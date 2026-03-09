@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "interview-room-ai",
+      "runtimeExecutable": "/bin/bash",
+      "runtimeArgs": ["-c", "cd /Users/apurvabhishek/Documents/Prep\\ Interview/interview-room-ai && npm run dev"],
+      "port": 3000
+    }
+  ]
+}

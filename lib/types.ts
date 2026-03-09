@@ -1,0 +1,138 @@
+// ─── Interview Configuration ──────────────────────────────────────────────────
+
+export type Role = 'PM' | 'SWE' | 'Sales' | 'MBA'
+export type ExperienceLevel = '0-2' | '3-6' | '7+'
+export type Duration = 5 | 10 | 20
+
+export interface InterviewConfig {
+  role: Role
+  experience: ExperienceLevel
+  duration: Duration
+  jobDescription?: string
+  resumeText?: string
+  jdFileName?: string
+  resumeFileName?: string
+}
+
+// ─── State Machine ────────────────────────────────────────────────────────────
+
+export type InterviewState =
+  | 'INIT'
+  | 'LOBBY'
+  | 'CALIBRATION'
+  | 'INTERVIEW_START'
+  | 'ASK_QUESTION'
+  | 'LISTENING'
+  | 'PROCESSING'
+  | 'FOLLOW_UP'
+  | 'WRAP_UP'
+  | 'SCORING'
+  | 'FEEDBACK'
+  | 'ENDED'
+
+// ─── Avatar ───────────────────────────────────────────────────────────────────
+
+export type AvatarEmotion = 'neutral' | 'friendly' | 'curious' | 'skeptical' | 'impressed'
+
+// ─── Transcript ───────────────────────────────────────────────────────────────
+
+export interface TranscriptEntry {
+  speaker: 'interviewer' | 'candidate'
+  text: string
+  timestamp: number
+  questionIndex?: number
+}
+
+// ─── Evaluation ───────────────────────────────────────────────────────────────
+
+export interface AnswerEvaluation {
+  questionIndex: number
+  question: string
+  answer: string
+  relevance: number       // 0–100
+  structure: number       // 0–100  (STAR detection)
+  specificity: number     // 0–100  (metrics / examples)
+  ownership: number       // 0–100
+  jdAlignment?: number    // 0–100, only present when JD was provided
+  needsFollowUp: boolean
+  followUpQuestion?: string
+  flags: string[]
+}
+
+// ─── Speech metrics ───────────────────────────────────────────────────────────
+
+export interface SpeechMetrics {
+  wpm: number
+  fillerRate: number         // filler words / total words
+  pauseScore: number         // 0–100 (higher = better pacing)
+  ramblingIndex: number      // 0–1 (higher = rambling)
+  totalWords: number
+  fillerWordCount: number
+  durationMinutes: number
+}
+
+// ─── Scoring JSON (as per spec) ───────────────────────────────────────────────
+
+// ─── Engagement signals (AI-estimated from speech patterns) ──────────────────
+
+export interface EngagementSignals {
+  score: number                                          // 0–100 overall
+  engagement_score: number                               // 0–100
+  confidence_trend: 'increasing' | 'stable' | 'declining'
+  energy_consistency: number                             // 0–1
+  composure_under_pressure: number                       // 0–100
+}
+
+// Legacy delivery signals (for backward compat with older sessions)
+export interface DeliverySignals {
+  score: number
+  gaze_ratio: number
+  head_stability: number
+  affect_variability: number
+  confidence_band: 'High' | 'Medium' | 'Low'
+}
+
+// ─── JD alignment breakdown ─────────────────────────────────────────────────
+
+export interface JdRequirementMatch {
+  requirement: string
+  matched: boolean
+  evidence?: string
+}
+
+export interface FeedbackData {
+  overall_score: number
+  pass_probability: 'High' | 'Medium' | 'Low'
+  confidence_level: 'High' | 'Medium' | 'Low'
+  dimensions: {
+    answer_quality: {
+      score: number
+      strengths: string[]
+      weaknesses: string[]
+    }
+    communication: {
+      score: number
+      wpm: number
+      filler_rate: number
+      pause_score: number
+      rambling_index: number
+    }
+    engagement_signals: EngagementSignals
+    // Legacy: older sessions may still have delivery_signals
+    delivery_signals?: DeliverySignals
+  }
+  jd_match_score?: number                    // 0–100, only when JD was provided
+  jd_requirement_breakdown?: JdRequirementMatch[]
+  red_flags: string[]
+  top_3_improvements: string[]
+}
+
+// ─── Stored interview data ────────────────────────────────────────────────────
+
+export interface StoredInterviewData {
+  config: InterviewConfig
+  transcript: TranscriptEntry[]
+  evaluations: AnswerEvaluation[]
+  speechMetrics: SpeechMetrics[]
+  feedback?: FeedbackData
+}

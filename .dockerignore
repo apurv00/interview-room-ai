@@ -1,0 +1,11 @@
+node_modules
+.next
+.git
+.gitignore
+.env.local
+.env.docker
+*.md
+__tests__
+.claude
+data/recordings
+.DS_Store
