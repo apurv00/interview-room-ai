@@ -31,7 +31,7 @@ export async function GET() {
     monthlyInterviewLimit: user.monthlyInterviewLimit,
     planExpiresAt: user.planExpiresAt?.toISOString() || null,
     hasStripeCustomer: !!user.stripeCustomerId,
-    memberSince: user.createdAt.toISOString(),
+    memberSince: user.createdAt?.toISOString() || new Date().toISOString(),
     resetsAt: resetDate.toISOString(),
   })
 }

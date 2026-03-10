@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import { ScoreBar, ScoreRing } from '@/components/ScoreBar'
 import ScoreTrendChart from '@/components/feedback/ScoreTrendChart'
@@ -11,6 +11,44 @@ import PeerComparison, { type PeerData } from '@/components/feedback/PeerCompari
 import type { FeedbackData, StoredInterviewData, TranscriptEntry, EngagementSignals, DeliverySignals } from '@/lib/types'
 import { ROLE_LABELS } from '@/lib/interviewConfig'
 import { computeOffsetSeconds } from '@/lib/offsetHelpers'
+
+// ─── Error Boundary ──────────────────────────────────────────────────────────
+
+class FeedbackErrorBoundary extends Component<
+  { children: ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  state = { hasError: false, error: null as Error | null }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error }
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-[#070b14] flex flex-col items-center justify-center gap-5 px-4">
+          <div className="bg-slate-900 border border-red-500/30 rounded-2xl p-6 max-w-sm w-full text-center space-y-4">
+            <p className="text-slate-200 font-medium">Something went wrong rendering feedback</p>
+            <p className="text-slate-400 text-sm">{String(this.state.error?.message || 'Unknown error')}</p>
+            <button
+              onClick={() => { window.location.href = '/' }}
+              className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-medium transition"
+            >
+              Go home
+            </button>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
+// Helper: safely coerce to string for rendering (prevents React #310 on unexpected objects)
+function s(v: unknown): string {
+  if (v === null || v === undefined) return ''
+  if (typeof v === 'object') return JSON.stringify(v)
+  return String(v)
+}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -54,7 +92,15 @@ function bisectLastLE(offsets: number[], target: number): number {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function FeedbackPage() {
+export default function FeedbackPageWrapper() {
+  return (
+    <FeedbackErrorBoundary>
+      <FeedbackPageInner />
+    </FeedbackErrorBoundary>
+  )
+}
+
+function FeedbackPageInner() {
   const router = useRouter()
   const params = useParams()
   const sessionId = params.sessionId as string
@@ -283,6 +329,21 @@ export default function FeedbackPage() {
 
   if (!feedback) return null
 
+  // Defensive: bail to error UI if feedback has unexpected shape
+  if (!feedback.dimensions || !feedback.dimensions.answer_quality || !feedback.dimensions.communication) {
+    return (
+      <div className="min-h-screen bg-[#070b14] flex flex-col items-center justify-center gap-5 px-4">
+        <div className="bg-slate-900 border border-red-500/30 rounded-2xl p-6 max-w-sm w-full text-center space-y-4">
+          <p className="text-slate-200 font-medium">Invalid feedback data</p>
+          <p className="text-slate-400 text-sm">The feedback response had an unexpected format. Please try again.</p>
+          <button onClick={handleRetry} className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-medium transition">
+            Try again
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   const { dimensions, red_flags, top_3_improvements, overall_score, pass_probability } = feedback
   const { answer_quality, communication } = dimensions
 
@@ -424,10 +485,10 @@ export default function FeedbackPage() {
               <div
                 className={`px-3 py-1 rounded-full border text-sm font-medium ${PROBABILITY_COLORS[pass_probability]}`}
               >
-                {pass_probability} pass probability
+                {s(pass_probability)} pass probability
               </div>
               <div className="px-3 py-1 rounded-full border border-slate-700 text-slate-400 text-sm">
-                {feedback.confidence_level} confidence
+                {s(feedback.confidence_level)} confidence
               </div>
             </div>
             {/* Score trend */}
@@ -488,22 +549,22 @@ export default function FeedbackPage() {
                     delay={400}
                   />
                 </div>
-                {answer_quality.strengths.length > 0 && (
+                {Array.isArray(answer_quality.strengths) && answer_quality.strengths.length > 0 && (
                   <div className="pt-2 border-t border-slate-800">
                     <p className="text-xs text-emerald-400 font-medium mb-1">Strengths</p>
-                    {answer_quality.strengths.map((s) => (
-                      <p key={s} className="text-xs text-slate-400">
-                        · {s}
+                    {answer_quality.strengths.map((str, idx) => (
+                      <p key={idx} className="text-xs text-slate-400">
+                        · {s(str)}
                       </p>
                     ))}
                   </div>
                 )}
-                {answer_quality.weaknesses.length > 0 && (
+                {Array.isArray(answer_quality.weaknesses) && answer_quality.weaknesses.length > 0 && (
                   <div>
                     <p className="text-xs text-amber-400 font-medium mb-1">Areas to improve</p>
-                    {answer_quality.weaknesses.map((w) => (
-                      <p key={w} className="text-xs text-slate-400">
-                        · {w}
+                    {answer_quality.weaknesses.map((w, idx) => (
+                      <p key={idx} className="text-xs text-slate-400">
+                        · {s(w)}
                       </p>
                     ))}
                   </div>
@@ -597,8 +658,8 @@ export default function FeedbackPage() {
                     <div className="pt-2 border-t border-slate-800 space-y-2">
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-slate-500">Confidence trend</span>
-                        <span className={`text-xs px-2 py-0.5 rounded-full border ${CONFIDENCE_TREND_LABELS[engagementSignals.confidence_trend].color}`}>
-                          {CONFIDENCE_TREND_LABELS[engagementSignals.confidence_trend].text}
+                        <span className={`text-xs px-2 py-0.5 rounded-full border ${CONFIDENCE_TREND_LABELS[engagementSignals.confidence_trend as keyof typeof CONFIDENCE_TREND_LABELS]?.color || 'text-slate-400 bg-slate-500/10 border-slate-500/30'}`}>
+                          {CONFIDENCE_TREND_LABELS[engagementSignals.confidence_trend as keyof typeof CONFIDENCE_TREND_LABELS]?.text || s(engagementSignals.confidence_trend)}
                         </span>
                       </div>
                       <p className="text-xs text-slate-600">
@@ -691,13 +752,13 @@ export default function FeedbackPage() {
             )}
 
             {/* Red flags */}
-            {red_flags.length > 0 && (
+            {Array.isArray(red_flags) && red_flags.length > 0 && (
               <section className="bg-red-950/30 border border-red-500/20 rounded-2xl p-5 animate-slide-up stagger-4">
                 <h3 className="font-semibold text-red-400 mb-3">Red flags detected</h3>
                 <ul className="space-y-2">
-                  {red_flags.map((flag) => (
-                    <li key={flag} className="flex items-start gap-2 text-sm text-red-300">
-                      <span className="shrink-0">·</span> {flag}
+                  {red_flags.map((flag, idx) => (
+                    <li key={idx} className="flex items-start gap-2 text-sm text-red-300">
+                      <span className="shrink-0">·</span> {s(flag)}
                     </li>
                   ))}
                 </ul>
@@ -708,12 +769,12 @@ export default function FeedbackPage() {
             <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 animate-slide-up stagger-5">
               <h3 className="font-semibold text-slate-200 mb-4">Top improvements for next attempt</h3>
               <div className="space-y-3">
-                {top_3_improvements.map((tip, i) => (
-                  <div key={tip} className="flex items-start gap-3">
+                {Array.isArray(top_3_improvements) && top_3_improvements.map((tip, i) => (
+                  <div key={i} className="flex items-start gap-3">
                     <span className="shrink-0 w-6 h-6 rounded-full bg-indigo-600/30 border border-indigo-500/40 text-indigo-400 text-xs flex items-center justify-center font-bold">
                       {i + 1}
                     </span>
-                    <p className="text-sm text-slate-300 leading-relaxed">{tip}</p>
+                    <p className="text-sm text-slate-300 leading-relaxed">{s(tip)}</p>
                   </div>
                 ))}
               </div>
@@ -774,7 +835,7 @@ export default function FeedbackPage() {
                           : 'bg-indigo-900/40 border border-indigo-500/20 text-indigo-100'
                       }`}
                     >
-                      {entry.text}
+                      {s(entry.text)}
                     </div>
                   </div>
                 )
