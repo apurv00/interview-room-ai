@@ -1,15 +1,5 @@
-import { describe, it, expect, vi } from 'vitest'
-
-// Mock modules that trigger DB/Redis connections at import time
-vi.mock('@/lib/db/connection', () => ({ connectDB: vi.fn() }))
-vi.mock('@/lib/redis', () => ({ redis: { get: vi.fn(), setex: vi.fn() } }))
-vi.mock('@/lib/logger', () => ({ logger: { error: vi.fn() } }))
-vi.mock('@/lib/db/models', () => ({ InterviewSession: { findOne: vi.fn(), aggregate: vi.fn() } }))
-vi.mock('next-auth', () => ({ getServerSession: vi.fn() }))
-vi.mock('@/lib/auth/authOptions', () => ({ authOptions: {} }))
-vi.mock('@/lib/db/mongoClient', () => ({ default: Promise.resolve({ db: () => ({}) }) }))
-
-import { computePercentile } from '../../app/api/analytics/peer-comparison/route'
+import { describe, it, expect } from 'vitest'
+import { computePercentile } from '../peerComparison'
 
 describe('computePercentile', () => {
   it('returns 50 for empty scores array', () => {

@@ -5,6 +5,7 @@ import { connectDB } from '@/lib/db/connection'
 import { InterviewSession } from '@/lib/db/models'
 import { redis } from '@/lib/redis'
 import { logger } from '@/lib/logger'
+import { computePercentile } from '@/lib/peerComparison'
 
 export const dynamic = 'force-dynamic'
 
@@ -13,43 +14,6 @@ const VALID_EXPERIENCE = ['0-2', '3-6', '7+']
 const CACHE_TTL = 21600 // 6 hours in seconds
 const USER_SCORE_TTL = 3600 // 1 hour in seconds
 const MAX_SCORES = 1000 // Cap allScores array to avoid large cache entries
-
-/**
- * Binary search: find insertion index for target in a sorted array.
- * Returns count of elements strictly less than target (bisect-left).
- */
-function bisectLeft(sorted: number[], target: number): number {
-  let lo = 0
-  let hi = sorted.length
-  while (lo < hi) {
-    const mid = (lo + hi) >>> 1
-    if (sorted[mid] < target) lo = mid + 1
-    else hi = mid
-  }
-  return lo
-}
-
-function bisectRight(sorted: number[], target: number): number {
-  let lo = 0
-  let hi = sorted.length
-  while (lo < hi) {
-    const mid = (lo + hi) >>> 1
-    if (sorted[mid] <= target) lo = mid + 1
-    else hi = mid
-  }
-  return lo
-}
-
-/**
- * Compute percentile using binary search. O(log n) instead of O(n).
- * For ties, uses midpoint of the range (bisectLeft + bisectRight) / 2.
- */
-export function computePercentile(sortedScores: number[], userScore: number): number {
-  if (sortedScores.length === 0) return 50
-  const left = bisectLeft(sortedScores, userScore)
-  const right = bisectRight(sortedScores, userScore)
-  return Math.round(((left + right) / 2 / sortedScores.length) * 100)
-}
 
 /**
  * Get user's score for a session, with per-session Redis cache.
