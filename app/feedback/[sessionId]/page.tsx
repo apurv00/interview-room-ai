@@ -287,7 +287,65 @@ function FeedbackPageInner() {
     generateFeedback(data, sessionId !== 'local' ? sessionId : undefined)
   }
 
-  // ── Loading / error state ───────────────────────────────────────────────────
+  // ── Derived memos (MUST be before early returns to comply with Rules of Hooks) ──
+
+  // Issue 5-A: single one-pass reduce for all avg scores
+  const avgScores = useMemo(() => {
+    if (!data || !data.evaluations || data.evaluations.length === 0) return null
+    const n = data.evaluations.length
+    const sums = data.evaluations.reduce(
+      (acc, e) => ({
+        relevance: acc.relevance + (Number(e.relevance) || 0),
+        structure: acc.structure + (Number(e.structure) || 0),
+        specificity: acc.specificity + (Number(e.specificity) || 0),
+        ownership: acc.ownership + (Number(e.ownership) || 0),
+      }),
+      { relevance: 0, structure: 0, specificity: 0, ownership: 0 }
+    )
+    return {
+      relevance: Math.round(sums.relevance / n),
+      structure: Math.round(sums.structure / n),
+      specificity: Math.round(sums.specificity / n),
+      ownership: Math.round(sums.ownership / n),
+    }
+  }, [data]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const questionMarkers = useMemo(() => {
+    if (!data || !data.transcript) return []
+    const seen = new Set<number>()
+    return data.transcript
+      .filter((e) => {
+        if (e.speaker !== 'interviewer' || e.questionIndex === undefined) return false
+        if (seen.has(e.questionIndex)) return false
+        seen.add(e.questionIndex)
+        return true
+      })
+      .map((e) => ({
+        label: `Q${(e.questionIndex ?? 0) + 1}`,
+        offsetSeconds: computeOffsetSeconds(e.timestamp, sessionStartedAt),
+      }))
+  }, [data, sessionStartedAt]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const transcriptOffsets = useMemo(() => {
+    if (!data || !data.transcript) return []
+    return data.transcript
+      .map((e) => computeOffsetSeconds(e.timestamp, sessionStartedAt))
+      .sort((a, b) => a - b)
+  }, [data, sessionStartedAt]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const activeTranscriptIndex = useMemo(() => {
+    if (!recordingUrl || transcriptOffsets.length === 0) return -1
+    return bisectLastLE(transcriptOffsets, currentAudioTime)
+  }, [recordingUrl, transcriptOffsets, currentAudioTime])
+
+  // Auto-scroll to active transcript entry
+  useEffect(() => {
+    if (activeEntryRef.current && activeTab === 'transcript') {
+      activeEntryRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }, [activeTranscriptIndex, activeTab])
+
+  // ── Loading / error state (AFTER all hooks) ────────────────────────────────
 
   if (loading || !data) {
     return (
@@ -333,19 +391,6 @@ function FeedbackPageInner() {
 
   if (!feedback) return null
 
-  // DEBUG: log feedback and data shapes to diagnose React #310
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  useMemo(() => {
-    try {
-      console.log('[FeedbackDebug] feedback:', JSON.stringify(feedback).slice(0, 2000))
-      console.log('[FeedbackDebug] data.evaluations sample:', JSON.stringify(data?.evaluations?.[0]).slice(0, 500))
-      console.log('[FeedbackDebug] data.transcript sample:', JSON.stringify(data?.transcript?.[0]).slice(0, 500))
-      console.log('[FeedbackDebug] data.speechMetrics sample:', JSON.stringify(data?.speechMetrics?.[0]).slice(0, 500))
-    } catch (e) {
-      console.error('[FeedbackDebug] stringify failed:', e)
-    }
-  }, [feedback, data])
-
   // Defensive: bail to error UI if feedback has unexpected shape
   if (!feedback.dimensions || !feedback.dimensions.answer_quality || !feedback.dimensions.communication) {
     return (
@@ -373,74 +418,6 @@ function FeedbackPageInner() {
     { key: 'questions', label: 'Questions' },
     { key: 'transcript', label: 'Transcript' },
   ]
-
-  // ── Derived memos ───────────────────────────────────────────────────────────
-
-  // Issue 5-A: single one-pass reduce for all avg scores (was 4 separate reduces inline)
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  const avgScores = useMemo(() => {
-    if (!data || data.evaluations.length === 0) return null
-    const n = data.evaluations.length
-    const sums = data.evaluations.reduce(
-      (acc, e) => ({
-        relevance: acc.relevance + e.relevance,
-        structure: acc.structure + e.structure,
-        specificity: acc.specificity + e.specificity,
-        ownership: acc.ownership + e.ownership,
-      }),
-      { relevance: 0, structure: 0, specificity: 0, ownership: 0 }
-    )
-    return {
-      relevance: Math.round(sums.relevance / n),
-      structure: Math.round(sums.structure / n),
-      specificity: Math.round(sums.specificity / n),
-      ownership: Math.round(sums.ownership / n),
-    }
-  }, [data?.evaluations]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Issue 15-A: narrow deps to data?.transcript instead of data (avoids re-compute on unrelated state changes)
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  const questionMarkers = useMemo(() => {
-    if (!data) return []
-    const seen = new Set<number>()
-    return data.transcript
-      .filter((e) => {
-        if (e.speaker !== 'interviewer' || e.questionIndex === undefined) return false
-        if (seen.has(e.questionIndex)) return false
-        seen.add(e.questionIndex)
-        return true
-      })
-      .map((e) => ({
-        label: `Q${(e.questionIndex ?? 0) + 1}`,
-        offsetSeconds: computeOffsetSeconds(e.timestamp, sessionStartedAt),
-      }))
-  }, [data?.transcript, sessionStartedAt]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Issue 15-A + 4-A: narrow deps; ensure sorted for binary search
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  const transcriptOffsets = useMemo(() => {
-    if (!data) return []
-    // Map and sort ascending — transcripts are ordered by time but explicit sort
-    // ensures the binary search in activeTranscriptIndex is always correct.
-    return data.transcript
-      .map((e) => computeOffsetSeconds(e.timestamp, sessionStartedAt))
-      .sort((a, b) => a - b)
-  }, [data?.transcript, sessionStartedAt]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Issue 4-A: binary search O(log n) instead of linear scan O(n)
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  const activeTranscriptIndex = useMemo(() => {
-    if (!recordingUrl || transcriptOffsets.length === 0) return -1
-    return bisectLastLE(transcriptOffsets, currentAudioTime)
-  }, [recordingUrl, transcriptOffsets, currentAudioTime])
-
-  // Auto-scroll to active transcript entry
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  useEffect(() => {
-    if (activeEntryRef.current && activeTab === 'transcript') {
-      activeEntryRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    }
-  }, [activeTranscriptIndex, activeTab])
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
