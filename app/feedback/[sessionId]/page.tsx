@@ -203,8 +203,12 @@ export default function FeedbackPage() {
         }),
         signal,
       })
-      const fb: FeedbackData = await res.json()
-      setFeedback(fb)
+      const fb = await res.json()
+      // Guard: if the API returned an error envelope instead of valid feedback, treat it as a failure
+      if (!res.ok || !fb.dimensions || !fb.overall_score) {
+        throw new Error(fb.error || `Feedback API returned status ${res.status}`)
+      }
+      setFeedback(fb as FeedbackData)
 
       // Issue 1-A: DB persist is fire-and-forget — intentionally no `signal`
       // so user navigation doesn't cancel a write that's already in flight.
