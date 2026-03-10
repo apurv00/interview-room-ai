@@ -11,6 +11,7 @@ import PeerComparison, { type PeerData } from '@/components/feedback/PeerCompari
 import type { FeedbackData, StoredInterviewData, TranscriptEntry, EngagementSignals, DeliverySignals } from '@/lib/types'
 import { ROLE_LABELS } from '@/lib/interviewConfig'
 import { computeOffsetSeconds } from '@/lib/offsetHelpers'
+import { mergeWithLocalData, readLocalInterviewData, cleanupLocalInterviewData } from '@/lib/mergeSessionData'
 
 // ─── Error Boundary ──────────────────────────────────────────────────────────
 
@@ -151,28 +152,11 @@ function FeedbackPageInner() {
               feedback: session.feedback,
             }
 
-            // If DB session has empty transcript (e.g. PATCH failed silently),
-            // fall back to localStorage which may have the full interview data
-            if (d.transcript.length === 0) {
-              try {
-                const stored = localStorage.getItem('interviewData')
-                if (stored) {
-                  const local: StoredInterviewData = JSON.parse(stored)
-                  if (local.transcript?.length > 0) {
-                    d = {
-                      ...d,
-                      transcript: local.transcript,
-                      evaluations: local.evaluations?.length ? local.evaluations : d.evaluations,
-                      speechMetrics: local.speechMetrics?.length ? local.speechMetrics : d.speechMetrics,
-                    }
-                  }
-                }
-              } catch {
-                // localStorage unavailable — continue with DB data
-              }
-            }
+            // If DB transcript is empty (e.g. PATCH failed), merge from localStorage
+            d = mergeWithLocalData(d, sessionId)
 
             setData(d)
+            cleanupLocalInterviewData(sessionId)
             if (session.recordingUrl) setRecordingUrl(session.recordingUrl)
             if (session.startedAt) setSessionStartedAt(new Date(session.startedAt).getTime())
 
@@ -198,13 +182,14 @@ function FeedbackPageInner() {
       }
 
       // Fallback: load from localStorage
-      const stored = localStorage.getItem('interviewData')
-      if (!stored) {
+      const localSid = sessionId !== 'local' ? sessionId : undefined
+      const d = readLocalInterviewData(localSid)
+      if (!d) {
         router.push('/')
         return
       }
-      const d: StoredInterviewData = JSON.parse(stored)
       setData(d)
+      cleanupLocalInterviewData(localSid)
       // Derive sessionStartedAt from first transcript entry as fallback
       if (d.transcript.length > 0) {
         setSessionStartedAt(d.transcript[0].timestamp)

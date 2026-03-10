@@ -7,6 +7,8 @@ import Link from 'next/link'
 import FileDropzone from '@/components/FileDropzone'
 import type { Role, ExperienceLevel, Duration, InterviewConfig } from '@/lib/types'
 import { ROLE_LABELS, EXPERIENCE_LABELS, DURATION_LABELS } from '@/lib/interviewConfig'
+import { STORAGE_KEYS } from '@/lib/storageKeys'
+import { getStartRedirect } from '@/lib/authRedirect'
 
 const ROLES: Role[] = ['PM', 'SWE', 'Sales', 'MBA']
 const EXPERIENCES: ExperienceLevel[] = ['0-2', '3-6', '7+']
@@ -46,7 +48,7 @@ export default function HomePage() {
   // Pre-fill from last session config
   useEffect(() => {
     try {
-      const stored = localStorage.getItem('interviewConfig')
+      const stored = localStorage.getItem(STORAGE_KEYS.INTERVIEW_CONFIG)
       if (stored) {
         const c: InterviewConfig = JSON.parse(stored)
         setLastConfig(c)
@@ -119,6 +121,9 @@ export default function HomePage() {
 
   function start() {
     if (!ready) return
+    const redirect = getStartRedirect(status)
+    if (!redirect) return // still loading
+
     const config: InterviewConfig = {
       role: role!,
       experience: experience!,
@@ -126,16 +131,8 @@ export default function HomePage() {
       ...(jdText && { jobDescription: jdText, jdFileName }),
       ...(resumeText && { resumeText, resumeFileName }),
     }
-    localStorage.setItem('interviewConfig', JSON.stringify(config))
-
-    // Require authentication before starting an interview so that
-    // the session is persisted to DB (enables history, progress, feedback)
-    if (status !== 'authenticated') {
-      router.push('/signin?callbackUrl=/lobby')
-      return
-    }
-
-    router.push('/lobby')
+    localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(config))
+    router.push(redirect)
   }
 
   return (
@@ -286,10 +283,10 @@ export default function HomePage() {
         <div className="animate-slide-up stagger-5 flex flex-col items-center gap-3">
           <button
             onClick={start}
-            disabled={!ready}
+            disabled={!ready || status === 'loading'}
             className={`
               w-full max-w-sm py-4 rounded-2xl font-semibold text-base transition-all duration-200
-              ${ready
+              ${ready && status !== 'loading'
                 ? 'bg-indigo-600 hover:bg-indigo-500 text-white btn-glow cursor-pointer'
                 : 'bg-slate-800 text-slate-600 cursor-not-allowed border border-slate-700'
               }
