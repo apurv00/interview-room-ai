@@ -163,16 +163,25 @@ export function useInterview({
         window.speechSynthesis.cancel()
         const utterance = new SpeechSynthesisUtterance(text)
         const voices = window.speechSynthesis.getVoices()
-        const preferred = voices.find(
-          (v) =>
-            v.name.includes('Samantha') ||
-            v.name.includes('Google UK English Female') ||
-            v.name.includes('Karen') ||
-            v.name.includes('Moira')
+        // Prefer Indian English / natural-sounding voices, fall back to Western defaults
+        const voicePreferences = [
+          'Microsoft Neerja Online (Natural)',
+          'Microsoft Neerja',
+          'Google India English',
+          'Rishi',
+          'Veena',
+          'Samantha',
+          'Google UK English Female',
+          'Karen',
+          'Moira',
+        ]
+        const preferred = voicePreferences.reduce<SpeechSynthesisVoice | null>(
+          (found, name) => found || voices.find((v) => v.name.includes(name)) || null,
+          null
         )
         if (preferred) utterance.voice = preferred
-        utterance.rate = 0.93
-        utterance.pitch = 1.05
+        utterance.rate = 0.95
+        utterance.pitch = 1.0
         utterance.volume = 1
 
         setAvatarEmotion(emotion)
@@ -437,9 +446,64 @@ export function useInterview({
     const start = async () => {
       const intro = INTERVIEW_INTROS[config.role]
       setCurrentQuestion(intro)
-      addToTranscript('interviewer', intro)
+      addToTranscript('interviewer', intro, 0)
       await avatarSpeak(intro, 'friendly')
-      runInterviewLoop(0)
+
+      // Listen for the candidate's response to the intro ("tell me about yourself")
+      // Previously, the loop started immediately at index 0, skipping the intro answer.
+      transitionTo('LISTENING')
+      setLiveAnswer('')
+      questionIndexRef.current = 0
+      setQuestionIndex(0)
+
+      const introAnswer: string = await new Promise((resolve) => {
+        startListening((result) => {
+          if (result.metrics) {
+            speechMetricsRef.current = [...speechMetricsRef.current, result.metrics]
+            setSpeechMetrics([...speechMetricsRef.current])
+          }
+          setLiveAnswer(result.text)
+          resolve(result.text)
+        })
+      })
+
+      if (
+        (phaseRef.current as string) === 'SCORING' ||
+        (phaseRef.current as string) === 'ENDED'
+      )
+        return
+
+      if (introAnswer) {
+        addToTranscript('candidate', introAnswer, 0)
+
+        // Evaluate the intro answer
+        transitionTo('PROCESSING')
+        setLiveAnswer('')
+        const evaluation = await evaluateAnswer(intro, introAnswer, 0)
+        const updated = [{ ...evaluation, question: intro, answer: introAnswer }]
+        evaluationsRef.current = updated
+        setEvaluations([...updated])
+
+        // Brief coaching tip
+        transitionTo('COACHING')
+        setCoachingTip(deriveCoachingTip(evaluation))
+        const abortCtrl = new AbortController()
+        coachingAbortRef.current = abortCtrl
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 3500)
+          abortCtrl.signal.addEventListener('abort', () => {
+            clearTimeout(timer)
+            resolve()
+          })
+        })
+        coachingAbortRef.current = null
+        if (!abortCtrl.signal.aborted) {
+          setCoachingTip(null)
+        }
+      }
+
+      // Continue with AI-generated questions starting from index 1
+      runInterviewLoop(1)
     }
 
     const t = setTimeout(start, 800)

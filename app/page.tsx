@@ -127,6 +127,14 @@ export default function HomePage() {
       ...(resumeText && { resumeText, resumeFileName }),
     }
     localStorage.setItem('interviewConfig', JSON.stringify(config))
+
+    // Require authentication before starting an interview so that
+    // the session is persisted to DB (enables history, progress, feedback)
+    if (status !== 'authenticated') {
+      router.push('/signin?callbackUrl=/lobby')
+      return
+    }
+
     router.push('/lobby')
   }
 
@@ -163,7 +171,7 @@ export default function HomePage() {
           <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-white">
             {authSession?.user?.name
               ? `Welcome back, ${authSession.user.name.split(' ')[0]}`
-              : 'Interview Room AI'}
+              : 'Interview Prep Guru'}
           </h1>
           <p className="text-slate-400 text-lg">
             {lastConfig

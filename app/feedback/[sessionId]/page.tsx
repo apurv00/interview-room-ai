@@ -143,13 +143,35 @@ function FeedbackPageInner() {
           const res = await fetch(`/api/interviews/${sessionId}`, { signal })
           if (res.ok) {
             const session = await res.json()
-            const d: StoredInterviewData = {
+            let d: StoredInterviewData = {
               config: session.config,
               transcript: session.transcript || [],
               evaluations: session.evaluations || [],
               speechMetrics: session.speechMetrics || [],
               feedback: session.feedback,
             }
+
+            // If DB session has empty transcript (e.g. PATCH failed silently),
+            // fall back to localStorage which may have the full interview data
+            if (d.transcript.length === 0) {
+              try {
+                const stored = localStorage.getItem('interviewData')
+                if (stored) {
+                  const local: StoredInterviewData = JSON.parse(stored)
+                  if (local.transcript?.length > 0) {
+                    d = {
+                      ...d,
+                      transcript: local.transcript,
+                      evaluations: local.evaluations?.length ? local.evaluations : d.evaluations,
+                      speechMetrics: local.speechMetrics?.length ? local.speechMetrics : d.speechMetrics,
+                    }
+                  }
+                }
+              } catch {
+                // localStorage unavailable — continue with DB data
+              }
+            }
+
             setData(d)
             if (session.recordingUrl) setRecordingUrl(session.recordingUrl)
             if (session.startedAt) setSessionStartedAt(new Date(session.startedAt).getTime())

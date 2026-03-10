@@ -4,8 +4,8 @@ import AppShell from '@/components/layout/AppShell'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'Interview Room AI',
-  description: 'Realistic HR screening simulation with AI interviewer avatar',
+  title: 'Interview Prep Guru',
+  description: 'AI-powered mock interview practice with realistic HR screening simulation',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
