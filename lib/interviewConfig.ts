@@ -21,11 +21,11 @@ export const DURATION_LABELS: Record<Duration, string> = {
   20: '20 min — Deep dive',
 }
 
-// How many questions per duration (excluding intro + wrap-up)
+// How many AI-generated questions per duration (intro "tell me about yourself" is Q0, handled separately)
 export const QUESTION_COUNT: Record<Duration, number> = {
-  5: 3,
-  10: 6,
-  20: 11,
+  5: 2,
+  10: 5,
+  20: 10,
 }
 
 // ─── Avatar persona ───────────────────────────────────────────────────────────

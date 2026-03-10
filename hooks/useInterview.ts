@@ -279,7 +279,7 @@ export function useInterview({
     // Keep localStorage as fallback
     localStorage.setItem('interviewData', JSON.stringify(data))
 
-    // Persist to DB and navigate with sessionId
+    // Persist to DB (fire-and-forget) and navigate immediately
     const sid = sessionIdRef.current
     if (sid) {
       persistSession(sid, {
@@ -289,9 +289,8 @@ export function useInterview({
         transcript: transcriptRef.current,
         evaluations: evaluationsRef.current,
         speechMetrics: speechMetricsRef.current,
-      }).then(() => {
-        router.push(`/feedback/${sid}`)
       })
+      router.push(`/feedback/${sid}`)
     } else {
       router.push('/feedback/local')
     }
