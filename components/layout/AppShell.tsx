@@ -3,6 +3,7 @@
 import { usePathname } from 'next/navigation'
 import Link from 'next/link'
 import AuthMenu from './AuthMenu'
+import Footer from './Footer'
 
 const NAV_LINKS = [
   { href: '/', label: 'Home' },
@@ -66,7 +67,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       </nav>
-      {children}
+      <div className="flex-1">{children}</div>
+      <Footer />
     </>
   )
 }
