@@ -4,6 +4,13 @@ import { useState } from 'react'
 import { ScoreBar } from '@/components/ScoreBar'
 import type { TranscriptEntry, AnswerEvaluation } from '@/lib/types'
 
+// Safe string coerce to prevent React #310
+function s(v: unknown): string {
+  if (v === null || v === undefined) return ''
+  if (typeof v === 'object') return JSON.stringify(v)
+  return String(v)
+}
+
 interface QuestionBreakdownProps {
   transcript: TranscriptEntry[]
   evaluations: AnswerEvaluation[]
@@ -61,7 +68,7 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-xs text-slate-500 mb-0.5">Question {i + 1}</p>
-                <p className="text-sm text-slate-200 truncate">{ev.question}</p>
+                <p className="text-sm text-slate-200 truncate">{s(ev.question)}</p>
               </div>
               <svg
                 className={`w-4 h-4 text-slate-500 shrink-0 transition-transform ${
@@ -84,7 +91,7 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
                   <p className="text-xs text-slate-500 font-medium mb-1 uppercase tracking-wide">
                     Question
                   </p>
-                  <p className="text-sm text-slate-300 leading-relaxed">{ev.question}</p>
+                  <p className="text-sm text-slate-300 leading-relaxed">{s(ev.question)}</p>
                 </div>
 
                 {/* Answer */}
@@ -93,7 +100,7 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
                     Your Answer
                   </p>
                   <p className="text-sm text-slate-400 leading-relaxed bg-slate-800/50 rounded-xl p-3">
-                    {ev.answer || (
+                    {ev.answer ? s(ev.answer) : (
                       <span className="italic text-slate-600">No answer captured</span>
                     )}
                   </p>
@@ -118,12 +125,12 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
                 {/* Flags */}
                 {ev.flags.length > 0 && (
                   <div className="flex flex-wrap gap-1.5">
-                    {ev.flags.map((flag) => (
+                    {ev.flags.map((flag, fi) => (
                       <span
-                        key={flag}
+                        key={fi}
                         className="px-2 py-0.5 bg-red-500/10 border border-red-500/20 rounded-full text-xs text-red-400"
                       >
-                        {flag}
+                        {s(flag)}
                       </span>
                     ))}
                   </div>
@@ -153,7 +160,7 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
                     </p>
                     {followUpEntries.map((fq, fi) => (
                       <div key={fi} className="mb-2">
-                        <p className="text-xs text-indigo-400 mb-1">{fq.text}</p>
+                        <p className="text-xs text-indigo-400 mb-1">{s(fq.text)}</p>
                         {/* Find the candidate's follow-up answer */}
                         {transcript
                           .filter(
@@ -165,7 +172,7 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
                           .slice(0, 1)
                           .map((a, ai) => (
                             <p key={ai} className="text-xs text-slate-500 bg-slate-800/50 rounded-lg p-2">
-                              {a.text}
+                              {s(a.text)}
                             </p>
                           ))}
                       </div>

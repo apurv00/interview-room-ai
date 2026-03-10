@@ -22,6 +22,10 @@ class FeedbackErrorBoundary extends Component<
   static getDerivedStateFromError(error: Error) {
     return { hasError: true, error }
   }
+  componentDidCatch(error: Error, info: { componentStack?: string | null }) {
+    // Log full details to help diagnose React #310 in production
+    console.error('[FeedbackErrorBoundary]', error.message, info.componentStack)
+  }
   render() {
     if (this.state.hasError) {
       return (
@@ -605,15 +609,15 @@ function FeedbackPageInner() {
                 </div>
                 <div className="pt-2 border-t border-slate-800 space-y-1">
                   {[
-                    { label: 'Avg. WPM', value: communication.wpm, ideal: '120-160' },
+                    { label: 'Avg. WPM', value: s(communication.wpm), ideal: '120-160' },
                     {
                       label: 'Filler rate',
-                      value: `${(communication.filler_rate * 100).toFixed(1)}%`,
+                      value: `${(Number(communication.filler_rate) * 100).toFixed(1)}%`,
                       ideal: '<5%',
                     },
                     {
                       label: 'Rambling index',
-                      value: communication.rambling_index.toFixed(2),
+                      value: Number(communication.rambling_index).toFixed(2),
                       ideal: '<0.30',
                     },
                   ].map(({ label, value, ideal }) => (
@@ -739,9 +743,9 @@ function FeedbackPageInner() {
                           )}
                         </span>
                         <div className="flex-1">
-                          <p className="text-sm text-slate-300">{req.requirement}</p>
+                          <p className="text-sm text-slate-300">{s(req.requirement)}</p>
                           {req.evidence && (
-                            <p className="text-xs text-slate-500 mt-0.5">{req.evidence}</p>
+                            <p className="text-xs text-slate-500 mt-0.5">{s(req.evidence)}</p>
                           )}
                         </div>
                       </div>
