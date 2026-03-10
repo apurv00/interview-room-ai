@@ -21,7 +21,9 @@ export const DURATION_LABELS: Record<Duration, string> = {
   20: '20 min — Deep dive',
 }
 
-// How many questions per duration (excluding intro + wrap-up)
+// Upper bound for AI-generated question indices.
+// Loop runs from 1..<QUESTION_COUNT>, so actual AI questions = QUESTION_COUNT - 1.
+// Total questions answered = 1 (intro at Q0) + (QUESTION_COUNT - 1) AI questions.
 export const QUESTION_COUNT: Record<Duration, number> = {
   5: 3,
   10: 6,

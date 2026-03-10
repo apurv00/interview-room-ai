@@ -16,6 +16,7 @@ import {
   QUESTION_COUNT,
 } from '@/lib/interviewConfig'
 import { deriveCoachingTip } from '@/lib/coachingTips'
+import { STORAGE_KEYS, sessionScopedKey } from '@/lib/storageKeys'
 import type { SpeechRecognitionResult } from './useSpeechRecognition'
 
 // ─── Session persistence helpers ──────────────────────────────────────────────
@@ -36,15 +37,23 @@ async function createDbSession(config: InterviewConfig): Promise<string | null> 
 }
 
 async function persistSession(sessionId: string, payload: Record<string, unknown>) {
-  try {
-    await fetch(`/api/interviews/${sessionId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-  } catch {
-    // Fail silently — localStorage is the fallback
+  const MAX_RETRIES = 3
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      const res = await fetch(`/api/interviews/${sessionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (res.ok) return
+    } catch {
+      // Network error — retry
+    }
+    if (attempt < MAX_RETRIES - 1) {
+      await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt)))
+    }
   }
+  // All retries failed — localStorage is the fallback
 }
 
 // ─── Hook options ─────────────────────────────────────────────────────────────
@@ -63,9 +72,6 @@ export interface UseInterviewReturn {
   phase: InterviewState
   questionIndex: number
   currentQuestion: string
-  transcript: TranscriptEntry[]
-  evaluations: AnswerEvaluation[]
-  speechMetrics: SpeechMetrics[]
   avatarEmotion: AvatarEmotion
   isAvatarTalking: boolean
   timeRemaining: number
@@ -102,11 +108,8 @@ export function useInterview({
   const [currentQuestion, setCurrentQuestion] = useState('')
   const [questionIndex, setQuestionIndex] = useState(0)
   const questionIndexRef = useRef(0)
-  const [transcript, setTranscript] = useState<TranscriptEntry[]>([])
   const transcriptRef = useRef<TranscriptEntry[]>([])
-  const [evaluations, setEvaluations] = useState<AnswerEvaluation[]>([])
   const evaluationsRef = useRef<AnswerEvaluation[]>([])
-  const [speechMetrics, setSpeechMetrics] = useState<SpeechMetrics[]>([])
   const speechMetricsRef = useRef<SpeechMetrics[]>([])
 
   // ── Live answer capture ──
@@ -130,6 +133,10 @@ export function useInterview({
     setTimeRemaining(config.duration * 60)
     timeRemainingRef.current = config.duration * 60
 
+    // NOTE: createDbSession runs concurrently with the start() effect below.
+    // sessionIdRef may not be populated during the intro phase. This is safe
+    // because no DB persist occurs until finishInterview(), which runs much later.
+    // localStorage captures all data as a backup regardless.
     createDbSession(config).then((id) => {
       if (id) {
         sessionIdRef.current = id
@@ -163,16 +170,25 @@ export function useInterview({
         window.speechSynthesis.cancel()
         const utterance = new SpeechSynthesisUtterance(text)
         const voices = window.speechSynthesis.getVoices()
-        const preferred = voices.find(
-          (v) =>
-            v.name.includes('Samantha') ||
-            v.name.includes('Google UK English Female') ||
-            v.name.includes('Karen') ||
-            v.name.includes('Moira')
+        // Prefer Indian English / natural-sounding voices, fall back to Western defaults
+        const voicePreferences = [
+          'Microsoft Neerja Online (Natural)',
+          'Microsoft Neerja',
+          'Google India English',
+          'Rishi',
+          'Veena',
+          'Samantha',
+          'Google UK English Female',
+          'Karen',
+          'Moira',
+        ]
+        const preferred = voicePreferences.reduce<SpeechSynthesisVoice | null>(
+          (found, name) => found || voices.find((v) => v.name.includes(name)) || null,
+          null
         )
         if (preferred) utterance.voice = preferred
-        utterance.rate = 0.93
-        utterance.pitch = 1.05
+        utterance.rate = 0.95
+        utterance.pitch = 1.0
         utterance.volume = 1
 
         setAvatarEmotion(emotion)
@@ -198,7 +214,6 @@ export function useInterview({
     (speaker: 'interviewer' | 'candidate', text: string, qIdx?: number) => {
       const entry: TranscriptEntry = { speaker, text, timestamp: Date.now(), questionIndex: qIdx }
       transcriptRef.current = [...transcriptRef.current, entry]
-      setTranscript([...transcriptRef.current])
     },
     []
   )
@@ -250,6 +265,59 @@ export function useInterview({
     [config]
   )
 
+  // ─── Shared helpers (DRY: listening + evaluation + coaching) ──────────────
+
+  /** Listen for candidate speech and collect metrics. Resolves with the answer text. */
+  function listenForAnswer(showLive: boolean = true): Promise<string> {
+    return new Promise((resolve) => {
+      startListening((result) => {
+        if (result.metrics) {
+          speechMetricsRef.current.push(result.metrics)
+        }
+        if (showLive) setLiveAnswer(result.text)
+        resolve(result.text)
+      })
+    })
+  }
+
+  /** Returns true if interview has been ended/scored (should bail out of loop). */
+  function isInterviewOver(): boolean {
+    return (
+      (phaseRef.current as string) === 'SCORING' ||
+      (phaseRef.current as string) === 'ENDED'
+    )
+  }
+
+  /** Evaluate answer, accumulate result, show coaching tip, wait 3.5s (cancellable). */
+  async function evaluateAndCoach(
+    question: string,
+    answer: string,
+    qIdx: number,
+  ): Promise<AnswerEvaluation> {
+    transitionTo('PROCESSING')
+    setLiveAnswer('')
+    const evaluation = await evaluateAnswer(question, answer, qIdx)
+    evaluationsRef.current = [...evaluationsRef.current, { ...evaluation, question, answer }]
+
+    transitionTo('COACHING')
+    setCoachingTip(deriveCoachingTip(evaluation))
+    const abortCtrl = new AbortController()
+    coachingAbortRef.current = abortCtrl
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 3500)
+      abortCtrl.signal.addEventListener('abort', () => {
+        clearTimeout(timer)
+        resolve()
+      })
+    })
+    coachingAbortRef.current = null
+    if (!abortCtrl.signal.aborted) {
+      setCoachingTip(null)
+    }
+
+    return evaluation
+  }
+
   // ─── Finish interview ──────────────────────────────────────────────────────
 
   const finishInterview = useCallback(() => {
@@ -267,11 +335,15 @@ export function useInterview({
       evaluations: evaluationsRef.current,
       speechMetrics: speechMetricsRef.current,
     }
-    // Keep localStorage as fallback
-    localStorage.setItem('interviewData', JSON.stringify(data))
-
-    // Persist to DB and navigate with sessionId
+    // Keep localStorage as fallback (session-scoped key when possible, plus unscoped)
     const sid = sessionIdRef.current
+    const dataJson = JSON.stringify(data)
+    if (sid) {
+      localStorage.setItem(sessionScopedKey(STORAGE_KEYS.INTERVIEW_DATA, sid), dataJson)
+    }
+    localStorage.setItem(STORAGE_KEYS.INTERVIEW_DATA, dataJson)
+
+    // Persist to DB (fire-and-forget) and navigate immediately
     if (sid) {
       persistSession(sid, {
         status: 'completed',
@@ -280,9 +352,8 @@ export function useInterview({
         transcript: transcriptRef.current,
         evaluations: evaluationsRef.current,
         speechMetrics: speechMetricsRef.current,
-      }).then(() => {
-        router.push(`/feedback/${sid}`)
       })
+      router.push(`/feedback/${sid}`)
     } else {
       router.push('/feedback/local')
     }
@@ -296,11 +367,7 @@ export function useInterview({
       const maxQ = QUESTION_COUNT[config.duration]
 
       for (let qIdx = startingQIndex; qIdx < maxQ; qIdx++) {
-        if (
-          (phaseRef.current as string) === 'SCORING' ||
-          (phaseRef.current as string) === 'ENDED'
-        )
-          return
+        if (isInterviewOver()) return
 
         // Check time
         if (timeRemainingRef.current < 30) break
@@ -321,37 +388,20 @@ export function useInterview({
         // Listen for answer
         transitionTo('LISTENING')
         setLiveAnswer('')
+        const answer = await listenForAnswer()
 
-        const answer: string = await new Promise((resolve) => {
-          startListening((result) => {
-            if (result.metrics) {
-              speechMetricsRef.current = [...speechMetricsRef.current, result.metrics]
-              setSpeechMetrics([...speechMetricsRef.current])
-            }
-            setLiveAnswer(result.text)
-            resolve(result.text)
-          })
-        })
+        if (isInterviewOver()) return
 
-        if (
-          (phaseRef.current as string) === 'SCORING' ||
-          (phaseRef.current as string) === 'ENDED'
-        )
-          return
-
-        // Process
-        transitionTo('PROCESSING')
-        setLiveAnswer('')
-
-        if (!answer) continue
+        if (!answer) {
+          transitionTo('PROCESSING')
+          setLiveAnswer('')
+          continue
+        }
 
         addToTranscript('candidate', answer, qIdx)
 
-        // Evaluate
-        const evaluation = await evaluateAnswer(question, answer, qIdx)
-        const updated = [...evaluationsRef.current, { ...evaluation, question, answer }]
-        evaluationsRef.current = updated
-        setEvaluations([...updated])
+        // Evaluate + coaching
+        const evaluation = await evaluateAndCoach(question, answer, qIdx)
 
         // Avatar emotion based on quality
         const avgScore =
@@ -362,23 +412,6 @@ export function useInterview({
           4
         const responseEmotion: AvatarEmotion =
           avgScore >= 75 ? 'impressed' : avgScore >= 55 ? 'friendly' : 'curious'
-
-        // Coaching tip between questions (cancellable via AbortController)
-        transitionTo('COACHING')
-        setCoachingTip(deriveCoachingTip(evaluation))
-        const abortCtrl = new AbortController()
-        coachingAbortRef.current = abortCtrl
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, 3500)
-          abortCtrl.signal.addEventListener('abort', () => {
-            clearTimeout(timer)
-            resolve()
-          })
-        })
-        coachingAbortRef.current = null
-        if (!abortCtrl.signal.aborted) {
-          setCoachingTip(null)
-        }
 
         // Follow-up?
         if (
@@ -391,15 +424,7 @@ export function useInterview({
           await avatarSpeak(evaluation.followUpQuestion, 'curious')
 
           transitionTo('LISTENING')
-          const followUpAnswer: string = await new Promise((resolve) => {
-            startListening((result) => {
-              if (result.metrics) {
-                speechMetricsRef.current = [...speechMetricsRef.current, result.metrics]
-                setSpeechMetrics([...speechMetricsRef.current])
-              }
-              resolve(result.text)
-            })
-          })
+          const followUpAnswer = await listenForAnswer(false)
 
           if (followUpAnswer) {
             addToTranscript('candidate', followUpAnswer, qIdx)
@@ -413,11 +438,7 @@ export function useInterview({
       }
 
       // Wrap-up
-      if (
-        (phaseRef.current as string) === 'SCORING' ||
-        (phaseRef.current as string) === 'ENDED'
-      )
-        return
+      if (isInterviewOver()) return
       transitionTo('WRAP_UP')
       addToTranscript('interviewer', WRAP_UP_LINE)
       await avatarSpeak(WRAP_UP_LINE, 'friendly')
@@ -437,9 +458,26 @@ export function useInterview({
     const start = async () => {
       const intro = INTERVIEW_INTROS[config.role]
       setCurrentQuestion(intro)
-      addToTranscript('interviewer', intro)
+      addToTranscript('interviewer', intro, 0)
       await avatarSpeak(intro, 'friendly')
-      runInterviewLoop(0)
+
+      // Listen for the candidate's response to the intro ("tell me about yourself")
+      transitionTo('LISTENING')
+      setLiveAnswer('')
+      questionIndexRef.current = 0
+      setQuestionIndex(0)
+
+      const introAnswer = await listenForAnswer()
+
+      if (isInterviewOver()) return
+
+      if (introAnswer) {
+        addToTranscript('candidate', introAnswer, 0)
+        await evaluateAndCoach(intro, introAnswer, 0)
+      }
+
+      // Continue with AI-generated questions starting from index 1
+      runInterviewLoop(1)
     }
 
     const t = setTimeout(start, 800)
@@ -450,9 +488,6 @@ export function useInterview({
     phase,
     questionIndex,
     currentQuestion,
-    transcript,
-    evaluations,
-    speechMetrics,
     avatarEmotion,
     isAvatarTalking,
     timeRemaining,

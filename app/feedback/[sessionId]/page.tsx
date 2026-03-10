@@ -11,6 +11,7 @@ import PeerComparison, { type PeerData } from '@/components/feedback/PeerCompari
 import type { FeedbackData, StoredInterviewData, TranscriptEntry, EngagementSignals, DeliverySignals } from '@/lib/types'
 import { ROLE_LABELS } from '@/lib/interviewConfig'
 import { computeOffsetSeconds } from '@/lib/offsetHelpers'
+import { mergeWithLocalData, readLocalInterviewData, cleanupLocalInterviewData } from '@/lib/mergeSessionData'
 
 // ─── Error Boundary ──────────────────────────────────────────────────────────
 
@@ -143,14 +144,19 @@ function FeedbackPageInner() {
           const res = await fetch(`/api/interviews/${sessionId}`, { signal })
           if (res.ok) {
             const session = await res.json()
-            const d: StoredInterviewData = {
+            let d: StoredInterviewData = {
               config: session.config,
               transcript: session.transcript || [],
               evaluations: session.evaluations || [],
               speechMetrics: session.speechMetrics || [],
               feedback: session.feedback,
             }
+
+            // If DB transcript is empty (e.g. PATCH failed), merge from localStorage
+            d = mergeWithLocalData(d, sessionId)
+
             setData(d)
+            cleanupLocalInterviewData(sessionId)
             if (session.recordingUrl) setRecordingUrl(session.recordingUrl)
             if (session.startedAt) setSessionStartedAt(new Date(session.startedAt).getTime())
 
@@ -176,13 +182,14 @@ function FeedbackPageInner() {
       }
 
       // Fallback: load from localStorage
-      const stored = localStorage.getItem('interviewData')
-      if (!stored) {
+      const localSid = sessionId !== 'local' ? sessionId : undefined
+      const d = readLocalInterviewData(localSid)
+      if (!d) {
         router.push('/')
         return
       }
-      const d: StoredInterviewData = JSON.parse(stored)
       setData(d)
+      cleanupLocalInterviewData(localSid)
       // Derive sessionStartedAt from first transcript entry as fallback
       if (d.transcript.length > 0) {
         setSessionStartedAt(d.transcript[0].timestamp)

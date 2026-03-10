@@ -45,7 +45,7 @@ function SignInContent() {
     <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-950 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-white mb-2">Interview Room AI</h1>
+          <h1 className="text-3xl font-bold text-white mb-2">Interview Prep Guru</h1>
           <p className="text-gray-400">Sign in to start your interview practice</p>
         </div>
 

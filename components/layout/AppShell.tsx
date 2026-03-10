@@ -37,7 +37,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 </svg>
               </div>
               <span className="text-sm font-bold text-white group-hover:text-indigo-400 transition hidden sm:block">
-                Interview Room AI
+                Interview Prep Guru
               </span>
             </Link>
 

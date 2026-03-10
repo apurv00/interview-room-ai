@@ -16,6 +16,7 @@ import { useMediaRecorder } from '@/hooks/useMediaRecorder'
 import { useCoachingNudge } from '@/hooks/useCoachingNudge'
 import type { InterviewConfig } from '@/lib/types'
 import { AVATAR_NAME, AVATAR_TITLE } from '@/lib/interviewConfig'
+import { STORAGE_KEYS } from '@/lib/storageKeys'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -136,7 +137,7 @@ export default function InterviewPage() {
 
   // ─── Load config ───────────────────────────────────────────────────────────
   useEffect(() => {
-    const stored = localStorage.getItem('interviewConfig')
+    const stored = localStorage.getItem(STORAGE_KEYS.INTERVIEW_CONFIG)
     if (!stored) {
       router.push('/')
       return

@@ -56,7 +56,7 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
       const recognition = new SR()
       recognition.continuous = true
       recognition.interimResults = true
-      recognition.lang = 'en-US'
+      recognition.lang = 'en-IN'
 
       let finalText = ''
       answerStartRef.current = Date.now()

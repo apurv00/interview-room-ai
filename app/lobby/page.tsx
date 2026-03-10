@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { InterviewConfig } from '@/lib/types'
 import { ROLE_LABELS } from '@/lib/interviewConfig'
+import { STORAGE_KEYS } from '@/lib/storageKeys'
 
 type CheckStatus = 'pending' | 'ok' | 'error'
 
@@ -78,7 +79,7 @@ export default function LobbyPage() {
 
   // Load config
   useEffect(() => {
-    const stored = localStorage.getItem('interviewConfig')
+    const stored = localStorage.getItem(STORAGE_KEYS.INTERVIEW_CONFIG)
     if (!stored) { router.push('/'); return }
     setConfig(JSON.parse(stored))
   }, [router])
