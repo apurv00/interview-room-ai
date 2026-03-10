@@ -21,7 +21,6 @@ module.exports = {
         'pulse-slow': 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
         'blink': 'blink 4s ease-in-out infinite',
         'talk': 'talk 0.15s ease-in-out infinite alternate',
-        'slide-up': 'slideUp 0.4s ease-out',
         'fade-in': 'fadeIn 0.3s ease-out',
         'score-fill': 'scoreFill 1s ease-out forwards',
       },
@@ -33,10 +32,6 @@ module.exports = {
         talk: {
           '0%': { d: 'path("M 75 155 Q 100 162 125 155")' },
           '100%': { d: 'path("M 75 155 Q 100 170 125 155")' },
-        },
-        slideUp: {
-          from: { transform: 'translateY(20px)', opacity: '0' },
-          to: { transform: 'translateY(0)', opacity: '1' },
         },
         fadeIn: {
           from: { opacity: '0' },

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { motion, AnimatePresence } from 'framer-motion'
 import type { InterviewConfig } from '@/lib/types'
 import { ROLE_LABELS } from '@/lib/interviewConfig'
 
@@ -12,6 +13,49 @@ interface Check {
   status: CheckStatus
   detail?: string
 }
+
+// ─── Icons ────────────────────────────────────────────────────────────────────
+
+function CheckIcon() {
+  return (
+    <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+    </svg>
+  )
+}
+
+function XIcon() {
+  return (
+    <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+    </svg>
+  )
+}
+
+function DocIcon() {
+  return (
+    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+    </svg>
+  )
+}
+
+// ─── Stagger animation config ─────────────────────────────────────────────────
+
+const containerVariants = {
+  hidden: { opacity: 0 },
+  show: {
+    opacity: 1,
+    transition: { staggerChildren: 0.08, delayChildren: 0.1 },
+  },
+}
+
+const itemVariants = {
+  hidden: { opacity: 0, y: 16 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' } },
+}
+
+// ─── Component ────────────────────────────────────────────────────────────────
 
 export default function LobbyPage() {
   const router = useRouter()
@@ -30,7 +74,7 @@ export default function LobbyPage() {
   const [allOk, setAllOk] = useState(false)
   const [joining, setJoining] = useState(false)
   const [audioLevel, setAudioLevel] = useState(0)
-  const [visibleChecks, setVisibleChecks] = useState(0)
+  const [joinCountdown, setJoinCountdown] = useState(0)
 
   // Load config
   useEffect(() => {
@@ -38,17 +82,6 @@ export default function LobbyPage() {
     if (!stored) { router.push('/'); return }
     setConfig(JSON.parse(stored))
   }, [router])
-
-  // Stagger check items entrance
-  useEffect(() => {
-    if (!config) return
-    const timers: NodeJS.Timeout[] = []
-    checks.forEach((_, i) => {
-      timers.push(setTimeout(() => setVisibleChecks(i + 1), 150 * (i + 1)))
-    })
-    return () => timers.forEach(clearTimeout)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config])
 
   // Audio level visualiser
   const startAudioMeter = useCallback((stream: MediaStream) => {
@@ -79,13 +112,10 @@ export default function LobbyPage() {
     if (!config) return
 
     const runChecks = async () => {
-      // Camera + mic
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
         streamRef.current = stream
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream
-        }
+        if (videoRef.current) videoRef.current.srcObject = stream
         setChecks(prev => prev.map(c =>
           c.label === 'Camera' ? { ...c, status: 'ok', detail: 'HD video ready' } : c
         ))
@@ -102,7 +132,6 @@ export default function LobbyPage() {
         ))
       }
 
-      // Speech recognition check
       await new Promise(r => setTimeout(r, 400))
       const hasSR = 'SpeechRecognition' in window || 'webkitSpeechRecognition' in window
       setChecks(prev => prev.map(c =>
@@ -111,7 +140,6 @@ export default function LobbyPage() {
           : c
       ))
 
-      // Network latency check
       await new Promise(r => setTimeout(r, 200))
       try {
         const start = performance.now()
@@ -120,11 +148,7 @@ export default function LobbyPage() {
         if (res.ok) {
           setChecks(prev => prev.map(c =>
             c.label === 'Network'
-              ? {
-                  ...c,
-                  status: latency < 500 ? 'ok' : 'error',
-                  detail: latency < 500 ? `${latency}ms latency` : `High latency (${latency}ms)`,
-                }
+              ? { ...c, status: latency < 500 ? 'ok' : 'error', detail: latency < 500 ? `${latency}ms latency` : `High latency (${latency}ms)` }
               : c
           ))
         } else {
@@ -132,24 +156,19 @@ export default function LobbyPage() {
         }
       } catch {
         setChecks(prev => prev.map(c =>
-          c.label === 'Network'
-            ? { ...c, status: 'ok', detail: 'Connected' }
-            : c
+          c.label === 'Network' ? { ...c, status: 'ok', detail: 'Connected' } : c
         ))
       }
     }
 
     runChecks()
 
-    // Cleanup camera + audio on unmount
     return () => {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(t => t.stop())
         streamRef.current = null
       }
-      if (animFrameRef.current) {
-        cancelAnimationFrame(animFrameRef.current)
-      }
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config])
@@ -161,13 +180,26 @@ export default function LobbyPage() {
     if (done) setAllOk(ok)
   }, [checks])
 
+  // Joining countdown
+  useEffect(() => {
+    if (!joining) return
+    setJoinCountdown(3)
+    const interval = setInterval(() => {
+      setJoinCountdown(prev => {
+        if (prev <= 1) {
+          clearInterval(interval)
+          router.push('/interview')
+          return 0
+        }
+        return prev - 1
+      })
+    }, 700)
+    return () => clearInterval(interval)
+  }, [joining, router])
+
   function enterRoom() {
     setJoining(true)
-    // Stop the audio meter but keep camera running for transition
-    if (animFrameRef.current) {
-      cancelAnimationFrame(animFrameRef.current)
-    }
-    setTimeout(() => router.push('/interview'), 2000)
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
   }
 
   const StatusIcon = ({ status }: { status: CheckStatus }) => {
@@ -175,49 +207,63 @@ export default function LobbyPage() {
       <div className="w-5 h-5 rounded-full border-2 border-slate-600 border-t-indigo-400 animate-spin" />
     )
     if (status === 'ok') return (
-      <div className="w-5 h-5 rounded-full bg-emerald-500 flex items-center justify-center">
-        <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-        </svg>
-      </div>
+      <motion.div
+        className="w-5 h-5 rounded-full bg-emerald-500 flex items-center justify-center"
+        initial={{ scale: 0 }}
+        animate={{ scale: 1 }}
+        transition={{ type: 'spring', stiffness: 500, damping: 25 }}
+      >
+        <CheckIcon />
+      </motion.div>
     )
     return (
-      <div className="w-5 h-5 rounded-full bg-red-500 flex items-center justify-center">
-        <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-        </svg>
-      </div>
+      <motion.div
+        className="w-5 h-5 rounded-full bg-red-500 flex items-center justify-center"
+        initial={{ scale: 0 }}
+        animate={{ scale: 1 }}
+        transition={{ type: 'spring', stiffness: 500, damping: 25 }}
+      >
+        <XIcon />
+      </motion.div>
     )
   }
 
+  // Audio level meter color
+  const meterColor = audioLevel > 80
+    ? 'rgb(239,68,68)'
+    : audioLevel > 20
+    ? 'rgb(16,185,129)'
+    : 'rgb(100,116,139)'
+
   return (
     <main className="min-h-screen flex items-center justify-center px-4 py-12">
-      <div className="w-full max-w-4xl space-y-8">
-
+      <motion.div
+        className="w-full max-w-4xl space-y-8"
+        variants={containerVariants}
+        initial="hidden"
+        animate="show"
+      >
         {/* Header */}
-        <div className="text-center space-y-2 animate-slide-up">
+        <motion.div className="text-center space-y-2" variants={itemVariants}>
           <h1 className="text-3xl font-bold text-white">Pre-Interview Check</h1>
           {config && (
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               <p className="text-slate-400">
                 {ROLE_LABELS[config.role]} · {config.experience} yrs · {config.duration} min session
               </p>
+
               {/* Document badges */}
               {(config.jdFileName || config.resumeFileName) && (
-                <div className="flex items-center justify-center gap-3 flex-wrap">
+                <div className="flex items-center justify-center gap-2.5 flex-wrap">
                   {config.jdFileName && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full text-xs text-emerald-400">
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                      </svg>
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-xs text-emerald-400">
+                      <DocIcon />
                       JD: {config.jdFileName}
                     </span>
                   )}
                   {config.resumeFileName && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full text-xs text-emerald-400">
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                      </svg>
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-xs text-emerald-400">
+                      <DocIcon />
                       Resume: {config.resumeFileName}
                     </span>
                   )}
@@ -225,18 +271,18 @@ export default function LobbyPage() {
                     onClick={() => router.push('/')}
                     className="text-xs text-slate-500 hover:text-indigo-400 transition underline underline-offset-2"
                   >
-                    Change documents
+                    Change
                   </button>
                 </div>
               )}
             </div>
           )}
-        </div>
+        </motion.div>
 
-        <div className="grid md:grid-cols-2 gap-6">
+        <div className="grid md:grid-cols-2 gap-5">
           {/* Camera preview */}
-          <div className="space-y-3 animate-slide-up stagger-1">
-            <div className="relative aspect-video rounded-2xl overflow-hidden bg-slate-900 border border-slate-700">
+          <motion.div className="space-y-3" variants={itemVariants}>
+            <div className="relative aspect-video rounded-2xl overflow-hidden bg-slate-900 border border-slate-700/50">
               <video
                 ref={videoRef}
                 autoPlay
@@ -244,75 +290,96 @@ export default function LobbyPage() {
                 playsInline
                 className="w-full h-full object-cover scale-x-[-1]"
               />
-              <div className="absolute bottom-3 left-3 bg-black/60 backdrop-blur-sm px-3 py-1 rounded-full text-xs text-slate-300">
-                Your preview
+              <div className="absolute bottom-3 left-3 bg-black/50 backdrop-blur-md px-3 py-1.5 rounded-lg border border-white/[0.06] text-xs text-slate-300 font-medium">
+                Camera preview
               </div>
+
+              {/* Joining overlay */}
+              <AnimatePresence>
+                {joining && (
+                  <motion.div
+                    className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center gap-3"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                  >
+                    <motion.div
+                      className="text-4xl font-bold text-white"
+                      key={joinCountdown}
+                      initial={{ scale: 0.5, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      exit={{ scale: 1.5, opacity: 0 }}
+                      transition={{ duration: 0.3 }}
+                    >
+                      {joinCountdown || ''}
+                    </motion.div>
+                    <p className="text-sm text-slate-300">Joining interview room...</p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
 
             {/* Audio level meter */}
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
-                <span className="text-xs text-slate-500">Microphone level</span>
-                <span className="text-xs text-slate-600 tabular-nums">{Math.round(audioLevel)}%</span>
+                <span className="text-xs text-slate-500 font-medium">Microphone level</span>
+                <span className="text-xs text-slate-600 tabular-nums font-mono">{Math.round(audioLevel)}%</span>
               </div>
-              <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
-                <div
-                  className="h-full rounded-full transition-all duration-75"
-                  style={{
-                    width: `${audioLevel}%`,
-                    background: audioLevel > 80
-                      ? 'rgb(239,68,68)'
-                      : audioLevel > 20
-                      ? 'rgb(16,185,129)'
-                      : 'rgb(100,116,139)',
-                  }}
+              <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                <motion.div
+                  className="h-full rounded-full"
+                  animate={{ width: `${audioLevel}%`, backgroundColor: meterColor }}
+                  transition={{ duration: 0.075, ease: 'linear' }}
                 />
               </div>
               <p className="text-xs text-slate-600">
-                {audioLevel > 20 ? 'Speak normally — your mic is picking up audio.' : 'Say something to test your microphone.'}
+                {audioLevel > 20 ? 'Mic is picking up audio — you\'re good to go.' : 'Say something to test your microphone.'}
               </p>
             </div>
-          </div>
+          </motion.div>
 
           {/* Checks + tips */}
-          <div className="space-y-4 animate-slide-up stagger-2">
+          <motion.div className="space-y-4" variants={itemVariants}>
             {/* System checks */}
-            <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 space-y-4">
+            <div className="bg-slate-900/80 backdrop-blur-sm border border-slate-700/50 rounded-2xl p-5 space-y-4">
               <h2 className="text-sm font-semibold text-slate-300">System checks</h2>
-              {checks.map((check, i) => (
-                <div
-                  key={check.label}
-                  className={`flex items-center gap-3 transition-all duration-300 ${
-                    i < visibleChecks
-                      ? 'opacity-100 translate-y-0'
-                      : 'opacity-0 translate-y-2'
-                  }`}
-                >
+              {checks.map((check) => (
+                <div key={check.label} className="flex items-center gap-3">
                   <StatusIcon status={check.status} />
-                  <div className="flex-1">
+                  <div className="flex-1 min-w-0">
                     <div className="text-sm text-slate-200">{check.label}</div>
-                    {check.detail && (
-                      <div className={`text-xs ${check.status === 'error' ? 'text-red-400' : 'text-slate-500'}`}>
-                        {check.detail}
-                      </div>
-                    )}
+                    <AnimatePresence>
+                      {check.detail && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          className={`text-xs ${check.status === 'error' ? 'text-red-400' : 'text-slate-500'}`}
+                        >
+                          {check.detail}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
                 </div>
               ))}
             </div>
 
             {/* Tips */}
-            <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 space-y-3">
+            <div className="bg-slate-900/80 backdrop-blur-sm border border-slate-700/50 rounded-2xl p-5 space-y-3">
               <h2 className="text-sm font-semibold text-slate-300">Quick tips</h2>
-              <ul className="space-y-2 text-sm text-slate-400">
+              <ul className="space-y-2.5 text-sm text-slate-400">
                 {[
                   'Speak clearly and at a steady pace',
-                  'Pause 1–2 seconds before answering',
+                  'Pause 1-2 seconds before answering',
                   'Use STAR: Situation, Task, Action, Result',
                   'Close other browser tabs to reduce lag',
                 ].map(tip => (
-                  <li key={tip} className="flex items-start gap-2">
-                    <span className="text-indigo-400 mt-0.5">›</span>
+                  <li key={tip} className="flex items-start gap-2.5">
+                    <span className="text-indigo-400 mt-0.5 shrink-0">
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                      </svg>
+                    </span>
                     {tip}
                   </li>
                 ))}
@@ -320,38 +387,54 @@ export default function LobbyPage() {
             </div>
 
             {/* CTA */}
-            {!joining ? (
-              <button
-                onClick={enterRoom}
-                disabled={!allOk}
-                className={`
-                  w-full py-4 rounded-2xl font-semibold text-sm transition-all duration-200
-                  ${allOk
-                    ? 'bg-indigo-600 hover:bg-indigo-500 text-white btn-glow'
-                    : 'bg-slate-800 text-slate-600 cursor-not-allowed border border-slate-700'
-                  }
-                `}
-              >
-                {allOk ? 'Join Interview Room →' : 'Waiting for checks…'}
-              </button>
-            ) : (
-              <div className="w-full py-4 rounded-2xl bg-slate-800 border border-slate-700 flex items-center justify-center gap-3">
-                <div className="w-4 h-4 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
-                <span className="text-slate-400 text-sm">Interviewer joining…</span>
-              </div>
-            )}
-          </div>
+            <AnimatePresence mode="wait">
+              {!joining ? (
+                <motion.button
+                  key="join-btn"
+                  onClick={enterRoom}
+                  disabled={!allOk}
+                  whileHover={allOk ? { scale: 1.01 } : {}}
+                  whileTap={allOk ? { scale: 0.99 } : {}}
+                  className={`
+                    w-full py-4 rounded-2xl font-semibold text-sm transition-colors
+                    ${allOk
+                      ? 'bg-indigo-600 hover:bg-indigo-500 text-white btn-glow'
+                      : 'bg-slate-800 text-slate-600 cursor-not-allowed border border-slate-700'
+                    }
+                  `}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                >
+                  {allOk ? 'Join Interview Room' : 'Waiting for checks...'}
+                </motion.button>
+              ) : (
+                <motion.div
+                  key="joining-state"
+                  className="w-full py-4 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 flex items-center justify-center gap-3"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                >
+                  <div className="w-4 h-4 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
+                  <span className="text-indigo-300 text-sm font-medium">Interviewer joining...</span>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </motion.div>
         </div>
 
-        <div className="text-center animate-slide-up stagger-4">
+        <motion.div className="text-center" variants={itemVariants}>
           <button
             onClick={() => router.push('/')}
-            className="text-sm text-slate-500 hover:text-slate-300 transition"
+            className="text-sm text-slate-500 hover:text-slate-300 transition inline-flex items-center gap-1.5"
           >
-            ← Back to settings
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+            </svg>
+            Back to settings
           </button>
-        </div>
-      </div>
+        </motion.div>
+      </motion.div>
     </main>
   )
 }

@@ -24,14 +24,17 @@ body {
 
 /* Smooth scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 5px;
 }
 ::-webkit-scrollbar-track {
-  background: #0f172a;
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
   background: #334155;
   border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
 }
 
 /* Selection */
@@ -42,12 +45,12 @@ body {
 /* Transcript scroll area */
 .transcript-scroll {
   scrollbar-width: thin;
-  scrollbar-color: #334155 #0f172a;
+  scrollbar-color: #334155 transparent;
 }
 
-/* Talking wave animation */
+/* Talking wave animation (kept for fallback) */
 @keyframes wave {
-  0%, 100% { transform: scaleY(0.4); }
+  0%, 100% { transform: scaleY(0.3); }
   50% { transform: scaleY(1); }
 }
 
@@ -55,7 +58,28 @@ body {
   animation: wave 0.6s ease-in-out infinite;
 }
 
-/* Slide-up entry */
+/* Glow button */
+.btn-glow {
+  box-shadow: 0 0 24px rgba(99, 102, 241, 0.35);
+  transition: box-shadow 0.2s ease, transform 0.15s ease;
+}
+.btn-glow:hover {
+  box-shadow: 0 0 36px rgba(99, 102, 241, 0.55);
+  transform: translateY(-1px);
+}
+.btn-glow:active {
+  transform: translateY(0);
+  box-shadow: 0 0 20px rgba(99, 102, 241, 0.3);
+}
+
+/* Focus ring for accessibility */
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid rgba(99, 102, 241, 0.6);
+  outline-offset: 2px;
+}
+
+/* Slide-up entry animation — used by home, settings, feedback, pricing pages */
 @keyframes slideUp {
   from {
     opacity: 0;
@@ -71,22 +95,9 @@ body {
   animation: slideUp 0.5s ease-out both;
 }
 
-/* Stagger helper */
+/* Stagger helpers */
 .stagger-1 { animation-delay: 0.05s; }
-.stagger-2 { animation-delay: 0.1s; }
+.stagger-2 { animation-delay: 0.10s; }
 .stagger-3 { animation-delay: 0.15s; }
-.stagger-4 { animation-delay: 0.2s; }
+.stagger-4 { animation-delay: 0.20s; }
 .stagger-5 { animation-delay: 0.25s; }
-
-/* Glow button */
-.btn-glow {
-  box-shadow: 0 0 20px rgba(99, 102, 241, 0.4);
-  transition: box-shadow 0.2s ease, transform 0.15s ease;
-}
-.btn-glow:hover {
-  box-shadow: 0 0 32px rgba(99, 102, 241, 0.6);
-  transform: translateY(-1px);
-}
-.btn-glow:active {
-  transform: translateY(0);
-}
