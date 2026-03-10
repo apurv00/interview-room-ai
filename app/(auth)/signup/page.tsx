@@ -42,7 +42,7 @@ export default function SignUpPage() {
         email,
         password,
         redirect: false,
-        callbackUrl: '/setup',
+        callbackUrl: '/lobby',
       })
 
       if (result?.url) {

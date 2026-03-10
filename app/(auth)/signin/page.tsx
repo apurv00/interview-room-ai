@@ -8,7 +8,7 @@ import Link from 'next/link'
 function SignInContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const callbackUrl = searchParams.get('callbackUrl') || '/setup'
+  const callbackUrl = searchParams.get('callbackUrl') || '/lobby'
   const error = searchParams.get('error')
 
   const [email, setEmail] = useState('')
