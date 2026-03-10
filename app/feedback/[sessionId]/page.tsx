@@ -1,13 +1,20 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import { ScoreBar, ScoreRing } from '@/components/ScoreBar'
 import ScoreTrendChart from '@/components/feedback/ScoreTrendChart'
 import QuestionBreakdown from '@/components/feedback/QuestionBreakdown'
 import CommunicationDetail from '@/components/feedback/CommunicationDetail'
+import AudioPlayer from '@/components/feedback/AudioPlayer'
+import PeerComparison, { type PeerData } from '@/components/feedback/PeerComparison'
 import type { FeedbackData, StoredInterviewData, TranscriptEntry, EngagementSignals, DeliverySignals } from '@/lib/types'
 import { ROLE_LABELS } from '@/lib/interviewConfig'
+import { computeOffsetSeconds } from '@/lib/offsetHelpers'
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const PEER_CACHE_PREFIX = 'peerData:'
 
 const PROBABILITY_COLORS = {
   High: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30',
@@ -23,6 +30,30 @@ const CONFIDENCE_TREND_LABELS = {
 
 type FeedbackTab = 'overview' | 'questions' | 'transcript'
 
+// ─── Binary search helper ─────────────────────────────────────────────────────
+
+/**
+ * Find the last index in a sorted `offsets` array where offsets[i] <= target.
+ * Returns -1 if no such index exists. O(log n).
+ */
+function bisectLastLE(offsets: number[], target: number): number {
+  let lo = 0
+  let hi = offsets.length - 1
+  let result = -1
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1
+    if (offsets[mid] <= target) {
+      result = mid
+      lo = mid + 1
+    } else {
+      hi = mid - 1
+    }
+  }
+  return result
+}
+
+// ─── Component ────────────────────────────────────────────────────────────────
+
 export default function FeedbackPage() {
   const router = useRouter()
   const params = useParams()
@@ -31,15 +62,35 @@ export default function FeedbackPage() {
   const [data, setData] = useState<StoredInterviewData | null>(null)
   const [feedback, setFeedback] = useState<FeedbackData | null>(null)
   const [loading, setLoading] = useState(true)
+  // Issue 6-A: feedbackError state for user-facing error + retry
+  const [feedbackError, setFeedbackError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<FeedbackTab>('overview')
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null)
+  const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null)
+
+  // Peer comparison state
+  const [peerData, setPeerData] = useState<PeerData | null>(null)
+  const [peerLoading, setPeerLoading] = useState(true)
+
+  // Audio player sync state
+  const [currentAudioTime, setCurrentAudioTime] = useState(0)
+  const seekToRef = useRef<((s: number) => void) | null>(null)
+  const activeEntryRef = useRef<HTMLDivElement>(null)
+  const handleSeekExpose = useCallback((fn: (s: number) => void) => { seekToRef.current = fn }, [])
+
+  // ── Data loading ────────────────────────────────────────────────────────────
 
   useEffect(() => {
+    // Issue 1-A: single AbortController for cancellable fetch/generation only.
+    // The DB persist PATCH is fire-and-forget and NOT cancelled on unmount.
+    const abortCtrl = new AbortController()
+    const { signal } = abortCtrl
+
     async function loadData() {
       // Try loading from DB first (unless it's the "local" fallback route)
       if (sessionId && sessionId !== 'local') {
         try {
-          const res = await fetch(`/api/interviews/${sessionId}`)
+          const res = await fetch(`/api/interviews/${sessionId}`, { signal })
           if (res.ok) {
             const session = await res.json()
             const d: StoredInterviewData = {
@@ -51,6 +102,11 @@ export default function FeedbackPage() {
             }
             setData(d)
             if (session.recordingUrl) setRecordingUrl(session.recordingUrl)
+            if (session.startedAt) setSessionStartedAt(new Date(session.startedAt).getTime())
+
+            // Fetch peer comparison data in parallel (non-blocking)
+            // Issue 7-A: sessionId removed — route validates ownership via NextAuth userId
+            fetchPeerData(d.config, signal)
 
             // If feedback already exists in DB, use it
             if (session.feedback) {
@@ -60,10 +116,11 @@ export default function FeedbackPage() {
             }
 
             // Otherwise generate feedback
-            await generateFeedback(d, sessionId)
+            await generateFeedback(d, sessionId, signal)
             return
           }
-        } catch {
+        } catch (e) {
+          if ((e as Error).name === 'AbortError') return
           // Fall through to localStorage
         }
       }
@@ -76,13 +133,63 @@ export default function FeedbackPage() {
       }
       const d: StoredInterviewData = JSON.parse(stored)
       setData(d)
-      await generateFeedback(d, sessionId !== 'local' ? sessionId : undefined)
+      // Derive sessionStartedAt from first transcript entry as fallback
+      if (d.transcript.length > 0) {
+        setSessionStartedAt(d.transcript[0].timestamp)
+      }
+      setPeerLoading(false) // No peer data for local sessions
+      await generateFeedback(d, sessionId !== 'local' ? sessionId : undefined, signal)
     }
 
     loadData()
+    return () => abortCtrl.abort()
   }, [sessionId, router]) // eslint-disable-line
 
-  async function generateFeedback(d: StoredInterviewData, sid?: string) {
+  // ── Peer data fetch with sessionStorage cache (Issue 13-A) ─────────────────
+
+  async function fetchPeerData(config: StoredInterviewData['config'], signal?: AbortSignal) {
+    if (!config) { setPeerLoading(false); return }
+
+    const cacheKey = `${PEER_CACHE_PREFIX}${config.role}:${config.experience}`
+
+    // Check sessionStorage first — avoids re-fetching on tab revisit within the session
+    try {
+      const cached = sessionStorage.getItem(cacheKey)
+      if (cached) {
+        setPeerData(JSON.parse(cached))
+        setPeerLoading(false)
+        return
+      }
+    } catch {
+      // sessionStorage unavailable (e.g. private browsing) — fall through
+    }
+
+    try {
+      // Issue 7-A: no sessionId param — server derives userId from NextAuth
+      const searchParams = new URLSearchParams({ role: config.role, experience: config.experience })
+      const res = await fetch(`/api/analytics/peer-comparison?${searchParams}`, { signal })
+      if (res.ok) {
+        const json = await res.json()
+        setPeerData(json)
+        // Persist to sessionStorage for the rest of this browser session
+        try {
+          sessionStorage.setItem(cacheKey, JSON.stringify(json))
+        } catch {
+          // Non-critical — quota or private browsing
+        }
+      }
+    } catch (e) {
+      if ((e as Error).name === 'AbortError') return
+      // Non-critical — silently fail, PeerComparison handles null gracefully
+    } finally {
+      setPeerLoading(false)
+    }
+  }
+
+  // ── Feedback generation (Issue 1-A, 6-A) ───────────────────────────────────
+
+  async function generateFeedback(d: StoredInterviewData, sid?: string, signal?: AbortSignal) {
+    setFeedbackError(null)
     try {
       const res = await fetch('/api/generate-feedback', {
         method: 'POST',
@@ -94,30 +201,41 @@ export default function FeedbackPage() {
           speechMetrics: d.speechMetrics,
           sessionId: sid,
         }),
+        signal,
       })
       const fb: FeedbackData = await res.json()
       setFeedback(fb)
 
-      // Persist feedback to DB
+      // Issue 1-A: DB persist is fire-and-forget — intentionally no `signal`
+      // so user navigation doesn't cancel a write that's already in flight.
       if (sid && sid !== 'local') {
-        try {
-          await fetch(`/api/interviews/${sid}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ feedback: fb }),
-          })
-        } catch {
-          // Non-critical
-        }
+        fetch(`/api/interviews/${sid}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ feedback: fb }),
+        }).catch(() => { /* non-critical */ })
       }
     } catch (e) {
-      console.error(e)
+      if ((e as Error).name === 'AbortError') return
+      // Issue 6-A: surface error with retry affordance
+      setFeedbackError('Failed to generate feedback. Please try again.')
     } finally {
       setLoading(false)
     }
   }
 
-  if (loading || !feedback || !data) {
+  // ── Retry handler (Issue 6-A) ───────────────────────────────────────────────
+
+  function handleRetry() {
+    if (!data) return
+    setLoading(true)
+    setFeedbackError(null)
+    generateFeedback(data, sessionId !== 'local' ? sessionId : undefined)
+  }
+
+  // ── Loading / error state ───────────────────────────────────────────────────
+
+  if (loading || !data) {
     return (
       <div className="min-h-screen bg-[#070b14] flex flex-col items-center justify-center gap-4">
         <div className="w-8 h-8 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
@@ -125,6 +243,41 @@ export default function FeedbackPage() {
       </div>
     )
   }
+
+  // Issue 6-A: error card with retry
+  if (feedbackError && !feedback) {
+    return (
+      <div className="min-h-screen bg-[#070b14] flex flex-col items-center justify-center gap-5 px-4">
+        <div className="bg-slate-900 border border-red-500/30 rounded-2xl p-6 max-w-sm w-full text-center space-y-4">
+          <div className="w-12 h-12 rounded-full bg-red-600/20 flex items-center justify-center mx-auto">
+            <svg className="w-6 h-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <div>
+            <p className="text-slate-200 font-medium">Something went wrong</p>
+            <p className="text-slate-400 text-sm mt-1">{feedbackError}</p>
+          </div>
+          <div className="flex gap-3 justify-center">
+            <button
+              onClick={handleRetry}
+              className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-medium transition"
+            >
+              Try again
+            </button>
+            <button
+              onClick={() => router.push('/')}
+              className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-sm font-medium transition"
+            >
+              Go home
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (!feedback) return null
 
   const { dimensions, red_flags, top_3_improvements, overall_score, pass_probability } = feedback
   const { answer_quality, communication } = dimensions
@@ -139,6 +292,76 @@ export default function FeedbackPage() {
     { key: 'transcript', label: 'Transcript' },
   ]
 
+  // ── Derived memos ───────────────────────────────────────────────────────────
+
+  // Issue 5-A: single one-pass reduce for all avg scores (was 4 separate reduces inline)
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const avgScores = useMemo(() => {
+    if (!data || data.evaluations.length === 0) return null
+    const n = data.evaluations.length
+    const sums = data.evaluations.reduce(
+      (acc, e) => ({
+        relevance: acc.relevance + e.relevance,
+        structure: acc.structure + e.structure,
+        specificity: acc.specificity + e.specificity,
+        ownership: acc.ownership + e.ownership,
+      }),
+      { relevance: 0, structure: 0, specificity: 0, ownership: 0 }
+    )
+    return {
+      relevance: Math.round(sums.relevance / n),
+      structure: Math.round(sums.structure / n),
+      specificity: Math.round(sums.specificity / n),
+      ownership: Math.round(sums.ownership / n),
+    }
+  }, [data?.evaluations]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Issue 15-A: narrow deps to data?.transcript instead of data (avoids re-compute on unrelated state changes)
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const questionMarkers = useMemo(() => {
+    if (!data) return []
+    const seen = new Set<number>()
+    return data.transcript
+      .filter((e) => {
+        if (e.speaker !== 'interviewer' || e.questionIndex === undefined) return false
+        if (seen.has(e.questionIndex)) return false
+        seen.add(e.questionIndex)
+        return true
+      })
+      .map((e) => ({
+        label: `Q${(e.questionIndex ?? 0) + 1}`,
+        offsetSeconds: computeOffsetSeconds(e.timestamp, sessionStartedAt),
+      }))
+  }, [data?.transcript, sessionStartedAt]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Issue 15-A + 4-A: narrow deps; ensure sorted for binary search
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const transcriptOffsets = useMemo(() => {
+    if (!data) return []
+    // Map and sort ascending — transcripts are ordered by time but explicit sort
+    // ensures the binary search in activeTranscriptIndex is always correct.
+    return data.transcript
+      .map((e) => computeOffsetSeconds(e.timestamp, sessionStartedAt))
+      .sort((a, b) => a - b)
+  }, [data?.transcript, sessionStartedAt]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Issue 4-A: binary search O(log n) instead of linear scan O(n)
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const activeTranscriptIndex = useMemo(() => {
+    if (!recordingUrl || transcriptOffsets.length === 0) return -1
+    return bisectLastLE(transcriptOffsets, currentAudioTime)
+  }, [recordingUrl, transcriptOffsets, currentAudioTime])
+
+  // Auto-scroll to active transcript entry
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  useEffect(() => {
+    if (activeEntryRef.current && activeTab === 'transcript') {
+      activeEntryRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }, [activeTranscriptIndex, activeTab])
+
+  // ── Render ──────────────────────────────────────────────────────────────────
+
   return (
     <div className="min-h-screen bg-[#070b14] text-white">
       {/* Header */}
@@ -152,20 +375,6 @@ export default function FeedbackPage() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            {recordingUrl && (
-              <a
-                href={recordingUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 border border-slate-700 hover:bg-slate-700 rounded-xl text-sm text-slate-300 transition"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                Playback
-              </a>
-            )}
             <button
               onClick={() => router.push('/')}
               className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-sm font-medium transition"
@@ -177,6 +386,16 @@ export default function FeedbackPage() {
       </header>
 
       <main className="max-w-5xl mx-auto px-4 py-8 space-y-8">
+        {/* Audio Player */}
+        {recordingUrl && (
+          <AudioPlayer
+            src={recordingUrl}
+            questionMarkers={questionMarkers}
+            onTimeUpdate={setCurrentAudioTime}
+            onSeek={handleSeekExpose}
+          />
+        )}
+
         {/* Hero: overall score + trend */}
         <section className="flex flex-col sm:flex-row items-center gap-8 bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 animate-slide-up">
           <ScoreRing score={overall_score} size={140} />
@@ -237,7 +456,7 @@ export default function FeedbackPage() {
           <div className="space-y-6">
             {/* Score breakdown */}
             <section className="grid md:grid-cols-3 gap-4">
-              {/* Answer Quality */}
+              {/* Answer Quality — Issue 5-A: uses avgScores useMemo instead of 4 inline reduces */}
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 animate-slide-up stagger-1">
                 <div className="flex items-center justify-between">
                   <h3 className="font-semibold text-slate-200">Answer Quality</h3>
@@ -246,38 +465,22 @@ export default function FeedbackPage() {
                 <div className="space-y-3">
                   <ScoreBar
                     label="Relevance"
-                    score={
-                      data.evaluations.length > 0
-                        ? Math.round(data.evaluations.reduce((a, e) => a + e.relevance, 0) / data.evaluations.length)
-                        : answer_quality.score
-                    }
+                    score={avgScores?.relevance ?? answer_quality.score}
                     delay={100}
                   />
                   <ScoreBar
                     label="Structure (STAR)"
-                    score={
-                      data.evaluations.length > 0
-                        ? Math.round(data.evaluations.reduce((a, e) => a + e.structure, 0) / data.evaluations.length)
-                        : answer_quality.score
-                    }
+                    score={avgScores?.structure ?? answer_quality.score}
                     delay={200}
                   />
                   <ScoreBar
                     label="Specificity"
-                    score={
-                      data.evaluations.length > 0
-                        ? Math.round(data.evaluations.reduce((a, e) => a + e.specificity, 0) / data.evaluations.length)
-                        : answer_quality.score
-                    }
+                    score={avgScores?.specificity ?? answer_quality.score}
                     delay={300}
                   />
                   <ScoreBar
                     label="Ownership"
-                    score={
-                      data.evaluations.length > 0
-                        ? Math.round(data.evaluations.reduce((a, e) => a + e.ownership, 0) / data.evaluations.length)
-                        : answer_quality.score
-                    }
+                    score={avgScores?.ownership ?? answer_quality.score}
                     delay={400}
                   />
                 </div>
@@ -511,6 +714,15 @@ export default function FeedbackPage() {
                 ))}
               </div>
             </section>
+
+            {/* Peer Comparison */}
+            {sessionId && sessionId !== 'local' && data.config && feedback && (
+              <PeerComparison
+                data={peerData}
+                loading={peerLoading}
+                userFeedback={feedback}
+              />
+            )}
           </div>
         )}
 
@@ -526,31 +738,43 @@ export default function FeedbackPage() {
           <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 animate-slide-up">
             <h3 className="font-semibold text-slate-200">Full Transcript</h3>
             <div className="space-y-4 max-h-[600px] overflow-y-auto transcript-scroll pr-2">
-              {data.transcript.map((entry: TranscriptEntry, i: number) => (
-                <div
-                  key={i}
-                  className={`flex gap-3 ${entry.speaker === 'interviewer' ? '' : 'flex-row-reverse'}`}
-                >
+              {data.transcript.map((entry: TranscriptEntry, i: number) => {
+                const isActive = i === activeTranscriptIndex
+                const canSeek = recordingUrl && sessionStartedAt
+                return (
                   <div
-                    className={`shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${
-                      entry.speaker === 'interviewer'
-                        ? 'bg-indigo-600 text-white'
-                        : 'bg-slate-700 text-slate-300'
-                    }`}
+                    key={i}
+                    ref={isActive ? activeEntryRef : undefined}
+                    className={`flex gap-3 ${entry.speaker === 'interviewer' ? '' : 'flex-row-reverse'} ${
+                      canSeek ? 'cursor-pointer' : ''
+                    } ${isActive ? 'ring-2 ring-indigo-500/50 rounded-2xl' : ''} transition-all duration-200`}
+                    onClick={() => {
+                      if (canSeek && seekToRef.current) {
+                        seekToRef.current(computeOffsetSeconds(entry.timestamp, sessionStartedAt))
+                      }
+                    }}
                   >
-                    {entry.speaker === 'interviewer' ? 'A' : 'Y'}
+                    <div
+                      className={`shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${
+                        entry.speaker === 'interviewer'
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-slate-700 text-slate-300'
+                      }`}
+                    >
+                      {entry.speaker === 'interviewer' ? 'A' : 'Y'}
+                    </div>
+                    <div
+                      className={`max-w-[78%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
+                        entry.speaker === 'interviewer'
+                          ? 'bg-slate-800 text-slate-200'
+                          : 'bg-indigo-900/40 border border-indigo-500/20 text-indigo-100'
+                      }`}
+                    >
+                      {entry.text}
+                    </div>
                   </div>
-                  <div
-                    className={`max-w-[78%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
-                      entry.speaker === 'interviewer'
-                        ? 'bg-slate-800 text-slate-200'
-                        : 'bg-indigo-900/40 border border-indigo-500/20 text-indigo-100'
-                    }`}
-                  >
-                    {entry.text}
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </section>
         )}

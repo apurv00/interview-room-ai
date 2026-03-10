@@ -24,6 +24,7 @@ export type InterviewState =
   | 'ASK_QUESTION'
   | 'LISTENING'
   | 'PROCESSING'
+  | 'COACHING'
   | 'FOLLOW_UP'
   | 'WRAP_UP'
   | 'SCORING'

@@ -15,6 +15,7 @@ import {
   WRAP_UP_LINE,
   QUESTION_COUNT,
 } from '@/lib/interviewConfig'
+import { deriveCoachingTip } from '@/lib/coachingTips'
 import type { SpeechRecognitionResult } from './useSpeechRecognition'
 
 // ─── Session persistence helpers ──────────────────────────────────────────────
@@ -70,6 +71,7 @@ export interface UseInterviewReturn {
   timeRemaining: number
   liveAnswer: string
   sessionId: string | null
+  coachingTip: string | null
   finishInterview: () => void
 }
 
@@ -109,6 +111,10 @@ export function useInterview({
 
   // ── Live answer capture ──
   const [liveAnswer, setLiveAnswer] = useState('')
+
+  // ── Coaching ──
+  const [coachingTip, setCoachingTip] = useState<string | null>(null)
+  const coachingAbortRef = useRef<AbortController | null>(null)
 
   // ── Timer ──
   const [timeRemaining, setTimeRemaining] = useState(0)
@@ -251,6 +257,9 @@ export function useInterview({
     window.speechSynthesis.cancel()
     stopListening()
     onRecordingStop?.()
+    // Cancel coaching sleep if in progress
+    coachingAbortRef.current?.abort()
+    setCoachingTip(null)
 
     const data = {
       config,
@@ -354,6 +363,23 @@ export function useInterview({
         const responseEmotion: AvatarEmotion =
           avgScore >= 75 ? 'impressed' : avgScore >= 55 ? 'friendly' : 'curious'
 
+        // Coaching tip between questions (cancellable via AbortController)
+        transitionTo('COACHING')
+        setCoachingTip(deriveCoachingTip(evaluation))
+        const abortCtrl = new AbortController()
+        coachingAbortRef.current = abortCtrl
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 3500)
+          abortCtrl.signal.addEventListener('abort', () => {
+            clearTimeout(timer)
+            resolve()
+          })
+        })
+        coachingAbortRef.current = null
+        if (!abortCtrl.signal.aborted) {
+          setCoachingTip(null)
+        }
+
         // Follow-up?
         if (
           evaluation.needsFollowUp &&
@@ -383,7 +409,6 @@ export function useInterview({
           await new Promise((r) => setTimeout(r, 600))
         } else {
           setAvatarEmotion(responseEmotion)
-          await new Promise((r) => setTimeout(r, 600))
         }
       }
 
@@ -433,6 +458,7 @@ export function useInterview({
     timeRemaining,
     liveAnswer,
     sessionId: sessionIdRef.current,
+    coachingTip,
     finishInterview,
   }
 }

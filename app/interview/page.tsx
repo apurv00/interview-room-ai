@@ -8,9 +8,12 @@ import VideoTile from '@/components/VideoTile'
 import TranscriptPanel from '@/components/interview/TranscriptPanel'
 import InterviewControls from '@/components/interview/InterviewControls'
 import RecordingIndicator from '@/components/RecordingIndicator'
+import CoachingNudge from '@/components/interview/CoachingNudge'
+import CoachingTip from '@/components/interview/CoachingTip'
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition'
 import { useInterview } from '@/hooks/useInterview'
 import { useMediaRecorder } from '@/hooks/useMediaRecorder'
+import { useCoachingNudge } from '@/hooks/useCoachingNudge'
 import type { InterviewConfig } from '@/lib/types'
 import { AVATAR_NAME, AVATAR_TITLE } from '@/lib/interviewConfig'
 
@@ -32,6 +35,7 @@ const PHASE_LABELS: Record<string, string> = {
   ASK_QUESTION: 'Question',
   LISTENING: 'Listening',
   PROCESSING: 'Processing',
+  COACHING: 'Coaching',
   FOLLOW_UP: 'Follow-up',
   WRAP_UP: 'Wrapping up',
   SCORING: 'Scoring',
@@ -42,6 +46,7 @@ const PHASE_LABELS: Record<string, string> = {
 const PHASE_COLORS: Record<string, { text: string; bg: string; border: string; dot: string }> = {
   LISTENING: { text: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/25', dot: 'bg-emerald-400' },
   PROCESSING: { text: 'text-amber-400', bg: 'bg-amber-500/10', border: 'border-amber-500/25', dot: 'bg-amber-400' },
+  COACHING: { text: 'text-violet-400', bg: 'bg-violet-500/10', border: 'border-violet-500/25', dot: 'bg-violet-400' },
   ASK_QUESTION: { text: 'text-indigo-400', bg: 'bg-indigo-500/10', border: 'border-indigo-500/25', dot: 'bg-indigo-400' },
   FOLLOW_UP: { text: 'text-purple-400', bg: 'bg-purple-500/10', border: 'border-purple-500/25', dot: 'bg-purple-400' },
   WRAP_UP: { text: 'text-orange-400', bg: 'bg-orange-500/10', border: 'border-orange-500/25', dot: 'bg-orange-400' },
@@ -106,12 +111,16 @@ export default function InterviewPage() {
     isAvatarTalking,
     timeRemaining,
     liveAnswer,
+    coachingTip,
     finishInterview,
   } = interview
 
   const displayAnswer = isListening ? liveTranscript : liveAnswer
   const phaseColor = PHASE_COLORS[phase] ?? DEFAULT_PHASE_COLOR
   const isProcessing = phase === 'PROCESSING'
+
+  // ── Live coaching nudges (Issue 3-A: extracted to useCoachingNudge hook) ──
+  const activeNudge = useCoachingNudge({ phase, liveTranscript })
 
   // ─── Keyboard shortcut (M to toggle mute) ──────────────────────────────────
   useEffect(() => {
@@ -323,6 +332,12 @@ export default function InterviewPage() {
         currentQuestion={currentQuestion}
         liveAnswer={displayAnswer}
       />
+
+      {/* ── Coaching layer ── */}
+      <div className="px-4 pb-1 flex flex-col gap-1.5">
+        <CoachingNudge nudge={activeNudge} />
+        <CoachingTip tip={coachingTip} />
+      </div>
 
       {/* ── Controls ── */}
       <InterviewControls
