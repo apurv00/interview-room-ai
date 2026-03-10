@@ -333,6 +333,19 @@ function FeedbackPageInner() {
 
   if (!feedback) return null
 
+  // DEBUG: log feedback and data shapes to diagnose React #310
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  useMemo(() => {
+    try {
+      console.log('[FeedbackDebug] feedback:', JSON.stringify(feedback).slice(0, 2000))
+      console.log('[FeedbackDebug] data.evaluations sample:', JSON.stringify(data?.evaluations?.[0]).slice(0, 500))
+      console.log('[FeedbackDebug] data.transcript sample:', JSON.stringify(data?.transcript?.[0]).slice(0, 500))
+      console.log('[FeedbackDebug] data.speechMetrics sample:', JSON.stringify(data?.speechMetrics?.[0]).slice(0, 500))
+    } catch (e) {
+      console.error('[FeedbackDebug] stringify failed:', e)
+    }
+  }, [feedback, data])
+
   // Defensive: bail to error UI if feedback has unexpected shape
   if (!feedback.dimensions || !feedback.dimensions.answer_quality || !feedback.dimensions.communication) {
     return (
@@ -529,7 +542,7 @@ function FeedbackPageInner() {
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 animate-slide-up stagger-1">
                 <div className="flex items-center justify-between">
                   <h3 className="font-semibold text-slate-200">Answer Quality</h3>
-                  <span className="text-2xl font-bold text-indigo-400">{answer_quality.score}</span>
+                  <span className="text-2xl font-bold text-indigo-400">{Number(answer_quality.score) || 0}</span>
                 </div>
                 <div className="space-y-3">
                   <ScoreBar
@@ -579,7 +592,7 @@ function FeedbackPageInner() {
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 animate-slide-up stagger-2">
                 <div className="flex items-center justify-between">
                   <h3 className="font-semibold text-slate-200">Communication</h3>
-                  <span className="text-2xl font-bold text-cyan-400">{communication.score}</span>
+                  <span className="text-2xl font-bold text-cyan-400">{Number(communication.score) || 0}</span>
                 </div>
                 <div className="space-y-3">
                   <ScoreBar
@@ -637,7 +650,7 @@ function FeedbackPageInner() {
                   <>
                     <div className="flex items-center justify-between">
                       <h3 className="font-semibold text-slate-200">Engagement</h3>
-                      <span className="text-2xl font-bold text-violet-400">{engagementSignals.score}</span>
+                      <span className="text-2xl font-bold text-violet-400">{Number(engagementSignals.score) || 0}</span>
                     </div>
                     <div className="space-y-3">
                       <ScoreBar
@@ -676,7 +689,7 @@ function FeedbackPageInner() {
                     {/* Legacy delivery signals for backward compat */}
                     <div className="flex items-center justify-between">
                       <h3 className="font-semibold text-slate-200">Delivery</h3>
-                      <span className="text-2xl font-bold text-violet-400">{deliverySignals.score}</span>
+                      <span className="text-2xl font-bold text-violet-400">{Number(deliverySignals.score) || 0}</span>
                     </div>
                     <div className="space-y-3">
                       <ScoreBar

@@ -44,7 +44,8 @@ function scoreToColor(score: number): 'emerald' | 'amber' | 'rose' {
   return 'rose'
 }
 
-export function ScoreBar({ label, score, color, detail, delay = 0 }: ScoreBarProps) {
+export function ScoreBar({ label, score: rawScore, color, detail, delay = 0 }: ScoreBarProps) {
+  const score = typeof rawScore === 'number' ? rawScore : Number(rawScore) || 0
   const [width, setWidth] = useState(0)
   const resolvedColor = color ?? scoreToColor(score)
   const c = COLOR_MAP[resolvedColor]
@@ -80,7 +81,8 @@ interface ScoreRingProps {
   size?: number
 }
 
-export function ScoreRing({ score, size = 120 }: ScoreRingProps) {
+export function ScoreRing({ score: rawScore, size = 120 }: ScoreRingProps) {
+  const score = typeof rawScore === 'number' ? rawScore : Number(rawScore) || 0
   const [displayed, setDisplayed] = useState(0)
   const radius = (size / 2) * 0.8
   const circumference = 2 * Math.PI * radius
