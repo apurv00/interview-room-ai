@@ -1,5 +1,4 @@
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const pdfParse = require('pdf-parse')
+import { extractText, getDocumentProxy } from 'unpdf'
 import mammoth from 'mammoth'
 import { logger } from '@/lib/logger'
 
@@ -37,8 +36,9 @@ export async function parseDocument(buffer: Buffer, filename: string): Promise<P
 
   switch (ext) {
     case '.pdf': {
-      const result = await pdfParse(buffer)
-      rawText = result.text
+      const pdf = await getDocumentProxy(new Uint8Array(buffer))
+      const { text } = await extractText(pdf, { mergePages: true })
+      rawText = text as string
       break
     }
     case '.docx': {
