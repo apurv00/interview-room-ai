@@ -5,6 +5,18 @@ import mongoose from 'mongoose'
 
 export const dynamic = 'force-dynamic'
 
+/**
+ * HEAD — lightweight connectivity check (used by lobby page).
+ * Always returns 200 to confirm the API is reachable.
+ */
+export async function HEAD() {
+  return new NextResponse(null, { status: 200 })
+}
+
+/**
+ * GET — full infrastructure health check (used by Docker / monitoring).
+ * Returns 503 if MongoDB or Redis is unavailable.
+ */
 export async function GET() {
   const checks: Record<string, 'ok' | 'error'> = {}
 
