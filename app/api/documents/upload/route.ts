@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { parseDocument } from '@/lib/services/documentParser'
 import { logger } from '@/lib/logger'
+import { uploadToR2, documentKey, isR2Configured } from '@/lib/storage/r2'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth/authOptions'
 
 export const dynamic = 'force-dynamic'
 
@@ -32,11 +35,26 @@ export async function POST(req: NextRequest) {
 
     const result = await parseDocument(buffer, file.name)
 
+    // Store original file in R2 if configured and user is authenticated
+    let r2Key: string | undefined
+    if (isR2Configured()) {
+      try {
+        const session = await getServerSession(authOptions)
+        const userId = session?.user?.id || 'anonymous'
+        const key = documentKey(userId, docType, file.name)
+        await uploadToR2(key, buffer, file.type || 'application/octet-stream')
+        r2Key = key
+      } catch (uploadErr) {
+        logger.warn({ err: uploadErr }, 'Failed to store original document in R2 — parsed text still available')
+      }
+    }
+
     return NextResponse.json({
       text: result.text,
       fileName: file.name,
       wordCount: result.wordCount,
       docType,
+      r2Key,
     })
   } catch (err) {
     logger.error({ err }, 'Document upload/parse error')

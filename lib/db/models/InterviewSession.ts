@@ -35,6 +35,10 @@ export interface IInterviewSession extends Document {
 
   recordingUrl?: string
   recordingSizeBytes?: number
+  recordingR2Key?: string
+
+  resumeR2Key?: string
+  jdR2Key?: string
 
   templateId?: mongoose.Types.ObjectId
   candidateEmail?: string
@@ -81,6 +85,10 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
 
     recordingUrl: { type: String },
     recordingSizeBytes: { type: Number },
+    recordingR2Key: { type: String },
+
+    resumeR2Key: { type: String },
+    jdR2Key: { type: String },
 
     templateId: { type: Schema.Types.ObjectId, ref: 'InterviewTemplate' },
     candidateEmail: { type: String, lowercase: true },

@@ -4,8 +4,7 @@ import { authOptions } from '@/lib/auth/authOptions'
 import { connectDB } from '@/lib/db/connection'
 import { InterviewSession } from '@/lib/db/models/InterviewSession'
 import { aiLogger } from '@/lib/logger'
-import { writeFile, mkdir } from 'fs/promises'
-import path from 'path'
+import { uploadToR2, recordingKey, isR2Configured } from '@/lib/storage/r2'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,34 +35,32 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'File too large (max 50MB)' }, { status: 413 })
     }
 
-    // Save to uploads directory
-    const uploadsDir = path.join(process.cwd(), 'uploads', 'recordings')
-    await mkdir(uploadsDir, { recursive: true })
-
-    const timestamp = Date.now()
-    const filename = `${sessionId}-${timestamp}.webm`
-    const filePath = path.join(uploadsDir, filename)
-
     const buffer = Buffer.from(await recording.arrayBuffer())
-    await writeFile(filePath, buffer)
 
-    // Update interview session with recording URL
+    if (!isR2Configured()) {
+      return NextResponse.json({ error: 'Storage not configured' }, { status: 503 })
+    }
+
+    // Upload to R2
+    const key = recordingKey(session.user.id, sessionId)
+    await uploadToR2(key, buffer, 'audio/webm')
+
+    // Update interview session with R2 key
     try {
       await connectDB()
       await InterviewSession.findByIdAndUpdate(sessionId, {
-        recordingUrl: `/api/recordings/${filename}`,
+        recordingR2Key: key,
+        recordingSizeBytes: buffer.length,
       })
     } catch (dbErr) {
-      aiLogger.error({ err: dbErr }, 'Failed to update session with recording URL')
-      // File is saved, just DB update failed — not critical
+      aiLogger.error({ err: dbErr }, 'Failed to update session with recording R2 key')
     }
 
-    aiLogger.info({ filename, size: recording.size, sessionId }, 'Recording uploaded')
+    aiLogger.info({ key, size: recording.size, sessionId }, 'Recording uploaded to R2')
 
     return NextResponse.json({
       success: true,
-      filename,
-      url: `/api/recordings/${filename}`,
+      key,
     })
   } catch (err) {
     aiLogger.error({ err }, 'Recording upload error')
