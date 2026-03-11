@@ -82,7 +82,14 @@ export default function InterviewPage() {
       const formData = new FormData()
       formData.append('recording', blob, 'interview-recording.webm')
       formData.append('sessionId', sessionId)
-      fetch('/api/recordings/upload', { method: 'POST', body: formData }).catch(() => {})
+      fetch('/api/recordings/upload', { method: 'POST', body: formData })
+        .then(async (res) => {
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}))
+            console.error('Recording upload failed:', res.status, body)
+          }
+        })
+        .catch((err) => console.error('Recording upload network error:', err))
     }
   }, [stopRecording])
 
