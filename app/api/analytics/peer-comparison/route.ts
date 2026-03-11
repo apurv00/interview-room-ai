@@ -39,7 +39,6 @@ async function getCachedUserScore(sessionId: string, userId: string): Promise<nu
       .select('feedback.overall_score')
       .lean()
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const score = (session as any)?.feedback?.overall_score ?? null
     if (score !== null) {
       try {

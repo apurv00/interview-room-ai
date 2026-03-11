@@ -181,7 +181,6 @@ export async function listSessions(input: ListSessionsInput) {
   const limit = Math.min(input.limit || 20, 50)
   const skip = (page - 1) * limit
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const filter: any = {}
 
   // If recruiter/admin, show org sessions; otherwise show own sessions
