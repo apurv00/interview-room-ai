@@ -27,7 +27,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <>
-      <nav className="sticky top-0 z-50 bg-slate-950/80 backdrop-blur-lg border-b border-slate-800/60">
+      <nav aria-label="Main navigation" className="sticky top-0 z-50 bg-slate-950/80 backdrop-blur-lg border-b border-slate-800/60">
         <div className="max-w-6xl mx-auto px-4 sm:px-6">
           <div className="flex items-center justify-between h-14">
             {/* Left: brand */}

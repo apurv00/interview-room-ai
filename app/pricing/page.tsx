@@ -157,6 +157,13 @@ export default function PricingPage() {
           ))}
         </div>
       </div>
+
+      {/* CTA link */}
+      <div className="text-center mt-16 animate-slide-up stagger-3">
+        <Link href="/" className="text-indigo-400 hover:text-indigo-300 text-sm font-medium transition">
+          ← Start practicing now
+        </Link>
+      </div>
     </main>
   )
 }

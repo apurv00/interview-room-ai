@@ -26,7 +26,7 @@ export default function Footer() {
       <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
         <div className="flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-slate-500">
           <span>&copy; {new Date().getFullYear()} Interview Prep Guru</span>
-          <nav className="flex flex-wrap items-center gap-4">
+          <nav aria-label="Footer navigation" className="flex flex-wrap items-center gap-4">
             {FOOTER_LINKS.map((link) => (
               <Link
                 key={link.href}
