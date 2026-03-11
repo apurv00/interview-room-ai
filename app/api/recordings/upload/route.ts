@@ -41,9 +41,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Storage not configured' }, { status: 503 })
     }
 
-    // Upload to R2
+    // Upload to R2 — detect content type from the uploaded file
     const key = recordingKey(session.user.id, sessionId)
-    await uploadToR2(key, buffer, 'audio/webm')
+    const contentType = recording.type || 'video/webm'
+    await uploadToR2(key, buffer, contentType)
 
     // Update interview session with R2 key
     try {

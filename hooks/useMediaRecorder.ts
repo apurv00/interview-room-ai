@@ -19,29 +19,39 @@ export function useMediaRecorder(): UseMediaRecorderReturn {
   const resolveRef = useRef<((blob: Blob | null) => void) | null>(null)
 
   const startRecording = useCallback((stream: MediaStream) => {
-    // Only capture audio tracks
+    // Require at least audio; video is optional but preferred
     const audioTracks = stream.getAudioTracks()
     if (audioTracks.length === 0) {
       console.warn('No audio tracks available for recording')
       return
     }
 
-    const audioStream = new MediaStream(audioTracks)
+    // Use the full stream (video + audio) when video tracks are present
+    const hasVideo = stream.getVideoTracks().length > 0
+    const recordingStream = hasVideo ? stream : new MediaStream(audioTracks)
 
-    // Choose codec
-    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-      ? 'audio/webm;codecs=opus'
-      : MediaRecorder.isTypeSupported('audio/webm')
-      ? 'audio/webm'
-      : ''
+    // Choose codec — prefer video/webm for full recording, fall back to audio-only
+    const mimeType = hasVideo
+      ? (MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
+          ? 'video/webm;codecs=vp9,opus'
+          : MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')
+          ? 'video/webm;codecs=vp8,opus'
+          : MediaRecorder.isTypeSupported('video/webm')
+          ? 'video/webm'
+          : '')
+      : (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+          ? 'audio/webm;codecs=opus'
+          : MediaRecorder.isTypeSupported('audio/webm')
+          ? 'audio/webm'
+          : '')
 
     if (!mimeType) {
-      console.warn('No supported audio recording format found')
+      console.warn('No supported recording format found')
       return
     }
 
     try {
-      const recorder = new MediaRecorder(audioStream, { mimeType })
+      const recorder = new MediaRecorder(recordingStream, { mimeType })
       chunksRef.current = []
 
       recorder.ondataavailable = (event) => {
