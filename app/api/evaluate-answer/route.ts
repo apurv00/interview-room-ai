@@ -4,6 +4,8 @@ import { composeApiRoute } from '@/lib/middleware/composeApiRoute'
 import { EvaluateAnswerSchema } from '@/lib/validators/interview'
 import { trackUsage } from '@/lib/services/usageTracking'
 import { aiLogger } from '@/lib/logger'
+import { connectDB } from '@/lib/db/connection'
+import { User } from '@/lib/db/models'
 import type { AnswerEvaluation } from '@/lib/types'
 import { z } from 'zod'
 
@@ -27,7 +29,23 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
       jdContext = `\n\nJOB DESCRIPTION (excerpt):\n${config.jobDescription.slice(0, 3000)}\n\nUse this JD to evaluate how well the answer aligns with the role's requirements.`
     }
 
-    const systemPrompt = `You are an expert interview coach evaluating candidates for ${config.role} roles at the ${config.experience} experience level. You score objectively and fairly.${jdContext}`
+    // Build profile context
+    let profileContext = ''
+    try {
+      await connectDB()
+      const profile = await User.findById(user.id).select('isCareerSwitcher switchingFrom interviewGoal weakAreas').lean()
+      if (profile?.isCareerSwitcher && profile?.switchingFrom) {
+        profileContext += `\nThis candidate is transitioning from ${profile.switchingFrom} — weight transferable skills and learning agility more heavily when scoring relevance and ownership.`
+      }
+      if (profile?.interviewGoal === 'first_interview') {
+        profileContext += `\nThis is the candidate's first interview preparation — be encouraging in follow-up framing while still being honest about scores.`
+      }
+      if (profile?.weakAreas?.length) {
+        profileContext += `\nThe candidate wants to improve: ${profile.weakAreas.join(', ')}. Flag related issues more explicitly in the flags array.`
+      }
+    } catch { /* continue without profile */ }
+
+    const systemPrompt = `You are an expert interview coach evaluating candidates for ${config.role} roles at the ${config.experience} experience level. You score objectively and fairly.${jdContext}${profileContext}`
 
     const jdAlignmentDimension = config.jobDescription
       ? `\n- jdAlignment: How well does this answer demonstrate skills/experience relevant to the job description requirements? (integer 0-100)`

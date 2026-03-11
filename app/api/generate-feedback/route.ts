@@ -7,6 +7,8 @@ import { aiLogger } from '@/lib/logger'
 import type { FeedbackData } from '@/lib/types'
 import { aggregateMetrics, communicationScore } from '@/lib/speechMetrics'
 import { PRESSURE_QUESTION_INDEX } from '@/lib/interviewConfig'
+import { connectDB } from '@/lib/db/connection'
+import { User } from '@/lib/db/models'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -113,7 +115,30 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
   ]`
     }
 
-    const systemPrompt = `You are an expert interview coach. Generate honest, specific, and actionable feedback for a candidate.${jdBlock}`
+    // Build profile context for personalized feedback
+    let profileBlock = ''
+    try {
+      await connectDB()
+      const profile = await User.findById(user.id).select('interviewGoal targetCompanyType weakAreas').lean()
+      if (profile?.interviewGoal) {
+        const goalLabels: Record<string, string> = {
+          first_interview: 'preparing for their first interview',
+          improve_scores: 'improving their interview scores',
+          career_switch: 'switching careers',
+          promotion: 'preparing for a promotion',
+          general_practice: 'general interview practice',
+        }
+        profileBlock += `\nThe candidate's goal: ${goalLabels[profile.interviewGoal] || profile.interviewGoal}. Frame the top_3_improvements in a way that directly serves this goal.`
+      }
+      if (profile?.targetCompanyType && profile.targetCompanyType !== 'any') {
+        profileBlock += `\nThey are targeting ${profile.targetCompanyType} companies. Reference what those companies typically look for in the strengths/weaknesses analysis.`
+      }
+      if (profile?.weakAreas?.length) {
+        profileBlock += `\nThe candidate wanted to work on: ${profile.weakAreas.join(', ')}. In top_3_improvements, address at least one of these self-identified weak areas with a specific, actionable tip.`
+      }
+    } catch { /* continue without profile */ }
+
+    const systemPrompt = `You are an expert interview coach. Generate honest, specific, and actionable feedback for a candidate.${jdBlock}${profileBlock}`
 
     const userPrompt = `Interview summary for ${config.role} (${config.experience} yrs), ${config.duration}-min session.
 

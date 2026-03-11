@@ -61,6 +61,21 @@ export default function HomePage() {
     } catch { /* ignore */ }
   }, [])
 
+  // Pre-fill from user profile (onboarding data) if no localStorage config
+  useEffect(() => {
+    if (status !== 'authenticated' || lastConfig) return
+    fetch('/api/onboarding')
+      .then((r) => r.json())
+      .then((profile) => {
+        if (!role && profile.targetRole) setRole(profile.targetRole)
+        if (!experience && profile.experienceLevel) setExperience(profile.experienceLevel)
+        if (!resumeText && profile.hasResume && profile.resumeFileName) {
+          setResumeFileName(profile.resumeFileName)
+        }
+      })
+      .catch(() => {})
+  }, [status, lastConfig]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const ready = role && experience && duration
 
   async function handleFileUpload(file: File, docType: 'jd' | 'resume') {
