@@ -50,7 +50,8 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
 
   // Monthly auto-reset: if we're in a new month since last reset, zero the counter
   const now = new Date()
-  const lastReset = user.usageResetAt || user.createdAt
+  const lastResetRaw = user.usageResetAt || user.createdAt
+  const lastReset = lastResetRaw ? new Date(lastResetRaw) : now
   if (lastReset.getMonth() !== now.getMonth() || lastReset.getFullYear() !== now.getFullYear()) {
     user.monthlyInterviewsUsed = 0
     user.usageResetAt = now
