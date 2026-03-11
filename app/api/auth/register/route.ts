@@ -33,6 +33,7 @@ export async function POST(req: NextRequest) {
       role: 'candidate',
       plan: 'free',
       monthlyInterviewLimit: 999999,
+      onboardingCompleted: false,
     })
 
     return NextResponse.json({ message: 'Account created successfully' }, { status: 201 })

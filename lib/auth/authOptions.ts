@@ -70,6 +70,7 @@ export const authOptions: NextAuthOptions = {
           token.role = dbUser.role
           token.organizationId = dbUser.organizationId?.toString()
           token.plan = dbUser.plan
+          token.onboardingCompleted = dbUser.onboardingCompleted ?? false
         }
       }
       // Refresh plan from DB periodically (catches external plan changes).
@@ -80,10 +81,11 @@ export const authOptions: NextAuthOptions = {
         if (Date.now() - lastRefreshed > REFRESH_INTERVAL_MS) {
           try {
             await connectDB()
-            const dbUser = await User.findById(token.userId).select('plan role')
+            const dbUser = await User.findById(token.userId).select('plan role onboardingCompleted')
             if (dbUser) {
               token.plan = dbUser.plan
               token.role = dbUser.role
+              token.onboardingCompleted = dbUser.onboardingCompleted ?? false
             }
             token.lastRefreshedAt = Date.now()
           } catch {
@@ -105,6 +107,7 @@ export const authOptions: NextAuthOptions = {
         session.user.role = (token.role as string) || 'candidate'
         session.user.organizationId = token.organizationId as string | undefined
         session.user.plan = (token.plan as string) || 'free'
+        session.user.onboardingCompleted = token.onboardingCompleted ?? false
       }
       return session
     },
@@ -128,6 +131,7 @@ export const authOptions: NextAuthOptions = {
           role: 'candidate',
           plan: 'free',
           monthlyInterviewLimit: 999999,
+          onboardingCompleted: false,
         })
       }
     },

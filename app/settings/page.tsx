@@ -5,6 +5,22 @@ import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { PLANS } from '@/lib/services/stripe'
+import { ROLE_LABELS, EXPERIENCE_LABELS } from '@/lib/interviewConfig'
+import type { Role, ExperienceLevel } from '@/lib/types'
+
+interface OnboardingProfile {
+  targetRole: string | null
+  experienceLevel: string | null
+  currentTitle: string | null
+  currentIndustry: string | null
+  isCareerSwitcher: boolean
+  switchingFrom: string | null
+  targetCompanyType: string | null
+  interviewGoal: string | null
+  weakAreas: string[]
+  hasResume: boolean
+  resumeFileName: string | null
+}
 
 interface UsageData {
   plan: string
@@ -28,6 +44,17 @@ export default function SettingsPage() {
   const [usage, setUsage] = useState<UsageData | null>(null)
   const [loading, setLoading] = useState(true)
   const [upgraded, setUpgraded] = useState(false)
+  const [profile, setProfile] = useState<OnboardingProfile | null>(null)
+  const [profileEditing, setProfileEditing] = useState(false)
+  const [profileSaving, setProfileSaving] = useState(false)
+  // Editable profile fields
+  const [editTargetRole, setEditTargetRole] = useState<Role | null>(null)
+  const [editExperience, setEditExperience] = useState<ExperienceLevel | null>(null)
+  const [editTitle, setEditTitle] = useState('')
+  const [editIndustry, setEditIndustry] = useState('')
+  const [editCompanyType, setEditCompanyType] = useState('')
+  const [editGoal, setEditGoal] = useState('')
+  const [editWeakAreas, setEditWeakAreas] = useState<string[]>([])
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -52,6 +79,20 @@ export default function SettingsPage() {
       .then(setUsage)
       .catch(console.error)
       .finally(() => setLoading(false))
+
+    fetch('/api/onboarding')
+      .then((r) => r.json())
+      .then((data: OnboardingProfile) => {
+        setProfile(data)
+        setEditTargetRole((data.targetRole as Role) || null)
+        setEditExperience((data.experienceLevel as ExperienceLevel) || null)
+        setEditTitle(data.currentTitle || '')
+        setEditIndustry(data.currentIndustry || '')
+        setEditCompanyType(data.targetCompanyType || '')
+        setEditGoal(data.interviewGoal || '')
+        setEditWeakAreas(data.weakAreas || [])
+      })
+      .catch(() => {})
   }, [status])
 
   if (status === 'loading' || !session?.user) {
@@ -127,8 +168,207 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      {/* Plan & Usage Card */}
+      {/* Interview Profile Card */}
       <section className="bg-slate-900 border border-slate-700 rounded-2xl p-6 animate-slide-up stagger-2">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-widest">
+            Interview Profile
+          </h2>
+          {!profileEditing ? (
+            <button
+              onClick={() => setProfileEditing(true)}
+              className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+            >
+              Edit
+            </button>
+          ) : (
+            <div className="flex gap-2">
+              <button
+                onClick={() => setProfileEditing(false)}
+                className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  setProfileSaving(true)
+                  try {
+                    await fetch('/api/onboarding', {
+                      method: 'PATCH',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        targetRole: editTargetRole || undefined,
+                        experienceLevel: editExperience || undefined,
+                        currentTitle: editTitle || undefined,
+                        currentIndustry: editIndustry || undefined,
+                        targetCompanyType: editCompanyType || undefined,
+                        interviewGoal: editGoal || undefined,
+                        weakAreas: editWeakAreas.length > 0 ? editWeakAreas : undefined,
+                      }),
+                    })
+                    setProfile((prev) => prev ? {
+                      ...prev,
+                      targetRole: editTargetRole,
+                      experienceLevel: editExperience,
+                      currentTitle: editTitle || null,
+                      currentIndustry: editIndustry || null,
+                      targetCompanyType: editCompanyType || null,
+                      interviewGoal: editGoal || null,
+                      weakAreas: editWeakAreas,
+                    } : null)
+                    setProfileEditing(false)
+                  } catch { /* ignore */ }
+                  setProfileSaving(false)
+                }}
+                disabled={profileSaving}
+                className="text-xs text-indigo-400 hover:text-indigo-300 font-medium transition-colors disabled:opacity-50"
+              >
+                {profileSaving ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          )}
+        </div>
+
+        {!profile ? (
+          <div className="flex items-center justify-center py-6">
+            <div className="w-5 h-5 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
+          </div>
+        ) : !profileEditing ? (
+          <div className="space-y-3">
+            {!profile.targetRole && !profile.currentTitle && !profile.interviewGoal && (
+              <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-lg px-4 py-3 text-sm text-indigo-300">
+                Complete your profile for more personalized interviews.
+                <button onClick={() => setProfileEditing(true)} className="ml-2 underline hover:text-indigo-200">Set up now</button>
+              </div>
+            )}
+            {profile.targetRole && (
+              <div className="flex justify-between text-sm">
+                <span className="text-slate-500">Target Role</span>
+                <span className="text-slate-300">{ROLE_LABELS[profile.targetRole as Role] || profile.targetRole}</span>
+              </div>
+            )}
+            {profile.experienceLevel && (
+              <div className="flex justify-between text-sm">
+                <span className="text-slate-500">Experience</span>
+                <span className="text-slate-300">{EXPERIENCE_LABELS[profile.experienceLevel as ExperienceLevel] || profile.experienceLevel}</span>
+              </div>
+            )}
+            {profile.currentTitle && (
+              <div className="flex justify-between text-sm">
+                <span className="text-slate-500">Current Title</span>
+                <span className="text-slate-300">{profile.currentTitle}</span>
+              </div>
+            )}
+            {profile.currentIndustry && (
+              <div className="flex justify-between text-sm">
+                <span className="text-slate-500">Industry</span>
+                <span className="text-slate-300 capitalize">{profile.currentIndustry}</span>
+              </div>
+            )}
+            {profile.targetCompanyType && (
+              <div className="flex justify-between text-sm">
+                <span className="text-slate-500">Target Companies</span>
+                <span className="text-slate-300 capitalize">{profile.targetCompanyType === 'faang' ? 'FAANG / Big Tech' : profile.targetCompanyType}</span>
+              </div>
+            )}
+            {profile.interviewGoal && (
+              <div className="flex justify-between text-sm">
+                <span className="text-slate-500">Goal</span>
+                <span className="text-slate-300 capitalize">{profile.interviewGoal.replace(/_/g, ' ')}</span>
+              </div>
+            )}
+            {profile.weakAreas?.length > 0 && (
+              <div className="flex justify-between text-sm">
+                <span className="text-slate-500">Focus Areas</span>
+                <span className="text-slate-300">{profile.weakAreas.map(a => a.replace(/_/g, ' ')).join(', ')}</span>
+              </div>
+            )}
+            {profile.hasResume && profile.resumeFileName && (
+              <div className="flex justify-between text-sm">
+                <span className="text-slate-500">Resume</span>
+                <span className="text-slate-300">{profile.resumeFileName}</span>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {/* Role */}
+            <div className="space-y-1.5">
+              <label className="text-xs text-slate-500 uppercase tracking-wide">Target Role</label>
+              <div className="grid grid-cols-4 gap-2">
+                {(['PM', 'SWE', 'Sales', 'MBA'] as Role[]).map((r) => (
+                  <button key={r} onClick={() => setEditTargetRole(r)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editTargetRole === r ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'}`}>
+                    {ROLE_LABELS[r]}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {/* Experience */}
+            <div className="space-y-1.5">
+              <label className="text-xs text-slate-500 uppercase tracking-wide">Experience</label>
+              <div className="grid grid-cols-3 gap-2">
+                {(['0-2', '3-6', '7+'] as ExperienceLevel[]).map((e) => (
+                  <button key={e} onClick={() => setEditExperience(e)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editExperience === e ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'}`}>
+                    {EXPERIENCE_LABELS[e]}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {/* Title */}
+            <div className="space-y-1.5">
+              <label className="text-xs text-slate-500 uppercase tracking-wide">Current Title</label>
+              <input type="text" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} maxLength={100} placeholder="e.g. Senior Software Engineer" className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            </div>
+            {/* Industry */}
+            <div className="space-y-1.5">
+              <label className="text-xs text-slate-500 uppercase tracking-wide">Industry</label>
+              <div className="grid grid-cols-5 gap-1.5">
+                {['tech', 'finance', 'consulting', 'healthcare', 'retail', 'media', 'government', 'education', 'startup', 'other'].map((i) => (
+                  <button key={i} onClick={() => setEditIndustry(i)} className={`py-1.5 rounded-lg border text-xs font-medium transition-all capitalize ${editIndustry === i ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'}`}>
+                    {i}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {/* Company Type */}
+            <div className="space-y-1.5">
+              <label className="text-xs text-slate-500 uppercase tracking-wide">Target Companies</label>
+              <div className="grid grid-cols-3 gap-2">
+                {[{v:'faang',l:'FAANG'},{v:'startup',l:'Startup'},{v:'midsize',l:'Mid-size'},{v:'consulting',l:'Consulting'},{v:'enterprise',l:'Enterprise'},{v:'any',l:'Any'}].map((c) => (
+                  <button key={c.v} onClick={() => setEditCompanyType(c.v)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editCompanyType === c.v ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'}`}>
+                    {c.l}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {/* Goal */}
+            <div className="space-y-1.5">
+              <label className="text-xs text-slate-500 uppercase tracking-wide">Interview Goal</label>
+              <div className="space-y-1.5">
+                {[{v:'first_interview',l:'First interview'},{v:'improve_scores',l:'Improve skills'},{v:'career_switch',l:'Career switch'},{v:'promotion',l:'Promotion prep'},{v:'general_practice',l:'General practice'}].map((g) => (
+                  <button key={g.v} onClick={() => setEditGoal(g.v)} className={`w-full text-left px-3 py-2 rounded-lg border text-xs font-medium transition-all ${editGoal === g.v ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'}`}>
+                    {g.l}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {/* Weak Areas */}
+            <div className="space-y-1.5">
+              <label className="text-xs text-slate-500 uppercase tracking-wide">Focus Areas (up to 3)</label>
+              <div className="grid grid-cols-3 gap-1.5">
+                {[{v:'star_structure',l:'STAR Structure'},{v:'specificity',l:'Specificity'},{v:'conciseness',l:'Conciseness'},{v:'confidence',l:'Confidence'},{v:'technical_depth',l:'Tech Depth'},{v:'storytelling',l:'Storytelling'}].map((w) => (
+                  <button key={w.v} onClick={() => setEditWeakAreas(prev => prev.includes(w.v) ? prev.filter(a => a !== w.v) : prev.length < 3 ? [...prev, w.v] : prev)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editWeakAreas.includes(w.v) ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'}`}>
+                    {w.l}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* Plan & Usage Card */}
+      <section className="bg-slate-900 border border-slate-700 rounded-2xl p-6 animate-slide-up stagger-3">
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-widest">
             Plan & Usage
@@ -210,7 +450,7 @@ export default function SettingsPage() {
       </section>
 
       {/* Quick Links */}
-      <section className="bg-slate-900 border border-slate-700 rounded-2xl p-6 animate-slide-up stagger-3">
+      <section className="bg-slate-900 border border-slate-700 rounded-2xl p-6 animate-slide-up stagger-4">
         <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-widest mb-4">
           Quick Links
         </h2>

@@ -13,6 +13,18 @@ export default withAuth(
     response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')
     response.headers.set('Permissions-Policy', 'geolocation=(), payment=(), usb=()')
 
+    // Redirect new users to onboarding
+    if (
+      token?.onboardingCompleted === false &&
+      !pathname.startsWith('/onboarding') &&
+      !pathname.startsWith('/api/') &&
+      !pathname.startsWith('/signin') &&
+      !pathname.startsWith('/signup') &&
+      pathname !== '/'
+    ) {
+      return NextResponse.redirect(new URL('/onboarding', req.url))
+    }
+
     // B2B routes require recruiter role or higher
     if (
       pathname.startsWith('/dashboard') ||

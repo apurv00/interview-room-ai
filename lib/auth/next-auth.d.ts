@@ -11,6 +11,7 @@ declare module 'next-auth' {
       role: string
       organizationId?: string
       plan: string
+      onboardingCompleted: boolean
     }
   }
 }
@@ -21,5 +22,6 @@ declare module 'next-auth/jwt' {
     role: string
     organizationId?: string
     plan: string
+    onboardingCompleted: boolean
   }
 }

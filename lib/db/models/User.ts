@@ -14,6 +14,19 @@ export interface IUser extends Document {
   targetRole?: 'PM' | 'SWE' | 'Sales' | 'MBA'
   experienceLevel?: '0-2' | '3-6' | '7+'
 
+  // Onboarding profile
+  onboardingCompleted: boolean
+  currentTitle?: string
+  currentIndustry?: 'tech' | 'finance' | 'consulting' | 'healthcare' | 'retail' | 'media' | 'government' | 'education' | 'startup' | 'other'
+  isCareerSwitcher?: boolean
+  switchingFrom?: string
+  targetCompanyType?: 'faang' | 'startup' | 'midsize' | 'consulting' | 'enterprise' | 'any'
+  interviewGoal?: 'first_interview' | 'improve_scores' | 'career_switch' | 'promotion' | 'general_practice'
+  weakAreas?: string[]
+  resumeText?: string
+  resumeFileName?: string
+  resumeR2Key?: string
+
   interviewCount: number
   lastInterviewAt?: Date
 
@@ -45,6 +58,19 @@ const UserSchema = new Schema<IUser>(
 
     targetRole: { type: String, enum: ['PM', 'SWE', 'Sales', 'MBA'] },
     experienceLevel: { type: String, enum: ['0-2', '3-6', '7+'] },
+
+    // Onboarding profile
+    onboardingCompleted: { type: Boolean, default: false },
+    currentTitle: { type: String, trim: true, maxlength: 100 },
+    currentIndustry: { type: String, enum: ['tech', 'finance', 'consulting', 'healthcare', 'retail', 'media', 'government', 'education', 'startup', 'other'] },
+    isCareerSwitcher: { type: Boolean, default: false },
+    switchingFrom: { type: String, trim: true, maxlength: 100 },
+    targetCompanyType: { type: String, enum: ['faang', 'startup', 'midsize', 'consulting', 'enterprise', 'any'] },
+    interviewGoal: { type: String, enum: ['first_interview', 'improve_scores', 'career_switch', 'promotion', 'general_practice'] },
+    weakAreas: [{ type: String, enum: ['star_structure', 'specificity', 'conciseness', 'confidence', 'technical_depth', 'storytelling'] }],
+    resumeText: { type: String },
+    resumeFileName: { type: String },
+    resumeR2Key: { type: String },
 
     interviewCount: { type: Number, default: 0 },
     lastInterviewAt: { type: Date },

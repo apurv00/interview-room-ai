@@ -5,6 +5,8 @@ import { GenerateQuestionSchema } from '@/lib/validators/interview'
 import { trackUsage } from '@/lib/services/usageTracking'
 import { aiLogger } from '@/lib/logger'
 import { PRESSURE_QUESTION_INDEX, QUESTION_COUNT } from '@/lib/interviewConfig'
+import { connectDB } from '@/lib/db/connection'
+import { User } from '@/lib/db/models'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -44,6 +46,30 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
       contextBlock += `\n\nCross-reference the resume against the JD requirements. Identify gaps or areas where the candidate's experience may not fully match, and explore those.`
     }
 
+    // Build profile context from onboarding data
+    let profileBlock = ''
+    try {
+      await connectDB()
+      const profile = await User.findById(user.id).select(
+        'currentTitle currentIndustry isCareerSwitcher switchingFrom targetCompanyType weakAreas'
+      ).lean()
+      if (profile?.currentTitle) {
+        profileBlock += `\nThe candidate's current title is: ${profile.currentTitle}.`
+      }
+      if (profile?.currentIndustry) {
+        profileBlock += ` They work in the ${profile.currentIndustry} industry.`
+      }
+      if (profile?.isCareerSwitcher && profile?.switchingFrom) {
+        profileBlock += `\nIMPORTANT: This candidate is making a career transition from ${profile.switchingFrom} to ${config.role}. Focus on transferable skills and probe how their background applies to the new role.`
+      }
+      if (profile?.targetCompanyType && profile.targetCompanyType !== 'any') {
+        profileBlock += `\nThey are targeting ${profile.targetCompanyType} companies — calibrate question depth and formality accordingly.`
+      }
+      if (profile?.weakAreas?.length) {
+        profileBlock += `\nThe candidate wants to improve: ${profile.weakAreas.join(', ')}. Naturally weave in questions that test these areas.`
+      }
+    } catch { /* profile fetch failed — continue without it */ }
+
     const systemPrompt = `You are Alex Chen, a senior HR interviewer at a top-tier tech company. You are conducting a ${config.duration}-minute behavioral screening for a ${config.role} role (${config.experience} years experience).
 
 Your interview style is warm but professional. You ask ONE focused question at a time. Questions should feel conversational and natural — not robotic or overly formal.
@@ -52,7 +78,7 @@ Question types you rotate through:
 - Behavioral (STAR): "Tell me about a time when..."
 - Motivation: "What drives you / why this role?"
 - Situational: "How would you handle..."
-- Consistency check: follow up on something mentioned earlier${contextBlock}`
+- Consistency check: follow up on something mentioned earlier${contextBlock}${profileBlock}`
 
     const userPrompt = `Previous conversation:
 ${qaContext}
