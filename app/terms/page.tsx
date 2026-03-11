@@ -86,7 +86,7 @@ export default function TermsPage() {
           <h2 className="text-lg font-semibold text-white mb-3">11. Contact</h2>
           <p className="text-slate-400">
             For questions about these Terms, contact us at{' '}
-            <a href="mailto:legal@interviewroom.ai" className="text-indigo-400 hover:text-indigo-300">legal@interviewroom.ai</a>.
+            <a href="mailto:legal@interviewprep.guru" className="text-indigo-400 hover:text-indigo-300">legal@interviewprep.guru</a>.
           </p>
         </section>
       </div>

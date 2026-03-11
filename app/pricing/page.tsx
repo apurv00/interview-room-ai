@@ -89,7 +89,7 @@ function PlanCard({ plan, isCurrent }: { plan: PlanConfig; isCurrent: boolean })
           </button>
         ) : (
           <a
-            href="mailto:contact@interviewroom.ai"
+            href="mailto:contact@interviewprep.guru"
             className="block w-full py-3 rounded-xl text-center text-sm font-medium bg-slate-800 text-slate-200 border border-slate-700 hover:bg-slate-700 transition"
           >
             Contact Sales
