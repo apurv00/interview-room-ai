@@ -36,6 +36,7 @@ export default function ProgressPage() {
   const { data: session, status: authStatus } = useSession()
   const [data, setData] = useState<ProgressData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [period, setPeriod] = useState<'7d' | '30d' | 'all'>('all')
 
   useEffect(() => {
@@ -47,13 +48,16 @@ export default function ProgressPage() {
 
     async function load() {
       setLoading(true)
+      setError(null)
       try {
         const res = await fetch(`/api/progress?period=${period}`)
         if (res.ok) {
           setData(await res.json())
+        } else {
+          setError('Failed to load progress data. Please try again.')
         }
       } catch {
-        // Silently handle
+        setError('Network error. Please check your connection and try again.')
       } finally {
         setLoading(false)
       }
@@ -66,6 +70,23 @@ export default function ProgressPage() {
     return (
       <div className="min-h-screen bg-[#070b14] flex items-center justify-center">
         <div className="w-6 h-6 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-[#070b14] text-white">
+        <div className="max-w-4xl mx-auto px-4 py-16 text-center">
+          <h1 className="text-2xl font-bold mb-4">Progress Tracker</h1>
+          <p className="text-red-400 mb-6">{error}</p>
+          <button
+            onClick={() => { setLoading(true); setError(null); setPeriod('all') }}
+            className="px-6 py-3 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-medium transition"
+          >
+            Retry
+          </button>
+        </div>
       </div>
     )
   }

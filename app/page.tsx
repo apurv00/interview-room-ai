@@ -21,12 +21,6 @@ const ROLE_ICONS: Record<Role, string> = {
   MBA: '🎓',
 }
 
-interface UsageInfo {
-  monthlyInterviewsUsed: number
-  monthlyInterviewLimit: number
-  plan: string
-}
-
 export default function HomePage() {
   const router = useRouter()
   const { data: authSession, status } = useSession()
@@ -34,7 +28,6 @@ export default function HomePage() {
   const [experience, setExperience] = useState<ExperienceLevel | null>(null)
   const [duration, setDuration] = useState<Duration | null>(null)
   const [lastConfig, setLastConfig] = useState<InterviewConfig | null>(null)
-  const [usage, setUsage] = useState<UsageInfo | null>(null)
 
   // Document upload state
   const [jdText, setJdText] = useState<string>('')
@@ -68,20 +61,7 @@ export default function HomePage() {
     } catch { /* ignore */ }
   }, [])
 
-  // Fetch usage when authenticated
-  useEffect(() => {
-    if (status !== 'authenticated') return
-    fetch('/api/settings/usage')
-      .then((r) => r.json())
-      .then((d) => setUsage(d))
-      .catch(() => {})
-  }, [status])
-
-  const remaining = usage ? Math.max(0, usage.monthlyInterviewLimit - usage.monthlyInterviewsUsed) : null
-  const atLimit = remaining !== null && remaining <= 0
-  const nearLimit = remaining !== null && remaining > 0 && remaining <= 2
-
-  const ready = role && experience && duration && !atLimit
+  const ready = role && experience && duration
 
   async function handleFileUpload(file: File, docType: 'jd' | 'resume') {
     setUploadError('')
@@ -148,23 +128,6 @@ export default function HomePage() {
       <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-violet-900/15 rounded-full blur-3xl pointer-events-none" />
 
       <div className="relative z-10 w-full max-w-2xl space-y-10">
-        {/* Usage warning banners */}
-        {atLimit && (
-          <div className="bg-red-500/10 border border-red-500/30 rounded-xl px-5 py-4 text-sm text-red-300 flex items-center justify-between animate-slide-up">
-            <span>
-              You&apos;ve used all {usage?.monthlyInterviewLimit} interviews this month.
-            </span>
-            <Link href="/pricing" className="text-red-200 hover:text-white font-medium underline underline-offset-2 ml-3 whitespace-nowrap">
-              Upgrade for more →
-            </Link>
-          </div>
-        )}
-        {nearLimit && (
-          <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl px-5 py-4 text-sm text-amber-300 animate-slide-up">
-            You have <span className="font-semibold">{remaining}</span> interview{remaining !== 1 ? 's' : ''} left this month.
-          </div>
-        )}
-
         {/* Header */}
         <div className="text-center space-y-3 animate-slide-up">
           <div className="inline-flex items-center gap-2 px-3 py-1 bg-indigo-500/10 border border-indigo-500/20 rounded-full text-indigo-400 text-xs font-medium mb-2">
@@ -303,9 +266,7 @@ export default function HomePage() {
               }
             `}
           >
-            {atLimit
-              ? 'Monthly limit reached'
-              : role && experience && duration
+            {role && experience && duration
               ? 'Enter Interview Room →'
               : 'Select all options to continue'}
           </button>
@@ -356,12 +317,14 @@ export default function HomePage() {
               </div>
             ))}
           </div>
-          <p className="text-center text-sm text-slate-500">
-            Free to start — no credit card required.{' '}
-            <Link href="/signup" className="text-indigo-400 hover:text-indigo-300 transition">
-              Create your account →
-            </Link>
-          </p>
+          {status !== 'authenticated' && (
+            <p className="text-center text-sm text-slate-500">
+              Free to start — no credit card required.{' '}
+              <Link href="/signup" className="text-indigo-400 hover:text-indigo-300 transition">
+                Create your account →
+              </Link>
+            </p>
+          )}
         </section>
     </main>
   )

@@ -26,6 +26,7 @@ export default function HistoryPage() {
   const { data: session, status: authStatus } = useSession()
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [page, setPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
 
@@ -37,15 +38,18 @@ export default function HistoryPage() {
     if (authStatus !== 'authenticated') return
 
     async function fetchSessions() {
+      setError(null)
       try {
         const res = await fetch(`/api/interviews?page=${page}&limit=10`)
         if (res.ok) {
           const data = await res.json()
           setSessions(data.sessions)
           setTotalPages(data.pagination.totalPages)
+        } else {
+          setError('Failed to load interview history. Please try again.')
         }
       } catch {
-        // Silently handle
+        setError('Network error. Please check your connection and try again.')
       } finally {
         setLoading(false)
       }
@@ -84,7 +88,17 @@ export default function HistoryPage() {
       </header>
 
       <main className="max-w-4xl mx-auto px-4 py-8">
-        {sessions.length === 0 ? (
+        {error ? (
+          <div className="text-center py-20">
+            <p className="text-red-400 mb-4">{error}</p>
+            <button
+              onClick={() => { setLoading(true); setError(null); setPage(1) }}
+              className="px-6 py-3 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-medium transition"
+            >
+              Retry
+            </button>
+          </div>
+        ) : sessions.length === 0 ? (
           <div className="text-center py-20">
             <p className="text-slate-500 mb-4">You haven&apos;t completed any interviews yet.</p>
             <button

@@ -22,18 +22,24 @@ import type { SpeechRecognitionResult } from './useSpeechRecognition'
 
 // ─── Session persistence helpers ──────────────────────────────────────────────
 
-async function createDbSession(config: InterviewConfig): Promise<string | null> {
+interface CreateDbSessionResult {
+  sessionId: string | null
+  limitReached?: boolean
+}
+
+async function createDbSession(config: InterviewConfig): Promise<CreateDbSessionResult> {
   try {
     const res = await fetch('/api/interviews', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ config }),
     })
-    if (!res.ok) return null
+    if (res.status === 402) return { sessionId: null, limitReached: true }
+    if (!res.ok) return { sessionId: null }
     const data = await res.json()
-    return data.sessionId
+    return { sessionId: data.sessionId }
   } catch {
-    return null
+    return { sessionId: null }
   }
 }
 
@@ -126,10 +132,10 @@ export function useInterview({
     // sessionIdRef may not be populated during the intro phase. This is safe
     // because no DB persist occurs until finishInterview(), which runs much later.
     // localStorage captures all data as a backup regardless.
-    createDbSession(config).then((id) => {
-      if (id) {
-        sessionIdRef.current = id
-        persistSession(id, { status: 'in_progress', startedAt: new Date().toISOString() })
+    createDbSession(config).then((result) => {
+      if (result.sessionId) {
+        sessionIdRef.current = result.sessionId
+        persistSession(result.sessionId, { status: 'in_progress', startedAt: new Date().toISOString() })
       }
     })
   }, [config])
@@ -343,7 +349,8 @@ export function useInterview({
     }
     localStorage.setItem(STORAGE_KEYS.INTERVIEW_DATA, dataJson)
 
-    // Persist to DB before navigating (with 3s timeout guard)
+    // Persist to DB before navigating (with 10s timeout guard — must be long enough
+    // for fetchWithRetry's 3 attempts with exponential backoff: ~7s total)
     if (sid) {
       await Promise.race([
         persistSession(sid, {
@@ -354,7 +361,7 @@ export function useInterview({
           evaluations: evaluationsRef.current,
           speechMetrics: speechMetricsRef.current,
         }),
-        new Promise((r) => setTimeout(r, 3000)),
+        new Promise((r) => setTimeout(r, 10000)),
       ])
       router.push(`/feedback/${sid}`)
     } else {

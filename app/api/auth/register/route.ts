@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
       hashedPassword,
       role: 'candidate',
       plan: 'free',
-      monthlyInterviewLimit: 3,
+      monthlyInterviewLimit: 999999,
     })
 
     return NextResponse.json({ message: 'Account created successfully' }, { status: 201 })
