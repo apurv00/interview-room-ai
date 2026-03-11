@@ -165,10 +165,13 @@ export default function HomePage() {
             <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
             AI-powered mock interview
           </div>
+          {authSession?.user?.name && (
+            <p className="text-indigo-400 text-sm font-medium">
+              Welcome back, {authSession.user.name.split(' ')[0]}
+            </p>
+          )}
           <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-white">
-            {authSession?.user?.name
-              ? `Welcome back, ${authSession.user.name.split(' ')[0]}`
-              : 'Interview Prep Guru'}
+            Interview Prep Guru
           </h1>
           <p className="text-slate-400 text-lg">
             {lastConfig
@@ -303,6 +306,55 @@ export default function HomePage() {
           </p>
         </div>
       </div>
+
+        {/* How It Works */}
+        <section className="relative z-10 w-full max-w-2xl space-y-4 mt-20 animate-slide-up">
+          <h2 className="text-2xl font-bold text-white text-center">How It Works</h2>
+          <div className="grid sm:grid-cols-3 gap-4">
+            {[
+              { step: '1', title: 'Choose Your Role', desc: 'Pick from PM, SWE, Sales, or MBA interview tracks tailored to your career path.' },
+              { step: '2', title: 'Practice with AI', desc: 'Our AI interviewer asks realistic HR screening questions in a live video call format.' },
+              { step: '3', title: 'Get Instant Feedback', desc: 'Receive scored feedback on content relevance, structure, specificity, and delivery.' },
+            ].map((item) => (
+              <div key={item.step} className="border border-slate-800 bg-slate-900/50 rounded-xl p-5 text-center space-y-2">
+                <div className="w-8 h-8 rounded-full bg-indigo-600/20 text-indigo-400 text-sm font-bold flex items-center justify-center mx-auto">
+                  {item.step}
+                </div>
+                <h3 className="text-sm font-semibold text-white">{item.title}</h3>
+                <p className="text-xs text-slate-400 leading-relaxed">{item.desc}</p>
+              </div>
+            ))}
+          </div>
+          <p className="text-center text-sm text-slate-500">
+            <Link href="/pricing" className="text-indigo-400 hover:text-indigo-300 transition">
+              See pricing →
+            </Link>
+          </p>
+        </section>
+
+        {/* Built for Real Interviews */}
+        <section className="relative z-10 w-full max-w-2xl space-y-4 mt-16 mb-12 animate-slide-up">
+          <h2 className="text-2xl font-bold text-white text-center">Built for Real Interview Scenarios</h2>
+          <div className="grid sm:grid-cols-2 gap-4">
+            {[
+              { title: 'Realistic HR Screening', desc: 'Simulates a live screening call with an AI interviewer that adapts to your responses.' },
+              { title: 'Role-Specific Questions', desc: 'Tailored questions for product management, software engineering, sales, and MBA roles.' },
+              { title: 'Instant Scoring', desc: 'Get rated on relevance, structure, specificity, and ownership after every session.' },
+              { title: 'Upload Your JD & Resume', desc: 'Personalize interview questions to match your target job description and experience.' },
+            ].map((item) => (
+              <div key={item.title} className="border border-slate-800 bg-slate-900/50 rounded-xl p-5 space-y-1.5">
+                <h3 className="text-sm font-semibold text-white">{item.title}</h3>
+                <p className="text-xs text-slate-400 leading-relaxed">{item.desc}</p>
+              </div>
+            ))}
+          </div>
+          <p className="text-center text-sm text-slate-500">
+            Free to start — no credit card required.{' '}
+            <Link href="/signup" className="text-indigo-400 hover:text-indigo-300 transition">
+              Create your account →
+            </Link>
+          </p>
+        </section>
     </main>
   )
 }

@@ -55,7 +55,7 @@ export default function SignUpPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-950 flex items-center justify-center p-4">
+    <main className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-950 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-white mb-2">Create Account</h1>
@@ -129,7 +129,14 @@ export default function SignUpPage() {
             </Link>
           </p>
         </div>
+
+        <p className="mt-6 text-center text-sm text-gray-600">
+          Free tier includes 3 interviews per month.{' '}
+          <Link href="/pricing" className="text-indigo-400 hover:text-indigo-300">
+            See all plans →
+          </Link>
+        </p>
       </div>
-    </div>
+    </main>
   )
 }

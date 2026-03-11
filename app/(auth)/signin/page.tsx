@@ -42,7 +42,7 @@ function SignInContent() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-950 flex items-center justify-center p-4">
+    <main className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-950 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-white mb-2">Interview Prep Guru</h1>
@@ -151,8 +151,15 @@ function SignInContent() {
             </Link>
           </p>
         </div>
+
+        <p className="mt-6 text-center text-sm text-gray-600">
+          Practice mock interviews with AI feedback.{' '}
+          <Link href="/" className="text-indigo-400 hover:text-indigo-300">
+            Learn more →
+          </Link>
+        </p>
       </div>
-    </div>
+    </main>
   )
 }
 
