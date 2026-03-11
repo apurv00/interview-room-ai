@@ -44,8 +44,16 @@ export default withAuth(
           pathname.startsWith('/api/evaluate-answer') ||
           pathname.startsWith('/api/generate-feedback') ||
           pathname.startsWith('/pricing') ||
+          pathname.startsWith('/privacy') ||
+          pathname.startsWith('/terms') ||
           pathname.startsWith('/_next') ||
-          pathname === '/favicon.ico'
+          pathname === '/favicon.ico' ||
+          pathname === '/sitemap.xml' ||
+          pathname === '/robots.txt' ||
+          pathname === '/manifest.webmanifest' ||
+          pathname === '/icon' ||
+          pathname === '/apple-icon' ||
+          pathname === '/opengraph-image'
         ) {
           return true
         }
