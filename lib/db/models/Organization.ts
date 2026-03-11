@@ -41,8 +41,8 @@ export interface IOrganization extends Document {
 const OrganizationSchema = new Schema<IOrganization>(
   {
     name: { type: String, required: true, trim: true },
-    slug: { type: String, required: true, unique: true, lowercase: true },
-    domain: { type: String, lowercase: true, sparse: true },
+    slug: { type: String, required: true, unique: true, lowercase: true, index: true },
+    domain: { type: String, lowercase: true, sparse: true, index: true },
 
     logoUrl: { type: String },
     primaryColor: { type: String },
@@ -81,9 +81,6 @@ const OrganizationSchema = new Schema<IOrganization>(
   },
   { timestamps: true }
 )
-
-OrganizationSchema.index({ slug: 1 })
-OrganizationSchema.index({ domain: 1 })
 
 export const Organization: Model<IOrganization> =
   mongoose.models.Organization ||
