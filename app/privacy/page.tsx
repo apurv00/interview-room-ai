@@ -64,7 +64,7 @@ export default function PrivacyPage() {
           <h2 className="text-lg font-semibold text-white mb-3">7. Contact</h2>
           <p className="text-slate-400">
             For privacy-related questions, contact us at{' '}
-            <a href="mailto:privacy@interviewroom.ai" className="text-indigo-400 hover:text-indigo-300">privacy@interviewroom.ai</a>.
+            <a href="mailto:privacy@interviewprep.guru" className="text-indigo-400 hover:text-indigo-300">privacy@interviewprep.guru</a>.
           </p>
         </section>
       </div>

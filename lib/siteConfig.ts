@@ -1,6 +1,6 @@
 export const siteConfig = {
   name: 'Interview Prep Guru',
-  url: process.env.NEXT_PUBLIC_SITE_URL || 'https://interviewprepguru.com',
+  url: process.env.NEXT_PUBLIC_SITE_URL || 'https://interviewprep.guru',
   description:
     'AI-powered mock interview practice with realistic HR screening simulation. Get measured feedback on content, communication, and delivery.',
   shortDescription:
