@@ -98,7 +98,13 @@ export default function HomePage() {
         body: formData,
       })
 
-      const data = await res.json()
+      let data
+      try {
+        data = await res.json()
+      } catch {
+        setUploadError('Upload failed — server returned an unexpected response. Please try again.')
+        return
+      }
 
       if (!res.ok) {
         setUploadError(data.error || 'Upload failed')
@@ -268,6 +274,7 @@ export default function HomePage() {
               isUploading={jdUploading}
               onFileSelect={(file) => handleFileUpload(file, 'jd')}
               onRemove={() => { setJdText(''); setJdFileName('') }}
+              onError={setUploadError}
             />
             <FileDropzone
               label="Resume / CV"
@@ -275,6 +282,7 @@ export default function HomePage() {
               isUploading={resumeUploading}
               onFileSelect={(file) => handleFileUpload(file, 'resume')}
               onRemove={() => { setResumeText(''); setResumeFileName('') }}
+              onError={setUploadError}
             />
           </div>
           {uploadError && (

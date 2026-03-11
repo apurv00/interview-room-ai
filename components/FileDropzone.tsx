@@ -9,6 +9,8 @@ interface FileDropzoneProps {
   onFileSelect: (file: File) => void
   onRemove: () => void
   accept?: string
+  maxSizeMB?: number
+  onError?: (message: string) => void
 }
 
 export default function FileDropzone({
@@ -18,18 +20,31 @@ export default function FileDropzone({
   onFileSelect,
   onRemove,
   accept = '.pdf,.docx,.txt',
+  maxSizeMB = 10,
+  onError,
 }: FileDropzoneProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [isDragging, setIsDragging] = useState(false)
+
+  const validateAndSelect = useCallback(
+    (file: File) => {
+      if (file.size > maxSizeMB * 1024 * 1024) {
+        onError?.(`File too large. Maximum size is ${maxSizeMB}MB.`)
+        return
+      }
+      onFileSelect(file)
+    },
+    [onFileSelect, maxSizeMB, onError]
+  )
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault()
       setIsDragging(false)
       const file = e.dataTransfer.files[0]
-      if (file) onFileSelect(file)
+      if (file) validateAndSelect(file)
     },
-    [onFileSelect]
+    [validateAndSelect]
   )
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -45,9 +60,9 @@ export default function FileDropzone({
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0]
-      if (file) onFileSelect(file)
+      if (file) validateAndSelect(file)
     },
-    [onFileSelect]
+    [validateAndSelect]
   )
 
   // Uploading state

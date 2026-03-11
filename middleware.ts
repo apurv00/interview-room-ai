@@ -43,6 +43,7 @@ export default withAuth(
           pathname.startsWith('/api/generate-question') ||
           pathname.startsWith('/api/evaluate-answer') ||
           pathname.startsWith('/api/generate-feedback') ||
+          pathname.startsWith('/api/documents/upload') ||
           pathname.startsWith('/pricing') ||
           pathname.startsWith('/privacy') ||
           pathname.startsWith('/terms') ||
