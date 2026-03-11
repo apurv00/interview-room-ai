@@ -18,13 +18,7 @@ import type { InterviewConfig } from '@/lib/types'
 import { AVATAR_NAME, AVATAR_TITLE } from '@/lib/interviewConfig'
 import { STORAGE_KEYS } from '@/lib/storageKeys'
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function formatTime(s: number) {
-  const m = Math.floor(s / 60)
-  const sec = s % 60
-  return `${m}:${sec.toString().padStart(2, '0')}`
-}
+import { formatTime } from '@/lib/utils'
 
 // ─── Phase label map ──────────────────────────────────────────────────────────
 

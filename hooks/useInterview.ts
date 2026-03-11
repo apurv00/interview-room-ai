@@ -17,6 +17,7 @@ import {
 } from '@/lib/interviewConfig'
 import { deriveCoachingTip } from '@/lib/coachingTips'
 import { STORAGE_KEYS, sessionScopedKey } from '@/lib/storageKeys'
+import { fetchWithRetry } from '@/lib/fetchWithRetry'
 import type { SpeechRecognitionResult } from './useSpeechRecognition'
 
 // ─── Session persistence helpers ──────────────────────────────────────────────
@@ -37,23 +38,11 @@ async function createDbSession(config: InterviewConfig): Promise<string | null> 
 }
 
 async function persistSession(sessionId: string, payload: Record<string, unknown>) {
-  const MAX_RETRIES = 3
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    try {
-      const res = await fetch(`/api/interviews/${sessionId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-      if (res.ok) return
-    } catch {
-      // Network error — retry
-    }
-    if (attempt < MAX_RETRIES - 1) {
-      await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt)))
-    }
-  }
-  // All retries failed — localStorage is the fallback
+  await fetchWithRetry(`/api/interviews/${sessionId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
 }
 
 // ─── Hook options ─────────────────────────────────────────────────────────────
@@ -289,17 +278,8 @@ export function useInterview({
     )
   }
 
-  /** Evaluate answer, accumulate result, show coaching tip, wait 2s (cancellable). */
-  async function evaluateAndCoach(
-    question: string,
-    answer: string,
-    qIdx: number,
-  ): Promise<AnswerEvaluation> {
-    transitionTo('PROCESSING')
-    setLiveAnswer('')
-    const evaluation = await evaluateAnswer(question, answer, qIdx)
-    evaluationsRef.current = [...evaluationsRef.current, { ...evaluation, question, answer }]
-
+  /** Show coaching tip for 2s (cancellable via coachingAbortRef). */
+  async function showCoachingTip(evaluation: AnswerEvaluation): Promise<void> {
     transitionTo('COACHING')
     setCoachingTip(deriveCoachingTip(evaluation))
     const abortCtrl = new AbortController()
@@ -315,8 +295,27 @@ export function useInterview({
     if (!abortCtrl.signal.aborted) {
       setCoachingTip(null)
     }
+  }
 
-    return evaluation
+  /** Evaluate answer, accumulate result, show coaching tip. Optionally runs a concurrent task in parallel with evaluation. */
+  async function evaluateAndCoach<T = void>(
+    question: string,
+    answer: string,
+    qIdx: number,
+    concurrentTask?: Promise<T>,
+  ): Promise<{ evaluation: AnswerEvaluation; concurrentResult: T }> {
+    transitionTo('PROCESSING')
+    setLiveAnswer('')
+
+    const [evaluation, concurrentResult] = await Promise.all([
+      evaluateAnswer(question, answer, qIdx),
+      concurrentTask ?? (Promise.resolve(undefined) as Promise<T>),
+    ])
+
+    evaluationsRef.current = [...evaluationsRef.current, { ...evaluation, question, answer }]
+    await showCoachingTip(evaluation)
+
+    return { evaluation, concurrentResult }
   }
 
   // ─── Finish interview ──────────────────────────────────────────────────────
@@ -408,37 +407,15 @@ export function useInterview({
 
         addToTranscript('candidate', answer, qIdx)
 
-        // Evaluate answer AND pre-fetch next question in parallel
+        // Evaluate answer AND pre-fetch next question in parallel, then show coaching
         const nextQIdx = qIdx + 1
         const shouldPrefetch = nextQIdx < maxQ && timeRemainingRef.current > 30
+        const prefetchPromise = shouldPrefetch ? generateQuestion(nextQIdx) : Promise.resolve(null)
 
-        transitionTo('PROCESSING')
-        setLiveAnswer('')
-
-        const [evaluation, nextQuestion] = await Promise.all([
-          evaluateAnswer(question, answer, qIdx),
-          shouldPrefetch ? generateQuestion(nextQIdx) : Promise.resolve(null),
-        ])
-
+        const { evaluation, concurrentResult: nextQuestion } = await evaluateAndCoach(
+          question, answer, qIdx, prefetchPromise,
+        )
         prefetchedQuestion = nextQuestion
-        evaluationsRef.current = [...evaluationsRef.current, { ...evaluation, question, answer }]
-
-        // Show coaching tip (2s, cancellable)
-        transitionTo('COACHING')
-        setCoachingTip(deriveCoachingTip(evaluation))
-        const abortCtrl = new AbortController()
-        coachingAbortRef.current = abortCtrl
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, 2000)
-          abortCtrl.signal.addEventListener('abort', () => {
-            clearTimeout(timer)
-            resolve()
-          })
-        })
-        coachingAbortRef.current = null
-        if (!abortCtrl.signal.aborted) {
-          setCoachingTip(null)
-        }
 
         // Avatar emotion based on quality
         const avgScore =
@@ -484,7 +461,7 @@ export function useInterview({
       await new Promise((r) => setTimeout(r, 6000))
       finishInterview()
     },
-    [config, generateQuestion, avatarSpeak, startListening, evaluateAnswer, addToTranscript, finishInterview]
+    [config, generateQuestion, avatarSpeak, startListening, evaluateAnswer, addToTranscript, finishInterview] // eslint-disable-line react-hooks/exhaustive-deps
   )
 
   // ─── Start interview when config + voices ready ────────────────────────────
@@ -510,7 +487,7 @@ export function useInterview({
 
       if (introAnswer) {
         addToTranscript('candidate', introAnswer, 0)
-        await evaluateAndCoach(intro, introAnswer, 0)
+        await evaluateAndCoach(intro, introAnswer, 0, undefined)
       }
 
       // Continue with AI-generated questions starting from index 1

@@ -123,6 +123,11 @@ export class EmotionEngine {
     this.currentEmotion = this.targetEmotion
     this.targetEmotion = emotion
     this.transitionStartTime = performance.now()
+
+    // Restart the RAF loop if it stopped after completing a previous transition
+    if (this.rafId === null && this.onUpdate) {
+      this.tick()
+    }
   }
 
   /** Stop the engine */
@@ -160,7 +165,14 @@ export class EmotionEngine {
   private tick = (): void => {
     const state = this.getCurrentBlended()
     this.onUpdate?.(state)
-    this.rafId = requestAnimationFrame(this.tick)
+
+    // Only continue the RAF loop while a transition is in progress
+    const elapsed = performance.now() - this.transitionStartTime
+    if (elapsed < this.transitionDurationMs) {
+      this.rafId = requestAnimationFrame(this.tick)
+    } else {
+      this.rafId = null
+    }
   }
 
   /** Static helper: pick emotion for interview phase context */

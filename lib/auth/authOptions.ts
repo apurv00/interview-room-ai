@@ -72,17 +72,23 @@ export const authOptions: NextAuthOptions = {
           token.plan = dbUser.plan
         }
       }
-      // Refresh plan from DB periodically (catches external plan changes)
+      // Refresh plan from DB periodically (catches external plan changes).
+      // Throttled to at most once every 5 minutes to avoid DB load.
       if (!user && token.userId) {
-        try {
-          await connectDB()
-          const dbUser = await User.findById(token.userId).select('plan role')
-          if (dbUser) {
-            token.plan = dbUser.plan
-            token.role = dbUser.role
+        const REFRESH_INTERVAL_MS = 5 * 60 * 1000
+        const lastRefreshed = (token.lastRefreshedAt as number) || 0
+        if (Date.now() - lastRefreshed > REFRESH_INTERVAL_MS) {
+          try {
+            await connectDB()
+            const dbUser = await User.findById(token.userId).select('plan role')
+            if (dbUser) {
+              token.plan = dbUser.plan
+              token.role = dbUser.role
+            }
+            token.lastRefreshedAt = Date.now()
+          } catch {
+            // Silently fail — keep existing token values
           }
-        } catch {
-          // Silently fail — keep existing token values
         }
       }
       if (trigger === 'update' && session) {

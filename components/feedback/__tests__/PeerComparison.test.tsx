@@ -82,15 +82,16 @@ describe('PeerComparison', () => {
     expect(screen.getByText('Engagement')).toBeInTheDocument()
   })
 
-  it('renders percentile badge with emerald color for >= 75', () => {
+  it('renders percentile badge with high tier for >= 75', () => {
     render(
       <PeerComparison data={mockPeerData} loading={false} userFeedback={makeFeedback()} />
     )
-    const badge = screen.getByText('Top 25%')
-    expect(badge.className).toContain('emerald')
+    const badge = screen.getByTestId('percentile-badge')
+    expect(badge).toHaveTextContent('Top 25%')
+    expect(badge).toHaveAttribute('data-tier', 'high')
   })
 
-  it('renders percentile badge with amber color for 40-74', () => {
+  it('renders percentile badge with medium tier for 40-74', () => {
     render(
       <PeerComparison
         data={{ ...mockPeerData, percentile: 55 }}
@@ -98,11 +99,12 @@ describe('PeerComparison', () => {
         userFeedback={makeFeedback()}
       />
     )
-    const badge = screen.getByText('Top 45%')
-    expect(badge.className).toContain('amber')
+    const badge = screen.getByTestId('percentile-badge')
+    expect(badge).toHaveTextContent('Top 45%')
+    expect(badge).toHaveAttribute('data-tier', 'medium')
   })
 
-  it('renders percentile badge with red color for < 40', () => {
+  it('renders percentile badge with low tier for < 40', () => {
     render(
       <PeerComparison
         data={{ ...mockPeerData, percentile: 30 }}
@@ -110,8 +112,9 @@ describe('PeerComparison', () => {
         userFeedback={makeFeedback()}
       />
     )
-    const badge = screen.getByText('30th percentile')
-    expect(badge.className).toContain('red')
+    const badge = screen.getByTestId('percentile-badge')
+    expect(badge).toHaveTextContent('30th percentile')
+    expect(badge).toHaveAttribute('data-tier', 'low')
   })
 
   it('renders session count', () => {

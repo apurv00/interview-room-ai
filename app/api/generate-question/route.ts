@@ -16,7 +16,6 @@ type GenerateQuestionBody = z.infer<typeof GenerateQuestionSchema>
 export const POST = composeApiRoute<GenerateQuestionBody>({
   schema: GenerateQuestionSchema,
   rateLimit: { windowMs: 60_000, maxRequests: 30, keyPrefix: 'rl:gen-q' },
-  authOptional: true,
 
   async handler(req, { user, body }) {
     const { config, questionIndex, previousQA } = body
@@ -85,7 +84,7 @@ Return ONLY the question text. No preamble, no numbering, no quotation marks. Ju
         modelUsed: 'claude-sonnet-4-6',
         durationMs: Date.now() - startTime,
         success: true,
-      }).catch(() => {})
+      }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
 
       return NextResponse.json({ question })
     } catch (err) {
@@ -101,7 +100,7 @@ Return ONLY the question text. No preamble, no numbering, no quotation marks. Ju
         durationMs: Date.now() - startTime,
         success: false,
         errorMessage: err instanceof Error ? err.message : 'Unknown error',
-      }).catch(() => {})
+      }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
 
       return NextResponse.json({
         question:

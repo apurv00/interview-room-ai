@@ -16,7 +16,6 @@ type EvaluateAnswerBody = z.infer<typeof EvaluateAnswerSchema>
 export const POST = composeApiRoute<EvaluateAnswerBody>({
   schema: EvaluateAnswerSchema,
   rateLimit: { windowMs: 60_000, maxRequests: 30, keyPrefix: 'rl:eval' },
-  authOptional: true,
 
   async handler(req, { user, body }) {
     const { config, question, answer, questionIndex } = body
@@ -101,7 +100,7 @@ Respond with ONLY valid JSON matching this schema:
         modelUsed: 'claude-sonnet-4-6',
         durationMs: Date.now() - startTime,
         success: true,
-      }).catch(() => {})
+      }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
 
       return NextResponse.json(evaluation)
     } catch (err) {
@@ -117,7 +116,7 @@ Respond with ONLY valid JSON matching this schema:
         durationMs: Date.now() - startTime,
         success: false,
         errorMessage: err instanceof Error ? err.message : 'Unknown error',
-      }).catch(() => {})
+      }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
 
       // Neutral fallback so the interview continues
       return NextResponse.json({
