@@ -4,7 +4,6 @@ import AudioPlayer from '../AudioPlayer'
 
 // Mock HTMLAudioElement
 beforeEach(() => {
-  // Reset play/pause mocks
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(() => Promise.resolve())
   vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {})
 })
@@ -42,7 +41,6 @@ describe('AudioPlayer', () => {
 
   it('renders time display', () => {
     render(<AudioPlayer {...defaultProps} />)
-    // Initial state: 0:00 / 0:00
     expect(screen.getByText('0:00 / 0:00')).toBeInTheDocument()
   })
 
@@ -65,19 +63,22 @@ describe('AudioPlayer', () => {
     expect(onSeek).toHaveBeenCalledWith(expect.any(Function))
   })
 
-  it('speed button highlights active speed', () => {
+  it('speed button marks active speed with aria-pressed', () => {
     render(<AudioPlayer {...defaultProps} />)
     const activeBtn = screen.getByLabelText('Playback speed 1x')
-    expect(activeBtn.className).toContain('bg-indigo-600')
+    expect(activeBtn).toHaveAttribute('aria-pressed', 'true')
+
+    const inactiveBtn = screen.getByLabelText('Playback speed 1.5x')
+    expect(inactiveBtn).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('clicking a speed button changes active speed', () => {
     render(<AudioPlayer {...defaultProps} />)
     const btn = screen.getByLabelText('Playback speed 1.5x')
     fireEvent.click(btn)
-    expect(btn.className).toContain('bg-indigo-600')
-    // 1x should no longer be active
+    expect(btn).toHaveAttribute('aria-pressed', 'true')
+
     const oldBtn = screen.getByLabelText('Playback speed 1x')
-    expect(oldBtn.className).not.toContain('bg-indigo-600')
+    expect(oldBtn).toHaveAttribute('aria-pressed', 'false')
   })
 })

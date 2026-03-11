@@ -25,6 +25,7 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout>>()
   const answerStartRef = useRef(0)
   const liveAnswerRef = useRef('')
+  const rafPendingRef = useRef(false)
 
   const stopListening = useCallback(() => {
     if (recognitionRef.current) {
@@ -86,7 +87,15 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
 
         const combined = (finalText + interim).trim()
         liveAnswerRef.current = combined
-        setLiveTranscript(combined)
+
+        // Throttle React state updates to ~60fps via requestAnimationFrame
+        if (!rafPendingRef.current) {
+          rafPendingRef.current = true
+          requestAnimationFrame(() => {
+            setLiveTranscript(liveAnswerRef.current)
+            rafPendingRef.current = false
+          })
+        }
 
         // Silence detection: 2s after last word
         silenceTimerRef.current = setTimeout(() => {

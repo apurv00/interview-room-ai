@@ -62,10 +62,16 @@ const DIMENSIONS: DimensionConfig[] = [
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function getPercentileColor(percentile: number): string {
-  if (percentile >= 75) return 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30'
-  if (percentile >= 40) return 'text-amber-400 bg-amber-500/10 border-amber-500/30'
-  return 'text-red-400 bg-red-500/10 border-red-500/30'
+function getPercentileTier(percentile: number): 'high' | 'medium' | 'low' {
+  if (percentile >= 75) return 'high'
+  if (percentile >= 40) return 'medium'
+  return 'low'
+}
+
+const PERCENTILE_COLORS: Record<string, string> = {
+  high: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30',
+  medium: 'text-amber-400 bg-amber-500/10 border-amber-500/30',
+  low: 'text-red-400 bg-red-500/10 border-red-500/30',
 }
 
 function getBarColor(userScore: number, avgScore: number): string {
@@ -121,7 +127,11 @@ export default function PeerComparison({ data, loading, userFeedback }: PeerComp
       {/* Percentile badge */}
       {percentile !== undefined && (
         <div className="flex items-center gap-3">
-          <div className={`px-3 py-1 rounded-full border text-sm font-medium ${getPercentileColor(percentile)}`}>
+          <div
+            className={`px-3 py-1 rounded-full border text-sm font-medium ${PERCENTILE_COLORS[getPercentileTier(percentile)]}`}
+            data-testid="percentile-badge"
+            data-tier={getPercentileTier(percentile)}
+          >
             {percentile >= 50 ? `Top ${100 - percentile}%` : `${percentile}th percentile`}
           </div>
         </div>

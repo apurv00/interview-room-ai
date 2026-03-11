@@ -14,11 +14,7 @@ interface AudioPlayerProps {
   onSeek?: (seekFn: (seconds: number) => void) => void
 }
 
-function formatTime(s: number): string {
-  const m = Math.floor(s / 60)
-  const sec = Math.floor(s % 60)
-  return `${m}:${sec.toString().padStart(2, '0')}`
-}
+import { formatTime } from '@/lib/utils'
 
 const SPEEDS = [0.5, 1, 1.25, 1.5, 2] as const
 const THROTTLE_MS = 200
@@ -232,6 +228,7 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
             key={s}
             onClick={() => changeSpeed(s)}
             aria-label={`Playback speed ${s}x`}
+            aria-pressed={speed === s}
             className={`px-2 py-0.5 rounded-md text-xs font-medium transition ${
               speed === s
                 ? 'bg-indigo-600 text-white'

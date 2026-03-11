@@ -44,50 +44,72 @@ interface ListSessionsInput {
 export async function createSession(input: CreateSessionInput): Promise<IInterviewSession> {
   await connectDB()
 
-  // Check usage limits
-  const user = await User.findById(input.userId)
-  if (!user) throw new NotFoundError('User')
-
-  // Monthly auto-reset: if we're in a new month since last reset, zero the counter
   const now = new Date()
-  const lastResetRaw = user.usageResetAt || user.createdAt
-  const lastReset = lastResetRaw ? new Date(lastResetRaw) : now
-  if (lastReset.getMonth() !== now.getMonth() || lastReset.getFullYear() !== now.getFullYear()) {
-    user.monthlyInterviewsUsed = 0
-    user.usageResetAt = now
-    await user.save()
-    logger.info({ userId: input.userId }, 'Monthly usage counter reset')
-  }
+  const currentMonth = now.getMonth()
+  const currentYear = now.getFullYear()
 
-  // Enforce limit for ALL plans (enterprise has limit 999999 so effectively unlimited)
-  if (user.monthlyInterviewsUsed >= user.monthlyInterviewLimit) {
+  // Monthly auto-reset: zero the counter if we're in a new month since last reset.
+  // This runs before the atomic increment so the limit check uses fresh data.
+  await User.updateOne(
+    {
+      _id: new mongoose.Types.ObjectId(input.userId),
+      $or: [
+        { usageResetAt: { $exists: false } },
+        { $expr: { $ne: [{ $month: '$usageResetAt' }, currentMonth + 1] } },
+        { $expr: { $ne: [{ $year: '$usageResetAt' }, currentYear] } },
+      ],
+    },
+    { $set: { monthlyInterviewsUsed: 0, usageResetAt: now } }
+  )
+
+  // Atomic increment-first: check limit AND increment in a single operation.
+  // Uses $expr to compare field values atomically — no race condition.
+  const updatedUser = await User.findOneAndUpdate(
+    {
+      _id: new mongoose.Types.ObjectId(input.userId),
+      $expr: { $lt: ['$monthlyInterviewsUsed', '$monthlyInterviewLimit'] },
+    },
+    {
+      $inc: { monthlyInterviewsUsed: 1, interviewCount: 1 },
+      $set: { lastInterviewAt: now },
+    },
+    { new: true }
+  )
+
+  if (!updatedUser) {
+    // Either user doesn't exist or usage limit reached
+    const exists = await User.exists({ _id: input.userId })
+    if (!exists) throw new NotFoundError('User')
     throw new UsageLimitError()
   }
 
-  const session = await InterviewSession.create({
-    userId: new mongoose.Types.ObjectId(input.userId),
-    organizationId: input.organizationId
-      ? new mongoose.Types.ObjectId(input.organizationId)
-      : undefined,
-    config: input.config,
-    status: 'created',
-    templateId: input.templateId
-      ? new mongoose.Types.ObjectId(input.templateId)
-      : undefined,
-    candidateEmail: input.candidateEmail,
-    candidateName: input.candidateName,
-    userAgent: input.userAgent,
-    jobDescription: input.jobDescription,
-    resumeText: input.resumeText,
-    jdFileName: input.jdFileName,
-    resumeFileName: input.resumeFileName,
-  })
-
-  // Increment usage
-  await User.findByIdAndUpdate(input.userId, {
-    $inc: { monthlyInterviewsUsed: 1, interviewCount: 1 },
-    $set: { lastInterviewAt: new Date() },
-  })
+  let session: IInterviewSession
+  try {
+    session = await InterviewSession.create({
+      userId: new mongoose.Types.ObjectId(input.userId),
+      organizationId: input.organizationId
+        ? new mongoose.Types.ObjectId(input.organizationId)
+        : undefined,
+      config: input.config,
+      status: 'created',
+      templateId: input.templateId
+        ? new mongoose.Types.ObjectId(input.templateId)
+        : undefined,
+      candidateEmail: input.candidateEmail,
+      candidateName: input.candidateName,
+      userAgent: input.userAgent,
+      jobDescription: input.jobDescription,
+      resumeText: input.resumeText,
+      jdFileName: input.jdFileName,
+      resumeFileName: input.resumeFileName,
+    })
+  } catch (err) {
+    // Rollback the usage increment if session creation fails
+    await User.findByIdAndUpdate(input.userId, {
+      $inc: { monthlyInterviewsUsed: -1, interviewCount: -1 },
+    })
+    throw err
+  }
 
   logger.info({ sessionId: session._id, userId: input.userId }, 'Interview session created')
 

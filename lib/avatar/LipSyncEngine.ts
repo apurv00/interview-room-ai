@@ -99,8 +99,10 @@ export class LipSyncEngine {
 
     if (this.timeline.length === 0 || elapsed > this.totalDuration()) {
       this.onUpdate?.(VISEME_PATHS.REST)
-      // Don't stop — let the caller decide when to stop
-      this.rafId = requestAnimationFrame(this.tick)
+      // Auto-stop: timeline complete, no more frames needed.
+      // The caller calls start() for each new utterance which calls stop() first.
+      this.rafId = null
+      this.onUpdate = null
       return
     }
 

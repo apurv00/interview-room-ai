@@ -77,7 +77,6 @@ function computeEngagementContext(
 export const POST = composeApiRoute<GenerateFeedbackBody>({
   schema: GenerateFeedbackSchema,
   rateLimit: { windowMs: 60_000, maxRequests: 5, keyPrefix: 'rl:feedback' },
-  authOptional: true,
 
   async handler(req, { user, body }) {
     const { config, transcript, evaluations, speechMetrics } = body
@@ -190,7 +189,7 @@ For engagement_signals, analyze the speech pattern trends provided above:
         modelUsed: 'claude-opus-4-6',
         durationMs: Date.now() - startTime,
         success: true,
-      }).catch(() => {})
+      }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
 
       return NextResponse.json(feedback)
     } catch (err) {
@@ -206,7 +205,7 @@ For engagement_signals, analyze the speech pattern trends provided above:
         durationMs: Date.now() - startTime,
         success: false,
         errorMessage: err instanceof Error ? err.message : 'Unknown error',
-      }).catch(() => {})
+      }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
 
       // Comprehensive fallback with engagement_signals
       const fallback: FeedbackData = {
