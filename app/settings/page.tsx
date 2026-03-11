@@ -66,9 +66,10 @@ export default function SettingsPage() {
   const plan = usage?.plan || user.plan || 'free'
   const planConfig = PLANS[plan] || PLANS.free
   const used = usage?.monthlyInterviewsUsed || 0
-  const limit = usage?.monthlyInterviewLimit || 3
-  const usagePercent = Math.min(100, Math.round((used / limit) * 100))
-  const remaining = Math.max(0, limit - used)
+  const limit = usage?.monthlyInterviewLimit || 999999
+  const isUnlimited = limit >= 999999
+  const usagePercent = isUnlimited ? 0 : Math.min(100, Math.round((used / limit) * 100))
+  const remaining = isUnlimited ? null : Math.max(0, limit - used)
 
   const initials = (user.name || user.email || '?')
     .split(' ')
@@ -149,11 +150,13 @@ export default function SettingsPage() {
             <div>
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm text-slate-300">
-                  {used} of {limit} interviews used
+                  {isUnlimited ? `${used} interviews completed` : `${used} of ${limit} interviews used`}
                 </span>
-                <span className="text-sm text-slate-500">
-                  {remaining} remaining
-                </span>
+                {remaining !== null && (
+                  <span className="text-sm text-slate-500">
+                    {remaining} remaining
+                  </span>
+                )}
               </div>
               <div className="h-3 bg-slate-800 rounded-full overflow-hidden">
                 <div
