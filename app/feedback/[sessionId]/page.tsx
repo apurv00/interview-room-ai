@@ -115,6 +115,7 @@ function FeedbackPageInner() {
   const [loading, setLoading] = useState(true)
   // Issue 6-A: feedbackError state for user-facing error + retry
   const [feedbackError, setFeedbackError] = useState<string | null>(null)
+  const [saveWarning, setSaveWarning] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<FeedbackTab>('overview')
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null)
   const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null)
@@ -267,14 +268,23 @@ function FeedbackPageInner() {
       }
       setFeedback(fb as FeedbackData)
 
-      // Issue 1-A: DB persist is fire-and-forget — intentionally no `signal`
-      // so user navigation doesn't cancel a write that's already in flight.
+      // Persist feedback to DB with retry (no abort signal — must survive navigation)
       if (sid && sid !== 'local') {
-        fetch(`/api/interviews/${sid}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ feedback: fb }),
-        }).catch(() => { /* non-critical */ })
+        let saved = false
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            const patchRes = await fetch(`/api/interviews/${sid}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ feedback: fb }),
+            })
+            if (patchRes.ok) { saved = true; break }
+          } catch { /* retry */ }
+          if (attempt < 2) await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)))
+        }
+        if (!saved) {
+          setSaveWarning('Feedback generated but could not be saved. It may not appear in history.')
+        }
       }
     } catch (e) {
       if ((e as Error).name === 'AbortError') return
@@ -450,6 +460,18 @@ function FeedbackPageInner() {
           </div>
         </div>
       </header>
+
+      {/* Save warning banner */}
+      {saveWarning && (
+        <div className="max-w-5xl mx-auto px-4 mt-4">
+          <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl px-5 py-3 text-sm text-amber-300 flex items-center gap-2">
+            <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            {saveWarning}
+          </div>
+        </div>
+      )}
 
       <main className="max-w-5xl mx-auto px-4 py-8 space-y-8">
         {/* Audio Player */}

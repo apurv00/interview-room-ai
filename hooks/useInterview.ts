@@ -321,7 +321,7 @@ export function useInterview({
 
   // ─── Finish interview ──────────────────────────────────────────────────────
 
-  const finishInterview = useCallback(() => {
+  const finishInterview = useCallback(async () => {
     transitionTo('SCORING')
     window.speechSynthesis.cancel()
     stopListening()
@@ -344,16 +344,19 @@ export function useInterview({
     }
     localStorage.setItem(STORAGE_KEYS.INTERVIEW_DATA, dataJson)
 
-    // Persist to DB (fire-and-forget) and navigate immediately
+    // Persist to DB before navigating (with 3s timeout guard)
     if (sid) {
-      persistSession(sid, {
-        status: 'completed',
-        completedAt: new Date().toISOString(),
-        durationActualSeconds: config ? config.duration * 60 - timeRemainingRef.current : 0,
-        transcript: transcriptRef.current,
-        evaluations: evaluationsRef.current,
-        speechMetrics: speechMetricsRef.current,
-      })
+      await Promise.race([
+        persistSession(sid, {
+          status: 'completed',
+          completedAt: new Date().toISOString(),
+          durationActualSeconds: config ? config.duration * 60 - timeRemainingRef.current : 0,
+          transcript: transcriptRef.current,
+          evaluations: evaluationsRef.current,
+          speechMetrics: speechMetricsRef.current,
+        }),
+        new Promise((r) => setTimeout(r, 3000)),
+      ])
       router.push(`/feedback/${sid}`)
     } else {
       router.push('/feedback/local')
