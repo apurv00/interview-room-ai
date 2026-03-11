@@ -153,11 +153,13 @@ export default function LobbyPage() {
               : c
           ))
         } else {
-          throw new Error('non-ok')
+          setChecks(prev => prev.map(c =>
+            c.label === 'Network' ? { ...c, status: 'error', detail: 'Server returned an error' } : c
+          ))
         }
       } catch {
         setChecks(prev => prev.map(c =>
-          c.label === 'Network' ? { ...c, status: 'ok', detail: 'Connected' } : c
+          c.label === 'Network' ? { ...c, status: 'error', detail: 'Could not reach server' } : c
         ))
       }
     }
