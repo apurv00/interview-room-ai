@@ -68,7 +68,7 @@ Respond with ONLY valid JSON matching this schema:
 
     try {
       const message = await client.messages.create({
-        model: 'claude-opus-4-6',
+        model: 'claude-sonnet-4-6',
         max_tokens: 400,
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
@@ -98,7 +98,7 @@ Respond with ONLY valid JSON matching this schema:
         sessionId: body.sessionId,
         inputTokens: message.usage.input_tokens,
         outputTokens: message.usage.output_tokens,
-        modelUsed: 'claude-opus-4-6',
+        modelUsed: 'claude-sonnet-4-6',
         durationMs: Date.now() - startTime,
         success: true,
       }).catch(() => {})
@@ -113,7 +113,7 @@ Respond with ONLY valid JSON matching this schema:
         sessionId: body.sessionId,
         inputTokens: 0,
         outputTokens: 0,
-        modelUsed: 'claude-opus-4-6',
+        modelUsed: 'claude-sonnet-4-6',
         durationMs: Date.now() - startTime,
         success: false,
         errorMessage: err instanceof Error ? err.message : 'Unknown error',

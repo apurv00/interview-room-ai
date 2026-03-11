@@ -105,6 +105,7 @@ _Update this section each session to carry context forward._
 - **SEO phase 1**: Open Graph metadata, JSON-LD structured data, sitemap.ts, favicons, security headers, robots.txt
 - **SEO phase 2**: "How It Works" + feature content sections on homepage, Privacy Policy & Terms of Service pages, semantic HTML (aria-labels, `<main>` wrappers), internal cross-linking, h1 brand name fix
 - **CLAUDE.md**: Added this file for cross-session context
+- **Voice & responsiveness**: Faster TTS rate (0.95→1.08), warmer pitch, parallel eval+question generation, reduced inter-phase delays, switched real-time APIs to claude-sonnet-4-6 for speed
 
 ## Known Issues / TODO
 

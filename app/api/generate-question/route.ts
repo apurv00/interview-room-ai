@@ -66,7 +66,7 @@ Return ONLY the question text. No preamble, no numbering, no quotation marks. Ju
 
     try {
       const message = await client.messages.create({
-        model: 'claude-opus-4-6',
+        model: 'claude-sonnet-4-6',
         max_tokens: 300,
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
@@ -82,7 +82,7 @@ Return ONLY the question text. No preamble, no numbering, no quotation marks. Ju
         sessionId: body.sessionId,
         inputTokens: message.usage.input_tokens,
         outputTokens: message.usage.output_tokens,
-        modelUsed: 'claude-opus-4-6',
+        modelUsed: 'claude-sonnet-4-6',
         durationMs: Date.now() - startTime,
         success: true,
       }).catch(() => {})
@@ -97,7 +97,7 @@ Return ONLY the question text. No preamble, no numbering, no quotation marks. Ju
         sessionId: body.sessionId,
         inputTokens: 0,
         outputTokens: 0,
-        modelUsed: 'claude-opus-4-6',
+        modelUsed: 'claude-sonnet-4-6',
         durationMs: Date.now() - startTime,
         success: false,
         errorMessage: err instanceof Error ? err.message : 'Unknown error',
