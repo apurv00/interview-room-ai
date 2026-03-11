@@ -173,12 +173,13 @@ export function useInterview({
         // Prefer Indian English / natural-sounding voices, fall back to Western defaults
         const voicePreferences = [
           'Microsoft Neerja Online (Natural)',
+          'Google US English',
           'Microsoft Neerja',
           'Google India English',
-          'Rishi',
-          'Veena',
           'Samantha',
           'Google UK English Female',
+          'Rishi',
+          'Veena',
           'Karen',
           'Moira',
         ]
@@ -187,8 +188,8 @@ export function useInterview({
           null
         )
         if (preferred) utterance.voice = preferred
-        utterance.rate = 0.95
-        utterance.pitch = 1.0
+        utterance.rate = 1.08
+        utterance.pitch = 1.02
         utterance.volume = 1
 
         setAvatarEmotion(emotion)
@@ -288,7 +289,7 @@ export function useInterview({
     )
   }
 
-  /** Evaluate answer, accumulate result, show coaching tip, wait 3.5s (cancellable). */
+  /** Evaluate answer, accumulate result, show coaching tip, wait 2s (cancellable). */
   async function evaluateAndCoach(
     question: string,
     answer: string,
@@ -304,7 +305,7 @@ export function useInterview({
     const abortCtrl = new AbortController()
     coachingAbortRef.current = abortCtrl
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 3500)
+      const timer = setTimeout(resolve, 2000)
       abortCtrl.signal.addEventListener('abort', () => {
         clearTimeout(timer)
         resolve()
@@ -366,15 +367,19 @@ export function useInterview({
       if (!config) return
       const maxQ = QUESTION_COUNT[config.duration]
 
+      // Pre-fetched question for the next iteration (generated in parallel with evaluation)
+      let prefetchedQuestion: string | null = null
+
       for (let qIdx = startingQIndex; qIdx < maxQ; qIdx++) {
         if (isInterviewOver()) return
 
         // Check time
         if (timeRemainingRef.current < 30) break
 
-        // Generate question
+        // Use pre-fetched question if available, otherwise generate now
         transitionTo('ASK_QUESTION')
-        const question = await generateQuestion(qIdx)
+        const question: string = prefetchedQuestion ?? await generateQuestion(qIdx)
+        prefetchedQuestion = null
         questionIndexRef.current = qIdx
         setQuestionIndex(qIdx)
         setCurrentQuestion(question)
@@ -400,8 +405,37 @@ export function useInterview({
 
         addToTranscript('candidate', answer, qIdx)
 
-        // Evaluate + coaching
-        const evaluation = await evaluateAndCoach(question, answer, qIdx)
+        // Evaluate answer AND pre-fetch next question in parallel
+        const nextQIdx = qIdx + 1
+        const shouldPrefetch = nextQIdx < maxQ && timeRemainingRef.current > 30
+
+        transitionTo('PROCESSING')
+        setLiveAnswer('')
+
+        const [evaluation, nextQuestion] = await Promise.all([
+          evaluateAnswer(question, answer, qIdx),
+          shouldPrefetch ? generateQuestion(nextQIdx) : Promise.resolve(null),
+        ])
+
+        prefetchedQuestion = nextQuestion
+        evaluationsRef.current = [...evaluationsRef.current, { ...evaluation, question, answer }]
+
+        // Show coaching tip (2s, cancellable)
+        transitionTo('COACHING')
+        setCoachingTip(deriveCoachingTip(evaluation))
+        const abortCtrl = new AbortController()
+        coachingAbortRef.current = abortCtrl
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 2000)
+          abortCtrl.signal.addEventListener('abort', () => {
+            clearTimeout(timer)
+            resolve()
+          })
+        })
+        coachingAbortRef.current = null
+        if (!abortCtrl.signal.aborted) {
+          setCoachingTip(null)
+        }
 
         // Avatar emotion based on quality
         const avgScore =
@@ -431,7 +465,7 @@ export function useInterview({
           }
           transitionTo('PROCESSING')
           setAvatarEmotion(responseEmotion)
-          await new Promise((r) => setTimeout(r, 600))
+          await new Promise((r) => setTimeout(r, 300))
         } else {
           setAvatarEmotion(responseEmotion)
         }
@@ -443,8 +477,8 @@ export function useInterview({
       addToTranscript('interviewer', WRAP_UP_LINE)
       await avatarSpeak(WRAP_UP_LINE, 'friendly')
 
-      // 10s for user to ask questions
-      await new Promise((r) => setTimeout(r, 10000))
+      // 6s for user to ask questions
+      await new Promise((r) => setTimeout(r, 6000))
       finishInterview()
     },
     [config, generateQuestion, avatarSpeak, startListening, evaluateAnswer, addToTranscript, finishInterview]
@@ -480,7 +514,7 @@ export function useInterview({
       runInterviewLoop(1)
     }
 
-    const t = setTimeout(start, 800)
+    const t = setTimeout(start, 500)
     return () => clearTimeout(t)
   }, [config, voicesReady]) // eslint-disable-line react-hooks/exhaustive-deps
 

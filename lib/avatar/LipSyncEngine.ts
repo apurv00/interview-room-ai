@@ -62,9 +62,9 @@ export class LipSyncEngine {
     }
   }
 
-  /** Build a viseme timeline from text at ~13 chars/sec (matching TTS rate 0.93) */
+  /** Build a viseme timeline from text at ~15 chars/sec (matching TTS rate 1.08) */
   prepareFromText(text: string): void {
-    const charDurationMs = 1000 / 13 // ~77ms per char
+    const charDurationMs = 1000 / 15 // ~67ms per char
     this.timeline = []
 
     let timeMs = 0
