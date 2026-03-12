@@ -14,7 +14,23 @@ export default withAuth(
 
     // Rewrite CMS subdomain requests to /cms prefix
     // e.g., cms.domain.com/domains -> /cms/domains
-    if (isCms && !pathname.startsWith('/cms')) {
+    // Exclude auth routes, API auth, and static assets so signin/signup work on CMS subdomain
+    const cmsExcludedPaths = [
+      '/signin',
+      '/signup',
+      '/api/auth',
+      '/api/health',
+      '/_next',
+      '/favicon.ico',
+      '/sitemap.xml',
+      '/robots.txt',
+    ]
+    const shouldRewriteToCms =
+      isCms &&
+      !pathname.startsWith('/cms') &&
+      !cmsExcludedPaths.some((p) => pathname.startsWith(p))
+
+    if (shouldRewriteToCms) {
       const url = req.nextUrl.clone()
       url.pathname = `/cms${pathname}`
       return NextResponse.rewrite(url)
