@@ -6,6 +6,7 @@ import { MongoDBAdapter } from '@auth/mongodb-adapter'
 import type { Adapter } from 'next-auth/adapters'
 import bcrypt from 'bcryptjs'
 import { connectDB } from '@/lib/db/connection'
+import { UNLIMITED } from '@/lib/services/stripe'
 import { User } from '@/lib/db/models'
 import clientPromise from '@/lib/db/mongoClient'
 
@@ -146,7 +147,7 @@ export const authOptions: NextAuthOptions = {
           emailVerified: new Date(),
           role: 'candidate',
           plan: 'free',
-          monthlyInterviewLimit: 999999,
+          monthlyInterviewLimit: UNLIMITED,
           onboardingCompleted: false,
         })
       }

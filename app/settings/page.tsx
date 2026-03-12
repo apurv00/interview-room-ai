@@ -5,7 +5,7 @@ import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Image from 'next/image'
-import { PLANS } from '@/lib/services/stripe'
+import { PLANS, UNLIMITED } from '@/lib/services/stripe'
 import { ROLE_LABELS, EXPERIENCE_LABELS } from '@/lib/interviewConfig'
 import type { Role, ExperienceLevel } from '@/lib/types'
 
@@ -108,8 +108,8 @@ export default function SettingsPage() {
   const plan = usage?.plan || user.plan || 'free'
   const planConfig = PLANS[plan] || PLANS.free
   const used = usage?.monthlyInterviewsUsed || 0
-  const limit = usage?.monthlyInterviewLimit || 999999
-  const isUnlimited = limit >= 999999
+  const limit = usage?.monthlyInterviewLimit || UNLIMITED
+  const isUnlimited = limit >= UNLIMITED
   const usagePercent = isUnlimited ? 0 : Math.min(100, Math.round((used / limit) * 100))
   const remaining = isUnlimited ? null : Math.max(0, limit - used)
 

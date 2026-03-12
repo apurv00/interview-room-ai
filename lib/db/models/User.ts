@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document, Model } from 'mongoose'
+import { UNLIMITED } from '@/lib/services/stripe'
 
 export interface IUser extends Document {
   _id: mongoose.Types.ObjectId
@@ -79,7 +80,7 @@ const UserSchema = new Schema<IUser>(
     planExpiresAt: { type: Date },
     stripeCustomerId: { type: String, sparse: true },
     monthlyInterviewsUsed: { type: Number, default: 0 },
-    monthlyInterviewLimit: { type: Number, default: 999999 },
+    monthlyInterviewLimit: { type: Number, default: UNLIMITED },
     usageResetAt: { type: Date },
   },
   { timestamps: true }

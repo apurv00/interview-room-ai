@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import bcrypt from 'bcryptjs'
 import { connectDB } from '@/lib/db/connection'
 import { User } from '@/lib/db/models'
+import { UNLIMITED } from '@/lib/services/stripe'
 
 export const dynamic = 'force-dynamic'
 
@@ -32,7 +33,7 @@ export async function POST(req: NextRequest) {
       hashedPassword,
       role: 'candidate',
       plan: 'free',
-      monthlyInterviewLimit: 999999,
+      monthlyInterviewLimit: UNLIMITED,
       onboardingCompleted: false,
     })
 

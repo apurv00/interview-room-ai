@@ -12,11 +12,14 @@ export interface PlanConfig {
   highlighted?: boolean
 }
 
+/** Sentinel value representing an unlimited interview quota. */
+export const UNLIMITED = 999999
+
 export const PLANS: Record<string, PlanConfig> = {
   free: {
     name: 'free',
     label: 'Free',
-    monthlyInterviewLimit: 999999,
+    monthlyInterviewLimit: UNLIMITED,
     rateLimitPerMin: 15,
     priceMonthly: 0,
     features: [
@@ -44,7 +47,7 @@ export const PLANS: Record<string, PlanConfig> = {
   enterprise: {
     name: 'enterprise',
     label: 'Enterprise',
-    monthlyInterviewLimit: 999999,
+    monthlyInterviewLimit: UNLIMITED,
     rateLimitPerMin: 60,
     priceMonthly: null,
     features: [

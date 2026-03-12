@@ -2,7 +2,7 @@
 
 import { useSession } from 'next-auth/react'
 import Link from 'next/link'
-import { PLANS, type PlanConfig } from '@/lib/services/stripe'
+import { PLANS, UNLIMITED, type PlanConfig } from '@/lib/services/stripe'
 
 const PLAN_ORDER = ['free', 'pro', 'enterprise'] as const
 
@@ -52,7 +52,7 @@ function PlanCard({ plan, isCurrent }: { plan: PlanConfig; isCurrent: boolean })
 
       {/* Interview limit */}
       <p className="mt-2 text-sm text-slate-400">
-        {plan.monthlyInterviewLimit >= 999999
+        {plan.monthlyInterviewLimit >= UNLIMITED
           ? 'Unlimited interviews'
           : `${plan.monthlyInterviewLimit} interviews per month`}
       </p>
