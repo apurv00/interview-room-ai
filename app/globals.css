@@ -3,8 +3,15 @@
 @tailwind utilities;
 
 :root {
-  --foreground: #f8fafc;
+  --color-page: #070b14;
+  --color-card: #0c1220;
+  --color-surface: #151d2e;
+  --color-raised: #1c2539;
+  --color-border: rgba(255,255,255,0.10);
+  --color-border-subtle: rgba(255,255,255,0.06);
+  --foreground: #f0f2f5;
   --background: #070b14;
+  --radius-md: 10px;
 }
 
 * {
@@ -22,33 +29,71 @@ body {
   height: 100%;
 }
 
-/* Smooth scrollbar */
-::-webkit-scrollbar {
-  width: 5px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: #334155;
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+/* ─── TEXT ROLES ─────────────────────────── */
+.text-display    { font-size: 2.25rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; }
+.text-heading    { font-size: 1.5rem;  font-weight: 600; letter-spacing: -0.01em; line-height: 1.3; }
+.text-subheading { font-size: 1rem;    font-weight: 600; line-height: 1.4; }
+.text-body       { font-size: 0.875rem;font-weight: 400; line-height: 1.6; }
+.text-caption    { font-size: 0.75rem; font-weight: 500; line-height: 1.5; }
+.text-micro      { font-size: 0.6875rem;font-weight: 500; letter-spacing: 0.02em; line-height: 1.4; }
+
+/* ─── STEP LABEL (the ONLY uppercase usage) ─ */
+.step-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #4b5563;
 }
 
-/* Selection */
-::selection {
-  background: rgba(99, 102, 241, 0.3);
+/* ─── CARD SURFACES ─────────────────────── */
+.surface-card {
+  background: var(--color-card);
+  border-radius: var(--radius-md);
 }
+.surface-card-bordered {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+/* ─── SCROLLBAR ─────────────────────────── */
+* { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.08) transparent; }
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }
 
 /* Transcript scroll area */
 .transcript-scroll {
   scrollbar-width: thin;
-  scrollbar-color: #334155 transparent;
+  scrollbar-color: rgba(255,255,255,0.08) transparent;
 }
 
-/* Talking wave animation (kept for fallback) */
+/* ─── SELECTION ─────────────────────────── */
+::selection {
+  background: rgba(99, 102, 241, 0.3);
+}
+
+/* ─── FOCUS ─────────────────────────────── */
+:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 2px;
+}
+
+/* ─── GLOW BUTTON ───────────────────────── */
+.btn-glow {
+  box-shadow: 0 0 20px rgba(99, 102, 241, 0.3);
+  transition: box-shadow 0.2s ease;
+}
+.btn-glow:hover {
+  box-shadow: 0 0 28px rgba(99, 102, 241, 0.45);
+}
+.btn-glow:active {
+  box-shadow: 0 0 16px rgba(99, 102, 241, 0.25);
+}
+
+/* ─── WAVE ANIMATION (avatar fallback) ──── */
 @keyframes wave {
   0%, 100% { transform: scaleY(0.3); }
   50% { transform: scaleY(1); }
@@ -58,46 +103,10 @@ body {
   animation: wave 0.6s ease-in-out infinite;
 }
 
-/* Glow button */
-.btn-glow {
-  box-shadow: 0 0 24px rgba(99, 102, 241, 0.35);
-  transition: box-shadow 0.2s ease, transform 0.15s ease;
-}
-.btn-glow:hover {
-  box-shadow: 0 0 36px rgba(99, 102, 241, 0.55);
-  transform: translateY(-1px);
-}
-.btn-glow:active {
-  transform: translateY(0);
-  box-shadow: 0 0 20px rgba(99, 102, 241, 0.3);
-}
-
-/* Focus ring for accessibility */
-button:focus-visible,
-a:focus-visible {
-  outline: 2px solid rgba(99, 102, 241, 0.6);
-  outline-offset: 2px;
-}
-
-/* Slide-up entry animation — used by home, settings, feedback, pricing pages */
-@keyframes slideUp {
-  from {
-    opacity: 0;
-    transform: translateY(24px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
+/* ─── REDUCED MOTION ────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
   }
 }
-
-.animate-slide-up {
-  animation: slideUp 0.5s ease-out both;
-}
-
-/* Stagger helpers */
-.stagger-1 { animation-delay: 0.05s; }
-.stagger-2 { animation-delay: 0.10s; }
-.stagger-3 { animation-delay: 0.15s; }
-.stagger-4 { animation-delay: 0.20s; }
-.stagger-5 { animation-delay: 0.25s; }

@@ -16,6 +16,23 @@ module.exports = {
           700: '#4338ca',
           900: '#1e1b4b',
         },
+        page: '#070b14',
+        card: '#0c1220',
+        surface: '#151d2e',
+        raised: '#1c2539',
+      },
+      spacing: {
+        'inline': '6px',
+        'element': '12px',
+        'component': '16px',
+        'section': '32px',
+        'region': '56px',
+      },
+      borderRadius: {
+        DEFAULT: '10px',
+      },
+      borderColor: {
+        DEFAULT: 'rgba(255,255,255,0.10)',
       },
       animation: {
         'pulse-slow': 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',

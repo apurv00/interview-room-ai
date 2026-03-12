@@ -7,6 +7,10 @@ import Link from 'next/link'
 import FileDropzone from '@/components/FileDropzone'
 import DomainSelector from '@/components/DomainSelector'
 import DepthSelector from '@/components/DepthSelector'
+import StepSection from '@/components/ui/StepSection'
+import SelectionGroup from '@/components/ui/SelectionGroup'
+import Button from '@/components/ui/Button'
+import Badge from '@/components/ui/Badge'
 import type { Role, InterviewType, ExperienceLevel, Duration, InterviewConfig } from '@/lib/types'
 import { EXPERIENCE_LABELS, DURATION_LABELS } from '@/lib/interviewConfig'
 import { STORAGE_KEYS } from '@/lib/storageKeys'
@@ -15,7 +19,7 @@ import { getStartRedirect } from '@/lib/authRedirect'
 const EXPERIENCES: ExperienceLevel[] = ['0-2', '3-6', '7+']
 const DURATIONS: Duration[] = [5, 10, 20]
 
-export default function HomePage() {
+function AuthenticatedHome() {
   const router = useRouter()
   const { data: authSession, status } = useSession()
   const [role, setRole] = useState<Role | null>(null)
@@ -25,13 +29,13 @@ export default function HomePage() {
   const [lastConfig, setLastConfig] = useState<InterviewConfig | null>(null)
 
   // Document upload state
-  const [jdText, setJdText] = useState<string>('')
-  const [jdFileName, setJdFileName] = useState<string>('')
+  const [jdText, setJdText] = useState('')
+  const [jdFileName, setJdFileName] = useState('')
   const [jdUploading, setJdUploading] = useState(false)
-  const [resumeText, setResumeText] = useState<string>('')
-  const [resumeFileName, setResumeFileName] = useState<string>('')
+  const [resumeText, setResumeText] = useState('')
+  const [resumeFileName, setResumeFileName] = useState('')
   const [resumeUploading, setResumeUploading] = useState(false)
-  const [uploadError, setUploadError] = useState<string>('')
+  const [uploadError, setUploadError] = useState('')
 
   // Pre-fill from last session config
   useEffect(() => {
@@ -44,7 +48,6 @@ export default function HomePage() {
         if (c.interviewType) setInterviewType(c.interviewType)
         setExperience(c.experience)
         setDuration(c.duration)
-        // Restore documents if present
         if (c.jobDescription) {
           setJdText(c.jobDescription)
           setJdFileName(c.jdFileName || 'Job Description')
@@ -57,7 +60,7 @@ export default function HomePage() {
     } catch { /* ignore */ }
   }, [])
 
-  // Pre-fill from user profile (onboarding data) if no localStorage config
+  // Pre-fill from user profile (onboarding data)
   useEffect(() => {
     if (status !== 'authenticated' || lastConfig) return
     fetch('/api/onboarding')
@@ -77,50 +80,28 @@ export default function HomePage() {
   async function handleFileUpload(file: File, docType: 'jd' | 'resume') {
     setUploadError('')
     const setUploading = docType === 'jd' ? setJdUploading : setResumeUploading
-
     setUploading(true)
     try {
       const formData = new FormData()
       formData.append('file', file)
       formData.append('docType', docType)
-
-      const res = await fetch('/api/documents/upload', {
-        method: 'POST',
-        body: formData,
-      })
-
+      const res = await fetch('/api/documents/upload', { method: 'POST', body: formData })
       let data
-      try {
-        data = await res.json()
-      } catch {
+      try { data = await res.json() } catch {
         setUploadError('Upload failed — server returned an unexpected response. Please try again.')
         return
       }
-
-      if (!res.ok) {
-        setUploadError(data.error || 'Upload failed')
-        return
-      }
-
-      if (docType === 'jd') {
-        setJdText(data.text)
-        setJdFileName(data.fileName)
-      } else {
-        setResumeText(data.text)
-        setResumeFileName(data.fileName)
-      }
-    } catch {
-      setUploadError('Failed to upload file. Please try again.')
-    } finally {
-      setUploading(false)
-    }
+      if (!res.ok) { setUploadError(data.error || 'Upload failed'); return }
+      if (docType === 'jd') { setJdText(data.text); setJdFileName(data.fileName) }
+      else { setResumeText(data.text); setResumeFileName(data.fileName) }
+    } catch { setUploadError('Failed to upload file. Please try again.') }
+    finally { setUploading(false) }
   }
 
   function start() {
     if (!ready) return
     const redirect = getStartRedirect(status)
-    if (!redirect) return // still loading
-
+    if (!redirect) return
     const config: InterviewConfig = {
       role: role!,
       ...(interviewType && { interviewType }),
@@ -134,117 +115,72 @@ export default function HomePage() {
   }
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center px-4 py-12 relative overflow-hidden">
-      {/* Background gradient blobs */}
-      <div className="absolute top-0 left-1/4 w-96 h-96 bg-indigo-900/20 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-violet-900/15 rounded-full blur-3xl pointer-events-none" />
-
-      <div className="relative z-10 w-full max-w-2xl space-y-10">
+    <main className="min-h-screen px-4 sm:px-6 py-12">
+      <div className="max-w-[800px] mx-auto space-y-section animate-fade-in">
         {/* Header */}
-        <div className="text-center space-y-3 animate-slide-up">
-          <div className="inline-flex items-center gap-2 px-3 py-1 bg-indigo-500/10 border border-indigo-500/20 rounded-full text-indigo-400 text-xs font-medium mb-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
-            AI-powered mock interview
-          </div>
+        <div className="text-center mb-region">
           {authSession?.user?.name && (
-            <p className="text-indigo-400 text-sm font-medium">
+            <p className="text-body text-[#6b7280] mb-2">
               Welcome back, {authSession.user.name.split(' ')[0]}
             </p>
           )}
-          <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-white">
-            Interview Prep Guru
-          </h1>
-          <p className="text-slate-400 text-lg">
-            {lastConfig
-              ? 'Ready for another round? Your last settings are pre-filled below.'
-              : 'Practice with a realistic AI interviewer. Choose your domain, interview type, and get scored feedback.'}
-          </p>
+          <h1 className="text-display text-[#f0f2f5]">Set up your interview</h1>
+          {lastConfig && (
+            <p className="text-body text-[#6b7280] mt-2">
+              Your last settings are pre-filled below.
+            </p>
+          )}
         </div>
 
         {/* Step 1: Domain */}
-        <section className="space-y-3 animate-slide-up stagger-1">
-          <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
-            1 · Choose your interview domain
-          </h2>
-          <DomainSelector
-            selectedDomain={role}
-            onSelect={(slug) => {
-              setRole(slug)
-              // Reset interview type when domain changes
-              setInterviewType(null)
-            }}
-          />
-        </section>
+        <StepSection step={1} label="Interview domain" completed={!!role}>
+          <DomainSelector selectedDomain={role} onSelect={(slug) => { setRole(slug); setInterviewType(null) }} />
+        </StepSection>
 
         {/* Step 2: Interview Type */}
-        <section className="space-y-3 animate-slide-up stagger-2">
-          <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
-            2 · Interview type
-          </h2>
-          <DepthSelector
-            selectedDomain={role}
-            selectedDepth={interviewType}
-            onSelect={setInterviewType}
-          />
-        </section>
+        <StepSection step={2} label="Interview type" completed={!!interviewType}>
+          <DepthSelector selectedDomain={role} selectedDepth={interviewType} onSelect={setInterviewType} />
+        </StepSection>
 
-        {/* Step 3: Experience */}
-        <section className="space-y-3 animate-slide-up stagger-3">
-          <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
-            3 · Experience level
-          </h2>
-          <div className="grid grid-cols-3 gap-3">
-            {EXPERIENCES.map(e => (
-              <button
-                key={e}
-                onClick={() => setExperience(e)}
-                className={`
-                  py-4 rounded-xl border text-sm font-medium transition-all duration-200
-                  ${experience === e
-                    ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300 shadow-lg shadow-indigo-500/10'
-                    : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600 hover:text-slate-200 hover:bg-slate-800'
-                  }
-                `}
-              >
-                {EXPERIENCE_LABELS[e]}
-              </button>
-            ))}
-          </div>
-        </section>
+        {/* Steps 3 + 4: Experience & Duration side by side */}
+        <div className="grid md:grid-cols-2 gap-section">
+          <StepSection step={3} label="Experience level" completed={!!experience}>
+            <SelectionGroup<ExperienceLevel>
+              items={EXPERIENCES}
+              value={experience}
+              onChange={(v) => setExperience(v as ExperienceLevel)}
+              getKey={(e) => e}
+              layout="inline"
+              renderItem={(e, selected) => (
+                <div className={`py-3 px-2 text-center ${selected ? 'text-[#818cf8]' : ''}`}>
+                  <span className="text-body font-medium">{EXPERIENCE_LABELS[e]}</span>
+                </div>
+              )}
+            />
+          </StepSection>
 
-        {/* Step 4: Duration */}
-        <section className="space-y-3 animate-slide-up stagger-4">
-          <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
-            4 · Session length
-          </h2>
-          <div className="grid grid-cols-3 gap-3">
-            {DURATIONS.map(d => (
-              <button
-                key={d}
-                onClick={() => setDuration(d)}
-                className={`
-                  py-4 rounded-xl border text-sm font-medium transition-all duration-200
-                  ${duration === d
-                    ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300 shadow-lg shadow-indigo-500/10'
-                    : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600 hover:text-slate-200 hover:bg-slate-800'
-                  }
-                `}
-              >
-                {DURATION_LABELS[d]}
-              </button>
-            ))}
-          </div>
-        </section>
+          <StepSection step={4} label="Duration" completed={!!duration}>
+            <SelectionGroup<Duration>
+              items={DURATIONS}
+              value={duration !== null ? String(duration) : null}
+              onChange={(v) => setDuration(Number(v) as Duration)}
+              getKey={(d) => String(d)}
+              layout="inline"
+              renderItem={(d, selected) => (
+                <div className={`py-3 px-2 text-center ${selected ? 'text-[#818cf8]' : ''}`}>
+                  <span className="text-body font-medium">{DURATION_LABELS[d]}</span>
+                </div>
+              )}
+            />
+          </StepSection>
+        </div>
 
-        {/* Step 5: Upload Documents (optional) */}
-        <section className="space-y-3 animate-slide-up stagger-5">
-          <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
-            5 · Upload documents <span className="text-slate-600">(optional)</span>
-          </h2>
-          <p className="text-xs text-slate-600">
-            Upload a JD for role-specific questions, or a resume to personalize the interview around your experience.
+        {/* Step 5: Documents */}
+        <StepSection step={5} label="Documents (optional)">
+          <p className="text-caption text-[#4b5563] mb-3">
+            Upload a JD for role-specific questions, or a resume to personalize the interview.
           </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid sm:grid-cols-2 gap-element">
             <FileDropzone
               label="Job Description"
               fileName={jdFileName || undefined}
@@ -262,84 +198,180 @@ export default function HomePage() {
               onError={setUploadError}
             />
           </div>
-          {uploadError && (
-            <p className="text-xs text-red-400">{uploadError}</p>
-          )}
-        </section>
+          {uploadError && <p className="text-caption text-[#f87171] mt-2">{uploadError}</p>}
+        </StepSection>
 
         {/* CTA */}
-        <div className="animate-slide-up stagger-5 flex flex-col items-center gap-3">
-          <button
-            onClick={start}
+        <div className="flex flex-col items-center gap-3 mt-region">
+          <Button
+            variant="primary"
+            size="lg"
+            glow
+            isFullWidth
+            className="max-w-sm"
             disabled={!ready || status === 'loading'}
-            className={`
-              w-full max-w-sm py-4 rounded-2xl font-semibold text-base transition-all duration-200
-              ${ready && status !== 'loading'
-                ? 'bg-indigo-600 hover:bg-indigo-500 text-white btn-glow cursor-pointer'
-                : 'bg-slate-800 text-slate-600 cursor-not-allowed border border-slate-700'
-              }
-            `}
+            onClick={start}
           >
-            {role && experience && duration
-              ? 'Enter Interview Room →'
-              : 'Select all options to continue'}
-          </button>
-          <p className="text-xs text-slate-600">
-            Requires Chrome or Edge · Camera & mic access needed
+            {ready ? 'Enter Interview Room \u2192' : 'Select all options to continue'}
+          </Button>
+          <p className="text-caption text-[#4b5563]">
+            Requires Chrome or Edge &middot; Camera & mic access needed
           </p>
         </div>
       </div>
+    </main>
+  )
+}
 
-        {/* How It Works */}
-        <section className="relative z-10 w-full max-w-2xl space-y-4 mt-20 animate-slide-up">
-          <h2 className="text-2xl font-bold text-white text-center">How It Works</h2>
-          <div className="grid sm:grid-cols-3 gap-4">
+function UnauthenticatedHome() {
+  return (
+    <main className="min-h-screen">
+      {/* Hero */}
+      <section className="px-4 sm:px-6 pt-20 pb-region">
+        <div className="max-w-[800px] mx-auto text-center">
+          <Badge variant="primary" dot>AI-Powered Interview Practice</Badge>
+          <h1 className="text-display text-[#f0f2f5] mt-6">
+            Practice interviews that feel real.
+          </h1>
+          <p className="text-display text-[#f0f2f5]">
+            Get feedback that makes you better.
+          </p>
+          <p className="text-body text-[#6b7280] mt-4 max-w-lg mx-auto">
+            Mock interviews with an AI interviewer who adapts to your domain, experience level, and career goals. Scored feedback after every session.
+          </p>
+          <div className="flex items-center justify-center gap-3 mt-8">
+            <Link href="/signup">
+              <Button variant="primary" size="lg" glow>Get Started Free</Button>
+            </Link>
+            <Link href="/pricing">
+              <Button variant="ghost" size="md">View Pricing</Button>
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* How It Works */}
+      <section className="px-4 sm:px-6 py-section">
+        <div className="max-w-[1000px] mx-auto">
+          <h2 className="text-heading text-[#f0f2f5] text-center mb-section">How It Works</h2>
+          <div className="grid md:grid-cols-3 gap-component">
             {[
               { step: '1', title: 'Choose Domain & Type', desc: 'Pick from 12+ interview domains and select the interview depth — from HR screening to technical deep dives.' },
               { step: '2', title: 'Practice with AI', desc: 'Our AI interviewer asks realistic questions tailored to your domain, type, and experience level.' },
               { step: '3', title: 'Get Instant Feedback', desc: 'Receive scored feedback on content relevance, structure, specificity, and delivery.' },
             ].map((item) => (
-              <div key={item.step} className="border border-slate-800 bg-slate-900/50 rounded-xl p-5 text-center space-y-2">
-                <div className="w-8 h-8 rounded-full bg-indigo-600/20 text-indigo-400 text-sm font-bold flex items-center justify-center mx-auto">
+              <div key={item.step} className="surface-card p-7">
+                <div className="w-5 h-5 rounded-full bg-[rgba(99,102,241,0.08)] text-[#818cf8] text-micro font-bold flex items-center justify-center">
                   {item.step}
                 </div>
-                <h3 className="text-sm font-semibold text-white">{item.title}</h3>
-                <p className="text-xs text-slate-400 leading-relaxed">{item.desc}</p>
+                <h3 className="text-subheading text-[#f0f2f5] mt-3">{item.title}</h3>
+                <p className="text-body text-[#6b7280] mt-1">{item.desc}</p>
               </div>
             ))}
           </div>
-          <p className="text-center text-sm text-slate-500">
-            <Link href="/pricing" className="text-indigo-400 hover:text-indigo-300 transition">
-              See pricing →
-            </Link>
-          </p>
-        </section>
+        </div>
+      </section>
 
-        {/* Built for Real Interviews */}
-        <section className="relative z-10 w-full max-w-2xl space-y-4 mt-16 mb-12 animate-slide-up">
-          <h2 className="text-2xl font-bold text-white text-center">Built for Real Interview Scenarios</h2>
-          <div className="grid sm:grid-cols-2 gap-4">
+      {/* Domain Showcase */}
+      <section className="px-4 sm:px-6 py-section">
+        <div className="max-w-[1000px] mx-auto text-center">
+          <h2 className="text-heading text-[#f0f2f5]">Built for Every Career Path</h2>
+          <p className="text-body text-[#6b7280] mt-2">Tailored questions for 12+ career domains</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-element mt-section max-w-[600px] mx-auto">
             {[
-              { title: 'Multiple Interview Types', desc: 'Practice HR screenings, technical rounds, behavioral deep dives, case studies, and more.' },
-              { title: '12+ Career Domains', desc: 'Tailored questions for engineering, product, design, sales, data science, operations, and beyond.' },
-              { title: 'Instant Scoring', desc: 'Get rated on relevance, structure, specificity, and ownership after every session.' },
-              { title: 'Upload Your JD & Resume', desc: 'Personalize interview questions to match your target job description and experience.' },
-            ].map((item) => (
-              <div key={item.title} className="border border-slate-800 bg-slate-900/50 rounded-xl p-5 space-y-1.5">
-                <h3 className="text-sm font-semibold text-white">{item.title}</h3>
-                <p className="text-xs text-slate-400 leading-relaxed">{item.desc}</p>
+              { icon: '💻', label: 'Software Engineering' },
+              { icon: '📊', label: 'Data Science' },
+              { icon: '🗂', label: 'Product Management' },
+              { icon: '🎨', label: 'Design / UX' },
+              { icon: '💰', label: 'Finance' },
+              { icon: '📈', label: 'Marketing' },
+            ].map((d) => (
+              <div key={d.label} className="surface-card p-4 flex flex-col items-center gap-1.5">
+                <span className="text-xl">{d.icon}</span>
+                <span className="text-caption font-semibold text-[#b0b8c4]">{d.label}</span>
               </div>
             ))}
           </div>
-          {status !== 'authenticated' && (
-            <p className="text-center text-sm text-slate-500">
-              Free to start — no credit card required.{' '}
-              <Link href="/signup" className="text-indigo-400 hover:text-indigo-300 transition">
-                Create your account →
-              </Link>
-            </p>
-          )}
-        </section>
+          <Link href="/signup" className="text-caption text-[#818cf8] hover:text-[#6366f1] transition-colors mt-4 inline-block">
+            See all domains &rarr;
+          </Link>
+        </div>
+      </section>
+
+      {/* Social Proof */}
+      <section className="px-4 sm:px-6 py-section">
+        <div className="max-w-[800px] mx-auto">
+          <div className="grid grid-cols-3 gap-component text-center">
+            {[
+              { num: '12+', label: 'Career Domains' },
+              { num: '6', label: 'Interview Depths' },
+              { num: '5', label: 'Scoring Dimensions' },
+            ].map((s) => (
+              <div key={s.label}>
+                <p className="text-display text-[#f0f2f5] font-bold">{s.num}</p>
+                <p className="text-caption text-[#6b7280]">{s.label}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Pricing Preview */}
+      <section className="px-4 sm:px-6 py-section">
+        <div className="max-w-[1000px] mx-auto text-center">
+          <h2 className="text-heading text-[#f0f2f5]">Simple Pricing</h2>
+          <p className="text-body text-[#6b7280] mt-2">Start free. Upgrade when you&apos;re ready.</p>
+          <div className="grid md:grid-cols-3 gap-component mt-section">
+            {[
+              { plan: 'Free', price: '$0', desc: '3 interviews/month', cta: 'Get Started', href: '/signup' },
+              { plan: 'Pro', price: '$19', desc: 'Unlimited interviews', cta: 'Coming Soon', href: '/pricing', featured: true },
+              { plan: 'Enterprise', price: 'Custom', desc: 'Team & org features', cta: 'Contact Us', href: '/pricing' },
+            ].map((p) => (
+              <div key={p.plan} className={`surface-card-bordered p-7 ${p.featured ? 'border-[rgba(99,102,241,0.15)]' : ''}`}>
+                {p.featured && <Badge variant="primary" className="mb-3">Popular</Badge>}
+                <p className="text-subheading text-[#f0f2f5]">{p.plan}</p>
+                <p className="text-display text-[#f0f2f5] mt-1">{p.price}</p>
+                <p className="text-caption text-[#6b7280] mt-1">{p.desc}</p>
+                <Link href={p.href} className="block mt-4">
+                  <Button variant={p.featured ? 'primary' : 'secondary'} size="md" isFullWidth>
+                    {p.cta}
+                  </Button>
+                </Link>
+              </div>
+            ))}
+          </div>
+          <Link href="/pricing" className="text-caption text-[#818cf8] hover:text-[#6366f1] transition-colors mt-4 inline-block">
+            Compare plans in detail &rarr;
+          </Link>
+        </div>
+      </section>
+
+      {/* Final CTA */}
+      <section className="px-4 sm:px-6 py-region text-center">
+        <h2 className="text-heading text-[#f0f2f5]">Ready to practice?</h2>
+        <p className="text-body text-[#6b7280] mt-2">Free to start — no credit card required.</p>
+        <Link href="/signup" className="inline-block mt-6">
+          <Button variant="primary" size="lg" glow>Start Your First Interview</Button>
+        </Link>
+      </section>
     </main>
   )
+}
+
+export default function HomePage() {
+  const { status } = useSession()
+
+  if (status === 'loading') {
+    return (
+      <main className="min-h-screen flex items-center justify-center">
+        <div className="animate-pulse text-[#4b5563]">Loading...</div>
+      </main>
+    )
+  }
+
+  if (status === 'authenticated') {
+    return <AuthenticatedHome />
+  }
+
+  return <UnauthenticatedHome />
 }

@@ -31,7 +31,7 @@ export default function TranscriptTab({
   const canSeek = recordingUrl && sessionStartedAt
 
   return (
-    <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 animate-slide-up">
+    <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 animate-fade-in">
       <h3 className="font-semibold text-slate-200">Full Transcript</h3>
       <div className="space-y-4 max-h-[600px] overflow-y-auto transcript-scroll pr-2">
         {transcript.map((entry: TranscriptEntry, i: number) => {

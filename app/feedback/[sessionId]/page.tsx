@@ -33,13 +33,13 @@ class FeedbackErrorBoundary extends Component<
   render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-[#070b14] flex flex-col items-center justify-center gap-5 px-4">
-          <div className="bg-slate-900 border border-red-500/30 rounded-2xl p-6 max-w-sm w-full text-center space-y-4">
-            <p className="text-slate-200 font-medium">Something went wrong rendering feedback</p>
-            <p className="text-slate-400 text-sm">{String(this.state.error?.message || 'Unknown error')}</p>
+        <div className="min-h-screen bg-page flex flex-col items-center justify-center gap-5 px-4">
+          <div className="surface-card-bordered p-6 max-w-sm w-full text-center space-y-4">
+            <p className="text-subheading text-[#f0f2f5]">Something went wrong rendering feedback</p>
+            <p className="text-body text-[#6b7280]">{String(this.state.error?.message || 'Unknown error')}</p>
             <button
               onClick={() => { window.location.href = '/' }}
-              className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-medium transition"
+              className="px-5 py-2 bg-brand-500 hover:bg-brand-600 text-white rounded-[var(--radius-md)] text-sm font-medium transition"
             >
               Go home
             </button>
@@ -288,31 +288,31 @@ function FeedbackPageInner() {
 
   if (loading || !data) {
     return (
-      <div className="min-h-screen bg-[#070b14] flex flex-col items-center justify-center gap-4">
-        <div className="w-8 h-8 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
-        <p className="text-slate-400 text-sm">Generating your feedback report...</p>
+      <div className="min-h-screen bg-page flex flex-col items-center justify-center gap-4">
+        <div className="w-8 h-8 rounded-full border-2 border-brand-500 border-t-transparent animate-spin" />
+        <p className="text-body text-[#6b7280]">Generating your feedback report...</p>
       </div>
     )
   }
 
   if (feedbackError && !feedback) {
     return (
-      <div className="min-h-screen bg-[#070b14] flex flex-col items-center justify-center gap-5 px-4">
-        <div className="bg-slate-900 border border-red-500/30 rounded-2xl p-6 max-w-sm w-full text-center space-y-4">
+      <div className="min-h-screen bg-page flex flex-col items-center justify-center gap-5 px-4">
+        <div className="surface-card-bordered border-red-500/30 p-6 max-w-sm w-full text-center space-y-4">
           <div className="w-12 h-12 rounded-full bg-red-600/20 flex items-center justify-center mx-auto">
             <svg className="w-6 h-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </div>
           <div>
-            <p className="text-slate-200 font-medium">Something went wrong</p>
-            <p className="text-slate-400 text-sm mt-1">{feedbackError}</p>
+            <p className="text-subheading text-[#f0f2f5]">Something went wrong</p>
+            <p className="text-body text-[#6b7280] mt-1">{feedbackError}</p>
           </div>
           <div className="flex gap-3 justify-center">
-            <button onClick={handleRetry} className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-medium transition">
+            <button onClick={handleRetry} className="px-5 py-2 bg-brand-500 hover:bg-brand-600 text-white rounded-[var(--radius-md)] text-sm font-medium transition">
               Try again
             </button>
-            <button onClick={() => router.push('/')} className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-sm font-medium transition">
+            <button onClick={() => router.push('/')} className="px-5 py-2 bg-surface hover:bg-raised border border-[rgba(255,255,255,0.10)] text-[#9ca3af] rounded-[var(--radius-md)] text-sm font-medium transition">
               Go home
             </button>
           </div>
@@ -325,11 +325,11 @@ function FeedbackPageInner() {
 
   if (!feedback.dimensions || !feedback.dimensions.answer_quality || !feedback.dimensions.communication) {
     return (
-      <div className="min-h-screen bg-[#070b14] flex flex-col items-center justify-center gap-5 px-4">
-        <div className="bg-slate-900 border border-red-500/30 rounded-2xl p-6 max-w-sm w-full text-center space-y-4">
-          <p className="text-slate-200 font-medium">Invalid feedback data</p>
-          <p className="text-slate-400 text-sm">The feedback response had an unexpected format. Please try again.</p>
-          <button onClick={handleRetry} className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-medium transition">
+      <div className="min-h-screen bg-page flex flex-col items-center justify-center gap-5 px-4">
+        <div className="surface-card-bordered border-red-500/30 p-6 max-w-sm w-full text-center space-y-4">
+          <p className="text-subheading text-[#f0f2f5]">Invalid feedback data</p>
+          <p className="text-body text-[#6b7280]">The feedback response had an unexpected format. Please try again.</p>
+          <button onClick={handleRetry} className="px-5 py-2 bg-brand-500 hover:bg-brand-600 text-white rounded-[var(--radius-md)] text-sm font-medium transition">
             Try again
           </button>
         </div>
@@ -348,32 +348,33 @@ function FeedbackPageInner() {
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-[#070b14] text-white">
+    <div className="min-h-screen bg-page text-[#f0f2f5]">
       {/* Header */}
-      <header className="px-6 py-5 border-b border-slate-800 bg-slate-900/50 backdrop-blur sticky top-14 z-10">
-        <div className="max-w-5xl mx-auto flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-bold">Interview Feedback</h1>
-            <p className="text-xs text-slate-400 mt-0.5">
-              {data.config &&
-                `${ROLE_LABELS[data.config.role]} · ${data.config.experience} yrs · ${data.config.duration} min`}
-            </p>
-          </div>
+      <header className="sticky top-14 z-10 bg-card border-b border-[rgba(255,255,255,0.06)] h-[52px] flex items-center px-6">
+        <div className="max-w-[800px] mx-auto w-full flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button
-              onClick={() => router.push('/')}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-sm font-medium transition"
+              onClick={() => router.back()}
+              className="p-1.5 rounded-lg hover:bg-surface transition text-[#9ca3af] hover:text-[#f0f2f5]"
+              aria-label="Go back"
             >
-              Reattempt
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+              </svg>
             </button>
+            <h1 className="text-heading">Interview Feedback</h1>
           </div>
+          <p className="text-caption text-[#6b7280]">
+            {data.config &&
+              `${ROLE_LABELS[data.config.role]} · ${data.config.experience} yrs · ${data.config.duration} min`}
+          </p>
         </div>
       </header>
 
       {/* Save warning banner */}
       {saveWarning && (
-        <div className="max-w-5xl mx-auto px-4 mt-4">
-          <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl px-5 py-3 text-sm text-amber-300 flex items-center gap-2">
+        <div className="max-w-[800px] mx-auto px-4 mt-4">
+          <div className="bg-amber-500/10 border border-amber-500/30 rounded-[var(--radius-md)] px-5 py-3 text-sm text-amber-300 flex items-center gap-2">
             <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
@@ -382,7 +383,7 @@ function FeedbackPageInner() {
         </div>
       )}
 
-      <main className="max-w-5xl mx-auto px-4 py-8 space-y-8">
+      <main className="max-w-[800px] mx-auto px-4 py-8 space-y-8">
         {/* Audio Player */}
         {recordingUrl && (
           <AudioPlayer
@@ -393,51 +394,49 @@ function FeedbackPageInner() {
           />
         )}
 
-        {/* Hero: overall score + trend */}
-        <section className="flex flex-col sm:flex-row items-center gap-8 bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 animate-slide-up">
+        {/* Hero: overall score */}
+        <section className="flex flex-col items-center gap-4 surface-card-bordered p-6 sm:p-8 animate-fade-in">
           <ScoreRing score={overall_score} size={140} />
-          <div className="space-y-3 text-center sm:text-left flex-1">
-            <div>
-              <h2 className="text-2xl font-bold">
-                {overall_score >= 75
-                  ? 'Strong Performance'
-                  : overall_score >= 55
-                  ? 'Competent'
-                  : 'Needs Development'}
-              </h2>
-              <p className="text-slate-400 mt-1">
-                {overall_score >= 75
-                  ? 'You demonstrated clear, structured answers with solid examples.'
-                  : overall_score >= 55
-                  ? 'Solid foundation — refining structure and specificity will elevate your score.'
-                  : 'Focus on the STAR framework and concrete examples in your next attempt.'}
-              </p>
+          <div className="text-center space-y-2">
+            <h2 className="text-heading">
+              {overall_score >= 75
+                ? 'Strong Performance'
+                : overall_score >= 55
+                ? 'Competent'
+                : 'Needs Development'}
+            </h2>
+            <p className="text-body text-[#6b7280]">
+              {overall_score >= 75
+                ? 'You demonstrated clear, structured answers with solid examples.'
+                : overall_score >= 55
+                ? 'Solid foundation — refining structure and specificity will elevate your score.'
+                : 'Focus on the STAR framework and concrete examples in your next attempt.'}
+            </p>
+          </div>
+          <div className="flex items-center gap-3 justify-center flex-wrap">
+            <div className={`px-3 py-1 rounded-full border text-sm font-medium ${PROBABILITY_COLORS[pass_probability]}`}>
+              {s(pass_probability)} pass probability
             </div>
-            <div className="flex items-center gap-3 justify-center sm:justify-start flex-wrap">
-              <div className={`px-3 py-1 rounded-full border text-sm font-medium ${PROBABILITY_COLORS[pass_probability]}`}>
-                {s(pass_probability)} pass probability
-              </div>
-              <div className="px-3 py-1 rounded-full border border-slate-700 text-slate-400 text-sm">
-                {s(feedback.confidence_level)} confidence
-              </div>
+            <div className="px-3 py-1 rounded-full border border-[rgba(255,255,255,0.10)] text-[#9ca3af] text-sm">
+              {s(feedback.confidence_level)} confidence
             </div>
-            <div className="pt-2">
-              <p className="text-xs text-slate-500 mb-1">Score trend</p>
-              <ScoreTrendChart currentScore={overall_score} sessionId={sessionId} />
-            </div>
+          </div>
+          <div className="w-full pt-2">
+            <p className="text-caption text-[#4b5563] mb-1">Score trend</p>
+            <ScoreTrendChart currentScore={overall_score} sessionId={sessionId} />
           </div>
         </section>
 
         {/* Tab navigation */}
-        <div className="flex gap-1 bg-slate-900 border border-slate-800 rounded-xl p-1 w-fit">
+        <div className="flex gap-1 surface-card-bordered p-1 w-fit">
           {TABS.map((tab) => (
             <button
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                 activeTab === tab.key
-                  ? 'bg-indigo-600 text-white'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-brand-500 text-white'
+                  : 'text-[#6b7280] hover:text-[#f0f2f5]'
               }`}
             >
               {tab.label}
@@ -458,7 +457,7 @@ function FeedbackPageInner() {
 
         {/* Questions tab */}
         {activeTab === 'questions' && (
-          <div className="animate-slide-up">
+          <div className="animate-fade-in">
             <QuestionBreakdown transcript={data.transcript} evaluations={data.evaluations} />
           </div>
         )}
@@ -476,10 +475,10 @@ function FeedbackPageInner() {
         )}
 
         {/* CTA */}
-        <div className="flex gap-3 justify-center pb-8 animate-slide-up">
+        <div className="flex gap-3 justify-center pb-8 animate-fade-in">
           <button
             onClick={() => router.push('/')}
-            className="px-8 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-semibold btn-glow transition"
+            className="px-8 py-3 bg-brand-500 hover:bg-brand-600 text-white rounded-[var(--radius-md)] font-semibold btn-glow transition"
           >
             Reattempt Interview
           </button>
@@ -492,7 +491,7 @@ function FeedbackPageInner() {
               a.download = 'interview-transcript.txt'
               a.click()
             }}
-            className="px-8 py-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 rounded-2xl font-medium transition"
+            className="px-8 py-3 bg-surface hover:bg-raised border border-[rgba(255,255,255,0.10)] text-[#9ca3af] rounded-[var(--radius-md)] font-medium transition"
           >
             Download Transcript
           </button>

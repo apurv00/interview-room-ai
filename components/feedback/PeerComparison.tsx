@@ -85,7 +85,7 @@ function getBarColor(userScore: number, avgScore: number): string {
 export default function PeerComparison({ data, loading, userFeedback }: PeerComparisonProps) {
   if (loading) {
     return (
-      <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 animate-slide-up">
+      <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 animate-fade-in">
         <div className="flex items-center gap-3">
           <div className="w-4 h-4 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
           <span className="text-sm text-slate-500">Loading peer comparison...</span>
@@ -96,7 +96,7 @@ export default function PeerComparison({ data, loading, userFeedback }: PeerComp
 
   if (!data || !data.available) {
     return (
-      <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 text-center animate-slide-up">
+      <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 text-center animate-fade-in">
         <p className="text-slate-400 text-sm">Not enough data yet — be one of the first!</p>
         <p className="text-slate-600 text-xs mt-1">
           Peer comparisons unlock after 5 sessions in your role + experience bucket
@@ -118,7 +118,7 @@ export default function PeerComparison({ data, loading, userFeedback }: PeerComp
   }))
 
   return (
-    <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 animate-slide-up">
+    <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 animate-fade-in">
       <div className="flex items-center justify-between">
         <h3 className="font-semibold text-slate-200">How You Compare</h3>
         <span className="text-xs text-slate-500">{count} sessions in your bucket</span>
