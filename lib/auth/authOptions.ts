@@ -113,6 +113,22 @@ export const authOptions: NextAuthOptions = {
     },
   },
 
+  cookies:
+    process.env.NODE_ENV === 'production'
+      ? {
+          sessionToken: {
+            name: '__Secure-next-auth.session-token',
+            options: {
+              httpOnly: true,
+              sameSite: 'lax',
+              path: '/',
+              secure: true,
+              domain: '.interviewprep.guru',
+            },
+          },
+        }
+      : undefined,
+
   pages: {
     signIn: '/signin',
     error: '/signin',
