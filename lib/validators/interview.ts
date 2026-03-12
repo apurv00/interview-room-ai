@@ -4,7 +4,7 @@ export const InterviewConfigSchema = z.object({
   role: z.string().min(1).max(50),
   interviewType: z.string().min(1).max(50).optional().default('hr-screening'),
   experience: z.enum(['0-2', '3-6', '7+']),
-  duration: z.union([z.literal(5), z.literal(10), z.literal(20)]),
+  duration: z.union([z.literal(10), z.literal(20), z.literal(30)]),
   jobDescription: z.string().max(50000).optional(),
   resumeText: z.string().max(50000).optional(),
   jdFileName: z.string().max(500).optional(),

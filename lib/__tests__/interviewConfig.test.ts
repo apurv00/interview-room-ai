@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { QUESTION_COUNT, PRESSURE_QUESTION_INDEX } from '../interviewConfig'
 import type { Duration } from '../types'
 
-const DURATIONS: Duration[] = [5, 10, 20]
+const DURATIONS: Duration[] = [10, 20, 30]
 
 describe('QUESTION_COUNT', () => {
   it.each(DURATIONS)(
@@ -17,16 +17,16 @@ describe('QUESTION_COUNT', () => {
     }
   )
 
-  it('5-min has 3 total questions (1 intro + 2 AI)', () => {
-    expect(1 + (QUESTION_COUNT[5] - 1)).toBe(3)
-  })
-
   it('10-min has 6 total questions (1 intro + 5 AI)', () => {
     expect(1 + (QUESTION_COUNT[10] - 1)).toBe(6)
   })
 
   it('20-min has 11 total questions (1 intro + 10 AI)', () => {
     expect(1 + (QUESTION_COUNT[20] - 1)).toBe(11)
+  })
+
+  it('30-min has 16 total questions (1 intro + 15 AI)', () => {
+    expect(1 + (QUESTION_COUNT[30] - 1)).toBe(16)
   })
 })
 

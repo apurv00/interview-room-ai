@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation'
 import { useSession, signOut } from 'next-auth/react'
 import Link from 'next/link'
 import AuthMenu from './AuthMenu'
+import ThemeToggle from '../ui/ThemeToggle'
 import Footer from './Footer'
 
 const NAV_LINKS = [
@@ -79,8 +80,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               </Link>
             </div>
 
-            {/* Right: auth */}
-            <AuthMenu />
+            {/* Right: theme + auth */}
+            <div className="flex items-center gap-2">
+              <ThemeToggle />
+              <AuthMenu />
+            </div>
           </div>
         </div>
       </nav>
@@ -154,8 +158,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         </nav>
       )}
 
-      {/* Footer (only on non-authenticated pages) */}
-      {!isAuthenticated && <Footer />}
+      {/* Footer */}
+      <Footer />
     </>
   )
 }

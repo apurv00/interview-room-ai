@@ -14,7 +14,9 @@ export async function GET() {
       .lean()
 
     if (domains.length > 0) {
-      return NextResponse.json(domains)
+      return NextResponse.json(domains, {
+        headers: { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=3600' },
+      })
     }
   } catch {
     // DB not available — fall through to fallback
@@ -22,5 +24,7 @@ export async function GET() {
 
   // Strip internal prompt fields from fallback data
   const safeFallback = FALLBACK_DOMAINS.map(({ systemPromptContext, ...rest }) => rest)
-  return NextResponse.json(safeFallback)
+  return NextResponse.json(safeFallback, {
+    headers: { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=3600' },
+  })
 }

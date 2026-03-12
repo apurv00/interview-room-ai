@@ -17,6 +17,9 @@ interface DepthSelectorProps {
   onSelect: (slug: string) => void
 }
 
+// Module-level cache keyed by domain slug
+const depthCache: Record<string, InterviewDepth[]> = {}
+
 export default function DepthSelector({ selectedDomain, selectedDepth, onSelect }: DepthSelectorProps) {
   const [types, setTypes] = useState<InterviewDepth[]>([])
   const [loading, setLoading] = useState(false)
@@ -28,12 +31,25 @@ export default function DepthSelector({ selectedDomain, selectedDepth, onSelect 
       return
     }
 
+    // Use cached data if available
+    if (depthCache[selectedDomain]) {
+      const cached = depthCache[selectedDomain]
+      setTypes(cached)
+      if (!selectedDepth) {
+        const hrType = cached.find((t) => t.slug === 'hr-screening')
+        if (hrType) onSelect(hrType.slug)
+        else if (cached.length > 0) onSelect(cached[0].slug)
+      }
+      return
+    }
+
     setLoading(true)
     setError('')
 
     fetch(`/api/interview-types?domain=${encodeURIComponent(selectedDomain)}`)
       .then((r) => r.json())
       .then((data: InterviewDepth[]) => {
+        depthCache[selectedDomain] = data
         setTypes(data)
         setLoading(false)
 
