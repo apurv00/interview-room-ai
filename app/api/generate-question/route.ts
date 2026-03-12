@@ -18,7 +18,7 @@ type GenerateQuestionBody = z.infer<typeof GenerateQuestionSchema>
 
 export const POST = composeApiRoute<GenerateQuestionBody>({
   schema: GenerateQuestionSchema,
-  rateLimit: { windowMs: 60_000, maxRequests: 30, keyPrefix: 'rl:gen-q' },
+  rateLimit: { windowMs: 60_000, maxRequests: 15, keyPrefix: 'rl:gen-q' },
 
   async handler(req, { user, body }) {
     const { config, questionIndex, previousQA } = body

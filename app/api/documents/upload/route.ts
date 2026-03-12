@@ -4,6 +4,7 @@ import { logger } from '@/lib/logger'
 import { uploadToR2, documentKey, isR2Configured } from '@/lib/storage/r2'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth/authOptions'
+import { checkRateLimit } from '@/lib/middleware/checkRateLimit'
 
 export const dynamic = 'force-dynamic'
 
@@ -16,6 +17,14 @@ export async function POST(req: NextRequest) {
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    // Rate limit: 10 uploads per user per hour
+    const rateLimited = await checkRateLimit(session.user.id, {
+      windowMs: 3600_000,
+      maxRequests: 10,
+      keyPrefix: 'rl:doc-upload',
+    })
+    if (rateLimited) return rateLimited
 
     const formData = await req.formData()
     const file = formData.get('file') as File | null

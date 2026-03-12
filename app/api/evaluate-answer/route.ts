@@ -19,7 +19,7 @@ type EvaluateAnswerBody = z.infer<typeof EvaluateAnswerSchema>
 
 export const POST = composeApiRoute<EvaluateAnswerBody>({
   schema: EvaluateAnswerSchema,
-  rateLimit: { windowMs: 60_000, maxRequests: 30, keyPrefix: 'rl:eval' },
+  rateLimit: { windowMs: 60_000, maxRequests: 15, keyPrefix: 'rl:eval' },
 
   async handler(req, { user, body }) {
     const { config, question, answer, questionIndex } = body

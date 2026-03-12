@@ -5,6 +5,7 @@ import { authOptions } from '@/lib/auth/authOptions'
 import { redis } from '@/lib/redis'
 import { aiLogger } from '@/lib/logger'
 import { AppError } from '@/lib/errors'
+import { getPlanLimits } from '@/lib/services/stripe'
 import type { AuthUser } from './withAuth'
 
 export type { AuthUser }
@@ -64,11 +65,15 @@ export function composeApiRoute<T>(options: ComposeOptions<T>) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
       }
 
-      // 2. Rate limit
+      // 2. Rate limit — scale maxRequests by plan tier
       const rateLimitKey =
         user.id !== 'anonymous'
           ? user.id
           : req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'anonymous'
+
+      const planLimits = getPlanLimits(user.plan || 'free')
+      const planScale = planLimits.rateLimitPerMin / 15 // Normalize: free=1x, pro=2x, enterprise=4x
+      const effectiveMax = Math.ceil(options.rateLimit.maxRequests * planScale)
 
       try {
         const key = `${options.rateLimit.keyPrefix}:${rateLimitKey}`
@@ -76,7 +81,7 @@ export function composeApiRoute<T>(options: ComposeOptions<T>) {
         if (current === 1) {
           await redis.pexpire(key, options.rateLimit.windowMs)
         }
-        if (current > options.rateLimit.maxRequests) {
+        if (current > effectiveMax) {
           aiLogger.warn({ userId: rateLimitKey, key, current }, 'Rate limit exceeded')
           return NextResponse.json(
             { error: 'Rate limit exceeded. Try again later.' },
