@@ -35,7 +35,9 @@ export async function POST(req: NextRequest) {
 
     const existing = await User.findOne({ email: email.toLowerCase() })
     if (existing) {
-      return NextResponse.json({ error: 'An account with this email already exists' }, { status: 409 })
+      // Return the same response shape as success to prevent email enumeration.
+      // Do NOT reveal whether the email is already registered.
+      return NextResponse.json({ message: 'If this email is not already registered, your account has been created.' }, { status: 201 })
     }
 
     const hashedPassword = await bcrypt.hash(password, 12)
@@ -51,7 +53,7 @@ export async function POST(req: NextRequest) {
       onboardingCompleted: false,
     })
 
-    return NextResponse.json({ message: 'Account created successfully' }, { status: 201 })
+    return NextResponse.json({ message: 'If this email is not already registered, your account has been created.' }, { status: 201 })
   } catch (error) {
     logger.error({ err: error }, 'Registration error')
     return NextResponse.json({ error: 'Registration failed' }, { status: 500 })

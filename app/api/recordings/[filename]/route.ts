@@ -32,6 +32,18 @@ export async function GET(
     return NextResponse.json({ error: 'Invalid key' }, { status: 400 })
   }
 
+  // Ownership check: verify the R2 key belongs to the requesting user.
+  // Keys follow the pattern: recordings/{userId}/... or documents/{userId}/...
+  const keySegments = r2Key.split('/')
+  const userRole = (session.user as { role?: string }).role
+  if (
+    keySegments.length < 3 ||
+    !['recordings', 'documents'].includes(keySegments[0]) ||
+    (keySegments[1] !== session.user.id && userRole !== 'platform_admin')
+  ) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
+
   try {
     const url = await getDownloadPresignedUrl(r2Key)
     return NextResponse.redirect(url)

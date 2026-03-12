@@ -4,6 +4,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { authOptions } from '@/lib/auth/authOptions'
 import { ResumeExtractSchema, ExtractedProfileSchema } from '@/lib/validators/onboarding'
 import { aiLogger } from '@/lib/logger'
+import { checkRateLimit } from '@/lib/middleware/checkRateLimit'
 
 export const dynamic = 'force-dynamic'
 
@@ -14,6 +15,14 @@ export async function POST(req: Request) {
   if (!session?.user?.id) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  // Rate limit: 5 resume extractions per user per minute (AI API call)
+  const rateLimited = await checkRateLimit(session.user.id, {
+    windowMs: 60_000,
+    maxRequests: 5,
+    keyPrefix: 'rl:extract',
+  })
+  if (rateLimited) return rateLimited
 
   const body = await req.json()
   const parsed = ResumeExtractSchema.safeParse(body)

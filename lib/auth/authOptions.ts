@@ -93,10 +93,24 @@ export const authOptions: NextAuthOptions = {
           }
         }
       }
-      if (trigger === 'update' && session) {
-        token.role = session.role ?? token.role
-        token.organizationId = session.organizationId ?? token.organizationId
-        token.plan = session.plan ?? token.plan
+      // When session update is triggered (e.g. after plan change, onboarding),
+      // always re-read authoritative fields from the database instead of trusting
+      // client-supplied values. This prevents privilege escalation via
+      // NextAuth's update() API.
+      if (trigger === 'update' && token.userId) {
+        try {
+          await connectDB()
+          const dbUser = await User.findById(token.userId).select('plan role organizationId onboardingCompleted')
+          if (dbUser) {
+            token.role = dbUser.role
+            token.plan = dbUser.plan
+            token.organizationId = dbUser.organizationId?.toString()
+            token.onboardingCompleted = dbUser.onboardingCompleted ?? false
+            token.lastRefreshedAt = Date.now()
+          }
+        } catch {
+          // Keep existing token values on DB failure
+        }
       }
       return token
     },
