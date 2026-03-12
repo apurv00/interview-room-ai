@@ -10,8 +10,21 @@ import { User } from '@/lib/db/models'
 import clientPromise from '@/lib/db/mongoClient'
 import { redis } from '@/lib/redis'
 
+// Fail fast if NEXTAUTH_SECRET is missing or too short in production.
+// Without a proper secret, JWTs can be forged and sessions hijacked.
+// Guard with typeof window check to avoid breaking build-time page collection.
+if (
+  typeof globalThis !== 'undefined' &&
+  process.env.NODE_ENV === 'production' &&
+  !process.env.NEXT_PHASE &&
+  (!process.env.NEXTAUTH_SECRET || process.env.NEXTAUTH_SECRET.length < 16)
+) {
+  throw new Error('NEXTAUTH_SECRET must be set to a strong value (>= 16 chars) in production. Generate one with: openssl rand -base64 32')
+}
+
 export const authOptions: NextAuthOptions = {
   adapter: MongoDBAdapter(clientPromise) as Adapter,
+  secret: process.env.NEXTAUTH_SECRET,
 
   session: {
     strategy: 'jwt',

@@ -3,6 +3,10 @@ import { logger } from './logger'
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379'
 
+if (process.env.NODE_ENV === 'production' && !process.env.REDIS_URL) {
+  logger.warn('REDIS_URL not set in production — using localhost default. Rate limiting may be ineffective.')
+}
+
 const globalWithRedis = global as typeof globalThis & {
   redis?: Redis
 }
