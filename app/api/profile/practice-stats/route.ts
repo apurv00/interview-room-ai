@@ -36,7 +36,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'User not found' }, { status: 404 })
   }
 
-  const existing = user.practiceStats?.get?.(key) || (user.practiceStats as Record<string, unknown>)?.[key]
+  const existing = user.practiceStats?.get?.(key) || (user.practiceStats as unknown as Record<string, unknown>)?.[key]
   const prev = existing as { totalSessions?: number; avgScore?: number } | undefined
 
   const totalSessions = (prev?.totalSessions || 0) + 1

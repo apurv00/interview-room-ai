@@ -26,13 +26,13 @@ export async function GET() {
 
   try {
     await connectDB()
-    const user = await User.findById(session.user.id).select('savedResumes onboardingProfile').lean()
+    const user = await User.findById(session.user.id).select('savedResumes targetRole currentTitle').lean()
     if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 })
     }
 
     const resumes = (user.savedResumes || []).map((r: Record<string, unknown>) => ({
-      id: r.id || r._id?.toString(),
+      id: r.id || (r._id as { toString(): string })?.toString(),
       name: r.name || 'Untitled Resume',
       targetRole: r.targetRole || '',
       targetCompany: r.targetCompany || '',
@@ -42,7 +42,7 @@ export async function GET() {
 
     return NextResponse.json({
       resumes,
-      hasProfile: !!(user.onboardingProfile?.targetRole || user.onboardingProfile?.currentTitle),
+      hasProfile: !!(user.targetRole || user.currentTitle),
     })
   } catch {
     return NextResponse.json({ error: 'Failed to load resumes' }, { status: 500 })

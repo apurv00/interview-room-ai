@@ -363,6 +363,32 @@ export function useInterview({
         }),
         new Promise((r) => setTimeout(r, 10000)),
       ])
+
+      // Update practice stats (fire-and-forget)
+      if (config) {
+        const evals = evaluationsRef.current
+        if (evals.length > 0) {
+          const dims = ['relevance', 'structure', 'specificity', 'ownership'] as const
+          const dimAvgs = dims.map(d => ({
+            name: d,
+            avg: evals.reduce((s, e) => s + (e[d] || 0), 0) / evals.length,
+          }))
+          const avgScore = Math.round(dimAvgs.reduce((s, d) => s + d.avg, 0) / dims.length)
+          const sorted = [...dimAvgs].sort((a, b) => b.avg - a.avg)
+          fetch('/api/profile/practice-stats', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              domain: config.role,
+              interviewType: config.interviewType || 'hr-screening',
+              score: avgScore,
+              strongDimensions: sorted.slice(0, 2).map(d => d.name),
+              weakDimensions: sorted.slice(-2).map(d => d.name),
+            }),
+          }).catch(() => {})
+        }
+      }
+
       router.push(`/feedback/${sid}`)
     } else {
       router.push('/feedback/local')

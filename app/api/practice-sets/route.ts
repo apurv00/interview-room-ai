@@ -106,11 +106,11 @@ export async function GET() {
   const baseDifficulty = user.experienceLevel === '7+'
     ? 'advanced' : user.experienceLevel === '3-6' ? 'intermediate' : 'beginner'
 
-  for (const domainSlug of priorityDomains) {
+  for (const domainSlug of Array.from(priorityDomains)) {
     const domain = domains.find(d => d.slug === domainSlug)
     if (!domain) continue
 
-    for (const depthSlug of priorityDepths) {
+    for (const depthSlug of Array.from(priorityDepths)) {
       const depth = depths.find(d => d.slug === depthSlug)
       if (!depth) continue
 
@@ -120,7 +120,7 @@ export async function GET() {
       }
 
       const key = `${domainSlug}:${depthSlug}`
-      const stats = (practiceStats as Record<string, { totalSessions?: number; avgScore?: number; lastScore?: number }>)?.[key]
+      const stats = (practiceStats as unknown as Record<string, { totalSessions?: number; avgScore?: number; lastScore?: number }>)?.[key]
       const practiceCount = stats?.totalSessions || 0
       const avgScore = stats?.avgScore
       const lastScore = stats?.lastScore
