@@ -133,17 +133,17 @@ export default function SettingsPage() {
 
   return (
     <main className="min-h-screen px-4 py-12 max-w-2xl mx-auto space-y-6">
-      <h1 className="text-3xl font-bold text-white animate-slide-up">Settings</h1>
+      <h1 className="text-3xl font-bold text-white animate-fade-in">Settings</h1>
 
       {/* Upgrade success banner */}
       {upgraded && (
-        <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-5 py-4 text-sm text-emerald-300 animate-slide-up">
+        <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-5 py-4 text-sm text-emerald-300 animate-fade-in">
           🎉 Your plan has been upgraded! New limits are now active.
         </div>
       )}
 
       {/* Profile Card */}
-      <section className="bg-slate-900 border border-slate-700 rounded-2xl p-6 animate-slide-up stagger-1">
+      <section className="bg-slate-900 border border-slate-700 rounded-2xl p-6 animate-fade-in">
         <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-widest mb-4">
           Profile
         </h2>
@@ -172,7 +172,7 @@ export default function SettingsPage() {
       </section>
 
       {/* Interview Profile Card */}
-      <section className="bg-slate-900 border border-slate-700 rounded-2xl p-6 animate-slide-up stagger-2">
+      <section className="bg-slate-900 border border-slate-700 rounded-2xl p-6 animate-fade-in">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-widest">
             Interview Profile
@@ -371,7 +371,7 @@ export default function SettingsPage() {
       </section>
 
       {/* Plan & Usage Card */}
-      <section className="bg-slate-900 border border-slate-700 rounded-2xl p-6 animate-slide-up stagger-3">
+      <section className="bg-slate-900 border border-slate-700 rounded-2xl p-6 animate-fade-in">
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-widest">
             Plan & Usage
@@ -453,7 +453,7 @@ export default function SettingsPage() {
       </section>
 
       {/* Quick Links */}
-      <section className="bg-slate-900 border border-slate-700 rounded-2xl p-6 animate-slide-up stagger-4">
+      <section className="bg-slate-900 border border-slate-700 rounded-2xl p-6 animate-fade-in">
         <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-widest mb-4">
           Quick Links
         </h2>

@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo } from 'react'
+import MetricCard from '@/components/ui/MetricCard'
 import { ScoreBar } from '@/components/ScoreBar'
 import CommunicationDetail from '@/components/feedback/CommunicationDetail'
 import PeerComparison, { type PeerData } from '@/components/feedback/PeerComparison'
@@ -53,61 +54,50 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
   return (
     <div className="space-y-6">
       {/* Score breakdown */}
-      <section className="grid md:grid-cols-3 gap-4">
+      <section className="grid md:grid-cols-2 lg:grid-cols-3 gap-component animate-fade-in">
         {/* Answer Quality */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 animate-slide-up stagger-1">
-          <div className="flex items-center justify-between">
-            <h3 className="font-semibold text-slate-200">Answer Quality</h3>
-            <span className="text-2xl font-bold text-indigo-400">{Number(answer_quality.score) || 0}</span>
-          </div>
-          <div className="space-y-3">
-            <ScoreBar label="Relevance" score={avgScores?.relevance ?? answer_quality.score} delay={100} />
-            <ScoreBar label="Structure (STAR)" score={avgScores?.structure ?? answer_quality.score} delay={200} />
-            <ScoreBar label="Specificity" score={avgScores?.specificity ?? answer_quality.score} delay={300} />
-            <ScoreBar label="Ownership" score={avgScores?.ownership ?? answer_quality.score} delay={400} />
-          </div>
-          {Array.isArray(answer_quality.strengths) && answer_quality.strengths.length > 0 && (
-            <div className="pt-2 border-t border-slate-800">
-              <p className="text-xs text-emerald-400 font-medium mb-1">Strengths</p>
-              {answer_quality.strengths.map((str, idx) => (
-                <p key={idx} className="text-xs text-slate-400">· {s(str)}</p>
-              ))}
-            </div>
-          )}
-          {Array.isArray(answer_quality.weaknesses) && answer_quality.weaknesses.length > 0 && (
-            <div>
-              <p className="text-xs text-amber-400 font-medium mb-1">Areas to improve</p>
-              {answer_quality.weaknesses.map((w, idx) => (
-                <p key={idx} className="text-xs text-slate-400">· {s(w)}</p>
-              ))}
-            </div>
-          )}
-        </div>
+        <MetricCard
+          title="Answer Quality"
+          score={Number(answer_quality.score) || 0}
+          color="auto"
+          metrics={[
+            { label: 'Relevance', value: avgScores?.relevance ?? answer_quality.score },
+            { label: 'Structure (STAR)', value: avgScores?.structure ?? answer_quality.score },
+            { label: 'Specificity', value: avgScores?.specificity ?? answer_quality.score },
+            { label: 'Ownership', value: avgScores?.ownership ?? answer_quality.score },
+          ]}
+          insights={{
+            strengths: Array.isArray(answer_quality.strengths) ? answer_quality.strengths.map((str) => s(str)) : undefined,
+            improvements: Array.isArray(answer_quality.weaknesses) ? answer_quality.weaknesses.map((w) => s(w)) : undefined,
+          }}
+        />
 
         {/* Communication */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 animate-slide-up stagger-2">
+        <div className="surface-card-bordered p-5 space-y-4">
           <div className="flex items-center justify-between">
-            <h3 className="font-semibold text-slate-200">Communication</h3>
-            <span className="text-2xl font-bold text-cyan-400">{Number(communication.score) || 0}</span>
+            <span className="text-subheading text-[#f0f2f5]">Communication</span>
+            <span className="text-heading font-bold text-cyan-400" role="meter" aria-valuenow={Number(communication.score) || 0} aria-valuemin={0} aria-valuemax={100} aria-label={`Communication score: ${Number(communication.score) || 0} out of 100`}>
+              {Number(communication.score) || 0}
+            </span>
           </div>
           <div className="space-y-3">
-            <ScoreBar label="Pacing" score={communication.pause_score} color="cyan" delay={100} detail={`${communication.wpm} wpm`} />
-            <ScoreBar label="Filler words" score={Math.round(Math.max(0, 100 - communication.filler_rate * 500))} color="cyan" delay={200} detail={`${(communication.filler_rate * 100).toFixed(1)}%`} />
-            <ScoreBar label="Conciseness" score={Math.round(Math.max(0, 100 - communication.rambling_index * 100))} color="cyan" delay={300} />
+            <ScoreBar label="Pacing" score={communication.pause_score} color="cyan" detail={`${communication.wpm} wpm`} />
+            <ScoreBar label="Filler words" score={Math.round(Math.max(0, 100 - communication.filler_rate * 500))} color="cyan" detail={`${(communication.filler_rate * 100).toFixed(1)}%`} />
+            <ScoreBar label="Conciseness" score={Math.round(Math.max(0, 100 - communication.rambling_index * 100))} color="cyan" />
           </div>
-          <div className="pt-2 border-t border-slate-800">
+          <div className="pt-2 border-t border-[rgba(255,255,255,0.10)]">
             <CommunicationDetail metrics={data.speechMetrics} />
           </div>
-          <div className="pt-2 border-t border-slate-800 space-y-1">
+          <div className="pt-2 border-t border-[rgba(255,255,255,0.10)] space-y-1">
             {[
               { label: 'Avg. WPM', value: s(communication.wpm), ideal: '120-160' },
               { label: 'Filler rate', value: `${(Number(communication.filler_rate) * 100).toFixed(1)}%`, ideal: '<5%' },
               { label: 'Rambling index', value: Number(communication.rambling_index).toFixed(2), ideal: '<0.30' },
             ].map(({ label, value, ideal }) => (
               <div key={label} className="flex justify-between text-xs">
-                <span className="text-slate-500">{label}</span>
-                <span className="text-slate-300 tabular-nums">
-                  {value} <span className="text-slate-600">({ideal})</span>
+                <span className="text-[#4b5563]">{label}</span>
+                <span className="text-[#d1d5db] tabular-nums">
+                  {value} <span className="text-[#374151]">({ideal})</span>
                 </span>
               </div>
             ))}
@@ -115,65 +105,67 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
         </div>
 
         {/* Engagement (or legacy Delivery) */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 animate-slide-up stagger-3">
-          {engagementSignals ? (
-            <>
+        {engagementSignals ? (
+          <div className="surface-card-bordered p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <span className="text-subheading text-[#f0f2f5]">Engagement</span>
+              <span className="text-heading font-bold text-violet-400" role="meter" aria-valuenow={Number(engagementSignals.score) || 0} aria-valuemin={0} aria-valuemax={100} aria-label={`Engagement score: ${Number(engagementSignals.score) || 0} out of 100`}>
+                {Number(engagementSignals.score) || 0}
+              </span>
+            </div>
+            <div className="space-y-3">
+              <ScoreBar label="Engagement depth" score={engagementSignals.engagement_score} color="indigo" />
+              <ScoreBar label="Composure under pressure" score={engagementSignals.composure_under_pressure} color="indigo" />
+              <ScoreBar label="Energy consistency" score={Math.round(engagementSignals.energy_consistency * 100)} color="indigo" />
+            </div>
+            <div className="pt-2 border-t border-[rgba(255,255,255,0.10)] space-y-2">
               <div className="flex items-center justify-between">
-                <h3 className="font-semibold text-slate-200">Engagement</h3>
-                <span className="text-2xl font-bold text-violet-400">{Number(engagementSignals.score) || 0}</span>
+                <span className="text-caption text-[#4b5563]">Confidence trend</span>
+                <span className={`text-xs px-2 py-0.5 rounded-full border ${CONFIDENCE_TREND_LABELS[engagementSignals.confidence_trend as keyof typeof CONFIDENCE_TREND_LABELS]?.color || 'text-[#9ca3af] bg-[rgba(255,255,255,0.05)] border-[rgba(255,255,255,0.10)]'}`}>
+                  {CONFIDENCE_TREND_LABELS[engagementSignals.confidence_trend as keyof typeof CONFIDENCE_TREND_LABELS]?.text || s(engagementSignals.confidence_trend)}
+                </span>
               </div>
-              <div className="space-y-3">
-                <ScoreBar label="Engagement depth" score={engagementSignals.engagement_score} color="indigo" delay={100} />
-                <ScoreBar label="Composure under pressure" score={engagementSignals.composure_under_pressure} color="indigo" delay={200} />
-                <ScoreBar label="Energy consistency" score={Math.round(engagementSignals.energy_consistency * 100)} color="indigo" delay={300} />
+              <p className="text-caption text-[#374151]">
+                Engagement scores are AI-estimated from speech patterns, answer depth, and consistency.
+              </p>
+            </div>
+          </div>
+        ) : deliverySignals ? (
+          <div className="surface-card-bordered p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <span className="text-subheading text-[#f0f2f5]">Delivery</span>
+              <span className="text-heading font-bold text-violet-400" role="meter" aria-valuenow={Number(deliverySignals.score) || 0} aria-valuemin={0} aria-valuemax={100} aria-label={`Delivery score: ${Number(deliverySignals.score) || 0} out of 100`}>
+                {Number(deliverySignals.score) || 0}
+              </span>
+            </div>
+            <div className="space-y-3">
+              <ScoreBar label="Gaze / eye contact" score={Math.round(deliverySignals.gaze_ratio * 100)} color="indigo" />
+              <ScoreBar label="Head stability" score={Math.round(deliverySignals.head_stability * 100)} color="indigo" />
+              <ScoreBar label="Affect variability" score={Math.round(deliverySignals.affect_variability * 100)} color="indigo" />
+            </div>
+            <div className="pt-2 border-t border-[rgba(255,255,255,0.10)]">
+              <div className={`text-xs px-2 py-1 rounded-full border w-fit ${PROBABILITY_COLORS[deliverySignals.confidence_band]}`}>
+                Confidence band: {deliverySignals.confidence_band}
               </div>
-              <div className="pt-2 border-t border-slate-800 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-500">Confidence trend</span>
-                  <span className={`text-xs px-2 py-0.5 rounded-full border ${CONFIDENCE_TREND_LABELS[engagementSignals.confidence_trend as keyof typeof CONFIDENCE_TREND_LABELS]?.color || 'text-slate-400 bg-slate-500/10 border-slate-500/30'}`}>
-                    {CONFIDENCE_TREND_LABELS[engagementSignals.confidence_trend as keyof typeof CONFIDENCE_TREND_LABELS]?.text || s(engagementSignals.confidence_trend)}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-600">
-                  Engagement scores are AI-estimated from speech patterns, answer depth, and consistency.
-                </p>
-              </div>
-            </>
-          ) : deliverySignals ? (
-            <>
-              <div className="flex items-center justify-between">
-                <h3 className="font-semibold text-slate-200">Delivery</h3>
-                <span className="text-2xl font-bold text-violet-400">{Number(deliverySignals.score) || 0}</span>
-              </div>
-              <div className="space-y-3">
-                <ScoreBar label="Gaze / eye contact" score={Math.round(deliverySignals.gaze_ratio * 100)} color="indigo" delay={100} />
-                <ScoreBar label="Head stability" score={Math.round(deliverySignals.head_stability * 100)} color="indigo" delay={200} />
-                <ScoreBar label="Affect variability" score={Math.round(deliverySignals.affect_variability * 100)} color="indigo" delay={300} />
-              </div>
-              <div className="pt-2 border-t border-slate-800">
-                <div className={`text-xs px-2 py-1 rounded-full border w-fit ${PROBABILITY_COLORS[deliverySignals.confidence_band]}`}>
-                  Confidence band: {deliverySignals.confidence_band}
-                </div>
-                <p className="text-xs text-slate-600 mt-2">
-                  Delivery scores are AI-estimated. Updated engagement analysis available in new sessions.
-                </p>
-              </div>
-            </>
-          ) : null}
-        </div>
+              <p className="text-caption text-[#374151] mt-2">
+                Delivery scores are AI-estimated. Updated engagement analysis available in new sessions.
+              </p>
+            </div>
+          </div>
+        ) : null}
       </section>
 
       {/* JD Alignment Section */}
       {feedback.jd_match_score !== undefined && (
-        <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 animate-slide-up stagger-4">
+        <section className="surface-card-bordered p-5 space-y-4 animate-fade-in">
           <div className="flex items-center justify-between">
-            <h3 className="font-semibold text-slate-200">JD Alignment</h3>
-            <span className="text-2xl font-bold text-cyan-400">{feedback.jd_match_score}</span>
+            <span className="text-subheading text-[#f0f2f5]">JD Alignment</span>
+            <span className="text-heading font-bold text-cyan-400">{feedback.jd_match_score}</span>
           </div>
-          <ScoreBar label="Overall JD Match" score={feedback.jd_match_score} color="cyan" delay={100} />
+          <ScoreBar label="Overall JD Match" score={feedback.jd_match_score} color="cyan" />
           {feedback.jd_requirement_breakdown && feedback.jd_requirement_breakdown.length > 0 && (
-            <div className="pt-2 border-t border-slate-800 space-y-2">
-              <p className="text-xs text-slate-500 font-medium uppercase tracking-wide">Requirement Breakdown</p>
+            <div className="pt-2 border-t border-[rgba(255,255,255,0.10)] space-y-2">
+              <p className="step-label">Requirement Breakdown</p>
               {feedback.jd_requirement_breakdown.map((req, i) => (
                 <div key={i} className="flex items-start gap-2">
                   <span className={`shrink-0 mt-0.5 ${req.matched ? 'text-emerald-400' : 'text-red-400'}`}>
@@ -188,8 +180,8 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
                     )}
                   </span>
                   <div className="flex-1">
-                    <p className="text-sm text-slate-300">{s(req.requirement)}</p>
-                    {req.evidence && <p className="text-xs text-slate-500 mt-0.5">{s(req.evidence)}</p>}
+                    <p className="text-body text-[#d1d5db]">{s(req.requirement)}</p>
+                    {req.evidence && <p className="text-caption text-[#4b5563] mt-0.5">{s(req.evidence)}</p>}
                   </div>
                 </div>
               ))}
@@ -200,11 +192,11 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
 
       {/* Red flags */}
       {Array.isArray(red_flags) && red_flags.length > 0 && (
-        <section className="bg-red-950/30 border border-red-500/20 rounded-2xl p-5 animate-slide-up stagger-4">
-          <h3 className="font-semibold text-red-400 mb-3">Red flags detected</h3>
+        <section className="bg-red-950/30 border border-red-500/20 rounded-[var(--radius-md)] p-5 animate-fade-in">
+          <h3 className="text-subheading text-red-400 mb-3">Red flags detected</h3>
           <ul className="space-y-2">
             {red_flags.map((flag, idx) => (
-              <li key={idx} className="flex items-start gap-2 text-sm text-red-300">
+              <li key={idx} className="flex items-start gap-2 text-body text-red-300">
                 <span className="shrink-0">·</span> {s(flag)}
               </li>
             ))}
@@ -213,15 +205,15 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
       )}
 
       {/* Top 3 improvements */}
-      <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 animate-slide-up stagger-5">
-        <h3 className="font-semibold text-slate-200 mb-4">Top improvements for next attempt</h3>
+      <section className="surface-card-bordered p-5 animate-fade-in">
+        <h3 className="text-subheading text-[#f0f2f5] mb-4">Top improvements for next attempt</h3>
         <div className="space-y-3">
           {Array.isArray(top_3_improvements) && top_3_improvements.map((tip, i) => (
             <div key={i} className="flex items-start gap-3">
-              <span className="shrink-0 w-6 h-6 rounded-full bg-indigo-600/30 border border-indigo-500/40 text-indigo-400 text-xs flex items-center justify-center font-bold">
+              <span className="shrink-0 w-6 h-6 rounded-full bg-brand-500/20 border border-brand-500/30 text-brand-500 text-xs flex items-center justify-center font-bold">
                 {i + 1}
               </span>
-              <p className="text-sm text-slate-300 leading-relaxed">{s(tip)}</p>
+              <p className="text-body text-[#d1d5db] leading-relaxed">{s(tip)}</p>
             </div>
           ))}
         </div>

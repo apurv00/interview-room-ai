@@ -48,7 +48,7 @@ const PHASE_COLORS: Record<string, { text: string; bg: string; border: string; d
   SCORING: { text: 'text-cyan-400', bg: 'bg-cyan-500/10', border: 'border-cyan-500/25', dot: 'bg-cyan-400' },
 }
 
-const DEFAULT_PHASE_COLOR = { text: 'text-slate-400', bg: 'bg-slate-500/10', border: 'border-slate-600/30', dot: 'bg-slate-500' }
+const DEFAULT_PHASE_COLOR = { text: 'text-[#6b7280]', bg: 'bg-surface', border: 'border-[rgba(255,255,255,0.10)]', dot: 'bg-[#6b7280]' }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -194,7 +194,7 @@ export default function InterviewPage() {
           transition={{ duration: 0.5 }}
         >
           <div className="w-8 h-8 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
-          <p className="text-sm text-slate-500">Loading interview...</p>
+          <p className="text-sm text-[#4b5563]">Loading interview...</p>
         </motion.div>
       </div>
     )
@@ -208,7 +208,7 @@ export default function InterviewPage() {
       transition={{ duration: 0.5, ease: 'easeOut' }}
     >
       {/* ── Header ── */}
-      <header className="flex items-center justify-between px-5 py-3 bg-slate-900/60 backdrop-blur-md border-b border-slate-800/50 shrink-0">
+      <header className="flex items-center justify-between px-5 h-[52px] bg-card border-b border-[rgba(255,255,255,0.06)] shrink-0">
         <div className="flex items-center gap-3">
           {/* Live dot */}
           <div className="flex items-center gap-2">
@@ -217,10 +217,10 @@ export default function InterviewPage() {
               animate={{ opacity: [1, 0.4, 1] }}
               transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
             />
-            <span className="text-sm font-medium text-slate-300">Live</span>
+            <span className="text-sm font-medium text-[#b0b8c4]">Live</span>
           </div>
           {/* Separator */}
-          <div className="w-px h-4 bg-slate-700/60" />
+          <div className="w-px h-4 bg-[rgba(255,255,255,0.06)]" />
           <RecordingIndicator
             isRecording={isRecording}
             durationSeconds={recordingDuration}
@@ -310,7 +310,7 @@ export default function InterviewPage() {
                   animate={{ opacity: [1, 0.4, 1] }}
                   transition={{ duration: 1.5, repeat: Infinity, ease: 'easeInOut' }}
                 />
-                <span className="text-[10px] text-slate-300 font-medium">REC</span>
+                <span className="text-[10px] text-[#b0b8c4] font-medium">REC</span>
               </div>
             ) : null
           }

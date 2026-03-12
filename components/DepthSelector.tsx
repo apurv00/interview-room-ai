@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import SelectionGroup from './ui/SelectionGroup'
+import StateView from './ui/StateView'
 
 interface InterviewDepth {
   slug: string
@@ -53,60 +55,56 @@ export default function DepthSelector({ selectedDomain, selectedDepth, onSelect 
 
   if (!selectedDomain) {
     return (
-      <p className="text-sm text-slate-600 py-4">
-        Select a domain first to see available interview types.
-      </p>
+      <StateView
+        state="empty"
+        title="Select a domain first"
+        description="Choose an interview domain to see available interview types."
+      />
     )
   }
 
   if (loading) {
-    return (
-      <div className="flex gap-3 overflow-x-auto pb-2">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="min-w-[180px] h-24 bg-slate-800/50 rounded-xl animate-pulse shrink-0" />
-        ))}
-      </div>
-    )
+    return <StateView state="loading" skeletonLayout="list" skeletonCount={4} />
   }
 
   if (error) {
-    return <p className="text-sm text-red-400">{error}</p>
+    return (
+      <StateView
+        state="error"
+        error="Couldn't load interview types. Check your connection and try again."
+        onRetry={() => window.location.reload()}
+      />
+    )
   }
 
   if (types.length === 0) {
     return (
-      <p className="text-sm text-slate-600 py-4">
-        No interview types available for this domain.
-      </p>
+      <StateView
+        state="empty"
+        title="No interview types"
+        description="No interview types available for this domain."
+      />
     )
   }
 
   return (
-    <div className="overflow-x-auto pb-2 -mx-1 px-1 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
-      <div className="flex gap-3" style={{ minWidth: 'min-content' }}>
-        {types.map((t) => (
-          <button
-            key={t.slug}
-            onClick={() => onSelect(t.slug)}
-            className={`
-              flex flex-col items-start gap-1.5 py-4 px-4 rounded-xl border text-left transition-all duration-200 shrink-0
-              min-w-[180px] max-w-[220px]
-              ${selectedDepth === t.slug
-                ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300 shadow-lg shadow-indigo-500/10 ring-1 ring-indigo-500/30'
-                : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600 hover:text-slate-200 hover:bg-slate-800'
-              }
-            `}
-          >
-            <div className="flex items-center gap-2">
-              <span className="text-xl">{t.icon}</span>
-              <span className="text-sm font-semibold">{t.label}</span>
-            </div>
-            <span className="text-[11px] text-slate-500 leading-snug line-clamp-2">
-              {t.description}
-            </span>
-          </button>
-        ))}
-      </div>
-    </div>
+    <SelectionGroup<InterviewDepth>
+      items={types}
+      value={selectedDepth}
+      onChange={onSelect}
+      getKey={(t) => t.slug}
+      layout="list"
+      renderItem={(t, selected) => (
+        <div className="flex items-center gap-3 py-3 px-4">
+          <span className="text-lg">{t.icon}</span>
+          <div>
+            <p className={`text-subheading ${selected ? 'text-[#818cf8]' : 'text-[#f0f2f5]'}`}>
+              {t.label}
+            </p>
+            <p className="text-caption text-[#6b7280]">{t.description}</p>
+          </div>
+        </div>
+      )}
+    />
   )
 }

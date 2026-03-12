@@ -4,6 +4,9 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import { getDomainLabel } from '@/lib/interviewConfig'
+import Badge from '@/components/ui/Badge'
+import StateView from '@/components/ui/StateView'
+import Button from '@/components/ui/Button'
 
 interface SessionSummary {
   _id: string
@@ -14,11 +17,11 @@ interface SessionSummary {
   durationActualSeconds?: number
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  completed: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30',
-  in_progress: 'text-amber-400 bg-amber-500/10 border-amber-500/30',
-  abandoned: 'text-red-400 bg-red-500/10 border-red-500/30',
-  created: 'text-slate-400 bg-slate-500/10 border-slate-500/30',
+const STATUS_BADGE_VARIANT: Record<string, 'success' | 'caution' | 'danger' | 'default'> = {
+  completed: 'success',
+  in_progress: 'caution',
+  abandoned: 'danger',
+  created: 'default',
 }
 
 export default function HistoryPage() {
@@ -67,47 +70,42 @@ export default function HistoryPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#070b14] text-white">
-      <header className="px-6 py-5 border-b border-slate-800 bg-slate-900/50 backdrop-blur sticky top-0 z-20">
-        <div className="max-w-4xl mx-auto flex items-center justify-between">
+    <div className="min-h-screen bg-[#070b14] text-[#f0f2f5] animate-fade-in">
+      <header className="px-6 py-5 border-b border-[rgba(255,255,255,0.10)] bg-surface backdrop-blur sticky top-0 z-20">
+        <div className="max-w-[800px] mx-auto flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-bold">Interview History</h1>
-            <p className="text-xs text-slate-400 mt-0.5">
+            <h1 className="text-heading">Interview History</h1>
+            <p className="text-caption text-[#6b7280] mt-0.5">
               {sessions.length > 0 ? `${sessions.length} sessions` : 'No interviews yet'}
             </p>
           </div>
           <div className="flex gap-3">
-            <button
-              onClick={() => router.push('/')}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-sm font-medium transition"
-            >
+            <Button variant="primary" size="md" onClick={() => router.push('/')}>
               New Interview
-            </button>
+            </Button>
           </div>
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto px-4 py-8">
+      <main className="max-w-[800px] mx-auto px-4 py-8">
         {error ? (
-          <div className="text-center py-20">
-            <p className="text-red-400 mb-4">{error}</p>
-            <button
-              onClick={() => { setLoading(true); setError(null); setPage(1) }}
-              className="px-6 py-3 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-medium transition"
-            >
-              Retry
-            </button>
-          </div>
+          <StateView
+            state="error"
+            error={error}
+            onRetry={() => { setLoading(true); setError(null); setPage(1) }}
+          />
         ) : sessions.length === 0 ? (
-          <div className="text-center py-20">
-            <p className="text-slate-500 mb-4">You haven&apos;t completed any interviews yet.</p>
-            <button
-              onClick={() => router.push('/')}
-              className="px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium transition"
-            >
-              Start Your First Interview
-            </button>
-          </div>
+          <StateView
+            state="empty"
+            icon={
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+            }
+            title="No interviews yet"
+            description="Start your first mock interview and get AI-powered feedback."
+            action={{ label: 'Start Your First Interview', onClick: () => router.push('/') }}
+          />
         ) : (
           <div className="space-y-3">
             {sessions.map((s) => (
@@ -118,63 +116,79 @@ export default function HistoryPage() {
                     router.push(`/feedback/${s._id}`)
                   }
                 }}
-                className="w-full bg-slate-900 border border-slate-800 rounded-2xl p-5 flex items-center gap-4 hover:border-slate-700 transition text-left"
+                className="w-full surface-card-bordered rounded-2xl p-5 flex items-center gap-4 hover:border-[rgba(255,255,255,0.16)] transition text-left"
               >
-                <div className="w-12 h-12 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center">
-                  <span className="text-lg font-bold text-indigo-400">
+                {/* Score badge */}
+                <div className="w-11 h-11 rounded-[10px] bg-[rgba(99,102,241,0.08)] flex items-center justify-center flex-shrink-0">
+                  <span className="text-lg font-bold text-[#818cf8]">
                     {s.feedback?.overall_score || '--'}
                   </span>
                 </div>
+
+                {/* Content */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="font-medium text-slate-200">
+                    <span className="font-medium text-[#f0f2f5]">
                       {getDomainLabel(s.config.role)}
                     </span>
-                    <span className="text-xs text-slate-500">
+                    <Badge variant={STATUS_BADGE_VARIANT[s.status] || 'default'}>
+                      {s.status.replace('_', ' ')}
+                    </Badge>
+                  </div>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-xs text-[#6b7280]">
                       {s.config.experience} yrs · {s.config.duration} min
                     </span>
+                    <span className="text-xs text-[#4b5563]">·</span>
+                    <span className="text-xs text-[#6b7280]">
+                      {new Date(s.createdAt).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </span>
+                    {s.feedback?.pass_probability && (
+                      <>
+                        <span className="text-xs text-[#4b5563]">·</span>
+                        <span className="text-xs text-[#6b7280]">
+                          {s.feedback.pass_probability} pass
+                        </span>
+                      </>
+                    )}
                   </div>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    {new Date(s.createdAt).toLocaleDateString('en-US', {
-                      month: 'short',
-                      day: 'numeric',
-                      year: 'numeric',
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                  </p>
                 </div>
-                <div className={`px-2.5 py-1 rounded-full border text-xs font-medium capitalize ${STATUS_COLORS[s.status] || STATUS_COLORS.created}`}>
-                  {s.status.replace('_', ' ')}
-                </div>
-                {s.feedback?.pass_probability && (
-                  <div className="text-xs text-slate-500">
-                    {s.feedback.pass_probability} pass
-                  </div>
-                )}
+
+                {/* Chevron */}
+                <svg className="w-4 h-4 text-[#4b5563] flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                </svg>
               </button>
             ))}
 
             {/* Pagination */}
             {totalPages > 1 && (
-              <div className="flex justify-center gap-2 pt-4">
-                <button
+              <div className="flex justify-center items-center gap-2 pt-4">
+                <Button
+                  variant="secondary"
+                  size="sm"
                   onClick={() => setPage(p => Math.max(1, p - 1))}
                   disabled={page === 1}
-                  className="px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-sm disabled:opacity-40"
                 >
                   Previous
-                </button>
-                <span className="px-3 py-1.5 text-sm text-slate-400">
+                </Button>
+                <span className="px-3 py-1.5 text-sm text-[#6b7280]">
                   {page} of {totalPages}
                 </span>
-                <button
+                <Button
+                  variant="secondary"
+                  size="sm"
                   onClick={() => setPage(p => Math.min(totalPages, p + 1))}
                   disabled={page === totalPages}
-                  className="px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-sm disabled:opacity-40"
                 >
                   Next
-                </button>
+                </Button>
               </div>
             )}
           </div>

@@ -1,14 +1,20 @@
 'use client'
 
+import { useState } from 'react'
 import { useSession } from 'next-auth/react'
 import Link from 'next/link'
 import { PLANS, type PlanConfig } from '@/lib/services/stripe'
+import { FAQ } from '@/lib/pricingFaq'
+import Badge from '@/components/ui/Badge'
+import Button from '@/components/ui/Button'
+import Input from '@/components/ui/Input'
+import Accordion from '@/components/ui/Accordion'
 
 const PLAN_ORDER = ['free', 'pro', 'enterprise'] as const
 
 function CheckIcon() {
   return (
-    <svg className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <svg className="w-4 h-4 text-[#34d399] flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
     </svg>
   )
@@ -16,51 +22,52 @@ function CheckIcon() {
 
 function PlanCard({ plan, isCurrent }: { plan: PlanConfig; isCurrent: boolean }) {
   const isHighlighted = plan.highlighted
+  const [email, setEmail] = useState('')
 
   return (
     <div
       className={`
-        relative flex flex-col rounded-2xl border p-6 transition-all duration-200
+        relative flex flex-col surface-card-bordered p-7
         ${isHighlighted
-          ? 'border-indigo-500 bg-indigo-500/5 shadow-lg shadow-indigo-500/10 scale-[1.02]'
-          : 'border-slate-700 bg-slate-900'
+          ? 'border-[rgba(99,102,241,0.15)]'
+          : ''
         }
       `}
     >
       {isHighlighted && (
-        <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 bg-indigo-600 text-white text-xs font-semibold rounded-full">
-          Most Popular
+        <div className="absolute -top-2.5 left-1/2 -translate-x-1/2">
+          <Badge variant="primary">Popular</Badge>
         </div>
       )}
 
       {/* Plan name */}
-      <h3 className="text-lg font-semibold text-white">{plan.label}</h3>
+      <h3 className="text-subheading text-[#f0f2f5]">{plan.label}</h3>
 
       {/* Price */}
       <div className="mt-4 flex items-baseline gap-1">
         {plan.priceMonthly === null ? (
-          <span className="text-3xl font-bold text-white">Custom</span>
+          <span className="text-display text-[#f0f2f5]">Custom</span>
         ) : plan.priceMonthly === 0 ? (
-          <span className="text-3xl font-bold text-white">$0</span>
+          <span className="text-display text-[#f0f2f5]">$0</span>
         ) : (
           <>
-            <span className="text-3xl font-bold text-white">${plan.priceMonthly}</span>
-            <span className="text-slate-400 text-sm">/month</span>
+            <span className="text-display text-[#f0f2f5]">${plan.priceMonthly}</span>
+            <span className="text-body text-[#6b7280]">/month</span>
           </>
         )}
       </div>
 
       {/* Interview limit */}
-      <p className="mt-2 text-sm text-slate-400">
+      <p className="mt-2 text-body text-[#6b7280]">
         {plan.monthlyInterviewLimit >= 999999
           ? 'Unlimited interviews'
           : `${plan.monthlyInterviewLimit} interviews per month`}
       </p>
 
       {/* Features */}
-      <ul className="mt-6 space-y-3 flex-1">
+      <ul className="mt-6 flex flex-col gap-element flex-1">
         {plan.features.map((feature) => (
-          <li key={feature} className="flex items-start gap-2 text-sm text-slate-300">
+          <li key={feature} className="flex items-start gap-2 text-body text-[#b0b8c4]">
             <CheckIcon />
             {feature}
           </li>
@@ -70,29 +77,36 @@ function PlanCard({ plan, isCurrent }: { plan: PlanConfig; isCurrent: boolean })
       {/* CTA */}
       <div className="mt-8">
         {isCurrent ? (
-          <div className="w-full py-3 rounded-xl text-center text-sm font-medium bg-slate-800 text-slate-400 border border-slate-700">
+          <Button variant="secondary" isFullWidth disabled>
             Current Plan
-          </div>
+          </Button>
         ) : plan.name === 'free' ? (
-          <Link
-            href="/signup"
-            className="block w-full py-3 rounded-xl text-center text-sm font-medium bg-slate-800 text-slate-200 border border-slate-700 hover:bg-slate-700 transition"
-          >
-            Get Started Free
+          <Link href="/signup">
+            <Button variant="secondary" isFullWidth>
+              Get Started Free
+            </Button>
           </Link>
         ) : plan.name === 'pro' ? (
-          <button
-            disabled
-            className="w-full py-3 rounded-xl text-sm font-medium bg-indigo-600/50 text-indigo-200 border border-indigo-500/30 cursor-not-allowed"
-          >
-            Coming Soon
-          </button>
+          <div className="flex flex-col gap-element">
+            <Button variant="primary" isFullWidth disabled>
+              Coming Soon
+            </Button>
+            <div className="flex gap-2">
+              <Input
+                placeholder="your@email.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+              <Button variant="primary" size="sm">
+                Notify Me
+              </Button>
+            </div>
+          </div>
         ) : (
-          <a
-            href="mailto:contact@interviewprep.guru"
-            className="block w-full py-3 rounded-xl text-center text-sm font-medium bg-slate-800 text-slate-200 border border-slate-700 hover:bg-slate-700 transition"
-          >
-            Contact Sales
+          <a href="mailto:contact@interviewprep.guru">
+            <Button variant="secondary" isFullWidth>
+              Contact Sales
+            </Button>
           </a>
         )}
       </div>
@@ -100,24 +114,27 @@ function PlanCard({ plan, isCurrent }: { plan: PlanConfig; isCurrent: boolean })
   )
 }
 
-import { FAQ } from '@/lib/pricingFaq'
-
 export default function PricingPage() {
   const { data: session } = useSession()
   const currentPlan = (session?.user?.plan as string) || 'free'
 
+  const accordionItems = FAQ.map(({ q, a }) => ({
+    title: q,
+    content: a,
+  }))
+
   return (
-    <main className="min-h-screen px-4 py-16 max-w-5xl mx-auto">
+    <main className="min-h-screen px-4 py-16 max-w-[1000px] mx-auto">
       {/* Header */}
-      <div className="text-center space-y-3 mb-14 animate-slide-up">
-        <h1 className="text-4xl font-bold text-white">Simple, transparent pricing</h1>
-        <p className="text-slate-400 text-lg max-w-xl mx-auto">
-          Practice with AI-powered interviews. Start free, upgrade when you are ready.
+      <div className="text-center space-y-3 mb-14 animate-fade-in">
+        <h1 className="text-display text-center text-[#f0f2f5]">Simple pricing</h1>
+        <p className="text-body text-[#6b7280] max-w-xl mx-auto">
+          Start free. Upgrade when you&apos;re ready.
         </p>
       </div>
 
       {/* Plan cards */}
-      <div className="grid md:grid-cols-3 gap-6 mb-20 animate-slide-up stagger-1">
+      <div className="grid md:grid-cols-3 gap-component mb-20 animate-fade-in">
         {PLAN_ORDER.map((key) => (
           <PlanCard
             key={key}
@@ -128,40 +145,17 @@ export default function PricingPage() {
       </div>
 
       {/* FAQ */}
-      <div className="max-w-2xl mx-auto animate-slide-up stagger-2">
-        <h2 className="text-2xl font-bold text-white text-center mb-8">
+      <div className="max-w-2xl mx-auto animate-fade-in">
+        <h2 className="text-display text-[#f0f2f5] text-center mb-8">
           Frequently Asked Questions
         </h2>
-        <div className="space-y-4">
-          {FAQ.map(({ q, a }) => (
-            <details
-              key={q}
-              className="group bg-slate-900 border border-slate-700 rounded-xl overflow-hidden"
-            >
-              <summary className="flex items-center justify-between px-5 py-4 cursor-pointer text-sm font-medium text-slate-200 hover:text-white transition">
-                {q}
-                <svg
-                  className="w-4 h-4 text-slate-500 transition-transform group-open:rotate-180"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                </svg>
-              </summary>
-              <div className="px-5 pb-4 text-sm text-slate-400 leading-relaxed">
-                {a}
-              </div>
-            </details>
-          ))}
-        </div>
+        <Accordion items={accordionItems} />
       </div>
 
       {/* CTA link */}
-      <div className="text-center mt-16 animate-slide-up stagger-3">
-        <Link href="/" className="text-indigo-400 hover:text-indigo-300 text-sm font-medium transition">
-          ← Start practicing now
+      <div className="text-center mt-16 animate-fade-in">
+        <Link href="/" className="text-[#818cf8] hover:text-[#a5b4fc] text-body font-medium transition">
+          &larr; Start practicing now
         </Link>
       </div>
     </main>
