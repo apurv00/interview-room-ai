@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { InterviewConfig } from '@/lib/types'
-import { ROLE_LABELS } from '@/lib/interviewConfig'
+import { getDomainLabel } from '@/lib/interviewConfig'
 import { STORAGE_KEYS } from '@/lib/storageKeys'
 
 type CheckStatus = 'pending' | 'ok' | 'error'
@@ -252,7 +252,9 @@ export default function LobbyPage() {
           {config && (
             <div className="space-y-2">
               <p className="text-slate-400">
-                {ROLE_LABELS[config.role]} · {config.experience} yrs · {config.duration} min session
+                {getDomainLabel(config.role)}
+                {config.interviewType && config.interviewType !== 'hr-screening' && ` · ${config.interviewType.split('-').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}`}
+                {' '}· {config.experience} yrs · {config.duration} min session
               </p>
 
               {/* Document badges */}

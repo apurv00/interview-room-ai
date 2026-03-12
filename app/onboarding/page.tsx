@@ -5,18 +5,19 @@ import { useRouter } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import { motion, AnimatePresence } from 'framer-motion'
 import FileDropzone from '@/components/FileDropzone'
-import { ROLE_LABELS, EXPERIENCE_LABELS } from '@/lib/interviewConfig'
-import type { Role, ExperienceLevel } from '@/lib/types'
+import { EXPERIENCE_LABELS } from '@/lib/interviewConfig'
+import type { ExperienceLevel } from '@/lib/types'
 
-const ROLES: Role[] = ['PM', 'SWE', 'Sales', 'MBA']
-const EXPERIENCES: ExperienceLevel[] = ['0-2', '3-6', '7+']
-
-const ROLE_ICONS: Record<Role, string> = {
-  PM: '🗂',
-  SWE: '💻',
-  Sales: '📈',
-  MBA: '🎓',
+interface DomainOption {
+  slug: string
+  label: string
+  shortLabel?: string
+  icon?: string
+  description?: string
+  color?: string
 }
+
+const EXPERIENCES: ExperienceLevel[] = ['0-2', '3-6', '7+']
 
 const INDUSTRIES = [
   { value: 'tech', label: 'Tech' },
@@ -83,12 +84,15 @@ export default function OnboardingPage() {
   const [uploadError, setUploadError] = useState('')
 
   // Step 2: Profile
-  const [targetRole, setTargetRole] = useState<Role | null>(null)
+  const [targetRole, setTargetRole] = useState<string | null>(null)
   const [experienceLevel, setExperienceLevel] = useState<ExperienceLevel | null>(null)
   const [currentTitle, setCurrentTitle] = useState('')
   const [currentIndustry, setCurrentIndustry] = useState('')
   const [isCareerSwitcher, setIsCareerSwitcher] = useState(false)
   const [switchingFrom, setSwitchingFrom] = useState('')
+
+  // Domains (fetched from API)
+  const [domains, setDomains] = useState<DomainOption[]>([])
 
   // Step 3: Goals
   const [targetCompanyType, setTargetCompanyType] = useState('')
@@ -123,6 +127,14 @@ export default function OnboardingPage() {
       .catch(() => {})
       .finally(() => setLoading(false))
   }, [status])
+
+  // Fetch domains on mount
+  useEffect(() => {
+    fetch('/api/domains')
+      .then((r) => r.json())
+      .then((data: DomainOption[]) => setDomains(data))
+      .catch(() => {})
+  }, [])
 
   const goForward = useCallback(() => {
     setDirection(1)
@@ -194,7 +206,7 @@ export default function OnboardingPage() {
         if (extracted.currentTitle) setCurrentTitle(extracted.currentTitle)
         if (extracted.currentIndustry) setCurrentIndustry(extracted.currentIndustry)
         if (extracted.experienceLevel) setExperienceLevel(extracted.experienceLevel as ExperienceLevel)
-        if (extracted.inferredRole) setTargetRole(extracted.inferredRole as Role)
+        if (extracted.inferredRole) setTargetRole(extracted.inferredRole)
         if (extracted.isCareerSwitcher) setIsCareerSwitcher(true)
         if (extracted.switchingFrom) setSwitchingFrom(extracted.switchingFrom)
       } catch { /* extraction failed — user can fill manually */ }
@@ -377,19 +389,19 @@ export default function OnboardingPage() {
                 <label className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
                   Target role
                 </label>
-                <div className="grid grid-cols-4 gap-2">
-                  {ROLES.map((r) => (
+                <div className="grid grid-cols-3 gap-2 max-h-64 overflow-y-auto pr-1">
+                  {domains.map((d) => (
                     <button
-                      key={r}
-                      onClick={() => setTargetRole(r)}
+                      key={d.slug}
+                      onClick={() => setTargetRole(d.slug)}
                       className={`flex flex-col items-center gap-1.5 py-3 rounded-xl border text-xs font-medium transition-all duration-200 ${
-                        targetRole === r
+                        targetRole === d.slug
                           ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300'
                           : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'
                       }`}
                     >
-                      <span className="text-lg">{ROLE_ICONS[r]}</span>
-                      <span>{ROLE_LABELS[r]}</span>
+                      {d.icon && <span className="text-lg">{d.icon}</span>}
+                      <span>{d.shortLabel || d.label}</span>
                     </button>
                   ))}
                 </div>

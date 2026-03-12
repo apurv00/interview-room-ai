@@ -12,3 +12,9 @@ export type { IInterviewTemplate } from './InterviewTemplate'
 
 export { UsageRecord } from './UsageRecord'
 export type { IUsageRecord } from './UsageRecord'
+
+export { InterviewDomain } from './InterviewDomain'
+export type { IInterviewDomain } from './InterviewDomain'
+
+export { InterviewDepth } from './InterviewDepth'
+export type { IInterviewDepth } from './InterviewDepth'

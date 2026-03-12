@@ -5,26 +5,21 @@ import { useRouter } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import Link from 'next/link'
 import FileDropzone from '@/components/FileDropzone'
-import type { Role, ExperienceLevel, Duration, InterviewConfig } from '@/lib/types'
-import { ROLE_LABELS, EXPERIENCE_LABELS, DURATION_LABELS } from '@/lib/interviewConfig'
+import DomainSelector from '@/components/DomainSelector'
+import DepthSelector from '@/components/DepthSelector'
+import type { Role, InterviewType, ExperienceLevel, Duration, InterviewConfig } from '@/lib/types'
+import { EXPERIENCE_LABELS, DURATION_LABELS } from '@/lib/interviewConfig'
 import { STORAGE_KEYS } from '@/lib/storageKeys'
 import { getStartRedirect } from '@/lib/authRedirect'
 
-const ROLES: Role[] = ['PM', 'SWE', 'Sales', 'MBA']
 const EXPERIENCES: ExperienceLevel[] = ['0-2', '3-6', '7+']
 const DURATIONS: Duration[] = [5, 10, 20]
-
-const ROLE_ICONS: Record<Role, string> = {
-  PM: '🗂',
-  SWE: '💻',
-  Sales: '📈',
-  MBA: '🎓',
-}
 
 export default function HomePage() {
   const router = useRouter()
   const { data: authSession, status } = useSession()
   const [role, setRole] = useState<Role | null>(null)
+  const [interviewType, setInterviewType] = useState<InterviewType | null>(null)
   const [experience, setExperience] = useState<ExperienceLevel | null>(null)
   const [duration, setDuration] = useState<Duration | null>(null)
   const [lastConfig, setLastConfig] = useState<InterviewConfig | null>(null)
@@ -46,6 +41,7 @@ export default function HomePage() {
         const c: InterviewConfig = JSON.parse(stored)
         setLastConfig(c)
         setRole(c.role)
+        if (c.interviewType) setInterviewType(c.interviewType)
         setExperience(c.experience)
         setDuration(c.duration)
         // Restore documents if present
@@ -127,6 +123,7 @@ export default function HomePage() {
 
     const config: InterviewConfig = {
       role: role!,
+      ...(interviewType && { interviewType }),
       experience: experience!,
       duration: duration!,
       ...(jdText && { jobDescription: jdText, jdFileName }),
@@ -160,39 +157,41 @@ export default function HomePage() {
           <p className="text-slate-400 text-lg">
             {lastConfig
               ? 'Ready for another round? Your last settings are pre-filled below.'
-              : 'Feels like a real HR screening call. Measured feedback on content, communication, and delivery.'}
+              : 'Practice with a realistic AI interviewer. Choose your domain, interview type, and get scored feedback.'}
           </p>
         </div>
 
-        {/* Step 1: Role */}
+        {/* Step 1: Domain */}
         <section className="space-y-3 animate-slide-up stagger-1">
           <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
-            1 · Select your target role
+            1 · Choose your interview domain
           </h2>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {ROLES.map(r => (
-              <button
-                key={r}
-                onClick={() => setRole(r)}
-                className={`
-                  flex flex-col items-center gap-2 py-5 rounded-xl border text-sm font-medium transition-all duration-200
-                  ${role === r
-                    ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300 shadow-lg shadow-indigo-500/10'
-                    : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600 hover:text-slate-200 hover:bg-slate-800'
-                  }
-                `}
-              >
-                <span className="text-2xl">{ROLE_ICONS[r]}</span>
-                <span>{ROLE_LABELS[r]}</span>
-              </button>
-            ))}
-          </div>
+          <DomainSelector
+            selectedDomain={role}
+            onSelect={(slug) => {
+              setRole(slug)
+              // Reset interview type when domain changes
+              setInterviewType(null)
+            }}
+          />
         </section>
 
-        {/* Step 2: Experience */}
+        {/* Step 2: Interview Type */}
         <section className="space-y-3 animate-slide-up stagger-2">
           <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
-            2 · Experience level
+            2 · Interview type
+          </h2>
+          <DepthSelector
+            selectedDomain={role}
+            selectedDepth={interviewType}
+            onSelect={setInterviewType}
+          />
+        </section>
+
+        {/* Step 3: Experience */}
+        <section className="space-y-3 animate-slide-up stagger-3">
+          <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
+            3 · Experience level
           </h2>
           <div className="grid grid-cols-3 gap-3">
             {EXPERIENCES.map(e => (
@@ -213,10 +212,10 @@ export default function HomePage() {
           </div>
         </section>
 
-        {/* Step 3: Duration */}
-        <section className="space-y-3 animate-slide-up stagger-3">
+        {/* Step 4: Duration */}
+        <section className="space-y-3 animate-slide-up stagger-4">
           <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
-            3 · Session length
+            4 · Session length
           </h2>
           <div className="grid grid-cols-3 gap-3">
             {DURATIONS.map(d => (
@@ -237,10 +236,10 @@ export default function HomePage() {
           </div>
         </section>
 
-        {/* Step 4: Upload Documents (optional) */}
-        <section className="space-y-3 animate-slide-up stagger-4">
+        {/* Step 5: Upload Documents (optional) */}
+        <section className="space-y-3 animate-slide-up stagger-5">
           <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
-            4 · Upload documents <span className="text-slate-600">(optional)</span>
+            5 · Upload documents <span className="text-slate-600">(optional)</span>
           </h2>
           <p className="text-xs text-slate-600">
             Upload a JD for role-specific questions, or a resume to personalize the interview around your experience.
@@ -296,8 +295,8 @@ export default function HomePage() {
           <h2 className="text-2xl font-bold text-white text-center">How It Works</h2>
           <div className="grid sm:grid-cols-3 gap-4">
             {[
-              { step: '1', title: 'Choose Your Role', desc: 'Pick from PM, SWE, Sales, or MBA interview tracks tailored to your career path.' },
-              { step: '2', title: 'Practice with AI', desc: 'Our AI interviewer asks realistic HR screening questions in a live video call format.' },
+              { step: '1', title: 'Choose Domain & Type', desc: 'Pick from 12+ interview domains and select the interview depth — from HR screening to technical deep dives.' },
+              { step: '2', title: 'Practice with AI', desc: 'Our AI interviewer asks realistic questions tailored to your domain, type, and experience level.' },
               { step: '3', title: 'Get Instant Feedback', desc: 'Receive scored feedback on content relevance, structure, specificity, and delivery.' },
             ].map((item) => (
               <div key={item.step} className="border border-slate-800 bg-slate-900/50 rounded-xl p-5 text-center space-y-2">
@@ -321,8 +320,8 @@ export default function HomePage() {
           <h2 className="text-2xl font-bold text-white text-center">Built for Real Interview Scenarios</h2>
           <div className="grid sm:grid-cols-2 gap-4">
             {[
-              { title: 'Realistic HR Screening', desc: 'Simulates a live screening call with an AI interviewer that adapts to your responses.' },
-              { title: 'Role-Specific Questions', desc: 'Tailored questions for product management, software engineering, sales, and MBA roles.' },
+              { title: 'Multiple Interview Types', desc: 'Practice HR screenings, technical rounds, behavioral deep dives, case studies, and more.' },
+              { title: '12+ Career Domains', desc: 'Tailored questions for engineering, product, design, sales, data science, operations, and beyond.' },
               { title: 'Instant Scoring', desc: 'Get rated on relevance, structure, specificity, and ownership after every session.' },
               { title: 'Upload Your JD & Resume', desc: 'Personalize interview questions to match your target job description and experience.' },
             ].map((item) => (

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useSession } from 'next-auth/react'
-import { ROLE_LABELS } from '@/lib/interviewConfig'
+import { getDomainLabel } from '@/lib/interviewConfig'
 
 interface SessionSummary {
   _id: string
@@ -128,7 +128,7 @@ export default function HistoryPage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-slate-200">
-                      {ROLE_LABELS[s.config.role as keyof typeof ROLE_LABELS] || s.config.role}
+                      {getDomainLabel(s.config.role)}
                     </span>
                     <span className="text-xs text-slate-500">
                       {s.config.experience} yrs · {s.config.duration} min

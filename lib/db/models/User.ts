@@ -11,7 +11,7 @@ export interface IUser extends Document {
   role: 'candidate' | 'recruiter' | 'org_admin' | 'platform_admin'
   organizationId?: mongoose.Types.ObjectId
 
-  targetRole?: 'PM' | 'SWE' | 'Sales' | 'MBA'
+  targetRole?: string
   experienceLevel?: '0-2' | '3-6' | '7+'
 
   // Onboarding profile
@@ -56,7 +56,7 @@ const UserSchema = new Schema<IUser>(
     },
     organizationId: { type: Schema.Types.ObjectId, ref: 'Organization', index: true },
 
-    targetRole: { type: String, enum: ['PM', 'SWE', 'Sales', 'MBA'] },
+    targetRole: { type: String },
     experienceLevel: { type: String, enum: ['0-2', '3-6', '7+'] },
 
     // Onboarding profile

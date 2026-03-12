@@ -57,7 +57,8 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
     organizationId: { type: Schema.Types.ObjectId, ref: 'Organization', index: true },
 
     config: {
-      role: { type: String, enum: ['PM', 'SWE', 'Sales', 'MBA'], required: true },
+      role: { type: String, required: true },
+      interviewType: { type: String, default: 'hr-screening' },
       experience: { type: String, enum: ['0-2', '3-6', '7+'], required: true },
       duration: { type: Number, enum: [5, 10, 20], required: true },
     },

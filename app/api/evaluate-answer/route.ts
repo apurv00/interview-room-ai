@@ -4,8 +4,10 @@ import { composeApiRoute } from '@/lib/middleware/composeApiRoute'
 import { EvaluateAnswerSchema } from '@/lib/validators/interview'
 import { trackUsage } from '@/lib/services/usageTracking'
 import { aiLogger } from '@/lib/logger'
+import { getDomainLabel } from '@/lib/interviewConfig'
 import { connectDB } from '@/lib/db/connection'
-import { User } from '@/lib/db/models'
+import { User, InterviewDepth } from '@/lib/db/models'
+import { FALLBACK_DEPTHS } from '@/lib/db/seed'
 import type { AnswerEvaluation } from '@/lib/types'
 import { z } from 'zod'
 
@@ -22,6 +24,39 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
   async handler(req, { user, body }) {
     const { config, question, answer, questionIndex } = body
     const startTime = Date.now()
+    const interviewType = config.interviewType || 'hr-screening'
+    const domainLabel = getDomainLabel(config.role)
+
+    // Fetch depth-specific evaluation criteria
+    let evalCriteria = ''
+    let scoringDims: { name: string; label: string; weight: number }[] = []
+
+    try {
+      await connectDB()
+      const depthDoc = await InterviewDepth.findOne({ slug: interviewType, isActive: true }).lean()
+      if (depthDoc) {
+        evalCriteria = depthDoc.evaluationCriteria || ''
+        scoringDims = depthDoc.scoringDimensions || []
+      }
+    } catch { /* continue with defaults */ }
+
+    if (!scoringDims.length) {
+      const fallback = FALLBACK_DEPTHS.find(d => d.slug === interviewType)
+      if (fallback) {
+        evalCriteria = fallback.evaluationCriteria || ''
+        scoringDims = fallback.scoringDimensions || []
+      }
+    }
+
+    // Default to standard HR screening dimensions
+    if (!scoringDims.length) {
+      scoringDims = [
+        { name: 'relevance', label: 'Relevance', weight: 0.25 },
+        { name: 'structure', label: 'STAR Structure', weight: 0.25 },
+        { name: 'specificity', label: 'Specificity', weight: 0.25 },
+        { name: 'ownership', label: 'Ownership', weight: 0.25 },
+      ]
+    }
 
     // Build JD context if available
     let jdContext = ''
@@ -35,7 +70,7 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
       await connectDB()
       const profile = await User.findById(user.id).select('isCareerSwitcher switchingFrom interviewGoal weakAreas').lean()
       if (profile?.isCareerSwitcher && profile?.switchingFrom) {
-        profileContext += `\nThis candidate is transitioning from ${profile.switchingFrom} — weight transferable skills and learning agility more heavily when scoring relevance and ownership.`
+        profileContext += `\nThis candidate is transitioning from ${profile.switchingFrom} — weight transferable skills and learning agility more heavily when scoring.`
       }
       if (profile?.interviewGoal === 'first_interview') {
         profileContext += `\nThis is the candidate's first interview preparation — be encouraging in follow-up framing while still being honest about scores.`
@@ -45,14 +80,25 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
       }
     } catch { /* continue without profile */ }
 
-    const systemPrompt = `You are an expert interview coach evaluating candidates for ${config.role} roles at the ${config.experience} experience level. You score objectively and fairly.${jdContext}${profileContext}`
+    const evalCriteriaBlock = evalCriteria ? `\n\nEVALUATION FOCUS: ${evalCriteria}` : ''
+
+    const systemPrompt = `You are an expert interview coach evaluating candidates for ${domainLabel} roles at the ${config.experience} experience level. Interview type: ${interviewType}. You score objectively and fairly.${evalCriteriaBlock}${jdContext}${profileContext}`
+
+    // Build dynamic scoring dimensions
+    const dimensionPrompt = scoringDims.map(d =>
+      `- ${d.name}: ${d.label} (integer 0-100)`
+    ).join('\n')
+
+    const dimensionSchema = scoringDims.map(d =>
+      `  "${d.name}": number`
+    ).join(',\n')
 
     const jdAlignmentDimension = config.jobDescription
       ? `\n- jdAlignment: How well does this answer demonstrate skills/experience relevant to the job description requirements? (integer 0-100)`
       : ''
 
     const jdAlignmentSchema = config.jobDescription
-      ? `\n  "jdAlignment": number,`
+      ? `,\n  "jdAlignment": number`
       : ''
 
     const userPrompt = `Evaluate this interview answer:
@@ -62,10 +108,7 @@ Question: "${question}"
 Candidate's answer: "${answer}"
 
 Score on these dimensions (integer 0–100):
-- relevance: How well does the answer address the question?
-- structure: Does it follow STAR (Situation, Task, Action, Result)?
-- specificity: Are there concrete metrics, numbers, or named examples?
-- ownership: Does the candidate use "I" (not "we") and show personal accountability?${jdAlignmentDimension}
+${dimensionPrompt}${jdAlignmentDimension}
 
 Also determine:
 - needsFollowUp: true if the answer is vague, too short (<30 words), evasive, or missing key info
@@ -74,10 +117,7 @@ Also determine:
 
 Respond with ONLY valid JSON matching this schema:
 {
-  "relevance": number,
-  "structure": number,
-  "specificity": number,
-  "ownership": number,${jdAlignmentSchema}
+${dimensionSchema}${jdAlignmentSchema},
   "needsFollowUp": boolean,
   "followUpQuestion": string | null,
   "flags": string[]
@@ -95,14 +135,16 @@ Respond with ONLY valid JSON matching this schema:
       const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
       const scores = JSON.parse(cleaned)
 
+      // Map depth-specific dimensions back to standard eval format
+      // Always include relevance/structure/specificity/ownership for backward compat
       const evaluation: AnswerEvaluation = {
         questionIndex,
         question,
         answer,
-        relevance: scores.relevance ?? 50,
-        structure: scores.structure ?? 50,
-        specificity: scores.specificity ?? 50,
-        ownership: scores.ownership ?? 50,
+        relevance: scores.relevance ?? scores[scoringDims[0]?.name] ?? 50,
+        structure: scores.structure ?? scores[scoringDims[1]?.name] ?? 50,
+        specificity: scores.specificity ?? scores[scoringDims[2]?.name] ?? 50,
+        ownership: scores.ownership ?? scores[scoringDims[3]?.name] ?? 50,
         ...(scores.jdAlignment !== undefined && { jdAlignment: scores.jdAlignment }),
         needsFollowUp: scores.needsFollowUp ?? false,
         followUpQuestion: scores.followUpQuestion ?? undefined,
@@ -136,7 +178,6 @@ Respond with ONLY valid JSON matching this schema:
         errorMessage: err instanceof Error ? err.message : 'Unknown error',
       }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
 
-      // Neutral fallback so the interview continues
       return NextResponse.json({
         questionIndex,
         question,

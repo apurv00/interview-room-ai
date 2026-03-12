@@ -6,7 +6,7 @@ import { trackUsage } from '@/lib/services/usageTracking'
 import { aiLogger } from '@/lib/logger'
 import type { FeedbackData } from '@/lib/types'
 import { aggregateMetrics, communicationScore } from '@/lib/speechMetrics'
-import { PRESSURE_QUESTION_INDEX } from '@/lib/interviewConfig'
+import { PRESSURE_QUESTION_INDEX, getDomainLabel } from '@/lib/interviewConfig'
 import { connectDB } from '@/lib/db/connection'
 import { User } from '@/lib/db/models'
 import { z } from 'zod'
@@ -17,19 +17,13 @@ const client = new Anthropic()
 
 type GenerateFeedbackBody = z.infer<typeof GenerateFeedbackSchema>
 
-/**
- * Pre-compute engagement-related speech analytics per question.
- */
 function computeEngagementContext(
   speechMetrics: Record<string, unknown>[],
   evaluations: Record<string, unknown>[],
   pressureIdx: number
 ) {
   if (!speechMetrics.length) {
-    return {
-      perQSummary: 'No per-question speech metrics available.',
-      pressureContext: '',
-    }
+    return { perQSummary: 'No per-question speech metrics available.', pressureContext: '' }
   }
 
   const perQ = speechMetrics.map((m, i) => {
@@ -40,7 +34,6 @@ function computeEngagementContext(
     return `  Q${i + 1}: WPM=${wpm}, filler_rate=${(fillerRate * 100).toFixed(1)}%, words=${totalWords}, duration=${durationMinutes.toFixed(1)}min`
   })
 
-  // First half vs second half trends
   const halfIdx = Math.ceil(speechMetrics.length / 2)
   const firstHalf = speechMetrics.slice(0, halfIdx)
   const secondHalf = speechMetrics.slice(halfIdx)
@@ -50,7 +43,6 @@ function computeEngagementContext(
   const avgWordsFirst = firstHalf.reduce((s, m) => s + (Number(m.totalWords) || 0), 0) / (firstHalf.length || 1)
   const avgWordsSecond = secondHalf.reduce((s, m) => s + (Number(m.totalWords) || 0), 0) / (secondHalf.length || 1)
 
-  // Pressure question performance
   let pressureContext = ''
   if (pressureIdx < evaluations.length) {
     const pEval = evaluations[pressureIdx]
@@ -83,12 +75,12 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
   async handler(req, { user, body }) {
     const { config, transcript, evaluations, speechMetrics } = body
     const startTime = Date.now()
+    const interviewType = config.interviewType || 'hr-screening'
+    const domainLabel = getDomainLabel(config.role)
 
-    // Pre-compute communication metrics
     const aggMetrics = aggregateMetrics(speechMetrics)
     const commScore = communicationScore(aggMetrics)
 
-    // Pre-compute engagement context
     const pressureIdx = PRESSURE_QUESTION_INDEX[config.duration] ?? 0
     const { perQSummary, pressureContext } = computeEngagementContext(speechMetrics, evaluations, pressureIdx)
 
@@ -103,7 +95,6 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
       .map((e) => `${e.speaker === 'interviewer' ? 'Interviewer' : 'Candidate'}: ${e.text}`)
       .join('\n')
 
-    // Build JD context if available
     let jdBlock = ''
     let jdSchemaBlock = ''
     if (config.jobDescription) {
@@ -115,7 +106,6 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
   ]`
     }
 
-    // Build profile context for personalized feedback
     let profileBlock = ''
     try {
       await connectDB()
@@ -138,9 +128,13 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
       }
     } catch { /* continue without profile */ }
 
-    const systemPrompt = `You are an expert interview coach. Generate honest, specific, and actionable feedback for a candidate.${jdBlock}${profileBlock}`
+    const interviewTypeContext = interviewType !== 'hr-screening'
+      ? `\nThis was a "${interviewType}" interview. Tailor feedback to the interview format — e.g. for technical interviews focus on technical depth, for case studies focus on structured thinking.`
+      : ''
 
-    const userPrompt = `Interview summary for ${config.role} (${config.experience} yrs), ${config.duration}-min session.
+    const systemPrompt = `You are an expert interview coach. Generate honest, specific, and actionable feedback for a candidate.${interviewTypeContext}${jdBlock}${profileBlock}`
+
+    const userPrompt = `Interview summary for ${domainLabel} (${config.experience} yrs), ${config.duration}-min ${interviewType} session.
 
 Per-question evaluation scores:
 ${evalSummary}
@@ -177,21 +171,16 @@ Generate a comprehensive feedback report as VALID JSON only (no markdown), match
     "engagement_signals": {
       "score": <integer 0-100, overall engagement quality>,
       "engagement_score": <integer 0-100, depth and consistency of answers>,
-      "confidence_trend": <"increasing"|"stable"|"declining", based on filler rate and answer length trends>,
-      "energy_consistency": <float 0-1, how consistent answer quality and length was across questions>,
-      "composure_under_pressure": <integer 0-100, how well the candidate handled the pressure question vs normal questions>
+      "confidence_trend": <"increasing"|"stable"|"declining">,
+      "energy_consistency": <float 0-1>,
+      "composure_under_pressure": <integer 0-100>
     }
   },
   "red_flags": [<array of red flag strings, may be empty>],
   "top_3_improvements": [<exactly 3 specific, actionable improvement strings>]${jdSchemaBlock}
 }
 
-Be honest. If overall performance was weak, reflect that in the score. Use ${commScore} for communication.score exactly as provided.
-For engagement_signals, analyze the speech pattern trends provided above:
-- engagement_score: Based on answer depth, word count consistency, and whether answers addressed questions fully
-- confidence_trend: "increasing" if filler rate decreased over time, "declining" if it increased, "stable" otherwise
-- energy_consistency: How consistent were answer lengths and quality scores across questions (1.0 = very consistent)
-- composure_under_pressure: Compare pressure question performance to average (100 = handled pressure as well or better than normal questions)`
+Be honest. Use ${commScore} for communication.score exactly as provided.`
 
     try {
       const message = await client.messages.create({
@@ -232,31 +221,14 @@ For engagement_signals, analyze the speech pattern trends provided above:
         errorMessage: err instanceof Error ? err.message : 'Unknown error',
       }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
 
-      // Comprehensive fallback with engagement_signals
       const fallback: FeedbackData = {
         overall_score: 65,
         pass_probability: 'Medium',
         confidence_level: 'Low',
         dimensions: {
-          answer_quality: {
-            score: 65,
-            strengths: ['Attempted to answer all questions'],
-            weaknesses: ['Limited specificity', 'STAR structure not consistently used'],
-          },
-          communication: {
-            score: 60,
-            wpm: 140,
-            filler_rate: 0.08,
-            pause_score: 60,
-            rambling_index: 0.3,
-          },
-          engagement_signals: {
-            score: 60,
-            engagement_score: 60,
-            confidence_trend: 'stable',
-            energy_consistency: 0.65,
-            composure_under_pressure: 55,
-          },
+          answer_quality: { score: 65, strengths: ['Attempted to answer all questions'], weaknesses: ['Limited specificity', 'STAR structure not consistently used'] },
+          communication: { score: 60, wpm: 140, filler_rate: 0.08, pause_score: 60, rambling_index: 0.3 },
+          engagement_signals: { score: 60, engagement_score: 60, confidence_trend: 'stable', energy_consistency: 0.65, composure_under_pressure: 55 },
         },
         red_flags: [],
         top_3_improvements: [
