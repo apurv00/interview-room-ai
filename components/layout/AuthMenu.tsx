@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useSession, signOut } from 'next-auth/react'
 import Link from 'next/link'
+import Image from 'next/image'
 
 const PLAN_BADGE: Record<string, { label: string; className: string }> = {
   free: { label: 'Free', className: 'bg-slate-700 text-slate-300' },
@@ -54,9 +55,11 @@ export default function AuthMenu() {
         className="flex items-center gap-2 group"
       >
         {user.image ? (
-          <img
+          <Image
             src={user.image}
-            alt=""
+            alt="Profile"
+            width={32}
+            height={32}
             className="w-8 h-8 rounded-full border-2 border-slate-700 group-hover:border-indigo-500 transition"
           />
         ) : (

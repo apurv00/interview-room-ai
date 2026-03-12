@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import Image from 'next/image'
 import { PLANS } from '@/lib/services/stripe'
 import { ROLE_LABELS, EXPERIENCE_LABELS } from '@/lib/interviewConfig'
 import type { Role, ExperienceLevel } from '@/lib/types'
@@ -148,9 +149,11 @@ export default function SettingsPage() {
         </h2>
         <div className="flex items-center gap-4">
           {user.image ? (
-            <img
+            <Image
               src={user.image}
-              alt=""
+              alt="Profile"
+              width={56}
+              height={56}
               className="w-14 h-14 rounded-full border-2 border-slate-700"
             />
           ) : (
