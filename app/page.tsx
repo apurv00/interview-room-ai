@@ -13,6 +13,7 @@ import Button from '@/components/ui/Button'
 import Badge from '@/components/ui/Badge'
 import HowItWorks from '@/components/marketing/HowItWorks'
 import SocialProof from '@/components/marketing/SocialProof'
+import ResourceLinks from '@/components/marketing/ResourceLinks'
 import type { Role, InterviewType, ExperienceLevel, Duration, InterviewConfig } from '@/lib/types'
 import { EXPERIENCE_LABELS, DURATION_LABELS } from '@/lib/interviewConfig'
 import { STORAGE_KEYS } from '@/lib/storageKeys'
@@ -225,6 +226,7 @@ function AuthenticatedHome() {
       {/* SEO / Marketing sections */}
       <HowItWorks />
       <SocialProof />
+      <ResourceLinks />
     </main>
   )
 }
@@ -285,6 +287,7 @@ function UnauthenticatedHome() {
       </section>
 
       <SocialProof />
+      <ResourceLinks />
 
       {/* Pricing Preview */}
       <section className="px-4 sm:px-6 py-section">
