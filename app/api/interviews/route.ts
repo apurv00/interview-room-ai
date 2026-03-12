@@ -53,9 +53,11 @@ export async function GET(req: NextRequest) {
     }
 
     const { searchParams } = new URL(req.url)
-    const page = parseInt(searchParams.get('page') || '1', 10)
-    const limit = parseInt(searchParams.get('limit') || '20', 10)
-    const status = searchParams.get('status') || undefined
+    const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10) || 1)
+    const limit = Math.min(50, Math.max(1, parseInt(searchParams.get('limit') || '20', 10) || 20))
+    const rawStatus = searchParams.get('status')
+    const VALID_STATUSES = ['created', 'in_progress', 'completed', 'abandoned']
+    const status = rawStatus && VALID_STATUSES.includes(rawStatus) ? rawStatus : undefined
 
     const result = await listSessions({
       userId: session.user.id,

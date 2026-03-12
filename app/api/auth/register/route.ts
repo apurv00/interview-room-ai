@@ -5,8 +5,15 @@ import { User } from '@/lib/db/models'
 import { logger } from '@/lib/logger'
 import { redis } from '@/lib/redis'
 import { PLANS } from '@/lib/services/stripe'
+import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
+
+const RegisterSchema = z.object({
+  name: z.string().min(1).max(200).trim(),
+  email: z.string().email().max(320).toLowerCase(),
+  password: z.string().min(8).max(128),
+})
 
 export async function POST(req: NextRequest) {
   try {
@@ -21,19 +28,16 @@ export async function POST(req: NextRequest) {
       }
     } catch { /* allow if Redis is unavailable */ }
 
-    const { name, email, password } = await req.json()
-
-    if (!name || !email || !password) {
+    const body = await req.json()
+    const parsed = RegisterSchema.safeParse(body)
+    if (!parsed.success) {
       return NextResponse.json({ error: 'Name, email, and password are required' }, { status: 400 })
     }
-
-    if (password.length < 8) {
-      return NextResponse.json({ error: 'Password must be at least 8 characters' }, { status: 400 })
-    }
+    const { name, email, password } = parsed.data
 
     await connectDB()
 
-    const existing = await User.findOne({ email: email.toLowerCase() })
+    const existing = await User.findOne({ email })
     if (existing) {
       // Return the same response shape as success to prevent email enumeration.
       // Do NOT reveal whether the email is already registered.
@@ -44,8 +48,8 @@ export async function POST(req: NextRequest) {
     const freePlan = PLANS.free
 
     await User.create({
-      email: email.toLowerCase(),
-      name: name.trim(),
+      email,
+      name,
       hashedPassword,
       role: 'candidate',
       plan: 'free',

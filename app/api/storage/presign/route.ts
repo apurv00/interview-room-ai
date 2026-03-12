@@ -10,14 +10,22 @@ import {
 } from '@/lib/storage/r2'
 import { connectDB } from '@/lib/db/connection'
 import { InterviewSession } from '@/lib/db/models/InterviewSession'
+import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
+
+const PresignSchema = z.object({
+  action: z.enum(['upload', 'download']),
+  type: z.enum(['recording', 'document']).optional(),
+  sessionId: z.string().max(100).optional(),
+  docType: z.enum(['jd', 'resume']).optional(),
+  fileName: z.string().max(500).optional(),
+  key: z.string().max(1000).optional(),
+})
 
 /**
  * POST /api/storage/presign
  * Generate presigned URLs for R2 upload/download.
- *
- * Body: { action: 'upload' | 'download', type: 'recording' | 'document', sessionId?, docType?, fileName?, key? }
  */
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions)
@@ -31,7 +39,11 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json()
-    const { action, type, sessionId, docType, fileName, key } = body
+    const parsed = PresignSchema.safeParse(body)
+    if (!parsed.success) {
+      return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
+    }
+    const { action, type, sessionId, docType, fileName, key } = parsed.data
     const userId = session.user.id
 
     if (action === 'upload') {
@@ -87,8 +99,7 @@ export async function POST(req: NextRequest) {
     }
 
     return NextResponse.json({ error: 'action must be "upload" or "download"' }, { status: 400 })
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Presign failed'
-    return NextResponse.json({ error: message }, { status: 500 })
+  } catch {
+    return NextResponse.json({ error: 'Presign failed' }, { status: 500 })
   }
 }
