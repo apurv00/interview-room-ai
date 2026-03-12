@@ -51,7 +51,13 @@ export async function PATCH(req: Request) {
   const body = await req.json()
   const parsed = OnboardingUpdateSchema.safeParse(body)
   if (!parsed.success) {
-    return NextResponse.json({ error: 'Invalid data', details: parsed.error.flatten() }, { status: 400 })
+    return NextResponse.json(
+      {
+        error: 'Invalid data',
+        ...(process.env.NODE_ENV !== 'production' && { details: parsed.error.flatten() }),
+      },
+      { status: 400 }
+    )
   }
 
   const { complete, ...fields } = parsed.data

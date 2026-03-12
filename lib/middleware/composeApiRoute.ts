@@ -107,10 +107,12 @@ export function composeApiRoute<T>(options: ComposeOptions<T>) {
         return NextResponse.json(
           {
             error: 'Validation failed',
-            details: err.issues.map((e) => ({
-              path: e.path.join('.'),
-              message: e.message,
-            })),
+            ...(process.env.NODE_ENV !== 'production' && {
+              details: err.issues.map((e) => ({
+                path: e.path.join('.'),
+                message: e.message,
+              })),
+            }),
           },
           { status: 400 }
         )

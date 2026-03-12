@@ -25,6 +25,18 @@ export const logger = pino({
       'hashedPassword',
       'apiKey',
       'ANTHROPIC_API_KEY',
+      // PII fields
+      'email',
+      'candidateEmail',
+      'resumeText',
+      'jobDescription',
+      'stripeCustomerId',
+      // Nested PII in error/request objects
+      '*.email',
+      '*.candidateEmail',
+      '*.resumeText',
+      '*.jobDescription',
+      '*.stripeCustomerId',
     ],
     censor: '[REDACTED]',
   },
