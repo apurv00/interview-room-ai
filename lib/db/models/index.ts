@@ -18,3 +18,32 @@ export type { IInterviewDomain } from './InterviewDomain'
 
 export { InterviewDepth } from './InterviewDepth'
 export type { IInterviewDepth } from './InterviewDepth'
+
+// Phase 1: Evaluation rubrics
+export { EvaluationRubric } from './EvaluationRubric'
+export type { IEvaluationRubric, RubricDimension } from './EvaluationRubric'
+
+// Phase 2: User competency & memory
+export { UserCompetencyState } from './UserCompetencyState'
+export type { IUserCompetencyState } from './UserCompetencyState'
+
+export { WeaknessCluster } from './WeaknessCluster'
+export type { IWeaknessCluster } from './WeaknessCluster'
+
+export { SessionSummary } from './SessionSummary'
+export type { ISessionSummary } from './SessionSummary'
+
+// Phase 5: Pathway planner
+export { PathwayPlan } from './PathwayPlan'
+export type { IPathwayPlan, PracticeTask, Milestone } from './PathwayPlan'
+
+// Phase 6: RAG
+export { QuestionBank } from './QuestionBank'
+export type { IQuestionBank } from './QuestionBank'
+
+export { CompanyPattern } from './CompanyPattern'
+export type { ICompanyPattern } from './CompanyPattern'
+
+// Phase 7: Benchmarking
+export { BenchmarkCase } from './BenchmarkCase'
+export type { IBenchmarkCase } from './BenchmarkCase'

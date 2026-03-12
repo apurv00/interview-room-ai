@@ -143,3 +143,56 @@ export interface StoredInterviewData {
   speechMetrics: SpeechMetrics[]
   feedback?: FeedbackData
 }
+
+// ─── Pathway & Competency Types (client-facing) ────────────────────────────
+
+export interface CompetencyScore {
+  name: string
+  score: number
+  trend: 'improving' | 'stable' | 'declining'
+  confidence: number
+}
+
+export interface PathwayData {
+  readinessLevel: 'not_ready' | 'developing' | 'approaching' | 'ready' | 'strong'
+  readinessScore: number
+  topBlockingWeaknesses: Array<{
+    competency: string
+    currentScore: number
+    targetScore: number
+    reason: string
+  }>
+  strengthsToPreserve: string[]
+  nextSessionRecommendation: {
+    domain: string
+    interviewType: string
+    focusCompetencies: string[]
+    difficulty: string
+    reason: string
+  }
+  practiceTasks: Array<{
+    taskId: string
+    type: string
+    title: string
+    description: string
+    targetCompetency: string
+    difficulty: string
+    estimatedMinutes: number
+    completed: boolean
+  }>
+  milestones: Array<{
+    name: string
+    description: string
+    targetScore: number
+    currentScore: number
+    achieved: boolean
+  }>
+}
+
+export interface WeaknessData {
+  name: string
+  description: string
+  severity: 'critical' | 'moderate' | 'minor'
+  recurrenceCount: number
+  linkedCompetencies: string[]
+}
