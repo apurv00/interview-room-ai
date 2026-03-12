@@ -23,7 +23,9 @@ export async function GET(req: Request) {
       const filtered = domain
         ? depths.filter(d => d.applicableDomains.length === 0 || d.applicableDomains.includes(domain))
         : depths
-      return NextResponse.json(filtered)
+      return NextResponse.json(filtered, {
+        headers: { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=3600' },
+      })
     }
   } catch {
     // DB not available — fall through to fallback
@@ -34,5 +36,7 @@ export async function GET(req: Request) {
     : FALLBACK_DEPTHS
   // Strip internal prompt fields from fallback data
   const safeFallback = rawFallback.map(({ systemPromptTemplate, questionStrategy, evaluationCriteria, avatarPersona, ...rest }) => rest)
-  return NextResponse.json(safeFallback)
+  return NextResponse.json(safeFallback, {
+    headers: { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=3600' },
+  })
 }

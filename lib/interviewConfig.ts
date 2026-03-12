@@ -32,18 +32,18 @@ export const EXPERIENCE_LABELS: Record<ExperienceLevel, string> = {
 }
 
 export const DURATION_LABELS: Record<Duration, string> = {
-  5: '5 min — Quick screen',
-  10: '10 min — Standard',
-  20: '20 min — Deep dive',
+  10: '10 min — Quick screen',
+  20: '20 min — Standard',
+  30: '30 min — Deep dive',
 }
 
 // Upper bound for AI-generated question indices.
 // Loop runs from 1..<QUESTION_COUNT>, so actual AI questions = QUESTION_COUNT - 1.
 // Total questions answered = 1 (intro at Q0) + (QUESTION_COUNT - 1) AI questions.
 export const QUESTION_COUNT: Record<Duration, number> = {
-  5: 3,
   10: 6,
   20: 11,
+  30: 16,
 }
 
 // ─── Avatar persona ───────────────────────────────────────────────────────────
@@ -79,7 +79,7 @@ export const WRAP_UP_LINE =
 // ─── Pressure question triggers (question index where light pressure hits) ────
 
 export const PRESSURE_QUESTION_INDEX: Record<Duration, number> = {
-  5: 2,
   10: 4,
   20: 8,
+  30: 12,
 }

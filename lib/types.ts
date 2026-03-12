@@ -4,7 +4,7 @@
 export type Role = string
 export type InterviewType = string  // slug from InterviewDepth
 export type ExperienceLevel = '0-2' | '3-6' | '7+'
-export type Duration = 5 | 10 | 20
+export type Duration = 10 | 20 | 30
 
 // Legacy role type for backward compatibility checks
 export type LegacyRole = 'PM' | 'SWE' | 'Sales' | 'MBA'

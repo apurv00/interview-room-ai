@@ -11,13 +11,15 @@ import StepSection from '@/components/ui/StepSection'
 import SelectionGroup from '@/components/ui/SelectionGroup'
 import Button from '@/components/ui/Button'
 import Badge from '@/components/ui/Badge'
+import HowItWorks from '@/components/marketing/HowItWorks'
+import SocialProof from '@/components/marketing/SocialProof'
 import type { Role, InterviewType, ExperienceLevel, Duration, InterviewConfig } from '@/lib/types'
 import { EXPERIENCE_LABELS, DURATION_LABELS } from '@/lib/interviewConfig'
 import { STORAGE_KEYS } from '@/lib/storageKeys'
 import { getStartRedirect } from '@/lib/authRedirect'
 
 const EXPERIENCES: ExperienceLevel[] = ['0-2', '3-6', '7+']
-const DURATIONS: Duration[] = [5, 10, 20]
+const DURATIONS: Duration[] = [10, 20, 30]
 
 function AuthenticatedHome() {
   const router = useRouter()
@@ -116,9 +118,9 @@ function AuthenticatedHome() {
 
   return (
     <main className="min-h-screen px-4 sm:px-6 py-12">
-      <div className="max-w-[800px] mx-auto space-y-section animate-fade-in">
+      <div className="max-w-[1100px] mx-auto space-y-section animate-fade-in">
         {/* Header */}
-        <div className="text-center mb-region">
+        <div className="text-center mb-section">
           {authSession?.user?.name && (
             <p className="text-body text-[#6b7280] mb-2">
               Welcome back, {authSession.user.name.split(' ')[0]}
@@ -219,6 +221,10 @@ function AuthenticatedHome() {
           </p>
         </div>
       </div>
+
+      {/* SEO / Marketing sections */}
+      <HowItWorks />
+      <SocialProof />
     </main>
   )
 }
@@ -250,27 +256,7 @@ function UnauthenticatedHome() {
         </div>
       </section>
 
-      {/* How It Works */}
-      <section className="px-4 sm:px-6 py-section">
-        <div className="max-w-[1000px] mx-auto">
-          <h2 className="text-heading text-[#f0f2f5] text-center mb-section">How It Works</h2>
-          <div className="grid md:grid-cols-3 gap-component">
-            {[
-              { step: '1', title: 'Choose Domain & Type', desc: 'Pick from 12+ interview domains and select the interview depth — from HR screening to technical deep dives.' },
-              { step: '2', title: 'Practice with AI', desc: 'Our AI interviewer asks realistic questions tailored to your domain, type, and experience level.' },
-              { step: '3', title: 'Get Instant Feedback', desc: 'Receive scored feedback on content relevance, structure, specificity, and delivery.' },
-            ].map((item) => (
-              <div key={item.step} className="surface-card p-7">
-                <div className="w-5 h-5 rounded-full bg-[rgba(99,102,241,0.08)] text-[#818cf8] text-micro font-bold flex items-center justify-center">
-                  {item.step}
-                </div>
-                <h3 className="text-subheading text-[#f0f2f5] mt-3">{item.title}</h3>
-                <p className="text-body text-[#6b7280] mt-1">{item.desc}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
+      <HowItWorks />
 
       {/* Domain Showcase */}
       <section className="px-4 sm:px-6 py-section">
@@ -298,23 +284,7 @@ function UnauthenticatedHome() {
         </div>
       </section>
 
-      {/* Social Proof */}
-      <section className="px-4 sm:px-6 py-section">
-        <div className="max-w-[800px] mx-auto">
-          <div className="grid grid-cols-3 gap-component text-center">
-            {[
-              { num: '12+', label: 'Career Domains' },
-              { num: '6', label: 'Interview Depths' },
-              { num: '5', label: 'Scoring Dimensions' },
-            ].map((s) => (
-              <div key={s.label}>
-                <p className="text-display text-[#f0f2f5] font-bold">{s.num}</p>
-                <p className="text-caption text-[#6b7280]">{s.label}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
+      <SocialProof />
 
       {/* Pricing Preview */}
       <section className="px-4 sm:px-6 py-section">
