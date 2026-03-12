@@ -7,10 +7,9 @@ export default withAuth(
     const token = req.nextauth.token
 
     // ── CMS subdomain detection ──
+    // Only allow actual subdomain-based CMS access (no query param bypass).
     const hostname = req.headers.get('host') || ''
-    const isCmsSubdomain = hostname.startsWith('cms.')
-    const isCmsQueryParam = req.nextUrl.searchParams.get('subdomain') === 'cms'
-    const isCms = isCmsSubdomain || isCmsQueryParam
+    const isCms = hostname.startsWith('cms.')
 
     // Rewrite CMS subdomain requests to /cms prefix
     // e.g., cms.domain.com/domains -> /cms/domains
@@ -54,6 +53,13 @@ export default withAuth(
       pathname !== '/'
     ) {
       return NextResponse.redirect(new URL('/onboarding', req.url))
+    }
+
+    // CMS routes require platform_admin role
+    if (pathname.startsWith('/cms')) {
+      if (token?.role !== 'platform_admin') {
+        return NextResponse.redirect(new URL('/', req.url))
+      }
     }
 
     // B2B routes require recruiter role or higher

@@ -6,8 +6,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - MONGODB_URI=mongodb://mongo:27017/interview-room-ai
-      - REDIS_URL=redis://redis:6379
+      - MONGODB_URI=mongodb://${MONGO_USERNAME:-admin}:${MONGO_PASSWORD}@mongo:27017/interview-room-ai?authSource=admin
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
       - NEXTAUTH_URL=http://localhost:3000
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
@@ -31,11 +31,14 @@ services:
   mongo:
     image: mongo:7
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_USERNAME:-admin}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_PASSWORD:?Set MONGO_PASSWORD in .env}
     volumes:
       - mongo-data:/data/db
     healthcheck:
-      test: echo 'db.runCommand("ping").ok' | mongosh --quiet
+      test: echo 'db.runCommand("ping").ok' | mongosh --quiet -u $$MONGO_INITDB_ROOT_USERNAME -p $$MONGO_INITDB_ROOT_PASSWORD --authenticationDatabase admin
       interval: 10s
       timeout: 5s
       retries: 5
@@ -46,7 +49,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -54,7 +57,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
     restart: unless-stopped
     networks:
       - app-network

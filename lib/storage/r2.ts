@@ -83,7 +83,7 @@ export async function getUploadPresignedUrl(
 /** Generate a presigned URL for downloading from R2 (GET) */
 export async function getDownloadPresignedUrl(
   key: string,
-  expiresIn = 3600
+  expiresIn = 900 // 15 minutes — shorter TTL limits URL sharing window
 ): Promise<string> {
   const client = getR2Client()
   return getSignedUrl(

@@ -37,3 +37,26 @@ export function canViewSession(
   }
   return false
 }
+
+/**
+ * Write access is more restrictive than view access:
+ * - Session owner can always edit their own session
+ * - org_admin+ in the same org can edit (for admin corrections)
+ * - platform_admin can edit any session
+ * - Regular recruiters get READ-ONLY access to org sessions (no writes)
+ */
+export function canEditSession(
+  session: { userId: string; organizationId?: string },
+  requestingUser: { id: string; role: string; organizationId?: string }
+): boolean {
+  if (session.userId === requestingUser.id) return true
+  if (requestingUser.role === 'platform_admin') return true
+  if (
+    session.organizationId &&
+    requestingUser.organizationId === session.organizationId &&
+    hasRole(requestingUser.role, 'org_admin')
+  ) {
+    return true
+  }
+  return false
+}

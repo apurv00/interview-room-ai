@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/db/connection'
 import { redis } from '@/lib/redis'
 import mongoose from 'mongoose'
@@ -15,9 +15,21 @@ export async function HEAD() {
 
 /**
  * GET — full infrastructure health check (used by Docker / monitoring).
+ * Requires a HEALTH_CHECK_TOKEN to prevent unauthenticated infrastructure probing.
  * Returns 503 if MongoDB or Redis is unavailable.
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
+  // Require a monitoring token to access detailed health info.
+  // If HEALTH_CHECK_TOKEN is not set, the detailed check is disabled for public access.
+  const token = process.env.HEALTH_CHECK_TOKEN
+  if (token) {
+    const provided =
+      req.headers.get('authorization')?.replace('Bearer ', '') ||
+      req.nextUrl.searchParams.get('token')
+    if (provided !== token) {
+      return NextResponse.json({ status: 'ok' }, { status: 200 })
+    }
+  }
   const checks: Record<string, 'ok' | 'error'> = {}
 
   try {

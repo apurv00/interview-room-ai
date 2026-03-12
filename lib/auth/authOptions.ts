@@ -8,9 +8,23 @@ import bcrypt from 'bcryptjs'
 import { connectDB } from '@/lib/db/connection'
 import { User } from '@/lib/db/models'
 import clientPromise from '@/lib/db/mongoClient'
+import { redis } from '@/lib/redis'
+
+// Fail fast if NEXTAUTH_SECRET is missing or too short in production.
+// Without a proper secret, JWTs can be forged and sessions hijacked.
+// Guard with typeof window check to avoid breaking build-time page collection.
+if (
+  typeof globalThis !== 'undefined' &&
+  process.env.NODE_ENV === 'production' &&
+  !process.env.NEXT_PHASE &&
+  (!process.env.NEXTAUTH_SECRET || process.env.NEXTAUTH_SECRET.length < 16)
+) {
+  throw new Error('NEXTAUTH_SECRET must be set to a strong value (>= 16 chars) in production. Generate one with: openssl rand -base64 32')
+}
 
 export const authOptions: NextAuthOptions = {
   adapter: MongoDBAdapter(clientPromise) as Adapter,
+  secret: process.env.NEXTAUTH_SECRET,
 
   session: {
     strategy: 'jwt',
@@ -43,8 +57,17 @@ export const authOptions: NextAuthOptions = {
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) return null
 
+        // Rate limit login attempts: 10 per email per 15 minutes
+        const email = credentials.email.toLowerCase()
+        try {
+          const key = `rl:login:${email}`
+          const attempts = await redis.incr(key)
+          if (attempts === 1) await redis.pexpire(key, 15 * 60 * 1000)
+          if (attempts > 10) return null
+        } catch { /* allow if Redis is unavailable */ }
+
         await connectDB()
-        const user = await User.findOne({ email: credentials.email.toLowerCase() })
+        const user = await User.findOne({ email })
         if (!user || !user.hashedPassword) return null
 
         const valid = await bcrypt.compare(credentials.password, user.hashedPassword)
@@ -93,10 +116,24 @@ export const authOptions: NextAuthOptions = {
           }
         }
       }
-      if (trigger === 'update' && session) {
-        token.role = session.role ?? token.role
-        token.organizationId = session.organizationId ?? token.organizationId
-        token.plan = session.plan ?? token.plan
+      // When session update is triggered (e.g. after plan change, onboarding),
+      // always re-read authoritative fields from the database instead of trusting
+      // client-supplied values. This prevents privilege escalation via
+      // NextAuth's update() API.
+      if (trigger === 'update' && token.userId) {
+        try {
+          await connectDB()
+          const dbUser = await User.findById(token.userId).select('plan role organizationId onboardingCompleted')
+          if (dbUser) {
+            token.role = dbUser.role
+            token.plan = dbUser.plan
+            token.organizationId = dbUser.organizationId?.toString()
+            token.onboardingCompleted = dbUser.onboardingCompleted ?? false
+            token.lastRefreshedAt = Date.now()
+          }
+        } catch {
+          // Keep existing token values on DB failure
+        }
       }
       return token
     },
