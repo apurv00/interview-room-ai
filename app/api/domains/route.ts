@@ -10,7 +10,7 @@ export async function GET() {
     await connectDB()
     const domains = await InterviewDomain.find({ isActive: true })
       .sort({ sortOrder: 1 })
-      .select('slug label shortLabel icon description color category systemPromptContext')
+      .select('slug label shortLabel icon description color category')
       .lean()
 
     if (domains.length > 0) {
@@ -20,5 +20,7 @@ export async function GET() {
     // DB not available — fall through to fallback
   }
 
-  return NextResponse.json(FALLBACK_DOMAINS)
+  // Strip internal prompt fields from fallback data
+  const safeFallback = FALLBACK_DOMAINS.map(({ systemPromptContext, ...rest }) => rest)
+  return NextResponse.json(safeFallback)
 }

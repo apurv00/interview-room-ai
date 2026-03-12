@@ -8,6 +8,7 @@ import bcrypt from 'bcryptjs'
 import { connectDB } from '@/lib/db/connection'
 import { User } from '@/lib/db/models'
 import clientPromise from '@/lib/db/mongoClient'
+import { redis } from '@/lib/redis'
 
 export const authOptions: NextAuthOptions = {
   adapter: MongoDBAdapter(clientPromise) as Adapter,
@@ -43,8 +44,17 @@ export const authOptions: NextAuthOptions = {
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) return null
 
+        // Rate limit login attempts: 10 per email per 15 minutes
+        const email = credentials.email.toLowerCase()
+        try {
+          const key = `rl:login:${email}`
+          const attempts = await redis.incr(key)
+          if (attempts === 1) await redis.pexpire(key, 15 * 60 * 1000)
+          if (attempts > 10) return null
+        } catch { /* allow if Redis is unavailable */ }
+
         await connectDB()
-        const user = await User.findOne({ email: credentials.email.toLowerCase() })
+        const user = await User.findOne({ email })
         if (!user || !user.hashedPassword) return null
 
         const valid = await bcrypt.compare(credentials.password, user.hashedPassword)

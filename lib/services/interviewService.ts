@@ -4,7 +4,7 @@ import { InterviewSession, User } from '@/lib/db/models'
 import type { IInterviewSession } from '@/lib/db/models'
 import type { InterviewConfig, TranscriptEntry, AnswerEvaluation, SpeechMetrics, FeedbackData } from '@/lib/types'
 import { NotFoundError, ForbiddenError, UsageLimitError } from '@/lib/errors'
-import { canViewSession } from '@/lib/auth/permissions'
+import { canViewSession, canEditSession } from '@/lib/auth/permissions'
 import { logger } from '@/lib/logger'
 
 interface CreateSessionInput {
@@ -128,11 +128,11 @@ export async function updateSession(
   const session = await InterviewSession.findById(sessionId)
   if (!session) throw new NotFoundError('Interview session')
 
-  if (!canViewSession(
+  if (!canEditSession(
     { userId: session.userId.toString(), organizationId: session.organizationId?.toString() },
     { id: userId, role, organizationId }
   )) {
-    throw new ForbiddenError('You do not have access to this session')
+    throw new ForbiddenError('You do not have permission to edit this session')
   }
 
   const updateFields: Record<string, unknown> = {}

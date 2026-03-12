@@ -15,7 +15,7 @@ export async function GET(req: Request) {
 
     const depths = await InterviewDepth.find(query)
       .sort({ sortOrder: 1 })
-      .select('slug label icon description scoringDimensions applicableDomains systemPromptTemplate questionStrategy evaluationCriteria avatarPersona')
+      .select('slug label icon description scoringDimensions applicableDomains')
       .lean()
 
     if (depths.length > 0) {
@@ -29,8 +29,10 @@ export async function GET(req: Request) {
     // DB not available — fall through to fallback
   }
 
-  const fallback = domain
+  const rawFallback = domain
     ? FALLBACK_DEPTHS.filter(d => d.applicableDomains.length === 0 || d.applicableDomains.includes(domain))
     : FALLBACK_DEPTHS
-  return NextResponse.json(fallback)
+  // Strip internal prompt fields from fallback data
+  const safeFallback = rawFallback.map(({ systemPromptTemplate, questionStrategy, evaluationCriteria, avatarPersona, ...rest }) => rest)
+  return NextResponse.json(safeFallback)
 }

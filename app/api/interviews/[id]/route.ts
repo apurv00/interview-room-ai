@@ -29,10 +29,13 @@ export async function GET(
     const responseData = interviewSession.toObject ? interviewSession.toObject() : { ...interviewSession }
     delete responseData.recordingR2Key
 
-    // Strip PII for non-owner viewers (recruiters viewing org sessions)
+    // Strip PII and non-essential fields for non-owner viewers (recruiters viewing org sessions)
     const isOwner = responseData.userId?.toString() === session.user.id
     if (!isOwner) {
       delete responseData.resumeText
+      delete responseData.userAgent
+      delete responseData.candidateEmail
+      delete responseData.jobDescription
     }
 
     return NextResponse.json(responseData)
