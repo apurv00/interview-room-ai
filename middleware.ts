@@ -18,8 +18,7 @@ export default withAuth(
     const cmsExcludedPaths = [
       '/signin',
       '/signup',
-      '/api/auth',
-      '/api/health',
+      '/api/',
       '/_next',
       '/favicon.ico',
       '/sitemap.xml',
@@ -85,6 +84,8 @@ export default withAuth(
           pathname.startsWith('/api/auth') ||
           pathname.startsWith('/api/health') ||
           pathname.startsWith('/api/documents/upload') ||
+          pathname.startsWith('/api/domains') ||
+          pathname.startsWith('/api/interview-types') ||
           pathname.startsWith('/pricing') ||
           pathname.startsWith('/privacy') ||
           pathname.startsWith('/terms') ||
