@@ -83,7 +83,7 @@ export default withAuth(
           pathname.startsWith('/signup') ||
           pathname.startsWith('/api/auth') ||
           pathname.startsWith('/api/health') ||
-          pathname.startsWith('/api/documents/upload') ||
+          // pathname.startsWith('/api/documents/upload') || // Removed: require auth to prevent anonymous abuse
           pathname.startsWith('/api/domains') ||
           pathname.startsWith('/api/interview-types') ||
           pathname.startsWith('/pricing') ||

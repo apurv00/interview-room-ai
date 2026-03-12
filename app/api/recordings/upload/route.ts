@@ -41,6 +41,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Storage not configured' }, { status: 503 })
     }
 
+    // Security: Verify the user owns this interview session before uploading
+    await connectDB()
+    const interviewSession = await InterviewSession.findOne({
+      _id: sessionId,
+      userId: session.user.id,
+    })
+    if (!interviewSession) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
+
     // Upload to R2 — detect content type from the uploaded file
     const key = recordingKey(session.user.id, sessionId)
     const contentType = recording.type || 'video/webm'
@@ -48,11 +58,9 @@ export async function POST(req: NextRequest) {
 
     // Update interview session with R2 key
     try {
-      await connectDB()
-      await InterviewSession.findByIdAndUpdate(sessionId, {
-        recordingR2Key: key,
-        recordingSizeBytes: buffer.length,
-      })
+      interviewSession.recordingR2Key = key
+      interviewSession.recordingSizeBytes = buffer.length
+      await interviewSession.save()
     } catch (dbErr) {
       aiLogger.error({ err: dbErr }, 'Failed to update session with recording R2 key')
     }

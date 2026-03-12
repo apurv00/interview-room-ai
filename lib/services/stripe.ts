@@ -16,11 +16,11 @@ export const PLANS: Record<string, PlanConfig> = {
   free: {
     name: 'free',
     label: 'Free',
-    monthlyInterviewLimit: 999999,
+    monthlyInterviewLimit: 3,
     rateLimitPerMin: 15,
     priceMonthly: 0,
     features: [
-      'Unlimited interviews',
+      '3 interviews per month',
       'Basic feedback summary',
       'Score tracking',
       'Community support',

@@ -3,6 +3,8 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth/authOptions'
 import { connectDB } from '@/lib/db/connection'
 import { InterviewDepth } from '@/lib/db/models'
+import { UpdateInterviewTypeSchema } from '@/lib/validators/cms'
+import { logger } from '@/lib/logger'
 
 export const dynamic = 'force-dynamic'
 
@@ -32,7 +34,7 @@ export async function GET(
     }
     return NextResponse.json({ interviewType })
   } catch (err) {
-    console.error('CMS GET /interview-types/[slug] error:', err)
+    logger.error({ err }, 'CMS GET /interview-types/[slug] error')
     return NextResponse.json({ error: 'Failed to fetch interview type' }, { status: 500 })
   }
 }
@@ -46,15 +48,18 @@ export async function PUT(
     if ('error' in auth && auth.error) return auth.error
 
     await connectDB()
-    const body = await req.json()
-
-    delete body._id
-    delete body.createdAt
-    delete body.updatedAt
+    const raw = await req.json()
+    const parsed = UpdateInterviewTypeSchema.safeParse(raw)
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: 'Validation failed', details: parsed.error.issues.map(e => ({ path: e.path.join('.'), message: e.message })) },
+        { status: 400 }
+      )
+    }
 
     const interviewType = await InterviewDepth.findOneAndUpdate(
       { slug: params.slug },
-      { $set: body },
+      { $set: parsed.data },
       { new: true, runValidators: true }
     ).lean()
 
@@ -63,7 +68,7 @@ export async function PUT(
     }
     return NextResponse.json({ interviewType })
   } catch (err) {
-    console.error('CMS PUT /interview-types/[slug] error:', err)
+    logger.error({ err }, 'CMS PUT /interview-types/[slug] error')
     return NextResponse.json({ error: 'Failed to update interview type' }, { status: 500 })
   }
 }
@@ -88,7 +93,7 @@ export async function DELETE(
     await InterviewDepth.deleteOne({ slug: params.slug })
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('CMS DELETE /interview-types/[slug] error:', err)
+    logger.error({ err }, 'CMS DELETE /interview-types/[slug] error')
     return NextResponse.json({ error: 'Failed to delete interview type' }, { status: 500 })
   }
 }

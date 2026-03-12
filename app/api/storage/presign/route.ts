@@ -8,6 +8,8 @@ import {
   documentKey,
   isR2Configured,
 } from '@/lib/storage/r2'
+import { connectDB } from '@/lib/db/connection'
+import { InterviewSession } from '@/lib/db/models/InterviewSession'
 
 export const dynamic = 'force-dynamic'
 
@@ -40,6 +42,14 @@ export async function POST(req: NextRequest) {
         if (!sessionId) {
           return NextResponse.json({ error: 'sessionId required for recording upload' }, { status: 400 })
         }
+
+        // Security: Validate that the user owns this interview session
+        await connectDB()
+        const ownsSession = await InterviewSession.exists({ _id: sessionId, userId })
+        if (!ownsSession) {
+          return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+        }
+
         r2Key = recordingKey(userId, sessionId)
         contentType = 'audio/webm'
       } else if (type === 'document') {
@@ -60,6 +70,18 @@ export async function POST(req: NextRequest) {
       if (!key) {
         return NextResponse.json({ error: 'key required for download' }, { status: 400 })
       }
+
+      // Security: Validate that the R2 key belongs to the requesting user.
+      // Keys follow the pattern: recordings/{userId}/... or documents/{userId}/...
+      const keySegments = key.split('/')
+      if (
+        keySegments.length < 3 ||
+        !['recordings', 'documents'].includes(keySegments[0]) ||
+        keySegments[1] !== userId
+      ) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+      }
+
       const url = await getDownloadPresignedUrl(key)
       return NextResponse.json({ url })
     }

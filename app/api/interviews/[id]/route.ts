@@ -25,7 +25,17 @@ export async function GET(
       session.user.organizationId
     )
 
-    return NextResponse.json(interviewSession)
+    // Strip internal storage keys from response to prevent presigned URL abuse
+    const responseData = interviewSession.toObject ? interviewSession.toObject() : { ...interviewSession }
+    delete responseData.recordingR2Key
+
+    // Strip PII for non-owner viewers (recruiters viewing org sessions)
+    const isOwner = responseData.userId?.toString() === session.user.id
+    if (!isOwner) {
+      delete responseData.resumeText
+    }
+
+    return NextResponse.json(responseData)
   } catch (err) {
     if (err instanceof AppError) {
       return NextResponse.json({ error: err.message, code: err.code }, { status: err.statusCode })
