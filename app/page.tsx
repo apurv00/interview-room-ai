@@ -223,6 +223,46 @@ function AuthenticatedHome() {
         </div>
       </div>
 
+      {/* Quick access cards */}
+      <div className="max-w-[1100px] mx-auto mt-section">
+        <h2 className="text-heading text-[#f0f2f5] mb-4">More Tools</h2>
+        <div className="grid sm:grid-cols-3 gap-element">
+          <Link href="/practice" className="surface-card-bordered p-5 group hover:border-[rgba(99,102,241,0.2)] transition-all">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-10 h-10 rounded-xl bg-indigo-600/10 flex items-center justify-center">
+                <svg className="w-5 h-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                </svg>
+              </div>
+              <h3 className="text-sm font-semibold text-[#f0f2f5] group-hover:text-[#818cf8] transition-colors">Practice Sets</h3>
+            </div>
+            <p className="text-caption text-[#6b7280]">Personalized practice plans based on your profile and progress.</p>
+          </Link>
+          <Link href="/resume" className="surface-card-bordered p-5 group hover:border-[rgba(16,185,129,0.2)] transition-all">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-10 h-10 rounded-xl bg-emerald-600/10 flex items-center justify-center">
+                <svg className="w-5 h-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                </svg>
+              </div>
+              <h3 className="text-sm font-semibold text-[#f0f2f5] group-hover:text-emerald-400 transition-colors">Resume Tools</h3>
+            </div>
+            <p className="text-caption text-[#6b7280]">Build, tailor, and ATS-optimize your resume with AI.</p>
+          </Link>
+          <Link href="/hire" className="surface-card-bordered p-5 group hover:border-[rgba(139,92,246,0.2)] transition-all">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-10 h-10 rounded-xl bg-violet-600/10 flex items-center justify-center">
+                <svg className="w-5 h-5 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
+                </svg>
+              </div>
+              <h3 className="text-sm font-semibold text-[#f0f2f5] group-hover:text-violet-400 transition-colors">For Recruiters</h3>
+            </div>
+            <p className="text-caption text-[#6b7280]">Screen candidates with AI-powered interview assessments.</p>
+          </Link>
+        </div>
+      </div>
+
       {/* SEO / Marketing sections */}
       <HowItWorks />
       <SocialProof />
@@ -287,6 +327,44 @@ function UnauthenticatedHome() {
       </section>
 
       <SocialProof />
+
+      {/* Tools Section */}
+      <section className="px-4 sm:px-6 py-section">
+        <div className="max-w-[1000px] mx-auto text-center">
+          <h2 className="text-heading text-[#f0f2f5]">Complete Career Toolkit</h2>
+          <p className="text-body text-[#6b7280] mt-2">Everything you need to land your next role</p>
+          <div className="grid sm:grid-cols-3 gap-element mt-section">
+            <Link href="/practice" className="surface-card-bordered p-6 text-left group hover:border-[rgba(99,102,241,0.2)] transition-all">
+              <div className="w-12 h-12 rounded-xl bg-indigo-600/10 flex items-center justify-center mb-4">
+                <svg className="w-6 h-6 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                </svg>
+              </div>
+              <h3 className="text-subheading text-[#f0f2f5] group-hover:text-[#818cf8] transition-colors">Practice Sets</h3>
+              <p className="text-caption text-[#6b7280] mt-2">Guided practice plans personalized to your goals, with progress tracking and difficulty scaling.</p>
+            </Link>
+            <Link href="/resume" className="surface-card-bordered p-6 text-left group hover:border-[rgba(16,185,129,0.2)] transition-all">
+              <div className="w-12 h-12 rounded-xl bg-emerald-600/10 flex items-center justify-center mb-4">
+                <svg className="w-6 h-6 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                </svg>
+              </div>
+              <h3 className="text-subheading text-[#f0f2f5] group-hover:text-emerald-400 transition-colors">Resume Tools</h3>
+              <p className="text-caption text-[#6b7280] mt-2">AI resume builder, job description tailor, and ATS compatibility checker to maximize callbacks.</p>
+            </Link>
+            <Link href="/hire" className="surface-card-bordered p-6 text-left group hover:border-[rgba(139,92,246,0.2)] transition-all">
+              <div className="w-12 h-12 rounded-xl bg-violet-600/10 flex items-center justify-center mb-4">
+                <svg className="w-6 h-6 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
+                </svg>
+              </div>
+              <h3 className="text-subheading text-[#f0f2f5] group-hover:text-violet-400 transition-colors">IPG Hire</h3>
+              <p className="text-caption text-[#6b7280] mt-2">For recruiters: screen candidates with AI-powered interview assessments at scale.</p>
+            </Link>
+          </div>
+        </div>
+      </section>
+
       <ResourceLinks />
 
       {/* Pricing Preview */}

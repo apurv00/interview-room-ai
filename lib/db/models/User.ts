@@ -27,6 +27,42 @@ export interface IUser extends Document {
   resumeFileName?: string
   resumeR2Key?: string
 
+  // Extended profile for personalization
+  preferredDomains?: string[]          // domains user practices most / wants to focus on
+  preferredInterviewTypes?: string[]   // interview types user prefers
+  targetCompanies?: string[]           // specific company names
+  linkedinUrl?: string
+  yearsInCurrentRole?: number
+  educationLevel?: 'high_school' | 'bachelors' | 'masters' | 'phd' | 'bootcamp' | 'self_taught'
+  topSkills?: string[]                 // up to 10 key skills
+  communicationStyle?: 'concise' | 'detailed' | 'storyteller'
+  feedbackPreference?: 'encouraging' | 'balanced' | 'tough_love'
+  timezone?: string
+  languagePreference?: string
+
+  // Practice tracking per domain+type combination
+  practiceStats?: Map<string, {        // key: "domain:interviewType"
+    totalSessions: number
+    avgScore: number
+    lastScore: number
+    lastPracticedAt: Date
+    strongDimensions: string[]
+    weakDimensions: string[]
+  }>
+
+  // Saved resumes
+  savedResumes?: Array<{
+    id: string
+    name: string
+    targetRole: string
+    targetCompany: string
+    template: string
+    atsScore: number | null
+    sections: Record<string, string>
+    fullText: string
+    updatedAt: string
+  }>
+
   interviewCount: number
   lastInterviewAt?: Date
 
@@ -71,6 +107,42 @@ const UserSchema = new Schema<IUser>(
     resumeText: { type: String },
     resumeFileName: { type: String },
     resumeR2Key: { type: String },
+
+    // Extended profile for personalization
+    preferredDomains: [{ type: String }],
+    preferredInterviewTypes: [{ type: String }],
+    targetCompanies: [{ type: String }],
+    linkedinUrl: { type: String, trim: true },
+    yearsInCurrentRole: { type: Number, min: 0, max: 50 },
+    educationLevel: { type: String, enum: ['high_school', 'bachelors', 'masters', 'phd', 'bootcamp', 'self_taught'] },
+    topSkills: [{ type: String, trim: true, maxlength: 50 }],
+    communicationStyle: { type: String, enum: ['concise', 'detailed', 'storyteller'] },
+    feedbackPreference: { type: String, enum: ['encouraging', 'balanced', 'tough_love'] },
+    timezone: { type: String },
+    languagePreference: { type: String, default: 'en' },
+
+    // Practice tracking per domain+type combination
+    practiceStats: { type: Map, of: {
+      totalSessions: { type: Number, default: 0 },
+      avgScore: { type: Number, default: 0 },
+      lastScore: { type: Number, default: 0 },
+      lastPracticedAt: { type: Date },
+      strongDimensions: [{ type: String }],
+      weakDimensions: [{ type: String }],
+    }},
+
+    // Saved resumes
+    savedResumes: [{
+      id: { type: String, required: true },
+      name: { type: String, required: true },
+      targetRole: { type: String, default: '' },
+      targetCompany: { type: String, default: '' },
+      template: { type: String, default: 'professional' },
+      atsScore: { type: Number, default: null },
+      sections: { type: Schema.Types.Mixed, default: {} },
+      fullText: { type: String, default: '' },
+      updatedAt: { type: String },
+    }],
 
     interviewCount: { type: Number, default: 0 },
     lastInterviewAt: { type: Date },

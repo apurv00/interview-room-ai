@@ -8,9 +8,18 @@ const HIDDEN_PREFIXES = ['/interview', '/lobby']
 
 const PRODUCT_LINKS = [
   { href: '/', label: 'Home' },
+  { href: '/practice', label: 'Practice Sets' },
   { href: '/pricing', label: 'Pricing' },
   { href: '/resources', label: 'Resources' },
   { href: '/signup', label: 'Get Started' },
+]
+
+const TOOLS_LINKS = [
+  { href: '/resume', label: 'Resume Builder' },
+  { href: '/resume/tailor', label: 'Resume Tailor' },
+  { href: '/resume/ats-check', label: 'ATS Checker' },
+  { href: '/resume/templates', label: 'Resume Templates' },
+  { href: '/hire', label: 'For Recruiters' },
 ]
 
 const QUESTION_LINKS = [
@@ -61,8 +70,9 @@ export default function Footer() {
     <footer className="border-t border-[var(--color-border-subtle)] mt-auto">
       <div className="max-w-[1100px] mx-auto px-4 sm:px-6 py-10">
         {/* Columns */}
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-8 mb-8">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-8 mb-8">
           <FooterColumn title="Product" links={PRODUCT_LINKS} />
+          <FooterColumn title="Tools" links={TOOLS_LINKS} />
           <FooterColumn title="Interview Questions" links={QUESTION_LINKS} />
           <FooterColumn title="Tips & Frameworks" links={TIP_LINKS} />
         </div>

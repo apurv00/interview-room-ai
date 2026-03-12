@@ -68,7 +68,10 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
     let profileContext = ''
     try {
       await connectDB()
-      const profile = await User.findById(user.id).select('isCareerSwitcher switchingFrom interviewGoal weakAreas').lean()
+      const profile = await User.findById(user.id).select(
+        'isCareerSwitcher switchingFrom interviewGoal weakAreas feedbackPreference ' +
+        'targetCompanyType topSkills communicationStyle practiceStats'
+      ).lean()
       if (profile?.isCareerSwitcher && profile?.switchingFrom) {
         profileContext += `\nThis candidate is transitioning from ${profile.switchingFrom} — weight transferable skills and learning agility more heavily when scoring.`
       }
@@ -77,6 +80,23 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
       }
       if (profile?.weakAreas?.length) {
         profileContext += `\nThe candidate wants to improve: ${profile.weakAreas.join(', ')}. Flag related issues more explicitly in the flags array.`
+      }
+      if (profile?.feedbackPreference) {
+        const prefGuide: Record<string, string> = {
+          encouraging: 'Frame follow-ups encouragingly. Acknowledge strengths before noting gaps.',
+          balanced: 'Provide balanced feedback — acknowledge both strengths and areas for improvement.',
+          tough_love: 'Be direct and critical. The candidate wants honest, unfiltered feedback.',
+        }
+        profileContext += `\n${prefGuide[profile.feedbackPreference] || ''}`
+      }
+      if (profile?.targetCompanyType && profile.targetCompanyType !== 'any') {
+        profileContext += `\nCalibrate scoring to ${profile.targetCompanyType} company standards.`
+      }
+      // Check practice history for adaptive scoring
+      const practiceKey = `${config.role}:${interviewType}`
+      const stats = (profile?.practiceStats as Record<string, { totalSessions?: number; avgScore?: number }> | undefined)?.[practiceKey]
+      if (stats?.totalSessions && stats.totalSessions >= 3) {
+        profileContext += `\nExperienced practitioner (${stats.totalSessions} sessions, avg ${stats.avgScore}). Raise the bar — score more critically.`
       }
     } catch { /* continue without profile */ }
 
