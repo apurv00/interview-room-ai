@@ -3,6 +3,8 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth/authOptions'
 import { connectDB } from '@/lib/db/connection'
 import { InterviewDomain } from '@/lib/db/models'
+import { CreateDomainSchema } from '@/lib/validators/cms'
+import { logger } from '@/lib/logger'
 
 export const dynamic = 'force-dynamic'
 
@@ -26,7 +28,7 @@ export async function GET() {
     const domains = await InterviewDomain.find({}).sort({ sortOrder: 1, label: 1 }).lean()
     return NextResponse.json({ domains })
   } catch (err) {
-    console.error('CMS GET /domains error:', err)
+    logger.error({ err }, 'CMS GET /domains error')
     return NextResponse.json({ error: 'Failed to fetch domains' }, { status: 500 })
   }
 }
@@ -37,7 +39,15 @@ export async function POST(req: NextRequest) {
     if ('error' in auth && auth.error) return auth.error
 
     await connectDB()
-    const body = await req.json()
+    const raw = await req.json()
+    const parsed = CreateDomainSchema.safeParse(raw)
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: 'Validation failed', details: parsed.error.issues.map(e => ({ path: e.path.join('.'), message: e.message })) },
+        { status: 400 }
+      )
+    }
+    const body = parsed.data
 
     const domain = await InterviewDomain.create({
       slug: body.slug,
@@ -57,7 +67,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ domain }, { status: 201 })
   } catch (err: unknown) {
-    console.error('CMS POST /domains error:', err)
+    logger.error({ err }, 'CMS POST /domains error')
     if (err && typeof err === 'object' && 'code' in err && (err as { code: number }).code === 11000) {
       return NextResponse.json({ error: 'Domain slug already exists' }, { status: 409 })
     }

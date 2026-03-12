@@ -11,6 +11,12 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
 
 export async function POST(req: NextRequest) {
   try {
+    // Auth required to prevent anonymous storage exhaustion and compute abuse
+    const session = await getServerSession(authOptions)
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
     const formData = await req.formData()
     const file = formData.get('file') as File | null
     const docType = formData.get('docType') as string | null
@@ -35,12 +41,11 @@ export async function POST(req: NextRequest) {
 
     const result = await parseDocument(buffer, file.name)
 
-    // Store original file in R2 if configured and user is authenticated
+    // Store original file in R2 if configured
     let r2Key: string | undefined
     if (isR2Configured()) {
       try {
-        const session = await getServerSession(authOptions)
-        const userId = session?.user?.id || 'anonymous'
+        const userId = session.user.id
         const key = documentKey(userId, docType, file.name)
         await uploadToR2(key, buffer, file.type || 'application/octet-stream')
         r2Key = key
@@ -58,7 +63,6 @@ export async function POST(req: NextRequest) {
     })
   } catch (err) {
     logger.error({ err }, 'Document upload/parse error')
-    const message = err instanceof Error ? err.message : 'Failed to parse document'
-    return NextResponse.json({ error: message }, { status: 400 })
+    return NextResponse.json({ error: 'Failed to parse document' }, { status: 400 })
   }
 }

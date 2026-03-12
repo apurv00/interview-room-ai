@@ -146,7 +146,7 @@ export const authOptions: NextAuthOptions = {
           emailVerified: new Date(),
           role: 'candidate',
           plan: 'free',
-          monthlyInterviewLimit: 999999,
+          monthlyInterviewLimit: 3,
           onboardingCompleted: false,
         })
       }
