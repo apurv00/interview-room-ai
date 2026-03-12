@@ -11,7 +11,7 @@ import type {
   SpeechMetrics,
 } from '@/lib/types'
 import {
-  INTERVIEW_INTROS,
+  getInterviewIntro,
   WRAP_UP_LINE,
   QUESTION_COUNT,
 } from '@/lib/interviewConfig'
@@ -477,7 +477,7 @@ export function useInterview({
     if (!config || !voicesReady) return
 
     const start = async () => {
-      const intro = INTERVIEW_INTROS[config.role]
+      const intro = getInterviewIntro(config.role)
       setCurrentQuestion(intro)
       addToTranscript('interviewer', intro, 0)
       await avatarSpeak(intro, 'friendly')

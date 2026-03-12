@@ -5,6 +5,21 @@ export default withAuth(
   function middleware(req) {
     const { pathname } = req.nextUrl
     const token = req.nextauth.token
+
+    // ── CMS subdomain detection ──
+    const hostname = req.headers.get('host') || ''
+    const isCmsSubdomain = hostname.startsWith('cms.')
+    const isCmsQueryParam = req.nextUrl.searchParams.get('subdomain') === 'cms'
+    const isCms = isCmsSubdomain || isCmsQueryParam
+
+    // Rewrite CMS subdomain requests to /cms prefix
+    // e.g., cms.domain.com/domains -> /cms/domains
+    if (isCms && !pathname.startsWith('/cms')) {
+      const url = req.nextUrl.clone()
+      url.pathname = `/cms${pathname}`
+      return NextResponse.rewrite(url)
+    }
+
     const response = NextResponse.next()
 
     // Security headers
@@ -20,6 +35,7 @@ export default withAuth(
       !pathname.startsWith('/api/') &&
       !pathname.startsWith('/signin') &&
       !pathname.startsWith('/signup') &&
+      !pathname.startsWith('/cms') &&
       pathname !== '/'
     ) {
       return NextResponse.redirect(new URL('/onboarding', req.url))
@@ -66,6 +82,10 @@ export default withAuth(
           pathname === '/opengraph-image'
         ) {
           return true
+        }
+        // CMS paths require auth but are accessible behind the subdomain
+        if (pathname.startsWith('/cms')) {
+          return !!token
         }
         return !!token
       },

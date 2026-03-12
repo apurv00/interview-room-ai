@@ -1,11 +1,17 @@
 // ─── Interview Configuration ──────────────────────────────────────────────────
 
-export type Role = 'PM' | 'SWE' | 'Sales' | 'MBA'
+// Role is now a dynamic slug from InterviewDomain (backward-compat: 'PM' | 'SWE' etc. still work)
+export type Role = string
+export type InterviewType = string  // slug from InterviewDepth
 export type ExperienceLevel = '0-2' | '3-6' | '7+'
 export type Duration = 5 | 10 | 20
 
+// Legacy role type for backward compatibility checks
+export type LegacyRole = 'PM' | 'SWE' | 'Sales' | 'MBA'
+
 export interface InterviewConfig {
   role: Role
+  interviewType?: InterviewType  // defaults to 'hr-screening'
   experience: ExperienceLevel
   duration: Duration
   jobDescription?: string

@@ -106,6 +106,7 @@ _Update this section each session to carry context forward._
 - **SEO phase 2**: "How It Works" + feature content sections on homepage, Privacy Policy & Terms of Service pages, semantic HTML (aria-labels, `<main>` wrappers), internal cross-linking, h1 brand name fix
 - **CLAUDE.md**: Added this file for cross-session context
 - **Voice & responsiveness**: Faster TTS rate (0.95→1.08), warmer pitch, parallel eval+question generation, reduced inter-phase delays, switched real-time APIs to claude-sonnet-4-6 for speed
+- **CMS + Interview Domains/Depth**: Expanded from 4 hardcoded roles to 12+ dynamic interview domains (PM, SWE, DS, Design, Marketing, Finance, Consulting, DevOps, HR, Legal, etc.) managed via CMS. Added 6 interview depth levels (HR Screening, Behavioral, Technical, Case Study, Domain Knowledge, Culture Fit). CMS admin at cms.interviewprepguru.com subdomain with middleware-based routing. Homepage redesigned with domain catalog, search, category tabs, and depth selector. AI prompts dynamically adapt to domain/depth. All 166 tests passing.
 
 ## Known Issues / TODO
 

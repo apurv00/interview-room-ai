@@ -4,9 +4,10 @@ import { composeApiRoute } from '@/lib/middleware/composeApiRoute'
 import { GenerateQuestionSchema } from '@/lib/validators/interview'
 import { trackUsage } from '@/lib/services/usageTracking'
 import { aiLogger } from '@/lib/logger'
-import { PRESSURE_QUESTION_INDEX, QUESTION_COUNT } from '@/lib/interviewConfig'
+import { PRESSURE_QUESTION_INDEX, QUESTION_COUNT, getDomainLabel } from '@/lib/interviewConfig'
 import { connectDB } from '@/lib/db/connection'
-import { User } from '@/lib/db/models'
+import { User, InterviewDomain, InterviewDepth } from '@/lib/db/models'
+import { FALLBACK_DOMAINS, FALLBACK_DEPTHS } from '@/lib/db/seed'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -22,6 +23,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
   async handler(req, { user, body }) {
     const { config, questionIndex, previousQA } = body
     const startTime = Date.now()
+    const interviewType = config.interviewType || 'hr-screening'
 
     const totalQuestions = QUESTION_COUNT[config.duration]
     const isPressureQuestion = questionIndex === PRESSURE_QUESTION_INDEX[config.duration]
@@ -44,6 +46,54 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     }
     if (config.jobDescription && config.resumeText) {
       contextBlock += `\n\nCross-reference the resume against the JD requirements. Identify gaps or areas where the candidate's experience may not fully match, and explore those.`
+    }
+
+    // Fetch domain and depth config from DB (with fallback)
+    let domainContext = ''
+    let depthTemplate = ''
+    let depthStrategy = ''
+    let domainLabel = getDomainLabel(config.role)
+
+    try {
+      await connectDB()
+
+      const [domainDoc, depthDoc] = await Promise.all([
+        InterviewDomain.findOne({ slug: config.role, isActive: true }).lean(),
+        InterviewDepth.findOne({ slug: interviewType, isActive: true }).lean(),
+      ])
+
+      if (domainDoc) {
+        domainLabel = domainDoc.label
+        domainContext = domainDoc.systemPromptContext ? `\n\nDOMAIN CONTEXT: ${domainDoc.systemPromptContext}` : ''
+      } else {
+        const fallback = FALLBACK_DOMAINS.find(d => d.slug === config.role)
+        if (fallback) {
+          domainLabel = fallback.label
+          domainContext = fallback.systemPromptContext ? `\n\nDOMAIN CONTEXT: ${fallback.systemPromptContext}` : ''
+        }
+      }
+
+      if (depthDoc) {
+        depthTemplate = depthDoc.systemPromptTemplate || ''
+        depthStrategy = depthDoc.questionStrategy ? `\n\nQUESTION STRATEGY: ${depthDoc.questionStrategy}` : ''
+      } else {
+        const fallback = FALLBACK_DEPTHS.find(d => d.slug === interviewType)
+        if (fallback) {
+          depthTemplate = fallback.systemPromptTemplate || ''
+          depthStrategy = fallback.questionStrategy ? `\n\nQUESTION STRATEGY: ${fallback.questionStrategy}` : ''
+        }
+      }
+    } catch {
+      const fallbackDomain = FALLBACK_DOMAINS.find(d => d.slug === config.role)
+      const fallbackDepth = FALLBACK_DEPTHS.find(d => d.slug === interviewType)
+      if (fallbackDomain) {
+        domainLabel = fallbackDomain.label
+        domainContext = fallbackDomain.systemPromptContext ? `\n\nDOMAIN CONTEXT: ${fallbackDomain.systemPromptContext}` : ''
+      }
+      if (fallbackDepth) {
+        depthTemplate = fallbackDepth.systemPromptTemplate || ''
+        depthStrategy = fallbackDepth.questionStrategy ? `\n\nQUESTION STRATEGY: ${fallbackDepth.questionStrategy}` : ''
+      }
     }
 
     // Build profile context from onboarding data
@@ -70,15 +120,24 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
       }
     } catch { /* profile fetch failed — continue without it */ }
 
-    const systemPrompt = `You are Alex Chen, a senior HR interviewer at a top-tier tech company. You are conducting a ${config.duration}-minute behavioral screening for a ${config.role} role (${config.experience} years experience).
+    // Build system prompt — use depth template if available, otherwise default
+    let basePrompt: string
+    if (depthTemplate) {
+      basePrompt = depthTemplate
+        .replace('{duration}', String(config.duration))
+        .replace('{domain}', domainLabel)
+        .replace('{experience}', config.experience)
+    } else {
+      basePrompt = `You are Alex Chen, a senior HR interviewer at a top-tier tech company. You are conducting a ${config.duration}-minute behavioral screening for a ${domainLabel} role (${config.experience} years experience).`
+    }
 
-Your interview style is warm but professional. You ask ONE focused question at a time. Questions should feel conversational and natural — not robotic or overly formal.
+    const defaultStrategy = interviewType === 'hr-screening'
+      ? `\nQuestion types you rotate through:\n- Behavioral (STAR): "Tell me about a time when..."\n- Motivation: "What drives you / why this role?"\n- Situational: "How would you handle..."\n- Consistency check: follow up on something mentioned earlier`
+      : ''
 
-Question types you rotate through:
-- Behavioral (STAR): "Tell me about a time when..."
-- Motivation: "What drives you / why this role?"
-- Situational: "How would you handle..."
-- Consistency check: follow up on something mentioned earlier${contextBlock}${profileBlock}`
+    const systemPrompt = `${basePrompt}
+
+Your interview style is warm but professional. You ask ONE focused question at a time. Questions should feel conversational and natural — not robotic or overly formal.${depthStrategy || defaultStrategy}${domainContext}${contextBlock}${profileBlock}`
 
     const userPrompt = `Previous conversation:
 ${qaContext}
@@ -100,7 +159,6 @@ Return ONLY the question text. No preamble, no numbering, no quotation marks. Ju
       const question =
         message.content[0].type === 'text' ? message.content[0].text.trim() : ''
 
-      // Fire-and-forget usage tracking
       trackUsage({
         user,
         type: 'api_call_question',
