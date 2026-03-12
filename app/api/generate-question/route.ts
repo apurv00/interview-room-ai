@@ -99,12 +99,14 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
       }
     }
 
-    // Build profile context from onboarding data
+    // Build profile context from onboarding data + extended profile
     let profileBlock = ''
     try {
       await connectDB()
       const profile = await User.findById(user.id).select(
-        'currentTitle currentIndustry isCareerSwitcher switchingFrom targetCompanyType weakAreas'
+        'currentTitle currentIndustry isCareerSwitcher switchingFrom targetCompanyType weakAreas ' +
+        'topSkills educationLevel yearsInCurrentRole communicationStyle ' +
+        'targetCompanies practiceStats interviewGoal'
       ).lean()
       if (profile?.currentTitle) {
         profileBlock += `\nThe candidate's current title is: ${profile.currentTitle}.`
@@ -112,14 +114,51 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
       if (profile?.currentIndustry) {
         profileBlock += ` They work in the ${profile.currentIndustry} industry.`
       }
+      if (profile?.yearsInCurrentRole) {
+        profileBlock += ` They have been in their current role for ${profile.yearsInCurrentRole} years.`
+      }
       if (profile?.isCareerSwitcher && profile?.switchingFrom) {
         profileBlock += `\nIMPORTANT: This candidate is making a career transition from ${profile.switchingFrom} to ${config.role}. Focus on transferable skills and probe how their background applies to the new role.`
       }
       if (profile?.targetCompanyType && profile.targetCompanyType !== 'any') {
         profileBlock += `\nThey are targeting ${profile.targetCompanyType} companies — calibrate question depth and formality accordingly.`
       }
+      if (profile?.targetCompanies?.length) {
+        profileBlock += `\nSpecific target companies: ${profile.targetCompanies.join(', ')}. Tailor questions to the culture and interview style of these companies.`
+      }
       if (profile?.weakAreas?.length) {
         profileBlock += `\nThe candidate wants to improve: ${profile.weakAreas.join(', ')}. Naturally weave in questions that test these areas.`
+      }
+      if (profile?.topSkills?.length) {
+        profileBlock += `\nCandidate's top skills: ${profile.topSkills.join(', ')}. Probe these to validate depth.`
+      }
+      if (profile?.communicationStyle) {
+        const styleGuide: Record<string, string> = {
+          concise: 'The candidate prefers concise communication — ask focused, direct questions.',
+          detailed: 'The candidate is detail-oriented — feel free to ask multi-part questions.',
+          storyteller: 'The candidate is a storyteller — ask open-ended questions that invite narratives.',
+        }
+        profileBlock += `\n${styleGuide[profile.communicationStyle] || ''}`
+      }
+      // Check practice history for this domain+type combo
+      const practiceKey = `${config.role}:${interviewType}`
+      const stats = (profile?.practiceStats as Record<string, { totalSessions?: number; avgScore?: number; weakDimensions?: string[] }> | undefined)?.[practiceKey]
+      if (stats?.totalSessions && stats.totalSessions > 0) {
+        profileBlock += `\nThis candidate has done ${stats.totalSessions} practice sessions for this combination (avg score: ${stats.avgScore || 'N/A'}).`
+        if (stats.weakDimensions?.length) {
+          profileBlock += ` Weak dimensions: ${stats.weakDimensions.join(', ')}. Test these specifically.`
+        }
+        profileBlock += ` Avoid repeating common questions — challenge with novel scenarios.`
+      }
+      if (profile?.interviewGoal) {
+        const goalContext: Record<string, string> = {
+          first_interview: 'First-time interview preparer — start foundational, build complexity.',
+          improve_scores: 'Actively improving — push with progressively harder questions.',
+          career_switch: 'Career switcher — ask about adaptability and transferable skills.',
+          promotion: 'Promotion prep — focus on leadership and strategic thinking.',
+          general_practice: 'General practice — vary question types for breadth.',
+        }
+        profileBlock += `\n${goalContext[profile.interviewGoal] || ''}`
       }
     } catch { /* profile fetch failed — continue without it */ }
 

@@ -109,7 +109,10 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
     let profileBlock = ''
     try {
       await connectDB()
-      const profile = await User.findById(user.id).select('interviewGoal targetCompanyType weakAreas').lean()
+      const profile = await User.findById(user.id).select(
+        'interviewGoal targetCompanyType weakAreas feedbackPreference ' +
+        'targetCompanies topSkills isCareerSwitcher switchingFrom practiceStats'
+      ).lean()
       if (profile?.interviewGoal) {
         const goalLabels: Record<string, string> = {
           first_interview: 'preparing for their first interview',
@@ -123,8 +126,28 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
       if (profile?.targetCompanyType && profile.targetCompanyType !== 'any') {
         profileBlock += `\nThey are targeting ${profile.targetCompanyType} companies. Reference what those companies typically look for in the strengths/weaknesses analysis.`
       }
+      if (profile?.targetCompanies?.length) {
+        profileBlock += `\nSpecific target companies: ${profile.targetCompanies.join(', ')}. Reference these companies' known interview standards where relevant.`
+      }
       if (profile?.weakAreas?.length) {
         profileBlock += `\nThe candidate wanted to work on: ${profile.weakAreas.join(', ')}. In top_3_improvements, address at least one of these self-identified weak areas with a specific, actionable tip.`
+      }
+      if (profile?.feedbackPreference) {
+        const prefGuide: Record<string, string> = {
+          encouraging: 'Use an encouraging, growth-oriented tone. Lead with positives.',
+          balanced: 'Use a balanced tone — equal weight to strengths and improvements.',
+          tough_love: 'Be direct, critical, and specific. The candidate wants brutal honesty.',
+        }
+        profileBlock += `\nFeedback style preference: ${prefGuide[profile.feedbackPreference] || 'balanced'}`
+      }
+      if (profile?.isCareerSwitcher && profile?.switchingFrom) {
+        profileBlock += `\nCareer switcher from ${profile.switchingFrom}. Acknowledge transferable skills and suggest how to better bridge the gap.`
+      }
+      // Practice history context
+      const practiceKey = `${config.role}:${interviewType}`
+      const stats = (profile?.practiceStats as Record<string, { totalSessions?: number; avgScore?: number; lastScore?: number }> | undefined)?.[practiceKey]
+      if (stats?.totalSessions && stats.totalSessions > 1) {
+        profileBlock += `\nThis is session #${stats.totalSessions + 1} for this combination. Previous avg score: ${stats.avgScore}. Compare this session's performance to their historical average and note progress or regression.`
       }
     } catch { /* continue without profile */ }
 

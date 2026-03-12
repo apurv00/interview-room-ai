@@ -12,6 +12,10 @@ const ONBOARDING_FIELDS = [
   'currentTitle', 'currentIndustry', 'isCareerSwitcher', 'switchingFrom',
   'targetCompanyType', 'interviewGoal', 'weakAreas',
   'resumeFileName', 'resumeR2Key',
+  'preferredDomains', 'preferredInterviewTypes', 'targetCompanies',
+  'linkedinUrl', 'yearsInCurrentRole', 'educationLevel',
+  'topSkills', 'communicationStyle', 'feedbackPreference',
+  'practiceStats',
 ] as const
 
 export async function GET() {
@@ -39,6 +43,17 @@ export async function GET() {
     weakAreas: user.weakAreas || [],
     hasResume: !!(user.resumeText || user.resumeFileName),
     resumeFileName: user.resumeFileName || null,
+    // Extended profile
+    preferredDomains: user.preferredDomains || [],
+    preferredInterviewTypes: user.preferredInterviewTypes || [],
+    targetCompanies: user.targetCompanies || [],
+    linkedinUrl: user.linkedinUrl || null,
+    yearsInCurrentRole: user.yearsInCurrentRole ?? null,
+    educationLevel: user.educationLevel || null,
+    topSkills: user.topSkills || [],
+    communicationStyle: user.communicationStyle || null,
+    feedbackPreference: user.feedbackPreference || null,
+    practiceStats: user.practiceStats || {},
   })
 }
 
