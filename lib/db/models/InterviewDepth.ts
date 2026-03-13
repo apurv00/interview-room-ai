@@ -28,6 +28,13 @@ export interface IInterviewDepth extends Document {
   // Domain applicability (empty = all)
   applicableDomains: string[]
 
+  // Phase 1: Extended config
+  defaultRubricId?: string                          // links to EvaluationRubric
+  competencyMapping: string[]                       // competencies this depth evaluates
+  difficultyRange: { min: string; max: string }
+  idealSessionLengthMin?: number
+  tonePreset: 'neutral_professional' | 'warm_supportive' | 'challenging_direct' | 'collaborative'
+
   createdAt: Date
   updatedAt: Date
 }
@@ -54,6 +61,20 @@ const InterviewDepthSchema = new Schema<IInterviewDepth>(
     }],
 
     applicableDomains: [{ type: String }],
+
+    // Phase 1: Extended config
+    defaultRubricId: { type: String },
+    competencyMapping: [{ type: String }],
+    difficultyRange: {
+      min: { type: String, default: 'easy' },
+      max: { type: String, default: 'hard' },
+    },
+    idealSessionLengthMin: { type: Number },
+    tonePreset: {
+      type: String,
+      enum: ['neutral_professional', 'warm_supportive', 'challenging_direct', 'collaborative'],
+      default: 'neutral_professional',
+    },
   },
   { timestamps: true }
 )

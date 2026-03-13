@@ -28,10 +28,11 @@ interface RateLimitConfig {
 }
 
 export interface ComposeOptions<T> {
-  schema: ZodSchema<T>
+  schema?: ZodSchema<T>
   rateLimit: RateLimitConfig
   handler: SecureHandler<T>
   authOptional?: boolean
+  requiredRole?: string
 }
 
 const ANONYMOUS_USER: AuthUser = {
@@ -97,9 +98,19 @@ export function composeApiRoute<T>(options: ComposeOptions<T>) {
         aiLogger.error({ err }, 'Rate limit check failed, allowing request')
       }
 
+      // 2b. Role check
+      if (options.requiredRole && user.role !== options.requiredRole && user.role !== 'platform_admin') {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+      }
+
       // 3. Validation
-      const raw = await req.json()
-      const body = options.schema.parse(raw)
+      let body: T
+      if (options.schema) {
+        const raw = await req.json()
+        body = options.schema.parse(raw)
+      } else {
+        body = {} as T
+      }
 
       // 4. Call handler
       return await options.handler(req, {

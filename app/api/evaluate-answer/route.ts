@@ -8,6 +8,8 @@ import { getDomainLabel } from '@/lib/interviewConfig'
 import { connectDB } from '@/lib/db/connection'
 import { User, InterviewDepth } from '@/lib/db/models'
 import { FALLBACK_DEPTHS } from '@/lib/db/seed'
+import { isFeatureEnabled } from '@/lib/featureFlags'
+import { getScoringDimensions, buildRubricPromptSection } from '@/lib/services/evaluationEngine'
 import type { AnswerEvaluation } from '@/lib/types'
 import { z } from 'zod'
 
@@ -56,6 +58,16 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
         { name: 'specificity', label: 'Specificity', weight: 0.25 },
         { name: 'ownership', label: 'Ownership', weight: 0.25 },
       ]
+    }
+
+    // Try rubric-enhanced dimensions from evaluation engine
+    if (isFeatureEnabled('rubric_registry')) {
+      try {
+        const rubricDims = await getScoringDimensions(config.role, interviewType, config.experience)
+        if (rubricDims.length > 0) {
+          scoringDims = rubricDims.map(d => ({ name: d.name, label: d.label, weight: d.weight }))
+        }
+      } catch { /* continue with existing dims */ }
     }
 
     // Build JD context if available — wrapped in XML tags to prevent prompt injection

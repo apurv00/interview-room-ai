@@ -18,6 +18,17 @@ export interface IInterviewDomain extends Document {
   sampleQuestions: string[]
   evaluationEmphasis: string[]
 
+  // Phase 1: Extended scenario config
+  defaultRubricId?: string                          // links to EvaluationRubric
+  competencyTaxonomy: string[]                      // domain-specific competencies
+  difficultyRules?: {
+    entryLevel: { minDifficulty: string; maxDifficulty: string }
+    midLevel: { minDifficulty: string; maxDifficulty: string }
+    seniorLevel: { minDifficulty: string; maxDifficulty: string }
+  }
+  followUpStyle: 'breadth_first' | 'depth_first' | 'adaptive'
+  questionStyle: 'conversational' | 'probing' | 'structured' | 'challenging'
+
   createdAt: Date
   updatedAt: Date
 }
@@ -42,6 +53,26 @@ const InterviewDomainSchema = new Schema<IInterviewDomain>(
     systemPromptContext: { type: String, default: '' },
     sampleQuestions: [{ type: String }],
     evaluationEmphasis: [{ type: String }],
+
+    // Phase 1: Extended scenario config
+    defaultRubricId: { type: String },
+    competencyTaxonomy: [{ type: String }],
+    difficultyRules: {
+      entryLevel: {
+        minDifficulty: { type: String, default: 'easy' },
+        maxDifficulty: { type: String, default: 'medium' },
+      },
+      midLevel: {
+        minDifficulty: { type: String, default: 'medium' },
+        maxDifficulty: { type: String, default: 'medium_high' },
+      },
+      seniorLevel: {
+        minDifficulty: { type: String, default: 'medium_high' },
+        maxDifficulty: { type: String, default: 'hard' },
+      },
+    },
+    followUpStyle: { type: String, enum: ['breadth_first', 'depth_first', 'adaptive'], default: 'adaptive' },
+    questionStyle: { type: String, enum: ['conversational', 'probing', 'structured', 'challenging'], default: 'probing' },
   },
   { timestamps: true }
 )
