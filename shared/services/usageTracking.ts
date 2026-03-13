@@ -1,7 +1,7 @@
-import { connectDB } from '@/lib/db/connection'
-import { UsageRecord } from '@/lib/db/models/UsageRecord'
-import { aiLogger } from '@/lib/logger'
-import type { AuthUser } from '@/lib/middleware/withAuth'
+import { connectDB } from '@shared/db/connection'
+import { UsageRecord } from '@shared/db/models/UsageRecord'
+import { aiLogger } from '@shared/logger'
+import type { AuthUser } from '@shared/middleware/withAuth'
 import mongoose from 'mongoose'
 
 interface TrackUsageInput {

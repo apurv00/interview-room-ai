@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import Anthropic from '@anthropic-ai/sdk'
-import { authOptions } from '@/lib/auth/authOptions'
+import { authOptions } from '@shared/auth/authOptions'
 import { ResumeExtractSchema, ExtractedProfileSchema } from '@/lib/validators/onboarding'
-import { aiLogger } from '@/lib/logger'
-import { checkRateLimit } from '@/lib/middleware/checkRateLimit'
+import { aiLogger } from '@shared/logger'
+import { checkRateLimit } from '@shared/middleware/checkRateLimit'
 
 export const dynamic = 'force-dynamic'
 

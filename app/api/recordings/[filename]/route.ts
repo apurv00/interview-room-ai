@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth/authOptions'
-import { getDownloadPresignedUrl, isR2Configured } from '@/lib/storage/r2'
+import { authOptions } from '@shared/auth/authOptions'
+import { getDownloadPresignedUrl, isR2Configured } from '@shared/storage/r2'
 
 export const dynamic = 'force-dynamic'
 

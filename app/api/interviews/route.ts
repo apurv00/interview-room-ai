@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth/authOptions'
+import { authOptions } from '@shared/auth/authOptions'
 import { CreateSessionSchema } from '@/lib/validators/interview'
 import { createSession, listSessions } from '@/lib/services/interviewService'
-import { logger } from '@/lib/logger'
-import { AppError } from '@/lib/errors'
+import { logger } from '@shared/logger'
+import { AppError } from '@shared/errors'
 
 export const dynamic = 'force-dynamic'
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { redis } from '@/lib/redis'
-import { logger } from '@/lib/logger'
+import { redis } from '@shared/redis'
+import { logger } from '@shared/logger'
 
 interface RateLimitConfig {
   windowMs: number

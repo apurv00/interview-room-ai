@@ -1,18 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/db/connection', () => ({
+vi.mock('@shared/db/connection', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
 }))
 
-vi.mock('@/lib/featureFlags', () => ({
+vi.mock('@shared/featureFlags', () => ({
   isFeatureEnabled: vi.fn().mockReturnValue(true),
 }))
 
-vi.mock('@/lib/logger', () => ({
+vi.mock('@shared/logger', () => ({
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }))
 
-vi.mock('@/lib/db/models', () => ({
+vi.mock('@shared/db/models', () => ({
   BenchmarkCase: {
     find: vi.fn().mockReturnValue({
       lean: vi.fn().mockResolvedValue([]),
@@ -26,7 +26,7 @@ vi.mock('@/lib/db/models', () => ({
   },
 }))
 
-vi.mock('@/lib/db/seed', () => ({
+vi.mock('@shared/db/seed', () => ({
   FALLBACK_DEPTHS: [
     {
       slug: 'hr-screening',
@@ -52,7 +52,7 @@ vi.mock('@anthropic-ai/sdk', () => ({
 }))
 
 import { runBenchmarkSuite } from '@/lib/services/benchmarkService'
-import { isFeatureEnabled } from '@/lib/featureFlags'
+import { isFeatureEnabled } from '@shared/featureFlags'
 
 describe('benchmarkService', () => {
   beforeEach(() => {

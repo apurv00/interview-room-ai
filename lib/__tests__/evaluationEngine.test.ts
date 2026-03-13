@@ -1,18 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/db/connection', () => ({
+vi.mock('@shared/db/connection', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
 }))
 
-vi.mock('@/lib/featureFlags', () => ({
+vi.mock('@shared/featureFlags', () => ({
   isFeatureEnabled: vi.fn().mockReturnValue(true),
 }))
 
-vi.mock('@/lib/logger', () => ({
+vi.mock('@shared/logger', () => ({
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }))
 
-vi.mock('@/lib/db/models', () => ({
+vi.mock('@shared/db/models', () => ({
   EvaluationRubric: {
     findOne: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(null) }) }),
   },
@@ -21,7 +21,7 @@ vi.mock('@/lib/db/models', () => ({
   },
 }))
 
-vi.mock('@/lib/db/seed', () => ({
+vi.mock('@shared/db/seed', () => ({
   FALLBACK_DEPTHS: [
     {
       slug: 'hr-screening',
@@ -36,8 +36,8 @@ vi.mock('@/lib/db/seed', () => ({
 }))
 
 import { getScoringDimensions, buildRubricPromptSection, evaluateSession } from '@/lib/services/evaluationEngine'
-import { isFeatureEnabled } from '@/lib/featureFlags'
-import type { RubricDimension } from '@/lib/db/models'
+import { isFeatureEnabled } from '@shared/featureFlags'
+import type { RubricDimension } from '@shared/db/models'
 
 describe('evaluationEngine', () => {
   beforeEach(() => {

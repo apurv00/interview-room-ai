@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AvatarEmotion } from '@/lib/types'
+import type { AvatarEmotion } from '@shared/types'
 import { LipSyncEngine } from '@/lib/avatar/LipSyncEngine'
 import { IdleAnimationEngine, type IdleState } from '@/lib/avatar/IdleAnimations'
 import { EmotionEngine, type EmotionState } from '@/lib/avatar/EmotionEngine'

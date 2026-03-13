@@ -1,10 +1,10 @@
 import mongoose from 'mongoose'
-import { connectDB } from '@/lib/db/connection'
-import { SessionSummary } from '@/lib/db/models'
-import type { ISessionSummary } from '@/lib/db/models'
-import type { TranscriptEntry, AnswerEvaluation, SpeechMetrics, FeedbackData } from '@/lib/types'
-import { isFeatureEnabled } from '@/lib/featureFlags'
-import { logger } from '@/lib/logger'
+import { connectDB } from '@shared/db/connection'
+import { SessionSummary } from '@shared/db/models'
+import type { ISessionSummary } from '@shared/db/models'
+import type { TranscriptEntry, AnswerEvaluation, SpeechMetrics, FeedbackData } from '@shared/types'
+import { isFeatureEnabled } from '@shared/featureFlags'
+import { logger } from '@shared/logger'
 
 // ─── Generate Session Summary ────────────────────────────────────────────────
 

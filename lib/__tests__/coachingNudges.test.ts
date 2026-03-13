@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { deriveNudge } from '../coachingNudges'
-import type { SpeechMetrics } from '../types'
+import type { SpeechMetrics } from '@shared/types'
 
 function makeMetrics(overrides: Partial<SpeechMetrics> = {}): SpeechMetrics {
   return {

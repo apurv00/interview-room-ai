@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { ScoreBar } from '@/components/ScoreBar'
-import type { TranscriptEntry, AnswerEvaluation } from '@/lib/types'
+import type { TranscriptEntry, AnswerEvaluation } from '@shared/types'
 
 // Safe string coerce to prevent React #310
 function s(v: unknown): string {

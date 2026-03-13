@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatTime, bisectLastLE } from '@/lib/utils'
+import { formatTime, bisectLastLE } from '@shared/utils'
 
 describe('formatTime', () => {
   it('formats 0 seconds as 0:00', () => {

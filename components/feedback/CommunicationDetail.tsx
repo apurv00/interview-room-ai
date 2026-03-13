@@ -1,6 +1,6 @@
 'use client'
 
-import type { SpeechMetrics } from '@/lib/types'
+import type { SpeechMetrics } from '@shared/types'
 
 interface CommunicationDetailProps {
   metrics: SpeechMetrics[]

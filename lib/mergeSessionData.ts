@@ -1,5 +1,5 @@
-import type { StoredInterviewData } from './types'
-import { STORAGE_KEYS, sessionScopedKey } from './storageKeys'
+import type { StoredInterviewData } from '@shared/types'
+import { STORAGE_KEYS, sessionScopedKey } from '@shared/storageKeys'
 
 /**
  * Try to read interview data from localStorage, preferring the session-scoped

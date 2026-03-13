@@ -3,12 +3,12 @@
 import { useState } from 'react'
 import { useSession } from 'next-auth/react'
 import Link from 'next/link'
-import { PLANS, type PlanConfig } from '@/lib/services/stripe'
-import { FAQ } from '@/lib/pricingFaq'
-import Badge from '@/components/ui/Badge'
-import Button from '@/components/ui/Button'
-import Input from '@/components/ui/Input'
-import Accordion from '@/components/ui/Accordion'
+import { PLANS, type PlanConfig } from '@shared/services/stripe'
+import { FAQ } from '@shared/pricingFaq'
+import Badge from '@shared/ui/Badge'
+import Button from '@shared/ui/Button'
+import Input from '@shared/ui/Input'
+import Accordion from '@shared/ui/Accordion'
 
 const PLAN_ORDER = ['free', 'pro', 'enterprise'] as const
 

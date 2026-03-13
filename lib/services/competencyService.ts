@@ -1,9 +1,9 @@
 import mongoose from 'mongoose'
-import { connectDB } from '@/lib/db/connection'
-import { UserCompetencyState, WeaknessCluster } from '@/lib/db/models'
-import type { AnswerEvaluation } from '@/lib/types'
-import { isFeatureEnabled } from '@/lib/featureFlags'
-import { logger } from '@/lib/logger'
+import { connectDB } from '@shared/db/connection'
+import { UserCompetencyState, WeaknessCluster } from '@shared/db/models'
+import type { AnswerEvaluation } from '@shared/types'
+import { isFeatureEnabled } from '@shared/featureFlags'
+import { logger } from '@shared/logger'
 
 // ─── Competency Taxonomy ─────────────────────────────────────────────────────
 

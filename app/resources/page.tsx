@@ -1,8 +1,8 @@
 import Link from 'next/link'
 import type { Metadata } from 'next'
 import { RESOURCES, getResourcesByCategory } from '@/lib/resources'
-import { siteConfig } from '@/lib/siteConfig'
-import JsonLd from '@/components/seo/JsonLd'
+import { siteConfig } from '@shared/siteConfig'
+import JsonLd from '@shared/seo/JsonLd'
 
 export const metadata: Metadata = {
   title: 'Interview Preparation Resources',

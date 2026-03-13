@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { logger } from '@/lib/logger'
-import { AppError } from '@/lib/errors'
+import { logger } from '@shared/logger'
+import { AppError } from '@shared/errors'
 import { ZodError } from 'zod'
 
 export function withErrorHandler(

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { useTheme } from '@/providers/ThemeProvider'
+import { useTheme } from '@shared/providers/ThemeProvider'
 
 const options = [
   { value: 'light' as const, label: 'Light', icon: SunIcon },
