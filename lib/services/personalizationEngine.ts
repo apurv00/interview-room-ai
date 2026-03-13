@@ -69,7 +69,8 @@ export async function generateSessionBrief(input: SessionBriefInput): Promise<Se
       ])
 
     // Determine session goal
-    const sessionGoal = determineSessionGoal(profile, competencySummary, weaknesses)
+    const profileRecord = profile as Record<string, unknown> | null
+    const sessionGoal = determineSessionGoal(profileRecord, competencySummary, weaknesses)
 
     // Determine difficulty
     const recommendedDifficulty = determineDifficulty(experience, competencySummary, recentSummaries)
@@ -93,10 +94,10 @@ export async function generateSessionBrief(input: SessionBriefInput): Promise<Se
     const knownStrengths = competencySummary?.strongAreas || []
 
     // Interviewer behavior directive
-    const interviewerBehavior = determineInterviewerBehavior(weaknesses, competencySummary, profile)
+    const interviewerBehavior = determineInterviewerBehavior(weaknesses, competencySummary, profileRecord)
 
     // Build context blocks
-    const profileContext = buildProfileContext(profile, input)
+    const profileContext = buildProfileContext(profileRecord, input)
     const competencyContext = buildCompetencyContext(competencySummary)
 
     return {

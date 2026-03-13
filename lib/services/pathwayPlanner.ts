@@ -66,7 +66,7 @@ export async function generatePathwayPlan(input: GeneratePathwayInput): Promise<
     const difficultyProgression = buildDifficultyProgression(readinessScore)
 
     // AI-enhanced improvement plan
-    const aiPlan = await generateAIPlan(input, competencySummary, weaknesses, profile)
+    const aiPlan = await generateAIPlan(input, competencySummary, weaknesses, profile as Record<string, unknown> | null)
 
     // Merge AI suggestions into practice tasks
     if (aiPlan?.suggestedTasks) {
