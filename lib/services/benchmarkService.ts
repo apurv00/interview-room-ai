@@ -185,7 +185,7 @@ async function runSingleBenchmark(benchCase: IBenchmarkCase): Promise<BenchmarkR
 function setOverlap(actual: string[], expected: string[]): number {
   if (expected.length === 0) return actual.length === 0 ? 1 : 0.5
 
-  const normalizedActual = new Set(actual.map(s => s.toLowerCase().replace(/[_-]/g, ' ')))
+  const normalizedActual = Array.from(new Set(actual.map(s => s.toLowerCase().replace(/[_-]/g, ' '))))
   const normalizedExpected = expected.map(s => s.toLowerCase().replace(/[_-]/g, ' '))
 
   let matches = 0
