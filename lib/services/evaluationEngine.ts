@@ -295,8 +295,8 @@ export async function evaluateSession(
   ]
 
   // Deduplicate
-  const topStrengths = [...new Set(allStrengths)].slice(0, 5)
-  const topWeaknesses = [...new Set(allWeaknessTags)].slice(0, 5)
+  const topStrengths = Array.from(new Set(allStrengths)).slice(0, 5)
+  const topWeaknesses = Array.from(new Set(allWeaknessTags)).slice(0, 5)
 
   // Build competency breakdown
   const competencyBreakdown: Record<string, { score: number; trend: string; evidence: string[] }> = {}
@@ -313,7 +313,7 @@ export async function evaluateSession(
     overallWeightedScore,
     topStrengths,
     topWeaknesses,
-    allFlags: [...new Set(allFlags)],
+    allFlags: Array.from(new Set(allFlags)),
     competencyBreakdown,
   }
 }

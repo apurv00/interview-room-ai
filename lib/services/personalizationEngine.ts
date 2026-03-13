@@ -400,5 +400,5 @@ function extractResumeAnchors(resumeText?: string): string[] {
     }
   }
 
-  return [...new Set(anchors)].slice(0, 5)
+  return Array.from(new Set(anchors)).slice(0, 5)
 }

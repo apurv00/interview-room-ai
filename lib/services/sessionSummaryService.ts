@@ -167,7 +167,7 @@ export async function buildHistorySummary(userId: string, domain?: string): Prom
 
   // Aggregate topics to avoid
   const allTopics = summaries.flatMap(s => s.topicsCovered)
-  const uniqueTopics = [...new Set(allTopics)]
+  const uniqueTopics = Array.from(new Set(allTopics))
   if (uniqueTopics.length > 0) {
     lines.push(`Topics already covered recently: ${uniqueTopics.slice(0, 10).join(', ')}`)
   }
@@ -203,5 +203,5 @@ function extractTopics(transcript: TranscriptEntry[]): string[] {
     }
   }
 
-  return [...new Set(topics)].slice(0, 10)
+  return Array.from(new Set(topics)).slice(0, 10)
 }
