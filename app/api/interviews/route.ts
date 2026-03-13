@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
-import { CreateSessionSchema } from '@/lib/validators/interview'
-import { createSession, listSessions } from '@/lib/services/interviewService'
+import { CreateSessionSchema } from '@interview/validators/interview'
+import { createSession, listSessions } from '@interview/services/interviewService'
 import { logger } from '@shared/logger'
 import { AppError } from '@shared/errors'
 

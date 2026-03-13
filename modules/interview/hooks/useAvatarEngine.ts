@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AvatarEmotion } from '@shared/types'
-import { LipSyncEngine } from '@/lib/avatar/LipSyncEngine'
-import { IdleAnimationEngine, type IdleState } from '@/lib/avatar/IdleAnimations'
-import { EmotionEngine, type EmotionState } from '@/lib/avatar/EmotionEngine'
+import { LipSyncEngine } from '@interview/avatar/LipSyncEngine'
+import { IdleAnimationEngine, type IdleState } from '@interview/avatar/IdleAnimations'
+import { EmotionEngine, type EmotionState } from '@interview/avatar/EmotionEngine'
 
 // ─── Combined avatar state ──────────────────────────────────────────────────
 

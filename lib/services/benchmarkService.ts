@@ -1,7 +1,7 @@
 import { connectDB } from '@shared/db/connection'
 import { BenchmarkCase } from '@shared/db/models'
 import type { IBenchmarkCase } from '@shared/db/models'
-import { evaluateStructured } from './evaluationEngine'
+import { evaluateStructured } from '@interview/services/evaluationEngine'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { logger } from '@shared/logger'
 

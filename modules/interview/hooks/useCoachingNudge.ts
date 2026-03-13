@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { analyzeSpeech } from '@/lib/speechMetrics'
-import { deriveNudge, type CoachingNudge } from '@/lib/coachingNudges'
+import { analyzeSpeech } from '@interview/config/speechMetrics'
+import { deriveNudge, type CoachingNudge } from '@interview/config/coachingNudges'
 import type { InterviewState } from '@shared/types'
 
 // ─── Constants ────────────────────────────────────────────────────────────────

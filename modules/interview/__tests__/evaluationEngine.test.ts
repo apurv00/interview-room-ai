@@ -35,7 +35,7 @@ vi.mock('@shared/db/seed', () => ({
   ],
 }))
 
-import { getScoringDimensions, buildRubricPromptSection, evaluateSession } from '@/lib/services/evaluationEngine'
+import { getScoringDimensions, buildRubricPromptSection, evaluateSession } from '@interview/services/evaluationEngine'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import type { RubricDimension } from '@shared/db/models'
 

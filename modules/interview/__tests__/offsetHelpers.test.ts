@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeOffsetSeconds } from '../offsetHelpers'
+import { computeOffsetSeconds } from '../utils/offsetHelpers'
 
 describe('computeOffsetSeconds', () => {
   it('returns offset in seconds for valid timestamp and startedAt', () => {

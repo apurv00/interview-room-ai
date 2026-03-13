@@ -1,9 +1,9 @@
 import { connectDB } from '@shared/db/connection'
 import { User, InterviewDomain, InterviewDepth } from '@shared/db/models'
 import { isFeatureEnabled } from '@shared/featureFlags'
-import { getUserCompetencySummary } from './competencyService'
-import { getUserWeaknesses } from './competencyService'
-import { buildHistorySummary, getRecentSummaries } from './sessionSummaryService'
+import { getUserCompetencySummary } from '@/lib/services/competencyService'
+import { getUserWeaknesses } from '@/lib/services/competencyService'
+import { buildHistorySummary, getRecentSummaries } from '@/lib/services/sessionSummaryService'
 import { getCompanyContext } from './retrievalService'
 import { logger } from '@shared/logger'
 

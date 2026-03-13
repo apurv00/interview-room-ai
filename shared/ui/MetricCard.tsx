@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { ScoreBar } from '@/components/ScoreBar'
+import { ScoreBar } from '@interview/components/ScoreBar'
 
 type MetricColor = 'primary' | 'success' | 'caution' | 'danger' | 'auto'
 

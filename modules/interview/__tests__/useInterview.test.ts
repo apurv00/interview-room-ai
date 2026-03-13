@@ -12,7 +12,7 @@ vi.mock('@shared/fetchWithRetry', () => ({
   fetchWithRetry: vi.fn().mockResolvedValue(true),
 }))
 
-vi.mock('@/lib/coachingTips', () => ({
+vi.mock('@interview/config/coachingTips', () => ({
   deriveCoachingTip: vi.fn().mockReturnValue('Great answer! Keep that energy.'),
 }))
 
@@ -48,10 +48,10 @@ class MockUtterance {
 }
 vi.stubGlobal('SpeechSynthesisUtterance', MockUtterance)
 
-import { useInterview } from '../useInterview'
+import { useInterview } from '../hooks/useInterview'
 import type { InterviewConfig } from '@shared/types'
 import { fetchWithRetry } from '@shared/fetchWithRetry'
-import { deriveCoachingTip } from '@/lib/coachingTips'
+import { deriveCoachingTip } from '@interview/config/coachingTips'
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 

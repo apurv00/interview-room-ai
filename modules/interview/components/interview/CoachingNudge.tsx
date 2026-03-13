@@ -1,7 +1,7 @@
 'use client'
 
 import { motion, AnimatePresence } from 'framer-motion'
-import type { CoachingNudge as NudgeType } from '@/lib/coachingNudges'
+import type { CoachingNudge as NudgeType } from '@interview/config/coachingNudges'
 
 interface CoachingNudgeProps {
   nudge: NudgeType | null

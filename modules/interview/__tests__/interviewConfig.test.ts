@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { QUESTION_COUNT, PRESSURE_QUESTION_INDEX } from '../interviewConfig'
+import { QUESTION_COUNT, PRESSURE_QUESTION_INDEX } from '../config/interviewConfig'
 import type { Duration } from '@shared/types'
 
 const DURATIONS: Duration[] = [10, 20, 30]

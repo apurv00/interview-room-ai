@@ -2,11 +2,11 @@
 
 import { useMemo } from 'react'
 import MetricCard from '@shared/ui/MetricCard'
-import { ScoreBar } from '@/components/ScoreBar'
-import CommunicationDetail from '@/components/feedback/CommunicationDetail'
-import PeerComparison, { type PeerData } from '@/components/feedback/PeerComparison'
+import { ScoreBar } from '@interview/components/ScoreBar'
+import CommunicationDetail from '@interview/components/feedback/CommunicationDetail'
+import PeerComparison, { type PeerData } from '@interview/components/feedback/PeerComparison'
 import type { FeedbackData, StoredInterviewData, EngagementSignals, DeliverySignals } from '@shared/types'
-import { PROBABILITY_COLORS, CONFIDENCE_TREND_LABELS } from '@/lib/feedbackConfig'
+import { PROBABILITY_COLORS, CONFIDENCE_TREND_LABELS } from '@interview/config/feedbackConfig'
 
 // Helper: safely coerce to string for rendering (prevents React #310 on unexpected objects)
 function s(v: unknown): string {

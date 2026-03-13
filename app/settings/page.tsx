@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Image from 'next/image'
 import { PLANS } from '@shared/services/stripe'
-import { ROLE_LABELS, EXPERIENCE_LABELS } from '@/lib/interviewConfig'
+import { ROLE_LABELS, EXPERIENCE_LABELS } from '@interview/config/interviewConfig'
 import type { Role, ExperienceLevel } from '@shared/types'
 
 interface OnboardingProfile {

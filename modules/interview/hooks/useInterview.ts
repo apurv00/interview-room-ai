@@ -14,8 +14,8 @@ import {
   getInterviewIntro,
   WRAP_UP_LINE,
   QUESTION_COUNT,
-} from '@/lib/interviewConfig'
-import { deriveCoachingTip } from '@/lib/coachingTips'
+} from '@interview/config/interviewConfig'
+import { deriveCoachingTip } from '@interview/config/coachingTips'
 import { STORAGE_KEYS, sessionScopedKey } from '@shared/storageKeys'
 import { fetchWithRetry } from '@shared/fetchWithRetry'
 import type { SpeechRecognitionResult } from './useSpeechRecognition'

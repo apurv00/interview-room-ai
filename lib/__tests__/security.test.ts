@@ -6,7 +6,7 @@ import {
   GenerateFeedbackSchema,
   UpdateSessionSchema,
   EvaluateAnswerSchema,
-} from '@/lib/validators/interview'
+} from '@interview/validators/interview'
 import {
   CreateDomainSchema,
   UpdateDomainSchema,
