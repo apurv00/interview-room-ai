@@ -18,7 +18,14 @@
       }
     ],
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["./*"],
+      "@shared/*": ["./shared/*"],
+      "@modules/*": ["./modules/*"],
+      "@interview/*": ["./modules/interview/*"],
+      "@learn/*": ["./modules/learn/*"],
+      "@b2b/*": ["./modules/b2b/*"],
+      "@cms/*": ["./modules/cms/*"],
+      "@resume/*": ["./modules/resume/*"]
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],

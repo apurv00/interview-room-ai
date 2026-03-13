@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
-import type { InterviewConfig } from '@/lib/types'
+import type { InterviewConfig } from '@shared/types'
 import { getDomainLabel } from '@/lib/interviewConfig'
-import { STORAGE_KEYS } from '@/lib/storageKeys'
+import { STORAGE_KEYS } from '@shared/storageKeys'
 
 type CheckStatus = 'pending' | 'ok' | 'error'
 

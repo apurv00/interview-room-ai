@@ -14,7 +14,7 @@ interface AudioPlayerProps {
   onSeek?: (seekFn: (seconds: number) => void) => void
 }
 
-import { formatTime } from '@/lib/utils'
+import { formatTime } from '@shared/utils'
 
 const SPEEDS = [0.5, 1, 1.25, 1.5, 2] as const
 const THROTTLE_MS = 200

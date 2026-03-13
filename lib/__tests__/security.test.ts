@@ -13,7 +13,7 @@ import {
   CreateInterviewTypeSchema,
   UpdateInterviewTypeSchema,
 } from '@/lib/validators/cms'
-import { canViewSession, hasRole, canAccessOrg } from '@/lib/auth/permissions'
+import { canViewSession, hasRole, canAccessOrg } from '@shared/auth/permissions'
 
 // ─── Authorization Boundary Tests ───────────────────────────────────────────
 
@@ -281,13 +281,13 @@ describe('R2 key ownership validation logic', () => {
 
 describe('Plan limits configuration', () => {
   it('free plan has a limited interview count', async () => {
-    const { PLANS } = await import('@/lib/services/stripe')
+    const { PLANS } = await import('@shared/services/stripe')
     expect(PLANS.free.monthlyInterviewLimit).toBeLessThanOrEqual(10)
     expect(PLANS.free.monthlyInterviewLimit).toBeGreaterThan(0)
   })
 
   it('pro plan has higher limits than free', async () => {
-    const { PLANS } = await import('@/lib/services/stripe')
+    const { PLANS } = await import('@shared/services/stripe')
     expect(PLANS.pro.monthlyInterviewLimit).toBeGreaterThan(PLANS.free.monthlyInterviewLimit)
   })
 })

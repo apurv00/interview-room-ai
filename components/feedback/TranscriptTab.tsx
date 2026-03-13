@@ -1,7 +1,7 @@
 'use client'
 
 import { type RefObject } from 'react'
-import type { TranscriptEntry } from '@/lib/types'
+import type { TranscriptEntry } from '@shared/types'
 import { computeOffsetSeconds } from '@/lib/offsetHelpers'
 
 // Helper: safely coerce to string for rendering

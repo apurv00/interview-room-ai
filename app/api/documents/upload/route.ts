@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { parseDocument } from '@/lib/services/documentParser'
-import { logger } from '@/lib/logger'
-import { uploadToR2, documentKey, isR2Configured } from '@/lib/storage/r2'
+import { parseDocument } from '@shared/services/documentParser'
+import { logger } from '@shared/logger'
+import { uploadToR2, documentKey, isR2Configured } from '@shared/storage/r2'
 import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth/authOptions'
-import { checkRateLimit } from '@/lib/middleware/checkRateLimit'
+import { authOptions } from '@shared/auth/authOptions'
+import { checkRateLimit } from '@shared/middleware/checkRateLimit'
 
 export const dynamic = 'force-dynamic'
 

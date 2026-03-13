@@ -1,11 +1,11 @@
 'use client'
 
 import { useMemo } from 'react'
-import MetricCard from '@/components/ui/MetricCard'
+import MetricCard from '@shared/ui/MetricCard'
 import { ScoreBar } from '@/components/ScoreBar'
 import CommunicationDetail from '@/components/feedback/CommunicationDetail'
 import PeerComparison, { type PeerData } from '@/components/feedback/PeerComparison'
-import type { FeedbackData, StoredInterviewData, EngagementSignals, DeliverySignals } from '@/lib/types'
+import type { FeedbackData, StoredInterviewData, EngagementSignals, DeliverySignals } from '@shared/types'
 import { PROBABILITY_COLORS, CONFIDENCE_TREND_LABELS } from '@/lib/feedbackConfig'
 
 // Helper: safely coerce to string for rendering (prevents React #310 on unexpected objects)

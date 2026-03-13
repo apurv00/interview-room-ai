@@ -1,11 +1,11 @@
 import Anthropic from '@anthropic-ai/sdk'
-import { connectDB } from '@/lib/db/connection'
-import { EvaluationRubric, InterviewDepth } from '@/lib/db/models'
-import type { IEvaluationRubric, RubricDimension } from '@/lib/db/models'
-import type { AnswerEvaluation } from '@/lib/types'
-import { isFeatureEnabled } from '@/lib/featureFlags'
-import { FALLBACK_DEPTHS } from '@/lib/db/seed'
-import { logger } from '@/lib/logger'
+import { connectDB } from '@shared/db/connection'
+import { EvaluationRubric, InterviewDepth } from '@shared/db/models'
+import type { IEvaluationRubric, RubricDimension } from '@shared/db/models'
+import type { AnswerEvaluation } from '@shared/types'
+import { isFeatureEnabled } from '@shared/featureFlags'
+import { FALLBACK_DEPTHS } from '@shared/db/seed'
+import { logger } from '@shared/logger'
 
 // ─── Rubric Registry ────────────────────────────────────────────────────────
 

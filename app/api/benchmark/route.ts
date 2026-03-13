@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { composeApiRoute } from '@/lib/middleware/composeApiRoute'
+import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { runBenchmarkSuite } from '@/lib/services/benchmarkService'
 import { z } from 'zod'
 

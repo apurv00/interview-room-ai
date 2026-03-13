@@ -1,14 +1,14 @@
 import mongoose from 'mongoose'
 import Anthropic from '@anthropic-ai/sdk'
-import { connectDB } from '@/lib/db/connection'
-import { PathwayPlan, User } from '@/lib/db/models'
-import type { IPathwayPlan, PracticeTask, Milestone } from '@/lib/db/models'
-import type { FeedbackData } from '@/lib/types'
+import { connectDB } from '@shared/db/connection'
+import { PathwayPlan, User } from '@shared/db/models'
+import type { IPathwayPlan, PracticeTask, Milestone } from '@shared/db/models'
+import type { FeedbackData } from '@shared/types'
 import { getUserCompetencySummary, getUserWeaknesses } from './competencyService'
 import { getRecentSummaries } from './sessionSummaryService'
 import type { SessionEvaluationSummary } from './evaluationEngine'
-import { isFeatureEnabled } from '@/lib/featureFlags'
-import { logger } from '@/lib/logger'
+import { isFeatureEnabled } from '@shared/featureFlags'
+import { logger } from '@shared/logger'
 
 // ─── Generate Pathway Plan ──────────────────────────────────────────────────
 

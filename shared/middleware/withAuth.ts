@@ -1,6 +1,6 @@
 import { getServerSession } from 'next-auth'
 import { NextRequest, NextResponse } from 'next/server'
-import { authOptions } from '@/lib/auth/authOptions'
+import { authOptions } from '@shared/auth/authOptions'
 
 export interface AuthUser {
   id: string

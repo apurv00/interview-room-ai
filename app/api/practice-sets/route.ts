@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth/authOptions'
-import { connectDB } from '@/lib/db/connection'
-import { User, InterviewDomain, InterviewDepth, InterviewSession } from '@/lib/db/models'
-import { FALLBACK_DOMAINS, FALLBACK_DEPTHS } from '@/lib/db/seed'
+import { authOptions } from '@shared/auth/authOptions'
+import { connectDB } from '@shared/db/connection'
+import { User, InterviewDomain, InterviewDepth, InterviewSession } from '@shared/db/models'
+import { FALLBACK_DOMAINS, FALLBACK_DEPTHS } from '@shared/db/seed'
 
 export const dynamic = 'force-dynamic'
 

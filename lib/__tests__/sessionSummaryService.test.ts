@@ -1,21 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/db/connection', () => ({
+vi.mock('@shared/db/connection', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
 }))
 
-vi.mock('@/lib/featureFlags', () => ({
+vi.mock('@shared/featureFlags', () => ({
   isFeatureEnabled: vi.fn().mockReturnValue(true),
 }))
 
-vi.mock('@/lib/logger', () => ({
+vi.mock('@shared/logger', () => ({
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }))
 
 const mockFindOneAndUpdate = vi.fn()
 const mockFind = vi.fn()
 
-vi.mock('@/lib/db/models', () => ({
+vi.mock('@shared/db/models', () => ({
   SessionSummary: {
     findOneAndUpdate: (...args: unknown[]) => mockFindOneAndUpdate(...args),
     find: () => ({
@@ -31,7 +31,7 @@ vi.mock('@/lib/db/models', () => ({
 }))
 
 import { getRecentSummaries, buildHistorySummary } from '@/lib/services/sessionSummaryService'
-import { isFeatureEnabled } from '@/lib/featureFlags'
+import { isFeatureEnabled } from '@shared/featureFlags'
 
 const TEST_USER_ID = '507f1f77bcf86cd799439011' // valid ObjectId
 

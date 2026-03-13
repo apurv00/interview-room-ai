@@ -1,4 +1,4 @@
-import type { ExperienceLevel, Duration } from './types'
+import type { ExperienceLevel, Duration } from '@shared/types'
 
 // ─── Legacy role labels (kept for backward compat with existing sessions) ────
 

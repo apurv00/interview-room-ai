@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { ZodSchema, ZodError } from 'zod'
 import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth/authOptions'
-import { redis } from '@/lib/redis'
-import { aiLogger } from '@/lib/logger'
-import { AppError } from '@/lib/errors'
-import { getPlanLimits } from '@/lib/services/stripe'
+import { authOptions } from '@shared/auth/authOptions'
+import { redis } from '@shared/redis'
+import { aiLogger } from '@shared/logger'
+import { AppError } from '@shared/errors'
+import { getPlanLimits } from '@shared/services/stripe'
 import type { AuthUser } from './withAuth'
 
 export type { AuthUser }

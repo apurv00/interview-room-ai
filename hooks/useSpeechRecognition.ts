@@ -2,7 +2,7 @@
 
 import { useCallback, useRef, useState } from 'react'
 import { analyzeSpeech } from '@/lib/speechMetrics'
-import type { SpeechMetrics } from '@/lib/types'
+import type { SpeechMetrics } from '@shared/types'
 
 export interface SpeechRecognitionResult {
   text: string

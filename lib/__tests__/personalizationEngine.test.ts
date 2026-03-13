@@ -1,18 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/db/connection', () => ({
+vi.mock('@shared/db/connection', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
 }))
 
-vi.mock('@/lib/featureFlags', () => ({
+vi.mock('@shared/featureFlags', () => ({
   isFeatureEnabled: vi.fn().mockReturnValue(true),
 }))
 
-vi.mock('@/lib/logger', () => ({
+vi.mock('@shared/logger', () => ({
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }))
 
-vi.mock('@/lib/db/models', () => ({
+vi.mock('@shared/db/models', () => ({
   User: {
     findById: vi.fn().mockReturnValue({ select: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(null) }) }),
   },
@@ -39,7 +39,7 @@ vi.mock('@/lib/services/retrievalService', () => ({
 }))
 
 import { generateSessionBrief, briefToPromptContext } from '@/lib/services/personalizationEngine'
-import { isFeatureEnabled } from '@/lib/featureFlags'
+import { isFeatureEnabled } from '@shared/featureFlags'
 
 describe('personalizationEngine', () => {
   beforeEach(() => {

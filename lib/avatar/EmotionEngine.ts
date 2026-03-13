@@ -1,7 +1,7 @@
 // ─── Emotion cross-fade engine ──────────────────────────────────────────────
 // Smooth 300ms cross-fade between emotion states by interpolating SVG path control points
 
-import type { AvatarEmotion } from '@/lib/types'
+import type { AvatarEmotion } from '@shared/types'
 
 // Emotion → SVG path config (matches Avatar.tsx EMOTION_CONFIG)
 const EMOTION_CONFIG: Record<

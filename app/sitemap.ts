@@ -1,5 +1,5 @@
 import type { MetadataRoute } from 'next'
-import { siteConfig } from '@/lib/siteConfig'
+import { siteConfig } from '@shared/siteConfig'
 import { getAllSlugs } from '@/lib/resources'
 
 export default function sitemap(): MetadataRoute.Sitemap {

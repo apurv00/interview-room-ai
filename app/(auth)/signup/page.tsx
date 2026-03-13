@@ -4,9 +4,9 @@ import { useState } from 'react'
 import { signIn } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import Button from '@/components/ui/Button'
-import Input from '@/components/ui/Input'
-import Divider from '@/components/ui/Divider'
+import Button from '@shared/ui/Button'
+import Input from '@shared/ui/Input'
+import Divider from '@shared/ui/Divider'
 
 export default function SignUpPage() {
   const router = useRouter()

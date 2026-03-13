@@ -9,15 +9,15 @@ import type {
   TranscriptEntry,
   AnswerEvaluation,
   SpeechMetrics,
-} from '@/lib/types'
+} from '@shared/types'
 import {
   getInterviewIntro,
   WRAP_UP_LINE,
   QUESTION_COUNT,
 } from '@/lib/interviewConfig'
 import { deriveCoachingTip } from '@/lib/coachingTips'
-import { STORAGE_KEYS, sessionScopedKey } from '@/lib/storageKeys'
-import { fetchWithRetry } from '@/lib/fetchWithRetry'
+import { STORAGE_KEYS, sessionScopedKey } from '@shared/storageKeys'
+import { fetchWithRetry } from '@shared/fetchWithRetry'
 import type { SpeechRecognitionResult } from './useSpeechRecognition'
 
 // ─── Session persistence helpers ──────────────────────────────────────────────

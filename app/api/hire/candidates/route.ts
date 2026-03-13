@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth/authOptions'
-import { connectDB } from '@/lib/db/connection'
-import { User, InterviewSession } from '@/lib/db/models'
+import { authOptions } from '@shared/auth/authOptions'
+import { connectDB } from '@shared/db/connection'
+import { User, InterviewSession } from '@shared/db/models'
 
 export const dynamic = 'force-dynamic'
 

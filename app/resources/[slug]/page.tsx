@@ -1,8 +1,8 @@
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { getResourceBySlug, RESOURCES } from '@/lib/resources'
-import { siteConfig } from '@/lib/siteConfig'
-import JsonLd from '@/components/seo/JsonLd'
+import { siteConfig } from '@shared/siteConfig'
+import JsonLd from '@shared/seo/JsonLd'
 
 interface Props {
   params: { slug: string }

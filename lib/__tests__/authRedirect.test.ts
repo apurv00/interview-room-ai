@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getStartRedirect } from '../authRedirect'
+import { getStartRedirect } from '@shared/authRedirect'
 
 describe('getStartRedirect', () => {
   it('returns null when status is loading (block the action)', () => {

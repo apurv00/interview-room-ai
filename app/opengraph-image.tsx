@@ -1,5 +1,5 @@
 import { ImageResponse } from 'next/og'
-import { siteConfig } from '@/lib/siteConfig'
+import { siteConfig } from '@shared/siteConfig'
 
 export const runtime = 'edge'
 export const alt = siteConfig.name

@@ -1,11 +1,11 @@
 import mongoose from 'mongoose'
-import { connectDB } from '@/lib/db/connection'
-import { InterviewSession, User } from '@/lib/db/models'
-import type { IInterviewSession } from '@/lib/db/models'
-import type { InterviewConfig, TranscriptEntry, AnswerEvaluation, SpeechMetrics, FeedbackData } from '@/lib/types'
-import { NotFoundError, ForbiddenError, UsageLimitError } from '@/lib/errors'
-import { canViewSession, canEditSession } from '@/lib/auth/permissions'
-import { logger } from '@/lib/logger'
+import { connectDB } from '@shared/db/connection'
+import { InterviewSession, User } from '@shared/db/models'
+import type { IInterviewSession } from '@shared/db/models'
+import type { InterviewConfig, TranscriptEntry, AnswerEvaluation, SpeechMetrics, FeedbackData } from '@shared/types'
+import { NotFoundError, ForbiddenError, UsageLimitError } from '@shared/errors'
+import { canViewSession, canEditSession } from '@shared/auth/permissions'
+import { logger } from '@shared/logger'
 
 interface CreateSessionInput {
   userId: string

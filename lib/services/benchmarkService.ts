@@ -1,9 +1,9 @@
-import { connectDB } from '@/lib/db/connection'
-import { BenchmarkCase } from '@/lib/db/models'
-import type { IBenchmarkCase } from '@/lib/db/models'
+import { connectDB } from '@shared/db/connection'
+import { BenchmarkCase } from '@shared/db/models'
+import type { IBenchmarkCase } from '@shared/db/models'
 import { evaluateStructured } from './evaluationEngine'
-import { isFeatureEnabled } from '@/lib/featureFlags'
-import { logger } from '@/lib/logger'
+import { isFeatureEnabled } from '@shared/featureFlags'
+import { logger } from '@shared/logger'
 
 // ─── Benchmark Run Result ───────────────────────────────────────────────────
 

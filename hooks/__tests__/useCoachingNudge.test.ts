@@ -14,7 +14,7 @@ vi.mock('@/lib/coachingNudges', () => ({
 
 import { analyzeSpeech } from '@/lib/speechMetrics'
 import { deriveNudge } from '@/lib/coachingNudges'
-import type { SpeechMetrics } from '@/lib/types'
+import type { SpeechMetrics } from '@shared/types'
 
 const mockAnalyzeSpeech = vi.mocked(analyzeSpeech)
 const mockDeriveNudge = vi.mocked(deriveNudge)

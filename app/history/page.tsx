@@ -4,9 +4,9 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import { getDomainLabel } from '@/lib/interviewConfig'
-import Badge from '@/components/ui/Badge'
-import StateView from '@/components/ui/StateView'
-import Button from '@/components/ui/Button'
+import Badge from '@shared/ui/Badge'
+import StateView from '@shared/ui/StateView'
+import Button from '@shared/ui/Button'
 
 interface SessionSummary {
   _id: string

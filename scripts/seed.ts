@@ -10,8 +10,8 @@
  *   npx tsx -r dotenv/config scripts/seed.ts
  */
 
-import { seedDatabase } from '../lib/db/seed'
-import { connectDB } from '../lib/db/connection'
+import { seedDatabase } from '../shared/db/seed'
+import { connectDB } from '../shared/db/connection'
 
 async function main() {
   if (!process.env.MONGODB_URI) {

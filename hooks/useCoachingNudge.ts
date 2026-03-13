@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { analyzeSpeech } from '@/lib/speechMetrics'
 import { deriveNudge, type CoachingNudge } from '@/lib/coachingNudges'
-import type { InterviewState } from '@/lib/types'
+import type { InterviewState } from '@shared/types'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 

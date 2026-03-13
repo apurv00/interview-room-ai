@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
-import StateView from './ui/StateView'
+import StateView from '@shared/ui/StateView'
 
 interface Domain {
   slug: string

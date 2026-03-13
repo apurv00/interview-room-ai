@@ -6,7 +6,7 @@ import { useSession } from 'next-auth/react'
 import { motion, AnimatePresence } from 'framer-motion'
 import FileDropzone from '@/components/FileDropzone'
 import { EXPERIENCE_LABELS } from '@/lib/interviewConfig'
-import type { ExperienceLevel } from '@/lib/types'
+import type { ExperienceLevel } from '@shared/types'
 
 interface DomainOption {
   slug: string

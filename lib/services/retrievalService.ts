@@ -1,8 +1,8 @@
-import { connectDB } from '@/lib/db/connection'
-import { QuestionBank, CompanyPattern } from '@/lib/db/models'
-import type { IQuestionBank, ICompanyPattern } from '@/lib/db/models'
-import { isFeatureEnabled } from '@/lib/featureFlags'
-import { logger } from '@/lib/logger'
+import { connectDB } from '@shared/db/connection'
+import { QuestionBank, CompanyPattern } from '@shared/db/models'
+import type { IQuestionBank, ICompanyPattern } from '@shared/db/models'
+import { isFeatureEnabled } from '@shared/featureFlags'
+import { logger } from '@shared/logger'
 
 // ─── Question Bank Retrieval ────────────────────────────────────────────────
 
@@ -180,7 +180,7 @@ export async function getCompanyContext(input: {
     await connectDB()
 
     // Import here to avoid circular dependency
-    const { User } = await import('@/lib/db/models')
+    const { User } = await import('@shared/db/models')
     const profile = await User.findById(input.userId)
       .select('targetCompanies targetCompanyType')
       .lean()

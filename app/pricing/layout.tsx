@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
-import JsonLd from '@/components/seo/JsonLd'
-import { siteConfig } from '@/lib/siteConfig'
-import { FAQ } from '@/lib/pricingFaq'
+import JsonLd from '@shared/seo/JsonLd'
+import { siteConfig } from '@shared/siteConfig'
+import { FAQ } from '@shared/pricingFaq'
 
 export const metadata: Metadata = {
   title: 'Pricing',

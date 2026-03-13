@@ -5,10 +5,10 @@ import CredentialsProvider from 'next-auth/providers/credentials'
 import { MongoDBAdapter } from '@auth/mongodb-adapter'
 import type { Adapter } from 'next-auth/adapters'
 import bcrypt from 'bcryptjs'
-import { connectDB } from '@/lib/db/connection'
-import { User } from '@/lib/db/models'
-import clientPromise from '@/lib/db/mongoClient'
-import { redis } from '@/lib/redis'
+import { connectDB } from '@shared/db/connection'
+import { User } from '@shared/db/models'
+import clientPromise from '@shared/db/mongoClient'
+import { redis } from '@shared/redis'
 
 // Fail fast if NEXTAUTH_SECRET is missing or too short in production.
 // Without a proper secret, JWTs can be forged and sessions hijacked.

@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth/authOptions'
+import { authOptions } from '@shared/auth/authOptions'
 import {
   getUploadPresignedUrl,
   getDownloadPresignedUrl,
   recordingKey,
   documentKey,
   isR2Configured,
-} from '@/lib/storage/r2'
-import { connectDB } from '@/lib/db/connection'
-import { InterviewSession } from '@/lib/db/models/InterviewSession'
+} from '@shared/storage/r2'
+import { connectDB } from '@shared/db/connection'
+import { InterviewSession } from '@shared/db/models/InterviewSession'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
