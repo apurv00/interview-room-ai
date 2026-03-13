@@ -30,7 +30,7 @@ vi.mock('@shared/db/models', () => ({
   },
 }))
 
-import { getRecentSummaries, buildHistorySummary } from '@/lib/services/sessionSummaryService'
+import { getRecentSummaries, buildHistorySummary } from '@learn/services/sessionSummaryService'
 import { isFeatureEnabled } from '@shared/featureFlags'
 
 const TEST_USER_ID = '507f1f77bcf86cd799439011' // valid ObjectId

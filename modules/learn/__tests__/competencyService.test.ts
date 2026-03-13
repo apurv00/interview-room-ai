@@ -33,7 +33,7 @@ vi.mock('@shared/db/models', () => ({
   },
 }))
 
-import { getCompetenciesForDomain, DOMAIN_COMPETENCIES, UNIVERSAL_COMPETENCIES } from '@/lib/services/competencyService'
+import { getCompetenciesForDomain, DOMAIN_COMPETENCIES, UNIVERSAL_COMPETENCIES } from '@learn/services/competencyService'
 import { isFeatureEnabled } from '@shared/featureFlags'
 
 describe('competencyService', () => {
@@ -93,14 +93,14 @@ describe('competencyService', () => {
   describe('feature flag gating', () => {
     it('getUserCompetencySummary returns null when flag disabled', async () => {
       vi.mocked(isFeatureEnabled).mockReturnValue(false)
-      const { getUserCompetencySummary } = await import('@/lib/services/competencyService')
+      const { getUserCompetencySummary } = await import('@learn/services/competencyService')
       const result = await getUserCompetencySummary('user123')
       expect(result).toBeNull()
     })
 
     it('getUserWeaknesses returns empty when flag disabled', async () => {
       vi.mocked(isFeatureEnabled).mockReturnValue(false)
-      const { getUserWeaknesses } = await import('@/lib/services/competencyService')
+      const { getUserWeaknesses } = await import('@learn/services/competencyService')
       const result = await getUserWeaknesses('user123')
       expect(result).toEqual([])
     })

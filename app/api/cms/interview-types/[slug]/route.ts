@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import { InterviewDepth } from '@shared/db/models'
-import { UpdateInterviewTypeSchema } from '@/lib/validators/cms'
+import { UpdateInterviewTypeSchema } from '@cms/validators/cms'
 import { logger } from '@shared/logger'
 
 export const dynamic = 'force-dynamic'

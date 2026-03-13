@@ -13,7 +13,7 @@ import Button from '@shared/ui/Button'
 import Badge from '@shared/ui/Badge'
 import HowItWorks from '@shared/marketing/HowItWorks'
 import SocialProof from '@shared/marketing/SocialProof'
-import ResourceLinks from '@shared/marketing/ResourceLinks'
+import ResourceLinks from '@learn/components/ResourceLinks'
 import type { Role, InterviewType, ExperienceLevel, Duration, InterviewConfig } from '@shared/types'
 import { EXPERIENCE_LABELS, DURATION_LABELS } from '@interview/config/interviewConfig'
 import { STORAGE_KEYS } from '@shared/storageKeys'
@@ -227,7 +227,7 @@ function AuthenticatedHome() {
       <div className="max-w-[1100px] mx-auto mt-section">
         <h2 className="text-heading text-[#f0f2f5] mb-4">More Tools</h2>
         <div className="grid sm:grid-cols-3 gap-element">
-          <Link href="/practice" className="surface-card-bordered p-5 group hover:border-[rgba(99,102,241,0.2)] transition-all">
+          <Link href="/learn/practice" className="surface-card-bordered p-5 group hover:border-[rgba(99,102,241,0.2)] transition-all">
             <div className="flex items-center gap-3 mb-2">
               <div className="w-10 h-10 rounded-xl bg-indigo-600/10 flex items-center justify-center">
                 <svg className="w-5 h-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -334,7 +334,7 @@ function UnauthenticatedHome() {
           <h2 className="text-heading text-[#f0f2f5]">Complete Career Toolkit</h2>
           <p className="text-body text-[#6b7280] mt-2">Everything you need to land your next role</p>
           <div className="grid sm:grid-cols-3 gap-element mt-section">
-            <Link href="/practice" className="surface-card-bordered p-6 text-left group hover:border-[rgba(99,102,241,0.2)] transition-all">
+            <Link href="/learn/practice" className="surface-card-bordered p-6 text-left group hover:border-[rgba(99,102,241,0.2)] transition-all">
               <div className="w-12 h-12 rounded-xl bg-indigo-600/10 flex items-center justify-center mb-4">
                 <svg className="w-6 h-6 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />

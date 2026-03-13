@@ -10,7 +10,7 @@ import {
   calculateRelevance,
   type UserProfile,
   type Resource,
-} from '@/lib/resources'
+} from '@learn/lib/resources'
 
 const COLUMNS = [
   { key: 'questions' as const, label: 'Interview Questions' },

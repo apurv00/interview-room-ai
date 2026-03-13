@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import { User } from '@shared/db/models'
-import { OnboardingUpdateSchema } from '@/lib/validators/onboarding'
+import { OnboardingUpdateSchema } from '@shared/validators/onboarding'
 
 export const dynamic = 'force-dynamic'
 

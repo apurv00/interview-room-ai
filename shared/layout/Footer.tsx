@@ -8,9 +8,9 @@ const HIDDEN_PREFIXES = ['/interview', '/lobby']
 
 const PRODUCT_LINKS = [
   { href: '/', label: 'Home' },
-  { href: '/practice', label: 'Practice Sets' },
+  { href: '/learn/practice', label: 'Practice Sets' },
   { href: '/pricing', label: 'Pricing' },
-  { href: '/resources', label: 'Resources' },
+  { href: '/learn/guides', label: 'Resources' },
   { href: '/signup', label: 'Get Started' },
 ]
 
@@ -23,20 +23,20 @@ const TOOLS_LINKS = [
 ]
 
 const QUESTION_LINKS = [
-  { href: '/resources/common-interview-questions', label: 'Common Questions' },
-  { href: '/resources/behavioral-questions', label: 'Behavioral Questions' },
-  { href: '/resources/technical-interview-questions', label: 'Technical Questions' },
-  { href: '/resources/mock-interview-guide', label: 'Mock Interview Guide' },
-  { href: '/resources/interview-readiness-quiz', label: 'Readiness Quiz' },
+  { href: '/learn/guides/common-interview-questions', label: 'Common Questions' },
+  { href: '/learn/guides/behavioral-questions', label: 'Behavioral Questions' },
+  { href: '/learn/guides/technical-interview-questions', label: 'Technical Questions' },
+  { href: '/learn/guides/mock-interview-guide', label: 'Mock Interview Guide' },
+  { href: '/learn/guides/interview-readiness-quiz', label: 'Readiness Quiz' },
 ]
 
 const TIP_LINKS = [
-  { href: '/resources/interview-tips', label: '50+ Interview Tips' },
-  { href: '/resources/phone-interview-tips', label: 'Phone Tips' },
-  { href: '/resources/video-interview-tips', label: 'Video Tips' },
-  { href: '/resources/star-method-guide', label: 'STAR Method Guide' },
-  { href: '/resources/body-language-guide', label: 'Body Language' },
-  { href: '/resources/interview-frameworks', label: 'Frameworks' },
+  { href: '/learn/guides/interview-tips', label: '50+ Interview Tips' },
+  { href: '/learn/guides/phone-interview-tips', label: 'Phone Tips' },
+  { href: '/learn/guides/video-interview-tips', label: 'Video Tips' },
+  { href: '/learn/guides/star-method-guide', label: 'STAR Method Guide' },
+  { href: '/learn/guides/body-language-guide', label: 'Body Language' },
+  { href: '/learn/guides/interview-frameworks', label: 'Frameworks' },
 ]
 
 function FooterColumn({ title, links }: { title: string; links: { href: string; label: string }[] }) {

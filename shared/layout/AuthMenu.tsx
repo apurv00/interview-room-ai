@@ -104,7 +104,7 @@ export default function AuthMenu() {
               History
             </Link>
             <Link
-              href="/progress"
+              href="/learn/progress"
               onClick={() => setOpen(false)}
               className="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-300 hover:bg-slate-800 transition"
             >

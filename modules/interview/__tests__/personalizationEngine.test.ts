@@ -24,12 +24,12 @@ vi.mock('@shared/db/models', () => ({
   },
 }))
 
-vi.mock('@/lib/services/competencyService', () => ({
+vi.mock('@learn/services/competencyService', () => ({
   getUserCompetencySummary: vi.fn().mockResolvedValue(null),
   getUserWeaknesses: vi.fn().mockResolvedValue([]),
 }))
 
-vi.mock('@/lib/services/sessionSummaryService', () => ({
+vi.mock('@learn/services/sessionSummaryService', () => ({
   getRecentSummaries: vi.fn().mockResolvedValue([]),
   buildHistorySummary: vi.fn().mockResolvedValue(''),
 }))

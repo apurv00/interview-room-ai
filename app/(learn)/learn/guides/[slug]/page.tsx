@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
-import { getResourceBySlug, RESOURCES } from '@/lib/resources'
+import { getResourceBySlug, RESOURCES } from '@learn/lib/resources'
 import { siteConfig } from '@shared/siteConfig'
 import JsonLd from '@shared/seo/JsonLd'
 
@@ -56,7 +56,7 @@ export default function ResourcePage({ params }: Props) {
           publisher: { '@type': 'Organization', name: siteConfig.name },
           datePublished: '2026-01-15',
           dateModified: '2026-03-12',
-          url: `${siteConfig.url}/resources/${resource.slug}`,
+          url: `${siteConfig.url}/learn/guides/${resource.slug}`,
         }}
       />
 
@@ -65,7 +65,7 @@ export default function ResourcePage({ params }: Props) {
         <nav aria-label="Breadcrumb" className="text-caption text-[var(--foreground-tertiary)] mb-6">
           <Link href="/" className="hover:text-[#818cf8] transition-colors">Home</Link>
           <span className="mx-2">›</span>
-          <Link href="/resources" className="hover:text-[#818cf8] transition-colors">Resources</Link>
+          <Link href="/learn/guides" className="hover:text-[#818cf8] transition-colors">Resources</Link>
           <span className="mx-2">›</span>
           <span className="text-[var(--foreground-secondary)]">{resource.title}</span>
         </nav>
@@ -131,7 +131,7 @@ export default function ResourcePage({ params }: Props) {
               {related.map(r => (
                 <Link
                   key={r.slug}
-                  href={`/resources/${r.slug}`}
+                  href={`/learn/guides/${r.slug}`}
                   className="surface-card p-4 hover:bg-[var(--color-surface)] transition-colors"
                 >
                   <p className="text-subheading text-[var(--foreground)]">{r.title}</p>
@@ -156,7 +156,7 @@ export default function ResourcePage({ params }: Props) {
               Start Practicing Free
             </Link>
             <Link
-              href="/resources"
+              href="/learn/guides"
               className="inline-flex items-center justify-center h-11 px-5 bg-[var(--color-surface)] hover:bg-[var(--color-raised)] text-[var(--foreground-secondary)] rounded-[10px] text-sm font-medium transition-colors border border-[var(--color-border)]"
             >
               Browse All Resources

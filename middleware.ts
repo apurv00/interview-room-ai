@@ -11,6 +11,7 @@ export default withAuth(
     const isCms = hostname.startsWith('cms.')
     const isHire = hostname.startsWith('hire.')
     const isResume = hostname.startsWith('resume.')
+    const isLearn = hostname.startsWith('learn.')
 
     // Paths excluded from subdomain rewriting
     const subdomainExcludedPaths = [
@@ -59,6 +60,18 @@ export default withAuth(
       return NextResponse.rewrite(url)
     }
 
+    // Rewrite Learn subdomain requests to /learn prefix
+    const shouldRewriteToLearn =
+      isLearn &&
+      !pathname.startsWith('/learn') &&
+      !subdomainExcludedPaths.some((p) => pathname.startsWith(p))
+
+    if (shouldRewriteToLearn) {
+      const url = req.nextUrl.clone()
+      url.pathname = `/learn${pathname}`
+      return NextResponse.rewrite(url)
+    }
+
     const response = NextResponse.next()
 
     // Security headers
@@ -77,6 +90,7 @@ export default withAuth(
       !pathname.startsWith('/cms') &&
       !pathname.startsWith('/hire') &&
       !pathname.startsWith('/resume') &&
+      !pathname.startsWith('/learn') &&
       pathname !== '/'
     ) {
       return NextResponse.redirect(new URL('/onboarding', req.url))
@@ -143,7 +157,11 @@ export default withAuth(
           pathname === '/apple-icon' ||
           pathname === '/opengraph-image' ||
           // Resume subdomain landing page is public
-          pathname === '/resume'
+          pathname === '/resume' ||
+          // Learn subdomain public pages
+          pathname.startsWith('/learn/guides') ||
+          pathname === '/learn' ||
+          pathname.startsWith('/resources')
         ) {
           return true
         }

@@ -51,7 +51,7 @@ vi.mock('@anthropic-ai/sdk', () => ({
   })),
 }))
 
-import { runBenchmarkSuite } from '@/lib/services/benchmarkService'
+import { runBenchmarkSuite } from '@cms/services/benchmarkService'
 import { isFeatureEnabled } from '@shared/featureFlags'
 
 describe('benchmarkService', () => {
