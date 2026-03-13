@@ -1,4 +1,4 @@
-import type { SpeechMetrics } from './types'
+import type { SpeechMetrics } from '@shared/types'
 
 export interface CoachingNudge {
   id: string

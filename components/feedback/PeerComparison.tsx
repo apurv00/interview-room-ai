@@ -1,6 +1,6 @@
 'use client'
 
-import type { FeedbackData } from '@/lib/types'
+import type { FeedbackData } from '@shared/types'
 
 // ─── Exported types for parent to use ────────────────────────────────────────
 

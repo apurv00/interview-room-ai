@@ -1,6 +1,6 @@
 import { extractText, getDocumentProxy } from 'unpdf'
 import mammoth from 'mammoth'
-import { logger } from '@/lib/logger'
+import { logger } from '@shared/logger'
 
 export interface ParseResult {
   text: string

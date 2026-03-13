@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import { getResourceBySlug, getAllSlugs } from '@/lib/resources'
-import { siteConfig } from '@/lib/siteConfig'
+import { siteConfig } from '@shared/siteConfig'
 
 interface Props {
   params: { slug: string }

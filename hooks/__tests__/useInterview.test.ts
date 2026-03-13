@@ -8,7 +8,7 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: mockPush }),
 }))
 
-vi.mock('@/lib/fetchWithRetry', () => ({
+vi.mock('@shared/fetchWithRetry', () => ({
   fetchWithRetry: vi.fn().mockResolvedValue(true),
 }))
 
@@ -49,8 +49,8 @@ class MockUtterance {
 vi.stubGlobal('SpeechSynthesisUtterance', MockUtterance)
 
 import { useInterview } from '../useInterview'
-import type { InterviewConfig } from '@/lib/types'
-import { fetchWithRetry } from '@/lib/fetchWithRetry'
+import type { InterviewConfig } from '@shared/types'
+import { fetchWithRetry } from '@shared/fetchWithRetry'
 import { deriveCoachingTip } from '@/lib/coachingTips'
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

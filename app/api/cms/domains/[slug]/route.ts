@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth/authOptions'
-import { connectDB } from '@/lib/db/connection'
-import { InterviewDomain } from '@/lib/db/models'
+import { authOptions } from '@shared/auth/authOptions'
+import { connectDB } from '@shared/db/connection'
+import { InterviewDomain } from '@shared/db/models'
 import { UpdateDomainSchema } from '@/lib/validators/cms'
-import { logger } from '@/lib/logger'
+import { logger } from '@shared/logger'
 
 export const dynamic = 'force-dynamic'
 

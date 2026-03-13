@@ -7,28 +7,28 @@ vi.mock('next-auth', () => ({
   getServerSession: vi.fn(),
 }))
 
-vi.mock('@/lib/auth/authOptions', () => ({
+vi.mock('@shared/auth/authOptions', () => ({
   authOptions: {},
 }))
 
-vi.mock('@/lib/redis', () => ({
+vi.mock('@shared/redis', () => ({
   redis: {
     incr: vi.fn().mockResolvedValue(1),
     pexpire: vi.fn().mockResolvedValue(true),
   },
 }))
 
-vi.mock('@/lib/logger', () => ({
+vi.mock('@shared/logger', () => ({
   aiLogger: {
     warn: vi.fn(),
     error: vi.fn(),
   },
 }))
 
-import { composeApiRoute } from '@/lib/middleware/composeApiRoute'
+import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { getServerSession } from 'next-auth'
-import { redis } from '@/lib/redis'
-import { AppError } from '@/lib/errors'
+import { redis } from '@shared/redis'
+import { AppError } from '@shared/errors'
 
 const TestSchema = z.object({
   name: z.string(),

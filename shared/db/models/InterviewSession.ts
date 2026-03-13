@@ -5,7 +5,7 @@ import type {
   AnswerEvaluation,
   SpeechMetrics,
   FeedbackData,
-} from '@/lib/types'
+} from '@shared/types'
 
 export type SessionStatus = 'created' | 'in_progress' | 'completed' | 'abandoned'
 

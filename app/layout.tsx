@@ -1,9 +1,9 @@
 import type { Metadata, Viewport } from 'next'
-import SessionProvider from '@/providers/SessionProvider'
-import { ThemeProvider } from '@/providers/ThemeProvider'
-import AppShell from '@/components/layout/AppShell'
-import JsonLd from '@/components/seo/JsonLd'
-import { siteConfig } from '@/lib/siteConfig'
+import SessionProvider from '@shared/providers/SessionProvider'
+import { ThemeProvider } from '@shared/providers/ThemeProvider'
+import AppShell from '@shared/layout/AppShell'
+import JsonLd from '@shared/seo/JsonLd'
+import { siteConfig } from '@shared/siteConfig'
 import './globals.css'
 
 // Inline script to prevent FOUC — runs before React hydrates

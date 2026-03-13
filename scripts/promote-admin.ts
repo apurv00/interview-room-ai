@@ -9,8 +9,8 @@
  *   npx tsx -r dotenv/config scripts/promote-admin.ts user@example.com
  */
 
-import { connectDB } from '../lib/db/connection'
-import { User } from '../lib/db/models'
+import { connectDB } from '../shared/db/connection'
+import { User } from '../shared/db/models'
 
 async function main() {
   const email = process.argv[2]

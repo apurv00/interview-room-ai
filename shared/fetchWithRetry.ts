@@ -1,4 +1,4 @@
-import { aiLogger } from '@/lib/logger'
+import { aiLogger } from '@shared/logger'
 
 interface RetryOptions {
   maxRetries?: number

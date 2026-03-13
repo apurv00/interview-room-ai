@@ -1,4 +1,4 @@
-import type { AnswerEvaluation } from './types'
+import type { AnswerEvaluation } from '@shared/types'
 
 const GENERIC_TIP = 'Keep going — you are doing well.'
 

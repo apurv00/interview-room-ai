@@ -6,6 +6,13 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
+      '@shared': path.resolve(__dirname, 'shared'),
+      '@modules': path.resolve(__dirname, 'modules'),
+      '@interview': path.resolve(__dirname, 'modules/interview'),
+      '@learn': path.resolve(__dirname, 'modules/learn'),
+      '@b2b': path.resolve(__dirname, 'modules/b2b'),
+      '@cms': path.resolve(__dirname, 'modules/cms'),
+      '@resume': path.resolve(__dirname, 'modules/resume'),
       '@': path.resolve(__dirname, '.'),
     },
   },

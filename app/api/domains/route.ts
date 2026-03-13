@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
-import { connectDB } from '@/lib/db/connection'
-import { InterviewDomain } from '@/lib/db/models'
-import { FALLBACK_DOMAINS } from '@/lib/db/seed'
+import { connectDB } from '@shared/db/connection'
+import { InterviewDomain } from '@shared/db/models'
+import { FALLBACK_DOMAINS } from '@shared/db/seed'
 
 export const dynamic = 'force-dynamic'
 

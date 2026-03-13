@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
-import { composeApiRoute } from '@/lib/middleware/composeApiRoute'
-import { seedAllPersonalization } from '@/lib/db/seedPersonalization'
+import { composeApiRoute } from '@shared/middleware/composeApiRoute'
+import { seedAllPersonalization } from '@shared/db/seedPersonalization'
 
 export const dynamic = 'force-dynamic'
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import PeerComparison, { type PeerData } from '../PeerComparison'
-import type { FeedbackData } from '@/lib/types'
+import type { FeedbackData } from '@shared/types'
 
 // Minimal mock feedback data
 function makeFeedback(overrides: Partial<FeedbackData> = {}): FeedbackData {

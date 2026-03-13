@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { composeApiRoute } from '@/lib/middleware/composeApiRoute'
+import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { getUserCompetencySummary, getUserWeaknesses, getCompetenciesForDomain } from '@/lib/services/competencyService'
 import { getRecentSummaries } from '@/lib/services/sessionSummaryService'
 

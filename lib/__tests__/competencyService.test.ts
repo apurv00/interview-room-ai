@@ -1,15 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock all dependencies
-vi.mock('@/lib/db/connection', () => ({
+vi.mock('@shared/db/connection', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
 }))
 
-vi.mock('@/lib/featureFlags', () => ({
+vi.mock('@shared/featureFlags', () => ({
   isFeatureEnabled: vi.fn().mockReturnValue(true),
 }))
 
-vi.mock('@/lib/logger', () => ({
+vi.mock('@shared/logger', () => ({
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }))
 
@@ -19,7 +19,7 @@ const mockCreate = vi.fn()
 const mockUpdateOne = vi.fn()
 const mockSave = vi.fn()
 
-vi.mock('@/lib/db/models', () => ({
+vi.mock('@shared/db/models', () => ({
   UserCompetencyState: {
     findOne: (...args: unknown[]) => mockFindOne(...args),
     find: (...args: unknown[]) => ({ sort: () => ({ limit: () => ({ lean: () => mockFind(...args) }) }) }),
@@ -34,7 +34,7 @@ vi.mock('@/lib/db/models', () => ({
 }))
 
 import { getCompetenciesForDomain, DOMAIN_COMPETENCIES, UNIVERSAL_COMPETENCIES } from '@/lib/services/competencyService'
-import { isFeatureEnabled } from '@/lib/featureFlags'
+import { isFeatureEnabled } from '@shared/featureFlags'
 
 describe('competencyService', () => {
   beforeEach(() => {

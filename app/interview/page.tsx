@@ -14,11 +14,11 @@ import { useSpeechRecognition } from '@/hooks/useSpeechRecognition'
 import { useInterview } from '@/hooks/useInterview'
 import { useMediaRecorder } from '@/hooks/useMediaRecorder'
 import { useCoachingNudge } from '@/hooks/useCoachingNudge'
-import type { InterviewConfig } from '@/lib/types'
+import type { InterviewConfig } from '@shared/types'
 import { AVATAR_NAME, AVATAR_TITLE } from '@/lib/interviewConfig'
-import { STORAGE_KEYS } from '@/lib/storageKeys'
+import { STORAGE_KEYS } from '@shared/storageKeys'
 
-import { formatTime } from '@/lib/utils'
+import { formatTime } from '@shared/utils'
 
 // ─── Phase label map ──────────────────────────────────────────────────────────
 

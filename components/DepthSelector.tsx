@@ -1,8 +1,8 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import SelectionGroup from './ui/SelectionGroup'
-import StateView from './ui/StateView'
+import SelectionGroup from '@shared/ui/SelectionGroup'
+import StateView from '@shared/ui/StateView'
 
 interface InterviewDepth {
   slug: string

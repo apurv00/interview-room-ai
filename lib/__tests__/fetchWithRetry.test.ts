@@ -1,14 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/logger', () => ({
+vi.mock('@shared/logger', () => ({
   aiLogger: {
     warn: vi.fn(),
     error: vi.fn(),
   },
 }))
 
-import { fetchWithRetry } from '@/lib/fetchWithRetry'
-import { aiLogger } from '@/lib/logger'
+import { fetchWithRetry } from '@shared/fetchWithRetry'
+import { aiLogger } from '@shared/logger'
 
 describe('fetchWithRetry', () => {
   beforeEach(() => {

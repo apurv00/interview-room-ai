@@ -13,37 +13,37 @@ describe('featureFlags', () => {
   })
 
   it('returns default values when no env vars set', async () => {
-    const { isFeatureEnabled } = await import('@/lib/featureFlags')
+    const { isFeatureEnabled } = await import('@shared/featureFlags')
     expect(isFeatureEnabled('personalization_engine')).toBe(true)
     expect(isFeatureEnabled('benchmark_harness')).toBe(false)
   })
 
   it('respects env var overrides with "true"', async () => {
     process.env.FEATURE_FLAG_BENCHMARK_HARNESS = 'true'
-    const { isFeatureEnabled } = await import('@/lib/featureFlags')
+    const { isFeatureEnabled } = await import('@shared/featureFlags')
     expect(isFeatureEnabled('benchmark_harness')).toBe(true)
   })
 
   it('respects env var overrides with "1"', async () => {
     process.env.FEATURE_FLAG_BENCHMARK_HARNESS = '1'
-    const { isFeatureEnabled } = await import('@/lib/featureFlags')
+    const { isFeatureEnabled } = await import('@shared/featureFlags')
     expect(isFeatureEnabled('benchmark_harness')).toBe(true)
   })
 
   it('respects env var disabling with "false"', async () => {
     process.env.FEATURE_FLAG_PERSONALIZATION_ENGINE = 'false'
-    const { isFeatureEnabled } = await import('@/lib/featureFlags')
+    const { isFeatureEnabled } = await import('@shared/featureFlags')
     expect(isFeatureEnabled('personalization_engine')).toBe(false)
   })
 
   it('respects env var disabling with "0"', async () => {
     process.env.FEATURE_FLAG_PERSONALIZATION_ENGINE = '0'
-    const { isFeatureEnabled } = await import('@/lib/featureFlags')
+    const { isFeatureEnabled } = await import('@shared/featureFlags')
     expect(isFeatureEnabled('personalization_engine')).toBe(false)
   })
 
   it('getEnabledFlags returns all flags', async () => {
-    const { getEnabledFlags } = await import('@/lib/featureFlags')
+    const { getEnabledFlags } = await import('@shared/featureFlags')
     const flags = getEnabledFlags()
     expect(flags).toHaveProperty('personalization_engine')
     expect(flags).toHaveProperty('evaluation_engine_v2')

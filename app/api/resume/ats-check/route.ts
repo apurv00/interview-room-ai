@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth/authOptions'
+import { authOptions } from '@shared/auth/authOptions'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'

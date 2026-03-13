@@ -5,9 +5,9 @@ import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Image from 'next/image'
-import { PLANS } from '@/lib/services/stripe'
+import { PLANS } from '@shared/services/stripe'
 import { ROLE_LABELS, EXPERIENCE_LABELS } from '@/lib/interviewConfig'
-import type { Role, ExperienceLevel } from '@/lib/types'
+import type { Role, ExperienceLevel } from '@shared/types'
 
 interface OnboardingProfile {
   targetRole: string | null

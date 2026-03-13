@@ -4,8 +4,8 @@ import { useEffect, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { STORAGE_KEYS } from '@/lib/storageKeys'
-import type { InterviewConfig, ExperienceLevel, Duration } from '@/lib/types'
+import { STORAGE_KEYS } from '@shared/storageKeys'
+import type { InterviewConfig, ExperienceLevel, Duration } from '@shared/types'
 
 interface PracticeSet {
   id: string

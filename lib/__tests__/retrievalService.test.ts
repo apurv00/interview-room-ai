@@ -1,21 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/db/connection', () => ({
+vi.mock('@shared/db/connection', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
 }))
 
-vi.mock('@/lib/featureFlags', () => ({
+vi.mock('@shared/featureFlags', () => ({
   isFeatureEnabled: vi.fn().mockReturnValue(true),
 }))
 
-vi.mock('@/lib/logger', () => ({
+vi.mock('@shared/logger', () => ({
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }))
 
 const mockFind = vi.fn()
 const mockUpdateMany = vi.fn()
 
-vi.mock('@/lib/db/models', () => ({
+vi.mock('@shared/db/models', () => ({
   QuestionBank: {
     find: (...args: unknown[]) => ({
       sort: () => ({
@@ -44,7 +44,7 @@ vi.mock('@/lib/db/models', () => ({
 }))
 
 import { retrieveQuestions, getQuestionBankContext } from '@/lib/services/retrievalService'
-import { isFeatureEnabled } from '@/lib/featureFlags'
+import { isFeatureEnabled } from '@shared/featureFlags'
 
 describe('retrievalService', () => {
   beforeEach(() => {

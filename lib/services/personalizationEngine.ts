@@ -1,11 +1,11 @@
-import { connectDB } from '@/lib/db/connection'
-import { User, InterviewDomain, InterviewDepth } from '@/lib/db/models'
-import { isFeatureEnabled } from '@/lib/featureFlags'
+import { connectDB } from '@shared/db/connection'
+import { User, InterviewDomain, InterviewDepth } from '@shared/db/models'
+import { isFeatureEnabled } from '@shared/featureFlags'
 import { getUserCompetencySummary } from './competencyService'
 import { getUserWeaknesses } from './competencyService'
 import { buildHistorySummary, getRecentSummaries } from './sessionSummaryService'
 import { getCompanyContext } from './retrievalService'
-import { logger } from '@/lib/logger'
+import { logger } from '@shared/logger'
 
 // ─── Session Brief ──────────────────────────────────────────────────────────
 
