@@ -6,7 +6,6 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, '.'),
       '@shared': path.resolve(__dirname, 'shared'),
       '@modules': path.resolve(__dirname, 'modules'),
       '@interview': path.resolve(__dirname, 'modules/interview'),
@@ -14,6 +13,7 @@ export default defineConfig({
       '@b2b': path.resolve(__dirname, 'modules/b2b'),
       '@cms': path.resolve(__dirname, 'modules/cms'),
       '@resume': path.resolve(__dirname, 'modules/resume'),
+      '@': path.resolve(__dirname, '.'),
     },
   },
   test: {
