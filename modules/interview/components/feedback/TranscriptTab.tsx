@@ -2,7 +2,7 @@
 
 import { type RefObject } from 'react'
 import type { TranscriptEntry } from '@shared/types'
-import { computeOffsetSeconds } from '@/lib/offsetHelpers'
+import { computeOffsetSeconds } from '@interview/utils/offsetHelpers'
 
 // Helper: safely coerce to string for rendering
 function s(v: unknown): string {

@@ -1,19 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import { useCoachingNudge } from '../useCoachingNudge'
+import { useCoachingNudge } from '../hooks/useCoachingNudge'
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
-vi.mock('@/lib/speechMetrics', () => ({
+vi.mock('@interview/config/speechMetrics', () => ({
   analyzeSpeech: vi.fn(),
 }))
 
-vi.mock('@/lib/coachingNudges', () => ({
+vi.mock('@interview/config/coachingNudges', () => ({
   deriveNudge: vi.fn(),
 }))
 
-import { analyzeSpeech } from '@/lib/speechMetrics'
-import { deriveNudge } from '@/lib/coachingNudges'
+import { analyzeSpeech } from '@interview/config/speechMetrics'
+import { deriveNudge } from '@interview/config/coachingNudges'
 import type { SpeechMetrics } from '@shared/types'
 
 const mockAnalyzeSpeech = vi.mocked(analyzeSpeech)

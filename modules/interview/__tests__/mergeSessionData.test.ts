@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { mergeWithLocalData, readLocalInterviewData, cleanupLocalInterviewData } from '../mergeSessionData'
+import { mergeWithLocalData, readLocalInterviewData, cleanupLocalInterviewData } from '../utils/mergeSessionData'
 import type { StoredInterviewData } from '@shared/types'
 
 function makeData(overrides: Partial<StoredInterviewData> = {}): StoredInterviewData {

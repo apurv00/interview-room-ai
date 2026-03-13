@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useSession } from 'next-auth/react'
-import { getDomainLabel } from '@/lib/interviewConfig'
+import { getDomainLabel } from '@interview/config/interviewConfig'
 import Badge from '@shared/ui/Badge'
 import StateView from '@shared/ui/StateView'
 import Button from '@shared/ui/Button'

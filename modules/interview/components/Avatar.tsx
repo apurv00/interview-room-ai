@@ -3,7 +3,7 @@
 import { useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { AvatarEmotion } from '@shared/types'
-import { useAvatarEngine } from '@/hooks/useAvatarEngine'
+import { useAvatarEngine } from '@interview/hooks/useAvatarEngine'
 
 interface AvatarProps {
   emotion: AvatarEmotion

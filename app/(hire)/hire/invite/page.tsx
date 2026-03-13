@@ -3,8 +3,8 @@
 import { useState, useEffect } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
-import DomainSelector from '@/components/DomainSelector'
-import DepthSelector from '@/components/DepthSelector'
+import DomainSelector from '@interview/components/DomainSelector'
+import DepthSelector from '@interview/components/DepthSelector'
 
 export default function InvitePage() {
   const router = useRouter()

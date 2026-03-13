@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useRef, useState } from 'react'
-import { analyzeSpeech } from '@/lib/speechMetrics'
+import { analyzeSpeech } from '@interview/config/speechMetrics'
 import type { SpeechMetrics } from '@shared/types'
 
 export interface SpeechRecognitionResult {

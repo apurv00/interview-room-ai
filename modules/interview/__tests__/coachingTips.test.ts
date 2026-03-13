@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { deriveCoachingTip } from '../coachingTips'
+import { deriveCoachingTip } from '../config/coachingTips'
 import type { AnswerEvaluation } from '@shared/types'
 
 function makeEval(overrides: Partial<AnswerEvaluation> = {}): AnswerEvaluation {

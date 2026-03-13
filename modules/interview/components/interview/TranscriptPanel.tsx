@@ -3,7 +3,7 @@
 import { useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { InterviewState, Duration } from '@shared/types'
-import { QUESTION_COUNT } from '@/lib/interviewConfig'
+import { QUESTION_COUNT } from '@interview/config/interviewConfig'
 
 interface TranscriptPanelProps {
   phase: InterviewState

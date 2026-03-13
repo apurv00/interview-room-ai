@@ -34,11 +34,11 @@ vi.mock('@/lib/services/sessionSummaryService', () => ({
   buildHistorySummary: vi.fn().mockResolvedValue(''),
 }))
 
-vi.mock('@/lib/services/retrievalService', () => ({
+vi.mock('@interview/services/retrievalService', () => ({
   getCompanyContext: vi.fn().mockResolvedValue(''),
 }))
 
-import { generateSessionBrief, briefToPromptContext } from '@/lib/services/personalizationEngine'
+import { generateSessionBrief, briefToPromptContext } from '@interview/services/personalizationEngine'
 import { isFeatureEnabled } from '@shared/featureFlags'
 
 describe('personalizationEngine', () => {
