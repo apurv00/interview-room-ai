@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
-import { enhanceSection, generateFullResume } from '@resume/services/resumeAIService'
+import { enhanceSection, enhanceBullets, generateFullResume } from '@resume/services/resumeAIService'
 import { GenerateSchema } from '@resume/validators/resume'
 
 export const dynamic = 'force-dynamic'
@@ -18,10 +18,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Invalid data' }, { status: 400 })
   }
 
-  const { action, sectionType, currentContent, targetRole, targetCompany, currentSections } = parsed.data
+  const { action, sectionType, currentContent, targetRole, targetCompany, currentSections, bullets, context } = parsed.data
 
   if (action === 'enhance' && sectionType && currentContent) {
     const result = await enhanceSection(session.user.id, { sectionType, currentContent, targetRole, targetCompany })
+    return NextResponse.json(result)
+  }
+
+  if (action === 'enhance_bullets' && bullets?.length) {
+    const result = await enhanceBullets(session.user.id, { bullets, context })
     return NextResponse.json(result)
   }
 

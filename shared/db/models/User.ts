@@ -50,16 +50,69 @@ export interface IUser extends Document {
     weakDimensions: string[]
   }>
 
-  // Saved resumes
+  // Saved resumes (structured)
   savedResumes?: Array<{
     id: string
     name: string
-    targetRole: string
-    targetCompany: string
     template: string
-    atsScore: number | null
-    sections: Record<string, string>
-    fullText: string
+    targetRole?: string
+    targetCompany?: string
+    atsScore?: number | null
+
+    contactInfo: {
+      fullName: string
+      email: string
+      phone?: string
+      location?: string
+      linkedin?: string
+      website?: string
+      github?: string
+    }
+    summary: string
+    experience: Array<{
+      id: string
+      company: string
+      title: string
+      location?: string
+      startDate: string
+      endDate?: string
+      bullets: string[]
+    }>
+    education: Array<{
+      id: string
+      institution: string
+      degree: string
+      field?: string
+      graduationDate?: string
+      gpa?: string
+      honors?: string
+    }>
+    skills: Array<{
+      category: string
+      items: string[]
+    }>
+    projects: Array<{
+      id: string
+      name: string
+      description: string
+      technologies?: string[]
+      url?: string
+    }>
+    certifications: Array<{
+      name: string
+      issuer: string
+      date?: string
+    }>
+    customSections: Array<{
+      id: string
+      title: string
+      content: string
+    }>
+
+    // Legacy field for backward compatibility + ATS/tailor operations
+    sections?: Record<string, string>
+    fullText?: string
+    createdAt: string
     updatedAt: string
   }>
 
@@ -131,16 +184,69 @@ const UserSchema = new Schema<IUser>(
       weakDimensions: [{ type: String }],
     }},
 
-    // Saved resumes
+    // Saved resumes (structured)
     savedResumes: [{
       id: { type: String, required: true },
       name: { type: String, required: true },
+      template: { type: String, default: 'professional' },
       targetRole: { type: String, default: '' },
       targetCompany: { type: String, default: '' },
-      template: { type: String, default: 'professional' },
       atsScore: { type: Number, default: null },
+
+      contactInfo: {
+        fullName: { type: String, default: '' },
+        email: { type: String, default: '' },
+        phone: { type: String },
+        location: { type: String },
+        linkedin: { type: String },
+        website: { type: String },
+        github: { type: String },
+      },
+      summary: { type: String, default: '' },
+      experience: [{
+        id: { type: String, required: true },
+        company: { type: String, required: true },
+        title: { type: String, required: true },
+        location: { type: String },
+        startDate: { type: String, required: true },
+        endDate: { type: String },
+        bullets: [{ type: String }],
+      }],
+      education: [{
+        id: { type: String, required: true },
+        institution: { type: String, required: true },
+        degree: { type: String, required: true },
+        field: { type: String },
+        graduationDate: { type: String },
+        gpa: { type: String },
+        honors: { type: String },
+      }],
+      skills: [{
+        category: { type: String, required: true },
+        items: [{ type: String }],
+      }],
+      projects: [{
+        id: { type: String, required: true },
+        name: { type: String, required: true },
+        description: { type: String, required: true },
+        technologies: [{ type: String }],
+        url: { type: String },
+      }],
+      certifications: [{
+        name: { type: String, required: true },
+        issuer: { type: String, required: true },
+        date: { type: String },
+      }],
+      customSections: [{
+        id: { type: String, required: true },
+        title: { type: String, required: true },
+        content: { type: String, required: true },
+      }],
+
+      // Legacy + utility fields
       sections: { type: Schema.Types.Mixed, default: {} },
       fullText: { type: String, default: '' },
+      createdAt: { type: String },
       updatedAt: { type: String },
     }],
 

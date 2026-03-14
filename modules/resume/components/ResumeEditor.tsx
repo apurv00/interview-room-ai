@@ -1,0 +1,395 @@
+'use client'
+
+import { useState } from 'react'
+import type { ResumeData } from '../validators/resume'
+import { useResume } from '../hooks/useResume'
+import { RESUME_TEMPLATES } from '../config/templates'
+import ResumePreview from './ResumePreview'
+import ContactInfoEditor from './sections/ContactInfoEditor'
+import SummaryEditor from './sections/SummaryEditor'
+import ExperienceEditor from './sections/ExperienceEditor'
+import EducationEditor from './sections/EducationEditor'
+import SkillsEditor from './sections/SkillsEditor'
+import ProjectsEditor from './sections/ProjectsEditor'
+import CertificationsEditor from './sections/CertificationsEditor'
+import CustomSectionEditor from './sections/CustomSectionEditor'
+import FileDropzone from '@interview/components/FileDropzone'
+
+interface Props {
+  initialData?: Partial<ResumeData>
+  resumeId?: string
+  onSave: (data: ResumeData) => Promise<{ id?: string; error?: string; code?: string }>
+}
+
+export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
+  const {
+    resume, isDirty, update, setContactInfo,
+    addExperience, updateExperience, removeExperience,
+    addEducation, updateEducation, removeEducation,
+    setSkills,
+    addProject, updateProject, removeProject,
+    setCertifications,
+    addCustomSection, updateCustomSection, removeCustomSection,
+    loadResume, markClean,
+  } = useResume(initialData)
+
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState('')
+  const [enhancingSection, setEnhancingSection] = useState<string | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [mobileTab, setMobileTab] = useState<'edit' | 'preview'>('edit')
+  const [downloading, setDownloading] = useState(false)
+
+  async function handleSave() {
+    setSaving(true)
+    setError('')
+    const result = await onSave({ ...resume, id: resumeId })
+    if (result.error) {
+      setError(result.error)
+    } else {
+      setSaved(true)
+      markClean()
+      setTimeout(() => setSaved(false), 3000)
+    }
+    setSaving(false)
+  }
+
+  async function handleEnhanceSummary() {
+    if (!resume.summary?.trim()) return
+    setEnhancingSection('summary')
+    try {
+      const res = await fetch('/api/resume/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'enhance',
+          sectionType: 'summary',
+          currentContent: resume.summary,
+          targetRole: resume.targetRole,
+          targetCompany: resume.targetCompany,
+        }),
+      })
+      const data = await res.json()
+      if (data.enhanced) update('summary', data.enhanced)
+    } catch { /* ignore */ }
+    setEnhancingSection(null)
+  }
+
+  async function handleEnhanceBullets(expId: string) {
+    const exp = resume.experience?.find(e => e.id === expId)
+    if (!exp || exp.bullets.every(b => !b.trim())) return
+    setEnhancingSection(expId)
+    try {
+      const res = await fetch('/api/resume/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'enhance_bullets',
+          bullets: exp.bullets.filter(b => b.trim()),
+          context: { role: exp.title, company: exp.company, targetRole: resume.targetRole },
+        }),
+      })
+      const data = await res.json()
+      if (data.bullets) updateExperience(expId, { bullets: data.bullets })
+    } catch { /* ignore */ }
+    setEnhancingSection(null)
+  }
+
+  async function handleUpload(file: File) {
+    setUploading(true)
+    setError('')
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('docType', 'resume')
+      const uploadRes = await fetch('/api/documents/upload', { method: 'POST', body: formData })
+      const uploadData = await uploadRes.json()
+      if (!uploadRes.ok) { setError(uploadData.error || 'Upload failed'); setUploading(false); return }
+
+      // Parse into structured data
+      const parseRes = await fetch('/api/resume/parse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: uploadData.text }),
+      })
+      const parsed = await parseRes.json()
+      if (parseRes.ok && parsed.contactInfo) {
+        loadResume(parsed)
+      } else {
+        setError('Could not parse resume structure. Please fill in sections manually.')
+      }
+    } catch { setError('Upload failed') }
+    setUploading(false)
+  }
+
+  async function handleImportProfile() {
+    try {
+      const res = await fetch('/api/resume/profile')
+      const data = await res.json()
+      if (res.ok && data) {
+        loadResume(data)
+      }
+    } catch { /* ignore */ }
+  }
+
+  async function handleGenerateFull() {
+    if (!resume.targetRole) return
+    setEnhancingSection('full')
+    try {
+      const res = await fetch('/api/resume/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'generate_full',
+          targetRole: resume.targetRole,
+          targetCompany: resume.targetCompany,
+          currentSections: [
+            { type: 'summary', content: resume.summary || '' },
+            ...(resume.experience || []).map(e => ({ type: 'experience', content: `${e.title} at ${e.company}: ${e.bullets.join('. ')}` })),
+          ],
+        }),
+      })
+      const data = await res.json()
+      if (data.sections) {
+        for (const s of data.sections) {
+          if (s.type === 'summary' && s.content) update('summary', s.content)
+        }
+      }
+    } catch { /* ignore */ }
+    setEnhancingSection(null)
+  }
+
+  async function handleDownloadPDF() {
+    setDownloading(true)
+    try {
+      const res = await fetch('/api/resume/pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          resumeData: resume,
+          templateId: resume.template || 'professional',
+        }),
+      })
+      if (res.ok) {
+        const blob = await res.blob()
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `${resume.name || 'resume'}.pdf`
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+      } else {
+        setError('PDF generation failed')
+      }
+    } catch { setError('PDF download failed') }
+    setDownloading(false)
+  }
+
+  return (
+    <div className="h-full">
+      {/* Mobile tab toggle */}
+      <div className="md:hidden flex border-b border-slate-700 mb-4">
+        <button
+          onClick={() => setMobileTab('edit')}
+          className={`flex-1 py-2 text-sm font-medium transition-colors ${mobileTab === 'edit' ? 'text-emerald-400 border-b-2 border-emerald-400' : 'text-slate-400'}`}
+        >Edit</button>
+        <button
+          onClick={() => setMobileTab('preview')}
+          className={`flex-1 py-2 text-sm font-medium transition-colors ${mobileTab === 'preview' ? 'text-emerald-400 border-b-2 border-emerald-400' : 'text-slate-400'}`}
+        >Preview</button>
+      </div>
+
+      <div className="flex gap-6 h-full">
+        {/* Editor Panel */}
+        <div className={`flex-1 overflow-y-auto space-y-5 pr-2 ${mobileTab === 'preview' ? 'hidden md:block' : ''}`}>
+          {/* Top bar: name, actions */}
+          <div className="flex items-center justify-between">
+            <input
+              type="text"
+              value={resume.name}
+              onChange={e => update('name', e.target.value)}
+              className="text-xl font-bold text-white bg-transparent border-none focus:outline-none"
+              placeholder="Resume Name"
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={handleDownloadPDF}
+                disabled={downloading}
+                className="px-3 py-1.5 bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 text-xs rounded-lg font-medium hover:bg-indigo-600/30 transition-colors disabled:opacity-50"
+              >
+                {downloading ? 'Generating...' : 'Download PDF'}
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs rounded-lg font-medium transition-colors disabled:opacity-50"
+              >
+                {saving ? 'Saving...' : saved ? 'Saved!' : isDirty ? 'Save*' : 'Save'}
+              </button>
+            </div>
+          </div>
+
+          {error && (
+            <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5 text-xs text-red-400">
+              {error}
+            </div>
+          )}
+
+          {/* Upload / Import */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-semibold text-slate-400">Quick Start</h3>
+              <button
+                onClick={handleImportProfile}
+                className="px-2.5 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 text-[10px] rounded-lg font-medium transition-colors"
+              >
+                Import from Profile
+              </button>
+            </div>
+            <FileDropzone
+              label="Upload Resume (PDF, DOCX, TXT)"
+              isUploading={uploading}
+              onFileSelect={handleUpload}
+              onRemove={() => {}}
+              onError={setError}
+            />
+          </div>
+
+          {/* Meta: target role, company, template */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[10px] text-slate-500 uppercase tracking-wider">Target Role</label>
+                <input
+                  type="text"
+                  value={resume.targetRole || ''}
+                  onChange={e => update('targetRole', e.target.value)}
+                  placeholder="e.g. Senior Product Manager"
+                  className="w-full mt-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] text-slate-500 uppercase tracking-wider">Target Company</label>
+                <input
+                  type="text"
+                  value={resume.targetCompany || ''}
+                  onChange={e => update('targetCompany', e.target.value)}
+                  placeholder="e.g. Google"
+                  className="w-full mt-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+            </div>
+
+            {/* Template selector */}
+            <div>
+              <label className="text-[10px] text-slate-500 uppercase tracking-wider">Template</label>
+              <div className="flex flex-wrap gap-1.5 mt-1">
+                {RESUME_TEMPLATES.map(t => (
+                  <button
+                    key={t.id}
+                    onClick={() => update('template', t.id)}
+                    className={`px-2.5 py-1 rounded-lg text-[10px] font-medium transition-colors ${
+                      resume.template === t.id
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {t.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {resume.targetRole && (
+              <button
+                onClick={handleGenerateFull}
+                disabled={enhancingSection === 'full'}
+                className="px-3 py-1.5 bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 text-[10px] rounded-lg font-medium hover:bg-indigo-600/30 transition-colors disabled:opacity-50"
+              >
+                {enhancingSection === 'full' ? 'Generating...' : 'AI: Generate suggestions for all sections'}
+              </button>
+            )}
+          </div>
+
+          {/* Section editors */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+            <ContactInfoEditor
+              data={resume.contactInfo || { fullName: '', email: '' }}
+              onChange={setContactInfo}
+            />
+          </div>
+
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+            <SummaryEditor
+              value={resume.summary || ''}
+              onChange={v => update('summary', v)}
+              onEnhance={handleEnhanceSummary}
+              enhancing={enhancingSection === 'summary'}
+            />
+          </div>
+
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+            <ExperienceEditor
+              items={resume.experience || []}
+              onAdd={addExperience}
+              onUpdate={updateExperience}
+              onRemove={removeExperience}
+              onEnhanceBullets={handleEnhanceBullets}
+              enhancingId={enhancingSection}
+            />
+          </div>
+
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+            <EducationEditor
+              items={resume.education || []}
+              onAdd={addEducation}
+              onUpdate={updateEducation}
+              onRemove={removeEducation}
+            />
+          </div>
+
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+            <SkillsEditor
+              items={resume.skills || []}
+              onChange={setSkills}
+            />
+          </div>
+
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+            <ProjectsEditor
+              items={resume.projects || []}
+              onAdd={addProject}
+              onUpdate={updateProject}
+              onRemove={removeProject}
+            />
+          </div>
+
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+            <CertificationsEditor
+              items={resume.certifications || []}
+              onChange={setCertifications}
+            />
+          </div>
+
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+            <CustomSectionEditor
+              items={resume.customSections || []}
+              onAdd={addCustomSection}
+              onUpdate={updateCustomSection}
+              onRemove={removeCustomSection}
+            />
+          </div>
+        </div>
+
+        {/* Preview Panel */}
+        <div className={`w-[420px] shrink-0 sticky top-0 h-fit ${mobileTab === 'edit' ? 'hidden md:block' : ''}`}>
+          <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-2 font-semibold">Live Preview</div>
+          <ResumePreview data={resume} templateId={resume.template || 'professional'} />
+        </div>
+      </div>
+    </div>
+  )
+}
