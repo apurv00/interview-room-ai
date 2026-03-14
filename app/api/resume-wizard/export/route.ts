@@ -4,7 +4,7 @@ import { WizardSession } from '@shared/db/models/WizardSession'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { ExportWizardSchema } from '@resume/wizard/validators/wizardSchemas'
 import { saveResume } from '@resume/services/resumeService'
-import { generatePDF } from '@resume/services/pdfService'
+import { generatePDF, generateResumeHTML } from '@resume/services/pdfService'
 import type { ExportWizardInput } from '@resume/wizard/validators/wizardSchemas'
 import type { ResumeData } from '@resume/validators/resume'
 
@@ -25,6 +25,8 @@ export const POST = composeApiRoute<ExportWizardInput>({
     }
 
     const templateId = body.template || session.selectedTemplate || 'professional'
+    const fontFamily = body.fontFamily || undefined
+    const fontSize = body.fontSize || undefined
 
     // Map WizardSession to ResumeData
     const resumeData: ResumeData = {
@@ -73,6 +75,10 @@ export const POST = composeApiRoute<ExportWizardInput>({
         issuer: c.issuer,
         date: c.date,
       })),
+      styling: (fontFamily || fontSize) ? {
+        fontFamily: fontFamily as ResumeData['styling'] extends { fontFamily?: infer F } ? F : never,
+        fontSize: fontSize as ResumeData['styling'] extends { fontSize?: infer S } ? S : never,
+      } : undefined,
     }
 
     // Save to User.savedResumes via existing service
@@ -102,12 +108,13 @@ export const POST = composeApiRoute<ExportWizardInput>({
         },
       })
     } catch {
-      // PDF generation failed, but save succeeded — return JSON with resumeId
+      // PDF generation failed — return HTML for client-side print-to-PDF fallback
+      const html = generateResumeHTML(resumeData, templateId)
       return NextResponse.json({
         success: true,
         resumeId: saveResult.id,
-        message: 'Resume saved. PDF generation unavailable — use browser print instead.',
-        templateId,
+        html,
+        message: 'Resume saved. Opening print dialog for PDF download.',
       })
     }
   },

@@ -10,12 +10,13 @@ interface Props {
   isGenerating: boolean
   onGenerateFollowUps: (roleId: string, jobTitle: string, rawDescription: string, company?: string) => void
   onAnswerChange: (roleId: string, questionIndex: number, answer: string) => void
+  onBack: () => void
   onNextRole: () => void
   onDone: () => void
 }
 
 export default function StageFollowUps({
-  roles, currentRoleIndex, isGenerating, onGenerateFollowUps, onAnswerChange, onNextRole, onDone,
+  roles, currentRoleIndex, isGenerating, onGenerateFollowUps, onAnswerChange, onBack, onNextRole, onDone,
 }: Props) {
   const role = roles[currentRoleIndex]
   if (!role) return null
@@ -38,24 +39,29 @@ export default function StageFollowUps({
         </p>
       </div>
 
-      {!hasQuestions && (
+      {!hasQuestions && !isGenerating && (
         <div className="text-center py-6 space-y-3">
           <p className="text-sm text-[#4b5563]">
             Generate AI-powered questions to extract key achievements
           </p>
-          <Button
-            variant="primary"
-            size="md"
-            onClick={() => onGenerateFollowUps(
-              role.id,
-              role.title,
-              role.rawBullets.join('. '),
-              role.company,
-            )}
-            isLoading={isGenerating}
-          >
-            Generate Questions
-          </Button>
+          <div className="flex items-center justify-center gap-3">
+            <Button variant="ghost" size="sm" onClick={onBack}>
+              Back
+            </Button>
+            <Button
+              variant="primary"
+              size="md"
+              onClick={() => onGenerateFollowUps(
+                role.id,
+                role.title,
+                role.rawBullets.join('. '),
+                role.company,
+              )}
+              isLoading={isGenerating}
+            >
+              Generate Questions
+            </Button>
+          </div>
         </div>
       )}
 
@@ -80,19 +86,24 @@ export default function StageFollowUps({
           ))}
 
           <div className="flex items-center justify-between pt-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => onGenerateFollowUps(
-                role.id,
-                role.title,
-                role.rawBullets.join('. '),
-                role.company,
-              )}
-              isLoading={isGenerating}
-            >
-              Regenerate
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" size="sm" onClick={onBack}>
+                Back
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onGenerateFollowUps(
+                  role.id,
+                  role.title,
+                  role.rawBullets.join('. '),
+                  role.company,
+                )}
+                isLoading={isGenerating}
+              >
+                Regenerate
+              </Button>
+            </div>
             {hasMoreRoles ? (
               <Button variant="primary" size="sm" onClick={onNextRole}>
                 Next Role

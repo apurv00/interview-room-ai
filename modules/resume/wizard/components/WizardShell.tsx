@@ -144,6 +144,7 @@ export default function WizardShell({ initialSessionId }: Props) {
           onAnswerChange={(roleId, qi, answer) =>
             dispatch({ type: 'SET_FOLLOW_UP_ANSWER', roleId, questionIndex: qi, answer })
           }
+          onBack={handleBack}
           onNextRole={handleFollowUpNextRole}
           onDone={handleFollowUpDone}
         />

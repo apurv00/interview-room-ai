@@ -115,6 +115,8 @@ export const ExportWizardSchema = z.object({
   sessionId: z.string(),
   template: z.string().max(50).optional(),
   format: z.enum(['pdf']).default('pdf'),
+  fontFamily: z.string().max(50).optional(),
+  fontSize: z.string().max(20).optional(),
 })
 export type ExportWizardInput = z.infer<typeof ExportWizardSchema>
 
