@@ -3,6 +3,40 @@ import { getUserProfileContext } from './resumeService'
 
 const client = new Anthropic()
 
+// ─── JSON Extraction Helper ──────────────────────────────────────────────────
+// Robustly extracts JSON from Claude responses that may include preamble text,
+// trailing comments, code fences, or other non-JSON content.
+
+function extractJSON(raw: string): string {
+  // Find the first { or [ which starts a JSON object/array
+  const jsonStart = raw.search(/[\[{]/)
+  if (jsonStart === -1) return raw
+
+  const startChar = raw[jsonStart]
+  let depth = 0
+  let inString = false
+  let escape = false
+
+  for (let i = jsonStart; i < raw.length; i++) {
+    const ch = raw[i]
+    if (escape) { escape = false; continue }
+    if (ch === '\\') { escape = true; continue }
+    if (ch === '"') { inString = !inString; continue }
+    if (inString) continue
+    if (ch === '{' || ch === '[') depth++
+    if (ch === '}' || ch === ']') {
+      depth--
+      if (depth === 0) return raw.slice(jsonStart, i + 1)
+    }
+  }
+
+  // Fallback if braces aren't balanced (truncated response): strip code fences
+  return raw
+    .replace(/^[\s\S]*?```(?:json)?\s*\n?/, '')
+    .replace(/\n?\s*```[\s\S]*$/, '')
+    .trim()
+}
+
 // ─── Enhance Section ────────────────────────────────────────────────────────
 
 export async function enhanceSection(
@@ -46,11 +80,12 @@ Rules:
   })
 
   const raw = message.content[0].type === 'text' ? message.content[0].text.trim() : '[]'
-  const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
+  const cleaned = extractJSON(raw)
   try {
     const bullets = JSON.parse(cleaned)
     return { bullets: Array.isArray(bullets) ? bullets : data.bullets }
   } catch {
+    console.error('enhanceBullets JSON parse failed. Raw:', raw.slice(0, 300))
     return { bullets: data.bullets }
   }
 }
@@ -72,7 +107,7 @@ export async function generateFullResume(
 
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 2000,
+    max_tokens: 3000,
     system: `You are an expert resume writer. Generate professional resume content based on the user's profile and any existing content. ${profileContext}${data.targetRole ? `Target role: ${data.targetRole}. ` : ''}${data.targetCompany ? `Target company: ${data.targetCompany}. ` : ''}Make content ATS-friendly with strong action verbs and quantified achievements.
 
 Return ONLY valid JSON with this structure:
@@ -81,10 +116,11 @@ Return ONLY valid JSON with this structure:
   })
 
   const raw = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}'
-  const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
+  const cleaned = extractJSON(raw)
   try {
     return JSON.parse(cleaned)
   } catch {
+    console.error('generateFullResume JSON parse failed. Raw:', raw.slice(0, 300))
     return { sections: [] }
   }
 }
@@ -98,7 +134,7 @@ export async function checkATS(data: { resumeText: string; jobDescription?: stri
 
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 2000,
+    max_tokens: 4096,
     system: `You are an ATS (Applicant Tracking System) compatibility expert. Analyze a resume for ATS parsing issues and provide a compatibility score.
 
 Check for:
@@ -125,7 +161,7 @@ Return ONLY valid JSON matching this schema:
   })
 
   const raw = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}'
-  const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
+  const cleaned = extractJSON(raw)
   try {
     const result = JSON.parse(cleaned)
     // Ensure required fields have defaults
@@ -149,6 +185,7 @@ Return ONLY valid JSON matching this schema:
       summary: result.summary || 'Unable to generate summary.',
     }
   } catch {
+    console.error('checkATS JSON parse failed. Raw response:', raw.slice(0, 500))
     throw new Error('Failed to parse ATS analysis results. Please try again.')
   }
 }
@@ -158,7 +195,7 @@ Return ONLY valid JSON matching this schema:
 export async function tailorResume(data: { resumeText: string; jobDescription: string; companyName?: string }) {
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 3000,
+    max_tokens: 4096,
     system: `You are an expert resume tailor. Your job is to modify a candidate's resume to better match a specific job description while keeping all facts accurate. Never fabricate experience or skills.
 
 Rules:
@@ -185,7 +222,7 @@ Return ONLY valid JSON matching this schema:
   })
 
   const raw = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}'
-  const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
+  const cleaned = extractJSON(raw)
   try {
     const result = JSON.parse(cleaned)
     return {
@@ -196,6 +233,7 @@ Return ONLY valid JSON matching this schema:
       addedKeywords: Array.isArray(result.addedKeywords) ? result.addedKeywords : [],
     }
   } catch {
+    console.error('tailorResume JSON parse failed. Raw response:', raw.slice(0, 500))
     throw new Error('Failed to parse tailoring results. Please try again.')
   }
 }
@@ -205,7 +243,7 @@ Return ONLY valid JSON matching this schema:
 export async function parseResumeToStructured(text: string) {
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 4000,
+    max_tokens: 4096,
     system: `You are an expert resume parser. Parse the given resume text into a structured JSON format.
 
 Return ONLY valid JSON matching this exact schema:
@@ -277,10 +315,11 @@ Rules:
   })
 
   const raw = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}'
-  const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
+  const cleaned = extractJSON(raw)
   try {
     return JSON.parse(cleaned)
   } catch {
+    console.error('parseResumeToStructured JSON parse failed. Raw:', raw.slice(0, 500))
     return null
   }
 }
