@@ -60,6 +60,10 @@ export default function WizardPreview({ state }: Props) {
       issuer: c.issuer,
       date: c.date,
     })),
+    styling: {
+      fontFamily: state.fontFamily as 'georgia' | 'times' | 'garamond' | 'palatino' | 'calibri' | 'helvetica' | 'lato' | 'roboto',
+      fontSize: state.fontSize as 'small' | 'medium' | 'large',
+    },
   }), [state])
 
   return <ResumePreview data={resumeData} templateId={state.selectedTemplate} />

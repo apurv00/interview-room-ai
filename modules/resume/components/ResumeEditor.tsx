@@ -14,6 +14,7 @@ import ProjectsEditor from './sections/ProjectsEditor'
 import CertificationsEditor from './sections/CertificationsEditor'
 import CustomSectionEditor from './sections/CustomSectionEditor'
 import FileDropzone from '@interview/components/FileDropzone'
+import FontStyleControls from './FontStyleControls'
 import SortableList from './SortableList'
 import SortableItem, { DragHandle } from './SortableItem'
 
@@ -363,6 +364,14 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
                 ))}
               </div>
             </div>
+
+            {/* Font & Size */}
+            <FontStyleControls
+              fontFamily={resume.styling?.fontFamily || 'georgia'}
+              fontSize={resume.styling?.fontSize || 'medium'}
+              onFontFamilyChange={f => update('styling', { ...resume.styling, fontFamily: f as 'georgia' | 'times' | 'garamond' | 'palatino' | 'calibri' | 'helvetica' | 'lato' | 'roboto' })}
+              onFontSizeChange={s => update('styling', { ...resume.styling, fontSize: s as 'small' | 'medium' | 'large' })}
+            />
 
             {resume.targetRole && (
               <button
