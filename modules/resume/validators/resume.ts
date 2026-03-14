@@ -75,6 +75,7 @@ export const ResumeSchema = z.object({
   projects: z.array(ProjectSchema).max(20).optional(),
   certifications: z.array(CertificationSchema).max(20).optional(),
   customSections: z.array(CustomSectionSchema).max(10).optional(),
+  sectionOrder: z.array(z.string()).max(20).optional(),
 
   // Legacy support
   sections: z.record(z.string(), z.string()).optional(),

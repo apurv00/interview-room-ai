@@ -1,5 +1,15 @@
 import { useState, useCallback, useMemo } from 'react'
+import { arrayMove } from '@dnd-kit/sortable'
 import type { ResumeData, ResumeContactInfo, ResumeExperience, ResumeEducation, ResumeSkillCategory, ResumeProject, ResumeCertification, ResumeCustomSection } from '../validators/resume'
+
+function reorderByIds<T extends { id: string }>(items: T[], activeId: string, overId: string): T[] {
+  const oldIndex = items.findIndex(i => i.id === activeId)
+  const newIndex = items.findIndex(i => i.id === overId)
+  if (oldIndex === -1 || newIndex === -1) return items
+  return arrayMove(items, oldIndex, newIndex)
+}
+
+export const DEFAULT_SECTION_ORDER = ['contactInfo', 'summary', 'experience', 'education', 'skills', 'projects', 'certifications', 'customSections']
 
 const DEFAULT_RESUME: ResumeData = {
   name: 'My Resume',
@@ -133,6 +143,49 @@ export function useResume(initial?: Partial<ResumeData>) {
     setDirty(true)
   }, [])
 
+  // Reorder helpers
+  const reorderExperience = useCallback((activeId: string, overId: string) => {
+    setResume(prev => ({ ...prev, experience: reorderByIds(prev.experience || [], activeId, overId) }))
+    setDirty(true)
+  }, [])
+
+  const reorderEducation = useCallback((activeId: string, overId: string) => {
+    setResume(prev => ({ ...prev, education: reorderByIds(prev.education || [], activeId, overId) }))
+    setDirty(true)
+  }, [])
+
+  const reorderProjects = useCallback((activeId: string, overId: string) => {
+    setResume(prev => ({ ...prev, projects: reorderByIds(prev.projects || [], activeId, overId) }))
+    setDirty(true)
+  }, [])
+
+  const reorderCustomSections = useCallback((activeId: string, overId: string) => {
+    setResume(prev => ({ ...prev, customSections: reorderByIds(prev.customSections || [], activeId, overId) }))
+    setDirty(true)
+  }, [])
+
+  const reorderBullets = useCallback((expId: string, oldIndex: number, newIndex: number) => {
+    setResume(prev => ({
+      ...prev,
+      experience: (prev.experience || []).map(e =>
+        e.id === expId ? { ...e, bullets: arrayMove(e.bullets, oldIndex, newIndex) } : e
+      ),
+    }))
+    setDirty(true)
+  }, [])
+
+  // Section-level reordering
+  const reorderSections = useCallback((activeId: string, overId: string) => {
+    setResume(prev => {
+      const sectionOrder = prev.sectionOrder || DEFAULT_SECTION_ORDER
+      const oldIndex = sectionOrder.indexOf(activeId)
+      const newIndex = sectionOrder.indexOf(overId)
+      if (oldIndex === -1 || newIndex === -1) return prev
+      return { ...prev, sectionOrder: arrayMove(sectionOrder, oldIndex, newIndex) }
+    })
+    setDirty(true)
+  }, [])
+
   // Load full resume (e.g., from API or profile import)
   const loadResume = useCallback((data: Partial<ResumeData>) => {
     setResume(prev => ({ ...prev, ...data }))
@@ -166,6 +219,8 @@ export function useResume(initial?: Partial<ResumeData>) {
     addProject, updateProject, removeProject,
     setCertifications,
     addCustomSection, updateCustomSection, removeCustomSection,
+    reorderExperience, reorderEducation, reorderProjects, reorderCustomSections,
+    reorderBullets, reorderSections,
     loadResume,
     markClean,
   }

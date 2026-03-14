@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import type { ResumeData } from '../validators/resume'
-import { useResume } from '../hooks/useResume'
+import { useResume, DEFAULT_SECTION_ORDER } from '../hooks/useResume'
 import { RESUME_TEMPLATES } from '../config/templates'
 import ResumePreview from './ResumePreview'
 import ContactInfoEditor from './sections/ContactInfoEditor'
@@ -14,6 +14,8 @@ import ProjectsEditor from './sections/ProjectsEditor'
 import CertificationsEditor from './sections/CertificationsEditor'
 import CustomSectionEditor from './sections/CustomSectionEditor'
 import FileDropzone from '@interview/components/FileDropzone'
+import SortableList from './SortableList'
+import SortableItem, { DragHandle } from './SortableItem'
 
 interface Props {
   initialData?: Partial<ResumeData>
@@ -30,6 +32,8 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
     addProject, updateProject, removeProject,
     setCertifications,
     addCustomSection, updateCustomSection, removeCustomSection,
+    reorderExperience, reorderEducation, reorderProjects, reorderCustomSections,
+    reorderBullets, reorderSections,
     loadResume, markClean,
   } = useResume(initialData)
 
@@ -371,74 +375,94 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
             )}
           </div>
 
-          {/* Section editors */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-            <ContactInfoEditor
-              data={resume.contactInfo || { fullName: '', email: '' }}
-              onChange={setContactInfo}
-            />
-          </div>
-
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-            <SummaryEditor
-              value={resume.summary || ''}
-              onChange={v => update('summary', v)}
-              onEnhance={handleEnhanceSummary}
-              enhancing={enhancingSection === 'summary'}
-            />
-          </div>
-
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-            <ExperienceEditor
-              items={resume.experience || []}
-              onAdd={addExperience}
-              onUpdate={updateExperience}
-              onRemove={removeExperience}
-              onEnhanceBullets={handleEnhanceBullets}
-              enhancingId={enhancingSection}
-            />
-          </div>
-
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-            <EducationEditor
-              items={resume.education || []}
-              onAdd={addEducation}
-              onUpdate={updateEducation}
-              onRemove={removeEducation}
-            />
-          </div>
-
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-            <SkillsEditor
-              items={resume.skills || []}
-              onChange={setSkills}
-            />
-          </div>
-
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-            <ProjectsEditor
-              items={resume.projects || []}
-              onAdd={addProject}
-              onUpdate={updateProject}
-              onRemove={removeProject}
-            />
-          </div>
-
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-            <CertificationsEditor
-              items={resume.certifications || []}
-              onChange={setCertifications}
-            />
-          </div>
-
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-            <CustomSectionEditor
-              items={resume.customSections || []}
-              onAdd={addCustomSection}
-              onUpdate={updateCustomSection}
-              onRemove={removeCustomSection}
-            />
-          </div>
+          {/* Section editors — drag to reorder */}
+          <SortableList
+            items={resume.sectionOrder || DEFAULT_SECTION_ORDER}
+            onReorder={reorderSections}
+          >
+            <div className="space-y-5">
+              {(resume.sectionOrder || DEFAULT_SECTION_ORDER).map(sectionId => (
+                <SortableItem key={sectionId} id={sectionId}>
+                  {({ listeners, attributes }) => (
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+                      <div className="flex items-start gap-2">
+                        <div className="pt-1">
+                          <DragHandle listeners={listeners} attributes={attributes} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          {sectionId === 'contactInfo' && (
+                            <ContactInfoEditor
+                              data={resume.contactInfo || { fullName: '', email: '' }}
+                              onChange={setContactInfo}
+                            />
+                          )}
+                          {sectionId === 'summary' && (
+                            <SummaryEditor
+                              value={resume.summary || ''}
+                              onChange={v => update('summary', v)}
+                              onEnhance={handleEnhanceSummary}
+                              enhancing={enhancingSection === 'summary'}
+                            />
+                          )}
+                          {sectionId === 'experience' && (
+                            <ExperienceEditor
+                              items={resume.experience || []}
+                              onAdd={addExperience}
+                              onUpdate={updateExperience}
+                              onRemove={removeExperience}
+                              onEnhanceBullets={handleEnhanceBullets}
+                              enhancingId={enhancingSection}
+                              onReorder={reorderExperience}
+                              onReorderBullets={reorderBullets}
+                            />
+                          )}
+                          {sectionId === 'education' && (
+                            <EducationEditor
+                              items={resume.education || []}
+                              onAdd={addEducation}
+                              onUpdate={updateEducation}
+                              onRemove={removeEducation}
+                              onReorder={reorderEducation}
+                            />
+                          )}
+                          {sectionId === 'skills' && (
+                            <SkillsEditor
+                              items={resume.skills || []}
+                              onChange={setSkills}
+                            />
+                          )}
+                          {sectionId === 'projects' && (
+                            <ProjectsEditor
+                              items={resume.projects || []}
+                              onAdd={addProject}
+                              onUpdate={updateProject}
+                              onRemove={removeProject}
+                              onReorder={reorderProjects}
+                            />
+                          )}
+                          {sectionId === 'certifications' && (
+                            <CertificationsEditor
+                              items={resume.certifications || []}
+                              onChange={setCertifications}
+                            />
+                          )}
+                          {sectionId === 'customSections' && (
+                            <CustomSectionEditor
+                              items={resume.customSections || []}
+                              onAdd={addCustomSection}
+                              onUpdate={updateCustomSection}
+                              onRemove={removeCustomSection}
+                              onReorder={reorderCustomSections}
+                            />
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </SortableItem>
+              ))}
+            </div>
+          </SortableList>
         </div>
 
         {/* Preview Panel - 50% */}
