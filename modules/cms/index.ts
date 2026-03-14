@@ -6,4 +6,5 @@ export {
   UpdateDomainSchema,
   CreateInterviewTypeSchema,
   UpdateInterviewTypeSchema,
+  UpdateWizardCostCapSchema,
 } from './validators/cms'

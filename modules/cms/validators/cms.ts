@@ -63,3 +63,10 @@ export const UpdateInterviewTypeSchema = z.object({
   isActive: z.boolean().optional(),
   sortOrder: z.number().int().min(0).max(1000).optional(),
 })
+
+// ─── Wizard Config ────────────────────────────────────────────────────────
+
+export const UpdateWizardCostCapSchema = z.object({
+  costCapEnabled: z.boolean(),
+  costCapUsd: z.number().min(0.01).max(100),
+})

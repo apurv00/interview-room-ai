@@ -3,6 +3,7 @@ import { aiLogger } from '@shared/logger'
 import { trackUsage } from '@shared/services/usageTracking'
 import { connectDB } from '@shared/db/connection'
 import { WizardSession } from '@shared/db/models/WizardSession'
+import { WizardConfig } from '@shared/db/models/WizardConfig'
 import { WIZARD_COST_CAP_USD, FALLBACK_FOLLOW_UPS, SEGMENT_PROMPT_CONTEXT } from '../config/wizardConfig'
 import type { AuthUser } from '@shared/middleware/composeApiRoute'
 
@@ -41,9 +42,17 @@ function extractJSON(raw: string): string {
 
 export async function checkCostCap(sessionId: string): Promise<{ allowed: boolean; remaining: number }> {
   await connectDB()
+
+  // Fetch dynamic config from DB (falls back to static defaults)
+  const config = await WizardConfig.getConfig()
+  if (!config.costCapEnabled) {
+    return { allowed: true, remaining: Infinity }
+  }
+
+  const capUsd = config.costCapUsd ?? WIZARD_COST_CAP_USD
   const session = await WizardSession.findById(sessionId).select('aiCostUsd').lean()
   if (!session) return { allowed: false, remaining: 0 }
-  const remaining = WIZARD_COST_CAP_USD - (session.aiCostUsd || 0)
+  const remaining = capUsd - (session.aiCostUsd || 0)
   return { allowed: remaining > 0, remaining }
 }
 

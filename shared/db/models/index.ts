@@ -49,6 +49,8 @@ export { BenchmarkCase } from './BenchmarkCase'
 export type { IBenchmarkCase } from './BenchmarkCase'
 
 // Smart Wizard
+export { WizardConfig } from './WizardConfig'
+export type { IWizardConfig } from './WizardConfig'
 export { WizardSession } from './WizardSession'
 export type {
   IWizardSession, IWizardRole, IWizardEducation, IWizardSkills,
