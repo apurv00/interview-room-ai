@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
-import { getUserCompetencySummary, getUserWeaknesses, getCompetenciesForDomain } from '@/lib/services/competencyService'
-import { getRecentSummaries } from '@/lib/services/sessionSummaryService'
+import { getUserCompetencySummary, getUserWeaknesses, getCompetenciesForDomain } from '@learn/services/competencyService'
+import { getRecentSummaries } from '@learn/services/sessionSummaryService'
 
 export const dynamic = 'force-dynamic'
 

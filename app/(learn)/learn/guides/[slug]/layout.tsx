@@ -1,6 +1,6 @@
 import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
-import { getResourceBySlug, getAllSlugs } from '@/lib/resources'
+import { getResourceBySlug, getAllSlugs } from '@learn/lib/resources'
 import { siteConfig } from '@shared/siteConfig'
 
 interface Props {
@@ -15,7 +15,7 @@ export function generateMetadata({ params }: Props): Metadata {
   const resource = getResourceBySlug(params.slug)
   if (!resource) return notFound()
 
-  const url = `${siteConfig.url}/resources/${resource.slug}`
+  const url = `${siteConfig.url}/learn/guides/${resource.slug}`
 
   return {
     title: resource.title,

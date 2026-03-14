@@ -375,7 +375,7 @@ export function useInterview({
           }))
           const avgScore = Math.round(dimAvgs.reduce((s, d) => s + d.avg, 0) / dims.length)
           const sorted = [...dimAvgs].sort((a, b) => b.avg - a.avg)
-          fetch('/api/profile/practice-stats', {
+          fetch('/api/learn/stats', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

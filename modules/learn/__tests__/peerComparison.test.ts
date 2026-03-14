@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computePercentile } from '../peerComparison'
+import { computePercentile } from '@learn/lib/peerComparison'
 
 describe('computePercentile', () => {
   it('returns 50 for empty scores array', () => {

@@ -50,7 +50,7 @@ export default function ProgressPage() {
       setLoading(true)
       setError(null)
       try {
-        const res = await fetch(`/api/progress?period=${period}`)
+        const res = await fetch(`/api/learn/progress?period=${period}`)
         if (res.ok) {
           setData(await res.json())
         } else {

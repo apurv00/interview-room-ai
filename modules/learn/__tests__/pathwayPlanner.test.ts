@@ -34,7 +34,7 @@ vi.mock('@shared/db/models', () => ({
   },
 }))
 
-vi.mock('@/lib/services/competencyService', () => ({
+vi.mock('@learn/services/competencyService', () => ({
   getUserCompetencySummary: vi.fn().mockResolvedValue({
     competencies: [
       { name: 'specificity', score: 45, trend: 'stable', confidence: 0.5 },
@@ -49,13 +49,13 @@ vi.mock('@/lib/services/competencyService', () => ({
   ]),
 }))
 
-vi.mock('@/lib/services/sessionSummaryService', () => ({
+vi.mock('@learn/services/sessionSummaryService', () => ({
   getRecentSummaries: vi.fn().mockResolvedValue([
     { overallScore: 65, strengths: ['structure'], weaknesses: ['specificity'], majorMistakes: [], topicsCovered: [], competencyScores: {}, sessionDate: new Date(), interviewType: 'hr-screening' },
   ]),
 }))
 
-vi.mock('@/lib/services/evaluationEngine', () => ({
+vi.mock('@interview/services/evaluationEngine', () => ({
   evaluateSession: vi.fn().mockResolvedValue({
     dimensionAverages: { relevance: 75, structure: 80, specificity: 45, ownership: 70 },
     overallWeightedScore: 68,
@@ -86,7 +86,7 @@ vi.mock('@anthropic-ai/sdk', () => ({
   })),
 }))
 
-import { getCurrentPathway, markTaskComplete } from '@/lib/services/pathwayPlanner'
+import { getCurrentPathway, markTaskComplete } from '@learn/services/pathwayPlanner'
 import { isFeatureEnabled } from '@shared/featureFlags'
 
 const TEST_USER_ID = '507f1f77bcf86cd799439011' // valid ObjectId

@@ -5,7 +5,7 @@ import { connectDB } from '@shared/db/connection'
 import { InterviewSession } from '@shared/db/models'
 import { redis } from '@shared/redis'
 import { logger } from '@shared/logger'
-import { computePercentile } from '@/lib/peerComparison'
+import { computePercentile } from '@learn/lib/peerComparison'
 
 export const dynamic = 'force-dynamic'
 

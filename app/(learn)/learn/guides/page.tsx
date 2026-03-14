@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import type { Metadata } from 'next'
-import { RESOURCES, getResourcesByCategory } from '@/lib/resources'
+import { RESOURCES, getResourcesByCategory } from '@learn/lib/resources'
 import { siteConfig } from '@shared/siteConfig'
 import JsonLd from '@shared/seo/JsonLd'
 
@@ -16,7 +16,7 @@ export const metadata: Metadata = {
     'behavioral interview',
     'mock interview guide',
   ],
-  alternates: { canonical: '/resources' },
+  alternates: { canonical: '/learn/guides' },
 }
 
 const CATEGORIES = [
@@ -34,7 +34,7 @@ export default function ResourcesPage() {
           '@type': 'CollectionPage',
           name: 'Interview Preparation Resources',
           description: metadata.description,
-          url: `${siteConfig.url}/resources`,
+          url: `${siteConfig.url}/learn/guides`,
           publisher: { '@type': 'Organization', name: siteConfig.name },
         }}
       />
@@ -63,7 +63,7 @@ export default function ResourcesPage() {
                   {items.map((r) => (
                     <li key={r.slug}>
                       <Link
-                        href={`/resources/${r.slug}`}
+                        href={`/learn/guides/${r.slug}`}
                         className="block py-2 px-3 rounded-[8px] hover:bg-[var(--color-surface)] transition-colors group"
                       >
                         <span className="text-subheading text-[var(--foreground)] group-hover:text-[#818cf8] transition-colors">

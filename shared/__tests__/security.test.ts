@@ -12,7 +12,7 @@ import {
   UpdateDomainSchema,
   CreateInterviewTypeSchema,
   UpdateInterviewTypeSchema,
-} from '@/lib/validators/cms'
+} from '@cms/validators/cms'
 import { canViewSession, hasRole, canAccessOrg } from '@shared/auth/permissions'
 
 // ─── Authorization Boundary Tests ───────────────────────────────────────────

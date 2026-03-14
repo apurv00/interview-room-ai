@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
-import { runBenchmarkSuite } from '@/lib/services/benchmarkService'
+import { runBenchmarkSuite } from '@cms/services/benchmarkService'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'

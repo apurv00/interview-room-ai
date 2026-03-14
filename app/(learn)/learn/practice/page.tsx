@@ -71,7 +71,7 @@ export default function PracticePage() {
     }
     if (authStatus !== 'authenticated') return
 
-    fetch('/api/practice-sets')
+    fetch('/api/learn/practice-sets')
       .then(r => r.json())
       .then(setData)
       .catch(() => {})
