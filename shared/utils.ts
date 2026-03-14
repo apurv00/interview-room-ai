@@ -8,6 +8,38 @@ export function formatTime(s: number): string {
 }
 
 /**
+ * Robustly extracts JSON from Claude responses that may include preamble text,
+ * trailing comments, code fences, or other non-JSON content.
+ */
+export function extractJSON(raw: string): string {
+  const jsonStart = raw.search(/[\[{]/)
+  if (jsonStart === -1) return raw
+
+  let depth = 0
+  let inString = false
+  let escape = false
+
+  for (let i = jsonStart; i < raw.length; i++) {
+    const ch = raw[i]
+    if (escape) { escape = false; continue }
+    if (ch === '\\') { escape = true; continue }
+    if (ch === '"') { inString = !inString; continue }
+    if (inString) continue
+    if (ch === '{' || ch === '[') depth++
+    if (ch === '}' || ch === ']') {
+      depth--
+      if (depth === 0) return raw.slice(jsonStart, i + 1)
+    }
+  }
+
+  // Fallback if braces aren't balanced (truncated response): strip code fences
+  return raw
+    .replace(/^[\s\S]*?```(?:json)?\s*\n?/, '')
+    .replace(/\n?\s*```[\s\S]*$/, '')
+    .trim()
+}
+
+/**
  * Find the last index in a sorted `offsets` array where offsets[i] <= target.
  * Returns -1 if no such index exists. O(log n).
  */

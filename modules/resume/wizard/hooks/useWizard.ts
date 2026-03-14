@@ -99,10 +99,7 @@ type WizardAction =
   | { type: 'SET_BULLET_DECISION'; roleId: string; bulletIndex: number; decision: 'accept' | 'reject' | 'edit'; editedText?: string }
   | { type: 'SET_SUMMARY_DECISION'; decision: 'accept' | 'reject' | 'edit'; editedSummary?: string }
   | { type: 'SET_TEMPLATE'; template: string }
-  | { type: 'SET_LOADING'; isLoading: boolean }
-  | { type: 'SET_SAVING'; isSaving: boolean }
-  | { type: 'SET_GENERATING_FOLLOW_UPS'; isGeneratingFollowUps: boolean }
-  | { type: 'SET_ENHANCING'; isEnhancing: boolean }
+  | { type: 'SET_UI_FLAG'; key: 'isLoading' | 'isSaving' | 'isGeneratingFollowUps' | 'isEnhancing'; value: boolean }
   | { type: 'SET_ERROR'; error: string | null }
   | { type: 'SET_COST'; aiCostUsd: number }
   | { type: 'LOAD_SESSION'; session: Partial<WizardState> }
@@ -259,14 +256,8 @@ function wizardReducer(state: WizardState, action: WizardAction): WizardState {
     case 'SET_TEMPLATE':
       return { ...state, selectedTemplate: action.template }
 
-    case 'SET_LOADING':
-      return { ...state, isLoading: action.isLoading }
-    case 'SET_SAVING':
-      return { ...state, isSaving: action.isSaving }
-    case 'SET_GENERATING_FOLLOW_UPS':
-      return { ...state, isGeneratingFollowUps: action.isGeneratingFollowUps }
-    case 'SET_ENHANCING':
-      return { ...state, isEnhancing: action.isEnhancing }
+    case 'SET_UI_FLAG':
+      return { ...state, [action.key]: action.value }
     case 'SET_ERROR':
       return { ...state, error: action.error }
     case 'SET_COST':
@@ -337,7 +328,7 @@ export function useWizard(initialSessionId?: string) {
   // ─── API Calls ─────────────────────────────────────────────────────────
 
   const createSession = useCallback(async (segment: WizardSegment) => {
-    dispatch({ type: 'SET_SAVING', isSaving: true })
+    dispatch({ type: 'SET_UI_FLAG', key: 'isSaving', value: true })
     dispatch({ type: 'SET_ERROR', error: null })
     try {
       const res = await fetch('/api/resume-wizard/session/create', {
@@ -353,12 +344,12 @@ export function useWizard(initialSessionId?: string) {
     } catch (err) {
       dispatch({ type: 'SET_ERROR', error: err instanceof Error ? err.message : 'Failed to create session' })
     } finally {
-      dispatch({ type: 'SET_SAVING', isSaving: false })
+      dispatch({ type: 'SET_UI_FLAG', key: 'isSaving', value: false })
     }
   }, [])
 
   const loadSession = useCallback(async (sessionId: string) => {
-    dispatch({ type: 'SET_LOADING', isLoading: true })
+    dispatch({ type: 'SET_UI_FLAG', key: 'isLoading', value: true })
     try {
       const res = await fetch(`/api/resume-wizard/session/${sessionId}`)
       if (!res.ok) throw new Error('Session not found')
@@ -383,13 +374,13 @@ export function useWizard(initialSessionId?: string) {
       })
     } catch (err) {
       dispatch({ type: 'SET_ERROR', error: err instanceof Error ? err.message : 'Failed to load session' })
-      dispatch({ type: 'SET_LOADING', isLoading: false })
+      dispatch({ type: 'SET_UI_FLAG', key: 'isLoading', value: false })
     }
   }, [])
 
   const submitStage = useCallback(async (stageData: Record<string, unknown>) => {
     if (!state.sessionId) return
-    dispatch({ type: 'SET_SAVING', isSaving: true })
+    dispatch({ type: 'SET_UI_FLAG', key: 'isSaving', value: true })
     dispatch({ type: 'SET_ERROR', error: null })
     try {
       const res = await fetch('/api/resume-wizard/stage/submit', {
@@ -406,13 +397,13 @@ export function useWizard(initialSessionId?: string) {
     } catch (err) {
       dispatch({ type: 'SET_ERROR', error: err instanceof Error ? err.message : 'Failed to save' })
     } finally {
-      dispatch({ type: 'SET_SAVING', isSaving: false })
+      dispatch({ type: 'SET_UI_FLAG', key: 'isSaving', value: false })
     }
   }, [state.sessionId])
 
   const generateFollowUps = useCallback(async (roleId: string, jobTitle: string, rawDescription: string, company?: string) => {
     if (!state.sessionId) return
-    dispatch({ type: 'SET_GENERATING_FOLLOW_UPS', isGeneratingFollowUps: true })
+    dispatch({ type: 'SET_UI_FLAG', key: 'isGeneratingFollowUps', value: true })
     try {
       const res = await fetch('/api/resume-wizard/follow-ups/generate', {
         method: 'POST',
@@ -426,13 +417,13 @@ export function useWizard(initialSessionId?: string) {
     } catch (err) {
       dispatch({ type: 'SET_ERROR', error: err instanceof Error ? err.message : 'Failed to generate questions' })
     } finally {
-      dispatch({ type: 'SET_GENERATING_FOLLOW_UPS', isGeneratingFollowUps: false })
+      dispatch({ type: 'SET_UI_FLAG', key: 'isGeneratingFollowUps', value: false })
     }
   }, [state.sessionId, state.aiCostUsd])
 
   const enhanceBullets = useCallback(async () => {
     if (!state.sessionId) return
-    dispatch({ type: 'SET_ENHANCING', isEnhancing: true })
+    dispatch({ type: 'SET_UI_FLAG', key: 'isEnhancing', value: true })
     dispatch({ type: 'SET_ERROR', error: null })
     try {
       const res = await fetch('/api/resume-wizard/ai/enhance', {
@@ -454,13 +445,13 @@ export function useWizard(initialSessionId?: string) {
     } catch (err) {
       dispatch({ type: 'SET_ERROR', error: err instanceof Error ? err.message : 'Enhancement failed' })
     } finally {
-      dispatch({ type: 'SET_ENHANCING', isEnhancing: false })
+      dispatch({ type: 'SET_UI_FLAG', key: 'isEnhancing', value: false })
     }
   }, [state.sessionId])
 
   const submitReview = useCallback(async () => {
     if (!state.sessionId) return
-    dispatch({ type: 'SET_SAVING', isSaving: true })
+    dispatch({ type: 'SET_UI_FLAG', key: 'isSaving', value: true })
     dispatch({ type: 'SET_ERROR', error: null })
 
     const bulletDecisions = state.roles.flatMap(r =>
@@ -493,13 +484,13 @@ export function useWizard(initialSessionId?: string) {
     } catch (err) {
       dispatch({ type: 'SET_ERROR', error: err instanceof Error ? err.message : 'Review failed' })
     } finally {
-      dispatch({ type: 'SET_SAVING', isSaving: false })
+      dispatch({ type: 'SET_UI_FLAG', key: 'isSaving', value: false })
     }
   }, [state.sessionId, state.roles, state.finalSummary, state.generatedSummary])
 
   const exportResume = useCallback(async () => {
     if (!state.sessionId) return
-    dispatch({ type: 'SET_SAVING', isSaving: true })
+    dispatch({ type: 'SET_UI_FLAG', key: 'isSaving', value: true })
     dispatch({ type: 'SET_ERROR', error: null })
     try {
       const res = await fetch('/api/resume-wizard/export', {
@@ -529,7 +520,7 @@ export function useWizard(initialSessionId?: string) {
     } catch (err) {
       dispatch({ type: 'SET_ERROR', error: err instanceof Error ? err.message : 'Export failed' })
     } finally {
-      dispatch({ type: 'SET_SAVING', isSaving: false })
+      dispatch({ type: 'SET_UI_FLAG', key: 'isSaving', value: false })
     }
   }, [state.sessionId, state.selectedTemplate, state.contactInfo.fullName])
 

@@ -8,6 +8,7 @@ const navItems = [
   { href: '/cms', label: 'Dashboard', icon: '📊' },
   { href: '/cms/domains', label: 'Domains', icon: '🏷️' },
   { href: '/cms/interview-types', label: 'Interview Types', icon: '🎯' },
+  { href: '/cms/wizard-config', label: 'Wizard Config', icon: '⚙️' },
 ]
 
 export default function CmsLayout({ children }: { children: ReactNode }) {

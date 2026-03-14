@@ -2,48 +2,29 @@ import Anthropic from '@anthropic-ai/sdk'
 import { aiLogger } from '@shared/logger'
 import { trackUsage } from '@shared/services/usageTracking'
 import { connectDB } from '@shared/db/connection'
+import { extractJSON } from '@shared/utils'
 import { WizardSession } from '@shared/db/models/WizardSession'
+import { WizardConfig } from '@shared/db/models/WizardConfig'
 import { WIZARD_COST_CAP_USD, FALLBACK_FOLLOW_UPS, SEGMENT_PROMPT_CONTEXT } from '../config/wizardConfig'
 import type { AuthUser } from '@shared/middleware/composeApiRoute'
 
 const client = new Anthropic()
 
-// ─── JSON Extraction Helper ────────────────────────────────────────────────
-
-function extractJSON(raw: string): string {
-  const jsonStart = raw.search(/[\[{]/)
-  if (jsonStart === -1) return raw
-
-  let depth = 0
-  let inString = false
-  let escape = false
-
-  for (let i = jsonStart; i < raw.length; i++) {
-    const ch = raw[i]
-    if (escape) { escape = false; continue }
-    if (ch === '\\') { escape = true; continue }
-    if (ch === '"') { inString = !inString; continue }
-    if (inString) continue
-    if (ch === '{' || ch === '[') depth++
-    if (ch === '}' || ch === ']') {
-      depth--
-      if (depth === 0) return raw.slice(jsonStart, i + 1)
-    }
-  }
-
-  return raw
-    .replace(/^[\s\S]*?```(?:json)?\s*\n?/, '')
-    .replace(/\n?\s*```[\s\S]*$/, '')
-    .trim()
-}
-
 // ─── Cost Cap Check ────────────────────────────────────────────────────────
 
 export async function checkCostCap(sessionId: string): Promise<{ allowed: boolean; remaining: number }> {
   await connectDB()
+
+  // Fetch dynamic config from DB (falls back to static defaults)
+  const config = await WizardConfig.getConfig()
+  if (!config.costCapEnabled) {
+    return { allowed: true, remaining: Infinity }
+  }
+
+  const capUsd = config.costCapUsd ?? WIZARD_COST_CAP_USD
   const session = await WizardSession.findById(sessionId).select('aiCostUsd').lean()
   if (!session) return { allowed: false, remaining: 0 }
-  const remaining = WIZARD_COST_CAP_USD - (session.aiCostUsd || 0)
+  const remaining = capUsd - (session.aiCostUsd || 0)
   return { allowed: remaining > 0, remaining }
 }
 
