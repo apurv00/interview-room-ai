@@ -47,3 +47,12 @@ export type { ICompanyPattern } from './CompanyPattern'
 // Phase 7: Benchmarking
 export { BenchmarkCase } from './BenchmarkCase'
 export type { IBenchmarkCase } from './BenchmarkCase'
+
+// Smart Wizard
+export { WizardSession } from './WizardSession'
+export type {
+  IWizardSession, IWizardRole, IWizardEducation, IWizardSkills,
+  IWizardProject, IWizardCertification, IWizardContactInfo,
+  IStrengthBreakdown, IFollowUpQA, IBulletDecisionEntry,
+  WizardSegment, WizardStatus, BulletDecision,
+} from './WizardSession'

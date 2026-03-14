@@ -1,0 +1,564 @@
+'use client'
+
+import { useReducer, useCallback, useEffect, useRef } from 'react'
+import { calculateStrengthScore } from '../services/strengthScorer'
+import type { StrengthResult } from '../services/strengthScorer'
+import type { WizardSegment } from '../validators/wizardSchemas'
+
+// ─── Types ─────────────────────────────────────────────────────────────────
+
+export interface WizardContactInfo {
+  fullName: string
+  email: string
+  phone?: string
+  city?: string
+  linkedInUrl?: string
+}
+
+export interface WizardRole {
+  id: string
+  company: string
+  title: string
+  location?: string
+  startDate: string
+  endDate?: string
+  rawBullets: string[]
+  followUpQuestions: Array<{ question: string; answer: string }>
+  enhancedBullets: string[]
+  bulletDecisions: Array<{ index: number; decision: 'accept' | 'reject' | 'edit'; editedText?: string }>
+  finalBullets: string[]
+}
+
+export interface WizardEducation {
+  id: string
+  institution: string
+  degree: string
+  field?: string
+  graduationDate?: string
+  gpa?: string
+  honors?: string
+}
+
+export interface WizardProject {
+  id: string
+  name: string
+  description: string
+  technologies?: string[]
+  url?: string
+}
+
+export interface WizardCertification {
+  name: string
+  issuer: string
+  date?: string
+}
+
+export interface WizardState {
+  sessionId: string | null
+  stage: number
+  segment: WizardSegment | null
+  contactInfo: WizardContactInfo
+  roles: WizardRole[]
+  education: WizardEducation[]
+  skills: { hard: string[]; soft: string[]; technical: string[] }
+  projects: WizardProject[]
+  certifications: WizardCertification[]
+  generatedSummary: string
+  finalSummary: string
+  strengthScore: number
+  strengthBreakdown: { contact: number; experience: number; education: number; skills: number; extras: number }
+  aiCostUsd: number
+  selectedTemplate: string
+  // UI states
+  isLoading: boolean
+  isSaving: boolean
+  isGeneratingFollowUps: boolean
+  isEnhancing: boolean
+  error: string | null
+}
+
+// ─── Actions ───────────────────────────────────────────────────────────────
+
+type WizardAction =
+  | { type: 'SET_SESSION_ID'; sessionId: string }
+  | { type: 'SET_STAGE'; stage: number }
+  | { type: 'SET_SEGMENT'; segment: WizardSegment }
+  | { type: 'SET_CONTACT'; contactInfo: WizardContactInfo }
+  | { type: 'SET_ROLES'; roles: WizardRole[] }
+  | { type: 'UPDATE_ROLE'; roleId: string; data: Partial<WizardRole> }
+  | { type: 'ADD_ROLE'; role: WizardRole }
+  | { type: 'REMOVE_ROLE'; roleId: string }
+  | { type: 'SET_FOLLOW_UPS'; roleId: string; questions: string[] }
+  | { type: 'SET_FOLLOW_UP_ANSWER'; roleId: string; questionIndex: number; answer: string }
+  | { type: 'SET_EDUCATION'; education: WizardEducation[] }
+  | { type: 'SET_SKILLS'; skills: { hard: string[]; soft: string[]; technical: string[] } }
+  | { type: 'SET_PROJECTS'; projects: WizardProject[] }
+  | { type: 'SET_CERTIFICATIONS'; certifications: WizardCertification[] }
+  | { type: 'SET_ENHANCED'; roleId: string; enhanced: string[] }
+  | { type: 'SET_ALL_ENHANCED'; roles: Array<{ roleId: string; enhanced: string[] }>; summary: string }
+  | { type: 'SET_BULLET_DECISION'; roleId: string; bulletIndex: number; decision: 'accept' | 'reject' | 'edit'; editedText?: string }
+  | { type: 'SET_SUMMARY_DECISION'; decision: 'accept' | 'reject' | 'edit'; editedSummary?: string }
+  | { type: 'SET_TEMPLATE'; template: string }
+  | { type: 'SET_LOADING'; isLoading: boolean }
+  | { type: 'SET_SAVING'; isSaving: boolean }
+  | { type: 'SET_GENERATING_FOLLOW_UPS'; isGeneratingFollowUps: boolean }
+  | { type: 'SET_ENHANCING'; isEnhancing: boolean }
+  | { type: 'SET_ERROR'; error: string | null }
+  | { type: 'SET_COST'; aiCostUsd: number }
+  | { type: 'LOAD_SESSION'; session: Partial<WizardState> }
+
+// ─── Initial State ─────────────────────────────────────────────────────────
+
+const initialState: WizardState = {
+  sessionId: null,
+  stage: 0,
+  segment: null,
+  contactInfo: { fullName: '', email: '' },
+  roles: [],
+  education: [],
+  skills: { hard: [], soft: [], technical: [] },
+  projects: [],
+  certifications: [],
+  generatedSummary: '',
+  finalSummary: '',
+  strengthScore: 0,
+  strengthBreakdown: { contact: 0, experience: 0, education: 0, skills: 0, extras: 0 },
+  aiCostUsd: 0,
+  selectedTemplate: 'professional',
+  isLoading: false,
+  isSaving: false,
+  isGeneratingFollowUps: false,
+  isEnhancing: false,
+  error: null,
+}
+
+// ─── Reducer ───────────────────────────────────────────────────────────────
+
+function recalcStrength(state: WizardState): WizardState {
+  const result: StrengthResult = calculateStrengthScore({
+    contactInfo: state.contactInfo,
+    roles: state.roles,
+    education: state.education,
+    skills: state.skills,
+    projects: state.projects,
+    certifications: state.certifications,
+    finalSummary: state.finalSummary,
+    generatedSummary: state.generatedSummary,
+  })
+  return { ...state, strengthScore: result.total, strengthBreakdown: result.breakdown }
+}
+
+function wizardReducer(state: WizardState, action: WizardAction): WizardState {
+  let next: WizardState
+
+  switch (action.type) {
+    case 'SET_SESSION_ID':
+      return { ...state, sessionId: action.sessionId }
+
+    case 'SET_STAGE':
+      return { ...state, stage: action.stage }
+
+    case 'SET_SEGMENT':
+      return recalcStrength({ ...state, segment: action.segment })
+
+    case 'SET_CONTACT':
+      next = { ...state, contactInfo: action.contactInfo }
+      return recalcStrength(next)
+
+    case 'SET_ROLES':
+      next = { ...state, roles: action.roles }
+      return recalcStrength(next)
+
+    case 'UPDATE_ROLE': {
+      const roles = state.roles.map(r =>
+        r.id === action.roleId ? { ...r, ...action.data } : r
+      )
+      return recalcStrength({ ...state, roles })
+    }
+
+    case 'ADD_ROLE':
+      next = { ...state, roles: [...state.roles, action.role] }
+      return recalcStrength(next)
+
+    case 'REMOVE_ROLE':
+      next = { ...state, roles: state.roles.filter(r => r.id !== action.roleId) }
+      return recalcStrength(next)
+
+    case 'SET_FOLLOW_UPS': {
+      const roles = state.roles.map(r =>
+        r.id === action.roleId
+          ? { ...r, followUpQuestions: action.questions.map(q => ({ question: q, answer: '' })) }
+          : r
+      )
+      return { ...state, roles }
+    }
+
+    case 'SET_FOLLOW_UP_ANSWER': {
+      const roles = state.roles.map(r => {
+        if (r.id !== action.roleId) return r
+        const fqs = [...r.followUpQuestions]
+        if (fqs[action.questionIndex]) {
+          fqs[action.questionIndex] = { ...fqs[action.questionIndex], answer: action.answer }
+        }
+        return { ...r, followUpQuestions: fqs }
+      })
+      return recalcStrength({ ...state, roles })
+    }
+
+    case 'SET_EDUCATION':
+      next = { ...state, education: action.education }
+      return recalcStrength(next)
+
+    case 'SET_SKILLS':
+      next = { ...state, skills: action.skills }
+      return recalcStrength(next)
+
+    case 'SET_PROJECTS':
+      next = { ...state, projects: action.projects }
+      return recalcStrength(next)
+
+    case 'SET_CERTIFICATIONS':
+      next = { ...state, certifications: action.certifications }
+      return recalcStrength(next)
+
+    case 'SET_ENHANCED': {
+      const roles = state.roles.map(r =>
+        r.id === action.roleId ? { ...r, enhancedBullets: action.enhanced } : r
+      )
+      return { ...state, roles }
+    }
+
+    case 'SET_ALL_ENHANCED': {
+      const roles = state.roles.map(r => {
+        const match = action.roles.find(e => e.roleId === r.id)
+        return match ? { ...r, enhancedBullets: match.enhanced } : r
+      })
+      return { ...state, roles, generatedSummary: action.summary }
+    }
+
+    case 'SET_BULLET_DECISION': {
+      const roles = state.roles.map(r => {
+        if (r.id !== action.roleId) return r
+        const existing = r.bulletDecisions.filter(d => d.index !== action.bulletIndex)
+        return {
+          ...r,
+          bulletDecisions: [...existing, { index: action.bulletIndex, decision: action.decision, editedText: action.editedText }],
+        }
+      })
+      return recalcStrength({ ...state, roles })
+    }
+
+    case 'SET_SUMMARY_DECISION':
+      if (action.decision === 'accept') {
+        return recalcStrength({ ...state, finalSummary: state.generatedSummary })
+      } else if (action.decision === 'edit' && action.editedSummary) {
+        return recalcStrength({ ...state, finalSummary: action.editedSummary })
+      }
+      return recalcStrength({ ...state, finalSummary: '' })
+
+    case 'SET_TEMPLATE':
+      return { ...state, selectedTemplate: action.template }
+
+    case 'SET_LOADING':
+      return { ...state, isLoading: action.isLoading }
+    case 'SET_SAVING':
+      return { ...state, isSaving: action.isSaving }
+    case 'SET_GENERATING_FOLLOW_UPS':
+      return { ...state, isGeneratingFollowUps: action.isGeneratingFollowUps }
+    case 'SET_ENHANCING':
+      return { ...state, isEnhancing: action.isEnhancing }
+    case 'SET_ERROR':
+      return { ...state, error: action.error }
+    case 'SET_COST':
+      return { ...state, aiCostUsd: action.aiCostUsd }
+
+    case 'LOAD_SESSION':
+      return recalcStrength({ ...state, ...action.session, isLoading: false })
+
+    default:
+      return state
+  }
+}
+
+// ─── localStorage ──────────────────────────────────────────────────────────
+
+const STORAGE_KEY = 'wizardDraft'
+
+function saveToStorage(state: WizardState) {
+  try {
+    const { isLoading, isSaving, isGeneratingFollowUps, isEnhancing, error, ...data } = state
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+  } catch { /* ignore */ }
+}
+
+function loadFromStorage(): Partial<WizardState> | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return null
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}
+
+function clearStorage() {
+  try {
+    localStorage.removeItem(STORAGE_KEY)
+  } catch { /* ignore */ }
+}
+
+// ─── Hook ──────────────────────────────────────────────────────────────────
+
+export function useWizard(initialSessionId?: string) {
+  const [state, dispatch] = useReducer(wizardReducer, initialState)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Auto-save to localStorage (debounced)
+  useEffect(() => {
+    if (!state.sessionId) return
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(() => saveToStorage(state), 500)
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
+  }, [state])
+
+  // Load session on mount
+  useEffect(() => {
+    if (initialSessionId) {
+      loadSession(initialSessionId)
+    } else {
+      const saved = loadFromStorage()
+      if (saved?.sessionId) {
+        dispatch({ type: 'LOAD_SESSION', session: saved })
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // ─── API Calls ─────────────────────────────────────────────────────────
+
+  const createSession = useCallback(async (segment: WizardSegment) => {
+    dispatch({ type: 'SET_SAVING', isSaving: true })
+    dispatch({ type: 'SET_ERROR', error: null })
+    try {
+      const res = await fetch('/api/resume-wizard/session/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ segment }),
+      })
+      if (!res.ok) throw new Error('Failed to create session')
+      const data = await res.json()
+      dispatch({ type: 'SET_SESSION_ID', sessionId: data.sessionId })
+      dispatch({ type: 'SET_SEGMENT', segment })
+      dispatch({ type: 'SET_STAGE', stage: 1 })
+    } catch (err) {
+      dispatch({ type: 'SET_ERROR', error: err instanceof Error ? err.message : 'Failed to create session' })
+    } finally {
+      dispatch({ type: 'SET_SAVING', isSaving: false })
+    }
+  }, [])
+
+  const loadSession = useCallback(async (sessionId: string) => {
+    dispatch({ type: 'SET_LOADING', isLoading: true })
+    try {
+      const res = await fetch(`/api/resume-wizard/session/${sessionId}`)
+      if (!res.ok) throw new Error('Session not found')
+      const { session } = await res.json()
+      dispatch({
+        type: 'LOAD_SESSION',
+        session: {
+          sessionId: session._id,
+          stage: session.currentStage,
+          segment: session.segment,
+          contactInfo: session.contactInfo || { fullName: '', email: '' },
+          roles: session.roles || [],
+          education: session.education || [],
+          skills: session.skills || { hard: [], soft: [], technical: [] },
+          projects: session.projects || [],
+          certifications: session.certifications || [],
+          generatedSummary: session.generatedSummary || '',
+          finalSummary: session.finalSummary || '',
+          aiCostUsd: session.aiCostUsd || 0,
+          selectedTemplate: session.selectedTemplate || 'professional',
+        },
+      })
+    } catch (err) {
+      dispatch({ type: 'SET_ERROR', error: err instanceof Error ? err.message : 'Failed to load session' })
+      dispatch({ type: 'SET_LOADING', isLoading: false })
+    }
+  }, [])
+
+  const submitStage = useCallback(async (stageData: Record<string, unknown>) => {
+    if (!state.sessionId) return
+    dispatch({ type: 'SET_SAVING', isSaving: true })
+    dispatch({ type: 'SET_ERROR', error: null })
+    try {
+      const res = await fetch('/api/resume-wizard/stage/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: state.sessionId, data: stageData }),
+      })
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.error || 'Failed to save')
+      }
+      const result = await res.json()
+      dispatch({ type: 'SET_STAGE', stage: result.currentStage })
+    } catch (err) {
+      dispatch({ type: 'SET_ERROR', error: err instanceof Error ? err.message : 'Failed to save' })
+    } finally {
+      dispatch({ type: 'SET_SAVING', isSaving: false })
+    }
+  }, [state.sessionId])
+
+  const generateFollowUps = useCallback(async (roleId: string, jobTitle: string, rawDescription: string, company?: string) => {
+    if (!state.sessionId) return
+    dispatch({ type: 'SET_GENERATING_FOLLOW_UPS', isGeneratingFollowUps: true })
+    try {
+      const res = await fetch('/api/resume-wizard/follow-ups/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: state.sessionId, roleId, jobTitle, rawDescription, company }),
+      })
+      if (!res.ok) throw new Error('Failed to generate follow-ups')
+      const data = await res.json()
+      dispatch({ type: 'SET_FOLLOW_UPS', roleId, questions: data.questions })
+      if (data.cost) dispatch({ type: 'SET_COST', aiCostUsd: state.aiCostUsd + data.cost })
+    } catch (err) {
+      dispatch({ type: 'SET_ERROR', error: err instanceof Error ? err.message : 'Failed to generate questions' })
+    } finally {
+      dispatch({ type: 'SET_GENERATING_FOLLOW_UPS', isGeneratingFollowUps: false })
+    }
+  }, [state.sessionId, state.aiCostUsd])
+
+  const enhanceBullets = useCallback(async () => {
+    if (!state.sessionId) return
+    dispatch({ type: 'SET_ENHANCING', isEnhancing: true })
+    dispatch({ type: 'SET_ERROR', error: null })
+    try {
+      const res = await fetch('/api/resume-wizard/ai/enhance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: state.sessionId }),
+      })
+      if (!res.ok) throw new Error('Enhancement failed')
+      const data = await res.json()
+      dispatch({
+        type: 'SET_ALL_ENHANCED',
+        roles: data.enhancedRoles.map((r: { roleId: string; enhanced: string[] }) => ({
+          roleId: r.roleId,
+          enhanced: r.enhanced,
+        })),
+        summary: data.summary,
+      })
+      if (data.totalCost) dispatch({ type: 'SET_COST', aiCostUsd: data.totalCost })
+    } catch (err) {
+      dispatch({ type: 'SET_ERROR', error: err instanceof Error ? err.message : 'Enhancement failed' })
+    } finally {
+      dispatch({ type: 'SET_ENHANCING', isEnhancing: false })
+    }
+  }, [state.sessionId])
+
+  const submitReview = useCallback(async () => {
+    if (!state.sessionId) return
+    dispatch({ type: 'SET_SAVING', isSaving: true })
+    dispatch({ type: 'SET_ERROR', error: null })
+
+    const bulletDecisions = state.roles.flatMap(r =>
+      r.bulletDecisions.map(d => ({
+        roleId: r.id,
+        bulletIndex: d.index,
+        decision: d.decision,
+        editedText: d.editedText,
+      }))
+    )
+
+    const summaryDecision = state.finalSummary
+      ? (state.finalSummary === state.generatedSummary ? 'accept' : 'edit')
+      : 'reject'
+
+    try {
+      const res = await fetch('/api/resume-wizard/stage/review/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: state.sessionId,
+          bulletDecisions,
+          summaryDecision,
+          editedSummary: summaryDecision === 'edit' ? state.finalSummary : undefined,
+        }),
+      })
+      if (!res.ok) throw new Error('Review submission failed')
+      const result = await res.json()
+      dispatch({ type: 'SET_STAGE', stage: result.currentStage })
+    } catch (err) {
+      dispatch({ type: 'SET_ERROR', error: err instanceof Error ? err.message : 'Review failed' })
+    } finally {
+      dispatch({ type: 'SET_SAVING', isSaving: false })
+    }
+  }, [state.sessionId, state.roles, state.finalSummary, state.generatedSummary])
+
+  const exportResume = useCallback(async () => {
+    if (!state.sessionId) return
+    dispatch({ type: 'SET_SAVING', isSaving: true })
+    dispatch({ type: 'SET_ERROR', error: null })
+    try {
+      const res = await fetch('/api/resume-wizard/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: state.sessionId,
+          template: state.selectedTemplate,
+          format: 'pdf',
+        }),
+      })
+
+      if (!res.ok) throw new Error('Export failed')
+
+      const contentType = res.headers.get('Content-Type')
+      if (contentType?.includes('application/pdf')) {
+        const blob = await res.blob()
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `Resume_${state.contactInfo.fullName.replace(/\s+/g, '_') || 'Resume'}.pdf`
+        a.click()
+        URL.revokeObjectURL(url)
+      }
+
+      clearStorage()
+    } catch (err) {
+      dispatch({ type: 'SET_ERROR', error: err instanceof Error ? err.message : 'Export failed' })
+    } finally {
+      dispatch({ type: 'SET_SAVING', isSaving: false })
+    }
+  }, [state.sessionId, state.selectedTemplate, state.contactInfo.fullName])
+
+  // ─── Navigation ────────────────────────────────────────────────────────
+
+  const goBack = useCallback(() => {
+    if (state.stage > 0) {
+      dispatch({ type: 'SET_STAGE', stage: state.stage - 1 })
+    }
+  }, [state.stage])
+
+  const resetWizard = useCallback(() => {
+    clearStorage()
+    dispatch({ type: 'LOAD_SESSION', session: initialState })
+  }, [])
+
+  return {
+    state,
+    dispatch,
+    // API calls
+    createSession,
+    loadSession,
+    submitStage,
+    generateFollowUps,
+    enhanceBullets,
+    submitReview,
+    exportResume,
+    // Navigation
+    goBack,
+    resetWizard,
+  }
+}
