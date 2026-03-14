@@ -116,20 +116,6 @@ export default withAuth(
       }
     }
 
-    // Legacy B2B routes
-    if (
-      pathname.startsWith('/dashboard') ||
-      pathname.startsWith('/candidates') ||
-      pathname.startsWith('/templates')
-    ) {
-      if (
-        !token?.organizationId ||
-        !['recruiter', 'org_admin', 'platform_admin'].includes(token.role as string)
-      ) {
-        return NextResponse.redirect(new URL('/', req.url))
-      }
-    }
-
     return response
   },
   {
