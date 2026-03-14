@@ -14,3 +14,10 @@ export type {
 // Config
 export { RESUME_TEMPLATES, TEMPLATE_COLOR_MAP } from './config/templates'
 export type { ResumeTemplate } from './config/templates'
+
+// Wizard
+export {
+  calculateStrengthScore, WIZARD_SEGMENTS, WIZARD_STAGES, WIZARD_COST_CAP_USD,
+  CreateWizardSessionSchema, SubmitStageSchema, GenerateFollowUpsSchema,
+  EnhanceWizardSchema, ReviewSubmitSchema, ExportWizardSchema,
+} from './wizard'

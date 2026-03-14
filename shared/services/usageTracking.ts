@@ -6,7 +6,7 @@ import mongoose from 'mongoose'
 
 interface TrackUsageInput {
   user: AuthUser
-  type: 'api_call_question' | 'api_call_evaluate' | 'api_call_feedback'
+  type: 'api_call_question' | 'api_call_evaluate' | 'api_call_feedback' | 'api_call_wizard_followup' | 'api_call_wizard_enhance' | 'api_call_wizard_summary'
   sessionId?: string
   inputTokens: number
   outputTokens: number
@@ -20,6 +20,7 @@ interface TrackUsageInput {
 const PRICING: Record<string, { input: number; output: number }> = {
   'claude-opus-4-6': { input: 0.015, output: 0.075 },
   'claude-sonnet-4-20250514': { input: 0.003, output: 0.015 },
+  'claude-haiku-4-5-20251001': { input: 0.001, output: 0.005 },
 }
 
 export async function trackUsage(input: TrackUsageInput): Promise<void> {

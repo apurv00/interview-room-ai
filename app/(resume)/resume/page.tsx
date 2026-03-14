@@ -152,8 +152,9 @@ export default function ResumeDashboardPage() {
       </div>
 
       {/* Quick actions */}
-      <div className="grid md:grid-cols-3 gap-4">
+      <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
         {[
+          { href: '/resume/wizard', title: 'Smart Wizard', desc: 'Step-by-step AI-guided builder', icon: '✨', disabled: false },
           { href: atLimit ? '#' : '/resume/builder', title: 'Build Resume', desc: 'Create from scratch or upload', icon: '📝', disabled: atLimit },
           { href: '/resume/tailor', title: 'Tailor for Job', desc: 'Customize for a job posting', icon: '🎯', disabled: false },
           { href: '/resume/ats-check', title: 'ATS Check', desc: 'Score & optimize for ATS', icon: '✅', disabled: false },
