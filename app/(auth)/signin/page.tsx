@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, Suspense } from 'react'
-import { signIn } from 'next-auth/react'
+import { signIn, signOut, useSession } from 'next-auth/react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import Button from '@shared/ui/Button'
@@ -9,6 +9,7 @@ import Input from '@shared/ui/Input'
 import Divider from '@shared/ui/Divider'
 
 function SignInContent() {
+  const { data: session } = useSession()
   const router = useRouter()
   const searchParams = useSearchParams()
   const callbackUrl = searchParams.get('callbackUrl') || '/lobby'
@@ -23,6 +24,11 @@ function SignInContent() {
     e.preventDefault()
     setIsLoading(true)
     setAuthError('')
+
+    // Clear existing session before re-authenticating to prevent identity confusion
+    if (session) {
+      await signOut({ redirect: false })
+    }
 
     const result = await signIn('credentials', {
       email,
@@ -41,6 +47,10 @@ function SignInContent() {
 
   async function handleOAuthSignIn(provider: string) {
     setIsLoading(true)
+    // Clear existing session before starting OAuth flow to prevent identity confusion
+    if (session) {
+      await signOut({ redirect: false })
+    }
     await signIn(provider, { callbackUrl })
   }
 
@@ -61,6 +71,12 @@ function SignInContent() {
           <p className="text-body text-[#6b7280] text-center mt-1">
             Sign in to start your interview practice
           </p>
+
+          {session && (
+            <div className="mt-4 p-3 bg-[rgba(99,102,241,0.08)] border border-[rgba(99,102,241,0.15)] rounded-[10px] text-caption text-[#a5b4fc]" role="status">
+              You are signed in as <strong>{session.user?.email}</strong>. Signing in again will switch your account.
+            </div>
+          )}
 
           {authError && (
             <div className="mt-4 p-3 bg-[rgba(239,68,68,0.08)] border border-[rgba(239,68,68,0.15)] rounded-[10px] text-caption text-[#f87171]" role="alert">
