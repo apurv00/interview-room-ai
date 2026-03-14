@@ -37,6 +37,11 @@ export const authOptions: NextAuthOptions = {
           GoogleProvider({
             clientId: process.env.GOOGLE_CLIENT_ID,
             clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+            authorization: {
+              params: {
+                prompt: 'select_account',
+              },
+            },
           }),
         ]
       : []),
@@ -45,6 +50,11 @@ export const authOptions: NextAuthOptions = {
           GitHubProvider({
             clientId: process.env.GITHUB_CLIENT_ID,
             clientSecret: process.env.GITHUB_CLIENT_SECRET!,
+            authorization: {
+              params: {
+                prompt: 'consent',
+              },
+            },
           }),
         ]
       : []),
@@ -84,7 +94,17 @@ export const authOptions: NextAuthOptions = {
   ],
 
   callbacks: {
-    async jwt({ token, user, trigger, session }) {
+    async signIn({ user, account }) {
+      // Audit log every sign-in attempt for debugging identity issues
+      console.log('[AUTH] Sign-in attempt', {
+        provider: account?.provider,
+        email: user.email,
+        userId: user.id,
+      })
+      return true
+    },
+
+    async jwt({ token, user, account, trigger, session }) {
       if (user) {
         await connectDB()
         const dbUser = await User.findOne({ email: user.email })
@@ -94,6 +114,10 @@ export const authOptions: NextAuthOptions = {
           token.organizationId = dbUser.organizationId?.toString()
           token.plan = dbUser.plan
           token.onboardingCompleted = dbUser.onboardingCompleted ?? false
+        }
+        // Store provider info for debugging
+        if (account) {
+          token.provider = account.provider
         }
       }
       // Refresh plan from DB periodically (catches external plan changes).
