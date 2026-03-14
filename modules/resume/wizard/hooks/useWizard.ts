@@ -512,6 +512,8 @@ export function useWizard(initialSessionId?: string) {
           sessionId: state.sessionId,
           template: state.selectedTemplate,
           format: 'pdf',
+          fontFamily: state.fontFamily,
+          fontSize: state.fontSize,
         }),
       })
 
@@ -519,22 +521,47 @@ export function useWizard(initialSessionId?: string) {
 
       const contentType = res.headers.get('Content-Type')
       if (contentType?.includes('application/pdf')) {
+        // Server generated PDF successfully — trigger download
         const blob = await res.blob()
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
         a.href = url
         a.download = `Resume_${state.contactInfo.fullName.replace(/\s+/g, '_') || 'Resume'}.pdf`
+        document.body.appendChild(a)
         a.click()
+        a.remove()
         URL.revokeObjectURL(url)
+        clearStorage()
+      } else {
+        // PDF generation unavailable on server — use browser print fallback
+        const data = await res.json()
+        if (data.html) {
+          // Server returned renderable HTML — open in new window for print-to-PDF
+          const printWindow = window.open('', '_blank')
+          if (printWindow) {
+            printWindow.document.write(data.html)
+            printWindow.document.close()
+            // Short delay to let fonts/styles load before print dialog
+            setTimeout(() => printWindow.print(), 500)
+          } else {
+            dispatch({ type: 'SET_ERROR', error: 'Pop-up blocked. Please allow pop-ups and try again.' })
+          }
+          clearStorage()
+        } else {
+          // Resume was saved but no PDF or HTML returned
+          clearStorage()
+          dispatch({
+            type: 'SET_ERROR',
+            error: data.message || 'Resume saved to your dashboard but PDF download is temporarily unavailable. Use browser print (Ctrl+P) on the preview.',
+          })
+        }
       }
-
-      clearStorage()
     } catch (err) {
       dispatch({ type: 'SET_ERROR', error: err instanceof Error ? err.message : 'Export failed' })
     } finally {
       dispatch({ type: 'SET_UI_FLAG', key: 'isSaving', value: false })
     }
-  }, [state.sessionId, state.selectedTemplate, state.contactInfo.fullName])
+  }, [state.sessionId, state.selectedTemplate, state.contactInfo.fullName, state.fontFamily, state.fontSize])
 
   // ─── Navigation ────────────────────────────────────────────────────────
 
