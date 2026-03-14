@@ -1,53 +1,96 @@
 'use client'
 
+import { useState } from 'react'
 import Link from 'next/link'
-import { RESUME_TEMPLATES, TEMPLATE_COLOR_MAP } from '@resume/config/templates'
+import { RESUME_TEMPLATES, TEMPLATE_COLOR_MAP, SAMPLE_RESUME_DATA } from '@resume/config/templates'
+import ResumePreview from '@resume/components/ResumePreview'
+import type { ResumeData } from '@resume/validators/resume'
 
 export default function ResumeTemplatesPage() {
+  const [selectedId, setSelectedId] = useState(RESUME_TEMPLATES[0].id)
+  const selected = RESUME_TEMPLATES.find(t => t.id === selectedId) || RESUME_TEMPLATES[0]
+  const colors = TEMPLATE_COLOR_MAP[selected.color] || TEMPLATE_COLOR_MAP.indigo
+
+  const sampleData: ResumeData = {
+    ...SAMPLE_RESUME_DATA,
+    template: selectedId,
+  }
+
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
+    <div className="max-w-6xl mx-auto space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-white">Resume Templates</h1>
         <p className="text-sm text-slate-400 mt-1">
-          Choose a template that matches your career stage and industry.
+          Choose a template that matches your career stage and industry. Click any template to preview it.
         </p>
       </div>
 
-      <div className="grid md:grid-cols-2 gap-4">
-        {RESUME_TEMPLATES.map(t => {
-          const colors = TEMPLATE_COLOR_MAP[t.color] || TEMPLATE_COLOR_MAP.indigo
-          return (
-            <div key={t.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-6 hover:border-slate-700 transition-all group">
-              <div className="flex items-start justify-between mb-3">
-                <h3 className="text-lg font-semibold text-white group-hover:text-emerald-400 transition-colors">
-                  {t.name}
-                </h3>
-                <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${colors.bg} border ${colors.border} ${colors.text}`}>
-                  {t.industries[0]}
-                </span>
-              </div>
-              <p className="text-xs text-slate-400 mb-4">{t.desc}</p>
-
-              <div className="mb-4">
-                <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1.5">Sections</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {t.sections.map(s => (
-                    <span key={s} className="px-2 py-0.5 bg-slate-800 rounded text-[10px] text-slate-400">
+      <div className="flex gap-6">
+        {/* Template list - left side */}
+        <div className="w-[340px] shrink-0 space-y-2 overflow-y-auto max-h-[calc(100vh-180px)] pr-1">
+          {RESUME_TEMPLATES.map(t => {
+            const tColors = TEMPLATE_COLOR_MAP[t.color] || TEMPLATE_COLOR_MAP.indigo
+            const isSelected = t.id === selectedId
+            return (
+              <button
+                key={t.id}
+                onClick={() => setSelectedId(t.id)}
+                className={`w-full text-left p-4 rounded-xl border transition-all ${
+                  isSelected
+                    ? `bg-slate-800/80 border-emerald-500/40 ring-1 ring-emerald-500/20`
+                    : 'bg-slate-900 border-slate-800 hover:border-slate-700'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <h3 className={`text-sm font-semibold ${isSelected ? 'text-emerald-400' : 'text-white'}`}>
+                    {t.name}
+                  </h3>
+                  <span className={`px-2 py-0.5 rounded-full text-[9px] font-semibold ${tColors.bg} border ${tColors.border} ${tColors.text}`}>
+                    {t.industries[0]}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">{t.desc}</p>
+                <div className="flex flex-wrap gap-1 mt-2">
+                  {t.sections.slice(0, 4).map(s => (
+                    <span key={s} className="px-1.5 py-0.5 bg-slate-800 rounded text-[9px] text-slate-500">
                       {s}
                     </span>
                   ))}
                 </div>
-              </div>
+              </button>
+            )
+          })}
+        </div>
 
+        {/* Preview - right side */}
+        <div className="flex-1 min-w-0">
+          <div className="sticky top-4">
+            {/* Template info header */}
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-3">
+                <h2 className="text-lg font-semibold text-white">{selected.name}</h2>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${colors.bg} border ${colors.border} ${colors.text}`}>
+                  {selected.industries.join(', ')}
+                </span>
+              </div>
               <Link
-                href={`/resume/builder?template=${t.id}`}
-                className="block w-full py-2.5 text-center text-sm font-medium bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl transition-colors"
+                href={`/resume/builder?template=${selected.id}`}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm rounded-xl font-medium transition-colors"
               >
                 Use This Template
               </Link>
             </div>
-          )
-        })}
+
+            {/* Live preview */}
+            <div className="max-w-[520px] mx-auto">
+              <ResumePreview data={sampleData} templateId={selectedId} />
+            </div>
+
+            <p className="text-center text-[10px] text-slate-600 mt-3">
+              Preview uses sample data. Your content will replace this when you build your resume.
+            </p>
+          </div>
+        </div>
       </div>
     </div>
   )

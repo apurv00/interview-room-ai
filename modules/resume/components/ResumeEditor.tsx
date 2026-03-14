@@ -160,6 +160,53 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
     setEnhancingSection(null)
   }
 
+  function handlePrintPDF() {
+    // Client-side PDF via browser print dialog
+    const previewEl = document.getElementById('resume-preview-container')
+    if (!previewEl) { setError('Preview not found'); return }
+
+    const printWindow = window.open('', '_blank')
+    if (!printWindow) { setError('Pop-up blocked. Please allow pop-ups and try again.'); return }
+
+    // Clone the preview content and render in a print-friendly window
+    const content = previewEl.innerHTML
+    printWindow.document.write(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>${resume.name || 'Resume'}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    @page { size: A4; margin: 0; }
+    body {
+      font-family: 'Georgia', 'Times New Roman', serif;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .resume-print-wrapper {
+      width: 210mm;
+      min-height: 297mm;
+      padding: 12mm 14mm;
+      background: white;
+    }
+    @media print {
+      body { margin: 0; }
+      .resume-print-wrapper { padding: 10mm 12mm; }
+    }
+  </style>
+</head>
+<body>
+  <div class="resume-print-wrapper">${content}</div>
+  <script>
+    window.onload = function() {
+      setTimeout(function() { window.print(); window.close(); }, 300);
+    };
+  </script>
+</body>
+</html>`)
+    printWindow.document.close()
+  }
+
   async function handleDownloadPDF() {
     setDownloading(true)
     try {
@@ -182,9 +229,13 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
         document.body.removeChild(a)
         URL.revokeObjectURL(url)
       } else {
-        setError('PDF generation failed')
+        // Fallback to browser print
+        handlePrintPDF()
       }
-    } catch { setError('PDF download failed') }
+    } catch {
+      // Fallback to browser print
+      handlePrintPDF()
+    }
     setDownloading(false)
   }
 
@@ -215,6 +266,12 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
               placeholder="Resume Name"
             />
             <div className="flex gap-2">
+              <button
+                onClick={handlePrintPDF}
+                className="px-3 py-1.5 bg-slate-700/50 border border-slate-600/30 text-slate-300 text-xs rounded-lg font-medium hover:bg-slate-700 transition-colors"
+              >
+                Print PDF
+              </button>
               <button
                 onClick={handleDownloadPDF}
                 disabled={downloading}
