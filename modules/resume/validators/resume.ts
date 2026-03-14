@@ -57,6 +57,13 @@ export const CustomSectionSchema = z.object({
   content: z.string().max(5000),
 })
 
+// ─── Styling Schema ─────────────────────────────────────────────────────────
+
+export const ResumeStylingSchema = z.object({
+  fontFamily: z.enum(['georgia', 'times', 'garamond', 'palatino', 'calibri', 'helvetica', 'lato', 'roboto']).optional(),
+  fontSize: z.enum(['small', 'medium', 'large']).optional(),
+})
+
 // ─── Full Resume Schema (for save) ─────────────────────────────────────────
 
 export const ResumeSchema = z.object({
@@ -76,6 +83,7 @@ export const ResumeSchema = z.object({
   certifications: z.array(CertificationSchema).max(20).optional(),
   customSections: z.array(CustomSectionSchema).max(10).optional(),
   sectionOrder: z.array(z.string()).max(20).optional(),
+  styling: ResumeStylingSchema.optional(),
 
   // Legacy support
   sections: z.record(z.string(), z.string()).optional(),
@@ -132,4 +140,5 @@ export type ResumeSkillCategory = z.infer<typeof SkillCategorySchema>
 export type ResumeProject = z.infer<typeof ProjectSchema>
 export type ResumeCertification = z.infer<typeof CertificationSchema>
 export type ResumeCustomSection = z.infer<typeof CustomSectionSchema>
+export type ResumeStyling = z.infer<typeof ResumeStylingSchema>
 export type ResumeData = z.infer<typeof ResumeSchema>

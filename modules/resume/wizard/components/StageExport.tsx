@@ -3,19 +3,25 @@
 import { motion } from 'framer-motion'
 import Button from '@shared/ui/Button'
 import { RESUME_TEMPLATES } from '@resume/config/templates'
+import FontStyleControls from '@resume/components/FontStyleControls'
 
 interface Props {
   selectedTemplate: string
   strengthScore: number
   strengthBreakdown: { contact: number; experience: number; education: number; skills: number; extras: number }
   isSaving: boolean
+  fontFamily: string
+  fontSize: string
   onSelectTemplate: (template: string) => void
+  onFontFamilyChange: (id: string) => void
+  onFontSizeChange: (size: string) => void
   onExport: () => void
 }
 
 export default function StageExport({
   selectedTemplate, strengthScore, strengthBreakdown, isSaving,
-  onSelectTemplate, onExport,
+  fontFamily, fontSize,
+  onSelectTemplate, onFontFamilyChange, onFontSizeChange, onExport,
 }: Props) {
   return (
     <div className="space-y-6">
@@ -81,6 +87,14 @@ export default function StageExport({
           ))}
         </div>
       </div>
+
+      {/* Font & Size */}
+      <FontStyleControls
+        fontFamily={fontFamily}
+        fontSize={fontSize}
+        onFontFamilyChange={onFontFamilyChange}
+        onFontSizeChange={onFontSizeChange}
+      />
 
       {/* Export Button */}
       <div className="space-y-3 pt-2">

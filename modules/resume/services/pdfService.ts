@@ -1,4 +1,5 @@
 import type { ResumeData } from '../validators/resume'
+import { getFontStack, getFontSizes, getGoogleFontUrl } from '../config/fontConfig'
 
 // ─── HTML Template Generators for PDF ──────────────────────────────────────
 // These generate static HTML+CSS (no Tailwind, no React) for Puppeteer rendering
@@ -34,6 +35,14 @@ export function generateResumeHTML(data: ResumeData, templateId: string): string
     startup: '#f97316',
   }
   const accent = accentColors[templateId] || '#1f2937'
+
+  // Dynamic font settings
+  const fontStack = getFontStack(data.styling?.fontFamily)
+  const sizes = getFontSizes(data.styling?.fontSize)
+  const googleFontUrl = getGoogleFontUrl(data.styling?.fontFamily)
+  const googleFontLink = googleFontUrl
+    ? `<link rel="stylesheet" href="${googleFontUrl}">`
+    : ''
 
   const sectionsHTML: string[] = []
 
@@ -121,11 +130,12 @@ export function generateResumeHTML(data: ResumeData, templateId: string): string
 <html>
 <head>
   <meta charset="utf-8">
+  ${googleFontLink}
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      font-family: 'Georgia', 'Times New Roman', serif;
-      font-size: 10.5pt;
+      font-family: ${fontStack};
+      font-size: ${sizes.bodyPt};
       line-height: 1.4;
       color: #1f2937;
       padding: 40px 50px;
@@ -137,13 +147,13 @@ export function generateResumeHTML(data: ResumeData, templateId: string): string
       margin-bottom: 16px;
     }
     .header h1 {
-      font-size: 20pt;
+      font-size: ${sizes.titlePt};
       letter-spacing: 2px;
       text-transform: uppercase;
       color: ${accent};
     }
     .header .contact {
-      font-size: 8.5pt;
+      font-size: ${sizes.metaPt};
       color: #6b7280;
       margin-top: 4px;
     }
@@ -154,7 +164,7 @@ export function generateResumeHTML(data: ResumeData, templateId: string): string
       margin-bottom: 14px;
     }
     .section h2 {
-      font-size: 9.5pt;
+      font-size: ${sizes.sectionPt};
       text-transform: uppercase;
       letter-spacing: 1.5px;
       border-bottom: 1px solid #d1d5db;
@@ -163,7 +173,7 @@ export function generateResumeHTML(data: ResumeData, templateId: string): string
       color: ${accent};
     }
     .section p {
-      font-size: 9.5pt;
+      font-size: ${sizes.bodyPt};
       color: #374151;
     }
     .entry {
@@ -173,16 +183,16 @@ export function generateResumeHTML(data: ResumeData, templateId: string): string
       display: flex;
       justify-content: space-between;
       align-items: baseline;
-      font-size: 9.5pt;
+      font-size: ${sizes.bodyPt};
     }
     .date {
-      font-size: 8.5pt;
+      font-size: ${sizes.metaPt};
       color: #6b7280;
       white-space: nowrap;
       margin-left: 8px;
     }
     .subtitle {
-      font-size: 8.5pt;
+      font-size: ${sizes.metaPt};
       color: #6b7280;
     }
     ul {
@@ -190,20 +200,20 @@ export function generateResumeHTML(data: ResumeData, templateId: string): string
       padding-left: 14px;
     }
     li {
-      font-size: 9.5pt;
+      font-size: ${sizes.bodyPt};
       color: #374151;
       margin-bottom: 2px;
     }
     .skill-row {
-      font-size: 9.5pt;
+      font-size: ${sizes.bodyPt};
       margin-bottom: 2px;
     }
     .tech {
-      font-size: 8.5pt;
+      font-size: ${sizes.metaPt};
       color: #6b7280;
     }
     .cert {
-      font-size: 9.5pt;
+      font-size: ${sizes.bodyPt};
       margin-bottom: 2px;
     }
   </style>

@@ -69,6 +69,8 @@ export interface WizardState {
   strengthBreakdown: { contact: number; experience: number; education: number; skills: number; extras: number }
   aiCostUsd: number
   selectedTemplate: string
+  fontFamily: string
+  fontSize: string
   // UI states
   isLoading: boolean
   isSaving: boolean
@@ -99,6 +101,8 @@ type WizardAction =
   | { type: 'SET_BULLET_DECISION'; roleId: string; bulletIndex: number; decision: 'accept' | 'reject' | 'edit'; editedText?: string }
   | { type: 'SET_SUMMARY_DECISION'; decision: 'accept' | 'reject' | 'edit'; editedSummary?: string }
   | { type: 'SET_TEMPLATE'; template: string }
+  | { type: 'SET_FONT_FAMILY'; fontFamily: string }
+  | { type: 'SET_FONT_SIZE'; fontSize: string }
   | { type: 'SET_UI_FLAG'; key: 'isLoading' | 'isSaving' | 'isGeneratingFollowUps' | 'isEnhancing'; value: boolean }
   | { type: 'SET_ERROR'; error: string | null }
   | { type: 'SET_COST'; aiCostUsd: number }
@@ -122,6 +126,8 @@ const initialState: WizardState = {
   strengthBreakdown: { contact: 0, experience: 0, education: 0, skills: 0, extras: 0 },
   aiCostUsd: 0,
   selectedTemplate: 'professional',
+  fontFamily: 'georgia',
+  fontSize: 'medium',
   isLoading: false,
   isSaving: false,
   isGeneratingFollowUps: false,
@@ -255,6 +261,12 @@ function wizardReducer(state: WizardState, action: WizardAction): WizardState {
 
     case 'SET_TEMPLATE':
       return { ...state, selectedTemplate: action.template }
+
+    case 'SET_FONT_FAMILY':
+      return { ...state, fontFamily: action.fontFamily }
+
+    case 'SET_FONT_SIZE':
+      return { ...state, fontSize: action.fontSize }
 
     case 'SET_UI_FLAG':
       return { ...state, [action.key]: action.value }

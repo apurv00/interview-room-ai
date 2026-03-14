@@ -16,12 +16,12 @@ export default function StartupTemplate({ data }: TemplateProps) {
   ) || []
 
   return (
-    <div className="font-sans text-gray-900 leading-snug" style={{ fontSize: '10px' }}>
+    <div className="text-gray-900 leading-snug" style={{ fontSize: 'var(--r-body, 9px)' }}>
       {/* Gradient Header */}
       <div className="mb-3 pb-2 border-b border-gray-200">
         <h1
-          className="text-xl font-extrabold tracking-tight bg-clip-text text-transparent"
-          style={{ backgroundImage: 'linear-gradient(to right, #f97316, #ec4899)' }}
+          className="font-extrabold tracking-tight bg-clip-text text-transparent"
+          style={{ fontSize: 'var(--r-title, 20px)', backgroundImage: 'linear-gradient(to right, #f97316, #ec4899)' }}
         >
           {contact.fullName || 'Your Name'}
         </h1>
@@ -38,15 +38,15 @@ export default function StartupTemplate({ data }: TemplateProps) {
       {/* Summary */}
       {data.summary && (
         <div className="mb-3">
-          <h2 className="text-[9px] font-bold uppercase tracking-widest text-orange-500 mb-1">About</h2>
-          <p className="text-[9px] text-gray-700 leading-relaxed">{data.summary}</p>
+          <h2 className="font-bold uppercase tracking-widest text-orange-500 mb-1">About</h2>
+          <p className="text-gray-700 leading-relaxed">{data.summary}</p>
         </div>
       )}
 
       {/* Skills as colorful pills */}
       {data.skills && data.skills.length > 0 && (
         <div className="mb-3">
-          <h2 className="text-[9px] font-bold uppercase tracking-widest text-orange-500 mb-1">Skills</h2>
+          <h2 className="font-bold uppercase tracking-widest text-orange-500 mb-1">Skills</h2>
           <div className="flex flex-wrap gap-1">
             {data.skills.flatMap((cat, ci) =>
               cat.items.map((item, ii) => {
@@ -73,13 +73,13 @@ export default function StartupTemplate({ data }: TemplateProps) {
       {/* Experience */}
       {data.experience && data.experience.length > 0 && (
         <div className="mb-3">
-          <h2 className="text-[9px] font-bold uppercase tracking-widest text-orange-500 mb-1">Experience</h2>
+          <h2 className="font-bold uppercase tracking-widest text-orange-500 mb-1">Experience</h2>
           {data.experience.map(exp => (
             <div key={exp.id} className="mb-2">
               <div className="flex justify-between items-baseline">
                 <div>
-                  <span className="font-bold text-[9px]">{exp.title}</span>
-                  {exp.company && <span className="text-[9px] text-pink-500"> @ {exp.company}</span>}
+                  <span className="font-bold">{exp.title}</span>
+                  {exp.company && <span className="text-pink-500"> @ {exp.company}</span>}
                 </div>
                 <span className="text-[8px] text-gray-400 shrink-0 ml-2">{exp.startDate} - {exp.endDate || 'Present'}</span>
               </div>
@@ -87,7 +87,7 @@ export default function StartupTemplate({ data }: TemplateProps) {
               {exp.bullets.filter(b => b.trim()).length > 0 && (
                 <ul className="mt-0.5 space-y-0.5">
                   {exp.bullets.filter(b => b.trim()).map((bullet, i) => (
-                    <li key={i} className="text-[9px] text-gray-700 flex items-start gap-1">
+                    <li key={i} className="text-gray-700 flex items-start gap-1">
                       <span className="shrink-0 mt-[3px] w-1 h-1 bg-gradient-to-r from-orange-400 to-pink-400 rounded-full" />
                       <span>{bullet}</span>
                     </li>
@@ -102,11 +102,11 @@ export default function StartupTemplate({ data }: TemplateProps) {
       {/* Projects */}
       {data.projects && data.projects.length > 0 && (
         <div className="mb-3">
-          <h2 className="text-[9px] font-bold uppercase tracking-widest text-orange-500 mb-1">Projects</h2>
+          <h2 className="font-bold uppercase tracking-widest text-orange-500 mb-1">Projects</h2>
           {data.projects.map(proj => (
             <div key={proj.id} className="mb-1.5">
               <div className="flex items-baseline gap-1">
-                <span className="font-bold text-[9px]">{proj.name}</span>
+                <span className="font-bold">{proj.name}</span>
                 {proj.url && <span className="text-[8px] text-pink-500">{proj.url}</span>}
               </div>
               {proj.technologies?.length ? (
@@ -116,7 +116,7 @@ export default function StartupTemplate({ data }: TemplateProps) {
                   ))}
                 </div>
               ) : null}
-              <p className="text-[9px] text-gray-700 mt-0.5">{proj.description}</p>
+              <p className="text-gray-700 mt-0.5">{proj.description}</p>
             </div>
           ))}
         </div>
@@ -125,22 +125,22 @@ export default function StartupTemplate({ data }: TemplateProps) {
       {/* Side Projects (from customSections) */}
       {sideProjects.length > 0 && sideProjects.map(section => (
         <div key={section.id} className="mb-3">
-          <h2 className="text-[9px] font-bold uppercase tracking-widest text-orange-500 mb-1">{section.title}</h2>
-          <p className="text-[9px] text-gray-700 whitespace-pre-wrap">{section.content}</p>
+          <h2 className="font-bold uppercase tracking-widest text-orange-500 mb-1">{section.title}</h2>
+          <p className="text-gray-700 whitespace-pre-wrap">{section.content}</p>
         </div>
       ))}
 
       {/* Education */}
       {data.education && data.education.length > 0 && (
         <div className="mb-3">
-          <h2 className="text-[9px] font-bold uppercase tracking-widest text-orange-500 mb-1">Education</h2>
+          <h2 className="font-bold uppercase tracking-widest text-orange-500 mb-1">Education</h2>
           {data.education.map(edu => (
             <div key={edu.id} className="mb-1.5">
               <div className="flex justify-between items-baseline">
                 <div>
-                  <span className="font-bold text-[9px]">{edu.degree}</span>
-                  {edu.field && <span className="text-[9px]"> in {edu.field}</span>}
-                  {edu.institution && <span className="text-[9px] text-gray-500"> — {edu.institution}</span>}
+                  <span className="font-bold">{edu.degree}</span>
+                  {edu.field && <span> in {edu.field}</span>}
+                  {edu.institution && <span className="text-gray-500"> — {edu.institution}</span>}
                 </div>
                 {edu.graduationDate && <span className="text-[8px] text-gray-400 shrink-0 ml-2">{edu.graduationDate}</span>}
               </div>
@@ -159,9 +159,9 @@ export default function StartupTemplate({ data }: TemplateProps) {
       {/* Certifications */}
       {data.certifications && data.certifications.length > 0 && (
         <div className="mb-3">
-          <h2 className="text-[9px] font-bold uppercase tracking-widest text-orange-500 mb-1">Certifications</h2>
+          <h2 className="font-bold uppercase tracking-widest text-orange-500 mb-1">Certifications</h2>
           {data.certifications.map((cert, i) => (
-            <div key={i} className="text-[9px] mb-0.5">
+            <div key={i} className="mb-0.5">
               <span className="font-semibold">{cert.name}</span> — {cert.issuer}
               {cert.date && <span className="text-gray-400"> ({cert.date})</span>}
             </div>
@@ -172,16 +172,16 @@ export default function StartupTemplate({ data }: TemplateProps) {
       {/* Interests (from customSections) */}
       {interests.length > 0 && interests.map(section => (
         <div key={section.id} className="mb-3">
-          <h2 className="text-[9px] font-bold uppercase tracking-widest text-orange-500 mb-1">{section.title}</h2>
-          <p className="text-[9px] text-gray-700 whitespace-pre-wrap">{section.content}</p>
+          <h2 className="font-bold uppercase tracking-widest text-orange-500 mb-1">{section.title}</h2>
+          <p className="text-gray-700 whitespace-pre-wrap">{section.content}</p>
         </div>
       ))}
 
       {/* Other Custom Sections */}
       {otherSections.length > 0 && otherSections.map(section => (
         <div key={section.id} className="mb-3">
-          <h2 className="text-[9px] font-bold uppercase tracking-widest text-orange-500 mb-1">{section.title}</h2>
-          <p className="text-[9px] text-gray-700 whitespace-pre-wrap">{section.content}</p>
+          <h2 className="font-bold uppercase tracking-widest text-orange-500 mb-1">{section.title}</h2>
+          <p className="text-gray-700 whitespace-pre-wrap">{section.content}</p>
         </div>
       ))}
     </div>

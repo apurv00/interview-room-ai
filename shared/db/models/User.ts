@@ -109,6 +109,11 @@ export interface IUser extends Document {
       content: string
     }>
 
+    styling?: {
+      fontFamily?: string
+      fontSize?: string
+    }
+
     // Legacy field for backward compatibility + ATS/tailor operations
     sections?: Record<string, string>
     fullText?: string
@@ -242,6 +247,11 @@ const UserSchema = new Schema<IUser>(
         title: { type: String, required: true },
         content: { type: String, required: true },
       }],
+
+      styling: {
+        fontFamily: { type: String },
+        fontSize: { type: String },
+      },
 
       // Legacy + utility fields
       sections: { type: Schema.Types.Mixed, default: {} },
