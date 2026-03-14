@@ -126,7 +126,31 @@ Return ONLY valid JSON matching this schema:
 
   const raw = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}'
   const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
-  return JSON.parse(cleaned)
+  try {
+    const result = JSON.parse(cleaned)
+    // Ensure required fields have defaults
+    return {
+      score: result.score ?? 0,
+      issues: Array.isArray(result.issues) ? result.issues : [],
+      keywords: {
+        found: result.keywords?.found || [],
+        missing: result.keywords?.missing || [],
+        total: result.keywords?.total || 0,
+      },
+      formatting: {
+        score: result.formatting?.score ?? 0,
+        issues: Array.isArray(result.formatting?.issues) ? result.formatting.issues : [],
+      },
+      sections: {
+        found: result.sections?.found || [],
+        missing: result.sections?.missing || [],
+        recommended: result.sections?.recommended || [],
+      },
+      summary: result.summary || 'Unable to generate summary.',
+    }
+  } catch {
+    throw new Error('Failed to parse ATS analysis results. Please try again.')
+  }
 }
 
 // ─── Tailor Resume ──────────────────────────────────────────────────────────
@@ -162,7 +186,18 @@ Return ONLY valid JSON matching this schema:
 
   const raw = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}'
   const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
-  return JSON.parse(cleaned)
+  try {
+    const result = JSON.parse(cleaned)
+    return {
+      tailoredResume: result.tailoredResume || '',
+      changes: Array.isArray(result.changes) ? result.changes : [],
+      matchScore: result.matchScore ?? 0,
+      missingKeywords: Array.isArray(result.missingKeywords) ? result.missingKeywords : [],
+      addedKeywords: Array.isArray(result.addedKeywords) ? result.addedKeywords : [],
+    }
+  } catch {
+    throw new Error('Failed to parse tailoring results. Please try again.')
+  }
 }
 
 // ─── Parse Resume Text to Structured Data ───────────────────────────────────

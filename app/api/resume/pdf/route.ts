@@ -30,7 +30,12 @@ export async function POST(req: Request) {
         'Content-Length': String(pdfBuffer.length),
       },
     })
-  } catch {
-    return NextResponse.json({ error: 'PDF generation failed' }, { status: 500 })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'PDF generation failed'
+    console.error('PDF generation error:', message)
+    return NextResponse.json(
+      { error: 'PDF generation failed. Use browser print (Ctrl+P) as an alternative.', fallback: 'print' },
+      { status: 500 }
+    )
   }
 }

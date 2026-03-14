@@ -49,7 +49,7 @@ export default function ResumeLayout({ children }: { children: React.ReactNode }
           </Link>
         </div>
 
-        <nav className="px-3 py-4 space-y-1">
+        <nav className="px-3 py-3 space-y-0.5">
           {RESUME_NAV.map(link => {
             const isActive = pathname === link.href || (link.href !== '/resume' && pathname.startsWith(link.href))
             return (
@@ -57,13 +57,13 @@ export default function ResumeLayout({ children }: { children: React.ReactNode }
                 key={link.href}
                 href={link.href}
                 onClick={() => setSidebarOpen(false)}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] font-medium transition-all ${
                   isActive
                     ? 'bg-emerald-600/10 text-emerald-400 border border-emerald-500/20'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent'
                 }`}
               >
-                <svg className="w-4.5 h-4.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <svg className="w-[18px] h-[18px] flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d={link.icon} />
                 </svg>
                 {link.label}

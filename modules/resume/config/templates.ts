@@ -90,6 +90,78 @@ export const RESUME_TEMPLATES: ResumeTemplate[] = [
   },
 ]
 
+// Sample data used for template previews
+export const SAMPLE_RESUME_DATA = {
+  name: 'Sample Resume',
+  template: 'professional',
+  contactInfo: {
+    fullName: 'Alex Johnson',
+    email: 'alex.johnson@email.com',
+    phone: '(555) 123-4567',
+    location: 'San Francisco, CA',
+    linkedin: 'linkedin.com/in/alexjohnson',
+    website: 'alexjohnson.dev',
+    github: 'github.com/alexjohnson',
+  },
+  summary: 'Results-driven software engineer with 5+ years of experience building scalable web applications. Led cross-functional teams to deliver high-impact products serving millions of users. Passionate about clean code, performance optimization, and mentoring junior developers.',
+  experience: [
+    {
+      id: 'exp-1',
+      company: 'TechCorp Inc.',
+      title: 'Senior Software Engineer',
+      location: 'San Francisco, CA',
+      startDate: 'Jan 2022',
+      endDate: '',
+      bullets: [
+        'Architected and launched a real-time analytics platform processing 2M+ events daily, reducing latency by 40%',
+        'Led migration from monolith to microservices architecture, improving deployment velocity by 3x',
+        'Mentored 4 junior engineers, resulting in 2 promotions within 12 months',
+      ],
+    },
+    {
+      id: 'exp-2',
+      company: 'StartupXYZ',
+      title: 'Full Stack Developer',
+      location: 'Remote',
+      startDate: 'Mar 2019',
+      endDate: 'Dec 2021',
+      bullets: [
+        'Built customer-facing dashboard serving 50K+ monthly active users with React and Node.js',
+        'Implemented CI/CD pipeline reducing deployment time from 2 hours to 15 minutes',
+      ],
+    },
+  ],
+  education: [
+    {
+      id: 'edu-1',
+      institution: 'Stanford University',
+      degree: 'B.S. Computer Science',
+      field: 'Artificial Intelligence',
+      graduationDate: 'Jun 2019',
+      gpa: '3.8',
+      honors: 'Magna Cum Laude',
+    },
+  ],
+  skills: [
+    { category: 'Languages', items: ['TypeScript', 'Python', 'Go', 'SQL'] },
+    { category: 'Frameworks', items: ['React', 'Next.js', 'Node.js', 'FastAPI'] },
+    { category: 'Tools', items: ['AWS', 'Docker', 'Kubernetes', 'PostgreSQL'] },
+  ],
+  projects: [
+    {
+      id: 'proj-1',
+      name: 'AI Resume Builder',
+      description: 'Open-source resume builder with AI-powered content suggestions and ATS optimization.',
+      technologies: ['Next.js', 'Claude AI', 'MongoDB'],
+      url: 'github.com/alexj/resume-builder',
+    },
+  ],
+  certifications: [
+    { name: 'AWS Solutions Architect', issuer: 'Amazon Web Services', date: '2023' },
+  ],
+  customSections: [],
+}
+
 export const TEMPLATE_COLOR_MAP: Record<string, { bg: string; border: string; text: string }> = {
   indigo: { bg: 'bg-indigo-500/10', border: 'border-indigo-500/20', text: 'text-indigo-400' },
   emerald: { bg: 'bg-emerald-500/10', border: 'border-emerald-500/20', text: 'text-emerald-400' },

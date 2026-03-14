@@ -21,7 +21,8 @@ export async function POST(req: Request) {
   try {
     const result = await checkATS(parsed.data)
     return NextResponse.json(result)
-  } catch {
-    return NextResponse.json({ error: 'ATS check failed' }, { status: 500 })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'ATS check failed'
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }
