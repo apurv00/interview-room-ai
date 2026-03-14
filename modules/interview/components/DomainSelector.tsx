@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
-import StateView from '@shared/ui/StateView'
+import { STATIC_DOMAINS, type StaticDomain } from '../config/staticData'
 
 interface Domain {
   slug: string
@@ -26,6 +26,7 @@ const DOMAIN_GRADIENTS: Record<string, string> = {
   pm: 'from-violet-600/30 to-indigo-600/30',
   swe: 'from-blue-600/30 to-cyan-600/30',
   ds: 'from-emerald-600/30 to-teal-600/30',
+  'data-science': 'from-emerald-600/30 to-teal-600/30',
   design: 'from-pink-600/30 to-rose-600/30',
   ux: 'from-pink-600/30 to-rose-600/30',
   marketing: 'from-amber-600/30 to-orange-600/30',
@@ -42,7 +43,7 @@ const DOMAIN_GRADIENTS: Record<string, string> = {
 }
 const DEFAULT_GRADIENT = 'from-indigo-600/30 to-violet-600/30'
 
-// Module-level cache to avoid re-fetching on re-mounts
+// Module-level cache for CMS-fetched data
 let domainCache: Domain[] | null = null
 
 interface DomainSelectorProps {
@@ -51,24 +52,24 @@ interface DomainSelectorProps {
 }
 
 export default function DomainSelector({ selectedDomain, onSelect }: DomainSelectorProps) {
-  const [domains, setDomains] = useState<Domain[]>(domainCache || [])
-  const [loading, setLoading] = useState(!domainCache)
-  const [error, setError] = useState('')
+  // Start with static data immediately — no loading spinner
+  const [domains, setDomains] = useState<Domain[]>(domainCache || STATIC_DOMAINS as Domain[])
   const [activeCategory, setActiveCategory] = useState('all')
   const scrollRef = useRef<HTMLDivElement>(null)
 
+  // Background fetch to pick up any CMS-added domains
   useEffect(() => {
     if (domainCache) return
     fetch('/api/domains')
       .then((r) => r.json())
       .then((data: Domain[]) => {
-        domainCache = data
-        setDomains(data)
-        setLoading(false)
+        if (data?.length > 0) {
+          domainCache = data
+          setDomains(data)
+        }
       })
       .catch(() => {
-        setError('Failed to load domains')
-        setLoading(false)
+        // Static data already shown — silently ignore
       })
   }, [])
 
@@ -92,20 +93,6 @@ export default function DomainSelector({ selectedDomain, onSelect }: DomainSelec
     const amount = 300
     scrollRef.current.scrollBy({ left: dir === 'left' ? -amount : amount, behavior: 'smooth' })
   }, [])
-
-  if (loading) {
-    return <StateView state="loading" skeletonLayout="grid" skeletonCount={6} />
-  }
-
-  if (error) {
-    return (
-      <StateView
-        state="error"
-        error="Couldn't load interview domains. Check your connection and try again."
-        onRetry={() => { domainCache = null; window.location.reload() }}
-      />
-    )
-  }
 
   return (
     <div className="space-y-3">
