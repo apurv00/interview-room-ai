@@ -1,8 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import SelectionGroup from '@shared/ui/SelectionGroup'
-import StateView from '@shared/ui/StateView'
+import { STATIC_DEPTHS, type StaticDepth } from '../config/staticData'
 
 interface InterviewDepth {
   slug: string
@@ -21,106 +20,74 @@ interface DepthSelectorProps {
 const depthCache: Record<string, InterviewDepth[]> = {}
 
 export default function DepthSelector({ selectedDomain, selectedDepth, onSelect }: DepthSelectorProps) {
-  const [types, setTypes] = useState<InterviewDepth[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+  // Use static data immediately — no loading state needed
+  const [types, setTypes] = useState<InterviewDepth[]>(STATIC_DEPTHS as InterviewDepth[])
 
+  // Auto-select hr-screening on first render if nothing selected
   useEffect(() => {
-    if (!selectedDomain) {
-      setTypes([])
-      return
+    if (!selectedDepth && types.length > 0) {
+      const hrType = types.find((t) => t.slug === 'hr-screening')
+      if (hrType) onSelect(hrType.slug)
+      else onSelect(types[0].slug)
     }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Use cached data if available
+  // Background fetch for CMS-managed depths (domain-filtered)
+  useEffect(() => {
+    if (!selectedDomain) return
+
     if (depthCache[selectedDomain]) {
-      const cached = depthCache[selectedDomain]
-      setTypes(cached)
-      if (!selectedDepth) {
-        const hrType = cached.find((t) => t.slug === 'hr-screening')
-        if (hrType) onSelect(hrType.slug)
-        else if (cached.length > 0) onSelect(cached[0].slug)
-      }
+      setTypes(depthCache[selectedDomain])
       return
     }
-
-    setLoading(true)
-    setError('')
 
     fetch(`/api/interview-types?domain=${encodeURIComponent(selectedDomain)}`)
       .then((r) => r.json())
       .then((data: InterviewDepth[]) => {
-        depthCache[selectedDomain] = data
-        setTypes(data)
-        setLoading(false)
-
-        // Auto-select hr-screening if available and nothing is selected yet
-        if (!selectedDepth) {
-          const hrType = data.find((t) => t.slug === 'hr-screening')
-          if (hrType) {
-            onSelect(hrType.slug)
-          } else if (data.length > 0) {
-            onSelect(data[0].slug)
-          }
+        if (data?.length > 0) {
+          depthCache[selectedDomain] = data
+          setTypes(data)
         }
       })
       .catch(() => {
-        setError('Failed to load interview types')
-        setLoading(false)
+        // Static data already shown — silently ignore
       })
-  }, [selectedDomain]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedDomain])
 
   if (!selectedDomain) {
     return (
-      <StateView
-        state="empty"
-        title="Select a domain first"
-        description="Choose an interview domain to see available interview types."
-      />
+      <div className="text-sm text-[#6b7280] py-3">
+        Select a domain first to choose an interview type.
+      </div>
     )
   }
 
-  if (loading) {
-    return <StateView state="loading" skeletonLayout="list" skeletonCount={4} />
-  }
-
-  if (error) {
-    return (
-      <StateView
-        state="error"
-        error="Couldn't load interview types. Check your connection and try again."
-        onRetry={() => window.location.reload()}
-      />
-    )
-  }
-
-  if (types.length === 0) {
-    return (
-      <StateView
-        state="empty"
-        title="No interview types"
-        description="No interview types available for this domain."
-      />
-    )
-  }
+  const selectedType = types.find((t) => t.slug === selectedDepth)
 
   return (
-    <SelectionGroup<InterviewDepth>
-      items={types}
-      value={selectedDepth}
-      onChange={onSelect}
-      getKey={(t) => t.slug}
-      layout="list"
-      renderItem={(t, selected) => (
-        <div className="flex items-center gap-3 py-3 px-4">
-          <span className="text-lg">{t.icon}</span>
-          <div>
-            <p className={`text-subheading ${selected ? 'text-[#818cf8]' : 'text-[#f0f2f5]'}`}>
-              {t.label}
-            </p>
-            <p className="text-caption text-[#6b7280]">{t.description}</p>
-          </div>
-        </div>
+    <div className="space-y-2">
+      <select
+        value={selectedDepth || ''}
+        onChange={(e) => onSelect(e.target.value)}
+        className="w-full px-4 py-3 bg-[#0c1220] border border-[rgba(255,255,255,0.10)] rounded-[10px] text-sm text-[#f0f2f5] focus:outline-none focus:ring-2 focus:ring-[rgba(99,102,241,0.4)] focus:border-[rgba(99,102,241,0.3)] appearance-none cursor-pointer"
+        style={{
+          backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E")`,
+          backgroundRepeat: 'no-repeat',
+          backgroundPosition: 'right 12px center',
+          paddingRight: '40px',
+        }}
+      >
+        {types.map((t) => (
+          <option key={t.slug} value={t.slug}>
+            {t.icon} {t.label}
+          </option>
+        ))}
+      </select>
+
+      {/* Description of selected type */}
+      {selectedType && (
+        <p className="text-xs text-[#6b7280] px-1">{selectedType.description}</p>
       )}
-    />
+    </div>
   )
 }
