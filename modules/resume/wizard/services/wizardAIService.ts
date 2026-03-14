@@ -2,41 +2,13 @@ import Anthropic from '@anthropic-ai/sdk'
 import { aiLogger } from '@shared/logger'
 import { trackUsage } from '@shared/services/usageTracking'
 import { connectDB } from '@shared/db/connection'
+import { extractJSON } from '@shared/utils'
 import { WizardSession } from '@shared/db/models/WizardSession'
 import { WizardConfig } from '@shared/db/models/WizardConfig'
 import { WIZARD_COST_CAP_USD, FALLBACK_FOLLOW_UPS, SEGMENT_PROMPT_CONTEXT } from '../config/wizardConfig'
 import type { AuthUser } from '@shared/middleware/composeApiRoute'
 
 const client = new Anthropic()
-
-// ─── JSON Extraction Helper ────────────────────────────────────────────────
-
-function extractJSON(raw: string): string {
-  const jsonStart = raw.search(/[\[{]/)
-  if (jsonStart === -1) return raw
-
-  let depth = 0
-  let inString = false
-  let escape = false
-
-  for (let i = jsonStart; i < raw.length; i++) {
-    const ch = raw[i]
-    if (escape) { escape = false; continue }
-    if (ch === '\\') { escape = true; continue }
-    if (ch === '"') { inString = !inString; continue }
-    if (inString) continue
-    if (ch === '{' || ch === '[') depth++
-    if (ch === '}' || ch === ']') {
-      depth--
-      if (depth === 0) return raw.slice(jsonStart, i + 1)
-    }
-  }
-
-  return raw
-    .replace(/^[\s\S]*?```(?:json)?\s*\n?/, '')
-    .replace(/\n?\s*```[\s\S]*$/, '')
-    .trim()
-}
 
 // ─── Cost Cap Check ────────────────────────────────────────────────────────
 
