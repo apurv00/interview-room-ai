@@ -1,7 +1,7 @@
 # CMS Platform Plan — Interview Prep Guru
 
 > Scalable, subdomain-based Content Management System for the Interview Prep Guru platform.
-> Subdomain: `cms.interviewprepguru.com` (admin) / `content.interviewprepguru.com` (public content delivery)
+> Subdomain: `cms.interviewprep.guru` (admin) / `content.interviewprep.guru` (public content delivery)
 
 ---
 
@@ -76,11 +76,11 @@
 The existing `middleware.ts` (NextAuth-based) is extended to detect subdomains and rewrite to the appropriate route group.
 
 ```
-Request: cms.interviewprepguru.com/dashboard
+Request: cms.interviewprep.guru/dashboard
   → middleware detects subdomain "cms"
   → rewrites to /cms/dashboard (route group: app/(cms)/cms/dashboard/page.tsx)
 
-Request: content.interviewprepguru.com/blog/ace-your-hr-interview
+Request: content.interviewprep.guru/blog/ace-your-hr-interview
   → middleware detects subdomain "content"
   → rewrites to /content/blog/ace-your-hr-interview (route group: app/(content)/)
 ```
@@ -94,7 +94,7 @@ const hostname = req.headers.get('host') || ''
 const currentHost = hostname.split(':')[0]  // strip port for local dev
 
 // Extract subdomain
-const baseDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN || 'interviewprepguru.com'
+const baseDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN || 'interviewprep.guru'
 const subdomain = currentHost.endsWith(baseDomain)
   ? currentHost.replace(`.${baseDomain}`, '')
   : null
@@ -118,8 +118,8 @@ if (subdomain === 'content') {
 
 ### DNS & Vercel Configuration
 
-- Wildcard DNS: `*.interviewprepguru.com → Vercel`
-- Vercel domains: add `cms.interviewprepguru.com` and `content.interviewprepguru.com`
+- Wildcard DNS: `*.interviewprep.guru → Vercel`
+- Vercel domains: add `cms.interviewprep.guru` and `content.interviewprep.guru`
 - Local dev: use `/etc/hosts` entries or `NEXT_PUBLIC_ROOT_DOMAIN=localhost:3000` with query-param-based subdomain simulation
 
 ### Local Development
@@ -999,7 +999,7 @@ export async function generateMetadata({ params }): Promise<Metadata> {
     },
     alternates: {
       canonical: content.seo?.canonical ||
-        `https://content.interviewprepguru.com/${params.type}/${params.slug}`,
+        `https://content.interviewprep.guru/${params.type}/${params.slug}`,
     },
   }
 }
@@ -1020,7 +1020,7 @@ Each content type generates appropriate JSON-LD:
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const content = await getAllPublishedContentSlugs()
   return content.map(item => ({
-    url: `https://content.interviewprepguru.com/${item.contentType}/${item.slug}`,
+    url: `https://content.interviewprep.guru/${item.contentType}/${item.slug}`,
     lastModified: item.updatedAt,
     changeFrequency: item.contentType === 'blog-post' ? 'weekly' : 'monthly',
     priority: item.contentType === 'landing-page' ? 1.0 : 0.7,
@@ -1031,7 +1031,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 ### Cross-Linking with Main App
 
 Content pages include CTAs that link back to the main app:
-- "Try a practice interview" buttons → `interviewprepguru.com/lobby`
+- "Try a practice interview" buttons → `interviewprep.guru/lobby`
 - Related content suggestions in sidebar
 - Internal linking between content pieces
 
@@ -1409,7 +1409,7 @@ hooks/cms/                            # CMS React hooks
 
 ```bash
 # CMS Configuration
-NEXT_PUBLIC_ROOT_DOMAIN=interviewprepguru.com     # Base domain for subdomain routing
+NEXT_PUBLIC_ROOT_DOMAIN=interviewprep.guru     # Base domain for subdomain routing
 CMS_REVALIDATION_SECRET=xxx                        # Secret for ISR revalidation webhook
 CMS_DEFAULT_SITE_ID=xxx                            # Default platform site ObjectId
 
@@ -1418,7 +1418,7 @@ CMS_R2_BUCKET=interview-prep-guru-cms
 CMS_R2_ACCOUNT_ID=xxx
 CMS_R2_ACCESS_KEY=xxx
 CMS_R2_SECRET_KEY=xxx
-CMS_CDN_URL=https://cdn.interviewprepguru.com
+CMS_CDN_URL=https://cdn.interviewprep.guru
 
 # AI Features (reuse existing ANTHROPIC_API_KEY)
 # No new keys needed

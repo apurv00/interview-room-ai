@@ -54,7 +54,7 @@ Add a new config dimension: **Interview Type** (depth), with options:
 | **Culture Fit** | Values alignment, work style, team dynamics. | Self-awareness, alignment, authenticity |
 
 ### C. CMS Admin (Subdomain)
-- `cms.interviewprepguru.com` — Admin UI for managing domains, depth types, and content
+- `cms.interviewprep.guru` — Admin UI for managing domains, depth types, and content
 - Middleware-based subdomain routing within the same Next.js deployment
 - CRUD for interview domains and depth configurations
 - RBAC: `platform_admin` role required
@@ -231,7 +231,7 @@ Returns active depth levels, optionally filtered by domain.
 ```typescript
 // middleware.ts additions
 const hostname = req.headers.get('host') || ''
-const baseDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN || 'interviewprepguru.com'
+const baseDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN || 'interviewprep.guru'
 const subdomain = hostname.replace(`.${baseDomain}`, '').split('.')[0]
 
 // CMS admin subdomain
@@ -274,7 +274,7 @@ All CMS API routes require `platform_admin` role.
 ### 4.4 Environment Variables
 
 ```
-NEXT_PUBLIC_ROOT_DOMAIN=interviewprepguru.com   # for subdomain detection
+NEXT_PUBLIC_ROOT_DOMAIN=interviewprep.guru   # for subdomain detection
 ```
 
 Local development: use `?subdomain=cms` query param as fallback.
