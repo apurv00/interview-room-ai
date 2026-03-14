@@ -27,42 +27,49 @@ npm run lint       # ESLint
 | Validation   | Zod · Logging: Pino                                |
 | Docs         | pdf-parse, mammoth (DOCX), plain text              |
 
-## Project Structure
+## Project Structure (Modular Monolith)
 
 ```
-app/                        # Next.js App Router
-  (auth)/                   # signin, signup pages
-  api/                      # API routes
-    generate-question/      # AI question generation
-    evaluate-answer/        # Real-time answer scoring (5 dimensions)
-    generate-feedback/      # End-of-session feedback
-    interviews/             # Interview CRUD
-    recordings/             # Video upload
-    documents/upload/       # JD/resume parsing (PDF, DOCX, TXT)
-    analytics/              # Peer comparison metrics
-  interview/                # Main interview page (client component)
-  feedback/[sessionId]/     # Feedback display
-  history/                  # Past interviews
-  pricing/                  # Pricing page
-  privacy/, terms/          # Legal pages
-components/
-  interview/                # TranscriptPanel, Controls, CoachingNudge
-  feedback/                 # ScoreTrendChart, PeerComparison, AudioPlayer
-  layout/                   # AppShell, Header, Footer
-hooks/
-  useInterview.ts           # Interview state machine (main orchestrator)
-  useSpeechRecognition.ts   # Browser speech-to-text
-  useMediaRecorder.ts       # Video recording
-  useCoachingNudge.ts       # Live coaching tips
-lib/
-  auth/                     # NextAuth config, permissions
+modules/
+  interview/                # Core interview engine (@interview/*)
+    services/               # interviewService, evaluationEngine, personalizationEngine
+    hooks/                  # useInterview, useSpeechRecognition, useMediaRecorder, useCoachingNudge
+    components/             # Avatar, TranscriptPanel, Controls, DomainSelector, DepthSelector
+    config/                 # coachingNudges, coachingTips, feedbackConfig, speechMetrics
+    avatar/                 # EmotionEngine, LipSyncEngine, IdleAnimations
+    validators/             # Zod schemas for interview API routes
+  learn/                    # Learning & progress tracking (@learn/*)
+    services/               # competencyService, pathwayPlanner, sessionSummaryService
+    lib/                    # peerComparison, resources
+    components/             # ResourceLinks
+  b2b/                      # B2B hiring platform (@b2b/*)
+    services/               # hireService (org, candidates, invites, templates, dashboard)
+    validators/             # Zod schemas for hire API routes
+  resume/                   # Resume builder tools (@resume/*)
+    services/               # resumeService (CRUD), resumeAIService (enhance, ATS, tailor)
+    validators/             # Zod schemas for resume API routes
+  cms/                      # Content management (@cms/*)
+    services/               # benchmarkService
+    validators/             # CMS domain/type schemas
+shared/                     # Cross-cutting concerns (@shared/*)
+  auth/                     # NextAuth config, permissions, role hierarchy
   db/models/                # User, InterviewSession, Organization, InterviewTemplate, UsageRecord
-  services/                 # interviewService, documentParser, usageTracking, stripe
+  services/                 # documentParser, usageTracking, stripe
   middleware/               # composeApiRoute (auth → rate limit → validate → handler)
-  avatar/                   # EmotionEngine, LipSyncEngine
+  layout/                   # AppShell, AuthMenu, Footer
+  ui/                       # Generic UI components (Input, Button, Badge)
+  providers/                # SessionProvider, ThemeProvider
   types.ts                  # Core TypeScript types
-providers/                  # React context (SessionProvider)
-middleware.ts               # Route protection & role checks
+app/                        # Next.js App Router (pages & API routes)
+  api/hire/                 # B2B recruiter API endpoints
+  api/resume/               # Resume builder API endpoints
+  api/learn/                # Learning feature API endpoints
+  api/cms/                  # CMS admin API endpoints
+  (hire)/                   # B2B recruiter pages
+  (resume)/                 # Resume tool pages
+  (learn)/                  # Learning & practice pages
+  (cms)/                    # CMS admin pages
+middleware.ts               # Route protection, subdomain rewriting, security headers
 ```
 
 ## Architecture Patterns
@@ -92,7 +99,7 @@ Full list: `.env.local.example`
 - Roles: `candidate` (default), `recruiter`, `org_admin`, `platform_admin`
 - Free plan: 3 interviews/month (usage tracked per user)
 - Protected routes defined in `middleware.ts`
-- B2B routes (`/dashboard`, `/candidates`, `/templates`) require recruiter+
+- B2B routes (`/hire/*`) require recruiter+
 
 ---
 
@@ -107,12 +114,8 @@ _Update this section each session to carry context forward._
 - **CLAUDE.md**: Added this file for cross-session context
 - **Voice & responsiveness**: Faster TTS rate (0.95→1.08), warmer pitch, parallel eval+question generation, reduced inter-phase delays, switched real-time APIs to claude-sonnet-4-6 for speed
 - **CMS + Interview Domains/Depth**: Expanded from 4 hardcoded roles to 12+ dynamic interview domains (PM, SWE, DS, Design, Marketing, Finance, Consulting, DevOps, HR, Legal, etc.) managed via CMS. Added 6 interview depth levels (HR Screening, Behavioral, Technical, Case Study, Domain Knowledge, Culture Fit). CMS admin at cms.interviewprepguru.com subdomain with middleware-based routing. Homepage redesigned with domain catalog, search, category tabs, and depth selector. AI prompts dynamically adapt to domain/depth. All 166 tests passing.
+- **Modular monolith refactor**: Reorganized codebase from flat `lib/`, `components/`, `hooks/` into 5 domain modules (`interview`, `learn`, `b2b`, `resume`, `cms`) + `shared/` kernel. All modules have barrel exports and path aliases (`@interview/*`, `@learn/*`, `@b2b/*`, `@resume/*`, `@cms/*`, `@shared/*`). Business logic extracted from API routes into module services. Removed legacy empty directories and dead middleware routes. 252 tests passing, production build clean.
 
 ## Known Issues / TODO
 
 _Add items as they arise. Remove when resolved._
-
-<!-- Example:
-- [ ] Stripe webhook endpoint not tested in production
-- [ ] Mobile recording quality needs testing on Safari
--->
