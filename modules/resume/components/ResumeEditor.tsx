@@ -254,8 +254,8 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
       </div>
 
       <div className="flex gap-6 h-full">
-        {/* Editor Panel - 60% */}
-        <div className={`w-[60%] shrink-0 overflow-y-auto space-y-5 pr-2 ${mobileTab === 'preview' ? 'hidden md:block' : ''}`}>
+        {/* Editor Panel - 50% */}
+        <div className={`w-1/2 shrink-0 overflow-y-auto space-y-5 pr-2 ${mobileTab === 'preview' ? 'hidden md:block' : ''}`}>
           {/* Top bar: name, actions */}
           <div className="flex items-center justify-between">
             <input
@@ -441,8 +441,8 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
           </div>
         </div>
 
-        {/* Preview Panel - 40% */}
-        <div className={`w-[40%] shrink-0 sticky top-0 h-fit ${mobileTab === 'edit' ? 'hidden md:block' : ''}`}>
+        {/* Preview Panel - 50% */}
+        <div className={`w-1/2 shrink-0 sticky top-0 h-fit ${mobileTab === 'edit' ? 'hidden md:block' : ''}`}>
           <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-2 font-semibold">Live Preview</div>
           <ResumePreview data={resume} templateId={resume.template || 'professional'} />
         </div>
