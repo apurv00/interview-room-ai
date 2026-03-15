@@ -147,7 +147,10 @@ export default withAuth(
           // Learn subdomain public pages
           pathname.startsWith('/learn/guides') ||
           pathname === '/learn' ||
-          pathname.startsWith('/resources')
+          pathname.startsWith('/resources') ||
+          // Public scorecard pages
+          pathname.startsWith('/scorecard') ||
+          pathname.startsWith('/api/public')
         ) {
           return true
         }

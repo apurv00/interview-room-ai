@@ -1,0 +1,81 @@
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@shared/auth/authOptions'
+import { saveDrillAttempt } from '@learn/services/drillService'
+import Anthropic from '@anthropic-ai/sdk'
+import { aiLogger } from '@shared/logger'
+
+export const dynamic = 'force-dynamic'
+
+const client = new Anthropic()
+
+export async function POST(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const body = await req.json()
+    const { sessionId, questionIndex, question, originalAnswer, originalScore, newAnswer, competency } = body
+
+    if (!question || !newAnswer || !sessionId) {
+      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
+    }
+
+    // Score the new answer using Claude
+    const message = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 300,
+      system: 'You are an expert interview coach. Score the candidate\'s answer objectively.',
+      messages: [{
+        role: 'user',
+        content: `Score this interview answer on 4 dimensions (0-100 each):
+
+Question: "${question}"
+
+<candidate_answer>
+${newAnswer}
+</candidate_answer>
+
+Score on:
+- relevance: How directly does the answer address the question?
+- structure: Does it follow STAR format (Situation, Task, Action, Result)?
+- specificity: Are there concrete examples, metrics, and details?
+- ownership: Does the candidate show personal contribution and accountability?
+
+Respond with ONLY valid JSON:
+{"relevance": number, "structure": number, "specificity": number, "ownership": number}`,
+      }],
+    })
+
+    const raw = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}'
+    const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
+    const scores = JSON.parse(cleaned)
+
+    const newScore = Math.round(
+      (scores.relevance + scores.structure + scores.specificity + scores.ownership) / 4
+    )
+
+    const result = await saveDrillAttempt(session.user.id, {
+      sessionId,
+      questionIndex: questionIndex ?? 0,
+      question,
+      originalAnswer: originalAnswer || '',
+      originalScore: originalScore ?? 0,
+      newAnswer,
+      newScore,
+      competency: competency || 'general',
+    })
+
+    return NextResponse.json({
+      ...result,
+      newScore,
+      delta: newScore - (originalScore ?? 0),
+      breakdown: scores,
+    })
+  } catch (err) {
+    aiLogger.error({ err }, 'Drill evaluate error')
+    return NextResponse.json({ error: 'Evaluation failed' }, { status: 500 })
+  }
+}

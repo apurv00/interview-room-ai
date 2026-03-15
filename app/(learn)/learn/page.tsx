@@ -43,6 +43,36 @@ export default function LearnPage() {
             Track your competency growth and see personalized improvement pathways.
           </p>
         </Link>
+
+        <Link
+          href="/learn/pathway"
+          className="block p-6 rounded-xl border border-gray-200 dark:border-gray-700 hover:border-emerald-500 transition-colors"
+        >
+          <h2 className="text-xl font-semibold mb-2">Learning Pathway</h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Your personalized roadmap to interview readiness with milestones and tasks.
+          </p>
+        </Link>
+
+        <Link
+          href="/practice/drill"
+          className="block p-6 rounded-xl border border-gray-200 dark:border-gray-700 hover:border-amber-500 transition-colors"
+        >
+          <h2 className="text-xl font-semibold mb-2">Drill Mode</h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Re-attempt your weakest answers and track improvement over time.
+          </p>
+        </Link>
+
+        <Link
+          href="/dashboard"
+          className="block p-6 rounded-xl border border-gray-200 dark:border-gray-700 hover:border-purple-500 transition-colors"
+        >
+          <h2 className="text-xl font-semibold mb-2">Analytics</h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Visualize your score trends, competency radar, and session streaks.
+          </p>
+        </Link>
       </div>
     </main>
   )

@@ -16,6 +16,8 @@ import { mergeWithLocalData, readLocalInterviewData, cleanupLocalInterviewData }
 import { fetchWithRetry } from '@shared/fetchWithRetry'
 import { bisectLastLE } from '@shared/utils'
 import { PROBABILITY_COLORS } from '@interview/config/feedbackConfig'
+import ComparisonCard from '@learn/components/feedback/ComparisonCard'
+import ShareButton from '@learn/components/feedback/ShareButton'
 
 // ─── Error Boundary ──────────────────────────────────────────────────────────
 
@@ -421,11 +423,31 @@ function FeedbackPageInner() {
               {s(feedback.confidence_level)} confidence
             </div>
           </div>
+          <ShareButton sessionId={sessionId} />
           <div className="w-full pt-2">
             <p className="text-caption text-[#4b5563] mb-1">Score trend</p>
             <ScoreTrendChart currentScore={overall_score} sessionId={sessionId} />
           </div>
         </section>
+
+        {/* Comparative Feedback */}
+        {data.evaluations.length > 0 && (() => {
+          const evals = data.evaluations
+          const avg = (key: 'relevance' | 'structure' | 'specificity' | 'ownership') =>
+            Math.round(evals.reduce((s, e) => s + (e[key] || 0), 0) / evals.length)
+          return (
+            <ComparisonCard
+              currentScores={{
+                relevance: avg('relevance'),
+                structure: avg('structure'),
+                specificity: avg('specificity'),
+                ownership: avg('ownership'),
+              }}
+              overallScore={overall_score}
+              domain={data.config?.role}
+            />
+          )
+        })()}
 
         {/* Tab navigation */}
         <div className="flex gap-1 surface-card-bordered p-1 w-fit">
