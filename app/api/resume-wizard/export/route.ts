@@ -27,6 +27,8 @@ export const POST = composeApiRoute<ExportWizardInput>({
     const templateId = body.template || session.selectedTemplate || 'professional'
     const fontFamily = body.fontFamily || undefined
     const fontSize = body.fontSize || undefined
+    const headingSize = typeof body.headingSize === 'number' ? body.headingSize : undefined
+    const bodySize = typeof body.bodySize === 'number' ? body.bodySize : undefined
 
     // Map WizardSession to ResumeData
     const resumeData: ResumeData = {
@@ -75,9 +77,11 @@ export const POST = composeApiRoute<ExportWizardInput>({
         issuer: c.issuer,
         date: c.date,
       })),
-      styling: (fontFamily || fontSize) ? {
+      styling: (fontFamily || fontSize || headingSize || bodySize) ? {
         fontFamily: fontFamily as ResumeData['styling'] extends { fontFamily?: infer F } ? F : never,
         fontSize: fontSize as ResumeData['styling'] extends { fontSize?: infer S } ? S : never,
+        headingSize,
+        bodySize,
       } : undefined,
     }
 

@@ -3,7 +3,7 @@
 import { useMemo, useEffect } from 'react'
 import type { ResumeData } from '../validators/resume'
 import { getTemplate } from './templates'
-import { getFontStack, getFontSizes, getGoogleFontUrl } from '../config/fontConfig'
+import { getFontStack, getFontSizes, getCustomFontSizes, getGoogleFontUrl, DEFAULT_HEADING_SIZE, DEFAULT_BODY_SIZE } from '../config/fontConfig'
 
 interface Props {
   data: ResumeData
@@ -36,7 +36,10 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
     }
   }, [fontFamily])
 
-  const sizes = getFontSizes(fontSize)
+  const headingSize = data.styling?.headingSize ?? DEFAULT_HEADING_SIZE
+  const bodySize = data.styling?.bodySize ?? DEFAULT_BODY_SIZE
+  const hasCustomSizes = data.styling?.headingSize != null || data.styling?.bodySize != null
+  const sizes = hasCustomSizes ? getCustomFontSizes(headingSize, bodySize) : getFontSizes(fontSize)
   const wrapperStyle = {
     fontFamily: getFontStack(fontFamily),
     '--r-title': sizes.title,

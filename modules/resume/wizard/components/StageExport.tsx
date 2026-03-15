@@ -11,17 +11,19 @@ interface Props {
   strengthBreakdown: { contact: number; experience: number; education: number; skills: number; extras: number }
   isSaving: boolean
   fontFamily: string
-  fontSize: string
+  headingSize: number
+  bodySize: number
   onSelectTemplate: (template: string) => void
   onFontFamilyChange: (id: string) => void
-  onFontSizeChange: (size: string) => void
+  onHeadingSizeChange: (size: number) => void
+  onBodySizeChange: (size: number) => void
   onExport: () => void
 }
 
 export default function StageExport({
   selectedTemplate, strengthScore, strengthBreakdown, isSaving,
-  fontFamily, fontSize,
-  onSelectTemplate, onFontFamilyChange, onFontSizeChange, onExport,
+  fontFamily, headingSize, bodySize,
+  onSelectTemplate, onFontFamilyChange, onHeadingSizeChange, onBodySizeChange, onExport,
 }: Props) {
   return (
     <div className="space-y-6">
@@ -91,9 +93,11 @@ export default function StageExport({
       {/* Font & Size */}
       <FontStyleControls
         fontFamily={fontFamily}
-        fontSize={fontSize}
+        headingSize={headingSize}
+        bodySize={bodySize}
         onFontFamilyChange={onFontFamilyChange}
-        onFontSizeChange={onFontSizeChange}
+        onHeadingSizeChange={onHeadingSizeChange}
+        onBodySizeChange={onBodySizeChange}
       />
 
       {/* Export Button */}

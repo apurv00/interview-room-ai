@@ -1,5 +1,5 @@
 import type { ResumeData } from '../validators/resume'
-import { getFontStack, getFontSizes, getGoogleFontUrl } from '../config/fontConfig'
+import { getFontStack, getFontSizes, getCustomFontSizes, getGoogleFontUrl, DEFAULT_HEADING_SIZE, DEFAULT_BODY_SIZE } from '../config/fontConfig'
 
 // ─── HTML Template Generators for PDF ──────────────────────────────────────
 // These generate static HTML+CSS (no Tailwind, no React) for Puppeteer rendering
@@ -38,7 +38,10 @@ export function generateResumeHTML(data: ResumeData, templateId: string): string
 
   // Dynamic font settings
   const fontStack = getFontStack(data.styling?.fontFamily)
-  const sizes = getFontSizes(data.styling?.fontSize)
+  const hasCustomSizes = data.styling?.headingSize != null || data.styling?.bodySize != null
+  const sizes = hasCustomSizes
+    ? getCustomFontSizes(data.styling?.headingSize ?? DEFAULT_HEADING_SIZE, data.styling?.bodySize ?? DEFAULT_BODY_SIZE)
+    : getFontSizes(data.styling?.fontSize)
   const googleFontUrl = getGoogleFontUrl(data.styling?.fontFamily)
   const googleFontLink = googleFontUrl
     ? `<link rel="stylesheet" href="${googleFontUrl}">`

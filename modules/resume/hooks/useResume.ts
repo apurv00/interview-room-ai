@@ -24,7 +24,7 @@ const DEFAULT_RESUME: ResumeData = {
   projects: [],
   certifications: [],
   customSections: [],
-  styling: { fontFamily: 'georgia', fontSize: 'medium' },
+  styling: { fontFamily: 'georgia', fontSize: 'medium', headingSize: 18, bodySize: 9 },
 }
 
 export function useResume(initial?: Partial<ResumeData>) {

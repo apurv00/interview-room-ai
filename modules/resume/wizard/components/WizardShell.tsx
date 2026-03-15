@@ -231,10 +231,12 @@ export default function WizardShell({ initialSessionId }: Props) {
             strengthBreakdown={state.strengthBreakdown}
             isSaving={state.isSaving}
             fontFamily={state.fontFamily}
-            fontSize={state.fontSize}
+            headingSize={state.headingSize}
+            bodySize={state.bodySize}
             onSelectTemplate={t => dispatch({ type: 'SET_TEMPLATE', template: t })}
             onFontFamilyChange={f => dispatch({ type: 'SET_FONT_FAMILY', fontFamily: f })}
-            onFontSizeChange={s => dispatch({ type: 'SET_FONT_SIZE', fontSize: s })}
+            onHeadingSizeChange={s => dispatch({ type: 'SET_HEADING_SIZE', headingSize: s })}
+            onBodySizeChange={s => dispatch({ type: 'SET_BODY_SIZE', bodySize: s })}
             onExport={exportResume}
           />
         )

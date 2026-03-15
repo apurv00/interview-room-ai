@@ -368,9 +368,11 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
             {/* Font & Size */}
             <FontStyleControls
               fontFamily={resume.styling?.fontFamily || 'georgia'}
-              fontSize={resume.styling?.fontSize || 'medium'}
+              headingSize={resume.styling?.headingSize ?? 18}
+              bodySize={resume.styling?.bodySize ?? 9}
               onFontFamilyChange={f => update('styling', { ...resume.styling, fontFamily: f as 'georgia' | 'times' | 'garamond' | 'palatino' | 'calibri' | 'helvetica' | 'lato' | 'roboto' })}
-              onFontSizeChange={s => update('styling', { ...resume.styling, fontSize: s as 'small' | 'medium' | 'large' })}
+              onHeadingSizeChange={s => update('styling', { ...resume.styling, headingSize: s })}
+              onBodySizeChange={s => update('styling', { ...resume.styling, bodySize: s })}
             />
 
             {resume.targetRole && (

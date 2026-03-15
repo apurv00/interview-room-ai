@@ -1,20 +1,20 @@
 'use client'
 
-import { FONT_FAMILIES, FONT_SIZES } from '../config/fontConfig'
+import { FONT_FAMILIES, DEFAULT_HEADING_SIZE, DEFAULT_BODY_SIZE } from '../config/fontConfig'
 
 interface Props {
   fontFamily: string
-  fontSize: string
+  headingSize: number
+  bodySize: number
   onFontFamilyChange: (id: string) => void
-  onFontSizeChange: (size: string) => void
+  onHeadingSizeChange: (size: number) => void
+  onBodySizeChange: (size: number) => void
 }
 
-const SIZE_LABELS: Record<string, string> = { small: 'S', medium: 'M', large: 'L' }
-
-export default function FontStyleControls({ fontFamily, fontSize, onFontFamilyChange, onFontSizeChange }: Props) {
+export default function FontStyleControls({ fontFamily, headingSize, bodySize, onFontFamilyChange, onHeadingSizeChange, onBodySizeChange }: Props) {
   return (
-    <div className="flex items-end gap-4">
-      <div className="flex-1">
+    <div className="space-y-3">
+      <div>
         <label className="text-[10px] text-slate-500 uppercase tracking-wider">Font</label>
         <select
           value={fontFamily}
@@ -26,23 +26,66 @@ export default function FontStyleControls({ fontFamily, fontSize, onFontFamilyCh
           ))}
         </select>
       </div>
-      <div>
-        <label className="text-[10px] text-slate-500 uppercase tracking-wider">Size</label>
-        <div className="flex gap-1 mt-1">
-          {Object.keys(FONT_SIZES).map(size => (
-            <button
-              key={size}
-              onClick={() => onFontSizeChange(size)}
-              className={`px-3 py-2 rounded-lg text-[10px] font-medium transition-colors ${
-                fontSize === size
-                  ? 'bg-emerald-600 text-white'
-                  : 'bg-slate-800 text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              {SIZE_LABELS[size]}
-            </button>
-          ))}
+      <div className="flex gap-3">
+        <div className="flex-1">
+          <label className="text-[10px] text-slate-500 uppercase tracking-wider">Heading Size</label>
+          <div className="flex items-center gap-2 mt-1">
+            <input
+              type="range"
+              min={12}
+              max={28}
+              step={1}
+              value={headingSize}
+              onChange={e => onHeadingSizeChange(Number(e.target.value))}
+              className="flex-1 accent-emerald-500 h-1.5"
+            />
+            <input
+              type="number"
+              min={12}
+              max={28}
+              value={headingSize}
+              onChange={e => {
+                const v = Number(e.target.value)
+                if (v >= 12 && v <= 28) onHeadingSizeChange(v)
+              }}
+              className="w-12 px-1.5 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white text-center focus:outline-none focus:ring-1 focus:ring-emerald-500"
+            />
+          </div>
         </div>
+        <div className="flex-1">
+          <label className="text-[10px] text-slate-500 uppercase tracking-wider">Body Size</label>
+          <div className="flex items-center gap-2 mt-1">
+            <input
+              type="range"
+              min={7}
+              max={14}
+              step={0.5}
+              value={bodySize}
+              onChange={e => onBodySizeChange(Number(e.target.value))}
+              className="flex-1 accent-emerald-500 h-1.5"
+            />
+            <input
+              type="number"
+              min={7}
+              max={14}
+              step={0.5}
+              value={bodySize}
+              onChange={e => {
+                const v = Number(e.target.value)
+                if (v >= 7 && v <= 14) onBodySizeChange(v)
+              }}
+              className="w-12 px-1.5 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white text-center focus:outline-none focus:ring-1 focus:ring-emerald-500"
+            />
+          </div>
+        </div>
+      </div>
+      <div className="flex justify-end">
+        <button
+          onClick={() => { onHeadingSizeChange(DEFAULT_HEADING_SIZE); onBodySizeChange(DEFAULT_BODY_SIZE) }}
+          className="text-[10px] text-slate-500 hover:text-slate-300 transition-colors"
+        >
+          Reset to defaults
+        </button>
       </div>
     </div>
   )
