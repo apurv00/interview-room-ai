@@ -17,6 +17,10 @@ export type { WeakQuestion, DrillResult, DrillHistoryEntry } from './services/dr
 export { getAnalyticsData } from './services/analyticsService'
 export type { AnalyticsData } from './services/analyticsService'
 
+// ── Benchmarking ──
+export { getPeerBenchmark } from './services/benchmarkService'
+export type { BenchmarkResult } from './services/benchmarkService'
+
 // ── Comparison ──
 export { computeComparison } from './services/comparisonService'
 export type { ComparisonResult, DimensionDelta } from './services/comparisonService'
