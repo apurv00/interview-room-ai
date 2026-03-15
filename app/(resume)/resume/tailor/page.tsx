@@ -114,6 +114,8 @@ export default function TailorPage() {
       const data = await res.json()
       if (res.ok) {
         router.push(`/resume/builder?id=${data.id}`)
+      } else if (data.code === 'RESUME_LIMIT') {
+        setError('Resume limit reached (max 3). Delete an existing resume from the Resume Builder page, then try saving again.')
       } else {
         setError(data.error || 'Failed to save')
       }
@@ -199,6 +201,14 @@ export default function TailorPage() {
         </div>
       ) : (
         <div className="space-y-6 animate-fade-in">
+          {error && (
+            <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 flex items-start gap-2">
+              <svg className="w-4 h-4 text-red-400 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+              </svg>
+              <p className="text-xs text-red-400">{error}</p>
+            </div>
+          )}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center">
             <p className="text-sm text-slate-400 mb-2">Job Match Score</p>
             <p className={`text-4xl font-bold ${result.matchScore >= 80 ? 'text-emerald-400' : result.matchScore >= 60 ? 'text-amber-400' : 'text-red-400'}`}>
