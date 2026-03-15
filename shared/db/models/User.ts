@@ -121,6 +121,11 @@ export interface IUser extends Document {
     updatedAt: string
   }>
 
+  // Streak tracking
+  currentStreak: number
+  longestStreak: number
+  lastSessionDate?: Date
+
   interviewCount: number
   lastInterviewAt?: Date
 
@@ -259,6 +264,11 @@ const UserSchema = new Schema<IUser>(
       createdAt: { type: String },
       updatedAt: { type: String },
     }],
+
+    // Streak tracking
+    currentStreak: { type: Number, default: 0 },
+    longestStreak: { type: Number, default: 0 },
+    lastSessionDate: { type: Date },
 
     interviewCount: { type: Number, default: 0 },
     lastInterviewAt: { type: Date },
