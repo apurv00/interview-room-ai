@@ -141,7 +141,7 @@ export function generateResumeHTML(data: ResumeData, templateId: string): string
       font-size: ${sizes.bodyPt};
       line-height: 1.4;
       color: #1f2937;
-      padding: 40px 50px;
+      /* No body padding — margins handled by Puppeteer per-page */
     }
     .header {
       text-align: center;
@@ -165,6 +165,7 @@ export function generateResumeHTML(data: ResumeData, templateId: string): string
     }
     .section {
       margin-bottom: 14px;
+      break-inside: avoid;
     }
     .section h2 {
       font-size: ${sizes.sectionPt};
@@ -174,6 +175,7 @@ export function generateResumeHTML(data: ResumeData, templateId: string): string
       padding-bottom: 2px;
       margin-bottom: 6px;
       color: ${accent};
+      break-after: avoid;
     }
     .section p {
       font-size: ${sizes.bodyPt};
@@ -181,6 +183,7 @@ export function generateResumeHTML(data: ResumeData, templateId: string): string
     }
     .entry {
       margin-bottom: 8px;
+      break-inside: avoid;
     }
     .entry-header {
       display: flex;
@@ -210,6 +213,7 @@ export function generateResumeHTML(data: ResumeData, templateId: string): string
     .skill-row {
       font-size: ${sizes.bodyPt};
       margin-bottom: 2px;
+      break-inside: avoid;
     }
     .tech {
       font-size: ${sizes.metaPt};
@@ -218,6 +222,7 @@ export function generateResumeHTML(data: ResumeData, templateId: string): string
     .cert {
       font-size: ${sizes.bodyPt};
       margin-bottom: 2px;
+      break-inside: avoid;
     }
   </style>
 </head>
@@ -260,7 +265,7 @@ export async function generatePDF(data: ResumeData, templateId: string): Promise
     const pdfBuffer = await page.pdf({
       format: 'A4',
       printBackground: true,
-      margin: { top: '0', bottom: '0', left: '0', right: '0' },
+      margin: { top: '40px', bottom: '40px', left: '50px', right: '50px' },
     })
     return Buffer.from(pdfBuffer)
   } finally {
