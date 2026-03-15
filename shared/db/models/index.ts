@@ -52,6 +52,13 @@ export type { IBenchmarkCase } from './BenchmarkCase'
 export { DrillAttempt } from './DrillAttempt'
 export type { IDrillAttempt } from './DrillAttempt'
 
+// Phase 8: Theme A — Deeper Practice
+export { InterviewerPersona } from './InterviewerPersona'
+export type { IInterviewerPersona } from './InterviewerPersona'
+
+export { SavedJobDescription } from './SavedJobDescription'
+export type { ISavedJobDescription, IParsedJobDescription, ParsedRequirement } from './SavedJobDescription'
+
 // Smart Wizard
 export { WizardConfig } from './WizardConfig'
 export type { IWizardConfig } from './WizardConfig'

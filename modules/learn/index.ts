@@ -3,6 +3,8 @@ export { getCompetenciesForDomain, updateCompetencyState, getUserCompetencySumma
 export type { CompetencySummary } from './services/competencyService'
 export { generatePathwayPlan, getCurrentPathway, markTaskComplete } from './services/pathwayPlanner'
 export { generateSessionSummary, getRecentSummaries, buildHistorySummary } from './services/sessionSummaryService'
+export { calculateNextReview, scoreToQuality, updateAfterSession, getDueCompetencies } from './services/spacedRepetitionService'
+export type { DueCompetency, ReviewUrgency } from './services/spacedRepetitionService'
 
 // ── Lib ──
 export { computePercentile } from './lib/peerComparison'

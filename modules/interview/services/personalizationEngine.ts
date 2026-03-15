@@ -1,10 +1,12 @@
 import { connectDB } from '@shared/db/connection'
-import { User, InterviewDomain, InterviewDepth } from '@shared/db/models'
+import { User, InterviewDomain, InterviewDepth, InterviewerPersona } from '@shared/db/models'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { getUserCompetencySummary } from '@learn/services/competencyService'
 import { getUserWeaknesses } from '@learn/services/competencyService'
 import { buildHistorySummary, getRecentSummaries } from '@learn/services/sessionSummaryService'
 import { getCompanyContext } from './retrievalService'
+import { buildParsedJDContext } from './jdParserService'
+import type { IParsedJobDescription } from '@shared/db/models/SavedJobDescription'
 import { logger } from '@shared/logger'
 
 // ─── Session Brief ──────────────────────────────────────────────────────────
@@ -25,6 +27,13 @@ export interface SessionBrief {
   knownStrengths: string[]
   interviewerBehavior: string
 
+  // Persona
+  personaName: string
+  personaPromptFragment: string
+
+  // Parsed JD context
+  parsedJDContext: string
+
   // Context blocks for prompt injection
   profileContext: string
   historyContext: string
@@ -39,6 +48,8 @@ interface SessionBriefInput {
   experience: string
   jobDescription?: string
   resumeText?: string
+  persona?: string
+  parsedJobDescription?: IParsedJobDescription
 }
 
 // ─── Generate Session Brief ─────────────────────────────────────────────────
@@ -54,7 +65,7 @@ export async function generateSessionBrief(input: SessionBriefInput): Promise<Se
     const { userId, domain, interviewType, experience } = input
 
     // Parallel fetch all context
-    const [profile, competencySummary, weaknesses, recentSummaries, historySummary, companyCtx] =
+    const [profile, competencySummary, weaknesses, recentSummaries, historySummary, companyCtx, persona] =
       await Promise.all([
         User.findById(userId).select(
           'currentTitle currentIndustry isCareerSwitcher switchingFrom targetCompanyType ' +
@@ -66,6 +77,9 @@ export async function generateSessionBrief(input: SessionBriefInput): Promise<Se
         getRecentSummaries(userId, domain, 3),
         buildHistorySummary(userId, domain),
         getCompanyContext(input),
+        input.persona
+          ? InterviewerPersona.findOne({ slug: input.persona, isActive: true }).lean()
+          : InterviewerPersona.findOne({ isDefault: true, isActive: true }).lean(),
       ])
 
     // Determine session goal
@@ -100,6 +114,15 @@ export async function generateSessionBrief(input: SessionBriefInput): Promise<Se
     const profileContext = buildProfileContext(profileRecord, input)
     const competencyContext = buildCompetencyContext(competencySummary)
 
+    // Persona context
+    const personaName = persona?.name || 'Alex Chen'
+    const personaPromptFragment = persona?.systemPromptFragment || ''
+
+    // Parsed JD context
+    const parsedJDContext = input.parsedJobDescription
+      ? buildParsedJDContext(input.parsedJobDescription)
+      : ''
+
     return {
       userId,
       domain,
@@ -113,6 +136,9 @@ export async function generateSessionBrief(input: SessionBriefInput): Promise<Se
       knownWeaknesses,
       knownStrengths,
       interviewerBehavior,
+      personaName,
+      personaPromptFragment,
+      parsedJDContext,
       profileContext,
       historyContext: historySummary,
       companyContext: companyCtx,
@@ -161,6 +187,14 @@ export function briefToPromptContext(brief: SessionBrief): string {
     sections.push(`INTERVIEWER BEHAVIOR: ${brief.interviewerBehavior}`)
   }
 
+  if (brief.personaPromptFragment) {
+    sections.push(`PERSONA: Your name is ${brief.personaName}. ${brief.personaPromptFragment}`)
+  }
+
+  if (brief.parsedJDContext) {
+    sections.push(brief.parsedJDContext)
+  }
+
   if (brief.profileContext) {
     sections.push(brief.profileContext)
   }
@@ -196,6 +230,9 @@ function createDefaultBrief(input: SessionBriefInput): SessionBrief {
     knownWeaknesses: [],
     knownStrengths: [],
     interviewerBehavior: 'balanced',
+    personaName: 'Alex Chen',
+    personaPromptFragment: '',
+    parsedJDContext: '',
     profileContext: '',
     historyContext: '',
     companyContext: '',

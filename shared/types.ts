@@ -18,6 +18,8 @@ export interface InterviewConfig {
   resumeText?: string
   jdFileName?: string
   resumeFileName?: string
+  persona?: string              // interviewer persona slug
+  resumeId?: string             // source resume ID for resume-to-interview flow
 }
 
 // ─── State Machine ────────────────────────────────────────────────────────────

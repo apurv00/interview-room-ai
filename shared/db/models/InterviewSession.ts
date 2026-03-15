@@ -22,6 +22,10 @@ export interface IInterviewSession extends Document {
   resumeText?: string
   jdFileName?: string
   resumeFileName?: string
+  parsedJobDescription?: Record<string, unknown>
+
+  // Persona
+  persona?: string
 
   status: SessionStatus
   startedAt?: Date
@@ -92,6 +96,9 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
     recordingUrl: { type: String },
     recordingSizeBytes: { type: Number },
     recordingR2Key: { type: String },
+
+    parsedJobDescription: { type: Schema.Types.Mixed },
+    persona: { type: String },
 
     resumeR2Key: { type: String },
     jdR2Key: { type: String },

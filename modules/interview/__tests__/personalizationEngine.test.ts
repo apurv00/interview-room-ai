@@ -12,6 +12,13 @@ vi.mock('@shared/logger', () => ({
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }))
 
+vi.mock('@anthropic-ai/sdk', () => {
+  class MockAnthropic {
+    messages = { create: vi.fn().mockResolvedValue({ content: [{ type: 'text', text: '{}' }] }) }
+  }
+  return { default: MockAnthropic }
+})
+
 vi.mock('@shared/db/models', () => ({
   User: {
     findById: vi.fn().mockReturnValue({ select: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(null) }) }),
@@ -20,6 +27,9 @@ vi.mock('@shared/db/models', () => ({
     findOne: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(null) }),
   },
   InterviewDepth: {
+    findOne: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(null) }),
+  },
+  InterviewerPersona: {
     findOne: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(null) }),
   },
 }))
