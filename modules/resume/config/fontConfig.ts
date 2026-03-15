@@ -49,3 +49,21 @@ export function getGoogleFontUrl(fontId?: string): string | null {
 export function getFontSizes(preset?: string): FontSizePreset {
   return FONT_SIZES[preset || 'medium'] || FONT_SIZES.medium
 }
+
+/** Build font sizes from custom numeric heading/body values */
+export function getCustomFontSizes(headingSize: number, bodySize: number): FontSizePreset {
+  const metaSize = Math.max(7, bodySize - 1)
+  return {
+    title: `${headingSize}px`,
+    body: `${bodySize}px`,
+    section: `${bodySize}px`,
+    meta: `${metaSize}px`,
+    titlePt: `${headingSize}pt`,
+    bodyPt: `${bodySize}pt`,
+    sectionPt: `${bodySize}pt`,
+    metaPt: `${metaSize}pt`,
+  }
+}
+
+export const DEFAULT_HEADING_SIZE = 18
+export const DEFAULT_BODY_SIZE = 9

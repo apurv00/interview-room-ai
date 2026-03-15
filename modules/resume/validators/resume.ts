@@ -62,6 +62,8 @@ export const CustomSectionSchema = z.object({
 export const ResumeStylingSchema = z.object({
   fontFamily: z.enum(['georgia', 'times', 'garamond', 'palatino', 'calibri', 'helvetica', 'lato', 'roboto']).optional(),
   fontSize: z.enum(['small', 'medium', 'large']).optional(),
+  headingSize: z.number().min(12).max(28).optional(),
+  bodySize: z.number().min(7).max(14).optional(),
 })
 
 // ─── Full Resume Schema (for save) ─────────────────────────────────────────

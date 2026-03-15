@@ -63,6 +63,8 @@ export default function WizardPreview({ state }: Props) {
     styling: {
       fontFamily: state.fontFamily as 'georgia' | 'times' | 'garamond' | 'palatino' | 'calibri' | 'helvetica' | 'lato' | 'roboto',
       fontSize: state.fontSize as 'small' | 'medium' | 'large',
+      headingSize: state.headingSize,
+      bodySize: state.bodySize,
     },
   }), [state])
 

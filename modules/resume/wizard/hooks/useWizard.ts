@@ -71,6 +71,8 @@ export interface WizardState {
   selectedTemplate: string
   fontFamily: string
   fontSize: string
+  headingSize: number
+  bodySize: number
   // UI states
   isLoading: boolean
   isSaving: boolean
@@ -103,6 +105,8 @@ type WizardAction =
   | { type: 'SET_TEMPLATE'; template: string }
   | { type: 'SET_FONT_FAMILY'; fontFamily: string }
   | { type: 'SET_FONT_SIZE'; fontSize: string }
+  | { type: 'SET_HEADING_SIZE'; headingSize: number }
+  | { type: 'SET_BODY_SIZE'; bodySize: number }
   | { type: 'SET_UI_FLAG'; key: 'isLoading' | 'isSaving' | 'isGeneratingFollowUps' | 'isEnhancing'; value: boolean }
   | { type: 'SET_ERROR'; error: string | null }
   | { type: 'SET_COST'; aiCostUsd: number }
@@ -128,6 +132,8 @@ const initialState: WizardState = {
   selectedTemplate: 'professional',
   fontFamily: 'georgia',
   fontSize: 'medium',
+  headingSize: 18,
+  bodySize: 9,
   isLoading: false,
   isSaving: false,
   isGeneratingFollowUps: false,
@@ -267,6 +273,12 @@ function wizardReducer(state: WizardState, action: WizardAction): WizardState {
 
     case 'SET_FONT_SIZE':
       return { ...state, fontSize: action.fontSize }
+
+    case 'SET_HEADING_SIZE':
+      return { ...state, headingSize: action.headingSize }
+
+    case 'SET_BODY_SIZE':
+      return { ...state, bodySize: action.bodySize }
 
     case 'SET_UI_FLAG':
       return { ...state, [action.key]: action.value }
@@ -514,6 +526,8 @@ export function useWizard(initialSessionId?: string) {
           format: 'pdf',
           fontFamily: state.fontFamily,
           fontSize: state.fontSize,
+          headingSize: state.headingSize,
+          bodySize: state.bodySize,
         }),
       })
 
@@ -561,7 +575,7 @@ export function useWizard(initialSessionId?: string) {
     } finally {
       dispatch({ type: 'SET_UI_FLAG', key: 'isSaving', value: false })
     }
-  }, [state.sessionId, state.selectedTemplate, state.contactInfo.fullName, state.fontFamily, state.fontSize])
+  }, [state.sessionId, state.selectedTemplate, state.contactInfo.fullName, state.fontFamily, state.fontSize, state.headingSize, state.bodySize])
 
   // ─── Navigation ────────────────────────────────────────────────────────
 
