@@ -165,6 +165,90 @@ export async function getProfileForResume(userId: string) {
   }
 }
 
+// ─── Resume-to-Interview Config ────────────────────────────────────────────
+
+const ROLE_TO_DOMAIN: Array<{ pattern: RegExp; domain: string }> = [
+  { pattern: /product\s*manag|^pm$/i, domain: 'pm' },
+  { pattern: /software|developer|engineer|frontend|backend|fullstack|full.stack|swe/i, domain: 'swe' },
+  { pattern: /data\s*scien|machine\s*learn|ml\s*engineer|data\s*analy/i, domain: 'data-science' },
+  { pattern: /design|ux|ui|creative\s*director/i, domain: 'design' },
+  { pattern: /market|growth|brand|content\s*strat/i, domain: 'marketing' },
+  { pattern: /financ|accounting|controller|treasury/i, domain: 'finance' },
+  { pattern: /consult/i, domain: 'consulting' },
+  { pattern: /sale|account\s*exec|business\s*develop/i, domain: 'sales' },
+  { pattern: /devops|sre|infrastructure|platform\s*eng/i, domain: 'devops' },
+  { pattern: /human\s*resource|hr\s|talent|recruit/i, domain: 'hr' },
+  { pattern: /legal|attorney|counsel/i, domain: 'legal' },
+  { pattern: /mba|strateg|operations|general\s*manag/i, domain: 'mba' },
+]
+
+function inferDomainFromRole(role: string): string | null {
+  for (const { pattern, domain } of ROLE_TO_DOMAIN) {
+    if (pattern.test(role)) return domain
+  }
+  return null
+}
+
+function inferExperienceLevel(experience: Array<{ startDate?: string; endDate?: string }>): '0-2' | '3-6' | '7+' {
+  if (!experience?.length) return '0-2'
+
+  let totalMonths = 0
+  const now = new Date()
+
+  for (const exp of experience) {
+    if (!exp.startDate) continue
+    const start = new Date(exp.startDate)
+    const end = exp.endDate ? new Date(exp.endDate) : now
+
+    if (isNaN(start.getTime())) continue
+    const endDate = isNaN(end.getTime()) ? now : end
+
+    const months = Math.max(0, (endDate.getFullYear() - start.getFullYear()) * 12 + (endDate.getMonth() - start.getMonth()))
+    totalMonths += months
+  }
+
+  const years = totalMonths / 12
+  if (years >= 7) return '7+'
+  if (years >= 3) return '3-6'
+  return '0-2'
+}
+
+export interface ResumeInterviewConfig {
+  domain: string | null
+  experience: '0-2' | '3-6' | '7+'
+  resumeText: string
+  resumeName: string
+  targetRole: string
+  targetCompany: string
+}
+
+export async function buildInterviewConfig(userId: string, resumeId: string): Promise<ResumeInterviewConfig | null> {
+  await connectDB()
+  const user = await User.findById(userId).select('savedResumes').lean()
+  if (!user) return null
+
+  const resume = (user.savedResumes || []).find(
+    (r: Record<string, unknown>) => r.id === resumeId
+  ) as Record<string, unknown> | undefined
+  if (!resume) return null
+
+  const targetRole = (resume.targetRole as string) || ''
+  const domain = inferDomainFromRole(targetRole)
+  const experience = inferExperienceLevel(resume.experience as Array<{ startDate?: string; endDate?: string }> || [])
+
+  // Build full text for AI context
+  const fullText = (resume.fullText as string) || ''
+
+  return {
+    domain,
+    experience,
+    resumeText: fullText,
+    resumeName: (resume.name as string) || 'Untitled Resume',
+    targetRole,
+    targetCompany: (resume.targetCompany as string) || '',
+  }
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function buildFullText(data: ResumeData): string {

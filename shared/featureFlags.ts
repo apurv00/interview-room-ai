@@ -14,6 +14,10 @@ export type FeatureFlag =
   | 'benchmark_harness'
   | 'adaptive_difficulty'
   | 'rubric_registry'
+  | 'resume_to_interview'
+  | 'jd_structured_parsing'
+  | 'interviewer_personas'
+  | 'spaced_repetition'
 
 const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   personalization_engine: true,
@@ -27,6 +31,10 @@ const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   benchmark_harness: false,
   adaptive_difficulty: true,
   rubric_registry: true,
+  resume_to_interview: true,
+  jd_structured_parsing: true,
+  interviewer_personas: true,
+  spaced_repetition: true,
 }
 
 export function isFeatureEnabled(flag: FeatureFlag): boolean {

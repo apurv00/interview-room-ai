@@ -48,6 +48,13 @@ export type { ICompanyPattern } from './CompanyPattern'
 export { BenchmarkCase } from './BenchmarkCase'
 export type { IBenchmarkCase } from './BenchmarkCase'
 
+// Phase 8: Theme A — Deeper Practice
+export { InterviewerPersona } from './InterviewerPersona'
+export type { IInterviewerPersona } from './InterviewerPersona'
+
+export { SavedJobDescription } from './SavedJobDescription'
+export type { ISavedJobDescription, IParsedJobDescription, ParsedRequirement } from './SavedJobDescription'
+
 // Smart Wizard
 export { WizardConfig } from './WizardConfig'
 export type { IWizardConfig } from './WizardConfig'

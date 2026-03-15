@@ -18,6 +18,13 @@ export interface IUserCompetencyState extends Document {
     timestamp: Date
   }>
 
+  // Spaced repetition fields
+  srLastPracticedAt?: Date
+  srNextReviewAt?: Date
+  srEaseFactor?: number
+  srInterval?: number
+  srRepetitionCount?: number
+
   createdAt: Date
   updatedAt: Date
 }
@@ -38,6 +45,13 @@ const UserCompetencyStateSchema = new Schema<IUserCompetencyState>(
       sessionId: { type: Schema.Types.ObjectId, ref: 'InterviewSession' },
       timestamp: { type: Date, default: Date.now },
     }],
+
+    // Spaced repetition
+    srLastPracticedAt: { type: Date },
+    srNextReviewAt: { type: Date },
+    srEaseFactor: { type: Number, default: 2.5, min: 1.3, max: 3.0 },
+    srInterval: { type: Number, default: 1 },
+    srRepetitionCount: { type: Number, default: 0 },
   },
   { timestamps: true }
 )
@@ -45,6 +59,7 @@ const UserCompetencyStateSchema = new Schema<IUserCompetencyState>(
 // Compound index: one entry per user+competency+domain
 UserCompetencyStateSchema.index({ userId: 1, competencyName: 1, domain: 1 }, { unique: true })
 UserCompetencyStateSchema.index({ userId: 1, currentScore: 1 })
+UserCompetencyStateSchema.index({ userId: 1, srNextReviewAt: 1 })
 
 export const UserCompetencyState: Model<IUserCompetencyState> =
   mongoose.models.UserCompetencyState ||

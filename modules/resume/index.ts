@@ -1,7 +1,8 @@
 // Resume module barrel export
 
 // Services
-export { listResumes, getResume, saveResume, deleteResume, getUserProfileContext, getProfileForResume } from './services/resumeService'
+export { listResumes, getResume, saveResume, deleteResume, getUserProfileContext, getProfileForResume, buildInterviewConfig } from './services/resumeService'
+export type { ResumeInterviewConfig } from './services/resumeService'
 export { enhanceSection, enhanceBullets, generateFullResume, checkATS, tailorResume, parseResumeToStructured } from './services/resumeAIService'
 
 // Validators & Types
