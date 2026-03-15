@@ -126,6 +126,13 @@ export interface IUser extends Document {
   longestStreak: number
   lastSessionDate?: Date
 
+  // Email preferences
+  emailPreferences?: {
+    digest: boolean
+    reminders: boolean
+    frequency: 'daily' | 'weekly'
+  }
+
   interviewCount: number
   lastInterviewAt?: Date
 
@@ -269,6 +276,13 @@ const UserSchema = new Schema<IUser>(
     currentStreak: { type: Number, default: 0 },
     longestStreak: { type: Number, default: 0 },
     lastSessionDate: { type: Date },
+
+    // Email preferences
+    emailPreferences: {
+      digest: { type: Boolean, default: true },
+      reminders: { type: Boolean, default: true },
+      frequency: { type: String, enum: ['daily', 'weekly'], default: 'weekly' },
+    },
 
     interviewCount: { type: Number, default: 0 },
     lastInterviewAt: { type: Date },

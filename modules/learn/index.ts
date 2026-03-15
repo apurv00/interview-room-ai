@@ -21,6 +21,9 @@ export type { AnalyticsData } from './services/analyticsService'
 export { getPeerBenchmark } from './services/benchmarkService'
 export type { BenchmarkResult } from './services/benchmarkService'
 
+// ── Email ──
+export { processEmailBatch, buildDigestContent, sendInactivityNudge } from './services/emailTriggerService'
+
 // ── Comparison ──
 export { computeComparison } from './services/comparisonService'
 export type { ComparisonResult, DimensionDelta } from './services/comparisonService'
