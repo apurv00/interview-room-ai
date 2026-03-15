@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import type { InterviewConfig } from '@shared/types'
 import { getDomainLabel } from '@interview/config/interviewConfig'
 import { STORAGE_KEYS } from '@shared/storageKeys'
+import PrepChecklist from '@interview/components/PrepChecklist'
 
 type CheckStatus = 'pending' | 'ok' | 'error'
 
@@ -239,7 +240,7 @@ export default function LobbyPage() {
     : 'rgb(100,116,139)'
 
   return (
-    <main className="min-h-screen flex items-center justify-center px-4 py-12">
+    <main className="min-h-screen flex items-center justify-center px-3 sm:px-4 py-8 sm:py-12">
       <motion.div
         className="w-full max-w-4xl space-y-8"
         variants={containerVariants}
@@ -248,7 +249,7 @@ export default function LobbyPage() {
       >
         {/* Header */}
         <motion.div className="text-center space-y-2" variants={itemVariants}>
-          <h1 className="text-3xl font-bold text-white">Pre-Interview Check</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold text-white">Pre-Interview Check</h1>
           {config && (
             <div className="space-y-2">
               <p className="text-slate-400">
@@ -369,27 +370,14 @@ export default function LobbyPage() {
               ))}
             </div>
 
-            {/* Tips */}
-            <div className="bg-slate-900/80 backdrop-blur-sm border border-slate-700/50 rounded-2xl p-5 space-y-3">
-              <h2 className="text-sm font-semibold text-slate-300">Quick tips</h2>
-              <ul className="space-y-2.5 text-sm text-slate-400">
-                {[
-                  'Speak clearly and at a steady pace',
-                  'Pause 1-2 seconds before answering',
-                  'Use STAR: Situation, Task, Action, Result',
-                  'Close other browser tabs to reduce lag',
-                ].map(tip => (
-                  <li key={tip} className="flex items-start gap-2.5">
-                    <span className="text-indigo-400 mt-0.5 shrink-0">
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                      </svg>
-                    </span>
-                    {tip}
-                  </li>
-                ))}
-              </ul>
-            </div>
+            {/* Interview Prep Checklist */}
+            {config && (
+              <PrepChecklist
+                domainSlug={config.role}
+                domainLabel={getDomainLabel(config.role)}
+                duration={config.duration}
+              />
+            )}
 
             {/* CTA */}
             <AnimatePresence mode="wait">

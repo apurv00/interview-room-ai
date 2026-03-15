@@ -49,6 +49,11 @@ export interface IInterviewSession extends Document {
   candidateName?: string
   recruiterNotes?: string
 
+  // Sharing
+  shareToken?: string
+  isPublic?: boolean
+  shareExpiresAt?: Date
+
   userAgent?: string
 
   createdAt: Date
@@ -102,6 +107,11 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
     candidateEmail: { type: String, lowercase: true },
     candidateName: { type: String },
     recruiterNotes: { type: String },
+
+    // Sharing
+    shareToken: { type: String, unique: true, sparse: true },
+    isPublic: { type: Boolean, default: false },
+    shareExpiresAt: { type: Date },
 
     userAgent: { type: String },
   },

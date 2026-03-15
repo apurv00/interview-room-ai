@@ -48,6 +48,10 @@ export type { ICompanyPattern } from './CompanyPattern'
 export { BenchmarkCase } from './BenchmarkCase'
 export type { IBenchmarkCase } from './BenchmarkCase'
 
+// Phase 2: Drill Mode
+export { DrillAttempt } from './DrillAttempt'
+export type { IDrillAttempt } from './DrillAttempt'
+
 // Phase 8: Theme A — Deeper Practice
 export { InterviewerPersona } from './InterviewerPersona'
 export type { IInterviewerPersona } from './InterviewerPersona'

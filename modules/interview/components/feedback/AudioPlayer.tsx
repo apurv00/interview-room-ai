@@ -155,7 +155,7 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
         <button
           onClick={togglePlay}
           disabled={isLoading}
-          className="shrink-0 w-9 h-9 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:cursor-not-allowed flex items-center justify-center transition"
+          className="shrink-0 w-11 h-11 sm:w-9 sm:h-9 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:cursor-not-allowed flex items-center justify-center transition"
           aria-label={isLoading ? 'Loading audio' : isPlaying ? 'Pause' : 'Play'}
         >
           {isLoading ? (
@@ -186,7 +186,7 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
             aria-valuemax={duration || 0}
             aria-valuenow={currentTime}
             className="w-full h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer disabled:cursor-not-allowed
-              [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3
+              [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 sm:[&::-webkit-slider-thumb]:w-3 sm:[&::-webkit-slider-thumb]:h-3
               [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-indigo-400
               [&::-webkit-slider-thumb]:hover:bg-indigo-300 [&::-webkit-slider-thumb]:transition"
             style={{
@@ -229,7 +229,7 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
             onClick={() => changeSpeed(s)}
             aria-label={`Playback speed ${s}x`}
             aria-pressed={speed === s}
-            className={`px-2 py-0.5 rounded-md text-xs font-medium transition ${
+            className={`px-2.5 py-1 sm:px-2 sm:py-0.5 rounded-md text-xs font-medium transition ${
               speed === s
                 ? 'bg-indigo-600 text-white'
                 : 'bg-slate-800 text-slate-400 hover:text-slate-300'

@@ -73,7 +73,7 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
         />
 
         {/* Communication */}
-        <div className="surface-card-bordered p-5 space-y-4">
+        <div className="surface-card-bordered p-4 sm:p-5 space-y-4">
           <div className="flex items-center justify-between">
             <span className="text-subheading text-[#f0f2f5]">Communication</span>
             <span className="text-heading font-bold text-cyan-400" role="meter" aria-valuenow={Number(communication.score) || 0} aria-valuemin={0} aria-valuemax={100} aria-label={`Communication score: ${Number(communication.score) || 0} out of 100`}>
@@ -106,7 +106,7 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
 
         {/* Engagement (or legacy Delivery) */}
         {engagementSignals ? (
-          <div className="surface-card-bordered p-5 space-y-4">
+          <div className="surface-card-bordered p-4 sm:p-5 space-y-4">
             <div className="flex items-center justify-between">
               <span className="text-subheading text-[#f0f2f5]">Engagement</span>
               <span className="text-heading font-bold text-violet-400" role="meter" aria-valuenow={Number(engagementSignals.score) || 0} aria-valuemin={0} aria-valuemax={100} aria-label={`Engagement score: ${Number(engagementSignals.score) || 0} out of 100`}>
@@ -131,7 +131,7 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
             </div>
           </div>
         ) : deliverySignals ? (
-          <div className="surface-card-bordered p-5 space-y-4">
+          <div className="surface-card-bordered p-4 sm:p-5 space-y-4">
             <div className="flex items-center justify-between">
               <span className="text-subheading text-[#f0f2f5]">Delivery</span>
               <span className="text-heading font-bold text-violet-400" role="meter" aria-valuenow={Number(deliverySignals.score) || 0} aria-valuemin={0} aria-valuemax={100} aria-label={`Delivery score: ${Number(deliverySignals.score) || 0} out of 100`}>
@@ -157,7 +157,7 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
 
       {/* JD Alignment Section */}
       {feedback.jd_match_score !== undefined && (
-        <section className="surface-card-bordered p-5 space-y-4 animate-fade-in">
+        <section className="surface-card-bordered p-4 sm:p-5 space-y-4 animate-fade-in">
           <div className="flex items-center justify-between">
             <span className="text-subheading text-[#f0f2f5]">JD Alignment</span>
             <span className="text-heading font-bold text-cyan-400">{feedback.jd_match_score}</span>

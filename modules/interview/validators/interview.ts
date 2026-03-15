@@ -18,6 +18,19 @@ export const TranscriptEntrySchema = z.object({
   questionIndex: z.number().optional(),
 })
 
+const ProbeDecisionSchema = z.object({
+  shouldProbe: z.boolean(),
+  probeType: z.enum(['clarify', 'challenge', 'expand', 'quantify']).optional(),
+  probeQuestion: z.string().max(500).optional(),
+  probingRationale: z.string().max(300).optional(),
+})
+
+const PushbackSchema = z.object({
+  line: z.string().max(300),
+  targetDimension: z.string().max(50),
+  tone: z.enum(['curious', 'probing', 'encouraging']),
+})
+
 export const AnswerEvaluationSchema = z.object({
   questionIndex: z.number().int().min(0).max(20),
   question: z.string().max(1000),
@@ -30,6 +43,8 @@ export const AnswerEvaluationSchema = z.object({
   needsFollowUp: z.boolean(),
   followUpQuestion: z.string().max(500).optional(),
   flags: z.array(z.string().max(200)).max(10),
+  probeDecision: ProbeDecisionSchema.optional(),
+  pushback: PushbackSchema.optional(),
 })
 
 export const SpeechMetricsSchema = z.object({
@@ -79,10 +94,22 @@ const FeedbackDataSchema = z.object({
   top_3_improvements: z.array(z.string().max(500)).max(5),
 })
 
+const ThreadSummarySchema = z.object({
+  topicIndex: z.number().int().min(0),
+  topicQuestion: z.string().max(1000),
+  summary: z.string().max(500),
+  avgScore: z.number(),
+  probeCount: z.number(),
+  probeTypes: z.array(z.string().max(50)).max(10),
+})
+
 export const GenerateQuestionSchema = z.object({
   config: InterviewConfigSchema,
   questionIndex: z.number().int().min(0).max(20),
   previousQA: z.array(TranscriptEntrySchema),
+  performanceSignal: z.enum(['calibrating', 'struggling', 'on_track', 'strong']).optional(),
+  lastThreadSummary: ThreadSummarySchema.optional(),
+  completedThreads: z.array(ThreadSummarySchema).max(20).optional(),
   templateId: z.string().optional(),
   sessionId: z.string().optional(),
 })
@@ -92,6 +119,7 @@ export const EvaluateAnswerSchema = z.object({
   question: z.string().min(5).max(1000),
   answer: z.string().min(1).max(5000),
   questionIndex: z.number().int().min(0).max(20),
+  probeDepth: z.number().int().min(0).max(10).optional(),
   sessionId: z.string().optional(),
 })
 

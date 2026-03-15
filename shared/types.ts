@@ -39,6 +39,48 @@ export type InterviewState =
   | 'FEEDBACK'
   | 'ENDED'
 
+// ─── Performance Signal ─────────────────────────────────────────────────────
+
+export type PerformanceSignal = 'calibrating' | 'struggling' | 'on_track' | 'strong'
+
+// ─── Probing & Threads ──────────────────────────────────────────────────────
+
+export type ProbeType = 'clarify' | 'challenge' | 'expand' | 'quantify'
+
+export interface ProbeDecision {
+  shouldProbe: boolean
+  probeType?: ProbeType
+  probeQuestion?: string
+  probingRationale?: string
+}
+
+export interface ThreadEntry {
+  role: 'interviewer' | 'candidate'
+  text: string
+  isProbe: boolean
+  probeType?: ProbeType
+  probeDepth: number  // 0 = main question, 1+ = probes
+}
+
+export interface ThreadSummary {
+  topicIndex: number
+  topicQuestion: string
+  summary: string
+  avgScore: number
+  probeCount: number
+  probeTypes: string[]
+}
+
+// ─── Pushback ───────────────────────────────────────────────────────────────
+
+export type PushbackTone = 'curious' | 'probing' | 'encouraging'
+
+export interface Pushback {
+  line: string
+  targetDimension: string
+  tone: PushbackTone
+}
+
 // ─── Avatar ───────────────────────────────────────────────────────────────────
 
 export type AvatarEmotion = 'neutral' | 'friendly' | 'curious' | 'skeptical' | 'impressed'
@@ -66,6 +108,8 @@ export interface AnswerEvaluation {
   needsFollowUp: boolean
   followUpQuestion?: string
   flags: string[]
+  probeDecision?: ProbeDecision
+  pushback?: Pushback
 }
 
 // ─── Speech metrics ───────────────────────────────────────────────────────────
@@ -144,6 +188,7 @@ export interface StoredInterviewData {
   evaluations: AnswerEvaluation[]
   speechMetrics: SpeechMetrics[]
   feedback?: FeedbackData
+  threads?: ThreadSummary[]
 }
 
 // ─── Pathway & Competency Types (client-facing) ────────────────────────────

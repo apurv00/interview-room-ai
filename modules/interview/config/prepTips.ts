@@ -1,0 +1,146 @@
+// ─── Domain-specific interview prep tips ─────────────────────────────────────
+
+export interface PrepTip {
+  text: string
+  icon: 'star' | 'chart' | 'users' | 'code' | 'bulb'
+}
+
+export const GENERAL_TIPS: PrepTip[] = [
+  { text: 'Have 3 STAR stories ready (Situation, Task, Action, Result)', icon: 'star' },
+  { text: 'Review your resume — be ready to discuss anything on it', icon: 'chart' },
+  { text: "Know why you want this role and what excites you about it", icon: 'bulb' },
+]
+
+const DOMAIN_TIPS: Record<string, PrepTip[]> = {
+  PM: [
+    { text: 'Prepare a metrics framework (e.g., HEART, NSM, AARRR)', icon: 'chart' },
+    { text: 'Have a product teardown ready for a product you use daily', icon: 'bulb' },
+    { text: 'Practice explaining trade-offs between user needs and business goals', icon: 'users' },
+  ],
+  SWE: [
+    { text: 'Have a system design example ready (scale, trade-offs, decisions)', icon: 'code' },
+    { text: 'Prepare to discuss a debugging war story with measurable impact', icon: 'bulb' },
+    { text: 'Review your most impactful technical contribution in detail', icon: 'star' },
+  ],
+  'data-science': [
+    { text: 'Prepare to explain a model you built — from problem framing to deployment', icon: 'code' },
+    { text: 'Know your go-to approach for A/B testing and statistical significance', icon: 'chart' },
+    { text: 'Have an example of communicating technical findings to non-technical stakeholders', icon: 'users' },
+  ],
+  design: [
+    { text: 'Walk through a case study end-to-end (problem, research, iterations, outcome)', icon: 'bulb' },
+    { text: 'Prepare to discuss a design decision where you had to compromise', icon: 'users' },
+    { text: 'Know your design process and how you handle ambiguity', icon: 'star' },
+  ],
+  Sales: [
+    { text: 'Know your top 3 deals — pipeline, objections handled, and close strategy', icon: 'chart' },
+    { text: 'Prepare your 60-second elevator pitch', icon: 'star' },
+    { text: 'Have examples of relationship building and consultative selling', icon: 'users' },
+  ],
+  marketing: [
+    { text: 'Prepare a campaign case study with clear metrics (CAC, ROAS, conversion)', icon: 'chart' },
+    { text: 'Know the difference between your strategic thinking and execution skills', icon: 'bulb' },
+    { text: 'Have an example of cross-functional collaboration', icon: 'users' },
+  ],
+  consulting: [
+    { text: 'Practice structuring answers using frameworks (MECE, Issue Trees)', icon: 'chart' },
+    { text: 'Prepare to discuss a client engagement from problem to recommendation', icon: 'star' },
+    { text: 'Have examples of stakeholder management and influence without authority', icon: 'users' },
+  ],
+  finance: [
+    { text: 'Prepare to walk through a financial model or valuation you built', icon: 'chart' },
+    { text: 'Know current market conditions and how they affect your domain', icon: 'bulb' },
+    { text: 'Have examples of risk assessment and decision-making under uncertainty', icon: 'star' },
+  ],
+  devops: [
+    { text: 'Prepare an incident response story (detection, mitigation, post-mortem)', icon: 'code' },
+    { text: 'Know your CI/CD philosophy and scaling strategies', icon: 'chart' },
+    { text: 'Have examples of infrastructure decisions with measurable impact', icon: 'bulb' },
+  ],
+  hr: [
+    { text: 'Prepare examples of conflict resolution and difficult conversations', icon: 'users' },
+    { text: 'Know employment law basics relevant to your target company', icon: 'star' },
+    { text: 'Have metrics-driven examples of HR program impact', icon: 'chart' },
+  ],
+  legal: [
+    { text: 'Prepare to discuss a complex matter you managed end-to-end', icon: 'star' },
+    { text: 'Know how you balance legal risk with business objectives', icon: 'chart' },
+    { text: 'Have examples of explaining legal concepts to non-legal stakeholders', icon: 'users' },
+  ],
+  MBA: [
+    { text: 'Prepare your leadership philosophy with concrete examples', icon: 'star' },
+    { text: 'Have a case where you drove measurable business impact', icon: 'chart' },
+    { text: 'Know your "Why MBA?" story cold', icon: 'bulb' },
+  ],
+}
+
+export function getDomainTips(domainSlug: string): PrepTip[] {
+  return DOMAIN_TIPS[domainSlug] || GENERAL_TIPS
+}
+
+// ─── Checklist sections ──────────────────────────────────────────────────────
+
+export interface ChecklistSection {
+  id: string
+  title: string
+  icon: string
+  items: string[]
+}
+
+export const CHECKLIST_SECTIONS: ChecklistSection[] = [
+  {
+    id: 'environment',
+    title: 'Environment',
+    icon: '🏠',
+    items: [
+      'Find a quiet room with minimal background noise',
+      'Check your lighting — face a window or lamp, not away from it',
+      'Use a neutral, uncluttered background',
+    ],
+  },
+  {
+    id: 'tech',
+    title: 'Technology',
+    icon: '💻',
+    items: [
+      'Use a stable internet connection (wired is best)',
+      'Wear headphones to prevent echo',
+      'Close other browser tabs and apps to reduce lag',
+    ],
+  },
+  {
+    id: 'content',
+    title: 'Content Prep',
+    icon: '📋',
+    items: [
+      'Review the job description for key requirements',
+      'Prepare 3 STAR stories covering leadership, challenge, and impact',
+      'Know your resume highlights — be ready to discuss any claim',
+    ],
+  },
+  {
+    id: 'mindset',
+    title: 'Mindset',
+    icon: '🧠',
+    items: [
+      'Treat this as practice — mistakes are learning opportunities',
+      'Take a deep breath before each answer',
+      'Pause 1-2 seconds before responding to collect your thoughts',
+    ],
+  },
+]
+
+// ─── Warm-up questions ───────────────────────────────────────────────────────
+
+export const WARMUP_QUESTIONS: string[] = [
+  'Tell me about yourself and your professional background in 60 seconds.',
+  'What are you most proud of in your career so far?',
+  'Describe a recent challenge you overcame at work.',
+  'What motivates you to come to work every day?',
+  'Tell me about a time you had to learn something new quickly.',
+  'What is your biggest professional achievement in the last year?',
+  'Describe your ideal work environment.',
+  'How do you handle disagreements with colleagues?',
+  'What is one skill you are actively working to improve?',
+  'Tell me about a project where you exceeded expectations.',
+]

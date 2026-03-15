@@ -33,7 +33,7 @@ export default function TranscriptPanel({
   }, [liveAnswer])
 
   return (
-    <div className="px-4 pb-2 shrink-0">
+    <div className="px-3 sm:px-4 pb-2 shrink-0">
       <div className="bg-slate-900/80 backdrop-blur-sm border border-slate-800/60 rounded-2xl overflow-hidden">
         {/* Question progress bar */}
         <div className="h-[2px] bg-slate-800 w-full">
@@ -119,7 +119,7 @@ export default function TranscriptPanel({
                   </div>
                   <div
                     ref={answerRef}
-                    className="text-sm text-slate-300 leading-relaxed max-h-20 overflow-y-auto transcript-scroll"
+                    className="text-sm text-slate-300 leading-relaxed max-h-24 sm:max-h-20 overflow-y-auto transcript-scroll"
                   >
                     {liveAnswer ? (
                       <span>
