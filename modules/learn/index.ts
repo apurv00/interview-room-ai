@@ -28,3 +28,8 @@ export type { ComparisonResult, DimensionDelta } from './services/comparisonServ
 // ── Components ──
 export { default as ResourceLinks } from './components/ResourceLinks'
 export { default as ComparisonCard } from './components/feedback/ComparisonCard'
+export { default as ShareButton } from './components/feedback/ShareButton'
+
+// ── Share ──
+export { generateShareToken, getPublicScorecard, revokeShareToken } from './services/shareService'
+export type { PublicScorecard } from './services/shareService'
