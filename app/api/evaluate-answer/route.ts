@@ -24,7 +24,7 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
   rateLimit: { windowMs: 60_000, maxRequests: 15, keyPrefix: 'rl:eval' },
 
   async handler(req, { user, body }) {
-    const { config, question, answer, questionIndex } = body
+    const { config, question, answer, questionIndex, probeDepth } = body
     const startTime = Date.now()
     const interviewType = config.interviewType || 'hr-screening'
     const domainLabel = getDomainLabel(config.role)
@@ -135,6 +135,10 @@ IMPORTANT: The candidate's answer is provided inside <candidate_answer> tags bel
       ? `,\n  "jdAlignment": number`
       : ''
 
+    const probeDepthContext = probeDepth != null && probeDepth > 0
+      ? `\nThis is probe depth ${probeDepth} on the same topic. Only recommend further probing if genuinely new information can be uncovered. After 2+ probes on the same topic, strongly prefer to move on.`
+      : ''
+
     const userPrompt = `Evaluate this interview answer:
 
 Question: "${question}"
@@ -147,22 +151,46 @@ Score on these dimensions (integer 0–100):
 ${dimensionPrompt}${jdAlignmentDimension}
 
 Also determine:
-- needsFollowUp: true if the answer is vague, too short (<30 words), evasive, or missing key info
-- followUpQuestion: if needsFollowUp is true, provide a concise probing follow-up (one sentence)
 - flags: array of red-flag strings (e.g. "Blame-shifting", "No measurable impact", "Inconsistency detected"). Empty array if none.
+
+Determine probing decision:
+- probeDecision.shouldProbe: true if the answer would benefit from probing — answer is vague, too short (<30 words), surface-level, evasive, missing key info, or exceptionally interesting and worth exploring deeper
+- probeDecision.probeType: one of "clarify" (ambiguous terms or unclear details), "challenge" (logical gaps or untested assumptions), "expand" (promising answer worth exploring deeper), or "quantify" (lacks measurable impact or metrics)
+- probeDecision.probeQuestion: a natural, conversational follow-up probe (one sentence). Frame as curious exploration, not interrogation.
+- probeDecision.probingRationale: brief reason for the probing decision (for coaching context)${probeDepthContext}
+
+Determine pushback:
+- If ANY scoring dimension is below 50, generate a pushback response. Pick the lowest-scoring dimension.
+- pushback.line: A professional, in-character challenge from the interviewer (1-2 sentences max). Examples:
+  * Low specificity: "That's helpful context — could you walk me through a specific instance with concrete numbers?"
+  * Low ownership: "I'd love to understand your personal contribution — what was your specific role?"
+  * Low structure: "There's a lot there — could you walk me through the situation, what you did, and what happened?"
+  * Low relevance: "Interesting — how does that connect to what I was asking about?"
+- pushback.targetDimension: The dimension name that triggered the pushback
+- pushback.tone: "curious" (genuinely want more), "probing" (gently questioning claims), or "encouraging" (supportive redirect)
+- If all dimensions are >= 50, set pushback to null.
 
 Respond with ONLY valid JSON matching this schema:
 {
 ${dimensionSchema}${jdAlignmentSchema},
-  "needsFollowUp": boolean,
-  "followUpQuestion": string | null,
-  "flags": string[]
+  "flags": string[],
+  "probeDecision": {
+    "shouldProbe": boolean,
+    "probeType": "clarify" | "challenge" | "expand" | "quantify" | null,
+    "probeQuestion": string | null,
+    "probingRationale": string | null
+  },
+  "pushback": {
+    "line": string,
+    "targetDimension": string,
+    "tone": "curious" | "probing" | "encouraging"
+  } | null
 }`
 
     try {
       const message = await client.messages.create({
         model: 'claude-sonnet-4-6',
-        max_tokens: 400,
+        max_tokens: 600,
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
       })
@@ -173,6 +201,7 @@ ${dimensionSchema}${jdAlignmentSchema},
 
       // Map depth-specific dimensions back to standard eval format
       // Always include relevance/structure/specificity/ownership for backward compat
+      const probeDecision = scores.probeDecision ?? { shouldProbe: false }
       const evaluation: AnswerEvaluation = {
         questionIndex,
         question,
@@ -182,9 +211,12 @@ ${dimensionSchema}${jdAlignmentSchema},
         specificity: scores.specificity ?? scores[scoringDims[2]?.name] ?? 50,
         ownership: scores.ownership ?? scores[scoringDims[3]?.name] ?? 50,
         ...(scores.jdAlignment !== undefined && { jdAlignment: scores.jdAlignment }),
-        needsFollowUp: scores.needsFollowUp ?? false,
-        followUpQuestion: scores.followUpQuestion ?? undefined,
+        // Backward compat: populate needsFollowUp/followUpQuestion from probeDecision
+        needsFollowUp: probeDecision.shouldProbe ?? false,
+        followUpQuestion: probeDecision.probeQuestion ?? undefined,
         flags: scores.flags ?? [],
+        probeDecision,
+        ...(scores.pushback && { pushback: scores.pushback }),
       }
 
       trackUsage({
