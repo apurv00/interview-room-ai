@@ -37,13 +37,21 @@ export const DURATION_LABELS: Record<Duration, string> = {
   30: '30 min — Deep dive',
 }
 
-// Upper bound for AI-generated question indices.
+// Upper bound for AI-generated question indices (total interactions including probes).
 // Loop runs from 1..<QUESTION_COUNT>, so actual AI questions = QUESTION_COUNT - 1.
 // Total questions answered = 1 (intro at Q0) + (QUESTION_COUNT - 1) AI questions.
 export const QUESTION_COUNT: Record<Duration, number> = {
   10: 6,
   20: 11,
   30: 16,
+}
+
+// Minimum distinct topics to cover (reduced from QUESTION_COUNT since probes use time).
+// With probing, fewer topics are needed but each gets explored more deeply.
+export const MINIMUM_TOPICS: Record<Duration, number> = {
+  10: 4,
+  20: 7,
+  30: 10,
 }
 
 // ─── Avatar persona ───────────────────────────────────────────────────────────
