@@ -99,7 +99,23 @@ export default function TailorPage() {
   async function handleSaveAsCopy() {
     if (!result) return
     setSavingCopy(true)
+    setError('')
     try {
+      // Parse tailored text into structured fields so the builder can render them
+      let structured: Record<string, unknown> = {}
+      try {
+        const parseRes = await fetch('/api/resume/parse', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: result.tailoredResume }),
+        })
+        if (parseRes.ok) {
+          structured = await parseRes.json()
+        }
+      } catch {
+        // Parsing failed — save with fullText only as fallback
+      }
+
       const res = await fetch('/api/resume/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -109,6 +125,7 @@ export default function TailorPage() {
           targetCompany: companyName || '',
           fullText: result.tailoredResume,
           atsScore: result.matchScore,
+          ...structured,
         }),
       })
       const data = await res.json()
@@ -267,7 +284,7 @@ export default function TailorPage() {
                   disabled={savingCopy}
                   className="px-3 py-1.5 bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 text-[10px] rounded-lg font-medium hover:bg-indigo-600/30 transition-colors disabled:opacity-50"
                 >
-                  {savingCopy ? 'Saving...' : 'Save as New Resume'}
+                  {savingCopy ? 'Parsing & Saving...' : 'Save as New Resume'}
                 </button>
               </div>
             </div>
