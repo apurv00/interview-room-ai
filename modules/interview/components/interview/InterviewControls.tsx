@@ -41,14 +41,14 @@ export default function InterviewControls({
   isScoring,
 }: InterviewControlsProps) {
   return (
-    <footer className="flex items-center justify-center gap-3 px-5 py-4 bg-slate-900/60 backdrop-blur-md border-t border-slate-800/50 shrink-0">
+    <footer className="flex items-center justify-center gap-2 sm:gap-3 px-3 sm:px-5 py-3 sm:py-4 bg-slate-900/60 backdrop-blur-md border-t border-slate-800/50 shrink-0 fixed bottom-0 left-0 right-0 sm:relative z-10">
       {/* Mute button */}
       <motion.button
         onClick={onToggleMute}
         whileHover={{ scale: 1.03 }}
         whileTap={{ scale: 0.97 }}
         className={`
-          flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium transition-colors
+          flex items-center gap-2 px-3 sm:px-5 py-2.5 min-h-[44px] rounded-xl text-sm font-medium transition-colors
           ${muted
             ? 'bg-red-500/15 border border-red-500/25 text-red-400 hover:bg-red-500/20'
             : 'bg-slate-800/80 border border-slate-700/60 text-slate-300 hover:bg-slate-700/80'
@@ -70,7 +70,7 @@ export default function InterviewControls({
         whileHover={isScoring ? {} : { scale: 1.03 }}
         whileTap={isScoring ? {} : { scale: 0.97 }}
         className={`
-          flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-medium transition-colors
+          flex items-center gap-2 px-4 sm:px-6 py-2.5 min-h-[44px] rounded-xl text-sm font-medium transition-colors
           ${isScoring
             ? 'bg-slate-800 border border-slate-700 text-slate-500 cursor-not-allowed'
             : 'bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-600/20'

@@ -240,7 +240,7 @@ export default function LobbyPage() {
     : 'rgb(100,116,139)'
 
   return (
-    <main className="min-h-screen flex items-center justify-center px-4 py-12">
+    <main className="min-h-screen flex items-center justify-center px-3 sm:px-4 py-8 sm:py-12">
       <motion.div
         className="w-full max-w-4xl space-y-8"
         variants={containerVariants}
@@ -249,7 +249,7 @@ export default function LobbyPage() {
       >
         {/* Header */}
         <motion.div className="text-center space-y-2" variants={itemVariants}>
-          <h1 className="text-3xl font-bold text-white">Pre-Interview Check</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold text-white">Pre-Interview Check</h1>
           {config && (
             <div className="space-y-2">
               <p className="text-slate-400">

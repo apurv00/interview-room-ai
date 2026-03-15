@@ -59,10 +59,10 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
             {/* Header — always visible */}
             <button
               onClick={() => setExpandedIdx(isOpen ? null : i)}
-              className="w-full flex items-center gap-4 p-4 text-left hover:bg-slate-800/50 transition"
+              className="w-full flex items-center gap-3 sm:gap-4 p-3 sm:p-4 text-left hover:bg-slate-800/50 transition"
             >
               <div
-                className={`shrink-0 w-10 h-10 rounded-xl border flex items-center justify-center text-sm font-bold ${scoreBg} ${scoreColor}`}
+                className={`shrink-0 w-11 h-11 sm:w-10 sm:h-10 rounded-xl border flex items-center justify-center text-sm font-bold ${scoreBg} ${scoreColor}`}
               >
                 {avgScore}
               </div>
