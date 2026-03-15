@@ -9,5 +9,10 @@ export { computePercentile } from './lib/peerComparison'
 export { RESOURCES, getResourceBySlug, getResourcesByCategory, getAllSlugs, calculateRelevance, getPersonalizedResources } from './lib/resources'
 export type { Resource, UserProfile } from './lib/resources'
 
+// ── Comparison ──
+export { computeComparison } from './services/comparisonService'
+export type { ComparisonResult, DimensionDelta } from './services/comparisonService'
+
 // ── Components ──
 export { default as ResourceLinks } from './components/ResourceLinks'
+export { default as ComparisonCard } from './components/feedback/ComparisonCard'
