@@ -24,6 +24,12 @@ import { deriveCoachingTip } from '@interview/config/coachingTips'
 import { STORAGE_KEYS, sessionScopedKey } from '@shared/storageKeys'
 import { fetchWithRetry } from '@shared/fetchWithRetry'
 import type { SpeechRecognitionResult } from './useSpeechRecognition'
+import {
+  computePerformanceSignal as computeSignal,
+  shouldProbeOrAdvance as probeOrAdvance,
+  buildThreadSummary as buildSummary,
+  toneToEmotion,
+} from './interviewUtils'
 
 // ─── Session persistence helpers ──────────────────────────────────────────────
 
@@ -231,14 +237,7 @@ export function useInterview({
   // ─── Performance signal computation ────────────────────────────────────────
 
   function computePerformanceSignal(): PerformanceSignal {
-    const evals = evaluationsRef.current
-    if (evals.length < 2) return 'calibrating'
-    const avg = evals.reduce((sum, e) =>
-      sum + (e.relevance + e.structure + e.specificity + e.ownership) / 4, 0
-    ) / evals.length
-    if (avg >= 70) return 'strong'
-    if (avg >= 45) return 'on_track'
-    return 'struggling'
+    return computeSignal(evaluationsRef.current)
   }
 
   // ─── Generate question ─────────────────────────────────────────────────────
@@ -471,16 +470,13 @@ export function useInterview({
 
   /** Decide whether to probe deeper or advance to next topic. */
   function shouldProbeOrAdvance(evaluation: AnswerEvaluation): 'probe' | 'advance' {
-    const probe = evaluation.probeDecision
-    if (!probe?.shouldProbe || !probe.probeQuestion) return 'advance'
-    if (timeRemainingRef.current < 60) return 'advance'
     if (!config) return 'advance'
-    // Don't probe if we haven't covered minimum topics and are running low on time
-    const topicsCompleted = completedThreadsRef.current.length
-    const topicsNeeded = MINIMUM_TOPICS[config.duration] - topicsCompleted
-    const roughTimePerTopic = 90 // ~1.5 min per topic
-    if (topicsNeeded > 0 && topicsNeeded * roughTimePerTopic > timeRemainingRef.current) return 'advance'
-    return 'probe'
+    return probeOrAdvance(
+      evaluation,
+      timeRemainingRef.current,
+      completedThreadsRef.current.length,
+      config.duration,
+    )
   }
 
   /** Build a summary for the completed thread. */
@@ -491,32 +487,10 @@ export function useInterview({
     const threadEvals = evaluationsRef.current.filter(e =>
       thread.some(t => t.role === 'candidate' && t.text === e.answer)
     )
-    const avgScore = threadEvals.length > 0
-      ? threadEvals.reduce((s, e) => s + (e.relevance + e.structure + e.specificity + e.ownership) / 4, 0) / threadEvals.length
-      : 0
-    const probeEntries = thread.filter(t => t.isProbe && t.role === 'interviewer')
-    const probeTypes = Array.from(new Set(probeEntries.map(t => t.probeType).filter(Boolean))) as string[]
-
-    const summary = `Discussed "${topicQuestion}". Avg score: ${Math.round(avgScore)}. ${probeEntries.length > 0 ? `Probed ${probeEntries.length} time(s) (${probeTypes.join(', ')}).` : 'No probing needed.'}`
-
-    return {
-      topicIndex: topicIdx,
-      topicQuestion,
-      summary,
-      avgScore: Math.round(avgScore),
-      probeCount: probeEntries.length,
-      probeTypes,
-    }
+    return buildSummary(topicIdx, topicQuestion, thread, threadEvals)
   }
 
-  /** Map pushback tone to avatar emotion. */
-  function toneToEmotion(tone: PushbackTone): AvatarEmotion {
-    switch (tone) {
-      case 'curious': return 'curious'
-      case 'probing': return 'skeptical'
-      case 'encouraging': return 'friendly'
-    }
-  }
+  // toneToEmotion is imported from interviewUtils
 
   /**
    * Handle pushback after evaluation. Returns the spoken question text if pushback
