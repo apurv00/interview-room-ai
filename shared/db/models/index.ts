@@ -48,6 +48,10 @@ export type { ICompanyPattern } from './CompanyPattern'
 export { BenchmarkCase } from './BenchmarkCase'
 export type { IBenchmarkCase } from './BenchmarkCase'
 
+// Phase 2: Drill Mode
+export { DrillAttempt } from './DrillAttempt'
+export type { IDrillAttempt } from './DrillAttempt'
+
 // Smart Wizard
 export { WizardConfig } from './WizardConfig'
 export type { IWizardConfig } from './WizardConfig'

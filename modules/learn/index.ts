@@ -9,6 +9,10 @@ export { computePercentile } from './lib/peerComparison'
 export { RESOURCES, getResourceBySlug, getResourcesByCategory, getAllSlugs, calculateRelevance, getPersonalizedResources } from './lib/resources'
 export type { Resource, UserProfile } from './lib/resources'
 
+// ── Drill ──
+export { getWeakQuestions, saveDrillAttempt, getDrillHistory } from './services/drillService'
+export type { WeakQuestion, DrillResult, DrillHistoryEntry } from './services/drillService'
+
 // ── Analytics ──
 export { getAnalyticsData } from './services/analyticsService'
 export type { AnalyticsData } from './services/analyticsService'
