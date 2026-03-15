@@ -10,6 +10,55 @@ const PAGE_WIDTH = 595
 const PAGE_HEIGHT = 842
 const PAGE_PADDING = 24
 
+// ─── Section-aware page break algorithm ─────────────────────────────────────
+// Simulates CSS break-inside:avoid by measuring each top-level section's
+// position and pushing sections that don't fit entirely to the next page.
+
+interface ChildMeasurement {
+  offsetTop: number
+  offsetHeight: number
+}
+
+function computePageBreaks(children: ChildMeasurement[], pageHeight: number): number[] {
+  if (children.length === 0) return [0]
+
+  const breaks: number[] = [0] // Page 1 always starts at offset 0
+  let currentPageStart = 0
+
+  for (const child of children) {
+    const childBottom = child.offsetTop + child.offsetHeight
+    const currentPageBottom = currentPageStart + pageHeight
+
+    // Child fits entirely within current page — no break needed
+    if (childBottom <= currentPageBottom) continue
+
+    // Child is taller than a full page — let it start fresh, then
+    // add breaks at pageHeight intervals (unavoidable split)
+    if (child.offsetHeight > pageHeight) {
+      if (child.offsetTop > currentPageStart) {
+        currentPageStart = child.offsetTop
+        breaks.push(child.offsetTop)
+      }
+      let next = currentPageStart + pageHeight
+      while (next < childBottom) {
+        breaks.push(next)
+        currentPageStart = next
+        next += pageHeight
+      }
+      continue
+    }
+
+    // Normal child that doesn't fit — push entire section to next page
+    // This leaves whitespace at the bottom of the current page (correct behavior)
+    currentPageStart = child.offsetTop
+    breaks.push(child.offsetTop)
+  }
+
+  return breaks
+}
+
+// ─── Component ──────────────────────────────────────────────────────────────
+
 interface Props {
   data: ResumeData
   templateId?: string
@@ -19,7 +68,7 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
   const TemplateComponent = useMemo(() => getTemplate(templateId), [templateId])
   const contentRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
-  const [pageCount, setPageCount] = useState(1)
+  const [pageBreaks, setPageBreaks] = useState<number[]>([0])
   const [scale, setScale] = useState(1)
 
   const fontFamily = data.styling?.fontFamily
@@ -61,15 +110,18 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
   const contentWidth = PAGE_WIDTH - PAGE_PADDING * 2
   const contentHeight = PAGE_HEIGHT - PAGE_PADDING * 2
 
-  // Measure content height and container width
+  // Measure section positions and compute natural page breaks
   const measure = useCallback(() => {
     if (contentRef.current) {
-      const totalHeight = contentRef.current.scrollHeight
-      setPageCount(Math.max(1, Math.ceil(totalHeight / contentHeight)))
+      const children = Array.from(contentRef.current.children) as HTMLElement[]
+      const measurements: ChildMeasurement[] = children.map(child => ({
+        offsetTop: child.offsetTop,
+        offsetHeight: child.offsetHeight,
+      }))
+      setPageBreaks(computePageBreaks(measurements, contentHeight))
     }
     if (containerRef.current) {
-      const containerWidth = containerRef.current.clientWidth
-      setScale(containerWidth / PAGE_WIDTH)
+      setScale(containerRef.current.clientWidth / PAGE_WIDTH)
     }
   }, [contentHeight])
 
@@ -85,6 +137,7 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
     return () => observer.disconnect()
   }, [measure])
 
+  const pageCount = pageBreaks.length
   const pages = Array.from({ length: pageCount }, (_, i) => i)
 
   return (
@@ -102,7 +155,7 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
       </div>
 
       <div id="resume-preview-container" ref={containerRef}>
-        {/* Hidden measurer — renders content at exact content-area width (no padding) to measure true height */}
+        {/* Hidden measurer — renders at exact content-area width to measure section positions */}
         <div
           aria-hidden
           style={{
@@ -147,9 +200,9 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                     transformOrigin: 'top left',
                   }}
                 >
-                  {/* Page padding — applied per page, independent of content */}
+                  {/* Page padding — applied per page */}
                   <div style={{ padding: PAGE_PADDING }}>
-                    {/* Content viewport — clips to usable area, shifts content for each page */}
+                    {/* Content viewport — clips to usable area */}
                     <div
                       style={{
                         width: contentWidth,
@@ -161,7 +214,8 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                         style={{
                           ...wrapperStyle,
                           width: contentWidth,
-                          marginTop: -(pageIndex * contentHeight),
+                          // Shift content to the break position for this page
+                          marginTop: -pageBreaks[pageIndex],
                         }}
                       >
                         <TemplateComponent data={data} />
