@@ -34,7 +34,38 @@ export default function ResumeBuilderPage() {
             // Fetch full resume data
             fetch(`/api/resume/save?id=${editId}`)
               .then(r => r.json())
-              .then(fullData => {
+              .then(async (fullData) => {
+                // If resume only has fullText but no structured fields, auto-parse
+                const hasStructuredContent = !!(
+                  fullData.summary ||
+                  fullData.experience?.length ||
+                  fullData.education?.length ||
+                  fullData.skills?.length ||
+                  (fullData.contactInfo?.fullName && fullData.contactInfo.fullName !== '')
+                )
+                if (!hasStructuredContent && fullData.fullText) {
+                  try {
+                    const parseRes = await fetch('/api/resume/parse', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ text: fullData.fullText }),
+                    })
+                    if (parseRes.ok) {
+                      const structured = await parseRes.json()
+                      const mergedData = { ...fullData, ...structured }
+                      setInitialData(mergedData)
+                      setResumeId(editId)
+                      setLoading(false)
+                      // Save the parsed fields back so future loads are instant
+                      fetch('/api/resume/save', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ...mergedData, id: editId, name: mergedData.name || 'Untitled Resume' }),
+                      }).catch(() => {})
+                      return
+                    }
+                  } catch { /* fallback to raw data */ }
+                }
                 setInitialData(fullData)
                 setResumeId(editId)
                 setLoading(false)
