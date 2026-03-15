@@ -57,19 +57,21 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
     '--r-meta': sizes.meta,
   } as React.CSSProperties
 
-  const usableHeight = PAGE_HEIGHT - PAGE_PADDING * 2
+  // Usable content area per page (inside padding)
+  const contentWidth = PAGE_WIDTH - PAGE_PADDING * 2
+  const contentHeight = PAGE_HEIGHT - PAGE_PADDING * 2
 
   // Measure content height and container width
   const measure = useCallback(() => {
     if (contentRef.current) {
-      const contentHeight = contentRef.current.scrollHeight
-      setPageCount(Math.max(1, Math.ceil(contentHeight / usableHeight)))
+      const totalHeight = contentRef.current.scrollHeight
+      setPageCount(Math.max(1, Math.ceil(totalHeight / contentHeight)))
     }
     if (containerRef.current) {
       const containerWidth = containerRef.current.clientWidth
       setScale(containerWidth / PAGE_WIDTH)
     }
-  }, [usableHeight])
+  }, [contentHeight])
 
   useEffect(() => {
     measure()
@@ -100,15 +102,14 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
       </div>
 
       <div id="resume-preview-container" ref={containerRef}>
-        {/* Hidden measurer at real page width */}
+        {/* Hidden measurer — renders content at exact content-area width (no padding) to measure true height */}
         <div
           aria-hidden
           style={{
             position: 'absolute',
             visibility: 'hidden',
             pointerEvents: 'none',
-            width: PAGE_WIDTH,
-            padding: PAGE_PADDING,
+            width: contentWidth,
           }}
         >
           <div ref={contentRef} style={wrapperStyle}>
@@ -128,6 +129,7 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                   </span>
                 </div>
               )}
+              {/* A4 page */}
               <div
                 className="bg-white rounded-lg shadow-lg overflow-hidden"
                 style={{
@@ -135,6 +137,7 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                   height: PAGE_HEIGHT * scale,
                 }}
               >
+                {/* Scale transform: render at PAGE_WIDTH, scale down to container */}
                 <div
                   className="overflow-hidden"
                   style={{
@@ -144,15 +147,26 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                     transformOrigin: 'top left',
                   }}
                 >
-                  <div
-                    style={{
-                      ...wrapperStyle,
-                      padding: PAGE_PADDING,
-                      width: PAGE_WIDTH,
-                      marginTop: -(pageIndex * usableHeight),
-                    }}
-                  >
-                    <TemplateComponent data={data} />
+                  {/* Page padding — applied per page, independent of content */}
+                  <div style={{ padding: PAGE_PADDING }}>
+                    {/* Content viewport — clips to usable area, shifts content for each page */}
+                    <div
+                      style={{
+                        width: contentWidth,
+                        height: contentHeight,
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <div
+                        style={{
+                          ...wrapperStyle,
+                          width: contentWidth,
+                          marginTop: -(pageIndex * contentHeight),
+                        }}
+                      >
+                        <TemplateComponent data={data} />
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
