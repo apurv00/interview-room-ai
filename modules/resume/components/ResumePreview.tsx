@@ -113,8 +113,13 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
   // Measure section positions and compute natural page breaks
   const measure = useCallback(() => {
     if (contentRef.current) {
-      const children = Array.from(contentRef.current.children) as HTMLElement[]
-      const measurements: ChildMeasurement[] = children.map(child => ({
+      // The template renders a root <div> inside contentRef.
+      // We need to measure the section-level children (header, summary, experience, etc.)
+      const templateRoot = contentRef.current.firstElementChild as HTMLElement | null
+      const sectionElements = templateRoot
+        ? (Array.from(templateRoot.children) as HTMLElement[])
+        : (Array.from(contentRef.current.children) as HTMLElement[])
+      const measurements: ChildMeasurement[] = sectionElements.map(child => ({
         offsetTop: child.offsetTop,
         offsetHeight: child.offsetHeight,
       }))
