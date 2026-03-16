@@ -256,7 +256,7 @@ export async function evaluateSession(
     pushToMap(dimScores, 'structure', ev.structure)
     pushToMap(dimScores, 'specificity', ev.specificity)
     pushToMap(dimScores, 'ownership', ev.ownership)
-    if (ev.jdAlignment !== undefined) pushToMap(dimScores, 'jdAlignment', ev.jdAlignment)
+    if (ev.jdAlignment != null) pushToMap(dimScores, 'jdAlignment', ev.jdAlignment)
   }
 
   // From structured evaluations

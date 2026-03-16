@@ -15,14 +15,14 @@ export const TranscriptEntrySchema = z.object({
   speaker: z.enum(['interviewer', 'candidate']),
   text: z.string().max(5000),
   timestamp: z.number(),
-  questionIndex: z.number().optional(),
+  questionIndex: z.number().nullish(),
 })
 
 const ProbeDecisionSchema = z.object({
   shouldProbe: z.boolean(),
-  probeType: z.enum(['clarify', 'challenge', 'expand', 'quantify']).optional(),
-  probeQuestion: z.string().max(500).optional(),
-  probingRationale: z.string().max(300).optional(),
+  probeType: z.enum(['clarify', 'challenge', 'expand', 'quantify']).nullish(),
+  probeQuestion: z.string().max(500).nullish(),
+  probingRationale: z.string().max(300).nullish(),
 })
 
 const PushbackSchema = z.object({
@@ -39,12 +39,12 @@ export const AnswerEvaluationSchema = z.object({
   structure: z.number().min(0).max(100),
   specificity: z.number().min(0).max(100),
   ownership: z.number().min(0).max(100),
-  jdAlignment: z.number().min(0).max(100).optional(),
+  jdAlignment: z.number().min(0).max(100).nullish(),
   needsFollowUp: z.boolean(),
-  followUpQuestion: z.string().max(500).optional(),
+  followUpQuestion: z.string().max(500).nullish(),
   flags: z.array(z.string().max(200)).max(10),
-  probeDecision: ProbeDecisionSchema.optional(),
-  pushback: PushbackSchema.optional(),
+  probeDecision: ProbeDecisionSchema.nullish(),
+  pushback: PushbackSchema.nullish(),
 })
 
 export const SpeechMetricsSchema = z.object({
