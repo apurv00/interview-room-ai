@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
+import { ZodError } from 'zod'
 import { authOptions } from '@shared/auth/authOptions'
 import { UpdateSessionSchema } from '@interview/validators/interview'
 import { getSession, updateSession } from '@interview/services/interviewService'
@@ -93,6 +94,20 @@ export async function PATCH(
 
     return NextResponse.json({ success: true, sessionId: updated._id.toString() })
   } catch (err) {
+    if (err instanceof ZodError) {
+      return NextResponse.json(
+        {
+          error: 'Validation failed',
+          ...(process.env.NODE_ENV !== 'production' && {
+            details: err.issues.map((e) => ({
+              path: e.path.join('.'),
+              message: e.message,
+            })),
+          }),
+        },
+        { status: 400 }
+      )
+    }
     if (err instanceof AppError) {
       return NextResponse.json({ error: err.message, code: err.code }, { status: err.statusCode })
     }
