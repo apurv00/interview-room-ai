@@ -6,7 +6,7 @@ import mongoose from 'mongoose'
 
 interface TrackUsageInput {
   user: AuthUser
-  type: 'api_call_question' | 'api_call_evaluate' | 'api_call_feedback' | 'api_call_wizard_followup' | 'api_call_wizard_enhance' | 'api_call_wizard_summary'
+  type: 'api_call_question' | 'api_call_evaluate' | 'api_call_feedback' | 'api_call_wizard_followup' | 'api_call_wizard_enhance' | 'api_call_wizard_summary' | 'api_call_daily_challenge' | 'api_call_daily_challenge_gen'
   sessionId?: string
   inputTokens: number
   outputTokens: number

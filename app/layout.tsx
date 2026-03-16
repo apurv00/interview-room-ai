@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next'
 import SessionProvider from '@shared/providers/SessionProvider'
 import { ThemeProvider } from '@shared/providers/ThemeProvider'
+import XpProvider from '@shared/providers/XpProvider'
 import AppShell from '@shared/layout/AppShell'
 import JsonLd from '@shared/seo/JsonLd'
 import { siteConfig } from '@shared/siteConfig'
@@ -92,7 +93,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
         <SessionProvider>
           <ThemeProvider>
-            <AppShell>{children}</AppShell>
+            <XpProvider>
+              <AppShell>{children}</AppShell>
+            </XpProvider>
           </ThemeProvider>
         </SessionProvider>
       </body>

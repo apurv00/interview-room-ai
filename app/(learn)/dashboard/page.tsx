@@ -3,6 +3,9 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import dynamic from 'next/dynamic'
+import DailyChallengeCard from '@learn/components/DailyChallengeCard'
+import StreakCalendar from '@learn/components/StreakCalendar'
+import StreakMilestoneBar from '@learn/components/StreakMilestoneBar'
 
 // Lazy-load recharts to avoid SSR issues and reduce bundle size
 const LineChart = dynamic(() => import('recharts').then(m => m.LineChart), { ssr: false })
@@ -109,6 +112,26 @@ export default function DashboardPage() {
           ))}
         </div>
       </div>
+
+      {/* Daily Challenge */}
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.05 }}
+      >
+        <DailyChallengeCard />
+      </motion.div>
+
+      {/* Streak Calendar + Milestone */}
+      <motion.div
+        className="space-y-3"
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.08 }}
+      >
+        <StreakCalendar />
+        <StreakMilestoneBar currentStreak={stats.currentStreak} />
+      </motion.div>
 
       {/* Stat Cards */}
       <motion.div

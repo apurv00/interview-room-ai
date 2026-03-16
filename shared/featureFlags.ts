@@ -18,6 +18,10 @@ export type FeatureFlag =
   | 'jd_structured_parsing'
   | 'interviewer_personas'
   | 'spaced_repetition'
+  | 'engagement_xp'
+  | 'engagement_badges'
+  | 'engagement_streaks_v2'
+  | 'engagement_daily_challenge'
 
 const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   personalization_engine: true,
@@ -35,6 +39,10 @@ const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   jd_structured_parsing: true,
   interviewer_personas: true,
   spaced_repetition: true,
+  engagement_xp: true,
+  engagement_badges: true,
+  engagement_streaks_v2: true,
+  engagement_daily_challenge: true,
 }
 
 export function isFeatureEnabled(flag: FeatureFlag): boolean {

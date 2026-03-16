@@ -121,10 +121,19 @@ export interface IUser extends Document {
     updatedAt: string
   }>
 
+  // XP & Levels
+  xp: number
+  level: number
+  xpThisWeek: number
+  weeklyXpResetAt?: Date
+
   // Streak tracking
   currentStreak: number
   longestStreak: number
   lastSessionDate?: Date
+  streakFreezeAvailable: number
+  streakFreezeUsedAt?: Date
+  streakFreezeResetAt?: Date
 
   // Email preferences
   emailPreferences?: {
@@ -272,10 +281,19 @@ const UserSchema = new Schema<IUser>(
       updatedAt: { type: String },
     }],
 
+    // XP & Levels
+    xp: { type: Number, default: 0 },
+    level: { type: Number, default: 1 },
+    xpThisWeek: { type: Number, default: 0 },
+    weeklyXpResetAt: { type: Date },
+
     // Streak tracking
     currentStreak: { type: Number, default: 0 },
     longestStreak: { type: Number, default: 0 },
     lastSessionDate: { type: Date },
+    streakFreezeAvailable: { type: Number, default: 0 },
+    streakFreezeUsedAt: { type: Date },
+    streakFreezeResetAt: { type: Date },
 
     // Email preferences
     emailPreferences: {
