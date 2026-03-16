@@ -112,11 +112,13 @@ export default function HistoryPage() {
               <button
                 key={s._id}
                 onClick={() => {
-                  if (s.status === 'completed') {
+                  if (s.status === 'in_progress') {
+                    router.push(`/interview?sessionId=${s._id}`)
+                  } else {
                     router.push(`/feedback/${s._id}`)
                   }
                 }}
-                className="w-full surface-card-bordered rounded-2xl p-5 flex items-center gap-4 hover:border-[rgba(255,255,255,0.16)] transition text-left"
+                className="w-full surface-card-bordered rounded-2xl p-5 flex items-center gap-4 hover:border-[rgba(255,255,255,0.16)] transition text-left cursor-pointer"
               >
                 {/* Score badge */}
                 <div className="w-11 h-11 rounded-[10px] bg-[rgba(99,102,241,0.08)] flex items-center justify-center flex-shrink-0">
