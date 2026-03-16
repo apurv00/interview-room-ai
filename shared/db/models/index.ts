@@ -59,6 +59,22 @@ export type { IInterviewerPersona } from './InterviewerPersona'
 export { SavedJobDescription } from './SavedJobDescription'
 export type { ISavedJobDescription, IParsedJobDescription, ParsedRequirement } from './SavedJobDescription'
 
+// Engagement & Retention
+export { XpEvent } from './XpEvent'
+export type { IXpEvent, XpEventType } from './XpEvent'
+
+export { UserBadge } from './UserBadge'
+export type { IUserBadge } from './UserBadge'
+
+export { StreakDay } from './StreakDay'
+export type { IStreakDay } from './StreakDay'
+
+export { DailyChallenge } from './DailyChallenge'
+export type { IDailyChallenge } from './DailyChallenge'
+
+export { DailyChallengeAttempt } from './DailyChallengeAttempt'
+export type { IDailyChallengeAttempt } from './DailyChallengeAttempt'
+
 // Smart Wizard
 export { WizardConfig } from './WizardConfig'
 export type { IWizardConfig } from './WizardConfig'

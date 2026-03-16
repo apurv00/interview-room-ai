@@ -3,6 +3,10 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { UpdateSessionSchema } from '@interview/validators/interview'
 import { getSession, updateSession } from '@interview/services/interviewService'
+import { awardXp } from '@learn/services/xpService'
+import { recordActivity, updateStreak } from '@learn/services/streakService'
+import { checkAndAwardBadges } from '@learn/services/badgeService'
+import { XP_AMOUNTS } from '@learn/config/xpTable'
 import { logger } from '@shared/logger'
 import { AppError } from '@shared/errors'
 
@@ -68,6 +72,24 @@ export async function PATCH(
       session.user.organizationId,
       validated
     )
+
+    // Award XP and update streak when interview is completed
+    if (validated.status === 'completed') {
+      const overallScore = validated.feedback?.overall_score
+      try {
+        await awardXp(session.user.id, 'interview_complete', XP_AMOUNTS.interview_complete, { sessionId: params.id })
+        await recordActivity(session.user.id)
+        const streakResult = await updateStreak(session.user.id)
+        await checkAndAwardBadges(session.user.id, {
+          type: 'interview_complete',
+          score: overallScore,
+          currentStreak: streakResult.currentStreak,
+        })
+      } catch (engErr) {
+        // Don't fail the interview save if engagement tracking fails
+        logger.error({ err: engErr }, 'Engagement tracking failed')
+      }
+    }
 
     return NextResponse.json({ success: true, sessionId: updated._id.toString() })
   } catch (err) {

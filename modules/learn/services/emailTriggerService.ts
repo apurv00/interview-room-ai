@@ -1,9 +1,12 @@
 import mongoose from 'mongoose'
 import { connectDB } from '@shared/db/connection'
-import { User, SessionSummary } from '@shared/db/models'
+import { User, SessionSummary, UserBadge, DailyChallengeAttempt } from '@shared/db/models'
 import { sendEmail } from '@shared/services/emailService'
 import { aiLogger as logger } from '@shared/logger'
 import type { IUser } from '@shared/db/models'
+import { getXpSummary } from './xpService'
+import { getStreakCalendar } from './streakService'
+import { BADGE_DEFINITIONS } from '@learn/config/badges'
 
 const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000
 const APP_URL = process.env.NEXTAUTH_URL || 'https://interviewprep.guru'
@@ -55,9 +58,53 @@ export async function buildDigestContent(userId: string): Promise<{
       .flatMap(s => s.weaknesses || [])
       .slice(0, 3)
 
-    const subject = streak > 0
-      ? `Keep your ${streak}-day streak alive!`
-      : `Your weekly interview prep update`
+    // Fetch engagement data (graceful degradation)
+    const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+    const [xpSummary, recentBadges, streakCalendar, challengeAttempts] = await Promise.all([
+      getXpSummary(userId).catch(() => null),
+      UserBadge.find({ userId: uid, earnedAt: { $gte: oneWeekAgo } }).lean().catch(() => []),
+      getStreakCalendar(userId, 1).catch(() => []),
+      DailyChallengeAttempt.find({ userId: uid, createdAt: { $gte: oneWeekAgo } }).lean().catch(() => []),
+    ])
+
+    // Badge names
+    const earnedBadgeNames = recentBadges.map(b => {
+      const def = BADGE_DEFINITIONS.find(d => d.id === b.badgeId)
+      return def ? `${def.icon} ${def.name}` : b.badgeId
+    })
+
+    // Daily challenge stats
+    const challengeCount = challengeAttempts.length
+    const bestChallengeScore = challengeAttempts.length > 0
+      ? Math.max(...challengeAttempts.map(a => a.score))
+      : 0
+
+    // Dynamic subject line
+    let subject: string
+    if (earnedBadgeNames.length > 0) {
+      subject = `${earnedBadgeNames.length} badge${earnedBadgeNames.length !== 1 ? 's' : ''} earned — your weekly recap`
+    } else if (xpSummary && xpSummary.xpThisWeek > 0) {
+      subject = `You earned ${xpSummary.xpThisWeek} XP this week!`
+    } else if (streak > 0) {
+      subject = `Keep your ${streak}-day streak alive!`
+    } else {
+      subject = `Your weekly interview prep update`
+    }
+
+    // Streak calendar mini visualization (7 days)
+    const last7Days = streakCalendar.slice(0, 7)
+    const calendarSquares = last7Days.map(d =>
+      d.type === 'active'
+        ? '<span style="display:inline-block;width:14px;height:14px;background:#22c55e;border-radius:3px;margin-right:3px;"></span>'
+        : d.type === 'freeze'
+          ? '<span style="display:inline-block;width:14px;height:14px;background:#3b82f6;border-radius:3px;margin-right:3px;opacity:0.5;"></span>'
+          : '<span style="display:inline-block;width:14px;height:14px;background:#334155;border-radius:3px;margin-right:3px;"></span>'
+    ).join('')
+
+    // XP progress bar
+    const xpProgress = xpSummary
+      ? Math.round(((xpSummary.xp - xpSummary.xpForCurrentLevel) / (xpSummary.xpForNextLevel - xpSummary.xpForCurrentLevel)) * 100)
+      : 0
 
     const html = `
 <!DOCTYPE html>
@@ -67,7 +114,31 @@ export async function buildDigestContent(userId: string): Promise<{
   <div style="max-width: 480px; margin: 0 auto;">
     <h1 style="color: #f0f2f5; font-size: 20px; margin-bottom: 16px;">Hey ${name}!</h1>
 
-    ${streak > 0 ? `<p style="color: #34d399; font-size: 14px;">You're on a ${streak}-day practice streak! Keep it up.</p>` : ''}
+    ${xpSummary && xpSummary.xpThisWeek > 0 ? `
+    <div style="background: #1e293b; border-radius: 12px; padding: 16px; margin: 16px 0;">
+      <h2 style="color: #f0f2f5; font-size: 14px; margin: 0 0 8px;">XP & Level</h2>
+      <p style="margin: 4px 0; font-size: 13px;">You earned <strong style="color: #818cf8;">${xpSummary.xpThisWeek} XP</strong> this week</p>
+      <p style="margin: 4px 0; font-size: 13px;">Level <strong style="color: #f0f2f5;">${xpSummary.level}</strong> — ${xpSummary.title}</p>
+      <div style="background: #334155; border-radius: 4px; height: 6px; margin-top: 8px; overflow: hidden;">
+        <div style="background: #818cf8; height: 100%; width: ${Math.min(xpProgress, 100)}%; border-radius: 4px;"></div>
+      </div>
+      <p style="margin: 4px 0 0; font-size: 11px; color: #6b7280;">${xpSummary.xpToNextLevel} XP to Level ${xpSummary.level + 1}</p>
+    </div>
+    ` : ''}
+
+    ${earnedBadgeNames.length > 0 ? `
+    <div style="background: #1e293b; border-radius: 12px; padding: 16px; margin: 16px 0;">
+      <h2 style="color: #f0f2f5; font-size: 14px; margin: 0 0 8px;">Badges Earned This Week</h2>
+      ${earnedBadgeNames.map(b => `<p style="margin: 4px 0; font-size: 13px;">${b}</p>`).join('')}
+    </div>
+    ` : ''}
+
+    ${streak > 0 ? `
+    <div style="background: #1e293b; border-radius: 12px; padding: 16px; margin: 16px 0;">
+      <h2 style="color: #f0f2f5; font-size: 14px; margin: 0 0 8px;">🔥 ${streak}-Day Streak</h2>
+      <div style="margin-top: 8px;">${calendarSquares || ''}</div>
+    </div>
+    ` : ''}
 
     <div style="background: #1e293b; border-radius: 12px; padding: 16px; margin: 16px 0;">
       <h2 style="color: #f0f2f5; font-size: 14px; margin: 0 0 12px;">Your Stats</h2>
@@ -75,6 +146,14 @@ export async function buildDigestContent(userId: string): Promise<{
       <p style="margin: 4px 0; font-size: 13px;">5-session avg: <strong style="color: #f0f2f5;">${avgScore}/100</strong></p>
       <p style="margin: 4px 0; font-size: 13px;">Sessions completed: <strong style="color: #f0f2f5;">${summaries.length}</strong></p>
     </div>
+
+    ${challengeCount > 0 ? `
+    <div style="background: #1e293b; border-radius: 12px; padding: 16px; margin: 16px 0;">
+      <h2 style="color: #f0f2f5; font-size: 14px; margin: 0 0 8px;">Daily Challenges</h2>
+      <p style="margin: 4px 0; font-size: 13px;">Completed: <strong style="color: #f0f2f5;">${challengeCount}/7</strong> this week</p>
+      <p style="margin: 4px 0; font-size: 13px;">Best score: <strong style="color: #f0f2f5;">${bestChallengeScore}/100</strong></p>
+    </div>
+    ` : ''}
 
     ${weakAreas.length > 0 ? `
     <div style="background: #1e293b; border-radius: 12px; padding: 16px; margin: 16px 0;">

@@ -7,6 +7,8 @@ import Link from 'next/link'
 import AuthMenu from './AuthMenu'
 import ThemeToggle from '../ui/ThemeToggle'
 import Footer from './Footer'
+import XpBadge from '@learn/components/XpBadge'
+import BadgeUnlockChecker from '@learn/components/BadgeUnlockChecker'
 
 const NAV_LINKS = [
   { href: '/', label: 'Home', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
@@ -17,6 +19,7 @@ const NAV_LINKS = [
 
 const MORE_LINKS = [
   { href: '/resume', label: 'Resume Tools' },
+  { href: '/learn/badges', label: 'Badges' },
   { href: '/pricing', label: 'Pricing' },
   { href: '/settings', label: 'Settings' },
 ]
@@ -82,9 +85,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               </Link>
             </div>
 
-            {/* Right: theme + auth */}
+            {/* Right: theme + xp + auth */}
             <div className="flex items-center gap-2">
               <ThemeToggle />
+              {isAuthenticated && <XpBadge />}
               <AuthMenu />
             </div>
           </div>
@@ -162,6 +166,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
       {/* Footer */}
       <Footer />
+
+      {/* Badge unlock notifications */}
+      {isAuthenticated && <BadgeUnlockChecker />}
     </>
   )
 }

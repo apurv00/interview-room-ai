@@ -2,6 +2,10 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { saveDrillAttempt } from '@learn/services/drillService'
+import { awardXp } from '@learn/services/xpService'
+import { recordActivity, updateStreak } from '@learn/services/streakService'
+import { checkAndAwardBadges } from '@learn/services/badgeService'
+import { XP_AMOUNTS } from '@learn/config/xpTable'
 import Anthropic from '@anthropic-ai/sdk'
 import { aiLogger } from '@shared/logger'
 
@@ -66,6 +70,16 @@ Respond with ONLY valid JSON:
       newAnswer,
       newScore,
       competency: competency || 'general',
+    })
+
+    // Award XP and update streak for drill completion
+    await awardXp(session.user.id, 'drill_complete', XP_AMOUNTS.drill_complete, { sessionId, questionIndex })
+    await recordActivity(session.user.id)
+    const streakResult = await updateStreak(session.user.id)
+    await checkAndAwardBadges(session.user.id, {
+      type: 'drill_complete',
+      score: newScore,
+      currentStreak: streakResult.currentStreak,
     })
 
     return NextResponse.json({
