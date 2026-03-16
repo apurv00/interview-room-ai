@@ -49,9 +49,9 @@ export type ProbeType = 'clarify' | 'challenge' | 'expand' | 'quantify'
 
 export interface ProbeDecision {
   shouldProbe: boolean
-  probeType?: ProbeType
-  probeQuestion?: string
-  probingRationale?: string
+  probeType?: ProbeType | null
+  probeQuestion?: string | null
+  probingRationale?: string | null
 }
 
 export interface ThreadEntry {
@@ -91,7 +91,7 @@ export interface TranscriptEntry {
   speaker: 'interviewer' | 'candidate'
   text: string
   timestamp: number
-  questionIndex?: number
+  questionIndex?: number | null
 }
 
 // ─── Evaluation ───────────────────────────────────────────────────────────────
@@ -104,12 +104,12 @@ export interface AnswerEvaluation {
   structure: number       // 0–100  (STAR detection)
   specificity: number     // 0–100  (metrics / examples)
   ownership: number       // 0–100
-  jdAlignment?: number    // 0–100, only present when JD was provided
+  jdAlignment?: number | null    // 0–100, only present when JD was provided
   needsFollowUp: boolean
-  followUpQuestion?: string
+  followUpQuestion?: string | null
   flags: string[]
-  probeDecision?: ProbeDecision
-  pushback?: Pushback
+  probeDecision?: ProbeDecision | null
+  pushback?: Pushback | null
 }
 
 // ─── Speech metrics ───────────────────────────────────────────────────────────

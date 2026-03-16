@@ -116,7 +116,7 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
                     <ScoreBar label="Structure (STAR)" score={ev.structure} delay={50} />
                     <ScoreBar label="Specificity" score={ev.specificity} delay={100} />
                     <ScoreBar label="Ownership" score={ev.ownership} delay={150} />
-                    {ev.jdAlignment !== undefined && (
+                    {ev.jdAlignment != null && (
                       <ScoreBar label="JD Alignment" score={ev.jdAlignment} color="cyan" delay={200} />
                     )}
                   </div>

@@ -636,7 +636,7 @@ export function useInterview({
           if (isInterviewOver()) return
 
           const probeQ = currentEval.probeDecision!.probeQuestion!
-          const probeType = currentEval.probeDecision!.probeType
+          const probeType = currentEval.probeDecision!.probeType ?? undefined
           currentProbeDepthRef.current++
           qIdx++ // Increment global exchange counter
 

@@ -256,7 +256,7 @@ function FeedbackPageInner() {
     const seen = new Set<number>()
     return data.transcript
       .filter((e) => {
-        if (e.speaker !== 'interviewer' || e.questionIndex === undefined) return false
+        if (e.speaker !== 'interviewer' || e.questionIndex == null) return false
         if (seen.has(e.questionIndex)) return false
         seen.add(e.questionIndex)
         return true
