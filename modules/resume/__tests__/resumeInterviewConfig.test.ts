@@ -52,7 +52,7 @@ describe('buildInterviewConfig', () => {
     expect(result!.targetCompany).toBe('Google')
   })
 
-  it('infers backend domain from software engineer role', async () => {
+  it('infers SWE domain from software engineer role', async () => {
     mockFindById.mockResolvedValue({
       savedResumes: [{
         id: 'r1', name: 'Dev Resume', targetRole: 'Senior Software Engineer',
@@ -61,7 +61,7 @@ describe('buildInterviewConfig', () => {
     })
 
     const result = await buildInterviewConfig('user123', 'r1')
-    expect(result!.domain).toBe('backend')
+    expect(result!.domain).toBe('swe')
   })
 
   it('infers data-science domain from data analyst role', async () => {

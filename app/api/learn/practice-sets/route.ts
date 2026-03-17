@@ -88,7 +88,7 @@ export async function GET() {
     user.preferredInterviewTypes.forEach(d => priorityDepths.add(d))
   }
   if (priorityDepths.size === 0) {
-    priorityDepths.add('screening')
+    priorityDepths.add('hr-screening')
     priorityDepths.add('behavioral')
     priorityDepths.add('technical')
   }

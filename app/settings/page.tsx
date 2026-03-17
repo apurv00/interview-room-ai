@@ -367,7 +367,7 @@ export default function SettingsPage() {
             <div className="space-y-1.5">
               <label className="text-xs text-slate-500 uppercase tracking-wide">Target Role</label>
               <div className="grid grid-cols-4 gap-2">
-                {(['frontend', 'backend', 'sdet', 'devops', 'data-science', 'pm', 'design', 'business', 'marketing', 'finance', 'sales']).map((r) => (
+                {(['pm', 'swe', 'sales', 'mba', 'data-science', 'design', 'marketing', 'finance']).map((r) => (
                   <button key={r} onClick={() => setEditTargetRole(r as Role)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editTargetRole === r ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'}`}>
                     {ROLE_LABELS[r as Role] || r.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
                   </button>

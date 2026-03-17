@@ -13,20 +13,18 @@ export const UNIVERSAL_COMPETENCIES = [
 ] as const
 
 export const DOMAIN_COMPETENCIES: Record<string, string[]> = {
-  // Engineering
-  frontend: ['ui_architecture', 'css_mastery', 'web_performance', 'accessibility', 'component_design', 'collaboration'],
-  backend: ['technical_accuracy', 'system_design', 'problem_solving', 'debugging', 'code_quality', 'collaboration'],
-  sdet: ['test_strategy', 'automation_depth', 'quality_mindset', 'ci_cd_expertise', 'debugging', 'collaboration'],
-  devops: ['infrastructure_knowledge', 'reliability_thinking', 'incident_management', 'ci_cd_expertise'],
-  'data-science': ['statistical_knowledge', 'ml_depth', 'experiment_design', 'data_storytelling', 'business_impact'],
-  // Product & Design
   pm: ['product_sense', 'prioritization', 'metrics_thinking', 'stakeholder_management', 'execution', 'tradeoff_reasoning'],
+  swe: ['technical_accuracy', 'system_design', 'problem_solving', 'debugging', 'code_quality', 'collaboration'],
+  'data-science': ['statistical_knowledge', 'ml_depth', 'experiment_design', 'data_storytelling', 'business_impact'],
   design: ['design_thinking', 'user_empathy', 'craft', 'prototyping', 'accessibility'],
-  // Business
-  business: ['strategic_thinking', 'structured_thinking', 'leadership', 'analytical_skills', 'framework_usage', 'client_management'],
-  marketing: ['creative_strategy', 'data_driven', 'brand_thinking', 'growth_marketing'],
-  finance: ['analytical_rigor', 'risk_assessment', 'financial_modeling', 'regulatory_knowledge'],
   sales: ['persuasion', 'objection_handling', 'pipeline_management', 'relationship_building', 'resilience'],
+  mba: ['strategic_thinking', 'leadership', 'analytical_skills', 'cross_functional_impact'],
+  consulting: ['structured_thinking', 'framework_usage', 'client_management', 'quantitative_reasoning'],
+  finance: ['analytical_rigor', 'risk_assessment', 'financial_modeling', 'regulatory_knowledge'],
+  marketing: ['creative_strategy', 'data_driven', 'brand_thinking', 'growth_marketing'],
+  devops: ['infrastructure_knowledge', 'reliability_thinking', 'incident_management', 'ci_cd_expertise'],
+  hr: ['people_skills', 'conflict_resolution', 'organizational_awareness', 'talent_strategy'],
+  legal: ['legal_knowledge', 'negotiation', 'business_acumen', 'regulatory_compliance'],
 }
 
 export function getCompetenciesForDomain(domain: string): string[] {

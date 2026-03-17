@@ -60,7 +60,7 @@ describe('sessionSummaryService', () => {
           topicsCovered: ['leadership'],
           competencyScores: { relevance: 75 },
           sessionDate: new Date('2024-01-15'),
-          interviewType: 'screening',
+          interviewType: 'hr-screening',
         },
       ]
       mockFind.mockResolvedValue(mockSummaries)
@@ -95,7 +95,7 @@ describe('sessionSummaryService', () => {
           topicsCovered: ['leadership', 'conflict resolution'],
           competencyScores: { relevance: 75 },
           sessionDate: new Date('2024-01-15'),
-          interviewType: 'screening',
+          interviewType: 'hr-screening',
         },
       ]
       mockFind.mockResolvedValue(mockSummaries)
@@ -103,7 +103,7 @@ describe('sessionSummaryService', () => {
       const result = await buildHistorySummary(TEST_USER_ID, 'pm')
       expect(result).toContain('Recent session history')
       expect(result).toContain('72/100')
-      expect(result).toContain('screening')
+      expect(result).toContain('hr-screening')
       expect(result).toContain('specificity')
       expect(result).toContain('No metrics given')
       expect(result).toContain('leadership')

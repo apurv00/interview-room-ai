@@ -10,7 +10,7 @@ const BUILT_IN_RUBRICS = [
   {
     rubricId: 'rubric_universal_hr_v1',
     domain: '*',
-    interviewType: 'screening',
+    interviewType: 'hr-screening',
     seniorityBand: '*',
     version: 1,
     passThreshold: 60,
@@ -113,7 +113,7 @@ const BUILT_IN_RUBRICS = [
   },
   {
     rubricId: 'rubric_swe_technical_v1',
-    domain: 'backend',
+    domain: 'swe',
     interviewType: 'technical',
     seniorityBand: '*',
     version: 1,
@@ -170,7 +170,7 @@ const BUILT_IN_RUBRICS = [
 const BUILT_IN_QUESTIONS = [
   // PM Questions
   {
-    domain: 'pm', interviewType: 'screening', seniorityBand: '*',
+    domain: 'pm', interviewType: 'hr-screening', seniorityBand: '*',
     question: 'Tell me about a time you had to make a difficult product decision with incomplete data.',
     category: 'behavioral', targetCompetencies: ['product_sense', 'metrics_thinking'],
     difficulty: 'medium' as const,
@@ -188,7 +188,7 @@ const BUILT_IN_QUESTIONS = [
     tags: ['stakeholder-management', 'conflict-resolution', 'alignment'],
   },
   {
-    domain: 'pm', interviewType: 'screening', seniorityBand: '*',
+    domain: 'pm', interviewType: 'hr-screening', seniorityBand: '*',
     question: 'How do you decide what NOT to build?',
     category: 'situational', targetCompetencies: ['prioritization', 'product_sense', 'tradeoff_reasoning'],
     difficulty: 'medium' as const,
@@ -198,7 +198,7 @@ const BUILT_IN_QUESTIONS = [
   },
   // SWE Questions
   {
-    domain: 'backend', interviewType: 'screening', seniorityBand: '*',
+    domain: 'swe', interviewType: 'hr-screening', seniorityBand: '*',
     question: 'Tell me about a production incident you resolved. Walk me through your debugging process.',
     category: 'behavioral', targetCompetencies: ['problem_solving', 'technical_accuracy', 'collaboration'],
     difficulty: 'medium' as const,
@@ -207,7 +207,7 @@ const BUILT_IN_QUESTIONS = [
     tags: ['debugging', 'incident-response', 'production'],
   },
   {
-    domain: 'backend', interviewType: 'technical', seniorityBand: '7+',
+    domain: 'swe', interviewType: 'technical', seniorityBand: '7+',
     question: 'Describe a system you designed from scratch. What were the key architectural decisions and tradeoffs?',
     category: 'behavioral', targetCompetencies: ['system_design', 'technical_accuracy', 'depth'],
     difficulty: 'hard' as const,
@@ -217,7 +217,7 @@ const BUILT_IN_QUESTIONS = [
   },
   // MBA/Business Questions
   {
-    domain: 'business', interviewType: 'screening', seniorityBand: '*',
+    domain: 'mba', interviewType: 'hr-screening', seniorityBand: '*',
     question: 'Tell me about a time you influenced a strategic decision without having direct authority.',
     category: 'behavioral', targetCompetencies: ['leadership', 'strategic_thinking'],
     difficulty: 'medium' as const,
@@ -227,7 +227,7 @@ const BUILT_IN_QUESTIONS = [
   },
   // Sales Questions
   {
-    domain: 'sales', interviewType: 'screening', seniorityBand: '*',
+    domain: 'sales', interviewType: 'hr-screening', seniorityBand: '*',
     question: 'Walk me through your biggest deal from first contact to close. What made it successful?',
     category: 'behavioral', targetCompetencies: ['persuasion', 'pipeline_management', 'relationship_building'],
     difficulty: 'medium' as const,
@@ -313,7 +313,7 @@ const BUILT_IN_COMPANY_PATTERNS = [
       'Always state your hypothesis upfront',
       'PEI answers need extreme specificity — names, numbers, timelines',
     ],
-    applicableDomains: ['business'],
+    applicableDomains: ['consulting', 'mba'],
     evaluationFocus: ['structured_thinking', 'framework_usage', 'quantitative_reasoning'],
   },
 ]
@@ -324,7 +324,7 @@ const BUILT_IN_BENCHMARKS = [
   {
     caseId: 'pm_hr_mid_001',
     domain: 'pm',
-    interviewType: 'screening',
+    interviewType: 'hr-screening',
     seniorityBand: '3-6',
     question: 'Tell me about a time you launched a product feature that didn\'t meet expectations. What did you do?',
     candidateAnswer: 'At my last company, we launched a new onboarding flow for our app. We spent three months building it based on what we thought users wanted. After launch, the completion rate actually dropped by 15%. I quickly set up user interviews and found that we had made the flow too long. We simplified it from 8 steps to 4, and within two weeks the completion rate went back up and eventually exceeded the old flow by 10%. I learned that we should have done user testing earlier.',
@@ -346,8 +346,8 @@ const BUILT_IN_BENCHMARKS = [
   },
   {
     caseId: 'swe_hr_entry_001',
-    domain: 'backend',
-    interviewType: 'screening',
+    domain: 'swe',
+    interviewType: 'hr-screening',
     seniorityBand: '0-2',
     question: 'Tell me about a challenging technical problem you solved recently.',
     candidateAnswer: 'Um, so like at my internship I had this bug that was really hard. The API was returning wrong data sometimes. I spent like a day figuring it out and it turned out to be a race condition. I fixed it by adding a mutex. My manager said good job.',

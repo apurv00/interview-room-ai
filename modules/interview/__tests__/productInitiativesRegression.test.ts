@@ -123,7 +123,7 @@ describe('Backward Compatibility', () => {
       expect(result.success).toBe(true)
     })
 
-    it('accepts config without interviewType (defaults to screening)', () => {
+    it('accepts config without interviewType (defaults to hr-screening)', () => {
       const result = GenerateQuestionSchema.safeParse({
         config: {
           role: 'SWE',
@@ -135,7 +135,7 @@ describe('Backward Compatibility', () => {
       })
       expect(result.success).toBe(true)
       if (result.success) {
-        expect(result.data.config.interviewType).toBe('screening')
+        expect(result.data.config.interviewType).toBe('hr-screening')
       }
     })
   })

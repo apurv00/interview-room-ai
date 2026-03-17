@@ -82,7 +82,7 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
   async handler(req, { user, body }) {
     const { config, transcript, evaluations, speechMetrics } = body
     const startTime = Date.now()
-    const interviewType = config.interviewType || 'screening'
+    const interviewType = config.interviewType || 'hr-screening'
     const domainLabel = getDomainLabel(config.role)
 
     const aggMetrics = aggregateMetrics(speechMetrics)
@@ -180,7 +180,7 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
       }
     } catch { /* continue without profile */ }
 
-    const interviewTypeContext = interviewType !== 'screening'
+    const interviewTypeContext = interviewType !== 'hr-screening'
       ? `\nThis was a "${interviewType}" interview. Tailor feedback to the interview format — e.g. for technical interviews focus on technical depth, for case studies focus on structured thinking.`
       : ''
 

@@ -24,7 +24,7 @@ vi.mock('@shared/db/models', () => ({
 vi.mock('@shared/db/seed', () => ({
   FALLBACK_DEPTHS: [
     {
-      slug: 'screening',
+      slug: 'hr-screening',
       scoringDimensions: [
         { name: 'relevance', label: 'Relevance', weight: 0.25 },
         { name: 'structure', label: 'STAR Structure', weight: 0.25 },
@@ -46,8 +46,8 @@ describe('evaluationEngine', () => {
   })
 
   describe('getScoringDimensions', () => {
-    it('returns fallback dimensions for screening', async () => {
-      const dims = await getScoringDimensions('pm', 'screening', '3-6')
+    it('returns fallback dimensions for hr-screening', async () => {
+      const dims = await getScoringDimensions('pm', 'hr-screening', '3-6')
       expect(dims.length).toBe(4)
       expect(dims[0].name).toBe('relevance')
       expect(dims[1].name).toBe('structure')
@@ -62,7 +62,7 @@ describe('evaluationEngine', () => {
     })
 
     it('dimensions have correct weight range', async () => {
-      const dims = await getScoringDimensions('pm', 'screening', '3-6')
+      const dims = await getScoringDimensions('pm', 'hr-screening', '3-6')
       for (const dim of dims) {
         expect(dim.weight).toBeGreaterThanOrEqual(0)
         expect(dim.weight).toBeLessThanOrEqual(1)
@@ -70,7 +70,7 @@ describe('evaluationEngine', () => {
     })
 
     it('weights sum to approximately 1', async () => {
-      const dims = await getScoringDimensions('pm', 'screening', '3-6')
+      const dims = await getScoringDimensions('pm', 'hr-screening', '3-6')
       const totalWeight = dims.reduce((sum, d) => sum + d.weight, 0)
       expect(totalWeight).toBeCloseTo(1, 1)
     })
@@ -110,7 +110,7 @@ describe('evaluationEngine', () => {
     it('aggregates evaluation scores correctly', async () => {
       const result = await evaluateSession({
         domain: 'pm',
-        interviewType: 'screening',
+        interviewType: 'hr-screening',
         seniorityBand: '3-6',
         evaluations: [
           {
@@ -136,7 +136,7 @@ describe('evaluationEngine', () => {
     it('handles empty evaluations', async () => {
       const result = await evaluateSession({
         domain: 'pm',
-        interviewType: 'screening',
+        interviewType: 'hr-screening',
         seniorityBand: '3-6',
         evaluations: [],
       })
@@ -149,7 +149,7 @@ describe('evaluationEngine', () => {
     it('includes jdAlignment when present', async () => {
       const result = await evaluateSession({
         domain: 'pm',
-        interviewType: 'screening',
+        interviewType: 'hr-screening',
         seniorityBand: '3-6',
         evaluations: [{
           questionIndex: 0, question: 'Q1', answer: 'A1',

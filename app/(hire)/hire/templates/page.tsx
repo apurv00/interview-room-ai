@@ -27,7 +27,7 @@ export default function TemplatesPage() {
   // Create form state
   const [newName, setNewName] = useState('')
   const [newDesc, setNewDesc] = useState('')
-  const [newRole, setNewRole] = useState('backend')
+  const [newRole, setNewRole] = useState('swe')
   const [newExp, setNewExp] = useState('all')
   const [newDuration, setNewDuration] = useState(20)
   const [newQuestions, setNewQuestions] = useState<Array<{ text: string; category: string }>>([
@@ -137,7 +137,7 @@ export default function TemplatesPage() {
                 onChange={e => setNewRole(e.target.value)}
                 className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
               >
-                {['frontend', 'backend', 'sdet', 'devops', 'data-science', 'pm', 'design', 'business', 'marketing', 'finance', 'sales'].map(r => (
+                {['swe', 'pm', 'sales', 'mba', 'data-science', 'design', 'marketing', 'finance', 'consulting'].map(r => (
                   <option key={r} value={r}>{r.toUpperCase()}</option>
                 ))}
               </select>

@@ -11,7 +11,7 @@ export type LegacyRole = 'PM' | 'SWE' | 'Sales' | 'MBA'
 
 export interface InterviewConfig {
   role: Role
-  interviewType?: InterviewType  // defaults to 'screening'
+  interviewType?: InterviewType  // defaults to 'hr-screening'
   experience: ExperienceLevel
   duration: Duration
   jobDescription?: string

@@ -29,7 +29,7 @@ vi.mock('@shared/db/models', () => ({
 vi.mock('@shared/db/seed', () => ({
   FALLBACK_DEPTHS: [
     {
-      slug: 'screening',
+      slug: 'hr-screening',
       scoringDimensions: [
         { name: 'relevance', label: 'Relevance', weight: 0.25 },
         { name: 'structure', label: 'STAR Structure', weight: 0.25 },

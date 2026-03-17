@@ -26,7 +26,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
   async handler(req, { user, body }) {
     const { config, questionIndex, previousQA, performanceSignal, lastThreadSummary, completedThreads } = body
     const startTime = Date.now()
-    const interviewType = config.interviewType || 'screening'
+    const interviewType = config.interviewType || 'hr-screening'
 
     const totalQuestions = QUESTION_COUNT[config.duration]
     const isPressureQuestion = questionIndex === PRESSURE_QUESTION_INDEX[config.duration]
@@ -205,7 +205,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
       basePrompt = `You are Alex Chen, a senior HR interviewer at a top-tier tech company. You are conducting a ${config.duration}-minute behavioral screening for a ${domainLabel} role (${config.experience} years experience).`
     }
 
-    const defaultStrategy = interviewType === 'screening'
+    const defaultStrategy = interviewType === 'hr-screening'
       ? `\nQuestion types you rotate through:\n- Behavioral (STAR): "Tell me about a time when..."\n- Motivation: "What drives you / why this role?"\n- Situational: "How would you handle..."\n- Consistency check: follow up on something mentioned earlier`
       : ''
 

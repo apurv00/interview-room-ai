@@ -26,7 +26,7 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
   async handler(req, { user, body }) {
     const { config, question, answer, questionIndex, probeDepth } = body
     const startTime = Date.now()
-    const interviewType = config.interviewType || 'screening'
+    const interviewType = config.interviewType || 'hr-screening'
     const domainLabel = getDomainLabel(config.role)
 
     // Fetch depth-specific evaluation criteria

@@ -4,9 +4,9 @@ import type { ExperienceLevel, Duration } from '@shared/types'
 
 export const LEGACY_ROLE_LABELS: Record<string, string> = {
   PM: 'Product Manager',
-  SWE: 'Backend Engineer',
+  SWE: 'Software Engineer',
   Sales: 'Sales',
-  MBA: 'Business & Strategy',
+  MBA: 'MBA / Business',
 }
 
 // ─── Dynamic label resolver (falls back to legacy or capitalizes slug) ───────

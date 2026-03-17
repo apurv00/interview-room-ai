@@ -56,7 +56,7 @@ describe('retrievalService', () => {
   describe('retrieveQuestions', () => {
     it('returns empty array when feature is disabled', async () => {
       vi.mocked(isFeatureEnabled).mockReturnValue(false)
-      const result = await retrieveQuestions({ domain: 'pm', interviewType: 'screening' })
+      const result = await retrieveQuestions({ domain: 'pm', interviewType: 'hr-screening' })
       expect(result).toEqual([])
     })
 
@@ -73,7 +73,7 @@ describe('retrievalService', () => {
       ]
       mockFind.mockResolvedValue(mockQuestions)
 
-      const result = await retrieveQuestions({ domain: 'pm', interviewType: 'screening' })
+      const result = await retrieveQuestions({ domain: 'pm', interviewType: 'hr-screening' })
       expect(result).toHaveLength(1)
       expect(result[0].question).toBe('Tell me about a product launch')
       expect(result[0].category).toBe('behavioral')
@@ -81,7 +81,7 @@ describe('retrievalService', () => {
 
     it('handles empty results', async () => {
       mockFind.mockResolvedValue([])
-      const result = await retrieveQuestions({ domain: 'pm', interviewType: 'screening' })
+      const result = await retrieveQuestions({ domain: 'pm', interviewType: 'hr-screening' })
       expect(result).toEqual([])
     })
   })
@@ -89,7 +89,7 @@ describe('retrievalService', () => {
   describe('getQuestionBankContext', () => {
     it('returns empty string when feature is disabled', async () => {
       vi.mocked(isFeatureEnabled).mockReturnValue(false)
-      const result = await getQuestionBankContext({ domain: 'pm', interviewType: 'screening' })
+      const result = await getQuestionBankContext({ domain: 'pm', interviewType: 'hr-screening' })
       expect(result).toBe('')
     })
 
@@ -105,14 +105,14 @@ describe('retrievalService', () => {
         },
       ])
 
-      const result = await getQuestionBankContext({ domain: 'pm', interviewType: 'screening' })
+      const result = await getQuestionBankContext({ domain: 'pm', interviewType: 'hr-screening' })
       expect(result).toContain('REFERENCE QUESTIONS')
       expect(result).toContain('Tell me about a product launch')
     })
 
     it('returns empty string when no questions found', async () => {
       mockFind.mockResolvedValue([])
-      const result = await getQuestionBankContext({ domain: 'pm', interviewType: 'screening' })
+      const result = await getQuestionBankContext({ domain: 'pm', interviewType: 'hr-screening' })
       expect(result).toBe('')
     })
   })

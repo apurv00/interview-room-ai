@@ -47,7 +47,7 @@ export default function InvitePage() {
           candidateEmail: email,
           candidateName: name || undefined,
           role,
-          interviewType: interviewType || 'screening',
+          interviewType: interviewType || 'hr-screening',
           experience,
           duration,
           recruiterNotes: notes || undefined,
@@ -83,7 +83,7 @@ export default function InvitePage() {
           body: JSON.stringify({
             candidateEmail,
             role,
-            interviewType: interviewType || 'screening',
+            interviewType: interviewType || 'hr-screening',
             experience,
             duration,
             jobDescription: jdText || undefined,

@@ -137,7 +137,7 @@ export const RESOURCES: Resource[] = [
     description: 'Prepare for technical interviews with domain-specific questions for software engineering, data science, DevOps, and more.',
     category: 'questions',
     keywords: ['technical interview questions', 'coding interview', 'system design interview', 'data science interview', 'software engineer interview questions'],
-    relevantDomains: ['backend', 'ds', 'devops'],
+    relevantDomains: ['swe', 'ds', 'devops'],
     relevantExperience: [],
     relevantWeakAreas: ['technical_depth'],
     relevantGoals: ['improve_scores'],
