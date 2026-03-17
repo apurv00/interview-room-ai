@@ -67,7 +67,7 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
 
     config: {
       role: { type: String, required: true },
-      interviewType: { type: String, default: 'hr-screening' },
+      interviewType: { type: String, default: 'screening' },
       experience: { type: String, enum: ['0-2', '3-6', '7+'], required: true },
       duration: { type: Number, enum: [5, 10, 20], required: true },
     },

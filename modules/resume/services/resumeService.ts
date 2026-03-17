@@ -169,17 +169,17 @@ export async function getProfileForResume(userId: string) {
 
 const ROLE_TO_DOMAIN: Array<{ pattern: RegExp; domain: string }> = [
   { pattern: /product\s*manag|^pm$/i, domain: 'pm' },
-  { pattern: /software|developer|engineer|frontend|backend|fullstack|full.stack|swe/i, domain: 'swe' },
+  { pattern: /frontend|front.end|react|angular|vue|ui\s*develop/i, domain: 'frontend' },
+  { pattern: /backend|back.end|server|api\s*develop|java\b|python\b|golang|node/i, domain: 'backend' },
+  { pattern: /sdet|qa\s*engineer|test\s*autom|quality\s*assur/i, domain: 'sdet' },
+  { pattern: /devops|sre|infrastructure|platform\s*eng/i, domain: 'devops' },
+  { pattern: /software|developer|engineer|fullstack|full.stack|swe/i, domain: 'backend' },
   { pattern: /data\s*scien|machine\s*learn|ml\s*engineer|data\s*analy/i, domain: 'data-science' },
-  { pattern: /design|ux|ui|creative\s*director/i, domain: 'design' },
+  { pattern: /design|ux|ui(?!\s*develop)|creative\s*director/i, domain: 'design' },
   { pattern: /market|growth|brand|content\s*strat/i, domain: 'marketing' },
   { pattern: /financ|accounting|controller|treasury/i, domain: 'finance' },
-  { pattern: /consult/i, domain: 'consulting' },
   { pattern: /sale|account\s*exec|business\s*develop/i, domain: 'sales' },
-  { pattern: /devops|sre|infrastructure|platform\s*eng/i, domain: 'devops' },
-  { pattern: /human\s*resource|hr\s|talent|recruit/i, domain: 'hr' },
-  { pattern: /legal|attorney|counsel/i, domain: 'legal' },
-  { pattern: /mba|strateg|operations|general\s*manag/i, domain: 'mba' },
+  { pattern: /mba|strateg|consult|operations|general\s*manag/i, domain: 'business' },
 ]
 
 function inferDomainFromRole(role: string): string | null {

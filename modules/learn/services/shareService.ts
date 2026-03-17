@@ -83,7 +83,7 @@ export async function getPublicScorecard(
     const fb = session.feedback
     return {
       domain: session.config?.role || 'General',
-      interviewType: session.config?.interviewType || 'hr-screening',
+      interviewType: session.config?.interviewType || 'screening',
       experience: session.config?.experience || '0-2',
       overallScore: fb.overall_score || 0,
       dimensions: {

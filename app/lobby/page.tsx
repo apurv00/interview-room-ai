@@ -254,7 +254,7 @@ export default function LobbyPage() {
             <div className="space-y-2">
               <p className="text-slate-400">
                 {getDomainLabel(config.role)}
-                {config.interviewType && config.interviewType !== 'hr-screening' && ` · ${config.interviewType.split('-').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}`}
+                {config.interviewType && config.interviewType !== 'screening' && ` · ${config.interviewType.split('-').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}`}
                 {' '}· {config.experience} yrs · {config.duration} min session
               </p>
 

@@ -51,7 +51,7 @@ vi.mock('@learn/services/competencyService', () => ({
 
 vi.mock('@learn/services/sessionSummaryService', () => ({
   getRecentSummaries: vi.fn().mockResolvedValue([
-    { overallScore: 65, strengths: ['structure'], weaknesses: ['specificity'], majorMistakes: [], topicsCovered: [], competencyScores: {}, sessionDate: new Date(), interviewType: 'hr-screening' },
+    { overallScore: 65, strengths: ['structure'], weaknesses: ['specificity'], majorMistakes: [], topicsCovered: [], competencyScores: {}, sessionDate: new Date(), interviewType: 'screening' },
   ]),
 }))
 

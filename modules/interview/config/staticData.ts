@@ -20,25 +20,25 @@ export interface StaticDepth {
 }
 
 export const STATIC_DOMAINS: StaticDomain[] = [
-  { slug: 'pm', label: 'Product Manager', shortLabel: 'PM', icon: '🗂', color: 'indigo', category: 'business', description: 'Product strategy, roadmaps, stakeholder management, and user-centric thinking.' },
-  { slug: 'swe', label: 'Software Engineer', shortLabel: 'SWE', icon: '💻', color: 'indigo', category: 'engineering', description: 'System design, coding practices, debugging, collaboration, and technical leadership.' },
-  { slug: 'sales', label: 'Sales', shortLabel: 'Sales', icon: '📈', color: 'indigo', category: 'business', description: 'Pipeline management, deal closing, relationship building, and revenue growth.' },
-  { slug: 'mba', label: 'MBA / Business', shortLabel: 'MBA', icon: '🎓', color: 'indigo', category: 'business', description: 'Business strategy, leadership, analytical thinking, and cross-functional impact.' },
-  { slug: 'data-science', label: 'Data Scientist', shortLabel: 'DS', icon: '📊', color: 'indigo', category: 'engineering', description: 'Statistical modeling, ML pipelines, data storytelling, and business impact.' },
-  { slug: 'design', label: 'Design / UX', shortLabel: 'UX', icon: '🎨', color: 'indigo', category: 'design', description: 'User research, design thinking, prototyping, and design system expertise.' },
+  // Engineering
+  { slug: 'frontend', label: 'Frontend Engineer', shortLabel: 'FE', icon: '🖥', color: 'indigo', category: 'engineering', description: 'UI development, React/Angular/Vue, web performance, accessibility, and responsive design.' },
+  { slug: 'backend', label: 'Backend Engineer', shortLabel: 'BE', icon: '🔧', color: 'indigo', category: 'engineering', description: 'APIs, databases, system design, microservices, scalability, and distributed systems.' },
+  { slug: 'sdet', label: 'SDET / QA', shortLabel: 'QA', icon: '🧪', color: 'indigo', category: 'engineering', description: 'Test automation, quality strategy, CI/CD testing, performance testing, and reliability.' },
+  { slug: 'devops', label: 'DevOps / SRE', shortLabel: 'SRE', icon: '⚙️', color: 'indigo', category: 'engineering', description: 'Infrastructure, CI/CD, monitoring, incident management, and cloud platforms.' },
+  { slug: 'data-science', label: 'Data Science', shortLabel: 'DS', icon: '📊', color: 'indigo', category: 'engineering', description: 'ML models, statistics, experimentation, data storytelling, and business impact.' },
+  // Product & Design
+  { slug: 'pm', label: 'Product Manager', shortLabel: 'PM', icon: '🗂', color: 'indigo', category: 'product', description: 'Product strategy, roadmaps, stakeholder management, and user-centric thinking.' },
+  { slug: 'design', label: 'Design / UX', shortLabel: 'UX', icon: '🎨', color: 'indigo', category: 'product', description: 'User research, design thinking, prototyping, and design system expertise.' },
+  // Business
+  { slug: 'business', label: 'Business & Strategy', shortLabel: 'BIZ', icon: '🎓', color: 'indigo', category: 'business', description: 'Strategy, consulting, leadership, analytical thinking, and cross-functional impact.' },
   { slug: 'marketing', label: 'Marketing', shortLabel: 'MKT', icon: '📣', color: 'indigo', category: 'business', description: 'Growth strategies, campaign management, brand building, and analytics.' },
   { slug: 'finance', label: 'Finance', shortLabel: 'FIN', icon: '💰', color: 'indigo', category: 'business', description: 'Financial modeling, risk assessment, strategic planning, and regulatory compliance.' },
-  { slug: 'consulting', label: 'Consulting', shortLabel: 'CON', icon: '🧩', color: 'indigo', category: 'business', description: 'Problem structuring, client management, frameworks, and executive communication.' },
-  { slug: 'devops', label: 'DevOps / SRE', shortLabel: 'SRE', icon: '⚙️', color: 'indigo', category: 'engineering', description: 'Infrastructure, CI/CD, reliability engineering, and incident management.' },
-  { slug: 'hr', label: 'Human Resources', shortLabel: 'HR', icon: '🤝', color: 'indigo', category: 'operations', description: 'Talent acquisition, employee relations, organizational development, and compliance.' },
-  { slug: 'legal', label: 'Legal', shortLabel: 'LGL', icon: '⚖️', color: 'indigo', category: 'operations', description: 'Contract negotiation, regulatory compliance, risk management, and legal strategy.' },
+  { slug: 'sales', label: 'Sales', shortLabel: 'Sales', icon: '📈', color: 'indigo', category: 'business', description: 'Pipeline management, deal closing, relationship building, and revenue growth.' },
 ]
 
 export const STATIC_DEPTHS: StaticDepth[] = [
-  { slug: 'hr-screening', label: 'HR Screening', icon: '🤝', description: 'Standard behavioral screening — motivation, culture fit, and communication skills.' },
-  { slug: 'behavioral', label: 'Behavioral Deep Dive', icon: '🧠', description: 'In-depth behavioral probing — leadership, conflict resolution, teamwork, and decision-making.' },
-  { slug: 'technical', label: 'Technical Interview', icon: '⚙️', description: 'Domain-specific technical questions — depth of knowledge, problem-solving, and technical communication.' },
-  { slug: 'case-study', label: 'Case Study', icon: '📋', description: 'Situational business cases — structured thinking, frameworks, and creative problem-solving.' },
-  { slug: 'domain-knowledge', label: 'Domain Knowledge', icon: '📚', description: 'Industry and function-specific knowledge probing — trends, best practices, and practical application.' },
-  { slug: 'culture-fit', label: 'Culture Fit', icon: '🌱', description: 'Values alignment, work style, team dynamics, and organizational culture match.' },
+  { slug: 'screening', label: 'Screening Round', icon: '🤝', description: 'First-round behavioral screening — motivation, culture fit, communication, and values alignment.' },
+  { slug: 'behavioral', label: 'Behavioral Round', icon: '🧠', description: 'Deep behavioral probing — leadership, conflict resolution, self-awareness, and decision-making.' },
+  { slug: 'technical', label: 'Technical Round', icon: '⚙️', description: 'Domain-specific technical depth — knowledge, problem-solving, trends, and practical application.' },
+  { slug: 'case-study', label: 'Case Study Round', icon: '📋', description: 'Scenario-based problem-solving — structured thinking, frameworks, and business reasoning.' },
 ]

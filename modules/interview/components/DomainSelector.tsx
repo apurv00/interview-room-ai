@@ -16,30 +16,23 @@ interface Domain {
 const CATEGORY_TABS = [
   { key: 'all', label: 'All' },
   { key: 'engineering', label: 'Engineering' },
+  { key: 'product', label: 'Product & Design' },
   { key: 'business', label: 'Business' },
-  { key: 'design', label: 'Design' },
-  { key: 'operations', label: 'Operations' },
 ]
 
 // Gradient backgrounds per domain slug
 const DOMAIN_GRADIENTS: Record<string, string> = {
-  pm: 'from-violet-600/30 to-indigo-600/30',
-  swe: 'from-blue-600/30 to-cyan-600/30',
-  ds: 'from-emerald-600/30 to-teal-600/30',
-  'data-science': 'from-emerald-600/30 to-teal-600/30',
-  design: 'from-pink-600/30 to-rose-600/30',
-  ux: 'from-pink-600/30 to-rose-600/30',
-  marketing: 'from-amber-600/30 to-orange-600/30',
-  mkt: 'from-amber-600/30 to-orange-600/30',
-  finance: 'from-green-600/30 to-emerald-600/30',
-  fin: 'from-green-600/30 to-emerald-600/30',
-  sales: 'from-red-600/30 to-pink-600/30',
-  consulting: 'from-purple-600/30 to-violet-600/30',
-  con: 'from-purple-600/30 to-violet-600/30',
-  mba: 'from-indigo-600/30 to-purple-600/30',
-  hr: 'from-teal-600/30 to-cyan-600/30',
-  legal: 'from-slate-600/30 to-gray-600/30',
+  frontend: 'from-blue-600/30 to-cyan-600/30',
+  backend: 'from-indigo-600/30 to-blue-600/30',
+  sdet: 'from-teal-600/30 to-cyan-600/30',
   devops: 'from-sky-600/30 to-blue-600/30',
+  'data-science': 'from-emerald-600/30 to-teal-600/30',
+  pm: 'from-violet-600/30 to-indigo-600/30',
+  design: 'from-pink-600/30 to-rose-600/30',
+  business: 'from-purple-600/30 to-violet-600/30',
+  marketing: 'from-amber-600/30 to-orange-600/30',
+  finance: 'from-green-600/30 to-emerald-600/30',
+  sales: 'from-red-600/30 to-pink-600/30',
 }
 const DEFAULT_GRADIENT = 'from-indigo-600/30 to-violet-600/30'
 

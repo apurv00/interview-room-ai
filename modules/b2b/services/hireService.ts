@@ -137,7 +137,7 @@ export async function listCandidates(
     candidateEmail: s.candidateEmail || '',
     candidateName: s.candidateName || '',
     role: s.config?.role || '',
-    interviewType: s.config?.interviewType || 'hr-screening',
+    interviewType: s.config?.interviewType || 'screening',
     experience: s.config?.experience || '',
     status: s.status,
     overallScore: s.feedback?.overall_score ?? null,

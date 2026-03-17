@@ -261,7 +261,7 @@ function recommendNextSession(
   let nextType = currentInterviewType
   let reason = `Continue practicing ${currentInterviewType} to build consistency`
 
-  if (feedback.overall_score >= 80 && currentInterviewType === 'hr-screening') {
+  if (feedback.overall_score >= 80 && currentInterviewType === 'screening') {
     nextType = 'behavioral'
     reason = 'Strong HR screening performance — move to deeper behavioral probing'
   } else if (feedback.overall_score >= 85 && currentInterviewType === 'behavioral') {

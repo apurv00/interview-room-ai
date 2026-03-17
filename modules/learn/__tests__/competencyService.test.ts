@@ -56,8 +56,8 @@ describe('competencyService', () => {
       expect(competencies.length).toBe(UNIVERSAL_COMPETENCIES.length)
     })
 
-    it('handles SWE domain', () => {
-      const competencies = getCompetenciesForDomain('swe')
+    it('handles backend domain', () => {
+      const competencies = getCompetenciesForDomain('backend')
       expect(competencies).toContain('technical_accuracy')
       expect(competencies).toContain('system_design')
       expect(competencies).toContain('problem_solving')
@@ -82,7 +82,7 @@ describe('competencyService', () => {
 
   describe('DOMAIN_COMPETENCIES', () => {
     it('has entries for all major domains', () => {
-      const expectedDomains = ['pm', 'swe', 'data-science', 'design', 'sales', 'mba', 'consulting', 'finance', 'marketing', 'devops', 'hr', 'legal']
+      const expectedDomains = ['frontend', 'backend', 'sdet', 'devops', 'data-science', 'pm', 'design', 'business', 'marketing', 'finance', 'sales']
       for (const domain of expectedDomains) {
         expect(DOMAIN_COMPETENCIES).toHaveProperty(domain)
         expect(DOMAIN_COMPETENCIES[domain].length).toBeGreaterThan(0)
