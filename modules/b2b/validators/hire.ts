@@ -44,7 +44,7 @@ export const InviteSchema = z.object({
   candidateEmail: z.string().email().max(200),
   candidateName: z.string().max(200).optional(),
   role: z.string().min(1).max(50),
-  interviewType: z.string().min(1).max(50).default('hr-screening'),
+  interviewType: z.string().min(1).max(50).default('screening'),
   experience: z.enum(['0-2', '3-6', '7+']).default('3-6'),
   duration: z.union([z.literal(10), z.literal(20), z.literal(30)]).default(20),
   templateId: z.string().optional(),

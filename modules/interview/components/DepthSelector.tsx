@@ -23,11 +23,11 @@ export default function DepthSelector({ selectedDomain, selectedDepth, onSelect 
   // Use static data immediately — no loading state needed
   const [types, setTypes] = useState<InterviewDepth[]>(STATIC_DEPTHS as InterviewDepth[])
 
-  // Auto-select hr-screening on first render if nothing selected
+  // Auto-select screening on first render if nothing selected
   useEffect(() => {
     if (!selectedDepth && types.length > 0) {
-      const hrType = types.find((t) => t.slug === 'hr-screening')
-      if (hrType) onSelect(hrType.slug)
+      const screeningType = types.find((t) => t.slug === 'screening')
+      if (screeningType) onSelect(screeningType.slug)
       else onSelect(types[0].slug)
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps

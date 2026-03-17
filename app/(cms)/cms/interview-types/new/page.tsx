@@ -102,7 +102,7 @@ export default function NewInterviewTypePage() {
               value={form.slug}
               onChange={(e) => updateField('slug', e.target.value)}
               className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
-              placeholder="e.g. hr-screening"
+              placeholder="e.g. screening"
             />
           </div>
           <div>

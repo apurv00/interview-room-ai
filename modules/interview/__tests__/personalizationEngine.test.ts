@@ -64,13 +64,13 @@ describe('personalizationEngine', () => {
       const brief = await generateSessionBrief({
         userId: 'user123',
         domain: 'pm',
-        interviewType: 'hr-screening',
+        interviewType: 'screening',
         experience: '3-6',
       })
 
       expect(brief.userId).toBe('user123')
       expect(brief.domain).toBe('pm')
-      expect(brief.interviewType).toBe('hr-screening')
+      expect(brief.interviewType).toBe('screening')
       expect(brief.sessionGoal).toBe('General interview practice')
       expect(brief.recommendedDifficulty).toBe('medium')
     })
@@ -78,12 +78,12 @@ describe('personalizationEngine', () => {
     it('returns a brief with correct domain and type when enabled', async () => {
       const brief = await generateSessionBrief({
         userId: 'user123',
-        domain: 'swe',
+        domain: 'backend',
         interviewType: 'technical',
         experience: '7+',
       })
 
-      expect(brief.domain).toBe('swe')
+      expect(brief.domain).toBe('backend')
       expect(brief.interviewType).toBe('technical')
       expect(brief.experience).toBe('7+')
     })
@@ -92,7 +92,7 @@ describe('personalizationEngine', () => {
       const brief = await generateSessionBrief({
         userId: 'user123',
         domain: 'pm',
-        interviewType: 'hr-screening',
+        interviewType: 'screening',
         experience: '0-2',
       })
 
@@ -106,7 +106,7 @@ describe('personalizationEngine', () => {
       const ctx = briefToPromptContext({
         userId: 'u1',
         domain: 'pm',
-        interviewType: 'hr-screening',
+        interviewType: 'screening',
         experience: '3-6',
         sessionGoal: '',
         recommendedDifficulty: 'medium',
@@ -130,7 +130,7 @@ describe('personalizationEngine', () => {
       const ctx = briefToPromptContext({
         userId: 'u1',
         domain: 'pm',
-        interviewType: 'hr-screening',
+        interviewType: 'screening',
         experience: '3-6',
         sessionGoal: 'Improve metrics specificity',
         recommendedDifficulty: 'medium_high',
@@ -159,7 +159,7 @@ describe('personalizationEngine', () => {
       const ctx = briefToPromptContext({
         userId: 'u1',
         domain: 'pm',
-        interviewType: 'hr-screening',
+        interviewType: 'screening',
         experience: '3-6',
         sessionGoal: '',
         recommendedDifficulty: 'medium',

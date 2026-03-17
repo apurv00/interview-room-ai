@@ -417,7 +417,7 @@ export function useInterview({
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               domain: config.role,
-              interviewType: config.interviewType || 'hr-screening',
+              interviewType: config.interviewType || 'screening',
               score: avgScore,
               strongDimensions: sorted.slice(0, 2).map(d => d.name),
               weakDimensions: sorted.slice(-2).map(d => d.name),

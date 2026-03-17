@@ -9,9 +9,9 @@ import { aiLogger as logger } from '@shared/logger'
 import Anthropic from '@anthropic-ai/sdk'
 
 const DOMAINS_ROTATION = [
-  'software-engineering', 'product-management', 'data-science',
-  'design', 'marketing', 'finance', 'consulting', 'devops',
-  'hr', 'legal', 'general',
+  'frontend', 'backend', 'sdet', 'devops', 'data-science',
+  'pm', 'design',
+  'business', 'marketing', 'finance', 'sales',
 ]
 
 function getTodayUTC(): string {
