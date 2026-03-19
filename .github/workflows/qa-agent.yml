@@ -31,6 +31,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Create output directories
+        run: mkdir -p /tmp/screenshots
+
       - name: Run QA Agent
         uses: anthropics/claude-code-action@v1
         with:
@@ -40,6 +43,8 @@ jobs:
 
             Target URL: ${{ inputs.url }}
             Test mobile viewports: ${{ inputs.test_mobile }}
+
+            IMPORTANT: Save all screenshots to /tmp/screenshots/ and write your final QA report as markdown to /tmp/qa-report.md so they can be uploaded as artifacts.
           claude_args: |
             --max-turns 80
             --model claude-sonnet-4-20250514
