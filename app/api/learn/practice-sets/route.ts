@@ -67,6 +67,29 @@ export async function GET() {
   const practiceSets: PracticeSetItem[] = []
   const practiceStats = user.practiceStats || new Map()
 
+  // Build session-based stats as fallback when practiceStats is empty/stale
+  const sessionBasedStats: Record<string, { count: number; avgScore?: number; lastScore?: number }> = {}
+  for (const rs of recentSessions) {
+    const domain = rs.config?.role
+    const type = rs.config?.interviewType || 'screening'
+    if (!domain) continue
+    const key = `${domain}:${type}`
+    if (!sessionBasedStats[key]) {
+      sessionBasedStats[key] = { count: 0 }
+    }
+    sessionBasedStats[key].count++
+    const score = rs.feedback?.overall_score
+    if (typeof score === 'number') {
+      if (sessionBasedStats[key].lastScore === undefined) {
+        sessionBasedStats[key].lastScore = score
+      }
+      const prev = sessionBasedStats[key].avgScore
+      sessionBasedStats[key].avgScore = prev !== undefined
+        ? Math.round((prev * (sessionBasedStats[key].count - 1) + score) / sessionBasedStats[key].count)
+        : score
+    }
+  }
+
   // Priority domains: user's preferred + target role + domains from recent sessions
   const priorityDomains = new Set<string>()
   if (user.targetRole) priorityDomains.add(user.targetRole)
@@ -121,9 +144,11 @@ export async function GET() {
 
       const key = `${domainSlug}:${depthSlug}`
       const stats = (practiceStats as unknown as Record<string, { totalSessions?: number; avgScore?: number; lastScore?: number }>)?.[key]
-      const practiceCount = stats?.totalSessions || 0
-      const avgScore = stats?.avgScore
-      const lastScore = stats?.lastScore
+      const sbStats = sessionBasedStats[key]
+      // Use practiceStats if available, fall back to counting completed InterviewSessions
+      const practiceCount = stats?.totalSessions || sbStats?.count || 0
+      const avgScore = stats?.avgScore ?? sbStats?.avgScore
+      const lastScore = stats?.lastScore ?? sbStats?.lastScore
 
       // Determine status
       let status: 'not_started' | 'in_progress' | 'mastered' = 'not_started'

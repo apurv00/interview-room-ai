@@ -131,6 +131,14 @@ function FeedbackPageInner() {
             if (session.feedback) {
               setFeedback(session.feedback)
               setLoading(false)
+              // Recover stuck sessions: if feedback exists but status is not completed, fix it
+              if (session.status && session.status !== 'completed') {
+                fetchWithRetry(`/api/interviews/${sessionId}`, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ status: 'completed', completedAt: new Date().toISOString() }),
+                }).catch(() => {})
+              }
               return
             }
 
@@ -221,12 +229,16 @@ function FeedbackPageInner() {
       }
       setFeedback(fb as FeedbackData)
 
-      // Persist feedback to DB with retry (no abort signal — must survive navigation)
+      // Persist feedback + ensure session is marked completed (recovers from stuck in_progress)
       if (sid && sid !== 'local') {
         const saved = await fetchWithRetry(`/api/interviews/${sid}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ feedback: fb }),
+          body: JSON.stringify({
+            feedback: fb,
+            status: 'completed',
+            completedAt: new Date().toISOString(),
+          }),
         })
         if (!saved) {
           setSaveWarning('Feedback generated but could not be saved. It may not appear in history.')
