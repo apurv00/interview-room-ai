@@ -17,9 +17,12 @@ export async function GET() {
       .lean()
 
     if (domains.length > 0) {
-      // Filter out old domains that are no longer in the active set
+      // Filter to only current slugs
       const filtered = domains.filter(d => ACTIVE_DOMAIN_SLUGS.has(d.slug))
-      if (filtered.length > 0) {
+      // Only use DB data if it covers ALL expected domains (otherwise it's stale)
+      const dbSlugs = new Set(filtered.map(d => d.slug))
+      const hasAll = Array.from(ACTIVE_DOMAIN_SLUGS).every(s => dbSlugs.has(s))
+      if (hasAll) {
         return NextResponse.json(filtered, {
           headers: { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=3600' },
         })

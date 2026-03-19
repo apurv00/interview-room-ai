@@ -56,7 +56,8 @@ export default function DomainSelector({ selectedDomain, onSelect }: DomainSelec
     fetch('/api/domains')
       .then((r) => r.json())
       .then((data: Domain[]) => {
-        if (data?.length > 0) {
+        // Only replace static data if API returns at least as many domains
+        if (data?.length >= STATIC_DOMAINS.length) {
           domainCache = data
           setDomains(data)
         }
