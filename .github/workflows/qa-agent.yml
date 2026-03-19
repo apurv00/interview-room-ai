@@ -1,0 +1,56 @@
+name: QA Agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "URL to test"
+        required: false
+        default: "https://interviewprep.guru"
+      test_mobile:
+        description: "Also test mobile viewports"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: qa-agent
+  cancel-in-progress: true
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run QA Agent
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Read the files qa/identity.md and qa/mission.md for your full instructions.
+
+            Target URL: ${{ inputs.url }}
+            Test mobile viewports: ${{ inputs.test_mobile }}
+          claude_args: |
+            --max-turns 80
+            --model claude-sonnet-4-20250514
+            --allowedTools "mcp__playwright__browser_navigate,mcp__playwright__browser_click,mcp__playwright__browser_type,mcp__playwright__browser_take_screenshot,mcp__playwright__browser_snapshot,mcp__playwright__browser_resize,mcp__playwright__browser_navigate_back,mcp__playwright__browser_wait,mcp__playwright__browser_evaluate,mcp__playwright__browser_select_option,mcp__playwright__browser_hover,mcp__playwright__browser_press_key,Read,Write"
+            --mcp-config '{"mcpServers":{"playwright":{"command":"npx","args":["@playwright/mcp@latest","--headless","--browser","chromium"]}}}'
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-report-${{ github.run_number }}
+          path: |
+            /tmp/screenshots/
+            /tmp/qa-report.md
+          retention-days: 30
