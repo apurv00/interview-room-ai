@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { parseJobDescription } from '@interview/services/jdParserService'
 
+export const dynamic = 'force-dynamic'
+
 const ParseJDSchema = z.object({
   text: z.string().min(20).max(15000),
 })

@@ -4,6 +4,8 @@ import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { connectDB } from '@shared/db/connection'
 import { SavedJobDescription } from '@shared/db/models'
 
+export const dynamic = 'force-dynamic'
+
 const SaveJDSchema = z.object({
   name: z.string().min(1).max(200),
   parsedJD: z.object({

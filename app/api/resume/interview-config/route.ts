@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { buildInterviewConfig } from '@resume/services/resumeService'
 
+export const dynamic = 'force-dynamic'
+
 export const GET = composeApiRoute({
   rateLimit: { windowMs: 60_000, maxRequests: 30, keyPrefix: 'resume:interview-config' },
   handler: async (req: NextRequest, { user }) => {
