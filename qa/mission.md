@@ -25,7 +25,7 @@ For each flow:
 ### Happy path
 - Walk through the flow as a normal user would
 - Verify each step works and leads to the expected next step
-- Screenshot key states (form loaded, form submitted, success/error message)
+- Screenshot key states (form loaded, form submitted, success/error message). Save all screenshots to `/tmp/screenshots/` with descriptive filenames (e.g. `homepage-desktop.png`, `login-empty-submit.png`).
 
 ### Edge cases
 - Submit forms with empty fields
