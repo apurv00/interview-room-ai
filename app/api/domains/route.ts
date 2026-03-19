@@ -5,6 +5,9 @@ import { FALLBACK_DOMAINS } from '@shared/db/seed'
 
 export const dynamic = 'force-dynamic'
 
+// Canonical set of active domain slugs — source of truth
+const ACTIVE_DOMAIN_SLUGS = new Set(FALLBACK_DOMAINS.map(d => d.slug))
+
 export async function GET() {
   try {
     await connectDB()
@@ -14,9 +17,13 @@ export async function GET() {
       .lean()
 
     if (domains.length > 0) {
-      return NextResponse.json(domains, {
-        headers: { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=3600' },
-      })
+      // Filter out old domains that are no longer in the active set
+      const filtered = domains.filter(d => ACTIVE_DOMAIN_SLUGS.has(d.slug))
+      if (filtered.length > 0) {
+        return NextResponse.json(filtered, {
+          headers: { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=3600' },
+        })
+      }
     }
   } catch {
     // DB not available — fall through to fallback

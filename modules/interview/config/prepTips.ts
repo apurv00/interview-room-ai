@@ -12,6 +12,65 @@ export const GENERAL_TIPS: PrepTip[] = [
 ]
 
 const DOMAIN_TIPS: Record<string, PrepTip[]> = {
+  // Product & Design
+  pm: [
+    { text: 'Prepare a metrics framework (e.g., HEART, NSM, AARRR)', icon: 'chart' },
+    { text: 'Have a product teardown ready for a product you use daily', icon: 'bulb' },
+    { text: 'Practice explaining trade-offs between user needs and business goals', icon: 'users' },
+  ],
+  design: [
+    { text: 'Walk through a case study end-to-end (problem, research, iterations, outcome)', icon: 'bulb' },
+    { text: 'Prepare to discuss a design decision where you had to compromise', icon: 'users' },
+    { text: 'Know your design process and how you handle ambiguity', icon: 'star' },
+  ],
+  // Engineering
+  frontend: [
+    { text: 'Have a UI architecture example ready (component design, state management)', icon: 'code' },
+    { text: 'Prepare to discuss web performance optimization with measurable impact', icon: 'bulb' },
+    { text: 'Review your experience with accessibility and responsive design', icon: 'star' },
+  ],
+  backend: [
+    { text: 'Have a system design example ready (scale, trade-offs, decisions)', icon: 'code' },
+    { text: 'Prepare to discuss a debugging war story with measurable impact', icon: 'bulb' },
+    { text: 'Review your most impactful technical contribution in detail', icon: 'star' },
+  ],
+  sdet: [
+    { text: 'Prepare a test strategy example — what to automate vs. test manually', icon: 'code' },
+    { text: 'Have examples of CI/CD testing pipelines you designed or improved', icon: 'chart' },
+    { text: 'Know your approach to balancing test coverage with development velocity', icon: 'bulb' },
+  ],
+  'data-science': [
+    { text: 'Prepare to explain a model you built — from problem framing to deployment', icon: 'code' },
+    { text: 'Know your go-to approach for A/B testing and statistical significance', icon: 'chart' },
+    { text: 'Have an example of communicating technical findings to non-technical stakeholders', icon: 'users' },
+  ],
+  devops: [
+    { text: 'Prepare an incident response story (detection, mitigation, post-mortem)', icon: 'code' },
+    { text: 'Know your CI/CD philosophy and scaling strategies', icon: 'chart' },
+    { text: 'Have examples of infrastructure decisions with measurable impact', icon: 'bulb' },
+  ],
+  // Business
+  sales: [
+    { text: 'Know your top 3 deals — pipeline, objections handled, and close strategy', icon: 'chart' },
+    { text: 'Prepare your 60-second elevator pitch', icon: 'star' },
+    { text: 'Have examples of relationship building and consultative selling', icon: 'users' },
+  ],
+  business: [
+    { text: 'Practice structuring answers using frameworks (MECE, Issue Trees)', icon: 'chart' },
+    { text: 'Prepare your leadership philosophy with concrete examples', icon: 'star' },
+    { text: 'Have examples of stakeholder management and influence without authority', icon: 'users' },
+  ],
+  marketing: [
+    { text: 'Prepare a campaign case study with clear metrics (CAC, ROAS, conversion)', icon: 'chart' },
+    { text: 'Know the difference between your strategic thinking and execution skills', icon: 'bulb' },
+    { text: 'Have an example of cross-functional collaboration', icon: 'users' },
+  ],
+  finance: [
+    { text: 'Prepare to walk through a financial model or valuation you built', icon: 'chart' },
+    { text: 'Know current market conditions and how they affect your domain', icon: 'bulb' },
+    { text: 'Have examples of risk assessment and decision-making under uncertainty', icon: 'star' },
+  ],
+  // Legacy slug mappings (backward compat with existing sessions)
   PM: [
     { text: 'Prepare a metrics framework (e.g., HEART, NSM, AARRR)', icon: 'chart' },
     { text: 'Have a product teardown ready for a product you use daily', icon: 'bulb' },
@@ -22,55 +81,15 @@ const DOMAIN_TIPS: Record<string, PrepTip[]> = {
     { text: 'Prepare to discuss a debugging war story with measurable impact', icon: 'bulb' },
     { text: 'Review your most impactful technical contribution in detail', icon: 'star' },
   ],
-  'data-science': [
-    { text: 'Prepare to explain a model you built — from problem framing to deployment', icon: 'code' },
-    { text: 'Know your go-to approach for A/B testing and statistical significance', icon: 'chart' },
-    { text: 'Have an example of communicating technical findings to non-technical stakeholders', icon: 'users' },
-  ],
-  design: [
-    { text: 'Walk through a case study end-to-end (problem, research, iterations, outcome)', icon: 'bulb' },
-    { text: 'Prepare to discuss a design decision where you had to compromise', icon: 'users' },
-    { text: 'Know your design process and how you handle ambiguity', icon: 'star' },
-  ],
   Sales: [
     { text: 'Know your top 3 deals — pipeline, objections handled, and close strategy', icon: 'chart' },
     { text: 'Prepare your 60-second elevator pitch', icon: 'star' },
     { text: 'Have examples of relationship building and consultative selling', icon: 'users' },
   ],
-  marketing: [
-    { text: 'Prepare a campaign case study with clear metrics (CAC, ROAS, conversion)', icon: 'chart' },
-    { text: 'Know the difference between your strategic thinking and execution skills', icon: 'bulb' },
-    { text: 'Have an example of cross-functional collaboration', icon: 'users' },
-  ],
-  consulting: [
-    { text: 'Practice structuring answers using frameworks (MECE, Issue Trees)', icon: 'chart' },
-    { text: 'Prepare to discuss a client engagement from problem to recommendation', icon: 'star' },
-    { text: 'Have examples of stakeholder management and influence without authority', icon: 'users' },
-  ],
-  finance: [
-    { text: 'Prepare to walk through a financial model or valuation you built', icon: 'chart' },
-    { text: 'Know current market conditions and how they affect your domain', icon: 'bulb' },
-    { text: 'Have examples of risk assessment and decision-making under uncertainty', icon: 'star' },
-  ],
-  devops: [
-    { text: 'Prepare an incident response story (detection, mitigation, post-mortem)', icon: 'code' },
-    { text: 'Know your CI/CD philosophy and scaling strategies', icon: 'chart' },
-    { text: 'Have examples of infrastructure decisions with measurable impact', icon: 'bulb' },
-  ],
-  hr: [
-    { text: 'Prepare examples of conflict resolution and difficult conversations', icon: 'users' },
-    { text: 'Know employment law basics relevant to your target company', icon: 'star' },
-    { text: 'Have metrics-driven examples of HR program impact', icon: 'chart' },
-  ],
-  legal: [
-    { text: 'Prepare to discuss a complex matter you managed end-to-end', icon: 'star' },
-    { text: 'Know how you balance legal risk with business objectives', icon: 'chart' },
-    { text: 'Have examples of explaining legal concepts to non-legal stakeholders', icon: 'users' },
-  ],
   MBA: [
+    { text: 'Practice structuring answers using frameworks (MECE, Issue Trees)', icon: 'chart' },
     { text: 'Prepare your leadership philosophy with concrete examples', icon: 'star' },
-    { text: 'Have a case where you drove measurable business impact', icon: 'chart' },
-    { text: 'Know your "Why MBA?" story cold', icon: 'bulb' },
+    { text: 'Have examples of stakeholder management and influence without authority', icon: 'users' },
   ],
 }
 
