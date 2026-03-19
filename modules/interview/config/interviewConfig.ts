@@ -7,6 +7,10 @@ export const LEGACY_ROLE_LABELS: Record<string, string> = {
   SWE: 'Backend Engineer',
   Sales: 'Sales',
   MBA: 'Business & Strategy',
+  // Old slugs that may still exist in DB sessions
+  consulting: 'Business & Strategy',
+  hr: 'Human Resources',
+  legal: 'Legal',
 }
 
 // ─── Dynamic label resolver (falls back to legacy or capitalizes slug) ───────

@@ -35,7 +35,7 @@ Schema:
 {
   "company": "string (company name or empty)",
   "role": "string (job title)",
-  "inferredDomain": "string (one of: pm, swe, data-science, design, marketing, finance, consulting, sales, devops, hr, legal, mba)",
+  "inferredDomain": "string (one of: pm, frontend, backend, sdet, data-science, design, marketing, finance, business, sales, devops)",
   "requirements": [
     {
       "id": "req_1",

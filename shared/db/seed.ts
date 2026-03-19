@@ -153,23 +153,38 @@ const BUILT_IN_DEPTHS = [
 export async function seedDatabase() {
   await connectDB()
 
+  const currentDomainSlugs = BUILT_IN_DOMAINS.map(d => d.slug)
+  const currentDepthSlugs = BUILT_IN_DEPTHS.map(d => d.slug)
+
   // Upsert domains
   for (const domain of BUILT_IN_DOMAINS) {
     await InterviewDomain.findOneAndUpdate(
       { slug: domain.slug },
-      { ...domain, isBuiltIn: true },
+      { ...domain, isBuiltIn: true, isActive: true },
       { upsert: true, new: true }
     )
   }
+
+  // Deactivate old built-in domains no longer in the list
+  await InterviewDomain.updateMany(
+    { isBuiltIn: true, slug: { $nin: currentDomainSlugs } },
+    { isActive: false }
+  )
 
   // Upsert depths
   for (const depth of BUILT_IN_DEPTHS) {
     await InterviewDepth.findOneAndUpdate(
       { slug: depth.slug },
-      { ...depth, isBuiltIn: true },
+      { ...depth, isBuiltIn: true, isActive: true },
       { upsert: true, new: true }
     )
   }
+
+  // Deactivate old built-in depths no longer in the list
+  await InterviewDepth.updateMany(
+    { isBuiltIn: true, slug: { $nin: currentDepthSlugs } },
+    { isActive: false }
+  )
 
   return { domains: BUILT_IN_DOMAINS.length, depths: BUILT_IN_DEPTHS.length }
 }
