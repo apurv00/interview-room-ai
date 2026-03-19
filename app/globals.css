@@ -12,7 +12,7 @@
   --foreground: #f0f2f5;
   --foreground-secondary: #b0b8c4;
   --foreground-tertiary: #6b7280;
-  --foreground-muted: #4b5563;
+  --foreground-muted: #6b7280;
   --background: #070b14;
   --radius-md: 10px;
 }
@@ -61,7 +61,7 @@ body {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: #4b5563;
+  color: var(--foreground-tertiary);
 }
 
 /* ─── CARD SURFACES ─────────────────────── */
