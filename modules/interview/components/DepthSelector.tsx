@@ -44,9 +44,15 @@ export default function DepthSelector({ selectedDomain, selectedDepth, onSelect 
     fetch(`/api/interview-types?domain=${encodeURIComponent(selectedDomain)}`)
       .then((r) => r.json())
       .then((data: InterviewDepth[]) => {
+        // Only replace static data if API returns at least as many depth options
+        // (domain filtering may legitimately reduce the count, so compare per-domain)
         if (data?.length > 0) {
-          depthCache[selectedDomain] = data
-          setTypes(data)
+          // Verify API data has correct labels by checking at least one expected slug
+          const hasSlugs = data.every((d: InterviewDepth) => d.slug && d.label)
+          if (hasSlugs) {
+            depthCache[selectedDomain] = data
+            setTypes(data)
+          }
         }
       })
       .catch(() => {
