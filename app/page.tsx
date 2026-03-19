@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import Link from 'next/link'
@@ -39,6 +39,7 @@ function AuthenticatedHome() {
   const [resumeFileName, setResumeFileName] = useState('')
   const [resumeUploading, setResumeUploading] = useState(false)
   const [uploadError, setUploadError] = useState('')
+  const [highlightStep, setHighlightStep] = useState<number | null>(null)
 
   // Pre-fill from last session config
   useEffect(() => {
@@ -79,6 +80,28 @@ function AuthenticatedHome() {
   }, [status, lastConfig]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const ready = role && experience && duration
+
+  const ctaText = useMemo(() => {
+    if (ready) return 'Enter Interview Room \u2192'
+    if (!role) return 'Choose a domain to continue'
+    if (!experience) return 'Select your experience level'
+    if (!duration) return 'Pick a duration'
+    return 'Select all options to continue'
+  }, [role, experience, duration, ready])
+
+  const handleCtaClick = useCallback(() => {
+    if (ready) {
+      start()
+      return
+    }
+    // Highlight the first incomplete required step
+    const step = !role ? 1 : !experience ? 3 : !duration ? 4 : null
+    if (step) {
+      setHighlightStep(step)
+      document.getElementById(`step-${step}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      setTimeout(() => setHighlightStep(null), 2000)
+    }
+  }, [ready, role, experience, duration]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleFileUpload(file: File, docType: 'jd' | 'resume') {
     setUploadError('')
@@ -136,8 +159,14 @@ function AuthenticatedHome() {
         </div>
 
         {/* Step 1: Domain */}
-        <StepSection step={1} label="Interview domain" completed={!!role}>
-          <DomainSelector selectedDomain={role} onSelect={(slug) => { setRole(slug); setInterviewType(null) }} />
+        <StepSection step={1} label="Interview domain" completed={!!role} highlight={highlightStep === 1}>
+          <DomainSelector selectedDomain={role} onSelect={(slug) => {
+            setRole(slug)
+            setInterviewType(null)
+            setTimeout(() => {
+              document.getElementById('step-2')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            }, 100)
+          }} />
         </StepSection>
 
         {/* Step 2: Interview Type */}
@@ -147,7 +176,7 @@ function AuthenticatedHome() {
 
         {/* Steps 3 + 4: Experience & Duration side by side */}
         <div className="grid md:grid-cols-2 gap-section">
-          <StepSection step={3} label="Experience level" completed={!!experience}>
+          <StepSection step={3} label="Experience level" completed={!!experience} highlight={highlightStep === 3}>
             <SelectionGroup<ExperienceLevel>
               items={EXPERIENCES}
               value={experience}
@@ -162,7 +191,7 @@ function AuthenticatedHome() {
             />
           </StepSection>
 
-          <StepSection step={4} label="Duration" completed={!!duration}>
+          <StepSection step={4} label="Duration" completed={!!duration} highlight={highlightStep === 4}>
             <SelectionGroup<Duration>
               items={DURATIONS}
               value={duration !== null ? String(duration) : null}
@@ -180,7 +209,7 @@ function AuthenticatedHome() {
 
         {/* Step 5: Documents */}
         <StepSection step={5} label="Documents (optional)">
-          <p className="text-caption text-[#4b5563] mb-3">
+          <p className="text-caption text-[var(--foreground-muted)] mb-3">
             Upload a JD for role-specific questions, or a resume to personalize the interview.
           </p>
           <div className="grid sm:grid-cols-2 gap-element">
@@ -209,63 +238,67 @@ function AuthenticatedHome() {
           <Button
             variant="primary"
             size="lg"
-            glow
+            glow={!!ready}
             isFullWidth
             className="max-w-sm"
-            disabled={!ready || status === 'loading'}
-            onClick={start}
+            disabled={status === 'loading'}
+            onClick={handleCtaClick}
           >
-            {ready ? 'Enter Interview Room \u2192' : 'Select all options to continue'}
+            {ctaText}
           </Button>
-          <p className="text-caption text-[#4b5563]">
+          <p className="text-caption text-[var(--foreground-muted)]">
             Requires Chrome or Edge &middot; Camera & mic access needed
           </p>
-        </div>
-      </div>
-
-      {/* Quick access cards */}
-      <div className="max-w-[1100px] mx-auto mt-section">
-        <h2 className="text-heading text-[#f0f2f5] mb-4">More Tools</h2>
-        <div className="grid sm:grid-cols-3 gap-element">
-          <Link href="/learn/practice" className="surface-card-bordered p-5 group hover:border-[rgba(99,102,241,0.2)] transition-all">
-            <div className="flex items-center gap-3 mb-2">
-              <div className="w-10 h-10 rounded-xl bg-indigo-600/10 flex items-center justify-center">
-                <svg className="w-5 h-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-                </svg>
-              </div>
-              <h3 className="text-sm font-semibold text-[#f0f2f5] group-hover:text-[#818cf8] transition-colors">Practice Sets</h3>
-            </div>
-            <p className="text-caption text-[#6b7280]">Personalized practice plans based on your profile and progress.</p>
-          </Link>
-          <Link href="/resume" className="surface-card-bordered p-5 group hover:border-[rgba(16,185,129,0.2)] transition-all">
-            <div className="flex items-center gap-3 mb-2">
-              <div className="w-10 h-10 rounded-xl bg-emerald-600/10 flex items-center justify-center">
-                <svg className="w-5 h-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-                </svg>
-              </div>
-              <h3 className="text-sm font-semibold text-[#f0f2f5] group-hover:text-emerald-400 transition-colors">Resume Tools</h3>
-            </div>
-            <p className="text-caption text-[#6b7280]">Build, tailor, and ATS-optimize your resume with AI.</p>
-          </Link>
-          <Link href="/hire" className="surface-card-bordered p-5 group hover:border-[rgba(139,92,246,0.2)] transition-all">
-            <div className="flex items-center gap-3 mb-2">
-              <div className="w-10 h-10 rounded-xl bg-violet-600/10 flex items-center justify-center">
-                <svg className="w-5 h-5 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
-                </svg>
-              </div>
-              <h3 className="text-sm font-semibold text-[#f0f2f5] group-hover:text-violet-400 transition-colors">For Recruiters</h3>
-            </div>
-            <p className="text-caption text-[#6b7280]">Screen candidates with AI-powered interview assessments.</p>
-          </Link>
         </div>
       </div>
 
       {/* SEO / Marketing sections */}
       <HowItWorks />
       <SocialProof />
+
+      {/* Quick access cards */}
+      <section className="px-4 sm:px-6 py-section">
+        <div className="max-w-[1100px] mx-auto text-center">
+          <h2 className="text-heading text-[#f0f2f5] mb-2">More Tools</h2>
+          <p className="text-body text-[#6b7280] mb-section">Explore more ways to prepare for your next opportunity</p>
+          <div className="grid sm:grid-cols-3 gap-element">
+            <Link href="/learn/practice" className="surface-card-bordered p-5 text-left group hover:border-[rgba(99,102,241,0.2)] transition-all">
+              <div className="flex items-center gap-3 mb-2">
+                <div className="w-10 h-10 rounded-xl bg-indigo-600/10 flex items-center justify-center">
+                  <svg className="w-5 h-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                  </svg>
+                </div>
+                <h3 className="text-sm font-semibold text-[#f0f2f5] group-hover:text-[#818cf8] transition-colors">Practice Sets</h3>
+              </div>
+              <p className="text-caption text-[#6b7280]">Personalized practice plans based on your profile and progress.</p>
+            </Link>
+            <Link href="/resume" className="surface-card-bordered p-5 text-left group hover:border-[rgba(16,185,129,0.2)] transition-all">
+              <div className="flex items-center gap-3 mb-2">
+                <div className="w-10 h-10 rounded-xl bg-emerald-600/10 flex items-center justify-center">
+                  <svg className="w-5 h-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                  </svg>
+                </div>
+                <h3 className="text-sm font-semibold text-[#f0f2f5] group-hover:text-emerald-400 transition-colors">Resume Tools</h3>
+              </div>
+              <p className="text-caption text-[#6b7280]">Build, tailor, and ATS-optimize your resume with AI.</p>
+            </Link>
+            <Link href="/hire" className="surface-card-bordered p-5 text-left group hover:border-[rgba(139,92,246,0.2)] transition-all">
+              <div className="flex items-center gap-3 mb-2">
+                <div className="w-10 h-10 rounded-xl bg-violet-600/10 flex items-center justify-center">
+                  <svg className="w-5 h-5 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
+                  </svg>
+                </div>
+                <h3 className="text-sm font-semibold text-[#f0f2f5] group-hover:text-violet-400 transition-colors">For Recruiters</h3>
+              </div>
+              <p className="text-caption text-[#6b7280]">Screen candidates with AI-powered interview assessments.</p>
+            </Link>
+          </div>
+        </div>
+      </section>
+
       <ResourceLinks />
     </main>
   )
@@ -373,23 +406,37 @@ function UnauthenticatedHome() {
           <h2 className="text-heading text-[#f0f2f5]">Simple Pricing</h2>
           <p className="text-body text-[#6b7280] mt-2">Start free. Upgrade when you&apos;re ready.</p>
           <div className="grid md:grid-cols-3 gap-component mt-section">
-            {[
-              { plan: 'Free', price: '$0', desc: '3 interviews/month', cta: 'Get Started', href: '/signup' },
-              { plan: 'Pro', price: '$19', desc: 'Unlimited interviews', cta: 'Coming Soon', href: '/pricing', featured: true },
-              { plan: 'Enterprise', price: 'Custom', desc: 'Team & org features', cta: 'Contact Us', href: '/pricing' },
-            ].map((p) => (
-              <div key={p.plan} className={`surface-card-bordered p-7 ${p.featured ? 'border-[rgba(99,102,241,0.15)]' : ''}`}>
-                {p.featured && <Badge variant="primary" className="mb-3">Popular</Badge>}
-                <p className="text-subheading text-[#f0f2f5]">{p.plan}</p>
-                <p className="text-display text-[#f0f2f5] mt-1">{p.price}</p>
-                <p className="text-caption text-[#6b7280] mt-1">{p.desc}</p>
-                <Link href={p.href} className="block mt-4">
-                  <Button variant={p.featured ? 'primary' : 'secondary'} size="md" isFullWidth>
-                    {p.cta}
-                  </Button>
+            {/* Free */}
+            <div className="surface-card-bordered p-7">
+              <p className="text-subheading text-[#f0f2f5]">Free</p>
+              <p className="text-display text-[#f0f2f5] mt-1">$0</p>
+              <p className="text-caption text-[#6b7280] mt-1">3 interviews/month</p>
+              <Link href="/signup" className="block mt-4">
+                <Button variant="secondary" size="md" isFullWidth>Get Started</Button>
+              </Link>
+            </div>
+            {/* Pro */}
+            <div className="surface-card-bordered p-7 border-[rgba(99,102,241,0.15)]">
+              <Badge variant="primary" className="mb-3">Popular</Badge>
+              <p className="text-subheading text-[#f0f2f5]">Pro</p>
+              <p className="text-display text-[#f0f2f5] mt-1">$19</p>
+              <p className="text-caption text-[#6b7280] mt-1">Unlimited interviews</p>
+              <div className="mt-4 space-y-2">
+                <Badge variant="caution">Coming Soon</Badge>
+                <Link href="/pricing" className="block">
+                  <Button variant="primary" size="md" isFullWidth>Get Early Access</Button>
                 </Link>
               </div>
-            ))}
+            </div>
+            {/* Enterprise */}
+            <div className="surface-card-bordered p-7">
+              <p className="text-subheading text-[#f0f2f5]">Enterprise</p>
+              <p className="text-display text-[#f0f2f5] mt-1">Custom</p>
+              <p className="text-caption text-[#6b7280] mt-1">Team & org features</p>
+              <Link href="/pricing" className="block mt-4">
+                <Button variant="secondary" size="md" isFullWidth>Contact Us</Button>
+              </Link>
+            </div>
           </div>
           <Link href="/pricing" className="text-caption text-[#818cf8] hover:text-[#6366f1] transition-colors mt-4 inline-block">
             Compare plans in detail &rarr;

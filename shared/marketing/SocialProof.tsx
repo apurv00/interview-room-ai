@@ -8,6 +8,7 @@ export default function SocialProof() {
   return (
     <section className="px-4 sm:px-6 py-section">
       <div className="max-w-[1100px] mx-auto">
+        <h2 className="text-heading text-[#f0f2f5] text-center mb-section">Platform at a Glance</h2>
         <div className="grid grid-cols-3 gap-component text-center">
           {stats.map((s) => (
             <div key={s.label}>
