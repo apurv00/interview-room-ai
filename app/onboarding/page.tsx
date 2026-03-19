@@ -69,7 +69,7 @@ interface ExtractedProfile {
 
 export default function OnboardingPage() {
   const router = useRouter()
-  const { data: session, status } = useSession()
+  const { data: session, status, update } = useSession()
   const [step, setStep] = useState(1)
   const [direction, setDirection] = useState(1) // 1 = forward, -1 = back
   const [loading, setLoading] = useState(true)
@@ -230,6 +230,8 @@ export default function OnboardingPage() {
           complete: true,
         }),
       })
+      // Refresh the JWT so middleware sees onboardingCompleted = true
+      await update()
     } catch { /* continue */ }
     setSaving(false)
     router.push('/')
@@ -618,11 +620,15 @@ export default function OnboardingPage() {
                 <button
                   onClick={async () => {
                     setSaving(true)
-                    await fetch('/api/onboarding', {
-                      method: 'PATCH',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ complete: true }),
-                    }).catch(() => {})
+                    try {
+                      await fetch('/api/onboarding', {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ complete: true }),
+                      })
+                      // Refresh the JWT so middleware sees onboardingCompleted = true
+                      await update()
+                    } catch { /* continue */ }
                     setSaving(false)
                     router.push('/')
                   }}
