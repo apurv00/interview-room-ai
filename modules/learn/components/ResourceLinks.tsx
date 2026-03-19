@@ -114,8 +114,13 @@ function ResourceItem({ resource, isRecommended }: { resource: Resource; isRecom
           {resource.title}
         </span>
         {isRecommended && (
-          <span className="ml-auto text-micro text-[#818cf8] bg-[rgba(99,102,241,0.08)] px-1.5 py-0.5 rounded flex-shrink-0">
-            For you
+          <span className="relative group/tip ml-auto flex-shrink-0">
+            <span className="text-micro text-[#818cf8] bg-[rgba(99,102,241,0.08)] px-1.5 py-0.5 rounded">
+              For you
+            </span>
+            <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 text-micro text-[#f0f2f5] bg-[#1c2539] border border-[rgba(255,255,255,0.10)] rounded opacity-0 group-hover/tip:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
+              Recommended based on your profile
+            </span>
           </span>
         )}
       </Link>

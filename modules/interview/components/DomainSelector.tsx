@@ -96,7 +96,7 @@ export default function DomainSelector({ selectedDomain, onSelect }: DomainSelec
           <button
             key={cat.key}
             onClick={() => setActiveCategory(cat.key)}
-            className={`px-3 py-1.5 rounded-[6px] text-sm font-medium transition-all duration-[120ms] ${
+            className={`px-4 py-2.5 rounded-[6px] text-sm font-medium transition-all duration-[120ms] ${
               activeCategory === cat.key
                 ? 'bg-[rgba(99,102,241,0.08)] text-[#818cf8] border border-[rgba(99,102,241,0.15)]'
                 : 'text-[#6b7280] hover:text-[#b0b8c4] hover:bg-[#151d2e]'
@@ -108,7 +108,7 @@ export default function DomainSelector({ selectedDomain, onSelect }: DomainSelec
       </div>
 
       {/* Carousel */}
-      <div className="relative group">
+      <div className="relative group overflow-hidden">
         {/* Left arrow */}
         <button
           onClick={() => scroll('left')}
@@ -130,6 +130,9 @@ export default function DomainSelector({ selectedDomain, onSelect }: DomainSelec
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
           </svg>
         </button>
+
+        {/* Mobile scroll fade indicator */}
+        <div className="absolute right-0 top-0 bottom-0 w-12 bg-gradient-to-l from-[var(--color-page)] to-transparent z-[5] pointer-events-none sm:hidden" />
 
         <div
           ref={scrollRef}
