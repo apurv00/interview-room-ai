@@ -73,7 +73,7 @@ export default function SelectionGroup<T>({
               key={cat.key}
               onClick={() => onFilter?.(cat.key)}
               className={`
-                px-3 py-1.5 rounded-[6px] text-micro font-medium whitespace-nowrap
+                px-4 py-2.5 rounded-[6px] text-micro font-medium whitespace-nowrap
                 transition-all duration-[120ms]
                 ${activeFilter === cat.key
                   ? 'bg-[rgba(99,102,241,0.08)] text-[#818cf8] border border-[rgba(99,102,241,0.15)]'
