@@ -17,6 +17,7 @@ permissions:
   contents: read
   id-token: write
 
+
 concurrency:
   group: qa-agent
   cancel-in-progress: true
