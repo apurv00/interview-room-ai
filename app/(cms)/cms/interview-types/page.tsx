@@ -52,7 +52,7 @@ export default function InterviewTypesListPage() {
     fetchTypes()
   }
 
-  if (loading) return <div className="text-slate-400">Loading interview types...</div>
+  if (loading) return <div className="text-[#536471]">Loading interview types...</div>
   if (error) return <div className="text-red-400">{error}</div>
 
   return (
@@ -67,10 +67,10 @@ export default function InterviewTypesListPage() {
         </Link>
       </div>
 
-      <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+      <div className="bg-white border border-[#e1e8ed] rounded-xl overflow-hidden">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-slate-800 text-left text-slate-400">
+            <tr className="border-b border-[#e1e8ed] text-left text-[#536471]">
               <th className="px-4 py-3">Slug</th>
               <th className="px-4 py-3">Label</th>
               <th className="px-4 py-3">Domains</th>
@@ -81,10 +81,10 @@ export default function InterviewTypesListPage() {
           </thead>
           <tbody>
             {types.map((t) => (
-              <tr key={t.slug} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+              <tr key={t.slug} className="border-b border-[#eff3f4] hover:bg-[#f7f9f9]">
                 <td className="px-4 py-3 font-mono text-xs">{t.slug}</td>
                 <td className="px-4 py-3">{t.label}</td>
-                <td className="px-4 py-3 text-xs text-slate-400">
+                <td className="px-4 py-3 text-xs text-[#536471]">
                   {t.applicableDomains?.length
                     ? t.applicableDomains.join(', ')
                     : 'All'}
@@ -105,7 +105,7 @@ export default function InterviewTypesListPage() {
                 <td className="px-4 py-3 space-x-2">
                   <Link
                     href={`/cms/interview-types/${t.slug}`}
-                    className="text-indigo-400 hover:text-indigo-300 text-xs"
+                    className="text-[#6366f1] hover:text-[#6366f1] text-xs"
                   >
                     Edit
                   </Link>
@@ -122,7 +122,7 @@ export default function InterviewTypesListPage() {
             ))}
             {types.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                <td colSpan={6} className="px-4 py-8 text-center text-[#8b98a5]">
                   No interview types found
                 </td>
               </tr>

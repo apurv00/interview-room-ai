@@ -68,9 +68,9 @@ const READINESS_STAGES = [
 ]
 
 const DIFFICULTY_COLORS: Record<string, string> = {
-  easy: 'bg-emerald-500/10 text-emerald-400',
-  medium: 'bg-amber-500/10 text-amber-400',
-  hard: 'bg-red-500/10 text-red-400',
+  easy: 'bg-emerald-500/10 text-[#059669]',
+  medium: 'bg-amber-500/10 text-[#d97706]',
+  hard: 'bg-red-500/10 text-[#f4212e]',
 }
 
 const TYPE_ICONS: Record<string, string> = {
@@ -122,9 +122,9 @@ export default function PathwayPage() {
     return (
       <main className="max-w-4xl mx-auto px-4 py-8">
         <div className="animate-pulse space-y-6">
-          <div className="h-8 bg-slate-800 rounded w-48" />
-          <div className="h-32 bg-slate-800 rounded-xl" />
-          <div className="h-48 bg-slate-800 rounded-xl" />
+          <div className="h-8 bg-[#eff3f4] rounded w-48" />
+          <div className="h-32 bg-[#eff3f4] rounded-xl" />
+          <div className="h-48 bg-[#eff3f4] rounded-xl" />
         </div>
       </main>
     )
@@ -135,8 +135,8 @@ export default function PathwayPage() {
   if (!pathway) {
     return (
       <main className="max-w-4xl mx-auto px-4 py-8 text-center py-16">
-        <h1 className="text-2xl font-bold text-[#f0f2f5] mb-4">Learning Pathway</h1>
-        <p className="text-[#6b7280] mb-6">Complete your first interview to generate a personalized learning pathway.</p>
+        <h1 className="text-2xl font-bold text-[#0f1419] mb-4">Learning Pathway</h1>
+        <p className="text-[#71767b] mb-6">Complete your first interview to generate a personalized learning pathway.</p>
         <a
           href="/lobby"
           className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors"
@@ -155,7 +155,7 @@ export default function PathwayPage() {
   return (
     <main className="max-w-4xl mx-auto px-4 py-8 space-y-8">
       <motion.h1
-        className="text-2xl font-bold text-[#f0f2f5]"
+        className="text-2xl font-bold text-[#0f1419]"
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
       >
@@ -170,12 +170,12 @@ export default function PathwayPage() {
         transition={{ delay: 0.1 }}
       >
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-[#f0f2f5]">Interview Readiness</h2>
-          <span className="text-2xl font-bold text-[#f0f2f5]">{pathway.readinessScore}/100</span>
+          <h2 className="text-sm font-semibold text-[#0f1419]">Interview Readiness</h2>
+          <span className="text-2xl font-bold text-[#0f1419]">{pathway.readinessScore}/100</span>
         </div>
 
         {/* Progress bar */}
-        <div className="relative h-2 bg-slate-800 rounded-full mb-4 overflow-hidden">
+        <div className="relative h-2 bg-[#eff3f4] rounded-full mb-4 overflow-hidden">
           <motion.div
             className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-red-500 via-amber-500 via-blue-500 to-emerald-500"
             initial={{ width: 0 }}
@@ -189,10 +189,10 @@ export default function PathwayPage() {
           {READINESS_STAGES.map((stage, i) => (
             <div key={stage.key} className="flex flex-col items-center gap-1">
               <div className={`w-3 h-3 rounded-full ${
-                i <= stageIndex ? stage.color : 'bg-slate-700'
+                i <= stageIndex ? stage.color : 'bg-[#e1e8ed]'
               }`} />
               <span className={`text-[10px] ${
-                i === stageIndex ? 'text-[#f0f2f5] font-medium' : 'text-[#4b5563]'
+                i === stageIndex ? 'text-[#0f1419] font-medium' : 'text-[#8b98a5]'
               }`}>
                 {stage.label}
               </span>
@@ -209,14 +209,14 @@ export default function PathwayPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.2 }}
         >
-          <h2 className="text-sm font-semibold text-[#f0f2f5] mb-4">
+          <h2 className="text-sm font-semibold text-[#0f1419] mb-4">
             Milestones ({achievedMilestones}/{pathway.milestones.length})
           </h2>
           <div className="space-y-3">
             {pathway.milestones.map((m, i) => (
               <div key={i} className="flex items-center gap-3">
                 <div className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${
-                  m.achieved ? 'bg-emerald-500' : 'bg-slate-700'
+                  m.achieved ? 'bg-emerald-500' : 'bg-[#e1e8ed]'
                 }`}>
                   {m.achieved && (
                     <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
@@ -225,12 +225,12 @@ export default function PathwayPage() {
                   )}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className={`text-sm ${m.achieved ? 'text-[#9ca3af] line-through' : 'text-[#d1d5db]'}`}>
+                  <div className={`text-sm ${m.achieved ? 'text-[#8b98a5] line-through' : 'text-[#536471]'}`}>
                     {m.name}
                   </div>
-                  <div className="text-xs text-[#4b5563]">{m.description}</div>
+                  <div className="text-xs text-[#8b98a5]">{m.description}</div>
                 </div>
-                <span className="text-xs text-[#6b7280] shrink-0">{m.currentScore}/{m.targetScore}</span>
+                <span className="text-xs text-[#71767b] shrink-0">{m.currentScore}/{m.targetScore}</span>
               </div>
             ))}
           </div>
@@ -245,11 +245,11 @@ export default function PathwayPage() {
         transition={{ delay: 0.3 }}
       >
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-[#f0f2f5]">
+          <h2 className="text-sm font-semibold text-[#0f1419]">
             Practice Tasks ({completedTasks}/{totalTasks})
           </h2>
           {totalTasks > 0 && (
-            <div className="w-24 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+            <div className="w-24 h-1.5 bg-[#eff3f4] rounded-full overflow-hidden">
               <div
                 className="h-full bg-blue-500 rounded-full transition-all"
                 style={{ width: `${(completedTasks / totalTasks) * 100}%` }}
@@ -263,7 +263,7 @@ export default function PathwayPage() {
             <div
               key={task.taskId}
               className={`flex items-start gap-3 p-3 rounded-xl transition-colors ${
-                task.completed ? 'bg-slate-800/20' : 'bg-slate-800/40'
+                task.completed ? 'bg-[#f7f9f9]' : 'bg-[#eff3f4]'
               }`}
             >
               <button
@@ -274,7 +274,7 @@ export default function PathwayPage() {
                     ? 'bg-emerald-500 border-emerald-500'
                     : completing === task.taskId
                     ? 'border-blue-500 animate-pulse'
-                    : 'border-slate-600 hover:border-blue-500'
+                    : 'border-[#e1e8ed] hover:border-blue-500'
                 }`}
               >
                 {task.completed && (
@@ -285,20 +285,20 @@ export default function PathwayPage() {
               </button>
 
               <div className="flex-1 min-w-0">
-                <div className={`text-sm ${task.completed ? 'text-[#6b7280] line-through' : 'text-[#d1d5db]'}`}>
+                <div className={`text-sm ${task.completed ? 'text-[#71767b] line-through' : 'text-[#536471]'}`}>
                   {task.title}
                 </div>
                 {task.description && (
-                  <div className="text-xs text-[#4b5563] mt-0.5">{task.description}</div>
+                  <div className="text-xs text-[#8b98a5] mt-0.5">{task.description}</div>
                 )}
                 <div className="flex items-center gap-2 mt-1.5">
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-[#9ca3af]">
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#eff3f4] text-[#8b98a5]">
                     {TYPE_ICONS[task.type]} {task.type.replace('_', ' ')}
                   </span>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${DIFFICULTY_COLORS[task.difficulty] || 'bg-slate-700 text-[#9ca3af]'}`}>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${DIFFICULTY_COLORS[task.difficulty] || 'bg-[#eff3f4] text-[#8b98a5]'}`}>
                     {task.difficulty}
                   </span>
-                  <span className="text-[10px] text-[#4b5563]">{task.estimatedMinutes}m</span>
+                  <span className="text-[10px] text-[#8b98a5]">{task.estimatedMinutes}m</span>
                   {task.type === 'drill' && !task.completed && (
                     <a
                       href={`/practice/drill?competency=${task.targetCompetency}`}
@@ -323,17 +323,17 @@ export default function PathwayPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.4 }}
         >
-          <h2 className="text-sm font-semibold text-[#f0f2f5] mb-4">Blocking Weaknesses</h2>
+          <h2 className="text-sm font-semibold text-[#0f1419] mb-4">Blocking Weaknesses</h2>
           <div className="space-y-3">
             {pathway.topBlockingWeaknesses.map((w, i) => (
               <div key={i} className="flex items-center gap-3 p-3 rounded-xl bg-red-500/5">
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm text-[#d1d5db] capitalize">{w.competency.replace(/_/g, ' ')}</div>
-                  <div className="text-xs text-[#6b7280] mt-0.5">{w.reason}</div>
+                  <div className="text-sm text-[#536471] capitalize">{w.competency.replace(/_/g, ' ')}</div>
+                  <div className="text-xs text-[#71767b] mt-0.5">{w.reason}</div>
                 </div>
                 <div className="text-right shrink-0">
-                  <div className="text-sm font-medium text-red-400">{w.currentScore}</div>
-                  <div className="text-[10px] text-[#4b5563]">target: {w.targetScore}</div>
+                  <div className="text-sm font-medium text-[#f4212e]">{w.currentScore}</div>
+                  <div className="text-[10px] text-[#8b98a5]">target: {w.targetScore}</div>
                 </div>
               </div>
             ))}
@@ -349,8 +349,8 @@ export default function PathwayPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.5 }}
         >
-          <h2 className="text-sm font-semibold text-[#f0f2f5] mb-3">Recommended Next Session</h2>
-          <p className="text-sm text-[#9ca3af] mb-4">{pathway.nextSessionRecommendation.reason}</p>
+          <h2 className="text-sm font-semibold text-[#0f1419] mb-3">Recommended Next Session</h2>
+          <p className="text-sm text-[#8b98a5] mb-4">{pathway.nextSessionRecommendation.reason}</p>
           <div className="flex items-center gap-3 flex-wrap mb-4">
             {pathway.nextSessionRecommendation.focusCompetencies.map(c => (
               <span key={c} className="text-xs px-2 py-1 rounded-lg bg-blue-500/10 text-blue-400 capitalize">

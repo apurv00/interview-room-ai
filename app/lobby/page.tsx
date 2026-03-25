@@ -208,7 +208,7 @@ export default function LobbyPage() {
 
   const StatusIcon = ({ status }: { status: CheckStatus }) => {
     if (status === 'pending') return (
-      <div className="w-5 h-5 rounded-full border-2 border-slate-600 border-t-indigo-400 animate-spin" />
+      <div className="w-5 h-5 rounded-full border-2 border-[#e1e8ed] border-t-[#6366f1] animate-spin" />
     )
     if (status === 'ok') return (
       <motion.div
@@ -249,10 +249,10 @@ export default function LobbyPage() {
       >
         {/* Header */}
         <motion.div className="text-center space-y-2" variants={itemVariants}>
-          <h1 className="text-2xl sm:text-3xl font-bold text-white">Pre-Interview Check</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold text-[#0f1419]">Pre-Interview Check</h1>
           {config && (
             <div className="space-y-2">
-              <p className="text-slate-400">
+              <p className="text-[#536471]">
                 {getDomainLabel(config.role)}
                 {config.interviewType && config.interviewType !== 'screening' && ` · ${config.interviewType.split('-').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}`}
                 {' '}· {config.experience} yrs · {config.duration} min session
@@ -262,20 +262,20 @@ export default function LobbyPage() {
               {(config.jdFileName || config.resumeFileName) && (
                 <div className="flex items-center justify-center gap-2.5 flex-wrap">
                   {config.jdFileName && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-xs text-emerald-400">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-xs text-emerald-600">
                       <DocIcon />
                       JD: {config.jdFileName}
                     </span>
                   )}
                   {config.resumeFileName && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-xs text-emerald-400">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-xs text-emerald-600">
                       <DocIcon />
                       Resume: {config.resumeFileName}
                     </span>
                   )}
                   <button
                     onClick={() => router.push('/')}
-                    className="text-xs text-slate-500 hover:text-indigo-400 transition underline underline-offset-2"
+                    className="text-xs text-[#71767b] hover:text-[#6366f1] transition underline underline-offset-2"
                   >
                     Change
                   </button>
@@ -288,7 +288,7 @@ export default function LobbyPage() {
         <div className="grid md:grid-cols-2 gap-5">
           {/* Camera preview */}
           <motion.div className="space-y-3" variants={itemVariants}>
-            <div className="relative aspect-video rounded-2xl overflow-hidden bg-slate-900 border border-slate-700/50">
+            <div className="relative aspect-video rounded-2xl overflow-hidden bg-[#f7f9f9] border border-[#e1e8ed]">
               <video
                 ref={videoRef}
                 autoPlay
@@ -296,7 +296,7 @@ export default function LobbyPage() {
                 playsInline
                 className="w-full h-full object-cover scale-x-[-1]"
               />
-              <div className="absolute bottom-3 left-3 bg-black/50 backdrop-blur-md px-3 py-1.5 rounded-lg border border-white/[0.06] text-xs text-slate-300 font-medium">
+              <div className="absolute bottom-3 left-3 bg-white/80 backdrop-blur-md px-3 py-1.5 rounded-lg border border-[#e1e8ed] text-xs text-[#536471] font-medium">
                 Camera preview
               </div>
 
@@ -304,13 +304,13 @@ export default function LobbyPage() {
               <AnimatePresence>
                 {joining && (
                   <motion.div
-                    className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center gap-3"
+                    className="absolute inset-0 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3"
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                   >
                     <motion.div
-                      className="text-4xl font-bold text-white"
+                      className="text-4xl font-bold text-[#0f1419]"
                       key={joinCountdown}
                       initial={{ scale: 0.5, opacity: 0 }}
                       animate={{ scale: 1, opacity: 1 }}
@@ -319,7 +319,7 @@ export default function LobbyPage() {
                     >
                       {joinCountdown || ''}
                     </motion.div>
-                    <p className="text-sm text-slate-300">Joining interview room...</p>
+                    <p className="text-sm text-[#536471]">Joining interview room...</p>
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -328,17 +328,17 @@ export default function LobbyPage() {
             {/* Audio level meter */}
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
-                <span className="text-xs text-slate-500 font-medium">Microphone level</span>
-                <span className="text-xs text-slate-600 tabular-nums font-mono">{Math.round(audioLevel)}%</span>
+                <span className="text-xs text-[#71767b] font-medium">Microphone level</span>
+                <span className="text-xs text-[#8b98a5] tabular-nums font-mono">{Math.round(audioLevel)}%</span>
               </div>
-              <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+              <div className="h-1.5 bg-[#eff3f4] rounded-full overflow-hidden">
                 <motion.div
                   className="h-full rounded-full"
                   animate={{ width: `${audioLevel}%`, backgroundColor: meterColor }}
                   transition={{ duration: 0.075, ease: 'linear' }}
                 />
               </div>
-              <p className="text-xs text-slate-600">
+              <p className="text-xs text-[#8b98a5]">
                 {audioLevel > 20 ? 'Mic is picking up audio — you\'re good to go.' : 'Say something to test your microphone.'}
               </p>
             </div>
@@ -347,19 +347,19 @@ export default function LobbyPage() {
           {/* Checks + tips */}
           <motion.div className="space-y-4" variants={itemVariants}>
             {/* System checks */}
-            <div className="bg-slate-900/80 backdrop-blur-sm border border-slate-700/50 rounded-2xl p-5 space-y-4">
-              <h2 className="text-sm font-semibold text-slate-300">System checks</h2>
+            <div className="bg-white backdrop-blur-sm border border-[#e1e8ed] rounded-2xl p-5 space-y-4">
+              <h2 className="text-sm font-semibold text-[#0f1419]">System checks</h2>
               {checks.map((check) => (
                 <div key={check.label} className="flex items-center gap-3">
                   <StatusIcon status={check.status} />
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm text-slate-200">{check.label}</div>
+                    <div className="text-sm text-[#0f1419]">{check.label}</div>
                     <AnimatePresence>
                       {check.detail && (
                         <motion.div
                           initial={{ opacity: 0, height: 0 }}
                           animate={{ opacity: 1, height: 'auto' }}
-                          className={`text-xs ${check.status === 'error' ? 'text-red-400' : 'text-slate-500'}`}
+                          className={`text-xs ${check.status === 'error' ? 'text-[#f4212e]' : 'text-[#71767b]'}`}
                         >
                           {check.detail}
                         </motion.div>
@@ -391,8 +391,8 @@ export default function LobbyPage() {
                   className={`
                     w-full py-4 rounded-2xl font-semibold text-sm transition-colors
                     ${allOk
-                      ? 'bg-indigo-600 hover:bg-indigo-500 text-white btn-glow'
-                      : 'bg-slate-800 text-slate-600 cursor-not-allowed border border-slate-700'
+                      ? 'bg-[#6366f1] hover:bg-indigo-500 text-white btn-glow'
+                      : 'bg-[#f7f9f9] text-[#8b98a5] cursor-not-allowed border border-[#e1e8ed]'
                     }
                   `}
                   initial={{ opacity: 0, y: 8 }}
@@ -404,12 +404,12 @@ export default function LobbyPage() {
               ) : (
                 <motion.div
                   key="joining-state"
-                  className="w-full py-4 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 flex items-center justify-center gap-3"
+                  className="w-full py-4 rounded-2xl bg-[#6366f1]/10 border border-[#6366f1]/20 flex items-center justify-center gap-3"
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
                 >
-                  <div className="w-4 h-4 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
-                  <span className="text-indigo-300 text-sm font-medium">Interviewer joining...</span>
+                  <div className="w-4 h-4 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
+                  <span className="text-[#6366f1] text-sm font-medium">Interviewer joining...</span>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -419,7 +419,7 @@ export default function LobbyPage() {
         <motion.div className="text-center" variants={itemVariants}>
           <button
             onClick={() => router.push('/')}
-            className="text-sm text-slate-500 hover:text-slate-300 transition inline-flex items-center gap-1.5"
+            className="text-sm text-[#71767b] hover:text-[#0f1419] transition inline-flex items-center gap-1.5"
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />

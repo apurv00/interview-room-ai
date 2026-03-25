@@ -8,8 +8,8 @@ interface CoachingNudgeProps {
 }
 
 const SEVERITY_STYLES = {
-  warning: 'border-amber-500/30 bg-amber-500/10 text-amber-300',
-  info: 'border-slate-600/40 bg-slate-800/80 text-slate-300',
+  warning: 'border-amber-500/30 bg-amber-500/10 text-amber-600',
+  info: 'border-[#e1e8ed] bg-white text-[#536471]',
 }
 
 const ICONS = {

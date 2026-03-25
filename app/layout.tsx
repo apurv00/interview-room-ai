@@ -7,13 +7,10 @@ import JsonLd from '@shared/seo/JsonLd'
 import { siteConfig } from '@shared/siteConfig'
 import './globals.css'
 
-// Inline script to prevent FOUC — runs before React hydrates
-const themeScript = `(function(){var t=localStorage.getItem('theme');var d=document.documentElement;if(t==='light')d.classList.add('light');else if(t==='dark')d.classList.remove('light');else if(window.matchMedia('(prefers-color-scheme:light)').matches)d.classList.add('light');})()`
-
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
-  themeColor: '#070b14',
+  themeColor: '#ffffff',
 }
 
 export const metadata: Metadata = {
@@ -62,10 +59,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
-      </head>
+    <html lang="en">
       <body className="min-h-screen bg-page text-[var(--foreground)] antialiased">
         <JsonLd
           data={{

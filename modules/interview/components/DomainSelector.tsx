@@ -98,8 +98,8 @@ export default function DomainSelector({ selectedDomain, onSelect }: DomainSelec
             onClick={() => setActiveCategory(cat.key)}
             className={`px-4 py-2.5 rounded-[6px] text-sm font-medium transition-all duration-[120ms] ${
               activeCategory === cat.key
-                ? 'bg-[rgba(99,102,241,0.08)] text-[#818cf8] border border-[rgba(99,102,241,0.15)]'
-                : 'text-[#6b7280] hover:text-[#b0b8c4] hover:bg-[#151d2e]'
+                ? 'bg-[rgba(99,102,241,0.08)] text-[#6366f1] border border-[rgba(99,102,241,0.15)]'
+                : 'text-[#71767b] hover:text-[#536471] hover:bg-[#f7f9f9]'
             }`}
           >
             {cat.label}
@@ -112,7 +112,7 @@ export default function DomainSelector({ selectedDomain, onSelect }: DomainSelec
         {/* Left arrow */}
         <button
           onClick={() => scroll('left')}
-          className="absolute left-0 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full bg-[#0c1220]/90 border border-[rgba(255,255,255,0.10)] flex items-center justify-center text-[#b0b8c4] hover:text-[#f0f2f5] hover:bg-[#151d2e] transition opacity-0 group-hover:opacity-100 -ml-3 hidden sm:flex"
+          className="absolute left-0 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full bg-white/90 border border-[#e1e8ed] flex items-center justify-center text-[#536471] hover:text-[#0f1419] hover:bg-[#f7f9f9] transition opacity-0 group-hover:opacity-100 -ml-3 hidden sm:flex"
           aria-label="Scroll left"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -123,7 +123,7 @@ export default function DomainSelector({ selectedDomain, onSelect }: DomainSelec
         {/* Right arrow */}
         <button
           onClick={() => scroll('right')}
-          className="absolute right-0 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full bg-[#0c1220]/90 border border-[rgba(255,255,255,0.10)] flex items-center justify-center text-[#b0b8c4] hover:text-[#f0f2f5] hover:bg-[#151d2e] transition opacity-0 group-hover:opacity-100 -mr-3 hidden sm:flex"
+          className="absolute right-0 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full bg-white/90 border border-[#e1e8ed] flex items-center justify-center text-[#536471] hover:text-[#0f1419] hover:bg-[#f7f9f9] transition opacity-0 group-hover:opacity-100 -mr-3 hidden sm:flex"
           aria-label="Scroll right"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -152,13 +152,13 @@ export default function DomainSelector({ selectedDomain, onSelect }: DomainSelec
                 className={`flex-shrink-0 snap-start w-[180px] h-[120px] rounded-[10px] bg-gradient-to-br ${gradient} flex flex-col items-center justify-center gap-2 transition-all duration-[120ms] border-2 ${
                   isSelected
                     ? 'border-[#6366f1] ring-2 ring-[rgba(99,102,241,0.3)]'
-                    : 'border-transparent hover:border-[rgba(255,255,255,0.15)]'
+                    : 'border-transparent hover:border-[#e1e8ed]'
                 }`}
               >
-                <span className="text-subheading text-[#f0f2f5] font-semibold">
+                <span className="text-subheading text-[#0f1419] font-semibold">
                   {d.shortLabel || d.label}
                 </span>
-                <span className="text-caption text-[#b0b8c4]">{d.label}</span>
+                <span className="text-caption text-[#536471]">{d.label}</span>
               </button>
             )
           })}
@@ -170,9 +170,9 @@ export default function DomainSelector({ selectedDomain, onSelect }: DomainSelec
         <div className="surface-card p-4">
           <div className="flex items-center gap-2 mb-1">
             <span className="text-lg">{selectedDomainData.icon}</span>
-            <span className="text-subheading text-[#f0f2f5]">{selectedDomainData.label}</span>
+            <span className="text-subheading text-[#0f1419]">{selectedDomainData.label}</span>
           </div>
-          <p className="text-body text-[#b0b8c4]">{selectedDomainData.description}</p>
+          <p className="text-body text-[#536471]">{selectedDomainData.description}</p>
         </div>
       )}
     </div>

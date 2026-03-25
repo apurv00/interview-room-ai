@@ -47,7 +47,7 @@ export default function ShareButton({ sessionId }: ShareButtonProps) {
       <div className="flex items-center gap-2">
         <button
           onClick={copyLink}
-          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 text-[#d1d5db] hover:bg-slate-700 transition-colors"
+          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[#f7f9f9] text-[#536471] hover:bg-[#eff3f4] transition-colors"
         >
           {copied ? 'Copied!' : 'Copy Link'}
         </button>
@@ -63,7 +63,7 @@ export default function ShareButton({ sessionId }: ShareButtonProps) {
           href={`https://twitter.com/intent/tweet?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent('Check out my interview scorecard!')}`}
           target="_blank"
           rel="noopener noreferrer"
-          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 text-[#d1d5db] hover:bg-slate-700 transition-colors"
+          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[#f7f9f9] text-[#536471] hover:bg-[#eff3f4] transition-colors"
         >
           X
         </a>
@@ -75,7 +75,7 @@ export default function ShareButton({ sessionId }: ShareButtonProps) {
     <button
       onClick={generateLink}
       disabled={loading}
-      className="px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white transition-colors"
+      className="px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-600 hover:bg-blue-500 disabled:bg-[#eff3f4] text-white transition-colors"
     >
       {loading ? 'Generating...' : 'Share Scorecard'}
     </button>

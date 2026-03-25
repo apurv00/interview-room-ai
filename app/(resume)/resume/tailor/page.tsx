@@ -142,22 +142,22 @@ export default function TailorPage() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      <h1 className="text-2xl font-bold text-white">Tailor Resume for Job</h1>
-      <p className="text-sm text-slate-400">
+      <h1 className="text-2xl font-bold text-[#0f1419]">Tailor Resume for Job</h1>
+      <p className="text-sm text-[#536471]">
         Upload your resume and paste a job description. AI will tailor your resume to highlight the most relevant experience.
       </p>
 
       {!result ? (
         <div className="space-y-6">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
-            <h2 className="text-sm font-semibold text-slate-300">Your Resume</h2>
+          <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
+            <h2 className="text-sm font-semibold text-[#536471]">Your Resume</h2>
 
             {savedResumes.length > 0 && (
               <div>
-                <label className="text-[10px] text-slate-500 uppercase tracking-wider">From Saved Resumes</label>
+                <label className="text-[10px] text-[#71767b] uppercase tracking-wider">From Saved Resumes</label>
                 <select
                   onChange={e => e.target.value && handleSelectSaved(e.target.value)}
-                  className="w-full mt-1 px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full mt-1 px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   defaultValue=""
                 >
                   <option value="">Choose a saved resume...</option>
@@ -168,41 +168,41 @@ export default function TailorPage() {
               </div>
             )}
 
-            {savedResumes.length > 0 && <div className="text-center text-[10px] text-slate-600">or</div>}
+            {savedResumes.length > 0 && <div className="text-center text-[10px] text-[#8b98a5]">or</div>}
 
             {!resumeText ? (
               <FileDropzone label="Upload Resume" isUploading={uploading} onFileSelect={handleUpload} onRemove={() => {}} onError={setError} />
             ) : (
               <div className="flex items-center justify-between bg-emerald-500/5 border border-emerald-500/15 rounded-xl px-4 py-3">
                 <div className="flex items-center gap-2">
-                  <svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <svg className="w-4 h-4 text-[#059669]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                   </svg>
-                  <span className="text-sm text-emerald-300">{resumeFileName || 'Resume loaded'}</span>
-                  <span className="text-[10px] text-slate-500">({resumeSource === 'saved' ? 'saved' : 'uploaded'})</span>
+                  <span className="text-sm text-[#059669]">{resumeFileName || 'Resume loaded'}</span>
+                  <span className="text-[10px] text-[#71767b]">({resumeSource === 'saved' ? 'saved' : 'uploaded'})</span>
                 </div>
-                <button onClick={() => { setResumeText(''); setResumeFileName('') }} className="text-xs text-slate-500 hover:text-slate-300">
+                <button onClick={() => { setResumeText(''); setResumeFileName('') }} className="text-xs text-[#71767b] hover:text-[#536471]">
                   Remove
                 </button>
               </div>
             )}
           </div>
 
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
-            <h2 className="text-sm font-semibold text-slate-300">Job Description</h2>
+          <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
+            <h2 className="text-sm font-semibold text-[#536471]">Job Description</h2>
             <input
               type="text"
               value={companyName}
               onChange={e => setCompanyName(e.target.value)}
               placeholder="Company name (optional)"
-              className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500"
             />
             <textarea
               value={jobDescription}
               onChange={e => setJobDescription(e.target.value)}
               placeholder="Paste the job description here..."
               rows={8}
-              className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
+              className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
             />
           </div>
 
@@ -226,26 +226,26 @@ export default function TailorPage() {
               <p className="text-xs text-red-400">{error}</p>
             </div>
           )}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center">
-            <p className="text-sm text-slate-400 mb-2">Job Match Score</p>
-            <p className={`text-4xl font-bold ${result.matchScore >= 80 ? 'text-emerald-400' : result.matchScore >= 60 ? 'text-amber-400' : 'text-red-400'}`}>
+          <div className="bg-white border border-[#e1e8ed] rounded-2xl p-6 text-center">
+            <p className="text-sm text-[#536471] mb-2">Job Match Score</p>
+            <p className={`text-4xl font-bold ${result.matchScore >= 80 ? 'text-[#059669]' : result.matchScore >= 60 ? 'text-amber-400' : 'text-red-400'}`}>
               {result.matchScore}%
             </p>
           </div>
 
           <div className="grid md:grid-cols-2 gap-4">
             {result.addedKeywords.length > 0 && (
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
-                <h3 className="text-xs font-semibold text-emerald-400 uppercase tracking-wider mb-2">Keywords Added</h3>
+              <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5">
+                <h3 className="text-xs font-semibold text-[#059669] uppercase tracking-wider mb-2">Keywords Added</h3>
                 <div className="flex flex-wrap gap-1.5">
                   {result.addedKeywords.map((k, i) => (
-                    <span key={i} className="px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/20 rounded text-[10px] text-emerald-400">{k}</span>
+                    <span key={i} className="px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/20 rounded text-[10px] text-[#059669]">{k}</span>
                   ))}
                 </div>
               </div>
             )}
             {result.missingKeywords.length > 0 && (
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+              <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5">
                 <h3 className="text-xs font-semibold text-amber-400 uppercase tracking-wider mb-2">Still Missing</h3>
                 <div className="flex flex-wrap gap-1.5">
                   {result.missingKeywords.map((k, i) => (
@@ -257,43 +257,43 @@ export default function TailorPage() {
           </div>
 
           {result.changes.length > 0 && (
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
-              <h3 className="text-sm font-semibold text-slate-300">Changes Made</h3>
+            <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
+              <h3 className="text-sm font-semibold text-[#536471]">Changes Made</h3>
               {result.changes.map((c, i) => (
                 <div key={i} className="border-l-2 border-emerald-500/30 pl-3 py-1">
-                  <p className="text-xs font-medium text-slate-300">{c.section}</p>
-                  <p className="text-[11px] text-slate-400 mt-0.5">{c.change}</p>
-                  <p className="text-[10px] text-slate-500 mt-0.5">{c.reason}</p>
+                  <p className="text-xs font-medium text-[#536471]">{c.section}</p>
+                  <p className="text-[11px] text-[#536471] mt-0.5">{c.change}</p>
+                  <p className="text-[10px] text-[#71767b] mt-0.5">{c.reason}</p>
                 </div>
               ))}
             </div>
           )}
 
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
+          <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-slate-300">Tailored Resume</h3>
+              <h3 className="text-sm font-semibold text-[#536471]">Tailored Resume</h3>
               <div className="flex gap-2">
                 <button
                   onClick={() => navigator.clipboard.writeText(result.tailoredResume)}
-                  className="px-3 py-1.5 bg-emerald-600/10 border border-emerald-500/20 text-emerald-400 text-[10px] rounded-lg font-medium hover:bg-emerald-600/20 transition-colors"
+                  className="px-3 py-1.5 bg-emerald-600/10 border border-emerald-500/20 text-[#059669] text-[10px] rounded-lg font-medium hover:bg-emerald-600/20 transition-colors"
                 >
                   Copy
                 </button>
                 <button
                   onClick={handleSaveAsCopy}
                   disabled={savingCopy}
-                  className="px-3 py-1.5 bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 text-[10px] rounded-lg font-medium hover:bg-indigo-600/30 transition-colors disabled:opacity-50"
+                  className="px-3 py-1.5 bg-indigo-600/10 border border-indigo-500/20 text-[#6366f1] text-[10px] rounded-lg font-medium hover:bg-indigo-600/20 transition-colors disabled:opacity-50"
                 >
                   {savingCopy ? 'Parsing & Saving...' : 'Save as New Resume'}
                 </button>
               </div>
             </div>
-            <pre className="whitespace-pre-wrap text-xs text-slate-300 bg-slate-800 rounded-xl p-4 max-h-96 overflow-y-auto">
+            <pre className="whitespace-pre-wrap text-xs text-[#536471] bg-[#f7f9f9] rounded-xl p-4 max-h-96 overflow-y-auto">
               {result.tailoredResume}
             </pre>
           </div>
 
-          <button onClick={() => setResult(null)} className="text-sm text-indigo-400 hover:text-indigo-300 transition-colors">
+          <button onClick={() => setResult(null)} className="text-sm text-[#6366f1] hover:text-indigo-500 transition-colors">
             Start Over
           </button>
         </div>

@@ -77,7 +77,7 @@ export default function DailyChallengeCard() {
   }, [])
 
   if (loading) {
-    return <div className="h-48 bg-slate-800 rounded-xl animate-pulse" />
+    return <div className="h-48 bg-[#f7f9f9] rounded-xl animate-pulse" />
   }
 
   if (!challenge) return null
@@ -87,8 +87,8 @@ export default function DailyChallengeCard() {
     return (
       <div className="surface-card-bordered p-5">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-semibold text-[#f0f2f5]">Daily Challenge</h2>
-          <span className="text-xs text-[#6b7280]">Next in {timeLeft}</span>
+          <h2 className="text-sm font-semibold text-[#0f1419]">Daily Challenge</h2>
+          <span className="text-xs text-[#71767b]">Next in {timeLeft}</span>
         </div>
         {result ? (
           <DailyChallengeResult
@@ -110,26 +110,26 @@ export default function DailyChallengeCard() {
   return (
     <div className="surface-card-bordered p-5">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-sm font-semibold text-[#f0f2f5]">Daily Challenge</h2>
-        <div className="flex items-center gap-2 text-xs text-[#6b7280]">
-          <span className="px-2 py-0.5 bg-[#1e293b] rounded text-[#9ca3af] capitalize">{challenge.domain.replace('-', ' ')}</span>
+        <h2 className="text-sm font-semibold text-[#0f1419]">Daily Challenge</h2>
+        <div className="flex items-center gap-2 text-xs text-[#71767b]">
+          <span className="px-2 py-0.5 bg-[#eff3f4] rounded text-[#536471] capitalize">{challenge.domain.replace('-', ' ')}</span>
           <span>{challenge.participantCount} participants</span>
         </div>
       </div>
 
-      <p className="text-sm text-[#d1d5db] mb-4 leading-relaxed">{challenge.question}</p>
+      <p className="text-sm text-[#536471] mb-4 leading-relaxed">{challenge.question}</p>
 
       <textarea
         value={answer}
         onChange={e => setAnswer(e.target.value)}
         placeholder="Type your answer here... (minimum 10 characters)"
-        className="w-full bg-[#0f172a] border border-[rgba(255,255,255,0.08)] rounded-lg px-3 py-2 text-sm text-[#d1d5db] placeholder-[#4b5563] focus:outline-none focus:border-[#6366f1] resize-none"
+        className="w-full bg-[#f7f9f9] border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:border-[#6366f1] resize-none"
         rows={5}
         maxLength={5000}
       />
 
       <div className="flex items-center justify-between mt-3">
-        <span className="text-micro text-[#4b5563]">{answer.length}/5000</span>
+        <span className="text-micro text-[#8b98a5]">{answer.length}/5000</span>
         <button
           onClick={handleSubmit}
           disabled={answer.length < 10 || submitting}

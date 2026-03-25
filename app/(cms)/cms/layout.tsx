@@ -15,12 +15,12 @@ export default function CmsLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname()
 
   return (
-    <div className="flex min-h-screen bg-[#070b14] text-white">
+    <div className="flex min-h-screen bg-white text-[#0f1419]">
       {/* Sidebar */}
-      <aside className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col">
-        <div className="p-6 border-b border-slate-800">
-          <h1 className="text-xl font-bold text-indigo-400">CMS Admin</h1>
-          <p className="text-xs text-slate-500 mt-1">Interview Prep Guru</p>
+      <aside className="w-64 bg-white border-r border-[#e1e8ed] flex flex-col">
+        <div className="p-6 border-b border-[#e1e8ed]">
+          <h1 className="text-xl font-bold text-[#6366f1]">CMS Admin</h1>
+          <p className="text-xs text-[#8b98a5] mt-1">Interview Prep Guru</p>
         </div>
         <nav className="flex-1 p-4 space-y-1">
           {navItems.map((item) => {
@@ -34,8 +34,8 @@ export default function CmsLayout({ children }: { children: ReactNode }) {
                 href={item.href}
                 className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
                   isActive
-                    ? 'bg-indigo-600/20 text-indigo-400 font-medium'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                    ? 'bg-indigo-600/20 text-[#6366f1] font-medium'
+                    : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#f7f9f9]'
                 }`}
               >
                 <span>{item.icon}</span>
@@ -44,10 +44,10 @@ export default function CmsLayout({ children }: { children: ReactNode }) {
             )
           })}
         </nav>
-        <div className="p-4 border-t border-slate-800">
+        <div className="p-4 border-t border-[#e1e8ed]">
           <Link
             href="/"
-            className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
+            className="text-xs text-[#8b98a5] hover:text-[#536471] transition-colors"
           >
             Back to main app
           </Link>

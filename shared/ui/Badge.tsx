@@ -8,19 +8,19 @@ interface BadgeProps {
 }
 
 const variantClasses: Record<BadgeVariant, string> = {
-  default: 'bg-surface border-[rgba(255,255,255,0.10)] text-[#b0b8c4]',
-  primary: 'bg-[rgba(99,102,241,0.08)] border-[rgba(99,102,241,0.15)] text-[#818cf8]',
-  success: 'bg-[rgba(16,185,129,0.08)] border-[rgba(16,185,129,0.15)] text-[#34d399]',
-  caution: 'bg-[rgba(245,158,11,0.08)] border-[rgba(245,158,11,0.15)] text-[#fbbf24]',
-  danger: 'bg-[rgba(239,68,68,0.08)] border-[rgba(239,68,68,0.15)] text-[#f87171]',
+  default: 'bg-[#eff3f4] border-[#e1e8ed] text-[#536471]',
+  primary: 'bg-[rgba(99,102,241,0.08)] border-[rgba(99,102,241,0.15)] text-[#6366f1]',
+  success: 'bg-[rgba(16,185,129,0.08)] border-[rgba(16,185,129,0.2)] text-[#059669]',
+  caution: 'bg-[rgba(245,158,11,0.08)] border-[rgba(245,158,11,0.2)] text-[#d97706]',
+  danger: 'bg-[rgba(244,33,46,0.06)] border-[rgba(244,33,46,0.15)] text-[#f4212e]',
 }
 
 const dotColors: Record<BadgeVariant, string> = {
-  default: 'bg-[#b0b8c4]',
-  primary: 'bg-[#818cf8]',
-  success: 'bg-[#34d399]',
-  caution: 'bg-[#fbbf24]',
-  danger: 'bg-[#f87171]',
+  default: 'bg-[#536471]',
+  primary: 'bg-[#6366f1]',
+  success: 'bg-[#059669]',
+  caution: 'bg-[#d97706]',
+  danger: 'bg-[#f4212e]',
 }
 
 export default function Badge({ variant = 'default', dot = false, children, className = '' }: BadgeProps) {

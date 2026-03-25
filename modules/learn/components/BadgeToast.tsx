@@ -31,15 +31,15 @@ export default function BadgeToast({ icon, name, xpReward, onDismiss }: BadgeToa
           exit={{ opacity: 0, x: 30, scale: 0.95 }}
           transition={{ type: 'spring', damping: 15 }}
         >
-          <div className="bg-[#1e293b] border border-[rgba(255,255,255,0.1)] text-white px-5 py-3 rounded-xl shadow-lg flex items-center gap-3">
+          <div className="bg-white border border-[#e1e8ed] text-[#0f1419] px-5 py-3 rounded-xl shadow-lg flex items-center gap-3">
             <span className="text-2xl">{icon}</span>
             <div>
-              <p className="text-sm font-bold text-[#f0f2f5]">Badge Earned!</p>
-              <p className="text-xs text-[#9ca3af]">{name} — +{xpReward} XP</p>
+              <p className="text-sm font-bold text-[#0f1419]">Badge Earned!</p>
+              <p className="text-xs text-[#536471]">{name} — +{xpReward} XP</p>
             </div>
             <button
               onClick={() => { setVisible(false); onDismiss() }}
-              className="ml-2 text-[#6b7280] hover:text-[#f0f2f5] text-sm"
+              className="ml-2 text-[#71767b] hover:text-[#0f1419] text-sm"
             >
               ✕
             </button>

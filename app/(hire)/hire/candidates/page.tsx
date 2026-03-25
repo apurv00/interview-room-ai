@@ -47,7 +47,7 @@ export default function CandidatesPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <div className="w-6 h-6 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
+        <div className="w-6 h-6 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
       </div>
     )
   }
@@ -55,7 +55,7 @@ export default function CandidatesPage() {
   return (
     <div className="max-w-6xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-white">Candidates</h1>
+        <h1 className="text-2xl font-bold text-[#0f1419]">Candidates</h1>
         <Link
           href="/hire/invite"
           className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm rounded-xl font-medium transition-colors"
@@ -65,13 +65,13 @@ export default function CandidatesPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex gap-1 bg-slate-900 border border-slate-800 rounded-xl p-1 w-fit">
+      <div className="flex gap-1 bg-white border border-[#e1e8ed] rounded-xl p-1 w-fit">
         {['all', 'created', 'in_progress', 'completed'].map(f => (
           <button
             key={f}
             onClick={() => { setStatusFilter(f); setLoading(true) }}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-              statusFilter === f ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
+              statusFilter === f ? 'bg-indigo-600 text-white' : 'text-[#536471] hover:text-[#0f1419]'
             }`}
           >
             {f === 'all' ? 'All' : f.replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase())}
@@ -80,27 +80,27 @@ export default function CandidatesPage() {
       </div>
 
       {candidates.length === 0 ? (
-        <div className="text-center py-12 bg-slate-900 border border-slate-800 rounded-2xl">
-          <p className="text-slate-400">No candidates found.</p>
+        <div className="text-center py-12 bg-white border border-[#e1e8ed] rounded-2xl">
+          <p className="text-[#536471]">No candidates found.</p>
         </div>
       ) : (
         <div className="space-y-3">
           {candidates.map(c => (
-            <div key={c.id} className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+            <div key={c.id} className="bg-white border border-[#e1e8ed] rounded-2xl overflow-hidden">
               {/* Summary row */}
               <button
                 onClick={() => setExpandedId(expandedId === c.id ? null : c.id)}
-                className="w-full flex items-center justify-between p-4 hover:bg-slate-800/30 transition-colors text-left"
+                className="w-full flex items-center justify-between p-4 hover:bg-[#f7f9f9] transition-colors text-left"
               >
                 <div className="flex items-center gap-4 min-w-0">
-                  <div className="w-9 h-9 rounded-full bg-indigo-600/20 flex items-center justify-center text-indigo-400 text-sm font-bold flex-shrink-0">
+                  <div className="w-9 h-9 rounded-full bg-indigo-600/20 flex items-center justify-center text-[#6366f1] text-sm font-bold flex-shrink-0">
                     {(c.candidateName || c.candidateEmail)?.[0]?.toUpperCase() || '?'}
                   </div>
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-white truncate">
+                    <p className="text-sm font-medium text-[#0f1419] truncate">
                       {c.candidateName || c.candidateEmail}
                     </p>
-                    <p className="text-[11px] text-slate-500">{c.role} &middot; {c.interviewType}</p>
+                    <p className="text-[11px] text-[#8b98a5]">{c.role} &middot; {c.interviewType}</p>
                   </div>
                 </div>
 
@@ -108,20 +108,20 @@ export default function CandidatesPage() {
                   {c.overallScore !== null && (
                     <div className="text-right">
                       <p className={`text-lg font-bold ${
-                        c.overallScore >= 75 ? 'text-emerald-400' : c.overallScore >= 55 ? 'text-amber-400' : 'text-red-400'
+                        c.overallScore >= 75 ? 'text-[#059669]' : c.overallScore >= 55 ? 'text-amber-400' : 'text-red-400'
                       }`}>{c.overallScore}</p>
-                      <p className="text-[10px] text-slate-500">{c.passProb} pass</p>
+                      <p className="text-[10px] text-[#8b98a5]">{c.passProb} pass</p>
                     </div>
                   )}
                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                    c.status === 'completed' ? 'bg-emerald-500/20 text-emerald-400' :
+                    c.status === 'completed' ? 'bg-emerald-500/20 text-[#059669]' :
                     c.status === 'in_progress' ? 'bg-amber-500/20 text-amber-400' :
-                    c.status === 'created' ? 'bg-indigo-500/20 text-indigo-400' :
-                    'bg-slate-700 text-slate-400'
+                    c.status === 'created' ? 'bg-indigo-500/20 text-[#6366f1]' :
+                    'bg-[#f7f9f9] text-[#536471]'
                   }`}>
                     {c.status.replace(/_/g, ' ')}
                   </span>
-                  <svg className={`w-4 h-4 text-slate-500 transition-transform ${expandedId === c.id ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <svg className={`w-4 h-4 text-[#8b98a5] transition-transform ${expandedId === c.id ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
                   </svg>
                 </div>
@@ -129,32 +129,32 @@ export default function CandidatesPage() {
 
               {/* Expanded details */}
               {expandedId === c.id && (
-                <div className="border-t border-slate-800 p-4 space-y-3 animate-fade-in">
+                <div className="border-t border-[#e1e8ed] p-4 space-y-3 animate-fade-in">
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
                     <div>
-                      <span className="text-slate-500">Email</span>
-                      <p className="text-slate-300 mt-0.5">{c.candidateEmail}</p>
+                      <span className="text-[#8b98a5]">Email</span>
+                      <p className="text-[#536471] mt-0.5">{c.candidateEmail}</p>
                     </div>
                     <div>
-                      <span className="text-slate-500">Experience</span>
-                      <p className="text-slate-300 mt-0.5">{c.experience} years</p>
+                      <span className="text-[#8b98a5]">Experience</span>
+                      <p className="text-[#536471] mt-0.5">{c.experience} years</p>
                     </div>
                     <div>
-                      <span className="text-slate-500">Date</span>
-                      <p className="text-slate-300 mt-0.5">{new Date(c.createdAt).toLocaleDateString()}</p>
+                      <span className="text-[#8b98a5]">Date</span>
+                      <p className="text-[#536471] mt-0.5">{new Date(c.createdAt).toLocaleDateString()}</p>
                     </div>
                     <div>
-                      <span className="text-slate-500">Duration</span>
-                      <p className="text-slate-300 mt-0.5">{c.durationSeconds ? `${Math.round(c.durationSeconds / 60)}m` : '—'}</p>
+                      <span className="text-[#8b98a5]">Duration</span>
+                      <p className="text-[#536471] mt-0.5">{c.durationSeconds ? `${Math.round(c.durationSeconds / 60)}m` : '—'}</p>
                     </div>
                   </div>
 
                   {c.strengths.length > 0 && (
                     <div>
-                      <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Strengths</p>
+                      <p className="text-[10px] text-[#8b98a5] uppercase tracking-wider mb-1">Strengths</p>
                       <ul className="space-y-1">
                         {c.strengths.map((s, i) => (
-                          <li key={i} className="text-xs text-emerald-400 flex items-start gap-1.5">
+                          <li key={i} className="text-xs text-[#059669] flex items-start gap-1.5">
                             <span className="mt-0.5">+</span> {s}
                           </li>
                         ))}
@@ -164,7 +164,7 @@ export default function CandidatesPage() {
 
                   {c.weaknesses.length > 0 && (
                     <div>
-                      <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Areas for Improvement</p>
+                      <p className="text-[10px] text-[#8b98a5] uppercase tracking-wider mb-1">Areas for Improvement</p>
                       <ul className="space-y-1">
                         {c.weaknesses.map((w, i) => (
                           <li key={i} className="text-xs text-amber-400 flex items-start gap-1.5">
@@ -177,7 +177,7 @@ export default function CandidatesPage() {
 
                   {c.redFlags.length > 0 && (
                     <div>
-                      <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Red Flags</p>
+                      <p className="text-[10px] text-[#8b98a5] uppercase tracking-wider mb-1">Red Flags</p>
                       <div className="flex flex-wrap gap-1.5">
                         {c.redFlags.map((f, i) => (
                           <span key={i} className="px-2 py-0.5 bg-red-500/10 border border-red-500/20 rounded text-[10px] text-red-400">
@@ -190,15 +190,15 @@ export default function CandidatesPage() {
 
                   {c.recruiterNotes && (
                     <div>
-                      <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Recruiter Notes</p>
-                      <p className="text-xs text-slate-400">{c.recruiterNotes}</p>
+                      <p className="text-[10px] text-[#8b98a5] uppercase tracking-wider mb-1">Recruiter Notes</p>
+                      <p className="text-xs text-[#536471]">{c.recruiterNotes}</p>
                     </div>
                   )}
 
                   {c.status === 'completed' && (
                     <Link
                       href={`/feedback/${c.id}`}
-                      className="inline-block text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+                      className="inline-block text-xs text-[#6366f1] hover:text-[#6366f1] transition-colors"
                     >
                       View Full Report →
                     </Link>

@@ -17,7 +17,7 @@ export default function CustomSectionEditor({ items, onAdd, onUpdate, onRemove, 
 
   function renderCard(section: ResumeCustomSection, dragListeners?: Record<string, Function>, dragAttributes?: Record<string, unknown>) {
     return (
-      <div className="border border-slate-700 rounded-xl p-4 space-y-2">
+      <div className="border border-[#e1e8ed] rounded-xl p-4 space-y-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             {dragListeners && (
@@ -27,7 +27,7 @@ export default function CustomSectionEditor({ items, onAdd, onUpdate, onRemove, 
               type="text"
               value={section.title}
               onChange={e => onUpdate(section.id, { title: e.target.value })}
-              className="text-sm font-semibold text-white bg-transparent border-none focus:outline-none"
+              className="text-sm font-semibold text-[#0f1419] bg-transparent border-none focus:outline-none"
               placeholder="Section Title"
             />
           </div>
@@ -40,7 +40,7 @@ export default function CustomSectionEditor({ items, onAdd, onUpdate, onRemove, 
           onChange={e => onUpdate(section.id, { content: e.target.value })}
           placeholder="Section content..."
           rows={3}
-          className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
+          className="w-full px-3 py-2.5 bg-white border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
         />
       </div>
     )
@@ -64,7 +64,7 @@ export default function CustomSectionEditor({ items, onAdd, onUpdate, onRemove, 
 
       <button
         onClick={addNew}
-        className="w-full py-3 border border-dashed border-slate-700 rounded-xl text-sm text-slate-500 hover:text-slate-300 hover:border-slate-600 transition-colors"
+        className="w-full py-3 border border-dashed border-[#e1e8ed] rounded-xl text-sm text-slate-500 hover:text-[#0f1419] hover:border-[#536471] transition-colors"
       >
         + Add Custom Section
       </button>

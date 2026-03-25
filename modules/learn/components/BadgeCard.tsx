@@ -33,15 +33,15 @@ export default function BadgeCard({ icon, name, description, rarity, earned, ear
       }`}
     >
       <div className="text-3xl mb-2">{icon}</div>
-      <p className="text-sm font-semibold text-[#f0f2f5] mb-1">{name}</p>
-      <p className="text-xs text-[#6b7280]">{description}</p>
+      <p className="text-sm font-semibold text-[#0f1419] mb-1">{name}</p>
+      <p className="text-xs text-[#71767b]">{description}</p>
       {earned && earnedAt && (
-        <p className="text-micro text-[#4b5563] mt-2">
+        <p className="text-micro text-[#8b98a5] mt-2">
           {new Date(earnedAt).toLocaleDateString()}
         </p>
       )}
       {!earned && (
-        <p className="text-micro text-[#4b5563] mt-2 uppercase tracking-wide">Locked</p>
+        <p className="text-micro text-[#8b98a5] mt-2 uppercase tracking-wide">Locked</p>
       )}
     </div>
   )

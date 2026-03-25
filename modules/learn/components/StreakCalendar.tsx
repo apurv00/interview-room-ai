@@ -29,7 +29,7 @@ export default function StreakCalendar() {
   }, [])
 
   if (loading) {
-    return <div className="h-24 bg-slate-800 rounded-xl animate-pulse" />
+    return <div className="h-24 bg-[#f7f9f9] rounded-xl animate-pulse" />
   }
 
   // Build a map of date -> activity
@@ -47,8 +47,8 @@ export default function StreakCalendar() {
   return (
     <div className="surface-card-bordered p-5">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-sm font-semibold text-[#f0f2f5]">Practice Streak</h2>
-        <div className="flex items-center gap-3 text-xs text-[#6b7280]">
+        <h2 className="text-sm font-semibold text-[#0f1419]">Practice Streak</h2>
+        <div className="flex items-center gap-3 text-xs text-[#71767b]">
           {currentStreak > 0 && (
             <span className="text-[#34d399] font-medium">
               🔥 {currentStreak} day{currentStreak !== 1 ? 's' : ''}
@@ -64,7 +64,7 @@ export default function StreakCalendar() {
       {/* Heatmap grid */}
       <div className="flex flex-wrap gap-[3px]">
         {days.map(day => {
-          let bg = 'bg-[#1e293b]' // inactive
+          let bg = 'bg-[#eff3f4]' // inactive
           let title = `${day.date}: No activity`
 
           if (day.data) {
@@ -94,9 +94,9 @@ export default function StreakCalendar() {
       </div>
 
       {/* Legend */}
-      <div className="flex items-center gap-3 mt-3 text-micro text-[#6b7280]">
+      <div className="flex items-center gap-3 mt-3 text-micro text-[#71767b]">
         <span className="flex items-center gap-1">
-          <span className="w-[10px] h-[10px] rounded-[2px] bg-[#1e293b]" /> None
+          <span className="w-[10px] h-[10px] rounded-[2px] bg-[#eff3f4]" /> None
         </span>
         <span className="flex items-center gap-1">
           <span className="w-[10px] h-[10px] rounded-[2px] bg-[#4ade80]/60" /> Active

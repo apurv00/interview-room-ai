@@ -92,7 +92,7 @@ export default function ResourceLinks() {
         <div className="text-center mt-6">
           <Link
             href="/resources"
-            className="text-caption text-[#818cf8] hover:text-[#6366f1] transition-colors"
+            className="text-caption text-[#6366f1] hover:text-[#4f46e5] transition-colors"
           >
             Browse all resources &rarr;
           </Link>
@@ -109,16 +109,16 @@ function ResourceItem({ resource, isRecommended }: { resource: Resource; isRecom
         href={`/resources/${resource.slug}`}
         className="flex items-center gap-2 py-2 px-3 rounded-[8px] hover:bg-[var(--color-surface)] transition-colors group"
       >
-        <span className="text-[#818cf8] flex-shrink-0">›</span>
+        <span className="text-[#6366f1] flex-shrink-0">›</span>
         <span className="text-body text-[var(--foreground-secondary)] group-hover:text-[var(--foreground)] transition-colors">
           {resource.title}
         </span>
         {isRecommended && (
           <span className="relative group/tip ml-auto flex-shrink-0">
-            <span className="text-micro text-[#818cf8] bg-[rgba(99,102,241,0.08)] px-1.5 py-0.5 rounded">
+            <span className="text-micro text-[#6366f1] bg-[rgba(99,102,241,0.08)] px-1.5 py-0.5 rounded">
               For you
             </span>
-            <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 text-micro text-[#f0f2f5] bg-[#1c2539] border border-[rgba(255,255,255,0.10)] rounded opacity-0 group-hover/tip:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
+            <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 text-micro text-[#0f1419] bg-white border border-[#e1e8ed] rounded opacity-0 group-hover/tip:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
               Recommended based on your profile
             </span>
           </span>

@@ -63,19 +63,19 @@ export default function HistoryPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#070b14] flex items-center justify-center">
-        <div className="w-6 h-6 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
+      <div className="min-h-screen bg-white flex items-center justify-center">
+        <div className="w-6 h-6 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-[#070b14] text-[#f0f2f5] animate-fade-in">
-      <header className="px-6 py-5 border-b border-[rgba(255,255,255,0.10)] bg-surface backdrop-blur sticky top-0 z-20">
+    <div className="min-h-screen bg-white text-[#0f1419] animate-fade-in">
+      <header className="px-6 py-5 border-b border-[#e1e8ed] bg-white backdrop-blur sticky top-0 z-20">
         <div className="max-w-[800px] mx-auto flex items-center justify-between">
           <div>
             <h1 className="text-heading">Interview History</h1>
-            <p className="text-caption text-[#6b7280] mt-0.5">
+            <p className="text-caption text-[#71767b] mt-0.5">
               {sessions.length > 0 ? `${sessions.length} sessions` : 'No interviews yet'}
             </p>
           </div>
@@ -118,11 +118,11 @@ export default function HistoryPage() {
                     router.push(`/feedback/${s._id}`)
                   }
                 }}
-                className="w-full surface-card-bordered rounded-2xl p-5 flex items-center gap-4 hover:border-[rgba(255,255,255,0.16)] transition text-left cursor-pointer"
+                className="w-full bg-white border border-[#e1e8ed] rounded-2xl p-5 flex items-center gap-4 hover:border-[#cfd9de] hover:bg-[#f7f9f9] transition text-left cursor-pointer"
               >
                 {/* Score badge */}
-                <div className="w-11 h-11 rounded-[10px] bg-[rgba(99,102,241,0.08)] flex items-center justify-center flex-shrink-0">
-                  <span className="text-lg font-bold text-[#818cf8]">
+                <div className="w-11 h-11 rounded-[10px] bg-indigo-50 flex items-center justify-center flex-shrink-0">
+                  <span className="text-lg font-bold text-[#6366f1]">
                     {s.feedback?.overall_score || '--'}
                   </span>
                 </div>
@@ -130,7 +130,7 @@ export default function HistoryPage() {
                 {/* Content */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="font-medium text-[#f0f2f5]">
+                    <span className="font-medium text-[#0f1419]">
                       {getDomainLabel(s.config.role)}
                     </span>
                     <Badge variant={STATUS_BADGE_VARIANT[s.status] || 'default'}>
@@ -138,11 +138,11 @@ export default function HistoryPage() {
                     </Badge>
                   </div>
                   <div className="flex items-center gap-2 mt-0.5">
-                    <span className="text-xs text-[#6b7280]">
+                    <span className="text-xs text-[#71767b]">
                       {s.config.experience} yrs · {s.config.duration} min
                     </span>
-                    <span className="text-xs text-[#4b5563]">·</span>
-                    <span className="text-xs text-[#6b7280]">
+                    <span className="text-xs text-[#8b98a5]">·</span>
+                    <span className="text-xs text-[#71767b]">
                       {new Date(s.createdAt).toLocaleDateString('en-US', {
                         month: 'short',
                         day: 'numeric',
@@ -153,8 +153,8 @@ export default function HistoryPage() {
                     </span>
                     {s.feedback?.pass_probability && (
                       <>
-                        <span className="text-xs text-[#4b5563]">·</span>
-                        <span className="text-xs text-[#6b7280]">
+                        <span className="text-xs text-[#8b98a5]">·</span>
+                        <span className="text-xs text-[#71767b]">
                           {s.feedback.pass_probability} pass
                         </span>
                       </>
@@ -163,7 +163,7 @@ export default function HistoryPage() {
                 </div>
 
                 {/* Chevron */}
-                <svg className="w-4 h-4 text-[#4b5563] flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <svg className="w-4 h-4 text-[#8b98a5] flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                 </svg>
               </button>
@@ -180,7 +180,7 @@ export default function HistoryPage() {
                 >
                   Previous
                 </Button>
-                <span className="px-3 py-1.5 text-sm text-[#6b7280]">
+                <span className="px-3 py-1.5 text-sm text-[#71767b]">
                   {page} of {totalPages}
                 </span>
                 <Button

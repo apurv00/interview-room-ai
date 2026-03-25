@@ -27,9 +27,9 @@ function PlanCard({ plan, isCurrent }: { plan: PlanConfig; isCurrent: boolean })
   return (
     <div
       className={`
-        relative flex flex-col surface-card-bordered p-7
+        relative flex flex-col bg-white border border-[#e1e8ed] rounded-2xl p-7
         ${isHighlighted
-          ? 'border-[rgba(99,102,241,0.15)]'
+          ? 'border-[rgba(99,102,241,0.4)]'
           : ''
         }
       `}
@@ -41,24 +41,24 @@ function PlanCard({ plan, isCurrent }: { plan: PlanConfig; isCurrent: boolean })
       )}
 
       {/* Plan name */}
-      <h3 className="text-subheading text-[#f0f2f5]">{plan.label}</h3>
+      <h3 className="text-subheading text-[#0f1419]">{plan.label}</h3>
 
       {/* Price */}
       <div className="mt-4 flex items-baseline gap-1">
         {plan.priceMonthly === null ? (
-          <span className="text-display text-[#f0f2f5]">Custom</span>
+          <span className="text-display text-[#0f1419]">Custom</span>
         ) : plan.priceMonthly === 0 ? (
-          <span className="text-display text-[#f0f2f5]">$0</span>
+          <span className="text-display text-[#0f1419]">$0</span>
         ) : (
           <>
-            <span className="text-display text-[#f0f2f5]">${plan.priceMonthly}</span>
-            <span className="text-body text-[#6b7280]">/month</span>
+            <span className="text-display text-[#0f1419]">${plan.priceMonthly}</span>
+            <span className="text-body text-[#71767b]">/month</span>
           </>
         )}
       </div>
 
       {/* Interview limit */}
-      <p className="mt-2 text-body text-[#6b7280]">
+      <p className="mt-2 text-body text-[#71767b]">
         {plan.monthlyInterviewLimit >= 999999
           ? 'Unlimited interviews'
           : `${plan.monthlyInterviewLimit} interviews per month`}
@@ -67,7 +67,7 @@ function PlanCard({ plan, isCurrent }: { plan: PlanConfig; isCurrent: boolean })
       {/* Features */}
       <ul className="mt-6 flex flex-col gap-element flex-1">
         {plan.features.map((feature) => (
-          <li key={feature} className="flex items-start gap-2 text-body text-[#b0b8c4]">
+          <li key={feature} className="flex items-start gap-2 text-body text-[#536471]">
             <CheckIcon />
             {feature}
           </li>
@@ -127,8 +127,8 @@ export default function PricingPage() {
     <main className="min-h-screen px-4 py-16 max-w-[1000px] mx-auto">
       {/* Header */}
       <div className="text-center space-y-3 mb-14 animate-fade-in">
-        <h1 className="text-display text-center text-[#f0f2f5]">Simple pricing</h1>
-        <p className="text-body text-[#6b7280] max-w-xl mx-auto">
+        <h1 className="text-display text-center text-[#0f1419]">Simple pricing</h1>
+        <p className="text-body text-[#71767b] max-w-xl mx-auto">
           Start free. Upgrade when you&apos;re ready.
         </p>
       </div>
@@ -146,7 +146,7 @@ export default function PricingPage() {
 
       {/* FAQ */}
       <div className="max-w-2xl mx-auto animate-fade-in">
-        <h2 className="text-display text-[#f0f2f5] text-center mb-8">
+        <h2 className="text-display text-[#0f1419] text-center mb-8">
           Frequently Asked Questions
         </h2>
         <Accordion items={accordionItems} />
@@ -154,7 +154,7 @@ export default function PricingPage() {
 
       {/* CTA link */}
       <div className="text-center mt-16 animate-fade-in">
-        <Link href="/" className="text-[#818cf8] hover:text-[#a5b4fc] text-body font-medium transition">
+        <Link href="/" className="text-[#6366f1] hover:text-[#4f46e5] text-body font-medium transition">
           &larr; Start practicing now
         </Link>
       </div>

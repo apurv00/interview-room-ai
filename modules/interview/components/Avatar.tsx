@@ -52,7 +52,7 @@ export default function Avatar({ emotion, isTalking, ttsText, isListening, isPro
   const nodY = state.isNodding ? Math.sin(state.nodProgress * Math.PI) * 3 : 0
 
   return (
-    <div className="w-full h-full flex items-center justify-center bg-gradient-to-b from-slate-800 via-[#0f1729] to-slate-900 relative overflow-hidden">
+    <div className="w-full h-full flex items-center justify-center bg-gradient-to-b from-white via-[#f7f9f9] to-white relative overflow-hidden">
       {/* Ambient background glow — crossfades with emotion */}
       <motion.div
         className="absolute inset-0"
@@ -96,13 +96,13 @@ export default function Avatar({ emotion, isTalking, ttsText, isListening, isPro
       </AnimatePresence>
 
       {/* Desk / surface hint */}
-      <div className="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-slate-700/20 to-transparent" />
+      <div className="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-[#eff3f4]/40 to-transparent" />
 
       {/* Avatar SVG */}
       <svg
         viewBox="0 0 200 210"
         className="w-full h-full max-w-xs mx-auto relative z-10"
-        style={{ filter: 'drop-shadow(0 8px 32px rgba(0,0,0,0.5))' }}
+        style={{ filter: 'drop-shadow(0 8px 32px rgba(0,0,0,0.15))' }}
       >
         {/* ── Clothing / body ── */}
         <ellipse cx="100" cy="218" rx="85" ry="50" fill="#1e3a5f" />
@@ -193,7 +193,7 @@ export default function Avatar({ emotion, isTalking, ttsText, isListening, isPro
               {[0, 1, 2, 3, 4].map((i) => (
                 <motion.div
                   key={i}
-                  className="w-[3px] bg-indigo-400 rounded-full origin-bottom"
+                  className="w-[3px] bg-indigo-600 rounded-full origin-bottom"
                   animate={{
                     scaleY: [0.3, 1, 0.3],
                   }}
@@ -207,7 +207,7 @@ export default function Avatar({ emotion, isTalking, ttsText, isListening, isPro
                 />
               ))}
             </div>
-            <span className="text-[10px] text-indigo-300/70 font-medium ml-1.5 uppercase tracking-wider">
+            <span className="text-[10px] text-indigo-600/70 font-medium ml-1.5 uppercase tracking-wider">
               Speaking
             </span>
           </motion.div>
@@ -223,11 +223,11 @@ export default function Avatar({ emotion, isTalking, ttsText, isListening, isPro
             transition={{ duration: 0.25 }}
           >
             <motion.div
-              className="w-2 h-2 rounded-full bg-emerald-400"
+              className="w-2 h-2 rounded-full bg-emerald-600"
               animate={{ scale: [1, 1.3, 1], opacity: [0.6, 1, 0.6] }}
               transition={{ duration: 1.5, repeat: Infinity, ease: 'easeInOut' }}
             />
-            <span className="text-[10px] text-emerald-300/70 font-medium uppercase tracking-wider">
+            <span className="text-[10px] text-emerald-600/70 font-medium uppercase tracking-wider">
               Listening
             </span>
           </motion.div>
@@ -246,7 +246,7 @@ export default function Avatar({ emotion, isTalking, ttsText, isListening, isPro
               {[0, 1, 2].map((i) => (
                 <motion.div
                   key={i}
-                  className="w-1.5 h-1.5 rounded-full bg-amber-400"
+                  className="w-1.5 h-1.5 rounded-full bg-amber-600"
                   animate={{ opacity: [0.3, 1, 0.3], y: [0, -3, 0] }}
                   transition={{
                     duration: 0.8,
@@ -257,7 +257,7 @@ export default function Avatar({ emotion, isTalking, ttsText, isListening, isPro
                 />
               ))}
             </div>
-            <span className="text-[10px] text-amber-300/70 font-medium ml-1 uppercase tracking-wider">
+            <span className="text-[10px] text-amber-600/70 font-medium ml-1 uppercase tracking-wider">
               Thinking
             </span>
           </motion.div>

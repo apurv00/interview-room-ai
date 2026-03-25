@@ -31,8 +31,8 @@ export default function TranscriptTab({
   const canSeek = recordingUrl && sessionStartedAt
 
   return (
-    <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 animate-fade-in">
-      <h3 className="font-semibold text-slate-200">Full Transcript</h3>
+    <section className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-4 animate-fade-in">
+      <h3 className="font-semibold text-[#0f1419]">Full Transcript</h3>
       <div className="space-y-4 max-h-[600px] overflow-y-auto transcript-scroll pr-2">
         {transcript.map((entry: TranscriptEntry, i: number) => {
           const isActive = i === activeTranscriptIndex
@@ -53,7 +53,7 @@ export default function TranscriptTab({
                 className={`shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${
                   entry.speaker === 'interviewer'
                     ? 'bg-indigo-600 text-white'
-                    : 'bg-slate-700 text-slate-300'
+                    : 'bg-[#eff3f4] text-[#536471]'
                 }`}
               >
                 {entry.speaker === 'interviewer' ? 'A' : 'Y'}
@@ -61,8 +61,8 @@ export default function TranscriptTab({
               <div
                 className={`max-w-[78%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
                   entry.speaker === 'interviewer'
-                    ? 'bg-slate-800 text-slate-200'
-                    : 'bg-indigo-900/40 border border-indigo-500/20 text-indigo-100'
+                    ? 'bg-[#f7f9f9] text-[#0f1419]'
+                    : 'bg-indigo-50 border border-indigo-200 text-indigo-900'
                 }`}
               >
                 {s(entry.text)}

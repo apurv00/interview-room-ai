@@ -8,15 +8,15 @@ export default function HowItWorks() {
   return (
     <section className="px-4 sm:px-6 py-section">
       <div className="max-w-[1100px] mx-auto">
-        <h2 className="text-heading text-[#f0f2f5] text-center mb-section">How It Works</h2>
+        <h2 className="text-heading text-[#0f1419] text-center mb-section">How It Works</h2>
         <div className="grid md:grid-cols-3 gap-component">
           {steps.map((item) => (
-            <div key={item.step} className="surface-card p-7">
-              <div className="w-5 h-5 rounded-full bg-[rgba(99,102,241,0.08)] text-[#818cf8] text-micro font-bold flex items-center justify-center">
+            <div key={item.step} className="surface-card-bordered p-7">
+              <div className="w-5 h-5 rounded-full bg-[rgba(99,102,241,0.08)] text-[#6366f1] text-micro font-bold flex items-center justify-center">
                 {item.step}
               </div>
-              <h3 className="text-subheading text-[#f0f2f5] mt-3">{item.title}</h3>
-              <p className="text-body text-[#6b7280] mt-1">{item.desc}</p>
+              <h3 className="text-subheading text-[#0f1419] mt-3">{item.title}</h3>
+              <p className="text-body text-[#71767b] mt-1">{item.desc}</p>
             </div>
           ))}
         </div>

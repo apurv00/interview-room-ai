@@ -30,12 +30,12 @@ export default function ResumeLayout({ children }: { children: React.ReactNode }
     <div className="flex min-h-screen">
       {/* Sidebar */}
       <aside className={`
-        fixed inset-y-0 left-0 z-40 w-60 bg-[#0c1220] border-r border-[rgba(255,255,255,0.06)]
+        fixed inset-y-0 left-0 z-40 w-60 bg-white border-r border-[#e1e8ed]
         transform transition-transform duration-200
         ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
         md:translate-x-0 md:static
       `}>
-        <div className="h-14 flex items-center px-5 border-b border-[rgba(255,255,255,0.06)]">
+        <div className="h-14 flex items-center px-5 border-b border-[#e1e8ed]">
           <Link href="/resume" className="flex items-center gap-2.5">
             <div className="w-7 h-7 rounded-md bg-emerald-600 flex items-center justify-center">
               <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -43,8 +43,8 @@ export default function ResumeLayout({ children }: { children: React.ReactNode }
               </svg>
             </div>
             <div>
-              <span className="text-sm font-bold text-white">IPG Resume</span>
-              <span className="block text-[10px] text-slate-500">AI Resume Builder</span>
+              <span className="text-sm font-bold text-[#0f1419]">IPG Resume</span>
+              <span className="block text-[10px] text-[#71767b]">AI Resume Builder</span>
             </div>
           </Link>
         </div>
@@ -59,8 +59,8 @@ export default function ResumeLayout({ children }: { children: React.ReactNode }
                 onClick={() => setSidebarOpen(false)}
                 className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] font-medium transition-all ${
                   isActive
-                    ? 'bg-emerald-600/10 text-emerald-400 border border-emerald-500/20'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent'
+                    ? 'bg-emerald-600/10 text-emerald-600 border border-emerald-500/20'
+                    : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#f7f9f9] border border-transparent'
                 }`}
               >
                 <svg className="w-[18px] h-[18px] flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -72,8 +72,8 @@ export default function ResumeLayout({ children }: { children: React.ReactNode }
           })}
         </nav>
 
-        <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-[rgba(255,255,255,0.06)]">
-          <Link href="/" className="flex items-center gap-2 text-xs text-slate-500 hover:text-slate-300 transition-colors mb-3">
+        <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-[#e1e8ed]">
+          <Link href="/" className="flex items-center gap-2 text-xs text-[#71767b] hover:text-[#536471] transition-colors mb-3">
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
             </svg>
@@ -82,18 +82,18 @@ export default function ResumeLayout({ children }: { children: React.ReactNode }
           {session?.user ? (
             <div className="flex items-center justify-between">
               <div className="min-w-0">
-                <p className="text-xs font-medium text-slate-300 truncate">{session.user.name}</p>
-                <p className="text-[10px] text-slate-500 truncate">{session.user.email}</p>
+                <p className="text-xs font-medium text-[#536471] truncate">{session.user.name}</p>
+                <p className="text-[10px] text-[#71767b] truncate">{session.user.email}</p>
               </div>
               <button
                 onClick={() => signOut({ callbackUrl: '/' })}
-                className="text-[10px] text-slate-500 hover:text-red-400 transition-colors"
+                className="text-[10px] text-[#71767b] hover:text-red-400 transition-colors"
               >
                 Sign Out
               </button>
             </div>
           ) : (
-            <Link href="/signin" className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+            <Link href="/signin" className="text-xs text-[#6366f1] hover:text-indigo-500 transition-colors">
               Sign In
             </Link>
           )}
@@ -105,16 +105,16 @@ export default function ResumeLayout({ children }: { children: React.ReactNode }
       )}
 
       <div className="flex-1 md:ml-0">
-        <header className="md:hidden sticky top-0 z-20 h-14 bg-[#0c1220] border-b border-[rgba(255,255,255,0.06)] flex items-center px-4">
+        <header className="md:hidden sticky top-0 z-20 h-14 bg-white border-b border-[#e1e8ed] flex items-center px-4">
           <button
             onClick={() => setSidebarOpen(true)}
-            className="text-slate-400 hover:text-white transition-colors"
+            className="text-[#536471] hover:text-[#0f1419] transition-colors"
           >
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
             </svg>
           </button>
-          <span className="ml-3 text-sm font-bold text-white">IPG Resume</span>
+          <span className="ml-3 text-sm font-bold text-[#0f1419]">IPG Resume</span>
         </header>
 
         <main className="p-4 md:p-8">

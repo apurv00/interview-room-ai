@@ -42,8 +42,8 @@ export default function DrillPage() {
     <Suspense fallback={
       <main className="max-w-4xl mx-auto px-4 py-8">
         <div className="animate-pulse space-y-4">
-          <div className="h-8 bg-slate-800 rounded w-48" />
-          {[1, 2, 3].map(i => <div key={i} className="h-24 bg-slate-800 rounded-xl" />)}
+          <div className="h-8 bg-[#eff3f4] rounded w-48" />
+          {[1, 2, 3].map(i => <div key={i} className="h-24 bg-[#eff3f4] rounded-xl" />)}
         </div>
       </main>
     }>
@@ -119,9 +119,9 @@ function DrillPageInner() {
     return (
       <main className="max-w-4xl mx-auto px-4 py-8">
         <div className="animate-pulse space-y-4">
-          <div className="h-8 bg-slate-800 rounded w-48" />
-          <div className="h-4 bg-slate-800 rounded w-72" />
-          {[1, 2, 3].map(i => <div key={i} className="h-24 bg-slate-800 rounded-xl" />)}
+          <div className="h-8 bg-[#eff3f4] rounded w-48" />
+          <div className="h-4 bg-[#eff3f4] rounded w-72" />
+          {[1, 2, 3].map(i => <div key={i} className="h-24 bg-[#eff3f4] rounded-xl" />)}
         </div>
       </main>
     )
@@ -131,13 +131,13 @@ function DrillPageInner() {
     <main className="max-w-4xl mx-auto px-4 py-8 space-y-6">
       <div>
         <motion.h1
-          className="text-2xl font-bold text-[#f0f2f5]"
+          className="text-2xl font-bold text-[#0f1419]"
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
         >
           Drill Mode
         </motion.h1>
-        <p className="text-sm text-[#6b7280] mt-1">
+        <p className="text-sm text-[#71767b] mt-1">
           Re-attempt your weakest answers and see how much you improve.
         </p>
       </div>
@@ -151,7 +151,7 @@ function DrillPageInner() {
             className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
               filter === c.value
                 ? 'bg-blue-600 text-white'
-                : 'bg-slate-800 text-[#9ca3af] hover:text-[#d1d5db]'
+                : 'bg-[#eff3f4] text-[#8b98a5] hover:text-[#536471]'
             }`}
           >
             {c.label}
@@ -171,19 +171,19 @@ function DrillPageInner() {
             {/* Question */}
             <div className="surface-card-bordered p-5 sm:p-6">
               <div className="flex items-start justify-between gap-4 mb-4">
-                <h2 className="text-base font-semibold text-[#f0f2f5]">{activeQuestion.question}</h2>
+                <h2 className="text-base font-semibold text-[#0f1419]">{activeQuestion.question}</h2>
                 <button
                   onClick={resetDrill}
-                  className="text-xs text-[#6b7280] hover:text-[#d1d5db] shrink-0"
+                  className="text-xs text-[#71767b] hover:text-[#536471] shrink-0"
                 >
                   Back
                 </button>
               </div>
 
               <div className="flex items-center gap-3 mb-4">
-                <span className="text-xs text-[#6b7280]">Original score: {activeQuestion.avgScore}/100</span>
+                <span className="text-xs text-[#71767b]">Original score: {activeQuestion.avgScore}/100</span>
                 <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                  activeQuestion.avgScore < 40 ? 'bg-red-500/10 text-red-400' : 'bg-amber-500/10 text-amber-400'
+                  activeQuestion.avgScore < 40 ? 'bg-red-500/10 text-[#f4212e]' : 'bg-amber-500/10 text-[#d97706]'
                 }`}>
                   Weak: {activeQuestion.competency}
                 </span>
@@ -197,7 +197,7 @@ function DrillPageInner() {
                 {showOriginal ? 'Hide' : 'Show'} original answer
               </button>
               {showOriginal && (
-                <div className="p-3 rounded-lg bg-slate-800/50 text-sm text-[#9ca3af] mb-4 border border-slate-700/50">
+                <div className="p-3 rounded-lg bg-[#f7f9f9] text-sm text-[#8b98a5] mb-4 border border-[#e1e8ed]">
                   {activeQuestion.answer}
                 </div>
               )}
@@ -210,12 +210,12 @@ function DrillPageInner() {
                     onChange={e => setNewAnswer(e.target.value)}
                     placeholder="Type your improved answer here..."
                     rows={6}
-                    className="w-full p-4 bg-slate-900 border border-slate-700 rounded-xl text-sm text-[#f0f2f5] placeholder:text-[#4b5563] focus:outline-none focus:ring-2 focus:ring-blue-500/50 resize-none"
+                    className="w-full p-4 bg-white border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder:text-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500/50 resize-none"
                   />
                   <button
                     onClick={submitAnswer}
                     disabled={evaluating || !newAnswer.trim()}
-                    className="mt-3 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-[#6b7280] text-white text-sm font-medium rounded-lg transition-colors"
+                    className="mt-3 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-[#eff3f4] disabled:text-[#71767b] text-white text-sm font-medium rounded-lg transition-colors"
                   >
                     {evaluating ? 'Evaluating...' : 'Submit Answer'}
                   </button>
@@ -230,24 +230,24 @@ function DrillPageInner() {
                   animate={{ opacity: 1, y: 0 }}
                 >
                   {/* Score comparison */}
-                  <div className="flex items-center gap-4 p-4 rounded-xl bg-slate-800/40">
+                  <div className="flex items-center gap-4 p-4 rounded-xl bg-[#f7f9f9]">
                     <div className="text-center">
-                      <div className="text-xs text-[#6b7280]">Original</div>
-                      <div className="text-xl font-bold text-[#9ca3af]">{activeQuestion.avgScore}</div>
+                      <div className="text-xs text-[#71767b]">Original</div>
+                      <div className="text-xl font-bold text-[#8b98a5]">{activeQuestion.avgScore}</div>
                     </div>
-                    <svg className="w-5 h-5 text-[#4b5563]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <svg className="w-5 h-5 text-[#8b98a5]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
                     </svg>
                     <div className="text-center">
-                      <div className="text-xs text-[#6b7280]">New</div>
-                      <div className="text-xl font-bold text-[#f0f2f5]">{result.newScore}</div>
+                      <div className="text-xs text-[#71767b]">New</div>
+                      <div className="text-xl font-bold text-[#0f1419]">{result.newScore}</div>
                     </div>
                     <div className={`ml-auto px-3 py-1 rounded-lg text-sm font-semibold ${
                       result.delta > 0
-                        ? 'bg-emerald-500/10 text-emerald-400'
+                        ? 'bg-emerald-500/10 text-[#059669]'
                         : result.delta < 0
-                        ? 'bg-red-500/10 text-red-400'
-                        : 'bg-slate-700 text-[#9ca3af]'
+                        ? 'bg-red-500/10 text-[#f4212e]'
+                        : 'bg-[#eff3f4] text-[#8b98a5]'
                     }`}>
                       {result.delta > 0 ? '+' : ''}{result.delta}
                     </div>
@@ -259,12 +259,12 @@ function DrillPageInner() {
                       const orig = activeQuestion[dim as keyof typeof activeQuestion] as number
                       const d = score - orig
                       return (
-                        <div key={dim} className="p-3 rounded-lg bg-slate-800/30">
-                          <div className="text-xs text-[#9ca3af] capitalize mb-1">{dim}</div>
+                        <div key={dim} className="p-3 rounded-lg bg-[#f7f9f9]">
+                          <div className="text-xs text-[#8b98a5] capitalize mb-1">{dim}</div>
                           <div className="flex items-baseline gap-2">
-                            <span className="text-sm font-medium text-[#f0f2f5]">{score}</span>
+                            <span className="text-sm font-medium text-[#0f1419]">{score}</span>
                             {d !== 0 && (
-                              <span className={`text-xs ${d > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                              <span className={`text-xs ${d > 0 ? 'text-[#059669]' : 'text-[#f4212e]'}`}>
                                 {d > 0 ? '+' : ''}{d}
                               </span>
                             )}
@@ -277,7 +277,7 @@ function DrillPageInner() {
                   <div className="flex gap-3">
                     <button
                       onClick={() => { setResult(null); setNewAnswer('') }}
-                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-sm text-[#d1d5db] rounded-lg transition-colors"
+                      className="px-4 py-2 bg-[#f7f9f9] hover:bg-[#eff3f4] text-sm text-[#536471] rounded-lg transition-colors"
                     >
                       Try Again
                     </button>
@@ -302,7 +302,7 @@ function DrillPageInner() {
           >
             {questions.length === 0 ? (
               <div className="text-center py-16">
-                <p className="text-[#6b7280] mb-4">
+                <p className="text-[#71767b] mb-4">
                   {filter
                     ? `No weak ${filter} questions found. Try a different filter.`
                     : 'No weak answers found yet. Complete more interviews to get drill questions!'}
@@ -326,19 +326,19 @@ function DrillPageInner() {
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex-1 min-w-0">
-                      <h3 className="text-sm font-medium text-[#f0f2f5] line-clamp-2">{q.question}</h3>
+                      <h3 className="text-sm font-medium text-[#0f1419] line-clamp-2">{q.question}</h3>
                       <div className="flex items-center gap-3 mt-2">
-                        <span className="text-xs text-[#6b7280]">Score: {q.avgScore}/100</span>
+                        <span className="text-xs text-[#71767b]">Score: {q.avgScore}/100</span>
                         <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${
-                          q.avgScore < 30 ? 'bg-red-500/10 text-red-400' :
-                          q.avgScore < 50 ? 'bg-amber-500/10 text-amber-400' :
-                          'bg-yellow-500/10 text-yellow-400'
+                          q.avgScore < 30 ? 'bg-red-500/10 text-[#f4212e]' :
+                          q.avgScore < 50 ? 'bg-amber-500/10 text-[#d97706]' :
+                          'bg-yellow-500/10 text-[#d97706]'
                         }`}>
                           {q.competency}
                         </span>
                       </div>
                     </div>
-                    <svg className="w-4 h-4 text-[#4b5563] shrink-0 mt-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <svg className="w-4 h-4 text-[#8b98a5] shrink-0 mt-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                     </svg>
                   </div>

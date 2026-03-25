@@ -55,16 +55,16 @@ function WarmUpQuestion() {
 
   return (
     <div className="space-y-3">
-      <div className="bg-slate-800/50 rounded-xl p-4 space-y-3">
+      <div className="bg-[#f7f9f9] rounded-xl p-4 space-y-3">
         <div className="flex items-start gap-3">
           <div className="w-6 h-6 rounded-full bg-indigo-500/20 flex items-center justify-center shrink-0 mt-0.5">
-            <svg className="w-3.5 h-3.5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <svg className="w-3.5 h-3.5 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
             </svg>
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-slate-200">Warm-up question</p>
-            <p className="text-sm text-slate-400 mt-1">{question}</p>
+            <p className="text-sm font-medium text-[#0f1419]">Warm-up question</p>
+            <p className="text-sm text-[#536471] mt-1">{question}</p>
           </div>
         </div>
 
@@ -73,7 +73,7 @@ function WarmUpQuestion() {
             <motion.button
               key="start"
               onClick={startWarmUp}
-              className="w-full py-2.5 rounded-xl bg-indigo-600/20 border border-indigo-500/30 text-sm text-indigo-300 font-medium hover:bg-indigo-600/30 transition-colors"
+              className="w-full py-2.5 rounded-xl bg-indigo-600/10 border border-indigo-500/30 text-sm text-indigo-600 font-medium hover:bg-indigo-600/20 transition-colors"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -89,11 +89,11 @@ function WarmUpQuestion() {
               exit={{ opacity: 0 }}
             >
               <div className="flex items-center gap-3">
-                <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                <span className="text-sm text-slate-300">Speaking... answer out loud</span>
-                <span className="ml-auto text-sm font-mono text-slate-400 tabular-nums">{timeLeft}s</span>
+                <div className="w-2 h-2 rounded-full bg-[#f4212e] animate-pulse" />
+                <span className="text-sm text-[#0f1419]">Speaking... answer out loud</span>
+                <span className="ml-auto text-sm font-mono text-[#536471] tabular-nums">{timeLeft}s</span>
               </div>
-              <div className="h-1 bg-slate-700 rounded-full overflow-hidden">
+              <div className="h-1 bg-[#eff3f4] rounded-full overflow-hidden">
                 <motion.div
                   className="h-full bg-indigo-500 rounded-full"
                   initial={{ width: '100%' }}
@@ -105,7 +105,7 @@ function WarmUpQuestion() {
           )}
         </AnimatePresence>
       </div>
-      <p className="text-xs text-slate-600 text-center">Practice your delivery — this won&apos;t be recorded or scored.</p>
+      <p className="text-xs text-[#8b98a5] text-center">Practice your delivery — this won&apos;t be recorded or scored.</p>
     </div>
   )
 }
@@ -138,20 +138,20 @@ export default function PrepChecklist({ domainSlug, domainLabel, duration }: Pre
   const estimatedDuration = duration === 10 ? '10-15' : duration === 20 ? '20-25' : '30-40'
 
   return (
-    <div className="bg-slate-900/80 backdrop-blur-sm border border-slate-700/50 rounded-2xl p-5 space-y-4">
+    <div className="bg-white/90 backdrop-blur-sm border border-[#e1e8ed] rounded-2xl p-5 space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-slate-300">Interview Prep</h2>
-        <span className="text-xs text-slate-500">~{estimatedDuration} min total</span>
+        <h2 className="text-sm font-semibold text-[#0f1419]">Interview Prep</h2>
+        <span className="text-xs text-[#71767b]">~{estimatedDuration} min total</span>
       </div>
 
       {/* Progress bar */}
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
-          <span className="text-xs text-slate-500">{checkedCount} of {totalItems} items checked</span>
-          <span className="text-xs text-slate-500 font-mono tabular-nums">{progress}%</span>
+          <span className="text-xs text-[#71767b]">{checkedCount} of {totalItems} items checked</span>
+          <span className="text-xs text-[#71767b] font-mono tabular-nums">{progress}%</span>
         </div>
-        <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+        <div className="h-1.5 bg-[#eff3f4] rounded-full overflow-hidden">
           <motion.div
             className="h-full bg-emerald-500 rounded-full"
             animate={{ width: `${progress}%` }}
@@ -168,22 +168,22 @@ export default function PrepChecklist({ domainSlug, domainLabel, duration }: Pre
           const sectionComplete = sectionChecked === section.items.length
 
           return (
-            <div key={section.id} className="rounded-xl border border-slate-700/40 overflow-hidden">
+            <div key={section.id} className="rounded-xl border border-[#e1e8ed] overflow-hidden">
               <button
                 onClick={() => toggleSection(section.id)}
-                className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-slate-800/30 transition-colors"
+                className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-[#f7f9f9] transition-colors"
                 aria-expanded={isOpen}
               >
                 <span className="text-base">{section.icon}</span>
-                <span className="text-sm text-slate-200 flex-1">{section.title}</span>
+                <span className="text-sm text-[#0f1419] flex-1">{section.title}</span>
                 {sectionComplete && (
                   <span className="text-xs text-emerald-400 font-medium">Done</span>
                 )}
                 {!sectionComplete && sectionChecked > 0 && (
-                  <span className="text-xs text-slate-500">{sectionChecked}/{section.items.length}</span>
+                  <span className="text-xs text-[#8b98a5]">{sectionChecked}/{section.items.length}</span>
                 )}
                 <svg
-                  className={`w-3.5 h-3.5 text-slate-500 shrink-0 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
+                  className={`w-3.5 h-3.5 text-[#8b98a5] shrink-0 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
                   fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
                 >
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
@@ -208,7 +208,7 @@ export default function PrepChecklist({ domainSlug, domainLabel, duration }: Pre
                             <div className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${
                               checked
                                 ? 'bg-emerald-500 border-emerald-500'
-                                : 'border-slate-600 group-hover:border-slate-400'
+                                : 'border-[#e1e8ed] group-hover:border-[#536471]'
                             }`}>
                               {checked && (
                                 <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
@@ -216,7 +216,7 @@ export default function PrepChecklist({ domainSlug, domainLabel, duration }: Pre
                                 </svg>
                               )}
                             </div>
-                            <span className={`text-sm transition-colors ${checked ? 'text-slate-500 line-through' : 'text-slate-300'}`}>
+                            <span className={`text-sm transition-colors ${checked ? 'text-[#8b98a5] line-through' : 'text-[#536471]'}`}>
                               {item}
                             </span>
                             <input
@@ -239,13 +239,13 @@ export default function PrepChecklist({ domainSlug, domainLabel, duration }: Pre
 
       {/* Domain-specific tips */}
       <div className="space-y-2.5">
-        <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+        <h3 className="text-xs font-semibold text-[#536471] uppercase tracking-wider">
           Tips for {domainLabel}
         </h3>
         <ul className="space-y-2">
           {domainTips.map((tip, i) => (
-            <li key={i} className="flex items-start gap-2.5 text-sm text-slate-400">
-              <span className="text-indigo-400 mt-0.5 shrink-0">
+            <li key={i} className="flex items-start gap-2.5 text-sm text-[#536471]">
+              <span className="text-[#6366f1] mt-0.5 shrink-0">
                 <TipIcon icon={tip.icon} />
               </span>
               {tip.text}

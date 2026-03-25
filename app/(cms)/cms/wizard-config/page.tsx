@@ -47,24 +47,24 @@ export default function WizardConfigPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <div className="w-6 h-6 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
+        <div className="w-6 h-6 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
       </div>
     )
   }
 
   return (
     <div className="max-w-xl">
-      <h1 className="text-2xl font-bold text-white mb-1">Wizard Config</h1>
-      <p className="text-sm text-slate-400 mb-8">
+      <h1 className="text-2xl font-bold text-[#0f1419] mb-1">Wizard Config</h1>
+      <p className="text-sm text-[#536471] mb-8">
         Global settings for the Smart Resume Wizard AI cost controls.
       </p>
 
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-6">
+      <div className="bg-white border border-[#e1e8ed] rounded-2xl p-6 space-y-6">
         {/* Cost Cap Toggle */}
         <div className="flex items-center justify-between">
           <div>
-            <label className="text-sm font-medium text-white">AI Cost Cap</label>
-            <p className="text-xs text-slate-500 mt-0.5">
+            <label className="text-sm font-medium text-[#0f1419]">AI Cost Cap</label>
+            <p className="text-xs text-[#8b98a5] mt-0.5">
               Limit AI spending per wizard session. When disabled, AI calls have no cost limit.
             </p>
           </div>
@@ -74,7 +74,7 @@ export default function WizardConfigPage() {
             aria-checked={costCapEnabled}
             onClick={() => setCostCapEnabled(!costCapEnabled)}
             className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ${
-              costCapEnabled ? 'bg-indigo-600' : 'bg-slate-700'
+              costCapEnabled ? 'bg-indigo-600' : 'bg-[#f7f9f9]'
             }`}
           >
             <span
@@ -87,14 +87,14 @@ export default function WizardConfigPage() {
 
         {/* Cost Cap Amount */}
         <div className={costCapEnabled ? '' : 'opacity-50 pointer-events-none'}>
-          <label className="block text-sm font-medium text-white mb-1">
+          <label className="block text-sm font-medium text-[#0f1419] mb-1">
             Cost Cap (USD)
           </label>
-          <p className="text-xs text-slate-500 mb-2">
+          <p className="text-xs text-[#8b98a5] mb-2">
             Maximum AI spend per wizard session before falling back to default questions.
           </p>
           <div className="relative w-40">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[#536471] text-sm">$</span>
             <input
               type="number"
               min={0.01}
@@ -102,7 +102,7 @@ export default function WizardConfigPage() {
               step={0.01}
               value={costCapUsd}
               onChange={e => setCostCapUsd(parseFloat(e.target.value) || 0.01)}
-              className="w-full pl-7 pr-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm focus:border-indigo-500 focus:outline-none"
+              className="w-full pl-7 pr-3 py-2 bg-[#f7f9f9] border border-[#e1e8ed] rounded-lg text-[#0f1419] text-sm focus:border-indigo-500 focus:outline-none"
             />
           </div>
         </div>

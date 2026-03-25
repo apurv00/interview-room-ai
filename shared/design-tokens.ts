@@ -1,46 +1,46 @@
 export const tokens = {
   color: {
     bg: {
-      page: '#070b14',
-      card: '#0c1220',
-      surface: '#151d2e',
-      raised: '#1c2539',
-      overlay: 'rgba(0,0,0,0.65)',
+      page: '#ffffff',
+      card: '#ffffff',
+      surface: '#f7f9f9',
+      raised: '#eff3f4',
+      overlay: 'rgba(0,0,0,0.4)',
     },
     border: {
-      subtle: 'rgba(255,255,255,0.06)',
-      default: 'rgba(255,255,255,0.10)',
-      strong: 'rgba(255,255,255,0.15)',
+      subtle: '#eff3f4',
+      default: '#e1e8ed',
+      strong: '#cfd9de',
       focus: '#6366f1',
     },
     text: {
-      primary: '#f0f2f5',
-      secondary: '#b0b8c4',
-      tertiary: '#6b7280',
-      muted: '#4b5563',
-      disabled: '#374151',
+      primary: '#0f1419',
+      secondary: '#536471',
+      tertiary: '#71767b',
+      muted: '#8b98a5',
+      disabled: '#cfd9de',
     },
     primary: {
-      text: '#818cf8',
+      text: '#6366f1',
       surface: 'rgba(99,102,241,0.08)',
       border: 'rgba(99,102,241,0.15)',
       solid: '#6366f1',
       hover: '#5558e6',
     },
     success: {
-      text: '#34d399',
+      text: '#059669',
       surface: 'rgba(16,185,129,0.08)',
-      border: 'rgba(16,185,129,0.15)',
+      border: 'rgba(16,185,129,0.2)',
     },
     caution: {
-      text: '#fbbf24',
+      text: '#d97706',
       surface: 'rgba(245,158,11,0.08)',
-      border: 'rgba(245,158,11,0.15)',
+      border: 'rgba(245,158,11,0.2)',
     },
     danger: {
-      text: '#f87171',
-      surface: 'rgba(239,68,68,0.08)',
-      border: 'rgba(239,68,68,0.15)',
+      text: '#f4212e',
+      surface: 'rgba(244,33,46,0.06)',
+      border: 'rgba(244,33,46,0.15)',
     },
   },
 
@@ -69,9 +69,9 @@ export const tokens = {
   },
 
   shadow: {
-    sm: '0 2px 8px rgba(0,0,0,0.3)',
-    md: '0 8px 24px rgba(0,0,0,0.4)',
-    glow: '0 0 20px rgba(99,102,241,0.3)',
+    sm: '0 2px 8px rgba(0,0,0,0.06)',
+    md: '0 8px 24px rgba(0,0,0,0.08)',
+    glow: '0 0 20px rgba(99,102,241,0.25)',
   },
 
   motion: {

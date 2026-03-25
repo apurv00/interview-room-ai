@@ -110,17 +110,17 @@ export default function EditDomainPage() {
     router.push('/cms/domains')
   }
 
-  if (loading) return <div className="text-slate-400">Loading domain...</div>
+  if (loading) return <div className="text-[#536471]">Loading domain...</div>
 
   return (
     <div className="max-w-2xl">
       <div className="flex items-center gap-4 mb-6">
-        <Link href="/cms/domains" className="text-slate-400 hover:text-white text-sm">
+        <Link href="/cms/domains" className="text-[#536471] hover:text-[#0f1419] text-sm">
           &larr; Back
         </Link>
         <h2 className="text-2xl font-bold">Edit Domain: {slug}</h2>
         {isBuiltIn && (
-          <span className="text-xs bg-slate-700 text-slate-300 px-2 py-1 rounded">Built-in</span>
+          <span className="text-xs bg-[#f7f9f9] text-[#536471] px-2 py-1 rounded">Built-in</span>
         )}
       </div>
 
@@ -132,78 +132,78 @@ export default function EditDomainPage() {
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <label className="block text-sm text-slate-400 mb-1">Slug (read-only)</label>
+          <label className="block text-sm text-[#536471] mb-1">Slug (read-only)</label>
           <input
             type="text"
             value={slug}
             disabled
-            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-500 cursor-not-allowed"
+            className="w-full bg-[#f7f9f9] border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#8b98a5] cursor-not-allowed"
           />
         </div>
 
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm text-slate-400 mb-1">Label</label>
+            <label className="block text-sm text-[#536471] mb-1">Label</label>
             <input
               type="text"
               required
               value={form.label}
               onChange={(e) => updateField('label', e.target.value)}
-              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
             />
           </div>
           <div>
-            <label className="block text-sm text-slate-400 mb-1">Short Label</label>
+            <label className="block text-sm text-[#536471] mb-1">Short Label</label>
             <input
               type="text"
               required
               value={form.shortLabel}
               onChange={(e) => updateField('shortLabel', e.target.value)}
-              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
             />
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm text-slate-400 mb-1">Icon</label>
+            <label className="block text-sm text-[#536471] mb-1">Icon</label>
             <input
               type="text"
               required
               value={form.icon}
               onChange={(e) => updateField('icon', e.target.value)}
-              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
             />
           </div>
           <div>
-            <label className="block text-sm text-slate-400 mb-1">Color</label>
+            <label className="block text-sm text-[#536471] mb-1">Color</label>
             <input
               type="text"
               value={form.color}
               onChange={(e) => updateField('color', e.target.value)}
-              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
             />
           </div>
         </div>
 
         <div>
-          <label className="block text-sm text-slate-400 mb-1">Description</label>
+          <label className="block text-sm text-[#536471] mb-1">Description</label>
           <textarea
             required
             value={form.description}
             onChange={(e) => updateField('description', e.target.value)}
             rows={2}
-            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
           />
         </div>
 
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm text-slate-400 mb-1">Category</label>
+            <label className="block text-sm text-[#536471] mb-1">Category</label>
             <select
               value={form.category}
               onChange={(e) => updateField('category', e.target.value)}
-              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
             >
               <option value="engineering">Engineering</option>
               <option value="business">Business</option>
@@ -212,12 +212,12 @@ export default function EditDomainPage() {
             </select>
           </div>
           <div>
-            <label className="block text-sm text-slate-400 mb-1">Sort Order</label>
+            <label className="block text-sm text-[#536471] mb-1">Sort Order</label>
             <input
               type="number"
               value={form.sortOrder}
               onChange={(e) => updateField('sortOrder', e.target.value)}
-              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
             />
           </div>
         </div>
@@ -228,42 +228,42 @@ export default function EditDomainPage() {
             id="isActive"
             checked={form.isActive}
             onChange={(e) => updateField('isActive', e.target.checked)}
-            className="rounded border-slate-700 bg-slate-900"
+            className="rounded border-[#e1e8ed] bg-white"
           />
-          <label htmlFor="isActive" className="text-sm text-slate-400">Active</label>
+          <label htmlFor="isActive" className="text-sm text-[#536471]">Active</label>
         </div>
 
         <div>
-          <label className="block text-sm text-slate-400 mb-1">System Prompt Context</label>
+          <label className="block text-sm text-[#536471] mb-1">System Prompt Context</label>
           <textarea
             value={form.systemPromptContext}
             onChange={(e) => updateField('systemPromptContext', e.target.value)}
             rows={4}
-            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none font-mono"
+            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none font-mono"
           />
         </div>
 
         <div>
-          <label className="block text-sm text-slate-400 mb-1">
+          <label className="block text-sm text-[#536471] mb-1">
             Sample Questions (one per line)
           </label>
           <textarea
             value={form.sampleQuestions}
             onChange={(e) => updateField('sampleQuestions', e.target.value)}
             rows={4}
-            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
           />
         </div>
 
         <div>
-          <label className="block text-sm text-slate-400 mb-1">
+          <label className="block text-sm text-[#536471] mb-1">
             Evaluation Emphasis (one per line)
           </label>
           <textarea
             value={form.evaluationEmphasis}
             onChange={(e) => updateField('evaluationEmphasis', e.target.value)}
             rows={3}
-            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
           />
         </div>
 
@@ -271,13 +271,13 @@ export default function EditDomainPage() {
           <button
             type="submit"
             disabled={saving}
-            className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-lg text-sm font-medium transition-colors"
+            className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50 rounded-lg text-sm font-medium transition-colors"
           >
             {saving ? 'Saving...' : 'Save Changes'}
           </button>
           <Link
             href="/cms/domains"
-            className="px-6 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm font-medium transition-colors"
+            className="px-6 py-2 bg-[#f7f9f9] hover:bg-[#f7f9f9] rounded-lg text-sm font-medium transition-colors"
           >
             Cancel
           </Link>

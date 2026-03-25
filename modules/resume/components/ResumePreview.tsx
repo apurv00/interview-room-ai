@@ -149,11 +149,11 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
     <div className="space-y-2">
       {/* Page count indicator */}
       <div className="flex items-center justify-between">
-        <span className={`text-[10px] font-medium ${pageCount > 1 ? 'text-amber-400' : 'text-emerald-400'}`}>
+        <span className={`text-[10px] font-medium ${pageCount > 1 ? 'text-amber-600' : 'text-[#059669]'}`}>
           {pageCount === 1 ? '1 page' : `${pageCount} pages`}
         </span>
         {pageCount > 1 && (
-          <span className="text-[10px] text-amber-400/70">
+          <span className="text-[10px] text-amber-600/70">
             Reduce content to fit 1 page
           </span>
         )}

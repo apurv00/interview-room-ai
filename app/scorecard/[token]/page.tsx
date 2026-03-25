@@ -29,7 +29,7 @@ function ScoreRing({ score, size = 80 }: { score: number; size?: number }) {
 
   return (
     <svg width={size} height={size} className="transform -rotate-90">
-      <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="#1e293b" strokeWidth={6} />
+      <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="#e1e8ed" strokeWidth={6} />
       <motion.circle
         cx={size / 2}
         cy={size / 2}
@@ -52,10 +52,10 @@ function DimensionBar({ label, score }: { label: string; score: number }) {
   return (
     <div>
       <div className="flex justify-between text-xs mb-1">
-        <span className="text-[#9ca3af]">{label}</span>
-        <span className="text-[#d1d5db] font-medium">{score}/100</span>
+        <span className="text-[#71767b]">{label}</span>
+        <span className="text-[#0f1419] font-medium">{score}/100</span>
       </div>
-      <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
+      <div className="h-2 bg-[#eff3f4] rounded-full overflow-hidden">
         <motion.div
           className={`h-full rounded-full ${color}`}
           initial={{ width: 0 }}
@@ -86,10 +86,10 @@ export default function ScorecardPage() {
 
   if (loading) {
     return (
-      <main className="min-h-screen bg-[#0a0f1a] flex items-center justify-center">
+      <main className="min-h-screen bg-white flex items-center justify-center">
         <div className="animate-pulse space-y-4 w-full max-w-md px-4">
-          <div className="h-8 bg-slate-800 rounded w-48 mx-auto" />
-          <div className="h-48 bg-slate-800 rounded-2xl" />
+          <div className="h-8 bg-[#eff3f4] rounded w-48 mx-auto" />
+          <div className="h-48 bg-[#eff3f4] rounded-2xl" />
         </div>
       </main>
     )
@@ -97,10 +97,10 @@ export default function ScorecardPage() {
 
   if (error || !data) {
     return (
-      <main className="min-h-screen bg-[#0a0f1a] flex items-center justify-center text-center px-4">
+      <main className="min-h-screen bg-white flex items-center justify-center text-center px-4">
         <div>
-          <h1 className="text-xl font-bold text-[#f0f2f5] mb-2">Scorecard Not Found</h1>
-          <p className="text-[#6b7280] mb-6">This scorecard may have expired or been revoked.</p>
+          <h1 className="text-xl font-bold text-[#0f1419] mb-2">Scorecard Not Found</h1>
+          <p className="text-[#71767b] mb-6">This scorecard may have expired or been revoked.</p>
           <a
             href="/"
             className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors"
@@ -120,23 +120,23 @@ export default function ScorecardPage() {
   const minutes = Math.round(data.duration / 60)
 
   return (
-    <main className="min-h-screen bg-[#0a0f1a] py-12 px-4">
+    <main className="min-h-screen bg-[#f7f9f9] py-12 px-4">
       <motion.div
         className="max-w-md mx-auto"
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
       >
         {/* Card */}
-        <div className="bg-gradient-to-br from-slate-900 to-slate-800 border border-slate-700/50 rounded-2xl p-6 sm:p-8 space-y-6">
+        <div className="bg-white border border-[#e1e8ed] rounded-2xl p-6 sm:p-8 space-y-6 shadow-sm">
           {/* Header */}
           <div className="text-center">
-            <div className="text-xs text-blue-400 font-medium uppercase tracking-wider mb-2">
+            <div className="text-xs text-blue-600 font-medium uppercase tracking-wider mb-2">
               Interview Scorecard
             </div>
-            <h1 className="text-lg font-bold text-[#f0f2f5] capitalize">
+            <h1 className="text-lg font-bold text-[#0f1419] capitalize">
               {data.domain.replace(/-/g, ' ')} — {data.interviewType.replace(/-/g, ' ')}
             </h1>
-            <p className="text-xs text-[#6b7280] mt-1">
+            <p className="text-xs text-[#71767b] mt-1">
               {date} &middot; {data.questionCount} questions &middot; {minutes}min
             </p>
           </div>
@@ -146,10 +146,10 @@ export default function ScorecardPage() {
             <div className="relative">
               <ScoreRing score={data.overallScore} size={100} />
               <div className="absolute inset-0 flex items-center justify-center">
-                <span className="text-2xl font-bold text-[#f0f2f5]">{data.overallScore}</span>
+                <span className="text-2xl font-bold text-[#0f1419]">{data.overallScore}</span>
               </div>
             </div>
-            <span className="text-xs text-[#6b7280] mt-2">Overall Score</span>
+            <span className="text-xs text-[#71767b] mt-2">Overall Score</span>
           </div>
 
           {/* Dimension bars */}
@@ -162,11 +162,11 @@ export default function ScorecardPage() {
           {/* Strengths */}
           {data.strengths.length > 0 && (
             <div>
-              <h3 className="text-xs font-semibold text-[#9ca3af] uppercase tracking-wide mb-2">Key Strengths</h3>
+              <h3 className="text-xs font-semibold text-[#71767b] uppercase tracking-wide mb-2">Key Strengths</h3>
               <ul className="space-y-1">
                 {data.strengths.map((s, i) => (
-                  <li key={i} className="text-sm text-[#d1d5db] flex items-start gap-2">
-                    <span className="text-emerald-400 mt-0.5 shrink-0">+</span>
+                  <li key={i} className="text-sm text-[#536471] flex items-start gap-2">
+                    <span className="text-emerald-500 mt-0.5 shrink-0">+</span>
                     {s}
                   </li>
                 ))}
@@ -175,11 +175,11 @@ export default function ScorecardPage() {
           )}
 
           {/* Verified badge */}
-          <div className="flex items-center justify-center gap-2 pt-2 border-t border-slate-700/50">
-            <svg className="w-4 h-4 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
+          <div className="flex items-center justify-center gap-2 pt-2 border-t border-[#e1e8ed]">
+            <svg className="w-4 h-4 text-blue-600" fill="currentColor" viewBox="0 0 20 20">
               <path fillRule="evenodd" d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
             </svg>
-            <span className="text-xs text-[#6b7280]">Verified by Interview Prep Guru</span>
+            <span className="text-xs text-[#71767b]">Verified by Interview Prep Guru</span>
           </div>
         </div>
 
