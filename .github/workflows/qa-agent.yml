@@ -49,7 +49,7 @@ jobs:
             --max-turns 80
             --model claude-sonnet-4-20250514
             --allowedTools "Bash,mcp__playwright__browser_navigate,mcp__playwright__browser_click,mcp__playwright__browser_type,mcp__playwright__browser_take_screenshot,mcp__playwright__browser_snapshot,mcp__playwright__browser_resize,mcp__playwright__browser_navigate_back,mcp__playwright__browser_wait,mcp__playwright__browser_evaluate,mcp__playwright__browser_select_option,mcp__playwright__browser_hover,mcp__playwright__browser_press_key,Read,Write"
-            --mcp-config '{"mcpServers":{"playwright":{"command":"npx","args":["@playwright/mcp@latest","--headless","--browser","chromium","--screenshot-dir","/tmp/screenshots"]}}}'
+            --mcp-config '{"mcpServers":{"playwright":{"command":"npx","args":["@playwright/mcp@latest","--headless","--browser","chromium","--output-dir","/tmp/screenshots"]}}}'
 
       - name: Ensure report exists
         if: always()
