@@ -131,7 +131,7 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
   // Error state
   if (error) {
     return (
-      <div className="bg-slate-900 border border-red-500/30 rounded-2xl p-4 sticky top-28 z-10" role="alert">
+      <div className="bg-white border border-red-500/30 rounded-2xl p-4 sticky top-28 z-10" role="alert">
         <audio ref={audioRef} src={src} preload="metadata" />
         <div className="flex items-center gap-3">
           <div className="shrink-0 w-9 h-9 rounded-full bg-red-600/20 flex items-center justify-center">
@@ -146,7 +146,7 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
   }
 
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sticky top-28 z-10">
+    <div className="bg-white border border-[#e1e8ed] rounded-2xl p-4 sticky top-28 z-10">
       <audio ref={audioRef} src={src} preload="metadata" />
 
       {/* Top row: play/pause + seek bar + time */}
@@ -155,7 +155,7 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
         <button
           onClick={togglePlay}
           disabled={isLoading}
-          className="shrink-0 w-11 h-11 sm:w-9 sm:h-9 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:cursor-not-allowed flex items-center justify-center transition"
+          className="shrink-0 w-11 h-11 sm:w-9 sm:h-9 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-[#e1e8ed] disabled:cursor-not-allowed flex items-center justify-center transition"
           aria-label={isLoading ? 'Loading audio' : isPlaying ? 'Pause' : 'Play'}
         >
           {isLoading ? (
@@ -185,14 +185,14 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
             aria-valuemin={0}
             aria-valuemax={duration || 0}
             aria-valuenow={currentTime}
-            className="w-full h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer disabled:cursor-not-allowed
+            className="w-full h-1.5 bg-[#e1e8ed] rounded-full appearance-none cursor-pointer disabled:cursor-not-allowed
               [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 sm:[&::-webkit-slider-thumb]:w-3 sm:[&::-webkit-slider-thumb]:h-3
-              [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-indigo-400
-              [&::-webkit-slider-thumb]:hover:bg-indigo-300 [&::-webkit-slider-thumb]:transition"
+              [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-indigo-600
+              [&::-webkit-slider-thumb]:hover:bg-indigo-500 [&::-webkit-slider-thumb]:transition"
             style={{
               background: duration
-                ? `linear-gradient(to right, #818cf8 0%, #818cf8 ${(currentTime / duration) * 100}%, #334155 ${(currentTime / duration) * 100}%, #334155 100%)`
-                : '#334155',
+                ? `linear-gradient(to right, #6366f1 0%, #6366f1 ${(currentTime / duration) * 100}%, #e1e8ed ${(currentTime / duration) * 100}%, #e1e8ed 100%)`
+                : '#e1e8ed',
             }}
           />
           {/* Question markers */}
@@ -206,7 +206,7 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
                   style={{ left: `${left}%` }}
                 >
                   <div className="w-2.5 h-2.5 -ml-[5px] rounded-full bg-amber-400/70 border border-amber-300/50" />
-                  <span className="absolute -top-5 left-1/2 -translate-x-1/2 text-[9px] text-amber-300 font-medium opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+                  <span className="absolute -top-5 left-1/2 -translate-x-1/2 text-[9px] text-amber-600 font-medium opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
                     {m.label}
                   </span>
                 </div>
@@ -215,14 +215,14 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
         </div>
 
         {/* Time */}
-        <span className="text-xs text-slate-400 tabular-nums whitespace-nowrap shrink-0">
+        <span className="text-xs text-[#536471] tabular-nums whitespace-nowrap shrink-0">
           {formatTime(currentTime)} / {formatTime(duration)}
         </span>
       </div>
 
       {/* Bottom row: speed selector */}
       <div className="flex items-center gap-1.5 mt-2.5">
-        <span className="text-[10px] text-slate-500 uppercase tracking-wider mr-1">Speed</span>
+        <span className="text-[10px] text-[#8b98a5] uppercase tracking-wider mr-1">Speed</span>
         {SPEEDS.map((s) => (
           <button
             key={s}
@@ -232,7 +232,7 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
             className={`px-2.5 py-1 sm:px-2 sm:py-0.5 rounded-md text-xs font-medium transition ${
               speed === s
                 ? 'bg-indigo-600 text-white'
-                : 'bg-slate-800 text-slate-400 hover:text-slate-300'
+                : 'bg-[#eff3f4] text-[#536471] hover:bg-[#e1e8ed]'
             }`}
           >
             {s}x

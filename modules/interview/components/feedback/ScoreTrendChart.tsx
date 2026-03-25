@@ -39,7 +39,7 @@ export default function ScoreTrendChart({ currentScore, sessionId }: ScoreTrendC
 
   if (points.length < 2) {
     return (
-      <div className="text-xs text-slate-600 italic">
+      <div className="text-xs text-[#8b98a5] italic">
         Complete more interviews to see your score trend.
       </div>
     )
@@ -101,10 +101,10 @@ export default function ScoreTrendChart({ currentScore, sessionId }: ScoreTrendC
       {/* Tooltip */}
       {hoverIdx !== null && (
         <div
-          className="absolute -top-8 bg-slate-800 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white pointer-events-none whitespace-nowrap"
+          className="absolute -top-8 bg-white border border-[#e1e8ed] rounded-lg px-2 py-1 text-xs text-[#0f1419] pointer-events-none whitespace-nowrap shadow-sm"
           style={{ left: `${(coords[hoverIdx].x / W) * 100}%`, transform: 'translateX(-50%)' }}
         >
-          {points[hoverIdx].date}: <span className="font-bold text-indigo-400">{points[hoverIdx].score}</span>
+          {points[hoverIdx].date}: <span className="font-bold text-indigo-600">{points[hoverIdx].score}</span>
         </div>
       )}
     </div>

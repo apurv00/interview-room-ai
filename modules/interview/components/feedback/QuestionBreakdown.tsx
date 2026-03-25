@@ -21,7 +21,7 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
 
   if (evaluations.length === 0) {
     return (
-      <div className="text-center py-10 text-slate-500 text-sm">
+      <div className="text-center py-10 text-[#8b98a5] text-sm">
         No per-question evaluations available.
       </div>
     )
@@ -35,7 +35,7 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
         )
         const isOpen = expandedIdx === i
         const scoreColor =
-          avgScore >= 75 ? 'text-emerald-400' : avgScore >= 55 ? 'text-amber-400' : 'text-red-400'
+          avgScore >= 75 ? 'text-[#059669]' : avgScore >= 55 ? 'text-amber-600' : 'text-red-500'
         const scoreBg =
           avgScore >= 75
             ? 'bg-emerald-500/10 border-emerald-500/30'
@@ -54,12 +54,12 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
         return (
           <div
             key={i}
-            className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden transition-all"
+            className="bg-white border border-[#e1e8ed] rounded-2xl overflow-hidden transition-all"
           >
             {/* Header — always visible */}
             <button
               onClick={() => setExpandedIdx(isOpen ? null : i)}
-              className="w-full flex items-center gap-3 sm:gap-4 p-3 sm:p-4 text-left hover:bg-slate-800/50 transition"
+              className="w-full flex items-center gap-3 sm:gap-4 p-3 sm:p-4 text-left hover:bg-[#f7f9f9] transition"
             >
               <div
                 className={`shrink-0 w-11 h-11 sm:w-10 sm:h-10 rounded-xl border flex items-center justify-center text-sm font-bold ${scoreBg} ${scoreColor}`}
@@ -67,11 +67,11 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
                 {avgScore}
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-xs text-slate-500 mb-0.5">Question {i + 1}</p>
-                <p className="text-sm text-slate-200 truncate">{s(ev.question)}</p>
+                <p className="text-xs text-[#8b98a5] mb-0.5">Question {i + 1}</p>
+                <p className="text-sm text-[#0f1419] truncate">{s(ev.question)}</p>
               </div>
               <svg
-                className={`w-4 h-4 text-slate-500 shrink-0 transition-transform ${
+                className={`w-4 h-4 text-[#8b98a5] shrink-0 transition-transform ${
                   isOpen ? 'rotate-180' : ''
                 }`}
                 fill="none"
@@ -85,30 +85,30 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
 
             {/* Expanded detail */}
             {isOpen && (
-              <div className="px-4 pb-4 space-y-4 border-t border-slate-800">
+              <div className="px-4 pb-4 space-y-4 border-t border-[#e1e8ed]">
                 {/* Question */}
                 <div className="pt-3">
-                  <p className="text-xs text-slate-500 font-medium mb-1 uppercase tracking-wide">
+                  <p className="text-xs text-[#8b98a5] font-medium mb-1 uppercase tracking-wide">
                     Question
                   </p>
-                  <p className="text-sm text-slate-300 leading-relaxed">{s(ev.question)}</p>
+                  <p className="text-sm text-[#536471] leading-relaxed">{s(ev.question)}</p>
                 </div>
 
                 {/* Answer */}
                 <div>
-                  <p className="text-xs text-slate-500 font-medium mb-1 uppercase tracking-wide">
+                  <p className="text-xs text-[#8b98a5] font-medium mb-1 uppercase tracking-wide">
                     Your Answer
                   </p>
-                  <p className="text-sm text-slate-400 leading-relaxed bg-slate-800/50 rounded-xl p-3">
+                  <p className="text-sm text-[#536471] leading-relaxed bg-[#f7f9f9] rounded-xl p-3">
                     {ev.answer ? s(ev.answer) : (
-                      <span className="italic text-slate-600">No answer captured</span>
+                      <span className="italic text-[#8b98a5]">No answer captured</span>
                     )}
                   </p>
                 </div>
 
                 {/* Score breakdown */}
                 <div>
-                  <p className="text-xs text-slate-500 font-medium mb-2 uppercase tracking-wide">
+                  <p className="text-xs text-[#8b98a5] font-medium mb-2 uppercase tracking-wide">
                     Score Breakdown
                   </p>
                   <div className="space-y-2">
@@ -138,9 +138,9 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
 
                 {/* Low score suggestions */}
                 {avgScore < 60 && (
-                  <div className="bg-amber-950/20 border border-amber-500/10 rounded-xl p-3">
-                    <p className="text-xs text-amber-400 font-medium mb-1">Suggestion</p>
-                    <p className="text-xs text-amber-300/70">
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+                    <p className="text-xs text-amber-700 font-medium mb-1">Suggestion</p>
+                    <p className="text-xs text-amber-600">
                       {ev.structure < 55
                         ? 'Try using the STAR framework: describe the Situation, your Task, the Action you took, and the Result.'
                         : ev.specificity < 55
@@ -154,13 +154,13 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
 
                 {/* Follow-up Q&A */}
                 {followUpEntries.length > 0 && (
-                  <div className="border-t border-slate-800 pt-3">
-                    <p className="text-xs text-slate-500 font-medium mb-2 uppercase tracking-wide">
+                  <div className="border-t border-[#e1e8ed] pt-3">
+                    <p className="text-xs text-[#8b98a5] font-medium mb-2 uppercase tracking-wide">
                       Follow-up
                     </p>
                     {followUpEntries.map((fq, fi) => (
                       <div key={fi} className="mb-2">
-                        <p className="text-xs text-indigo-400 mb-1">{s(fq.text)}</p>
+                        <p className="text-xs text-indigo-600 mb-1">{s(fq.text)}</p>
                         {/* Find the candidate's follow-up answer */}
                         {transcript
                           .filter(
@@ -171,7 +171,7 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
                           )
                           .slice(0, 1)
                           .map((a, ai) => (
-                            <p key={ai} className="text-xs text-slate-500 bg-slate-800/50 rounded-lg p-2">
+                            <p key={ai} className="text-xs text-[#8b98a5] bg-[#f7f9f9] rounded-lg p-2">
                               {s(a.text)}
                             </p>
                           ))}

@@ -317,7 +317,7 @@ export default function WizardShell({ initialSessionId }: Props) {
 
           {/* Navigation buttons */}
           {!showFollowUps && (
-            <div className="flex items-center justify-between mt-6 pt-4 border-t border-[rgba(255,255,255,0.06)]">
+            <div className="flex items-center justify-between mt-6 pt-4 border-t border-[#e1e8ed]">
               <div>
                 {state.stage > 0 && (
                   <Button variant="ghost" size="sm" onClick={handleBack} disabled={state.isSaving}>
@@ -365,9 +365,9 @@ export default function WizardShell({ initialSessionId }: Props) {
 
         {/* Right: Live Preview */}
         <div className={`w-[380px] shrink-0 sticky top-4 self-start ${mobileTab !== 'preview' ? 'hidden md:block' : ''}`}>
-          <div className="bg-card border border-[rgba(255,255,255,0.06)] rounded-xl p-3">
+          <div className="bg-white border border-[#e1e8ed] rounded-xl p-3">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-medium text-[#4b5563] uppercase tracking-wider">Live Preview</span>
+              <span className="text-[10px] font-medium text-[#8b98a5] uppercase tracking-wider">Live Preview</span>
             </div>
             <div className="transform scale-[0.55] origin-top-left" style={{ width: '182%', height: '500px', overflow: 'hidden' }}>
               <WizardPreview state={state} />

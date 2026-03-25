@@ -28,7 +28,7 @@ export default function WizardProgressBar({ currentStage, strengthScore }: Props
                       ? 'bg-emerald-500 text-white'
                       : isCurrent
                         ? 'bg-[#6366f1] text-white ring-2 ring-[#6366f1]/30'
-                        : 'bg-surface border border-[rgba(255,255,255,0.10)] text-[#4b5563]'
+                        : 'bg-surface border border-[#e1e8ed] text-[#8b98a5]'
                     }
                   `}
                   initial={false}
@@ -43,7 +43,7 @@ export default function WizardProgressBar({ currentStage, strengthScore }: Props
                     i
                   )}
                 </motion.div>
-                <span className={`text-[9px] mt-1 hidden sm:block ${isCurrent ? 'text-[#6366f1] font-medium' : 'text-[#4b5563]'}`}>
+                <span className={`text-[9px] mt-1 hidden sm:block ${isCurrent ? 'text-[#6366f1] font-medium' : 'text-[#8b98a5]'}`}>
                   {stage.shortLabel}
                 </span>
               </div>
@@ -66,11 +66,11 @@ export default function WizardProgressBar({ currentStage, strengthScore }: Props
 
       {/* Strength score badge */}
       <div className="flex items-center justify-between">
-        <span className="text-[10px] text-[#4b5563]">
+        <span className="text-[10px] text-[#8b98a5]">
           Stage {currentStage} of {WIZARD_STAGES.length - 1}
         </span>
         <div className="flex items-center gap-2">
-          <span className="text-[10px] text-[#4b5563]">Strength</span>
+          <span className="text-[10px] text-[#8b98a5]">Strength</span>
           <div className="w-16 h-1.5 rounded-full bg-surface overflow-hidden">
             <motion.div
               className={`h-full rounded-full ${
@@ -86,7 +86,7 @@ export default function WizardProgressBar({ currentStage, strengthScore }: Props
           <motion.span
             key={strengthScore}
             className={`text-xs font-bold ${
-              strengthScore >= 75 ? 'text-emerald-400'
+              strengthScore >= 75 ? 'text-[#059669]'
                 : strengthScore >= 50 ? 'text-amber-400'
                   : 'text-[#6366f1]'
             }`}

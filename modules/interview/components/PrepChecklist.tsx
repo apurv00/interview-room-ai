@@ -175,15 +175,15 @@ export default function PrepChecklist({ domainSlug, domainLabel, duration }: Pre
                 aria-expanded={isOpen}
               >
                 <span className="text-base">{section.icon}</span>
-                <span className="text-sm text-slate-200 flex-1">{section.title}</span>
+                <span className="text-sm text-[#0f1419] flex-1">{section.title}</span>
                 {sectionComplete && (
                   <span className="text-xs text-emerald-400 font-medium">Done</span>
                 )}
                 {!sectionComplete && sectionChecked > 0 && (
-                  <span className="text-xs text-slate-500">{sectionChecked}/{section.items.length}</span>
+                  <span className="text-xs text-[#8b98a5]">{sectionChecked}/{section.items.length}</span>
                 )}
                 <svg
-                  className={`w-3.5 h-3.5 text-slate-500 shrink-0 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
+                  className={`w-3.5 h-3.5 text-[#8b98a5] shrink-0 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
                   fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
                 >
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
@@ -208,7 +208,7 @@ export default function PrepChecklist({ domainSlug, domainLabel, duration }: Pre
                             <div className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${
                               checked
                                 ? 'bg-emerald-500 border-emerald-500'
-                                : 'border-slate-600 group-hover:border-slate-400'
+                                : 'border-[#e1e8ed] group-hover:border-[#536471]'
                             }`}>
                               {checked && (
                                 <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
@@ -216,7 +216,7 @@ export default function PrepChecklist({ domainSlug, domainLabel, duration }: Pre
                                 </svg>
                               )}
                             </div>
-                            <span className={`text-sm transition-colors ${checked ? 'text-slate-500 line-through' : 'text-slate-300'}`}>
+                            <span className={`text-sm transition-colors ${checked ? 'text-[#8b98a5] line-through' : 'text-[#536471]'}`}>
                               {item}
                             </span>
                             <input
@@ -239,13 +239,13 @@ export default function PrepChecklist({ domainSlug, domainLabel, duration }: Pre
 
       {/* Domain-specific tips */}
       <div className="space-y-2.5">
-        <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+        <h3 className="text-xs font-semibold text-[#536471] uppercase tracking-wider">
           Tips for {domainLabel}
         </h3>
         <ul className="space-y-2">
           {domainTips.map((tip, i) => (
-            <li key={i} className="flex items-start gap-2.5 text-sm text-slate-400">
-              <span className="text-indigo-400 mt-0.5 shrink-0">
+            <li key={i} className="flex items-start gap-2.5 text-sm text-[#536471]">
+              <span className="text-[#6366f1] mt-0.5 shrink-0">
                 <TipIcon icon={tip.icon} />
               </span>
               {tip.text}

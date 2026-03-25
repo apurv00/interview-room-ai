@@ -41,7 +41,7 @@ export default function InterviewControls({
   isScoring,
 }: InterviewControlsProps) {
   return (
-    <footer className="flex items-center justify-center gap-2 sm:gap-3 px-3 sm:px-5 py-3 sm:py-4 bg-slate-900/60 backdrop-blur-md border-t border-slate-800/50 shrink-0 fixed bottom-0 left-0 right-0 sm:relative z-10">
+    <footer className="flex items-center justify-center gap-2 sm:gap-3 px-3 sm:px-5 py-3 sm:py-4 bg-white/90 backdrop-blur-md border-t border-[#e1e8ed] shrink-0 fixed bottom-0 left-0 right-0 sm:relative z-10">
       {/* Mute button */}
       <motion.button
         onClick={onToggleMute}
@@ -50,15 +50,15 @@ export default function InterviewControls({
         className={`
           flex items-center gap-2 px-3 sm:px-5 py-2.5 min-h-[44px] rounded-xl text-sm font-medium transition-colors
           ${muted
-            ? 'bg-red-500/15 border border-red-500/25 text-red-400 hover:bg-red-500/20'
-            : 'bg-slate-800/80 border border-slate-700/60 text-slate-300 hover:bg-slate-700/80'
+            ? 'bg-red-500/15 border border-red-500/25 text-red-500 hover:bg-red-500/20'
+            : 'bg-[#f7f9f9] border border-[#e1e8ed] text-[#536471] hover:bg-[#eff3f4]'
           }
         `}
         aria-label={muted ? 'Unmute microphone' : 'Mute microphone'}
       >
         <MicIcon muted={muted} />
         <span>{muted ? 'Unmute' : 'Mute'}</span>
-        <kbd className="hidden sm:inline-block text-[10px] text-slate-500 bg-slate-800 border border-slate-700 px-1.5 py-0.5 rounded ml-1 font-mono">
+        <kbd className="hidden sm:inline-block text-[10px] text-[#8b98a5] bg-[#f7f9f9] border border-[#e1e8ed] px-1.5 py-0.5 rounded ml-1 font-mono">
           M
         </kbd>
       </motion.button>
@@ -72,7 +72,7 @@ export default function InterviewControls({
         className={`
           flex items-center gap-2 px-4 sm:px-6 py-2.5 min-h-[44px] rounded-xl text-sm font-medium transition-colors
           ${isScoring
-            ? 'bg-slate-800 border border-slate-700 text-slate-500 cursor-not-allowed'
+            ? 'bg-[#f7f9f9] border border-[#e1e8ed] text-[#8b98a5] cursor-not-allowed'
             : 'bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-600/20'
           }
         `}
@@ -80,7 +80,7 @@ export default function InterviewControls({
       >
         {isScoring ? (
           <>
-            <div className="w-4 h-4 rounded-full border-2 border-slate-500 border-t-transparent animate-spin" />
+            <div className="w-4 h-4 rounded-full border-2 border-[#8b98a5] border-t-transparent animate-spin" />
             <span>Scoring...</span>
           </>
         ) : (

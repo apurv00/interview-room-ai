@@ -69,9 +69,9 @@ function getPercentileTier(percentile: number): 'high' | 'medium' | 'low' {
 }
 
 const PERCENTILE_COLORS: Record<string, string> = {
-  high: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30',
-  medium: 'text-amber-400 bg-amber-500/10 border-amber-500/30',
-  low: 'text-red-400 bg-red-500/10 border-red-500/30',
+  high: 'text-[#059669] bg-emerald-500/10 border-emerald-500/30',
+  medium: 'text-amber-600 bg-amber-500/10 border-amber-500/30',
+  low: 'text-red-500 bg-red-500/10 border-red-500/30',
 }
 
 function getBarColor(userScore: number, avgScore: number): string {
@@ -85,10 +85,10 @@ function getBarColor(userScore: number, avgScore: number): string {
 export default function PeerComparison({ data, loading, userFeedback }: PeerComparisonProps) {
   if (loading) {
     return (
-      <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 animate-fade-in">
+      <section className="bg-white border border-[#e1e8ed] rounded-2xl p-5 animate-fade-in">
         <div className="flex items-center gap-3">
-          <div className="w-4 h-4 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
-          <span className="text-sm text-slate-500">Loading peer comparison...</span>
+          <div className="w-4 h-4 rounded-full border-2 border-indigo-600 border-t-transparent animate-spin" />
+          <span className="text-sm text-[#8b98a5]">Loading peer comparison...</span>
         </div>
       </section>
     )
@@ -96,9 +96,9 @@ export default function PeerComparison({ data, loading, userFeedback }: PeerComp
 
   if (!data || !data.available) {
     return (
-      <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 text-center animate-fade-in">
-        <p className="text-slate-400 text-sm">Not enough data yet — be one of the first!</p>
-        <p className="text-slate-600 text-xs mt-1">
+      <section className="bg-white border border-[#e1e8ed] rounded-2xl p-5 text-center animate-fade-in">
+        <p className="text-[#536471] text-sm">Not enough data yet — be one of the first!</p>
+        <p className="text-[#8b98a5] text-xs mt-1">
           Peer comparisons unlock after 5 sessions in your role + experience bucket
           {data?.count ? ` (${data.count}/5 so far)` : ''}.
         </p>
@@ -118,10 +118,10 @@ export default function PeerComparison({ data, loading, userFeedback }: PeerComp
   }))
 
   return (
-    <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 animate-fade-in">
+    <section className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-4 animate-fade-in">
       <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-slate-200">How You Compare</h3>
-        <span className="text-xs text-slate-500">{count} sessions in your bucket</span>
+        <h3 className="font-semibold text-[#0f1419]">How You Compare</h3>
+        <span className="text-xs text-[#8b98a5]">{count} sessions in your bucket</span>
       </div>
 
       {/* Percentile badge */}
@@ -142,14 +142,14 @@ export default function PeerComparison({ data, loading, userFeedback }: PeerComp
         {rows.map((dim) => (
           <div key={dim.key}>
             <div className="flex justify-between text-xs mb-1.5">
-              <span className="text-slate-400">{dim.label}</span>
-              <span className="text-slate-400 tabular-nums">
-                You: <span className="text-slate-200 font-medium">{dim.userScore}</span>
+              <span className="text-[#536471]">{dim.label}</span>
+              <span className="text-[#536471] tabular-nums">
+                You: <span className="text-[#0f1419] font-medium">{dim.userScore}</span>
                 {' · '}
-                Avg: <span className="text-slate-200 font-medium">{dim.avgScore}</span>
+                Avg: <span className="text-[#0f1419] font-medium">{dim.avgScore}</span>
               </span>
             </div>
-            <div className="relative h-2 bg-slate-800 rounded-full overflow-hidden">
+            <div className="relative h-2 bg-[#eff3f4] rounded-full overflow-hidden">
               {/* User's score bar */}
               <div
                 className={`absolute h-full rounded-full transition-all duration-700 ${getBarColor(dim.userScore, dim.avgScore)}`}
@@ -157,7 +157,7 @@ export default function PeerComparison({ data, loading, userFeedback }: PeerComp
               />
               {/* Average marker */}
               <div
-                className="absolute w-0.5 h-4 -top-1 bg-slate-400 rounded"
+                className="absolute w-0.5 h-4 -top-1 bg-[#536471] rounded"
                 style={{ left: `${Math.min(100, dim.avgScore)}%` }}
                 title={`Community avg: ${dim.avgScore}`}
               />
@@ -166,7 +166,7 @@ export default function PeerComparison({ data, loading, userFeedback }: PeerComp
         ))}
       </div>
 
-      <p className="text-[10px] text-slate-600">
+      <p className="text-[10px] text-[#8b98a5]">
         Compared against {count} completed sessions for your role and experience level. Refreshed every 6 hours.
       </p>
     </section>
