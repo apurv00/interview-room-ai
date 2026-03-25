@@ -44,7 +44,7 @@ export default function BadgeGallery() {
     return (
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {Array.from({ length: 8 }).map((_, i) => (
-          <div key={i} className="h-32 bg-slate-800 rounded-xl animate-pulse" />
+          <div key={i} className="h-32 bg-[#f7f9f9] rounded-xl animate-pulse" />
         ))}
       </div>
     )
@@ -60,7 +60,7 @@ export default function BadgeGallery() {
 
   return (
     <div className="space-y-8">
-      <div className="text-sm text-[#6b7280]">
+      <div className="text-sm text-[#71767b]">
         {earned.length} / {allBadges.length} badges earned
       </div>
 
@@ -70,7 +70,7 @@ export default function BadgeGallery() {
 
         return (
           <section key={cat}>
-            <h2 className="text-sm font-semibold text-[#f0f2f5] mb-3">
+            <h2 className="text-sm font-semibold text-[#0f1419] mb-3">
               {CATEGORY_LABELS[cat]}
             </h2>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3">

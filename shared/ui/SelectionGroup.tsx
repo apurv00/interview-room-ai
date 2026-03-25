@@ -76,8 +76,8 @@ export default function SelectionGroup<T>({
                 px-4 py-2.5 rounded-[6px] text-micro font-medium whitespace-nowrap
                 transition-all duration-[120ms]
                 ${activeFilter === cat.key
-                  ? 'bg-[rgba(99,102,241,0.08)] text-[#818cf8] border border-[rgba(99,102,241,0.15)]'
-                  : 'bg-transparent text-[#4b5563] border border-transparent hover:text-[#b0b8c4]'
+                  ? 'bg-[rgba(99,102,241,0.08)] text-[#6366f1] border border-[rgba(99,102,241,0.15)]'
+                  : 'bg-transparent text-[#8b98a5] border border-transparent hover:text-[#536471]'
                 }
               `}
             >
@@ -103,7 +103,7 @@ export default function SelectionGroup<T>({
 
       {/* Items */}
       {visibleItems.length === 0 ? (
-        <p className="text-body text-[#6b7280] text-center py-8">{emptyMessage}</p>
+        <p className="text-body text-[#8b98a5] text-center py-8">{emptyMessage}</p>
       ) : (
         <div className={layoutClasses[layout]} role="listbox">
           {visibleItems.map((item) => {
@@ -121,8 +121,8 @@ export default function SelectionGroup<T>({
                   ${layout === 'inline' ? 'flex-1 text-center' : ''}
                   ${layout === 'list' && selected ? 'border-l-[3px] border-l-[#6366f1]' : ''}
                   ${selected
-                    ? 'bg-[rgba(99,102,241,0.08)] border border-[rgba(99,102,241,0.15)] text-[#818cf8]'
-                    : 'bg-card border border-[rgba(255,255,255,0.06)] text-[#b0b8c4] hover:bg-surface hover:border-[rgba(255,255,255,0.10)]'
+                    ? 'bg-[rgba(99,102,241,0.06)] border border-[rgba(99,102,241,0.15)] text-[#6366f1]'
+                    : 'bg-white border border-[#eff3f4] text-[#536471] hover:bg-[#f7f9f9] hover:border-[#e1e8ed]'
                   }
                   rounded-[10px]
                 `}
@@ -138,7 +138,7 @@ export default function SelectionGroup<T>({
       {maxVisible && !showAll && items.length > maxVisible && (
         <button
           onClick={() => setShowAll(true)}
-          className="text-caption text-[#818cf8] hover:text-[#6366f1] transition-colors"
+          className="text-caption text-[#6366f1] hover:text-[#4f46e5] transition-colors"
         >
           Show all {items.length} items &rarr;
         </button>
@@ -146,7 +146,7 @@ export default function SelectionGroup<T>({
       {maxVisible && showAll && items.length > maxVisible && (
         <button
           onClick={() => setShowAll(false)}
-          className="text-caption text-[#818cf8] hover:text-[#6366f1] transition-colors"
+          className="text-caption text-[#6366f1] hover:text-[#4f46e5] transition-colors"
         >
           Show less
         </button>

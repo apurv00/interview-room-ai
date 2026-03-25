@@ -52,7 +52,7 @@ export default function DomainsListPage() {
     fetchDomains()
   }
 
-  if (loading) return <div className="text-slate-400">Loading domains...</div>
+  if (loading) return <div className="text-[#536471]">Loading domains...</div>
   if (error) return <div className="text-red-400">{error}</div>
 
   return (
@@ -67,10 +67,10 @@ export default function DomainsListPage() {
         </Link>
       </div>
 
-      <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+      <div className="bg-white border border-[#e1e8ed] rounded-xl overflow-hidden">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-slate-800 text-left text-slate-400">
+            <tr className="border-b border-[#e1e8ed] text-left text-[#536471]">
               <th className="px-4 py-3">Slug</th>
               <th className="px-4 py-3">Label</th>
               <th className="px-4 py-3">Category</th>
@@ -81,7 +81,7 @@ export default function DomainsListPage() {
           </thead>
           <tbody>
             {domains.map((domain) => (
-              <tr key={domain.slug} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+              <tr key={domain.slug} className="border-b border-[#eff3f4] hover:bg-[#f7f9f9]">
                 <td className="px-4 py-3 font-mono text-xs">{domain.slug}</td>
                 <td className="px-4 py-3">{domain.label}</td>
                 <td className="px-4 py-3 capitalize">{domain.category}</td>
@@ -101,7 +101,7 @@ export default function DomainsListPage() {
                 <td className="px-4 py-3 space-x-2">
                   <Link
                     href={`/cms/domains/${domain.slug}`}
-                    className="text-indigo-400 hover:text-indigo-300 text-xs"
+                    className="text-[#6366f1] hover:text-[#6366f1] text-xs"
                   >
                     Edit
                   </Link>
@@ -118,7 +118,7 @@ export default function DomainsListPage() {
             ))}
             {domains.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                <td colSpan={6} className="px-4 py-8 text-center text-[#8b98a5]">
                   No domains found
                 </td>
               </tr>

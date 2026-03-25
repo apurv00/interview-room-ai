@@ -17,7 +17,7 @@ export default function OgImage() {
           flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
-          background: 'linear-gradient(135deg, #070b14 0%, #1e1b4b 50%, #070b14 100%)',
+          background: 'linear-gradient(135deg, #ffffff 0%, #eef2ff 50%, #ffffff 100%)',
           fontFamily: 'sans-serif',
         }}
       >
@@ -41,7 +41,7 @@ export default function OgImage() {
           style={{
             fontSize: 56,
             fontWeight: 800,
-            color: 'white',
+            color: '#0f1419',
             letterSpacing: '-0.02em',
             marginBottom: 16,
           }}
@@ -51,7 +51,7 @@ export default function OgImage() {
         <div
           style={{
             fontSize: 24,
-            color: '#94a3b8',
+            color: '#536471',
             maxWidth: 700,
             textAlign: 'center',
             lineHeight: 1.4,

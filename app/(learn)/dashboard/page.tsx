@@ -39,9 +39,9 @@ interface AnalyticsData {
 function StatCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
   return (
     <div className="surface-card-bordered p-5 flex flex-col gap-1">
-      <span className="text-xs text-[#6b7280] uppercase tracking-wide">{label}</span>
-      <span className="text-2xl font-bold text-[#f0f2f5]">{value}</span>
-      {sub && <span className="text-xs text-[#4b5563]">{sub}</span>}
+      <span className="text-xs text-[#71767b] uppercase tracking-wide">{label}</span>
+      <span className="text-2xl font-bold text-[#0f1419]">{value}</span>
+      {sub && <span className="text-xs text-[#8b98a5]">{sub}</span>}
     </div>
   )
 }
@@ -63,11 +63,11 @@ export default function DashboardPage() {
     return (
       <main className="max-w-6xl mx-auto px-4 py-8">
         <div className="animate-pulse space-y-6">
-          <div className="h-8 bg-slate-800 rounded w-60" />
+          <div className="h-8 bg-[#eff3f4] rounded w-60" />
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {[1, 2, 3, 4].map(i => <div key={i} className="h-24 bg-slate-800 rounded-xl" />)}
+            {[1, 2, 3, 4].map(i => <div key={i} className="h-24 bg-[#eff3f4] rounded-xl" />)}
           </div>
-          <div className="h-64 bg-slate-800 rounded-xl" />
+          <div className="h-64 bg-[#eff3f4] rounded-xl" />
         </div>
       </main>
     )
@@ -76,8 +76,8 @@ export default function DashboardPage() {
   if (!data) {
     return (
       <main className="max-w-6xl mx-auto px-4 py-8">
-        <h1 className="text-2xl font-bold text-[#f0f2f5] mb-4">Analytics Dashboard</h1>
-        <p className="text-[#6b7280]">Unable to load analytics data. Please try again later.</p>
+        <h1 className="text-2xl font-bold text-[#0f1419] mb-4">Analytics Dashboard</h1>
+        <p className="text-[#71767b]">Unable to load analytics data. Please try again later.</p>
       </main>
     )
   }
@@ -89,22 +89,22 @@ export default function DashboardPage() {
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-4">
         <motion.h1
-          className="text-2xl font-bold text-[#f0f2f5]"
+          className="text-2xl font-bold text-[#0f1419]"
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
         >
           Analytics Dashboard
         </motion.h1>
 
-        <div className="flex gap-1 p-1 bg-slate-800/50 rounded-lg">
+        <div className="flex gap-1 p-1 bg-[#eff3f4] rounded-lg">
           {(['7d', '30d', 'all'] as const).map(p => (
             <button
               key={p}
               onClick={() => setPeriod(p)}
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
                 period === p
-                  ? 'bg-slate-700 text-[#f0f2f5]'
-                  : 'text-[#6b7280] hover:text-[#d1d5db]'
+                  ? 'bg-white text-[#0f1419]'
+                  : 'text-[#71767b] hover:text-[#536471]'
               }`}
             >
               {p === 'all' ? 'All Time' : p === '7d' ? '7 Days' : '30 Days'}
@@ -160,23 +160,23 @@ export default function DashboardPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.2 }}
         >
-          <h2 className="text-sm font-semibold text-[#f0f2f5] mb-4">Score Over Time</h2>
+          <h2 className="text-sm font-semibold text-[#0f1419] mb-4">Score Over Time</h2>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={scoreTrend}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#e1e8ed" />
                 <XAxis
                   dataKey="date"
-                  tick={{ fontSize: 11, fill: '#6b7280' }}
+                  tick={{ fontSize: 11, fill: '#71767b' }}
                   tickFormatter={(v: string) => {
                     const d = new Date(v)
                     return `${d.getMonth() + 1}/${d.getDate()}`
                   }}
                 />
-                <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: '#6b7280' }} />
+                <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: '#71767b' }} />
                 <Tooltip
-                  contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
-                  labelStyle={{ color: '#d1d5db' }}
+                  contentStyle={{ backgroundColor: '#ffffff', border: '1px solid #e1e8ed', borderRadius: '8px' }}
+                  labelStyle={{ color: '#536471' }}
                   itemStyle={{ color: '#60a5fa' }}
                 />
                 <Line
@@ -202,20 +202,20 @@ export default function DashboardPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.3 }}
           >
-            <h2 className="text-sm font-semibold text-[#f0f2f5] mb-4">Competency Snapshot</h2>
+            <h2 className="text-sm font-semibold text-[#0f1419] mb-4">Competency Snapshot</h2>
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
                 <RadarChart data={competencyRadar} outerRadius="70%">
-                  <PolarGrid stroke="#334155" />
+                  <PolarGrid stroke="#e1e8ed" />
                   <PolarAngleAxis
                     dataKey="competency"
-                    tick={{ fontSize: 10, fill: '#9ca3af' }}
+                    tick={{ fontSize: 10, fill: '#8b98a5' }}
                   />
-                  <PolarRadiusAxis domain={[0, 100]} tick={{ fontSize: 9, fill: '#6b7280' }} />
+                  <PolarRadiusAxis domain={[0, 100]} tick={{ fontSize: 9, fill: '#71767b' }} />
                   <Radar
                     dataKey="score"
-                    stroke="#818cf8"
-                    fill="#818cf8"
+                    stroke="#6366f1"
+                    fill="#6366f1"
                     fillOpacity={0.2}
                   />
                 </RadarChart>
@@ -232,23 +232,23 @@ export default function DashboardPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.4 }}
           >
-            <h2 className="text-sm font-semibold text-[#f0f2f5] mb-4">Sessions Per Week</h2>
+            <h2 className="text-sm font-semibold text-[#0f1419] mb-4">Sessions Per Week</h2>
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={sessionsPerWeek}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e1e8ed" />
                   <XAxis
                     dataKey="week"
-                    tick={{ fontSize: 10, fill: '#6b7280' }}
+                    tick={{ fontSize: 10, fill: '#71767b' }}
                     tickFormatter={(v: string) => {
                       const d = new Date(v)
                       return `${d.getMonth() + 1}/${d.getDate()}`
                     }}
                   />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#6b7280' }} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#71767b' }} />
                   <Tooltip
-                    contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
-                    labelStyle={{ color: '#d1d5db' }}
+                    contentStyle={{ backgroundColor: '#ffffff', border: '1px solid #e1e8ed', borderRadius: '8px' }}
+                    labelStyle={{ color: '#536471' }}
                   />
                   <Bar dataKey="count" fill="#34d399" radius={[4, 4, 0, 0]} />
                 </BarChart>
@@ -266,24 +266,24 @@ export default function DashboardPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.5 }}
         >
-          <h2 className="text-sm font-semibold text-[#f0f2f5] mb-4">Communication Trends</h2>
+          <h2 className="text-sm font-semibold text-[#0f1419] mb-4">Communication Trends</h2>
           <div className="h-48">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={communicationTrend}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#e1e8ed" />
                 <XAxis
                   dataKey="date"
-                  tick={{ fontSize: 11, fill: '#6b7280' }}
+                  tick={{ fontSize: 11, fill: '#71767b' }}
                   tickFormatter={(v: string) => {
                     const d = new Date(v)
                     return `${d.getMonth() + 1}/${d.getDate()}`
                   }}
                 />
-                <YAxis yAxisId="wpm" tick={{ fontSize: 11, fill: '#6b7280' }} />
-                <YAxis yAxisId="filler" orientation="right" tick={{ fontSize: 11, fill: '#6b7280' }} />
+                <YAxis yAxisId="wpm" tick={{ fontSize: 11, fill: '#71767b' }} />
+                <YAxis yAxisId="filler" orientation="right" tick={{ fontSize: 11, fill: '#71767b' }} />
                 <Tooltip
-                  contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
-                  labelStyle={{ color: '#d1d5db' }}
+                  contentStyle={{ backgroundColor: '#ffffff', border: '1px solid #e1e8ed', borderRadius: '8px' }}
+                  labelStyle={{ color: '#536471' }}
                 />
                 <Line yAxisId="wpm" type="monotone" dataKey="wpm" stroke="#f59e0b" strokeWidth={2} dot={false} name="WPM" />
                 <Line yAxisId="filler" type="monotone" dataKey="fillerRate" stroke="#f87171" strokeWidth={2} dot={false} name="Filler %" />
@@ -291,11 +291,11 @@ export default function DashboardPage() {
             </ResponsiveContainer>
           </div>
           <div className="flex gap-6 mt-3">
-            <span className="text-xs text-[#6b7280] flex items-center gap-1.5">
-              <span className="w-3 h-0.5 bg-amber-400 rounded" /> Words Per Minute
+            <span className="text-xs text-[#71767b] flex items-center gap-1.5">
+              <span className="w-3 h-0.5 bg-[#d97706] rounded" /> Words Per Minute
             </span>
-            <span className="text-xs text-[#6b7280] flex items-center gap-1.5">
-              <span className="w-3 h-0.5 bg-red-400 rounded" /> Filler Rate
+            <span className="text-xs text-[#71767b] flex items-center gap-1.5">
+              <span className="w-3 h-0.5 bg-[#f4212e] rounded" /> Filler Rate
             </span>
           </div>
         </motion.section>
@@ -304,7 +304,7 @@ export default function DashboardPage() {
       {/* Empty state */}
       {stats.totalSessions === 0 && (
         <div className="text-center py-16">
-          <p className="text-[#6b7280] mb-4">No session data yet. Complete an interview to see your analytics!</p>
+          <p className="text-[#71767b] mb-4">No session data yet. Complete an interview to see your analytics!</p>
           <a
             href="/lobby"
             className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors"

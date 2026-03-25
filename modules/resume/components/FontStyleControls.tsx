@@ -19,7 +19,7 @@ export default function FontStyleControls({ fontFamily, headingSize, bodySize, o
         <select
           value={fontFamily}
           onChange={e => onFontFamilyChange(e.target.value)}
-          className="w-full mt-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 appearance-none cursor-pointer"
+          className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-emerald-500 appearance-none cursor-pointer"
         >
           {FONT_FAMILIES.map(f => (
             <option key={f.id} value={f.id}>{f.name}</option>
@@ -48,7 +48,7 @@ export default function FontStyleControls({ fontFamily, headingSize, bodySize, o
                 const v = Number(e.target.value)
                 if (v >= 12 && v <= 28) onHeadingSizeChange(v)
               }}
-              className="w-12 px-1.5 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white text-center focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              className="w-12 px-1.5 py-1 bg-white border border-[#e1e8ed] rounded text-xs text-[#0f1419] text-center focus:outline-none focus:ring-1 focus:ring-emerald-500"
             />
           </div>
         </div>
@@ -74,7 +74,7 @@ export default function FontStyleControls({ fontFamily, headingSize, bodySize, o
                 const v = Number(e.target.value)
                 if (v >= 7 && v <= 14) onBodySizeChange(v)
               }}
-              className="w-12 px-1.5 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-white text-center focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              className="w-12 px-1.5 py-1 bg-white border border-[#e1e8ed] rounded text-xs text-[#0f1419] text-center focus:outline-none focus:ring-1 focus:ring-emerald-500"
             />
           </div>
         </div>
@@ -82,7 +82,7 @@ export default function FontStyleControls({ fontFamily, headingSize, bodySize, o
       <div className="flex justify-end">
         <button
           onClick={() => { onHeadingSizeChange(DEFAULT_HEADING_SIZE); onBodySizeChange(DEFAULT_BODY_SIZE) }}
-          className="text-[10px] text-slate-500 hover:text-slate-300 transition-colors"
+          className="text-[10px] text-[#536471] hover:text-[#0f1419] transition-colors"
         >
           Reset to defaults
         </button>

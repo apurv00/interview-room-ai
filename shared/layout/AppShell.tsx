@@ -5,7 +5,6 @@ import { usePathname } from 'next/navigation'
 import { useSession, signOut } from 'next-auth/react'
 import Link from 'next/link'
 import AuthMenu from './AuthMenu'
-import ThemeToggle from '../ui/ThemeToggle'
 import Footer from './Footer'
 import XpBadge from '@learn/components/XpBadge'
 import BadgeUnlockChecker from '@learn/components/BadgeUnlockChecker'
@@ -41,7 +40,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <>
       {/* Desktop/Tablet header */}
-      <nav aria-label="Main navigation" className="sticky top-0 z-50 h-[52px] bg-card border-b border-[rgba(255,255,255,0.06)]">
+      <nav aria-label="Main navigation" className="sticky top-0 z-50 h-[52px] bg-white/80 backdrop-blur-md border-b border-[#e1e8ed]">
         <div className="max-w-[1200px] mx-auto px-4 sm:px-6 h-full">
           <div className="flex items-center justify-between h-full">
             {/* Left: brand */}
@@ -51,7 +50,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
                 </svg>
               </div>
-              <span className="text-sm font-bold text-[#f0f2f5] group-hover:text-[#818cf8] transition hidden sm:block">
+              <span className="text-sm font-bold text-[#0f1419] group-hover:text-[#6366f1] transition hidden sm:block">
                 Interview Prep Guru
               </span>
             </Link>
@@ -66,8 +65,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                     href={link.href}
                     className={`px-3 py-1.5 rounded-[6px] text-sm font-medium transition-all duration-[120ms] ${
                       isActive
-                        ? 'text-[#f0f2f5] bg-surface'
-                        : 'text-[#6b7280] hover:text-[#b0b8c4] hover:bg-surface/50'
+                        ? 'text-[#0f1419] bg-[#eff3f4]'
+                        : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#eff3f4]/50'
                     }`}
                   >
                     {link.label}
@@ -78,17 +77,16 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 href="/pricing"
                 className={`px-3 py-1.5 rounded-[6px] text-sm font-medium transition-all duration-[120ms] ${
                   pathname === '/pricing'
-                    ? 'text-[#f0f2f5] bg-surface'
-                    : 'text-[#6b7280] hover:text-[#b0b8c4] hover:bg-surface/50'
+                    ? 'text-[#0f1419] bg-[#eff3f4]'
+                    : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#eff3f4]/50'
                 }`}
               >
                 Pricing
               </Link>
             </div>
 
-            {/* Right: theme + xp + auth */}
+            {/* Right: xp + auth */}
             <div className="flex items-center gap-2">
-              <ThemeToggle />
               {isAuthenticated && <XpBadge />}
               <AuthMenu />
             </div>
@@ -104,7 +102,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       {isAuthenticated && (
         <nav
           aria-label="Mobile navigation"
-          className="md:hidden fixed bottom-0 left-0 right-0 z-50 h-[56px] bg-card border-t border-[rgba(255,255,255,0.06)]"
+          className="md:hidden fixed bottom-0 left-0 right-0 z-50 h-[56px] bg-white border-t border-[#e1e8ed]"
         >
           <div className="flex items-center justify-around h-full px-2">
             {NAV_LINKS.map((link) => {
@@ -114,7 +112,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   key={link.href}
                   href={link.href}
                   className={`flex flex-col items-center gap-0.5 py-1 px-3 transition-colors ${
-                    isActive ? 'text-[#818cf8]' : 'text-[#4b5563]'
+                    isActive ? 'text-[#6366f1]' : 'text-[#8b98a5]'
                   }`}
                 >
                   <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -128,7 +126,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             <button
               onClick={() => setMoreOpen(!moreOpen)}
               className={`flex flex-col items-center gap-0.5 py-1 px-3 transition-colors ${
-                moreOpen ? 'text-[#818cf8]' : 'text-[#4b5563]'
+                moreOpen ? 'text-[#6366f1]' : 'text-[#8b98a5]'
               }`}
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -142,20 +140,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           {moreOpen && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setMoreOpen(false)} />
-              <div className="absolute bottom-full left-0 right-0 z-50 bg-card border-t border-[rgba(255,255,255,0.06)] shadow-md animate-fade-in">
+              <div className="absolute bottom-full left-0 right-0 z-50 bg-white border-t border-[#e1e8ed] shadow-lg animate-fade-in">
                 {MORE_LINKS.map((link) => (
                   <Link
                     key={link.href}
                     href={link.href}
                     onClick={() => setMoreOpen(false)}
-                    className="block px-6 py-3.5 text-sm text-[#b0b8c4] hover:bg-surface transition-colors"
+                    className="block px-6 py-3.5 text-sm text-[#536471] hover:bg-[#f7f9f9] transition-colors"
                   >
                     {link.label}
                   </Link>
                 ))}
                 <button
                   onClick={() => { setMoreOpen(false); signOut({ callbackUrl: '/' }) }}
-                  className="w-full text-left px-6 py-3.5 text-sm text-[#f87171] hover:bg-surface transition-colors"
+                  className="w-full text-left px-6 py-3.5 text-sm text-[#f4212e] hover:bg-[#f7f9f9] transition-colors"
                 >
                   Sign Out
                 </button>

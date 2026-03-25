@@ -41,9 +41,9 @@ export default function Accordion({ items, mode = 'single' }: AccordionProps) {
               className="w-full flex items-center justify-between px-5 py-4 cursor-pointer text-left"
               aria-expanded={isOpen}
             >
-              <span className="text-subheading text-[#f0f2f5]">{item.title}</span>
+              <span className="text-subheading text-[#0f1419]">{item.title}</span>
               <svg
-                className={`w-4 h-4 text-[#4b5563] shrink-0 transition-transform duration-[250ms] ${isOpen ? 'rotate-180' : ''}`}
+                className={`w-4 h-4 text-[#8b98a5] shrink-0 transition-transform duration-[250ms] ${isOpen ? 'rotate-180' : ''}`}
                 style={{ transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)' }}
                 fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
               >
@@ -57,7 +57,7 @@ export default function Accordion({ items, mode = 'single' }: AccordionProps) {
                 transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)',
               }}
             >
-              <div className="px-5 pb-5 text-body text-[#b0b8c4]">
+              <div className="px-5 pb-5 text-body text-[#536471]">
                 {item.content}
               </div>
             </div>

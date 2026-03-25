@@ -114,10 +114,10 @@ export default function InvitePage() {
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-white">Invite Candidates</h1>
+        <h1 className="text-2xl font-bold text-[#0f1419]">Invite Candidates</h1>
         <button
           onClick={() => { setBulkMode(!bulkMode); setResult(null); setBulkResults([]) }}
-          className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+          className="text-xs text-[#6366f1] hover:text-[#6366f1] transition-colors"
         >
           {bulkMode ? 'Single Invite' : 'Bulk Invite'}
         </button>
@@ -127,24 +127,24 @@ export default function InvitePage() {
         <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-2xl p-6 space-y-4 animate-fade-in">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-emerald-500/20 flex items-center justify-center">
-              <svg className="w-5 h-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <svg className="w-5 h-5 text-[#059669]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
               </svg>
             </div>
             <div>
-              <p className="text-sm font-semibold text-emerald-400">Invite Sent!</p>
+              <p className="text-sm font-semibold text-[#059669]">Invite Sent!</p>
               <p className="text-xs text-emerald-300/70">Sent to {result.candidateEmail}</p>
             </div>
           </div>
 
           <div>
-            <label className="text-[10px] text-slate-500 uppercase tracking-wider">Interview Link</label>
+            <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Interview Link</label>
             <div className="flex gap-2 mt-1">
               <input
                 type="text"
                 value={result.inviteLink}
                 readOnly
-                className="flex-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-slate-300 font-mono"
+                className="flex-1 px-3 py-2 bg-[#f7f9f9] border border-[#e1e8ed] rounded-lg text-xs text-[#536471] font-mono"
               />
               <button
                 onClick={() => copyLink(result.inviteLink)}
@@ -157,73 +157,73 @@ export default function InvitePage() {
 
           <button
             onClick={() => { setResult(null); setEmail(''); setName(''); setNotes('') }}
-            className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+            className="text-xs text-[#6366f1] hover:text-[#6366f1] transition-colors"
           >
             Send Another Invite
           </button>
         </div>
       ) : (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5">
+        <div className="bg-white border border-[#e1e8ed] rounded-2xl p-6 space-y-5">
           {!bulkMode ? (
             <>
               {/* Single invite */}
               <div className="grid md:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <label className="text-[10px] text-slate-500 uppercase tracking-wider">Candidate Email *</label>
+                  <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Candidate Email *</label>
                   <input
                     type="email"
                     value={email}
                     onChange={e => setEmail(e.target.value)}
                     placeholder="candidate@company.com"
-                    className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-[10px] text-slate-500 uppercase tracking-wider">Candidate Name</label>
+                  <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Candidate Name</label>
                   <input
                     type="text"
                     value={name}
                     onChange={e => setName(e.target.value)}
                     placeholder="John Doe"
-                    className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
               </div>
             </>
           ) : (
             <div className="space-y-1.5">
-              <label className="text-[10px] text-slate-500 uppercase tracking-wider">Candidate Emails (one per line or comma-separated)</label>
+              <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Candidate Emails (one per line or comma-separated)</label>
               <textarea
                 value={bulkEmails}
                 onChange={e => setBulkEmails(e.target.value)}
                 placeholder={'candidate1@company.com\ncandidate2@company.com\ncandidate3@company.com'}
                 rows={5}
-                className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+                className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
               />
             </div>
           )}
 
           {/* Interview config */}
           <div className="space-y-1.5">
-            <label className="text-[10px] text-slate-500 uppercase tracking-wider">Interview Domain *</label>
+            <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Interview Domain *</label>
             <DomainSelector selectedDomain={role} onSelect={slug => { setRole(slug); setInterviewType(null) }} />
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-[10px] text-slate-500 uppercase tracking-wider">Interview Type</label>
+            <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Interview Type</label>
             <DepthSelector selectedDomain={role} selectedDepth={interviewType} onSelect={setInterviewType} />
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <label className="text-[10px] text-slate-500 uppercase tracking-wider">Experience Level</label>
+              <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Experience Level</label>
               <div className="grid grid-cols-3 gap-2">
                 {['0-2', '3-6', '7+'].map(e => (
                   <button
                     key={e}
                     onClick={() => setExperience(e)}
                     className={`py-2 rounded-lg border text-xs font-medium transition-all ${
-                      experience === e ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'
+                      experience === e ? 'border-indigo-500 bg-indigo-500/10 text-[#6366f1]' : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#e1e8ed]'
                     }`}
                   >
                     {e} yrs
@@ -232,14 +232,14 @@ export default function InvitePage() {
               </div>
             </div>
             <div className="space-y-1.5">
-              <label className="text-[10px] text-slate-500 uppercase tracking-wider">Duration</label>
+              <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Duration</label>
               <div className="grid grid-cols-3 gap-2">
                 {[10, 20, 30].map(d => (
                   <button
                     key={d}
                     onClick={() => setDuration(d)}
                     className={`py-2 rounded-lg border text-xs font-medium transition-all ${
-                      duration === d ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'
+                      duration === d ? 'border-indigo-500 bg-indigo-500/10 text-[#6366f1]' : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#e1e8ed]'
                     }`}
                   >
                     {d} min
@@ -251,27 +251,27 @@ export default function InvitePage() {
 
           {!bulkMode && (
             <div className="space-y-1.5">
-              <label className="text-[10px] text-slate-500 uppercase tracking-wider">Recruiter Notes (internal)</label>
+              <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Recruiter Notes (internal)</label>
               <textarea
                 value={notes}
                 onChange={e => setNotes(e.target.value)}
                 maxLength={1000}
                 placeholder="Any context for this candidate..."
                 rows={2}
-                className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+                className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
               />
             </div>
           )}
 
           <div className="space-y-1.5">
-            <label className="text-[10px] text-slate-500 uppercase tracking-wider">Job Description (optional)</label>
+            <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Job Description (optional)</label>
             <textarea
               value={jdText}
               onChange={e => setJdText(e.target.value)}
               maxLength={50000}
               placeholder="Paste the job description here for role-specific questions..."
               rows={3}
-              className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+              className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
             />
           </div>
 
@@ -289,15 +289,15 @@ export default function InvitePage() {
 
       {/* Bulk results */}
       {bulkResults.length > 0 && (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
-          <h3 className="text-sm font-semibold text-white">Bulk Invite Results</h3>
+        <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
+          <h3 className="text-sm font-semibold text-[#0f1419]">Bulk Invite Results</h3>
           {bulkResults.map((r, i) => (
             <div key={i} className={`flex items-center justify-between px-3 py-2 rounded-lg ${r.success ? 'bg-emerald-500/5' : 'bg-red-500/5'}`}>
-              <span className="text-xs text-slate-300">{r.email}</span>
+              <span className="text-xs text-[#536471]">{r.email}</span>
               {r.success ? (
                 <button
                   onClick={() => r.link && copyLink(r.link)}
-                  className="text-[10px] text-indigo-400 hover:text-indigo-300"
+                  className="text-[10px] text-[#6366f1] hover:text-[#6366f1]"
                 >
                   Copy Link
                 </button>

@@ -11,8 +11,8 @@ export default function FeedbackRedirect() {
   }, [router])
 
   return (
-    <div className="min-h-screen bg-[#070b14] flex items-center justify-center">
-      <div className="w-6 h-6 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
+    <div className="min-h-screen bg-white flex items-center justify-center">
+      <div className="w-6 h-6 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
     </div>
   )
 }

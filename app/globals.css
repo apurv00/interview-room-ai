@@ -3,33 +3,18 @@
 @tailwind utilities;
 
 :root {
-  --color-page: #070b14;
-  --color-card: #0c1220;
-  --color-surface: #151d2e;
-  --color-raised: #1c2539;
-  --color-border: rgba(255,255,255,0.10);
-  --color-border-subtle: rgba(255,255,255,0.06);
-  --foreground: #f0f2f5;
-  --foreground-secondary: #b0b8c4;
-  --foreground-tertiary: #6b7280;
-  --foreground-muted: #6b7280;
-  --background: #070b14;
-  --radius-md: 10px;
-}
-
-/* ─── LIGHT MODE ─────────────────────────── */
-.light {
-  --color-page: #f8f9fb;
+  --color-page: #ffffff;
   --color-card: #ffffff;
-  --color-surface: #f0f1f4;
-  --color-raised: #e8e9ed;
-  --color-border: rgba(0,0,0,0.10);
-  --color-border-subtle: rgba(0,0,0,0.06);
-  --foreground: #1a1a2e;
-  --foreground-secondary: #4a4a5e;
-  --foreground-tertiary: #6b7280;
-  --foreground-muted: #9ca3af;
-  --background: #f8f9fb;
+  --color-surface: #f7f9f9;
+  --color-raised: #eff3f4;
+  --color-border: #e1e8ed;
+  --color-border-subtle: #eff3f4;
+  --foreground: #0f1419;
+  --foreground-secondary: #536471;
+  --foreground-tertiary: #71767b;
+  --foreground-muted: #8b98a5;
+  --background: #ffffff;
+  --radius-md: 10px;
 }
 
 * {
@@ -76,24 +61,21 @@ body {
 }
 
 /* ─── SCROLLBAR ─────────────────────────── */
-* { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.08) transparent; }
-.light * { scrollbar-color: rgba(0,0,0,0.08) transparent; }
+* { scrollbar-width: thin; scrollbar-color: rgba(0,0,0,0.08) transparent; }
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 9999px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }
-.light ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.08); }
-.light ::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.15); }
+::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.08); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.15); }
 
 /* Transcript scroll area */
 .transcript-scroll {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255,255,255,0.08) transparent;
+  scrollbar-color: rgba(0,0,0,0.08) transparent;
 }
 
 /* ─── SELECTION ─────────────────────────── */
 ::selection {
-  background: rgba(99, 102, 241, 0.3);
+  background: rgba(99, 102, 241, 0.2);
 }
 
 /* ─── FOCUS ─────────────────────────────── */
@@ -104,14 +86,14 @@ body {
 
 /* ─── GLOW BUTTON ───────────────────────── */
 .btn-glow {
-  box-shadow: 0 0 20px rgba(99, 102, 241, 0.3);
+  box-shadow: 0 0 20px rgba(99, 102, 241, 0.25);
   transition: box-shadow 0.2s ease;
 }
 .btn-glow:hover {
-  box-shadow: 0 0 28px rgba(99, 102, 241, 0.45);
+  box-shadow: 0 0 28px rgba(99, 102, 241, 0.35);
 }
 .btn-glow:active {
-  box-shadow: 0 0 16px rgba(99, 102, 241, 0.25);
+  box-shadow: 0 0 16px rgba(99, 102, 241, 0.2);
 }
 
 /* ─── WAVE ANIMATION (avatar fallback) ──── */

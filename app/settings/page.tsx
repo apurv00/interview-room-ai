@@ -41,9 +41,9 @@ interface UsageData {
 }
 
 const PLAN_BADGE_STYLES: Record<string, string> = {
-  free: 'bg-slate-700 text-slate-300',
-  pro: 'bg-indigo-600 text-indigo-100',
-  enterprise: 'bg-violet-600 text-violet-100',
+  free: 'bg-[#eff3f4] text-[#536471]',
+  pro: 'bg-indigo-600 text-white',
+  enterprise: 'bg-violet-600 text-white',
 }
 
 export default function SettingsPage() {
@@ -119,7 +119,7 @@ export default function SettingsPage() {
   if (status === 'loading' || !session?.user) {
     return (
       <main className="min-h-screen flex items-center justify-center">
-        <div className="w-6 h-6 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
+        <div className="w-6 h-6 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
       </main>
     )
   }
@@ -153,18 +153,18 @@ export default function SettingsPage() {
 
   return (
     <main className="min-h-screen px-4 py-12 max-w-2xl mx-auto space-y-6">
-      <h1 className="text-3xl font-bold text-white animate-fade-in">Settings</h1>
+      <h1 className="text-3xl font-bold text-[#0f1419] animate-fade-in">Settings</h1>
 
       {/* Upgrade success banner */}
       {upgraded && (
-        <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-5 py-4 text-sm text-emerald-300 animate-fade-in">
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-5 py-4 text-sm text-[#059669] animate-fade-in">
           🎉 Your plan has been upgraded! New limits are now active.
         </div>
       )}
 
       {/* Profile Card */}
-      <section className="bg-slate-900 border border-slate-700 rounded-2xl p-6 animate-fade-in">
-        <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-widest mb-4">
+      <section className="bg-white border border-[#e1e8ed] rounded-2xl p-6 animate-fade-in">
+        <h2 className="text-sm font-semibold text-[#536471] uppercase tracking-widest mb-4">
           Profile
         </h2>
         <div className="flex items-center gap-4">
@@ -174,33 +174,33 @@ export default function SettingsPage() {
               alt="Profile"
               width={56}
               height={56}
-              className="w-14 h-14 rounded-full border-2 border-slate-700"
+              className="w-14 h-14 rounded-full border-2 border-[#e1e8ed]"
             />
           ) : (
-            <div className="w-14 h-14 rounded-full bg-indigo-600 flex items-center justify-center text-lg font-bold text-white border-2 border-slate-700">
+            <div className="w-14 h-14 rounded-full bg-indigo-600 flex items-center justify-center text-lg font-bold text-white border-2 border-[#e1e8ed]">
               {initials}
             </div>
           )}
           <div className="flex-1 min-w-0">
-            <p className="text-lg font-medium text-white truncate">{user.name}</p>
-            <p className="text-sm text-slate-400 truncate">{user.email}</p>
+            <p className="text-lg font-medium text-[#0f1419] truncate">{user.name}</p>
+            <p className="text-sm text-[#536471] truncate">{user.email}</p>
             {memberSince && (
-              <p className="text-xs text-slate-500 mt-1">Member since {memberSince}</p>
+              <p className="text-xs text-[#8b98a5] mt-1">Member since {memberSince}</p>
             )}
           </div>
         </div>
       </section>
 
       {/* Interview Profile Card */}
-      <section className="bg-slate-900 border border-slate-700 rounded-2xl p-6 animate-fade-in">
+      <section className="bg-white border border-[#e1e8ed] rounded-2xl p-6 animate-fade-in">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-widest">
+          <h2 className="text-sm font-semibold text-[#536471] uppercase tracking-widest">
             Interview Profile
           </h2>
           {!profileEditing ? (
             <button
               onClick={() => setProfileEditing(true)}
-              className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+              className="text-xs text-[#6366f1] hover:text-indigo-700 transition-colors"
             >
               Edit
             </button>
@@ -208,7 +208,7 @@ export default function SettingsPage() {
             <div className="flex gap-2">
               <button
                 onClick={() => setProfileEditing(false)}
-                className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
+                className="text-xs text-[#8b98a5] hover:text-[#536471] transition-colors"
               >
                 Cancel
               </button>
@@ -256,7 +256,7 @@ export default function SettingsPage() {
                   setProfileSaving(false)
                 }}
                 disabled={profileSaving}
-                className="text-xs text-indigo-400 hover:text-indigo-300 font-medium transition-colors disabled:opacity-50"
+                className="text-xs text-[#6366f1] hover:text-indigo-700 font-medium transition-colors disabled:opacity-50"
               >
                 {profileSaving ? 'Saving...' : 'Save'}
               </button>
@@ -266,98 +266,98 @@ export default function SettingsPage() {
 
         {!profile ? (
           <div className="flex items-center justify-center py-6">
-            <div className="w-5 h-5 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
+            <div className="w-5 h-5 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
           </div>
         ) : !profileEditing ? (
           <div className="space-y-3">
             {!profile.targetRole && !profile.currentTitle && !profile.interviewGoal && (
-              <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-lg px-4 py-3 text-sm text-indigo-300">
+              <div className="bg-indigo-50 border border-indigo-200 rounded-lg px-4 py-3 text-sm text-[#6366f1]">
                 Complete your profile for more personalized interviews.
-                <button onClick={() => setProfileEditing(true)} className="ml-2 underline hover:text-indigo-200">Set up now</button>
+                <button onClick={() => setProfileEditing(true)} className="ml-2 underline hover:text-indigo-700">Set up now</button>
               </div>
             )}
             {profile.targetRole && (
               <div className="flex justify-between text-sm">
-                <span className="text-slate-500">Target Role</span>
-                <span className="text-slate-300">{ROLE_LABELS[profile.targetRole as Role] || profile.targetRole}</span>
+                <span className="text-[#8b98a5]">Target Role</span>
+                <span className="text-[#536471]">{ROLE_LABELS[profile.targetRole as Role] || profile.targetRole}</span>
               </div>
             )}
             {profile.experienceLevel && (
               <div className="flex justify-between text-sm">
-                <span className="text-slate-500">Experience</span>
-                <span className="text-slate-300">{EXPERIENCE_LABELS[profile.experienceLevel as ExperienceLevel] || profile.experienceLevel}</span>
+                <span className="text-[#8b98a5]">Experience</span>
+                <span className="text-[#536471]">{EXPERIENCE_LABELS[profile.experienceLevel as ExperienceLevel] || profile.experienceLevel}</span>
               </div>
             )}
             {profile.currentTitle && (
               <div className="flex justify-between text-sm">
-                <span className="text-slate-500">Current Title</span>
-                <span className="text-slate-300">{profile.currentTitle}</span>
+                <span className="text-[#8b98a5]">Current Title</span>
+                <span className="text-[#536471]">{profile.currentTitle}</span>
               </div>
             )}
             {profile.currentIndustry && (
               <div className="flex justify-between text-sm">
-                <span className="text-slate-500">Industry</span>
+                <span className="text-[#8b98a5]">Industry</span>
                 <span className="text-slate-300 capitalize">{profile.currentIndustry}</span>
               </div>
             )}
             {profile.targetCompanyType && (
               <div className="flex justify-between text-sm">
-                <span className="text-slate-500">Target Companies</span>
+                <span className="text-[#8b98a5]">Target Companies</span>
                 <span className="text-slate-300 capitalize">{profile.targetCompanyType === 'faang' ? 'FAANG / Big Tech' : profile.targetCompanyType}</span>
               </div>
             )}
             {profile.interviewGoal && (
               <div className="flex justify-between text-sm">
-                <span className="text-slate-500">Goal</span>
+                <span className="text-[#8b98a5]">Goal</span>
                 <span className="text-slate-300 capitalize">{profile.interviewGoal.replace(/_/g, ' ')}</span>
               </div>
             )}
             {profile.weakAreas?.length > 0 && (
               <div className="flex justify-between text-sm">
-                <span className="text-slate-500">Focus Areas</span>
-                <span className="text-slate-300">{profile.weakAreas.map(a => a.replace(/_/g, ' ')).join(', ')}</span>
+                <span className="text-[#8b98a5]">Focus Areas</span>
+                <span className="text-[#536471]">{profile.weakAreas.map(a => a.replace(/_/g, ' ')).join(', ')}</span>
               </div>
             )}
             {profile.topSkills?.length > 0 && (
               <div className="flex justify-between text-sm">
-                <span className="text-slate-500">Top Skills</span>
+                <span className="text-[#8b98a5]">Top Skills</span>
                 <span className="text-slate-300 text-right max-w-[60%]">{profile.topSkills.join(', ')}</span>
               </div>
             )}
             {profile.educationLevel && (
               <div className="flex justify-between text-sm">
-                <span className="text-slate-500">Education</span>
+                <span className="text-[#8b98a5]">Education</span>
                 <span className="text-slate-300 capitalize">{profile.educationLevel.replace(/_/g, ' ')}</span>
               </div>
             )}
             {profile.yearsInCurrentRole != null && (
               <div className="flex justify-between text-sm">
-                <span className="text-slate-500">Years in Current Role</span>
-                <span className="text-slate-300">{profile.yearsInCurrentRole}</span>
+                <span className="text-[#8b98a5]">Years in Current Role</span>
+                <span className="text-[#536471]">{profile.yearsInCurrentRole}</span>
               </div>
             )}
             {profile.targetCompanies?.length > 0 && (
               <div className="flex justify-between text-sm">
-                <span className="text-slate-500">Target Companies</span>
+                <span className="text-[#8b98a5]">Target Companies</span>
                 <span className="text-slate-300 text-right max-w-[60%]">{profile.targetCompanies.join(', ')}</span>
               </div>
             )}
             {profile.communicationStyle && (
               <div className="flex justify-between text-sm">
-                <span className="text-slate-500">Communication Style</span>
+                <span className="text-[#8b98a5]">Communication Style</span>
                 <span className="text-slate-300 capitalize">{profile.communicationStyle}</span>
               </div>
             )}
             {profile.feedbackPreference && (
               <div className="flex justify-between text-sm">
-                <span className="text-slate-500">Feedback Preference</span>
+                <span className="text-[#8b98a5]">Feedback Preference</span>
                 <span className="text-slate-300 capitalize">{profile.feedbackPreference.replace(/_/g, ' ')}</span>
               </div>
             )}
             {profile.hasResume && profile.resumeFileName && (
               <div className="flex justify-between text-sm">
-                <span className="text-slate-500">Resume</span>
-                <span className="text-slate-300">{profile.resumeFileName}</span>
+                <span className="text-[#8b98a5]">Resume</span>
+                <span className="text-[#536471]">{profile.resumeFileName}</span>
               </div>
             )}
           </div>
@@ -365,10 +365,10 @@ export default function SettingsPage() {
           <div className="space-y-4">
             {/* Role */}
             <div className="space-y-1.5">
-              <label className="text-xs text-slate-500 uppercase tracking-wide">Target Role</label>
+              <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Target Role</label>
               <div className="grid grid-cols-4 gap-2">
                 {(['frontend', 'backend', 'sdet', 'devops', 'data-science', 'pm', 'design', 'business', 'marketing', 'finance', 'sales']).map((r) => (
-                  <button key={r} onClick={() => setEditTargetRole(r as Role)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editTargetRole === r ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'}`}>
+                  <button key={r} onClick={() => setEditTargetRole(r as Role)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editTargetRole === r ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]' : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'}`}>
                     {ROLE_LABELS[r as Role] || r.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
                   </button>
                 ))}
@@ -376,10 +376,10 @@ export default function SettingsPage() {
             </div>
             {/* Experience */}
             <div className="space-y-1.5">
-              <label className="text-xs text-slate-500 uppercase tracking-wide">Experience</label>
+              <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Experience</label>
               <div className="grid grid-cols-3 gap-2">
                 {(['0-2', '3-6', '7+'] as ExperienceLevel[]).map((e) => (
-                  <button key={e} onClick={() => setEditExperience(e)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editExperience === e ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'}`}>
+                  <button key={e} onClick={() => setEditExperience(e)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editExperience === e ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]' : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'}`}>
                     {EXPERIENCE_LABELS[e]}
                   </button>
                 ))}
@@ -387,15 +387,15 @@ export default function SettingsPage() {
             </div>
             {/* Title */}
             <div className="space-y-1.5">
-              <label className="text-xs text-slate-500 uppercase tracking-wide">Current Title</label>
-              <input type="text" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} maxLength={100} placeholder="e.g. Senior Software Engineer" className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Current Title</label>
+              <input type="text" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} maxLength={100} placeholder="e.g. Senior Software Engineer" className="w-full px-3 py-2 bg-[#f7f9f9] border border-[#e1e8ed] rounded-lg text-[#0f1419] text-sm placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-[#6366f1]" />
             </div>
             {/* Industry */}
             <div className="space-y-1.5">
-              <label className="text-xs text-slate-500 uppercase tracking-wide">Industry</label>
+              <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Industry</label>
               <div className="grid grid-cols-5 gap-1.5">
                 {['tech', 'finance', 'consulting', 'healthcare', 'retail', 'media', 'government', 'education', 'startup', 'other'].map((i) => (
-                  <button key={i} onClick={() => setEditIndustry(i)} className={`py-1.5 rounded-lg border text-xs font-medium transition-all capitalize ${editIndustry === i ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'}`}>
+                  <button key={i} onClick={() => setEditIndustry(i)} className={`py-1.5 rounded-lg border text-xs font-medium transition-all capitalize ${editIndustry === i ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]' : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'}`}>
                     {i}
                   </button>
                 ))}
@@ -403,10 +403,10 @@ export default function SettingsPage() {
             </div>
             {/* Company Type */}
             <div className="space-y-1.5">
-              <label className="text-xs text-slate-500 uppercase tracking-wide">Target Companies</label>
+              <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Target Companies</label>
               <div className="grid grid-cols-3 gap-2">
                 {[{v:'faang',l:'FAANG'},{v:'startup',l:'Startup'},{v:'midsize',l:'Mid-size'},{v:'consulting',l:'Consulting'},{v:'enterprise',l:'Enterprise'},{v:'any',l:'Any'}].map((c) => (
-                  <button key={c.v} onClick={() => setEditCompanyType(c.v)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editCompanyType === c.v ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'}`}>
+                  <button key={c.v} onClick={() => setEditCompanyType(c.v)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editCompanyType === c.v ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]' : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'}`}>
                     {c.l}
                   </button>
                 ))}
@@ -414,10 +414,10 @@ export default function SettingsPage() {
             </div>
             {/* Goal */}
             <div className="space-y-1.5">
-              <label className="text-xs text-slate-500 uppercase tracking-wide">Interview Goal</label>
+              <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Interview Goal</label>
               <div className="space-y-1.5">
                 {[{v:'first_interview',l:'First interview'},{v:'improve_scores',l:'Improve skills'},{v:'career_switch',l:'Career switch'},{v:'promotion',l:'Promotion prep'},{v:'general_practice',l:'General practice'}].map((g) => (
-                  <button key={g.v} onClick={() => setEditGoal(g.v)} className={`w-full text-left px-3 py-2 rounded-lg border text-xs font-medium transition-all ${editGoal === g.v ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'}`}>
+                  <button key={g.v} onClick={() => setEditGoal(g.v)} className={`w-full text-left px-3 py-2 rounded-lg border text-xs font-medium transition-all ${editGoal === g.v ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]' : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'}`}>
                     {g.l}
                   </button>
                 ))}
@@ -425,10 +425,10 @@ export default function SettingsPage() {
             </div>
             {/* Weak Areas */}
             <div className="space-y-1.5">
-              <label className="text-xs text-slate-500 uppercase tracking-wide">Focus Areas (up to 3)</label>
+              <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Focus Areas (up to 3)</label>
               <div className="grid grid-cols-3 gap-1.5">
                 {[{v:'star_structure',l:'STAR Structure'},{v:'specificity',l:'Specificity'},{v:'conciseness',l:'Conciseness'},{v:'confidence',l:'Confidence'},{v:'technical_depth',l:'Tech Depth'},{v:'storytelling',l:'Storytelling'}].map((w) => (
-                  <button key={w.v} onClick={() => setEditWeakAreas(prev => prev.includes(w.v) ? prev.filter(a => a !== w.v) : prev.length < 3 ? [...prev, w.v] : prev)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editWeakAreas.includes(w.v) ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'}`}>
+                  <button key={w.v} onClick={() => setEditWeakAreas(prev => prev.includes(w.v) ? prev.filter(a => a !== w.v) : prev.length < 3 ? [...prev, w.v] : prev)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editWeakAreas.includes(w.v) ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]' : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'}`}>
                     {w.l}
                   </button>
                 ))}
@@ -436,22 +436,22 @@ export default function SettingsPage() {
             </div>
 
             {/* Divider */}
-            <div className="border-t border-slate-800 pt-4">
-              <p className="text-[10px] text-slate-600 uppercase tracking-wider mb-3">Advanced Personalization</p>
+            <div className="border-t border-[#eff3f4] pt-4">
+              <p className="text-[10px] text-[#8b98a5] uppercase tracking-wider mb-3">Advanced Personalization</p>
             </div>
 
             {/* Top Skills */}
             <div className="space-y-1.5">
-              <label className="text-xs text-slate-500 uppercase tracking-wide">Top Skills (comma-separated, up to 10)</label>
-              <input type="text" value={editTopSkills} onChange={(e) => setEditTopSkills(e.target.value)} maxLength={500} placeholder="e.g. Python, System Design, Leadership" className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Top Skills (comma-separated, up to 10)</label>
+              <input type="text" value={editTopSkills} onChange={(e) => setEditTopSkills(e.target.value)} maxLength={500} placeholder="e.g. Python, System Design, Leadership" className="w-full px-3 py-2 bg-[#f7f9f9] border border-[#e1e8ed] rounded-lg text-[#0f1419] text-sm placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-[#6366f1]" />
             </div>
 
             {/* Education Level */}
             <div className="space-y-1.5">
-              <label className="text-xs text-slate-500 uppercase tracking-wide">Education Level</label>
+              <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Education Level</label>
               <div className="grid grid-cols-3 gap-1.5">
                 {[{v:'high_school',l:'High School'},{v:'bachelors',l:'Bachelors'},{v:'masters',l:'Masters'},{v:'phd',l:'PhD'},{v:'bootcamp',l:'Bootcamp'},{v:'self_taught',l:'Self-Taught'}].map((e) => (
-                  <button key={e.v} onClick={() => setEditEducation(e.v)} className={`py-1.5 rounded-lg border text-xs font-medium transition-all ${editEducation === e.v ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'}`}>
+                  <button key={e.v} onClick={() => setEditEducation(e.v)} className={`py-1.5 rounded-lg border text-xs font-medium transition-all ${editEducation === e.v ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]' : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'}`}>
                     {e.l}
                   </button>
                 ))}
@@ -460,22 +460,22 @@ export default function SettingsPage() {
 
             {/* Years in Current Role */}
             <div className="space-y-1.5">
-              <label className="text-xs text-slate-500 uppercase tracking-wide">Years in Current Role</label>
-              <input type="number" min={0} max={50} value={editYearsInRole} onChange={(e) => setEditYearsInRole(e.target.value)} placeholder="e.g. 3" className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Years in Current Role</label>
+              <input type="number" min={0} max={50} value={editYearsInRole} onChange={(e) => setEditYearsInRole(e.target.value)} placeholder="e.g. 3" className="w-full px-3 py-2 bg-[#f7f9f9] border border-[#e1e8ed] rounded-lg text-[#0f1419] text-sm placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-[#6366f1]" />
             </div>
 
             {/* Target Companies */}
             <div className="space-y-1.5">
-              <label className="text-xs text-slate-500 uppercase tracking-wide">Target Companies (comma-separated, up to 5)</label>
-              <input type="text" value={editTargetCompanies} onChange={(e) => setEditTargetCompanies(e.target.value)} maxLength={300} placeholder="e.g. Google, Stripe, Airbnb" className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Target Companies (comma-separated, up to 5)</label>
+              <input type="text" value={editTargetCompanies} onChange={(e) => setEditTargetCompanies(e.target.value)} maxLength={300} placeholder="e.g. Google, Stripe, Airbnb" className="w-full px-3 py-2 bg-[#f7f9f9] border border-[#e1e8ed] rounded-lg text-[#0f1419] text-sm placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-[#6366f1]" />
             </div>
 
             {/* Communication Style */}
             <div className="space-y-1.5">
-              <label className="text-xs text-slate-500 uppercase tracking-wide">Communication Style</label>
+              <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Communication Style</label>
               <div className="grid grid-cols-3 gap-2">
                 {[{v:'concise',l:'Concise'},{v:'detailed',l:'Detailed'},{v:'storyteller',l:'Storyteller'}].map((s) => (
-                  <button key={s.v} onClick={() => setEditCommStyle(s.v)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editCommStyle === s.v ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'}`}>
+                  <button key={s.v} onClick={() => setEditCommStyle(s.v)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editCommStyle === s.v ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]' : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'}`}>
                     {s.l}
                   </button>
                 ))}
@@ -484,10 +484,10 @@ export default function SettingsPage() {
 
             {/* Feedback Preference */}
             <div className="space-y-1.5">
-              <label className="text-xs text-slate-500 uppercase tracking-wide">Feedback Preference</label>
+              <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Feedback Preference</label>
               <div className="grid grid-cols-3 gap-2">
                 {[{v:'encouraging',l:'Encouraging'},{v:'balanced',l:'Balanced'},{v:'tough_love',l:'Tough Love'}].map((f) => (
-                  <button key={f.v} onClick={() => setEditFeedbackPref(f.v)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editFeedbackPref === f.v ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'}`}>
+                  <button key={f.v} onClick={() => setEditFeedbackPref(f.v)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editFeedbackPref === f.v ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]' : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'}`}>
                     {f.l}
                   </button>
                 ))}
@@ -498,9 +498,9 @@ export default function SettingsPage() {
       </section>
 
       {/* Plan & Usage Card */}
-      <section className="bg-slate-900 border border-slate-700 rounded-2xl p-6 animate-fade-in">
+      <section className="bg-white border border-[#e1e8ed] rounded-2xl p-6 animate-fade-in">
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-widest">
+          <h2 className="text-sm font-semibold text-[#536471] uppercase tracking-widest">
             Plan & Usage
           </h2>
           <span
@@ -512,14 +512,14 @@ export default function SettingsPage() {
 
         {loading ? (
           <div className="flex items-center justify-center py-8">
-            <div className="w-5 h-5 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
+            <div className="w-5 h-5 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
           </div>
         ) : (
           <div className="space-y-5">
             {/* Usage bar */}
             <div>
               <div className="flex items-center justify-between mb-2">
-                <span className="text-sm text-slate-300">
+                <span className="text-sm text-[#0f1419]">
                   {isUnlimited ? `${used} interviews completed` : `${used} of ${limit} interviews used`}
                 </span>
                 {remaining !== null && (

@@ -16,10 +16,10 @@ module.exports = {
           700: '#4338ca',
           900: '#1e1b4b',
         },
-        page: '#070b14',
-        card: '#0c1220',
-        surface: '#151d2e',
-        raised: '#1c2539',
+        page: 'var(--color-page)',
+        card: 'var(--color-card)',
+        surface: 'var(--color-surface)',
+        raised: 'var(--color-raised)',
       },
       spacing: {
         'inline': '6px',
@@ -32,7 +32,7 @@ module.exports = {
         DEFAULT: '10px',
       },
       borderColor: {
-        DEFAULT: 'rgba(255,255,255,0.10)',
+        DEFAULT: 'var(--color-border)',
       },
       animation: {
         'pulse-slow': 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',

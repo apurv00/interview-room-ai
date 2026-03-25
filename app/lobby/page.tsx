@@ -249,10 +249,10 @@ export default function LobbyPage() {
       >
         {/* Header */}
         <motion.div className="text-center space-y-2" variants={itemVariants}>
-          <h1 className="text-2xl sm:text-3xl font-bold text-white">Pre-Interview Check</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold text-[#0f1419]">Pre-Interview Check</h1>
           {config && (
             <div className="space-y-2">
-              <p className="text-slate-400">
+              <p className="text-[#536471]">
                 {getDomainLabel(config.role)}
                 {config.interviewType && config.interviewType !== 'screening' && ` · ${config.interviewType.split('-').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}`}
                 {' '}· {config.experience} yrs · {config.duration} min session
@@ -262,20 +262,20 @@ export default function LobbyPage() {
               {(config.jdFileName || config.resumeFileName) && (
                 <div className="flex items-center justify-center gap-2.5 flex-wrap">
                   {config.jdFileName && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-xs text-emerald-400">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-xs text-emerald-600">
                       <DocIcon />
                       JD: {config.jdFileName}
                     </span>
                   )}
                   {config.resumeFileName && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-xs text-emerald-400">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-xs text-emerald-600">
                       <DocIcon />
                       Resume: {config.resumeFileName}
                     </span>
                   )}
                   <button
                     onClick={() => router.push('/')}
-                    className="text-xs text-slate-500 hover:text-indigo-400 transition underline underline-offset-2"
+                    className="text-xs text-[#71767b] hover:text-[#6366f1] transition underline underline-offset-2"
                   >
                     Change
                   </button>
@@ -288,7 +288,7 @@ export default function LobbyPage() {
         <div className="grid md:grid-cols-2 gap-5">
           {/* Camera preview */}
           <motion.div className="space-y-3" variants={itemVariants}>
-            <div className="relative aspect-video rounded-2xl overflow-hidden bg-slate-900 border border-slate-700/50">
+            <div className="relative aspect-video rounded-2xl overflow-hidden bg-[#f7f9f9] border border-[#e1e8ed]">
               <video
                 ref={videoRef}
                 autoPlay
@@ -296,7 +296,7 @@ export default function LobbyPage() {
                 playsInline
                 className="w-full h-full object-cover scale-x-[-1]"
               />
-              <div className="absolute bottom-3 left-3 bg-black/50 backdrop-blur-md px-3 py-1.5 rounded-lg border border-white/[0.06] text-xs text-slate-300 font-medium">
+              <div className="absolute bottom-3 left-3 bg-white/80 backdrop-blur-md px-3 py-1.5 rounded-lg border border-[#e1e8ed] text-xs text-[#536471] font-medium">
                 Camera preview
               </div>
 

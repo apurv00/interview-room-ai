@@ -39,10 +39,10 @@ function resolveColor(score: number, color: MetricColor): 'emerald' | 'amber' | 
 }
 
 const scoreTextColor: Record<string, string> = {
-  emerald: 'text-emerald-400',
-  amber: 'text-amber-400',
-  rose: 'text-rose-400',
-  indigo: 'text-indigo-400',
+  emerald: 'text-emerald-600',
+  amber: 'text-amber-600',
+  rose: 'text-rose-600',
+  indigo: 'text-indigo-600',
 }
 
 export default function MetricCard({
@@ -62,7 +62,7 @@ export default function MetricCard({
         className={`flex items-center justify-between ${expandable ? 'cursor-pointer' : ''}`}
         onClick={expandable ? () => setExpanded(!expanded) : undefined}
       >
-        <span className="text-subheading text-[#f0f2f5]">{title}</span>
+        <span className="text-subheading text-[#0f1419]">{title}</span>
         <div className="flex items-center gap-2">
           <span className={`text-heading font-bold tabular-nums ${scoreTextColor[resolved]}`}
             role="meter"
@@ -75,7 +75,7 @@ export default function MetricCard({
           </span>
           {expandable && (
             <svg
-              className={`w-4 h-4 text-[#4b5563] transition-transform duration-[250ms] ${expanded ? 'rotate-180' : ''}`}
+              className={`w-4 h-4 text-[#8b98a5] transition-transform duration-[250ms] ${expanded ? 'rotate-180' : ''}`}
               fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
             >
               <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
@@ -98,12 +98,12 @@ export default function MetricCard({
           {insights && (
             <div className="mt-3 space-y-2">
               {insights.strengths?.map((s, i) => (
-                <p key={i} className="text-caption text-[#34d399] flex items-start gap-1.5">
+                <p key={i} className="text-caption text-[#059669] flex items-start gap-1.5">
                   <span className="mt-0.5">&#10003;</span> {s}
                 </p>
               ))}
               {insights.improvements?.map((s, i) => (
-                <p key={i} className="text-caption text-[#fbbf24] flex items-start gap-1.5">
+                <p key={i} className="text-caption text-[#d97706] flex items-start gap-1.5">
                   <span className="mt-0.5">&#9651;</span> {s}
                 </p>
               ))}

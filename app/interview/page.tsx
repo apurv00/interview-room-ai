@@ -39,16 +39,16 @@ const PHASE_LABELS: Record<string, string> = {
 }
 
 const PHASE_COLORS: Record<string, { text: string; bg: string; border: string; dot: string }> = {
-  LISTENING: { text: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/25', dot: 'bg-emerald-400' },
-  PROCESSING: { text: 'text-amber-400', bg: 'bg-amber-500/10', border: 'border-amber-500/25', dot: 'bg-amber-400' },
-  COACHING: { text: 'text-violet-400', bg: 'bg-violet-500/10', border: 'border-violet-500/25', dot: 'bg-violet-400' },
-  ASK_QUESTION: { text: 'text-indigo-400', bg: 'bg-indigo-500/10', border: 'border-indigo-500/25', dot: 'bg-indigo-400' },
-  FOLLOW_UP: { text: 'text-purple-400', bg: 'bg-purple-500/10', border: 'border-purple-500/25', dot: 'bg-purple-400' },
-  WRAP_UP: { text: 'text-orange-400', bg: 'bg-orange-500/10', border: 'border-orange-500/25', dot: 'bg-orange-400' },
-  SCORING: { text: 'text-cyan-400', bg: 'bg-cyan-500/10', border: 'border-cyan-500/25', dot: 'bg-cyan-400' },
+  LISTENING: { text: 'text-emerald-600', bg: 'bg-emerald-500/10', border: 'border-emerald-500/25', dot: 'bg-emerald-600' },
+  PROCESSING: { text: 'text-amber-600', bg: 'bg-amber-500/10', border: 'border-amber-500/25', dot: 'bg-amber-600' },
+  COACHING: { text: 'text-violet-600', bg: 'bg-violet-500/10', border: 'border-violet-500/25', dot: 'bg-violet-600' },
+  ASK_QUESTION: { text: 'text-[#6366f1]', bg: 'bg-indigo-500/10', border: 'border-indigo-500/25', dot: 'bg-[#6366f1]' },
+  FOLLOW_UP: { text: 'text-purple-600', bg: 'bg-purple-500/10', border: 'border-purple-500/25', dot: 'bg-purple-600' },
+  WRAP_UP: { text: 'text-orange-600', bg: 'bg-orange-500/10', border: 'border-orange-500/25', dot: 'bg-orange-600' },
+  SCORING: { text: 'text-cyan-600', bg: 'bg-cyan-500/10', border: 'border-cyan-500/25', dot: 'bg-cyan-600' },
 }
 
-const DEFAULT_PHASE_COLOR = { text: 'text-[#6b7280]', bg: 'bg-surface', border: 'border-[rgba(255,255,255,0.10)]', dot: 'bg-[#6b7280]' }
+const DEFAULT_PHASE_COLOR = { text: 'text-[#71767b]', bg: 'bg-[#f7f9f9]', border: 'border-[#e1e8ed]', dot: 'bg-[#71767b]' }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -186,15 +186,15 @@ export default function InterviewPage() {
   // ─── Loading state ─────────────────────────────────────────────────────────
   if (!config) {
     return (
-      <div className="min-h-screen bg-[#070b14] flex items-center justify-center">
+      <div className="min-h-screen bg-white flex items-center justify-center">
         <motion.div
           className="flex flex-col items-center gap-4"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 0.5 }}
         >
-          <div className="w-8 h-8 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
-          <p className="text-sm text-[#4b5563]">Loading interview...</p>
+          <div className="w-8 h-8 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
+          <p className="text-sm text-[#71767b]">Loading interview...</p>
         </motion.div>
       </div>
     )
@@ -202,13 +202,13 @@ export default function InterviewPage() {
 
   return (
     <motion.div
-      className="min-h-screen bg-[#070b14] flex flex-col"
+      className="min-h-screen bg-white flex flex-col"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.5, ease: 'easeOut' }}
     >
       {/* ── Header ── */}
-      <header className="flex items-center justify-between px-5 h-[52px] bg-card border-b border-[rgba(255,255,255,0.06)] shrink-0">
+      <header className="flex items-center justify-between px-5 h-[52px] bg-white border-b border-[#e1e8ed] shrink-0">
         <div className="flex items-center gap-3">
           {/* Live dot */}
           <div className="flex items-center gap-2">
@@ -217,10 +217,10 @@ export default function InterviewPage() {
               animate={{ opacity: [1, 0.4, 1] }}
               transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
             />
-            <span className="text-sm font-medium text-[#b0b8c4]">Live</span>
+            <span className="text-sm font-medium text-[#536471]">Live</span>
           </div>
           {/* Separator */}
-          <div className="w-px h-4 bg-[rgba(255,255,255,0.06)]" />
+          <div className="w-px h-4 bg-[#e1e8ed]" />
           <RecordingIndicator
             isRecording={isRecording}
             durationSeconds={recordingDuration}
@@ -232,7 +232,7 @@ export default function InterviewPage() {
         <motion.div
           className="font-mono font-bold tabular-nums text-lg"
           animate={{
-            color: timeRemaining < 60 ? '#f87171' : timeRemaining < 120 ? '#fbbf24' : '#e2e8f0',
+            color: timeRemaining < 60 ? '#f4212e' : timeRemaining < 120 ? '#d97706' : '#0f1419',
           }}
           transition={{ duration: 0.5 }}
         >
@@ -257,7 +257,7 @@ export default function InterviewPage() {
               />
             )}
             {phase === 'PROCESSING' && (
-              <div className="w-3 h-3 rounded-full border border-amber-400 border-t-transparent animate-spin" />
+              <div className="w-3 h-3 rounded-full border border-amber-600 border-t-transparent animate-spin" />
             )}
             <span className="font-medium">{PHASE_LABELS[phase] ?? phase}</span>
           </motion.div>
@@ -278,14 +278,14 @@ export default function InterviewPage() {
                   {[0, 1, 2].map((i) => (
                     <motion.div
                       key={i}
-                      className="w-[2.5px] bg-indigo-400 rounded-full origin-bottom"
+                      className="w-[2.5px] bg-[#6366f1] rounded-full origin-bottom"
                       animate={{ scaleY: [0.3, 1, 0.3] }}
                       transition={{ duration: 0.5, repeat: Infinity, delay: i * 0.1, ease: 'easeInOut' }}
                       style={{ height: '10px' }}
                     />
                   ))}
                 </div>
-                <span className="text-[10px] text-indigo-300 font-medium ml-1">AI</span>
+                <span className="text-[10px] text-[#6366f1] font-medium ml-1">AI</span>
               </div>
             ) : null
           }
@@ -310,7 +310,7 @@ export default function InterviewPage() {
                   animate={{ opacity: [1, 0.4, 1] }}
                   transition={{ duration: 1.5, repeat: Infinity, ease: 'easeInOut' }}
                 />
-                <span className="text-[10px] text-[#b0b8c4] font-medium">REC</span>
+                <span className="text-[10px] text-[#536471] font-medium">REC</span>
               </div>
             ) : null
           }

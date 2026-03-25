@@ -37,8 +37,8 @@ class FeedbackErrorBoundary extends Component<
       return (
         <div className="min-h-screen bg-page flex flex-col items-center justify-center gap-5 px-4">
           <div className="surface-card-bordered p-6 max-w-sm w-full text-center space-y-4">
-            <p className="text-subheading text-[#f0f2f5]">Something went wrong rendering feedback</p>
-            <p className="text-body text-[#6b7280]">{String(this.state.error?.message || 'Unknown error')}</p>
+            <p className="text-subheading text-[#0f1419]">Something went wrong rendering feedback</p>
+            <p className="text-body text-[#71767b]">{String(this.state.error?.message || 'Unknown error')}</p>
             <button
               onClick={() => { window.location.href = '/' }}
               className="px-5 py-2 bg-brand-500 hover:bg-brand-600 text-white rounded-[var(--radius-md)] text-sm font-medium transition"
@@ -304,7 +304,7 @@ function FeedbackPageInner() {
     return (
       <div className="min-h-screen bg-page flex flex-col items-center justify-center gap-4">
         <div className="w-8 h-8 rounded-full border-2 border-brand-500 border-t-transparent animate-spin" />
-        <p className="text-body text-[#6b7280]">Generating your feedback report...</p>
+        <p className="text-body text-[#71767b]">Generating your feedback report...</p>
       </div>
     )
   }
@@ -314,19 +314,19 @@ function FeedbackPageInner() {
       <div className="min-h-screen bg-page flex flex-col items-center justify-center gap-5 px-4">
         <div className="surface-card-bordered border-red-500/30 p-6 max-w-sm w-full text-center space-y-4">
           <div className="w-12 h-12 rounded-full bg-red-600/20 flex items-center justify-center mx-auto">
-            <svg className="w-6 h-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <svg className="w-6 h-6 text-[#f4212e]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </div>
           <div>
-            <p className="text-subheading text-[#f0f2f5]">Something went wrong</p>
-            <p className="text-body text-[#6b7280] mt-1">{feedbackError}</p>
+            <p className="text-subheading text-[#0f1419]">Something went wrong</p>
+            <p className="text-body text-[#71767b] mt-1">{feedbackError}</p>
           </div>
           <div className="flex gap-3 justify-center">
             <button onClick={handleRetry} className="px-5 py-2 bg-brand-500 hover:bg-brand-600 text-white rounded-[var(--radius-md)] text-sm font-medium transition">
               Try again
             </button>
-            <button onClick={() => router.push('/')} className="px-5 py-2 bg-surface hover:bg-raised border border-[rgba(255,255,255,0.10)] text-[#9ca3af] rounded-[var(--radius-md)] text-sm font-medium transition">
+            <button onClick={() => router.push('/')} className="px-5 py-2 bg-[#f7f9f9] hover:bg-[#eff3f4] border border-[#e1e8ed] text-[#536471] rounded-[var(--radius-md)] text-sm font-medium transition">
               Go home
             </button>
           </div>
@@ -341,8 +341,8 @@ function FeedbackPageInner() {
     return (
       <div className="min-h-screen bg-page flex flex-col items-center justify-center gap-5 px-4">
         <div className="surface-card-bordered border-red-500/30 p-6 max-w-sm w-full text-center space-y-4">
-          <p className="text-subheading text-[#f0f2f5]">Invalid feedback data</p>
-          <p className="text-body text-[#6b7280]">The feedback response had an unexpected format. Please try again.</p>
+          <p className="text-subheading text-[#0f1419]">Invalid feedback data</p>
+          <p className="text-body text-[#71767b]">The feedback response had an unexpected format. Please try again.</p>
           <button onClick={handleRetry} className="px-5 py-2 bg-brand-500 hover:bg-brand-600 text-white rounded-[var(--radius-md)] text-sm font-medium transition">
             Try again
           </button>
@@ -362,14 +362,14 @@ function FeedbackPageInner() {
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-page text-[#f0f2f5]">
+    <div className="min-h-screen bg-white text-[#0f1419]">
       {/* Header */}
-      <header className="sticky top-14 z-10 bg-card border-b border-[rgba(255,255,255,0.06)] h-[52px] flex items-center px-6">
+      <header className="sticky top-14 z-10 bg-white border-b border-[#e1e8ed] h-[52px] flex items-center px-6">
         <div className="max-w-[800px] mx-auto w-full flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button
               onClick={() => router.back()}
-              className="p-1.5 rounded-lg hover:bg-surface transition text-[#9ca3af] hover:text-[#f0f2f5]"
+              className="p-1.5 rounded-lg hover:bg-[#f7f9f9] transition text-[#536471] hover:text-[#0f1419]"
               aria-label="Go back"
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -378,7 +378,7 @@ function FeedbackPageInner() {
             </button>
             <h1 className="text-heading">Interview Feedback</h1>
           </div>
-          <p className="text-caption text-[#6b7280]">
+          <p className="text-caption text-[#71767b]">
             {data.config &&
               `${ROLE_LABELS[data.config.role]} · ${data.config.experience} yrs · ${data.config.duration} min`}
           </p>
@@ -388,7 +388,7 @@ function FeedbackPageInner() {
       {/* Save warning banner */}
       {saveWarning && (
         <div className="max-w-[800px] mx-auto px-4 mt-4">
-          <div className="bg-amber-500/10 border border-amber-500/30 rounded-[var(--radius-md)] px-5 py-3 text-sm text-amber-300 flex items-center gap-2">
+          <div className="bg-amber-500/10 border border-amber-500/30 rounded-[var(--radius-md)] px-5 py-3 text-sm text-amber-600 flex items-center gap-2">
             <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
@@ -419,7 +419,7 @@ function FeedbackPageInner() {
                 ? 'Competent'
                 : 'Needs Development'}
             </h2>
-            <p className="text-body text-[#6b7280]">
+            <p className="text-body text-[#71767b]">
               {overall_score >= 75
                 ? 'You demonstrated clear, structured answers with solid examples.'
                 : overall_score >= 55
@@ -431,13 +431,13 @@ function FeedbackPageInner() {
             <div className={`px-3 py-1 rounded-full border text-sm font-medium ${PROBABILITY_COLORS[pass_probability]}`}>
               {s(pass_probability)} pass probability
             </div>
-            <div className="px-3 py-1 rounded-full border border-[rgba(255,255,255,0.10)] text-[#9ca3af] text-sm">
+            <div className="px-3 py-1 rounded-full border border-[#e1e8ed] text-[#536471] text-sm">
               {s(feedback.confidence_level)} confidence
             </div>
           </div>
           <ShareButton sessionId={sessionId} />
           <div className="w-full pt-2">
-            <p className="text-caption text-[#4b5563] mb-1">Score trend</p>
+            <p className="text-caption text-[#8b98a5] mb-1">Score trend</p>
             <ScoreTrendChart currentScore={overall_score} sessionId={sessionId} />
           </div>
         </section>
@@ -470,7 +470,7 @@ function FeedbackPageInner() {
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                 activeTab === tab.key
                   ? 'bg-brand-500 text-white'
-                  : 'text-[#6b7280] hover:text-[#f0f2f5]'
+                  : 'text-[#71767b] hover:text-[#0f1419]'
               }`}
             >
               {tab.label}
@@ -525,7 +525,7 @@ function FeedbackPageInner() {
               a.download = 'interview-transcript.txt'
               a.click()
             }}
-            className="px-8 py-3 bg-surface hover:bg-raised border border-[rgba(255,255,255,0.10)] text-[#9ca3af] rounded-[var(--radius-md)] font-medium transition"
+            className="px-8 py-3 bg-[#f7f9f9] hover:bg-[#eff3f4] border border-[#e1e8ed] text-[#536471] rounded-[var(--radius-md)] font-medium transition"
           >
             Download Transcript
           </button>
