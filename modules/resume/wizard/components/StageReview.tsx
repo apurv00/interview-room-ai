@@ -159,8 +159,8 @@ export default function StageReview({
                       }}
                       className={`text-[10px] px-2 py-1 rounded-md transition-colors ${
                         decision?.decision === 'edit'
-                          ? 'bg-[#6366f1]/20 text-[#a5b4fc]'
-                          : 'bg-surface text-[#6b7280] hover:text-[#a5b4fc]'
+                          ? 'bg-[#6366f1]/20 text-[#6366f1]'
+                          : 'bg-surface text-[#6b7280] hover:text-[#6366f1]'
                       }`}
                     >
                       Edit

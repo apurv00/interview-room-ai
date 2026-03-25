@@ -50,9 +50,9 @@ export default function VideoTile({ label, sublabel, children, isActive, indicat
               transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
             />
           )}
-          <span className="text-sm font-medium text-white/90">{label}</span>
+          <span className="text-sm font-medium text-[#0f1419]">{label}</span>
           {sublabel && (
-            <span className="text-[11px] text-slate-400 border-l border-slate-600/50 pl-2">{sublabel}</span>
+            <span className="text-[11px] text-[#536471] border-l border-[#e1e8ed] pl-2">{sublabel}</span>
           )}
         </div>
       </div>

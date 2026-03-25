@@ -34,13 +34,13 @@ export default function StageEducation({ education, onChange }: Props) {
   return (
     <div className="space-y-6">
       <div className="space-y-1">
-        <h2 className="text-xl font-bold text-white">Education</h2>
+        <h2 className="text-xl font-bold text-[#0f1419]">Education</h2>
         <p className="text-sm text-[#6b7280]">Add your educational background</p>
       </div>
 
       {education.length === 0 && (
         <div className="text-center py-8">
-          <p className="text-sm text-[#4b5563] mb-3">No education added yet</p>
+          <p className="text-sm text-[#8b98a5] mb-3">No education added yet</p>
           <Button variant="primary" size="sm" onClick={addEntry}>Add Education</Button>
         </div>
       )}
@@ -48,12 +48,12 @@ export default function StageEducation({ education, onChange }: Props) {
       {education.map((entry, i) => (
         <div
           key={entry.id}
-          className="bg-surface border border-[rgba(255,255,255,0.06)] rounded-xl p-4 space-y-3"
+          className="bg-surface border border-[#e1e8ed] rounded-xl p-4 space-y-3"
         >
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-[#6366f1]">Education {i + 1}</span>
             {education.length > 1 && (
-              <button onClick={() => removeEntry(entry.id)} className="text-xs text-[#4b5563] hover:text-[#f87171] transition-colors">
+              <button onClick={() => removeEntry(entry.id)} className="text-xs text-[#8b98a5] hover:text-[#f87171] transition-colors">
                 Remove
               </button>
             )}

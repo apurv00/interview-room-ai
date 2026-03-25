@@ -28,18 +28,18 @@ export default function StageExport({
   return (
     <div className="space-y-6">
       <div className="space-y-1">
-        <h2 className="text-xl font-bold text-white">Export Your Resume</h2>
+        <h2 className="text-xl font-bold text-[#0f1419]">Export Your Resume</h2>
         <p className="text-sm text-[#6b7280]">Choose a template and download your polished resume</p>
       </div>
 
       {/* Strength Score Card */}
-      <div className="bg-surface border border-[rgba(255,255,255,0.06)] rounded-xl p-4 space-y-3">
+      <div className="bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl p-4 space-y-3">
         <div className="flex items-center justify-between">
-          <span className="text-sm font-medium text-white">Resume Strength</span>
+          <span className="text-sm font-medium text-[#0f1419]">Resume Strength</span>
           <motion.span
             key={strengthScore}
             className={`text-2xl font-bold ${
-              strengthScore >= 75 ? 'text-emerald-400'
+              strengthScore >= 75 ? 'text-[#059669]'
                 : strengthScore >= 50 ? 'text-amber-400'
                   : 'text-[#6366f1]'
             }`}
@@ -61,7 +61,7 @@ export default function StageExport({
                   transition={{ duration: 0.4 }}
                 />
               </div>
-              <span className="text-[10px] text-[#4b5563] w-8 text-right">{value}/{getMax(key)}</span>
+              <span className="text-[10px] text-[#8b98a5] w-8 text-right">{value}/{getMax(key)}</span>
             </div>
           ))}
         </div>
@@ -69,7 +69,7 @@ export default function StageExport({
 
       {/* Template Selector */}
       <div className="space-y-3">
-        <h3 className="text-sm font-semibold text-[#b0b8c4]">Choose Template</h3>
+        <h3 className="text-sm font-semibold text-[#536471]">Choose Template</h3>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
           {RESUME_TEMPLATES.slice(0, 6).map(template => (
             <button
@@ -78,13 +78,13 @@ export default function StageExport({
               className={`p-3 rounded-xl border text-left transition-all ${
                 selectedTemplate === template.id
                   ? 'border-[#6366f1]/50 bg-[#6366f1]/10 ring-1 ring-[#6366f1]/20'
-                  : 'border-[rgba(255,255,255,0.06)] bg-surface hover:border-[rgba(255,255,255,0.15)]'
+                  : 'border-[#e1e8ed] bg-[#f7f9f9] hover:border-[#e1e8ed]'
               }`}
             >
               <div className="w-full h-12 rounded bg-card mb-2 flex items-center justify-center">
-                <span className="text-[8px] text-[#4b5563] uppercase tracking-wider">{template.id}</span>
+                <span className="text-[8px] text-[#8b98a5] uppercase tracking-wider">{template.id}</span>
               </div>
-              <p className="text-xs font-medium text-white truncate">{template.name}</p>
+              <p className="text-xs font-medium text-[#0f1419] truncate">{template.name}</p>
             </button>
           ))}
         </div>
@@ -112,7 +112,7 @@ export default function StageExport({
         >
           Download PDF
         </Button>
-        <p className="text-[10px] text-center text-[#4b5563]">
+        <p className="text-[10px] text-center text-[#8b98a5]">
           Your resume will also be saved to your dashboard for future editing
         </p>
       </div>

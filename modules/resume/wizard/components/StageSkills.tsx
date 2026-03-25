@@ -36,17 +36,17 @@ function TagInput({ label, placeholder, tags, onAdd, onRemove }: {
 
   return (
     <div className="space-y-2">
-      <label className="text-caption text-[#b0b8c4]">{label}</label>
-      <div className="min-h-[44px] bg-surface border border-[rgba(255,255,255,0.10)] rounded-[6px] p-2 flex flex-wrap gap-1.5 focus-within:border-[#6366f1] focus-within:ring-1 focus-within:ring-[rgba(99,102,241,0.15)] transition-all duration-[120ms]">
+      <label className="text-caption text-[#536471]">{label}</label>
+      <div className="min-h-[44px] bg-surface border border-[#e1e8ed] rounded-[6px] p-2 flex flex-wrap gap-1.5 focus-within:border-[#6366f1] focus-within:ring-1 focus-within:ring-[rgba(99,102,241,0.15)] transition-all duration-[120ms]">
         {tags.map((tag, i) => (
           <span
             key={`${tag}-${i}`}
-            className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#6366f1]/10 border border-[#6366f1]/20 rounded text-xs text-[#a5b4fc]"
+            className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#6366f1]/10 border border-[#6366f1]/20 rounded text-xs text-[#6366f1]"
           >
             {tag}
             <button
               onClick={() => onRemove(i)}
-              className="text-[#6366f1] hover:text-white transition-colors"
+              className="text-[#6366f1] hover:text-[#0f1419] transition-colors"
             >
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -59,10 +59,10 @@ function TagInput({ label, placeholder, tags, onAdd, onRemove }: {
           onChange={e => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={tags.length === 0 ? placeholder : 'Add more...'}
-          className="flex-1 min-w-[120px] bg-transparent text-sm text-[#f0f2f5] placeholder-[#4b5563] outline-none"
+          className="flex-1 min-w-[120px] bg-transparent text-sm text-[#0f1419] placeholder-[#8b98a5] outline-none"
         />
       </div>
-      <p className="text-[10px] text-[#4b5563]">Press Enter or comma to add</p>
+      <p className="text-[10px] text-[#8b98a5]">Press Enter or comma to add</p>
     </div>
   )
 }
@@ -80,7 +80,7 @@ export default function StageSkills({ skills, onChange }: Props) {
   return (
     <div className="space-y-6">
       <div className="space-y-1">
-        <h2 className="text-xl font-bold text-white">Skills</h2>
+        <h2 className="text-xl font-bold text-[#0f1419]">Skills</h2>
         <p className="text-sm text-[#6b7280]">Add your key skills across categories</p>
       </div>
 
