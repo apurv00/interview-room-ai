@@ -10,7 +10,7 @@
 # Prerequisites:
 #   - claude (Claude Code CLI) installed and authenticated
 #   - npx available (Node.js)
-#   - ANTHROPIC_API_KEY set (or Claude Code already authenticated)
+#   - ANTHROPIC_API_KEY set (or Claude Code already authenticated with mcp_servers scope)
 #
 # Output:
 #   /tmp/screenshots/   — screenshots captured during testing
@@ -21,9 +21,8 @@ set -euo pipefail
 
 URL="${1:-https://interviewprep.guru}"
 TEST_MOBILE="${2:-true}"
-MAX_TURNS="${3:-80}"
+MAX_BUDGET="${3:-5.00}"
 MODEL="${4:-claude-sonnet-4-20250514}"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Ensure output directories exist
 mkdir -p /tmp/screenshots
@@ -38,7 +37,7 @@ echo "╠═══════════════════════�
 echo "║  URL:    $URL"
 echo "║  Mobile: $TEST_MOBILE"
 echo "║  Model:  $MODEL"
-echo "║  Turns:  $MAX_TURNS"
+echo "║  Budget: \$$MAX_BUDGET"
 echo "╚══════════════════════════════════════════╝"
 echo ""
 
@@ -47,7 +46,7 @@ MCP_CONFIG='{
   "mcpServers": {
     "playwright": {
       "command": "npx",
-      "args": ["@playwright/mcp@latest", "--headless", "--browser", "chromium"]
+      "args": ["@playwright/mcp@latest", "--headless", "--browser", "chromium", "--no-sandbox", "--output-dir", "/tmp/screenshots"]
     }
   }
 }'
@@ -63,14 +62,15 @@ IMPORTANT: Save all screenshots to /tmp/screenshots/ and write your final QA rep
 EOF
 )"
 
+ALLOWED_TOOLS="mcp__playwright__browser_navigate,mcp__playwright__browser_click,mcp__playwright__browser_type,mcp__playwright__browser_take_screenshot,mcp__playwright__browser_snapshot,mcp__playwright__browser_resize,mcp__playwright__browser_navigate_back,mcp__playwright__browser_wait,mcp__playwright__browser_evaluate,mcp__playwright__browser_select_option,mcp__playwright__browser_hover,mcp__playwright__browser_press_key,Read,Write"
+
 # Run Claude Code with Playwright MCP
 claude \
-  --print \
-  --max-turns "$MAX_TURNS" \
+  -p "$PROMPT" \
   --model "$MODEL" \
-  --allowedTools "mcp__playwright__browser_navigate,mcp__playwright__browser_click,mcp__playwright__browser_type,mcp__playwright__browser_take_screenshot,mcp__playwright__browser_snapshot,mcp__playwright__browser_resize,mcp__playwright__browser_navigate_back,mcp__playwright__browser_wait,mcp__playwright__browser_evaluate,mcp__playwright__browser_select_option,mcp__playwright__browser_hover,mcp__playwright__browser_press_key,Read,Write" \
-  --mcp-config "$MCP_CONFIG" \
-  --prompt "$PROMPT"
+  --max-budget-usd "$MAX_BUDGET" \
+  --allowedTools "$ALLOWED_TOOLS" \
+  --mcp-config "$MCP_CONFIG"
 
 echo ""
 echo "════════════════════════════════════════════"
