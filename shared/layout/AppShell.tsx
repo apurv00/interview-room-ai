@@ -40,53 +40,60 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <>
       {/* Desktop/Tablet header */}
-      <nav aria-label="Main navigation" className="sticky top-0 z-50 h-[52px] bg-white/80 backdrop-blur-md border-b border-[#e1e8ed]">
+      <nav aria-label="Main navigation" className="sticky top-0 z-50 h-[52px] bg-white/85 backdrop-blur-xl border-b border-[#e1e8ed]/60">
         <div className="max-w-[1200px] mx-auto px-4 sm:px-6 h-full">
           <div className="flex items-center justify-between h-full">
             {/* Left: brand */}
             <Link href="/" className="flex items-center gap-2.5 group">
-              <div className="w-7 h-7 rounded-[6px] bg-[#6366f1] flex items-center justify-center">
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#6366f1] to-[#4f46e5] flex items-center justify-center shadow-sm">
                 <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
                 </svg>
               </div>
-              <span className="text-sm font-bold text-[#0f1419] group-hover:text-[#6366f1] transition hidden sm:block">
+              <span className="text-[15px] font-bold text-[#0f1419] group-hover:text-[#6366f1] transition-colors hidden sm:block">
                 Interview Prep Guru
               </span>
             </Link>
 
-            {/* Center: nav links (desktop) */}
-            <div className="hidden md:flex items-center gap-1">
+            {/* Center: nav links (desktop) — Twitter-style with bottom indicator */}
+            <div className="hidden md:flex items-center h-full">
               {NAV_LINKS.map((link) => {
                 const isActive = pathname === link.href
                 return (
                   <Link
                     key={link.href}
                     href={link.href}
-                    className={`px-3 py-1.5 rounded-[6px] text-sm font-medium transition-all duration-[120ms] ${
+                    className={`relative px-4 h-full flex items-center text-sm font-medium transition-colors ${
                       isActive
-                        ? 'text-[#0f1419] bg-[#eff3f4]'
-                        : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#eff3f4]/50'
+                        ? 'text-[#0f1419]'
+                        : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#f7f9f9]'
                     }`}
                   >
                     {link.label}
+                    {/* Active indicator bar */}
+                    {isActive && (
+                      <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[calc(100%-16px)] h-[3px] bg-[#6366f1] rounded-full" />
+                    )}
                   </Link>
                 )
               })}
               <Link
                 href="/pricing"
-                className={`px-3 py-1.5 rounded-[6px] text-sm font-medium transition-all duration-[120ms] ${
+                className={`relative px-4 h-full flex items-center text-sm font-medium transition-colors ${
                   pathname === '/pricing'
-                    ? 'text-[#0f1419] bg-[#eff3f4]'
-                    : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#eff3f4]/50'
+                    ? 'text-[#0f1419]'
+                    : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#f7f9f9]'
                 }`}
               >
                 Pricing
+                {pathname === '/pricing' && (
+                  <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[calc(100%-16px)] h-[3px] bg-[#6366f1] rounded-full" />
+                )}
               </Link>
             </div>
 
             {/* Right: xp + auth */}
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
               {isAuthenticated && <XpBadge />}
               <AuthMenu />
             </div>
@@ -102,7 +109,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       {isAuthenticated && (
         <nav
           aria-label="Mobile navigation"
-          className="md:hidden fixed bottom-0 left-0 right-0 z-50 h-[56px] bg-white border-t border-[#e1e8ed]"
+          className="md:hidden fixed bottom-0 left-0 right-0 z-50 h-[56px] bg-white/90 backdrop-blur-xl border-t border-[#e1e8ed]/60"
         >
           <div className="flex items-center justify-around h-full px-2">
             {NAV_LINKS.map((link) => {
@@ -111,11 +118,15 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 <Link
                   key={link.href}
                   href={link.href}
-                  className={`flex flex-col items-center gap-0.5 py-1 px-3 transition-colors ${
+                  className={`relative flex flex-col items-center gap-0.5 py-1 px-3 transition-colors ${
                     isActive ? 'text-[#6366f1]' : 'text-[#8b98a5]'
                   }`}
                 >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  {/* Top indicator bar for mobile */}
+                  {isActive && (
+                    <span className="absolute -top-1 left-1/2 -translate-x-1/2 w-4 h-[3px] bg-[#6366f1] rounded-full" />
+                  )}
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={isActive ? 2.5 : 2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d={link.icon} />
                   </svg>
                   <span className="text-micro">{link.label}</span>
@@ -139,14 +150,15 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           {/* More bottom sheet */}
           {moreOpen && (
             <>
-              <div className="fixed inset-0 z-40" onClick={() => setMoreOpen(false)} />
-              <div className="absolute bottom-full left-0 right-0 z-50 bg-white border-t border-[#e1e8ed] shadow-lg animate-fade-in">
+              <div className="fixed inset-0 z-40 bg-black/10" onClick={() => setMoreOpen(false)} />
+              <div className="absolute bottom-full left-0 right-0 z-50 bg-white border-t border-[#e1e8ed] rounded-t-2xl shadow-[var(--shadow-dropdown)] animate-slide-up">
+                <div className="w-8 h-1 bg-[#e1e8ed] rounded-full mx-auto mt-2 mb-1" />
                 {MORE_LINKS.map((link) => (
                   <Link
                     key={link.href}
                     href={link.href}
                     onClick={() => setMoreOpen(false)}
-                    className="block px-6 py-3.5 text-sm text-[#536471] hover:bg-[#f7f9f9] transition-colors"
+                    className="block px-6 py-3.5 text-sm text-[#0f1419] hover:bg-[#f7f9f9] transition-colors"
                   >
                     {link.label}
                   </Link>

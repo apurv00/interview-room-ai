@@ -8,14 +8,16 @@ export default function SocialProof() {
   return (
     <section className="px-4 sm:px-6 py-section">
       <div className="max-w-[1100px] mx-auto">
-        <h2 className="text-heading text-[#0f1419] text-center mb-section">Platform at a Glance</h2>
-        <div className="grid grid-cols-3 gap-component text-center">
-          {stats.map((s) => (
-            <div key={s.label}>
-              <p className="text-display text-[#0f1419] font-bold">{s.num}</p>
-              <p className="text-caption text-[#71767b]">{s.label}</p>
-            </div>
-          ))}
+        <div className="surface-card-bordered p-8 sm:p-10">
+          <h2 className="text-heading text-[#0f1419] text-center mb-8">Platform at a Glance</h2>
+          <div className="grid grid-cols-3 gap-component text-center">
+            {stats.map((s) => (
+              <div key={s.label}>
+                <p className="text-display text-[#6366f1] font-bold">{s.num}</p>
+                <p className="text-caption text-[#71767b] mt-1">{s.label}</p>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </section>

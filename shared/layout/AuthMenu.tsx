@@ -70,7 +70,7 @@ export default function AuthMenu() {
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-56 bg-white border border-[#e1e8ed] rounded-xl shadow-lg overflow-hidden z-50 animate-fade-in">
+        <div className="absolute right-0 mt-2 w-56 bg-white border border-[#e1e8ed] rounded-2xl shadow-[var(--shadow-dropdown)] overflow-hidden z-50 animate-slide-up">
           {/* Header with plan badge */}
           <div className="px-4 py-3 border-b border-[#eff3f4]">
             <div className="flex items-center justify-between">

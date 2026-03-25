@@ -20,6 +20,12 @@ module.exports = {
         card: 'var(--color-card)',
         surface: 'var(--color-surface)',
         raised: 'var(--color-raised)',
+        border: 'var(--color-border)',
+      },
+      boxShadow: {
+        'card': 'var(--shadow-card)',
+        'card-hover': 'var(--shadow-card-hover)',
+        'dropdown': 'var(--shadow-dropdown)',
       },
       spacing: {
         'inline': '6px',
