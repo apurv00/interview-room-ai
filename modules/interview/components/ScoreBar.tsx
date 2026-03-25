@@ -13,27 +13,27 @@ interface ScoreBarProps {
 const COLOR_MAP = {
   indigo: {
     bar: 'bg-indigo-500',
-    text: 'text-indigo-400',
+    text: 'text-indigo-600',
     glow: 'shadow-indigo-500/30',
   },
   emerald: {
     bar: 'bg-emerald-500',
-    text: 'text-emerald-400',
+    text: 'text-emerald-600',
     glow: 'shadow-emerald-500/30',
   },
   amber: {
     bar: 'bg-amber-500',
-    text: 'text-amber-400',
+    text: 'text-amber-600',
     glow: 'shadow-amber-500/30',
   },
   rose: {
     bar: 'bg-rose-500',
-    text: 'text-rose-400',
+    text: 'text-rose-600',
     glow: 'shadow-rose-500/30',
   },
   cyan: {
     bar: 'bg-cyan-500',
-    text: 'text-cyan-400',
+    text: 'text-cyan-600',
     glow: 'shadow-cyan-500/30',
   },
 }
@@ -58,13 +58,13 @@ export function ScoreBar({ label, score: rawScore, color, detail, delay = 0 }: S
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between text-sm">
-        <span className="text-slate-300 font-medium">{label}</span>
+        <span className="text-[#0f1419] font-medium">{label}</span>
         <div className="flex items-center gap-2">
-          {detail && <span className="text-slate-500 text-xs">{detail}</span>}
+          {detail && <span className="text-[#71767b] text-xs">{detail}</span>}
           <span className={`font-bold tabular-nums ${c.text}`}>{score}</span>
         </div>
       </div>
-      <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
+      <div className="h-2 bg-[#eff3f4] rounded-full overflow-hidden">
         <div
           className={`h-full rounded-full ${c.bar} shadow-sm ${c.glow} transition-all duration-700 ease-out`}
           style={{ width: `${width}%` }}
@@ -113,7 +113,7 @@ export function ScoreRing({ score: rawScore, size = 120 }: ScoreRingProps) {
           cy={size / 2}
           r={radius}
           fill="none"
-          stroke="#1e293b"
+          stroke="#eff3f4"
           strokeWidth={size * 0.08}
         />
         <circle
@@ -130,8 +130,8 @@ export function ScoreRing({ score: rawScore, size = 120 }: ScoreRingProps) {
         />
       </svg>
       <div className="absolute flex flex-col items-center">
-        <span className="text-3xl font-bold text-white tabular-nums">{displayed}</span>
-        <span className="text-xs text-slate-400">/ 100</span>
+        <span className="text-3xl font-bold text-[#0f1419] tabular-nums">{displayed}</span>
+        <span className="text-xs text-[#71767b]">/ 100</span>
       </div>
     </div>
   )

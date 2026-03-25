@@ -247,14 +247,14 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
   return (
     <div className="h-full">
       {/* Mobile tab toggle */}
-      <div className="md:hidden flex border-b border-slate-700 mb-4">
+      <div className="md:hidden flex border-b border-[#e1e8ed] mb-4">
         <button
           onClick={() => setMobileTab('edit')}
-          className={`flex-1 py-2 text-sm font-medium transition-colors ${mobileTab === 'edit' ? 'text-emerald-400 border-b-2 border-emerald-400' : 'text-slate-400'}`}
+          className={`flex-1 py-2 text-sm font-medium transition-colors ${mobileTab === 'edit' ? 'text-[#059669] border-b-2 border-[#059669]' : 'text-[#536471]'}`}
         >Edit</button>
         <button
           onClick={() => setMobileTab('preview')}
-          className={`flex-1 py-2 text-sm font-medium transition-colors ${mobileTab === 'preview' ? 'text-emerald-400 border-b-2 border-emerald-400' : 'text-slate-400'}`}
+          className={`flex-1 py-2 text-sm font-medium transition-colors ${mobileTab === 'preview' ? 'text-[#059669] border-b-2 border-[#059669]' : 'text-[#536471]'}`}
         >Preview</button>
       </div>
 
@@ -267,20 +267,20 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
               type="text"
               value={resume.name}
               onChange={e => update('name', e.target.value)}
-              className="text-xl font-bold text-white bg-transparent border-none focus:outline-none"
+              className="text-xl font-bold text-[#0f1419] bg-transparent border-none focus:outline-none"
               placeholder="Resume Name"
             />
             <div className="flex gap-2">
               <button
                 onClick={handlePrintPDF}
-                className="px-3 py-1.5 bg-slate-700/50 border border-slate-600/30 text-slate-300 text-xs rounded-lg font-medium hover:bg-slate-700 transition-colors"
+                className="px-3 py-1.5 bg-[#eff3f4] border border-[#e1e8ed] text-[#536471] text-xs rounded-lg font-medium hover:bg-[#e1e8ed] transition-colors"
               >
                 Print PDF
               </button>
               <button
                 onClick={handleDownloadPDF}
                 disabled={downloading}
-                className="px-3 py-1.5 bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 text-xs rounded-lg font-medium hover:bg-indigo-600/30 transition-colors disabled:opacity-50"
+                className="px-3 py-1.5 bg-indigo-50 border border-indigo-200 text-indigo-600 text-xs rounded-lg font-medium hover:bg-indigo-100 transition-colors disabled:opacity-50"
               >
                 {downloading ? 'Generating...' : 'Download PDF'}
               </button>
@@ -295,18 +295,18 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
           </div>
 
           {error && (
-            <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5 text-xs text-red-400">
+            <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-2.5 text-xs text-red-600">
               {error}
             </div>
           )}
 
           {/* Upload / Import */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+          <div className="bg-[#f7f9f9] border border-[#e1e8ed] rounded-2xl p-4 space-y-3">
             <div className="flex items-center justify-between">
-              <h3 className="text-xs font-semibold text-slate-400">Quick Start</h3>
+              <h3 className="text-xs font-semibold text-[#536471]">Quick Start</h3>
               <button
                 onClick={handleImportProfile}
-                className="px-2.5 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 text-[10px] rounded-lg font-medium transition-colors"
+                className="px-2.5 py-1 bg-[#eff3f4] hover:bg-[#e1e8ed] text-[#536471] text-[10px] rounded-lg font-medium transition-colors"
               >
                 Import from Profile
               </button>
@@ -321,7 +321,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
           </div>
 
           {/* Meta: target role, company, template */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+          <div className="bg-[#f7f9f9] border border-[#e1e8ed] rounded-2xl p-4 space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-[10px] text-slate-500 uppercase tracking-wider">Target Role</label>
@@ -330,7 +330,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
                   value={resume.targetRole || ''}
                   onChange={e => update('targetRole', e.target.value)}
                   placeholder="e.g. Senior Product Manager"
-                  className="w-full mt-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
               </div>
               <div>
@@ -340,7 +340,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
                   value={resume.targetCompany || ''}
                   onChange={e => update('targetCompany', e.target.value)}
                   placeholder="e.g. Google"
-                  className="w-full mt-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
               </div>
             </div>
@@ -356,7 +356,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
                     className={`px-2.5 py-1 rounded-lg text-[10px] font-medium transition-colors ${
                       resume.template === t.id
                         ? 'bg-emerald-600 text-white'
-                        : 'bg-slate-800 text-slate-400 hover:text-slate-200'
+                        : 'bg-[#eff3f4] text-[#536471] hover:text-[#0f1419]'
                     }`}
                   >
                     {t.name}
@@ -379,7 +379,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
               <button
                 onClick={handleGenerateFull}
                 disabled={enhancingSection === 'full'}
-                className="px-3 py-1.5 bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 text-[10px] rounded-lg font-medium hover:bg-indigo-600/30 transition-colors disabled:opacity-50"
+                className="px-3 py-1.5 bg-indigo-50 border border-indigo-200 text-indigo-600 text-[10px] rounded-lg font-medium hover:bg-indigo-100 transition-colors disabled:opacity-50"
               >
                 {enhancingSection === 'full' ? 'Generating...' : 'AI: Generate suggestions for all sections'}
               </button>
@@ -395,7 +395,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
               {(resume.sectionOrder || DEFAULT_SECTION_ORDER).map(sectionId => (
                 <SortableItem key={sectionId} id={sectionId}>
                   {({ listeners, attributes }) => (
-                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+                    <div className="bg-[#f7f9f9] border border-[#e1e8ed] rounded-2xl p-4">
                       <div className="flex items-start gap-2">
                         <div className="pt-1">
                           <DragHandle listeners={listeners} attributes={attributes} />

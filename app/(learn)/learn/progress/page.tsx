@@ -68,21 +68,21 @@ export default function ProgressPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#070b14] flex items-center justify-center">
-        <div className="w-6 h-6 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
+      <div className="min-h-screen bg-white flex items-center justify-center">
+        <div className="w-6 h-6 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="min-h-screen bg-[#070b14] text-white">
+      <div className="min-h-screen bg-white text-[#0f1419]">
         <div className="max-w-4xl mx-auto px-4 py-16 text-center">
           <h1 className="text-2xl font-bold mb-4">Progress Tracker</h1>
-          <p className="text-red-400 mb-6">{error}</p>
+          <p className="text-[#f4212e] mb-6">{error}</p>
           <button
             onClick={() => { setLoading(true); setError(null); setPeriod('all') }}
-            className="px-6 py-3 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-medium transition"
+            className="px-6 py-3 bg-[#f7f9f9] hover:bg-[#eff3f4] text-[#0f1419] rounded-xl font-medium transition"
           >
             Retry
           </button>
@@ -93,10 +93,10 @@ export default function ProgressPage() {
 
   if (!data || data.stats.totalInterviews === 0) {
     return (
-      <div className="min-h-screen bg-[#070b14] text-white">
+      <div className="min-h-screen bg-white text-[#0f1419]">
         <div className="max-w-4xl mx-auto px-4 py-16 text-center">
           <h1 className="text-2xl font-bold mb-4">Progress Tracker</h1>
-          <p className="text-slate-400 mb-6">
+          <p className="text-[#536471] mb-6">
             Complete your first interview to start tracking your progress.
           </p>
           <button
@@ -142,12 +142,12 @@ export default function ProgressPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#070b14] text-white">
+    <div className="min-h-screen bg-white text-[#0f1419]">
       <div className="max-w-5xl mx-auto px-4 py-8 space-y-8">
         {/* Header */}
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold">Progress Tracker</h1>
-          <div className="flex gap-1 bg-slate-900 border border-slate-800 rounded-xl p-1">
+          <div className="flex gap-1 bg-white border border-[#e1e8ed] rounded-xl p-1">
             {(['7d', '30d', 'all'] as const).map((p) => (
               <button
                 key={p}
@@ -155,7 +155,7 @@ export default function ProgressPage() {
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
                   period === p
                     ? 'bg-indigo-600 text-white'
-                    : 'text-slate-400 hover:text-slate-200'
+                    : 'text-[#536471] hover:text-[#0f1419]'
                 }`}
               >
                 {p === '7d' ? '7 Days' : p === '30d' ? '30 Days' : 'All Time'}
@@ -178,32 +178,32 @@ export default function ProgressPage() {
           ].map((card) => (
             <div
               key={card.label}
-              className="bg-slate-900 border border-slate-800 rounded-2xl p-5 text-center"
+              className="bg-white border border-[#e1e8ed] rounded-2xl p-5 text-center"
             >
               <span className="text-2xl">{card.icon}</span>
-              <p className="text-2xl font-bold text-white mt-2">{card.value}</p>
-              <p className="text-xs text-slate-500 mt-1">{card.label}</p>
+              <p className="text-2xl font-bold text-[#0f1419] mt-2">{card.value}</p>
+              <p className="text-xs text-[#8b98a5] mt-1">{card.label}</p>
             </div>
           ))}
         </section>
 
         {/* Most improved badge */}
         {mostImproved && (
-          <div className="bg-emerald-950/30 border border-emerald-500/20 rounded-2xl p-4 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-400 text-lg">
+          <div className="bg-emerald-50 border border-emerald-500/20 rounded-2xl p-4 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-emerald-500/20 flex items-center justify-center text-[#059669] text-lg">
               📈
             </div>
             <div>
-              <p className="text-sm font-medium text-emerald-400">Improving!</p>
-              <p className="text-xs text-emerald-300/70">{mostImproved}</p>
+              <p className="text-sm font-medium text-[#059669]">Improving!</p>
+              <p className="text-xs text-emerald-700/70">{mostImproved}</p>
             </div>
           </div>
         )}
 
         {/* Overall score trend */}
         {trends.length >= 2 && (
-          <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
-            <h3 className="font-semibold text-slate-200">Overall Score Trend</h3>
+          <section className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
+            <h3 className="font-semibold text-[#0f1419]">Overall Score Trend</h3>
             <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-28">
               {renderTrendLine(
                 trends.map((t) => t.score),
@@ -211,7 +211,7 @@ export default function ProgressPage() {
                 'overall'
               )}
             </svg>
-            <div className="flex justify-between text-[10px] text-slate-600 px-4">
+            <div className="flex justify-between text-[10px] text-[#8b98a5] px-4">
               {trends.map((t, i) =>
                 i === 0 || i === trends.length - 1 ? (
                   <span key={i}>
@@ -236,9 +236,9 @@ export default function ProgressPage() {
             ].map((dim) => (
               <div
                 key={dim.key}
-                className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-2"
+                className="bg-white border border-[#e1e8ed] rounded-2xl p-4 space-y-2"
               >
-                <p className="text-sm font-medium text-slate-300">{dim.label}</p>
+                <p className="text-sm font-medium text-[#536471]">{dim.label}</p>
                 <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-16">
                   {renderTrendLine(
                     trends.map((t) => t[dim.key]),
@@ -253,9 +253,9 @@ export default function ProgressPage() {
 
         {/* Weaknesses */}
         {weaknesses.length > 0 && (
-          <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
-            <h3 className="font-semibold text-slate-200">Focus Areas</h3>
-            <p className="text-xs text-slate-500">
+          <section className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-4">
+            <h3 className="font-semibold text-[#0f1419]">Focus Areas</h3>
+            <p className="text-xs text-[#8b98a5]">
               These dimensions consistently score lowest. Focus on improving them.
             </p>
             <div className="space-y-3">
@@ -270,12 +270,12 @@ export default function ProgressPage() {
                 return (
                   <div key={w.dimension}>
                     <div className="flex justify-between text-xs mb-1">
-                      <span className="text-slate-300">
+                      <span className="text-[#536471]">
                         {DIMENSION_LABELS[w.dimension] || w.dimension}
                       </span>
-                      <span className="text-slate-400 tabular-nums">{w.avgScore}</span>
+                      <span className="text-[#536471] tabular-nums">{w.avgScore}</span>
                     </div>
-                    <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                    <div className="h-1.5 bg-[#eff3f4] rounded-full overflow-hidden">
                       <div
                         className={`h-full rounded-full ${color} transition-all`}
                         style={{ width: `${pct}%` }}

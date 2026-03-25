@@ -41,14 +41,14 @@ export default function ResourcesPage() {
 
       <div className="max-w-[1100px] mx-auto">
         {/* Header */}
-        <nav aria-label="Breadcrumb" className="text-caption text-[#6b7280] mb-6">
-          <Link href="/" className="hover:text-[#818cf8] transition-colors">Home</Link>
-          <span className="mx-2">›</span>
-          <span className="text-[#b0b8c4]">Resources</span>
+        <nav aria-label="Breadcrumb" className="text-caption text-[#71767b] mb-6">
+          <Link href="/" className="hover:text-[#6366f1] transition-colors">Home</Link>
+          <span className="mx-2">&rsaquo;</span>
+          <span className="text-[#536471]">Resources</span>
         </nav>
 
-        <h1 className="text-display text-[#f0f2f5]">Interview Preparation Resources</h1>
-        <p className="text-body text-[#6b7280] mt-3 max-w-[640px]">
+        <h1 className="text-display text-[#0f1419]">Interview Preparation Resources</h1>
+        <p className="text-body text-[#71767b] mt-3 max-w-[640px]">
           Everything you need to ace your next interview — from common questions and proven frameworks to salary negotiation strategies.
         </p>
 
@@ -66,7 +66,7 @@ export default function ResourcesPage() {
                         href={`/learn/guides/${r.slug}`}
                         className="block py-2 px-3 rounded-[8px] hover:bg-[var(--color-surface)] transition-colors group"
                       >
-                        <span className="text-subheading text-[var(--foreground)] group-hover:text-[#818cf8] transition-colors">
+                        <span className="text-subheading text-[var(--foreground)] group-hover:text-[#6366f1] transition-colors">
                           {r.title}
                         </span>
                         <p className="text-caption text-[var(--foreground-tertiary)] mt-0.5 line-clamp-2">
@@ -83,8 +83,8 @@ export default function ResourcesPage() {
 
         {/* CTA */}
         <section className="mt-region text-center surface-card-bordered p-7">
-          <h2 className="text-heading text-[#f0f2f5]">Ready to Put This Into Practice?</h2>
-          <p className="text-body text-[#6b7280] mt-2">
+          <h2 className="text-heading text-[#0f1419]">Ready to Put This Into Practice?</h2>
+          <p className="text-body text-[#71767b] mt-2">
             Practice with our AI interviewer and get instant scored feedback on your answers.
           </p>
           <div className="mt-4 flex items-center justify-center gap-3">
@@ -96,7 +96,7 @@ export default function ResourcesPage() {
             </Link>
             <Link
               href="/"
-              className="inline-flex items-center justify-center h-11 px-5 bg-[#151d2e] hover:bg-[#1c2539] text-[#b0b8c4] rounded-[10px] text-sm font-medium transition-colors border border-[rgba(255,255,255,0.10)]"
+              className="inline-flex items-center justify-center h-11 px-5 bg-[#f7f9f9] hover:bg-[#eff3f4] text-[#536471] rounded-[10px] text-sm font-medium transition-colors border border-[#e1e8ed]"
             >
               Try an Interview
             </Link>

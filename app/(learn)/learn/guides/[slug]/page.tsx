@@ -63,10 +63,10 @@ export default function ResourcePage({ params }: Props) {
       <div className="max-w-[800px] mx-auto">
         {/* Breadcrumb */}
         <nav aria-label="Breadcrumb" className="text-caption text-[var(--foreground-tertiary)] mb-6">
-          <Link href="/" className="hover:text-[#818cf8] transition-colors">Home</Link>
-          <span className="mx-2">›</span>
-          <Link href="/learn/guides" className="hover:text-[#818cf8] transition-colors">Resources</Link>
-          <span className="mx-2">›</span>
+          <Link href="/" className="hover:text-[#6366f1] transition-colors">Home</Link>
+          <span className="mx-2">&rsaquo;</span>
+          <Link href="/learn/guides" className="hover:text-[#6366f1] transition-colors">Resources</Link>
+          <span className="mx-2">&rsaquo;</span>
           <span className="text-[var(--foreground-secondary)]">{resource.title}</span>
         </nav>
 
@@ -95,7 +95,7 @@ export default function ResourcePage({ params }: Props) {
             <ul className="mt-3 space-y-2">
               {resource.content.tips.map((tip, i) => (
                 <li key={i} className="flex gap-3 text-body text-[var(--foreground-secondary)]">
-                  <span className="text-[#818cf8] font-bold flex-shrink-0">•</span>
+                  <span className="text-[#6366f1] font-bold flex-shrink-0">&bull;</span>
                   {tip}
                 </li>
               ))}

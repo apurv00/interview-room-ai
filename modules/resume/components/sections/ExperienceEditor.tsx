@@ -31,12 +31,12 @@ function BulletItem({ id, value, onChange, onRemove, canRemove }: {
             onChange={e => onChange(e.target.value)}
             placeholder="Describe an achievement or responsibility..."
             rows={2}
-            className="flex-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
+            className="flex-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
           />
           {canRemove && (
             <button
               onClick={onRemove}
-              className="text-slate-600 hover:text-red-400 mt-2 transition-colors"
+              className="text-[#8b98a5] hover:text-red-500 mt-2 transition-colors"
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -104,10 +104,10 @@ export default function ExperienceEditor({ items, onAdd, onUpdate, onRemove, onE
   const content = (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-white">Work Experience</h3>
+        <h3 className="text-sm font-semibold text-[#0f1419]">Work Experience</h3>
         <button
           onClick={addNew}
-          className="px-2.5 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 text-[10px] rounded-lg font-medium transition-colors"
+          className="px-2.5 py-1 bg-[#eff3f4] hover:bg-[#e1e8ed] text-[#536471] text-[10px] rounded-lg font-medium transition-colors"
         >
           + Add Role
         </button>
@@ -188,11 +188,11 @@ function ExperienceCard({ exp, expanded, onToggle, onUpdate, onRemove, onEnhance
   const bulletIds = exp.bullets.map((_, i) => `bullet-${i}`)
 
   return (
-    <div className="border border-slate-700 rounded-xl overflow-hidden">
+    <div className="border border-[#e1e8ed] rounded-xl overflow-hidden">
       {/* Header */}
       <button
         onClick={onToggle}
-        className="w-full flex items-center justify-between px-4 py-3 bg-slate-800/50 hover:bg-slate-800 transition-colors text-left"
+        className="w-full flex items-center justify-between px-4 py-3 bg-[#f7f9f9] hover:bg-[#eff3f4] transition-colors text-left"
       >
         <div className="flex items-center gap-2">
           {dragListeners && (
@@ -200,7 +200,7 @@ function ExperienceCard({ exp, expanded, onToggle, onUpdate, onRemove, onEnhance
               <DragHandle listeners={dragListeners} attributes={dragAttributes} />
             </div>
           )}
-          <span className="text-sm text-white">
+          <span className="text-sm text-[#0f1419]">
             {exp.title || exp.company
               ? `${exp.title || 'Untitled'}${exp.company ? ` at ${exp.company}` : ''}`
               : 'New Experience'}
@@ -215,7 +215,7 @@ function ExperienceCard({ exp, expanded, onToggle, onUpdate, onRemove, onEnhance
               <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
             </svg>
           </button>
-          <svg className={`w-4 h-4 text-slate-400 transition-transform ${expanded ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <svg className={`w-4 h-4 text-[#536471] transition-transform ${expanded ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
           </svg>
         </div>
@@ -232,7 +232,7 @@ function ExperienceCard({ exp, expanded, onToggle, onUpdate, onRemove, onEnhance
                 value={exp.title}
                 onChange={e => onUpdate(exp.id, { title: e.target.value })}
                 placeholder="Senior Software Engineer"
-                className="w-full mt-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </div>
             <div>
@@ -242,7 +242,7 @@ function ExperienceCard({ exp, expanded, onToggle, onUpdate, onRemove, onEnhance
                 value={exp.company}
                 onChange={e => onUpdate(exp.id, { company: e.target.value })}
                 placeholder="Google"
-                className="w-full mt-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </div>
             <div>
@@ -252,7 +252,7 @@ function ExperienceCard({ exp, expanded, onToggle, onUpdate, onRemove, onEnhance
                 value={exp.location || ''}
                 onChange={e => onUpdate(exp.id, { location: e.target.value })}
                 placeholder="Mountain View, CA"
-                className="w-full mt-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </div>
             <div className="grid grid-cols-2 gap-2">
@@ -263,7 +263,7 @@ function ExperienceCard({ exp, expanded, onToggle, onUpdate, onRemove, onEnhance
                   value={exp.startDate}
                   onChange={e => onUpdate(exp.id, { startDate: e.target.value })}
                   placeholder="Jan 2022"
-                  className="w-full mt-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
               </div>
               <div>
@@ -273,7 +273,7 @@ function ExperienceCard({ exp, expanded, onToggle, onUpdate, onRemove, onEnhance
                   value={exp.endDate || ''}
                   onChange={e => onUpdate(exp.id, { endDate: e.target.value })}
                   placeholder="Present"
-                  className="w-full mt-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
               </div>
             </div>
@@ -287,7 +287,7 @@ function ExperienceCard({ exp, expanded, onToggle, onUpdate, onRemove, onEnhance
                 <button
                   onClick={() => onEnhanceBullets(exp.id)}
                   disabled={enhancingId === exp.id || exp.bullets.every(b => !b.trim())}
-                  className="px-2 py-0.5 bg-emerald-600/10 border border-emerald-500/20 text-emerald-400 text-[10px] rounded font-medium hover:bg-emerald-600/20 disabled:opacity-30 transition-colors"
+                  className="px-2 py-0.5 bg-emerald-50 border border-emerald-200 text-[#059669] text-[10px] rounded font-medium hover:bg-emerald-100 disabled:opacity-30 transition-colors"
                 >
                   {enhancingId === exp.id ? 'Enhancing...' : 'AI Enhance'}
                 </button>
@@ -313,7 +313,7 @@ function ExperienceCard({ exp, expanded, onToggle, onUpdate, onRemove, onEnhance
             </DndContext>
             <button
               onClick={() => addBullet(exp.id)}
-              className="text-[11px] text-slate-500 hover:text-slate-300 transition-colors"
+              className="text-[11px] text-slate-500 hover:text-[#0f1419] transition-colors"
             >
               + Add bullet point
             </button>

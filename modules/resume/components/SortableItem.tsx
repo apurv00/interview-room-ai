@@ -16,7 +16,7 @@ export function DragHandle({ listeners, attributes }: { listeners?: any; attribu
   return (
     <button
       type="button"
-      className="cursor-grab active:cursor-grabbing text-slate-600 hover:text-slate-400 transition-colors touch-none"
+      className="cursor-grab active:cursor-grabbing text-[#8b98a5] hover:text-[#536471] transition-colors touch-none"
       {...attributes}
       {...listeners}
     >

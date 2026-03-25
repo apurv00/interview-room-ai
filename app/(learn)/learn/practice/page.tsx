@@ -38,15 +38,15 @@ interface PracticeData {
 }
 
 const DIFFICULTY_STYLES = {
-  beginner: { bg: 'bg-emerald-500/10', border: 'border-emerald-500/20', text: 'text-emerald-400', label: 'Beginner' },
-  intermediate: { bg: 'bg-amber-500/10', border: 'border-amber-500/20', text: 'text-amber-400', label: 'Intermediate' },
-  advanced: { bg: 'bg-red-500/10', border: 'border-red-500/20', text: 'text-red-400', label: 'Advanced' },
+  beginner: { bg: 'bg-emerald-500/10', border: 'border-emerald-500/20', text: 'text-[#059669]', label: 'Beginner' },
+  intermediate: { bg: 'bg-amber-500/10', border: 'border-amber-500/20', text: 'text-[#d97706]', label: 'Intermediate' },
+  advanced: { bg: 'bg-red-500/10', border: 'border-red-500/20', text: 'text-[#f4212e]', label: 'Advanced' },
 }
 
 const STATUS_STYLES = {
-  not_started: { bg: 'bg-slate-700', text: 'text-slate-400', label: 'Not Started' },
-  in_progress: { bg: 'bg-indigo-500/20', text: 'text-indigo-400', label: 'In Progress' },
-  mastered: { bg: 'bg-emerald-500/20', text: 'text-emerald-400', label: 'Mastered' },
+  not_started: { bg: 'bg-[#eff3f4]', text: 'text-[#536471]', label: 'Not Started' },
+  in_progress: { bg: 'bg-indigo-500/20', text: 'text-[#6366f1]', label: 'In Progress' },
+  mastered: { bg: 'bg-emerald-500/20', text: 'text-[#059669]', label: 'Mastered' },
 }
 
 const GOAL_LABELS: Record<string, string> = {
@@ -98,7 +98,7 @@ export default function PracticePage() {
   if (loading) {
     return (
       <main className="min-h-screen flex items-center justify-center">
-        <div className="w-6 h-6 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
+        <div className="w-6 h-6 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
       </main>
     )
   }
@@ -116,8 +116,8 @@ export default function PracticePage() {
       {/* Header */}
       <div className="flex items-start justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-bold text-white">Practice Sets</h1>
-          <p className="text-sm text-slate-400 mt-1">
+          <h1 className="text-2xl font-bold text-[#0f1419]">Practice Sets</h1>
+          <p className="text-sm text-[#536471] mt-1">
             {data?.profile?.interviewGoal
               ? `Personalized for: ${GOAL_LABELS[data.profile.interviewGoal] || data.profile.interviewGoal}`
               : 'Tailored practice based on your profile'}
@@ -125,7 +125,7 @@ export default function PracticePage() {
         </div>
         <Link
           href="/settings"
-          className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+          className="text-xs text-[#6366f1] hover:text-[#5558e6] transition-colors"
         >
           Update Profile
         </Link>
@@ -134,14 +134,14 @@ export default function PracticePage() {
       {/* Stats summary */}
       <section className="grid grid-cols-4 gap-3 mb-8">
         {[
-          { label: 'Total Sets', value: stats.total, color: 'text-white' },
-          { label: 'Mastered', value: stats.mastered, color: 'text-emerald-400' },
-          { label: 'In Progress', value: stats.inProgress, color: 'text-indigo-400' },
-          { label: 'Not Started', value: stats.notStarted, color: 'text-slate-400' },
+          { label: 'Total Sets', value: stats.total, color: 'text-[#0f1419]' },
+          { label: 'Mastered', value: stats.mastered, color: 'text-[#059669]' },
+          { label: 'In Progress', value: stats.inProgress, color: 'text-[#6366f1]' },
+          { label: 'Not Started', value: stats.notStarted, color: 'text-[#536471]' },
         ].map(s => (
-          <div key={s.label} className="bg-slate-900 border border-slate-800 rounded-xl p-4 text-center">
+          <div key={s.label} className="bg-white border border-[#e1e8ed] rounded-xl p-4 text-center">
             <p className={`text-xl font-bold ${s.color}`}>{s.value}</p>
-            <p className="text-[10px] text-slate-500 mt-1">{s.label}</p>
+            <p className="text-[10px] text-[#8b98a5] mt-1">{s.label}</p>
           </div>
         ))}
       </section>
@@ -150,12 +150,12 @@ export default function PracticePage() {
       {stats.total > 0 && (
         <div className="mb-8">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs text-slate-400">Overall Progress</span>
-            <span className="text-xs text-slate-500">
+            <span className="text-xs text-[#536471]">Overall Progress</span>
+            <span className="text-xs text-[#8b98a5]">
               {Math.round((stats.mastered / stats.total) * 100)}% mastered
             </span>
           </div>
-          <div className="h-2 bg-slate-800 rounded-full overflow-hidden flex">
+          <div className="h-2 bg-[#eff3f4] rounded-full overflow-hidden flex">
             {stats.mastered > 0 && (
               <div
                 className="h-full bg-emerald-500 transition-all"
@@ -173,7 +173,7 @@ export default function PracticePage() {
       )}
 
       {/* Filter tabs */}
-      <div className="flex gap-1 bg-slate-900 border border-slate-800 rounded-xl p-1 mb-6 w-fit">
+      <div className="flex gap-1 bg-white border border-[#e1e8ed] rounded-xl p-1 mb-6 w-fit">
         {(['all', 'not_started', 'in_progress', 'mastered'] as const).map(f => (
           <button
             key={f}
@@ -181,7 +181,7 @@ export default function PracticePage() {
             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
               filter === f
                 ? 'bg-indigo-600 text-white'
-                : 'text-slate-400 hover:text-slate-200'
+                : 'text-[#536471] hover:text-[#0f1419]'
             }`}
           >
             {f === 'all' ? 'All' : f === 'not_started' ? 'Not Started' : f === 'in_progress' ? 'In Progress' : 'Mastered'}
@@ -192,10 +192,10 @@ export default function PracticePage() {
       {/* Practice set cards */}
       {filtered.length === 0 ? (
         <div className="text-center py-12">
-          <p className="text-slate-400">No practice sets match this filter.</p>
+          <p className="text-[#536471]">No practice sets match this filter.</p>
           {!data?.profile?.targetRole && (
-            <p className="text-sm text-slate-500 mt-2">
-              <Link href="/settings" className="text-indigo-400 hover:text-indigo-300">Complete your profile</Link> to get personalized practice sets.
+            <p className="text-sm text-[#8b98a5] mt-2">
+              <Link href="/settings" className="text-[#6366f1] hover:text-[#5558e6]">Complete your profile</Link> to get personalized practice sets.
             </p>
           )}
         </div>
@@ -207,15 +207,15 @@ export default function PracticePage() {
             return (
               <div
                 key={set.id}
-                className="bg-slate-900 border border-slate-800 rounded-2xl p-5 hover:border-slate-700 transition-all group"
+                className="bg-white border border-[#e1e8ed] rounded-2xl p-5 hover:border-[#536471] transition-all group"
               >
                 {/* Header */}
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-2">
                     <span className="text-xl">{set.domainIcon}</span>
                     <div>
-                      <h3 className="text-sm font-semibold text-white">{set.domainLabel}</h3>
-                      <p className="text-xs text-slate-500 flex items-center gap-1">
+                      <h3 className="text-sm font-semibold text-[#0f1419]">{set.domainLabel}</h3>
+                      <p className="text-xs text-[#8b98a5] flex items-center gap-1">
                         <span>{set.interviewTypeIcon}</span>
                         {set.interviewTypeLabel}
                       </p>
@@ -232,23 +232,23 @@ export default function PracticePage() {
                 </div>
 
                 {/* Focus area */}
-                <p className="text-xs text-slate-400 mb-3">
+                <p className="text-xs text-[#536471] mb-3">
                   Focus: {set.focus}
                 </p>
 
                 {/* Personalized tip */}
                 {set.personalizedTip && (
                   <div className="bg-indigo-500/5 border border-indigo-500/10 rounded-lg px-3 py-2 mb-3">
-                    <p className="text-[11px] text-indigo-300">{set.personalizedTip}</p>
+                    <p className="text-[11px] text-[#6366f1]">{set.personalizedTip}</p>
                   </div>
                 )}
 
                 {/* Stats row */}
-                <div className="flex items-center gap-4 mb-4 text-xs text-slate-500">
+                <div className="flex items-center gap-4 mb-4 text-xs text-[#8b98a5]">
                   <span>{set.estimatedMinutes} min</span>
                   <span>{set.practiceCount} sessions</span>
                   {set.avgScore !== undefined && (
-                    <span>Avg: <span className={set.avgScore >= 75 ? 'text-emerald-400' : set.avgScore >= 55 ? 'text-amber-400' : 'text-red-400'}>{set.avgScore}</span></span>
+                    <span>Avg: <span className={set.avgScore >= 75 ? 'text-[#059669]' : set.avgScore >= 55 ? 'text-[#d97706]' : 'text-[#f4212e]'}>{set.avgScore}</span></span>
                   )}
                   {set.lastScore !== undefined && (
                     <span>Last: {set.lastScore}</span>

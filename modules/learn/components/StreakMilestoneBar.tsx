@@ -19,16 +19,16 @@ export default function StreakMilestoneBar({ currentStreak }: StreakMilestoneBar
 
   return (
     <div className="flex items-center gap-3">
-      <span className="text-xs text-[#6b7280] whitespace-nowrap">
+      <span className="text-xs text-[#71767b] whitespace-nowrap">
         🔥 {currentStreak}
       </span>
-      <div className="flex-1 h-2 rounded-full bg-[#1e293b] overflow-hidden">
+      <div className="flex-1 h-2 rounded-full bg-[#eff3f4] overflow-hidden">
         <div
           className="h-full rounded-full bg-gradient-to-r from-[#f59e0b] to-[#ef4444] transition-all duration-500"
           style={{ width: `${Math.min(progress, 100)}%` }}
         />
       </div>
-      <span className="text-xs text-[#6b7280] whitespace-nowrap">
+      <span className="text-xs text-[#71767b] whitespace-nowrap">
         {nextMilestone} days
       </span>
     </div>

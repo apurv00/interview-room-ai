@@ -35,7 +35,7 @@ class FeedbackErrorBoundary extends Component<
   render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-page flex flex-col items-center justify-center gap-5 px-4">
+        <div className="min-h-screen bg-white flex flex-col items-center justify-center gap-5 px-4">
           <div className="surface-card-bordered p-6 max-w-sm w-full text-center space-y-4">
             <p className="text-subheading text-[#0f1419]">Something went wrong rendering feedback</p>
             <p className="text-body text-[#71767b]">{String(this.state.error?.message || 'Unknown error')}</p>
@@ -302,7 +302,7 @@ function FeedbackPageInner() {
 
   if (loading || !data) {
     return (
-      <div className="min-h-screen bg-page flex flex-col items-center justify-center gap-4">
+      <div className="min-h-screen bg-white flex flex-col items-center justify-center gap-4">
         <div className="w-8 h-8 rounded-full border-2 border-brand-500 border-t-transparent animate-spin" />
         <p className="text-body text-[#71767b]">Generating your feedback report...</p>
       </div>
@@ -311,7 +311,7 @@ function FeedbackPageInner() {
 
   if (feedbackError && !feedback) {
     return (
-      <div className="min-h-screen bg-page flex flex-col items-center justify-center gap-5 px-4">
+      <div className="min-h-screen bg-white flex flex-col items-center justify-center gap-5 px-4">
         <div className="surface-card-bordered border-red-500/30 p-6 max-w-sm w-full text-center space-y-4">
           <div className="w-12 h-12 rounded-full bg-red-600/20 flex items-center justify-center mx-auto">
             <svg className="w-6 h-6 text-[#f4212e]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -339,7 +339,7 @@ function FeedbackPageInner() {
 
   if (!feedback.dimensions || !feedback.dimensions.answer_quality || !feedback.dimensions.communication) {
     return (
-      <div className="min-h-screen bg-page flex flex-col items-center justify-center gap-5 px-4">
+      <div className="min-h-screen bg-white flex flex-col items-center justify-center gap-5 px-4">
         <div className="surface-card-bordered border-red-500/30 p-6 max-w-sm w-full text-center space-y-4">
           <p className="text-subheading text-[#0f1419]">Invalid feedback data</p>
           <p className="text-body text-[#71767b]">The feedback response had an unexpected format. Please try again.</p>

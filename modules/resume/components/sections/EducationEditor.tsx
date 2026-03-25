@@ -26,7 +26,7 @@ export default function EducationEditor({ items, onAdd, onUpdate, onRemove, onRe
 
   function renderCard(edu: ResumeEducation, dragListeners?: Record<string, Function>, dragAttributes?: Record<string, unknown>) {
     return (
-      <div className="border border-slate-700 rounded-xl overflow-hidden">
+      <div className="border border-[#e1e8ed] rounded-xl overflow-hidden">
         <button
           onClick={() => setExpandedId(expandedId === edu.id ? null : edu.id)}
           className="w-full flex items-center justify-between px-4 py-3 bg-slate-800/50 hover:bg-slate-800 transition-colors text-left"

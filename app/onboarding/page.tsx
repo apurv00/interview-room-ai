@@ -250,7 +250,7 @@ export default function OnboardingPage() {
   if (status === 'loading' || loading) {
     return (
       <main className="min-h-screen flex items-center justify-center">
-        <div className="w-6 h-6 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
+        <div className="w-6 h-6 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
       </main>
     )
   }
@@ -275,7 +275,7 @@ export default function OnboardingPage() {
             <div
               key={s}
               className={`h-1 flex-1 rounded-full transition-colors duration-300 ${
-                s < step ? 'bg-indigo-600' : s === step ? 'bg-indigo-500' : 'bg-slate-700'
+                s < step ? 'bg-indigo-600' : s === step ? 'bg-indigo-500' : 'bg-[#e1e8ed]'
               }`}
             />
           ))}
@@ -285,7 +285,7 @@ export default function OnboardingPage() {
         {step > 1 && (
           <button
             onClick={goBack}
-            className="mb-4 flex items-center gap-1 text-sm text-slate-400 hover:text-slate-200 transition-colors"
+            className="mb-4 flex items-center gap-1 text-sm text-[#536471] hover:text-[#0f1419] transition-colors"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
@@ -307,8 +307,8 @@ export default function OnboardingPage() {
               className="space-y-6"
             >
               <div>
-                <h1 className="text-2xl font-bold text-white mb-2">Upload your resume</h1>
-                <p className="text-slate-400 text-sm">
+                <h1 className="text-2xl font-bold text-[#0f1419] mb-2">Upload your resume</h1>
+                <p className="text-[#536471] text-sm">
                   We&apos;ll auto-fill your profile from it — saving you time.
                 </p>
               </div>
@@ -324,14 +324,14 @@ export default function OnboardingPage() {
               {uploadError && <p className="text-xs text-red-400">{uploadError}</p>}
 
               {extracting && (
-                <div className="flex items-center gap-3 text-sm text-indigo-400">
-                  <div className="w-4 h-4 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
+                <div className="flex items-center gap-3 text-sm text-[#6366f1]">
+                  <div className="w-4 h-4 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
                   Analyzing your resume...
                 </div>
               )}
 
               {resumeText && !extracting && !resumeUploading && (
-                <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-4 py-3 text-sm text-emerald-300">
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 text-sm text-[#059669]">
                   Resume uploaded! We&apos;ve pre-filled your profile on the next step.
                 </div>
               )}
@@ -356,7 +356,7 @@ export default function OnboardingPage() {
                 </button>
                 <button
                   onClick={goForward}
-                  className="text-sm text-slate-500 hover:text-slate-300 transition-colors"
+                  className="text-sm text-[#8b98a5] hover:text-[#536471] transition-colors"
                 >
                   I don&apos;t have a resume — skip
                 </button>
@@ -376,10 +376,10 @@ export default function OnboardingPage() {
               className="space-y-6"
             >
               <div>
-                <h1 className="text-2xl font-bold text-white mb-2">
+                <h1 className="text-2xl font-bold text-[#0f1419] mb-2">
                   {resumeText ? 'Confirm your profile' : 'Tell us about yourself'}
                 </h1>
-                <p className="text-slate-400 text-sm">
+                <p className="text-[#536471] text-sm">
                   {resumeText
                     ? 'We extracted these details — feel free to adjust anything.'
                     : 'This helps us personalize your interview experience.'}
@@ -388,7 +388,7 @@ export default function OnboardingPage() {
 
               {/* Target Role */}
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
+                <label className="text-xs font-semibold text-[#8b98a5] uppercase tracking-widest">
                   Target role
                 </label>
                 <div className="grid grid-cols-3 gap-2 max-h-64 overflow-y-auto pr-1">
@@ -398,8 +398,8 @@ export default function OnboardingPage() {
                       onClick={() => setTargetRole(d.slug)}
                       className={`flex flex-col items-center gap-1.5 py-3 rounded-xl border text-xs font-medium transition-all duration-200 ${
                         targetRole === d.slug
-                          ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300'
-                          : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'
+                          ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]'
+                          : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'
                       }`}
                     >
                       {d.icon && <span className="text-lg">{d.icon}</span>}
@@ -411,7 +411,7 @@ export default function OnboardingPage() {
 
               {/* Experience */}
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
+                <label className="text-xs font-semibold text-[#8b98a5] uppercase tracking-widest">
                   Experience level
                 </label>
                 <div className="grid grid-cols-3 gap-2">
@@ -421,8 +421,8 @@ export default function OnboardingPage() {
                       onClick={() => setExperienceLevel(e)}
                       className={`py-3 rounded-xl border text-xs font-medium transition-all duration-200 ${
                         experienceLevel === e
-                          ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300'
-                          : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'
+                          ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]'
+                          : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'
                       }`}
                     >
                       {EXPERIENCE_LABELS[e]}
@@ -433,7 +433,7 @@ export default function OnboardingPage() {
 
               {/* Current Title */}
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
+                <label className="text-xs font-semibold text-[#8b98a5] uppercase tracking-widest">
                   Current title
                 </label>
                 <input
@@ -442,13 +442,13 @@ export default function OnboardingPage() {
                   onChange={(e) => setCurrentTitle(e.target.value)}
                   maxLength={100}
                   placeholder="e.g. Senior Software Engineer"
-                  className="w-full px-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                  className="w-full px-4 py-3 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-[#0f1419] text-sm placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-[#6366f1] focus:border-transparent"
                 />
               </div>
 
               {/* Industry */}
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
+                <label className="text-xs font-semibold text-[#8b98a5] uppercase tracking-widest">
                   Industry
                 </label>
                 <div className="grid grid-cols-5 gap-2">
@@ -458,8 +458,8 @@ export default function OnboardingPage() {
                       onClick={() => setCurrentIndustry(i.value)}
                       className={`py-2 rounded-lg border text-xs font-medium transition-all duration-200 ${
                         currentIndustry === i.value
-                          ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300'
-                          : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'
+                          ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]'
+                          : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'
                       }`}
                     >
                       {i.label}
@@ -474,9 +474,9 @@ export default function OnboardingPage() {
                   type="checkbox"
                   checked={isCareerSwitcher}
                   onChange={(e) => setIsCareerSwitcher(e.target.checked)}
-                  className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-indigo-500 focus:ring-indigo-500"
+                  className="w-4 h-4 rounded border-[#e1e8ed] bg-[#f7f9f9] text-[#6366f1] focus:ring-[#6366f1]"
                 />
-                <span className="text-sm text-slate-300">I&apos;m switching careers</span>
+                <span className="text-sm text-[#536471]">I&apos;m switching careers</span>
               </label>
 
               {isCareerSwitcher && (
@@ -492,7 +492,7 @@ export default function OnboardingPage() {
                     onChange={(e) => setSwitchingFrom(e.target.value)}
                     maxLength={100}
                     placeholder="Switching from... (e.g. Engineering)"
-                    className="w-full px-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                    className="w-full px-4 py-3 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-[#0f1419] text-sm placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-[#6366f1] focus:border-transparent"
                   />
                 </motion.div>
               )}
@@ -514,7 +514,7 @@ export default function OnboardingPage() {
                 </button>
                 <button
                   onClick={goForward}
-                  className="text-sm text-slate-500 hover:text-slate-300 transition-colors"
+                  className="text-sm text-[#8b98a5] hover:text-[#536471] transition-colors"
                 >
                   Skip for now
                 </button>
@@ -534,15 +534,15 @@ export default function OnboardingPage() {
               className="space-y-6"
             >
               <div>
-                <h1 className="text-2xl font-bold text-white mb-2">What are your goals?</h1>
-                <p className="text-slate-400 text-sm">
+                <h1 className="text-2xl font-bold text-[#0f1419] mb-2">What are your goals?</h1>
+                <p className="text-[#536471] text-sm">
                   This helps us tailor feedback to what matters most to you.
                 </p>
               </div>
 
               {/* Target Company Type */}
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
+                <label className="text-xs font-semibold text-[#8b98a5] uppercase tracking-widest">
                   Target company type
                 </label>
                 <div className="grid grid-cols-3 gap-2">
@@ -552,8 +552,8 @@ export default function OnboardingPage() {
                       onClick={() => setTargetCompanyType(c.value)}
                       className={`py-3 rounded-xl border text-xs font-medium transition-all duration-200 ${
                         targetCompanyType === c.value
-                          ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300'
-                          : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'
+                          ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]'
+                          : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'
                       }`}
                     >
                       {c.label}
@@ -564,7 +564,7 @@ export default function OnboardingPage() {
 
               {/* Interview Goal */}
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
+                <label className="text-xs font-semibold text-[#8b98a5] uppercase tracking-widest">
                   Interview goal
                 </label>
                 <div className="space-y-2">
@@ -574,14 +574,14 @@ export default function OnboardingPage() {
                       onClick={() => setInterviewGoal(g.value)}
                       className={`w-full text-left px-4 py-3 rounded-xl border transition-all duration-200 ${
                         interviewGoal === g.value
-                          ? 'border-indigo-500 bg-indigo-500/10'
-                          : 'border-slate-700 bg-slate-800/50 hover:border-slate-600'
+                          ? 'border-[#6366f1] bg-indigo-50'
+                          : 'border-[#e1e8ed] bg-[#f7f9f9] hover:border-[#cfd9de]'
                       }`}
                     >
-                      <span className={`text-sm font-medium ${interviewGoal === g.value ? 'text-indigo-300' : 'text-slate-300'}`}>
+                      <span className={`text-sm font-medium ${interviewGoal === g.value ? 'text-[#6366f1]' : 'text-[#0f1419]'}`}>
                         {g.label}
                       </span>
-                      <p className="text-xs text-slate-500 mt-0.5">{g.desc}</p>
+                      <p className="text-xs text-[#8b98a5] mt-0.5">{g.desc}</p>
                     </button>
                   ))}
                 </div>
@@ -589,8 +589,8 @@ export default function OnboardingPage() {
 
               {/* Weak Areas */}
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
-                  Areas to improve <span className="text-slate-600">(pick up to 3)</span>
+                <label className="text-xs font-semibold text-[#8b98a5] uppercase tracking-widest">
+                  Areas to improve <span className="text-[#8b98a5]">(pick up to 3)</span>
                 </label>
                 <div className="grid grid-cols-3 gap-2">
                   {WEAK_AREAS.map((w) => (
@@ -599,8 +599,8 @@ export default function OnboardingPage() {
                       onClick={() => toggleWeakArea(w.value)}
                       className={`py-2.5 rounded-lg border text-xs font-medium transition-all duration-200 ${
                         weakAreas.includes(w.value)
-                          ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300'
-                          : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'
+                          ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]'
+                          : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'
                       }`}
                     >
                       {w.label}
@@ -632,7 +632,7 @@ export default function OnboardingPage() {
                     setSaving(false)
                     router.push('/')
                   }}
-                  className="text-sm text-slate-500 hover:text-slate-300 transition-colors"
+                  className="text-sm text-[#8b98a5] hover:text-[#536471] transition-colors"
                 >
                   Skip for now
                 </button>

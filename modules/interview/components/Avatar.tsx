@@ -223,11 +223,11 @@ export default function Avatar({ emotion, isTalking, ttsText, isListening, isPro
             transition={{ duration: 0.25 }}
           >
             <motion.div
-              className="w-2 h-2 rounded-full bg-emerald-400"
+              className="w-2 h-2 rounded-full bg-emerald-600"
               animate={{ scale: [1, 1.3, 1], opacity: [0.6, 1, 0.6] }}
               transition={{ duration: 1.5, repeat: Infinity, ease: 'easeInOut' }}
             />
-            <span className="text-[10px] text-emerald-300/70 font-medium uppercase tracking-wider">
+            <span className="text-[10px] text-emerald-600/70 font-medium uppercase tracking-wider">
               Listening
             </span>
           </motion.div>
@@ -246,7 +246,7 @@ export default function Avatar({ emotion, isTalking, ttsText, isListening, isPro
               {[0, 1, 2].map((i) => (
                 <motion.div
                   key={i}
-                  className="w-1.5 h-1.5 rounded-full bg-amber-400"
+                  className="w-1.5 h-1.5 rounded-full bg-amber-600"
                   animate={{ opacity: [0.3, 1, 0.3], y: [0, -3, 0] }}
                   transition={{
                     duration: 0.8,
@@ -257,7 +257,7 @@ export default function Avatar({ emotion, isTalking, ttsText, isListening, isPro
                 />
               ))}
             </div>
-            <span className="text-[10px] text-amber-300/70 font-medium ml-1 uppercase tracking-wider">
+            <span className="text-[10px] text-amber-600/70 font-medium ml-1 uppercase tracking-wider">
               Thinking
             </span>
           </motion.div>

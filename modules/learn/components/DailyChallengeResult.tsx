@@ -35,9 +35,9 @@ export default function DailyChallengeResult({
       <div className="flex items-center justify-between">
         <div>
           <span className={`text-3xl font-bold ${scoreColor}`}>{score}</span>
-          <span className="text-sm text-[#6b7280]">/100</span>
+          <span className="text-sm text-[#71767b]">/100</span>
         </div>
-        <div className="text-right text-xs text-[#6b7280]">
+        <div className="text-right text-xs text-[#71767b]">
           <p>Top {100 - percentile}% of {participantCount} participants</p>
           <p>Community avg: {communityAvg}</p>
         </div>
@@ -46,9 +46,9 @@ export default function DailyChallengeResult({
       {/* Breakdown */}
       <div className="grid grid-cols-2 gap-2">
         {Object.entries(breakdown).map(([key, value]) => (
-          <div key={key} className="bg-[#0f172a] rounded-lg px-3 py-2">
-            <p className="text-micro text-[#6b7280]">{DIMENSION_LABELS[key] || key}</p>
-            <p className="text-sm font-semibold text-[#f0f2f5]">{value}</p>
+          <div key={key} className="bg-[#f7f9f9] rounded-lg px-3 py-2">
+            <p className="text-micro text-[#71767b]">{DIMENSION_LABELS[key] || key}</p>
+            <p className="text-sm font-semibold text-[#0f1419]">{value}</p>
           </div>
         ))}
       </div>

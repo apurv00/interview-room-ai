@@ -297,19 +297,19 @@ export default function SettingsPage() {
             {profile.currentIndustry && (
               <div className="flex justify-between text-sm">
                 <span className="text-[#8b98a5]">Industry</span>
-                <span className="text-slate-300 capitalize">{profile.currentIndustry}</span>
+                <span className="text-[#536471] capitalize">{profile.currentIndustry}</span>
               </div>
             )}
             {profile.targetCompanyType && (
               <div className="flex justify-between text-sm">
                 <span className="text-[#8b98a5]">Target Companies</span>
-                <span className="text-slate-300 capitalize">{profile.targetCompanyType === 'faang' ? 'FAANG / Big Tech' : profile.targetCompanyType}</span>
+                <span className="text-[#536471] capitalize">{profile.targetCompanyType === 'faang' ? 'FAANG / Big Tech' : profile.targetCompanyType}</span>
               </div>
             )}
             {profile.interviewGoal && (
               <div className="flex justify-between text-sm">
                 <span className="text-[#8b98a5]">Goal</span>
-                <span className="text-slate-300 capitalize">{profile.interviewGoal.replace(/_/g, ' ')}</span>
+                <span className="text-[#536471] capitalize">{profile.interviewGoal.replace(/_/g, ' ')}</span>
               </div>
             )}
             {profile.weakAreas?.length > 0 && (
@@ -321,13 +321,13 @@ export default function SettingsPage() {
             {profile.topSkills?.length > 0 && (
               <div className="flex justify-between text-sm">
                 <span className="text-[#8b98a5]">Top Skills</span>
-                <span className="text-slate-300 text-right max-w-[60%]">{profile.topSkills.join(', ')}</span>
+                <span className="text-[#536471] text-right max-w-[60%]">{profile.topSkills.join(', ')}</span>
               </div>
             )}
             {profile.educationLevel && (
               <div className="flex justify-between text-sm">
                 <span className="text-[#8b98a5]">Education</span>
-                <span className="text-slate-300 capitalize">{profile.educationLevel.replace(/_/g, ' ')}</span>
+                <span className="text-[#536471] capitalize">{profile.educationLevel.replace(/_/g, ' ')}</span>
               </div>
             )}
             {profile.yearsInCurrentRole != null && (
@@ -339,19 +339,19 @@ export default function SettingsPage() {
             {profile.targetCompanies?.length > 0 && (
               <div className="flex justify-between text-sm">
                 <span className="text-[#8b98a5]">Target Companies</span>
-                <span className="text-slate-300 text-right max-w-[60%]">{profile.targetCompanies.join(', ')}</span>
+                <span className="text-[#536471] text-right max-w-[60%]">{profile.targetCompanies.join(', ')}</span>
               </div>
             )}
             {profile.communicationStyle && (
               <div className="flex justify-between text-sm">
                 <span className="text-[#8b98a5]">Communication Style</span>
-                <span className="text-slate-300 capitalize">{profile.communicationStyle}</span>
+                <span className="text-[#536471] capitalize">{profile.communicationStyle}</span>
               </div>
             )}
             {profile.feedbackPreference && (
               <div className="flex justify-between text-sm">
                 <span className="text-[#8b98a5]">Feedback Preference</span>
-                <span className="text-slate-300 capitalize">{profile.feedbackPreference.replace(/_/g, ' ')}</span>
+                <span className="text-[#536471] capitalize">{profile.feedbackPreference.replace(/_/g, ' ')}</span>
               </div>
             )}
             {profile.hasResume && profile.resumeFileName && (
@@ -523,12 +523,12 @@ export default function SettingsPage() {
                   {isUnlimited ? `${used} interviews completed` : `${used} of ${limit} interviews used`}
                 </span>
                 {remaining !== null && (
-                  <span className="text-sm text-slate-500">
+                  <span className="text-sm text-[#8b98a5]">
                     {remaining} remaining
                   </span>
                 )}
               </div>
-              <div className="h-3 bg-slate-800 rounded-full overflow-hidden">
+              <div className="h-3 bg-[#eff3f4] rounded-full overflow-hidden">
                 <div
                   className="h-full rounded-full transition-all duration-500"
                   style={{
@@ -543,21 +543,21 @@ export default function SettingsPage() {
                 />
               </div>
               {resetDate && (
-                <p className="text-xs text-slate-500 mt-1.5">
+                <p className="text-xs text-[#8b98a5] mt-1.5">
                   Resets on {resetDate}
                 </p>
               )}
             </div>
 
             {/* Plan features */}
-            <div className="border-t border-slate-800 pt-4">
-              <p className="text-xs text-slate-500 uppercase tracking-wide mb-2">
+            <div className="border-t border-[#eff3f4] pt-4">
+              <p className="text-xs text-[#8b98a5] uppercase tracking-wide mb-2">
                 Your plan includes
               </p>
               <ul className="space-y-1.5">
                 {planConfig.features.map((f) => (
-                  <li key={f} className="flex items-center gap-2 text-sm text-slate-300">
-                    <svg className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <li key={f} className="flex items-center gap-2 text-sm text-[#536471]">
+                    <svg className="w-3.5 h-3.5 text-[#059669] flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                     </svg>
                     {f}
@@ -580,8 +580,8 @@ export default function SettingsPage() {
       </section>
 
       {/* Quick Links */}
-      <section className="bg-slate-900 border border-slate-700 rounded-2xl p-6 animate-fade-in">
-        <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-widest mb-4">
+      <section className="bg-white border border-[#e1e8ed] rounded-2xl p-6 animate-fade-in">
+        <h2 className="text-sm font-semibold text-[#536471] uppercase tracking-widest mb-4">
           Quick Links
         </h2>
         <div className="grid grid-cols-5 gap-3">
@@ -595,9 +595,9 @@ export default function SettingsPage() {
             <Link
               key={link.href}
               href={link.href}
-              className="flex flex-col items-center gap-2 py-4 rounded-xl border border-slate-700 bg-slate-800/50 text-slate-300 hover:border-slate-600 hover:text-white transition"
+              className="flex flex-col items-center gap-2 py-4 rounded-xl border border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de] hover:text-[#0f1419] transition"
             >
-              <svg className="w-5 h-5 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <svg className="w-5 h-5 text-[#8b98a5]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d={link.icon} />
               </svg>
               <span className="text-xs font-medium">{link.label}</span>
