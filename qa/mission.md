@@ -25,7 +25,7 @@ For each flow:
 ### Happy path
 - Walk through the flow as a normal user would
 - Verify each step works and leads to the expected next step
-- Screenshot key states (form loaded, form submitted, success/error message)
+- Screenshot key states (form loaded, form submitted, success/error message). Screenshots are automatically saved to `/tmp/screenshots/` by the Playwright MCP server.
 
 ### Edge cases
 - Submit forms with empty fields

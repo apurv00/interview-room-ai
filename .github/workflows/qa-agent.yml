@@ -17,6 +17,7 @@ permissions:
   contents: read
   id-token: write
 
+
 concurrency:
   group: qa-agent
   cancel-in-progress: true
@@ -29,6 +30,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Create output directories
+        run: mkdir -p /tmp/screenshots
 
       - name: Run QA Agent
         uses: anthropics/claude-code-action@v1
@@ -44,8 +48,20 @@ jobs:
           claude_args: |
             --max-turns 80
             --model claude-sonnet-4-20250514
-            --allowedTools "mcp__playwright__browser_navigate,mcp__playwright__browser_click,mcp__playwright__browser_type,mcp__playwright__browser_take_screenshot,mcp__playwright__browser_snapshot,mcp__playwright__browser_resize,mcp__playwright__browser_navigate_back,mcp__playwright__browser_wait,mcp__playwright__browser_evaluate,mcp__playwright__browser_select_option,mcp__playwright__browser_hover,mcp__playwright__browser_press_key,Read,Write"
-            --mcp-config '{"mcpServers":{"playwright":{"command":"npx","args":["@playwright/mcp@latest","--headless","--browser","chromium"]}}}'
+            --allowedTools "Bash,mcp__playwright__browser_navigate,mcp__playwright__browser_click,mcp__playwright__browser_type,mcp__playwright__browser_take_screenshot,mcp__playwright__browser_snapshot,mcp__playwright__browser_resize,mcp__playwright__browser_navigate_back,mcp__playwright__browser_wait,mcp__playwright__browser_evaluate,mcp__playwright__browser_select_option,mcp__playwright__browser_hover,mcp__playwright__browser_press_key,Read,Write"
+            --mcp-config '{"mcpServers":{"playwright":{"command":"npx","args":["@playwright/mcp@latest","--headless","--browser","chromium","--screenshot-dir","/tmp/screenshots"]}}}'
+
+      - name: Ensure report exists
+        if: always()
+        run: |
+          if [ ! -f /tmp/qa-report.md ]; then
+            echo "# QA Report" > /tmp/qa-report.md
+            echo "" >> /tmp/qa-report.md
+            echo "**Status**: Agent did not produce a report. It may have timed out or encountered an error." >> /tmp/qa-report.md
+            echo "Check the workflow logs for details." >> /tmp/qa-report.md
+          fi
+          # Ensure screenshots dir has at least a placeholder so artifact upload succeeds
+          touch /tmp/screenshots/.keep
 
       - name: Upload report
         if: always()
