@@ -52,10 +52,26 @@ describe('DOMAIN_DEPTH_OVERRIDES', () => {
     }
   })
 
-  it('every override has sampleOpeners with at least 2 entries', () => {
+  it('every override has antiPatterns', () => {
     for (const [key, override] of Object.entries(DOMAIN_DEPTH_OVERRIDES)) {
-      expect(override.sampleOpeners, `${key} missing sampleOpeners`).toBeDefined()
-      expect(override.sampleOpeners!.length, `${key} needs at least 2 sample openers`).toBeGreaterThanOrEqual(2)
+      expect(override.antiPatterns, `${key} missing antiPatterns`).toBeTruthy()
+      expect(override.antiPatterns!.length).toBeGreaterThan(10)
+    }
+  })
+
+  it('every override has experienceCalibration with all 3 levels', () => {
+    for (const [key, override] of Object.entries(DOMAIN_DEPTH_OVERRIDES)) {
+      expect(override.experienceCalibration, `${key} missing experienceCalibration`).toBeDefined()
+      expect(override.experienceCalibration!['0-2'], `${key} missing 0-2 calibration`).toBeTruthy()
+      expect(override.experienceCalibration!['3-6'], `${key} missing 3-6 calibration`).toBeTruthy()
+      expect(override.experienceCalibration!['7+'], `${key} missing 7+ calibration`).toBeTruthy()
+    }
+  })
+
+  it('every override has domainRedFlags with at least 2 entries', () => {
+    for (const [key, override] of Object.entries(DOMAIN_DEPTH_OVERRIDES)) {
+      expect(override.domainRedFlags, `${key} missing domainRedFlags`).toBeDefined()
+      expect(override.domainRedFlags!.length, `${key} needs at least 2 red flags`).toBeGreaterThanOrEqual(2)
     }
   })
 
