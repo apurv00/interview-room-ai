@@ -7,6 +7,7 @@ import { aiLogger } from '@shared/logger'
 import { PRESSURE_QUESTION_INDEX, QUESTION_COUNT, getDomainLabel } from '@interview/config/interviewConfig'
 import { DOMAIN_DEPTH_OVERRIDES } from '@interview/config/domainDepthMatrix'
 import { findCompanyProfile, buildCompanyPromptContext } from '@interview/config/companyProfiles'
+import { selectQuestionInspiration } from '@interview/config/questionPool'
 import { connectDB } from '@shared/db/connection'
 import { User, InterviewDomain, InterviewDepth } from '@shared/db/models'
 import { FALLBACK_DOMAINS, FALLBACK_DEPTHS } from '@shared/db/seed'
@@ -112,9 +113,26 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
       if (override.technicalTranslation) {
         depthStrategy += `\n\nTECHNICAL FOCUS FOR THIS DOMAIN: ${override.technicalTranslation}`
       }
-      // Use sample openers as inspiration for early questions
-      if (override.sampleOpeners?.length && questionIndex <= 2) {
-        depthStrategy += `\n\nSAMPLE OPENER INSPIRATION (adapt, don't copy verbatim): ${override.sampleOpeners.join(' | ')}`
+      if (override.antiPatterns) {
+        depthStrategy += `\n\nAVOID: ${override.antiPatterns}`
+      }
+      if (override.experienceCalibration?.[config.experience]) {
+        depthStrategy += `\n\nEXPECTATION CALIBRATION (${config.experience} yrs): ${override.experienceCalibration[config.experience]}`
+      }
+    }
+
+    // Select curated question inspiration from pool (experience-aware, randomized)
+    if (questionIndex <= 3) {
+      const inspiration = selectQuestionInspiration(
+        config.role, interviewType, config.experience,
+        completedThreads?.map(t => t.topicQuestion),
+      )
+      if (inspiration.length > 0) {
+        depthStrategy += `\n\nQUESTION INSPIRATION (adapt to context, don't copy verbatim):`
+        inspiration.forEach((q, i) => {
+          depthStrategy += `\n${i + 1}. "${q.question}" [targets: ${q.targetCompetency}]`
+          if (q.followUpTheme) depthStrategy += ` → follow up on: ${q.followUpTheme}`
+        })
       }
     }
 
