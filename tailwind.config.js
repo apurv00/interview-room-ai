@@ -46,6 +46,8 @@ module.exports = {
         'talk': 'talk 0.15s ease-in-out infinite alternate',
         'fade-in': 'fadeIn 0.3s ease-out',
         'score-fill': 'scoreFill 1s ease-out forwards',
+        'accordion-down': 'accordion-down 0.2s ease-out',
+        'accordion-up': 'accordion-up 0.2s ease-out',
       },
       keyframes: {
         blink: {
@@ -63,6 +65,14 @@ module.exports = {
         scoreFill: {
           from: { width: '0%' },
           to: { width: 'var(--score-width)' },
+        },
+        'accordion-down': {
+          from: { height: '0' },
+          to: { height: 'var(--radix-accordion-content-height)' },
+        },
+        'accordion-up': {
+          from: { height: 'var(--radix-accordion-content-height)' },
+          to: { height: '0' },
         },
       },
     },
