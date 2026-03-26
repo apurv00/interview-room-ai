@@ -7,7 +7,7 @@ export { retrieveQuestions, getQuestionBankContext, getCompanyContext } from './
 export { parseJobDescription, buildParsedJDContext } from './services/jdParserService'
 
 // ── Config ──
-export { QUESTION_COUNT, PRESSURE_QUESTION_INDEX, getDomainLabel, AVATAR_NAME, AVATAR_TITLE, getInterviewIntro, WRAP_UP_LINE, EXPERIENCE_LABELS, DURATION_LABELS, ROLE_LABELS } from './config/interviewConfig'
+export { QUESTION_COUNT, PRESSURE_QUESTION_INDEX, getDomainLabel, AVATAR_NAME, AVATAR_TITLE, getInterviewIntro, getAvatarTitle, WRAP_UP_LINE, EXPERIENCE_LABELS, DURATION_LABELS, ROLE_LABELS } from './config/interviewConfig'
 export { deriveCoachingTip } from './config/coachingTips'
 export { deriveNudge } from './config/coachingNudges'
 export type { CoachingNudge } from './config/coachingNudges'

@@ -67,6 +67,7 @@ export default function LobbyPage() {
   const animFrameRef = useRef<number>(0)
 
   const [config, setConfig] = useState<InterviewConfig | null>(null)
+  const [lobbyCompany, setLobbyCompany] = useState('')
   const [checks, setChecks] = useState<Check[]>([
     { label: 'Camera', status: 'pending' },
     { label: 'Microphone', status: 'pending' },
@@ -202,6 +203,12 @@ export default function LobbyPage() {
   }, [joining, router])
 
   function enterRoom() {
+    // Save optional company context to config before entering
+    if (lobbyCompany.trim() && config) {
+      const updated = { ...config, targetCompany: lobbyCompany.trim() }
+      setConfig(updated)
+      localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(updated))
+    }
     setJoining(true)
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
   }
@@ -377,6 +384,22 @@ export default function LobbyPage() {
                 domainLabel={getDomainLabel(config.role)}
                 duration={config.duration}
               />
+            )}
+
+            {/* Optional company input (when no JD-extracted company) */}
+            {config && !config.targetCompany && (
+              <div className="bg-white border border-[#e1e8ed] rounded-2xl p-4">
+                <label className="text-xs font-medium text-[#536471] block mb-1.5">
+                  Preparing for a specific company? (optional)
+                </label>
+                <input
+                  type="text"
+                  value={lobbyCompany}
+                  onChange={(e) => setLobbyCompany(e.target.value)}
+                  placeholder="e.g. Google, Stripe, McKinsey..."
+                  className="w-full text-sm px-3 py-2 border border-[#e1e8ed] rounded-xl bg-[#f7f9f9] focus:outline-none focus:ring-2 focus:ring-[#6366f1]/30 focus:border-[#6366f1] transition-colors placeholder:text-[#8b98a5]"
+                />
+              </div>
             )}
 
             {/* CTA */}

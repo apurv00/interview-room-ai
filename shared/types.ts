@@ -20,6 +20,8 @@ export interface InterviewConfig {
   resumeFileName?: string
   persona?: string              // interviewer persona slug
   resumeId?: string             // source resume ID for resume-to-interview flow
+  targetCompany?: string        // extracted from JD or entered in lobby
+  targetIndustry?: string       // extracted from JD or entered in lobby
 }
 
 // ─── State Machine ────────────────────────────────────────────────────────────

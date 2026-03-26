@@ -45,6 +45,11 @@ function AuthenticatedHome() {
   const [uploadError, setUploadError] = useState('')
   const [highlightStep, setHighlightStep] = useState<number | null>(null)
 
+  // Company/industry context (extracted from JD or entered manually)
+  const [targetCompany, setTargetCompany] = useState('')
+  const [targetIndustry, setTargetIndustry] = useState('')
+  const [extractingContext, setExtractingContext] = useState(false)
+
   // Pre-fill from last session config
   useEffect(() => {
     try {
@@ -64,6 +69,8 @@ function AuthenticatedHome() {
           setResumeText(c.resumeText)
           setResumeFileName(c.resumeFileName || 'Resume')
         }
+        if (c.targetCompany) setTargetCompany(c.targetCompany)
+        if (c.targetIndustry) setTargetIndustry(c.targetIndustry)
       }
     } catch { /* ignore */ }
   }, [])
@@ -122,7 +129,25 @@ function AuthenticatedHome() {
         return
       }
       if (!res.ok) { setUploadError(data.error || 'Upload failed'); return }
-      if (docType === 'jd') { setJdText(data.text); setJdFileName(data.fileName) }
+      if (docType === 'jd') {
+        setJdText(data.text); setJdFileName(data.fileName)
+        // Extract company/industry context from JD
+        if (data.text) {
+          setExtractingContext(true)
+          fetch('/api/extract-company-context', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jdText: data.text }),
+          })
+            .then(r => r.json())
+            .then(ctx => {
+              if (ctx.company) setTargetCompany(ctx.company)
+              if (ctx.industry) setTargetIndustry(ctx.industry)
+            })
+            .catch(() => {})
+            .finally(() => setExtractingContext(false))
+        }
+      }
       else { setResumeText(data.text); setResumeFileName(data.fileName) }
     } catch { setUploadError('Failed to upload file. Please try again.') }
     finally { setUploading(false) }
@@ -139,6 +164,8 @@ function AuthenticatedHome() {
       duration: duration!,
       ...(jdText && { jobDescription: jdText, jdFileName }),
       ...(resumeText && { resumeText, resumeFileName }),
+      ...(targetCompany && { targetCompany }),
+      ...(targetIndustry && { targetIndustry }),
     }
     localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(config))
     router.push(redirect)
@@ -215,6 +242,7 @@ function AuthenticatedHome() {
         <StepSection step={5} label="Documents (optional)">
           <p className="text-caption text-[var(--foreground-muted)] mb-3">
             Upload a JD for role-specific questions, or a resume to personalize the interview.
+            Include the company name and role details for a more personalized interview experience.
           </p>
           <div className="grid sm:grid-cols-2 gap-element">
             <FileDropzone
@@ -222,7 +250,7 @@ function AuthenticatedHome() {
               fileName={jdFileName || undefined}
               isUploading={jdUploading}
               onFileSelect={(file) => handleFileUpload(file, 'jd')}
-              onRemove={() => { setJdText(''); setJdFileName('') }}
+              onRemove={() => { setJdText(''); setJdFileName(''); setTargetCompany(''); setTargetIndustry('') }}
               onError={setUploadError}
             />
             <FileDropzone
@@ -235,6 +263,34 @@ function AuthenticatedHome() {
             />
           </div>
           {uploadError && <p className="text-caption text-[#f4212e] mt-2">{uploadError}</p>}
+
+          {/* Detected company/industry context from JD */}
+          {extractingContext && (
+            <p className="text-caption text-[var(--foreground-muted)] mt-2 animate-pulse">Detecting company context...</p>
+          )}
+          {!extractingContext && (targetCompany || targetIndustry) && (
+            <div className="mt-3 p-3 bg-indigo-50 border border-indigo-100 rounded-xl">
+              <p className="text-caption text-indigo-700 mb-2">
+                Detected: {targetCompany}{targetCompany && targetIndustry ? ' in ' : ''}{targetIndustry}
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={targetCompany}
+                  onChange={(e) => setTargetCompany(e.target.value)}
+                  placeholder="Company name"
+                  className="flex-1 text-xs px-2 py-1 border border-indigo-200 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                />
+                <input
+                  type="text"
+                  value={targetIndustry}
+                  onChange={(e) => setTargetIndustry(e.target.value)}
+                  placeholder="Industry"
+                  className="flex-1 text-xs px-2 py-1 border border-indigo-200 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                />
+              </div>
+            </div>
+          )}
         </StepSection>
 
         {/* CTA */}

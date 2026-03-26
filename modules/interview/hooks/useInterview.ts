@@ -128,6 +128,9 @@ export function useInterview({
   // ── Performance signal (progressive difficulty) ──
   const performanceSignalRef = useRef<PerformanceSignal>('calibrating')
 
+  // ── Question prefetch (parallel loading during coaching) ──
+  const prefetchedQuestionRef = useRef<Promise<string> | null>(null)
+
   // ── Thread tracking (adaptive probing) ──
   const currentTopicIndexRef = useRef(0)
   const currentProbeDepthRef = useRef(0)
@@ -319,14 +322,18 @@ export function useInterview({
     )
   }
 
-  /** Show coaching tip for 2s (cancellable via coachingAbortRef). */
-  async function showCoachingTip(evaluation: AnswerEvaluation): Promise<void> {
+  /** Show coaching tip for 1.5s (cancellable via coachingAbortRef). Optionally prefetch next question in parallel. */
+  async function showCoachingTip(evaluation: AnswerEvaluation, prefetchQIdx?: number): Promise<void> {
     transitionTo('COACHING')
-    setCoachingTip(deriveCoachingTip(evaluation))
+    setCoachingTip(deriveCoachingTip(evaluation, config?.role, config?.interviewType))
+    // Start prefetching next question during coaching display
+    if (prefetchQIdx != null) {
+      prefetchedQuestionRef.current = generateQuestion(prefetchQIdx)
+    }
     const abortCtrl = new AbortController()
     coachingAbortRef.current = abortCtrl
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 2000)
+      const timer = setTimeout(resolve, 1500)
       abortCtrl.signal.addEventListener('abort', () => {
         clearTimeout(timer)
         resolve()
@@ -345,6 +352,7 @@ export function useInterview({
     qIdx: number,
     concurrentTask?: Promise<T>,
     probeDepth?: number,
+    prefetchQIdx?: number,
   ): Promise<{ evaluation: AnswerEvaluation; concurrentResult: T }> {
     transitionTo('PROCESSING')
     setLiveAnswer('')
@@ -356,7 +364,7 @@ export function useInterview({
 
     evaluationsRef.current = [...evaluationsRef.current, { ...evaluation, question, answer }]
     performanceSignalRef.current = computePerformanceSignal()
-    await showCoachingTip(evaluation)
+    await showCoachingTip(evaluation, prefetchQIdx)
 
     return { evaluation, concurrentResult }
   }
@@ -443,12 +451,17 @@ export function useInterview({
     if (isProbe) return Promise.resolve(null)
     if (timeRemainingRef.current < 90) return Promise.resolve(null)
     if (questionIndexRef.current === 0) return Promise.resolve(null)
+    // Skip if already in follow-up/probe flow
+    if (currentProbeDepthRef.current > 0) return Promise.resolve(null)
+    // Skip if candidate is struggling — don't add pressure
+    if (performanceSignalRef.current === 'struggling') return Promise.resolve(null)
 
     const wordCount = answer.trim().split(/\s+/).length
     if (wordCount >= 30) return Promise.resolve(null)
 
-    // 25% chance
-    if (Math.random() >= 0.25) return Promise.resolve(null)
+    // Adaptive chance: very short answers get higher silence probability
+    const silenceChance = wordCount < 15 ? 0.40 : 0.25
+    if (Math.random() >= silenceChance) return Promise.resolve(null)
 
     // Set avatar to "curious" (waiting look)
     setAvatarEmotion('curious')
@@ -566,9 +579,15 @@ export function useInterview({
         if (isInterviewOver()) return
         if (timeRemainingRef.current < 30) break
 
-        // ── Generate new topic question ──
+        // ── Generate new topic question (use prefetched if available) ──
         transitionTo('ASK_QUESTION')
-        const question = await generateQuestion(qIdx)
+        let question: string
+        if (prefetchedQuestionRef.current) {
+          question = await prefetchedQuestionRef.current
+          prefetchedQuestionRef.current = null
+        } else {
+          question = await generateQuestion(qIdx)
+        }
         const topicQuestion = question // Save for thread summary
         questionIndexRef.current = qIdx
         setQuestionIndex(qIdx)
@@ -615,8 +634,12 @@ export function useInterview({
         })
 
         // Evaluate (uses combined answer if candidate elaborated during silence)
+        // Prefetch next question during coaching display for faster transitions
+        const nextQIdx = qIdx + 1
+        const shouldPrefetch = nextQIdx < maxQ && timeRemainingRef.current > 60
         const { evaluation } = await evaluateAndCoach(
           question, finalAnswer, qIdx, undefined, currentProbeDepthRef.current,
+          shouldPrefetch ? nextQIdx : undefined,
         )
 
         // ── Handle pushback (fires before probe loop, can act as ad-hoc probe) ──
@@ -700,8 +723,8 @@ export function useInterview({
       addToTranscript('interviewer', WRAP_UP_LINE)
       await avatarSpeak(WRAP_UP_LINE, 'friendly')
 
-      // 6s for user to ask questions
-      await new Promise((r) => setTimeout(r, 6000))
+      // 4s for user to ask questions
+      await new Promise((r) => setTimeout(r, 4000))
       finishInterview()
     },
     [config, generateQuestion, avatarSpeak, startListening, evaluateAnswer, addToTranscript, finishInterview] // eslint-disable-line react-hooks/exhaustive-deps
@@ -713,7 +736,7 @@ export function useInterview({
     if (!config || !voicesReady) return
 
     const start = async () => {
-      const intro = getInterviewIntro(config.role)
+      const intro = getInterviewIntro(config.role, config.interviewType, config.targetCompany)
       setCurrentQuestion(intro)
       addToTranscript('interviewer', intro, 0)
       await avatarSpeak(intro, 'friendly')

@@ -9,6 +9,8 @@ export const InterviewConfigSchema = z.object({
   resumeText: z.string().max(50000).optional(),
   jdFileName: z.string().max(500).optional(),
   resumeFileName: z.string().max(500).optional(),
+  targetCompany: z.string().max(200).optional(),
+  targetIndustry: z.string().max(200).optional(),
 })
 
 export const TranscriptEntrySchema = z.object({
