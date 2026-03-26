@@ -3,18 +3,21 @@
 @tailwind utilities;
 
 :root {
-  --color-page: #ffffff;
+  --color-page: #f7f9f9;
   --color-card: #ffffff;
-  --color-surface: #f7f9f9;
-  --color-raised: #eff3f4;
+  --color-surface: #f0f1f4;
+  --color-raised: #e8eaed;
   --color-border: #e1e8ed;
   --color-border-subtle: #eff3f4;
   --foreground: #0f1419;
   --foreground-secondary: #536471;
   --foreground-tertiary: #71767b;
   --foreground-muted: #8b98a5;
-  --background: #ffffff;
-  --radius-md: 10px;
+  --background: #f7f9f9;
+  --radius-md: 12px;
+  --shadow-card: 0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.02);
+  --shadow-card-hover: 0 4px 12px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
+  --shadow-dropdown: 0 4px 24px rgba(0,0,0,0.12), 0 1px 4px rgba(0,0,0,0.04);
 }
 
 * {
@@ -53,11 +56,44 @@ body {
 .surface-card {
   background: var(--color-card);
   border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
 }
 .surface-card-bordered {
   background: var(--color-card);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  transition: box-shadow 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+}
+.surface-card-bordered:hover {
+  box-shadow: var(--shadow-card-hover);
+  border-color: #cfd9de;
+}
+
+/* Interactive card (clickable / link wrapper) */
+.card-interactive {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.card-interactive:hover {
+  box-shadow: var(--shadow-card-hover);
+  transform: translateY(-2px);
+  border-color: #cfd9de;
+}
+.card-interactive:active {
+  transform: translateY(0);
+  box-shadow: var(--shadow-card);
+}
+
+/* ─── SECTION SURFACES ──────────────────── */
+.section-white {
+  background: #ffffff;
+}
+.section-tinted {
+  background: var(--color-page);
 }
 
 /* ─── SCROLLBAR ─────────────────────────── */
@@ -86,14 +122,16 @@ body {
 
 /* ─── GLOW BUTTON ───────────────────────── */
 .btn-glow {
-  box-shadow: 0 0 20px rgba(99, 102, 241, 0.25);
-  transition: box-shadow 0.2s ease;
+  box-shadow: 0 0 20px rgba(99, 102, 241, 0.25), 0 4px 12px rgba(99, 102, 241, 0.15);
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
 }
 .btn-glow:hover {
-  box-shadow: 0 0 28px rgba(99, 102, 241, 0.35);
+  box-shadow: 0 0 28px rgba(99, 102, 241, 0.35), 0 6px 16px rgba(99, 102, 241, 0.2);
+  transform: translateY(-1px);
 }
 .btn-glow:active {
   box-shadow: 0 0 16px rgba(99, 102, 241, 0.2);
+  transform: translateY(0);
 }
 
 /* ─── WAVE ANIMATION (avatar fallback) ──── */
@@ -105,6 +143,27 @@ body {
 .wave-bar {
   animation: wave 0.6s ease-in-out infinite;
 }
+
+/* ─── SLIDE UP ANIMATION ────────────────── */
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-slide-up {
+  animation: slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Staggered children animation */
+.stagger-children > * {
+  animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.stagger-children > *:nth-child(1) { animation-delay: 0ms; }
+.stagger-children > *:nth-child(2) { animation-delay: 60ms; }
+.stagger-children > *:nth-child(3) { animation-delay: 120ms; }
+.stagger-children > *:nth-child(4) { animation-delay: 180ms; }
+.stagger-children > *:nth-child(5) { animation-delay: 240ms; }
+.stagger-children > *:nth-child(6) { animation-delay: 300ms; }
 
 /* ─── REDUCED MOTION ────────────────────── */
 @media (prefers-reduced-motion: reduce) {

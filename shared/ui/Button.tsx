@@ -16,16 +16,16 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const variantClasses: Record<ButtonVariant, string> = {
-  primary: 'bg-[#6366f1] hover:bg-[#5558e6] text-white',
-  secondary: 'bg-white border border-[#e1e8ed] text-[#0f1419] hover:bg-[#f7f9f9]',
+  primary: 'bg-[#6366f1] hover:bg-[#5558e6] text-white shadow-sm hover:shadow-md',
+  secondary: 'bg-white border border-[#e1e8ed] text-[#0f1419] hover:bg-[#f7f9f9] hover:border-[#cfd9de] shadow-sm',
   ghost: 'bg-transparent text-[#536471] hover:bg-[#f7f9f9] hover:text-[#0f1419]',
   danger: 'bg-[rgba(244,33,46,0.06)] border border-[rgba(244,33,46,0.15)] text-[#f4212e] hover:bg-[rgba(244,33,46,0.10)]',
 }
 
 const sizeClasses: Record<ButtonSize, string> = {
-  sm: 'h-8 text-xs px-3 rounded-[6px]',
-  md: 'h-9 text-sm px-4 rounded-[10px]',
-  lg: 'h-11 text-sm px-5 rounded-[10px]',
+  sm: 'h-8 text-xs px-3.5 rounded-full',
+  md: 'h-9 text-sm px-5 rounded-full',
+  lg: 'h-11 text-sm px-6 rounded-full',
 }
 
 const Spinner = () => (
@@ -57,8 +57,8 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         ref={ref}
         disabled={disabled || isLoading}
         className={`
-          inline-flex items-center justify-center gap-1.5 font-medium
-          transition-all duration-[120ms] ease-out
+          inline-flex items-center justify-center gap-1.5 font-semibold
+          transition-all duration-200 ease-out
           disabled:opacity-40 disabled:cursor-not-allowed
           active:scale-[0.97]
           ${variantClasses[variant]}
