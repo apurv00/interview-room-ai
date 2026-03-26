@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import type { InterviewConfig } from '@shared/types'
 import { getDomainLabel } from '@interview/config/interviewConfig'
 import { STORAGE_KEYS } from '@shared/storageKeys'
+import { COMPANY_PROFILES } from '@interview/config/companyProfiles'
 import PrepChecklist from '@interview/components/PrepChecklist'
 
 type CheckStatus = 'pending' | 'ok' | 'error'
@@ -68,6 +69,7 @@ export default function LobbyPage() {
 
   const [config, setConfig] = useState<InterviewConfig | null>(null)
   const [lobbyCompany, setLobbyCompany] = useState('')
+  const [showSuggestions, setShowSuggestions] = useState(false)
   const [checks, setChecks] = useState<Check[]>([
     { label: 'Camera', status: 'pending' },
     { label: 'Microphone', status: 'pending' },
@@ -386,19 +388,48 @@ export default function LobbyPage() {
               />
             )}
 
-            {/* Optional company input (when no JD-extracted company) */}
+            {/* Optional company input with autocomplete (when no JD-extracted company) */}
             {config && !config.targetCompany && (
               <div className="bg-white border border-[#e1e8ed] rounded-2xl p-4">
                 <label className="text-xs font-medium text-[#536471] block mb-1.5">
                   Preparing for a specific company? (optional)
                 </label>
-                <input
-                  type="text"
-                  value={lobbyCompany}
-                  onChange={(e) => setLobbyCompany(e.target.value)}
-                  placeholder="e.g. Google, Stripe, McKinsey..."
-                  className="w-full text-sm px-3 py-2 border border-[#e1e8ed] rounded-xl bg-[#f7f9f9] focus:outline-none focus:ring-2 focus:ring-[#6366f1]/30 focus:border-[#6366f1] transition-colors placeholder:text-[#8b98a5]"
-                />
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={lobbyCompany}
+                    onChange={(e) => { setLobbyCompany(e.target.value); setShowSuggestions(true) }}
+                    onFocus={() => setShowSuggestions(true)}
+                    onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+                    placeholder="e.g. Google, Stripe, McKinsey..."
+                    className="w-full text-sm px-3 py-2 border border-[#e1e8ed] rounded-xl bg-[#f7f9f9] focus:outline-none focus:ring-2 focus:ring-[#6366f1]/30 focus:border-[#6366f1] transition-colors placeholder:text-[#8b98a5]"
+                  />
+                  {showSuggestions && lobbyCompany.length >= 1 && (
+                    (() => {
+                      const filtered = COMPANY_PROFILES.filter(p =>
+                        p.name.toLowerCase().includes(lobbyCompany.toLowerCase()) ||
+                        p.aliases.some(a => a.toLowerCase().includes(lobbyCompany.toLowerCase()))
+                      ).slice(0, 5)
+                      if (filtered.length === 0 || (filtered.length === 1 && filtered[0].name.toLowerCase() === lobbyCompany.toLowerCase())) return null
+                      return (
+                        <div className="absolute z-10 w-full mt-1 bg-white border border-[#e1e8ed] rounded-xl shadow-lg overflow-hidden">
+                          {filtered.map(p => (
+                            <button
+                              key={p.name}
+                              type="button"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => { setLobbyCompany(p.name); setShowSuggestions(false) }}
+                              className="w-full text-left px-3 py-2 text-sm hover:bg-[#f7f9f9] transition-colors flex items-center justify-between"
+                            >
+                              <span className="font-medium text-[#0f1419]">{p.name}</span>
+                              <span className="text-xs text-[#8b98a5]">{p.industry}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )
+                    })()
+                  )}
+                </div>
               </div>
             )}
 

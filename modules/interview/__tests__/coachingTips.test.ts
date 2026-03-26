@@ -101,4 +101,61 @@ describe('deriveCoachingTip', () => {
     const tip = deriveCoachingTip(makeEval({ ownership: 150 }))
     expect(tip).toBe('Keep going — you are doing well.')
   })
+
+  // ── Domain-aware tips ──
+  it('returns technical-specific tip for structure weakness in technical interview', () => {
+    const tip = deriveCoachingTip(
+      makeEval({ relevance: 65, structure: 40, specificity: 60, ownership: 60 }),
+      undefined,
+      'technical',
+    )
+    expect(tip).toContain('step-by-step')
+  })
+
+  it('returns case-study-specific tip for structure weakness', () => {
+    const tip = deriveCoachingTip(
+      makeEval({ relevance: 65, structure: 40, specificity: 60, ownership: 60 }),
+      undefined,
+      'case-study',
+    )
+    expect(tip).toContain('framework')
+  })
+
+  it('returns sales-specific tip for specificity weakness', () => {
+    const tip = deriveCoachingTip(
+      makeEval({ relevance: 65, structure: 60, specificity: 40, ownership: 60 }),
+      'sales',
+    )
+    expect(tip).toContain('pipeline') // sales specificity mentions pipeline/conversion/deal
+  })
+
+  it('returns behavioral-specific tip for ownership weakness', () => {
+    const tip = deriveCoachingTip(
+      makeEval({ relevance: 65, structure: 60, specificity: 60, ownership: 40 }),
+      undefined,
+      'behavioral',
+    )
+    expect(tip).toContain("'I'")
+  })
+
+  it('falls back to generic tip when no domain-specific match exists', () => {
+    const tip = deriveCoachingTip(
+      makeEval({ relevance: 40, structure: 60, specificity: 60, ownership: 60 }),
+      'unknown-domain',
+      'unknown-type',
+    )
+    expect(tip).toContain('Focus directly')
+  })
+
+  it('prefers interviewType match over domain match', () => {
+    // specificity weakness: technical has a specific tip, sales has a specific tip
+    // When both are provided, interviewType should take priority
+    const tip = deriveCoachingTip(
+      makeEval({ relevance: 65, structure: 60, specificity: 40, ownership: 60 }),
+      'sales',
+      'technical',
+    )
+    // Technical tip for specificity: "Be precise with technical terms"
+    expect(tip).toContain('precise')
+  })
 })

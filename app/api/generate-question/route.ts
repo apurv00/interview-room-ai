@@ -6,6 +6,7 @@ import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
 import { PRESSURE_QUESTION_INDEX, QUESTION_COUNT, getDomainLabel } from '@interview/config/interviewConfig'
 import { DOMAIN_DEPTH_OVERRIDES } from '@interview/config/domainDepthMatrix'
+import { findCompanyProfile, buildCompanyPromptContext } from '@interview/config/companyProfiles'
 import { connectDB } from '@shared/db/connection'
 import { User, InterviewDomain, InterviewDepth } from '@shared/db/models'
 import { FALLBACK_DOMAINS, FALLBACK_DEPTHS } from '@shared/db/seed'
@@ -111,13 +112,22 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
       if (override.technicalTranslation) {
         depthStrategy += `\n\nTECHNICAL FOCUS FOR THIS DOMAIN: ${override.technicalTranslation}`
       }
+      // Use sample openers as inspiration for early questions
+      if (override.sampleOpeners?.length && questionIndex <= 2) {
+        depthStrategy += `\n\nSAMPLE OPENER INSPIRATION (adapt, don't copy verbatim): ${override.sampleOpeners.join(' | ')}`
+      }
     }
 
     // Build company/industry context block
     let companyBlock = ''
     if (config.targetCompany) {
-      companyBlock += `\nThe candidate is preparing for an interview at ${config.targetCompany}.`
-      companyBlock += ` Adapt question style, difficulty calibration, and cultural expectations to match this company's known interview approach and values.`
+      const companyProfile = findCompanyProfile(config.targetCompany)
+      if (companyProfile) {
+        companyBlock += buildCompanyPromptContext(companyProfile)
+      } else {
+        companyBlock += `\nThe candidate is preparing for an interview at ${config.targetCompany}.`
+        companyBlock += ` Adapt question style, difficulty calibration, and cultural expectations to match this company's known interview approach and values.`
+      }
     }
     if (config.targetIndustry) {
       companyBlock += `\nThe role is in the ${config.targetIndustry} industry. Use industry-relevant scenarios, terminology, and domain examples.`

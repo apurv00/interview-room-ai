@@ -6,6 +6,7 @@ import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
 import { getDomainLabel } from '@interview/config/interviewConfig'
 import { DOMAIN_DEPTH_OVERRIDES } from '@interview/config/domainDepthMatrix'
+import { findCompanyProfile } from '@interview/config/companyProfiles'
 import { connectDB } from '@shared/db/connection'
 import { User, InterviewDepth } from '@shared/db/models'
 import { FALLBACK_DEPTHS } from '@shared/db/seed'
@@ -122,7 +123,12 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
     // Build company/industry context for evaluation calibration
     let companyContext = ''
     if (config.targetCompany) {
-      companyContext += `\nThe candidate is preparing for ${config.targetCompany}. Calibrate scoring expectations to this company's known standards.`
+      const companyProfile = findCompanyProfile(config.targetCompany)
+      if (companyProfile) {
+        companyContext += `\nThe candidate is preparing for ${companyProfile.name} (${companyProfile.difficultyLevel} difficulty). Calibrate scoring to ${companyProfile.name}'s interview standards. Key values: ${companyProfile.culturalValues.slice(0, 3).join(', ')}.`
+      } else {
+        companyContext += `\nThe candidate is preparing for ${config.targetCompany}. Calibrate scoring expectations to this company's known standards.`
+      }
     }
     if (config.targetIndustry) {
       companyContext += `\nThe role is in the ${config.targetIndustry} industry. Weight industry-relevant knowledge and terminology appropriately.`

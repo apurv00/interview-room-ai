@@ -206,8 +206,18 @@ export function useInterview({
           null
         )
         if (preferred) utterance.voice = preferred
-        utterance.rate = 1.08
-        utterance.pitch = 1.02
+
+        // Adapt TTS pacing to interview type persona
+        const interviewType = config?.interviewType || 'screening'
+        const ttsProfiles: Record<string, { rate: number; pitch: number }> = {
+          screening: { rate: 1.08, pitch: 1.02 },   // Warm, conversational
+          behavioral: { rate: 1.0, pitch: 1.0 },     // Measured, thoughtful
+          technical: { rate: 1.1, pitch: 0.98 },      // Slightly faster, direct
+          'case-study': { rate: 0.98, pitch: 1.0 },   // Deliberate, measured pacing
+        }
+        const tts = ttsProfiles[interviewType] || ttsProfiles.screening
+        utterance.rate = tts.rate
+        utterance.pitch = tts.pitch
         utterance.volume = 1
 
         setAvatarEmotion(emotion)
@@ -224,7 +234,7 @@ export function useInterview({
         window.speechSynthesis.speak(utterance)
       })
     },
-    []
+    [config]
   )
 
   // ─── Transcript helpers ────────────────────────────────────────────────────
