@@ -72,12 +72,41 @@ export const LEGACY_INTERVIEW_INTROS: Record<string, string> = {
   MBA: `Hello! I'm Alex, nice to have you here. This is a general business leadership screen. To start: tell me about your background and why you decided to pursue an MBA.`,
 }
 
-export function getInterviewIntro(domainSlug: string, domainLabel?: string): string {
-  // Use legacy intro if available
-  if (LEGACY_INTERVIEW_INTROS[domainSlug]) return LEGACY_INTERVIEW_INTROS[domainSlug]
-  // Generate dynamic intro
+export function getInterviewIntro(
+  domainSlug: string,
+  interviewType?: string,
+  targetCompany?: string,
+  domainLabel?: string,
+): string {
+  // For screening with legacy domains and no company context, use legacy intros
+  if ((!interviewType || interviewType === 'screening') && !targetCompany && LEGACY_INTERVIEW_INTROS[domainSlug]) {
+    return LEGACY_INTERVIEW_INTROS[domainSlug]
+  }
+
   const label = domainLabel || getDomainLabel(domainSlug)
-  return `Hi, I'm Alex — thanks for joining today. We'll be doing a ${label} screening interview. Let's kick things off: tell me a bit about yourself and what draws you to this field.`
+
+  const typeLabels: Record<string, string> = {
+    screening: 'screening interview',
+    behavioral: 'behavioral interview',
+    technical: 'technical deep-dive',
+    'case-study': 'case study session',
+  }
+  const typeLabel = typeLabels[interviewType || 'screening'] || 'screening interview'
+
+  const companyNote = targetCompany
+    ? ` I understand you're preparing for ${targetCompany} — I'll keep that in mind as we go.`
+    : ''
+
+  return `Hi, I'm Alex — thanks for joining today. We'll be doing a ${label} ${typeLabel}.${companyNote} Let's kick things off: tell me a bit about yourself and what draws you to this field.`
+}
+
+export function getAvatarTitle(interviewType?: string): string {
+  switch (interviewType) {
+    case 'behavioral': return 'Senior Hiring Manager'
+    case 'technical': return 'Technical Interview Lead'
+    case 'case-study': return 'Strategy & Assessment Lead'
+    default: return 'Senior Recruiter · Talent Acquisition'
+  }
 }
 
 // Backward compat export

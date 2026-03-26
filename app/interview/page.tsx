@@ -15,7 +15,7 @@ import { useInterview } from '@interview/hooks/useInterview'
 import { useMediaRecorder } from '@interview/hooks/useMediaRecorder'
 import { useCoachingNudge } from '@interview/hooks/useCoachingNudge'
 import type { InterviewConfig } from '@shared/types'
-import { AVATAR_NAME, AVATAR_TITLE } from '@interview/config/interviewConfig'
+import { AVATAR_NAME, getAvatarTitle } from '@interview/config/interviewConfig'
 import { STORAGE_KEYS } from '@shared/storageKeys'
 
 import { formatTime } from '@shared/utils'
@@ -269,7 +269,7 @@ export default function InterviewPage() {
         {/* Interviewer (avatar) */}
         <VideoTile
           label={AVATAR_NAME}
-          sublabel={AVATAR_TITLE}
+          sublabel={getAvatarTitle(config?.interviewType)}
           isActive={isAvatarTalking}
           indicator={
             isAvatarTalking ? (
