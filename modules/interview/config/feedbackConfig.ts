@@ -6,6 +6,6 @@ export const PROBABILITY_COLORS = {
 
 export const CONFIDENCE_TREND_LABELS = {
   increasing: { text: 'Improving', color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30' },
-  stable: { text: 'Stable', color: 'text-slate-400 bg-slate-500/10 border-slate-500/30' },
+  stable: { text: 'Stable', color: 'text-[#8b98a5] bg-[#eff3f4] border-[#e1e8ed]' },
   declining: { text: 'Declining', color: 'text-amber-400 bg-amber-500/10 border-amber-500/30' },
 } as const

@@ -15,7 +15,7 @@ export default function CommunicationDetail({ metrics }: CommunicationDetailProp
     <div className="space-y-3">
       {/* WPM per question mini chart */}
       <div>
-        <p className="text-xs text-slate-500 font-medium mb-2">Pacing per question</p>
+        <p className="text-xs text-[#8b98a5] font-medium mb-2">Pacing per question</p>
         <div className="flex items-end gap-1 h-10">
           {metrics.map((m, i) => {
             const h = Math.max(4, (m.wpm / maxWpm) * 100)
@@ -28,14 +28,14 @@ export default function CommunicationDetail({ metrics }: CommunicationDetailProp
             return (
               <div key={i} className="flex-1 flex flex-col items-center gap-0.5" title={`Q${i + 1}: ${m.wpm} wpm`}>
                 <div className={`w-full rounded-sm ${color} transition-all`} style={{ height: `${h}%` }} />
-                <span className="text-[9px] text-slate-600">{i + 1}</span>
+                <span className="text-[9px] text-[#71767b]">{i + 1}</span>
               </div>
             )
           })}
         </div>
         <div className="flex justify-between mt-1">
-          <span className="text-[9px] text-slate-600">Ideal: 120-160 wpm</span>
-          <span className="text-[9px] text-slate-600">
+          <span className="text-[9px] text-[#71767b]">Ideal: 120-160 wpm</span>
+          <span className="text-[9px] text-[#71767b]">
             <span className="inline-block w-1.5 h-1.5 rounded-sm bg-emerald-500 mr-0.5" />good
             <span className="inline-block w-1.5 h-1.5 rounded-sm bg-amber-400 mx-0.5 ml-1.5" />slow
             <span className="inline-block w-1.5 h-1.5 rounded-sm bg-red-400 mx-0.5 ml-1.5" />fast
@@ -45,7 +45,7 @@ export default function CommunicationDetail({ metrics }: CommunicationDetailProp
 
       {/* Filler distribution */}
       <div>
-        <p className="text-xs text-slate-500 font-medium mb-1">Filler words per question</p>
+        <p className="text-xs text-[#8b98a5] font-medium mb-1">Filler words per question</p>
         <div className="flex gap-1">
           {metrics.map((m, i) => {
             const intensity = Math.min(1, m.fillerRate * 10)
@@ -62,8 +62,8 @@ export default function CommunicationDetail({ metrics }: CommunicationDetailProp
           })}
         </div>
         <div className="flex justify-between mt-0.5">
-          <span className="text-[9px] text-slate-600">Light = good</span>
-          <span className="text-[9px] text-slate-600">Bright = many fillers</span>
+          <span className="text-[9px] text-[#71767b]">Light = good</span>
+          <span className="text-[9px] text-[#71767b]">Bright = many fillers</span>
         </div>
       </div>
     </div>

@@ -36,9 +36,9 @@ export async function GET(req: Request) {
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>Unsubscribed</title></head>
-<body style="font-family: -apple-system, sans-serif; background: #0a0f1a; color: #d1d5db; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0;">
+<body style="font-family: -apple-system, sans-serif; background: #ffffff; color: #536471; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0;">
   <div style="text-align: center; padding: 24px;">
-    <h1 style="color: #f0f2f5; font-size: 20px;">Unsubscribed</h1>
+    <h1 style="color: #0f1419; font-size: 20px;">Unsubscribed</h1>
     <p style="font-size: 14px; margin-top: 8px;">You've been unsubscribed from ${type === 'digest' ? 'digest emails' : 'practice reminders'}.</p>
     <a href="/" style="color: #3b82f6; font-size: 14px; margin-top: 16px; display: inline-block;">Back to Interview Prep Guru</a>
   </div>

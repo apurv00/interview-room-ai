@@ -31,7 +31,7 @@ export default function CustomSectionEditor({ items, onAdd, onUpdate, onRemove, 
               placeholder="Section Title"
             />
           </div>
-          <button onClick={() => onRemove(section.id)} className="text-slate-500 hover:text-red-400 transition-colors">
+          <button onClick={() => onRemove(section.id)} className="text-[#8b98a5] hover:text-[#f4212e] transition-colors">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
           </button>
         </div>
@@ -40,7 +40,7 @@ export default function CustomSectionEditor({ items, onAdd, onUpdate, onRemove, 
           onChange={e => onUpdate(section.id, { content: e.target.value })}
           placeholder="Section content..."
           rows={3}
-          className="w-full px-3 py-2.5 bg-white border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
+          className="w-full px-3 py-2.5 bg-white border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
         />
       </div>
     )
@@ -64,7 +64,7 @@ export default function CustomSectionEditor({ items, onAdd, onUpdate, onRemove, 
 
       <button
         onClick={addNew}
-        className="w-full py-3 border border-dashed border-[#e1e8ed] rounded-xl text-sm text-slate-500 hover:text-[#0f1419] hover:border-[#536471] transition-colors"
+        className="w-full py-3 border border-dashed border-[#e1e8ed] rounded-xl text-sm text-[#8b98a5] hover:text-[#0f1419] hover:border-[#536471] transition-colors"
       >
         + Add Custom Section
       </button>
