@@ -133,7 +133,7 @@ describe('AnswerEvaluationSchema — rejects invalid/malicious input', () => {
   })
 
   it('rejects excessive flags array', () => {
-    const tooManyFlags = Array(11).fill('flag')
+    const tooManyFlags = Array(21).fill('flag')
     expect(AnswerEvaluationSchema.safeParse({ ...validEval, flags: tooManyFlags }).success).toBe(false)
   })
 })

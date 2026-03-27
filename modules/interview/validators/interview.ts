@@ -15,7 +15,7 @@ export const InterviewConfigSchema = z.object({
 
 export const TranscriptEntrySchema = z.object({
   speaker: z.enum(['interviewer', 'candidate']),
-  text: z.string().max(5000),
+  text: z.string().max(20000),
   timestamp: z.number(),
   questionIndex: z.number().nullish(),
 })
@@ -23,13 +23,13 @@ export const TranscriptEntrySchema = z.object({
 const ProbeDecisionSchema = z.object({
   shouldProbe: z.boolean(),
   probeType: z.enum(['clarify', 'challenge', 'expand', 'quantify']).nullish(),
-  probeQuestion: z.string().max(500).nullish(),
-  probingRationale: z.string().max(300).nullish(),
+  probeQuestion: z.string().max(2000).nullish(),
+  probingRationale: z.string().max(1000).nullish(),
 })
 
 const PushbackSchema = z.object({
-  line: z.string().max(300),
-  targetDimension: z.string().max(50),
+  line: z.string().max(1000),
+  targetDimension: z.string().max(100),
   tone: z.enum(['curious', 'probing', 'encouraging']),
 })
 
@@ -43,8 +43,8 @@ export const AnswerEvaluationSchema = z.object({
   ownership: z.number().min(0).max(100),
   jdAlignment: z.number().min(0).max(100).nullish(),
   needsFollowUp: z.boolean(),
-  followUpQuestion: z.string().max(500).nullish(),
-  flags: z.array(z.string().max(200)).max(10),
+  followUpQuestion: z.string().max(2000).nullish(),
+  flags: z.array(z.string().max(500)).max(20),
   probeDecision: ProbeDecisionSchema.nullish(),
   pushback: PushbackSchema.nullish(),
 })
@@ -98,11 +98,11 @@ const FeedbackDataSchema = z.object({
 
 const ThreadSummarySchema = z.object({
   topicIndex: z.number().int().min(0),
-  topicQuestion: z.string().max(1000),
-  summary: z.string().max(500),
+  topicQuestion: z.string().max(5000),
+  summary: z.string().max(2000),
   avgScore: z.number(),
   probeCount: z.number(),
-  probeTypes: z.array(z.string().max(50)).max(10),
+  probeTypes: z.array(z.string().max(100)).max(20),
 })
 
 export const GenerateQuestionSchema = z.object({
@@ -118,10 +118,10 @@ export const GenerateQuestionSchema = z.object({
 
 export const EvaluateAnswerSchema = z.object({
   config: InterviewConfigSchema,
-  question: z.string().min(5).max(2000),
-  answer: z.string().min(1).max(10000),
+  question: z.string().min(1).max(5000),
+  answer: z.string().max(20000),
   questionIndex: z.number().int().min(0).max(100),
-  probeDepth: z.number().int().min(0).max(10).optional(),
+  probeDepth: z.number().int().min(0).max(20).optional(),
   sessionId: z.string().optional(),
 })
 
