@@ -8,3 +8,4 @@ export {
   UpdateInterviewTypeSchema,
   UpdateWizardCostCapSchema,
 } from './validators/cms'
+export { UpdateSkillSchema, SkillParamsSchema, validateSkillSections, REQUIRED_SKILL_SECTIONS } from './validators/skills'

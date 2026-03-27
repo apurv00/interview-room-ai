@@ -75,6 +75,10 @@ export type { IDailyChallenge } from './DailyChallenge'
 export { DailyChallengeAttempt } from './DailyChallengeAttempt'
 export type { IDailyChallengeAttempt } from './DailyChallengeAttempt'
 
+// Interview Skills (CMS-editable markdown playbooks)
+export { InterviewSkill } from './InterviewSkill'
+export type { IInterviewSkill } from './InterviewSkill'
+
 // Smart Wizard
 export { WizardConfig } from './WizardConfig'
 export type { IWizardConfig } from './WizardConfig'

@@ -105,7 +105,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     }
 
     // Inject domain:depth skill file context (replaces fragmented TS overrides)
-    const skillContext = getSkillSections(config.role, interviewType, [
+    const skillContext = await getSkillSections(config.role, interviewType, [
       'question-strategy', 'depth-meaning', 'anti-patterns', 'experience-calibration',
     ])
     if (skillContext) {
@@ -114,7 +114,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
 
     // Experience-aware question inspiration from skill file (randomized per session)
     if (questionIndex <= 3) {
-      const inspiration = selectSkillQuestions(config.role, interviewType, config.experience)
+      const inspiration = await selectSkillQuestions(config.role, interviewType, config.experience)
       if (inspiration) {
         depthStrategy += `\n\nQUESTION INSPIRATION (adapt to context, don't copy verbatim):\n${inspiration}`
       }
@@ -270,7 +270,7 @@ Do NOT use generic transitions like "Great, next question..." or "Moving on...".
     const difficultyBlock = difficultyGuidance[performanceSignal || 'calibrating'] || ''
 
     // Interviewer persona from skill file
-    const personaContent = getSkillSections(config.role, interviewType, ['interviewer-persona'])
+    const personaContent = await getSkillSections(config.role, interviewType, ['interviewer-persona'])
     const personaBlock = personaContent
       ? `\n\nINTERVIEWER PERSONA: ${personaContent}`
       : ''
