@@ -115,12 +115,14 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
     } catch { /* continue without profile */ }
 
     // Inject evaluation-relevant sections from skill file
-    const evalSkillContent = await getSkillSections(config.role, interviewType, [
-      'scoring-emphasis', 'red-flags', 'experience-calibration',
-    ])
-    if (evalSkillContent) {
-      evalCriteria = evalSkillContent + (evalCriteria ? `\n${evalCriteria}` : '')
-    }
+    try {
+      const evalSkillContent = await getSkillSections(config.role, interviewType, [
+        'scoring-emphasis', 'red-flags', 'experience-calibration',
+      ])
+      if (evalSkillContent) {
+        evalCriteria = evalSkillContent + (evalCriteria ? `\n${evalCriteria}` : '')
+      }
+    } catch { /* skill file unavailable — continue with DB eval criteria */ }
 
     // Build company/industry context for evaluation calibration
     let companyContext = ''

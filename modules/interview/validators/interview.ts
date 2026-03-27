@@ -34,9 +34,9 @@ const PushbackSchema = z.object({
 })
 
 export const AnswerEvaluationSchema = z.object({
-  questionIndex: z.number().int().min(0).max(20),
-  question: z.string().max(1000),
-  answer: z.string().max(5000),
+  questionIndex: z.number().int().min(0).max(100),
+  question: z.string().max(2000),
+  answer: z.string().max(10000),
   relevance: z.number().min(0).max(100),
   structure: z.number().min(0).max(100),
   specificity: z.number().min(0).max(100),
@@ -107,7 +107,7 @@ const ThreadSummarySchema = z.object({
 
 export const GenerateQuestionSchema = z.object({
   config: InterviewConfigSchema,
-  questionIndex: z.number().int().min(0).max(20),
+  questionIndex: z.number().int().min(0).max(100),
   previousQA: z.array(TranscriptEntrySchema),
   performanceSignal: z.enum(['calibrating', 'struggling', 'on_track', 'strong']).optional(),
   lastThreadSummary: ThreadSummarySchema.optional(),
@@ -118,9 +118,9 @@ export const GenerateQuestionSchema = z.object({
 
 export const EvaluateAnswerSchema = z.object({
   config: InterviewConfigSchema,
-  question: z.string().min(5).max(1000),
-  answer: z.string().min(1).max(5000),
-  questionIndex: z.number().int().min(0).max(20),
+  question: z.string().min(5).max(2000),
+  answer: z.string().min(1).max(10000),
+  questionIndex: z.number().int().min(0).max(100),
   probeDepth: z.number().int().min(0).max(10).optional(),
   sessionId: z.string().optional(),
 })
