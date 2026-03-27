@@ -105,20 +105,22 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     }
 
     // Inject domain:depth skill file context (replaces fragmented TS overrides)
-    const skillContext = await getSkillSections(config.role, interviewType, [
-      'question-strategy', 'depth-meaning', 'anti-patterns', 'experience-calibration',
-    ])
-    if (skillContext) {
-      depthStrategy = '\n\n' + skillContext
-    }
-
-    // Experience-aware question inspiration from skill file (randomized per session)
-    if (questionIndex <= 3) {
-      const inspiration = await selectSkillQuestions(config.role, interviewType, config.experience)
-      if (inspiration) {
-        depthStrategy += `\n\nQUESTION INSPIRATION (adapt to context, don't copy verbatim):\n${inspiration}`
+    try {
+      const skillContext = await getSkillSections(config.role, interviewType, [
+        'question-strategy', 'depth-meaning', 'anti-patterns', 'experience-calibration',
+      ])
+      if (skillContext) {
+        depthStrategy = '\n\n' + skillContext
       }
-    }
+
+      // Experience-aware question inspiration from skill file (randomized per session)
+      if (questionIndex <= 3) {
+        const inspiration = await selectSkillQuestions(config.role, interviewType, config.experience)
+        if (inspiration) {
+          depthStrategy += `\n\nQUESTION INSPIRATION (adapt to context, don't copy verbatim):\n${inspiration}`
+        }
+      }
+    } catch { /* skill file unavailable — continue with DB depth strategy */ }
 
     // Build company/industry context block
     let companyBlock = ''
@@ -270,10 +272,11 @@ Do NOT use generic transitions like "Great, next question..." or "Moving on...".
     const difficultyBlock = difficultyGuidance[performanceSignal || 'calibrating'] || ''
 
     // Interviewer persona from skill file
-    const personaContent = await getSkillSections(config.role, interviewType, ['interviewer-persona'])
-    const personaBlock = personaContent
-      ? `\n\nINTERVIEWER PERSONA: ${personaContent}`
-      : ''
+    let personaBlock = ''
+    try {
+      const personaContent = await getSkillSections(config.role, interviewType, ['interviewer-persona'])
+      if (personaContent) personaBlock = `\n\nINTERVIEWER PERSONA: ${personaContent}`
+    } catch { /* skill file unavailable — continue without persona */ }
 
     const systemPrompt = `${basePrompt}
 

@@ -75,8 +75,8 @@ async function loadSkillFromDB(domain: string, depth: string): Promise<string | 
       dbCache.set(key, { content: doc.content, timestamp: Date.now() })
       return doc.content
     }
-  } catch {
-    // DB unavailable — fall through to file
+  } catch (err) {
+    aiLogger.warn({ err, domain, depth }, 'Skill DB lookup failed, falling back to file')
   }
   return null
 }

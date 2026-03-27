@@ -223,9 +223,17 @@ function FeedbackPageInner() {
         }),
         signal,
       })
-      const fb = await res.json()
-      if (!res.ok || !fb.dimensions || !fb.overall_score) {
-        throw new Error(fb.error || `Feedback API returned status ${res.status}`)
+      let fb
+      try {
+        fb = await res.json()
+      } catch {
+        throw new Error(`Feedback API returned non-JSON response (status ${res.status})`)
+      }
+      if (!res.ok) {
+        throw new Error(fb.error || `Feedback generation failed (status ${res.status})`)
+      }
+      if (!fb.dimensions || !fb.overall_score) {
+        throw new Error('Feedback response is incomplete — missing required fields')
       }
       setFeedback(fb as FeedbackData)
 
@@ -246,7 +254,8 @@ function FeedbackPageInner() {
       }
     } catch (e) {
       if ((e as Error).name === 'AbortError') return
-      setFeedbackError('Failed to generate feedback. Please try again.')
+      const msg = e instanceof Error ? e.message : 'Unknown error'
+      setFeedbackError(`Failed to generate feedback: ${msg}`)
     } finally {
       setLoading(false)
     }
