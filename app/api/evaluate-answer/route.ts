@@ -115,7 +115,7 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
     } catch { /* continue without profile */ }
 
     // Inject evaluation-relevant sections from skill file
-    const evalSkillContent = getSkillSections(config.role, interviewType, [
+    const evalSkillContent = await getSkillSections(config.role, interviewType, [
       'scoring-emphasis', 'red-flags', 'experience-calibration',
     ])
     if (evalSkillContent) {

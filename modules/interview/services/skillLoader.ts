@@ -33,28 +33,60 @@ const EXP_HEADING_MAP: Record<string, ExperienceLevel | 'all'> = {
   'all levels': 'all',
 }
 
-// ─── Cache ─────────────────────────────────────────────────────────────────────
+// ─── Cache (DB content uses TTL, filesystem is permanent) ────────────────────
 
-const skillCache = new Map<string, string>()
-const parsedCache = new Map<string, Map<SkillSection, string>>()
+const DB_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
+const dbCache = new Map<string, { content: string; timestamp: number }>()
+const fileCache = new Map<string, string>()
+const parsedCache = new Map<string, { sections: Map<SkillSection, string>; timestamp: number }>()
 
 function getSkillsDir(): string {
   return path.join(process.cwd(), 'modules', 'interview', 'skills')
 }
 
-function loadSkillFile(domain: string, depth: string): string | null {
+function loadSkillFromFile(domain: string, depth: string): string | null {
   const key = `${domain}-${depth}`
-  if (skillCache.has(key)) return skillCache.get(key)!
+  if (fileCache.has(key)) return fileCache.get(key)!
 
   try {
     const filePath = path.join(getSkillsDir(), `${key}.md`)
     const content = fs.readFileSync(filePath, 'utf-8')
-    skillCache.set(key, content)
+    fileCache.set(key, content)
     return content
   } catch {
-    aiLogger.warn({ domain, depth }, 'Skill file not found')
     return null
   }
+}
+
+async function loadSkillFromDB(domain: string, depth: string): Promise<string | null> {
+  const key = `${domain}-${depth}`
+  const cached = dbCache.get(key)
+  if (cached && Date.now() - cached.timestamp < DB_CACHE_TTL) {
+    return cached.content
+  }
+
+  try {
+    // Dynamic import to avoid pulling mongoose into client bundles
+    const { connectDB } = await import('@shared/db/connection')
+    const { InterviewSkill } = await import('@shared/db/models')
+    await connectDB()
+    const doc = await InterviewSkill.findOne({ domain, depth, isActive: true }).lean()
+    if (doc?.content) {
+      dbCache.set(key, { content: doc.content, timestamp: Date.now() })
+      return doc.content
+    }
+  } catch {
+    // DB unavailable — fall through to file
+  }
+  return null
+}
+
+/**
+ * Load the default skill content from the filesystem .md file.
+ * Used by the "Reset to Default" CMS feature.
+ */
+export function getDefaultSkillContent(domain: string, depth: string): string | null {
+  return loadSkillFromFile(domain, depth)
 }
 
 // ─── Section Parsing ────────────────────────────────────────────────────────────
@@ -66,10 +98,8 @@ function parseSections(content: string): Map<SkillSection, string> {
   let currentContent: string[] = []
 
   for (const line of lines) {
-    // Match ## headings (not ### sub-headings)
     const h2Match = line.match(/^## (.+)$/)
     if (h2Match) {
-      // Save previous section
       if (currentSection) {
         sections.set(currentSection, currentContent.join('\n').trim())
       }
@@ -82,7 +112,6 @@ function parseSections(content: string): Map<SkillSection, string> {
       currentContent.push(line)
     }
   }
-  // Save last section
   if (currentSection) {
     sections.set(currentSection, currentContent.join('\n').trim())
   }
@@ -90,37 +119,43 @@ function parseSections(content: string): Map<SkillSection, string> {
   return sections
 }
 
-function getParsedSections(domain: string, depth: string): Map<SkillSection, string> | null {
+async function getParsedSections(domain: string, depth: string): Promise<Map<SkillSection, string> | null> {
   const key = `${domain}-${depth}`
-  if (parsedCache.has(key)) return parsedCache.get(key)!
+  const cached = parsedCache.get(key)
+  if (cached && Date.now() - cached.timestamp < DB_CACHE_TTL) {
+    return cached.sections
+  }
 
-  const content = loadSkillFile(domain, depth)
+  const content = await getSkillContent(domain, depth)
   if (!content) return null
 
   const sections = parseSections(content)
-  parsedCache.set(key, sections)
+  parsedCache.set(key, { sections, timestamp: Date.now() })
   return sections
 }
 
-// ─── Public API ─────────────────────────────────────────────────────────────────
+// ─── Public API (async — checks DB first, falls back to filesystem) ──────────
 
 /**
- * Get full skill file content for a domain:depth combination.
+ * Get full skill content for a domain:depth combination.
+ * Checks MongoDB first (CMS-edited), falls back to filesystem default.
  */
-export function getSkillContent(domain: string, depth: string): string | null {
-  return loadSkillFile(domain, depth)
+export async function getSkillContent(domain: string, depth: string): Promise<string | null> {
+  const dbContent = await loadSkillFromDB(domain, depth)
+  if (dbContent) return dbContent
+  return loadSkillFromFile(domain, depth)
 }
 
 /**
  * Extract specific sections from a skill file.
  * Returns concatenated content of requested sections, or empty string if none found.
  */
-export function getSkillSections(
+export async function getSkillSections(
   domain: string,
   depth: string,
   sections: SkillSection[],
-): string {
-  const parsed = getParsedSections(domain, depth)
+): Promise<string> {
+  const parsed = await getParsedSections(domain, depth)
   if (!parsed) return ''
 
   const parts: string[] = []
@@ -135,19 +170,18 @@ export function getSkillSections(
  * Select experience-appropriate questions from the skill file's Sample Questions section.
  * Returns a formatted string of up to `count` questions, randomized for variety.
  */
-export function selectSkillQuestions(
+export async function selectSkillQuestions(
   domain: string,
   depth: string,
   experience: ExperienceLevel,
   count: number = 3,
-): string {
-  const parsed = getParsedSections(domain, depth)
+): Promise<string> {
+  const parsed = await getParsedSections(domain, depth)
   if (!parsed) return ''
 
   const questionsSection = parsed.get('sample-questions')
   if (!questionsSection) return ''
 
-  // Parse questions grouped by experience level sub-heading
   const lines = questionsSection.split('\n')
   let currentExpLevel: ExperienceLevel | 'all' | null = null
   const questionsByLevel = new Map<ExperienceLevel | 'all', string[]>()
@@ -159,15 +193,12 @@ export function selectSkillQuestions(
       currentExpLevel = EXP_HEADING_MAP[heading] || null
       continue
     }
-    // Collect question lines (start with number + dot + space + quote)
     if (currentExpLevel && /^\d+\.\s+"/.test(line)) {
       if (!questionsByLevel.has(currentExpLevel)) {
         questionsByLevel.set(currentExpLevel, [])
       }
-      // Collect this question and its metadata (next line with "- Targets:")
       questionsByLevel.get(currentExpLevel)!.push(line)
     }
-    // Collect metadata lines for the last question
     if (currentExpLevel && line.trim().startsWith('- Targets:')) {
       const arr = questionsByLevel.get(currentExpLevel)
       if (arr && arr.length > 0) {
@@ -176,7 +207,6 @@ export function selectSkillQuestions(
     }
   }
 
-  // Gather matching questions (exact experience + 'all')
   const candidates: string[] = [
     ...(questionsByLevel.get(experience) || []),
     ...(questionsByLevel.get('all') || []),
@@ -184,7 +214,15 @@ export function selectSkillQuestions(
 
   if (candidates.length === 0) return ''
 
-  // Shuffle and pick `count`
   const shuffled = [...candidates].sort(() => Math.random() - 0.5)
   return shuffled.slice(0, count).map((q, i) => `${i + 1}. ${q.replace(/^\d+\.\s+/, '')}`).join('\n')
+}
+
+/**
+ * Invalidate cache for a specific skill (called after CMS edit).
+ */
+export function invalidateSkillCache(domain: string, depth: string): void {
+  const key = `${domain}-${depth}`
+  dbCache.delete(key)
+  parsedCache.delete(key)
 }

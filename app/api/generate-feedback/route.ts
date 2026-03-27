@@ -187,7 +187,7 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
       : ''
 
     // Domain x depth specialization for feedback from skill file
-    const feedbackSkillContent = getSkillSections(config.role, interviewType, [
+    const feedbackSkillContent = await getSkillSections(config.role, interviewType, [
       'scoring-emphasis', 'depth-meaning',
     ])
     let domainFeedbackContext = feedbackSkillContent
