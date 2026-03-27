@@ -15,7 +15,7 @@ export default function FontStyleControls({ fontFamily, headingSize, bodySize, o
   return (
     <div className="space-y-3">
       <div>
-        <label className="text-[10px] text-slate-500 uppercase tracking-wider">Font</label>
+        <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Font</label>
         <select
           value={fontFamily}
           onChange={e => onFontFamilyChange(e.target.value)}
@@ -28,7 +28,7 @@ export default function FontStyleControls({ fontFamily, headingSize, bodySize, o
       </div>
       <div className="flex gap-3">
         <div className="flex-1">
-          <label className="text-[10px] text-slate-500 uppercase tracking-wider">Heading Size</label>
+          <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Heading Size</label>
           <div className="flex items-center gap-2 mt-1">
             <input
               type="range"
@@ -53,7 +53,7 @@ export default function FontStyleControls({ fontFamily, headingSize, bodySize, o
           </div>
         </div>
         <div className="flex-1">
-          <label className="text-[10px] text-slate-500 uppercase tracking-wider">Body Size</label>
+          <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Body Size</label>
           <div className="flex items-center gap-2 mt-1">
             <input
               type="range"

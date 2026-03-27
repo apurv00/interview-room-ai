@@ -324,30 +324,30 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
           <div className="bg-[#f7f9f9] border border-[#e1e8ed] rounded-2xl p-4 space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-[10px] text-slate-500 uppercase tracking-wider">Target Role</label>
+                <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Target Role</label>
                 <input
                   type="text"
                   value={resume.targetRole || ''}
                   onChange={e => update('targetRole', e.target.value)}
                   placeholder="e.g. Senior Product Manager"
-                  className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
               </div>
               <div>
-                <label className="text-[10px] text-slate-500 uppercase tracking-wider">Target Company</label>
+                <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Target Company</label>
                 <input
                   type="text"
                   value={resume.targetCompany || ''}
                   onChange={e => update('targetCompany', e.target.value)}
                   placeholder="e.g. Google"
-                  className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
               </div>
             </div>
 
             {/* Template selector */}
             <div>
-              <label className="text-[10px] text-slate-500 uppercase tracking-wider">Template</label>
+              <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Template</label>
               <div className="flex flex-wrap gap-1.5 mt-1">
                 {RESUME_TEMPLATES.map(t => (
                   <button
@@ -478,7 +478,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
 
         {/* Preview Panel - 50% */}
         <div className={`w-1/2 shrink-0 sticky top-0 h-fit ${mobileTab === 'edit' ? 'hidden md:block' : ''}`}>
-          <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-2 font-semibold">Live Preview</div>
+          <div className="text-[10px] text-[#8b98a5] uppercase tracking-wider mb-2 font-semibold">Live Preview</div>
           <ResumePreview data={resume} templateId={resume.template || 'professional'} />
         </div>
       </div>

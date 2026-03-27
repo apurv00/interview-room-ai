@@ -98,7 +98,7 @@ export async function buildDigestContent(userId: string): Promise<{
         ? '<span style="display:inline-block;width:14px;height:14px;background:#22c55e;border-radius:3px;margin-right:3px;"></span>'
         : d.type === 'freeze'
           ? '<span style="display:inline-block;width:14px;height:14px;background:#3b82f6;border-radius:3px;margin-right:3px;opacity:0.5;"></span>'
-          : '<span style="display:inline-block;width:14px;height:14px;background:#334155;border-radius:3px;margin-right:3px;"></span>'
+          : '<span style="display:inline-block;width:14px;height:14px;background:#e1e8ed;border-radius:3px;margin-right:3px;"></span>'
     ).join('')
 
     // XP progress bar
@@ -110,54 +110,54 @@ export async function buildDigestContent(userId: string): Promise<{
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0f1a; color: #d1d5db; padding: 24px;">
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #ffffff; color: #536471; padding: 24px;">
   <div style="max-width: 480px; margin: 0 auto;">
-    <h1 style="color: #f0f2f5; font-size: 20px; margin-bottom: 16px;">Hey ${name}!</h1>
+    <h1 style="color: #0f1419; font-size: 20px; margin-bottom: 16px;">Hey ${name}!</h1>
 
     ${xpSummary && xpSummary.xpThisWeek > 0 ? `
-    <div style="background: #1e293b; border-radius: 12px; padding: 16px; margin: 16px 0;">
-      <h2 style="color: #f0f2f5; font-size: 14px; margin: 0 0 8px;">XP & Level</h2>
-      <p style="margin: 4px 0; font-size: 13px;">You earned <strong style="color: #818cf8;">${xpSummary.xpThisWeek} XP</strong> this week</p>
-      <p style="margin: 4px 0; font-size: 13px;">Level <strong style="color: #f0f2f5;">${xpSummary.level}</strong> — ${xpSummary.title}</p>
-      <div style="background: #334155; border-radius: 4px; height: 6px; margin-top: 8px; overflow: hidden;">
-        <div style="background: #818cf8; height: 100%; width: ${Math.min(xpProgress, 100)}%; border-radius: 4px;"></div>
+    <div style="background: #f7f9f9; border: 1px solid #e1e8ed; border-radius: 12px; padding: 16px; margin: 16px 0;">
+      <h2 style="color: #0f1419; font-size: 14px; margin: 0 0 8px;">XP & Level</h2>
+      <p style="margin: 4px 0; font-size: 13px;">You earned <strong style="color: #6366f1;">${xpSummary.xpThisWeek} XP</strong> this week</p>
+      <p style="margin: 4px 0; font-size: 13px;">Level <strong style="color: #0f1419;">${xpSummary.level}</strong> — ${xpSummary.title}</p>
+      <div style="background: #eff3f4; border-radius: 4px; height: 6px; margin-top: 8px; overflow: hidden;">
+        <div style="background: #6366f1; height: 100%; width: ${Math.min(xpProgress, 100)}%; border-radius: 4px;"></div>
       </div>
-      <p style="margin: 4px 0 0; font-size: 11px; color: #6b7280;">${xpSummary.xpToNextLevel} XP to Level ${xpSummary.level + 1}</p>
+      <p style="margin: 4px 0 0; font-size: 11px; color: #8b98a5;">${xpSummary.xpToNextLevel} XP to Level ${xpSummary.level + 1}</p>
     </div>
     ` : ''}
 
     ${earnedBadgeNames.length > 0 ? `
-    <div style="background: #1e293b; border-radius: 12px; padding: 16px; margin: 16px 0;">
-      <h2 style="color: #f0f2f5; font-size: 14px; margin: 0 0 8px;">Badges Earned This Week</h2>
+    <div style="background: #f7f9f9; border: 1px solid #e1e8ed; border-radius: 12px; padding: 16px; margin: 16px 0;">
+      <h2 style="color: #0f1419; font-size: 14px; margin: 0 0 8px;">Badges Earned This Week</h2>
       ${earnedBadgeNames.map(b => `<p style="margin: 4px 0; font-size: 13px;">${b}</p>`).join('')}
     </div>
     ` : ''}
 
     ${streak > 0 ? `
-    <div style="background: #1e293b; border-radius: 12px; padding: 16px; margin: 16px 0;">
-      <h2 style="color: #f0f2f5; font-size: 14px; margin: 0 0 8px;">🔥 ${streak}-Day Streak</h2>
+    <div style="background: #f7f9f9; border: 1px solid #e1e8ed; border-radius: 12px; padding: 16px; margin: 16px 0;">
+      <h2 style="color: #0f1419; font-size: 14px; margin: 0 0 8px;">🔥 ${streak}-Day Streak</h2>
       <div style="margin-top: 8px;">${calendarSquares || ''}</div>
     </div>
     ` : ''}
 
-    <div style="background: #1e293b; border-radius: 12px; padding: 16px; margin: 16px 0;">
-      <h2 style="color: #f0f2f5; font-size: 14px; margin: 0 0 12px;">Your Stats</h2>
-      <p style="margin: 4px 0; font-size: 13px;">Latest score: <strong style="color: #f0f2f5;">${latestScore}/100</strong></p>
-      <p style="margin: 4px 0; font-size: 13px;">5-session avg: <strong style="color: #f0f2f5;">${avgScore}/100</strong></p>
-      <p style="margin: 4px 0; font-size: 13px;">Sessions completed: <strong style="color: #f0f2f5;">${summaries.length}</strong></p>
+    <div style="background: #f7f9f9; border: 1px solid #e1e8ed; border-radius: 12px; padding: 16px; margin: 16px 0;">
+      <h2 style="color: #0f1419; font-size: 14px; margin: 0 0 12px;">Your Stats</h2>
+      <p style="margin: 4px 0; font-size: 13px;">Latest score: <strong style="color: #0f1419;">${latestScore}/100</strong></p>
+      <p style="margin: 4px 0; font-size: 13px;">5-session avg: <strong style="color: #0f1419;">${avgScore}/100</strong></p>
+      <p style="margin: 4px 0; font-size: 13px;">Sessions completed: <strong style="color: #0f1419;">${summaries.length}</strong></p>
     </div>
 
     ${challengeCount > 0 ? `
-    <div style="background: #1e293b; border-radius: 12px; padding: 16px; margin: 16px 0;">
-      <h2 style="color: #f0f2f5; font-size: 14px; margin: 0 0 8px;">Daily Challenges</h2>
-      <p style="margin: 4px 0; font-size: 13px;">Completed: <strong style="color: #f0f2f5;">${challengeCount}/7</strong> this week</p>
-      <p style="margin: 4px 0; font-size: 13px;">Best score: <strong style="color: #f0f2f5;">${bestChallengeScore}/100</strong></p>
+    <div style="background: #f7f9f9; border: 1px solid #e1e8ed; border-radius: 12px; padding: 16px; margin: 16px 0;">
+      <h2 style="color: #0f1419; font-size: 14px; margin: 0 0 8px;">Daily Challenges</h2>
+      <p style="margin: 4px 0; font-size: 13px;">Completed: <strong style="color: #0f1419;">${challengeCount}/7</strong> this week</p>
+      <p style="margin: 4px 0; font-size: 13px;">Best score: <strong style="color: #0f1419;">${bestChallengeScore}/100</strong></p>
     </div>
     ` : ''}
 
     ${weakAreas.length > 0 ? `
-    <div style="background: #1e293b; border-radius: 12px; padding: 16px; margin: 16px 0;">
-      <h2 style="color: #f0f2f5; font-size: 14px; margin: 0 0 8px;">Areas to Focus On</h2>
+    <div style="background: #f7f9f9; border: 1px solid #e1e8ed; border-radius: 12px; padding: 16px; margin: 16px 0;">
+      <h2 style="color: #0f1419; font-size: 14px; margin: 0 0 8px;">Areas to Focus On</h2>
       ${weakAreas.map(w => `<p style="margin: 4px 0; font-size: 13px; color: #fbbf24;">• ${w}</p>`).join('')}
     </div>
     ` : ''}
@@ -166,8 +166,8 @@ export async function buildDigestContent(userId: string): Promise<{
       Start Practice Session
     </a>
 
-    <p style="font-size: 11px; color: #4b5563; margin-top: 32px;">
-      <a href="${APP_URL}/api/learn/unsubscribe?userId=${userId}&type=digest" style="color: #6b7280; text-decoration: underline;">Unsubscribe from digest emails</a>
+    <p style="font-size: 11px; color: #8b98a5; margin-top: 32px;">
+      <a href="${APP_URL}/api/learn/unsubscribe?userId=${userId}&type=digest" style="color: #8b98a5; text-decoration: underline;">Unsubscribe from digest emails</a>
     </p>
   </div>
 </body>
@@ -190,17 +190,17 @@ export async function sendInactivityNudge(userId: string, email: string, name: s
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0f1a; color: #d1d5db; padding: 24px;">
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #ffffff; color: #536471; padding: 24px;">
   <div style="max-width: 480px; margin: 0 auto;">
-    <h1 style="color: #f0f2f5; font-size: 20px; margin-bottom: 16px;">Hey ${firstName}, we miss you!</h1>
+    <h1 style="color: #0f1419; font-size: 20px; margin-bottom: 16px;">Hey ${firstName}, we miss you!</h1>
     <p style="font-size: 14px;">It's been a few days since your last practice session. Even a quick 5-minute drill can help keep your skills sharp.</p>
 
     <a href="${APP_URL}/practice/drill" style="display: inline-block; background: #3b82f6; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 500; margin-top: 16px;">
       Quick Drill (5 min)
     </a>
 
-    <p style="font-size: 11px; color: #4b5563; margin-top: 32px;">
-      <a href="${APP_URL}/api/learn/unsubscribe?userId=${userId}&type=reminders" style="color: #6b7280; text-decoration: underline;">Unsubscribe from reminders</a>
+    <p style="font-size: 11px; color: #8b98a5; margin-top: 32px;">
+      <a href="${APP_URL}/api/learn/unsubscribe?userId=${userId}&type=reminders" style="color: #8b98a5; text-decoration: underline;">Unsubscribe from reminders</a>
     </p>
   </div>
 </body>

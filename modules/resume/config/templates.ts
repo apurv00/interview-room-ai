@@ -169,7 +169,7 @@ export const TEMPLATE_COLOR_MAP: Record<string, { bg: string; border: string; te
   amber: { bg: 'bg-amber-500/10', border: 'border-amber-500/20', text: 'text-amber-400' },
   cyan: { bg: 'bg-cyan-500/10', border: 'border-cyan-500/20', text: 'text-cyan-400' },
   rose: { bg: 'bg-rose-500/10', border: 'border-rose-500/20', text: 'text-rose-400' },
-  slate: { bg: 'bg-slate-500/10', border: 'border-slate-500/20', text: 'text-slate-400' },
+  slate: { bg: 'bg-[#eff3f4]', border: 'border-[#e1e8ed]', text: 'text-[#8b98a5]' },
   blue: { bg: 'bg-blue-500/10', border: 'border-blue-500/20', text: 'text-blue-400' },
   red: { bg: 'bg-red-500/10', border: 'border-red-500/20', text: 'text-red-400' },
   orange: { bg: 'bg-orange-500/10', border: 'border-orange-500/20', text: 'text-orange-400' },

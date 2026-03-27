@@ -31,7 +31,7 @@ function BulletItem({ id, value, onChange, onRemove, canRemove }: {
             onChange={e => onChange(e.target.value)}
             placeholder="Describe an achievement or responsibility..."
             rows={2}
-            className="flex-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
+            className="flex-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
           />
           {canRemove && (
             <button
@@ -161,7 +161,7 @@ export default function ExperienceEditor({ items, onAdd, onUpdate, onRemove, onE
       )}
 
       {items.length === 0 && (
-        <p className="text-xs text-slate-500 text-center py-4">No experience added yet. Click &quot;+ Add Role&quot; to start.</p>
+        <p className="text-xs text-[#8b98a5] text-center py-4">No experience added yet. Click &quot;+ Add Role&quot; to start.</p>
       )}
     </div>
   )
@@ -209,7 +209,7 @@ function ExperienceCard({ exp, expanded, onToggle, onUpdate, onRemove, onEnhance
         <div className="flex items-center gap-2">
           <button
             onClick={e => { e.stopPropagation(); onRemove(exp.id) }}
-            className="text-slate-500 hover:text-red-400 transition-colors"
+            className="text-[#8b98a5] hover:text-[#f4212e] transition-colors"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -226,54 +226,54 @@ function ExperienceCard({ exp, expanded, onToggle, onUpdate, onRemove, onEnhance
         <div className="p-4 space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-[10px] text-slate-500 uppercase tracking-wider">Job Title</label>
+              <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Job Title</label>
               <input
                 type="text"
                 value={exp.title}
                 onChange={e => onUpdate(exp.id, { title: e.target.value })}
                 placeholder="Senior Software Engineer"
-                className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </div>
             <div>
-              <label className="text-[10px] text-slate-500 uppercase tracking-wider">Company</label>
+              <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Company</label>
               <input
                 type="text"
                 value={exp.company}
                 onChange={e => onUpdate(exp.id, { company: e.target.value })}
                 placeholder="Google"
-                className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </div>
             <div>
-              <label className="text-[10px] text-slate-500 uppercase tracking-wider">Location</label>
+              <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Location</label>
               <input
                 type="text"
                 value={exp.location || ''}
                 onChange={e => onUpdate(exp.id, { location: e.target.value })}
                 placeholder="Mountain View, CA"
-                className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="text-[10px] text-slate-500 uppercase tracking-wider">Start Date</label>
+                <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Start Date</label>
                 <input
                   type="text"
                   value={exp.startDate}
                   onChange={e => onUpdate(exp.id, { startDate: e.target.value })}
                   placeholder="Jan 2022"
-                  className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
               </div>
               <div>
-                <label className="text-[10px] text-slate-500 uppercase tracking-wider">End Date</label>
+                <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">End Date</label>
                 <input
                   type="text"
                   value={exp.endDate || ''}
                   onChange={e => onUpdate(exp.id, { endDate: e.target.value })}
                   placeholder="Present"
-                  className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
               </div>
             </div>
@@ -282,7 +282,7 @@ function ExperienceCard({ exp, expanded, onToggle, onUpdate, onRemove, onEnhance
           {/* Bullets with DnD */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <label className="text-[10px] text-slate-500 uppercase tracking-wider">Achievements & Responsibilities</label>
+              <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Achievements & Responsibilities</label>
               {onEnhanceBullets && (
                 <button
                   onClick={() => onEnhanceBullets(exp.id)}
@@ -313,7 +313,7 @@ function ExperienceCard({ exp, expanded, onToggle, onUpdate, onRemove, onEnhance
             </DndContext>
             <button
               onClick={() => addBullet(exp.id)}
-              className="text-[11px] text-slate-500 hover:text-[#0f1419] transition-colors"
+              className="text-[11px] text-[#8b98a5] hover:text-[#0f1419] transition-colors"
             >
               + Add bullet point
             </button>

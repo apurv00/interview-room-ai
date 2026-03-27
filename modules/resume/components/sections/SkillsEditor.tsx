@@ -57,7 +57,7 @@ export default function SkillsEditor({ items, onChange }: Props) {
               className="text-xs font-semibold text-[#0f1419] bg-transparent border-none focus:outline-none"
               placeholder="Category name"
             />
-            <button onClick={() => removeCategory(catIdx)} className="text-slate-500 hover:text-red-400 transition-colors">
+            <button onClick={() => removeCategory(catIdx)} className="text-[#8b98a5] hover:text-[#f4212e] transition-colors">
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
             </button>
           </div>
@@ -66,7 +66,7 @@ export default function SkillsEditor({ items, onChange }: Props) {
             {cat.items.map((skill, skillIdx) => (
               <span key={skillIdx} className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#eff3f4] rounded text-[11px] text-[#0f1419]">
                 {skill}
-                <button onClick={() => removeSkill(catIdx, skillIdx)} className="text-slate-500 hover:text-red-400">
+                <button onClick={() => removeSkill(catIdx, skillIdx)} className="text-[#8b98a5] hover:text-[#f4212e]">
                   <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
                 </button>
               </span>
@@ -80,7 +80,7 @@ export default function SkillsEditor({ items, onChange }: Props) {
               onChange={e => setNewSkill(prev => ({ ...prev, [catIdx]: e.target.value }))}
               onKeyDown={e => e.key === 'Enter' && addSkillToCategory(catIdx)}
               placeholder="Add skill..."
-              className="flex-1 px-2.5 py-1.5 bg-white border border-[#e1e8ed] rounded-lg text-xs text-[#0f1419] placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className="flex-1 px-2.5 py-1.5 bg-white border border-[#e1e8ed] rounded-lg text-xs text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500"
             />
             <button onClick={() => addSkillToCategory(catIdx)} className="px-2.5 py-1.5 bg-emerald-50 text-[#059669] text-xs rounded-lg hover:bg-emerald-100 transition-colors">
               Add
@@ -89,7 +89,7 @@ export default function SkillsEditor({ items, onChange }: Props) {
         </div>
       ))}
 
-      {items.length === 0 && <p className="text-xs text-slate-500 text-center py-4">No skills added yet.</p>}
+      {items.length === 0 && <p className="text-xs text-[#8b98a5] text-center py-4">No skills added yet.</p>}
     </div>
   )
 }

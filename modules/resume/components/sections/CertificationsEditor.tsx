@@ -33,19 +33,19 @@ export default function CertificationsEditor({ items, onChange }: Props) {
         <div key={idx} className="border border-[#e1e8ed] rounded-xl p-4">
           <div className="grid grid-cols-3 gap-3">
             <div>
-              <label className="text-[10px] text-slate-500 uppercase tracking-wider">Name</label>
-              <input type="text" value={cert.name} onChange={e => update(idx, { name: e.target.value })} placeholder="AWS Solutions Architect" className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+              <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Name</label>
+              <input type="text" value={cert.name} onChange={e => update(idx, { name: e.target.value })} placeholder="AWS Solutions Architect" className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500" />
             </div>
             <div>
-              <label className="text-[10px] text-slate-500 uppercase tracking-wider">Issuer</label>
-              <input type="text" value={cert.issuer} onChange={e => update(idx, { issuer: e.target.value })} placeholder="Amazon Web Services" className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+              <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Issuer</label>
+              <input type="text" value={cert.issuer} onChange={e => update(idx, { issuer: e.target.value })} placeholder="Amazon Web Services" className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500" />
             </div>
             <div className="flex gap-2">
               <div className="flex-1">
-                <label className="text-[10px] text-slate-500 uppercase tracking-wider">Date</label>
-                <input type="text" value={cert.date || ''} onChange={e => update(idx, { date: e.target.value })} placeholder="2024" className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Date</label>
+                <input type="text" value={cert.date || ''} onChange={e => update(idx, { date: e.target.value })} placeholder="2024" className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500" />
               </div>
-              <button onClick={() => remove(idx)} className="self-end mb-1 text-slate-500 hover:text-red-400 transition-colors">
+              <button onClick={() => remove(idx)} className="self-end mb-1 text-[#8b98a5] hover:text-[#f4212e] transition-colors">
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
               </button>
             </div>
@@ -53,7 +53,7 @@ export default function CertificationsEditor({ items, onChange }: Props) {
         </div>
       ))}
 
-      {items.length === 0 && <p className="text-xs text-slate-500 text-center py-4">No certifications added yet.</p>}
+      {items.length === 0 && <p className="text-xs text-[#8b98a5] text-center py-4">No certifications added yet.</p>}
     </div>
   )
 }
