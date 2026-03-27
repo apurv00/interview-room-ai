@@ -5,9 +5,8 @@ import { GenerateQuestionSchema } from '@interview/validators/interview'
 import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
 import { PRESSURE_QUESTION_INDEX, QUESTION_COUNT, getDomainLabel } from '@interview/config/interviewConfig'
-import { DOMAIN_DEPTH_OVERRIDES } from '@interview/config/domainDepthMatrix'
+import { getSkillSections, selectSkillQuestions } from '@interview/services/skillLoader'
 import { findCompanyProfile, buildCompanyPromptContext } from '@interview/config/companyProfiles'
-import { selectQuestionInspiration } from '@interview/config/questionPool'
 import { connectDB } from '@shared/db/connection'
 import { User, InterviewDomain, InterviewDepth } from '@shared/db/models'
 import { FALLBACK_DOMAINS, FALLBACK_DEPTHS } from '@shared/db/seed'
@@ -105,34 +104,19 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
       }
     }
 
-    // Apply domain x depth specialization overrides
-    const overrideKey = `${config.role}:${interviewType}`
-    const override = DOMAIN_DEPTH_OVERRIDES[overrideKey]
-    if (override) {
-      depthStrategy = `\n\nQUESTION STRATEGY: ${override.questionStrategy}`
-      if (override.technicalTranslation) {
-        depthStrategy += `\n\nTECHNICAL FOCUS FOR THIS DOMAIN: ${override.technicalTranslation}`
-      }
-      if (override.antiPatterns) {
-        depthStrategy += `\n\nAVOID: ${override.antiPatterns}`
-      }
-      if (override.experienceCalibration?.[config.experience]) {
-        depthStrategy += `\n\nEXPECTATION CALIBRATION (${config.experience} yrs): ${override.experienceCalibration[config.experience]}`
-      }
+    // Inject domain:depth skill file context (replaces fragmented TS overrides)
+    const skillContext = getSkillSections(config.role, interviewType, [
+      'question-strategy', 'depth-meaning', 'anti-patterns', 'experience-calibration',
+    ])
+    if (skillContext) {
+      depthStrategy = '\n\n' + skillContext
     }
 
-    // Select curated question inspiration from pool (experience-aware, randomized)
+    // Experience-aware question inspiration from skill file (randomized per session)
     if (questionIndex <= 3) {
-      const inspiration = selectQuestionInspiration(
-        config.role, interviewType, config.experience,
-        completedThreads?.map(t => t.topicQuestion),
-      )
-      if (inspiration.length > 0) {
-        depthStrategy += `\n\nQUESTION INSPIRATION (adapt to context, don't copy verbatim):`
-        inspiration.forEach((q, i) => {
-          depthStrategy += `\n${i + 1}. "${q.question}" [targets: ${q.targetCompetency}]`
-          if (q.followUpTheme) depthStrategy += ` → follow up on: ${q.followUpTheme}`
-        })
+      const inspiration = selectSkillQuestions(config.role, interviewType, config.experience)
+      if (inspiration) {
+        depthStrategy += `\n\nQUESTION INSPIRATION (adapt to context, don't copy verbatim):\n${inspiration}`
       }
     }
 
@@ -285,9 +269,10 @@ Do NOT use generic transitions like "Great, next question..." or "Moving on...".
     }
     const difficultyBlock = difficultyGuidance[performanceSignal || 'calibrating'] || ''
 
-    // Override interviewer persona if domain-depth override provides one
-    const personaBlock = override?.interviewerTone
-      ? `\n\nINTERVIEWER PERSONA: ${override.interviewerTone}`
+    // Interviewer persona from skill file
+    const personaContent = getSkillSections(config.role, interviewType, ['interviewer-persona'])
+    const personaBlock = personaContent
+      ? `\n\nINTERVIEWER PERSONA: ${personaContent}`
       : ''
 
     const systemPrompt = `${basePrompt}

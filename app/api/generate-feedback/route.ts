@@ -7,7 +7,7 @@ import { aiLogger } from '@shared/logger'
 import type { FeedbackData, AnswerEvaluation } from '@shared/types'
 import { aggregateMetrics, communicationScore } from '@interview/config/speechMetrics'
 import { PRESSURE_QUESTION_INDEX, getDomainLabel } from '@interview/config/interviewConfig'
-import { DOMAIN_DEPTH_OVERRIDES } from '@interview/config/domainDepthMatrix'
+import { getSkillSections } from '@interview/services/skillLoader'
 import { findCompanyProfile } from '@interview/config/companyProfiles'
 import { connectDB } from '@shared/db/connection'
 import { User } from '@shared/db/models'
@@ -186,15 +186,13 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
       ? `\nThis was a "${interviewType}" interview. Tailor feedback to the interview format — e.g. for technical interviews focus on technical depth, for case studies focus on structured thinking.`
       : ''
 
-    // Domain x depth specialization for feedback
-    const override = DOMAIN_DEPTH_OVERRIDES[`${config.role}:${interviewType}`]
-    let domainFeedbackContext = ''
-    if (override) {
-      domainFeedbackContext += `\nFEEDBACK FOCUS: ${override.scoringEmphasis || override.questionStrategy}`
-      if (override.technicalTranslation) {
-        domainFeedbackContext += `\nFor this domain, "technical" means: ${override.technicalTranslation}. Evaluate and give feedback accordingly.`
-      }
-    }
+    // Domain x depth specialization for feedback from skill file
+    const feedbackSkillContent = getSkillSections(config.role, interviewType, [
+      'scoring-emphasis', 'depth-meaning',
+    ])
+    let domainFeedbackContext = feedbackSkillContent
+      ? `\nFEEDBACK CONTEXT:\n${feedbackSkillContent}`
+      : ''
 
     // Company/industry context for calibrated feedback
     let companyFeedbackContext = ''
