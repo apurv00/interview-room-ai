@@ -64,7 +64,7 @@ export async function PATCH(
     }
 
     const body = await req.json()
-    const validated = UpdateSessionSchema.parse(body)
+    const validated = UpdateSessionSchema.parse(body) as Parameters<typeof updateSession>[4]
 
     const updated = await updateSession(
       params.id,

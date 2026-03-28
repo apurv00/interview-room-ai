@@ -235,6 +235,16 @@ function FeedbackPageInner() {
       if (!fb.dimensions || !fb.overall_score) {
         throw new Error('Feedback response is incomplete — missing required fields')
       }
+      // Normalize enum values (Claude sometimes returns variants like "Medium-High")
+      const validProbabilities = ['High', 'Medium', 'Low'] as const
+      if (!validProbabilities.includes(fb.pass_probability)) {
+        fb.pass_probability = fb.pass_probability?.toLowerCase?.().includes('high') ? 'High'
+          : fb.pass_probability?.toLowerCase?.().includes('low') ? 'Low' : 'Medium'
+      }
+      if (!validProbabilities.includes(fb.confidence_level)) {
+        fb.confidence_level = fb.confidence_level?.toLowerCase?.().includes('high') ? 'High'
+          : fb.confidence_level?.toLowerCase?.().includes('low') ? 'Low' : 'Medium'
+      }
       setFeedback(fb as FeedbackData)
 
       // Persist feedback + ensure session is marked completed (recovers from stuck in_progress)
