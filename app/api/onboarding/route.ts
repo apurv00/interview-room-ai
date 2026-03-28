@@ -11,11 +11,12 @@ const ONBOARDING_FIELDS = [
   'targetRole', 'experienceLevel', 'onboardingCompleted',
   'currentTitle', 'currentIndustry', 'isCareerSwitcher', 'switchingFrom',
   'targetCompanyType', 'interviewGoal', 'weakAreas',
-  'resumeFileName', 'resumeR2Key',
+  'resumeText', 'resumeFileName', 'resumeR2Key',
   'preferredDomains', 'preferredInterviewTypes', 'targetCompanies',
   'linkedinUrl', 'yearsInCurrentRole', 'educationLevel',
   'topSkills', 'communicationStyle', 'feedbackPreference',
   'practiceStats',
+  'savedResumes',
 ] as const
 
 export async function GET() {
@@ -42,7 +43,15 @@ export async function GET() {
     interviewGoal: user.interviewGoal || null,
     weakAreas: user.weakAreas || [],
     hasResume: !!(user.resumeText || user.resumeFileName),
+    resumeText: user.resumeText || null,
     resumeFileName: user.resumeFileName || null,
+    // Saved resumes (metadata only for selection UI)
+    savedResumes: (user.savedResumes || []).map((r: Record<string, unknown>) => ({
+      id: r.id,
+      name: r.name,
+      targetRole: r.targetRole || null,
+      updatedAt: r.updatedAt || r.createdAt || null,
+    })),
     // Extended profile
     preferredDomains: user.preferredDomains || [],
     preferredInterviewTypes: user.preferredInterviewTypes || [],

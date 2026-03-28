@@ -26,6 +26,8 @@ import { getStartRedirect } from '@shared/authRedirect'
 const EXPERIENCES: ExperienceLevel[] = ['0-2', '3-6', '7+']
 const DURATIONS: Duration[] = [10, 20, 30]
 
+interface SavedResumeMeta { id: string; name: string; targetRole?: string | null; updatedAt?: string | null }
+
 function AuthenticatedHome() {
   const router = useRouter()
   const { data: authSession, status } = useSession()
@@ -49,6 +51,23 @@ function AuthenticatedHome() {
   const [targetCompany, setTargetCompany] = useState('')
   const [targetIndustry, setTargetIndustry] = useState('')
   const [extractingContext, setExtractingContext] = useState(false)
+
+  // Resume requirement state
+  const [savedResumes, setSavedResumes] = useState<SavedResumeMeta[]>([])
+  const [showNoResumeOptions, setShowNoResumeOptions] = useState(false)
+  const [quickTitle, setQuickTitle] = useState('')
+  const [quickSkills, setQuickSkills] = useState('')
+  const [quickProfileDone, setQuickProfileDone] = useState(false)
+  const [profileLoaded, setProfileLoaded] = useState(false)
+
+  // JD tab state: 'upload' | 'generate'
+  const [jdTab, setJdTab] = useState<'upload' | 'generate'>('upload')
+  const [jdCompany, setJdCompany] = useState('')
+  const [jdRole, setJdRole] = useState('')
+  const [jdGenerating, setJdGenerating] = useState(false)
+  const [jdPasteText, setJdPasteText] = useState('')
+
+  const hasResume = !!(resumeText || quickProfileDone)
 
   // Pre-fill from last session config
   useEffect(() => {
@@ -77,28 +96,37 @@ function AuthenticatedHome() {
 
   // Pre-fill from user profile (onboarding data)
   useEffect(() => {
-    if (status !== 'authenticated' || lastConfig) return
+    if (status !== 'authenticated') return
     fetch('/api/onboarding')
       .then((r) => r.json())
       .then((profile) => {
-        if (!role && profile.targetRole) setRole(profile.targetRole)
-        if (!experience && profile.experienceLevel) setExperience(profile.experienceLevel)
-        if (!resumeText && profile.hasResume && profile.resumeFileName) {
-          setResumeFileName(profile.resumeFileName)
+        if (!lastConfig) {
+          if (!role && profile.targetRole) setRole(profile.targetRole)
+          if (!experience && profile.experienceLevel) setExperience(profile.experienceLevel)
         }
+        // Always load resume and saved resumes from profile
+        if (!resumeText && profile.hasResume) {
+          if (profile.resumeText) setResumeText(profile.resumeText)
+          if (profile.resumeFileName) setResumeFileName(profile.resumeFileName)
+        }
+        if (profile.savedResumes?.length) setSavedResumes(profile.savedResumes)
+        if (profile.currentTitle) setQuickTitle(profile.currentTitle)
+        if (profile.topSkills?.length) setQuickSkills(profile.topSkills.join(', '))
+        setProfileLoaded(true)
       })
-      .catch(() => {})
-  }, [status, lastConfig]) // eslint-disable-line react-hooks/exhaustive-deps
+      .catch(() => setProfileLoaded(true))
+  }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const ready = role && experience && duration
+  const ready = hasResume && role && experience && duration
 
   const ctaText = useMemo(() => {
     if (ready) return 'Enter Interview Room \u2192'
+    if (!hasResume) return 'Add your resume to continue'
     if (!role) return 'Choose a domain to continue'
     if (!experience) return 'Select your experience level'
     if (!duration) return 'Pick a duration'
     return 'Select all options to continue'
-  }, [role, experience, duration, ready])
+  }, [hasResume, role, experience, duration, ready])
 
   const handleCtaClick = useCallback(() => {
     if (ready) {
@@ -106,13 +134,97 @@ function AuthenticatedHome() {
       return
     }
     // Highlight the first incomplete required step
-    const step = !role ? 1 : !experience ? 3 : !duration ? 4 : null
+    const step = !hasResume ? 1 : !role ? 2 : !experience ? 4 : !duration ? 5 : null
     if (step) {
       setHighlightStep(step)
       document.getElementById(`step-${step}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       setTimeout(() => setHighlightStep(null), 2000)
     }
-  }, [ready, role, experience, duration]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ready, hasResume, role, experience, duration]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Handle selecting a saved resume
+  async function handleSelectSavedResume(resumeId: string) {
+    try {
+      const res = await fetch(`/api/resume/interview-config?resumeId=${resumeId}`)
+      if (!res.ok) return
+      const data = await res.json()
+      if (data.resumeText) setResumeText(data.resumeText)
+      if (data.resumeName) setResumeFileName(data.resumeName)
+      if (data.domain && !role) setRole(data.domain)
+      if (data.experience && !experience) setExperience(data.experience)
+      setShowNoResumeOptions(false)
+    } catch { /* ignore */ }
+  }
+
+  // Handle quick profile submission (no resume escape hatch)
+  function handleQuickProfile() {
+    if (!quickTitle.trim()) return
+    const exp = experience || '3-6'
+    const synthetic = `Current Title: ${quickTitle.trim()}\nExperience: ${exp} years\nSkills: ${quickSkills.trim() || 'General professional skills'}`
+    setResumeText(synthetic)
+    setResumeFileName('Quick Profile')
+    setQuickProfileDone(true)
+    setShowNoResumeOptions(false)
+    if (!experience) setExperience(exp as ExperienceLevel)
+    // Save to profile
+    fetch('/api/onboarding', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        currentTitle: quickTitle.trim(),
+        experienceLevel: exp,
+        topSkills: quickSkills.split(',').map(s => s.trim()).filter(Boolean).slice(0, 10),
+        complete: true,
+      }),
+    }).catch(() => {})
+  }
+
+  // Handle JD generation from company + role
+  async function handleGenerateJD() {
+    if (!jdCompany.trim() || !jdRole.trim()) return
+    setJdGenerating(true)
+    try {
+      const res = await fetch('/api/jd/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company: jdCompany.trim(),
+          role: jdRole.trim(),
+          resumeText: resumeText || undefined,
+        }),
+      })
+      if (!res.ok) { setUploadError('Failed to generate JD. Try again or skip.'); return }
+      const data = await res.json()
+      if (data.jobDescription) {
+        setJdText(data.jobDescription)
+        setJdFileName(`Generated: ${jdRole} at ${jdCompany}`)
+        if (data.company) setTargetCompany(data.company)
+        if (data.industry) setTargetIndustry(data.industry)
+      }
+    } catch { setUploadError('Failed to generate JD. Try again or skip.') }
+    finally { setJdGenerating(false) }
+  }
+
+  // Handle JD paste
+  function handleJdPaste() {
+    if (!jdPasteText.trim()) return
+    setJdText(jdPasteText.trim())
+    setJdFileName('Pasted JD')
+    // Extract company context
+    setExtractingContext(true)
+    fetch('/api/extract-company-context', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jdText: jdPasteText.trim() }),
+    })
+      .then(r => r.json())
+      .then(ctx => {
+        if (ctx.company) setTargetCompany(ctx.company)
+        if (ctx.industry) setTargetIndustry(ctx.industry)
+      })
+      .catch(() => {})
+      .finally(() => setExtractingContext(false))
+  }
 
   async function handleFileUpload(file: File, docType: 'jd' | 'resume') {
     setUploadError('')
@@ -131,7 +243,6 @@ function AuthenticatedHome() {
       if (!res.ok) { setUploadError(data.error || 'Upload failed'); return }
       if (docType === 'jd') {
         setJdText(data.text); setJdFileName(data.fileName)
-        // Extract company/industry context from JD
         if (data.text) {
           setExtractingContext(true)
           fetch('/api/extract-company-context', {
@@ -147,8 +258,35 @@ function AuthenticatedHome() {
             .catch(() => {})
             .finally(() => setExtractingContext(false))
         }
+      } else {
+        setResumeText(data.text); setResumeFileName(data.fileName)
+        setShowNoResumeOptions(false)
+        // Auto-extract profile from resume and save
+        fetch('/api/onboarding/extract', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ resumeText: data.text }),
+        })
+          .then(r => r.json())
+          .then(extracted => {
+            if (extracted.inferredRole && !role) setRole(extracted.inferredRole)
+            if (extracted.experienceLevel && !experience) setExperience(extracted.experienceLevel)
+            // Save to profile
+            fetch('/api/onboarding', {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                resumeText: data.text,
+                resumeFileName: data.fileName,
+                ...(extracted.currentTitle && { currentTitle: extracted.currentTitle }),
+                ...(extracted.currentIndustry && { currentIndustry: extracted.currentIndustry }),
+                ...(extracted.experienceLevel && { experienceLevel: extracted.experienceLevel }),
+                complete: true,
+              }),
+            }).catch(() => {})
+          })
+          .catch(() => {})
       }
-      else { setResumeText(data.text); setResumeFileName(data.fileName) }
     } catch { setUploadError('Failed to upload file. Please try again.') }
     finally { setUploading(false) }
   }
@@ -189,25 +327,252 @@ function AuthenticatedHome() {
           )}
         </div>
 
-        {/* Step 1: Domain */}
-        <StepSection step={1} label="Interview domain" completed={!!role} highlight={highlightStep === 1}>
+        {/* Step 1: Resume (REQUIRED) */}
+        <StepSection step={1} label="Your resume" completed={hasResume} highlight={highlightStep === 1}>
+          {hasResume && resumeFileName ? (
+            /* Compact badge when resume is loaded */
+            <div className="flex items-center gap-3 py-3 px-4 rounded-xl border-2 border-emerald-500/30 bg-emerald-500/5">
+              <svg className="w-5 h-5 text-emerald-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-emerald-600 font-medium truncate">{resumeFileName}</p>
+                <p className="text-xs text-[#71767b]">Resume loaded</p>
+              </div>
+              <button
+                onClick={() => { setResumeText(''); setResumeFileName(''); setQuickProfileDone(false) }}
+                className="text-xs text-[#71767b] hover:text-[#6366f1] transition shrink-0"
+              >
+                Change
+              </button>
+            </div>
+          ) : (
+            /* Full resume input section */
+            <div className="space-y-3">
+              <p className="text-caption text-[var(--foreground-muted)]">
+                Upload your resume for a personalized 5-dimension interview with targeted probing.
+              </p>
+              <FileDropzone
+                label="Upload Resume (PDF, DOCX, TXT)"
+                fileName={resumeFileName || undefined}
+                isUploading={resumeUploading}
+                onFileSelect={(file) => handleFileUpload(file, 'resume')}
+                onRemove={() => { setResumeText(''); setResumeFileName('') }}
+                onError={setUploadError}
+              />
+
+              {/* Saved resumes selector */}
+              {savedResumes.length > 0 && (
+                <div>
+                  <p className="text-caption text-[var(--foreground-muted)] mb-1.5">Or select a saved resume:</p>
+                  <div className="flex flex-wrap gap-2">
+                    {savedResumes.map((r) => (
+                      <button
+                        key={r.id}
+                        onClick={() => handleSelectSavedResume(r.id)}
+                        className="text-xs px-3 py-1.5 rounded-full border border-[#e1e8ed] hover:border-[#6366f1] hover:text-[#6366f1] transition bg-white"
+                      >
+                        {r.name}{r.targetRole ? ` (${r.targetRole})` : ''}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* No resume options */}
+              {!showNoResumeOptions ? (
+                <button
+                  onClick={() => setShowNoResumeOptions(true)}
+                  className="text-xs text-[#536471] hover:text-[#6366f1] transition underline underline-offset-2"
+                >
+                  I don&apos;t have a resume
+                </button>
+              ) : (
+                <div className="grid sm:grid-cols-2 gap-3 p-4 rounded-xl border border-[#e1e8ed] bg-[#f7f9f9]">
+                  {/* Quick Profile */}
+                  <div className="space-y-2.5">
+                    <p className="text-xs font-semibold text-[#0f1419]">Quick Profile</p>
+                    <p className="text-xs text-[#71767b]">Start now with basic info (4-dimension scoring)</p>
+                    <input
+                      type="text"
+                      value={quickTitle}
+                      onChange={(e) => setQuickTitle(e.target.value)}
+                      placeholder="Current job title (e.g. Senior SWE)"
+                      className="w-full text-xs px-3 py-2 border border-[#e1e8ed] rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-[#6366f1]"
+                    />
+                    <SelectionGroup<ExperienceLevel>
+                      items={EXPERIENCES}
+                      value={experience}
+                      onChange={(v) => setExperience(v as ExperienceLevel)}
+                      getKey={(e) => e}
+                      layout="inline"
+                      renderItem={(e, selected) => (
+                        <div className={`py-1.5 px-1 text-center text-xs ${selected ? 'text-[#6366f1]' : ''}`}>
+                          {EXPERIENCE_LABELS[e]}
+                        </div>
+                      )}
+                    />
+                    <input
+                      type="text"
+                      value={quickSkills}
+                      onChange={(e) => setQuickSkills(e.target.value)}
+                      placeholder="Top skills (comma-separated)"
+                      className="w-full text-xs px-3 py-2 border border-[#e1e8ed] rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-[#6366f1]"
+                    />
+                    <Button variant="secondary" size="sm" onClick={handleQuickProfile} disabled={!quickTitle.trim()}>
+                      Continue with quick profile
+                    </Button>
+                  </div>
+
+                  {/* Build a Resume CTA */}
+                  <div className="space-y-2.5 flex flex-col items-center justify-center text-center p-4 rounded-xl border border-dashed border-[#e1e8ed]">
+                    <svg className="w-8 h-8 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                    </svg>
+                    <p className="text-xs font-semibold text-[#0f1419]">Build a Resume</p>
+                    <p className="text-xs text-[#71767b]">Create one with AI in minutes, then come back for a full 5-dimension interview.</p>
+                    <Link href="/resume/wizard" target="_blank" className="text-xs text-[#6366f1] hover:underline font-medium">
+                      Open Resume Wizard &rarr;
+                    </Link>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          {uploadError && <p className="text-caption text-[#f4212e] mt-2">{uploadError}</p>}
+        </StepSection>
+
+        {/* Step 2: Job Context (encouraged, not required) */}
+        <StepSection step={2} label="Job context (recommended)" completed={!!jdText}>
+          {jdText ? (
+            /* JD loaded badge */
+            <div className="flex items-center gap-3 py-3 px-4 rounded-xl border-2 border-emerald-500/30 bg-emerald-500/5">
+              <svg className="w-5 h-5 text-emerald-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-emerald-600 font-medium truncate">{jdFileName || 'Job Description'}</p>
+                {(targetCompany || targetIndustry) && (
+                  <p className="text-xs text-[#71767b]">{targetCompany}{targetCompany && targetIndustry ? ' · ' : ''}{targetIndustry}</p>
+                )}
+              </div>
+              <button
+                onClick={() => { setJdText(''); setJdFileName(''); setTargetCompany(''); setTargetIndustry(''); setJdPasteText('') }}
+                className="text-xs text-[#71767b] hover:text-[#6366f1] transition shrink-0"
+              >
+                Change
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-caption text-[var(--foreground-muted)]">
+                Add a job description for role-specific questions, JD gap analysis, and 5th scoring dimension (JD alignment).
+              </p>
+
+              {/* Tab switcher */}
+              <div className="flex gap-1 p-0.5 rounded-lg bg-[#f7f9f9] border border-[#e1e8ed] w-fit">
+                <button
+                  onClick={() => setJdTab('upload')}
+                  className={`text-xs px-3 py-1.5 rounded-md transition ${jdTab === 'upload' ? 'bg-white shadow-sm text-[#0f1419] font-medium' : 'text-[#536471] hover:text-[#0f1419]'}`}
+                >
+                  Upload / Paste JD
+                </button>
+                <button
+                  onClick={() => setJdTab('generate')}
+                  className={`text-xs px-3 py-1.5 rounded-md transition ${jdTab === 'generate' ? 'bg-white shadow-sm text-[#0f1419] font-medium' : 'text-[#536471] hover:text-[#0f1419]'}`}
+                >
+                  Company &amp; Role
+                </button>
+              </div>
+
+              {jdTab === 'upload' ? (
+                <div className="space-y-3">
+                  <FileDropzone
+                    label="Job Description"
+                    fileName={jdFileName || undefined}
+                    isUploading={jdUploading}
+                    onFileSelect={(file) => handleFileUpload(file, 'jd')}
+                    onRemove={() => { setJdText(''); setJdFileName(''); setTargetCompany(''); setTargetIndustry('') }}
+                    onError={setUploadError}
+                  />
+                  <div className="relative">
+                    <textarea
+                      value={jdPasteText}
+                      onChange={(e) => setJdPasteText(e.target.value)}
+                      placeholder="Or paste the job description text here..."
+                      rows={3}
+                      className="w-full text-xs px-3 py-2.5 border border-[#e1e8ed] rounded-xl bg-white focus:outline-none focus:ring-1 focus:ring-[#6366f1] resize-none"
+                    />
+                    {jdPasteText.trim().length > 20 && (
+                      <button
+                        onClick={handleJdPaste}
+                        className="absolute bottom-2 right-2 text-xs px-2.5 py-1 bg-[#6366f1] text-white rounded-lg hover:bg-[#5558e6] transition"
+                      >
+                        Use this JD
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="grid sm:grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      value={jdCompany}
+                      onChange={(e) => setJdCompany(e.target.value)}
+                      placeholder="Company name (e.g. Google)"
+                      className="text-xs px-3 py-2.5 border border-[#e1e8ed] rounded-xl bg-white focus:outline-none focus:ring-1 focus:ring-[#6366f1]"
+                    />
+                    <input
+                      type="text"
+                      value={jdRole}
+                      onChange={(e) => setJdRole(e.target.value)}
+                      placeholder="Role title (e.g. Senior PM)"
+                      className="text-xs px-3 py-2.5 border border-[#e1e8ed] rounded-xl bg-white focus:outline-none focus:ring-1 focus:ring-[#6366f1]"
+                    />
+                  </div>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleGenerateJD}
+                    disabled={!jdCompany.trim() || !jdRole.trim() || jdGenerating}
+                    isLoading={jdGenerating}
+                  >
+                    {jdGenerating ? 'Generating...' : 'Generate Sample JD'}
+                  </Button>
+                  <p className="text-xs text-[#8b98a5]">
+                    AI will create a realistic job description to tailor your interview questions.
+                  </p>
+                </div>
+              )}
+
+              {/* Detected company/industry context */}
+              {extractingContext && (
+                <p className="text-caption text-[var(--foreground-muted)] animate-pulse">Detecting company context...</p>
+              )}
+            </div>
+          )}
+        </StepSection>
+
+        {/* Step 3: Domain */}
+        <StepSection step={3} label="Interview domain" completed={!!role} highlight={highlightStep === 2}>
           <DomainSelector selectedDomain={role} onSelect={(slug) => {
             setRole(slug)
             setInterviewType(null)
             setTimeout(() => {
-              document.getElementById('step-2')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+              document.getElementById('step-4')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
             }, 100)
           }} />
         </StepSection>
 
-        {/* Step 2: Interview Type */}
-        <StepSection step={2} label="Interview type" completed={!!interviewType}>
+        {/* Step 4: Interview Type */}
+        <StepSection step={4} label="Interview type" completed={!!interviewType}>
           <DepthSelector selectedDomain={role} selectedDepth={interviewType} onSelect={setInterviewType} />
         </StepSection>
 
-        {/* Steps 3 + 4: Experience & Duration side by side */}
+        {/* Steps 5 + 6: Experience & Duration side by side */}
         <div className="grid md:grid-cols-2 gap-section">
-          <StepSection step={3} label="Experience level" completed={!!experience} highlight={highlightStep === 3}>
+          <StepSection step={5} label="Experience level" completed={!!experience} highlight={highlightStep === 4}>
             <SelectionGroup<ExperienceLevel>
               items={EXPERIENCES}
               value={experience}
@@ -222,7 +587,7 @@ function AuthenticatedHome() {
             />
           </StepSection>
 
-          <StepSection step={4} label="Duration" completed={!!duration} highlight={highlightStep === 4}>
+          <StepSection step={6} label="Duration" completed={!!duration} highlight={highlightStep === 5}>
             <SelectionGroup<Duration>
               items={DURATIONS}
               value={duration !== null ? String(duration) : null}
@@ -237,61 +602,6 @@ function AuthenticatedHome() {
             />
           </StepSection>
         </div>
-
-        {/* Step 5: Documents */}
-        <StepSection step={5} label="Documents (optional)">
-          <p className="text-caption text-[var(--foreground-muted)] mb-3">
-            Upload a JD for role-specific questions, or a resume to personalize the interview.
-            Include the company name and role details for a more personalized interview experience.
-          </p>
-          <div className="grid sm:grid-cols-2 gap-element">
-            <FileDropzone
-              label="Job Description"
-              fileName={jdFileName || undefined}
-              isUploading={jdUploading}
-              onFileSelect={(file) => handleFileUpload(file, 'jd')}
-              onRemove={() => { setJdText(''); setJdFileName(''); setTargetCompany(''); setTargetIndustry('') }}
-              onError={setUploadError}
-            />
-            <FileDropzone
-              label="Resume / CV"
-              fileName={resumeFileName || undefined}
-              isUploading={resumeUploading}
-              onFileSelect={(file) => handleFileUpload(file, 'resume')}
-              onRemove={() => { setResumeText(''); setResumeFileName('') }}
-              onError={setUploadError}
-            />
-          </div>
-          {uploadError && <p className="text-caption text-[#f4212e] mt-2">{uploadError}</p>}
-
-          {/* Detected company/industry context from JD */}
-          {extractingContext && (
-            <p className="text-caption text-[var(--foreground-muted)] mt-2 animate-pulse">Detecting company context...</p>
-          )}
-          {!extractingContext && (targetCompany || targetIndustry) && (
-            <div className="mt-3 p-3 bg-indigo-50 border border-indigo-100 rounded-xl">
-              <p className="text-caption text-indigo-700 mb-2">
-                Detected: {targetCompany}{targetCompany && targetIndustry ? ' in ' : ''}{targetIndustry}
-              </p>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={targetCompany}
-                  onChange={(e) => setTargetCompany(e.target.value)}
-                  placeholder="Company name"
-                  className="flex-1 text-xs px-2 py-1 border border-indigo-200 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-indigo-300"
-                />
-                <input
-                  type="text"
-                  value={targetIndustry}
-                  onChange={(e) => setTargetIndustry(e.target.value)}
-                  placeholder="Industry"
-                  className="flex-1 text-xs px-2 py-1 border border-indigo-200 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-indigo-300"
-                />
-              </div>
-            </div>
-          )}
-        </StepSection>
 
         {/* CTA */}
         <div className="flex flex-col items-center gap-3 mt-region">

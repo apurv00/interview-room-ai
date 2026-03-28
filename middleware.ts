@@ -80,22 +80,6 @@ export default withAuth(
     response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')
     response.headers.set('Permissions-Policy', 'geolocation=(), payment=(), usb=()')
 
-    // Redirect new users to onboarding (skip for hire/resume subdomains)
-    if (
-      token?.onboardingCompleted === false &&
-      !pathname.startsWith('/onboarding') &&
-      !pathname.startsWith('/api/') &&
-      !pathname.startsWith('/signin') &&
-      !pathname.startsWith('/signup') &&
-      !pathname.startsWith('/cms') &&
-      !pathname.startsWith('/hire') &&
-      !pathname.startsWith('/resume') &&
-      !pathname.startsWith('/learn') &&
-      pathname !== '/'
-    ) {
-      return NextResponse.redirect(new URL('/onboarding', req.url))
-    }
-
     // CMS routes require platform_admin role
     if (pathname.startsWith('/cms')) {
       if (token?.role !== 'platform_admin') {
