@@ -86,6 +86,7 @@ function FeedbackPageInner() {
   const [loading, setLoading] = useState(true)
   const [feedbackError, setFeedbackError] = useState<string | null>(null)
   const [saveWarning, setSaveWarning] = useState<string | null>(null)
+  const [progressStep, setProgressStep] = useState(0)
   const [activeTab, setActiveTab] = useState<FeedbackTab>('overview')
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null)
   const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null)
@@ -280,6 +281,38 @@ function FeedbackPageInner() {
     generateFeedback(data, sessionId !== 'local' ? sessionId : undefined)
   }
 
+  async function handleRetrySave() {
+    if (!feedback || !sessionId || sessionId === 'local') return
+    setSaveWarning(null)
+    try {
+      const fb = { ...feedback }
+      // Normalize enums before saving
+      const validProbabilities = ['High', 'Medium', 'Low'] as const
+      if (!validProbabilities.includes(fb.pass_probability as typeof validProbabilities[number])) {
+        fb.pass_probability = fb.pass_probability?.toLowerCase?.().includes('high') ? 'High'
+          : fb.pass_probability?.toLowerCase?.().includes('low') ? 'Low' : 'Medium'
+      }
+      if (!validProbabilities.includes(fb.confidence_level as typeof validProbabilities[number])) {
+        fb.confidence_level = fb.confidence_level?.toLowerCase?.().includes('high') ? 'High'
+          : fb.confidence_level?.toLowerCase?.().includes('low') ? 'Low' : 'Medium'
+      }
+      const saved = await fetchWithRetry(`/api/interviews/${sessionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          feedback: fb,
+          status: 'completed',
+          completedAt: new Date().toISOString(),
+        }),
+      })
+      if (!saved) {
+        setSaveWarning('Save failed again. The feedback is visible now but may not appear in history.')
+      }
+    } catch {
+      setSaveWarning('Save failed again. The feedback is visible now but may not appear in history.')
+    }
+  }
+
   // ── Derived memos (MUST be before early returns to comply with Rules of Hooks) ──
 
   const questionMarkers = useMemo(() => {
@@ -319,11 +352,48 @@ function FeedbackPageInner() {
 
   // ── Loading / error state (AFTER all hooks) ────────────────────────────────
 
+  // Progress steps for feedback generation
+  useEffect(() => {
+    if (!loading) { setProgressStep(0); return }
+    const steps = [
+      { delay: 0 },
+      { delay: 2000 },
+      { delay: 4000 },
+      { delay: 7000 },
+    ]
+    const timers = steps.map((s, i) =>
+      setTimeout(() => setProgressStep(i), s.delay)
+    )
+    return () => timers.forEach(clearTimeout)
+  }, [loading])
+
   if (loading || !data) {
+    const progressSteps = [
+      'Analyzing your answers...',
+      'Evaluating communication patterns...',
+      'Generating personalized feedback...',
+      'Finalizing your report...',
+    ]
+    const progress = Math.min(((progressStep + 1) / progressSteps.length) * 100, 95)
     return (
-      <div className="min-h-screen bg-white flex flex-col items-center justify-center gap-4">
-        <div className="w-8 h-8 rounded-full border-2 border-brand-500 border-t-transparent animate-spin" />
-        <p className="text-body text-[#71767b]">Generating your feedback report...</p>
+      <div className="min-h-screen bg-white flex flex-col items-center justify-center gap-6 px-4">
+        <div className="w-full max-w-xs space-y-4">
+          <div className="flex items-center justify-center gap-3">
+            <div className="w-6 h-6 rounded-full border-2 border-brand-500 border-t-transparent animate-spin" />
+            <p className="text-body font-medium text-[#0f1419]">{progressSteps[progressStep]}</p>
+          </div>
+          <div className="w-full h-1.5 bg-[#eff3f4] rounded-full overflow-hidden">
+            <div
+              className="h-full bg-brand-500 rounded-full transition-all duration-1000 ease-out"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+          <div className="flex justify-between text-xs text-[#8b98a5]">
+            {progressSteps.map((step, i) => (
+              <div key={i} className={`w-2 h-2 rounded-full ${i <= progressStep ? 'bg-brand-500' : 'bg-[#e1e8ed]'}`} />
+            ))}
+          </div>
+        </div>
       </div>
     )
   }
@@ -407,11 +477,18 @@ function FeedbackPageInner() {
       {/* Save warning banner */}
       {saveWarning && (
         <div className="max-w-[800px] mx-auto px-4 mt-4">
-          <div className="bg-amber-500/10 border border-amber-500/30 rounded-[var(--radius-md)] px-5 py-3 text-sm text-amber-600 flex items-center gap-2">
-            <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            {saveWarning}
+          <div className="bg-amber-500/10 border border-amber-500/30 rounded-[var(--radius-md)] px-5 py-3 text-sm text-amber-600 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              {saveWarning}
+            </div>
+            {sessionId && sessionId !== 'local' && (
+              <button onClick={handleRetrySave} className="shrink-0 px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-md text-xs font-medium transition">
+                Retry save
+              </button>
+            )}
           </div>
         </div>
       )}

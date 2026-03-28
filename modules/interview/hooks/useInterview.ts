@@ -332,14 +332,10 @@ export function useInterview({
     )
   }
 
-  /** Show coaching tip for 1.5s (cancellable via coachingAbortRef). Optionally prefetch next question in parallel. */
-  async function showCoachingTip(evaluation: AnswerEvaluation, prefetchQIdx?: number): Promise<void> {
+  /** Show coaching tip for 1.5s (cancellable via coachingAbortRef). */
+  async function showCoachingTip(evaluation: AnswerEvaluation): Promise<void> {
     transitionTo('COACHING')
     setCoachingTip(deriveCoachingTip(evaluation, config?.role, config?.interviewType))
-    // Start prefetching next question during coaching display
-    if (prefetchQIdx != null) {
-      prefetchedQuestionRef.current = generateQuestion(prefetchQIdx)
-    }
     const abortCtrl = new AbortController()
     coachingAbortRef.current = abortCtrl
     await new Promise<void>((resolve) => {
@@ -362,7 +358,6 @@ export function useInterview({
     qIdx: number,
     concurrentTask?: Promise<T>,
     probeDepth?: number,
-    prefetchQIdx?: number,
   ): Promise<{ evaluation: AnswerEvaluation; concurrentResult: T }> {
     transitionTo('PROCESSING')
     setLiveAnswer('')
@@ -374,7 +369,7 @@ export function useInterview({
 
     evaluationsRef.current = [...evaluationsRef.current, { ...evaluation, question, answer }]
     performanceSignalRef.current = computePerformanceSignal()
-    await showCoachingTip(evaluation, prefetchQIdx)
+    await showCoachingTip(evaluation)
 
     return { evaluation, concurrentResult }
   }
@@ -643,14 +638,14 @@ export function useInterview({
           role: 'candidate', text: finalAnswer, isProbe: false, probeDepth: 0,
         })
 
-        // Evaluate (uses combined answer if candidate elaborated during silence)
-        // Prefetch next question during coaching display for faster transitions
+        // Evaluate answer + generate next question in parallel for faster transitions
         const nextQIdx = qIdx + 1
         const shouldPrefetch = nextQIdx < maxQ && timeRemainingRef.current > 60
-        const { evaluation } = await evaluateAndCoach(
-          question, finalAnswer, qIdx, undefined, currentProbeDepthRef.current,
-          shouldPrefetch ? nextQIdx : undefined,
+        const nextQuestionPromise = shouldPrefetch ? generateQuestion(nextQIdx) : undefined
+        const { evaluation, concurrentResult: prefetchedQ } = await evaluateAndCoach(
+          question, finalAnswer, qIdx, nextQuestionPromise, currentProbeDepthRef.current,
         )
+        if (prefetchedQ) prefetchedQuestionRef.current = Promise.resolve(prefetchedQ as string)
 
         // ── Handle pushback (fires before probe loop, can act as ad-hoc probe) ──
         let currentEval = evaluation
