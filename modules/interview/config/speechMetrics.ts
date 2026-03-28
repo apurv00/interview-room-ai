@@ -108,10 +108,18 @@ export function aggregateMetrics(metrics: SpeechMetrics[]): SpeechMetrics {
 // ─── Communication dimension score (0–100) ────────────────────────────────────
 
 export function communicationScore(agg: SpeechMetrics): number {
+  // If user barely spoke, score should reflect insufficient data
+  if (agg.totalWords < 30) {
+    return Math.round(Math.max(0, Math.min(40, agg.totalWords * 1.3)))
+  }
+
   const wpmPenalty = agg.wpm > 180 ? (agg.wpm - 180) * 0.3 : 0
   const fillerPenalty = agg.fillerRate * 200
   const ramblingPenalty = agg.ramblingIndex * 20
 
-  const raw = 100 - wpmPenalty - fillerPenalty - ramblingPenalty
+  // Factor in pauseScore (WPM pacing quality, 0-90 scale) — weight at 30%
+  const pacingBonus = (agg.pauseScore - 50) * 0.3 // ranges from -9 to +12
+
+  const raw = 100 - wpmPenalty - fillerPenalty - ramblingPenalty + pacingBonus
   return Math.round(Math.max(0, Math.min(100, raw)))
 }
