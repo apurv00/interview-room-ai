@@ -76,6 +76,7 @@ export default function LobbyPage() {
     { label: 'Speech recognition', status: 'pending' },
     { label: 'Network', status: 'pending' },
   ])
+  const jdGeneratedRef = useRef(false)
   const [allOk, setAllOk] = useState(false)
   const [joining, setJoining] = useState(false)
   const [audioLevel, setAudioLevel] = useState(0)
@@ -87,6 +88,51 @@ export default function LobbyPage() {
     if (!stored) { router.push('/'); return }
     setConfig(JSON.parse(stored))
   }, [router])
+
+  // Auto-generate JD from company+role if no JD text was provided
+  useEffect(() => {
+    if (!config || jdGeneratedRef.current) return
+    if (config.jobDescription || !config.targetCompany) return
+    jdGeneratedRef.current = true
+
+    // Add context check to the checklist
+    setChecks(prev => [...prev, { label: 'Interview context', status: 'pending' }])
+
+    fetch('/api/jd/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        company: config.targetCompany,
+        role: config.role || '',
+        resumeText: config.resumeText || undefined,
+      }),
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.jobDescription) {
+          const updated = {
+            ...config,
+            jobDescription: data.jobDescription,
+            jdFileName: `Generated: ${config.targetCompany}`,
+            ...(data.industry && { targetIndustry: data.industry }),
+          }
+          setConfig(updated)
+          localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(updated))
+          setChecks(prev => prev.map(c =>
+            c.label === 'Interview context' ? { ...c, status: 'ok', detail: `${config.targetCompany} JD ready` } : c
+          ))
+        } else {
+          setChecks(prev => prev.map(c =>
+            c.label === 'Interview context' ? { ...c, status: 'ok', detail: 'Proceeding without JD' } : c
+          ))
+        }
+      })
+      .catch(() => {
+        setChecks(prev => prev.map(c =>
+          c.label === 'Interview context' ? { ...c, status: 'ok', detail: 'Proceeding without JD' } : c
+        ))
+      })
+  }, [config])
 
   // Audio level visualiser
   const startAudioMeter = useCallback((stream: MediaStream) => {
