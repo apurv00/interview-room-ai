@@ -280,6 +280,38 @@ function FeedbackPageInner() {
     generateFeedback(data, sessionId !== 'local' ? sessionId : undefined)
   }
 
+  async function handleRetrySave() {
+    if (!feedback || !sessionId || sessionId === 'local') return
+    setSaveWarning(null)
+    try {
+      const fb = { ...feedback }
+      // Normalize enums before saving
+      const validProbabilities = ['High', 'Medium', 'Low'] as const
+      if (!validProbabilities.includes(fb.pass_probability as typeof validProbabilities[number])) {
+        fb.pass_probability = fb.pass_probability?.toLowerCase?.().includes('high') ? 'High'
+          : fb.pass_probability?.toLowerCase?.().includes('low') ? 'Low' : 'Medium'
+      }
+      if (!validProbabilities.includes(fb.confidence_level as typeof validProbabilities[number])) {
+        fb.confidence_level = fb.confidence_level?.toLowerCase?.().includes('high') ? 'High'
+          : fb.confidence_level?.toLowerCase?.().includes('low') ? 'Low' : 'Medium'
+      }
+      const saved = await fetchWithRetry(`/api/interviews/${sessionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          feedback: fb,
+          status: 'completed',
+          completedAt: new Date().toISOString(),
+        }),
+      })
+      if (!saved) {
+        setSaveWarning('Save failed again. The feedback is visible now but may not appear in history.')
+      }
+    } catch {
+      setSaveWarning('Save failed again. The feedback is visible now but may not appear in history.')
+    }
+  }
+
   // ── Derived memos (MUST be before early returns to comply with Rules of Hooks) ──
 
   const questionMarkers = useMemo(() => {
@@ -407,11 +439,18 @@ function FeedbackPageInner() {
       {/* Save warning banner */}
       {saveWarning && (
         <div className="max-w-[800px] mx-auto px-4 mt-4">
-          <div className="bg-amber-500/10 border border-amber-500/30 rounded-[var(--radius-md)] px-5 py-3 text-sm text-amber-600 flex items-center gap-2">
-            <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            {saveWarning}
+          <div className="bg-amber-500/10 border border-amber-500/30 rounded-[var(--radius-md)] px-5 py-3 text-sm text-amber-600 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              {saveWarning}
+            </div>
+            {sessionId && sessionId !== 'local' && (
+              <button onClick={handleRetrySave} className="shrink-0 px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-md text-xs font-medium transition">
+                Retry save
+              </button>
+            )}
           </div>
         </div>
       )}
