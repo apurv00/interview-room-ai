@@ -134,7 +134,7 @@ function AuthenticatedHome() {
       return
     }
     // Highlight the first incomplete required step
-    const step = !hasResume ? 1 : !role ? 2 : !experience ? 4 : !duration ? 5 : null
+    const step = !hasResume ? 1 : !role ? 3 : !experience ? 5 : !duration ? 6 : null
     if (step) {
       setHighlightStep(step)
       document.getElementById(`step-${step}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -145,13 +145,14 @@ function AuthenticatedHome() {
   // Handle selecting a saved resume
   async function handleSelectSavedResume(resumeId: string) {
     try {
-      const res = await fetch(`/api/resume/interview-config?resumeId=${resumeId}`)
+      const res = await fetch(`/api/resume/interview-config?id=${resumeId}`)
       if (!res.ok) return
       const data = await res.json()
       if (data.resumeText) setResumeText(data.resumeText)
       if (data.resumeName) setResumeFileName(data.resumeName)
       if (data.domain && !role) setRole(data.domain)
-      if (data.experience && !experience) setExperience(data.experience)
+      if (data.experience && !experience) setExperience(data.experience as ExperienceLevel)
+      if (data.targetCompany) setTargetCompany(data.targetCompany)
       setShowNoResumeOptions(false)
     } catch { /* ignore */ }
   }
@@ -555,7 +556,7 @@ function AuthenticatedHome() {
         </StepSection>
 
         {/* Step 3: Domain */}
-        <StepSection step={3} label="Interview domain" completed={!!role} highlight={highlightStep === 2}>
+        <StepSection step={3} label="Interview domain" completed={!!role} highlight={highlightStep === 3}>
           <DomainSelector selectedDomain={role} onSelect={(slug) => {
             setRole(slug)
             setInterviewType(null)
@@ -572,7 +573,7 @@ function AuthenticatedHome() {
 
         {/* Steps 5 + 6: Experience & Duration side by side */}
         <div className="grid md:grid-cols-2 gap-section">
-          <StepSection step={5} label="Experience level" completed={!!experience} highlight={highlightStep === 4}>
+          <StepSection step={5} label="Experience level" completed={!!experience} highlight={highlightStep === 5}>
             <SelectionGroup<ExperienceLevel>
               items={EXPERIENCES}
               value={experience}
@@ -587,7 +588,7 @@ function AuthenticatedHome() {
             />
           </StepSection>
 
-          <StepSection step={6} label="Duration" completed={!!duration} highlight={highlightStep === 5}>
+          <StepSection step={6} label="Duration" completed={!!duration} highlight={highlightStep === 6}>
             <SelectionGroup<Duration>
               items={DURATIONS}
               value={duration !== null ? String(duration) : null}
