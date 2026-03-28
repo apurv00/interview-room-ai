@@ -120,15 +120,15 @@ export function composeApiRoute<T>(options: ComposeOptions<T>) {
       })
     } catch (err) {
       if (err instanceof ZodError) {
+        const details = err.issues.map((e) => ({
+          path: e.path.join('.'),
+          message: e.message,
+        }))
+        aiLogger.warn({ details, path: req.nextUrl.pathname }, 'Zod validation failed')
         return NextResponse.json(
           {
             error: 'Validation failed',
-            ...(process.env.NODE_ENV !== 'production' && {
-              details: err.issues.map((e) => ({
-                path: e.path.join('.'),
-                message: e.message,
-              })),
-            }),
+            details,
           },
           { status: 400 }
         )

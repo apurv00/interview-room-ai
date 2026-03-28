@@ -85,23 +85,23 @@ describe('ProbeDecision validation', () => {
     }
   })
 
-  it('enforces probeQuestion max 500 chars', () => {
+  it('enforces probeQuestion max 2000 chars', () => {
     const result = AnswerEvaluationSchema.safeParse({
       ...baseEvaluation,
       probeDecision: {
         shouldProbe: true,
-        probeQuestion: 'x'.repeat(501),
+        probeQuestion: 'x'.repeat(2001),
       },
     })
     expect(result.success).toBe(false)
   })
 
-  it('enforces probingRationale max 300 chars', () => {
+  it('enforces probingRationale max 1000 chars', () => {
     const result = AnswerEvaluationSchema.safeParse({
       ...baseEvaluation,
       probeDecision: {
         shouldProbe: true,
-        probingRationale: 'x'.repeat(301),
+        probingRationale: 'x'.repeat(1001),
       },
     })
     expect(result.success).toBe(false)
@@ -146,18 +146,18 @@ describe('Pushback validation', () => {
     expect(result.success).toBe(false)
   })
 
-  it('enforces line max 300 chars', () => {
+  it('enforces line max 1000 chars', () => {
     const result = AnswerEvaluationSchema.safeParse({
       ...baseEvaluation,
-      pushback: { line: 'x'.repeat(301), targetDimension: 'test', tone: 'curious' },
+      pushback: { line: 'x'.repeat(1001), targetDimension: 'test', tone: 'curious' },
     })
     expect(result.success).toBe(false)
   })
 
-  it('enforces targetDimension max 50 chars', () => {
+  it('enforces targetDimension max 100 chars', () => {
     const result = AnswerEvaluationSchema.safeParse({
       ...baseEvaluation,
-      pushback: { line: 'Test', targetDimension: 'x'.repeat(51), tone: 'curious' },
+      pushback: { line: 'Test', targetDimension: 'x'.repeat(101), tone: 'curious' },
     })
     expect(result.success).toBe(false)
   })
@@ -289,10 +289,10 @@ describe('EvaluateAnswerSchema extensions', () => {
     expect(result.success).toBe(true)
   })
 
-  it('rejects probeDepth > 10', () => {
+  it('rejects probeDepth > 20', () => {
     const result = EvaluateAnswerSchema.safeParse({
       ...baseEvaluateAnswer,
-      probeDepth: 11,
+      probeDepth: 21,
     })
     expect(result.success).toBe(false)
   })

@@ -10,7 +10,7 @@ import OverviewTab from '@interview/components/feedback/OverviewTab'
 import TranscriptTab from '@interview/components/feedback/TranscriptTab'
 import type { PeerData } from '@interview/components/feedback/PeerComparison'
 import type { FeedbackData, StoredInterviewData } from '@shared/types'
-import { ROLE_LABELS } from '@interview/config/interviewConfig'
+import { ROLE_LABELS, getDomainLabel } from '@interview/config/interviewConfig'
 import { computeOffsetSeconds } from '@interview/utils/offsetHelpers'
 import { mergeWithLocalData, readLocalInterviewData, cleanupLocalInterviewData } from '@interview/utils/mergeSessionData'
 import { fetchWithRetry } from '@shared/fetchWithRetry'
@@ -235,6 +235,16 @@ function FeedbackPageInner() {
       if (!fb.dimensions || !fb.overall_score) {
         throw new Error('Feedback response is incomplete — missing required fields')
       }
+      // Normalize enum values (Claude sometimes returns variants like "Medium-High")
+      const validProbabilities = ['High', 'Medium', 'Low'] as const
+      if (!validProbabilities.includes(fb.pass_probability)) {
+        fb.pass_probability = fb.pass_probability?.toLowerCase?.().includes('high') ? 'High'
+          : fb.pass_probability?.toLowerCase?.().includes('low') ? 'Low' : 'Medium'
+      }
+      if (!validProbabilities.includes(fb.confidence_level)) {
+        fb.confidence_level = fb.confidence_level?.toLowerCase?.().includes('high') ? 'High'
+          : fb.confidence_level?.toLowerCase?.().includes('low') ? 'Low' : 'Medium'
+      }
       setFeedback(fb as FeedbackData)
 
       // Persist feedback + ensure session is marked completed (recovers from stuck in_progress)
@@ -389,7 +399,7 @@ function FeedbackPageInner() {
           </div>
           <p className="text-caption text-[#71767b]">
             {data.config &&
-              `${ROLE_LABELS[data.config.role]} · ${data.config.experience} yrs · ${data.config.duration} min`}
+              `${getDomainLabel(data.config.role)} · ${data.config.experience} yrs · ${data.config.duration} min`}
           </p>
         </div>
       </header>
