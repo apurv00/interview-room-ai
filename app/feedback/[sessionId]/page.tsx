@@ -86,6 +86,7 @@ function FeedbackPageInner() {
   const [loading, setLoading] = useState(true)
   const [feedbackError, setFeedbackError] = useState<string | null>(null)
   const [saveWarning, setSaveWarning] = useState<string | null>(null)
+  const [progressStep, setProgressStep] = useState(0)
   const [activeTab, setActiveTab] = useState<FeedbackTab>('overview')
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null)
   const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null)
@@ -351,11 +352,48 @@ function FeedbackPageInner() {
 
   // ── Loading / error state (AFTER all hooks) ────────────────────────────────
 
+  // Progress steps for feedback generation
+  useEffect(() => {
+    if (!loading) { setProgressStep(0); return }
+    const steps = [
+      { delay: 0 },
+      { delay: 2000 },
+      { delay: 4000 },
+      { delay: 7000 },
+    ]
+    const timers = steps.map((s, i) =>
+      setTimeout(() => setProgressStep(i), s.delay)
+    )
+    return () => timers.forEach(clearTimeout)
+  }, [loading])
+
   if (loading || !data) {
+    const progressSteps = [
+      'Analyzing your answers...',
+      'Evaluating communication patterns...',
+      'Generating personalized feedback...',
+      'Finalizing your report...',
+    ]
+    const progress = Math.min(((progressStep + 1) / progressSteps.length) * 100, 95)
     return (
-      <div className="min-h-screen bg-white flex flex-col items-center justify-center gap-4">
-        <div className="w-8 h-8 rounded-full border-2 border-brand-500 border-t-transparent animate-spin" />
-        <p className="text-body text-[#71767b]">Generating your feedback report...</p>
+      <div className="min-h-screen bg-white flex flex-col items-center justify-center gap-6 px-4">
+        <div className="w-full max-w-xs space-y-4">
+          <div className="flex items-center justify-center gap-3">
+            <div className="w-6 h-6 rounded-full border-2 border-brand-500 border-t-transparent animate-spin" />
+            <p className="text-body font-medium text-[#0f1419]">{progressSteps[progressStep]}</p>
+          </div>
+          <div className="w-full h-1.5 bg-[#eff3f4] rounded-full overflow-hidden">
+            <div
+              className="h-full bg-brand-500 rounded-full transition-all duration-1000 ease-out"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+          <div className="flex justify-between text-xs text-[#8b98a5]">
+            {progressSteps.map((step, i) => (
+              <div key={i} className={`w-2 h-2 rounded-full ${i <= progressStep ? 'bg-brand-500' : 'bg-[#e1e8ed]'}`} />
+            ))}
+          </div>
+        </div>
       </div>
     )
   }

@@ -268,7 +268,7 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
 
     try {
       const message = await client.messages.create({
-        model: 'claude-opus-4-6',
+        model: 'claude-sonnet-4-6',
         max_tokens: 1200,
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
@@ -284,7 +284,7 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         sessionId: body.sessionId,
         inputTokens: message.usage.input_tokens,
         outputTokens: message.usage.output_tokens,
-        modelUsed: 'claude-opus-4-6',
+        modelUsed: 'claude-sonnet-4-6',
         durationMs: Date.now() - startTime,
         success: true,
       }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
@@ -364,7 +364,7 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         sessionId: body.sessionId,
         inputTokens: 0,
         outputTokens: 0,
-        modelUsed: 'claude-opus-4-6',
+        modelUsed: 'claude-sonnet-4-6',
         durationMs: Date.now() - startTime,
         success: false,
         errorMessage: err instanceof Error ? err.message : 'Unknown error',
