@@ -237,7 +237,11 @@ export default function LobbyPage() {
   useEffect(() => {
     const done = checks.every(c => c.status !== 'pending')
     const ok = checks.every(c => c.status === 'ok')
-    if (done) setAllOk(ok)
+    if (done) {
+      setAllOk(ok)
+    } else {
+      setAllOk(false)
+    }
   }, [checks])
 
   // Joining countdown
