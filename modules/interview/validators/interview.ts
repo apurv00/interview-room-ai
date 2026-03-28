@@ -69,32 +69,32 @@ const EngagementSignalsSchema = z.object({
 
 const FeedbackDataSchema = z.object({
   overall_score: z.number().min(0).max(100),
-  pass_probability: z.enum(['High', 'Medium', 'Low']),
-  confidence_level: z.enum(['High', 'Medium', 'Low']),
+  pass_probability: z.string().max(50),
+  confidence_level: z.string().max(50),
   dimensions: z.object({
     answer_quality: z.object({
       score: z.number().min(0).max(100),
-      strengths: z.array(z.string().max(500)).max(10),
-      weaknesses: z.array(z.string().max(500)).max(10),
-    }),
+      strengths: z.array(z.string().max(2000)).max(10),
+      weaknesses: z.array(z.string().max(2000)).max(10),
+    }).passthrough(),
     communication: z.object({
       score: z.number().min(0).max(100),
       wpm: z.number(),
       filler_rate: z.number(),
       pause_score: z.number(),
       rambling_index: z.number(),
-    }),
-    engagement_signals: EngagementSignalsSchema,
-  }).passthrough(), // allow legacy delivery_signals
+    }).passthrough(),
+    engagement_signals: EngagementSignalsSchema.passthrough(),
+  }).passthrough(),
   jd_match_score: z.number().min(0).max(100).optional(),
   jd_requirement_breakdown: z.array(z.object({
-    requirement: z.string().max(500),
+    requirement: z.string().max(2000),
     matched: z.boolean(),
-    evidence: z.string().max(500).optional(),
+    evidence: z.string().max(2000).nullish(),
   })).optional(),
-  red_flags: z.array(z.string().max(500)).max(20),
-  top_3_improvements: z.array(z.string().max(500)).max(5),
-})
+  red_flags: z.array(z.string().max(2000)).max(30),
+  top_3_improvements: z.array(z.string().max(2000)).max(10),
+}).passthrough()
 
 const ThreadSummarySchema = z.object({
   topicIndex: z.number().int().min(0),

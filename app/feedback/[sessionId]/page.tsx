@@ -10,7 +10,7 @@ import OverviewTab from '@interview/components/feedback/OverviewTab'
 import TranscriptTab from '@interview/components/feedback/TranscriptTab'
 import type { PeerData } from '@interview/components/feedback/PeerComparison'
 import type { FeedbackData, StoredInterviewData } from '@shared/types'
-import { ROLE_LABELS } from '@interview/config/interviewConfig'
+import { ROLE_LABELS, getDomainLabel } from '@interview/config/interviewConfig'
 import { computeOffsetSeconds } from '@interview/utils/offsetHelpers'
 import { mergeWithLocalData, readLocalInterviewData, cleanupLocalInterviewData } from '@interview/utils/mergeSessionData'
 import { fetchWithRetry } from '@shared/fetchWithRetry'
@@ -389,7 +389,7 @@ function FeedbackPageInner() {
           </div>
           <p className="text-caption text-[#71767b]">
             {data.config &&
-              `${ROLE_LABELS[data.config.role]} · ${data.config.experience} yrs · ${data.config.duration} min`}
+              `${getDomainLabel(data.config.role)} · ${data.config.experience} yrs · ${data.config.duration} min`}
           </p>
         </div>
       </header>
