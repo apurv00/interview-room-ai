@@ -117,6 +117,9 @@ export default function LobbyPage() {
     if (!config) return
 
     const runChecks = async () => {
+      // Fire warm-up ping immediately (absorbs serverless cold start while user grants permissions)
+      fetch('/api/health', { method: 'HEAD', cache: 'no-store' }).catch(() => {})
+
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
         streamRef.current = stream
@@ -146,14 +149,18 @@ export default function LobbyPage() {
       ))
 
       await new Promise(r => setTimeout(r, 200))
+      // Network check — run twice: first to warm up serverless function, second for real measurement
       try {
+        // Warm-up ping (absorbs cold start, result ignored)
+        await fetch('/api/health', { method: 'HEAD', cache: 'no-store' }).catch(() => {})
+
         const start = performance.now()
         const res = await fetch('/api/health', { method: 'HEAD', cache: 'no-store' })
         const latency = Math.round(performance.now() - start)
         if (res.ok) {
           setChecks(prev => prev.map(c =>
             c.label === 'Network'
-              ? { ...c, status: latency < 500 ? 'ok' : 'error', detail: latency < 500 ? `${latency}ms latency` : `High latency (${latency}ms)` }
+              ? { ...c, status: latency < 1500 ? 'ok' : 'error', detail: latency < 1500 ? `${latency}ms latency` : `High latency (${latency}ms)` }
               : c
           ))
         } else {
