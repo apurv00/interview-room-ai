@@ -82,7 +82,7 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
           </div>
           <div className="space-y-3">
             <ScoreBar label="Pacing" score={communication.pause_score} color="cyan" detail={`${communication.wpm} wpm`} />
-            <ScoreBar label="Filler words" score={Math.round(Math.max(0, 100 - communication.filler_rate * 500))} color="cyan" detail={`${(communication.filler_rate * 100).toFixed(1)}%`} />
+            <ScoreBar label="Filler words" score={Math.round(Math.max(0, 100 - communication.filler_rate * 200))} color="cyan" detail={`${(communication.filler_rate * 100).toFixed(1)}%`} />
             <ScoreBar label="Conciseness" score={Math.round(Math.max(0, 100 - communication.rambling_index * 100))} color="cyan" />
           </div>
           <div className="pt-2 border-t border-[#e1e8ed]">

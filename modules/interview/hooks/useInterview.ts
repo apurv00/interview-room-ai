@@ -125,6 +125,21 @@ export function useInterview({
   const [coachingTip, setCoachingTip] = useState<string | null>(null)
   const coachingAbortRef = useRef<AbortController | null>(null)
 
+  // ── Interview abort (stops the loop on End Interview) ──
+  const interviewAbortRef = useRef<AbortController | null>(null)
+
+  class InterviewAbortError extends Error {
+    constructor() { super('Interview aborted'); this.name = 'InterviewAbortError' }
+  }
+
+  function checkAbort() {
+    if (interviewAbortRef.current?.signal.aborted) throw new InterviewAbortError()
+  }
+
+  function getAbortSignal(): AbortSignal | undefined {
+    return interviewAbortRef.current?.signal
+  }
+
   // ── Performance signal (progressive difficulty) ──
   const performanceSignalRef = useRef<PerformanceSignal>('calibrating')
 
@@ -263,6 +278,7 @@ export function useInterview({
         const res = await fetch('/api/generate-question', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: getAbortSignal(),
           body: JSON.stringify({
             config,
             questionIndex: qIdx,
@@ -289,6 +305,7 @@ export function useInterview({
         const res = await fetch('/api/evaluate-answer', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: getAbortSignal(),
           body: JSON.stringify({ config, question, answer, questionIndex: qIdx, probeDepth }),
         })
         return res.json()
@@ -381,7 +398,8 @@ export function useInterview({
     window.speechSynthesis.cancel()
     stopListening()
     onRecordingStop?.()
-    // Cancel coaching sleep if in progress
+    // Cancel the interview loop and coaching sleep
+    interviewAbortRef.current?.abort()
     coachingAbortRef.current?.abort()
     setCoachingTip(null)
 
@@ -580,7 +598,9 @@ export function useInterview({
       const maxQ = QUESTION_COUNT[config.duration]
       let qIdx = startingQIndex
 
+      try {
       while (qIdx < maxQ) {
+        checkAbort()
         if (isInterviewOver()) return
         if (timeRemainingRef.current < 30) break
 
@@ -606,11 +626,13 @@ export function useInterview({
         currentProbeDepthRef.current = 0
 
         // Avatar speaks the question
+        checkAbort()
         const emotion: AvatarEmotion =
           qIdx === 0 ? 'friendly' : qIdx % 3 === 0 ? 'curious' : 'neutral'
         await avatarSpeak(question, emotion)
 
         // Listen for answer
+        checkAbort()
         transitionTo('LISTENING')
         setLiveAnswer('')
         const answer = await listenForAnswer()
@@ -639,6 +661,7 @@ export function useInterview({
         })
 
         // Evaluate answer + generate next question in parallel for faster transitions
+        checkAbort()
         const nextQIdx = qIdx + 1
         const shouldPrefetch = nextQIdx < maxQ && timeRemainingRef.current > 60
         const nextQuestionPromise = shouldPrefetch ? generateQuestion(nextQIdx) : undefined
@@ -674,6 +697,7 @@ export function useInterview({
           })
 
           // Ask probe
+          checkAbort()
           transitionTo('ASK_QUESTION')
           questionIndexRef.current = qIdx
           setQuestionIndex(qIdx)
@@ -682,6 +706,7 @@ export function useInterview({
           await avatarSpeak(probeQ, 'curious')
 
           // Listen for probe answer
+          checkAbort()
           transitionTo('LISTENING')
           setLiveAnswer('')
           const probeAnswer = await listenForAnswer()
@@ -723,6 +748,7 @@ export function useInterview({
       }
 
       // Wrap-up
+      checkAbort()
       if (isInterviewOver()) return
       transitionTo('WRAP_UP')
       addToTranscript('interviewer', WRAP_UP_LINE)
@@ -731,6 +757,11 @@ export function useInterview({
       // 4s for user to ask questions
       await new Promise((r) => setTimeout(r, 4000))
       finishInterview()
+      } catch (err) {
+        // Silently catch abort errors — interview was intentionally ended
+        if (err instanceof InterviewAbortError || (err instanceof DOMException && err.name === 'AbortError')) return
+        throw err
+      }
     },
     [config, generateQuestion, avatarSpeak, startListening, evaluateAnswer, addToTranscript, finishInterview] // eslint-disable-line react-hooks/exhaustive-deps
   )
@@ -740,13 +771,18 @@ export function useInterview({
   useEffect(() => {
     if (!config || !voicesReady) return
 
+    interviewAbortRef.current = new AbortController()
+
     const start = async () => {
+      try {
       const intro = getInterviewIntro(config.role, config.interviewType, config.targetCompany)
       setCurrentQuestion(intro)
       addToTranscript('interviewer', intro, 0)
+      checkAbort()
       await avatarSpeak(intro, 'friendly')
 
       // Listen for the candidate's response to the intro ("tell me about yourself")
+      checkAbort()
       transitionTo('LISTENING')
       setLiveAnswer('')
       questionIndexRef.current = 0
@@ -774,7 +810,12 @@ export function useInterview({
       currentTopicIndexRef.current++
 
       // Continue with AI-generated questions starting from index 1
+      checkAbort()
       runInterviewLoop(1)
+      } catch (err) {
+        if (err instanceof InterviewAbortError || (err instanceof DOMException && err.name === 'AbortError')) return
+        throw err
+      }
     }
 
     const t = setTimeout(start, 500)

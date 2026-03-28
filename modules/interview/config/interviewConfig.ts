@@ -78,8 +78,8 @@ export function getInterviewIntro(
   targetCompany?: string,
   domainLabel?: string,
 ): string {
-  // For screening with legacy domains and no company context, use legacy intros
-  if ((!interviewType || interviewType === 'screening') && !targetCompany && LEGACY_INTERVIEW_INTROS[domainSlug]) {
+  // For legacy domains with no explicit interview type and no company context, use legacy intros
+  if (!interviewType && !targetCompany && LEGACY_INTERVIEW_INTROS[domainSlug]) {
     return LEGACY_INTERVIEW_INTROS[domainSlug]
   }
 
