@@ -12,6 +12,10 @@ vi.mock('@shared/logger', () => ({
   aiLogger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }))
 
+vi.mock('@shared/redis', () => ({
+  redis: { get: vi.fn(), set: vi.fn(), del: vi.fn() },
+}))
+
 const mockAwardXp = vi.fn().mockResolvedValue({ newXp: 10, newLevel: 1, leveledUp: false, title: 'Novice' })
 vi.mock('../xpService', () => ({
   awardXp: (...args: unknown[]) => mockAwardXp(...args),

@@ -20,6 +20,7 @@ const UserBadgeSchema = new Schema<IUserBadge>(
 
 UserBadgeSchema.index({ userId: 1, badgeId: 1 }, { unique: true })
 UserBadgeSchema.index({ userId: 1, earnedAt: -1 })
+UserBadgeSchema.index({ userId: 1, notified: 1, earnedAt: -1 })
 
 export const UserBadge: Model<IUserBadge> =
   mongoose.models.UserBadge || mongoose.model<IUserBadge>('UserBadge', UserBadgeSchema)
