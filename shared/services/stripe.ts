@@ -6,6 +6,7 @@ export interface PlanConfig {
   name: string
   label: string
   monthlyInterviewLimit: number
+  monthlyAnalysisLimit: number
   rateLimitPerMin: number
   priceMonthly: number | null
   features: string[]
@@ -17,6 +18,7 @@ export const PLANS: Record<string, PlanConfig> = {
     name: 'free',
     label: 'Free',
     monthlyInterviewLimit: 3,
+    monthlyAnalysisLimit: 1,
     rateLimitPerMin: 15,
     priceMonthly: 0,
     features: [
@@ -30,6 +32,7 @@ export const PLANS: Record<string, PlanConfig> = {
     name: 'pro',
     label: 'Pro',
     monthlyInterviewLimit: 30,
+    monthlyAnalysisLimit: 10,
     rateLimitPerMin: 30,
     priceMonthly: 19,
     highlighted: true,
@@ -45,6 +48,7 @@ export const PLANS: Record<string, PlanConfig> = {
     name: 'enterprise',
     label: 'Enterprise',
     monthlyInterviewLimit: 999999,
+    monthlyAnalysisLimit: 999999,
     rateLimitPerMin: 60,
     priceMonthly: null,
     features: [

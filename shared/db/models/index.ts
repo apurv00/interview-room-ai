@@ -79,6 +79,10 @@ export type { IDailyChallengeAttempt } from './DailyChallengeAttempt'
 export { InterviewSkill } from './InterviewSkill'
 export type { IInterviewSkill } from './InterviewSkill'
 
+// Multimodal Analysis
+export { MultimodalAnalysis } from './MultimodalAnalysis'
+export type { IMultimodalAnalysis } from './MultimodalAnalysis'
+
 // Smart Wizard
 export { WizardConfig } from './WizardConfig'
 export type { IWizardConfig } from './WizardConfig'

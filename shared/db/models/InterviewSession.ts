@@ -54,6 +54,10 @@ export interface IInterviewSession extends Document {
   isPublic?: boolean
   shareExpiresAt?: Date
 
+  // Multimodal analysis
+  multimodalAnalysisId?: mongoose.Types.ObjectId
+  facialLandmarksR2Key?: string
+
   userAgent?: string
 
   createdAt: Date
@@ -112,6 +116,10 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
     shareToken: { type: String, unique: true, sparse: true },
     isPublic: { type: Boolean, default: false },
     shareExpiresAt: { type: Date },
+
+    // Multimodal analysis
+    multimodalAnalysisId: { type: Schema.Types.ObjectId, ref: 'MultimodalAnalysis' },
+    facialLandmarksR2Key: { type: String },
 
     userAgent: { type: String },
   },

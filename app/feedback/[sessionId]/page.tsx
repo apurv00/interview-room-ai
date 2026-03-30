@@ -605,13 +605,21 @@ function FeedbackPageInner() {
         )}
 
         {/* CTA */}
-        <div className="flex gap-3 justify-center pb-8 animate-fade-in">
+        <div className="flex gap-3 justify-center pb-8 animate-fade-in flex-wrap">
           <button
             onClick={() => router.push('/')}
             className="px-8 py-3 bg-brand-500 hover:bg-brand-600 text-white rounded-[var(--radius-md)] font-semibold btn-glow transition"
           >
             Reattempt Interview
           </button>
+          {recordingUrl && (
+            <button
+              onClick={() => router.push(`/replay/${sessionId}`)}
+              className="px-8 py-3 bg-[#f7f9f9] hover:bg-[#eff3f4] border border-[#e1e8ed] text-[#536471] rounded-[var(--radius-md)] font-medium transition"
+            >
+              View Replay
+            </button>
+          )}
           <button
             onClick={() => {
               const text = data.transcript.map((e) => `${e.speaker.toUpperCase()}: ${e.text}`).join('\n\n')
