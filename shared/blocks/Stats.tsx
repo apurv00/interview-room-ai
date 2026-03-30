@@ -9,11 +9,15 @@ const stats = [
 ]
 
 function AnimatedNumber({ target, suffix }: { target: number; suffix: string }) {
-  const [count, setCount] = useState(0)
+  // Start with target so SSR/initial render shows the real value (not 0)
+  const [count, setCount] = useState(target)
   const ref = useRef<HTMLSpanElement>(null)
   const hasAnimated = useRef(false)
 
   useEffect(() => {
+    // Reset to 0 on client so we can animate up when visible
+    setCount(0)
+
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting && !hasAnimated.current) {
