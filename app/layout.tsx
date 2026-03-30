@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next'
+import { SpeedInsights } from '@vercel/speed-insights/next'
 import SessionProvider from '@shared/providers/SessionProvider'
 import { ThemeProvider } from '@shared/providers/ThemeProvider'
 import XpProvider from '@shared/providers/XpProvider'
@@ -92,6 +93,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </XpProvider>
           </ThemeProvider>
         </SessionProvider>
+        <SpeedInsights />
       </body>
     </html>
   )
