@@ -25,7 +25,7 @@ const MORE_LINKS = [
 ]
 
 // Pages where the shell is hidden (full-screen experience)
-const HIDDEN_PATHS = ['/interview']
+const HIDDEN_PATHS = ['/interview', '/signin', '/signup']
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
