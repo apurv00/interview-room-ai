@@ -1,6 +1,9 @@
 import { MongoClient } from 'mongodb'
 
-const options = {}
+const options = {
+  maxPoolSize: 10,
+  serverSelectionTimeoutMS: 5000,
+}
 
 const globalWithMongo = global as typeof globalThis & {
   _mongoClientPromise?: Promise<MongoClient>
@@ -13,16 +16,13 @@ function getClientPromise(): Promise<MongoClient> {
     return Promise.reject(new Error('MONGODB_URI environment variable is not defined'))
   }
 
-  if (process.env.NODE_ENV === 'development') {
-    if (!globalWithMongo._mongoClientPromise) {
-      const client = new MongoClient(MONGODB_URI, options)
-      globalWithMongo._mongoClientPromise = client.connect()
-    }
-    return globalWithMongo._mongoClientPromise
+  // Cache the client promise in both dev and production to avoid
+  // creating a new TCP connection on every serverless invocation.
+  if (!globalWithMongo._mongoClientPromise) {
+    const client = new MongoClient(MONGODB_URI, options)
+    globalWithMongo._mongoClientPromise = client.connect()
   }
-
-  const client = new MongoClient(MONGODB_URI, options)
-  return client.connect()
+  return globalWithMongo._mongoClientPromise
 }
 
 const clientPromise = getClientPromise()

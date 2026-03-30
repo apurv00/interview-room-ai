@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { markBadgeNotified } from '@learn/services/badgeService'
+import { invalidateUnnotifiedBadgesCache } from '@learn/services/badgeCacheUtils'
 
 export const dynamic = 'force-dynamic'
 
@@ -20,6 +21,7 @@ export async function POST(req: Request) {
     }
 
     await markBadgeNotified(session.user.id, badgeId)
+    await invalidateUnnotifiedBadgesCache(session.user.id)
     return NextResponse.json({ success: true })
   } catch {
     return NextResponse.json({ error: 'Failed to mark badge notified' }, { status: 500 })

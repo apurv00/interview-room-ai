@@ -123,6 +123,7 @@ InterviewSessionSchema.index({ organizationId: 1, createdAt: -1 })
 InterviewSessionSchema.index({ organizationId: 1, candidateEmail: 1 })
 InterviewSessionSchema.index({ status: 1, createdAt: -1 })
 InterviewSessionSchema.index({ status: 1, 'config.role': 1, 'config.experience': 1 })
+InterviewSessionSchema.index({ userId: 1, status: 1 })
 
 export const InterviewSession: Model<IInterviewSession> =
   mongoose.models.InterviewSession ||

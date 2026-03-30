@@ -7,6 +7,7 @@ import { DailyChallengeAttempt } from '@shared/db/models/DailyChallengeAttempt'
 import { BADGE_DEFINITIONS, getBadgesByTrigger } from '@learn/config/badges'
 import type { BadgeDef, BadgeTriggerType, BadgeCheckContext } from '@learn/config/badges'
 import { awardXp } from './xpService'
+import { invalidateUnnotifiedBadgesCache } from './badgeCacheUtils'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { aiLogger as logger } from '@shared/logger'
 
@@ -79,6 +80,10 @@ export async function checkAndAwardBadges(
           throw err
         }
       }
+    }
+
+    if (awarded.length > 0) {
+      await invalidateUnnotifiedBadgesCache(userId)
     }
 
     return awarded

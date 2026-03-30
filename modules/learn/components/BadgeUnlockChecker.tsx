@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useSession } from 'next-auth/react'
 import BadgeToast from './BadgeToast'
 
@@ -11,9 +11,24 @@ interface UnnotifiedBadge {
   xpReward: number
 }
 
+const BASE_INTERVAL_MS = 120_000 // 2 minutes
+const MAX_INTERVAL_MS = 300_000  // 5 minutes
+
 export default function BadgeUnlockChecker() {
   const { status } = useSession()
   const [queue, setQueue] = useState<UnnotifiedBadge[]>([])
+  const intervalRef = useRef(BASE_INTERVAL_MS)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const scheduleNext = useCallback((checkFn: () => Promise<void>) => {
+    timerRef.current = setTimeout(() => {
+      if (!document.hidden) {
+        checkFn()
+      } else {
+        scheduleNext(checkFn)
+      }
+    }, intervalRef.current)
+  }, [])
 
   const checkBadges = useCallback(async () => {
     try {
@@ -21,29 +36,34 @@ export default function BadgeUnlockChecker() {
       if (!res.ok) return
       const data = await res.json()
       if (data.badges?.length > 0) {
+        // Reset to base interval when badges are found
+        intervalRef.current = BASE_INTERVAL_MS
         setQueue(prev => {
           const existing = new Set(prev.map(b => b.badgeId))
           const newBadges = data.badges.filter((b: UnnotifiedBadge) => !existing.has(b.badgeId))
           return [...prev, ...newBadges]
         })
+      } else {
+        // Exponential backoff when no badges found (up to max)
+        intervalRef.current = Math.min(intervalRef.current * 1.5, MAX_INTERVAL_MS)
       }
     } catch {
-      // Silently fail
+      // Silently fail — backoff on error too
+      intervalRef.current = Math.min(intervalRef.current * 1.5, MAX_INTERVAL_MS)
     }
-  }, [])
+    scheduleNext(checkBadges)
+  }, [scheduleNext])
 
   useEffect(() => {
     if (status !== 'authenticated') return
 
-    // Initial check
-    checkBadges()
+    // Initial check after a short delay to avoid blocking page load
+    const initialTimer = setTimeout(() => checkBadges(), 2000)
 
-    // Poll every 30 seconds when tab is visible
-    const interval = setInterval(() => {
-      if (!document.hidden) checkBadges()
-    }, 30000)
-
-    return () => clearInterval(interval)
+    return () => {
+      clearTimeout(initialTimer)
+      if (timerRef.current) clearTimeout(timerRef.current)
+    }
   }, [status, checkBadges])
 
   const dismissBadge = useCallback(async (badgeId: string) => {

@@ -34,6 +34,7 @@ const DailyChallengeAttemptSchema = new Schema<IDailyChallengeAttempt>(
 
 DailyChallengeAttemptSchema.index({ userId: 1, challengeDate: 1 }, { unique: true })
 DailyChallengeAttemptSchema.index({ challengeDate: 1, score: -1 })
+DailyChallengeAttemptSchema.index({ userId: 1 })
 
 export const DailyChallengeAttempt: Model<IDailyChallengeAttempt> =
   mongoose.models.DailyChallengeAttempt || mongoose.model<IDailyChallengeAttempt>('DailyChallengeAttempt', DailyChallengeAttemptSchema)

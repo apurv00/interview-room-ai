@@ -18,6 +18,10 @@ vi.mock('@shared/logger', () => ({
   aiLogger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }))
 
+vi.mock('@shared/redis', () => ({
+  redis: { get: vi.fn(), set: vi.fn(), del: vi.fn() },
+}))
+
 // Shared mock state for user across services
 let mockUserData: Record<string, unknown> = {}
 const mockUserFindByIdAndUpdate = vi.fn()
