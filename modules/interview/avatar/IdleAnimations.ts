@@ -15,6 +15,7 @@ export class IdleAnimationEngine {
   private startTime = 0
   private onUpdate: ((state: IdleState) => void) | null = null
   private isListeningMode = false
+  private isSpeechActive = false
 
   // Nod scheduling
   private nextNodAt = 0
@@ -43,6 +44,18 @@ export class IdleAnimationEngine {
     }
   }
 
+  /** Force an immediate nod (e.g., reacting to candidate speech) */
+  triggerNod(): void {
+    if (this.isListeningMode && this.nodStartTime === 0) {
+      this.nodStartTime = performance.now()
+    }
+  }
+
+  /** Set speech-active state to adjust nod frequency */
+  setSpeechActive(active: boolean): void {
+    this.isSpeechActive = active
+  }
+
   /** Stop all animations */
   stop(): void {
     if (this.rafId !== null) {
@@ -59,7 +72,10 @@ export class IdleAnimationEngine {
   }
 
   private scheduleNextNod(): void {
-    const delay = 2000 + Math.random() * 4000 // 2–6s
+    // Nod more frequently when candidate is actively speaking
+    const delay = this.isSpeechActive
+      ? 1500 + Math.random() * 1500 // 1.5–3s when speaking
+      : 2000 + Math.random() * 4000 // 2–6s when silent
     this.nextNodAt = performance.now() + delay
   }
 

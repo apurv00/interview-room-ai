@@ -10,10 +10,13 @@ import InterviewControls from '@interview/components/interview/InterviewControls
 import RecordingIndicator from '@interview/components/RecordingIndicator'
 import CoachingNudge from '@interview/components/interview/CoachingNudge'
 import CoachingTip from '@interview/components/interview/CoachingTip'
-import { useSpeechRecognition } from '@interview/hooks/useSpeechRecognition'
+import { useSpeechRecognitionAdapter as useSpeechRecognition } from '@interview/hooks/useSpeechRecognitionAdapter'
 import { useInterview } from '@interview/hooks/useInterview'
 import { useMediaRecorder } from '@interview/hooks/useMediaRecorder'
 import { useCoachingNudge } from '@interview/hooks/useCoachingNudge'
+import { useFacialLandmarks } from '@interview/hooks/useFacialLandmarks'
+import { useRealtimeFacialCoaching } from '@interview/hooks/useRealtimeFacialCoaching'
+import { useRealtimeProsody } from '@interview/hooks/useRealtimeProsody'
 import type { InterviewConfig } from '@shared/types'
 import { AVATAR_NAME, getAvatarTitle } from '@interview/config/interviewConfig'
 import { STORAGE_KEYS } from '@shared/storageKeys'
@@ -72,9 +75,27 @@ export default function InterviewPage() {
   // ── Recording ──
   const { isRecording, recordingDuration, startRecording, stopRecording } = useMediaRecorder()
 
+  // ── Facial landmarks (multimodal analysis) ──
+  const isMultimodalEnabled = process.env.NEXT_PUBLIC_FEATURE_MULTIMODAL === 'true'
+  const { startCapture, stopCapture, framesRef } = useFacialLandmarks()
+
   // Handle recording stop
   const handleRecordingStop = useCallback(async () => {
     const blob = await stopRecording()
+
+    // Stop facial capture and upload landmarks
+    if (isMultimodalEnabled) {
+      const frames = stopCapture()
+      const sessionId = interviewRef.current?.sessionId
+      if (frames.length > 0 && sessionId) {
+        fetch('/api/recordings/landmarks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId, frames }),
+        }).catch((err) => console.error('Landmarks upload error:', err))
+      }
+    }
+
     if (!blob) return
 
     const sessionId = interviewRef.current?.sessionId
@@ -91,7 +112,7 @@ export default function InterviewPage() {
         })
         .catch((err) => console.error('Recording upload network error:', err))
     }
-  }, [stopRecording])
+  }, [stopRecording, isMultimodalEnabled, stopCapture])
 
   // ── Interview engine ──
   const interview = useInterview({
@@ -121,8 +142,20 @@ export default function InterviewPage() {
   const phaseColor = PHASE_COLORS[phase] ?? DEFAULT_PHASE_COLOR
   const isProcessing = phase === 'PROCESSING'
 
-  // ── Live coaching nudges (Issue 3-A: extracted to useCoachingNudge hook) ──
-  const activeNudge = useCoachingNudge({ phase, liveTranscript })
+  // ── Live coaching nudges ──
+  const speechNudge = useCoachingNudge({ phase, liveTranscript })
+  const facialNudge = useRealtimeFacialCoaching({
+    phase,
+    framesRef,
+    enabled: isMultimodalEnabled,
+  })
+  const prosodyNudge = useRealtimeProsody({
+    phase,
+    liveTranscript,
+    enabled: isMultimodalEnabled,
+  })
+  // Priority: prosody > speech-content > visual
+  const activeNudge = prosodyNudge || speechNudge || facialNudge
 
   // ─── Keyboard shortcut (M to toggle mute) ──────────────────────────────────
   useEffect(() => {
@@ -152,7 +185,13 @@ export default function InterviewPage() {
       .getUserMedia({ video: true, audio: true })
       .then((stream) => {
         streamRef.current = stream
-        if (videoRef.current) videoRef.current.srcObject = stream
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream
+          // Start facial landmark capture if multimodal is enabled
+          if (isMultimodalEnabled) {
+            startCapture(videoRef.current).catch(() => {})
+          }
+        }
         startRecording(stream)
       })
       .catch(console.error)
@@ -295,6 +334,7 @@ export default function InterviewPage() {
             isTalking={isAvatarTalking}
             isListening={isListening}
             isProcessing={isProcessing}
+            transcriptWordCount={liveTranscript.split(/\s+/).filter(Boolean).length}
           />
         </VideoTile>
 

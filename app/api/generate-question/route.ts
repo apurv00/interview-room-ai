@@ -299,7 +299,7 @@ Return ONLY the question text. No preamble, no numbering, no quotation marks. Ju
 
     try {
       const message = await client.messages.create({
-        model: 'claude-sonnet-4-6',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 300,
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
@@ -314,7 +314,7 @@ Return ONLY the question text. No preamble, no numbering, no quotation marks. Ju
         sessionId: body.sessionId,
         inputTokens: message.usage.input_tokens,
         outputTokens: message.usage.output_tokens,
-        modelUsed: 'claude-sonnet-4-6',
+        modelUsed: 'claude-haiku-4-5-20251001',
         durationMs: Date.now() - startTime,
         success: true,
       }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
@@ -329,7 +329,7 @@ Return ONLY the question text. No preamble, no numbering, no quotation marks. Ju
         sessionId: body.sessionId,
         inputTokens: 0,
         outputTokens: 0,
-        modelUsed: 'claude-sonnet-4-6',
+        modelUsed: 'claude-haiku-4-5-20251001',
         durationMs: Date.now() - startTime,
         success: false,
         errorMessage: err instanceof Error ? err.message : 'Unknown error',

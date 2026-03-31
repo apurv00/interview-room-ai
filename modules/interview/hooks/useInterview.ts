@@ -197,13 +197,55 @@ export function useInterview({
 
   // ─── TTS (avatar speaks) ───────────────────────────────────────────────────
 
+  const isMultimodalEnabled = process.env.NEXT_PUBLIC_FEATURE_MULTIMODAL === 'true'
+
   const avatarSpeak = useCallback(
-    (text: string, emotion: AvatarEmotion = 'friendly'): Promise<void> => {
+    async (text: string, emotion: AvatarEmotion = 'friendly'): Promise<void> => {
+      setAvatarEmotion(emotion)
+      setIsAvatarTalking(true)
+
+      // Try Deepgram Aura TTS first (natural AI voice)
+      if (isMultimodalEnabled) {
+        try {
+          const res = await fetch('/api/tts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text }),
+          })
+
+          if (res.ok) {
+            const blob = await res.blob()
+            const url = URL.createObjectURL(blob)
+            await new Promise<void>((resolve) => {
+              const audio = new Audio(url)
+              audio.onended = () => {
+                URL.revokeObjectURL(url)
+                setIsAvatarTalking(false)
+                resolve()
+              }
+              audio.onerror = () => {
+                URL.revokeObjectURL(url)
+                setIsAvatarTalking(false)
+                resolve()
+              }
+              audio.play().catch(() => {
+                URL.revokeObjectURL(url)
+                setIsAvatarTalking(false)
+                resolve()
+              })
+            })
+            return
+          }
+        } catch {
+          // Fall through to browser TTS
+        }
+      }
+
+      // Fallback: browser speechSynthesis
       return new Promise((resolve) => {
         window.speechSynthesis.cancel()
         const utterance = new SpeechSynthesisUtterance(text)
         const voices = window.speechSynthesis.getVoices()
-        // Prefer Indian English / natural-sounding voices, fall back to Western defaults
         const voicePreferences = [
           'Microsoft Neerja Online (Natural)',
           'Google US English',
@@ -222,21 +264,17 @@ export function useInterview({
         )
         if (preferred) utterance.voice = preferred
 
-        // Adapt TTS pacing to interview type persona
         const interviewType = config?.interviewType || 'screening'
         const ttsProfiles: Record<string, { rate: number; pitch: number }> = {
-          screening: { rate: 1.08, pitch: 1.02 },   // Warm, conversational
-          behavioral: { rate: 1.0, pitch: 1.0 },     // Measured, thoughtful
-          technical: { rate: 1.1, pitch: 0.98 },      // Slightly faster, direct
-          'case-study': { rate: 0.98, pitch: 1.0 },   // Deliberate, measured pacing
+          screening: { rate: 1.08, pitch: 1.02 },
+          behavioral: { rate: 1.0, pitch: 1.0 },
+          technical: { rate: 1.1, pitch: 0.98 },
+          'case-study': { rate: 0.98, pitch: 1.0 },
         }
         const tts = ttsProfiles[interviewType] || ttsProfiles.screening
         utterance.rate = tts.rate
         utterance.pitch = tts.pitch
         utterance.volume = 1
-
-        setAvatarEmotion(emotion)
-        setIsAvatarTalking(true)
 
         utterance.onend = () => {
           setIsAvatarTalking(false)
@@ -249,7 +287,7 @@ export function useInterview({
         window.speechSynthesis.speak(utterance)
       })
     },
-    [config]
+    [config, isMultimodalEnabled]
   )
 
   // ─── Transcript helpers ────────────────────────────────────────────────────
@@ -356,7 +394,7 @@ export function useInterview({
     const abortCtrl = new AbortController()
     coachingAbortRef.current = abortCtrl
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 1500)
+      const timer = setTimeout(resolve, 800)
       abortCtrl.signal.addEventListener('abort', () => {
         clearTimeout(timer)
         resolve()

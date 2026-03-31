@@ -3,7 +3,7 @@ import type { SpeechMetrics } from '@shared/types'
 export interface CoachingNudge {
   id: string
   message: string
-  type: 'pace' | 'filler' | 'length' | 'detail'
+  type: 'pace' | 'filler' | 'length' | 'detail' | 'visual' | 'prosody'
   severity: 'info' | 'warning'
 }
 
