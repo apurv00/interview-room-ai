@@ -10,8 +10,8 @@ import type { AnswerEvaluation, TranscriptEntry, InterviewConfig } from '@shared
 
 const anthropic = new Anthropic()
 
-const FUSION_MODEL = 'claude-sonnet-4-6'
-const MAX_TOKENS = 2000
+const FUSION_MODEL = 'claude-haiku-4-5-20251001'
+const MAX_TOKENS = 1500
 
 interface FusionInput {
   prosodySegments: ProsodySegment[]
@@ -53,15 +53,15 @@ Return ONLY valid JSON matching this exact schema:
   "fusionSummary": {
     "overallBodyLanguageScore": number (0-100),
     "eyeContactScore": number (0-100),
-    "confidenceProgression": "narrative description of how confidence changed across the interview",
-    "topMoments": [3 best TimelineEvent objects],
-    "improvementMoments": [3 most impactful improvement TimelineEvent objects],
-    "coachingTips": ["3-5 specific, actionable coaching tips"]
+    "confidenceProgression": "one sentence on how confidence changed",
+    "topMoments": [3 indices into timeline array for best moments],
+    "improvementMoments": [3 indices into timeline array for worst moments],
+    "coachingTips": ["3 specific, actionable coaching tips"]
   }
 }
 
 Guidelines:
-- Generate 8-15 timeline events covering the full interview
+- Generate 6-10 timeline events covering the full interview
 - Prioritize "fused" signals that combine multiple modalities (e.g., filler words + loss of eye contact = nervousness)
 - Include both strengths and areas for improvement
 - Tie coaching tips to specific timestamps when possible
@@ -88,9 +88,30 @@ Guidelines:
     throw new Error('Fusion analysis returned no valid JSON')
   }
 
-  const parsed = JSON.parse(jsonMatch[0]) as {
+  const raw = JSON.parse(jsonMatch[0]) as {
     timeline: TimelineEvent[]
-    fusionSummary: FusionSummary
+    fusionSummary: Omit<FusionSummary, 'topMoments' | 'improvementMoments'> & {
+      topMoments: number[] | TimelineEvent[]
+      improvementMoments: number[] | TimelineEvent[]
+    }
+  }
+
+  // Resolve indices to full TimelineEvent objects if needed
+  const resolveEvents = (items: number[] | TimelineEvent[]): TimelineEvent[] => {
+    if (items.length === 0) return []
+    if (typeof items[0] === 'number') {
+      return (items as number[]).map((i) => raw.timeline[i]).filter(Boolean)
+    }
+    return items as TimelineEvent[]
+  }
+
+  const parsed = {
+    timeline: raw.timeline,
+    fusionSummary: {
+      ...raw.fusionSummary,
+      topMoments: resolveEvents(raw.fusionSummary.topMoments),
+      improvementMoments: resolveEvents(raw.fusionSummary.improvementMoments),
+    },
   }
 
   aiLogger.info(
@@ -159,15 +180,15 @@ function buildUserPrompt(
     sections.push(`<content_scores>\n${JSON.stringify(contentData, null, 2)}\n</content_scores>`)
   }
 
-  // Transcript summary (condensed to save tokens)
+  // Skip full transcript — evaluations already contain questions and scores.
+  // Only include question count and total duration for context.
   if (transcript.length > 0) {
-    const condensed = transcript.map((t) => ({
-      speaker: t.speaker,
-      time: `${t.timestamp}s`,
-      text: t.text.slice(0, 200),
-      qi: t.questionIndex,
-    }))
-    sections.push(`<transcript_summary>\n${JSON.stringify(condensed, null, 2)}\n</transcript_summary>`)
+    const interviewerEntries = transcript.filter((t) => t.speaker === 'interviewer')
+    sections.push(`<interview_meta>\n${JSON.stringify({
+      totalQuestions: interviewerEntries.length,
+      totalTranscriptEntries: transcript.length,
+      durationSec: Math.max(...transcript.map((t) => t.timestamp)),
+    })}\n</interview_meta>`)
   }
 
   return `Analyze this interview and generate the multimodal coaching timeline:\n\n${sections.join('\n\n')}`
