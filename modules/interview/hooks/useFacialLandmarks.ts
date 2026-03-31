@@ -43,6 +43,7 @@ export interface UseFacialLandmarksReturn {
   startCapture: (videoElement: HTMLVideoElement) => Promise<void>
   stopCapture: () => FacialFrame[]
   frameCount: number
+  framesRef: React.RefObject<FacialFrame[]>
 }
 
 export function useFacialLandmarks(): UseFacialLandmarksReturn {
@@ -175,5 +176,5 @@ export function useFacialLandmarks(): UseFacialLandmarksReturn {
     return frames
   }, [])
 
-  return { isCapturing, startCapture, stopCapture, frameCount }
+  return { isCapturing, startCapture, stopCapture, frameCount, framesRef }
 }

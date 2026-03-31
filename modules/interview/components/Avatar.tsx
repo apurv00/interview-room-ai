@@ -11,6 +11,7 @@ interface AvatarProps {
   ttsText?: string
   isListening?: boolean
   isProcessing?: boolean
+  transcriptWordCount?: number
 }
 
 // Ambient glow colors per emotion
@@ -22,8 +23,8 @@ const GLOW_COLORS: Record<AvatarEmotion, string> = {
   impressed: 'rgba(16,185,129,0.12)',
 }
 
-export default function Avatar({ emotion, isTalking, ttsText, isListening, isProcessing }: AvatarProps) {
-  const { state, prepareLipSync, startLipSync, stopLipSync, setListening } = useAvatarEngine(emotion, isTalking)
+export default function Avatar({ emotion, isTalking, ttsText, isListening, isProcessing, transcriptWordCount }: AvatarProps) {
+  const { state, prepareLipSync, startLipSync, stopLipSync, setListening, onTranscriptUpdate } = useAvatarEngine(emotion, isTalking)
 
   const prevTalkingRef = useRef(false)
   const prevTtsTextRef = useRef('')
@@ -47,6 +48,13 @@ export default function Avatar({ emotion, isTalking, ttsText, isListening, isPro
   useEffect(() => {
     setListening(isListening ?? false)
   }, [isListening, setListening])
+
+  // Reactive nods: update speech-active state based on transcript growth
+  useEffect(() => {
+    if (transcriptWordCount !== undefined) {
+      onTranscriptUpdate(transcriptWordCount)
+    }
+  }, [transcriptWordCount, onTranscriptUpdate])
 
   const mouthPath = isTalking ? state.mouthPath : state.emotionMouth
   const nodY = state.isNodding ? Math.sin(state.nodProgress * Math.PI) * 3 : 0

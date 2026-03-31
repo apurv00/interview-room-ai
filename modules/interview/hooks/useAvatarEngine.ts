@@ -49,6 +49,8 @@ export interface UseAvatarEngineReturn {
   startLipSync: () => void
   stopLipSync: () => void
   setListening: (listening: boolean) => void
+  onTranscriptUpdate: (wordCount: number) => void
+  triggerNod: () => void
 }
 
 export function useAvatarEngine(
@@ -172,5 +174,17 @@ export function useAvatarEngine(
     idleRef.current?.setListening(listening)
   }, [])
 
-  return { state, prepareLipSync, startLipSync, stopLipSync, setListening }
+  // ── Reactive avatar: respond to candidate speech ──
+  const prevWordCountRef = useRef(0)
+  const onTranscriptUpdate = useCallback((wordCount: number) => {
+    const isGrowing = wordCount > prevWordCountRef.current
+    prevWordCountRef.current = wordCount
+    idleRef.current?.setSpeechActive(isGrowing)
+  }, [])
+
+  const triggerNod = useCallback(() => {
+    idleRef.current?.triggerNod()
+  }, [])
+
+  return { state, prepareLipSync, startLipSync, stopLipSync, setListening, onTranscriptUpdate, triggerNod }
 }
