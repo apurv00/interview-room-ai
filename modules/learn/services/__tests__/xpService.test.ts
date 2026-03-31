@@ -11,6 +11,11 @@ vi.mock('@shared/featureFlags', () => ({
 
 vi.mock('@shared/logger', () => ({
   aiLogger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
+  logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), child: vi.fn().mockReturnValue({ error: vi.fn(), warn: vi.fn(), info: vi.fn() }) },
+}))
+
+vi.mock('@shared/redis', () => ({
+  redis: { del: vi.fn().mockResolvedValue(1), get: vi.fn(), setex: vi.fn() },
 }))
 
 const mockXpEventCreate = vi.fn()

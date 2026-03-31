@@ -14,6 +14,7 @@ import StatsBlock from '@/shared/blocks/Stats'
 import ResourceLinks from '@learn/components/ResourceLinks'
 import type { Role, InterviewType, ExperienceLevel, Duration, InterviewConfig } from '@shared/types'
 import { EXPERIENCE_LABELS, DURATION_LABELS, getDomainLabel } from '@interview/config/interviewConfig'
+import { deduplicatedFetch } from '@shared/cachedFetch'
 import { STORAGE_KEYS } from '@shared/storageKeys'
 import { getStartRedirect } from '@shared/authRedirect'
 
@@ -96,7 +97,7 @@ export default function AuthenticatedHome() {
   // Pre-fill from user profile (onboarding data)
   useEffect(() => {
     if (status !== 'authenticated') return
-    fetch('/api/onboarding')
+    deduplicatedFetch('/api/onboarding')
       .then((r) => r.json())
       .then((profile) => {
         if (!lastConfig) {
@@ -118,7 +119,7 @@ export default function AuthenticatedHome() {
   // Fetch returning user stats
   useEffect(() => {
     if (status !== 'authenticated') return
-    fetch('/api/interviews?limit=1')
+    deduplicatedFetch('/api/interviews?limit=1')
       .then((r) => r.json())
       .then((data) => {
         const total = data.pagination?.total || data.sessions?.length || 0
