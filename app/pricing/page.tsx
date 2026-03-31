@@ -23,6 +23,7 @@ function CheckIcon() {
 function PlanCard({ plan, isCurrent }: { plan: PlanConfig; isCurrent: boolean }) {
   const isHighlighted = plan.highlighted
   const [email, setEmail] = useState('')
+  const [notifySubmitted, setNotifySubmitted] = useState(false)
 
   return (
     <div
@@ -88,19 +89,28 @@ function PlanCard({ plan, isCurrent }: { plan: PlanConfig; isCurrent: boolean })
           </Link>
         ) : plan.name === 'pro' ? (
           <div className="flex flex-col gap-element">
-            <Button variant="primary" isFullWidth disabled>
-              Coming Soon
-            </Button>
-            <div className="flex gap-2">
-              <Input
-                placeholder="your@email.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-              <Button variant="primary" size="sm">
-                Notify Me
-              </Button>
-            </div>
+            {notifySubmitted ? (
+              <div className="flex items-center justify-center gap-2 py-3 px-4 rounded-xl border-2 border-emerald-500/30 bg-emerald-500/5">
+                <svg className="w-4 h-4 text-emerald-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span className="text-sm text-emerald-600 font-medium">You&apos;re on the list!</span>
+              </div>
+            ) : (
+              <>
+                <p className="text-xs text-[#536471] font-medium text-center">Get notified when Pro launches</p>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="your@email.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                  />
+                  <Button variant="primary" size="sm" disabled={!email.includes('@')} onClick={() => setNotifySubmitted(true)}>
+                    Notify Me
+                  </Button>
+                </div>
+              </>
+            )}
           </div>
         ) : (
           <a href="mailto:contact@interviewprep.guru">
