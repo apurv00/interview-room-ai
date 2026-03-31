@@ -3,20 +3,19 @@
 import { useSpeechRecognition } from './useSpeechRecognition'
 import { useDeepgramRecognition } from './useDeepgramRecognition'
 
+// NEXT_PUBLIC_ env vars are inlined at build time, so this is a static constant.
+// Conditional hook calls are safe when the condition never changes between renders.
+const USE_DEEPGRAM = process.env.NEXT_PUBLIC_FEATURE_MULTIMODAL === 'true'
+
 /**
  * Adapter that uses Deepgram streaming STT when multimodal is enabled,
  * falling back to Web Speech API otherwise.
  */
 export function useSpeechRecognitionAdapter() {
-  const isMultimodalEnabled = process.env.NEXT_PUBLIC_FEATURE_MULTIMODAL === 'true'
-
-  const webSpeech = useSpeechRecognition()
-  const deepgram = useDeepgramRecognition()
-
-  // When multimodal is enabled, prefer Deepgram
-  if (isMultimodalEnabled) {
-    return deepgram
+  if (USE_DEEPGRAM) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    return useDeepgramRecognition()
   }
-
-  return webSpeech
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  return useSpeechRecognition()
 }
