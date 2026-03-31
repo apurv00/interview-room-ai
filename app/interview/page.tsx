@@ -19,6 +19,8 @@ import { useRealtimeFacialCoaching } from '@interview/hooks/useRealtimeFacialCoa
 import { useRealtimeProsody } from '@interview/hooks/useRealtimeProsody'
 import { useCoachMode } from '@interview/hooks/useCoachMode'
 import CoachOverlay from '@interview/components/interview/CoachOverlay'
+import CodingLayout from '@interview/components/interview/CodingLayout'
+import { selectProblem, type CodingProblem } from '@interview/config/codingProblems'
 import type { InterviewConfig } from '@shared/types'
 import { AVATAR_NAME, getAvatarTitle } from '@interview/config/interviewConfig'
 import { STORAGE_KEYS } from '@shared/storageKeys'
@@ -34,6 +36,7 @@ const PHASE_LABELS: Record<string, string> = {
   INTERVIEW_START: 'Starting',
   ASK_QUESTION: 'Question',
   LISTENING: 'Listening',
+  CODE_EDITING: 'Coding',
   PROCESSING: 'Processing',
   COACHING: 'Coaching',
   FOLLOW_UP: 'Follow-up',
@@ -51,6 +54,7 @@ const PHASE_COLORS: Record<string, { text: string; bg: string; border: string; d
   FOLLOW_UP: { text: 'text-purple-600', bg: 'bg-purple-500/10', border: 'border-purple-500/25', dot: 'bg-purple-600' },
   WRAP_UP: { text: 'text-orange-600', bg: 'bg-orange-500/10', border: 'border-orange-500/25', dot: 'bg-orange-600' },
   SCORING: { text: 'text-cyan-600', bg: 'bg-cyan-500/10', border: 'border-cyan-500/25', dot: 'bg-cyan-600' },
+  CODE_EDITING: { text: 'text-blue-600', bg: 'bg-blue-500/10', border: 'border-blue-500/25', dot: 'bg-blue-600' },
 }
 
 const DEFAULT_PHASE_COLOR = { text: 'text-[#71767b]', bg: 'bg-[#f7f9f9]', border: 'border-[#e1e8ed]', dot: 'bg-[#71767b]' }
@@ -62,6 +66,9 @@ export default function InterviewPage() {
 
   // ── Config ──
   const [config, setConfig] = useState<InterviewConfig | null>(null)
+  const [codingLanguage, setCodingLanguage] = useState<import('@shared/types').CodeLanguage>('python')
+  const [currentProblem, setCurrentProblem] = useState<CodingProblem | null>(null)
+  const isCodingMode = config?.interviewType === 'coding'
 
   // ── Camera ──
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -161,6 +168,33 @@ export default function InterviewPage() {
   const coachModeState = useCoachMode({ phase, liveTranscript, enabled: isCoachMode })
   const activeNudge = prosodyNudge || speechNudge || facialNudge
 
+  // ─── Code submission handler (coding mode) ─────────────────────────────────
+  const handleCodeSubmit = useCallback(async (code: string) => {
+    if (!currentProblem || !config) return
+    // The interview hook handles phase transitions; we just call the evaluation API
+    try {
+      const res = await fetch('/api/evaluate-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code,
+          language: codingLanguage,
+          problemTitle: currentProblem.title,
+          problemDescription: currentProblem.description,
+          questionIndex,
+          sessionId: interview.sessionId,
+        }),
+      })
+      if (res.ok) {
+        const evaluation = await res.json()
+        console.log('Code evaluation:', evaluation)
+        // The evaluation will be stored alongside regular evaluations
+      }
+    } catch (err) {
+      console.error('Code evaluation error:', err)
+    }
+  }, [currentProblem, config, codingLanguage, questionIndex, interview.sessionId])
+
   // ─── Keyboard shortcut (M to toggle mute) ──────────────────────────────────
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
@@ -180,7 +214,13 @@ export default function InterviewPage() {
       router.push('/')
       return
     }
-    setConfig(JSON.parse(stored))
+    const parsed = JSON.parse(stored)
+    setConfig(parsed)
+    // Select a coding problem if in coding mode
+    if (parsed.interviewType === 'coding') {
+      const problem = selectProblem(parsed.role, parsed.experience)
+      if (problem) setCurrentProblem(problem)
+    }
   }, [router])
 
   // ─── Camera init + start recording ─────────────────────────────────────────
@@ -307,6 +347,30 @@ export default function InterviewPage() {
         </AnimatePresence>
       </header>
 
+      {/* ── Coding mode layout ── */}
+      {isCodingMode ? (
+        <CodingLayout
+          avatarEmotion={avatarEmotion}
+          isAvatarTalking={isAvatarTalking}
+          isListening={isListening}
+          isProcessing={isProcessing}
+          transcriptWordCount={liveTranscript.split(/\s+/).filter(Boolean).length}
+          problem={currentProblem}
+          phase={phase}
+          language={codingLanguage}
+          onLanguageChange={setCodingLanguage}
+          onCodeSubmit={handleCodeSubmit}
+          currentQuestion={currentQuestion}
+          liveAnswer={displayAnswer}
+        >
+          <div className="px-4 pb-1 flex flex-col gap-1.5">
+            {isCoachMode && <CoachOverlay state={coachModeState} />}
+            <CoachingNudge nudge={activeNudge} />
+            <CoachingTip tip={coachingTip} />
+          </div>
+        </CodingLayout>
+      ) : (
+      <>
       {/* ── Video tiles ── */}
       <div className="flex-1 flex gap-3 p-3 sm:p-4 min-h-0">
         {/* Interviewer (avatar) */}
@@ -385,6 +449,8 @@ export default function InterviewPage() {
         <CoachingNudge nudge={activeNudge} />
         <CoachingTip tip={coachingTip} />
       </div>
+      </>
+      )}
 
       {/* ── Controls ── */}
       <InterviewControls

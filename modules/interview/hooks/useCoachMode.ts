@@ -64,7 +64,7 @@ export function useCoachMode({ phase, liveTranscript, enabled }: UseCoachModeOpt
   useEffect(() => {
     if (phase === 'LISTENING') {
       setState({ currentStep: null, completedSteps: [], suggestion: 'Start with the Situation — set the context.' })
-    } else if (phase !== 'LISTENING') {
+    } else {
       setState({ currentStep: null, completedSteps: [], suggestion: null })
     }
   }, [phase])
