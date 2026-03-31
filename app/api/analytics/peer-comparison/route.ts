@@ -9,7 +9,12 @@ import { computePercentile } from '@learn/lib/peerComparison'
 
 export const dynamic = 'force-dynamic'
 
-const VALID_ROLES = ['PM', 'SWE', 'Sales', 'MBA']
+// Domain slugs matching staticData.ts + CMS-managed domains
+const VALID_ROLES = [
+  'frontend', 'backend', 'sdet', 'devops', 'data-science',
+  'pm', 'design',
+  'business', 'marketing', 'finance', 'sales',
+]
 const VALID_EXPERIENCE = ['0-2', '3-6', '7+']
 const CACHE_TTL = 21600 // 6 hours in seconds
 const USER_SCORE_TTL = 3600 // 1 hour in seconds

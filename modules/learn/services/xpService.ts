@@ -5,6 +5,7 @@ import { XpEvent } from '@shared/db/models/XpEvent'
 import { calculateLevel } from '@learn/config/xpTable'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { aiLogger as logger } from '@shared/logger'
+import { redis } from '@shared/redis'
 import type { XpEventType } from '@shared/db/models/XpEvent'
 
 export interface XpAwardResult {
@@ -68,6 +69,9 @@ export async function awardXp(
     if (newLevel !== oldLevel) {
       await User.updateOne({ _id: uid }, { level: newLevel })
     }
+
+    // Invalidate cached XP summary
+    try { await redis.del(`xp:${userId}`) } catch { /* non-critical */ }
 
     return {
       newXp,
