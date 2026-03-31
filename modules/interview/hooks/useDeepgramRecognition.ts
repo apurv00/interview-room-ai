@@ -59,7 +59,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
 
   function connectWebSocket(token: string) {
     const ws = new WebSocket(
-      `wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&filler_words=true&utterance_end_ms=2000&interim_results=true&language=en&encoding=linear16&sample_rate=16000`
+      `wss://api.deepgram.com/v1/listen?token=${token}&model=nova-2&smart_format=true&filler_words=true&utterance_end_ms=2000&interim_results=true&language=en&encoding=linear16&sample_rate=16000`
     )
 
     wsRef.current = ws
