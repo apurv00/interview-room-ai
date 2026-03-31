@@ -73,9 +73,9 @@ export async function runMultimodalPipeline(
       config,
     })
 
-    // 6. Calculate costs
+    // 6. Calculate costs (Haiku pricing: $0.001 input, $0.005 output per 1K tokens)
     const claudeCostUsd = parseFloat(
-      ((fusionResult.inputTokens / 1000) * 0.003 + (fusionResult.outputTokens / 1000) * 0.015).toFixed(4)
+      ((fusionResult.inputTokens / 1000) * 0.001 + (fusionResult.outputTokens / 1000) * 0.005).toFixed(4)
     )
     const totalCostUsd = parseFloat((whisperResult.costUsd + claudeCostUsd).toFixed(4))
     const processingDurationMs = Date.now() - startTime
@@ -107,7 +107,7 @@ export async function runMultimodalPipeline(
       sessionId,
       inputTokens: Math.round(totalDurationSec), // duration as proxy for tokens
       outputTokens: 0,
-      modelUsed: 'whisper-1',
+      modelUsed: 'whisper-large-v3-turbo',
       durationMs: processingDurationMs,
       success: true,
     }).catch(() => {}) // non-critical
@@ -118,7 +118,7 @@ export async function runMultimodalPipeline(
       sessionId,
       inputTokens: fusionResult.inputTokens,
       outputTokens: fusionResult.outputTokens,
-      modelUsed: 'claude-sonnet-4-6',
+      modelUsed: 'claude-haiku-4-5-20251001',
       durationMs: processingDurationMs,
       success: true,
     }).catch(() => {}) // non-critical

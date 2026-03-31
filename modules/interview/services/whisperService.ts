@@ -3,12 +3,15 @@ import { getDownloadPresignedUrl } from '@shared/storage/r2'
 import { aiLogger } from '@shared/logger'
 import type { WhisperSegment, WhisperWord } from '@shared/types/multimodal'
 
-function getOpenAIClient(): OpenAI {
-  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+function getGroqClient(): OpenAI {
+  return new OpenAI({
+    apiKey: process.env.GROQ_API_KEY,
+    baseURL: 'https://api.groq.com/openai/v1',
+  })
 }
 
-// Whisper API cost: $0.006 per minute of audio
-const WHISPER_COST_PER_MINUTE = 0.006
+// Groq Whisper cost: $0.004 per minute of audio
+const WHISPER_COST_PER_MINUTE = 0.004
 
 interface WhisperResult {
   segments: WhisperSegment[]
@@ -43,8 +46,8 @@ export async function transcribeRecording(r2Key: string): Promise<WhisperResult>
   // Create a File object from the buffer for the API
   const file = new File([buffer], 'recording.webm', { type: 'video/webm' })
 
-  const transcription = await getOpenAIClient().audio.transcriptions.create({
-    model: 'whisper-1',
+  const transcription = await getGroqClient().audio.transcriptions.create({
+    model: 'whisper-large-v3-turbo',
     file,
     response_format: 'verbose_json',
     timestamp_granularities: ['word', 'segment'],
