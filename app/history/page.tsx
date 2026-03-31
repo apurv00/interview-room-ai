@@ -139,11 +139,11 @@ export default function HistoryPage() {
                     </Badge>
                   </div>
                   <div className="flex items-center gap-2 mt-0.5">
-                    <span className="text-xs text-[#71767b]">
+                    <span className="text-xs text-[#536471]">
                       {s.config.experience} yrs · {s.config.duration} min
                     </span>
-                    <span className="text-xs text-[#8b98a5]">·</span>
-                    <span className="text-xs text-[#71767b]">
+                    <span className="text-xs text-[#71767b]">·</span>
+                    <span className="text-xs text-[#536471] font-medium">
                       {new Date(s.createdAt).toLocaleDateString('en-US', {
                         month: 'short',
                         day: 'numeric',
@@ -154,15 +154,15 @@ export default function HistoryPage() {
                     </span>
                     {s.feedback?.pass_probability && (
                       <>
-                        <span className="text-xs text-[#8b98a5]">·</span>
-                        <span className="text-xs text-[#71767b]">
+                        <span className="text-xs text-[#71767b]">·</span>
+                        <span className="text-xs text-[#536471]">
                           {s.feedback.pass_probability} pass
                         </span>
                       </>
                     )}
                     {s.recordingR2Key && s.status === 'completed' && (
                       <>
-                        <span className="text-xs text-[#8b98a5]">·</span>
+                        <span className="text-xs text-[#71767b]">·</span>
                         <button
                           onClick={(e) => {
                             e.stopPropagation()
@@ -178,7 +178,7 @@ export default function HistoryPage() {
                 </div>
 
                 {/* Chevron */}
-                <svg className="w-4 h-4 text-[#8b98a5] flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <svg className="w-4 h-4 text-[#71767b] flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                 </svg>
               </button>
@@ -195,7 +195,7 @@ export default function HistoryPage() {
                 >
                   Previous
                 </Button>
-                <span className="px-3 py-1.5 text-sm text-[#71767b]">
+                <span className="px-3 py-1.5 text-sm text-[#536471]">
                   {page} of {totalPages}
                 </span>
                 <Button

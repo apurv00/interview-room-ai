@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import Link from 'next/link'
@@ -13,7 +13,7 @@ import HowItWorksBlock from '@/shared/blocks/HowItWorks'
 import StatsBlock from '@/shared/blocks/Stats'
 import ResourceLinks from '@learn/components/ResourceLinks'
 import type { Role, InterviewType, ExperienceLevel, Duration, InterviewConfig } from '@shared/types'
-import { EXPERIENCE_LABELS, DURATION_LABELS } from '@interview/config/interviewConfig'
+import { EXPERIENCE_LABELS, DURATION_LABELS, getDomainLabel } from '@interview/config/interviewConfig'
 import { STORAGE_KEYS } from '@shared/storageKeys'
 import { getStartRedirect } from '@shared/authRedirect'
 
@@ -57,6 +57,14 @@ export default function AuthenticatedHome() {
   const [jdCompany, setJdCompany] = useState('')
   const [jdRole, setJdRole] = useState('')
   const [jdPasteText, setJdPasteText] = useState('')
+
+  // Returning user summary
+  const [lastScore, setLastScore] = useState<number | null>(null)
+  const [sessionCount, setSessionCount] = useState<number | null>(null)
+
+  // Sticky CTA
+  const ctaRef = useRef<HTMLDivElement>(null)
+  const [showStickyBar, setShowStickyBar] = useState(false)
 
   const hasResume = !!(resumeText || quickProfileDone)
 
@@ -107,6 +115,33 @@ export default function AuthenticatedHome() {
       .catch(() => {})
   }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Fetch returning user stats
+  useEffect(() => {
+    if (status !== 'authenticated') return
+    fetch('/api/interviews?limit=1')
+      .then((r) => r.json())
+      .then((data) => {
+        const total = data.pagination?.total || data.sessions?.length || 0
+        setSessionCount(total)
+        if (data.sessions?.[0]?.feedback?.overall_score) {
+          setLastScore(data.sessions[0].feedback.overall_score)
+        }
+      })
+      .catch(() => {})
+  }, [status])
+
+  // Sticky CTA — show when original CTA scrolls out of viewport
+  useEffect(() => {
+    const el = ctaRef.current
+    if (!el) return
+    const observer = new IntersectionObserver(
+      ([entry]) => setShowStickyBar(!entry.isIntersecting),
+      { threshold: 0 }
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
   const ready = hasResume && role && experience && duration
 
   const ctaText = useMemo(() => {
@@ -117,6 +152,15 @@ export default function AuthenticatedHome() {
     if (!duration) return 'Pick a duration'
     return 'Select all options to continue'
   }, [hasResume, role, experience, duration, ready])
+
+  const selectionSummary = useMemo(() => {
+    const parts: string[] = []
+    if (role) parts.push(getDomainLabel(role))
+    if (interviewType) parts.push(interviewType.charAt(0).toUpperCase() + interviewType.slice(1))
+    if (experience) parts.push(EXPERIENCE_LABELS[experience])
+    if (duration) parts.push(DURATION_LABELS[duration])
+    return parts.join(' · ')
+  }, [role, interviewType, experience, duration])
 
   const handleCtaClick = useCallback(() => {
     if (ready) {
@@ -277,12 +321,38 @@ export default function AuthenticatedHome() {
   return (
     <main className="min-h-screen px-4 sm:px-6 py-6">
       <div className="max-w-[1100px] mx-auto space-y-5 animate-fade-in">
-        {/* Compact header — single line */}
+        {/* Compact header */}
         <div className="text-center">
           <h1 className="text-heading text-[#0f1419]">
-            {authSession?.user?.name ? `Welcome back, ${authSession.user.name.split(' ')[0]} — ` : ''}Set up your interview
+            {authSession?.user?.name
+              ? sessionCount && sessionCount > 0
+                ? `Welcome back, ${authSession.user.name.split(' ')[0]}`
+                : `Welcome back, ${authSession.user.name.split(' ')[0]} — Set up your interview`
+              : 'Set up your interview'}
           </h1>
         </div>
+
+        {/* Returning user quick stats */}
+        {sessionCount !== null && sessionCount > 0 && (
+          <div className="surface-card flex items-center gap-4 p-3 rounded-xl">
+            {lastScore !== null && (
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-indigo-50 flex items-center justify-center">
+                  <span className="text-sm font-bold text-[#6366f1]">{lastScore}</span>
+                </div>
+                <span className="text-xs text-[#536471]">Last score</span>
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-bold text-[#0f1419]">{sessionCount}</span>
+              <span className="text-xs text-[#536471]">{sessionCount === 1 ? 'session' : 'sessions'} completed</span>
+            </div>
+            <div className="flex-1" />
+            <Link href="/history" className="text-xs text-[#6366f1] hover:text-[#4f46e5] font-medium transition">
+              View all &rarr;
+            </Link>
+          </div>
+        )}
 
         {/* Resume + JD side by side */}
         <div className="grid sm:grid-cols-2 gap-4">
@@ -415,11 +485,34 @@ export default function AuthenticatedHome() {
         </div>
 
         {/* CTA */}
-        <div className="flex flex-col items-center gap-2 pt-1">
+        <div ref={ctaRef} className="flex flex-col items-center gap-2 pt-1">
           <Button variant="primary" size="lg" glow={!!ready} isFullWidth className="max-w-md" disabled={status === 'loading'} onClick={handleCtaClick}>
             {ctaText}
           </Button>
-          <p className="text-[10px] text-[var(--foreground-muted)]">Chrome or Edge &middot; Camera &amp; mic needed</p>
+          <p className="text-xs text-[#536471] flex items-center gap-1.5">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+            Chrome or Edge &middot; Camera &amp; mic needed
+          </p>
+        </div>
+      </div>
+
+      {/* Sticky CTA bottom bar */}
+      <div
+        className={`fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur border-t border-[#e1e8ed] shadow-[0_-4px_12px_rgba(0,0,0,0.06)] transition-all duration-300 ${
+          showStickyBar ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0 pointer-events-none'
+        }`}
+      >
+        <div className="max-w-[1100px] mx-auto px-4 sm:px-6 py-3 flex items-center gap-4">
+          {selectionSummary && (
+            <p className="text-xs text-[#536471] truncate hidden sm:block flex-1">{selectionSummary}</p>
+          )}
+          <div className={selectionSummary ? '' : 'flex-1'}>
+            <Button variant="primary" size="md" glow={!!ready} isFullWidth={!selectionSummary} className={selectionSummary ? 'min-w-[220px]' : 'max-w-md mx-auto'} disabled={status === 'loading'} onClick={handleCtaClick}>
+              {ctaText}
+            </Button>
+          </div>
         </div>
       </div>
 
