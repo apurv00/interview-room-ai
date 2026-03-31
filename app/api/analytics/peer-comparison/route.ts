@@ -9,7 +9,6 @@ import { computePercentile } from '@learn/lib/peerComparison'
 
 export const dynamic = 'force-dynamic'
 
-const VALID_ROLES = ['PM', 'SWE', 'Sales', 'MBA']
 const VALID_EXPERIENCE = ['0-2', '3-6', '7+']
 const CACHE_TTL = 21600 // 6 hours in seconds
 const USER_SCORE_TTL = 3600 // 1 hour in seconds
@@ -68,7 +67,8 @@ export async function GET(req: NextRequest) {
     if (!role || !experience) {
       return NextResponse.json({ error: 'role and experience are required' }, { status: 400 })
     }
-    if (!VALID_ROLES.includes(role)) {
+    // Accept any role slug (dynamic domains via CMS)
+    if (typeof role !== 'string' || role.length > 50) {
       return NextResponse.json({ error: 'Invalid role' }, { status: 400 })
     }
     if (!VALID_EXPERIENCE.includes(experience)) {

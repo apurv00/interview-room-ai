@@ -148,6 +148,22 @@ const BUILT_IN_DEPTHS = [
     ],
     applicableDomains: ['pm', 'business', 'finance', 'marketing', 'sales', 'data-science'],
   },
+  {
+    slug: 'system-design', label: 'System Design Round', icon: '🏗️', sortOrder: 5,
+    description: 'Architecture and system design — scalability, trade-offs, data modeling, and distributed systems.',
+    systemPromptTemplate: 'You are Alex Chen, a senior technical interviewer conducting a {duration}-minute system design interview for a {domain} role ({experience} years experience). Present a system design problem and guide the candidate through requirements gathering, high-level design, deep dives, and trade-off discussions.',
+    questionStrategy: 'Present ONE system design problem. Let the candidate drive: requirements clarification → high-level architecture → component deep-dive → scaling discussion → trade-offs. Probe on: data modeling, API design, caching strategy, database selection, consistency vs availability, failure handling, monitoring. Ask "what happens when X fails?" and "how would you scale this 10x?"',
+    evaluationCriteria: 'Evaluate ability to clarify requirements, propose sensible architecture, reason about scalability and trade-offs, make justified technology choices, and communicate design decisions clearly.',
+    avatarPersona: 'Collaborative senior architect who sets up the problem and lets the candidate lead. Provides constraints when asked and probes on weak areas.',
+    scoringDimensions: [
+      { name: 'requirements_clarity', label: 'Requirements Gathering', weight: 0.15 },
+      { name: 'architecture', label: 'Architecture Design', weight: 0.25 },
+      { name: 'scalability', label: 'Scalability Reasoning', weight: 0.25 },
+      { name: 'tradeoffs', label: 'Trade-off Analysis', weight: 0.20 },
+      { name: 'communication', label: 'Design Communication', weight: 0.15 },
+    ],
+    applicableDomains: ['backend', 'frontend', 'devops', 'sdet', 'data-science'],
+  },
 ]
 
 export async function seedDatabase() {
