@@ -34,6 +34,7 @@ export type InterviewState =
   | 'INTERVIEW_START'
   | 'ASK_QUESTION'
   | 'LISTENING'
+  | 'CODE_EDITING'
   | 'PROCESSING'
   | 'COACHING'
   | 'FOLLOW_UP'
@@ -41,6 +42,17 @@ export type InterviewState =
   | 'SCORING'
   | 'FEEDBACK'
   | 'ENDED'
+
+// ─── Coding Interview Types ──────────────────────────────────────────────────
+
+export type CodeLanguage = 'python' | 'javascript' | 'typescript' | 'java' | 'cpp'
+
+export interface CodeSubmission {
+  questionIndex: number
+  code: string
+  language: CodeLanguage
+  submittedAt: number
+}
 
 // ─── Performance Signal ─────────────────────────────────────────────────────
 

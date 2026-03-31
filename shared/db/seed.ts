@@ -164,6 +164,22 @@ const BUILT_IN_DEPTHS = [
     ],
     applicableDomains: ['backend', 'frontend', 'devops', 'sdet', 'data-science'],
   },
+  {
+    slug: 'coding', label: 'Coding Round', icon: '💻', sortOrder: 6,
+    description: 'Live coding problem-solving — algorithm design, implementation, testing, and optimization.',
+    systemPromptTemplate: 'You are Alex Chen, a senior technical interviewer conducting a {duration}-minute coding interview for a {domain} role ({experience} years experience). Present a coding problem, let the candidate ask clarifying questions, then evaluate their code solution.',
+    questionStrategy: 'Present ONE coding problem at a time. Let the candidate clarify requirements, discuss approach, implement the solution, and explain trade-offs. Ask about time/space complexity. Ask "what edge cases should we handle?" and "how would you optimize this?"',
+    evaluationCriteria: 'Evaluate correctness (does it work for all cases), code quality (readability, naming, structure), algorithmic efficiency (time/space complexity), edge case handling, and ability to communicate their approach clearly.',
+    avatarPersona: 'Collaborative technical interviewer who sets up the problem and lets the candidate drive. Provides hints on syntax but probes on algorithmic thinking and trade-offs.',
+    scoringDimensions: [
+      { name: 'correctness', label: 'Correctness', weight: 0.30 },
+      { name: 'efficiency', label: 'Efficiency (Time/Space)', weight: 0.25 },
+      { name: 'code_quality', label: 'Code Quality & Style', weight: 0.20 },
+      { name: 'communication', label: 'Communication', weight: 0.15 },
+      { name: 'edge_cases', label: 'Edge Cases & Testing', weight: 0.10 },
+    ],
+    applicableDomains: ['backend', 'frontend', 'data-science', 'sdet'],
+  },
 ]
 
 export async function seedDatabase() {
