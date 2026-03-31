@@ -107,7 +107,7 @@ export async function runMultimodalPipeline(
       sessionId,
       inputTokens: Math.round(totalDurationSec), // duration as proxy for tokens
       outputTokens: 0,
-      modelUsed: 'whisper-1',
+      modelUsed: 'whisper-large-v3-turbo',
       durationMs: processingDurationMs,
       success: true,
     }).catch(() => {}) // non-critical

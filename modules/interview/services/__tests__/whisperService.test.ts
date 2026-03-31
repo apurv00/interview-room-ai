@@ -62,7 +62,7 @@ describe('whisperService', () => {
   it('computes cost based on duration', async () => {
     const result = await transcribeRecording('recordings/user1/session1.webm')
 
-    // 120 seconds = 2 minutes, at $0.006/min = $0.012
-    expect(result.costUsd).toBeCloseTo(0.012, 3)
+    // 120 seconds = 2 minutes, at $0.004/min = $0.008
+    expect(result.costUsd).toBeCloseTo(0.008, 3)
   })
 })
