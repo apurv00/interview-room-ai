@@ -245,3 +245,20 @@ export interface WeaknessData {
   recurrenceCount: number
   linkedCompetencies: string[]
 }
+
+// ─── Multimodal Analysis ─────────────────────────────────────────────────────
+
+export type {
+  WhisperWord,
+  WhisperSegment,
+  ProsodySegment,
+  FacialFrame,
+  FacialSegment,
+  TimelineEvent,
+  TimelineEventType,
+  TimelineSignalSource,
+  TimelineSeverity,
+  FusionSummary,
+  AnalysisStatus,
+  MultimodalAnalysisData,
+} from './types/multimodal'

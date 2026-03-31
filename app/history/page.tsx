@@ -15,6 +15,7 @@ interface SessionSummary {
   feedback?: { overall_score: number; pass_probability: string }
   createdAt: string
   durationActualSeconds?: number
+  recordingR2Key?: string
 }
 
 const STATUS_BADGE_VARIANT: Record<string, 'success' | 'caution' | 'danger' | 'default'> = {
@@ -157,6 +158,20 @@ export default function HistoryPage() {
                         <span className="text-xs text-[#71767b]">
                           {s.feedback.pass_probability} pass
                         </span>
+                      </>
+                    )}
+                    {s.recordingR2Key && s.status === 'completed' && (
+                      <>
+                        <span className="text-xs text-[#8b98a5]">·</span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            router.push(`/replay/${s._id}`)
+                          }}
+                          className="text-xs text-brand-500 hover:underline"
+                        >
+                          Replay
+                        </button>
                       </>
                     )}
                   </div>

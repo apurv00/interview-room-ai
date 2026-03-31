@@ -6,7 +6,7 @@ import mongoose from 'mongoose'
 
 interface TrackUsageInput {
   user: AuthUser
-  type: 'api_call_question' | 'api_call_evaluate' | 'api_call_feedback' | 'api_call_wizard_followup' | 'api_call_wizard_enhance' | 'api_call_wizard_summary' | 'api_call_daily_challenge' | 'api_call_daily_challenge_gen'
+  type: 'api_call_question' | 'api_call_evaluate' | 'api_call_feedback' | 'api_call_wizard_followup' | 'api_call_wizard_enhance' | 'api_call_wizard_summary' | 'api_call_daily_challenge' | 'api_call_daily_challenge_gen' | 'api_call_whisper' | 'api_call_multimodal_fusion'
   sessionId?: string
   inputTokens: number
   outputTokens: number
@@ -21,6 +21,7 @@ const PRICING: Record<string, { input: number; output: number }> = {
   'claude-opus-4-6': { input: 0.015, output: 0.075 },
   'claude-sonnet-4-20250514': { input: 0.003, output: 0.015 },
   'claude-haiku-4-5-20251001': { input: 0.001, output: 0.005 },
+  'whisper-1': { input: 0.006, output: 0 }, // $0.006 per minute of audio (tracked as inputTokens = durationSeconds)
 }
 
 export async function trackUsage(input: TrackUsageInput): Promise<void> {

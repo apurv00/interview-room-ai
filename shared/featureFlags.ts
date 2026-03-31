@@ -22,6 +22,7 @@ export type FeatureFlag =
   | 'engagement_badges'
   | 'engagement_streaks_v2'
   | 'engagement_daily_challenge'
+  | 'multimodal_analysis'
 
 const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   personalization_engine: true,
@@ -43,6 +44,7 @@ const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   engagement_badges: true,
   engagement_streaks_v2: true,
   engagement_daily_challenge: true,
+  multimodal_analysis: false,
 }
 
 export function isFeatureEnabled(flag: FeatureFlag): boolean {
