@@ -144,16 +144,24 @@ export default function ResourcePage({ params }: Props) {
 
         {/* CTA */}
         <section className="mt-region text-center surface-card-bordered p-7">
-          <h2 className="text-heading text-[var(--foreground)]">Put This Into Practice</h2>
+          <h2 className="text-heading text-[var(--foreground)]">
+            {resource.category === 'companies'
+              ? `Practice for ${resource.title.split('at ')[1]?.split(' —')[0] || 'This Company'}`
+              : 'Put This Into Practice'}
+          </h2>
           <p className="text-body text-[var(--foreground-tertiary)] mt-2">
-            Practice with our AI interviewer and get instant scored feedback on your answers.
+            {resource.category === 'companies'
+              ? `Start a mock interview tailored to this company's culture and interview style.`
+              : 'Practice with our AI interviewer and get instant scored feedback on your answers.'}
           </p>
           <div className="mt-4 flex items-center justify-center gap-3">
             <Link
-              href="/signup"
+              href={resource.category === 'companies'
+                ? `/?company=${encodeURIComponent(resource.title.split('at ')[1]?.split(' —')[0] || '')}`
+                : '/signup'}
               className="inline-flex items-center justify-center h-11 px-5 bg-[#6366f1] hover:bg-[#5558e6] text-white rounded-[10px] text-sm font-medium transition-colors"
             >
-              Start Practicing Free
+              {resource.category === 'companies' ? 'Start Practice Interview' : 'Start Practicing Free'}
             </Link>
             <Link
               href="/learn/guides"

@@ -16,7 +16,7 @@ export interface Resource {
   slug: string
   title: string
   description: string
-  category: 'questions' | 'tips' | 'frameworks'
+  category: 'questions' | 'tips' | 'frameworks' | 'companies'
   keywords: string[]
   relevantDomains: string[]       // empty = all
   relevantExperience: string[]    // empty = all
@@ -654,9 +654,381 @@ export const RESOURCES: Resource[] = [
       ],
     },
   },
-]
 
-// ─── Helper Functions ────────────────────────────────────────────────────────
+  // ──────────────── COMPANY GUIDES ────────────────
+
+  {
+    slug: 'how-to-interview-at-google',
+    title: 'How to Interview at Google — Complete Guide 2026',
+    description: 'Master the Google interview process with insider tips on Googleyness, structured interviews, and what hiring committees look for.',
+    category: 'companies',
+    keywords: ['google interview', 'googleyness', 'google behavioral interview', 'google interview process'],
+    relevantDomains: [],
+    relevantExperience: [],
+    relevantWeakAreas: ['star_structure', 'specificity'],
+    relevantGoals: ['first_interview', 'general_practice'],
+    content: {
+      intro: 'Google uses structured interviews with scorecards. Behavioral questions evaluate "Googleyness" — intellectual humility, collaboration, and comfort with ambiguity. Technical rounds emphasize your problem-solving approach over memorized answers.',
+      sections: [
+        { heading: 'Interview Process', body: 'Google\'s hiring process typically includes: (1) Recruiter phone screen (30 min), (2) Phone/video technical screen (45 min), (3) On-site loop of 4-5 interviews (behavioral + technical), (4) Hiring committee review, (5) Team matching, (6) Offer. The entire process takes 4-8 weeks. A "bar raiser" interviewer may be present to maintain hiring standards.' },
+        { heading: 'What Is Googleyness?', body: 'Googleyness is Google\'s cultural fit assessment. It measures: intellectual humility (admitting what you don\'t know), comfort with ambiguity (thriving without clear direction), collaborative nature (making others around you better), conscientiousness (following through on commitments), and bias toward action (doing rather than just planning). Weave these qualities into every answer.' },
+        { heading: 'Common Question Themes', body: 'Google behavioral interviews frequently cover: handling ambiguity without clear direction, influencing without authority across teams, scaling your impact beyond your immediate role, learning from failures and iterating, and demonstrating user empathy in decision-making. Prepare 2-3 strong STAR stories for each theme.' },
+        { heading: 'What Interviewers Look For', body: 'Google interviewers score candidates on structured scorecards. They evaluate: general cognitive ability (problem-solving approach, not trivia), role-related knowledge (depth in your domain), leadership (formal and informal), and Googleyness (cultural alignment). Each interviewer submits independent feedback to the hiring committee.' },
+        { heading: 'Preparation Strategy', body: 'Research Google\'s products and recent initiatives. Practice explaining technical concepts to non-technical audiences. Prepare stories that demonstrate cross-functional collaboration. Quantify your impact with specific metrics. Practice thinking aloud — Google values seeing your reasoning process, not just your conclusions.' },
+      ],
+      tips: [
+        'Show intellectual curiosity — ask thoughtful questions about the role and team.',
+        'Use the STAR format but emphasize the "why" behind your decisions.',
+        'Quantify impact: "improved latency by 40%" beats "made things faster."',
+        'Demonstrate collaboration — Google values making others better.',
+        'Be comfortable saying "I don\'t know, but here\'s how I\'d find out."',
+      ],
+      faq: [
+        { q: 'How long does the Google interview process take?', a: 'Typically 4-8 weeks from first contact to offer. The on-site loop is usually scheduled within 2-3 weeks of passing the phone screen. Hiring committee review can add 1-2 weeks.' },
+        { q: 'What is the Google hiring committee?', a: 'Unlike most companies, Google\'s hiring decision is made by a committee (not the hiring manager). This committee reviews all interviewer feedback to make an unbiased decision, which is why each interviewer scores independently.' },
+        { q: 'Can I re-apply to Google if I\'m rejected?', a: 'Yes — Google typically asks candidates to wait 6-12 months before reapplying. Use this time to address specific feedback areas and build new experiences to discuss.' },
+      ],
+    },
+  },
+  {
+    slug: 'amazon-leadership-principles-guide',
+    title: 'Amazon Interview Guide — Leadership Principles Mastery 2026',
+    description: 'Ace the Amazon interview by mastering the 16 Leadership Principles with STAR-format answers, bar raiser tips, and LP-specific preparation.',
+    category: 'companies',
+    keywords: ['amazon interview', 'amazon leadership principles', 'amazon behavioral interview', 'bar raiser interview'],
+    relevantDomains: [],
+    relevantExperience: [],
+    relevantWeakAreas: ['star_structure', 'ownership'],
+    relevantGoals: ['first_interview', 'general_practice'],
+    content: {
+      intro: 'Amazon interviews are driven entirely by their 16 Leadership Principles (LPs). Every behavioral answer should map to 1-2 LPs. The STAR format is essential — Amazon interviewers are trained to probe for specific data points, metrics, and your individual contribution.',
+      sections: [
+        { heading: 'Interview Process', body: 'Amazon\'s process: (1) Recruiter screen (30 min), (2) Phone interview with hiring manager (45-60 min, LP-focused), (3) "Loop" day — 4-5 back-to-back interviews (45 min each), including a Bar Raiser. Each interviewer is assigned 2-3 LPs to evaluate. The loop typically happens in one day (virtual or on-site).' },
+        { heading: 'Key Leadership Principles', body: 'The most frequently tested LPs: Customer Obsession (start with the customer and work backwards), Ownership (think long-term, act on behalf of the entire company), Bias for Action (speed matters — many decisions are reversible), Dive Deep (leaders operate at all levels and audit frequently), Earn Trust (listen attentively, speak candidly, treat others respectfully), Deliver Results (focus on key inputs and deliver with the right quality and timeliness).' },
+        { heading: 'The Bar Raiser', body: 'One interviewer in your loop is a "Bar Raiser" — a specially trained interviewer from outside the hiring team. Their job is to ensure Amazon\'s hiring bar stays high. They have veto power. The Bar Raiser evaluates whether you raise the bar for at least 50% of people in the role. They probe deeply and ask tough follow-up questions.' },
+        { heading: 'Common Question Themes', body: 'Amazon loves: customer obsession examples with real customer data, situations where you disagreed with your manager (Disagree and Commit), times you made a frugal decision (Frugality), diving deep into data to solve a problem, and earning trust across teams. Every question maps to 1-2 LPs.' },
+        { heading: 'Preparation Strategy', body: 'Prepare 2-3 STAR stories per LP (that\'s 30+ stories). Each story should include specific metrics (revenue, users, time saved). Practice connecting stories to LPs explicitly: "This demonstrates Customer Obsession because..." Prepare for aggressive follow-ups — Amazon interviewers dig deep with "Tell me more about YOUR role specifically."' },
+      ],
+      tips: [
+        'Start every answer by connecting to a Leadership Principle.',
+        'Use specific metrics: "$2M revenue impact" not "significant impact."',
+        'Emphasize YOUR individual contribution, not the team\'s.',
+        'Prepare for "Tell me about a time you failed" — Amazon loves failure + learning stories.',
+        'The Bar Raiser will probe hard — have depth in every story.',
+      ],
+      faq: [
+        { q: 'How many Leadership Principles should I prepare for?', a: 'All 16, but focus on the top 6: Customer Obsession, Ownership, Bias for Action, Dive Deep, Earn Trust, and Deliver Results. These come up most frequently.' },
+        { q: 'What does the Bar Raiser look for?', a: 'The Bar Raiser evaluates whether you\'d raise the average performance bar. They look for strong LP examples with depth, self-awareness, and genuine ownership. They also check for red flags like blame-shifting or vague answers.' },
+        { q: 'How should I handle the "Disagree and Commit" question?', a: 'Show a time you disagreed with a decision, explained your reasoning with data, but ultimately committed fully once the decision was made. Amazon values strong opinions loosely held.' },
+      ],
+    },
+  },
+  {
+    slug: 'how-to-interview-at-meta',
+    title: 'How to Interview at Meta — Complete Guide 2026',
+    description: 'Prepare for Meta interviews with tips on demonstrating impact, moving fast, and navigating the behavioral and technical rounds.',
+    category: 'companies',
+    keywords: ['meta interview', 'facebook interview', 'meta behavioral interview', 'meta interview process'],
+    relevantDomains: [],
+    relevantExperience: [],
+    relevantWeakAreas: ['specificity', 'ownership'],
+    relevantGoals: ['first_interview', 'general_practice'],
+    content: {
+      intro: 'Meta interviews focus on impact and scale. Behavioral rounds probe cultural fit with "Move Fast" and "Be Bold" values. The company values candidates who can articulate the business impact of their decisions and are comfortable making calls with incomplete information.',
+      sections: [
+        { heading: 'Interview Process', body: 'Meta\'s process: (1) Recruiter screen (30 min), (2) Technical phone screen (45 min), (3) On-site/virtual loop of 4-5 rounds including behavioral, technical, and system design. For non-engineering roles, expect case studies and execution-focused rounds. The process typically takes 3-6 weeks.' },
+        { heading: 'Cultural Values to Demonstrate', body: 'Meta\'s core values: Move Fast (ship and iterate, don\'t wait for perfection), Be Bold (take risks, big bets over safe choices), Focus on Impact (prioritize the highest-leverage work), Be Open (transparent communication, give and receive feedback), Build Social Value (connect your work to broader mission). Show these in every answer.' },
+        { heading: 'Common Question Themes', body: 'Meta interviews frequently cover: shipping at speed under constraints, measuring and articulating impact quantitatively, working with ambiguity at massive scale, cross-team collaboration in a flat organization, and making bold bets that didn\'t always pay off.' },
+        { heading: 'Preparation Strategy', body: 'Quantify everything — Meta loves numbers. "Increased DAU by 12%" is much stronger than "improved engagement." Show comfort with ambiguity: describe situations where you made decisions without full information. Demonstrate speed: how you shipped something faster than expected. Research Meta\'s products deeply — show genuine interest in the platform ecosystem.' },
+      ],
+      tips: [
+        'Quantify the impact of every story — revenue, users, time, percentage improvements.',
+        'Show comfort making decisions with incomplete information.',
+        'Demonstrate speed: "I shipped in 2 weeks instead of the planned 6."',
+        'Meta values bold decisions — share a time you took a calculated risk.',
+        'Research Meta\'s product ecosystem (Facebook, Instagram, WhatsApp, Reality Labs).',
+      ],
+      faq: [
+        { q: 'Is Meta\'s interview different from when it was Facebook?', a: 'The core process is similar, but the culture has evolved. There\'s more emphasis on efficiency, impact per headcount, and bold decision-making since the Meta rebrand and organizational changes.' },
+        { q: 'How important is product knowledge?', a: 'Very. Interviewers expect you to have opinions about Meta\'s products. Try using them actively before your interview and think critically about what you\'d improve.' },
+      ],
+    },
+  },
+  {
+    slug: 'how-to-interview-at-apple',
+    title: 'How to Interview at Apple — Complete Guide 2026',
+    description: 'Navigate Apple\'s secretive interview process with insights on demonstrating craft, product passion, and attention to detail.',
+    category: 'companies',
+    keywords: ['apple interview', 'apple interview process', 'apple behavioral interview', 'apple hiring'],
+    relevantDomains: [],
+    relevantExperience: [],
+    relevantWeakAreas: ['specificity', 'star_structure'],
+    relevantGoals: ['first_interview', 'general_practice'],
+    content: {
+      intro: 'Apple is famously secretive about its interview process. The company values craft, attention to detail, and genuine passion for creating excellent products. Behavioral questions probe how you balance perfectionism with pragmatic delivery.',
+      sections: [
+        { heading: 'Interview Process', body: 'Apple\'s process varies by team but typically includes: (1) Recruiter call, (2) Phone screen with hiring manager, (3) On-site/virtual loop of 5-8 interviews (yes, often more than FAANG peers). Interviews may span multiple days. Expect cross-functional interviewers from different teams. The process can take 4-8 weeks.' },
+        { heading: 'What Apple Values', body: 'Apple\'s culture prioritizes: craft and quality (sweating the details others miss), secrecy and focus (doing fewer things but doing them exceptionally), user experience obsession (every pixel matters), simplicity (the ultimate sophistication), and cross-functional excellence (hardware + software + design thinking together).' },
+        { heading: 'Common Question Themes', body: 'Apple interviews probe: attention to detail in your past work, genuine product passion (not just Apple products — any products you love and why), collaboration across disciplines (hardware, software, design), quality vs. speed tradeoffs (Apple often chooses quality), and simplicity in complex problem-solving.' },
+        { heading: 'Preparation Strategy', body: 'Be ready to discuss products you love in detail — what makes them great, what you\'d improve. Show attention to detail in your own work: "I noticed a 2px misalignment that was causing a 3% drop in tap accuracy." Practice explaining how you balanced quality with deadlines. Research the specific team you\'re interviewing for — Apple teams operate quite independently.' },
+      ],
+      tips: [
+        'Show genuine product passion — discuss products you love and why in detail.',
+        'Demonstrate attention to detail with specific micro-examples.',
+        'Apple values confidentiality — don\'t push for information about unannounced products.',
+        'Balance perfectionism with pragmatism — show when you shipped "good enough."',
+        'Research the specific team and product area you\'re interviewing for.',
+      ],
+      faq: [
+        { q: 'Why does Apple have so many interview rounds?', a: 'Apple wants broad consensus. With 5-8 interviews, they ensure you\'ll work well across the cross-functional team. Each interviewer evaluates different aspects: technical skills, collaboration, craft, and cultural fit.' },
+        { q: 'How secretive is the process really?', a: 'Very. Apple may not tell you the exact team or product until late in the process. Interviewers may be vague about what they\'re working on. This is normal — show that you respect the culture of confidentiality.' },
+      ],
+    },
+  },
+  {
+    slug: 'how-to-interview-at-microsoft',
+    title: 'How to Interview at Microsoft — Growth Mindset Guide 2026',
+    description: 'Prepare for Microsoft interviews with tips on demonstrating growth mindset, inclusive leadership, and customer empathy.',
+    category: 'companies',
+    keywords: ['microsoft interview', 'microsoft growth mindset', 'microsoft behavioral interview'],
+    relevantDomains: [],
+    relevantExperience: [],
+    relevantWeakAreas: ['star_structure', 'specificity'],
+    relevantGoals: ['first_interview', 'general_practice'],
+    content: {
+      intro: 'Microsoft\'s culture transformed under Satya Nadella to emphasize growth mindset. Interviews focus on learning from mistakes, empathy, collaboration, and inclusive leadership. The "One Microsoft" culture values cross-org collaboration over individual heroics.',
+      sections: [
+        { heading: 'Interview Process', body: 'Microsoft\'s process: (1) Recruiter screen, (2) Phone interview (45-60 min), (3) On-site/virtual loop of 4-5 interviews. The final interview is often with a senior leader ("As Appropriate" interview). Each interviewer evaluates different competencies. Process takes 3-6 weeks.' },
+        { heading: 'Growth Mindset Culture', body: 'Growth mindset is the #1 cultural value at Microsoft. Interviewers look for: how you learned from failures (not just successes), curiosity about areas outside your expertise, willingness to be wrong and adapt, coaching and developing others, and treating challenges as learning opportunities rather than threats.' },
+        { heading: 'Common Question Themes', body: 'Microsoft interviews frequently cover: learning from mistakes and changing your approach, inclusive leadership and supporting diverse teams, customer empathy and understanding user needs, cross-organization collaboration ("One Microsoft"), and demonstrating growth mindset in real situations.' },
+        { heading: 'Preparation Strategy', body: 'Prepare stories about: a time you were wrong and what you learned, how you helped a colleague grow, when you sought feedback and acted on it, collaborating across teams with different priorities, and understanding a customer need that wasn\'t obvious. Show genuine curiosity in your questions to interviewers.' },
+      ],
+      tips: [
+        'Lead with what you learned, not just what you achieved.',
+        'Show how you\'ve helped others grow and succeed.',
+        'Demonstrate curiosity — ask thoughtful questions about the team and technology.',
+        'Microsoft values empathy — show you understand user and colleague perspectives.',
+        'Mention cross-team collaboration and "One Microsoft" thinking.',
+      ],
+      faq: [
+        { q: 'What is the "As Appropriate" (AA) interview?', a: 'The AA is the final interview with a senior leader who makes the hiring recommendation. They evaluate your overall fit, leadership potential, and alignment with Microsoft\'s culture. It\'s typically more conversational than technical.' },
+        { q: 'How important is growth mindset really?', a: 'Extremely. It\'s not just a buzzword — interviewers are trained to assess it. Candidates who only talk about successes without demonstrating learning and adaptation are often flagged as lacking growth mindset.' },
+      ],
+    },
+  },
+  {
+    slug: 'how-to-interview-at-netflix',
+    title: 'How to Interview at Netflix — Freedom & Responsibility Guide 2026',
+    description: 'Navigate Netflix\'s unique culture with tips on demonstrating independent judgment, candor, and high-performance standards.',
+    category: 'companies',
+    keywords: ['netflix interview', 'netflix culture', 'netflix freedom and responsibility', 'netflix interview process'],
+    relevantDomains: [],
+    relevantExperience: [],
+    relevantWeakAreas: ['ownership', 'specificity'],
+    relevantGoals: ['first_interview', 'general_practice'],
+    content: {
+      intro: 'Netflix interviews are driven by their famous Culture Memo. The company values "Freedom and Responsibility," independent judgment, and radical candor. Interviewers expect candidates to articulate strong opinions and demonstrate high performance standards.',
+      sections: [
+        { heading: 'Interview Process', body: 'Netflix\'s process: (1) Recruiter screen, (2) Hiring manager phone call (exploratory), (3) On-site/virtual loop of 5-6 interviews. Netflix interviews are notably conversational — less structured than Amazon or Google. Interviewers assess cultural fit as heavily as technical ability.' },
+        { heading: 'Netflix Culture Values', body: 'Key values: Freedom and Responsibility (autonomy with accountability), Context Not Control (leaders set context, not rules), Highly Aligned Loosely Coupled (strategic alignment with tactical freedom), Candor (honest, direct feedback), and the Keeper Test ("Would I fight to keep this person?"). Read the Culture Memo before your interview.' },
+        { heading: 'Common Question Themes', body: 'Netflix interviews probe: independent judgment without waiting for permission, giving and receiving candid feedback (even uncomfortable), high performance standards and how you handle underperformance, strategic thinking and strong opinions, and innovation courage (taking bold action).' },
+        { heading: 'Preparation Strategy', body: 'Read Netflix\'s Culture Memo thoroughly. Prepare stories about: making bold decisions independently, giving difficult feedback to a peer or manager, raising the performance bar on your team, forming and defending a strong opinion, and times you prioritized context over process. Netflix wants adults who thrive with freedom.' },
+      ],
+      tips: [
+        'Read the Netflix Culture Memo before interviewing — interviewers will reference it.',
+        'Show independent judgment — times you acted without waiting for permission.',
+        'Demonstrate candor — share examples of giving honest, direct feedback.',
+        'Netflix values strong opinions — don\'t be wishy-washy in your answers.',
+        'Show you thrive with autonomy and hold yourself to high standards.',
+      ],
+      faq: [
+        { q: 'What is the "Keeper Test"?', a: 'Netflix managers ask themselves: "If this person told me they were leaving, would I fight hard to keep them?" If the answer is no, the person should be let go with a generous severance. In interviews, this means you need to show you\'d be exceptional, not just adequate.' },
+        { q: 'How candid should I really be?', a: 'Very. Netflix values radical honesty. If asked about a failure, don\'t sugarcoat it. If asked for your opinion, give a clear, reasoned perspective. Wishy-washy or politically safe answers are a red flag at Netflix.' },
+      ],
+    },
+  },
+  {
+    slug: 'how-to-interview-at-stripe',
+    title: 'How to Interview at Stripe — Craft & Systems Thinking Guide 2026',
+    description: 'Prepare for Stripe interviews with tips on demonstrating craft, systems thinking, and clear written communication.',
+    category: 'companies',
+    keywords: ['stripe interview', 'stripe interview process', 'stripe culture', 'stripe hiring'],
+    relevantDomains: [],
+    relevantExperience: [],
+    relevantWeakAreas: ['specificity', 'star_structure'],
+    relevantGoals: ['first_interview', 'general_practice'],
+    content: {
+      intro: 'Stripe sets a very high bar for craft and ownership. The company values clear writing, systems thinking, and genuine curiosity about payments infrastructure. Interviews often include take-home projects that demonstrate real work quality.',
+      sections: [
+        { heading: 'Interview Process', body: 'Stripe\'s process often includes: (1) Recruiter screen, (2) Phone interview, (3) Take-home project (1-3 hours), (4) On-site/virtual loop of 4-5 interviews including discussions of your take-home. The take-home is evaluated on code quality, documentation, and design thinking — not just correctness.' },
+        { heading: 'What Stripe Values', body: 'Core values: Users First (obsess over developer experience), Move With Urgency (ship fast with quality), Think Rigorously (first-principles reasoning), Trust and Amplify (empower others), and Global Optimization (optimize for Stripe, not just your team). Stripe also heavily values written communication.' },
+        { heading: 'Preparation Strategy', body: 'Practice writing clear technical documentation. Prepare stories about end-to-end ownership of a system or feature. Show systems thinking: how your decisions affected upstream and downstream teams. If doing a take-home, invest heavily in documentation, tests, and clean code — Stripe reviewers read everything carefully.' },
+      ],
+      tips: [
+        'Stripe values clear writing — practice explaining complex concepts simply.',
+        'Show end-to-end ownership: "I owned the system from design to production monitoring."',
+        'Demonstrate systems thinking — consider second-order effects of decisions.',
+        'Take-home projects: invest in documentation and code quality, not just features.',
+        'Show genuine curiosity about payments, financial infrastructure, or developer tools.',
+      ],
+      faq: [
+        { q: 'Do I need payments domain knowledge?', a: 'Not required, but showing genuine interest in payments infrastructure, fintech, or developer tools is a strong signal. Explore Stripe\'s documentation and products before your interview.' },
+        { q: 'How important is the take-home project?', a: 'Very. It\'s often the foundation for on-site discussions. Treat it as a production deliverable: clean code, tests, README, and thoughtful design decisions documented clearly.' },
+      ],
+    },
+  },
+  {
+    slug: 'how-to-interview-at-salesforce',
+    title: 'How to Interview at Salesforce — Ohana Culture Guide 2026',
+    description: 'Prepare for Salesforce interviews with tips on demonstrating trust, customer success, and values-driven leadership.',
+    category: 'companies',
+    keywords: ['salesforce interview', 'salesforce ohana', 'salesforce interview process', 'salesforce culture'],
+    relevantDomains: [],
+    relevantExperience: [],
+    relevantWeakAreas: ['star_structure', 'ownership'],
+    relevantGoals: ['first_interview', 'general_practice'],
+    content: {
+      intro: 'Salesforce\'s "Ohana" (family) culture drives every interview. The company deeply values trust, customer success, innovation, and equality. Behavioral interviews assess whether you\'ll contribute to an inclusive, customer-obsessed team.',
+      sections: [
+        { heading: 'Interview Process', body: 'Salesforce\'s process: (1) Recruiter screen, (2) Hiring manager call, (3) Panel interview or virtual loop of 3-4 interviews. Technical interviews tend to be collaborative and practical. The process is generally faster than FAANG (2-4 weeks).' },
+        { heading: 'Ohana Culture', body: 'Salesforce\'s values: Trust (the #1 value — integrity in everything), Customer Success (your success is our success), Innovation (continuous improvement and creativity), Equality (equal pay, diverse hiring, inclusive culture), and Sustainability (business as a platform for change). Interviewers evaluate cultural alignment seriously.' },
+        { heading: 'Preparation Strategy', body: 'Prepare stories about: building trust with customers or stakeholders, driving customer outcomes beyond what was asked, inclusive leadership and supporting diverse teams, innovative solutions to business problems, and giving back to community or mentoring others. Salesforce values the whole person, not just technical skills.' },
+      ],
+      tips: [
+        'Emphasize customer success stories with measurable outcomes.',
+        'Show how you\'ve built trust across teams and with stakeholders.',
+        'Salesforce values equality — share examples of inclusive behavior.',
+        'Demonstrate you care about impact beyond just your immediate work.',
+        'Research Salesforce\'s philanthropy model (1-1-1) and show values alignment.',
+      ],
+      faq: [
+        { q: 'What is the 1-1-1 model?', a: 'Salesforce pledges 1% of equity, 1% of product, and 1% of employee time to philanthropy. Showing awareness of this model and genuine interest in social impact is a positive signal.' },
+        { q: 'How values-driven is the interview really?', a: 'Very. Unlike pure performance-focused companies, Salesforce actively screens for cultural values alignment. A technically strong candidate who doesn\'t demonstrate trust, equality, or customer focus may not pass.' },
+      ],
+    },
+  },
+  {
+    slug: 'mckinsey-interview-guide',
+    title: 'McKinsey Interview Guide — Case & PEI Mastery 2026',
+    description: 'Master McKinsey\'s case interview and Personal Experience Interview (PEI) with frameworks, tips, and preparation strategies.',
+    category: 'companies',
+    keywords: ['mckinsey interview', 'mckinsey case interview', 'mckinsey pei', 'consulting interview'],
+    relevantDomains: ['business'],
+    relevantExperience: [],
+    relevantWeakAreas: ['star_structure', 'specificity'],
+    relevantGoals: ['first_interview', 'general_practice'],
+    content: {
+      intro: 'McKinsey interviews combine Case Interviews (structured problem-solving) with the Personal Experience Interview (PEI). Cases test your analytical and structured thinking. PEI probes leadership, personal impact, and entrepreneurial drive using deep behavioral questions.',
+      sections: [
+        { heading: 'Interview Process', body: 'McKinsey\'s process: (1) Resume screen and online assessment (PST or Solve game), (2) First round — 2 interviews (1 case + 1 PEI each), (3) Final round — 3 interviews (same format, senior partners). Each interview is ~40 minutes: ~15 min PEI + ~25 min case. The bar is extremely high at every stage.' },
+        { heading: 'The Case Interview', body: 'Case interviews present a business problem (e.g., "Should this airline launch a low-cost carrier?"). You must: clarify the problem, propose a structured framework, analyze data provided, synthesize findings, and deliver a recommendation. McKinsey expects top-down communication — state your answer first, then support it.' },
+        { heading: 'The PEI (Personal Experience Interview)', body: 'PEI evaluates three dimensions: (1) Personal Impact — a time you influenced others without authority, (2) Entrepreneurial Drive — a time you created something from nothing or drove change, (3) Leadership — a time you led a team through a challenge. Prepare 2-3 detailed stories for each. McKinsey probes deeply — expect 10+ follow-up questions per story.' },
+        { heading: 'Preparation Strategy', body: 'For cases: practice 30-50 cases using frameworks (profitability, market entry, pricing). Master mental math. Practice top-down communication. For PEI: prepare 6-9 deeply detailed stories. Practice telling each story in 2 minutes, then be ready for 10 minutes of follow-ups. McKinsey values "obligation to dissent" — show you speak up when you disagree.' },
+      ],
+      tips: [
+        'State your hypothesis upfront in cases — McKinsey values top-down communication.',
+        'For PEI, prepare stories with extreme depth — expect 10+ follow-up questions.',
+        'Practice mental math: percentages, market sizing, compound growth.',
+        'Show "obligation to dissent" — times you respectfully pushed back.',
+        'Structure is king — always lay out your approach before diving into analysis.',
+      ],
+      faq: [
+        { q: 'How many cases should I practice?', a: '30-50 cases minimum. Focus on quality over quantity — debrief each case to understand what you could improve. Practice with partners who can give real-time feedback.' },
+        { q: 'What is the McKinsey Solve game?', a: 'McKinsey replaced the Problem Solving Test (PST) with an online assessment called "Solve." It includes ecosystem-building and pattern-matching games that evaluate problem-solving, decision-making, and systems thinking.' },
+      ],
+    },
+  },
+  {
+    slug: 'bcg-interview-guide',
+    title: 'BCG Interview Guide — Creative Problem-Solving 2026',
+    description: 'Prepare for BCG interviews with tips on creative case approaches, hypothesis-driven thinking, and behavioral questions.',
+    category: 'companies',
+    keywords: ['bcg interview', 'bcg case interview', 'boston consulting group interview', 'consulting interview'],
+    relevantDomains: ['business'],
+    relevantExperience: [],
+    relevantWeakAreas: ['star_structure', 'specificity'],
+    relevantGoals: ['first_interview', 'general_practice'],
+    content: {
+      intro: 'BCG interviews are similar to McKinsey but value more creative, less formulaic approaches. The firm prizes original thinking, intellectual curiosity, and the ability to push back on assumptions. BCG cases tend to be more open-ended and conversational.',
+      sections: [
+        { heading: 'Interview Process', body: 'BCG\'s process: (1) Resume screen + online assessment (BCG Casey chatbot), (2) First round — 2 interviews with case + behavioral, (3) Final round — 2-3 interviews with senior partners. BCG also offers "BCG Pymetrics" digital assessment for some roles.' },
+        { heading: 'What Makes BCG Different', body: 'BCG values creative thinking over rigid frameworks. While structure matters, interviewers want to see: original insights (not just textbook frameworks), hypothesis-driven approaches (form a view early, then test it), willingness to challenge assumptions, and collaborative problem-solving (the interview is a dialogue, not a presentation).' },
+        { heading: 'Preparation Strategy', body: 'Practice cases with a creative twist — go beyond profit trees and market-sizing. Form hypotheses early and test them. Show intellectual curiosity: "What if we looked at this differently?" Practice collaborative casing — BCG interviewers actively participate. Prepare behavioral stories that show diverse thinking and unconventional approaches.' },
+      ],
+      tips: [
+        'Go beyond standard frameworks — BCG values original, creative thinking.',
+        'Form hypotheses early and explicitly state them: "My hypothesis is X because..."',
+        'The case is a conversation — engage the interviewer, ask their opinion.',
+        'Show intellectual curiosity — explore unexpected angles.',
+        'BCG values diversity of thought — bring your unique perspective.',
+      ],
+      faq: [
+        { q: 'How is BCG different from McKinsey cases?', a: 'BCG cases tend to be more open-ended and conversational. McKinsey expects more structured, top-down communication. BCG values creative insights over perfect structure. Both require strong analytical skills.' },
+        { q: 'What is BCG Casey?', a: 'BCG Casey is a chatbot-based case assessment. You solve a mini-case by interacting with an AI chatbot. It evaluates your structuring ability, analytical skills, and business judgment in a timed format.' },
+      ],
+    },
+  },
+  {
+    slug: 'goldman-sachs-interview-guide',
+    title: 'Goldman Sachs Interview Guide — Super Day Preparation 2026',
+    description: 'Navigate Goldman Sachs\' Super Day interview format with tips on technical finance questions, market awareness, and behavioral preparation.',
+    category: 'companies',
+    keywords: ['goldman sachs interview', 'goldman sachs super day', 'investment banking interview', 'finance interview'],
+    relevantDomains: ['finance'],
+    relevantExperience: [],
+    relevantWeakAreas: ['specificity', 'star_structure'],
+    relevantGoals: ['first_interview', 'general_practice'],
+    content: {
+      intro: 'Goldman Sachs interviews blend technical finance questions with behavioral assessment. The "Super Day" consists of multiple back-to-back interviews. The firm values work ethic, attention to detail, analytical rigor, and deep market awareness.',
+      sections: [
+        { heading: 'Interview Process', body: 'Goldman Sachs process: (1) HireVue video interview (pre-recorded responses), (2) First round phone interviews (1-2 calls), (3) "Super Day" — 4-6 back-to-back interviews in one day with different team members. Each interview is 30-45 minutes. The Super Day is physically and mentally demanding.' },
+        { heading: 'What Goldman Looks For', body: 'Core qualities: Client service mindset (clients come first), Excellence (never settle for good enough), Integrity (do the right thing), Teamwork (succeed together under pressure), Commercial mindset (understand how the business makes money). Technical knowledge is expected — you must know finance fundamentals cold.' },
+        { heading: 'Preparation Strategy', body: 'Stay current on markets — read WSJ/FT daily for 2 weeks before your interview. Know: recent IPOs, M&A deals, market trends, and Goldman\'s recent transactions. For behavioral: prepare STAR stories about teamwork under pressure, attention to detail, and client focus. For technical: review financial modeling, DCF, accounting concepts, and market analysis.' },
+      ],
+      tips: [
+        'Stay current on financial markets — expect "What\'s happening in the markets?" questions.',
+        'Know Goldman\'s recent deals and transactions.',
+        'Super Day is a marathon — maintain energy and enthusiasm through all rounds.',
+        'Show analytical rigor with specific numbers and financial metrics.',
+        'Dress formally — Goldman maintains a professional dress code culture.',
+      ],
+      faq: [
+        { q: 'What is the HireVue interview?', a: 'Goldman\'s first screen is a recorded video interview where you answer 3-5 questions on camera. There\'s no live interviewer — you record responses within a time limit. Focus on clear, structured answers with strong eye contact.' },
+        { q: 'How do I prepare for the Super Day?', a: 'Treat it like a final exam: study technical concepts, prepare 10+ behavioral stories, get a good night\'s sleep, bring water and snacks. Each interviewer asks different questions, so your stories need variety. Stay energetic and engaged through all 4-6 rounds.' },
+      ],
+    },
+  },
+  {
+    slug: 'jpmorgan-interview-guide',
+    title: 'JPMorgan Interview Guide — Risk & Analytics Focus 2026',
+    description: 'Prepare for JPMorgan interviews with tips on demonstrating risk awareness, analytical rigor, and client relationship skills.',
+    category: 'companies',
+    keywords: ['jpmorgan interview', 'jp morgan interview', 'chase interview', 'banking interview'],
+    relevantDomains: ['finance'],
+    relevantExperience: [],
+    relevantWeakAreas: ['specificity', 'star_structure'],
+    relevantGoals: ['first_interview', 'general_practice'],
+    content: {
+      intro: 'JPMorgan interviews mix technical assessment with behavioral evaluation. The firm values risk awareness, analytical thinking, client relationship skills, and integrity. Market knowledge and awareness of the regulatory landscape are important differentiators.',
+      sections: [
+        { heading: 'Interview Process', body: 'JPMorgan\'s process: (1) Online application + HireVue, (2) Phone screen with recruiter, (3) Super Day or panel interview (3-5 rounds). The process varies by division (Investment Banking, Asset Management, Technology, etc.). Technology roles include coding assessments.' },
+        { heading: 'What JPMorgan Values', body: 'Core qualities: Client focus (understanding and serving client needs), Risk management (aware of risks in every decision), Analytical rigor (data-driven, precise thinking), Integrity (do the right thing even when it\'s hard), Innovation (modernizing banking with technology). JPMorgan also values diversity and community involvement.' },
+        { heading: 'Preparation Strategy', body: 'Know the division you\'re interviewing for — JPMorgan is massive and each division has different priorities. Stay current on financial markets and regulations. Prepare stories about: risk assessment in decisions, analytical problem-solving with data, client relationship management, and ethical decision-making. Research JPMorgan\'s recent technology investments and transformation initiatives.' },
+      ],
+      tips: [
+        'Know which division you\'re interviewing for and tailor your preparation.',
+        'Demonstrate risk awareness — show you consider downside scenarios.',
+        'JPMorgan values analytical rigor — use numbers and data in your stories.',
+        'Research their technology transformation (blockchain, AI, cloud initiatives).',
+        'Show client focus and relationship-building skills.',
+      ],
+      faq: [
+        { q: 'How does JPMorgan\'s interview differ by division?', a: 'Investment Banking focuses on financial modeling and deal knowledge. Asset Management emphasizes market analysis and client relationships. Technology requires coding assessments and system design. All divisions assess behavioral fit and risk awareness.' },
+        { q: 'Do I need to know about regulations?', a: 'Basic awareness of key regulations (Dodd-Frank, Basel III, SOX) shows you understand the banking landscape. You don\'t need to be a regulatory expert, but showing awareness is a strong signal.' },
+      ],
+    },
+  },
+]
 
 export function getResourceBySlug(slug: string): Resource | undefined {
   return RESOURCES.find(r => r.slug === slug)

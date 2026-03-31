@@ -23,6 +23,9 @@ export type FeatureFlag =
   | 'engagement_streaks_v2'
   | 'engagement_daily_challenge'
   | 'multimodal_analysis'
+  | 'company_guides'
+  | 'coach_mode'
+  | 'live_coding'
 
 const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   personalization_engine: true,
@@ -45,6 +48,9 @@ const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   engagement_streaks_v2: true,
   engagement_daily_challenge: true,
   multimodal_analysis: false,
+  company_guides: true,
+  coach_mode: false,
+  live_coding: false,
 }
 
 export function isFeatureEnabled(flag: FeatureFlag): boolean {
