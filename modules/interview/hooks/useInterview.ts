@@ -394,7 +394,8 @@ export function useInterview({
     const abortCtrl = new AbortController()
     coachingAbortRef.current = abortCtrl
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 800)
+      const coachingDisplayMs = config?.coachMode ? 3000 : 800
+      const timer = setTimeout(resolve, coachingDisplayMs)
       abortCtrl.signal.addEventListener('abort', () => {
         clearTimeout(timer)
         resolve()

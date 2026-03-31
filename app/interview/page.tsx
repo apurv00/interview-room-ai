@@ -17,6 +17,8 @@ import { useCoachingNudge } from '@interview/hooks/useCoachingNudge'
 import { useFacialLandmarks } from '@interview/hooks/useFacialLandmarks'
 import { useRealtimeFacialCoaching } from '@interview/hooks/useRealtimeFacialCoaching'
 import { useRealtimeProsody } from '@interview/hooks/useRealtimeProsody'
+import { useCoachMode } from '@interview/hooks/useCoachMode'
+import CoachOverlay from '@interview/components/interview/CoachOverlay'
 import type { InterviewConfig } from '@shared/types'
 import { AVATAR_NAME, getAvatarTitle } from '@interview/config/interviewConfig'
 import { STORAGE_KEYS } from '@shared/storageKeys'
@@ -143,7 +145,8 @@ export default function InterviewPage() {
   const isProcessing = phase === 'PROCESSING'
 
   // ── Live coaching nudges ──
-  const speechNudge = useCoachingNudge({ phase, liveTranscript })
+  const isCoachMode = config?.coachMode ?? false
+  const speechNudge = useCoachingNudge({ phase, liveTranscript, pollIntervalMs: isCoachMode ? 2000 : undefined })
   const facialNudge = useRealtimeFacialCoaching({
     phase,
     framesRef,
@@ -155,6 +158,7 @@ export default function InterviewPage() {
     enabled: isMultimodalEnabled,
   })
   // Priority: prosody > speech-content > visual
+  const coachModeState = useCoachMode({ phase, liveTranscript, enabled: isCoachMode })
   const activeNudge = prosodyNudge || speechNudge || facialNudge
 
   // ─── Keyboard shortcut (M to toggle mute) ──────────────────────────────────
@@ -377,6 +381,7 @@ export default function InterviewPage() {
 
       {/* ── Coaching layer ── */}
       <div className="px-4 pb-1 flex flex-col gap-1.5">
+        {isCoachMode && <CoachOverlay state={coachModeState} />}
         <CoachingNudge nudge={activeNudge} />
         <CoachingTip tip={coachingTip} />
       </div>

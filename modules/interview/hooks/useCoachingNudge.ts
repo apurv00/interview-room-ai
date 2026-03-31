@@ -14,6 +14,7 @@ const NUDGE_DISPLAY_MS = 5000
 interface UseCoachingNudgeOptions {
   phase: InterviewState
   liveTranscript: string
+  pollIntervalMs?: number  // default 4000, coach mode uses 2000
 }
 
 /**
@@ -22,7 +23,7 @@ interface UseCoachingNudgeOptions {
  *
  * Returns the currently-active nudge (or null).
  */
-export function useCoachingNudge({ phase, liveTranscript }: UseCoachingNudgeOptions): CoachingNudge | null {
+export function useCoachingNudge({ phase, liveTranscript, pollIntervalMs }: UseCoachingNudgeOptions): CoachingNudge | null {
   const [activeNudge, setActiveNudge] = useState<CoachingNudge | null>(null)
 
   // Stable refs — avoids re-creating the poll interval on every transcript update
@@ -47,6 +48,7 @@ export function useCoachingNudge({ phase, liveTranscript }: UseCoachingNudgeOpti
   useEffect(() => {
     if (phase !== 'LISTENING') return
 
+    const effectiveInterval = pollIntervalMs ?? POLL_INTERVAL_MS
     const interval = setInterval(() => {
       const transcript = liveTranscriptRef.current
       if (!transcript) return
@@ -63,7 +65,7 @@ export function useCoachingNudge({ phase, liveTranscript }: UseCoachingNudgeOpti
         clearTimeout(nudgeTimerRef.current)
         nudgeTimerRef.current = setTimeout(() => setActiveNudge(null), NUDGE_DISPLAY_MS)
       }
-    }, POLL_INTERVAL_MS)
+    }, effectiveInterval)
 
     return () => {
       clearInterval(interval)

@@ -22,6 +22,7 @@ export interface InterviewConfig {
   resumeId?: string             // source resume ID for resume-to-interview flow
   targetCompany?: string        // extracted from JD or entered in lobby
   targetIndustry?: string       // extracted from JD or entered in lobby
+  coachMode?: boolean           // active STAR framework coaching during answers
 }
 
 // ─── State Machine ────────────────────────────────────────────────────────────
