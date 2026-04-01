@@ -187,13 +187,52 @@ export default function InterviewPage() {
     return () => window.removeEventListener('keydown', handleKey)
   })
 
-  // ─── Load config ───────────────────────────────────────────────────────────
+  // ─── Prevent accidental navigation away during active interview ────────────
+  useEffect(() => {
+    const isActive = phase !== 'INIT' && phase !== 'ENDED' && phase !== 'SCORING' && phase !== 'FEEDBACK'
+    if (!isActive) return
+
+    // Warn on tab close / refresh
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+
+    // Push a dummy history entry so back button doesn't leave the page
+    window.history.pushState(null, '', window.location.href)
+    const handlePopState = () => {
+      // Push again to stay on the page
+      window.history.pushState(null, '', window.location.href)
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    window.addEventListener('popstate', handlePopState)
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+      window.removeEventListener('popstate', handlePopState)
+    }
+  }, [phase])
+
+  // ─── Load config (with session guard) ──────────────────────────────────────
   useEffect(() => {
     const stored = localStorage.getItem(STORAGE_KEYS.INTERVIEW_CONFIG)
     if (!stored) {
       router.push('/')
       return
     }
+
+    // Guard: if there's already a completed session for this config, don't reuse it
+    const activeSession = localStorage.getItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
+    if (activeSession) {
+      // A previous session was in progress but user navigated back
+      // Clear stale state and redirect to home for fresh setup
+      localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
+      localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
+      router.push('/')
+      return
+    }
+
     const parsed = JSON.parse(stored)
     setConfig(parsed)
     // Select a coding problem if in coding mode

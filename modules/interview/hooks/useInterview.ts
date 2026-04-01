@@ -202,6 +202,8 @@ export function useInterview({
     createDbSession(config).then((result) => {
       if (result.sessionId) {
         sessionIdRef.current = result.sessionId
+        // Mark session as active to prevent duplicate creation on back navigation
+        localStorage.setItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION, result.sessionId)
         persistSession(result.sessionId, { status: 'in_progress', startedAt: new Date().toISOString() })
       }
     })
@@ -544,8 +546,13 @@ export function useInterview({
         }
       }
 
+      // Clear session state — interview is complete
+      localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
+      localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
       router.push(`/feedback/${sid}`)
     } else {
+      localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
+      localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
       router.push('/feedback/local')
     }
   }, [config, router, stopListening, onRecordingStop])

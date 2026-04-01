@@ -2,6 +2,7 @@
 export const STORAGE_KEYS = {
   INTERVIEW_CONFIG: 'interviewConfig',
   INTERVIEW_DATA: 'interviewData',
+  INTERVIEW_ACTIVE_SESSION: 'interviewActiveSession', // sessionId when interview is in progress
 } as const
 
 /** Returns a session-scoped localStorage key, e.g. "interviewData:abc123". */
