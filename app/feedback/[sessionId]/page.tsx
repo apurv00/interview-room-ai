@@ -644,7 +644,12 @@ function FeedbackPageInner() {
         {/* CTA */}
         <div className="flex gap-3 justify-center pb-8 animate-fade-in flex-wrap">
           <button
-            onClick={() => router.push('/')}
+            onClick={() => {
+              // Clear stale interview config to force fresh setup
+              localStorage.removeItem('interviewConfig')
+              localStorage.removeItem('interviewActiveSession')
+              router.push('/')
+            }}
             className="px-8 py-3 bg-brand-500 hover:bg-brand-600 text-white rounded-[var(--radius-md)] font-semibold btn-glow transition"
           >
             Reattempt Interview

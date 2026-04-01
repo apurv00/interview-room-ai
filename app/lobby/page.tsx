@@ -82,8 +82,16 @@ export default function LobbyPage() {
   const [audioLevel, setAudioLevel] = useState(0)
   const [joinCountdown, setJoinCountdown] = useState(0)
 
-  // Load config
+  // Load config (clear stale session state if present)
   useEffect(() => {
+    // If user navigated back from an in-progress interview, clean up
+    const activeSession = localStorage.getItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
+    if (activeSession) {
+      localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
+      localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
+      router.push('/')
+      return
+    }
     const stored = localStorage.getItem(STORAGE_KEYS.INTERVIEW_CONFIG)
     if (!stored) { router.push('/'); return }
     setConfig(JSON.parse(stored))
