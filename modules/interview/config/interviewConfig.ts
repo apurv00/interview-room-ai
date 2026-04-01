@@ -97,6 +97,8 @@ export function getInterviewIntro(
     behavioral: 'behavioral interview',
     technical: 'technical deep-dive',
     'case-study': 'case study session',
+    'system-design': 'system design interview',
+    coding: 'coding challenge',
   }
   const typeLabel = typeLabels[interviewType || 'screening'] || 'screening interview'
 
@@ -112,6 +114,8 @@ export function getAvatarTitle(interviewType?: string): string {
     case 'behavioral': return 'Senior Hiring Manager'
     case 'technical': return 'Technical Interview Lead'
     case 'case-study': return 'Strategy & Assessment Lead'
+    case 'system-design': return 'Senior Systems Architect'
+    case 'coding': return 'Technical Interview Lead'
     default: return 'Senior Recruiter · Talent Acquisition'
   }
 }

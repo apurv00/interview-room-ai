@@ -70,6 +70,7 @@ interface UseInterviewOptions {
   startListening: (onComplete: (result: SpeechRecognitionResult) => void) => void
   stopListening: () => void
   onRecordingStop?: () => void
+  currentProblem?: { title: string; description: string } | null
 }
 
 // ─── Hook return ──────────────────────────────────────────────────────────────
@@ -85,6 +86,7 @@ export interface UseInterviewReturn {
   sessionId: string | null
   coachingTip: string | null
   finishInterview: () => void
+  onCodeSubmit: (code: string, language: string) => void
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
@@ -95,6 +97,7 @@ export function useInterview({
   startListening,
   stopListening,
   onRecordingStop,
+  currentProblem,
 }: UseInterviewOptions): UseInterviewReturn {
   const router = useRouter()
 
@@ -127,6 +130,27 @@ export function useInterview({
 
   // ── Interview abort (stops the loop on End Interview) ──
   const interviewAbortRef = useRef<AbortController | null>(null)
+
+  // ── Code submission (coding interviews) ──
+  const codeSubmitResolverRef = useRef<((submission: { code: string; language: string }) => void) | null>(null)
+  const currentProblemRef = useRef(currentProblem)
+  currentProblemRef.current = currentProblem
+
+  const onCodeSubmit = useCallback((code: string, language: string) => {
+    if (codeSubmitResolverRef.current) {
+      codeSubmitResolverRef.current({ code, language })
+      codeSubmitResolverRef.current = null
+    }
+  }, [])
+
+  function waitForCodeSubmission(): Promise<{ code: string; language: string }> {
+    return new Promise((resolve, reject) => {
+      codeSubmitResolverRef.current = resolve
+      interviewAbortRef.current?.signal.addEventListener('abort', () => {
+        reject(new InterviewAbortError())
+      }, { once: true })
+    })
+  }
 
   class InterviewAbortError extends Error {
     constructor() { super('Interview aborted'); this.name = 'InterviewAbortError' }
@@ -814,6 +838,110 @@ export function useInterview({
 
     const start = async () => {
       try {
+
+      // ── Coding interview: special flow ──
+      if (config.interviewType === 'coding' && currentProblemRef.current) {
+        const problem = currentProblemRef.current
+        const codingIntro = `Hi! I'm Alex, and today we'll work through a coding challenge together. I'll present you with a problem, and you can write your solution in the code editor on the right. Feel free to think out loud as you work — I'm interested in your approach as much as the final code. Let's get started!`
+        setCurrentQuestion(codingIntro)
+        addToTranscript('interviewer', codingIntro, 0)
+        checkAbort()
+        await avatarSpeak(codingIntro, 'friendly')
+
+        checkAbort()
+
+        // Present the problem
+        const problemText = `Here's your problem: "${problem.title}". Take a look at the full description on the left panel. When you're ready, start coding and click Submit when done.`
+        transitionTo('ASK_QUESTION')
+        questionIndexRef.current = 1
+        setQuestionIndex(1)
+        setCurrentQuestion(problemText)
+        addToTranscript('interviewer', problemText, 1)
+        await avatarSpeak(problemText, 'curious')
+
+        checkAbort()
+
+        // Transition to CODE_EDITING — user codes
+        transitionTo('CODE_EDITING')
+        setLiveAnswer('')
+
+        // Wait for code submission
+        const submission = await waitForCodeSubmission()
+
+        if (isInterviewOver()) return
+        checkAbort()
+
+        // Evaluate the code
+        transitionTo('PROCESSING')
+        addToTranscript('candidate', `[Code submitted in ${submission.language}]`, 1)
+
+        let feedbackText = 'Good effort! Let me share some thoughts.'
+        try {
+          const evalRes = await fetch('/api/evaluate-code', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              code: submission.code,
+              language: submission.language,
+              problemTitle: problem.title,
+              problemDescription: problem.description,
+              questionIndex: 1,
+              sessionId: sessionIdRef.current,
+            }),
+          })
+          if (evalRes.ok) {
+            const evaluation = await evalRes.json()
+            feedbackText = evaluation.feedback || feedbackText
+            const avgScore = ((evaluation.correctness || 0) + (evaluation.efficiency || 0) + (evaluation.code_quality || 0)) / 3
+            setAvatarEmotion(avgScore >= 70 ? 'impressed' : avgScore >= 40 ? 'friendly' : 'curious')
+          }
+        } catch { /* continue with default feedback */ }
+
+        checkAbort()
+
+        // Show feedback
+        transitionTo('COACHING')
+        setCoachingTip(feedbackText)
+        setCurrentQuestion(feedbackText)
+        addToTranscript('interviewer', feedbackText, 1)
+        await avatarSpeak(feedbackText, avatarEmotion)
+
+        await new Promise<void>((r) => setTimeout(r, 2000))
+        checkAbort()
+
+        // Follow-up: ask about approach
+        if (timeRemainingRef.current > 60) {
+          const followUp = `Can you walk me through your approach? What data structures did you use, and what's the time complexity of your solution?`
+          transitionTo('ASK_QUESTION')
+          questionIndexRef.current = 2
+          setQuestionIndex(2)
+          setCurrentQuestion(followUp)
+          addToTranscript('interviewer', followUp, 2)
+          await avatarSpeak(followUp, 'curious')
+
+          checkAbort()
+          transitionTo('LISTENING')
+          setLiveAnswer('')
+          const answer = await listenForAnswer()
+
+          if (answer && !isInterviewOver()) {
+            addToTranscript('candidate', answer, 2)
+            await evaluateAndCoach(followUp, answer, 2, undefined, 0)
+          }
+        }
+
+        // Wrap up
+        if (!isInterviewOver()) {
+          transitionTo('WRAP_UP')
+          addToTranscript('interviewer', WRAP_UP_LINE)
+          await avatarSpeak(WRAP_UP_LINE, 'friendly')
+          await new Promise((r) => setTimeout(r, 4000))
+          finishInterview()
+        }
+        return
+      }
+
+      // ── Standard interview flow ──
       const intro = getInterviewIntro(config.role, config.interviewType, config.targetCompany)
       setCurrentQuestion(intro)
       addToTranscript('interviewer', intro, 0)
@@ -872,5 +1000,6 @@ export function useInterview({
     sessionId: sessionIdRef.current,
     coachingTip,
     finishInterview,
+    onCodeSubmit,
   }
 }
