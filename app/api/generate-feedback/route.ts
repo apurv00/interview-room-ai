@@ -87,6 +87,27 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
     const interviewType = config.interviewType || 'screening'
     const domainLabel = getDomainLabel(config.role)
 
+    // ── Early exit: no evaluations means user ended without answering ──
+    if (!evaluations || evaluations.length === 0) {
+      const noDataFeedback: FeedbackData = {
+        overall_score: 0,
+        pass_probability: 'Low',
+        confidence_level: 'Low',
+        dimensions: {
+          answer_quality: { score: 0, strengths: [], weaknesses: ['No answers were provided'] },
+          communication: { score: 0, wpm: 0, filler_rate: 0, pause_score: 0, rambling_index: 0 },
+          engagement_signals: { score: 0, engagement_score: 0, confidence_trend: 'stable', energy_consistency: 0, composure_under_pressure: 0 },
+        },
+        red_flags: ['Interview ended without any responses'],
+        top_3_improvements: [
+          'Complete the interview by answering the questions asked',
+          'Practice with shorter 10-minute sessions to build confidence',
+          'Use the Coach Mode for guided STAR framework practice',
+        ],
+      }
+      return NextResponse.json(noDataFeedback)
+    }
+
     const aggMetrics = aggregateMetrics(speechMetrics)
     const commScore = communicationScore(aggMetrics)
 
@@ -370,16 +391,23 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         errorMessage: err instanceof Error ? err.message : 'Unknown error',
       }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
 
+      // Compute a rough score from evaluations if available, otherwise use minimal defaults
+      const hasEvals = evaluations && evaluations.length > 0
+      const roughScore = hasEvals
+        ? Math.round((evaluations as any[]).reduce((sum: number, e: any) =>
+            sum + ((Number(e.relevance) || 0) + (Number(e.structure) || 0) + (Number(e.specificity) || 0) + (Number(e.ownership) || 0)) / 4, 0) / evaluations.length)
+        : 0
+
       const fallback: FeedbackData = {
-        overall_score: 65,
-        pass_probability: 'Medium',
+        overall_score: roughScore,
+        pass_probability: roughScore >= 70 ? 'Medium' : 'Low',
         confidence_level: 'Low',
         dimensions: {
-          answer_quality: { score: 65, strengths: ['Attempted to answer all questions'], weaknesses: ['Limited specificity', 'STAR structure not consistently used'] },
-          communication: { score: 60, wpm: 140, filler_rate: 0.08, pause_score: 60, rambling_index: 0.3 },
-          engagement_signals: { score: 60, engagement_score: 60, confidence_trend: 'stable', energy_consistency: 0.65, composure_under_pressure: 55 },
+          answer_quality: { score: roughScore, strengths: [], weaknesses: ['Feedback generation encountered an error — scores are approximate'] },
+          communication: { score: commScore || 0, wpm: aggMetrics.wpm, filler_rate: aggMetrics.fillerRate, pause_score: aggMetrics.pauseScore, rambling_index: aggMetrics.ramblingIndex },
+          engagement_signals: { score: Math.round(roughScore * 0.9), engagement_score: Math.round(roughScore * 0.9), confidence_trend: 'stable', energy_consistency: 0.5, composure_under_pressure: Math.round(roughScore * 0.85) },
         },
-        red_flags: [],
+        red_flags: hasEvals ? [] : ['No responses recorded'],
         top_3_improvements: [
           'Use the STAR framework explicitly for every behavioral question',
           'Include specific metrics and outcomes to strengthen specificity',

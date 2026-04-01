@@ -31,6 +31,24 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
     const interviewType = config.interviewType || 'screening'
     const domainLabel = getDomainLabel(config.role)
 
+    // ── Early exit: empty or near-empty answer → score 0 ──
+    const trimmedAnswer = (answer || '').trim()
+    if (trimmedAnswer.length < 5) {
+      return NextResponse.json({
+        questionIndex,
+        question,
+        answer: trimmedAnswer,
+        relevance: 0,
+        structure: 0,
+        specificity: 0,
+        ownership: 0,
+        needsFollowUp: false,
+        flags: ['No substantive answer provided'],
+        probeDecision: { shouldProbe: false },
+        pushback: null,
+      })
+    }
+
     // Fetch depth-specific evaluation criteria
     let evalCriteria = ''
     let scoringDims: { name: string; label: string; weight: number }[] = []

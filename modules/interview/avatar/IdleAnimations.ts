@@ -2,9 +2,9 @@
 // Continuous subtle animations: breathing, head tilt, gaze drift, nodding, blink
 
 export interface IdleState {
-  breathY: number        // vertical translate (-1.5 to 1.5)
-  headTiltDeg: number    // rotation degrees (-1 to 1)
-  gazeX: number          // horizontal eye offset (-2 to 2)
+  breathY: number        // vertical translate
+  headTiltDeg: number    // rotation degrees
+  gazeX: number          // horizontal eye offset
   isNodding: boolean
   nodProgress: number    // 0 to 1 during nod cycle
   blinkState: boolean    // true = eyes closed
@@ -20,7 +20,7 @@ export class IdleAnimationEngine {
   // Nod scheduling
   private nextNodAt = 0
   private nodStartTime = 0
-  private nodDurationMs = 400 // ~25 frames at 60fps
+  private nodDurationMs = 500 // Slightly longer nod for visibility
 
   // Blink scheduling
   private nextBlinkAt = 0
@@ -40,7 +40,8 @@ export class IdleAnimationEngine {
   setListening(listening: boolean): void {
     this.isListeningMode = listening
     if (listening) {
-      this.scheduleNextNod()
+      // Start nodding sooner when entering listening mode
+      this.nextNodAt = performance.now() + 800
     }
   }
 
@@ -53,7 +54,12 @@ export class IdleAnimationEngine {
 
   /** Set speech-active state to adjust nod frequency */
   setSpeechActive(active: boolean): void {
+    const wasActive = this.isSpeechActive
     this.isSpeechActive = active
+    // When speech starts, trigger an immediate nod
+    if (active && !wasActive && this.isListeningMode) {
+      this.triggerNod()
+    }
   }
 
   /** Stop all animations */
@@ -66,16 +72,21 @@ export class IdleAnimationEngine {
   }
 
   private scheduleNextBlink(): void {
-    const delay = 2500 + Math.random() * 3000 // 2.5–5.5s
+    // Blink more often during listening (engaged look)
+    const delay = this.isListeningMode
+      ? 2000 + Math.random() * 2000 // 2–4s when listening
+      : 2500 + Math.random() * 3000 // 2.5–5.5s otherwise
     this.nextBlinkAt = performance.now() + delay
-    this.blinkEndAt = this.nextBlinkAt + 150 // 150ms blink
+    this.blinkEndAt = this.nextBlinkAt + 150
   }
 
   private scheduleNextNod(): void {
-    // Nod more frequently when candidate is actively speaking
+    // Nod much more frequently when candidate is actively speaking
     const delay = this.isSpeechActive
-      ? 1500 + Math.random() * 1500 // 1.5–3s when speaking
-      : 2000 + Math.random() * 4000 // 2–6s when silent
+      ? 1000 + Math.random() * 1500 // 1–2.5s when speaking (very responsive)
+      : this.isListeningMode
+      ? 2000 + Math.random() * 2000 // 2–4s when listening but silence
+      : 3000 + Math.random() * 4000 // 3–7s when not listening
     this.nextNodAt = performance.now() + delay
   }
 
@@ -83,14 +94,17 @@ export class IdleAnimationEngine {
     const now = performance.now()
     const t = (now - this.startTime) / 1000 // seconds elapsed
 
-    // ── Breathing: 4s period, 1.5px amplitude ──
-    const breathY = Math.sin((t * 2 * Math.PI) / 4) * 1.5
+    // ── Breathing: deeper during listening (engaged posture) ──
+    const breathAmplitude = this.isListeningMode ? 2.0 : 1.5
+    const breathY = Math.sin((t * 2 * Math.PI) / 4) * breathAmplitude
 
-    // ── Head tilt: 6s period, ±1 degree ──
-    const headTiltDeg = Math.sin((t * 2 * Math.PI) / 6) * 1
+    // ── Head tilt: more subtle movement during listening ──
+    const tiltAmplitude = this.isListeningMode ? 1.5 : 1.0
+    const headTiltDeg = Math.sin((t * 2 * Math.PI) / 6) * tiltAmplitude
 
-    // ── Gaze drift: 8s period, ±2px ──
-    const gazeX = Math.sin((t * 2 * Math.PI) / 8) * 2
+    // ── Gaze: look slightly toward candidate when listening ──
+    const gazeBase = this.isListeningMode ? -0.5 : 0 // Slight leftward gaze (toward candidate)
+    const gazeX = gazeBase + Math.sin((t * 2 * Math.PI) / 8) * 2
 
     // ── Blink ──
     let blinkState = false
@@ -100,13 +114,12 @@ export class IdleAnimationEngine {
       this.scheduleNextBlink()
     }
 
-    // ── Nod (only in listening mode) ──
+    // ── Nod (listening mode — more visible and frequent) ──
     let isNodding = false
     let nodProgress = 0
 
     if (this.isListeningMode) {
       if (this.nodStartTime > 0) {
-        // Currently nodding
         const elapsed = now - this.nodStartTime
         if (elapsed < this.nodDurationMs) {
           isNodding = true
@@ -116,7 +129,6 @@ export class IdleAnimationEngine {
           this.scheduleNextNod()
         }
       } else if (now >= this.nextNodAt) {
-        // Start a nod
         this.nodStartTime = now
         isNodding = true
         nodProgress = 0
