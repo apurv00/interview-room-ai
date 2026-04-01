@@ -57,7 +57,8 @@ export default function Avatar({ emotion, isTalking, ttsText, isListening, isPro
   }, [transcriptWordCount, onTranscriptUpdate])
 
   const mouthPath = isTalking ? state.mouthPath : state.emotionMouth
-  const nodY = state.isNodding ? Math.sin(state.nodProgress * Math.PI) * 3 : 0
+  // Nod: larger amplitude (5px) for visible head movement
+  const nodY = state.isNodding ? Math.sin(state.nodProgress * Math.PI) * 5 : 0
 
   return (
     <div className="w-full h-full flex items-center justify-center bg-gradient-to-b from-white via-[#f7f9f9] to-white relative overflow-hidden">

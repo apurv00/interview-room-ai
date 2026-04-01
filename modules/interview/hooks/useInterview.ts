@@ -122,7 +122,12 @@ export function useInterview({
   const speechMetricsRef = useRef<SpeechMetrics[]>([])
 
   // ── Live answer capture ──
-  const [liveAnswer, setLiveAnswer] = useState('')
+  const [liveAnswer, _setLiveAnswer] = useState('')
+  const liveAnswerRef = useRef('')
+  const setLiveAnswer = useCallback((text: string) => {
+    liveAnswerRef.current = text
+    _setLiveAnswer(text)
+  }, [])
 
   // ── Coaching ──
   const [coachingTip, setCoachingTip] = useState<string | null>(null)
@@ -392,8 +397,27 @@ export function useInterview({
 
   /** Listen for candidate speech and collect metrics. Resolves with the answer text. */
   function listenForAnswer(showLive: boolean = true): Promise<string> {
+    // Periodically update avatar emotion during listening based on answer growth
+    let lastWordCount = 0
+    const emotionInterval = setInterval(() => {
+      const currentAnswer = liveAnswerRef.current || ''
+      const wordCount = currentAnswer.split(/\s+/).filter(Boolean).length
+      if (wordCount > lastWordCount) {
+        // Candidate is actively speaking — show engagement
+        if (wordCount > 80) {
+          setAvatarEmotion('impressed') // Long detailed answer
+        } else if (wordCount > 30) {
+          setAvatarEmotion('friendly')  // Building momentum
+        } else {
+          setAvatarEmotion('curious')   // Listening attentively
+        }
+        lastWordCount = wordCount
+      }
+    }, 3000) // Check every 3 seconds
+
     return new Promise((resolve) => {
       startListening((result) => {
+        clearInterval(emotionInterval)
         if (result.metrics) {
           speechMetricsRef.current.push(result.metrics)
         }
