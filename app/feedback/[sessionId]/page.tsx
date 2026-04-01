@@ -91,6 +91,10 @@ function FeedbackPageInner() {
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null)
   const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null)
 
+  // Lazy transcript loading
+  const [lazyTranscript, setLazyTranscript] = useState<StoredInterviewData['transcript'] | null>(null)
+  const [transcriptLoading, setTranscriptLoading] = useState(false)
+
   // Peer comparison state
   const [peerData, setPeerData] = useState<PeerData | null>(null)
   const [peerLoading, setPeerLoading] = useState(true)
@@ -101,6 +105,27 @@ function FeedbackPageInner() {
   const activeEntryRef = useRef<HTMLDivElement>(null)
   const handleSeekExpose = useCallback((fn: (s: number) => void) => { seekToRef.current = fn }, [])
 
+  // ── Tab switching with lazy transcript fetch ────────────────────────────────
+
+  const handleTabChange = useCallback((tab: FeedbackTab) => {
+    setActiveTab(tab)
+    // Lazy-load transcript when the tab is first opened
+    if ((tab === 'transcript' || tab === 'questions') && !lazyTranscript && !transcriptLoading && sessionId && sessionId !== 'local') {
+      setTranscriptLoading(true)
+      fetch(`/api/interviews/${sessionId}/transcript`)
+        .then((r) => r.ok ? r.json() : null)
+        .then((d) => {
+          if (d?.transcript) {
+            setLazyTranscript(d.transcript)
+            // Also update data.transcript for QuestionBreakdown
+            setData((prev) => prev ? { ...prev, transcript: d.transcript } : prev)
+          }
+        })
+        .catch(() => {})
+        .finally(() => setTranscriptLoading(false))
+    }
+  }, [lazyTranscript, transcriptLoading, sessionId])
+
   // ── Data loading ────────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -108,9 +133,15 @@ function FeedbackPageInner() {
     const { signal } = abortCtrl
 
     async function loadData() {
+      // Guard against null/undefined sessionIds reaching the API
+      if (!sessionId || sessionId === 'null' || sessionId === 'undefined') {
+        router.push('/')
+        return
+      }
+
       if (sessionId && sessionId !== 'local') {
         try {
-          const res = await fetch(`/api/interviews/${sessionId}`, { signal })
+          const res = await fetch(`/api/interviews/${sessionId}?excludeTranscript=true`, { signal })
           if (res.ok) {
             const session = await res.json()
             let d: StoredInterviewData = {
@@ -562,7 +593,7 @@ function FeedbackPageInner() {
           {TABS.map((tab) => (
             <button
               key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
+              onClick={() => handleTabChange(tab.key)}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                 activeTab === tab.key
                   ? 'bg-brand-500 text-white'
@@ -594,14 +625,20 @@ function FeedbackPageInner() {
 
         {/* Transcript tab */}
         {activeTab === 'transcript' && (
-          <TranscriptTab
-            transcript={data.transcript}
-            activeTranscriptIndex={activeTranscriptIndex}
-            activeEntryRef={activeEntryRef}
-            recordingUrl={recordingUrl}
-            sessionStartedAt={sessionStartedAt}
-            seekTo={seekToRef.current}
-          />
+          transcriptLoading ? (
+            <div className="flex items-center justify-center py-16">
+              <div className="w-6 h-6 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
+            </div>
+          ) : (
+            <TranscriptTab
+              transcript={lazyTranscript ?? data.transcript}
+              activeTranscriptIndex={activeTranscriptIndex}
+              activeEntryRef={activeEntryRef}
+              recordingUrl={recordingUrl}
+              sessionStartedAt={sessionStartedAt}
+              seekTo={seekToRef.current}
+            />
+          )
         )}
 
         {/* CTA */}

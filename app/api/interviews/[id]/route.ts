@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
+import mongoose from 'mongoose'
 import { ZodError } from 'zod'
 import { authOptions } from '@shared/auth/authOptions'
 import { UpdateSessionSchema } from '@interview/validators/interview'
@@ -18,16 +19,22 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
+    if (!mongoose.Types.ObjectId.isValid(params.id)) {
+      return NextResponse.json({ error: 'Invalid session ID format' }, { status: 400 })
+    }
+
     const session = await getServerSession(authOptions)
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
+    const excludeTranscript = req.nextUrl.searchParams.get('excludeTranscript') === 'true'
     const interviewSession = await getSession(
       params.id,
       session.user.id,
       session.user.role,
-      session.user.organizationId
+      session.user.organizationId,
+      { excludeTranscript }
     )
 
     // Strip internal storage keys from response to prevent presigned URL abuse
@@ -58,6 +65,10 @@ export async function PATCH(
   { params }: { params: { id: string } }
 ) {
   try {
+    if (!mongoose.Types.ObjectId.isValid(params.id)) {
+      return NextResponse.json({ error: 'Invalid session ID format' }, { status: 400 })
+    }
+
     const session = await getServerSession(authOptions)
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

@@ -1,6 +1,7 @@
 'use client'
 
 import { createContext, useContext, useState, useCallback, useEffect } from 'react'
+import { deduplicatedFetch } from '@shared/cachedFetch'
 
 interface XpContextValue {
   xp: number
@@ -41,7 +42,7 @@ export default function XpProvider({ children }: { children: React.ReactNode }) 
 
   const refreshXp = useCallback(async () => {
     try {
-      const res = await fetch('/api/learn/xp')
+      const res = await deduplicatedFetch('/api/learn/xp')
       if (res.ok) {
         const json = await res.json()
         setData(json)

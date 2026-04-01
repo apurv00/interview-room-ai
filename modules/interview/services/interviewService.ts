@@ -157,11 +157,16 @@ export async function getSession(
   sessionId: string,
   userId: string,
   role: string,
-  organizationId: string | undefined
+  organizationId: string | undefined,
+  options?: { excludeTranscript?: boolean }
 ): Promise<IInterviewSession> {
   await connectDB()
 
-  const session = await InterviewSession.findById(sessionId)
+  let query = InterviewSession.findById(sessionId)
+  if (options?.excludeTranscript) {
+    query = query.select('-transcript')
+  }
+  const session = await query
   if (!session) throw new NotFoundError('Interview session')
 
   if (!canViewSession(
