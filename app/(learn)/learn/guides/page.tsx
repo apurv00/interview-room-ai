@@ -23,6 +23,7 @@ const CATEGORIES = [
   { key: 'questions' as const, label: 'Interview Questions' },
   { key: 'tips' as const, label: 'Tips & Strategies' },
   { key: 'frameworks' as const, label: 'Frameworks & Practice' },
+  { key: 'companies' as const, label: 'Company Guides' },
 ]
 
 export default function ResourcesPage() {

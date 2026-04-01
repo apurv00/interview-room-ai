@@ -58,6 +58,13 @@ export const MINIMUM_TOPICS: Record<Duration, number> = {
   30: 10,
 }
 
+// Coding interviews have fewer problems (1-2) with more time per problem
+export const CODING_QUESTION_COUNT: Record<Duration, number> = {
+  10: 1,
+  20: 1,
+  30: 2,
+}
+
 // ─── Avatar persona ───────────────────────────────────────────────────────────
 
 export const AVATAR_NAME = 'Alex Chen'

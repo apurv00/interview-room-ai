@@ -22,6 +22,7 @@ export interface InterviewConfig {
   resumeId?: string             // source resume ID for resume-to-interview flow
   targetCompany?: string        // extracted from JD or entered in lobby
   targetIndustry?: string       // extracted from JD or entered in lobby
+  coachMode?: boolean           // active STAR framework coaching during answers
 }
 
 // ─── State Machine ────────────────────────────────────────────────────────────
@@ -33,6 +34,7 @@ export type InterviewState =
   | 'INTERVIEW_START'
   | 'ASK_QUESTION'
   | 'LISTENING'
+  | 'CODE_EDITING'
   | 'PROCESSING'
   | 'COACHING'
   | 'FOLLOW_UP'
@@ -40,6 +42,17 @@ export type InterviewState =
   | 'SCORING'
   | 'FEEDBACK'
   | 'ENDED'
+
+// ─── Coding Interview Types ──────────────────────────────────────────────────
+
+export type CodeLanguage = 'python' | 'javascript' | 'typescript' | 'java' | 'cpp'
+
+export interface CodeSubmission {
+  questionIndex: number
+  code: string
+  language: CodeLanguage
+  submittedAt: number
+}
 
 // ─── Performance Signal ─────────────────────────────────────────────────────
 

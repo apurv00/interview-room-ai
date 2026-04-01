@@ -148,6 +148,38 @@ const BUILT_IN_DEPTHS = [
     ],
     applicableDomains: ['pm', 'business', 'finance', 'marketing', 'sales', 'data-science'],
   },
+  {
+    slug: 'system-design', label: 'System Design Round', icon: '🏗️', sortOrder: 5,
+    description: 'Architecture and system design — scalability, trade-offs, data modeling, and distributed systems.',
+    systemPromptTemplate: 'You are Alex Chen, a senior technical interviewer conducting a {duration}-minute system design interview for a {domain} role ({experience} years experience). Present a system design problem and guide the candidate through requirements gathering, high-level design, deep dives, and trade-off discussions.',
+    questionStrategy: 'Present ONE system design problem. Let the candidate drive: requirements clarification → high-level architecture → component deep-dive → scaling discussion → trade-offs. Probe on: data modeling, API design, caching strategy, database selection, consistency vs availability, failure handling, monitoring. Ask "what happens when X fails?" and "how would you scale this 10x?"',
+    evaluationCriteria: 'Evaluate ability to clarify requirements, propose sensible architecture, reason about scalability and trade-offs, make justified technology choices, and communicate design decisions clearly.',
+    avatarPersona: 'Collaborative senior architect who sets up the problem and lets the candidate lead. Provides constraints when asked and probes on weak areas.',
+    scoringDimensions: [
+      { name: 'requirements_clarity', label: 'Requirements Gathering', weight: 0.15 },
+      { name: 'architecture', label: 'Architecture Design', weight: 0.25 },
+      { name: 'scalability', label: 'Scalability Reasoning', weight: 0.25 },
+      { name: 'tradeoffs', label: 'Trade-off Analysis', weight: 0.20 },
+      { name: 'communication', label: 'Design Communication', weight: 0.15 },
+    ],
+    applicableDomains: ['backend', 'frontend', 'devops', 'sdet', 'data-science'],
+  },
+  {
+    slug: 'coding', label: 'Coding Round', icon: '💻', sortOrder: 6,
+    description: 'Live coding problem-solving — algorithm design, implementation, testing, and optimization.',
+    systemPromptTemplate: 'You are Alex Chen, a senior technical interviewer conducting a {duration}-minute coding interview for a {domain} role ({experience} years experience). Present a coding problem, let the candidate ask clarifying questions, then evaluate their code solution.',
+    questionStrategy: 'Present ONE coding problem at a time. Let the candidate clarify requirements, discuss approach, implement the solution, and explain trade-offs. Ask about time/space complexity. Ask "what edge cases should we handle?" and "how would you optimize this?"',
+    evaluationCriteria: 'Evaluate correctness (does it work for all cases), code quality (readability, naming, structure), algorithmic efficiency (time/space complexity), edge case handling, and ability to communicate their approach clearly.',
+    avatarPersona: 'Collaborative technical interviewer who sets up the problem and lets the candidate drive. Provides hints on syntax but probes on algorithmic thinking and trade-offs.',
+    scoringDimensions: [
+      { name: 'correctness', label: 'Correctness', weight: 0.30 },
+      { name: 'efficiency', label: 'Efficiency (Time/Space)', weight: 0.25 },
+      { name: 'code_quality', label: 'Code Quality & Style', weight: 0.20 },
+      { name: 'communication', label: 'Communication', weight: 0.15 },
+      { name: 'edge_cases', label: 'Edge Cases & Testing', weight: 0.10 },
+    ],
+    applicableDomains: ['backend', 'frontend', 'data-science', 'sdet'],
+  },
 ]
 
 export async function seedDatabase() {
