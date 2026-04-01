@@ -130,6 +130,7 @@ export default function InterviewPage() {
     startListening,
     stopListening,
     onRecordingStop: handleRecordingStop,
+    currentProblem,
   })
 
   const interviewRef = useRef(interview)
@@ -169,31 +170,10 @@ export default function InterviewPage() {
   const activeNudge = prosodyNudge || speechNudge || facialNudge
 
   // ─── Code submission handler (coding mode) ─────────────────────────────────
-  const handleCodeSubmit = useCallback(async (code: string) => {
-    if (!currentProblem || !config) return
-    // The interview hook handles phase transitions; we just call the evaluation API
-    try {
-      const res = await fetch('/api/evaluate-code', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          code,
-          language: codingLanguage,
-          problemTitle: currentProblem.title,
-          problemDescription: currentProblem.description,
-          questionIndex,
-          sessionId: interview.sessionId,
-        }),
-      })
-      if (res.ok) {
-        const evaluation = await res.json()
-        console.log('Code evaluation:', evaluation)
-        // The evaluation will be stored alongside regular evaluations
-      }
-    } catch (err) {
-      console.error('Code evaluation error:', err)
-    }
-  }, [currentProblem, config, codingLanguage, questionIndex, interview.sessionId])
+  // Signals the useInterview hook to proceed from CODE_EDITING → PROCESSING
+  const handleCodeSubmit = useCallback((code: string) => {
+    interview.onCodeSubmit(code, codingLanguage)
+  }, [interview.onCodeSubmit, codingLanguage])
 
   // ─── Keyboard shortcut (M to toggle mute) ──────────────────────────────────
   useEffect(() => {

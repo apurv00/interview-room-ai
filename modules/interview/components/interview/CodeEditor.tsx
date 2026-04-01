@@ -96,7 +96,7 @@ export default function CodeEditor({
           theme="vs-dark"
           options={{
             minimap: { enabled: false },
-            fontSize: 14,
+            fontSize: 15,
             lineNumbers: 'on',
             wordWrap: 'on',
             tabSize: 2,
