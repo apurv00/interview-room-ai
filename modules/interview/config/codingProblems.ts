@@ -1002,12 +1002,25 @@ export function getProblemById(id: string): CodingProblem | undefined {
 }
 
 export function selectProblem(domain: string, experience: string, usedIds: string[] = []): CodingProblem | null {
-  const difficulty = experience === '7+' ? 'medium' : experience === '3-6' ? 'medium' : 'easy'
-  const candidates = CODING_PROBLEMS.filter(
-    (p) => p.difficulty === difficulty &&
-    p.applicableDomains.includes(domain) &&
-    !usedIds.includes(p.id)
-  )
-  if (candidates.length === 0) return null
-  return candidates[Math.floor(Math.random() * candidates.length)]
+  const primaryDifficulty = experience === '7+' ? 'hard' : experience === '3-6' ? 'medium' : 'easy'
+
+  // Try primary difficulty first, then adjacent difficulties
+  const difficultyOrder: Array<CodingProblem['difficulty']> =
+    primaryDifficulty === 'easy' ? ['easy', 'medium'] :
+    primaryDifficulty === 'hard' ? ['hard', 'medium'] :
+    ['medium', 'easy', 'hard']
+
+  for (const diff of difficultyOrder) {
+    const candidates = CODING_PROBLEMS.filter(
+      (p) => p.difficulty === diff &&
+      p.applicableDomains.includes(domain) &&
+      !usedIds.includes(p.id)
+    )
+    if (candidates.length > 0) {
+      return candidates[Math.floor(Math.random() * candidates.length)]
+    }
+  }
+
+  // All problems in pool exhausted for this domain — return null (triggers AI generation)
+  return null
 }
