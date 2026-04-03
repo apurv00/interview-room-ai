@@ -21,7 +21,6 @@ import {
 } from '@interview/config/interviewConfig'
 import { deriveCoachingTip } from '@interview/config/coachingTips'
 import { STORAGE_KEYS, sessionScopedKey } from '@shared/storageKeys'
-import { fetchWithRetry } from '@shared/fetchWithRetry'
 import type { SpeechRecognitionResult } from './useSpeechRecognition'
 import {
   computePerformanceSignal as computeSignal,
@@ -29,37 +28,9 @@ import {
   buildThreadSummary as buildSummary,
   toneToEmotion,
 } from './interviewUtils'
-
-// ─── Session persistence helpers ──────────────────────────────────────────────
-
-interface CreateDbSessionResult {
-  sessionId: string | null
-  limitReached?: boolean
-}
-
-async function createDbSession(config: InterviewConfig): Promise<CreateDbSessionResult> {
-  try {
-    const res = await fetch('/api/interviews', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config }),
-    })
-    if (res.status === 402) return { sessionId: null, limitReached: true }
-    if (!res.ok) return { sessionId: null }
-    const data = await res.json()
-    return { sessionId: data.sessionId }
-  } catch {
-    return { sessionId: null }
-  }
-}
-
-async function persistSession(sessionId: string, payload: Record<string, unknown>) {
-  await fetchWithRetry(`/api/interviews/${sessionId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-}
+import { useAvatarSpeech } from './useAvatarSpeech'
+import { useInterviewAPI } from './useInterviewAPI'
+import { createDbSession, persistSession } from './interviewPersistence'
 
 // ─── Hook options ─────────────────────────────────────────────────────────────
 
@@ -108,9 +79,15 @@ export function useInterview({
     setPhase(s)
   }
 
-  // ── Avatar ──
-  const [avatarEmotion, setAvatarEmotion] = useState<AvatarEmotion>('friendly')
-  const [isAvatarTalking, setIsAvatarTalking] = useState(false)
+  // ── Avatar (extracted to useAvatarSpeech) ──
+  const isMultimodalEnabled = process.env.NEXT_PUBLIC_FEATURE_MULTIMODAL === 'true'
+  const { avatarEmotion, isAvatarTalking, setAvatarEmotion, avatarSpeak } = useAvatarSpeech({
+    interviewType: config?.interviewType,
+    isMultimodalEnabled,
+  })
+
+  // ── API calls (extracted to useInterviewAPI) ──
+  const { generateQuestion: apiGenerateQuestion, evaluateAnswer: apiEvaluateAnswer } = useInterviewAPI({ config })
 
   // ── Interview content ──
   const [currentQuestion, setCurrentQuestion] = useState('')
@@ -230,101 +207,6 @@ export function useInterview({
     return () => clearInterval(tick)
   }, [config]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ─── TTS (avatar speaks) ───────────────────────────────────────────────────
-
-  const isMultimodalEnabled = process.env.NEXT_PUBLIC_FEATURE_MULTIMODAL === 'true'
-
-  const avatarSpeak = useCallback(
-    async (text: string, emotion: AvatarEmotion = 'friendly'): Promise<void> => {
-      setAvatarEmotion(emotion)
-      setIsAvatarTalking(true)
-
-      // Try Deepgram Aura TTS first (natural AI voice)
-      if (isMultimodalEnabled) {
-        try {
-          const res = await fetch('/api/tts', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text }),
-          })
-
-          if (res.ok) {
-            const blob = await res.blob()
-            const url = URL.createObjectURL(blob)
-            await new Promise<void>((resolve) => {
-              const audio = new Audio(url)
-              audio.onended = () => {
-                URL.revokeObjectURL(url)
-                setIsAvatarTalking(false)
-                resolve()
-              }
-              audio.onerror = () => {
-                URL.revokeObjectURL(url)
-                setIsAvatarTalking(false)
-                resolve()
-              }
-              audio.play().catch(() => {
-                URL.revokeObjectURL(url)
-                setIsAvatarTalking(false)
-                resolve()
-              })
-            })
-            return
-          }
-        } catch {
-          // Fall through to browser TTS
-        }
-      }
-
-      // Fallback: browser speechSynthesis
-      return new Promise((resolve) => {
-        window.speechSynthesis.cancel()
-        const utterance = new SpeechSynthesisUtterance(text)
-        const voices = window.speechSynthesis.getVoices()
-        const voicePreferences = [
-          'Microsoft Neerja Online (Natural)',
-          'Google US English',
-          'Microsoft Neerja',
-          'Google India English',
-          'Samantha',
-          'Google UK English Female',
-          'Rishi',
-          'Veena',
-          'Karen',
-          'Moira',
-        ]
-        const preferred = voicePreferences.reduce<SpeechSynthesisVoice | null>(
-          (found, name) => found || voices.find((v) => v.name.includes(name)) || null,
-          null
-        )
-        if (preferred) utterance.voice = preferred
-
-        const interviewType = config?.interviewType || 'screening'
-        const ttsProfiles: Record<string, { rate: number; pitch: number }> = {
-          screening: { rate: 1.08, pitch: 1.02 },
-          behavioral: { rate: 1.0, pitch: 1.0 },
-          technical: { rate: 1.1, pitch: 0.98 },
-          'case-study': { rate: 0.98, pitch: 1.0 },
-        }
-        const tts = ttsProfiles[interviewType] || ttsProfiles.screening
-        utterance.rate = tts.rate
-        utterance.pitch = tts.pitch
-        utterance.volume = 1
-
-        utterance.onend = () => {
-          setIsAvatarTalking(false)
-          resolve()
-        }
-        utterance.onerror = () => {
-          setIsAvatarTalking(false)
-          resolve()
-        }
-        window.speechSynthesis.speak(utterance)
-      })
-    },
-    [config, isMultimodalEnabled]
-  )
-
   // ─── Transcript helpers ────────────────────────────────────────────────────
 
   const addToTranscript = useCallback(
@@ -341,62 +223,24 @@ export function useInterview({
     return computeSignal(evaluationsRef.current)
   }
 
-  // ─── Generate question ─────────────────────────────────────────────────────
+  // ─── API wrappers (delegate to useInterviewAPI with local refs) ─────────────
 
   const generateQuestion = useCallback(
-    async (qIdx: number): Promise<string> => {
-      try {
-        const threads = completedThreadsRef.current
-        const lastThread = threads.length > 0 ? threads[threads.length - 1] : undefined
-        const res = await fetch('/api/generate-question', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: getAbortSignal(),
-          body: JSON.stringify({
-            config,
-            questionIndex: qIdx,
-            previousQA: transcriptRef.current,
-            performanceSignal: performanceSignalRef.current,
-            lastThreadSummary: lastThread,
-            completedThreads: threads.length > 0 ? threads : undefined,
-          }),
-        })
-        const data = await res.json()
-        return data.question as string
-      } catch {
-        return 'Tell me about a challenge you faced recently and how you handled it.'
-      }
-    },
-    [config]
+    (qIdx: number): Promise<string> =>
+      apiGenerateQuestion(
+        qIdx,
+        transcriptRef.current,
+        performanceSignalRef.current,
+        completedThreadsRef.current,
+        getAbortSignal(),
+      ),
+    [apiGenerateQuestion]
   )
 
-  // ─── Evaluate answer ───────────────────────────────────────────────────────
-
   const evaluateAnswer = useCallback(
-    async (question: string, answer: string, qIdx: number, probeDepth?: number): Promise<AnswerEvaluation> => {
-      try {
-        const res = await fetch('/api/evaluate-answer', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: getAbortSignal(),
-          body: JSON.stringify({ config, question, answer, questionIndex: qIdx, probeDepth }),
-        })
-        return res.json()
-      } catch {
-        return {
-          questionIndex: qIdx,
-          question,
-          answer,
-          relevance: 60,
-          structure: 55,
-          specificity: 55,
-          ownership: 60,
-          needsFollowUp: false,
-          flags: [],
-        }
-      }
-    },
-    [config]
+    (question: string, answer: string, qIdx: number, probeDepth?: number): Promise<AnswerEvaluation> =>
+      apiEvaluateAnswer(question, answer, qIdx, probeDepth, getAbortSignal()),
+    [apiEvaluateAnswer]
   )
 
   // ─── Shared helpers (DRY: listening + evaluation + coaching) ──────────────
