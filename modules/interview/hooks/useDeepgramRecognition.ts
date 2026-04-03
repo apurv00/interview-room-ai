@@ -41,13 +41,9 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       startTimeRef.current = Date.now()
       setLiveTranscript('')
 
-      // Fetch Deepgram token then connect
-      fetch('/api/transcribe/token', { method: 'POST' })
-        .then((r) => r.json())
-        .then(({ token }) => {
-          if (!token) throw new Error('No token')
-          connectWebSocket(token)
-        })
+      // Fetch short-lived Deepgram token then connect
+      fetchDeepgramToken()
+        .then((token) => connectWebSocket(token))
         .catch((err) => {
           console.error('Deepgram token fetch failed:', err)
           setIsListening(false)
@@ -56,6 +52,13 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   )
+
+  async function fetchDeepgramToken(): Promise<string> {
+    const res = await fetch('/api/transcribe/token', { method: 'POST' })
+    const data = await res.json()
+    if (!data.token) throw new Error('No token returned')
+    return data.token
+  }
 
   function connectWebSocket(token: string) {
     const ws = new WebSocket(

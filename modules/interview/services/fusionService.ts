@@ -1,4 +1,5 @@
-import Anthropic from '@anthropic-ai/sdk'
+import type Anthropic from '@anthropic-ai/sdk'
+import { getAnthropicClient } from '@shared/services/llmClient'
 import { aiLogger } from '@shared/logger'
 import type {
   ProsodySegment,
@@ -8,7 +9,7 @@ import type {
 } from '@shared/types/multimodal'
 import type { AnswerEvaluation, TranscriptEntry, InterviewConfig } from '@shared/types'
 
-const anthropic = new Anthropic()
+const anthropic = getAnthropicClient()
 
 const FUSION_MODEL = 'claude-haiku-4-5-20251001'
 const MAX_TOKENS = 1500

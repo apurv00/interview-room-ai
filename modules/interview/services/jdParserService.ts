@@ -1,12 +1,8 @@
-import Anthropic from '@anthropic-ai/sdk'
+import { getAnthropicClient } from '@shared/services/llmClient'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { logger } from '@shared/logger'
 import type { IParsedJobDescription, ParsedRequirement } from '@shared/db/models/SavedJobDescription'
 import { DOMAIN_COMPETENCIES, UNIVERSAL_COMPETENCIES } from '@learn/services/competencyService'
-
-function createClient(): Anthropic {
-  return new Anthropic()
-}
 
 // ─── Parse Job Description ─────────────────────────────────────────────────
 
@@ -23,7 +19,7 @@ export async function parseJobDescription(rawText: string): Promise<IParsedJobDe
     ]
     const uniqueCompetencies = Array.from(new Set(allCompetencies))
 
-    const response = await createClient().messages.create({
+    const response = await getAnthropicClient().messages.create({
       model: 'claude-sonnet-4-6',
       max_tokens: 2048,
       system: `You are a job description parser. Extract structured data from job descriptions.

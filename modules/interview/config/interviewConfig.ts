@@ -35,35 +35,87 @@ export const EXPERIENCE_LABELS: Record<ExperienceLevel, string> = {
   '7+': '7+ years (Senior)',
 }
 
-export const DURATION_LABELS: Record<Duration, string> = {
+/** Preset labels for common durations; custom durations get a generated label */
+const PRESET_DURATION_LABELS: Record<number, string> = {
   10: '10 min — Quick screen',
   20: '20 min — Standard',
   30: '30 min — Deep dive',
 }
 
-// Upper bound for AI-generated question indices (total interactions including probes).
-// Loop runs from 1..<QUESTION_COUNT>, so actual AI questions = QUESTION_COUNT - 1.
-// Total questions answered = 1 (intro at Q0) + (QUESTION_COUNT - 1) AI questions.
-export const QUESTION_COUNT: Record<Duration, number> = {
-  10: 6,
-  20: 11,
-  30: 16,
+export function getDurationLabel(duration: Duration): string {
+  return PRESET_DURATION_LABELS[duration] ?? `${duration} min`
 }
 
-// Minimum distinct topics to cover (reduced from QUESTION_COUNT since probes use time).
-// With probing, fewer topics are needed but each gets explored more deeply.
-export const MINIMUM_TOPICS: Record<Duration, number> = {
-  10: 4,
-  20: 7,
-  30: 10,
+/** @deprecated Use getDurationLabel() instead. Kept for backward compatibility. */
+export const DURATION_LABELS = PRESET_DURATION_LABELS
+
+// ─── Interpolation helpers ──────────────────────────────────────────────────
+// These use linear interpolation between known anchor points (10, 20, 30 min)
+// and extrapolate for durations outside that range (clamped to sensible bounds).
+
+function interpolate(
+  duration: number,
+  anchors: [number, number][],
+  { minVal = 1, round = true }: { minVal?: number; round?: boolean } = {}
+): number {
+  // Sort anchors by duration
+  const sorted = [...anchors].sort((a, b) => a[0] - b[0])
+
+  // Clamp: if below or above range, extrapolate from nearest two points
+  if (duration <= sorted[0][0]) {
+    const val = sorted[0][1]
+    return round ? Math.max(minVal, Math.round(val)) : Math.max(minVal, val)
+  }
+  if (duration >= sorted[sorted.length - 1][0]) {
+    // Extrapolate from last two points
+    const [d1, v1] = sorted[sorted.length - 2]
+    const [d2, v2] = sorted[sorted.length - 1]
+    const slope = (v2 - v1) / (d2 - d1)
+    const val = v2 + slope * (duration - d2)
+    return round ? Math.max(minVal, Math.round(val)) : Math.max(minVal, val)
+  }
+
+  // Find the two surrounding anchor points
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const [d1, v1] = sorted[i]
+    const [d2, v2] = sorted[i + 1]
+    if (duration >= d1 && duration <= d2) {
+      const t = (duration - d1) / (d2 - d1)
+      const val = v1 + t * (v2 - v1)
+      return round ? Math.max(minVal, Math.round(val)) : Math.max(minVal, val)
+    }
+  }
+
+  return sorted[0][1] // fallback
 }
+
+// Upper bound for AI-generated question indices (total interactions including probes).
+// Loop runs from 1..<questionCount>, so actual AI questions = questionCount - 1.
+// Anchors: 10min→6, 20min→11, 30min→16 (0.5 questions per minute)
+export function getQuestionCount(duration: Duration): number {
+  return interpolate(duration, [[10, 6], [20, 11], [30, 16]])
+}
+
+/** @deprecated Use getQuestionCount() instead */
+export const QUESTION_COUNT: Record<number, number> = { 10: 6, 20: 11, 30: 16 }
+
+// Minimum distinct topics to cover (reduced from question count since probes use time).
+// Anchors: 10min→4, 20min→7, 30min→10
+export function getMinimumTopics(duration: Duration): number {
+  return interpolate(duration, [[10, 4], [20, 7], [30, 10]])
+}
+
+/** @deprecated Use getMinimumTopics() instead */
+export const MINIMUM_TOPICS: Record<number, number> = { 10: 4, 20: 7, 30: 10 }
 
 // Coding interviews have fewer problems (1-2) with more time per problem
-export const CODING_QUESTION_COUNT: Record<Duration, number> = {
-  10: 1,
-  20: 1,
-  30: 2,
+// Anchors: 10min→1, 20min→1, 30min→2
+export function getCodingQuestionCount(duration: Duration): number {
+  return interpolate(duration, [[10, 1], [20, 1], [30, 2]])
 }
+
+/** @deprecated Use getCodingQuestionCount() instead */
+export const CODING_QUESTION_COUNT: Record<number, number> = { 10: 1, 20: 1, 30: 2 }
 
 // ─── Avatar persona ───────────────────────────────────────────────────────────
 
@@ -130,8 +182,11 @@ export const WRAP_UP_LINE =
 
 // ─── Pressure question triggers (question index where light pressure hits) ────
 
-export const PRESSURE_QUESTION_INDEX: Record<Duration, number> = {
-  10: 4,
-  20: 8,
-  30: 12,
+// Pressure question triggers (question index where light pressure hits)
+// Anchors: 10min→4, 20min→8, 30min→12
+export function getPressureQuestionIndex(duration: Duration): number {
+  return interpolate(duration, [[10, 4], [20, 8], [30, 12]])
 }
+
+/** @deprecated Use getPressureQuestionIndex() instead */
+export const PRESSURE_QUESTION_INDEX: Record<number, number> = { 10: 4, 20: 8, 30: 12 }

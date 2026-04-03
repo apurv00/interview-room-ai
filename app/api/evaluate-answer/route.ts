@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
+import { getAnthropicClient } from '@shared/services/llmClient'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { EvaluateAnswerSchema } from '@interview/validators/interview'
 import { trackUsage } from '@shared/services/usageTracking'
@@ -17,7 +17,7 @@ import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
 
-const client = new Anthropic()
+const client = getAnthropicClient()
 
 type EvaluateAnswerBody = z.infer<typeof EvaluateAnswerSchema>
 

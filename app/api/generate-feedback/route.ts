@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
+import { getAnthropicClient } from '@shared/services/llmClient'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { GenerateFeedbackSchema } from '@interview/validators/interview'
 import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
 import type { FeedbackData, AnswerEvaluation } from '@shared/types'
 import { aggregateMetrics, communicationScore } from '@interview/config/speechMetrics'
-import { PRESSURE_QUESTION_INDEX, getDomainLabel } from '@interview/config/interviewConfig'
+import { getPressureQuestionIndex, getDomainLabel } from '@interview/config/interviewConfig'
 import { getSkillSections } from '@interview/services/skillLoader'
 import { findCompanyProfile } from '@interview/config/companyProfiles'
 import { connectDB } from '@shared/db/connection'
@@ -22,7 +22,7 @@ import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
 
-const client = new Anthropic()
+const client = getAnthropicClient()
 
 type GenerateFeedbackBody = z.infer<typeof GenerateFeedbackSchema>
 
@@ -111,7 +111,7 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
     const aggMetrics = aggregateMetrics(speechMetrics)
     const commScore = communicationScore(aggMetrics)
 
-    const pressureIdx = PRESSURE_QUESTION_INDEX[config.duration] ?? 0
+    const pressureIdx = getPressureQuestionIndex(config.duration)
     const { perQSummary, pressureContext } = computeEngagementContext(speechMetrics, evaluations, pressureIdx)
 
     const evalSummary = evaluations

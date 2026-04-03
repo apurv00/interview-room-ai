@@ -1,9 +1,5 @@
-import Anthropic from '@anthropic-ai/sdk'
+import { getAnthropicClient } from '@shared/services/llmClient'
 import { logger } from '@shared/logger'
-
-function createClient(): Anthropic {
-  return new Anthropic()
-}
 
 export interface GenerateJDInput {
   company: string
@@ -25,7 +21,7 @@ export async function generateJobDescription(input: GenerateJDInput): Promise<Ge
     : ''
 
   try {
-    const response = await createClient().messages.create({
+    const response = await getAnthropicClient().messages.create({
       model: 'claude-sonnet-4-6',
       max_tokens: 2000,
       system: `You are a job description writer. Generate realistic, professional job descriptions based on a company name and role title.

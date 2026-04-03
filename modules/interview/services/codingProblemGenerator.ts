@@ -1,9 +1,9 @@
-import Anthropic from '@anthropic-ai/sdk'
+import { getAnthropicClient } from '@shared/services/llmClient'
 import { aiLogger } from '@shared/logger'
 import type { CodingProblem } from '@interview/config/codingProblems'
 import type { CodeLanguage } from '@shared/types'
 
-const client = new Anthropic()
+const client = getAnthropicClient()
 
 /**
  * Generate a fresh coding problem using Claude when the static pool is exhausted.

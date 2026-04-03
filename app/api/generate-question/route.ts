@@ -1,10 +1,9 @@
 import { NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { GenerateQuestionSchema } from '@interview/validators/interview'
 import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
-import { PRESSURE_QUESTION_INDEX, QUESTION_COUNT, getDomainLabel } from '@interview/config/interviewConfig'
+import { getPressureQuestionIndex, getQuestionCount, getDomainLabel } from '@interview/config/interviewConfig'
 import { getSkillSections, selectSkillQuestions } from '@interview/services/skillLoader'
 import { findCompanyProfile, buildCompanyPromptContext } from '@interview/config/companyProfiles'
 import { connectDB } from '@shared/db/connection'
@@ -14,10 +13,11 @@ import { isFeatureEnabled } from '@shared/featureFlags'
 import { generateSessionBrief, briefToPromptContext } from '@interview/services/personalizationEngine'
 import { getQuestionBankContext } from '@interview/services/retrievalService'
 import { z } from 'zod'
+import { getAnthropicClient } from '@shared/services/llmClient'
 
 export const dynamic = 'force-dynamic'
 
-const client = new Anthropic()
+const client = getAnthropicClient()
 
 type GenerateQuestionBody = z.infer<typeof GenerateQuestionSchema>
 
@@ -30,8 +30,8 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     const startTime = Date.now()
     const interviewType = config.interviewType || 'screening'
 
-    const totalQuestions = QUESTION_COUNT[config.duration]
-    const isPressureQuestion = questionIndex === PRESSURE_QUESTION_INDEX[config.duration]
+    const totalQuestions = getQuestionCount(config.duration)
+    const isPressureQuestion = questionIndex === getPressureQuestionIndex(config.duration)
     const isLastQuestion = questionIndex === totalQuestions - 1
 
     const qaContext =

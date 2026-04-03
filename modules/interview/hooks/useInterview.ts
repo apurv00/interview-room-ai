@@ -17,8 +17,7 @@ import type {
 import {
   getInterviewIntro,
   WRAP_UP_LINE,
-  QUESTION_COUNT,
-  MINIMUM_TOPICS,
+  getQuestionCount,
 } from '@interview/config/interviewConfig'
 import { deriveCoachingTip } from '@interview/config/coachingTips'
 import { STORAGE_KEYS, sessionScopedKey } from '@shared/storageKeys'
@@ -694,7 +693,7 @@ export function useInterview({
   const runInterviewLoop = useCallback(
     async (startingQIndex: number) => {
       if (!config) return
-      const maxQ = QUESTION_COUNT[config.duration]
+      const maxQ = getQuestionCount(config.duration)
       let qIdx = startingQIndex
 
       try {

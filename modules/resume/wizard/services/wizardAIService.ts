@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk'
+import { getAnthropicClient } from '@shared/services/llmClient'
 import { aiLogger } from '@shared/logger'
 import { trackUsage } from '@shared/services/usageTracking'
 import { connectDB } from '@shared/db/connection'
@@ -8,7 +8,7 @@ import { WizardConfig } from '@shared/db/models/WizardConfig'
 import { WIZARD_COST_CAP_USD, FALLBACK_FOLLOW_UPS, SEGMENT_PROMPT_CONTEXT } from '../config/wizardConfig'
 import type { AuthUser } from '@shared/middleware/composeApiRoute'
 
-const client = new Anthropic()
+const client = getAnthropicClient()
 
 // ─── Cost Cap Check ────────────────────────────────────────────────────────
 

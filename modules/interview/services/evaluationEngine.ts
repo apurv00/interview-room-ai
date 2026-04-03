@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk'
+import { getAnthropicClient } from '@shared/services/llmClient'
 import { connectDB } from '@shared/db/connection'
 import { EvaluationRubric, InterviewDepth } from '@shared/db/models'
 import type { IEvaluationRubric, RubricDimension } from '@shared/db/models'
@@ -139,7 +139,7 @@ export async function evaluateStructured(
   try {
     const dimensions = await getScoringDimensions(input.domain, input.interviewType, input.seniorityBand)
 
-    const client = new Anthropic()
+    const client = getAnthropicClient()
 
     const dimensionPrompt = buildRubricPromptSection(dimensions)
     const dimensionNames = dimensions.map(d => `"${d.name}": number`).join(', ')

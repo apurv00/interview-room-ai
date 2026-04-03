@@ -3,7 +3,7 @@
 import { useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { InterviewState, Duration } from '@shared/types'
-import { QUESTION_COUNT } from '@interview/config/interviewConfig'
+import { getQuestionCount } from '@interview/config/interviewConfig'
 
 interface TranscriptPanelProps {
   phase: InterviewState
@@ -21,7 +21,7 @@ export default function TranscriptPanel({
   liveAnswer,
 }: TranscriptPanelProps) {
   const answerRef = useRef<HTMLDivElement>(null)
-  const totalQuestions = QUESTION_COUNT[duration]
+  const totalQuestions = getQuestionCount(duration)
   const isActive = phase === 'LISTENING' || phase === 'FOLLOW_UP'
   const progressPct = totalQuestions > 0 ? ((questionIndex + 1) / totalQuestions) * 100 : 0
 

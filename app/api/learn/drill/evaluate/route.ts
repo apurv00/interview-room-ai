@@ -6,12 +6,12 @@ import { awardXp } from '@learn/services/xpService'
 import { recordActivity, updateStreak } from '@learn/services/streakService'
 import { checkAndAwardBadges } from '@learn/services/badgeService'
 import { XP_AMOUNTS } from '@learn/config/xpTable'
-import Anthropic from '@anthropic-ai/sdk'
+import { getAnthropicClient } from '@shared/services/llmClient'
 import { aiLogger } from '@shared/logger'
 
 export const dynamic = 'force-dynamic'
 
-const client = new Anthropic()
+const client = getAnthropicClient()
 
 export async function POST(req: Request) {
   try {

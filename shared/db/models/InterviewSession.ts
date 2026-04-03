@@ -57,6 +57,10 @@ export interface IInterviewSession extends Document {
   candidateName?: string
   recruiterNotes?: string
 
+  // Invite verification (B2B)
+  inviteTokenHash?: string
+  inviteTokenExpiry?: Date
+
   // Sharing
   shareToken?: string
   isPublic?: boolean
@@ -81,7 +85,7 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
       role: { type: String, required: true },
       interviewType: { type: String, default: 'screening' },
       experience: { type: String, enum: ['0-2', '3-6', '7+'], required: true },
-      duration: { type: Number, enum: [5, 10, 20], required: true },
+      duration: { type: Number, min: 5, max: 60, required: true },
     },
 
     // Document context (stored separately from config to keep config lightweight)
@@ -123,6 +127,10 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
     candidateEmail: { type: String, lowercase: true },
     candidateName: { type: String },
     recruiterNotes: { type: String },
+
+    // Invite verification (B2B)
+    inviteTokenHash: { type: String },
+    inviteTokenExpiry: { type: Date },
 
     // Sharing
     shareToken: { type: String, unique: true, sparse: true },

@@ -13,7 +13,7 @@ import HowItWorksBlock from '@/shared/blocks/HowItWorks'
 import StatsBlock from '@/shared/blocks/Stats'
 import ResourceLinks from '@learn/components/ResourceLinks'
 import type { Role, InterviewType, ExperienceLevel, Duration, InterviewConfig } from '@shared/types'
-import { EXPERIENCE_LABELS, DURATION_LABELS, getDomainLabel } from '@interview/config/interviewConfig'
+import { EXPERIENCE_LABELS, getDurationLabel, getDomainLabel } from '@interview/config/interviewConfig'
 import { deduplicatedFetch } from '@shared/cachedFetch'
 import { STORAGE_KEYS } from '@shared/storageKeys'
 import { getStartRedirect } from '@shared/authRedirect'
@@ -159,7 +159,7 @@ export default function AuthenticatedHome() {
     if (role) parts.push(getDomainLabel(role))
     if (interviewType) parts.push(interviewType.charAt(0).toUpperCase() + interviewType.slice(1))
     if (experience) parts.push(EXPERIENCE_LABELS[experience])
-    if (duration) parts.push(DURATION_LABELS[duration])
+    if (duration) parts.push(getDurationLabel(duration))
     return parts.join(' · ')
   }, [role, interviewType, experience, duration])
 
@@ -478,7 +478,7 @@ export default function AuthenticatedHome() {
               layout="inline"
               renderItem={(d, selected) => (
                 <div className={`py-2 px-1 text-center ${selected ? 'text-[#6366f1]' : ''}`}>
-                  <span className="text-xs font-medium">{DURATION_LABELS[d]}</span>
+                  <span className="text-xs font-medium">{getDurationLabel(d)}</span>
                 </div>
               )}
             />
