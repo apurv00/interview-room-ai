@@ -1,5 +1,5 @@
 import mongoose from 'mongoose'
-import Anthropic from '@anthropic-ai/sdk'
+import { getAnthropicClient } from '@shared/services/llmClient'
 import { connectDB } from '@shared/db/connection'
 import { PathwayPlan, User } from '@shared/db/models'
 import type { IPathwayPlan, PracticeTask, Milestone } from '@shared/db/models'
@@ -398,7 +398,7 @@ async function generateAIPlan(
   profile: Record<string, unknown> | null
 ): Promise<AIPlan | null> {
   try {
-    const client = new Anthropic()
+    const client = getAnthropicClient()
 
     const context = [
       `Domain: ${input.domain}`,

@@ -1,12 +1,21 @@
 import { inngest } from './inngestClient'
-import { runMultimodalPipeline } from './multimodalPipeline'
+import {
+  stepFetchSession,
+  stepTranscribeAndDownload,
+  stepProcessSignals,
+  stepRunFusion,
+  stepPersistResults,
+  stepMarkFailed,
+} from './multimodalPipeline'
+import { connectDB } from '@shared/db/connection'
+import { FailedJob } from '@shared/db/models/FailedJob'
 
 /**
  * Inngest function: Multimodal Interview Analysis
  *
  * Triggered by 'interview/analysis.requested' event.
- * Runs the full pipeline in multi-step fashion so each step
- * gets its own timeout and retry.
+ * Each step runs independently with its own timeout and retry,
+ * so a failure in (e.g.) fusion doesn't re-run transcription.
  */
 export const multimodalAnalysis = inngest.createFunction(
   {
@@ -17,11 +26,80 @@ export const multimodalAnalysis = inngest.createFunction(
   },
   async ({ event, step }) => {
     const { sessionId, userId } = event.data as { sessionId: string; userId: string }
+    const startTime = Date.now()
 
-    await step.run('run-pipeline', async () => {
-      await runMultimodalPipeline(sessionId, userId)
-    })
+    try {
+      // Step 1: Fetch and validate session data
+      const session = await step.run('fetch-session', () =>
+        stepFetchSession(sessionId)
+      )
 
-    return { sessionId, status: 'completed' }
+      // Step 2: Transcribe recording + download facial data (parallel within step)
+      const mediaData = await step.run('transcribe-and-download', () =>
+        stepTranscribeAndDownload(session.recordingR2Key, session.facialLandmarksR2Key)
+      )
+
+      // Step 3: Extract prosody + aggregate facial signals
+      const signals = await step.run('process-signals', () =>
+        stepProcessSignals(
+          mediaData.whisper.segments,
+          mediaData.facialFrames,
+          session.questionBoundaries,
+          mediaData.whisper.durationSeconds
+        )
+      )
+
+      // Step 4: Run Claude fusion analysis
+      const fusionResult = await step.run('run-fusion', () =>
+        stepRunFusion(
+          signals.prosodySegments,
+          signals.facialSegments,
+          session.evaluations,
+          session.transcript as unknown as Array<Record<string, unknown>>,
+          session.config
+        )
+      )
+
+      // Step 5: Persist results and track usage
+      await step.run('persist-results', () =>
+        stepPersistResults(sessionId, userId, {
+          whisperSegments: mediaData.whisper.segments,
+          prosodySegments: signals.prosodySegments,
+          facialSegments: signals.facialSegments,
+          timeline: fusionResult.timeline as unknown as Array<Record<string, unknown>>,
+          fusionSummary: fusionResult.fusionSummary as unknown as Record<string, unknown>,
+          facialLandmarksR2Key: session.facialLandmarksR2Key,
+          whisperCostUsd: mediaData.whisper.costUsd,
+          fusionInputTokens: fusionResult.inputTokens,
+          fusionOutputTokens: fusionResult.outputTokens,
+          startTime,
+        })
+      )
+
+      return { sessionId, status: 'completed' }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error'
+      const errorStack = err instanceof Error ? err.stack : undefined
+
+      await step.run('mark-failed', async () => {
+        await stepMarkFailed(sessionId, errorMessage, startTime)
+
+        // Persist structured failure record for observability
+        await connectDB()
+        await FailedJob.create({
+          jobId: event.id || `multimodal-${sessionId}`,
+          functionId: 'multimodal-analysis',
+          eventName: 'interview/analysis.requested',
+          sessionId,
+          userId,
+          error: errorMessage,
+          stack: errorStack,
+          attemptNumber: (event.data as Record<string, unknown>).attempt_number as number || 1,
+          payload: { sessionId, userId },
+        }).catch(() => {}) // non-critical
+      })
+
+      throw err
+    }
   }
 )

@@ -1,8 +1,8 @@
-import Anthropic from '@anthropic-ai/sdk'
+import { getAnthropicClient } from '@shared/services/llmClient'
 import { getUserProfileContext } from './resumeService'
 import { extractJSON } from '@shared/utils'
 
-const client = new Anthropic()
+const client = getAnthropicClient()
 
 // ─── Enhance Section ────────────────────────────────────────────────────────
 

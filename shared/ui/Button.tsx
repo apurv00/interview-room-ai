@@ -1,79 +1,36 @@
 'use client'
 
+/**
+ * Unified Button component — re-exports the shadcn Button with variant mapping
+ * for backward compatibility with the old custom Button API.
+ *
+ * Variant mapping:
+ *   primary   → default
+ *   secondary → outline
+ *   ghost     → ghost
+ *   danger    → destructive
+ */
+
+import { Button as ShadcnButton, type ButtonProps as ShadcnButtonProps } from '@shared/ui/shadcn/button'
 import { forwardRef } from 'react'
 
-type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger'
-type ButtonSize = 'sm' | 'md' | 'lg'
+type LegacyVariant = 'primary' | 'secondary' | 'ghost' | 'danger'
 
-interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: ButtonVariant
-  size?: ButtonSize
-  leftIcon?: React.ReactNode
-  rightIcon?: React.ReactNode
-  isLoading?: boolean
-  isFullWidth?: boolean
-  glow?: boolean
+const VARIANT_MAP: Record<LegacyVariant, ShadcnButtonProps['variant']> = {
+  primary: 'default',
+  secondary: 'outline',
+  ghost: 'ghost',
+  danger: 'destructive',
 }
 
-const variantClasses: Record<ButtonVariant, string> = {
-  primary: 'bg-[#6366f1] hover:bg-[#5558e6] text-white shadow-sm hover:shadow-md',
-  secondary: 'bg-white border border-[#e1e8ed] text-[#0f1419] hover:bg-[#f7f9f9] hover:border-[#cfd9de] shadow-sm',
-  ghost: 'bg-transparent text-[#536471] hover:bg-[#f7f9f9] hover:text-[#0f1419]',
-  danger: 'bg-[rgba(244,33,46,0.06)] border border-[rgba(244,33,46,0.15)] text-[#f4212e] hover:bg-[rgba(244,33,46,0.10)]',
+interface ButtonProps extends Omit<ShadcnButtonProps, 'variant'> {
+  variant?: LegacyVariant | ShadcnButtonProps['variant']
 }
-
-const sizeClasses: Record<ButtonSize, string> = {
-  sm: 'h-8 text-xs px-3.5 rounded-full',
-  md: 'h-9 text-sm px-5 rounded-full',
-  lg: 'h-11 text-sm px-6 rounded-full',
-}
-
-const Spinner = () => (
-  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-  </svg>
-)
 
 const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-  (
-    {
-      variant = 'primary',
-      size = 'md',
-      leftIcon,
-      rightIcon,
-      isLoading = false,
-      isFullWidth = false,
-      glow = false,
-      className = '',
-      disabled,
-      children,
-      ...props
-    },
-    ref
-  ) => {
-    return (
-      <button
-        ref={ref}
-        disabled={disabled || isLoading}
-        className={`
-          inline-flex items-center justify-center gap-1.5 font-semibold
-          transition-all duration-200 ease-out
-          disabled:opacity-40 disabled:cursor-not-allowed
-          active:scale-[0.97]
-          ${variantClasses[variant]}
-          ${sizeClasses[size]}
-          ${isFullWidth ? 'w-full' : ''}
-          ${glow && variant === 'primary' ? 'btn-glow' : ''}
-          ${className}
-        `.trim()}
-        {...props}
-      >
-        {isLoading ? <Spinner /> : leftIcon}
-        {children}
-        {rightIcon}
-      </button>
-    )
+  ({ variant = 'primary', ...props }, ref) => {
+    const mappedVariant = VARIANT_MAP[variant as LegacyVariant] ?? variant
+    return <ShadcnButton ref={ref} variant={mappedVariant as ShadcnButtonProps['variant']} {...props} />
   }
 )
 

@@ -13,7 +13,7 @@ export const UpdateOrgSchema = z.object({
   name: z.string().min(2).max(100).trim().optional(),
   settings: z.object({
     allowedRoles: z.array(z.string()).optional(),
-    defaultDuration: z.union([z.literal(10), z.literal(20), z.literal(30)]).optional(),
+    defaultDuration: z.number().int().min(5).max(60).optional(),
     requireRecording: z.boolean().optional(),
     customWelcomeMessage: z.string().max(500).optional(),
     webhookUrl: z.string().url().max(500).optional().or(z.literal('')),
@@ -46,7 +46,7 @@ export const InviteSchema = z.object({
   role: z.string().min(1).max(50),
   interviewType: z.string().min(1).max(50).default('screening'),
   experience: z.enum(['0-2', '3-6', '7+']).default('3-6'),
-  duration: z.union([z.literal(10), z.literal(20), z.literal(30)]).default(20),
+  duration: z.number().int().min(5).max(60).default(20),
   templateId: z.string().optional(),
   recruiterNotes: z.string().max(1000).optional(),
   jobDescription: z.string().max(50000).optional(),

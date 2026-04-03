@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
+import { getAnthropicClient } from '@shared/services/llmClient'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
 import { z } from 'zod'
 
-const client = new Anthropic()
+const client = getAnthropicClient()
 
 const EvaluateCodeSchema = z.object({
   code: z.string().min(1).max(50000),

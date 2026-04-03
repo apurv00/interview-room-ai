@@ -159,6 +159,8 @@ export async function listCandidates(
 
 // ─── Invites ────────────────────────────────────────────────────────────────
 
+const INVITE_TOKEN_EXPIRY_DAYS = 7
+
 export async function createInvite(
   userId: OrgId,
   organizationId: OrgId,
@@ -174,14 +176,28 @@ export async function createInvite(
     jobDescription?: string
   }
 ) {
-  const org = await Organization.findById(organizationId).lean()
-  if (!org) return { error: 'Organization not found', status: 404 }
+  // Atomic quota check + increment (prevents race condition)
+  const updatedOrg = await Organization.findOneAndUpdate(
+    {
+      _id: organizationId,
+      $expr: { $lt: ['$monthlyInterviewsUsed', '$monthlyInterviewLimit'] },
+    },
+    { $inc: { monthlyInterviewsUsed: 1 } },
+    { new: true }
+  )
 
-  if (org.monthlyInterviewsUsed >= org.monthlyInterviewLimit) {
+  if (!updatedOrg) {
+    const exists = await Organization.exists({ _id: organizationId })
+    if (!exists) return { error: 'Organization not found', status: 404 }
     return { error: 'Monthly interview limit reached', status: 429 }
   }
 
   const { candidateEmail, candidateName, role, interviewType, experience, duration, templateId, recruiterNotes, jobDescription } = data
+
+  // Generate invite token and store its hash for verification
+  const token = crypto.randomBytes(32).toString('hex')
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex')
+  const tokenExpiry = new Date(Date.now() + INVITE_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000)
 
   const interviewSession = await InterviewSession.create({
     userId,
@@ -193,15 +209,12 @@ export async function createInvite(
     candidateName,
     recruiterNotes,
     templateId: templateId || undefined,
+    inviteTokenHash: tokenHash,
+    inviteTokenExpiry: tokenExpiry,
   })
 
-  const token = crypto.randomBytes(32).toString('hex')
   const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://interviewprep.guru'
   const inviteLink = `${baseUrl}/interview?invite=${interviewSession._id}&token=${token}`
-
-  await Organization.findByIdAndUpdate(organizationId, {
-    $inc: { monthlyInterviewsUsed: 1 },
-  })
 
   return {
     success: true,
@@ -209,6 +222,20 @@ export async function createInvite(
     inviteLink,
     candidateEmail,
   }
+}
+
+/**
+ * Verify an invite token against the stored hash.
+ * Returns true if the token is valid and not expired.
+ */
+export async function verifyInviteToken(sessionId: string, token: string): Promise<boolean> {
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex')
+  const session = await InterviewSession.findOne({
+    _id: sessionId,
+    inviteTokenHash: tokenHash,
+    inviteTokenExpiry: { $gt: new Date() },
+  }).lean()
+  return !!session
 }
 
 export async function listPendingInvites(organizationId: OrgId) {

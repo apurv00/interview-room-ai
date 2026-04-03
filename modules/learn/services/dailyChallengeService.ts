@@ -6,7 +6,7 @@ import { QuestionBank } from '@shared/db/models/QuestionBank'
 import { User } from '@shared/db/models/User'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { aiLogger as logger } from '@shared/logger'
-import Anthropic from '@anthropic-ai/sdk'
+import { getAnthropicClient } from '@shared/services/llmClient'
 
 const DOMAINS_ROTATION = [
   'frontend', 'backend', 'sdet', 'devops', 'data-science',
@@ -93,7 +93,7 @@ async function generateDailyChallenge(date: string) {
 
   // Fallback: generate via Claude
   try {
-    const client = new Anthropic()
+    const client = getAnthropicClient()
     const message = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 500,
@@ -177,7 +177,7 @@ export async function submitChallengeAnswer(
     if (!challenge) return null
 
     // Score via Claude
-    const client = new Anthropic()
+    const client = getAnthropicClient()
     const message = await client.messages.create({
       model: 'claude-sonnet-4-6',
       max_tokens: 300,

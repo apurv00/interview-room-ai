@@ -7,7 +7,7 @@ import type {
   ThreadSummary,
 } from '@shared/types'
 import type { Duration } from '@shared/types'
-import { MINIMUM_TOPICS } from '@interview/config/interviewConfig'
+import { getMinimumTopics } from '@interview/config/interviewConfig'
 
 /**
  * Compute a rolling performance signal from all evaluations so far.
@@ -36,7 +36,7 @@ export function shouldProbeOrAdvance(
   if (!probe?.shouldProbe || !probe.probeQuestion) return 'advance'
   if (timeRemaining < 60) return 'advance'
   // Don't probe if we haven't covered minimum topics and are running low on time
-  const topicsNeeded = MINIMUM_TOPICS[duration] - completedThreadsCount
+  const topicsNeeded = getMinimumTopics(duration) - completedThreadsCount
   const roughTimePerTopic = 90 // ~1.5 min per topic
   if (topicsNeeded > 0 && topicsNeeded * roughTimePerTopic > timeRemaining) return 'advance'
   return 'probe'

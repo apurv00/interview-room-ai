@@ -83,6 +83,10 @@ export type { IInterviewSkill } from './InterviewSkill'
 export { MultimodalAnalysis } from './MultimodalAnalysis'
 export type { IMultimodalAnalysis } from './MultimodalAnalysis'
 
+// Observability
+export { FailedJob } from './FailedJob'
+export type { IFailedJob } from './FailedJob'
+
 // Smart Wizard
 export { WizardConfig } from './WizardConfig'
 export type { IWizardConfig } from './WizardConfig'

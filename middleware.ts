@@ -74,6 +74,10 @@ export default withAuth(
 
     const response = NextResponse.next()
 
+    // Request correlation ID for tracing
+    const requestId = req.headers.get('x-request-id') || crypto.randomUUID()
+    response.headers.set('x-request-id', requestId)
+
     // Security headers
     response.headers.set('X-Content-Type-Options', 'nosniff')
     response.headers.set('X-Frame-Options', 'DENY')

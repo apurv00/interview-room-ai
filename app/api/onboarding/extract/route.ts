@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
-import Anthropic from '@anthropic-ai/sdk'
+import { getAnthropicClient } from '@shared/services/llmClient'
 import { authOptions } from '@shared/auth/authOptions'
 import { ResumeExtractSchema, ExtractedProfileSchema } from '@shared/validators/onboarding'
 import { aiLogger } from '@shared/logger'
@@ -8,7 +8,7 @@ import { checkRateLimit } from '@shared/middleware/checkRateLimit'
 
 export const dynamic = 'force-dynamic'
 
-const client = new Anthropic()
+const client = getAnthropicClient()
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions)
