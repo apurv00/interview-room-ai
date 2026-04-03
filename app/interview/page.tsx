@@ -235,10 +235,33 @@ export default function InterviewPage() {
 
     const parsed = JSON.parse(stored)
     setConfig(parsed)
-    // Select a coding problem if in coding mode
+    // Select a coding problem if in coding mode (avoid repeats across sessions)
     if (parsed.interviewType === 'coding') {
-      const problem = selectProblem(parsed.role, parsed.experience)
-      if (problem) setCurrentProblem(problem)
+      // Fetch user's previously solved problem IDs
+      fetch('/api/code/history')
+        .then((r) => r.ok ? r.json() : { solvedProblemIds: [] })
+        .then(async ({ solvedProblemIds = [] }) => {
+          // Try pool first (excluding solved problems)
+          let problem = selectProblem(parsed.role, parsed.experience, solvedProblemIds)
+
+          // If pool exhausted, generate a fresh problem via AI
+          if (!problem) {
+            try {
+              const { generateCodingProblem } = await import('@interview/services/codingProblemGenerator')
+              problem = await generateCodingProblem(parsed.role, parsed.experience, solvedProblemIds)
+            } catch {
+              // Fall back to any problem from pool (allow repeats as last resort)
+              problem = selectProblem(parsed.role, parsed.experience)
+            }
+          }
+
+          if (problem) setCurrentProblem(problem)
+        })
+        .catch(() => {
+          // Offline fallback — just pick from pool without history
+          const problem = selectProblem(parsed.role, parsed.experience)
+          if (problem) setCurrentProblem(problem)
+        })
     }
   }, [router])
 

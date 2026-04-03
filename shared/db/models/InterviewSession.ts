@@ -44,6 +44,14 @@ export interface IInterviewSession extends Document {
   resumeR2Key?: string
   jdR2Key?: string
 
+  // Coding interview
+  codingProblemId?: string
+  codeSubmissions?: Array<{
+    code: string
+    language: string
+    submittedAt: Date
+  }>
+
   templateId?: mongoose.Types.ObjectId
   candidateEmail?: string
   candidateName?: string
@@ -106,6 +114,10 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
 
     resumeR2Key: { type: String },
     jdR2Key: { type: String },
+
+    // Coding interview
+    codingProblemId: { type: String },
+    codeSubmissions: { type: Schema.Types.Mixed },
 
     templateId: { type: Schema.Types.ObjectId, ref: 'InterviewTemplate' },
     candidateEmail: { type: String, lowercase: true },

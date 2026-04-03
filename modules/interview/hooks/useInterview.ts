@@ -70,7 +70,7 @@ interface UseInterviewOptions {
   startListening: (onComplete: (result: SpeechRecognitionResult) => void) => void
   stopListening: () => void
   onRecordingStop?: () => void
-  currentProblem?: { title: string; description: string } | null
+  currentProblem?: { id: string; title: string; description: string } | null
 }
 
 // ─── Hook return ──────────────────────────────────────────────────────────────
@@ -204,7 +204,12 @@ export function useInterview({
         sessionIdRef.current = result.sessionId
         // Mark session as active to prevent duplicate creation on back navigation
         localStorage.setItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION, result.sessionId)
-        persistSession(result.sessionId, { status: 'in_progress', startedAt: new Date().toISOString() })
+        persistSession(result.sessionId, {
+          status: 'in_progress',
+          startedAt: new Date().toISOString(),
+          // Track coding problem ID for cross-session repeat prevention
+          ...(currentProblemRef.current ? { codingProblemId: currentProblemRef.current.id } : {}),
+        })
       }
     })
   }, [config])
