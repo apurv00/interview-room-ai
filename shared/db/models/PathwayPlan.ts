@@ -67,6 +67,18 @@ export interface IPathwayPlan extends Document {
   targetRole: string
   targetTimeline?: string
 
+  // 14-day plan fields
+  planType?: 'standard' | '14_day'
+  startDate?: Date
+  endDate?: Date
+  dailySchedule?: Array<{
+    day: number
+    date: string
+    theme: string
+    tasks: PracticeTask[]
+    completed: boolean
+  }>
+
   createdAt: Date
   updatedAt: Date
 }
@@ -133,6 +145,18 @@ const PathwayPlanSchema = new Schema<IPathwayPlan>(
     userGoal: { type: String, default: '' },
     targetRole: { type: String, default: '' },
     targetTimeline: { type: String },
+
+    // 14-day plan
+    planType: { type: String, enum: ['standard', '14_day'], default: 'standard' },
+    startDate: { type: Date },
+    endDate: { type: Date },
+    dailySchedule: [{
+      day: { type: Number, required: true },
+      date: { type: String, required: true },
+      theme: { type: String, default: '' },
+      tasks: [PracticeTaskSchema],
+      completed: { type: Boolean, default: false },
+    }],
   },
   { timestamps: true }
 )
