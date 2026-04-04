@@ -280,14 +280,13 @@ describe('R2 key ownership validation logic', () => {
 // ─── Free Plan Limit Tests ──────────────────────────────────────────────────
 
 describe('Plan limits configuration', () => {
-  it('free plan has a limited interview count', async () => {
+  it('free plan allows unlimited interviews in development mode', async () => {
     const { PLANS } = await import('@shared/services/stripe')
-    expect(PLANS.free.monthlyInterviewLimit).toBeLessThanOrEqual(10)
-    expect(PLANS.free.monthlyInterviewLimit).toBeGreaterThan(0)
+    expect(PLANS.free.monthlyInterviewLimit).toBe(999999)
   })
 
-  it('pro plan has higher limits than free', async () => {
+  it('pro plan also allows unlimited interviews in development mode', async () => {
     const { PLANS } = await import('@shared/services/stripe')
-    expect(PLANS.pro.monthlyInterviewLimit).toBeGreaterThan(PLANS.free.monthlyInterviewLimit)
+    expect(PLANS.pro.monthlyInterviewLimit).toBe(PLANS.free.monthlyInterviewLimit)
   })
 })

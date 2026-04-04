@@ -62,6 +62,17 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
     { $set: { monthlyInterviewsUsed: 0, usageResetAt: now } }
   )
 
+  // Development-phase backfill: existing free/pro users may still have older
+  // persisted limits (e.g. 3/30). Promote them to the uncapped default.
+  await User.updateOne(
+    {
+      _id: new mongoose.Types.ObjectId(input.userId),
+      plan: { $in: ['free', 'pro'] },
+      monthlyInterviewLimit: { $lt: 999999 },
+    },
+    { $set: { monthlyInterviewLimit: 999999 } }
+  )
+
   // Atomic increment-first: check limit AND increment in a single operation.
   // Uses $expr to compare field values atomically — no race condition.
   const updatedUser = await User.findOneAndUpdate(
