@@ -23,10 +23,24 @@ async function runMigrations(): Promise<void> {
   try {
     const db = mongoose.connection.db
     if (!db) return
-    // Set all users with the old free-plan limit (3) to unlimited
+    // Ensure all users have unlimited interviews — handles:
+    // - Old users with limit <= 3 (original free plan)
+    // - Users whose documents predate the field (field missing)
+    // - Any user with a limit below the uncapped default
     await db.collection('users').updateMany(
-      { monthlyInterviewLimit: { $lte: 3 } },
+      {
+        $or: [
+          { monthlyInterviewLimit: { $exists: false } },
+          { monthlyInterviewLimit: null },
+          { monthlyInterviewLimit: { $lt: 999999 } },
+        ],
+      },
       { $set: { monthlyInterviewLimit: 999999 } }
+    )
+    // Also ensure monthlyInterviewsUsed exists
+    await db.collection('users').updateMany(
+      { monthlyInterviewsUsed: { $exists: false } },
+      { $set: { monthlyInterviewsUsed: 0 } }
     )
   } catch {
     // Non-fatal: migration failure shouldn't block the app

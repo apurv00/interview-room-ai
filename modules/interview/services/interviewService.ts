@@ -64,14 +64,28 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
     { $set: { monthlyInterviewsUsed: 0, usageResetAt: now } }
   )
 
-  // Development-phase backfill: any user with a limit below the uncapped
-  // default gets promoted to unlimited, regardless of plan type.
+  // Development-phase backfill: ensure every user has the unlimited limit set.
+  // Handles users created before the field was added (field missing in MongoDB)
+  // and users with any limit below the uncapped default.
   await User.updateOne(
     {
       _id: new mongoose.Types.ObjectId(input.userId),
-      monthlyInterviewLimit: { $lt: 999999 },
+      $or: [
+        { monthlyInterviewLimit: { $exists: false } },
+        { monthlyInterviewLimit: null },
+        { monthlyInterviewLimit: { $lt: 999999 } },
+      ],
     },
     { $set: { monthlyInterviewLimit: 999999 } }
+  )
+
+  // Also ensure monthlyInterviewsUsed exists (for users created before this field)
+  await User.updateOne(
+    {
+      _id: new mongoose.Types.ObjectId(input.userId),
+      monthlyInterviewsUsed: { $exists: false },
+    },
+    { $set: { monthlyInterviewsUsed: 0 } }
   )
 
   // Atomic increment-first: check limit AND increment in a single operation.
