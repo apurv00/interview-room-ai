@@ -34,6 +34,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   const rafRef = useRef<number>(0)
   const lastTranscriptRef = useRef('')
   const reconnectAttemptsRef = useRef(0)
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isFinishingRef = useRef(false)
   const fallbackFinishTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -44,6 +45,11 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       lastTranscriptRef.current = ''
       reconnectAttemptsRef.current = 0
       isFinishingRef.current = false
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current)
+        reconnectTimerRef.current = null
+      }
+      teardownCurrentCapture('finish')
       startTimeRef.current = Date.now()
       setLiveTranscript('')
 
@@ -180,15 +186,16 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     }
     reconnectAttemptsRef.current += 1
     const delay = 800 * reconnectAttemptsRef.current
-    setTimeout(() => {
+    reconnectTimerRef.current = setTimeout(() => {
+      reconnectTimerRef.current = null
       if (onCompleteRef.current && !isFinishingRef.current) {
-        teardownCurrentCapture()
+        teardownCurrentCapture('reconnect')
         connectWebSocket(token)
       }
     }, delay)
   }
 
-  function teardownCurrentCapture() {
+  function teardownCurrentCapture(closeReason: 'reconnect' | 'finish') {
     processorRef.current?.disconnect()
     sourceRef.current?.disconnect()
     audioContextRef.current?.close().catch(() => {})
@@ -210,7 +217,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
         wsRef.current.readyState === WebSocket.OPEN ||
         wsRef.current.readyState === WebSocket.CONNECTING
       ) {
-        wsRef.current.close(1000, 'reconnect')
+        wsRef.current.close(1000, closeReason)
       }
       wsRef.current = null
     }
@@ -267,7 +274,12 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       fallbackFinishTimerRef.current = null
     }
 
-    teardownCurrentCapture()
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current)
+      reconnectTimerRef.current = null
+    }
+
+    teardownCurrentCapture('finish')
 
     // Build result
     const text = finalTextRef.current.trim()
