@@ -184,6 +184,24 @@ describe('useInterview', () => {
     expect(result.current.sessionId).toBeNull()
   })
 
+  it('ends interview immediately when monthly usage limit is reached', async () => {
+    ;(global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: false,
+      status: 402,
+      json: () => Promise.resolve({ error: 'Monthly interview limit reached' }),
+    })
+
+    const { result } = renderHook(() => useInterview(makeOptions()))
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100)
+    })
+
+    expect(result.current.phase).toBe('ENDED')
+    expect(result.current.currentQuestion).toContain('Monthly interview limit reached')
+    expect(result.current.coachingTip).toContain('monthly interview limit')
+  })
+
   // ── No config ──
 
   it('does not start timer when config is null', () => {
