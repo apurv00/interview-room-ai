@@ -68,7 +68,15 @@ export async function GET(req: NextRequest) {
       status,
     })
 
-    return NextResponse.json(result)
+    // Strip internal R2 keys, expose hasRecording boolean instead
+    const sanitizedSessions = result.sessions.map((s: any) => { // eslint-disable-line
+      const obj = s.toObject ? s.toObject() : { ...s }
+      const hasRecording = !!obj.recordingR2Key
+      delete obj.recordingR2Key
+      return { ...obj, hasRecording }
+    })
+
+    return NextResponse.json({ ...result, sessions: sanitizedSessions })
   } catch (err) {
     logger.error({ err }, 'Failed to list interview sessions')
     return NextResponse.json({ error: 'Failed to list sessions' }, { status: 500 })
