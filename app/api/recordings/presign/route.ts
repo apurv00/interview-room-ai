@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
+import mongoose from 'mongoose'
 import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import { InterviewSession } from '@shared/db/models/InterviewSession'
@@ -25,6 +26,10 @@ export async function GET(req: NextRequest) {
   const sessionId = req.nextUrl.searchParams.get('sessionId')
   if (!sessionId) {
     return NextResponse.json({ error: 'sessionId required' }, { status: 400 })
+  }
+
+  if (!mongoose.Types.ObjectId.isValid(sessionId)) {
+    return NextResponse.json({ error: 'Invalid session ID format' }, { status: 400 })
   }
 
   await connectDB()

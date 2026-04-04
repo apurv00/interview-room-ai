@@ -56,13 +56,15 @@ export default function ReplayPage() {
           hasRecording: sessionJson.hasRecording,
         })
 
-        // Get presigned URL for video
+        // Get presigned URL for video (R2), or fall back to legacy recordingUrl
         if (sessionJson.hasRecording) {
           const presignRes = await fetch(`/api/recordings/presign?sessionId=${sessionId}`)
           if (presignRes.ok) {
             const presignJson = await presignRes.json()
             setVideoSrc(presignJson.url)
           }
+        } else if (sessionJson.recordingUrl) {
+          setVideoSrc(sessionJson.recordingUrl)
         }
 
         // Fetch analysis (may not exist yet)

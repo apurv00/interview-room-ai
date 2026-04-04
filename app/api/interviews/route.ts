@@ -69,8 +69,7 @@ export async function GET(req: NextRequest) {
     })
 
     // Strip internal R2 keys, expose hasRecording boolean instead
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const sanitizedSessions = result.sessions.map((s: any) => {
+    const sanitizedSessions = result.sessions.map((s: any) => { // eslint-disable-line
       const obj = s.toObject ? s.toObject() : { ...s }
       const hasRecording = !!obj.recordingR2Key
       delete obj.recordingR2Key

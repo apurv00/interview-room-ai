@@ -155,12 +155,14 @@ function FeedbackPageInner() {
             d = mergeWithLocalData(d, sessionId)
             setData(d)
             cleanupLocalInterviewData(sessionId)
-            // Fetch presigned recording URL if a recording exists
+            // Fetch presigned recording URL if an R2 recording exists, else fall back to legacy URL
             if (session.hasRecording) {
               fetch(`/api/recordings/presign?sessionId=${sessionId}`)
                 .then(r => r.ok ? r.json() : null)
                 .then(data => { if (data?.url) setRecordingUrl(data.url) })
                 .catch(() => {})
+            } else if (session.recordingUrl) {
+              setRecordingUrl(session.recordingUrl)
             }
             if (session.startedAt) setSessionStartedAt(new Date(session.startedAt).getTime())
 
