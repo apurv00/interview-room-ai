@@ -30,6 +30,8 @@ interface UpdateSessionInput {
   durationActualSeconds?: number
   startedAt?: string
   completedAt?: string
+  recordingR2Key?: string
+  recordingSizeBytes?: number
 }
 
 interface ListSessionsInput {
@@ -155,6 +157,8 @@ export async function updateSession(
   if (input.durationActualSeconds !== undefined) updateFields.durationActualSeconds = input.durationActualSeconds
   if (input.startedAt) updateFields.startedAt = new Date(input.startedAt)
   if (input.completedAt) updateFields.completedAt = new Date(input.completedAt)
+  if (input.recordingR2Key) updateFields.recordingR2Key = input.recordingR2Key
+  if (input.recordingSizeBytes !== undefined) updateFields.recordingSizeBytes = input.recordingSizeBytes
 
   const updated = await InterviewSession.findByIdAndUpdate(sessionId, updateFields, { new: true })
   if (!updated) throw new NotFoundError('Interview session')

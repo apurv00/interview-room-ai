@@ -149,4 +149,6 @@ export const UpdateSessionSchema = z.object({
   durationActualSeconds: z.number().optional(),
   startedAt: z.string().datetime().optional(),
   completedAt: z.string().datetime().optional(),
+  recordingR2Key: z.string().max(1000).optional(),
+  recordingSizeBytes: z.number().int().min(0).optional(),
 })
