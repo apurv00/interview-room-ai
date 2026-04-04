@@ -33,12 +33,17 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   const startTimeRef = useRef(0)
   const rafRef = useRef<number>(0)
   const lastTranscriptRef = useRef('')
+  const reconnectAttemptsRef = useRef(0)
+  const isFinishingRef = useRef(false)
+  const fallbackFinishTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const startListening = useCallback(
     (onComplete: (result: SpeechRecognitionResult) => void) => {
       onCompleteRef.current = onComplete
       finalTextRef.current = ''
       lastTranscriptRef.current = ''
+      reconnectAttemptsRef.current = 0
+      isFinishingRef.current = false
       startTimeRef.current = Date.now()
       setLiveTranscript('')
 
@@ -53,7 +58,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           setIsListening(false)
           // Resolve with empty text after a long delay (30s) so the interview
           // doesn't hang forever, but gives user time to notice the issue
-          setTimeout(() => {
+          fallbackFinishTimerRef.current = setTimeout(() => {
             if (onCompleteRef.current) {
               finishRecognition()
             }
@@ -82,19 +87,27 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
 
   async function fetchDeepgramToken(): Promise<string> {
     const res = await fetch('/api/transcribe/token', { method: 'POST' })
+    if (!res.ok) {
+      throw new Error(`Token request failed with ${res.status}`)
+    }
     const data = await res.json()
     if (!data.token) {
       console.error('[Deepgram] Token endpoint returned no token:', data)
       throw new Error('No token returned')
     }
-    console.log('[Deepgram] Token fetched, length:', data.token.length)
     return data.token
   }
 
   function connectWebSocket(token: string) {
-    const ws = new WebSocket(
-      `wss://api.deepgram.com/v1/listen?token=${token}&model=nova-2&smart_format=true&filler_words=true&utterance_end_ms=3500&interim_results=true&language=en&encoding=linear16&sample_rate=16000`
-    )
+    if (!navigator.onLine) {
+      console.warn('[Deepgram] Browser is offline, skipping WebSocket connect')
+      finishRecognition()
+      return
+    }
+
+    const wsUrl = 'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&filler_words=true&utterance_end_ms=3500&interim_results=true&language=en&encoding=linear16&sample_rate=16000'
+    // Use auth via websocket subprotocol so transient token is not logged in the URL.
+    const ws = new WebSocket(wsUrl, ['token', token])
 
     wsRef.current = ws
 
@@ -143,7 +156,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
 
     ws.onerror = (ev) => {
       console.error('[Deepgram] WebSocket error', ev)
-      finishRecognition()
+      maybeReconnectOrFinish(token)
     }
 
     ws.onclose = (ev) => {
@@ -153,8 +166,25 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       // let the 30s timeout in startListening handle it instead.
       if (onCompleteRef.current && finalTextRef.current.trim().length > 0) {
         finishRecognition()
+      } else if (ev.code !== 1000) {
+        maybeReconnectOrFinish(token)
       }
     }
+  }
+
+  function maybeReconnectOrFinish(token: string) {
+    const maxReconnectAttempts = 2
+    if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
+      finishRecognition()
+      return
+    }
+    reconnectAttemptsRef.current += 1
+    const delay = 800 * reconnectAttemptsRef.current
+    setTimeout(() => {
+      if (onCompleteRef.current && !isFinishingRef.current) {
+        connectWebSocket(token)
+      }
+    }, delay)
   }
 
   function startAudioCapture(ws: WebSocket) {
@@ -198,8 +228,15 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   }
 
   function finishRecognition() {
+    if (isFinishingRef.current) return
+    isFinishingRef.current = true
     console.log('[Deepgram] finishRecognition called, text:', finalTextRef.current.slice(0, 100))
     setIsListening(false)
+
+    if (fallbackFinishTimerRef.current) {
+      clearTimeout(fallbackFinishTimerRef.current)
+      fallbackFinishTimerRef.current = null
+    }
 
     // Cleanup audio processing
     processorRef.current?.disconnect()
@@ -226,11 +263,30 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     const durationMinutes = (Date.now() - startTimeRef.current) / 60000
 
     // Import analyzeSpeech dynamically to avoid circular deps
-    import('@interview/config/speechMetrics').then(({ analyzeSpeech }) => {
-      const metrics = analyzeSpeech(text, durationMinutes)
-      onCompleteRef.current?.({ text, durationMinutes, metrics })
-      onCompleteRef.current = null
-    })
+    import('@interview/config/speechMetrics')
+      .then(({ analyzeSpeech }) => {
+        const metrics = analyzeSpeech(text, durationMinutes)
+        onCompleteRef.current?.({ text, durationMinutes, metrics })
+      })
+      .catch(() => {
+        onCompleteRef.current?.({
+          text,
+          durationMinutes,
+          metrics: {
+            wpm: 0,
+            fillerRate: 0,
+            pauseScore: 0,
+            ramblingIndex: 0,
+            totalWords: 0,
+            fillerWordCount: 0,
+            durationMinutes,
+          },
+        })
+      })
+      .finally(() => {
+        onCompleteRef.current = null
+        isFinishingRef.current = false
+      })
   }
 
   const stopListening = useCallback(() => {
