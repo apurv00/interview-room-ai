@@ -19,7 +19,7 @@ interface SessionData {
   config: InterviewConfig
   transcript: TranscriptEntry[]
   recordingUrl?: string
-  recordingR2Key?: string
+  hasRecording?: boolean
 }
 
 export default function ReplayPage() {
@@ -53,11 +53,11 @@ export default function ReplayPage() {
           config: sessionJson.config,
           transcript: sessionJson.transcript || [],
           recordingUrl: sessionJson.recordingUrl,
-          recordingR2Key: sessionJson.recordingR2Key,
+          hasRecording: sessionJson.hasRecording,
         })
 
         // Get presigned URL for video
-        if (sessionJson.recordingR2Key) {
+        if (sessionJson.hasRecording) {
           const presignRes = await fetch(`/api/recordings/presign?sessionId=${sessionId}`)
           if (presignRes.ok) {
             const presignJson = await presignRes.json()

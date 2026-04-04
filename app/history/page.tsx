@@ -15,7 +15,7 @@ interface SessionSummary {
   feedback?: { overall_score: number; pass_probability: string }
   createdAt: string
   durationActualSeconds?: number
-  recordingR2Key?: string
+  hasRecording?: boolean
 }
 
 const STATUS_BADGE_VARIANT: Record<string, 'success' | 'caution' | 'danger' | 'default'> = {
@@ -160,7 +160,7 @@ export default function HistoryPage() {
                         </span>
                       </>
                     )}
-                    {s.recordingR2Key && s.status === 'completed' && (
+                    {s.hasRecording && s.status === 'completed' && (
                       <>
                         <span className="text-xs text-[#71767b]">·</span>
                         <button
