@@ -182,9 +182,38 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     const delay = 800 * reconnectAttemptsRef.current
     setTimeout(() => {
       if (onCompleteRef.current && !isFinishingRef.current) {
+        teardownCurrentCapture()
         connectWebSocket(token)
       }
     }, delay)
+  }
+
+  function teardownCurrentCapture() {
+    processorRef.current?.disconnect()
+    sourceRef.current?.disconnect()
+    audioContextRef.current?.close().catch(() => {})
+    processorRef.current = null
+    sourceRef.current = null
+    audioContextRef.current = null
+
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach(t => t.stop())
+      audioStreamRef.current = null
+    }
+
+    if (wsRef.current) {
+      wsRef.current.onopen = null
+      wsRef.current.onmessage = null
+      wsRef.current.onerror = null
+      wsRef.current.onclose = null
+      if (
+        wsRef.current.readyState === WebSocket.OPEN ||
+        wsRef.current.readyState === WebSocket.CONNECTING
+      ) {
+        wsRef.current.close(1000, 'reconnect')
+      }
+      wsRef.current = null
+    }
   }
 
   function startAudioCapture(ws: WebSocket) {
@@ -238,25 +267,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       fallbackFinishTimerRef.current = null
     }
 
-    // Cleanup audio processing
-    processorRef.current?.disconnect()
-    sourceRef.current?.disconnect()
-    audioContextRef.current?.close().catch(() => {})
-    processorRef.current = null
-    sourceRef.current = null
-    audioContextRef.current = null
-
-    // Stop the Deepgram-specific audio stream tracks (separate from page video stream)
-    if (audioStreamRef.current) {
-      audioStreamRef.current.getTracks().forEach(t => t.stop())
-      audioStreamRef.current = null
-    }
-
-    // Close WebSocket
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.close()
-    }
-    wsRef.current = null
+    teardownCurrentCapture()
 
     // Build result
     const text = finalTextRef.current.trim()
