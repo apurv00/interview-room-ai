@@ -66,6 +66,10 @@ export interface IInterviewSession extends Document {
   isPublic?: boolean
   shareExpiresAt?: Date
 
+  // Consent tracking
+  consentedToRecording?: boolean
+  consentedToAnalysis?: boolean
+
   // Multimodal analysis
   multimodalAnalysisId?: mongoose.Types.ObjectId
   facialLandmarksR2Key?: string
@@ -131,6 +135,10 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
     // Invite verification (B2B)
     inviteTokenHash: { type: String },
     inviteTokenExpiry: { type: Date },
+
+    // Consent
+    consentedToRecording: { type: Boolean },
+    consentedToAnalysis: { type: Boolean },
 
     // Sharing
     shareToken: { type: String, unique: true, sparse: true },

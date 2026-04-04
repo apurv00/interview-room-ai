@@ -15,6 +15,10 @@ export interface IQuestionBank extends Document {
   idealAnswerPoints: string[]               // key points a good answer should cover
   commonMistakes: string[]
 
+  // Embeddings (for semantic search)
+  embedding?: number[]                      // 1536-dim vector from text-embedding-3-small
+  embeddedAt?: Date
+
   // Metadata
   tags: string[]
   isActive: boolean
@@ -37,6 +41,10 @@ const QuestionBankSchema = new Schema<IQuestionBank>(
 
     idealAnswerPoints: [{ type: String }],
     commonMistakes: [{ type: String }],
+
+    // Embeddings
+    embedding: { type: [Number], select: false },  // excluded from default queries for performance
+    embeddedAt: { type: Date },
 
     tags: [{ type: String }],
     isActive: { type: Boolean, default: true },

@@ -86,6 +86,18 @@ export async function searchQuestions(
 ): Promise<IQuestionBank[]> {
   if (!isFeatureEnabled('question_bank_rag')) return []
 
+  // Try semantic (vector) search first if enabled
+  if (isFeatureEnabled('embedding_search')) {
+    try {
+      const { vectorSearchQuestions } = await import('./embeddingService')
+      const results = await vectorSearchQuestions(query, { domain }, limit)
+      if (results.length > 0) return results
+    } catch {
+      // Fall through to text search
+    }
+  }
+
+  // Fallback: keyword-based text search
   try {
     await connectDB()
 
