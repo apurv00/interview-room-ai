@@ -16,7 +16,7 @@ export default function SignUpPage() {
       document.cookie = '__Secure-next-auth.session-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; secure'
       document.cookie = `__Secure-next-auth.session-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; secure; domain=.interviewprep.guru`
     } catch { /* continue */ }
-    await signIn(provider, { callbackUrl: '/lobby' })
+    await signIn(provider, { callbackUrl: '/' })
   }
 
   return (

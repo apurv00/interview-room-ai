@@ -8,7 +8,7 @@ import Link from 'next/link'
 function SignInContent() {
   const { data: session } = useSession()
   const searchParams = useSearchParams()
-  const callbackUrl = searchParams.get('callbackUrl') || '/lobby'
+  const callbackUrl = searchParams.get('callbackUrl') || '/'
   const error = searchParams.get('error')
 
   const [isLoading, setIsLoading] = useState(false)
