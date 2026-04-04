@@ -137,6 +137,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     const wsUrl = 'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&filler_words=true&utterance_end_ms=3500&interim_results=true&language=en&encoding=linear16&sample_rate=16000'
     // Use auth via websocket subprotocol so transient token is not logged in the URL.
     const ws = new WebSocket(wsUrl, ['token', token])
+    let disconnectHandled = false
 
     wsRef.current = ws
 
@@ -185,7 +186,10 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
 
     ws.onerror = (ev) => {
       console.error('[Deepgram] WebSocket error', ev)
-      maybeReconnectOrFinish(token)
+      if (!disconnectHandled) {
+        disconnectHandled = true
+        maybeReconnectOrFinish(token)
+      }
     }
 
     ws.onclose = (ev) => {
@@ -196,7 +200,10 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       if (onCompleteRef.current && finalTextRef.current.trim().length > 0) {
         finishRecognition()
       } else if (ev.code !== 1000) {
-        maybeReconnectOrFinish(token, ev.code)
+        if (!disconnectHandled) {
+          disconnectHandled = true
+          maybeReconnectOrFinish(token, ev.code)
+        }
       }
     }
   }
