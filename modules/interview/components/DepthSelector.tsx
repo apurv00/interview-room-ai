@@ -19,9 +19,29 @@ interface DepthSelectorProps {
 // Module-level cache keyed by domain slug
 const depthCache: Record<string, InterviewDepth[]> = {}
 
+function filterDepthsByDomain(depths: StaticDepth[], domain: string | null): InterviewDepth[] {
+  if (!domain) return depths as InterviewDepth[]
+  return depths.filter(d => !d.applicableDomains || d.applicableDomains.length === 0 || d.applicableDomains.includes(domain)) as InterviewDepth[]
+}
+
 export default function DepthSelector({ selectedDomain, selectedDepth, onSelect }: DepthSelectorProps) {
-  // Use static data immediately — no loading state needed
-  const [types, setTypes] = useState<InterviewDepth[]>(STATIC_DEPTHS as InterviewDepth[])
+  // Use static data immediately, filtered by domain — no loading state needed
+  const [types, setTypes] = useState<InterviewDepth[]>(() => filterDepthsByDomain(STATIC_DEPTHS, selectedDomain))
+
+  // Re-filter static depths when domain changes, and auto-select screening
+  useEffect(() => {
+    const filtered = filterDepthsByDomain(STATIC_DEPTHS, selectedDomain)
+    setTypes(filtered)
+
+    // If current selection is no longer valid for this domain, reset to screening
+    if (selectedDepth && !filtered.some(t => t.slug === selectedDepth)) {
+      const screeningType = filtered.find((t) => t.slug === 'screening')
+      onSelect(screeningType ? screeningType.slug : filtered[0]?.slug || 'screening')
+    } else if (!selectedDepth && filtered.length > 0) {
+      const screeningType = filtered.find((t) => t.slug === 'screening')
+      onSelect(screeningType ? screeningType.slug : filtered[0].slug)
+    }
+  }, [selectedDomain]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-select screening on first render if nothing selected
   useEffect(() => {

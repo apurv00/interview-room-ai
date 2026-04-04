@@ -17,6 +17,7 @@ export interface StaticDepth {
   label: string
   icon: string
   description: string
+  applicableDomains?: string[]
 }
 
 export const STATIC_DOMAINS: StaticDomain[] = [
@@ -41,4 +42,6 @@ export const STATIC_DEPTHS: StaticDepth[] = [
   { slug: 'behavioral', label: 'Behavioral Round', icon: '🧠', description: 'Deep behavioral probing — leadership, conflict resolution, self-awareness, and decision-making.' },
   { slug: 'technical', label: 'Technical Round', icon: '⚙️', description: 'Domain-specific technical depth — knowledge, problem-solving, trends, and practical application.' },
   { slug: 'case-study', label: 'Case Study Round', icon: '📋', description: 'Scenario-based problem-solving — structured thinking, frameworks, and business reasoning.' },
+  { slug: 'system-design', label: 'System Design Round', icon: '🏗️', description: 'Architecture and system design — scalability, trade-offs, component design, and technical breadth.', applicableDomains: ['backend', 'frontend', 'data-science', 'sdet', 'devops'] },
+  { slug: 'coding', label: 'Coding Round', icon: '💻', description: 'Live coding problem-solving — algorithm design, implementation, testing, and optimization.', applicableDomains: ['backend', 'frontend', 'data-science', 'sdet'] },
 ]
