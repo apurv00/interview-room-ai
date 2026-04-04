@@ -357,7 +357,7 @@ const UserSchema = new Schema<IUser>(
     planExpiresAt: { type: Date },
     stripeCustomerId: { type: String, sparse: true },
     monthlyInterviewsUsed: { type: Number, default: 0 },
-    monthlyInterviewLimit: { type: Number, default: 3 },
+    monthlyInterviewLimit: { type: Number, default: 999999 },
     usageResetAt: { type: Date },
   },
   { timestamps: true }
