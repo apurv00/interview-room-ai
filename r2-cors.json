@@ -1,0 +1,13 @@
+{
+  "rules": [
+    {
+      "allowed": {
+        "origins": ["https://www.interviewprep.guru", "https://interviewprep.guru", "http://localhost:3000"],
+        "methods": ["GET", "PUT", "HEAD"],
+        "headers": ["Content-Type", "Content-Length"]
+      },
+      "expose": ["ETag"],
+      "maxAge": 3600
+    }
+  ]
+}
