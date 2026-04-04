@@ -136,6 +136,15 @@ export interface IUser extends Document {
     createdAt: string
   }>
 
+  // Privacy & Consent
+  privacyConsent?: {
+    recordingConsent: boolean
+    recordingConsentAt?: Date
+    analysisConsent: boolean
+    analysisConsentAt?: Date
+    marketingOptIn: boolean
+  }
+
   // XP & Levels
   xp: number
   level: number
@@ -311,6 +320,15 @@ const UserSchema = new Schema<IUser>(
       skills: [{ type: String }],
       createdAt: { type: String, default: () => new Date().toISOString() },
     }],
+
+    // Privacy & Consent
+    privacyConsent: {
+      recordingConsent: { type: Boolean, default: false },
+      recordingConsentAt: { type: Date },
+      analysisConsent: { type: Boolean, default: false },
+      analysisConsentAt: { type: Date },
+      marketingOptIn: { type: Boolean, default: false },
+    },
 
     xp: { type: Number, default: 0 },
     level: { type: Number, default: 1 },
