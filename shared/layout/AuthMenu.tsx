@@ -130,6 +130,12 @@ export default function AuthMenu() {
             <button
               onClick={() => {
                 setOpen(false)
+                // Clear interview localStorage to prevent cross-user data leakage
+                try {
+                  localStorage.removeItem('interviewConfig')
+                  localStorage.removeItem('interviewData')
+                  localStorage.removeItem('interviewActiveSession')
+                } catch { /* ignore */ }
                 signOut({ callbackUrl: '/' })
               }}
               className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-[#f4212e] hover:bg-[#f7f9f9] transition"

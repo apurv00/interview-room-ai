@@ -69,12 +69,17 @@ export default function AuthenticatedHome() {
 
   const hasResume = !!(resumeText || quickProfileDone)
 
-  // Pre-fill from last session config
+  // Pre-fill from last session config (scoped to current user to prevent cross-user leakage)
   useEffect(() => {
+    if (status !== 'authenticated' || !authSession?.user?.id) return
     try {
-      const stored = localStorage.getItem(STORAGE_KEYS.INTERVIEW_CONFIG)
-      if (stored) {
-        const c: InterviewConfig = JSON.parse(stored)
+      const userId = authSession.user.id
+      const stored = localStorage.getItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`)
+      // Also try the legacy unscoped key and migrate it
+      const legacy = !stored ? localStorage.getItem(STORAGE_KEYS.INTERVIEW_CONFIG) : null
+      const configStr = stored || legacy
+      if (configStr) {
+        const c: InterviewConfig = JSON.parse(configStr)
         setLastConfig(c)
         setRole(c.role)
         if (c.interviewType) setInterviewType(c.interviewType)
@@ -90,9 +95,14 @@ export default function AuthenticatedHome() {
         }
         if (c.targetCompany) setTargetCompany(c.targetCompany)
         if (c.targetIndustry) setTargetIndustry(c.targetIndustry)
+        // Migrate legacy key to user-scoped key
+        if (legacy && !stored) {
+          localStorage.setItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`, legacy)
+          localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
+        }
       }
     } catch { /* ignore */ }
-  }, [])
+  }, [status, authSession?.user?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Pre-fill from user profile (onboarding data)
   useEffect(() => {
@@ -315,7 +325,12 @@ export default function AuthenticatedHome() {
       ...(effectiveCompany && { targetCompany: effectiveCompany }),
       ...(targetIndustry && { targetIndustry }),
     }
+    // Store config scoped to current user AND as unscoped (for interview page to read)
+    const userId = authSession?.user?.id
     localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(config))
+    if (userId) {
+      localStorage.setItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`, JSON.stringify(config))
+    }
     router.push(redirect)
   }
 

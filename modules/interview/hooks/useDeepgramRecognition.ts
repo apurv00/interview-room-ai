@@ -65,7 +65,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
 
   function connectWebSocket(token: string) {
     const ws = new WebSocket(
-      `wss://api.deepgram.com/v1/listen?token=${token}&model=nova-2&smart_format=true&filler_words=true&utterance_end_ms=2000&interim_results=true&language=en&encoding=linear16&sample_rate=16000`
+      `wss://api.deepgram.com/v1/listen?token=${token}&model=nova-2&smart_format=true&filler_words=true&utterance_end_ms=3500&interim_results=true&language=en&encoding=linear16&sample_rate=16000`
     )
 
     wsRef.current = ws
@@ -100,9 +100,12 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           }
         }
 
-        // UtteranceEnd = 2s silence detected by Deepgram
+        // UtteranceEnd = 3.5s silence detected by Deepgram
+        // Only finish if we have actual text (ignore false triggers on silence)
         if (data.type === 'UtteranceEnd') {
-          finishRecognition()
+          if (finalTextRef.current.trim().length > 0) {
+            finishRecognition()
+          }
         }
       } catch {
         // Skip malformed messages
