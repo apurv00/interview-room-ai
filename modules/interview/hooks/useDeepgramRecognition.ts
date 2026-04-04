@@ -34,6 +34,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   const rafRef = useRef<number>(0)
   const lastTranscriptRef = useRef('')
   const reconnectAttemptsRef = useRef(0)
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isFinishingRef = useRef(false)
   const fallbackFinishTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -108,8 +109,15 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     const wsUrl = 'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&filler_words=true&utterance_end_ms=3500&interim_results=true&language=en&encoding=linear16&sample_rate=16000'
     // Use auth via websocket subprotocol so transient token is not logged in the URL.
     const ws = new WebSocket(wsUrl, ['token', token])
+    let disconnectHandled = false
 
     wsRef.current = ws
+
+    const handleDisconnect = () => {
+      if (disconnectHandled) return
+      disconnectHandled = true
+      maybeReconnectOrFinish(token)
+    }
 
     ws.onopen = () => {
       console.log('[Deepgram] WebSocket connected')
@@ -156,7 +164,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
 
     ws.onerror = (ev) => {
       console.error('[Deepgram] WebSocket error', ev)
-      maybeReconnectOrFinish(token)
+      handleDisconnect()
     }
 
     ws.onclose = (ev) => {
@@ -167,7 +175,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       if (onCompleteRef.current && finalTextRef.current.trim().length > 0) {
         finishRecognition()
       } else if (ev.code !== 1000) {
-        maybeReconnectOrFinish(token)
+        handleDisconnect()
       }
     }
   }
@@ -180,7 +188,11 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     }
     reconnectAttemptsRef.current += 1
     const delay = 800 * reconnectAttemptsRef.current
-    setTimeout(() => {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current)
+    }
+    reconnectTimerRef.current = setTimeout(() => {
+      reconnectTimerRef.current = null
       if (onCompleteRef.current && !isFinishingRef.current) {
         connectWebSocket(token)
       }
@@ -236,6 +248,10 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     if (fallbackFinishTimerRef.current) {
       clearTimeout(fallbackFinishTimerRef.current)
       fallbackFinishTimerRef.current = null
+    }
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current)
+      reconnectTimerRef.current = null
     }
 
     // Cleanup audio processing
