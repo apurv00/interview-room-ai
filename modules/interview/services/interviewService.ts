@@ -64,12 +64,11 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
     { $set: { monthlyInterviewsUsed: 0, usageResetAt: now } }
   )
 
-  // Development-phase backfill: existing free/pro users may still have older
-  // persisted limits (e.g. 3/30). Promote them to the uncapped default.
+  // Development-phase backfill: any user with a limit below the uncapped
+  // default gets promoted to unlimited, regardless of plan type.
   await User.updateOne(
     {
       _id: new mongoose.Types.ObjectId(input.userId),
-      plan: { $in: ['free', 'pro'] },
       monthlyInterviewLimit: { $lt: 999999 },
     },
     { $set: { monthlyInterviewLimit: 999999 } }
