@@ -85,19 +85,25 @@ export default function AuthenticatedHome() {
         if (c.interviewType) setInterviewType(c.interviewType)
         setExperience(c.experience)
         setDuration(c.duration)
-        if (c.jobDescription) {
-          setJdText(c.jobDescription)
-          setJdFileName(c.jdFileName || 'Job Description')
-        }
+        // Restore resume (persistent user asset)
         if (c.resumeText) {
           setResumeText(c.resumeText)
           setResumeFileName(c.resumeFileName || 'Resume')
         }
-        if (c.targetCompany) setTargetCompany(c.targetCompany)
-        if (c.targetIndustry) setTargetIndustry(c.targetIndustry)
+        // Don't restore JD, company, or industry from previous session —
+        // these are interview-specific context and should not carry over.
+        // Also scrub stale fields from stored config so the lobby page
+        // doesn't pick them up from an old localStorage entry.
+        const { jobDescription, jdFileName: _jf, targetCompany: _tc, targetIndustry: _ti, ...cleanConfig } = c
+        if (jobDescription || _tc || _ti) {
+          const cleanStr = JSON.stringify(cleanConfig)
+          localStorage.setItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`, cleanStr)
+          localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, cleanStr)
+        }
         // Migrate legacy key to user-scoped key
         if (legacy && !stored) {
-          localStorage.setItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`, legacy)
+          const cleanStr = JSON.stringify(cleanConfig)
+          localStorage.setItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`, cleanStr)
           localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
         }
       }
@@ -195,7 +201,9 @@ export default function AuthenticatedHome() {
       if (data.resumeName) setResumeFileName(data.resumeName)
       if (data.domain && !role) setRole(data.domain)
       if (data.experience && !experience) setExperience(data.experience as ExperienceLevel)
-      if (data.targetCompany) setTargetCompany(data.targetCompany)
+      // Don't auto-fill targetCompany from resume — the resume's target company
+      // is a resume-builder concept, not an interview session preference.
+      // Users should explicitly set the company for each interview session.
       setShowNoResumeOptions(false)
     } catch { /* ignore */ }
   }
