@@ -297,7 +297,33 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
 
       const raw = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}'
       const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
-      const feedback: FeedbackData = JSON.parse(cleaned)
+      let feedback: FeedbackData
+      try {
+        feedback = JSON.parse(cleaned)
+      } catch {
+        aiLogger.error({ raw: raw.slice(0, 500) }, 'Feedback JSON parse failed')
+        throw new Error('Feedback JSON parse failed')
+      }
+
+      // Validate required fields exist (Claude may truncate if hitting max_tokens)
+      if (!feedback.overall_score || !feedback.dimensions) {
+        aiLogger.warn({ raw: raw.slice(0, 500) }, 'Incomplete feedback from Claude — applying defaults')
+        feedback.overall_score = feedback.overall_score || Math.round(
+          evaluations.reduce((sum: number, e: Record<string, unknown>) =>
+            sum + (((e.relevance as number) || 0) + ((e.structure as number) || 0) +
+                   ((e.specificity as number) || 0) + ((e.ownership as number) || 0)) / 4, 0
+          ) / Math.max(evaluations.length, 1)
+        )
+        feedback.dimensions = feedback.dimensions || {
+          answer_quality: { score: feedback.overall_score, strengths: [], weaknesses: [] },
+          communication: { score: commScore, wpm: aggMetrics.wpm, filler_rate: aggMetrics.fillerRate, pause_score: aggMetrics.pauseScore, rambling_index: aggMetrics.ramblingIndex },
+          engagement_signals: { score: Math.round(feedback.overall_score * 0.9), engagement_score: Math.round(feedback.overall_score * 0.85), confidence_trend: 'stable' as const, energy_consistency: 0.7, composure_under_pressure: 65 },
+        }
+        feedback.pass_probability = feedback.pass_probability || (feedback.overall_score >= 70 ? 'High' : feedback.overall_score >= 50 ? 'Medium' : 'Low')
+        feedback.confidence_level = feedback.confidence_level || 'Medium'
+        feedback.red_flags = feedback.red_flags || []
+        feedback.top_3_improvements = feedback.top_3_improvements || ['Practice more structured answers']
+      }
 
       trackUsage({
         user,

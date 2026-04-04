@@ -164,7 +164,15 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   </Link>
                 ))}
                 <button
-                  onClick={() => { setMoreOpen(false); signOut({ callbackUrl: '/' }) }}
+                  onClick={() => {
+                    setMoreOpen(false)
+                    try {
+                      localStorage.removeItem('interviewConfig')
+                      localStorage.removeItem('interviewData')
+                      localStorage.removeItem('interviewActiveSession')
+                    } catch { /* ignore */ }
+                    signOut({ callbackUrl: '/' })
+                  }}
                   className="w-full text-left px-6 py-3.5 text-sm text-[#f4212e] hover:bg-[#f7f9f9] transition-colors"
                 >
                   Sign Out
