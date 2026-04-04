@@ -83,7 +83,11 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   async function fetchDeepgramToken(): Promise<string> {
     const res = await fetch('/api/transcribe/token', { method: 'POST' })
     const data = await res.json()
-    if (!data.token) throw new Error('No token returned')
+    if (!data.token) {
+      console.error('[Deepgram] Token endpoint returned no token:', data)
+      throw new Error('No token returned')
+    }
+    console.log('[Deepgram] Token fetched, length:', data.token.length)
     return data.token
   }
 
@@ -95,6 +99,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     wsRef.current = ws
 
     ws.onopen = () => {
+      console.log('[Deepgram] WebSocket connected')
       setIsListening(true)
       startAudioCapture(ws)
     }
@@ -136,13 +141,17 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       }
     }
 
-    ws.onerror = () => {
+    ws.onerror = (ev) => {
+      console.error('[Deepgram] WebSocket error', ev)
       finishRecognition()
     }
 
-    ws.onclose = () => {
-      // If still listening when connection closes, finish
-      if (onCompleteRef.current) {
+    ws.onclose = (ev) => {
+      console.warn('[Deepgram] WebSocket closed', { code: ev.code, reason: ev.reason, hadText: finalTextRef.current.length > 0 })
+      // Only resolve if we have captured text OR if the connection was intentionally closed.
+      // If connection closed with no text (e.g., token rejected), DON'T immediately finish —
+      // let the 30s timeout in startListening handle it instead.
+      if (onCompleteRef.current && finalTextRef.current.trim().length > 0) {
         finishRecognition()
       }
     }
@@ -189,6 +198,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   }
 
   function finishRecognition() {
+    console.log('[Deepgram] finishRecognition called, text:', finalTextRef.current.slice(0, 100))
     setIsListening(false)
 
     // Cleanup audio processing
