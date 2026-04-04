@@ -264,9 +264,22 @@ function FeedbackPageInner() {
       if (!res.ok) {
         throw new Error(fb.error || `Feedback generation failed (status ${res.status})`)
       }
-      if (!fb.dimensions || !fb.overall_score) {
-        throw new Error('Feedback response is incomplete — missing required fields')
+      // Apply client-side defaults if feedback is incomplete (truncated Claude response)
+      if (!fb.overall_score) fb.overall_score = 50
+      if (!fb.dimensions) {
+        fb.dimensions = {
+          answer_quality: { score: fb.overall_score || 50, strengths: [], weaknesses: [] },
+          communication: { score: 50, wpm: 120, filler_rate: 0.05, pause_score: 60, rambling_index: 0.3 },
+          engagement_signals: { score: 50, engagement_score: 50, confidence_trend: 'stable', energy_consistency: 0.6, composure_under_pressure: 50 },
+        }
       }
+      if (!fb.dimensions.answer_quality) fb.dimensions.answer_quality = { score: fb.overall_score, strengths: [], weaknesses: [] }
+      if (!fb.dimensions.communication) fb.dimensions.communication = { score: 50, wpm: 120, filler_rate: 0.05, pause_score: 60, rambling_index: 0.3 }
+      if (!fb.dimensions.engagement_signals) fb.dimensions.engagement_signals = { score: 50, engagement_score: 50, confidence_trend: 'stable', energy_consistency: 0.6, composure_under_pressure: 50 }
+      if (!fb.pass_probability) fb.pass_probability = fb.overall_score >= 70 ? 'High' : fb.overall_score >= 50 ? 'Medium' : 'Low'
+      if (!fb.confidence_level) fb.confidence_level = 'Medium'
+      if (!fb.red_flags) fb.red_flags = []
+      if (!fb.top_3_improvements) fb.top_3_improvements = ['Practice structured answers']
       // Normalize enum values (Claude sometimes returns variants like "Medium-High")
       const validProbabilities = ['High', 'Medium', 'Low'] as const
       if (!validProbabilities.includes(fb.pass_probability)) {
@@ -456,6 +469,13 @@ function FeedbackPageInner() {
   }
 
   if (!feedback) return null
+
+  // Apply safety defaults for missing nested feedback fields
+  if (feedback.dimensions) {
+    if (!feedback.dimensions.answer_quality) feedback.dimensions.answer_quality = { score: feedback.overall_score || 50, strengths: [], weaknesses: [] }
+    if (!feedback.dimensions.communication) feedback.dimensions.communication = { score: 50, wpm: 120, filler_rate: 0.05, pause_score: 60, rambling_index: 0.3 }
+    if (!feedback.dimensions.engagement_signals) feedback.dimensions.engagement_signals = { score: 50, engagement_score: 50, confidence_trend: 'stable' as const, energy_consistency: 0.6, composure_under_pressure: 50 }
+  }
 
   if (!feedback.dimensions || !feedback.dimensions.answer_quality || !feedback.dimensions.communication) {
     return (

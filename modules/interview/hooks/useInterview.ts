@@ -582,8 +582,34 @@ export function useInterview({
         if (isInterviewOver()) return
 
         if (!answer) {
-          transitionTo('PROCESSING')
+          // Empty answer — re-ask instead of silently skipping.
+          // This can happen if speech recognition failed to initialize.
+          checkAbort()
+          const retryPrompt = "I didn't quite catch that. Could you please share your thoughts on the question?"
+          addToTranscript('interviewer', retryPrompt, qIdx)
+          await avatarSpeak(retryPrompt, 'friendly')
+
+          checkAbort()
+          transitionTo('LISTENING')
           setLiveAnswer('')
+          const retryAnswer = await listenForAnswer()
+
+          if (isInterviewOver()) return
+          if (!retryAnswer) {
+            // Still empty after retry — skip this question to avoid infinite loop
+            finalizeThread(topicQuestion)
+            currentTopicIndexRef.current++
+            qIdx++
+            continue
+          }
+          // Use retry answer
+          addToTranscript('candidate', retryAnswer, qIdx)
+          currentThreadRef.current.push({
+            role: 'candidate', text: retryAnswer, isProbe: false, probeDepth: 0,
+          })
+          const { evaluation: retryEval } = await evaluateAndCoach(
+            question, retryAnswer, qIdx, undefined, 0,
+          )
           finalizeThread(topicQuestion)
           currentTopicIndexRef.current++
           qIdx++

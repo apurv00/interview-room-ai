@@ -42,19 +42,43 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       startTimeRef.current = Date.now()
       setLiveTranscript('')
 
-      // Fetch short-lived Deepgram token then connect
-      fetchDeepgramToken()
+      // Fetch Deepgram token with retry, then connect WebSocket
+      fetchDeepgramTokenWithRetry()
         .then((token) => connectWebSocket(token))
         .catch((err) => {
-          console.error('Deepgram token fetch failed:', err)
-          // Call finishRecognition to resolve the listenForAnswer() promise.
-          // Without this, the interview hangs in LISTENING forever.
-          finishRecognition()
+          console.error('Deepgram token fetch failed after retries:', err)
+          // Don't call finishRecognition() immediately — that resolves with empty
+          // text and causes the interview to skip questions. Instead, set isListening
+          // false and let the UtteranceEnd timeout or manual stopListening handle it.
+          setIsListening(false)
+          // Resolve with empty text after a long delay (30s) so the interview
+          // doesn't hang forever, but gives user time to notice the issue
+          setTimeout(() => {
+            if (onCompleteRef.current) {
+              finishRecognition()
+            }
+          }, 30000)
         })
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   )
+
+  async function fetchDeepgramTokenWithRetry(retries = 2): Promise<string> {
+    for (let attempt = 0; attempt < retries; attempt++) {
+      try {
+        return await fetchDeepgramToken()
+      } catch (err) {
+        if (attempt < retries - 1) {
+          console.warn(`Deepgram token fetch attempt ${attempt + 1} failed, retrying...`)
+          await new Promise(r => setTimeout(r, 1500))
+        } else {
+          throw err
+        }
+      }
+    }
+    throw new Error('All token fetch attempts failed')
+  }
 
   async function fetchDeepgramToken(): Promise<string> {
     const res = await fetch('/api/transcribe/token', { method: 'POST' })
