@@ -4,7 +4,7 @@ import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 /**
  * Returns a Deepgram API key for client-side WebSocket STT.
  *
- * Generates a short-lived temporary token via Deepgram's /v1/auth/token
+ * Generates a short-lived temporary token via Deepgram's /v1/auth/grant
  * endpoint. We never return the primary API key to clients.
  *
  * Requires DEEPGRAM_API_KEY env var.
@@ -27,19 +27,20 @@ export const POST = composeApiRoute({
     // Generate a short-lived temporary token.
     try {
       const response = await fetch(
-        `https://api.deepgram.com/v1/auth/token?expiration_date=${TOKEN_TTL_SECONDS}`,
+        'https://api.deepgram.com/v1/auth/grant',
         {
           method: 'POST',
           headers: {
             Authorization: `Token ${apiKey}`,
             'Content-Type': 'application/json',
           },
+          body: JSON.stringify({ ttl_seconds: TOKEN_TTL_SECONDS }),
         }
       )
 
       if (response.ok) {
         const data = await response.json()
-        const tempToken = data.token || data.key
+        const tempToken = data.access_token || data.token || data.key
         if (tempToken) {
           return NextResponse.json({ token: tempToken, expiresIn: TOKEN_TTL_SECONDS })
         }

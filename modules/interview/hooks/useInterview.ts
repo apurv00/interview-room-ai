@@ -163,6 +163,7 @@ export function useInterview({
 
   // ── DB session ──
   const sessionIdRef = useRef<string | null>(null)
+  const usageLimitReachedRef = useRef(false)
 
   // ─── Init timer + DB session ────────────────────────────────────────────────
 
@@ -176,6 +177,18 @@ export function useInterview({
     // because no DB persist occurs until finishInterview(), which runs much later.
     // localStorage captures all data as a backup regardless.
     createDbSession(config).then((result) => {
+      if (result.limitReached) {
+        usageLimitReachedRef.current = true
+        interviewAbortRef.current?.abort()
+        coachingAbortRef.current?.abort()
+        stopListening()
+        setCurrentQuestion('Monthly interview limit reached. Please upgrade your plan to continue.')
+        setCoachingTip('You have reached your monthly interview limit. Visit Pricing to upgrade and keep practicing.')
+        transitionTo('ENDED')
+        localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
+        return
+      }
+
       if (result.sessionId) {
         sessionIdRef.current = result.sessionId
         // Mark session as active to prevent duplicate creation on back navigation
@@ -188,7 +201,7 @@ export function useInterview({
         })
       }
     })
-  }, [config])
+  }, [config]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Timer countdown ───────────────────────────────────────────────────────
 
@@ -743,6 +756,7 @@ export function useInterview({
 
     const start = async () => {
       try {
+      if (usageLimitReachedRef.current) return
 
       // ── Coding interview: special flow ──
       if (config.interviewType === 'coding' && currentProblemRef.current) {
