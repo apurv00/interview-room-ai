@@ -444,7 +444,7 @@ export default function AuthenticatedHome() {
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    <input type="text" value={jdCompany} onChange={(e) => setJdCompany(e.target.value)} placeholder="Company (e.g. Google)" className="w-full text-xs px-3 py-2 border border-[#e1e8ed] rounded-xl bg-white focus:outline-none focus:ring-1 focus:ring-[#6366f1]" />
+                    <input type="text" value={jdCompany} onChange={(e) => { setJdCompany(e.target.value); setTargetCompany(e.target.value) }} placeholder="Company (e.g. Google)" className="w-full text-xs px-3 py-2 border border-[#e1e8ed] rounded-xl bg-white focus:outline-none focus:ring-1 focus:ring-[#6366f1]" />
                     <input type="text" value={jdRole} onChange={(e) => setJdRole(e.target.value)} placeholder="Role (e.g. Senior PM)" className="w-full text-xs px-3 py-2 border border-[#e1e8ed] rounded-xl bg-white focus:outline-none focus:ring-1 focus:ring-[#6366f1]" />
                     <p className="text-[10px] text-[#8b98a5]">JD will be auto-generated when you enter the interview room.</p>
                   </div>
