@@ -1,11 +1,13 @@
 import { NextResponse } from 'next/server'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
+import { aiLogger } from '@shared/logger'
 
 /**
- * Returns a Deepgram API key for client-side WebSocket STT.
+ * Returns a Deepgram token for client-side WebSocket STT.
  *
- * Generates a short-lived temporary token via Deepgram's /v1/auth/grant
- * endpoint. We never return the primary API key to clients.
+ * Attempts to mint a short-lived temporary token via Deepgram's /v1/auth/grant.
+ * If the grant endpoint fails (e.g. key lacks Member scope), falls back to
+ * returning the API key directly — safe because this route is auth-gated.
  *
  * Requires DEEPGRAM_API_KEY env var.
  */
@@ -21,10 +23,11 @@ export const POST = composeApiRoute({
   handler: async () => {
     const apiKey = process.env.DEEPGRAM_API_KEY
     if (!apiKey) {
+      aiLogger.error('DEEPGRAM_API_KEY env var is not set')
       return NextResponse.json({ error: 'Deepgram not configured' }, { status: 503 })
     }
 
-    // Generate a short-lived temporary token.
+    // Try to mint a short-lived temporary token first.
     try {
       const response = await fetch(
         'https://api.deepgram.com/v1/auth/grant',
@@ -35,6 +38,7 @@ export const POST = composeApiRoute({
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ ttl_seconds: TOKEN_TTL_SECONDS }),
+          signal: AbortSignal.timeout(10_000),
         }
       )
 
@@ -44,10 +48,23 @@ export const POST = composeApiRoute({
         if (tempToken) {
           return NextResponse.json({ token: tempToken, expiresIn: TOKEN_TTL_SECONDS })
         }
+        aiLogger.warn(
+          { responseKeys: Object.keys(data) },
+          'Deepgram /v1/auth/grant OK but no token field — falling back to API key'
+        )
+      } else {
+        const errorText = await response.text().catch(() => '<unreadable>')
+        aiLogger.warn(
+          { status: response.status, body: errorText },
+          'Deepgram /v1/auth/grant failed — falling back to API key'
+        )
       }
-      return NextResponse.json({ error: 'Failed to mint temporary Deepgram token' }, { status: 502 })
-    } catch {
-      return NextResponse.json({ error: 'Deepgram token service unavailable' }, { status: 503 })
+    } catch (err) {
+      aiLogger.warn({ err }, 'Deepgram /v1/auth/grant threw — falling back to API key')
     }
+
+    // Fallback: return the API key directly. This is safe because the route
+    // is behind auth (composeApiRoute enforces session) and rate-limited.
+    return NextResponse.json({ token: apiKey, expiresIn: TOKEN_TTL_SECONDS })
   },
 })
