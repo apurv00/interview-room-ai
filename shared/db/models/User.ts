@@ -121,6 +121,21 @@ export interface IUser extends Document {
     updatedAt: string
   }>
 
+  // STAR Stories
+  starStories?: Array<{
+    id: string
+    resumeId: string
+    experienceId: string
+    originalBullet: string
+    situation: string
+    task: string
+    action: string
+    result: string
+    targetQuestion: string
+    skills: string[]
+    createdAt: string
+  }>
+
   // XP & Levels
   xp: number
   level: number
@@ -282,6 +297,21 @@ const UserSchema = new Schema<IUser>(
     }],
 
     // XP & Levels
+    // STAR Stories
+    starStories: [{
+      id: { type: String, required: true },
+      resumeId: { type: String, required: true },
+      experienceId: { type: String },
+      originalBullet: { type: String },
+      situation: { type: String, required: true },
+      task: { type: String, required: true },
+      action: { type: String, required: true },
+      result: { type: String, required: true },
+      targetQuestion: { type: String },
+      skills: [{ type: String }],
+      createdAt: { type: String, default: () => new Date().toISOString() },
+    }],
+
     xp: { type: Number, default: 0 },
     level: { type: Number, default: 1 },
     xpThisWeek: { type: Number, default: 0 },

@@ -290,3 +290,101 @@ Rules:
     return null
   }
 }
+
+// ─── Generate STAR Stories ─────────────────────────────────────────────────
+
+export interface STARStory {
+  experienceId: string
+  originalBullet: string
+  situation: string
+  task: string
+  action: string
+  result: string
+  targetQuestion: string
+  skills: string[]
+}
+
+export async function generateSTARStories(
+  userId: string,
+  data: {
+    experience: Array<{ id: string; company: string; title: string; bullets: string[] }>
+    targetRole?: string
+    jobDescription?: string
+    count?: number
+  }
+): Promise<STARStory[]> {
+  const profileContext = await getUserProfileContext(userId)
+  const count = data.count || 6
+
+  // Flatten bullets with context
+  const bulletEntries = data.experience.flatMap(exp =>
+    exp.bullets.map(bullet => ({
+      id: exp.id,
+      company: exp.company,
+      title: exp.title,
+      bullet,
+    }))
+  )
+
+  if (bulletEntries.length === 0) return []
+
+  const bulletsText = bulletEntries
+    .map((b, i) => `${i + 1}. [${b.company} — ${b.title}] ${b.bullet}`)
+    .join('\n')
+
+  const jdContext = data.jobDescription
+    ? `\n\nTarget job description:\n${data.jobDescription.slice(0, 3000)}`
+    : ''
+
+  const message = await client.messages.create({
+    model: 'claude-sonnet-4-6-20250514',
+    max_tokens: 3000,
+    system: `You are an expert interview coach. Transform resume bullet points into compelling STAR stories for behavioral interview preparation. ${profileContext}${data.targetRole ? `Target role: ${data.targetRole}. ` : ''}
+
+For each story:
+- Pick the bullets with the most "story potential" (leadership, problem-solving, measurable impact)
+- Map each to a common behavioral interview question it best answers
+- Create a complete STAR breakdown: Situation (2-3 sentences), Task (1-2 sentences), Action (2-3 sentences), Result (1-2 sentences with metrics if possible)
+- Never fabricate details — expand on what's implied by the bullet
+- List 2-3 skills demonstrated
+
+Return JSON array: [{ "bulletIndex": <number>, "situation": "...", "task": "...", "action": "...", "result": "...", "targetQuestion": "Tell me about a time when...", "skills": ["skill1", "skill2"] }]`,
+    messages: [{
+      role: 'user',
+      content: `Generate ${count} STAR stories from these resume bullets:${jdContext}\n\n${bulletsText}`,
+    }],
+  })
+
+  const responseText = message.content[0].type === 'text' ? message.content[0].text : ''
+  const jsonMatch = responseText.match(/\[[\s\S]*\]/)
+  if (!jsonMatch) return []
+
+  try {
+    const parsed = JSON.parse(jsonMatch[0]) as Array<{
+      bulletIndex: number
+      situation: string
+      task: string
+      action: string
+      result: string
+      targetQuestion: string
+      skills: string[]
+    }>
+
+    return parsed.map(story => {
+      const entry = bulletEntries[story.bulletIndex - 1] || bulletEntries[0]
+      return {
+        experienceId: entry.id,
+        originalBullet: entry.bullet,
+        situation: story.situation,
+        task: story.task,
+        action: story.action,
+        result: story.result,
+        targetQuestion: story.targetQuestion,
+        skills: story.skills || [],
+      }
+    })
+  } catch {
+    console.error('generateSTARStories JSON parse failed')
+    return []
+  }
+}

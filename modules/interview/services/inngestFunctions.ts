@@ -9,6 +9,7 @@ import {
 } from './multimodalPipeline'
 import { connectDB } from '@shared/db/connection'
 import { FailedJob } from '@shared/db/models/FailedJob'
+import { MultimodalAnalysis } from '@shared/db/models/MultimodalAnalysis'
 
 /**
  * Inngest function: Multimodal Interview Analysis
@@ -75,6 +76,29 @@ export const multimodalAnalysis = inngest.createFunction(
           startTime,
         })
       )
+
+      // Step 6: Generate coach notes (non-blocking — failure doesn't fail the pipeline)
+      await step.run('generate-coach-notes', async () => {
+        try {
+          const { generateCoachNotes } = await import('./coachNotesService')
+          const fusionSummary = fusionResult.fusionSummary as Record<string, unknown> | undefined
+          const notes = await generateCoachNotes({
+            transcript: session.transcript as Array<{ speaker: string; text: string; timestamp: number; questionIndex?: number | null }>,
+            evaluations: session.evaluations,
+            improvementMoments: (fusionSummary?.improvementMoments || []) as Array<{ startSec: number; endSec: number; title: string; description: string; questionIndex?: number }>,
+          })
+          if (notes.length > 0) {
+            await connectDB()
+            await MultimodalAnalysis.findOneAndUpdate(
+              { sessionId },
+              { coachNotes: notes }
+            )
+          }
+        } catch (err) {
+          // Coach notes are non-critical — log but don't fail
+          console.warn('Coach notes generation failed:', err)
+        }
+      })
 
       return { sessionId, status: 'completed' }
     } catch (err) {
