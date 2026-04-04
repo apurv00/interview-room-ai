@@ -8,6 +8,16 @@ interface SpeechRecognitionResult {
   metrics: import('@shared/types').SpeechMetrics
 }
 
+interface TranscribeTokenResponse {
+  token?: string
+  expiresIn?: number
+}
+
+interface ActiveToken {
+  value: string
+  expiresAtMs: number
+}
+
 export interface UseDeepgramRecognitionReturn {
   isListening: boolean
   liveTranscript: string
@@ -37,6 +47,8 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isFinishingRef = useRef(false)
   const fallbackFinishTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const isReconnectScheduledRef = useRef(false)
+  const activeTokenRef = useRef<ActiveToken | null>(null)
 
   const startListening = useCallback(
     (onComplete: (result: SpeechRecognitionResult) => void) => {
@@ -54,7 +66,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       setLiveTranscript('')
 
       // Fetch Deepgram token with retry, then connect WebSocket
-      fetchDeepgramTokenWithRetry()
+      getUsableTokenWithRetry()
         .then((token) => connectWebSocket(token))
         .catch((err) => {
           console.error('Deepgram token fetch failed after retries:', err)
@@ -75,14 +87,20 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     []
   )
 
-  async function fetchDeepgramTokenWithRetry(retries = 2): Promise<string> {
-    for (let attempt = 0; attempt < retries; attempt++) {
+  async function getUsableTokenWithRetry(maxAttempts = 3): Promise<string> {
+    const existingToken = activeTokenRef.current
+    if (existingToken && existingToken.expiresAtMs > Date.now() + 15_000) {
+      return existingToken.value
+    }
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
         return await fetchDeepgramToken()
       } catch (err) {
-        if (attempt < retries - 1) {
-          console.warn(`Deepgram token fetch attempt ${attempt + 1} failed, retrying...`)
-          await new Promise(r => setTimeout(r, 1500))
+        if (attempt < maxAttempts - 1) {
+          const backoff = 500 * (2 ** attempt) + Math.floor(Math.random() * 250)
+          console.warn(`Deepgram token fetch attempt ${attempt + 1} failed, retrying in ${backoff}ms...`)
+          await new Promise(r => setTimeout(r, backoff))
         } else {
           throw err
         }
@@ -92,14 +110,19 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   }
 
   async function fetchDeepgramToken(): Promise<string> {
-    const res = await fetch('/api/transcribe/token', { method: 'POST' })
+    const res = await fetch('/api/transcribe/token', { method: 'POST', cache: 'no-store' })
     if (!res.ok) {
       throw new Error(`Token request failed with ${res.status}`)
     }
-    const data = await res.json()
+    const data = (await res.json()) as TranscribeTokenResponse
     if (!data.token) {
       console.error('[Deepgram] Token endpoint returned no token:', data)
       throw new Error('No token returned')
+    }
+    const expiresIn = typeof data.expiresIn === 'number' ? data.expiresIn : 120
+    activeTokenRef.current = {
+      value: data.token,
+      expiresAtMs: Date.now() + Math.max(30, expiresIn) * 1000,
     }
     return data.token
   }
@@ -114,6 +137,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     const wsUrl = 'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&filler_words=true&utterance_end_ms=3500&interim_results=true&language=en&encoding=linear16&sample_rate=16000'
     // Use auth via websocket subprotocol so transient token is not logged in the URL.
     const ws = new WebSocket(wsUrl, ['token', token])
+    let disconnectHandled = false
 
     wsRef.current = ws
 
@@ -162,7 +186,10 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
 
     ws.onerror = (ev) => {
       console.error('[Deepgram] WebSocket error', ev)
-      maybeReconnectOrFinish(token)
+      if (!disconnectHandled) {
+        disconnectHandled = true
+        maybeReconnectOrFinish(token)
+      }
     }
 
     ws.onclose = (ev) => {
@@ -173,24 +200,35 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       if (onCompleteRef.current && finalTextRef.current.trim().length > 0) {
         finishRecognition()
       } else if (ev.code !== 1000) {
-        maybeReconnectOrFinish(token)
+        if (!disconnectHandled) {
+          disconnectHandled = true
+          maybeReconnectOrFinish(token, ev.code)
+        }
       }
     }
   }
 
-  function maybeReconnectOrFinish(token: string) {
+  function maybeReconnectOrFinish(token: string, closeCode?: number) {
+    if (isReconnectScheduledRef.current) return
     const maxReconnectAttempts = 2
     if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
       finishRecognition()
       return
     }
+
+    isReconnectScheduledRef.current = true
     reconnectAttemptsRef.current += 1
     const delay = 800 * reconnectAttemptsRef.current
     reconnectTimerRef.current = setTimeout(() => {
       reconnectTimerRef.current = null
+      isReconnectScheduledRef.current = false
       if (onCompleteRef.current && !isFinishingRef.current) {
         teardownCurrentCapture('reconnect')
-        connectWebSocket(token)
+        const authFailure = closeCode === 1008 || closeCode === 1011 || closeCode === 4401 || closeCode === 4403
+        const reconnectPromise = authFailure ? getUsableTokenWithRetry() : Promise.resolve(token)
+        reconnectPromise
+          .then(freshToken => connectWebSocket(freshToken))
+          .catch(() => finishRecognition())
       }
     }, delay)
   }
@@ -278,6 +316,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       clearTimeout(reconnectTimerRef.current)
       reconnectTimerRef.current = null
     }
+    isReconnectScheduledRef.current = false
 
     teardownCurrentCapture('finish')
 
