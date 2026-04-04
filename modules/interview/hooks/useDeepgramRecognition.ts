@@ -27,6 +27,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   const audioContextRef = useRef<AudioContext | null>(null)
   const processorRef = useRef<ScriptProcessorNode | null>(null)
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
+  const audioStreamRef = useRef<MediaStream | null>(null)
   const finalTextRef = useRef('')
   const onCompleteRef = useRef<((result: SpeechRecognitionResult) => void) | null>(null)
   const startTimeRef = useRef(0)
@@ -46,7 +47,9 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
         .then((token) => connectWebSocket(token))
         .catch((err) => {
           console.error('Deepgram token fetch failed:', err)
-          setIsListening(false)
+          // Call finishRecognition to resolve the listenForAnswer() promise.
+          // Without this, the interview hangs in LISTENING forever.
+          finishRecognition()
         })
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -119,9 +122,14 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   }
 
   function startAudioCapture(ws: WebSocket) {
+    // Request audio-only stream. Avoid specifying sampleRate in getUserMedia
+    // constraints — it can conflict with existing video+audio streams on some
+    // browsers, causing the video track to freeze. The AudioContext handles
+    // resampling to 16kHz instead.
     navigator.mediaDevices
-      .getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } })
+      .getUserMedia({ audio: true, video: false })
       .then((stream) => {
+        audioStreamRef.current = stream
         const audioContext = new AudioContext({ sampleRate: 16000 })
         audioContextRef.current = audioContext
 
@@ -156,13 +164,19 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   function finishRecognition() {
     setIsListening(false)
 
-    // Cleanup audio
+    // Cleanup audio processing
     processorRef.current?.disconnect()
     sourceRef.current?.disconnect()
     audioContextRef.current?.close().catch(() => {})
     processorRef.current = null
     sourceRef.current = null
     audioContextRef.current = null
+
+    // Stop the Deepgram-specific audio stream tracks (separate from page video stream)
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach(t => t.stop())
+      audioStreamRef.current = null
+    }
 
     // Close WebSocket
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
