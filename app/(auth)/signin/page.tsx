@@ -15,10 +15,18 @@ function SignInContent() {
 
   async function handleOAuthSignIn(provider: string) {
     setIsLoading(true)
-    // Clear existing session before starting OAuth flow to prevent identity confusion
-    if (session) {
+    // Force clear session cookie before starting new OAuth flow.
+    // Without this, the old JWT persists and the user ends up logged
+    // in as the previous account after selecting a new Google account.
+    try {
+      // Clear NextAuth session (server-side cookie deletion)
       await signOut({ redirect: false })
-    }
+      // Clear any cached session data client-side
+      // Delete the session cookie directly as a safety net
+      document.cookie = 'next-auth.session-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+      document.cookie = '__Secure-next-auth.session-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; secure'
+      document.cookie = `__Secure-next-auth.session-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; secure; domain=.interviewprep.guru`
+    } catch { /* continue even if signout fails */ }
     await signIn(provider, { callbackUrl })
   }
 
