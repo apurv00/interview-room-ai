@@ -59,7 +59,7 @@ export default function CodingLayout({
   const editorDisabled = EDITOR_DISABLED_PHASES.has(phase)
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col flex-1 min-h-0">
       {/* Desktop: Split layout */}
       <div className="flex-1 flex min-h-0">
         {/* Left panel (40%): Avatar + Problem */}

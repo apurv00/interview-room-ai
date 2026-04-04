@@ -7,6 +7,7 @@ interface InterviewControlsProps {
   onToggleMute: () => void
   onEndInterview: () => void
   isScoring: boolean
+  darkMode?: boolean
 }
 
 // SVG Icons
@@ -39,9 +40,10 @@ export default function InterviewControls({
   onToggleMute,
   onEndInterview,
   isScoring,
+  darkMode = false,
 }: InterviewControlsProps) {
   return (
-    <footer className="flex items-center justify-center gap-2 sm:gap-3 px-3 sm:px-5 py-3 sm:py-4 bg-white/90 backdrop-blur-md border-t border-[#e1e8ed] shrink-0 fixed bottom-0 left-0 right-0 sm:relative z-10">
+    <footer className={`flex items-center justify-center gap-2 sm:gap-3 px-3 sm:px-5 py-3 sm:py-4 backdrop-blur-md shrink-0 fixed bottom-0 left-0 right-0 sm:relative z-10 ${darkMode ? 'bg-[#1e1f2e]/90 border-t border-gray-700/50' : 'bg-white/90 border-t border-[#e1e8ed]'}`}>
       {/* Mute button */}
       <motion.button
         onClick={onToggleMute}
@@ -51,14 +53,16 @@ export default function InterviewControls({
           flex items-center gap-2 px-3 sm:px-5 py-2.5 min-h-[44px] rounded-xl text-sm font-medium transition-colors
           ${muted
             ? 'bg-red-500/15 border border-red-500/25 text-red-500 hover:bg-red-500/20'
-            : 'bg-[#f7f9f9] border border-[#e1e8ed] text-[#536471] hover:bg-[#eff3f4]'
+            : darkMode
+              ? 'bg-gray-800 border border-gray-600/50 text-gray-300 hover:bg-gray-700'
+              : 'bg-[#f7f9f9] border border-[#e1e8ed] text-[#536471] hover:bg-[#eff3f4]'
           }
         `}
         aria-label={muted ? 'Unmute microphone' : 'Mute microphone'}
       >
         <MicIcon muted={muted} />
         <span>{muted ? 'Unmute' : 'Mute'}</span>
-        <kbd className="hidden sm:inline-block text-[10px] text-[#8b98a5] bg-[#f7f9f9] border border-[#e1e8ed] px-1.5 py-0.5 rounded ml-1 font-mono">
+        <kbd className={`hidden sm:inline-block text-[10px] px-1.5 py-0.5 rounded ml-1 font-mono ${darkMode ? 'text-gray-500 bg-gray-800 border border-gray-600/50' : 'text-[#8b98a5] bg-[#f7f9f9] border border-[#e1e8ed]'}`}>
           M
         </kbd>
       </motion.button>
@@ -72,7 +76,9 @@ export default function InterviewControls({
         className={`
           flex items-center gap-2 px-4 sm:px-6 py-2.5 min-h-[44px] rounded-xl text-sm font-medium transition-colors
           ${isScoring
-            ? 'bg-[#f7f9f9] border border-[#e1e8ed] text-[#8b98a5] cursor-not-allowed'
+            ? darkMode
+              ? 'bg-gray-800 border border-gray-600/50 text-gray-500 cursor-not-allowed'
+              : 'bg-[#f7f9f9] border border-[#e1e8ed] text-[#8b98a5] cursor-not-allowed'
             : 'bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-600/20'
           }
         `}
