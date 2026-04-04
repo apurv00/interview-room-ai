@@ -2,48 +2,16 @@
 
 import { useState, Suspense } from 'react'
 import { signIn, signOut, useSession } from 'next-auth/react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import Button from '@shared/ui/Button'
-import Input from '@shared/ui/Input'
-import Divider from '@shared/ui/Divider'
 
 function SignInContent() {
   const { data: session } = useSession()
-  const router = useRouter()
   const searchParams = useSearchParams()
   const callbackUrl = searchParams.get('callbackUrl') || '/lobby'
   const error = searchParams.get('error')
 
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [authError, setAuthError] = useState(error || '')
-
-  async function handleCredentialsSignIn(e: React.FormEvent) {
-    e.preventDefault()
-    setIsLoading(true)
-    setAuthError('')
-
-    // Clear existing session before re-authenticating to prevent identity confusion
-    if (session) {
-      await signOut({ redirect: false })
-    }
-
-    const result = await signIn('credentials', {
-      email,
-      password,
-      redirect: false,
-      callbackUrl,
-    })
-
-    if (result?.error) {
-      setAuthError('Invalid email or password')
-      setIsLoading(false)
-    } else if (result?.url) {
-      router.push(result.url)
-    }
-  }
 
   async function handleOAuthSignIn(provider: string) {
     setIsLoading(true)
@@ -53,6 +21,12 @@ function SignInContent() {
     }
     await signIn(provider, { callbackUrl })
   }
+
+  const errorMessage = error === 'OAuthAccountNotLinked'
+    ? 'An account with this email already exists. Please sign in with the same provider you used originally, or try a different one.'
+    : error === 'CredentialsSignin'
+      ? 'Email/password login has been removed. Please sign in with Google or GitHub below.'
+      : error || ''
 
   return (
     <main className="min-h-screen bg-[#ffffff] flex items-center justify-center px-4 sm:px-6">
@@ -78,9 +52,9 @@ function SignInContent() {
             </div>
           )}
 
-          {authError && (
+          {errorMessage && (
             <div className="mt-4 p-3 bg-[rgba(239,68,68,0.08)] border border-[rgba(239,68,68,0.15)] rounded-[10px] text-caption text-[#f87171]" role="alert">
-              {authError === 'CredentialsSignin' ? 'Invalid email or password' : authError}
+              {errorMessage}
             </div>
           )}
 
@@ -112,37 +86,10 @@ function SignInContent() {
             </button>
           </div>
 
-          <Divider label="or sign in with email" className="my-section" />
-
-          <form onSubmit={handleCredentialsSignIn} className="space-y-component">
-            <Input
-              label="Email"
-              id="email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              placeholder="you@example.com"
-            />
-            <Input
-              label="Password"
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              placeholder="Enter your password"
-            />
-            <Button
-              type="submit"
-              variant="primary"
-              size="md"
-              isFullWidth
-              isLoading={isLoading}
-            >
-              Sign In
-            </Button>
-          </form>
+          {/* Migration notice for former email/password users */}
+          <div className="mt-6 p-3 bg-[rgba(99,102,241,0.05)] border border-[rgba(99,102,241,0.12)] rounded-[10px] text-caption text-[#536471]">
+            Previously used email and password? Just sign in with Google or GitHub using the same email address — your account will be linked automatically.
+          </div>
 
           <p className="text-caption text-[#71767b] text-center mt-section">
             Don&apos;t have an account?{' '}

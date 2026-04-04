@@ -2,60 +2,10 @@
 
 import { useState } from 'react'
 import { signIn } from 'next-auth/react'
-import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import Button from '@shared/ui/Button'
-import Input from '@shared/ui/Input'
-import Divider from '@shared/ui/Divider'
 
 export default function SignUpPage() {
-  const router = useRouter()
-  const [name, setName] = useState('')
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState('')
-
-  async function handleSignUp(e: React.FormEvent) {
-    e.preventDefault()
-    setIsLoading(true)
-    setError('')
-
-    if (password.length < 8) {
-      setError('Password must be at least 8 characters')
-      setIsLoading(false)
-      return
-    }
-
-    try {
-      const res = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, password }),
-      })
-
-      if (!res.ok) {
-        const data = await res.json()
-        setError(data.error || 'Registration failed')
-        setIsLoading(false)
-        return
-      }
-
-      const result = await signIn('credentials', {
-        email,
-        password,
-        redirect: false,
-        callbackUrl: '/lobby',
-      })
-
-      if (result?.url) {
-        router.push(result.url)
-      }
-    } catch {
-      setError('Something went wrong. Please try again.')
-      setIsLoading(false)
-    }
-  }
 
   async function handleOAuthSignIn(provider: string) {
     setIsLoading(true)
@@ -77,14 +27,8 @@ export default function SignUpPage() {
 
           <h1 className="text-heading text-[#0f1419] text-center">Create Account</h1>
           <p className="text-body text-[#71767b] text-center mt-1">
-            Start practicing for your next interview
+            Sign up with your Google or GitHub account to get started
           </p>
-
-          {error && (
-            <div className="mt-4 p-3 bg-[rgba(239,68,68,0.08)] border border-[rgba(239,68,68,0.15)] rounded-[10px] text-caption text-[#f87171]" role="alert">
-              {error}
-            </div>
-          )}
 
           {/* OAuth */}
           <div className="space-y-element mt-section">
@@ -114,47 +58,10 @@ export default function SignUpPage() {
             </button>
           </div>
 
-          <Divider label="or sign up with email" className="my-section" />
-
-          <form onSubmit={handleSignUp} className="space-y-component">
-            <Input
-              label="Full Name"
-              id="name"
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-              placeholder="John Doe"
-            />
-            <Input
-              label="Email"
-              id="email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              placeholder="you@example.com"
-            />
-            <Input
-              label="Password"
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              placeholder="Min. 8 characters"
-              hint="Must be at least 8 characters"
-            />
-            <Button
-              type="submit"
-              variant="primary"
-              size="md"
-              isFullWidth
-              isLoading={isLoading}
-            >
-              Create Account
-            </Button>
-          </form>
+          {/* Migration notice */}
+          <div className="mt-6 p-3 bg-[rgba(99,102,241,0.05)] border border-[rgba(99,102,241,0.12)] rounded-[10px] text-caption text-[#536471]">
+            Previously used email and password? Just sign in with Google or GitHub using the same email address — your account will be linked automatically.
+          </div>
 
           <p className="text-caption text-[#71767b] text-center mt-section">
             Already have an account?{' '}
