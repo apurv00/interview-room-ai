@@ -256,8 +256,9 @@ export default function InterviewPage() {
     }
 
     const parsed = JSON.parse(stored)
-    setConfig(parsed)
     // Select a coding problem if in coding mode (avoid repeats across sessions)
+    // IMPORTANT: Defer setConfig until problem is loaded so useInterview doesn't
+    // start the standard flow before the problem is available.
     if (parsed.interviewType === 'coding') {
       // Fetch user's previously solved problem IDs
       fetch('/api/code/history')
@@ -278,12 +279,16 @@ export default function InterviewPage() {
           }
 
           if (problem) setCurrentProblem(problem)
+          setConfig(parsed)
         })
         .catch(() => {
           // Offline fallback — just pick from pool without history
           const problem = selectProblem(parsed.role, parsed.experience)
           if (problem) setCurrentProblem(problem)
+          setConfig(parsed)
         })
+    } else {
+      setConfig(parsed)
     }
   }, [router])
 
