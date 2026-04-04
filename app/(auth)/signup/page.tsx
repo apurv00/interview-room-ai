@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { signIn } from 'next-auth/react'
+import { signIn, signOut } from 'next-auth/react'
 import Link from 'next/link'
 
 export default function SignUpPage() {
@@ -9,6 +9,13 @@ export default function SignUpPage() {
 
   async function handleOAuthSignIn(provider: string) {
     setIsLoading(true)
+    // Clear any existing session to prevent stale JWT issues
+    try {
+      await signOut({ redirect: false })
+      document.cookie = 'next-auth.session-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+      document.cookie = '__Secure-next-auth.session-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; secure'
+      document.cookie = `__Secure-next-auth.session-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; secure; domain=.interviewprep.guru`
+    } catch { /* continue */ }
     await signIn(provider, { callbackUrl: '/lobby' })
   }
 
