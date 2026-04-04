@@ -349,13 +349,13 @@ export default function InterviewPage() {
 
   return (
     <motion.div
-      className="min-h-screen bg-white flex flex-col"
+      className={`min-h-screen flex flex-col ${isCodingMode ? 'bg-[#1a1b26]' : 'bg-white'}`}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.5, ease: 'easeOut' }}
     >
       {/* ── Header ── */}
-      <header className="flex items-center justify-between px-5 h-[52px] bg-white border-b border-[#e1e8ed] shrink-0">
+      <header className={`flex items-center justify-between px-5 h-[52px] shrink-0 ${isCodingMode ? 'bg-[#1e1f2e] border-b border-gray-700/50' : 'bg-white border-b border-[#e1e8ed]'}`}>
         <div className="flex items-center gap-3">
           {/* Live dot */}
           <div className="flex items-center gap-2">
@@ -364,10 +364,10 @@ export default function InterviewPage() {
               animate={{ opacity: [1, 0.4, 1] }}
               transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
             />
-            <span className="text-sm font-medium text-[#536471]">Live</span>
+            <span className={`text-sm font-medium ${isCodingMode ? 'text-gray-400' : 'text-[#536471]'}`}>Live</span>
           </div>
           {/* Separator */}
-          <div className="w-px h-4 bg-[#e1e8ed]" />
+          <div className={`w-px h-4 ${isCodingMode ? 'bg-gray-700' : 'bg-[#e1e8ed]'}`} />
           <RecordingIndicator
             isRecording={isRecording}
             durationSeconds={recordingDuration}
@@ -379,7 +379,7 @@ export default function InterviewPage() {
         <motion.div
           className="font-mono font-bold tabular-nums text-lg"
           animate={{
-            color: timeRemaining < 60 ? '#f4212e' : timeRemaining < 120 ? '#d97706' : '#0f1419',
+            color: timeRemaining < 60 ? '#f4212e' : timeRemaining < 120 ? '#d97706' : isCodingMode ? '#e2e8f0' : '#0f1419',
           }}
           transition={{ duration: 0.5 }}
         >
@@ -522,6 +522,7 @@ export default function InterviewPage() {
         onToggleMute={toggleMute}
         onEndInterview={finishInterview}
         isScoring={phase === 'SCORING'}
+        darkMode={isCodingMode}
       />
     </motion.div>
   )
