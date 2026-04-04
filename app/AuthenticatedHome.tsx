@@ -85,16 +85,14 @@ export default function AuthenticatedHome() {
         if (c.interviewType) setInterviewType(c.interviewType)
         setExperience(c.experience)
         setDuration(c.duration)
-        if (c.jobDescription) {
-          setJdText(c.jobDescription)
-          setJdFileName(c.jdFileName || 'Job Description')
-        }
+        // Restore resume (persistent user asset)
         if (c.resumeText) {
           setResumeText(c.resumeText)
           setResumeFileName(c.resumeFileName || 'Resume')
         }
-        if (c.targetCompany) setTargetCompany(c.targetCompany)
-        if (c.targetIndustry) setTargetIndustry(c.targetIndustry)
+        // Don't restore JD, company, or industry from previous session —
+        // these are interview-specific context and should not carry over
+        // to a new interview automatically.
         // Migrate legacy key to user-scoped key
         if (legacy && !stored) {
           localStorage.setItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`, legacy)
