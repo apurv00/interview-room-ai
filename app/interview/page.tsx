@@ -109,17 +109,39 @@ export default function InterviewPage() {
 
     const sessionId = interviewRef.current?.sessionId
     if (sessionId) {
-      const formData = new FormData()
-      formData.append('recording', blob, 'interview-recording.webm')
-      formData.append('sessionId', sessionId)
-      fetch('/api/recordings/upload', { method: 'POST', body: formData })
-        .then(async (res) => {
-          if (!res.ok) {
-            const body = await res.json().catch(() => ({}))
-            console.error('Recording upload failed:', res.status, body)
-          }
+      // Use presigned URL to upload directly to R2, bypassing Vercel's 4.5MB body limit
+      try {
+        const presignRes = await fetch('/api/storage/presign', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'upload', type: 'recording', sessionId }),
         })
-        .catch((err) => console.error('Recording upload network error:', err))
+        if (!presignRes.ok) {
+          console.error('Presign request failed:', presignRes.status)
+          return
+        }
+        const { url, key } = await presignRes.json()
+
+        // Upload directly to R2 via presigned PUT
+        const uploadRes = await fetch(url, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'video/webm' },
+          body: blob,
+        })
+        if (!uploadRes.ok) {
+          console.error('R2 upload failed:', uploadRes.status)
+          return
+        }
+
+        // Update the interview session record with the R2 key
+        await fetch(`/api/interviews/${sessionId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ recordingR2Key: key, recordingSizeBytes: blob.size }),
+        }).catch((err) => console.error('Failed to update session with R2 key:', err))
+      } catch (err) {
+        console.error('Recording upload error:', err)
+      }
     }
   }, [stopRecording, isMultimodalEnabled, stopCapture])
 
