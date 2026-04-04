@@ -72,7 +72,7 @@ export default function HistoryPage() {
 
   return (
     <div className="min-h-screen bg-white text-[#0f1419] animate-fade-in">
-      <header className="px-6 py-5 border-b border-[#e1e8ed] bg-white backdrop-blur sticky top-0 z-20">
+      <header className="px-6 py-5 border-b border-[#e1e8ed] bg-white/90 backdrop-blur-xl sticky top-[52px] z-20">
         <div className="max-w-[800px] mx-auto flex items-center justify-between">
           <div>
             <h1 className="text-heading">Interview History</h1>

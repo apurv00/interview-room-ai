@@ -245,7 +245,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
   }
 
   return (
-    <div className="h-full">
+    <div>
       {/* Mobile tab toggle */}
       <div className="md:hidden flex border-b border-[#e1e8ed] mb-4">
         <button
@@ -258,9 +258,9 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
         >Preview</button>
       </div>
 
-      <div className="flex gap-6 h-full">
+      <div className="flex gap-6">
         {/* Editor Panel - 50% */}
-        <div className={`w-1/2 shrink-0 overflow-y-auto space-y-5 pr-2 ${mobileTab === 'preview' ? 'hidden md:block' : ''}`}>
+        <div className={`w-1/2 shrink-0 space-y-5 pr-2 ${mobileTab === 'preview' ? 'hidden md:block' : ''}`}>
           {/* Top bar: name, actions */}
           <div className="flex items-center justify-between">
             <input
@@ -477,7 +477,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
         </div>
 
         {/* Preview Panel - 50% */}
-        <div className={`w-1/2 shrink-0 sticky top-0 h-fit ${mobileTab === 'edit' ? 'hidden md:block' : ''}`}>
+        <div className={`w-1/2 shrink-0 sticky top-4 self-start ${mobileTab === 'edit' ? 'hidden md:block' : ''}`}>
           <div className="text-[10px] text-[#8b98a5] uppercase tracking-wider mb-2 font-semibold">Live Preview</div>
           <ResumePreview data={resume} templateId={resume.template || 'professional'} />
         </div>
