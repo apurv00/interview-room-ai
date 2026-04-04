@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
-import { generate14DayPlan, getTodaysTasks } from '@learn/services/dailyPlanService'
+import { generateMonthlyPlan, getTodaysTasks } from '@learn/services/dailyPlanService'
 
 const GeneratePlanSchema = z.object({
   domain: z.string().min(1).max(50),
@@ -14,7 +14,7 @@ export const POST = composeApiRoute<z.infer<typeof GeneratePlanSchema>>({
   rateLimit: { windowMs: 60_000, maxRequests: 5, keyPrefix: 'rl:gen-plan' },
 
   async handler(_req, { user, body }) {
-    const plan = await generate14DayPlan(
+    const plan = await generateMonthlyPlan(
       user.id,
       body.domain,
       body.interviewType,

@@ -27,6 +27,7 @@ export type FeatureFlag =
   | 'coach_mode'
   | 'live_coding'
   | 'embedding_search'
+  | 'monthly_plan'
 
 const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   personalization_engine: true,
@@ -53,6 +54,7 @@ const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   coach_mode: false,
   live_coding: false,
   embedding_search: false,
+  monthly_plan: true,
 }
 
 export function isFeatureEnabled(flag: FeatureFlag): boolean {
