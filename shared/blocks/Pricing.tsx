@@ -9,7 +9,7 @@ const plans = [
     price: '$0',
     period: '/month',
     description: 'Get started with mock interviews',
-    features: ['3 interviews per month', 'AI feedback & scoring', '12+ career domains', 'Basic progress tracking'],
+    features: ['Unlimited interviews', 'AI feedback & scoring', '12+ career domains', 'Basic progress tracking'],
     cta: 'Get Started',
     ctaVariant: 'outline' as const,
     href: '/signup',

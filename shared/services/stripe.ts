@@ -17,12 +17,12 @@ export const PLANS: Record<string, PlanConfig> = {
   free: {
     name: 'free',
     label: 'Free',
-    monthlyInterviewLimit: 3,
+    monthlyInterviewLimit: 999999,
     monthlyAnalysisLimit: 1,
     rateLimitPerMin: 15,
     priceMonthly: 0,
     features: [
-      '3 interviews per month',
+      'Unlimited interviews',
       'Basic feedback summary',
       'Score tracking',
       'Community support',
@@ -31,13 +31,13 @@ export const PLANS: Record<string, PlanConfig> = {
   pro: {
     name: 'pro',
     label: 'Pro',
-    monthlyInterviewLimit: 30,
+    monthlyInterviewLimit: 999999,
     monthlyAnalysisLimit: 10,
     rateLimitPerMin: 30,
     priceMonthly: 19,
     highlighted: true,
     features: [
-      '30 interviews per month',
+      'Unlimited interviews',
       'Detailed per-question feedback',
       'Recording playback',
       'Score trends & analytics',
