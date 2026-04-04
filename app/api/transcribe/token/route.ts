@@ -4,10 +4,8 @@ import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 /**
  * Returns a Deepgram API key for client-side WebSocket STT.
  *
- * Attempts to generate a short-lived temporary token via Deepgram's
- * /v1/auth/token endpoint. If that fails (wrong plan, API change, etc.),
- * falls back to returning the main API key so the interview pipeline
- * never breaks.
+ * Generates a short-lived temporary token via Deepgram's /v1/auth/token
+ * endpoint. We never return the primary API key to clients.
  *
  * Requires DEEPGRAM_API_KEY env var.
  */
@@ -26,7 +24,7 @@ export const POST = composeApiRoute({
       return NextResponse.json({ error: 'Deepgram not configured' }, { status: 503 })
     }
 
-    // Try to generate a short-lived temporary token (preferred for security)
+    // Generate a short-lived temporary token.
     try {
       const response = await fetch(
         `https://api.deepgram.com/v1/auth/token?expiration_date=${TOKEN_TTL_SECONDS}`,
@@ -46,13 +44,9 @@ export const POST = composeApiRoute({
           return NextResponse.json({ token: tempToken, expiresIn: TOKEN_TTL_SECONDS })
         }
       }
-      // If temp token generation fails, fall through to raw key fallback
+      return NextResponse.json({ error: 'Failed to mint temporary Deepgram token' }, { status: 502 })
     } catch {
-      // Temp token generation failed — fall through to raw key
+      return NextResponse.json({ error: 'Deepgram token service unavailable' }, { status: 503 })
     }
-
-    // Fallback: return the main API key directly.
-    // This ensures the interview pipeline never breaks due to temp token issues.
-    return NextResponse.json({ token: apiKey })
   },
 })
