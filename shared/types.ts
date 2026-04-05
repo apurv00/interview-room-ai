@@ -36,6 +36,7 @@ export type InterviewState =
   | 'ASK_QUESTION'
   | 'LISTENING'
   | 'CODE_EDITING'
+  | 'DESIGN_CANVAS'
   | 'PROCESSING'
   | 'COACHING'
   | 'FOLLOW_UP'
@@ -52,6 +53,36 @@ export interface CodeSubmission {
   questionIndex: number
   code: string
   language: CodeLanguage
+  submittedAt: number
+}
+
+// ─── System Design Interview Types ──────────────────────────────────────────
+
+export type DesignComponentType =
+  | 'client' | 'cdn' | 'load_balancer' | 'api_gateway'
+  | 'web_server' | 'app_server' | 'microservice'
+  | 'database' | 'cache' | 'message_queue' | 'storage'
+  | 'search' | 'notification' | 'monitoring' | 'custom'
+
+export interface DesignComponent {
+  id: string
+  type: DesignComponentType
+  label: string
+  x: number
+  y: number
+}
+
+export interface DesignConnection {
+  id: string
+  from: string
+  to: string
+  label?: string
+}
+
+export interface DesignSubmission {
+  components: DesignComponent[]
+  connections: DesignConnection[]
+  questionIndex: number
   submittedAt: number
 }
 
