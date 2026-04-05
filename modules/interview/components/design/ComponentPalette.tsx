@@ -38,18 +38,25 @@ interface ComponentPaletteProps {
 }
 
 export default function ComponentPalette({ disabled, onAddComponent }: ComponentPaletteProps) {
+  const handleDragStart = (e: React.DragEvent, type: DesignComponentType) => {
+    e.dataTransfer.setData('application/design-component', type)
+    e.dataTransfer.effectAllowed = 'copy'
+  }
+
   return (
-    <div className="grid grid-cols-2 gap-1.5 p-2">
+    <div className="flex flex-col gap-0.5 p-1.5">
       {PALETTE_ITEMS.map((item) => (
         <button
           key={item.type}
           disabled={disabled}
+          draggable={!disabled}
           onClick={() => onAddComponent(item.type)}
-          className="flex flex-col items-center gap-1 px-2 py-2 rounded-md text-gray-400 hover:text-white hover:bg-gray-700/50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-[10px]"
+          onDragStart={(e) => handleDragStart(e, item.type)}
+          className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-gray-400 hover:text-white hover:bg-gray-700/50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-xs text-left cursor-grab active:cursor-grabbing"
           title={item.label}
         >
-          {item.icon}
-          <span className="truncate w-full text-center" title={item.label}>{item.label}</span>
+          <span className="shrink-0">{item.icon}</span>
+          <span>{item.label}</span>
         </button>
       ))}
     </div>
