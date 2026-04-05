@@ -233,8 +233,9 @@ export function useInterview({
         persistSession(result.sessionId, {
           status: 'in_progress',
           startedAt: new Date().toISOString(),
-          // Track coding problem ID for cross-session repeat prevention
+          // Track problem IDs for cross-session repeat prevention
           ...(currentProblemRef.current ? { codingProblemId: currentProblemRef.current.id } : {}),
+          ...(currentDesignProblemRef.current ? { designProblemId: currentDesignProblemRef.current.id } : {}),
         })
       }
     })
