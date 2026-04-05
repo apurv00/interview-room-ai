@@ -41,6 +41,7 @@ interface UseInterviewOptions {
   stopListening: () => void
   onRecordingStop?: () => void
   currentProblem?: { id: string; title: string; description: string } | null
+  currentDesignProblem?: { id: string; title: string; description: string; requirements: string[] } | null
 }
 
 // ─── Hook return ──────────────────────────────────────────────────────────────
@@ -57,6 +58,7 @@ export interface UseInterviewReturn {
   coachingTip: string | null
   finishInterview: () => void
   onCodeSubmit: (code: string, language: string) => void
+  onDesignSubmit: (data: import('@shared/types').DesignSubmission) => void
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
@@ -68,6 +70,7 @@ export function useInterview({
   stopListening,
   onRecordingStop,
   currentProblem,
+  currentDesignProblem,
 }: UseInterviewOptions): UseInterviewReturn {
   const router = useRouter()
 
@@ -132,6 +135,31 @@ export function useInterview({
         return
       }
       codeSubmitResolverRef.current = resolve
+      interviewAbortRef.current?.signal.addEventListener('abort', () => {
+        reject(new InterviewAbortError())
+      }, { once: true })
+    })
+  }
+
+  // ── Design submission (system design interviews) ──
+  const designSubmitResolverRef = useRef<((data: import('@shared/types').DesignSubmission) => void) | null>(null)
+  const currentDesignProblemRef = useRef(currentDesignProblem)
+  currentDesignProblemRef.current = currentDesignProblem
+
+  const onDesignSubmit = useCallback((data: import('@shared/types').DesignSubmission) => {
+    if (designSubmitResolverRef.current) {
+      designSubmitResolverRef.current(data)
+      designSubmitResolverRef.current = null
+    }
+  }, [])
+
+  function waitForDesignSubmission(): Promise<import('@shared/types').DesignSubmission> {
+    return new Promise((resolve, reject) => {
+      if (interviewAbortRef.current?.signal.aborted) {
+        reject(new InterviewAbortError())
+        return
+      }
+      designSubmitResolverRef.current = resolve
       interviewAbortRef.current?.signal.addEventListener('abort', () => {
         reject(new InterviewAbortError())
       }, { once: true })
@@ -869,6 +897,136 @@ export function useInterview({
         return
       }
 
+      // ── System design interview: special flow ──
+      if (config.interviewType === 'system-design' && currentDesignProblemRef.current) {
+        const problem = currentDesignProblemRef.current
+        const designIntro = `Hi! I'm Alex, and today we'll work through a system design challenge together. I'll present you with a problem, and you can build your architecture diagram using the design canvas on the right. Feel free to think out loud as you design — I'm interested in your reasoning and trade-off analysis as much as the final architecture. Let's get started!`
+        setCurrentQuestion(designIntro)
+        addToTranscript('interviewer', designIntro, 0)
+        checkAbort()
+        await avatarSpeak(designIntro, 'friendly')
+
+        checkAbort()
+
+        // Present the problem
+        const requirementsList = problem.requirements.map((r: string) => `• ${r}`).join('\n')
+        const problemText = `Here's your challenge: "${problem.title}". Take a look at the full description and requirements on the left panel. Use the component palette to build your architecture — drag components onto the canvas and use Connect mode to draw relationships between them. Click Submit when you're ready for my review.`
+        transitionTo('ASK_QUESTION')
+        questionIndexRef.current = 1
+        setQuestionIndex(1)
+        setCurrentQuestion(problemText)
+        addToTranscript('interviewer', problemText, 1)
+        await avatarSpeak(problemText, 'curious')
+
+        checkAbort()
+
+        // Transition to DESIGN_CANVAS — user designs
+        transitionTo('DESIGN_CANVAS')
+        setLiveAnswer('')
+
+        // Wait for design submission
+        const submission = await waitForDesignSubmission()
+
+        if (isInterviewOver()) return
+        checkAbort()
+
+        // Evaluate the design
+        transitionTo('PROCESSING')
+        addToTranscript('candidate', `[Design submitted: ${submission.components.length} components, ${submission.connections.length} connections]`, 1)
+
+        let feedbackText = 'Interesting design! Let me share some thoughts.'
+        try {
+          const evalRes = await fetch('/api/evaluate-design', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              components: submission.components,
+              connections: submission.connections,
+              problemTitle: problem.title,
+              problemDescription: problem.description,
+              requirements: problem.requirements,
+              questionIndex: 1,
+              sessionId: sessionIdRef.current,
+            }),
+          })
+          if (evalRes.ok) {
+            const evaluation = await evalRes.json()
+            feedbackText = evaluation.feedback || feedbackText
+            const avgScore = ((evaluation.architecture || 0) + (evaluation.scalability || 0) + (evaluation.requirements_clarity || 0)) / 3
+            setAvatarEmotion(avgScore >= 70 ? 'impressed' : avgScore >= 40 ? 'friendly' : 'curious')
+
+            // Add follow-up question if provided
+            if (evaluation.follow_up_question) {
+              feedbackText += ` ${evaluation.follow_up_question}`
+            }
+          }
+        } catch { /* continue with default feedback */ }
+
+        checkAbort()
+
+        // Show feedback
+        transitionTo('COACHING')
+        setCoachingTip(feedbackText)
+        setCurrentQuestion(feedbackText)
+        addToTranscript('interviewer', feedbackText, 1)
+        await avatarSpeak(feedbackText, avatarEmotion)
+
+        await new Promise<void>((r) => setTimeout(r, 2000))
+        checkAbort()
+
+        // Follow-up: ask about design decisions
+        if (timeRemainingRef.current > 60) {
+          const followUp = `Can you walk me through the key design decisions you made? Specifically, how would your system handle a 10x increase in traffic, and what are the potential bottlenecks?`
+          transitionTo('ASK_QUESTION')
+          questionIndexRef.current = 2
+          setQuestionIndex(2)
+          setCurrentQuestion(followUp)
+          addToTranscript('interviewer', followUp, 2)
+          await avatarSpeak(followUp, 'curious')
+
+          checkAbort()
+          transitionTo('LISTENING')
+          setLiveAnswer('')
+          const answer = await listenForAnswer()
+
+          if (answer && !isInterviewOver()) {
+            addToTranscript('candidate', answer, 2)
+            await evaluateAndCoach(followUp, answer, 2, undefined, 0)
+          }
+        }
+
+        // Second follow-up on trade-offs if time allows
+        if (timeRemainingRef.current > 60 && !isInterviewOver()) {
+          const tradeOffQ = `What trade-offs did you consider in your design? For example, consistency vs availability, or latency vs throughput. What would you change if you had different constraints?`
+          transitionTo('ASK_QUESTION')
+          questionIndexRef.current = 3
+          setQuestionIndex(3)
+          setCurrentQuestion(tradeOffQ)
+          addToTranscript('interviewer', tradeOffQ, 3)
+          await avatarSpeak(tradeOffQ, 'skeptical')
+
+          checkAbort()
+          transitionTo('LISTENING')
+          setLiveAnswer('')
+          const answer2 = await listenForAnswer()
+
+          if (answer2 && !isInterviewOver()) {
+            addToTranscript('candidate', answer2, 3)
+            await evaluateAndCoach(tradeOffQ, answer2, 3, undefined, 0)
+          }
+        }
+
+        // Wrap up
+        if (!isInterviewOver()) {
+          transitionTo('WRAP_UP')
+          addToTranscript('interviewer', WRAP_UP_LINE)
+          await avatarSpeak(WRAP_UP_LINE, 'friendly')
+          await new Promise((r) => setTimeout(r, 4000))
+          finishInterview()
+        }
+        return
+      }
+
       // ── Standard interview flow ──
       const intro = getInterviewIntro(config.role, config.interviewType, config.targetCompany)
       setCurrentQuestion(intro)
@@ -929,5 +1087,6 @@ export function useInterview({
     coachingTip,
     finishInterview,
     onCodeSubmit,
+    onDesignSubmit,
   }
 }

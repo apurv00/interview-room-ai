@@ -20,8 +20,10 @@ import { useRealtimeProsody } from '@interview/hooks/useRealtimeProsody'
 import { useCoachMode } from '@interview/hooks/useCoachMode'
 import CoachOverlay from '@interview/components/interview/CoachOverlay'
 import CodingLayout from '@interview/components/interview/CodingLayout'
+import DesignLayout from '@interview/components/interview/DesignLayout'
 import { selectProblem, type CodingProblem } from '@interview/config/codingProblems'
-import type { InterviewConfig } from '@shared/types'
+import { selectDesignProblem, type DesignProblem } from '@interview/config/designProblems'
+import type { InterviewConfig, DesignSubmission } from '@shared/types'
 import { AVATAR_NAME, getAvatarTitle } from '@interview/config/interviewConfig'
 import { STORAGE_KEYS } from '@shared/storageKeys'
 
@@ -37,6 +39,7 @@ const PHASE_LABELS: Record<string, string> = {
   ASK_QUESTION: 'Question',
   LISTENING: 'Listening',
   CODE_EDITING: 'Coding',
+  DESIGN_CANVAS: 'Designing',
   PROCESSING: 'Processing',
   COACHING: 'Coaching',
   FOLLOW_UP: 'Follow-up',
@@ -55,6 +58,7 @@ const PHASE_COLORS: Record<string, { text: string; bg: string; border: string; d
   WRAP_UP: { text: 'text-orange-600', bg: 'bg-orange-500/10', border: 'border-orange-500/25', dot: 'bg-orange-600' },
   SCORING: { text: 'text-cyan-600', bg: 'bg-cyan-500/10', border: 'border-cyan-500/25', dot: 'bg-cyan-600' },
   CODE_EDITING: { text: 'text-blue-600', bg: 'bg-blue-500/10', border: 'border-blue-500/25', dot: 'bg-blue-600' },
+  DESIGN_CANVAS: { text: 'text-teal-600', bg: 'bg-teal-500/10', border: 'border-teal-500/25', dot: 'bg-teal-600' },
 }
 
 const DEFAULT_PHASE_COLOR = { text: 'text-[#71767b]', bg: 'bg-[#f7f9f9]', border: 'border-[#e1e8ed]', dot: 'bg-[#71767b]' }
@@ -68,7 +72,9 @@ export default function InterviewPage() {
   const [config, setConfig] = useState<InterviewConfig | null>(null)
   const [codingLanguage, setCodingLanguage] = useState<import('@shared/types').CodeLanguage>('python')
   const [currentProblem, setCurrentProblem] = useState<CodingProblem | null>(null)
+  const [currentDesignProblem, setCurrentDesignProblem] = useState<DesignProblem | null>(null)
   const isCodingMode = config?.interviewType === 'coding'
+  const isDesignMode = config?.interviewType === 'system-design'
 
   // ── Camera ──
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -153,6 +159,7 @@ export default function InterviewPage() {
     stopListening,
     onRecordingStop: handleRecordingStop,
     currentProblem,
+    currentDesignProblem,
   })
 
   const interviewRef = useRef(interview)
@@ -196,6 +203,11 @@ export default function InterviewPage() {
   const handleCodeSubmit = useCallback((code: string) => {
     interview.onCodeSubmit(code, codingLanguage)
   }, [interview.onCodeSubmit, codingLanguage])
+
+  // ─── Design submission handler (system design mode) ────────────────────────
+  const handleDesignSubmit = useCallback((data: DesignSubmission) => {
+    interview.onDesignSubmit(data)
+  }, [interview.onDesignSubmit])
 
   // ─── Keyboard shortcut (M to toggle mute) ──────────────────────────────────
   useEffect(() => {
@@ -287,6 +299,11 @@ export default function InterviewPage() {
           if (problem) setCurrentProblem(problem)
           setConfig(parsed)
         })
+    } else if (parsed.interviewType === 'system-design') {
+      // Select a design problem (similar to coding problem selection)
+      const problem = selectDesignProblem(parsed.role, parsed.experience)
+      if (problem) setCurrentDesignProblem(problem)
+      setConfig(parsed)
     } else {
       setConfig(parsed)
     }
@@ -354,13 +371,13 @@ export default function InterviewPage() {
 
   return (
     <motion.div
-      className={`min-h-screen flex flex-col ${isCodingMode ? 'bg-[#1a1b26]' : 'bg-white'}`}
+      className={`min-h-screen flex flex-col ${isCodingMode || isDesignMode ? 'bg-[#1a1b26]' : 'bg-white'}`}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.5, ease: 'easeOut' }}
     >
       {/* ── Header ── */}
-      <header className={`flex items-center justify-between px-5 h-[52px] shrink-0 ${isCodingMode ? 'bg-[#1e1f2e] border-b border-gray-700/50' : 'bg-white border-b border-[#e1e8ed]'}`}>
+      <header className={`flex items-center justify-between px-5 h-[52px] shrink-0 ${isCodingMode || isDesignMode ? 'bg-[#1e1f2e] border-b border-gray-700/50' : 'bg-white border-b border-[#e1e8ed]'}`}>
         <div className="flex items-center gap-3">
           {/* Live dot */}
           <div className="flex items-center gap-2">
@@ -369,10 +386,10 @@ export default function InterviewPage() {
               animate={{ opacity: [1, 0.4, 1] }}
               transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
             />
-            <span className={`text-sm font-medium ${isCodingMode ? 'text-gray-400' : 'text-[#536471]'}`}>Live</span>
+            <span className={`text-sm font-medium ${isCodingMode || isDesignMode ? 'text-gray-400' : 'text-[#536471]'}`}>Live</span>
           </div>
           {/* Separator */}
-          <div className={`w-px h-4 ${isCodingMode ? 'bg-gray-700' : 'bg-[#e1e8ed]'}`} />
+          <div className={`w-px h-4 ${isCodingMode || isDesignMode ? 'bg-gray-700' : 'bg-[#e1e8ed]'}`} />
           <RecordingIndicator
             isRecording={isRecording}
             durationSeconds={recordingDuration}
@@ -384,7 +401,7 @@ export default function InterviewPage() {
         <motion.div
           className="font-mono font-bold tabular-nums text-lg"
           animate={{
-            color: timeRemaining < 60 ? '#f4212e' : timeRemaining < 120 ? '#d97706' : isCodingMode ? '#e2e8f0' : '#0f1419',
+            color: timeRemaining < 60 ? '#f4212e' : timeRemaining < 120 ? '#d97706' : isCodingMode || isDesignMode ? '#e2e8f0' : '#0f1419',
           }}
           transition={{ duration: 0.5 }}
         >
@@ -438,6 +455,26 @@ export default function InterviewPage() {
             <CoachingTip tip={coachingTip} />
           </div>
         </CodingLayout>
+      ) : isDesignMode ? (
+        <DesignLayout
+          avatarEmotion={avatarEmotion}
+          isAvatarTalking={isAvatarTalking}
+          isListening={isListening}
+          isProcessing={isProcessing}
+          transcriptWordCount={liveTranscript.split(/\s+/).filter(Boolean).length}
+          problem={currentDesignProblem}
+          phase={phase}
+          questionIndex={questionIndex}
+          onDesignSubmit={handleDesignSubmit}
+          currentQuestion={currentQuestion}
+          liveAnswer={displayAnswer}
+        >
+          <div className="px-4 pb-1 flex flex-col gap-1.5">
+            {isCoachMode && <CoachOverlay state={coachModeState} />}
+            <CoachingNudge nudge={activeNudge} />
+            <CoachingTip tip={coachingTip} />
+          </div>
+        </DesignLayout>
       ) : (
       <>
       {/* ── Video tiles ── */}
@@ -527,7 +564,7 @@ export default function InterviewPage() {
         onToggleMute={toggleMute}
         onEndInterview={finishInterview}
         isScoring={phase === 'SCORING'}
-        darkMode={isCodingMode}
+        darkMode={isCodingMode || isDesignMode}
       />
     </motion.div>
   )
