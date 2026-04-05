@@ -85,7 +85,7 @@ export default function InterviewPage() {
   const [voicesReady, setVoicesReady] = useState(false)
 
   // ── Speech recognition ──
-  const { isListening, liveTranscript, startListening, stopListening } = useSpeechRecognition()
+  const { isListening, liveTranscript, startListening, stopListening, warmUp, setExternalStream } = useSpeechRecognition()
 
   // ── Recording ──
   const { isRecording, recordingDuration, startRecording, stopRecording } = useMediaRecorder()
@@ -157,6 +157,7 @@ export default function InterviewPage() {
     voicesReady,
     startListening,
     stopListening,
+    warmUpListening: warmUp,
     onRecordingStop: handleRecordingStop,
     currentProblem,
     currentDesignProblem,
@@ -326,6 +327,8 @@ export default function InterviewPage() {
       .getUserMedia({ video: true, audio: true })
       .then((stream) => {
         streamRef.current = stream
+        // Share the audio stream with speech recognition to avoid redundant getUserMedia
+        setExternalStream(stream)
         if (videoRef.current) {
           videoRef.current.srcObject = stream
           // Start facial landmark capture if multimodal is enabled
