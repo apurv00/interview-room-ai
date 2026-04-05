@@ -466,18 +466,18 @@ export default function AuthenticatedHome() {
 
         {/* Domain selector */}
         <div id="step-3">
-          <p className="text-xs font-medium text-[#536471] uppercase tracking-wide mb-2">Interview Domain</p>
+          <p className="text-xs font-medium text-[#536471] uppercase tracking-wide mb-2">Interview Domain <span className="text-[#f4212e]">*</span></p>
           <DomainSelector selectedDomain={role} onSelect={(slug) => { setRole(slug); setInterviewType(null) }} />
         </div>
 
         {/* Interview Type + Experience + Duration — 3 columns */}
         <div className="grid sm:grid-cols-3 gap-4">
           <div>
-            <p className="text-xs font-medium text-[#536471] uppercase tracking-wide mb-2">Type</p>
+            <p className="text-xs font-medium text-[#536471] uppercase tracking-wide mb-2">Type <span className="text-[#f4212e]">*</span></p>
             <DepthSelector selectedDomain={role} selectedDepth={interviewType} onSelect={setInterviewType} />
           </div>
           <div id="step-5">
-            <p className="text-xs font-medium text-[#536471] uppercase tracking-wide mb-2">Experience</p>
+            <p className="text-xs font-medium text-[#536471] uppercase tracking-wide mb-2">Experience <span className="text-[#f4212e]">*</span></p>
             <SelectionGroup<ExperienceLevel>
               items={EXPERIENCES}
               value={experience}
@@ -492,7 +492,7 @@ export default function AuthenticatedHome() {
             />
           </div>
           <div id="step-6">
-            <p className="text-xs font-medium text-[#536471] uppercase tracking-wide mb-2">Duration</p>
+            <p className="text-xs font-medium text-[#536471] uppercase tracking-wide mb-2">Duration <span className="text-[#f4212e]">*</span></p>
             <SelectionGroup<Duration>
               items={DURATIONS}
               value={duration !== null ? String(duration) : null}

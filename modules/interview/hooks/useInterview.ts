@@ -84,7 +84,7 @@ export function useInterview({
 
   // ── Avatar (extracted to useAvatarSpeech) ──
   const isMultimodalEnabled = process.env.NEXT_PUBLIC_FEATURE_MULTIMODAL === 'true'
-  const { avatarEmotion, isAvatarTalking, setAvatarEmotion, avatarSpeak } = useAvatarSpeech({
+  const { avatarEmotion, isAvatarTalking, setAvatarEmotion, avatarSpeak, prefetchTTS } = useAvatarSpeech({
     interviewType: config?.interviewType,
     isMultimodalEnabled,
   })
@@ -296,8 +296,11 @@ export function useInterview({
 
   // ─── Shared helpers (DRY: listening + evaluation + coaching) ──────────────
 
-  /** Listen for candidate speech and collect metrics. Resolves with the answer text. */
-  function listenForAnswer(showLive: boolean = true): Promise<string> {
+  /** Listen for candidate speech and collect metrics. Resolves with the answer text.
+   *  @param showLive - whether to update live answer display
+   *  @param timeoutMs - max time to wait for speech (default 30s). 0 = no timeout.
+   */
+  function listenForAnswer(showLive: boolean = true, timeoutMs: number = 30000): Promise<string> {
     // Periodically update avatar emotion during listening based on answer growth
     let lastWordCount = 0
     const emotionInterval = setInterval(() => {
@@ -317,7 +320,13 @@ export function useInterview({
     }, 3000) // Check every 3 seconds
 
     return new Promise((resolve) => {
+      let resolved = false
+      let timeoutTimer: ReturnType<typeof setTimeout> | undefined
+
       startListening((result) => {
+        if (resolved) return
+        resolved = true
+        clearTimeout(timeoutTimer)
         clearInterval(emotionInterval)
         if (result.metrics) {
           speechMetricsRef.current.push(result.metrics)
@@ -325,6 +334,18 @@ export function useInterview({
         if (showLive) setLiveAnswer(result.text)
         resolve(result.text)
       })
+
+      // Auto-resolve with empty string after timeout if no speech detected
+      if (timeoutMs > 0) {
+        timeoutTimer = setTimeout(() => {
+          if (!resolved) {
+            resolved = true
+            clearInterval(emotionInterval)
+            stopListening()
+            resolve('')
+          }
+        }, timeoutMs)
+      }
     })
   }
 
@@ -595,7 +616,9 @@ export function useInterview({
       while (qIdx < maxQ) {
         checkAbort()
         if (isInterviewOver()) return
-        if (timeRemainingRef.current < 30) break
+        // Only skip starting a NEW question if very little time remains;
+        // once a question is in progress, let the user finish answering
+        if (timeRemainingRef.current < 15 && qIdx > 0) break
 
         // ── Generate new topic question (use prefetched if available) ──
         transitionTo('ASK_QUESTION')
@@ -633,10 +656,10 @@ export function useInterview({
         if (isInterviewOver()) return
 
         if (!answer) {
-          // Empty answer — re-ask instead of silently skipping.
-          // This can happen if speech recognition failed to initialize.
+          // Empty answer — nudge the candidate and re-ask.
+          // This can happen if speech recognition timed out or failed to initialize.
           checkAbort()
-          const retryPrompt = "I didn't quite catch that. Could you please share your thoughts on the question?"
+          const retryPrompt = "Take your time — whenever you're ready, I'd love to hear your thoughts on this."
           addToTranscript('interviewer', retryPrompt, qIdx)
           await avatarSpeak(retryPrompt, 'friendly')
 
@@ -647,7 +670,10 @@ export function useInterview({
 
           if (isInterviewOver()) return
           if (!retryAnswer) {
-            // Still empty after retry — skip this question to avoid infinite loop
+            // Still empty after retry — move to next question with a gentle transition
+            const skipMsg = "No problem — let's move on to the next question."
+            addToTranscript('interviewer', skipMsg, qIdx)
+            await avatarSpeak(skipMsg, 'friendly')
             finalizeThread(topicQuestion)
             currentTopicIndexRef.current++
             qIdx++
@@ -687,7 +713,11 @@ export function useInterview({
         const { evaluation, concurrentResult: prefetchedQ } = await evaluateAndCoach(
           question, finalAnswer, qIdx, nextQuestionPromise, currentProbeDepthRef.current,
         )
-        if (prefetchedQ) prefetchedQuestionRef.current = Promise.resolve(prefetchedQ as string)
+        if (prefetchedQ) {
+          prefetchedQuestionRef.current = Promise.resolve(prefetchedQ as string)
+          // Pre-fetch TTS audio for the next question to eliminate voice delay
+          prefetchTTS(prefetchedQ as string)
+        }
 
         // ── Handle pushback (fires before probe loop, can act as ad-hoc probe) ──
         let currentEval = evaluation
@@ -766,15 +796,32 @@ export function useInterview({
         qIdx++
       }
 
-      // Wrap-up
+      // Wrap-up — listen for user questions and respond
       checkAbort()
       if (isInterviewOver()) return
       transitionTo('WRAP_UP')
       addToTranscript('interviewer', WRAP_UP_LINE)
       await avatarSpeak(WRAP_UP_LINE, 'friendly')
 
-      // 4s for user to ask questions
-      await new Promise((r) => setTimeout(r, 4000))
+      // Listen for user's wrap-up questions (15s timeout)
+      transitionTo('LISTENING')
+      setLiveAnswer('')
+      const wrapUpAnswer = await listenForAnswer(true, 15000)
+
+      if (wrapUpAnswer && wrapUpAnswer.trim().length > 5) {
+        addToTranscript('candidate', wrapUpAnswer)
+        // Generate a brief closing response
+        checkAbort()
+        const closingLine = "That's a great question! I appreciate your curiosity. We'll be in touch with next steps. Thank you so much for your time today — it was a pleasure speaking with you!"
+        addToTranscript('interviewer', closingLine)
+        await avatarSpeak(closingLine, 'friendly')
+      } else {
+        // No questions — graceful close
+        const noQuestionsClose = "No worries at all! Thank you so much for your time today — it was a pleasure speaking with you. We'll be in touch!"
+        addToTranscript('interviewer', noQuestionsClose)
+        await avatarSpeak(noQuestionsClose, 'friendly')
+      }
+
       finishInterview()
       } catch (err) {
         // Silently catch abort errors — interview was intentionally ended

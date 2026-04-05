@@ -19,6 +19,11 @@ const nextConfig = {
         destination: '/lobby',
         permanent: true,
       },
+      {
+        source: '/resources/behavioral-interview-questions',
+        destination: '/resources/behavioral-questions',
+        permanent: true,
+      },
     ]
   },
   async headers() {
