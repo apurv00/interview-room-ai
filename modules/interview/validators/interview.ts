@@ -151,4 +151,6 @@ export const UpdateSessionSchema = z.object({
   completedAt: z.string().datetime().optional(),
   recordingR2Key: z.string().max(1000).optional(),
   recordingSizeBytes: z.number().int().min(0).optional(),
+  codingProblemId: z.string().max(200).optional(),
+  designProblemId: z.string().max(200).optional(),
 })

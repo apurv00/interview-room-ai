@@ -46,6 +46,8 @@ export interface IInterviewSession extends Document {
 
   // Coding interview
   codingProblemId?: string
+  // Design interview
+  designProblemId?: string
   codeSubmissions?: Array<{
     code: string
     language: string
@@ -125,6 +127,8 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
 
     // Coding interview
     codingProblemId: { type: String },
+    // Design interview
+    designProblemId: { type: String },
     codeSubmissions: { type: Schema.Types.Mixed },
 
     templateId: { type: Schema.Types.ObjectId, ref: 'InterviewTemplate' },
