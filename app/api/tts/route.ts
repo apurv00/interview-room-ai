@@ -9,17 +9,13 @@ const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY
 const TTS_MODEL = process.env.DEEPGRAM_TTS_MODEL || 'aura-2-zeus-en'
 
 /**
- * Add lightweight SSML prosody hints for more natural delivery.
- * Inserts pauses after question marks and transitional phrases.
+ * Add punctuation-based pauses for more natural TTS delivery.
+ * Deepgram Aura does not support SSML — use punctuation instead.
  */
-function addProsodyHints(text: string): string {
+function addNaturalPauses(text: string): string {
   let result = text
-  // Add brief pause after question marks for natural cadence
-  result = result.replace(/\?\s+/g, '? <break time="250ms"/> ')
-  // Add pause after transitional phrases
-  result = result.replace(/\b(So,|Now,|Alright,|Great,|Okay,|Well,)\s/g, '$1 <break time="200ms"/> ')
-  // Add slight pause before "and" in lists for clarity
-  result = result.replace(/,\s+and\s/g, ', <break time="150ms"/> and ')
+  // Add ellipsis after transitional phrases for a slight pause
+  result = result.replace(/\b(So,|Now,|Alright,|Great,|Okay,|Well,) /g, '$1... ')
   return result
 }
 
@@ -39,7 +35,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid text' }, { status: 400 })
     }
 
-    const processedText = addProsodyHints(text)
+    const processedText = addNaturalPauses(text)
 
     const response = await fetch(
       `https://api.deepgram.com/v1/speak?model=${TTS_MODEL}&encoding=mp3`,

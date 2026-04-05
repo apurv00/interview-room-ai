@@ -17,5 +17,7 @@ export function useSpeechRecognitionAdapter() {
     return useDeepgramRecognition()
   }
   // eslint-disable-next-line react-hooks/rules-of-hooks
-  return useSpeechRecognition()
+  const base = useSpeechRecognition()
+  // Provide no-op stubs for warmUp/setExternalStream when using Web Speech API
+  return { ...base, warmUp: () => {}, setExternalStream: (_s: MediaStream) => {} }
 }

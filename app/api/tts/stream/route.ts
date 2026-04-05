@@ -29,11 +29,9 @@ export async function POST(req: NextRequest) {
       return new Response(JSON.stringify({ error: 'Invalid text' }), { status: 400 })
     }
 
-    // Add SSML prosody hints for more natural delivery
+    // Add punctuation-based pauses (Deepgram Aura does not support SSML)
     let processedText = text
-    processedText = processedText.replace(/\?\s+/g, '? <break time="250ms"/> ')
-    processedText = processedText.replace(/\b(So,|Now,|Alright,|Great,|Okay,|Well,)\s/g, '$1 <break time="200ms"/> ')
-    processedText = processedText.replace(/,\s+and\s/g, ', <break time="150ms"/> and ')
+    processedText = processedText.replace(/\b(So,|Now,|Alright,|Great,|Okay,|Well,) /g, '$1... ')
 
     // Determine encoding — prefer opus if client requests it
     const encoding = req.nextUrl.searchParams.get('encoding') === 'opus' ? 'opus' : 'mp3'

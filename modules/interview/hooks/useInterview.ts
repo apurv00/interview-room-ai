@@ -39,6 +39,8 @@ interface UseInterviewOptions {
   voicesReady: boolean
   startListening: (onComplete: (result: SpeechRecognitionResult) => void) => void
   stopListening: () => void
+  /** Pre-warm STT WebSocket so startListening is instant. */
+  warmUpListening?: () => void
   onRecordingStop?: () => void
   currentProblem?: { id: string; title: string; description: string } | null
   currentDesignProblem?: { id: string; title: string; description: string; requirements: string[] } | null
@@ -68,6 +70,7 @@ export function useInterview({
   voicesReady,
   startListening,
   stopListening,
+  warmUpListening,
   onRecordingStop,
   currentProblem,
   currentDesignProblem,
@@ -569,6 +572,7 @@ export function useInterview({
     setQuestionIndex(pushbackQIdx)
     setCurrentQuestion(line)
     addToTranscript('interviewer', line, pushbackQIdx)
+    warmUpListening?.()
     await avatarSpeak(line, emotion)
 
     // Listen for response
@@ -645,6 +649,7 @@ export function useInterview({
         checkAbort()
         const emotion: AvatarEmotion =
           qIdx === 0 ? 'friendly' : qIdx % 3 === 0 ? 'curious' : 'neutral'
+        warmUpListening?.()
         await avatarSpeak(question, emotion)
 
         // Listen for answer
@@ -661,6 +666,7 @@ export function useInterview({
           checkAbort()
           const retryPrompt = "Take your time — whenever you're ready, I'd love to hear your thoughts on this."
           addToTranscript('interviewer', retryPrompt, qIdx)
+          warmUpListening?.()
           await avatarSpeak(retryPrompt, 'friendly')
 
           checkAbort()
@@ -757,6 +763,7 @@ export function useInterview({
           setQuestionIndex(qIdx)
           setCurrentQuestion(probeQ)
           addToTranscript('interviewer', probeQ, qIdx)
+          warmUpListening?.()
           await avatarSpeak(probeQ, 'curious')
 
           // Listen for probe answer
@@ -926,6 +933,7 @@ export function useInterview({
           setQuestionIndex(2)
           setCurrentQuestion(followUp)
           addToTranscript('interviewer', followUp, 2)
+          warmUpListening?.()
           await avatarSpeak(followUp, 'curious')
 
           checkAbort()
@@ -1050,6 +1058,7 @@ export function useInterview({
           setQuestionIndex(2)
           setCurrentQuestion(followUp)
           addToTranscript('interviewer', followUp, 2)
+          warmUpListening?.()
           await avatarSpeak(followUp, 'curious')
 
           checkAbort()
@@ -1071,6 +1080,7 @@ export function useInterview({
           setQuestionIndex(3)
           setCurrentQuestion(tradeOffQ)
           addToTranscript('interviewer', tradeOffQ, 3)
+          warmUpListening?.()
           await avatarSpeak(tradeOffQ, 'skeptical')
 
           checkAbort()
@@ -1122,6 +1132,7 @@ export function useInterview({
       q1Promise.then((q) => prefetchTTS(q)).catch(() => {})
       prefetchedQuestionRef.current = q1Promise
 
+      warmUpListening?.()
       await avatarSpeak(intro, 'friendly')
 
       // Listen for the candidate's response to the intro ("tell me about yourself")

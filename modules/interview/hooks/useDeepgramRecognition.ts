@@ -13,11 +13,18 @@ export interface UseDeepgramRecognitionReturn {
   liveTranscript: string
   startListening: (onComplete: (result: SpeechRecognitionResult) => void) => void
   stopListening: () => void
+  /** Pre-warm: fetch token + connect WebSocket so startListening is instant. */
+  warmUp: () => void
+  /** Provide an existing audio stream to avoid redundant getUserMedia calls. */
+  setExternalStream: (stream: MediaStream) => void
 }
 
 /**
  * Deepgram Nova-2 streaming speech recognition via WebSocket.
  * Same interface as useSpeechRecognition for drop-in replacement.
+ *
+ * Supports pre-warming: call warmUp() during avatar speech so the
+ * WebSocket is connected before the user starts answering.
  */
 export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   const [isListening, setIsListening] = useState(false)
@@ -28,6 +35,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   const processorRef = useRef<ScriptProcessorNode | null>(null)
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const audioStreamRef = useRef<MediaStream | null>(null)
+  const externalStreamRef = useRef<MediaStream | null>(null)
   const finalTextRef = useRef('')
   const onCompleteRef = useRef<((result: SpeechRecognitionResult) => void) | null>(null)
   const startTimeRef = useRef(0)
@@ -37,6 +45,16 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isFinishingRef = useRef(false)
   const fallbackFinishTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Token cache — avoids re-fetching for each question
+  const cachedTokenRef = useRef<string | null>(null)
+  // Whether warmUp() has been called and WebSocket is ready
+  const isWarmedUpRef = useRef(false)
+  const warmUpPromiseRef = useRef<Promise<void> | null>(null)
+
+  /** Provide an existing media stream (from page-level getUserMedia). */
+  const setExternalStream = useCallback((stream: MediaStream) => {
+    externalStreamRef.current = stream
+  }, [])
 
   const startListening = useCallback(
     (onComplete: (result: SpeechRecognitionResult) => void) => {
@@ -48,27 +66,108 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       startTimeRef.current = Date.now()
       setLiveTranscript('')
 
-      // Fetch Deepgram token with retry, then connect WebSocket
-      fetchDeepgramTokenWithRetry()
-        .then((token) => connectWebSocket(token))
-        .catch((err) => {
-          console.error('Deepgram token fetch failed after retries:', err)
-          // Don't call finishRecognition() immediately — that resolves with empty
-          // text and causes the interview to skip questions. Instead, set isListening
-          // false and let the UtteranceEnd timeout or manual stopListening handle it.
-          setIsListening(false)
-          // Resolve with empty text after a long delay (30s) so the interview
-          // doesn't hang forever, but gives user time to notice the issue
-          fallbackFinishTimerRef.current = setTimeout(() => {
-            if (onCompleteRef.current) {
-              finishRecognition()
+      // If warmed up and WebSocket is already connected, start capture immediately
+      if (isWarmedUpRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
+        setIsListening(true)
+        startAudioCapture(wsRef.current)
+        isWarmedUpRef.current = false
+        return
+      }
+
+      // If warmUp is in progress, wait for it then start capture
+      if (warmUpPromiseRef.current) {
+        warmUpPromiseRef.current
+          .then(() => {
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+              setIsListening(true)
+              startAudioCapture(wsRef.current)
+              isWarmedUpRef.current = false
+            } else {
+              // Warm-up WebSocket failed, fall back to full connection
+              connectFresh()
             }
-          }, 30000)
-        })
+          })
+          .catch(() => connectFresh())
+        return
+      }
+
+      // No warm-up — do full connection (original path)
+      connectFresh()
+
+      function connectFresh() {
+        fetchTokenCached()
+          .then((token) => connectWebSocket(token))
+          .catch((err) => {
+            console.error('Deepgram token fetch failed after retries:', err)
+            setIsListening(false)
+            fallbackFinishTimerRef.current = setTimeout(() => {
+              if (onCompleteRef.current) {
+                finishRecognition()
+              }
+            }, 30000)
+          })
+      }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   )
+
+  /**
+   * Pre-warm: fetch token and connect WebSocket ahead of time.
+   * Call this during avatar speech so recognition starts instantly.
+   */
+  const warmUp = useCallback(() => {
+    // Skip if already warmed up or connecting
+    if (isWarmedUpRef.current || warmUpPromiseRef.current) return
+    if (wsRef.current?.readyState === WebSocket.OPEN) return
+
+    const promise = fetchTokenCached()
+      .then((token) => {
+        return new Promise<void>((resolve) => {
+          const wsUrl = 'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&filler_words=true&utterance_end_ms=3500&interim_results=true&language=en&encoding=linear16&sample_rate=16000'
+          const ws = new WebSocket(wsUrl, ['token', token])
+
+          ws.onopen = () => {
+            wsRef.current = ws
+            isWarmedUpRef.current = true
+            warmUpPromiseRef.current = null
+            resolve()
+          }
+          ws.onerror = () => {
+            warmUpPromiseRef.current = null
+            resolve() // Don't reject — startListening will fall back
+          }
+          ws.onclose = () => {
+            if (isWarmedUpRef.current) {
+              isWarmedUpRef.current = false
+            }
+          }
+
+          // Timeout: if WebSocket doesn't connect within 5s, give up
+          setTimeout(() => {
+            if (ws.readyState !== WebSocket.OPEN) {
+              ws.close()
+              warmUpPromiseRef.current = null
+              resolve()
+            }
+          }, 5000)
+        })
+      })
+      .catch(() => {
+        warmUpPromiseRef.current = null
+      })
+
+    warmUpPromiseRef.current = promise
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  /** Fetch token with caching — reuses token across questions. */
+  async function fetchTokenCached(): Promise<string> {
+    if (cachedTokenRef.current) return cachedTokenRef.current
+    const token = await fetchDeepgramTokenWithRetry()
+    cachedTokenRef.current = token
+    return token
+  }
 
   async function fetchDeepgramTokenWithRetry(retries = 2): Promise<string> {
     for (let attempt = 0; attempt < retries; attempt++) {
@@ -150,47 +249,44 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           }
         }
 
-        // UtteranceEnd = 3.5s silence detected by Deepgram
-        // Only finish if we have actual text (ignore false triggers on silence)
         if (data.type === 'UtteranceEnd') {
+          // End of speech detected (3500ms silence)
           if (finalTextRef.current.trim().length > 0) {
             finishRecognition()
           }
         }
       } catch {
-        // Skip malformed messages
+        // Ignore JSON parse errors from Deepgram metadata messages
       }
     }
 
-    ws.onerror = (ev) => {
-      console.error('[Deepgram] WebSocket error', ev)
+    ws.onerror = (err) => {
+      console.error('[Deepgram] WebSocket error:', err)
       handleDisconnect()
     }
 
-    ws.onclose = (ev) => {
-      console.warn('[Deepgram] WebSocket closed', { code: ev.code, reason: ev.reason, hadText: finalTextRef.current.length > 0 })
-      // Only resolve if we have captured text OR if the connection was intentionally closed.
-      // If connection closed with no text (e.g., token rejected), DON'T immediately finish —
-      // let the 30s timeout in startListening handle it instead.
-      if (onCompleteRef.current && finalTextRef.current.trim().length > 0) {
-        finishRecognition()
-      } else if (ev.code !== 1000) {
-        handleDisconnect()
-      }
+    ws.onclose = () => {
+      handleDisconnect()
     }
   }
 
   function maybeReconnectOrFinish(token: string) {
     const maxReconnectAttempts = 2
-    if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
+    reconnectAttemptsRef.current++
+
+    if (reconnectAttemptsRef.current > maxReconnectAttempts) {
+      console.warn('[Deepgram] Max reconnect attempts reached, finishing')
       finishRecognition()
       return
     }
-    reconnectAttemptsRef.current += 1
-    const delay = 800 * reconnectAttemptsRef.current
-    if (reconnectTimerRef.current) {
-      clearTimeout(reconnectTimerRef.current)
+
+    if (finalTextRef.current.trim().length > 0) {
+      finishRecognition()
+      return
     }
+
+    const delay = 800 * reconnectAttemptsRef.current
+    console.log(`[Deepgram] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current})`)
     reconnectTimerRef.current = setTimeout(() => {
       reconnectTimerRef.current = null
       if (onCompleteRef.current && !isFinishingRef.current) {
@@ -200,38 +296,18 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   }
 
   function startAudioCapture(ws: WebSocket) {
-    // Request audio-only stream. Avoid specifying sampleRate in getUserMedia
-    // constraints — it can conflict with existing video+audio streams on some
-    // browsers, causing the video track to freeze. The AudioContext handles
-    // resampling to 16kHz instead.
+    // Reuse external stream (from page-level getUserMedia) if available
+    const existingStream = externalStreamRef.current
+    if (existingStream) {
+      setupAudioProcessing(existingStream, ws, false)
+      return
+    }
+
+    // Fallback: request audio-only stream
     navigator.mediaDevices
       .getUserMedia({ audio: true, video: false })
       .then((stream) => {
-        audioStreamRef.current = stream
-        const audioContext = new AudioContext({ sampleRate: 16000 })
-        audioContextRef.current = audioContext
-
-        const source = audioContext.createMediaStreamSource(stream)
-        sourceRef.current = source
-
-        // Use ScriptProcessorNode (deprecated but widely supported)
-        const processor = audioContext.createScriptProcessor(4096, 1, 1)
-        processorRef.current = processor
-
-        processor.onaudioprocess = (e) => {
-          if (ws.readyState !== WebSocket.OPEN) return
-          const inputData = e.inputBuffer.getChannelData(0)
-          // Convert Float32 to Int16 PCM
-          const pcm = new Int16Array(inputData.length)
-          for (let i = 0; i < inputData.length; i++) {
-            const s = Math.max(-1, Math.min(1, inputData[i]))
-            pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff
-          }
-          ws.send(pcm.buffer)
-        }
-
-        source.connect(processor)
-        processor.connect(audioContext.destination)
+        setupAudioProcessing(stream, ws, true)
       })
       .catch((err) => {
         console.error('Audio capture failed:', err)
@@ -239,11 +315,42 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       })
   }
 
+  function setupAudioProcessing(stream: MediaStream, ws: WebSocket, ownStream: boolean) {
+    if (ownStream) {
+      audioStreamRef.current = stream
+    }
+    const audioContext = new AudioContext({ sampleRate: 16000 })
+    audioContextRef.current = audioContext
+
+    const source = audioContext.createMediaStreamSource(stream)
+    sourceRef.current = source
+
+    // Use ScriptProcessorNode (deprecated but widely supported)
+    const processor = audioContext.createScriptProcessor(4096, 1, 1)
+    processorRef.current = processor
+
+    processor.onaudioprocess = (e) => {
+      if (ws.readyState !== WebSocket.OPEN) return
+      const inputData = e.inputBuffer.getChannelData(0)
+      // Convert Float32 to Int16 PCM
+      const pcm = new Int16Array(inputData.length)
+      for (let i = 0; i < inputData.length; i++) {
+        const s = Math.max(-1, Math.min(1, inputData[i]))
+        pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff
+      }
+      ws.send(pcm.buffer)
+    }
+
+    source.connect(processor)
+    processor.connect(audioContext.destination)
+  }
+
   function finishRecognition() {
     if (isFinishingRef.current) return
     isFinishingRef.current = true
     console.log('[Deepgram] finishRecognition called, text:', finalTextRef.current.slice(0, 100))
     setIsListening(false)
+    isWarmedUpRef.current = false
 
     if (fallbackFinishTimerRef.current) {
       clearTimeout(fallbackFinishTimerRef.current)
@@ -262,7 +369,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     sourceRef.current = null
     audioContextRef.current = null
 
-    // Stop the Deepgram-specific audio stream tracks (separate from page video stream)
+    // Stop the Deepgram-specific audio stream tracks (NOT the external/page stream)
     if (audioStreamRef.current) {
       audioStreamRef.current.getTracks().forEach(t => t.stop())
       audioStreamRef.current = null
@@ -310,5 +417,5 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  return { isListening, liveTranscript, startListening, stopListening }
+  return { isListening, liveTranscript, startListening, stopListening, warmUp, setExternalStream }
 }
