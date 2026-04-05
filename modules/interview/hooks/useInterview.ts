@@ -719,6 +719,11 @@ export function useInterview({
           prefetchTTS(prefetchedQ as string)
         }
 
+        // Pre-fetch TTS for probe question if evaluation decided to probe
+        if (evaluation.probeDecision?.shouldProbe && evaluation.probeDecision.probeQuestion) {
+          prefetchTTS(evaluation.probeDecision.probeQuestion)
+        }
+
         // ── Handle pushback (fires before probe loop, can act as ad-hoc probe) ──
         let currentEval = evaluation
         if (currentEval.pushback && timeRemainingRef.current >= 60) {
@@ -1110,6 +1115,13 @@ export function useInterview({
       setCurrentQuestion(intro)
       addToTranscript('interviewer', intro, 0)
       checkAbort()
+
+      // Start prefetching Q1 + its TTS in parallel with intro speech
+      // (intro takes 3-8 seconds — plenty of time for generation + TTS)
+      const q1Promise = generateQuestion(1)
+      q1Promise.then((q) => prefetchTTS(q)).catch(() => {})
+      prefetchedQuestionRef.current = q1Promise
+
       await avatarSpeak(intro, 'friendly')
 
       // Listen for the candidate's response to the intro ("tell me about yourself")
