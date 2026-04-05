@@ -172,7 +172,7 @@ export default function DesignCanvas({ onSubmit, questionIndex, disabled = false
       } else if (connectFrom !== nodeId) {
         saveHistory()
         const exists = connections.some(
-          (c) => (c.from === connectFrom && c.to === nodeId) || (c.from === nodeId && c.to === connectFrom)
+          (c) => c.from === connectFrom && c.to === nodeId
         )
         if (!exists) {
           setConnections((prev) => [...prev, { id: connId(), from: connectFrom, to: nodeId }])
@@ -286,7 +286,7 @@ export default function DesignCanvas({ onSubmit, questionIndex, disabled = false
   }, [])
 
   return (
-    <div className="flex flex-col h-full rounded-lg overflow-hidden border border-gray-700/50 shadow-lg">
+    <div className="flex flex-col h-full min-h-0 rounded-lg overflow-hidden border border-gray-700/50 shadow-lg">
       {/* Toolbar */}
       <div className="flex items-center justify-between px-3 py-2 bg-[#1e1f2e] border-b border-gray-700/50">
         <div className="flex items-center gap-2">
@@ -349,7 +349,7 @@ export default function DesignCanvas({ onSubmit, questionIndex, disabled = false
         {/* Canvas area */}
         <div
           ref={canvasRef}
-          className={`relative flex-1 bg-gray-950 overflow-auto design-canvas-scroll ${
+          className={`relative flex-1 min-h-0 bg-gray-950 overflow-auto design-canvas-scroll ${
             dragging ? 'cursor-grabbing' : 'cursor-crosshair'
           } ${dragOver ? 'ring-2 ring-inset ring-blue-500/40' : ''}`}
           onMouseMove={handleMouseMove}
@@ -395,20 +395,42 @@ export default function DesignCanvas({ onSubmit, questionIndex, disabled = false
                 const fromCenter = getNodeCenter(fromNode)
                 const toCenter = getNodeCenter(toNode)
 
+                // Check if reverse connection exists (bidirectional)
+                const hasReverse = connections.some(
+                  (c) => c.from === conn.to && c.to === conn.from
+                )
+
+                // Perpendicular offset for bidirectional arrows so they don't overlap
+                let offsetX = 0
+                let offsetY = 0
+                if (hasReverse) {
+                  const dx = toCenter.x - fromCenter.x
+                  const dy = toCenter.y - fromCenter.y
+                  const len = Math.sqrt(dx * dx + dy * dy) || 1
+                  // Perpendicular unit vector, offset by 6px
+                  offsetX = (-dy / len) * 6
+                  offsetY = (dx / len) * 6
+                }
+
                 // Calculate edge intersection points so arrow is visible
                 const startPt = getRectEdgePoint(toCenter.x, toCenter.y, fromNode.x, fromNode.y, NODE_W, NODE_H)
                 const endPt = getRectEdgePoint(fromCenter.x, fromCenter.y, toNode.x, toNode.y, NODE_W, NODE_H)
 
+                const x1 = startPt.x + offsetX
+                const y1 = startPt.y + offsetY
+                const x2 = endPt.x + offsetX
+                const y2 = endPt.y + offsetY
+
                 // Midpoint for label
-                const midX = (startPt.x + endPt.x) / 2
-                const midY = (startPt.y + endPt.y) / 2
+                const midX = (x1 + x2) / 2
+                const midY = (y1 + y2) / 2
 
                 return (
                   <g key={conn.id}>
                     {/* Clickable hit area (wider, invisible) */}
                     <line
-                      x1={startPt.x} y1={startPt.y}
-                      x2={endPt.x} y2={endPt.y}
+                      x1={x1} y1={y1}
+                      x2={x2} y2={y2}
                       stroke="transparent"
                       strokeWidth={14}
                       style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
@@ -418,8 +440,8 @@ export default function DesignCanvas({ onSubmit, questionIndex, disabled = false
                     </line>
                     {/* Visible arrow line */}
                     <line
-                      x1={startPt.x} y1={startPt.y}
-                      x2={endPt.x} y2={endPt.y}
+                      x1={x1} y1={y1}
+                      x2={x2} y2={y2}
                       stroke="#60a5fa"
                       strokeWidth={2}
                       markerEnd="url(#arrowhead)"

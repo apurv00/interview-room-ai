@@ -300,10 +300,20 @@ export default function InterviewPage() {
           setConfig(parsed)
         })
     } else if (parsed.interviewType === 'system-design') {
-      // Select a design problem (similar to coding problem selection)
-      const problem = selectDesignProblem(parsed.role, parsed.experience)
-      if (problem) setCurrentDesignProblem(problem)
-      setConfig(parsed)
+      // Fetch user's previously used design problem IDs to avoid repeats
+      fetch('/api/design/history')
+        .then((r) => r.ok ? r.json() : { solvedProblemIds: [] })
+        .then(({ solvedProblemIds = [] }) => {
+          const problem = selectDesignProblem(parsed.role, parsed.experience, solvedProblemIds)
+          if (problem) setCurrentDesignProblem(problem)
+          setConfig(parsed)
+        })
+        .catch(() => {
+          // Offline fallback — pick without history
+          const problem = selectDesignProblem(parsed.role, parsed.experience)
+          if (problem) setCurrentDesignProblem(problem)
+          setConfig(parsed)
+        })
     } else {
       setConfig(parsed)
     }
