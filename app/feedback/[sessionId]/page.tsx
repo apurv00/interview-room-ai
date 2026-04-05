@@ -144,12 +144,13 @@ function FeedbackPageInner() {
           const res = await fetch(`/api/interviews/${sessionId}?excludeTranscript=true`, { signal })
           if (res.ok) {
             const session = await res.json()
-            let d: StoredInterviewData = {
+            let d: StoredInterviewData & { scoringDimensions?: Array<{ name: string; label: string; weight: number }> } = {
               config: session.config,
               transcript: session.transcript || [],
               evaluations: session.evaluations || [],
               speechMetrics: session.speechMetrics || [],
               feedback: session.feedback,
+              scoringDimensions: session.scoringDimensions,
             }
 
             d = mergeWithLocalData(d, sessionId)

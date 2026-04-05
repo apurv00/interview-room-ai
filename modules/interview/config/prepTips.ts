@@ -44,31 +44,16 @@ const DOMAIN_TIPS: Record<string, PrepTip[]> = {
     { text: 'Know your go-to approach for A/B testing and statistical significance', icon: 'chart' },
     { text: 'Have an example of communicating technical findings to non-technical stakeholders', icon: 'users' },
   ],
-  devops: [
-    { text: 'Prepare an incident response story (detection, mitigation, post-mortem)', icon: 'code' },
-    { text: 'Know your CI/CD philosophy and scaling strategies', icon: 'chart' },
-    { text: 'Have examples of infrastructure decisions with measurable impact', icon: 'bulb' },
-  ],
   // Business
-  sales: [
-    { text: 'Know your top 3 deals — pipeline, objections handled, and close strategy', icon: 'chart' },
-    { text: 'Prepare your 60-second elevator pitch', icon: 'star' },
-    { text: 'Have examples of relationship building and consultative selling', icon: 'users' },
-  ],
   business: [
     { text: 'Practice structuring answers using frameworks (MECE, Issue Trees)', icon: 'chart' },
     { text: 'Prepare your leadership philosophy with concrete examples', icon: 'star' },
     { text: 'Have examples of stakeholder management and influence without authority', icon: 'users' },
   ],
-  marketing: [
-    { text: 'Prepare a campaign case study with clear metrics (CAC, ROAS, conversion)', icon: 'chart' },
-    { text: 'Know the difference between your strategic thinking and execution skills', icon: 'bulb' },
-    { text: 'Have an example of cross-functional collaboration', icon: 'users' },
-  ],
-  finance: [
-    { text: 'Prepare to walk through a financial model or valuation you built', icon: 'chart' },
-    { text: 'Know current market conditions and how they affect your domain', icon: 'bulb' },
-    { text: 'Have examples of risk assessment and decision-making under uncertainty', icon: 'star' },
+  general: [
+    { text: 'Prepare 3-5 strong STAR stories covering leadership, conflict, and growth', icon: 'star' },
+    { text: 'Practice your "tell me about yourself" — concise, compelling, and role-relevant', icon: 'users' },
+    { text: 'Know your strengths and weaknesses with honest self-reflection', icon: 'bulb' },
   ],
   // Legacy slug mappings (backward compat with existing sessions)
   PM: [

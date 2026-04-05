@@ -153,4 +153,9 @@ export const UpdateSessionSchema = z.object({
   recordingSizeBytes: z.number().int().min(0).optional(),
   codingProblemId: z.string().max(200).optional(),
   designProblemId: z.string().max(200).optional(),
+  scoringDimensions: z.array(z.object({
+    name: z.string(),
+    label: z.string(),
+    weight: z.number(),
+  })).optional(),
 })

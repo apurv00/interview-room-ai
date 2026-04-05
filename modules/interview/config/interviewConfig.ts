@@ -11,6 +11,11 @@ export const LEGACY_ROLE_LABELS: Record<string, string> = {
   consulting: 'Business & Strategy',
   hr: 'Human Resources',
   legal: 'Legal',
+  // Removed domains (merged into others)
+  devops: 'DevOps / SRE',
+  marketing: 'Marketing',
+  finance: 'Finance',
+  sales: 'Sales',
 }
 
 // ─── Dynamic label resolver (falls back to legacy or capitalizes slug) ───────
@@ -145,14 +150,13 @@ export function getInterviewIntro(
   const label = domainLabel || getDomainLabel(domainSlug)
 
   const typeLabels: Record<string, string> = {
-    screening: 'screening interview',
     behavioral: 'behavioral interview',
     technical: 'technical deep-dive',
     'case-study': 'case study session',
     'system-design': 'system design interview',
     coding: 'coding challenge',
   }
-  const typeLabel = typeLabels[interviewType || 'screening'] || 'screening interview'
+  const typeLabel = typeLabels[interviewType || 'behavioral'] || 'behavioral interview'
 
   const companyNote = targetCompany
     ? ` I understand you're preparing for ${targetCompany} — I'll keep that in mind as we go.`

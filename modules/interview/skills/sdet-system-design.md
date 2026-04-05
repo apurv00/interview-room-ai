@@ -9,6 +9,9 @@ System design for SDET means: test automation architecture, CI/CD testing pipeli
 ## Question Strategy
 Present ONE testing infrastructure problem. Guide through: test strategy → automation framework design → CI integration → data management → reporting → scaling. Classic problems: design an end-to-end test framework, design a performance testing platform, design a test data management system.
 
+## Anti-Patterns
+Do NOT ask generic software system design questions without a testing focus. System design for SDET must center on test infrastructure, quality gates, and automation architecture.
+
 ## Experience Calibration
 
 ### Entry Level (0-2 years)
@@ -19,6 +22,15 @@ Expect: page object patterns, API test frameworks, CI/CD integration, test data 
 
 ### Senior (7+ years)
 Expect: test platform architecture, visual regression at scale, chaos engineering, quality metrics/SLOs, shift-left strategy.
+
+## Scoring Emphasis
+Evaluate test strategy thinking, automation architecture decisions, CI/CD integration approach, scalability of test infrastructure, and quality metrics awareness.
+
+## Red Flags
+- Designs test infrastructure without considering flaky test management
+- Cannot explain test data management strategies
+- Ignores CI/CD integration or treats it as an afterthought
+- No awareness of test execution parallelization or scaling
 
 ## Sample Questions
 

@@ -16,13 +16,10 @@ const DOMAIN_TIPS: Record<string, string> = {
   'structure:case-study': 'Start with a framework — state your approach before diving into analysis.',
   'specificity:case-study': 'Ground your analysis in numbers — estimate sizes, percentages, or dollar amounts.',
 
-  // Sales domain tips
-  'specificity:sales': 'Quantify your impact — pipeline numbers, conversion rates, deal sizes make your answers compelling.',
-  'ownership:sales': 'Own your deals — describe your specific sales actions and how you drove the outcome.',
-
-  // Finance domain tips
-  'specificity:finance': 'Include financial specifics — mention dollar amounts, multiples, or percentage impacts.',
-  'structure:finance': 'Structure your analysis — state assumptions, walk through the model, then give a recommendation.',
+  // Business domain tips
+  'specificity:business': 'Quantify your impact — pipeline numbers, financial metrics, or conversion rates make your answers compelling.',
+  'ownership:business': 'Own the outcome — describe your specific actions and how you drove the result.',
+  'structure:business': 'Structure your analysis — state assumptions, walk through the model, then give a recommendation.',
 
   // Behavioral interview tips
   'ownership:behavioral': "Lead with 'I' — describe your specific actions and decisions, not the team's.",
@@ -36,8 +33,6 @@ const DOMAIN_TIPS: Record<string, string> = {
   'specificity:design': 'Reference specific user research findings or usability metrics to support your design decisions.',
   'structure:design': 'Walk through your design process — research, ideation, iteration, and validation.',
 
-  // Marketing domain tips
-  'specificity:marketing': 'Include campaign metrics — CTR, conversion rates, ROAS, or attribution data strengthen your answer.',
 }
 
 /**

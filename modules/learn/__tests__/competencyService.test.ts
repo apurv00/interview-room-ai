@@ -82,7 +82,7 @@ describe('competencyService', () => {
 
   describe('DOMAIN_COMPETENCIES', () => {
     it('has entries for all major domains', () => {
-      const expectedDomains = ['frontend', 'backend', 'sdet', 'devops', 'data-science', 'pm', 'design', 'business', 'marketing', 'finance', 'sales']
+      const expectedDomains = ['general', 'frontend', 'backend', 'sdet', 'data-science', 'pm', 'design', 'business']
       for (const domain of expectedDomains) {
         expect(DOMAIN_COMPETENCIES).toHaveProperty(domain)
         expect(DOMAIN_COMPETENCIES[domain].length).toBeGreaterThan(0)

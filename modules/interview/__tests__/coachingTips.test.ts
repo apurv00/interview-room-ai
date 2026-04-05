@@ -121,12 +121,12 @@ describe('deriveCoachingTip', () => {
     expect(tip).toContain('framework')
   })
 
-  it('returns sales-specific tip for specificity weakness', () => {
+  it('returns business-specific tip for specificity weakness', () => {
     const tip = deriveCoachingTip(
       makeEval({ relevance: 65, structure: 60, specificity: 40, ownership: 60 }),
-      'sales',
+      'business',
     )
-    expect(tip).toContain('pipeline') // sales specificity mentions pipeline/conversion/deal
+    expect(tip).toContain('pipeline') // business specificity mentions pipeline/financial metrics
   })
 
   it('returns behavioral-specific tip for ownership weakness', () => {
@@ -148,11 +148,11 @@ describe('deriveCoachingTip', () => {
   })
 
   it('prefers interviewType match over domain match', () => {
-    // specificity weakness: technical has a specific tip, sales has a specific tip
+    // specificity weakness: technical has a specific tip, business has a specific tip
     // When both are provided, interviewType should take priority
     const tip = deriveCoachingTip(
       makeEval({ relevance: 65, structure: 60, specificity: 40, ownership: 60 }),
-      'sales',
+      'business',
       'technical',
     )
     // Technical tip for specificity: "Be precise with technical terms"

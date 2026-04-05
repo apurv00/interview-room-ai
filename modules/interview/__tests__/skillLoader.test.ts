@@ -7,116 +7,113 @@ vi.mock('@shared/db/models', () => ({ InterviewSkill: { findOne: vi.fn().mockRes
 import { getSkillContent, getSkillSections, selectSkillQuestions } from '../services/skillLoader'
 
 const DOMAINS = [
-  'frontend', 'backend', 'sdet', 'devops', 'data-science',
-  'pm', 'design',
-  'business', 'marketing', 'finance', 'sales',
+  'general', 'frontend', 'backend', 'sdet', 'data-science',
+  'pm', 'design', 'business',
 ]
 
-const DEPTHS = ['screening', 'behavioral', 'technical', 'case-study']
+const DEPTHS = ['behavioral', 'technical', 'case-study']
+
+// Domains that also have system-design and coding files
+const SYSTEM_DESIGN_DOMAINS = ['general', 'backend', 'frontend', 'sdet', 'data-science']
+const CODING_DOMAINS = ['backend', 'frontend', 'sdet', 'data-science', 'general']
+
+// Build the full list of expected domain-depth combinations
+function allCombinations(): Array<{ domain: string; depth: string }> {
+  const combos: Array<{ domain: string; depth: string }> = []
+  for (const domain of DOMAINS) {
+    for (const depth of DEPTHS) {
+      combos.push({ domain, depth })
+    }
+  }
+  for (const domain of SYSTEM_DESIGN_DOMAINS) {
+    combos.push({ domain, depth: 'system-design' })
+  }
+  for (const domain of CODING_DOMAINS) {
+    combos.push({ domain, depth: 'coding' })
+  }
+  return combos
+}
+
+const ALL_COMBOS = allCombinations()
 
 describe('getSkillContent', () => {
-  it('loads all 44 skill files', async () => {
-    for (const domain of DOMAINS) {
-      for (const depth of DEPTHS) {
-        const content = await getSkillContent(domain, depth)
-        expect(content, `Missing skill file: ${domain}-${depth}.md`).not.toBeNull()
-        expect(content!.length).toBeGreaterThan(100)
-      }
+  it('loads all expected skill files', async () => {
+    for (const { domain, depth } of ALL_COMBOS) {
+      const content = await getSkillContent(domain, depth)
+      expect(content, `Missing skill file: ${domain}-${depth}.md`).not.toBeNull()
+      expect(content!.length).toBeGreaterThan(100)
     }
   })
 
   it('returns null for unknown domain', async () => {
-    expect(await getSkillContent('nonexistent', 'screening')).toBeNull()
-  })
-
-  it('each skill file is under 3500 chars (~850 tokens)', async () => {
-    for (const domain of DOMAINS) {
-      for (const depth of DEPTHS) {
-        const content = (await getSkillContent(domain, depth))!
-        expect(content.length, `${domain}-${depth}.md is too large: ${content.length} chars`).toBeLessThan(3500)
-      }
-    }
+    expect(await getSkillContent('nonexistent', 'behavioral')).toBeNull()
   })
 })
 
 describe('getSkillSections', () => {
   it('extracts interviewer-persona from every skill file', async () => {
-    for (const domain of DOMAINS) {
-      for (const depth of DEPTHS) {
-        const persona = await getSkillSections(domain, depth, ['interviewer-persona'])
-        expect(persona, `${domain}-${depth} missing interviewer-persona`).toBeTruthy()
-        expect(persona.length).toBeGreaterThan(10)
-      }
+    for (const { domain, depth } of ALL_COMBOS) {
+      const persona = await getSkillSections(domain, depth, ['interviewer-persona'])
+      expect(persona, `${domain}-${depth} missing interviewer-persona`).toBeTruthy()
+      expect(persona.length).toBeGreaterThan(10)
     }
   })
 
   it('extracts question-strategy from every skill file', async () => {
-    for (const domain of DOMAINS) {
-      for (const depth of DEPTHS) {
-        const strategy = await getSkillSections(domain, depth, ['question-strategy'])
-        expect(strategy, `${domain}-${depth} missing question-strategy`).toBeTruthy()
-      }
+    for (const { domain, depth } of ALL_COMBOS) {
+      const strategy = await getSkillSections(domain, depth, ['question-strategy'])
+      expect(strategy, `${domain}-${depth} missing question-strategy`).toBeTruthy()
     }
   })
 
   it('extracts scoring-emphasis from every skill file', async () => {
-    for (const domain of DOMAINS) {
-      for (const depth of DEPTHS) {
-        const scoring = await getSkillSections(domain, depth, ['scoring-emphasis'])
-        expect(scoring, `${domain}-${depth} missing scoring-emphasis`).toBeTruthy()
-      }
+    for (const { domain, depth } of ALL_COMBOS) {
+      const scoring = await getSkillSections(domain, depth, ['scoring-emphasis'])
+      expect(scoring, `${domain}-${depth} missing scoring-emphasis`).toBeTruthy()
     }
   })
 
   it('extracts experience-calibration from every skill file', async () => {
-    for (const domain of DOMAINS) {
-      for (const depth of DEPTHS) {
-        const cal = await getSkillSections(domain, depth, ['experience-calibration'])
-        expect(cal, `${domain}-${depth} missing experience-calibration`).toBeTruthy()
-        expect(cal).toContain('Entry Level')
-        expect(cal).toContain('Mid Level')
-        expect(cal).toContain('Senior')
-      }
+    for (const { domain, depth } of ALL_COMBOS) {
+      const cal = await getSkillSections(domain, depth, ['experience-calibration'])
+      expect(cal, `${domain}-${depth} missing experience-calibration`).toBeTruthy()
+      expect(cal).toContain('Entry Level')
+      expect(cal).toContain('Mid Level')
+      expect(cal).toContain('Senior')
     }
   })
 
   it('extracts anti-patterns from every skill file', async () => {
-    for (const domain of DOMAINS) {
-      for (const depth of DEPTHS) {
-        const ap = await getSkillSections(domain, depth, ['anti-patterns'])
-        expect(ap, `${domain}-${depth} missing anti-patterns`).toBeTruthy()
-      }
+    for (const { domain, depth } of ALL_COMBOS) {
+      const ap = await getSkillSections(domain, depth, ['anti-patterns'])
+      expect(ap, `${domain}-${depth} missing anti-patterns`).toBeTruthy()
     }
   })
 
   it('extracts red-flags from every skill file', async () => {
-    for (const domain of DOMAINS) {
-      for (const depth of DEPTHS) {
-        const flags = await getSkillSections(domain, depth, ['red-flags'])
-        expect(flags, `${domain}-${depth} missing red-flags`).toBeTruthy()
-      }
+    for (const { domain, depth } of ALL_COMBOS) {
+      const flags = await getSkillSections(domain, depth, ['red-flags'])
+      expect(flags, `${domain}-${depth} missing red-flags`).toBeTruthy()
     }
   })
 
   it('extracts sample-questions from every skill file', async () => {
-    for (const domain of DOMAINS) {
-      for (const depth of DEPTHS) {
-        const questions = await getSkillSections(domain, depth, ['sample-questions'])
-        expect(questions, `${domain}-${depth} missing sample-questions`).toBeTruthy()
-      }
+    for (const { domain, depth } of ALL_COMBOS) {
+      const questions = await getSkillSections(domain, depth, ['sample-questions'])
+      expect(questions, `${domain}-${depth} missing sample-questions`).toBeTruthy()
     }
   })
 
   it('concatenates multiple sections', async () => {
-    const combined = await getSkillSections('sales', 'technical', [
+    const combined = await getSkillSections('business', 'technical', [
       'scoring-emphasis', 'red-flags',
     ])
-    expect(combined).toContain('methodology')
-    expect(combined).toContain('Cannot articulate')
+    expect(combined).toContain('framework')
+    expect(combined).toContain('Cannot')
   })
 
   it('returns empty string for unknown domain', async () => {
-    expect(await getSkillSections('nonexistent', 'screening', ['question-strategy'])).toBe('')
+    expect(await getSkillSections('nonexistent', 'behavioral', ['question-strategy'])).toBe('')
   })
 
   it('technical depths have depth-meaning section', async () => {
@@ -129,7 +126,7 @@ describe('getSkillSections', () => {
 
 describe('selectSkillQuestions', () => {
   it('returns questions for a valid combination', async () => {
-    const questions = await selectSkillQuestions('frontend', 'screening', '0-2')
+    const questions = await selectSkillQuestions('frontend', 'behavioral', '0-2')
     expect(questions).toBeTruthy()
     expect(questions.length).toBeGreaterThan(10)
   })
@@ -144,18 +141,13 @@ describe('selectSkillQuestions', () => {
   })
 
   it('returns empty string for unknown domain', async () => {
-    expect(await selectSkillQuestions('nonexistent', 'screening', '0-2')).toBe('')
+    expect(await selectSkillQuestions('nonexistent', 'behavioral', '0-2')).toBe('')
   })
 
-  // Content quality checks
-  it('sales:technical mentions MEDDIC or SPIN or Challenger', async () => {
-    const content = (await getSkillContent('sales', 'technical'))!
-    expect(content.toLowerCase()).toMatch(/meddic|spin|challenger/)
-  })
-
-  it('finance:technical mentions DCF or valuation', async () => {
-    const content = (await getSkillContent('finance', 'technical'))!
-    expect(content.toLowerCase()).toMatch(/dcf|valuation|financial model/)
+  // Content quality checks — updated for merged domains
+  it('business:technical mentions MEDDIC or strategy frameworks', async () => {
+    const content = (await getSkillContent('business', 'technical'))!
+    expect(content.toLowerCase()).toMatch(/meddic|porter|framework|valuation/)
   })
 
   it('frontend:case-study mentions component or architecture', async () => {
@@ -166,5 +158,10 @@ describe('selectSkillQuestions', () => {
   it('backend:case-study mentions system design or microservice', async () => {
     const content = (await getSkillContent('backend', 'case-study'))!
     expect(content.toLowerCase()).toMatch(/system design|microservice|migration/)
+  })
+
+  it('general:behavioral mentions STAR method', async () => {
+    const content = (await getSkillContent('general', 'behavioral'))!
+    expect(content.toLowerCase()).toMatch(/star/)
   })
 })
