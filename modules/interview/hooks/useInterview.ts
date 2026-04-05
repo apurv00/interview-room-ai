@@ -934,12 +934,27 @@ export function useInterview({
           }
         }
 
-        // Wrap up
+        // Wrap up — listen for user questions
         if (!isInterviewOver()) {
           transitionTo('WRAP_UP')
           addToTranscript('interviewer', WRAP_UP_LINE)
           await avatarSpeak(WRAP_UP_LINE, 'friendly')
-          await new Promise((r) => setTimeout(r, 4000))
+
+          transitionTo('LISTENING')
+          setLiveAnswer('')
+          const codingWrapUpAnswer = await listenForAnswer(true, 15000)
+
+          if (codingWrapUpAnswer && codingWrapUpAnswer.trim().length > 5) {
+            addToTranscript('candidate', codingWrapUpAnswer)
+            const closingLine = "That's a great question! I appreciate your curiosity. We'll be in touch with next steps. Thank you so much for your time today — it was a pleasure speaking with you!"
+            addToTranscript('interviewer', closingLine)
+            await avatarSpeak(closingLine, 'friendly')
+          } else {
+            const noQuestionsClose = "No worries at all! Thank you so much for your time today — it was a pleasure speaking with you. We'll be in touch!"
+            addToTranscript('interviewer', noQuestionsClose)
+            await avatarSpeak(noQuestionsClose, 'friendly')
+          }
+
           finishInterview()
         }
         return
@@ -1064,12 +1079,27 @@ export function useInterview({
           }
         }
 
-        // Wrap up
+        // Wrap up — listen for user questions
         if (!isInterviewOver()) {
           transitionTo('WRAP_UP')
           addToTranscript('interviewer', WRAP_UP_LINE)
           await avatarSpeak(WRAP_UP_LINE, 'friendly')
-          await new Promise((r) => setTimeout(r, 4000))
+
+          transitionTo('LISTENING')
+          setLiveAnswer('')
+          const designWrapUpAnswer = await listenForAnswer(true, 15000)
+
+          if (designWrapUpAnswer && designWrapUpAnswer.trim().length > 5) {
+            addToTranscript('candidate', designWrapUpAnswer)
+            const closingLine = "That's a great question! I appreciate your curiosity. We'll be in touch with next steps. Thank you so much for your time today — it was a pleasure speaking with you!"
+            addToTranscript('interviewer', closingLine)
+            await avatarSpeak(closingLine, 'friendly')
+          } else {
+            const noQuestionsClose = "No worries at all! Thank you so much for your time today — it was a pleasure speaking with you. We'll be in touch!"
+            addToTranscript('interviewer', noQuestionsClose)
+            await avatarSpeak(noQuestionsClose, 'friendly')
+          }
+
           finishInterview()
         }
         return

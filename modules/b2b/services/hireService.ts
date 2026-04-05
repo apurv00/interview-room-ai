@@ -1,6 +1,7 @@
 import mongoose from 'mongoose'
 import { connectDB } from '@shared/db/connection'
 import { User, Organization, InterviewSession, InterviewTemplate } from '@shared/db/models'
+import { sendEmail } from '@shared/services/emailService'
 import type { Duration } from '@shared/types'
 import crypto from 'crypto'
 
@@ -216,11 +217,35 @@ export async function createInvite(
   const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://interviewprep.guru'
   const inviteLink = `${baseUrl}/interview?invite=${interviewSession._id}&token=${token}`
 
+  // Send invite email to the candidate (fire-and-forget — don't block on email failure)
+  const emailSent = await sendEmail({
+    to: candidateEmail.toLowerCase(),
+    subject: `You've been invited to an interview — ${role} (${interviewType})`,
+    html: `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 560px; margin: 0 auto; padding: 32px 24px;">
+        <h2 style="color: #0f1419; margin: 0 0 16px;">You're Invited to Interview</h2>
+        ${candidateName ? `<p style="color: #536471; margin: 0 0 12px;">Hi ${candidateName},</p>` : ''}
+        <p style="color: #536471; margin: 0 0 24px;">
+          You've been invited to complete a <strong>${interviewType}</strong> interview for the
+          <strong>${role}</strong> role${experience ? ` (${experience} years experience)` : ''}.
+          The interview will take approximately <strong>${duration} minutes</strong>.
+        </p>
+        <a href="${inviteLink}" style="display: inline-block; background: #6366f1; color: #fff; padding: 12px 28px; border-radius: 8px; text-decoration: none; font-weight: 600;">
+          Start Interview
+        </a>
+        <p style="color: #8b98a5; font-size: 13px; margin: 24px 0 0;">
+          This link expires in 7 days. If you have questions, please contact your recruiter directly.
+        </p>
+      </div>
+    `,
+  }).catch(() => false)
+
   return {
     success: true,
     sessionId: interviewSession._id.toString(),
     inviteLink,
     candidateEmail,
+    emailSent,
   }
 }
 

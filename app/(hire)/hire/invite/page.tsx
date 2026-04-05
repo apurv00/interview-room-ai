@@ -210,7 +210,7 @@ export default function InvitePage() {
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Interview Type</label>
+            <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Interview Type *</label>
             <DepthSelector selectedDomain={role} selectedDepth={interviewType} onSelect={setInterviewType} />
           </div>
 
