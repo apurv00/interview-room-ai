@@ -1,10 +1,12 @@
 import mongoose from 'mongoose'
 import { connectDB } from '@shared/db/connection'
 import { InterviewSession, User } from '@shared/db/models'
+import { InterviewDepth } from '@shared/db/models/InterviewDepth'
 import type { IInterviewSession } from '@shared/db/models'
 import type { InterviewConfig, TranscriptEntry, AnswerEvaluation, SpeechMetrics, FeedbackData } from '@shared/types'
 import { NotFoundError, ForbiddenError, UsageLimitError } from '@shared/errors'
 import { canViewSession, canEditSession } from '@shared/auth/permissions'
+import { FALLBACK_DEPTHS } from '@shared/db/seed'
 import { logger } from '@shared/logger'
 
 interface CreateSessionInput {
@@ -109,6 +111,20 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
     throw new UsageLimitError()
   }
 
+  // Look up scoring dimensions for this interview type
+  let scoringDimensions: Array<{ name: string; label: string; weight: number }> | undefined
+  const interviewType = input.config.interviewType || 'behavioral'
+  try {
+    const depth = await InterviewDepth.findOne({ slug: interviewType, isActive: true }).lean()
+    if (depth?.scoringDimensions?.length) {
+      scoringDimensions = depth.scoringDimensions
+    }
+  } catch { /* fallback below */ }
+  if (!scoringDimensions) {
+    const fallback = FALLBACK_DEPTHS.find(d => d.slug === interviewType)
+    if (fallback?.scoringDimensions) scoringDimensions = fallback.scoringDimensions
+  }
+
   let session: IInterviewSession
   try {
     session = await InterviewSession.create({
@@ -118,6 +134,7 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
         : undefined,
       config: input.config,
       status: 'created',
+      scoringDimensions,
       templateId: input.templateId
         ? new mongoose.Types.ObjectId(input.templateId)
         : undefined,

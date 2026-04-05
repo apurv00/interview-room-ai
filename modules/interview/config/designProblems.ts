@@ -27,7 +27,7 @@ export const DESIGN_PROBLEMS: DesignProblem[] = [
     ],
     expectedComponents: ['client', 'load_balancer', 'web_server', 'database', 'cache'],
     difficulty: 'easy',
-    applicableDomains: ['backend', 'frontend', 'devops'],
+    applicableDomains: ['backend', 'frontend'],
     hints: [
       'Consider how to generate unique short codes (hashing vs counter).',
       'Think about caching for frequently accessed URLs.',
@@ -71,7 +71,7 @@ export const DESIGN_PROBLEMS: DesignProblem[] = [
     ],
     expectedComponents: ['client', 'api_gateway', 'app_server', 'cache'],
     difficulty: 'easy',
-    applicableDomains: ['backend', 'devops', 'sdet'],
+    applicableDomains: ['backend', 'sdet'],
     hints: [
       'Compare token bucket vs sliding window algorithms.',
       'Redis is commonly used for distributed rate limiting.',
@@ -97,7 +97,7 @@ export const DESIGN_PROBLEMS: DesignProblem[] = [
     ],
     expectedComponents: ['client', 'load_balancer', 'api_gateway', 'app_server', 'database', 'cache', 'message_queue', 'notification'],
     difficulty: 'medium',
-    applicableDomains: ['backend', 'frontend', 'devops'],
+    applicableDomains: ['backend', 'frontend'],
     hints: [
       'Consider WebSockets vs long polling for real-time delivery.',
       'How do you handle message ordering in group chats?',
@@ -142,7 +142,7 @@ export const DESIGN_PROBLEMS: DesignProblem[] = [
     ],
     expectedComponents: ['client', 'cdn', 'load_balancer', 'app_server', 'database', 'storage', 'message_queue', 'notification'],
     difficulty: 'medium',
-    applicableDomains: ['backend', 'frontend', 'devops'],
+    applicableDomains: ['backend', 'frontend'],
     hints: [
       'How do you handle large file uploads? (chunking)',
       'Consider a metadata service vs a block storage service.',
@@ -165,7 +165,7 @@ export const DESIGN_PROBLEMS: DesignProblem[] = [
     ],
     expectedComponents: ['api_gateway', 'app_server', 'message_queue', 'database', 'cache', 'notification', 'monitoring'],
     difficulty: 'medium',
-    applicableDomains: ['backend', 'devops'],
+    applicableDomains: ['backend'],
     hints: [
       'Think about how to prioritize and batch notifications.',
       'Consider using a message queue for async delivery.',
@@ -191,7 +191,7 @@ export const DESIGN_PROBLEMS: DesignProblem[] = [
     ],
     expectedComponents: ['client', 'cdn', 'load_balancer', 'api_gateway', 'app_server', 'database', 'storage', 'message_queue', 'search', 'cache'],
     difficulty: 'hard',
-    applicableDomains: ['backend', 'frontend', 'devops', 'data-science'],
+    applicableDomains: ['backend', 'frontend', 'data-science'],
     hints: [
       'How would you handle video transcoding at scale?',
       'Think about CDN placement and cache invalidation.',
@@ -214,7 +214,7 @@ export const DESIGN_PROBLEMS: DesignProblem[] = [
     ],
     expectedComponents: ['client', 'app_server', 'cache', 'monitoring'],
     difficulty: 'hard',
-    applicableDomains: ['backend', 'devops'],
+    applicableDomains: ['backend'],
     hints: [
       'How does consistent hashing work with virtual nodes?',
       'Consider the trade-off between consistency and availability.',

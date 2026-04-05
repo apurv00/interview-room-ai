@@ -10,7 +10,7 @@ const BUILT_IN_RUBRICS = [
   {
     rubricId: 'rubric_universal_hr_v1',
     domain: '*',
-    interviewType: 'screening',
+    interviewType: 'behavioral',
     seniorityBand: '*',
     version: 1,
     passThreshold: 60,
@@ -170,7 +170,7 @@ const BUILT_IN_RUBRICS = [
 const BUILT_IN_QUESTIONS = [
   // PM Questions
   {
-    domain: 'pm', interviewType: 'screening', seniorityBand: '*',
+    domain: 'pm', interviewType: 'behavioral', seniorityBand: '*',
     question: 'Tell me about a time you had to make a difficult product decision with incomplete data.',
     category: 'behavioral', targetCompetencies: ['product_sense', 'metrics_thinking'],
     difficulty: 'medium' as const,
@@ -188,7 +188,7 @@ const BUILT_IN_QUESTIONS = [
     tags: ['stakeholder-management', 'conflict-resolution', 'alignment'],
   },
   {
-    domain: 'pm', interviewType: 'screening', seniorityBand: '*',
+    domain: 'pm', interviewType: 'behavioral', seniorityBand: '*',
     question: 'How do you decide what NOT to build?',
     category: 'situational', targetCompetencies: ['prioritization', 'product_sense', 'tradeoff_reasoning'],
     difficulty: 'medium' as const,
@@ -198,7 +198,7 @@ const BUILT_IN_QUESTIONS = [
   },
   // SWE Questions
   {
-    domain: 'backend', interviewType: 'screening', seniorityBand: '*',
+    domain: 'backend', interviewType: 'behavioral', seniorityBand: '*',
     question: 'Tell me about a production incident you resolved. Walk me through your debugging process.',
     category: 'behavioral', targetCompetencies: ['problem_solving', 'technical_accuracy', 'collaboration'],
     difficulty: 'medium' as const,
@@ -217,7 +217,7 @@ const BUILT_IN_QUESTIONS = [
   },
   // MBA/Business Questions
   {
-    domain: 'business', interviewType: 'screening', seniorityBand: '*',
+    domain: 'business', interviewType: 'behavioral', seniorityBand: '*',
     question: 'Tell me about a time you influenced a strategic decision without having direct authority.',
     category: 'behavioral', targetCompetencies: ['leadership', 'strategic_thinking'],
     difficulty: 'medium' as const,
@@ -227,7 +227,7 @@ const BUILT_IN_QUESTIONS = [
   },
   // Sales Questions
   {
-    domain: 'sales', interviewType: 'screening', seniorityBand: '*',
+    domain: 'business', interviewType: 'behavioral', seniorityBand: '*',
     question: 'Walk me through your biggest deal from first contact to close. What made it successful?',
     category: 'behavioral', targetCompetencies: ['persuasion', 'pipeline_management', 'relationship_building'],
     difficulty: 'medium' as const,
@@ -324,7 +324,7 @@ const BUILT_IN_BENCHMARKS = [
   {
     caseId: 'pm_hr_mid_001',
     domain: 'pm',
-    interviewType: 'screening',
+    interviewType: 'behavioral',
     seniorityBand: '3-6',
     question: 'Tell me about a time you launched a product feature that didn\'t meet expectations. What did you do?',
     candidateAnswer: 'At my last company, we launched a new onboarding flow for our app. We spent three months building it based on what we thought users wanted. After launch, the completion rate actually dropped by 15%. I quickly set up user interviews and found that we had made the flow too long. We simplified it from 8 steps to 4, and within two weeks the completion rate went back up and eventually exceeded the old flow by 10%. I learned that we should have done user testing earlier.',
@@ -347,7 +347,7 @@ const BUILT_IN_BENCHMARKS = [
   {
     caseId: 'swe_hr_entry_001',
     domain: 'backend',
-    interviewType: 'screening',
+    interviewType: 'behavioral',
     seniorityBand: '0-2',
     question: 'Tell me about a challenging technical problem you solved recently.',
     candidateAnswer: 'Um, so like at my internship I had this bug that was really hard. The API was returning wrong data sometimes. I spent like a day figuring it out and it turned out to be a race condition. I fixed it by adding a mutex. My manager said good job.',

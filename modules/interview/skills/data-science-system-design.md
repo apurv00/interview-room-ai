@@ -23,6 +23,15 @@ Expect: feature stores, online vs offline serving, A/B testing design, model mon
 ### Senior (7+ years)
 Expect: ML platform architecture, real-time feature computation, model governance, multi-model orchestration, cost-performance trade-offs at scale.
 
+## Scoring Emphasis
+Evaluate ML pipeline architecture thinking, data engineering awareness, model serving and scaling decisions, monitoring and retraining strategy, and production ML maturity.
+
+## Red Flags
+- Designs ML systems without considering data quality or feature engineering
+- Ignores model monitoring, drift detection, or retraining needs
+- Cannot distinguish between offline and online serving requirements
+- No awareness of experiment design or A/B testing for ML systems
+
 ## Sample Questions
 
 ### Mid Level (3-6 years)

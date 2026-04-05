@@ -32,3 +32,23 @@ Evaluate: correctness first, then efficiency (time/space), then code quality (re
 - Cannot analyze time/space complexity of their solution
 - Code is unreadable or poorly structured
 - Cannot debug when pointed to an issue
+
+## Sample Questions
+
+### Entry Level (0-2 years)
+1. "Given an array of integers, find two numbers that add up to a target sum."
+   - Targets: hash_map → follow up on: time complexity, edge cases
+2. "Implement a function to check if a string has all unique characters."
+   - Targets: string_manipulation → follow up on: space-time tradeoffs
+
+### Mid Level (3-6 years)
+1. "Design and implement an LRU cache with O(1) get and put operations."
+   - Targets: data_structures → follow up on: eviction strategy, thread safety
+2. "Given a graph of service dependencies, detect if there is a circular dependency."
+   - Targets: graph_traversal → follow up on: topological sort, cycle detection
+
+### Senior (7+ years)
+1. "Implement a rate limiter that supports sliding window and token bucket algorithms."
+   - Targets: system_coding → follow up on: distributed considerations, edge cases
+2. "Design and implement a simple in-memory message queue with pub/sub support."
+   - Targets: system_design_coding → follow up on: ordering guarantees, backpressure

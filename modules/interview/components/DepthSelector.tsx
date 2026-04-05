@@ -28,26 +28,26 @@ export default function DepthSelector({ selectedDomain, selectedDepth, onSelect 
   // Use static data immediately, filtered by domain — no loading state needed
   const [types, setTypes] = useState<InterviewDepth[]>(() => filterDepthsByDomain(STATIC_DEPTHS, selectedDomain))
 
-  // Re-filter static depths when domain changes, and auto-select screening
+  // Re-filter static depths when domain changes, and auto-select behavioral
   useEffect(() => {
     const filtered = filterDepthsByDomain(STATIC_DEPTHS, selectedDomain)
     setTypes(filtered)
 
-    // If current selection is no longer valid for this domain, reset to screening
+    // If current selection is no longer valid for this domain, reset to behavioral
     if (selectedDepth && !filtered.some(t => t.slug === selectedDepth)) {
-      const screeningType = filtered.find((t) => t.slug === 'screening')
-      onSelect(screeningType ? screeningType.slug : filtered[0]?.slug || 'screening')
+      const behavioralType = filtered.find((t) => t.slug === 'behavioral')
+      onSelect(behavioralType ? behavioralType.slug : filtered[0]?.slug || 'behavioral')
     } else if (!selectedDepth && filtered.length > 0) {
-      const screeningType = filtered.find((t) => t.slug === 'screening')
-      onSelect(screeningType ? screeningType.slug : filtered[0].slug)
+      const behavioralType = filtered.find((t) => t.slug === 'behavioral')
+      onSelect(behavioralType ? behavioralType.slug : filtered[0].slug)
     }
   }, [selectedDomain]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-select screening on first render if nothing selected
+  // Auto-select behavioral on first render if nothing selected
   useEffect(() => {
     if (!selectedDepth && types.length > 0) {
-      const screeningType = types.find((t) => t.slug === 'screening')
-      if (screeningType) onSelect(screeningType.slug)
+      const behavioralType = types.find((t) => t.slug === 'behavioral')
+      if (behavioralType) onSelect(behavioralType.slug)
       else onSelect(types[0].slug)
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps

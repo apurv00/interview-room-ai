@@ -4,13 +4,12 @@ import { useEffect, useState, useCallback } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 
 const DOMAIN_LABELS: Record<string, string> = {
-  frontend: 'Frontend Engineer', backend: 'Backend Engineer', sdet: 'SDET / QA',
-  devops: 'DevOps / SRE', 'data-science': 'Data Science', pm: 'Product Manager',
-  design: 'Design / UX', business: 'Business & Strategy', marketing: 'Marketing',
-  finance: 'Finance', sales: 'Sales',
+  general: 'General / Any Role', frontend: 'Frontend Engineer', backend: 'Backend / Infra Engineer',
+  sdet: 'SDET / QA', 'data-science': 'Data Science / ML', pm: 'Product Manager',
+  design: 'Design / UX', business: 'Business & Strategy',
 }
 const DEPTH_LABELS: Record<string, string> = {
-  screening: 'Screening', behavioral: 'Behavioral', technical: 'Technical', 'case-study': 'Case Study',
+  behavioral: 'Behavioral', technical: 'Technical', 'case-study': 'Case Study',
 }
 
 const REQUIRED_SECTIONS = [

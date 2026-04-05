@@ -15,6 +15,7 @@ interface Domain {
 
 const CATEGORY_TABS = [
   { key: 'all', label: 'All' },
+  { key: 'general', label: 'General' },
   { key: 'engineering', label: 'Engineering' },
   { key: 'product', label: 'Product & Design' },
   { key: 'business', label: 'Business' },
@@ -22,17 +23,14 @@ const CATEGORY_TABS = [
 
 // Gradient backgrounds per domain slug
 const DOMAIN_GRADIENTS: Record<string, string> = {
+  general: 'from-gray-500/30 to-slate-500/30',
   frontend: 'from-blue-600/30 to-cyan-600/30',
   backend: 'from-indigo-600/30 to-blue-600/30',
   sdet: 'from-teal-600/30 to-cyan-600/30',
-  devops: 'from-sky-600/30 to-blue-600/30',
   'data-science': 'from-emerald-600/30 to-teal-600/30',
   pm: 'from-violet-600/30 to-indigo-600/30',
   design: 'from-pink-600/30 to-rose-600/30',
   business: 'from-purple-600/30 to-violet-600/30',
-  marketing: 'from-amber-600/30 to-orange-600/30',
-  finance: 'from-green-600/30 to-emerald-600/30',
-  sales: 'from-red-600/30 to-pink-600/30',
 }
 const DEFAULT_GRADIENT = 'from-indigo-600/30 to-violet-600/30'
 

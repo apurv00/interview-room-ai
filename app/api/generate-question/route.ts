@@ -28,7 +28,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
   async handler(req, { user, body }) {
     const { config, questionIndex, previousQA, performanceSignal, lastThreadSummary, completedThreads } = body
     const startTime = Date.now()
-    const interviewType = config.interviewType || 'screening'
+    const interviewType = config.interviewType || 'behavioral'
 
     const totalQuestions = getQuestionCount(config.duration)
     const isPressureQuestion = questionIndex === getPressureQuestionIndex(config.duration)
@@ -230,22 +230,18 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
 
     // Build base prompt — always interview-type-aware, no DB dependency
     const typeLabels: Record<string, string> = {
-      screening: 'screening interview',
-      behavioral: 'behavioral deep-dive',
+      behavioral: 'behavioral interview',
       technical: 'technical interview',
       'case-study': 'case study session',
     }
     const roleLabels: Record<string, string> = {
-      screening: 'senior recruiter',
       behavioral: 'senior hiring manager',
       technical: 'technical interview lead',
       'case-study': 'strategy and assessment lead',
     }
     const basePrompt = `You are Alex Chen, a ${roleLabels[interviewType] || 'senior interviewer'}. You are conducting a ${config.duration}-minute ${typeLabels[interviewType] || interviewType + ' interview'} for a ${domainLabel} role (${config.experience} years experience).`
 
-    const defaultStrategy = interviewType === 'screening'
-      ? `\nQuestion types you rotate through:\n- Behavioral (STAR): "Tell me about a time when..."\n- Motivation: "What drives you / why this role?"\n- Situational: "How would you handle..."\n- Consistency check: follow up on something mentioned earlier`
-      : ''
+    const defaultStrategy = ''
 
     // Dynamic transition phrases (reference previous topic when available)
     let transitionBlock = ''

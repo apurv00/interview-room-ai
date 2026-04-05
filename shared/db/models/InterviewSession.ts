@@ -44,6 +44,9 @@ export interface IInterviewSession extends Document {
   resumeR2Key?: string
   jdR2Key?: string
 
+  // Scoring dimensions used for this session (stored at creation from depth config)
+  scoringDimensions?: Array<{ name: string; label: string; weight: number }>
+
   // Coding interview
   codingProblemId?: string
   // Design interview
@@ -89,7 +92,7 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
 
     config: {
       role: { type: String, required: true },
-      interviewType: { type: String, default: 'screening' },
+      interviewType: { type: String, default: 'behavioral' },
       experience: { type: String, enum: ['0-2', '3-6', '7+'], required: true },
       duration: { type: Number, min: 5, max: 60, required: true },
     },
@@ -124,6 +127,9 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
 
     resumeR2Key: { type: String },
     jdR2Key: { type: String },
+
+    // Scoring dimensions used for this session
+    scoringDimensions: { type: Schema.Types.Mixed },
 
     // Coding interview
     codingProblemId: { type: String },

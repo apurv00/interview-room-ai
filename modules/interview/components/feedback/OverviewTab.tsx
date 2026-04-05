@@ -30,26 +30,33 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
   const engagementSignals: EngagementSignals | null = dimensions.engagement_signals || null
   const deliverySignals: DeliverySignals | null = dimensions.delivery_signals || null
 
-  // Single one-pass reduce for all avg scores
+  // Default scoring dimensions (behavioral/legacy)
+  const DEFAULT_DIMS = [
+    { name: 'relevance', label: 'Relevance' },
+    { name: 'structure', label: 'STAR Structure' },
+    { name: 'specificity', label: 'Specificity' },
+    { name: 'ownership', label: 'Ownership' },
+  ]
+
+  // Use stored scoring dimensions if available, otherwise fall back to defaults
+  const scoringDims = useMemo(() => {
+    // Check for scoringDimensions on the session data (stored at creation)
+    const stored = (data as unknown as Record<string, unknown>).scoringDimensions as Array<{ name: string; label: string }> | undefined
+    if (stored?.length) return stored.map(d => ({ name: d.name, label: d.label }))
+    return DEFAULT_DIMS
+  }, [data])
+
+  // Dynamic one-pass reduce for avg scores based on scoring dimensions
   const avgScores = useMemo(() => {
     if (!data.evaluations || data.evaluations.length === 0) return null
     const n = data.evaluations.length
-    const sums = data.evaluations.reduce(
-      (acc, e) => ({
-        relevance: acc.relevance + (Number(e.relevance) || 0),
-        structure: acc.structure + (Number(e.structure) || 0),
-        specificity: acc.specificity + (Number(e.specificity) || 0),
-        ownership: acc.ownership + (Number(e.ownership) || 0),
-      }),
-      { relevance: 0, structure: 0, specificity: 0, ownership: 0 }
-    )
-    return {
-      relevance: Math.round(sums.relevance / n),
-      structure: Math.round(sums.structure / n),
-      specificity: Math.round(sums.specificity / n),
-      ownership: Math.round(sums.ownership / n),
+    const result: Record<string, number> = {}
+    for (const dim of scoringDims) {
+      const sum = data.evaluations.reduce((acc, e) => acc + (Number((e as unknown as Record<string, unknown>)[dim.name]) || 0), 0)
+      result[dim.name] = Math.round(sum / n)
     }
-  }, [data.evaluations])
+    return result
+  }, [data.evaluations, scoringDims])
 
   return (
     <div className="space-y-6">
@@ -60,12 +67,10 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
           title="Answer Quality"
           score={Number(answer_quality.score) || 0}
           color="auto"
-          metrics={[
-            { label: 'Relevance', value: avgScores?.relevance ?? answer_quality.score },
-            { label: 'Structure (STAR)', value: avgScores?.structure ?? answer_quality.score },
-            { label: 'Specificity', value: avgScores?.specificity ?? answer_quality.score },
-            { label: 'Ownership', value: avgScores?.ownership ?? answer_quality.score },
-          ]}
+          metrics={scoringDims.map(dim => ({
+            label: dim.label,
+            value: avgScores?.[dim.name] ?? answer_quality.score,
+          }))}
           insights={{
             strengths: Array.isArray(answer_quality.strengths) ? answer_quality.strengths.map((str) => s(str)) : undefined,
             improvements: Array.isArray(answer_quality.weaknesses) ? answer_quality.weaknesses.map((w) => s(w)) : undefined,

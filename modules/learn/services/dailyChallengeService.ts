@@ -9,9 +9,8 @@ import { aiLogger as logger } from '@shared/logger'
 import { getAnthropicClient } from '@shared/services/llmClient'
 
 const DOMAINS_ROTATION = [
-  'frontend', 'backend', 'sdet', 'devops', 'data-science',
-  'pm', 'design',
-  'business', 'marketing', 'finance', 'sales',
+  'general', 'frontend', 'backend', 'sdet', 'data-science',
+  'pm', 'design', 'business',
 ]
 
 function getTodayUTC(): string {

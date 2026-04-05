@@ -28,7 +28,7 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
   async handler(req, { user, body }) {
     const { config, question, answer, questionIndex, probeDepth } = body
     const startTime = Date.now()
-    const interviewType = config.interviewType || 'screening'
+    const interviewType = config.interviewType || 'behavioral'
     const domainLabel = getDomainLabel(config.role)
 
     // ── Early exit: empty or near-empty answer → score 0 ──
