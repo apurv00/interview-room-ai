@@ -6,7 +6,22 @@ import { aiLogger } from '@shared/logger'
 export const dynamic = 'force-dynamic'
 
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY
-const TTS_MODEL = 'aura-2-zeus-en' // Professional male voice for Alex Chen
+const TTS_MODEL = process.env.DEEPGRAM_TTS_MODEL || 'aura-2-zeus-en'
+
+/**
+ * Add lightweight SSML prosody hints for more natural delivery.
+ * Inserts pauses after question marks and transitional phrases.
+ */
+function addProsodyHints(text: string): string {
+  let result = text
+  // Add brief pause after question marks for natural cadence
+  result = result.replace(/\?\s+/g, '? <break time="250ms"/> ')
+  // Add pause after transitional phrases
+  result = result.replace(/\b(So,|Now,|Alright,|Great,|Okay,|Well,)\s/g, '$1 <break time="200ms"/> ')
+  // Add slight pause before "and" in lists for clarity
+  result = result.replace(/,\s+and\s/g, ', <break time="150ms"/> and ')
+  return result
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -24,6 +39,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid text' }, { status: 400 })
     }
 
+    const processedText = addProsodyHints(text)
+
     const response = await fetch(
       `https://api.deepgram.com/v1/speak?model=${TTS_MODEL}&encoding=mp3`,
       {
@@ -32,7 +49,7 @@ export async function POST(req: NextRequest) {
           Authorization: `Token ${DEEPGRAM_API_KEY}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text: processedText }),
       }
     )
 
