@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { executeCode, runTestCases } from '@interview/services/codeSandboxService'
 
+export const dynamic = 'force-dynamic'
+
 const RunCodeSchema = z.object({
   code: z.string().min(1).max(50000),
   language: z.enum(['python', 'javascript', 'typescript', 'java', 'cpp']),

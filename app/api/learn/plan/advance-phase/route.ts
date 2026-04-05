@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { evaluatePhaseTransition, advancePhase } from '@learn/services/dailyPlanService'
 
+export const dynamic = 'force-dynamic'
+
 /**
  * POST /api/learn/plan/advance-phase
  *

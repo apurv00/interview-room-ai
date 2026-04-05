@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { generateMonthlyPlan, getTodaysTasks } from '@learn/services/dailyPlanService'
 
+export const dynamic = 'force-dynamic'
+
 const GeneratePlanSchema = z.object({
   domain: z.string().min(1).max(50),
   interviewType: z.string().max(50).optional(),
