@@ -306,7 +306,7 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       }
 
       // Validate required fields exist (Claude may truncate if hitting max_tokens)
-      if (!feedback.overall_score || !feedback.dimensions) {
+      if (feedback.overall_score == null || !feedback.dimensions) {
         aiLogger.warn({ raw: raw.slice(0, 500) }, 'Incomplete feedback from Claude — applying defaults')
         feedback.overall_score = feedback.overall_score || Math.round(
           evaluations.reduce((sum: number, e: Record<string, unknown>) =>
@@ -325,12 +325,16 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         feedback.top_3_improvements = feedback.top_3_improvements || ['Practice more structured answers']
       }
 
+      // Enforce pre-computed communication score (Claude may deviate from the provided value)
+      if (feedback.dimensions?.communication) {
+        feedback.dimensions.communication.score = commScore
+      }
+
       // Deterministic overall score: weighted average of dimensions (40% AQ, 30% Comm, 30% Engagement)
       const aqScore = feedback.dimensions?.answer_quality?.score ?? 0
-      const commDimScore = feedback.dimensions?.communication?.score ?? 0
       const engScore = feedback.dimensions?.engagement_signals?.score ?? 0
-      feedback.overall_score = Math.round(aqScore * 0.4 + commDimScore * 0.3 + engScore * 0.3)
-      feedback.pass_probability = feedback.overall_score >= 70 ? 'High' : feedback.overall_score >= 50 ? 'Medium' : 'Low'
+      feedback.overall_score = Math.round(aqScore * 0.4 + commScore * 0.3 + engScore * 0.3)
+      feedback.pass_probability = feedback.overall_score >= 75 ? 'High' : feedback.overall_score >= 50 ? 'Medium' : 'Low'
 
       trackUsage({
         user,
@@ -431,14 +435,18 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
             sum + ((Number(e.relevance) || 0) + (Number(e.structure) || 0) + (Number(e.specificity) || 0) + (Number(e.ownership) || 0)) / 4, 0) / evaluations.length)
         : 0
 
+      const fallbackCommScore = commScore || 0
+      const fallbackEngScore = Math.round(roughScore * 0.9)
+      const fallbackOverall = Math.round(roughScore * 0.4 + fallbackCommScore * 0.3 + fallbackEngScore * 0.3)
+
       const fallback: FeedbackData = {
-        overall_score: roughScore,
-        pass_probability: roughScore >= 70 ? 'Medium' : 'Low',
+        overall_score: fallbackOverall,
+        pass_probability: fallbackOverall >= 75 ? 'High' : fallbackOverall >= 50 ? 'Medium' : 'Low',
         confidence_level: 'Low',
         dimensions: {
           answer_quality: { score: roughScore, strengths: [], weaknesses: ['Feedback generation encountered an error — scores are approximate'] },
-          communication: { score: commScore || 0, wpm: aggMetrics.wpm, filler_rate: aggMetrics.fillerRate, pause_score: aggMetrics.pauseScore, rambling_index: aggMetrics.ramblingIndex },
-          engagement_signals: { score: Math.round(roughScore * 0.9), engagement_score: Math.round(roughScore * 0.9), confidence_trend: 'stable', energy_consistency: 0.5, composure_under_pressure: Math.round(roughScore * 0.85) },
+          communication: { score: fallbackCommScore, wpm: aggMetrics.wpm, filler_rate: aggMetrics.fillerRate, pause_score: aggMetrics.pauseScore, rambling_index: aggMetrics.ramblingIndex },
+          engagement_signals: { score: fallbackEngScore, engagement_score: fallbackEngScore, confidence_trend: 'stable', energy_consistency: 0.5, composure_under_pressure: Math.round(roughScore * 0.85) },
         },
         red_flags: hasEvals ? [] : ['No responses recorded'],
         top_3_improvements: [

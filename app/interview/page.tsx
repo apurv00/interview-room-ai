@@ -357,10 +357,15 @@ export default function InterviewPage() {
   // ─── Mute toggle ──────────────────────────────────────────────────────────
   function toggleMute() {
     if (!streamRef.current) return
+    const willMute = !muted
     streamRef.current.getAudioTracks().forEach((t) => {
-      t.enabled = !t.enabled
+      t.enabled = !willMute
     })
-    setMuted((m) => !m)
+    // Stop speech recognition when muting to prevent phantom input
+    if (willMute) {
+      stopListening()
+    }
+    setMuted(willMute)
   }
 
   // ─── Loading state ─────────────────────────────────────────────────────────
