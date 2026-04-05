@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import type { AvatarEmotion } from '@shared/types'
 
 interface UseAvatarSpeechOptions {
@@ -13,6 +13,7 @@ export interface UseAvatarSpeechReturn {
   isAvatarTalking: boolean
   setAvatarEmotion: (emotion: AvatarEmotion) => void
   avatarSpeak: (text: string, emotion?: AvatarEmotion) => Promise<void>
+  prefetchTTS: (text: string) => void
 }
 
 /**
@@ -24,6 +25,24 @@ export function useAvatarSpeech({
 }: UseAvatarSpeechOptions): UseAvatarSpeechReturn {
   const [avatarEmotion, setAvatarEmotion] = useState<AvatarEmotion>('friendly')
   const [isAvatarTalking, setIsAvatarTalking] = useState(false)
+  // Cache for pre-fetched TTS audio blobs keyed by text
+  const ttsCacheRef = useRef<Map<string, Promise<Blob | null>>>(new Map())
+
+  /** Pre-fetch TTS audio for a question so it's ready when needed. */
+  const prefetchTTS = useCallback(
+    (text: string) => {
+      if (!isMultimodalEnabled || ttsCacheRef.current.has(text)) return
+      const promise = fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      })
+        .then((res) => (res.ok ? res.blob() : null))
+        .catch(() => null)
+      ttsCacheRef.current.set(text, promise)
+    },
+    [isMultimodalEnabled]
+  )
 
   const avatarSpeak = useCallback(
     async (text: string, emotion: AvatarEmotion = 'friendly'): Promise<void> => {
@@ -33,14 +52,22 @@ export function useAvatarSpeech({
       // Try Deepgram Aura TTS first (natural AI voice)
       if (isMultimodalEnabled) {
         try {
-          const res = await fetch('/api/tts', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text }),
-          })
+          // Use pre-fetched audio if available, otherwise fetch now
+          let blob: Blob | null = null
+          const cached = ttsCacheRef.current.get(text)
+          if (cached) {
+            blob = await cached
+            ttsCacheRef.current.delete(text)
+          } else {
+            const res = await fetch('/api/tts', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text }),
+            })
+            if (res.ok) blob = await res.blob()
+          }
 
-          if (res.ok) {
-            const blob = await res.blob()
+          if (blob) {
             const url = URL.createObjectURL(blob)
             await new Promise<void>((resolve) => {
               const audio = new Audio(url)
@@ -115,5 +142,5 @@ export function useAvatarSpeech({
     [interviewType, isMultimodalEnabled]
   )
 
-  return { avatarEmotion, isAvatarTalking, setAvatarEmotion, avatarSpeak }
+  return { avatarEmotion, isAvatarTalking, setAvatarEmotion, avatarSpeak, prefetchTTS }
 }

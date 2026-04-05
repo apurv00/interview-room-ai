@@ -325,6 +325,13 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         feedback.top_3_improvements = feedback.top_3_improvements || ['Practice more structured answers']
       }
 
+      // Deterministic overall score: weighted average of dimensions (40% AQ, 30% Comm, 30% Engagement)
+      const aqScore = feedback.dimensions?.answer_quality?.score ?? 0
+      const commDimScore = feedback.dimensions?.communication?.score ?? 0
+      const engScore = feedback.dimensions?.engagement_signals?.score ?? 0
+      feedback.overall_score = Math.round(aqScore * 0.4 + commDimScore * 0.3 + engScore * 0.3)
+      feedback.pass_probability = feedback.overall_score >= 70 ? 'High' : feedback.overall_score >= 50 ? 'Medium' : 'Low'
+
       trackUsage({
         user,
         type: 'api_call_feedback',

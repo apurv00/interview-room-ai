@@ -319,8 +319,9 @@ export default function InterviewPage() {
     }
   }, [router])
 
-  // ─── Camera init + start recording ─────────────────────────────────────────
+  // ─── Camera init + start recording (only after config is loaded) ───────────
   useEffect(() => {
+    if (!config) return // Don't start camera until interview config is ready
     navigator.mediaDevices
       .getUserMedia({ video: true, audio: true })
       .then((stream) => {
@@ -341,7 +342,7 @@ export default function InterviewPage() {
         streamRef.current = null
       }
     }
-  }, [startRecording])
+  }, [config, startRecording])
 
   // ─── Load TTS voices ──────────────────────────────────────────────────────
   useEffect(() => {
