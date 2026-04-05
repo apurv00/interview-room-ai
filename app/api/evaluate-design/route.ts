@@ -5,6 +5,8 @@ import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
 import { z } from 'zod'
 
+export const dynamic = 'force-dynamic'
+
 const client = getAnthropicClient()
 
 const DesignComponentSchema = z.object({

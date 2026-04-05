@@ -7,6 +7,8 @@ import { aiLogger } from '@shared/logger'
 import { LandmarksUploadSchema } from '@interview/validators/multimodal'
 import type { FacialFrame } from '@shared/types/multimodal'
 
+export const dynamic = 'force-dynamic'
+
 interface LandmarksPayload {
   sessionId: string
   frames: FacialFrame[]

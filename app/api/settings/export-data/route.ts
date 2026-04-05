@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { generateDataExport } from '@shared/services/dataExportService'
 
+export const dynamic = 'force-dynamic'
+
 /**
  * GET /api/settings/export-data
  *

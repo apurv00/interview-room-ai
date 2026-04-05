@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { aiLogger } from '@shared/logger'
 
+export const dynamic = 'force-dynamic'
+
 /**
  * Returns the Deepgram API key for client-side WebSocket STT.
  *

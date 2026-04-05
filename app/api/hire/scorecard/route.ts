@@ -4,6 +4,8 @@ import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { getHireUser, isRecruiter } from '@b2b/services/hireService'
 import { getRecruiterScorecard } from '@b2b/services/scorecardService'
 
+export const dynamic = 'force-dynamic'
+
 const ScorecardSchema = z.object({
   sessionId: z.string().min(1),
 })

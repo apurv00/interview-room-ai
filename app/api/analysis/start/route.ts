@@ -9,6 +9,8 @@ import { getPlanLimits } from '@shared/services/stripe'
 import { inngest } from '@interview/services/inngestClient'
 import { StartAnalysisSchema } from '@interview/validators/multimodal'
 
+export const dynamic = 'force-dynamic'
+
 interface StartPayload {
   sessionId: string
 }

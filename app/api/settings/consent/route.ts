@@ -4,6 +4,8 @@ import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { connectDB } from '@shared/db/connection'
 import { User } from '@shared/db/models'
 
+export const dynamic = 'force-dynamic'
+
 const UpdateConsentSchema = z.object({
   recordingConsent: z.boolean().optional(),
   analysisConsent: z.boolean().optional(),
