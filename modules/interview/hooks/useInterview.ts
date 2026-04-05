@@ -126,6 +126,11 @@ export function useInterview({
 
   function waitForCodeSubmission(): Promise<{ code: string; language: string }> {
     return new Promise((resolve, reject) => {
+      // If already aborted (e.g. usage limit or timer expired), reject immediately
+      if (interviewAbortRef.current?.signal.aborted) {
+        reject(new InterviewAbortError())
+        return
+      }
       codeSubmitResolverRef.current = resolve
       interviewAbortRef.current?.signal.addEventListener('abort', () => {
         reject(new InterviewAbortError())
@@ -182,10 +187,14 @@ export function useInterview({
         interviewAbortRef.current?.abort()
         coachingAbortRef.current?.abort()
         stopListening()
+        onRecordingStop?.()
         setCurrentQuestion('Monthly interview limit reached. Please upgrade your plan to continue.')
         setCoachingTip('You have reached your monthly interview limit. Visit Pricing to upgrade and keep practicing.')
         transitionTo('ENDED')
         localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
+        localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
+        // Redirect home after a brief delay so the user sees the message
+        setTimeout(() => router.push('/'), 4000)
         return
       }
 
