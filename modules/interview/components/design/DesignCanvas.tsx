@@ -221,7 +221,7 @@ export default function DesignCanvas({ onSubmit, questionIndex, disabled = false
       {/* Main area: palette + canvas */}
       <div className="flex flex-1 min-h-0">
         {/* Palette sidebar */}
-        <div className="w-[130px] shrink-0 bg-gray-900/60 border-r border-gray-700/50 overflow-y-auto">
+        <div className="w-[160px] shrink-0 bg-gray-900/60 border-r border-gray-700/50 overflow-y-auto">
           <p className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold px-2 pt-2 pb-1">Components</p>
           <ComponentPalette disabled={disabled} onAddComponent={handleAddComponent} />
         </div>

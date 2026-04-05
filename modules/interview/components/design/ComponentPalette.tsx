@@ -39,17 +39,17 @@ interface ComponentPaletteProps {
 
 export default function ComponentPalette({ disabled, onAddComponent }: ComponentPaletteProps) {
   return (
-    <div className="grid grid-cols-3 gap-1.5 p-2">
+    <div className="grid grid-cols-2 gap-1.5 p-2">
       {PALETTE_ITEMS.map((item) => (
         <button
           key={item.type}
           disabled={disabled}
           onClick={() => onAddComponent(item.type)}
           className="flex flex-col items-center gap-1 px-2 py-2 rounded-md text-gray-400 hover:text-white hover:bg-gray-700/50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-[10px]"
-          title={`Add ${item.label}`}
+          title={item.label}
         >
           {item.icon}
-          <span className="truncate w-full text-center">{item.label}</span>
+          <span className="truncate w-full text-center" title={item.label}>{item.label}</span>
         </button>
       ))}
     </div>
