@@ -7,7 +7,7 @@ export default function CreativeTemplate({ data }: TemplateProps) {
     <div className="text-gray-900 leading-snug" style={{ fontSize: 'var(--r-body, 9px)' }}>
       <div className="flex">
         {/* Left Sidebar */}
-        <div className="w-[20%] bg-[#6366f1] text-white p-3 min-h-full">
+        <div className="w-[20%] bg-[#2563eb] text-white p-3 min-h-full">
           {/* Contact */}
           <div className="mb-4">
             <h2 className="font-bold uppercase tracking-widest border-b border-white/30 pb-0.5 mb-1">Contact</h2>
@@ -53,13 +53,13 @@ export default function CreativeTemplate({ data }: TemplateProps) {
         <div className="w-[80%] p-3">
           {/* Header */}
           <div className="mb-3">
-            <h1 className="font-bold text-[#6366f1] tracking-wide" style={{ fontSize: 'var(--r-title, 18px)' }}>{contact.fullName || 'Your Name'}</h1>
+            <h1 className="font-bold text-[#2563eb] tracking-wide" style={{ fontSize: 'var(--r-title, 18px)' }}>{contact.fullName || 'Your Name'}</h1>
           </div>
 
           {/* Summary */}
           {data.summary && (
             <div className="mb-3">
-              <h2 className="font-bold uppercase tracking-widest text-[#6366f1] border-b border-gray-200 pb-0.5 mb-1">About Me</h2>
+              <h2 className="font-bold uppercase tracking-widest text-[#2563eb] border-b border-gray-200 pb-0.5 mb-1">About Me</h2>
               <p className="text-gray-700 leading-relaxed">{data.summary}</p>
             </div>
           )}
@@ -67,13 +67,13 @@ export default function CreativeTemplate({ data }: TemplateProps) {
           {/* Experience */}
           {data.experience && data.experience.length > 0 && (
             <div className="mb-3">
-              <h2 className="font-bold uppercase tracking-widest text-[#6366f1] border-b border-gray-200 pb-0.5 mb-1">Experience</h2>
+              <h2 className="font-bold uppercase tracking-widest text-[#2563eb] border-b border-gray-200 pb-0.5 mb-1">Experience</h2>
               {data.experience.map(exp => (
                 <div key={exp.id} className="mb-2">
                   <div className="flex justify-between items-baseline">
                     <div>
                       <span className="font-bold">{exp.title}</span>
-                      {exp.company && <span className="text-[#6366f1]"> | {exp.company}</span>}
+                      {exp.company && <span className="text-[#2563eb]"> | {exp.company}</span>}
                     </div>
                     <span className="text-[8px] text-gray-500 shrink-0 ml-2">{exp.startDate} - {exp.endDate || 'Present'}</span>
                   </div>
@@ -82,7 +82,7 @@ export default function CreativeTemplate({ data }: TemplateProps) {
                     <ul className="mt-0.5 space-y-0.5">
                       {exp.bullets.filter(b => b.trim()).map((bullet, i) => (
                         <li key={i} className="text-gray-700 flex items-start gap-1">
-                          <span className="shrink-0 mt-[3px] w-1 h-1 bg-[#6366f1] rounded-full" />
+                          <span className="shrink-0 mt-[3px] w-1 h-1 bg-[#2563eb] rounded-full" />
                           <span>{bullet}</span>
                         </li>
                       ))}
@@ -96,11 +96,11 @@ export default function CreativeTemplate({ data }: TemplateProps) {
           {/* Projects */}
           {data.projects && data.projects.length > 0 && (
             <div className="mb-3">
-              <h2 className="font-bold uppercase tracking-widest text-[#6366f1] border-b border-gray-200 pb-0.5 mb-1">Projects</h2>
+              <h2 className="font-bold uppercase tracking-widest text-[#2563eb] border-b border-gray-200 pb-0.5 mb-1">Projects</h2>
               {data.projects.map(proj => (
                 <div key={proj.id} className="mb-1.5">
                   <span className="font-bold">{proj.name}</span>
-                  {proj.url && <span className="text-[8px] text-[#6366f1] ml-1">{proj.url}</span>}
+                  {proj.url && <span className="text-[8px] text-[#2563eb] ml-1">{proj.url}</span>}
                   {proj.technologies?.length ? <span className="text-[8px] text-gray-500"> ({proj.technologies.join(', ')})</span> : null}
                   <p className="text-gray-700">{proj.description}</p>
                 </div>
@@ -111,7 +111,7 @@ export default function CreativeTemplate({ data }: TemplateProps) {
           {/* Education */}
           {data.education && data.education.length > 0 && (
             <div className="mb-3">
-              <h2 className="font-bold uppercase tracking-widest text-[#6366f1] border-b border-gray-200 pb-0.5 mb-1">Education</h2>
+              <h2 className="font-bold uppercase tracking-widest text-[#2563eb] border-b border-gray-200 pb-0.5 mb-1">Education</h2>
               {data.education.map(edu => (
                 <div key={edu.id} className="mb-1.5">
                   <div className="flex justify-between items-baseline">
@@ -137,7 +137,7 @@ export default function CreativeTemplate({ data }: TemplateProps) {
           {/* Custom Sections */}
           {data.customSections?.map(section => (
             <div key={section.id} className="mb-3">
-              <h2 className="font-bold uppercase tracking-widest text-[#6366f1] border-b border-gray-200 pb-0.5 mb-1">{section.title}</h2>
+              <h2 className="font-bold uppercase tracking-widest text-[#2563eb] border-b border-gray-200 pb-0.5 mb-1">{section.title}</h2>
               <p className="text-gray-700 whitespace-pre-wrap">{section.content}</p>
             </div>
           ))}

@@ -30,7 +30,7 @@ export default function LevelUpToast({ level, title, onDismiss }: LevelUpToastPr
           exit={{ opacity: 0, y: -20, scale: 0.95 }}
           transition={{ type: 'spring', damping: 15 }}
         >
-          <div className="bg-gradient-to-r from-[#6366f1] to-[#818cf8] text-white px-6 py-4 rounded-xl shadow-lg flex items-center gap-3">
+          <div className="bg-gradient-to-r from-[#2563eb] to-[#3b82f6] text-white px-6 py-4 rounded-xl shadow-lg flex items-center gap-3">
             <span className="text-2xl">🎉</span>
             <div>
               <p className="text-sm font-bold">Level Up!</p>

@@ -41,7 +41,7 @@ export default function StageExport({
             className={`text-2xl font-bold ${
               strengthScore >= 75 ? 'text-[#059669]'
                 : strengthScore >= 50 ? 'text-amber-400'
-                  : 'text-[#6366f1]'
+                  : 'text-[#2563eb]'
             }`}
             initial={{ scale: 0.8 }}
             animate={{ scale: 1 }}
@@ -55,7 +55,7 @@ export default function StageExport({
               <span className="text-[10px] text-[#6b7280] w-16 capitalize">{key}</span>
               <div className="flex-1 h-1.5 rounded-full bg-card overflow-hidden">
                 <motion.div
-                  className="h-full rounded-full bg-[#6366f1]"
+                  className="h-full rounded-full bg-[#2563eb]"
                   initial={false}
                   animate={{ width: `${(value / getMax(key)) * 100}%` }}
                   transition={{ duration: 0.4 }}
@@ -77,7 +77,7 @@ export default function StageExport({
               onClick={() => onSelectTemplate(template.id)}
               className={`p-3 rounded-xl border text-left transition-all ${
                 selectedTemplate === template.id
-                  ? 'border-[#6366f1]/50 bg-[#6366f1]/10 ring-1 ring-[#6366f1]/20'
+                  ? 'border-[#2563eb]/50 bg-[#2563eb]/10 ring-1 ring-[#2563eb]/20'
                   : 'border-[#e1e8ed] bg-[#f7f9f9] hover:border-[#e1e8ed]'
               }`}
             >

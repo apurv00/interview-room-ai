@@ -38,7 +38,7 @@ export default function TranscriptPanel({
         {/* Question progress bar */}
         <div className="h-[2px] bg-[#eff3f4] w-full">
           <motion.div
-            className="h-full bg-gradient-to-r from-indigo-500 to-indigo-400"
+            className="h-full bg-gradient-to-r from-blue-500 to-blue-400"
             initial={false}
             animate={{ width: `${progressPct}%` }}
             transition={{ duration: 0.6, ease: 'easeOut' }}
@@ -68,9 +68,9 @@ export default function TranscriptPanel({
                       height: 4,
                       backgroundColor:
                         i < questionIndex
-                          ? 'rgb(99,102,241)'
+                          ? 'rgb(37,99,235)'
                           : i === questionIndex
-                          ? 'rgb(129,140,248)'
+                          ? 'rgb(96,165,250)'
                           : 'rgb(225,232,237)',
                     }}
                     transition={{ duration: 0.3, ease: 'easeOut' }}

@@ -57,8 +57,8 @@ function WarmUpQuestion() {
     <div className="space-y-3">
       <div className="bg-[#f7f9f9] rounded-xl p-4 space-y-3">
         <div className="flex items-start gap-3">
-          <div className="w-6 h-6 rounded-full bg-indigo-500/20 flex items-center justify-center shrink-0 mt-0.5">
-            <svg className="w-3.5 h-3.5 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <div className="w-6 h-6 rounded-full bg-blue-500/20 flex items-center justify-center shrink-0 mt-0.5">
+            <svg className="w-3.5 h-3.5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
             </svg>
           </div>
@@ -73,7 +73,7 @@ function WarmUpQuestion() {
             <motion.button
               key="start"
               onClick={startWarmUp}
-              className="w-full py-2.5 rounded-xl bg-indigo-600/10 border border-indigo-500/30 text-sm text-indigo-600 font-medium hover:bg-indigo-600/20 transition-colors"
+              className="w-full py-2.5 rounded-xl bg-blue-600/10 border border-blue-500/30 text-sm text-blue-600 font-medium hover:bg-blue-600/20 transition-colors"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -95,7 +95,7 @@ function WarmUpQuestion() {
               </div>
               <div className="h-1 bg-[#eff3f4] rounded-full overflow-hidden">
                 <motion.div
-                  className="h-full bg-indigo-500 rounded-full"
+                  className="h-full bg-blue-500 rounded-full"
                   initial={{ width: '100%' }}
                   animate={{ width: '0%' }}
                   transition={{ duration: 60, ease: 'linear' }}
@@ -245,7 +245,7 @@ export default function PrepChecklist({ domainSlug, domainLabel, duration }: Pre
         <ul className="space-y-2">
           {domainTips.map((tip, i) => (
             <li key={i} className="flex items-start gap-2.5 text-sm text-[#536471]">
-              <span className="text-[#6366f1] mt-0.5 shrink-0">
+              <span className="text-[#2563eb] mt-0.5 shrink-0">
                 <TipIcon icon={tip.icon} />
               </span>
               {tip.text}

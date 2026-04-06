@@ -9,7 +9,7 @@ import type { ResumeData } from '@resume/validators/resume'
 export default function ResumeTemplatesPage() {
   const [selectedId, setSelectedId] = useState(RESUME_TEMPLATES[0].id)
   const selected = RESUME_TEMPLATES.find(t => t.id === selectedId) || RESUME_TEMPLATES[0]
-  const colors = TEMPLATE_COLOR_MAP[selected.color] || TEMPLATE_COLOR_MAP.indigo
+  const colors = TEMPLATE_COLOR_MAP[selected.color] || TEMPLATE_COLOR_MAP.blue
 
   const sampleData: ResumeData = {
     ...SAMPLE_RESUME_DATA,
@@ -29,7 +29,7 @@ export default function ResumeTemplatesPage() {
         {/* Template list - left side */}
         <div className="w-[340px] shrink-0 space-y-2 overflow-y-auto max-h-[calc(100vh-180px)] pr-1">
           {RESUME_TEMPLATES.map(t => {
-            const tColors = TEMPLATE_COLOR_MAP[t.color] || TEMPLATE_COLOR_MAP.indigo
+            const tColors = TEMPLATE_COLOR_MAP[t.color] || TEMPLATE_COLOR_MAP.blue
             const isSelected = t.id === selectedId
             return (
               <button

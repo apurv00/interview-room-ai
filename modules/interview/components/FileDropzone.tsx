@@ -68,9 +68,9 @@ export default function FileDropzone({
   // Uploading state
   if (isUploading) {
     return (
-      <div className="flex flex-col items-center justify-center gap-2 py-6 px-4 rounded-xl border-2 border-dashed border-indigo-500/30 bg-indigo-500/5">
-        <div className="w-5 h-5 rounded-full border-2 border-indigo-600 border-t-transparent animate-spin" />
-        <p className="text-xs text-indigo-600">Parsing...</p>
+      <div className="flex flex-col items-center justify-center gap-2 py-6 px-4 rounded-xl border-2 border-dashed border-blue-500/30 bg-blue-500/5">
+        <div className="w-5 h-5 rounded-full border-2 border-blue-600 border-t-transparent animate-spin" />
+        <p className="text-xs text-blue-600">Parsing...</p>
       </div>
     )
   }
@@ -106,7 +106,7 @@ export default function FileDropzone({
       className={`
         flex flex-col items-center justify-center gap-2 py-6 px-4 rounded-xl border-2 border-dashed cursor-pointer transition-all duration-200
         ${isDragging
-          ? 'border-indigo-600 bg-indigo-500/10'
+          ? 'border-blue-600 bg-blue-500/10'
           : 'border-[#e1e8ed] hover:border-[#536471] bg-white hover:bg-[#f7f9f9]'
         }
       `}

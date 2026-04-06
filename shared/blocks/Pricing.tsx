@@ -59,7 +59,7 @@ export default function Pricing() {
               key={plan.name}
               className={`relative bg-white rounded-2xl border p-7 transition-all duration-200 ${
                 plan.highlighted
-                  ? 'border-[#6366f1] shadow-[0_0_0_1px_rgba(99,102,241,0.15),var(--shadow-card-hover)] scale-[1.02]'
+                  ? 'border-[#2563eb] shadow-[0_0_0_1px_rgba(37,99,235,0.15),var(--shadow-card-hover)] scale-[1.02]'
                   : 'border-[#e1e8ed] shadow-card hover:shadow-card-hover'
               }`}
             >
@@ -104,7 +104,7 @@ export default function Pricing() {
         <div className="text-center mt-8">
           <Link
             href="/pricing"
-            className="text-sm font-semibold text-[#6366f1] hover:text-[#4f46e5] transition-colors"
+            className="text-sm font-semibold text-[#2563eb] hover:text-[#1d4ed8] transition-colors"
           >
             Compare plans in detail &rarr;
           </Link>

@@ -66,7 +66,7 @@ export default function StageExperience({ roles, onAddRole, onUpdateRole, onRemo
           className="bg-surface border border-[#e1e8ed] rounded-xl p-4 space-y-3"
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-[#6366f1]">Role {roleIndex + 1}</span>
+            <span className="text-xs font-medium text-[#2563eb]">Role {roleIndex + 1}</span>
             {roles.length > 1 && (
               <button
                 onClick={() => onRemoveRole(role.id)}
@@ -125,7 +125,7 @@ export default function StageExperience({ roles, onAddRole, onUpdateRole, onRemo
                   onChange={e => updateBullet(role.id, i, e.target.value, role.rawBullets)}
                   placeholder="Describe what you did — we'll polish it later"
                   rows={2}
-                  className="flex-1 bg-surface text-sm text-[#0f1419] placeholder-[#8b98a5] border border-[#e1e8ed] rounded-[6px] px-3 py-2 focus:outline-none focus:border-[#6366f1] focus:ring-1 focus:ring-[rgba(99,102,241,0.15)] transition-all duration-[120ms] resize-none"
+                  className="flex-1 bg-surface text-sm text-[#0f1419] placeholder-[#8b98a5] border border-[#e1e8ed] rounded-[6px] px-3 py-2 focus:outline-none focus:border-[#2563eb] focus:ring-1 focus:ring-[rgba(37,99,235,0.15)] transition-all duration-[120ms] resize-none"
                 />
                 {role.rawBullets.length > 1 && (
                   <button
@@ -141,7 +141,7 @@ export default function StageExperience({ roles, onAddRole, onUpdateRole, onRemo
             ))}
             <button
               onClick={() => addBullet(role.id, role.rawBullets)}
-              className="text-xs text-[#6366f1] hover:text-[#6366f1] transition-colors"
+              className="text-xs text-[#2563eb] hover:text-[#2563eb] transition-colors"
             >
               + Add another point
             </button>

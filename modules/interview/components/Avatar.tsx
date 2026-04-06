@@ -16,7 +16,7 @@ interface AvatarProps {
 
 // Ambient glow colors per emotion
 const GLOW_COLORS: Record<AvatarEmotion, string> = {
-  neutral: 'rgba(99,102,241,0.08)',
+  neutral: 'rgba(37,99,235,0.08)',
   friendly: 'rgba(59,130,246,0.12)',
   curious: 'rgba(168,85,247,0.10)',
   skeptical: 'rgba(239,68,68,0.07)',
@@ -97,8 +97,8 @@ export default function Avatar({ emotion, isTalking, ttsText, isListening, isPro
               scale: { duration: 2, repeat: Infinity, ease: 'easeInOut' },
             }}
             style={{
-              border: `2px solid ${isListening ? 'rgba(16,185,129,0.5)' : 'rgba(99,102,241,0.5)'}`,
-              boxShadow: `0 0 40px ${isListening ? 'rgba(16,185,129,0.1)' : 'rgba(99,102,241,0.1)'}`,
+              border: `2px solid ${isListening ? 'rgba(16,185,129,0.5)' : 'rgba(37,99,235,0.5)'}`,
+              boxShadow: `0 0 40px ${isListening ? 'rgba(16,185,129,0.1)' : 'rgba(37,99,235,0.1)'}`,
             }}
           />
         )}
@@ -202,7 +202,7 @@ export default function Avatar({ emotion, isTalking, ttsText, isListening, isPro
               {[0, 1, 2, 3, 4].map((i) => (
                 <motion.div
                   key={i}
-                  className="w-[3px] bg-indigo-600 rounded-full origin-bottom"
+                  className="w-[3px] bg-blue-600 rounded-full origin-bottom"
                   animate={{
                     scaleY: [0.3, 1, 0.3],
                   }}
@@ -216,7 +216,7 @@ export default function Avatar({ emotion, isTalking, ttsText, isListening, isPro
                 />
               ))}
             </div>
-            <span className="text-[10px] text-indigo-600/70 font-medium ml-1.5 uppercase tracking-wider">
+            <span className="text-[10px] text-blue-600/70 font-medium ml-1.5 uppercase tracking-wider">
               Speaking
             </span>
           </motion.div>

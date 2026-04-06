@@ -21,7 +21,7 @@ export default function ResumeLayout({ children }: { children: React.ReactNode }
   if (status === 'loading') {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="w-6 h-6 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
+        <div className="w-6 h-6 rounded-full border-2 border-blue-400 border-t-transparent animate-spin" />
       </div>
     )
   }
@@ -93,7 +93,7 @@ export default function ResumeLayout({ children }: { children: React.ReactNode }
               </button>
             </div>
           ) : (
-            <Link href="/signin" className="text-xs text-[#6366f1] hover:text-indigo-500 transition-colors">
+            <Link href="/signin" className="text-xs text-[#2563eb] hover:text-blue-500 transition-colors">
               Sign In
             </Link>
           )}

@@ -61,7 +61,7 @@ export default function Stats() {
           <div className="grid grid-cols-3 gap-6 text-center">
             {stats.map((stat) => (
               <div key={stat.label}>
-                <p className="text-3xl sm:text-4xl font-extrabold text-[#6366f1]">
+                <p className="text-3xl sm:text-4xl font-extrabold text-[#2563eb]">
                   <AnimatedNumber target={stat.value} suffix={stat.suffix} />
                 </p>
                 <p className="mt-2 text-sm text-[#71767b] font-medium">{stat.label}</p>

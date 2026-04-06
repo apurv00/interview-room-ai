@@ -123,7 +123,7 @@ export default function DailyChallengeCard() {
         value={answer}
         onChange={e => setAnswer(e.target.value)}
         placeholder="Type your answer here... (minimum 10 characters)"
-        className="w-full bg-[#f7f9f9] border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:border-[#6366f1] resize-none"
+        className="w-full bg-[#f7f9f9] border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:border-[#2563eb] resize-none"
         rows={5}
         maxLength={5000}
       />
@@ -133,7 +133,7 @@ export default function DailyChallengeCard() {
         <button
           onClick={handleSubmit}
           disabled={answer.length < 10 || submitting}
-          className="px-4 py-2 bg-[#6366f1] hover:bg-[#5558e6] disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors"
+          className="px-4 py-2 bg-[#2563eb] hover:bg-[#1d4ed8] disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors"
         >
           {submitting ? 'Scoring...' : 'Submit Answer'}
         </button>

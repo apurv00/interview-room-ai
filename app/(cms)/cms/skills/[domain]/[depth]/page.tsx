@@ -145,7 +145,7 @@ export default function SkillEditorPage() {
               {domainLabel} — {depthLabel}
             </h1>
             {hasCustomContent && (
-              <span className="text-xs px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded-full">customized</span>
+              <span className="text-xs px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full">customized</span>
             )}
           </div>
           <div className="flex items-center gap-4 mt-1 text-xs text-[#8b98a5]">
@@ -157,7 +157,7 @@ export default function SkillEditorPage() {
         <div className="flex items-center gap-3">
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={isActive} onChange={e => setIsActive(e.target.checked)}
-              className="rounded border-[#e1e8ed] text-[#6366f1] focus:ring-[#6366f1]/30" />
+              className="rounded border-[#e1e8ed] text-[#2563eb] focus:ring-[#2563eb]/30" />
             Active
           </label>
           <button onClick={() => setShowPreview(!showPreview)}
@@ -171,7 +171,7 @@ export default function SkillEditorPage() {
             </button>
           )}
           <button onClick={handleSave} disabled={saving}
-            className="px-4 py-1.5 text-sm bg-[#6366f1] text-white rounded-lg hover:bg-indigo-500 transition-colors disabled:opacity-50 font-medium">
+            className="px-4 py-1.5 text-sm bg-[#2563eb] text-white rounded-lg hover:bg-blue-500 transition-colors disabled:opacity-50 font-medium">
             {saving ? 'Saving...' : 'Save'} <span className="text-xs opacity-70 ml-1">Ctrl+S</span>
           </button>
         </div>
@@ -203,7 +203,7 @@ export default function SkillEditorPage() {
           <textarea
             value={content}
             onChange={e => setContent(e.target.value)}
-            className="flex-1 w-full p-4 border border-[#e1e8ed] rounded-xl bg-[#fafbfc] font-mono text-sm leading-relaxed resize-none focus:outline-none focus:ring-2 focus:ring-[#6366f1]/30 focus:border-[#6366f1]"
+            className="flex-1 w-full p-4 border border-[#e1e8ed] rounded-xl bg-[#fafbfc] font-mono text-sm leading-relaxed resize-none focus:outline-none focus:ring-2 focus:ring-[#2563eb]/30 focus:border-[#2563eb]"
             spellCheck={false}
           />
         </div>

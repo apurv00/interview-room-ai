@@ -7,8 +7,8 @@ const features = [
     title: 'Practice Sets',
     description: 'Guided practice plans personalized to your goals, with progress tracking and difficulty scaling.',
     href: '/learn/practice',
-    color: 'text-indigo-500',
-    bg: 'bg-indigo-50 group-hover:bg-indigo-100',
+    color: 'text-blue-500',
+    bg: 'bg-blue-50 group-hover:bg-blue-100',
   },
   {
     icon: FileText,
@@ -51,7 +51,7 @@ export default function Features() {
               <div className={`w-12 h-12 rounded-2xl ${feature.bg} flex items-center justify-center mb-4 transition-colors`}>
                 <feature.icon className={`size-6 ${feature.color}`} strokeWidth={1.5} />
               </div>
-              <h3 className="text-base font-semibold text-[#0f1419] group-hover:text-[#6366f1] transition-colors">
+              <h3 className="text-base font-semibold text-[#0f1419] group-hover:text-[#2563eb] transition-colors">
                 {feature.title}
               </h3>
               <p className="mt-2 text-sm text-[#71767b] leading-relaxed">

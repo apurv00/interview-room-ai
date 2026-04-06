@@ -61,7 +61,7 @@ export default function DomainsListPage() {
         <h2 className="text-2xl font-bold">Domains</h2>
         <Link
           href="/cms/domains/new"
-          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 rounded-lg text-sm font-medium transition-colors"
+          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm font-medium transition-colors"
         >
           Add Domain
         </Link>
@@ -101,7 +101,7 @@ export default function DomainsListPage() {
                 <td className="px-4 py-3 space-x-2">
                   <Link
                     href={`/cms/domains/${domain.slug}`}
-                    className="text-[#6366f1] hover:text-[#6366f1] text-xs"
+                    className="text-[#2563eb] hover:text-[#2563eb] text-xs"
                   >
                     Edit
                   </Link>

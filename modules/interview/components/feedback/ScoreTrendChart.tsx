@@ -104,7 +104,7 @@ export default function ScoreTrendChart({ currentScore, sessionId }: ScoreTrendC
           className="absolute -top-8 bg-white border border-[#e1e8ed] rounded-lg px-2 py-1 text-xs text-[#0f1419] pointer-events-none whitespace-nowrap shadow-sm"
           style={{ left: `${(coords[hoverIdx].x / W) * 100}%`, transform: 'translateX(-50%)' }}
         >
-          {points[hoverIdx].date}: <span className="font-bold text-indigo-600">{points[hoverIdx].score}</span>
+          {points[hoverIdx].date}: <span className="font-bold text-blue-600">{points[hoverIdx].score}</span>
         </div>
       )}
     </div>

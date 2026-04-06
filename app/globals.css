@@ -111,26 +111,26 @@ body {
 
 /* ─── SELECTION ─────────────────────────── */
 ::selection {
-  background: rgba(99, 102, 241, 0.2);
+  background: rgba(37, 99, 235, 0.2);
 }
 
 /* ─── FOCUS ─────────────────────────────── */
 :focus-visible {
-  outline: 2px solid #6366f1;
+  outline: 2px solid #2563eb;
   outline-offset: 2px;
 }
 
 /* ─── GLOW BUTTON ───────────────────────── */
 .btn-glow {
-  box-shadow: 0 0 20px rgba(99, 102, 241, 0.25), 0 4px 12px rgba(99, 102, 241, 0.15);
+  box-shadow: 0 0 20px rgba(37, 99, 235, 0.25), 0 4px 12px rgba(37, 99, 235, 0.15);
   transition: box-shadow 0.2s ease, transform 0.2s ease;
 }
 .btn-glow:hover {
-  box-shadow: 0 0 28px rgba(99, 102, 241, 0.35), 0 6px 16px rgba(99, 102, 241, 0.2);
+  box-shadow: 0 0 28px rgba(37, 99, 235, 0.35), 0 6px 16px rgba(37, 99, 235, 0.2);
   transform: translateY(-1px);
 }
 .btn-glow:active {
-  box-shadow: 0 0 16px rgba(99, 102, 241, 0.2);
+  box-shadow: 0 0 16px rgba(37, 99, 235, 0.2);
   transform: translateY(0);
 }
 
@@ -171,4 +171,23 @@ body {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ─── NEW DESIGN SYSTEM (v2 — blue-600 accent) ── */
+:root {
+  --ds-primary: #2563eb;
+  --ds-primary-hover: #1d4ed8;
+  --ds-primary-light: #eff6ff;
+  --ds-primary-border: #bfdbfe;
+  --ds-page: #f8fafc;
+  --ds-card: #ffffff;
+  --ds-surface: #f1f5f9;
+  --ds-border: #e2e8f0;
+  --ds-text-primary: #0f172a;
+  --ds-text-secondary: #64748b;
+  --ds-text-tertiary: #94a3b8;
+  --ds-radius-sm: 8px;
+  --ds-radius-md: 12px;
+  --ds-radius-lg: 16px;
+  --ds-radius-xl: 24px;
 }

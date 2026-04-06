@@ -28,7 +28,7 @@ export default function StepSection({ step, label, children, visible = true, com
     <section
       id={`step-${step}`}
       className={`space-y-3 rounded-xl transition-all duration-300 ${
-        pulse ? 'ring-2 ring-[rgba(99,102,241,0.4)] bg-[rgba(99,102,241,0.03)] p-4 -m-4' : ''
+        pulse ? 'ring-2 ring-[rgba(37,99,235,0.4)] bg-[rgba(37,99,235,0.03)] p-4 -m-4' : ''
       }`}
     >
       <div className="step-label flex items-center gap-1.5">

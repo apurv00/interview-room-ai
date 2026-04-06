@@ -30,7 +30,7 @@ function PlanCard({ plan, isCurrent }: { plan: PlanConfig; isCurrent: boolean })
       className={`
         relative flex flex-col bg-white border border-[#e1e8ed] rounded-2xl p-7
         ${isHighlighted
-          ? 'border-[rgba(99,102,241,0.4)]'
+          ? 'border-[rgba(37,99,235,0.4)]'
           : ''
         }
       `}
@@ -164,7 +164,7 @@ export default function PricingPage() {
 
       {/* CTA link */}
       <div className="text-center mt-16 animate-fade-in">
-        <Link href="/" className="text-[#6366f1] hover:text-[#4f46e5] text-body font-medium transition">
+        <Link href="/" className="text-[#2563eb] hover:text-[#1d4ed8] text-body font-medium transition">
           &larr; Start practicing now
         </Link>
       </div>

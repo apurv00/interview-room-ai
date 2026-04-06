@@ -656,7 +656,7 @@ function FeedbackPageInner() {
         {activeTab === 'transcript' && (
           transcriptLoading ? (
             <div className="flex items-center justify-center py-16">
-              <div className="w-6 h-6 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
+              <div className="w-6 h-6 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
             </div>
           ) : (
             <TranscriptTab

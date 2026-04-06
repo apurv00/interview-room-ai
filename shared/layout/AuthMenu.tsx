@@ -7,7 +7,7 @@ import Image from 'next/image'
 
 const PLAN_BADGE: Record<string, { label: string; className: string }> = {
   free: { label: 'Free', className: 'bg-[#eff3f4] text-[#536471]' },
-  pro: { label: 'Pro', className: 'bg-[rgba(99,102,241,0.1)] text-[#6366f1]' },
+  pro: { label: 'Pro', className: 'bg-[rgba(37,99,235,0.1)] text-[#2563eb]' },
   enterprise: { label: 'Enterprise', className: 'bg-[rgba(139,92,246,0.1)] text-[#7c3aed]' },
 }
 
@@ -31,7 +31,7 @@ export default function AuthMenu() {
     return (
       <Link
         href="/signin"
-        className="px-4 py-2 bg-[#6366f1] hover:bg-[#5558e6] text-white rounded-xl text-sm font-medium transition"
+        className="px-5 py-1.5 text-[13px] font-semibold rounded-full bg-blue-600 text-white hover:bg-blue-700 transition-colors"
       >
         Sign In
       </Link>
@@ -60,10 +60,10 @@ export default function AuthMenu() {
             alt="Profile"
             width={32}
             height={32}
-            className="w-8 h-8 rounded-full border-2 border-[#e1e8ed] group-hover:border-[#6366f1] transition"
+            className="w-8 h-8 rounded-full border-2 border-[#e1e8ed] group-hover:border-[#2563eb] transition"
           />
         ) : (
-          <div className="w-8 h-8 rounded-full bg-[#6366f1] flex items-center justify-center text-xs font-bold text-white border-2 border-[#e1e8ed] group-hover:border-[#6366f1] transition">
+          <div className="w-8 h-8 rounded-full bg-[#2563eb] flex items-center justify-center text-xs font-bold text-white border-2 border-[#e1e8ed] group-hover:border-[#2563eb] transition">
             {initials}
           </div>
         )}
@@ -84,7 +84,7 @@ export default function AuthMenu() {
               <Link
                 href="/pricing"
                 onClick={() => setOpen(false)}
-                className="inline-block mt-1.5 text-[11px] text-[#6366f1] hover:text-[#4f46e5] transition"
+                className="inline-block mt-1.5 text-[11px] text-[#2563eb] hover:text-[#1d4ed8] transition"
               >
                 Upgrade your plan →
               </Link>

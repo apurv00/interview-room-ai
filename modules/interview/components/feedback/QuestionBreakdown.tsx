@@ -160,7 +160,7 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
                     </p>
                     {followUpEntries.map((fq, fi) => (
                       <div key={fi} className="mb-2">
-                        <p className="text-xs text-indigo-600 mb-1">{s(fq.text)}</p>
+                        <p className="text-xs text-blue-600 mb-1">{s(fq.text)}</p>
                         {/* Find the candidate's follow-up answer */}
                         {transcript
                           .filter(

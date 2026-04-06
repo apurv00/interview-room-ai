@@ -20,7 +20,7 @@ export default function CmsLayout({ children }: { children: ReactNode }) {
       {/* Sidebar */}
       <aside className="w-64 bg-white border-r border-[#e1e8ed] flex flex-col">
         <div className="p-6 border-b border-[#e1e8ed]">
-          <h1 className="text-xl font-bold text-[#6366f1]">CMS Admin</h1>
+          <h1 className="text-xl font-bold text-[#2563eb]">CMS Admin</h1>
           <p className="text-xs text-[#8b98a5] mt-1">Interview Prep Guru</p>
         </div>
         <nav className="flex-1 p-4 space-y-1">
@@ -35,7 +35,7 @@ export default function CmsLayout({ children }: { children: ReactNode }) {
                 href={item.href}
                 className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
                   isActive
-                    ? 'bg-indigo-600/20 text-[#6366f1] font-medium'
+                    ? 'bg-blue-600/20 text-[#2563eb] font-medium'
                     : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#f7f9f9]'
                 }`}
               >

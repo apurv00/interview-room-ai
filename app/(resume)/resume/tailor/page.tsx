@@ -282,7 +282,7 @@ export default function TailorPage() {
                 <button
                   onClick={handleSaveAsCopy}
                   disabled={savingCopy}
-                  className="px-3 py-1.5 bg-indigo-600/10 border border-indigo-500/20 text-[#6366f1] text-[10px] rounded-lg font-medium hover:bg-indigo-600/20 transition-colors disabled:opacity-50"
+                  className="px-3 py-1.5 bg-blue-600/10 border border-blue-500/20 text-[#2563eb] text-[10px] rounded-lg font-medium hover:bg-blue-600/20 transition-colors disabled:opacity-50"
                 >
                   {savingCopy ? 'Parsing & Saving...' : 'Save as New Resume'}
                 </button>
@@ -293,7 +293,7 @@ export default function TailorPage() {
             </pre>
           </div>
 
-          <button onClick={() => setResult(null)} className="text-sm text-[#6366f1] hover:text-indigo-500 transition-colors">
+          <button onClick={() => setResult(null)} className="text-sm text-[#2563eb] hover:text-blue-500 transition-colors">
             Start Over
           </button>
         </div>

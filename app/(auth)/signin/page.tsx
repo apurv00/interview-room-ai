@@ -42,7 +42,7 @@ function SignInContent() {
         <div className="bg-white border border-[#e1e8ed] rounded-2xl p-7 sm:p-8">
           {/* Logo */}
           <div className="flex justify-center mb-section">
-            <div className="w-8 h-8 rounded-[6px] bg-[#6366f1] flex items-center justify-center">
+            <div className="w-8 h-8 rounded-[6px] bg-[#2563eb] flex items-center justify-center">
               <svg className="w-4.5 h-4.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
               </svg>
@@ -55,7 +55,7 @@ function SignInContent() {
           </p>
 
           {session && (
-            <div className="mt-4 p-3 bg-[rgba(99,102,241,0.08)] border border-[rgba(99,102,241,0.15)] rounded-[10px] text-caption text-[#6366f1]" role="status">
+            <div className="mt-4 p-3 bg-[rgba(37,99,235,0.08)] border border-[rgba(37,99,235,0.15)] rounded-[10px] text-caption text-[#2563eb]" role="status">
               You are signed in as <strong>{session.user?.email}</strong>. Signing in again will switch your account.
             </div>
           )}
@@ -95,13 +95,13 @@ function SignInContent() {
           </div>
 
           {/* Migration notice for former email/password users */}
-          <div className="mt-6 p-3 bg-[rgba(99,102,241,0.05)] border border-[rgba(99,102,241,0.12)] rounded-[10px] text-caption text-[#536471]">
+          <div className="mt-6 p-3 bg-[rgba(37,99,235,0.05)] border border-[rgba(37,99,235,0.12)] rounded-[10px] text-caption text-[#536471]">
             Previously used email and password? Just sign in with Google or GitHub using the same email address — your account will be linked automatically.
           </div>
 
           <p className="text-caption text-[#71767b] text-center mt-section">
             Don&apos;t have an account?{' '}
-            <Link href="/signup" className="text-[#6366f1] hover:text-[#4f46e5] transition-colors">
+            <Link href="/signup" className="text-[#2563eb] hover:text-[#1d4ed8] transition-colors">
               Sign up
             </Link>
           </p>
@@ -109,7 +109,7 @@ function SignInContent() {
 
         <p className="text-caption text-[#71767b] text-center mt-4">
           Practice mock interviews with AI feedback.{' '}
-          <Link href="/" className="text-[#6366f1] hover:text-[#4f46e5] transition-colors">
+          <Link href="/" className="text-[#2563eb] hover:text-[#1d4ed8] transition-colors">
             Learn more &rarr;
           </Link>
         </p>

@@ -12,7 +12,7 @@ export default function HowItWorks() {
         <div className="grid md:grid-cols-3 gap-4 stagger-children">
           {steps.map((item) => (
             <div key={item.step} className="surface-card-bordered p-7 relative">
-              <div className="w-8 h-8 rounded-full bg-indigo-50 text-[#6366f1] text-sm font-bold flex items-center justify-center">
+              <div className="w-8 h-8 rounded-full bg-blue-50 text-[#2563eb] text-sm font-bold flex items-center justify-center">
                 {item.step}
               </div>
               <h3 className="text-subheading text-[#0f1419] mt-4">{item.title}</h3>

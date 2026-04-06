@@ -13,7 +13,7 @@ export default function SocialProof() {
           <div className="grid grid-cols-3 gap-component text-center">
             {stats.map((s) => (
               <div key={s.label}>
-                <p className="text-display text-[#6366f1] font-bold">{s.num}</p>
+                <p className="text-display text-[#2563eb] font-bold">{s.num}</p>
                 <p className="text-caption text-[#71767b] mt-1">{s.label}</p>
               </div>
             ))}

@@ -71,7 +71,7 @@ export default function TermsPage() {
         <section>
           <h2 className="text-lg font-semibold text-[#0f1419] mb-3">9. Termination</h2>
           <p className="text-[#536471]">
-            We reserve the right to suspend or terminate your account if you violate these Terms. You may delete your account at any time from your <Link href="/settings" className="text-[#6366f1] hover:text-indigo-700">account settings</Link>.
+            We reserve the right to suspend or terminate your account if you violate these Terms. You may delete your account at any time from your <Link href="/settings" className="text-[#2563eb] hover:text-blue-700">account settings</Link>.
           </p>
         </section>
 
@@ -86,13 +86,13 @@ export default function TermsPage() {
           <h2 className="text-lg font-semibold text-[#0f1419] mb-3">11. Contact</h2>
           <p className="text-[#536471]">
             For questions about these Terms, contact us at{' '}
-            <a href="mailto:legal@interviewprep.guru" className="text-[#6366f1] hover:text-indigo-700">legal@interviewprep.guru</a>.
+            <a href="mailto:legal@interviewprep.guru" className="text-[#2563eb] hover:text-blue-700">legal@interviewprep.guru</a>.
           </p>
         </section>
       </div>
 
       <div className="mt-12 pt-8 border-t border-[#e1e8ed] text-sm text-[#8b98a5]">
-        <Link href="/" className="text-[#6366f1] hover:text-indigo-700 transition">
+        <Link href="/" className="text-[#2563eb] hover:text-blue-700 transition">
           ← Back to home
         </Link>
       </div>

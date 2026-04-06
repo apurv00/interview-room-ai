@@ -14,7 +14,7 @@ export const RESUME_TEMPLATES: ResumeTemplate[] = [
     desc: 'Clean, traditional layout perfect for corporate roles.',
     sections: ['Summary', 'Experience', 'Education', 'Skills'],
     industries: ['Finance', 'Consulting', 'Enterprise'],
-    color: 'indigo',
+    color: 'blue',
   },
   {
     id: 'technical',
@@ -163,14 +163,13 @@ export const SAMPLE_RESUME_DATA = {
 }
 
 export const TEMPLATE_COLOR_MAP: Record<string, { bg: string; border: string; text: string }> = {
-  indigo: { bg: 'bg-indigo-500/10', border: 'border-indigo-500/20', text: 'text-indigo-400' },
+  blue: { bg: 'bg-blue-500/10', border: 'border-blue-500/20', text: 'text-blue-400' },
   emerald: { bg: 'bg-emerald-500/10', border: 'border-emerald-500/20', text: 'text-emerald-400' },
   violet: { bg: 'bg-violet-500/10', border: 'border-violet-500/20', text: 'text-violet-400' },
   amber: { bg: 'bg-amber-500/10', border: 'border-amber-500/20', text: 'text-amber-400' },
   cyan: { bg: 'bg-cyan-500/10', border: 'border-cyan-500/20', text: 'text-cyan-400' },
   rose: { bg: 'bg-rose-500/10', border: 'border-rose-500/20', text: 'text-rose-400' },
   slate: { bg: 'bg-[#eff3f4]', border: 'border-[#e1e8ed]', text: 'text-[#8b98a5]' },
-  blue: { bg: 'bg-blue-500/10', border: 'border-blue-500/20', text: 'text-blue-400' },
   red: { bg: 'bg-red-500/10', border: 'border-red-500/20', text: 'text-red-400' },
   orange: { bg: 'bg-orange-500/10', border: 'border-orange-500/20', text: 'text-orange-400' },
 }

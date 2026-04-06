@@ -69,7 +69,7 @@ export default function ProgressPage() {
   if (loading) {
     return (
       <div className="min-h-screen bg-white flex items-center justify-center">
-        <div className="w-6 h-6 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
+        <div className="w-6 h-6 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
       </div>
     )
   }
@@ -101,7 +101,7 @@ export default function ProgressPage() {
           </p>
           <button
             onClick={() => router.push('/')}
-            className="px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium transition"
+            className="px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium transition"
           >
             Start Your First Interview
           </button>
@@ -154,7 +154,7 @@ export default function ProgressPage() {
                 onClick={() => setPeriod(p)}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
                   period === p
-                    ? 'bg-indigo-600 text-white'
+                    ? 'bg-blue-600 text-white'
                     : 'text-[#536471] hover:text-[#0f1419]'
                 }`}
               >

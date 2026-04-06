@@ -31,7 +31,7 @@ export default function StageSegment({ selected, onSelect, isLoading }: Props) {
               p-4 rounded-xl text-left transition-all duration-150
               border
               ${selected === segment.id
-                ? 'bg-[#6366f1]/10 border-[#6366f1]/50 ring-1 ring-[#6366f1]/20'
+                ? 'bg-[#2563eb]/10 border-[#2563eb]/50 ring-1 ring-[#2563eb]/20'
                 : 'bg-[#f7f9f9] border-[#e1e8ed] hover:border-[#e1e8ed]'
               }
               disabled:opacity-50 disabled:cursor-not-allowed

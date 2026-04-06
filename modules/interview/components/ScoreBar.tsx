@@ -5,16 +5,16 @@ import { useEffect, useState } from 'react'
 interface ScoreBarProps {
   label: string
   score: number          // 0–100
-  color?: 'indigo' | 'emerald' | 'amber' | 'rose' | 'cyan'
+  color?: 'blue' | 'emerald' | 'amber' | 'rose' | 'cyan'
   detail?: string
   delay?: number         // ms animation delay
 }
 
 const COLOR_MAP = {
-  indigo: {
-    bar: 'bg-indigo-500',
-    text: 'text-indigo-600',
-    glow: 'shadow-indigo-500/30',
+  blue: {
+    bar: 'bg-blue-500',
+    text: 'text-blue-600',
+    glow: 'shadow-blue-500/30',
   },
   emerald: {
     bar: 'bg-emerald-500',

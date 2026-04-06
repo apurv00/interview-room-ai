@@ -280,7 +280,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
               <button
                 onClick={handleDownloadPDF}
                 disabled={downloading}
-                className="px-3 py-1.5 bg-indigo-50 border border-indigo-200 text-indigo-600 text-xs rounded-lg font-medium hover:bg-indigo-100 transition-colors disabled:opacity-50"
+                className="px-3 py-1.5 bg-blue-50 border border-blue-200 text-blue-600 text-xs rounded-lg font-medium hover:bg-blue-100 transition-colors disabled:opacity-50"
               >
                 {downloading ? 'Generating...' : 'Download PDF'}
               </button>
@@ -379,7 +379,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
               <button
                 onClick={handleGenerateFull}
                 disabled={enhancingSection === 'full'}
-                className="px-3 py-1.5 bg-indigo-50 border border-indigo-200 text-indigo-600 text-[10px] rounded-lg font-medium hover:bg-indigo-100 transition-colors disabled:opacity-50"
+                className="px-3 py-1.5 bg-blue-50 border border-blue-200 text-blue-600 text-[10px] rounded-lg font-medium hover:bg-blue-100 transition-colors disabled:opacity-50"
               >
                 {enhancingSection === 'full' ? 'Generating...' : 'AI: Generate suggestions for all sections'}
               </button>

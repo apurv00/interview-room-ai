@@ -251,7 +251,7 @@ export default function WizardShell({ initialSessionId }: Props) {
   if (state.isLoading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <div className="w-6 h-6 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
+        <div className="w-6 h-6 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
       </div>
     )
   }
@@ -270,7 +270,7 @@ export default function WizardShell({ initialSessionId }: Props) {
         <button
           onClick={() => setMobileTab('wizard')}
           className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors ${
-            mobileTab === 'wizard' ? 'bg-[#6366f1] text-white' : 'bg-surface text-[#6b7280]'
+            mobileTab === 'wizard' ? 'bg-[#2563eb] text-white' : 'bg-surface text-[#6b7280]'
           }`}
         >
           Edit
@@ -278,7 +278,7 @@ export default function WizardShell({ initialSessionId }: Props) {
         <button
           onClick={() => setMobileTab('preview')}
           className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors ${
-            mobileTab === 'preview' ? 'bg-[#6366f1] text-white' : 'bg-surface text-[#6b7280]'
+            mobileTab === 'preview' ? 'bg-[#2563eb] text-white' : 'bg-surface text-[#6b7280]'
           }`}
         >
           Preview
