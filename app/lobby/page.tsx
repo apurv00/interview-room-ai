@@ -362,7 +362,7 @@ export default function LobbyPage() {
         <div className="grid md:grid-cols-2 gap-5">
           {/* Camera preview */}
           <motion.div className="space-y-3" variants={itemVariants}>
-            <div className="relative aspect-video rounded-2xl overflow-hidden bg-[#f7f9f9] border border-[#e1e8ed]">
+            <div className="relative aspect-video rounded-2xl overflow-hidden bg-[#f8fafc] border border-[#e1e8ed]">
               <video
                 ref={videoRef}
                 autoPlay
@@ -467,7 +467,7 @@ export default function LobbyPage() {
                     onFocus={() => setShowSuggestions(true)}
                     onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
                     placeholder="e.g. Google, Stripe, McKinsey..."
-                    className="w-full text-sm px-3 py-2 border border-[#e1e8ed] rounded-xl bg-[#f7f9f9] focus:outline-none focus:ring-2 focus:ring-[#2563eb]/30 focus:border-[#2563eb] transition-colors placeholder:text-[#8b98a5]"
+                    className="w-full text-sm px-3 py-2 border border-[#e1e8ed] rounded-xl bg-[#f8fafc] focus:outline-none focus:ring-2 focus:ring-[#2563eb]/30 focus:border-[#2563eb] transition-colors placeholder:text-[#8b98a5]"
                   />
                   {showSuggestions && lobbyCompany.length >= 1 && (
                     (() => {
@@ -484,7 +484,7 @@ export default function LobbyPage() {
                               type="button"
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={() => { setLobbyCompany(p.name); setShowSuggestions(false) }}
-                              className="w-full text-left px-3 py-2 text-sm hover:bg-[#f7f9f9] transition-colors flex items-center justify-between"
+                              className="w-full text-left px-3 py-2 text-sm hover:bg-[#f8fafc] transition-colors flex items-center justify-between"
                             >
                               <span className="font-medium text-[#0f1419]">{p.name}</span>
                               <span className="text-xs text-[#8b98a5]">{p.industry}</span>
@@ -511,7 +511,7 @@ export default function LobbyPage() {
                     w-full py-4 rounded-2xl font-semibold text-sm transition-colors
                     ${allOk
                       ? 'bg-[#2563eb] hover:bg-blue-500 text-white btn-glow'
-                      : 'bg-[#f7f9f9] text-[#8b98a5] cursor-not-allowed border border-[#e1e8ed]'
+                      : 'bg-[#f8fafc] text-[#8b98a5] cursor-not-allowed border border-[#e1e8ed]'
                     }
                   `}
                   initial={{ opacity: 0, y: 8 }}

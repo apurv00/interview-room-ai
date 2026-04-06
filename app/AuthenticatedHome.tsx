@@ -392,7 +392,7 @@ export default function AuthenticatedHome() {
                 <button onClick={() => { setResumeText(''); setResumeFileName(''); setQuickProfileDone(false) }} className="text-xs text-[#71767b] hover:text-[#2563eb] transition">Change</button>
               </div>
             ) : showNoResumeOptions ? (
-              <div className="grid grid-cols-2 gap-2 p-3 rounded-xl border border-[#e1e8ed] bg-[#f7f9f9]">
+              <div className="grid grid-cols-2 gap-2 p-3 rounded-xl border border-[#e1e8ed] bg-[#f8fafc]">
                 <div className="space-y-2">
                   <p className="text-xs font-semibold text-[#0f1419]">Quick Profile</p>
                   <input type="text" value={quickTitle} onChange={(e) => setQuickTitle(e.target.value)} placeholder="Job title (e.g. Senior SWE)" className="w-full text-xs px-2.5 py-1.5 border border-[#e1e8ed] rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
@@ -436,7 +436,7 @@ export default function AuthenticatedHome() {
               </div>
             ) : (
               <div className="space-y-2">
-                <div className="flex gap-1 p-0.5 rounded-lg bg-[#f7f9f9] border border-[#e1e8ed] w-fit">
+                <div className="flex gap-1 p-0.5 rounded-lg bg-[#f8fafc] border border-[#e1e8ed] w-fit">
                   <button onClick={() => setJdTab('upload')} className={`text-[10px] px-2.5 py-1 rounded-md transition ${jdTab === 'upload' ? 'bg-white shadow-sm text-[#0f1419] font-medium' : 'text-[#536471]'}`}>Upload / Paste</button>
                   <button onClick={() => setJdTab('generate')} className={`text-[10px] px-2.5 py-1 rounded-md transition ${jdTab === 'generate' ? 'bg-white shadow-sm text-[#0f1419] font-medium' : 'text-[#536471]'}`}>Company &amp; Role</button>
                 </div>

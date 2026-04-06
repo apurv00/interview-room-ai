@@ -133,7 +133,7 @@ export default function EditInterviewTypePage() {
         </Link>
         <h2 className="text-2xl font-bold">Edit Interview Type: {slug}</h2>
         {isBuiltIn && (
-          <span className="text-xs bg-[#f7f9f9] text-[#536471] px-2 py-1 rounded">Built-in</span>
+          <span className="text-xs bg-[#f8fafc] text-[#536471] px-2 py-1 rounded">Built-in</span>
         )}
       </div>
 
@@ -150,7 +150,7 @@ export default function EditInterviewTypePage() {
             type="text"
             value={slug}
             disabled
-            className="w-full bg-[#f7f9f9] border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#8b98a5] cursor-not-allowed"
+            className="w-full bg-[#f8fafc] border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#8b98a5] cursor-not-allowed"
           />
         </div>
 
@@ -288,7 +288,7 @@ export default function EditInterviewTypePage() {
           </button>
           <Link
             href="/cms/interview-types"
-            className="px-6 py-2 bg-[#f7f9f9] hover:bg-[#f7f9f9] rounded-lg text-sm font-medium transition-colors"
+            className="px-6 py-2 bg-[#f8fafc] hover:bg-[#f8fafc] rounded-lg text-sm font-medium transition-colors"
           >
             Cancel
           </Link>

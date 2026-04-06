@@ -55,7 +55,7 @@ function WarmUpQuestion() {
 
   return (
     <div className="space-y-3">
-      <div className="bg-[#f7f9f9] rounded-xl p-4 space-y-3">
+      <div className="bg-[#f8fafc] rounded-xl p-4 space-y-3">
         <div className="flex items-start gap-3">
           <div className="w-6 h-6 rounded-full bg-blue-500/20 flex items-center justify-center shrink-0 mt-0.5">
             <svg className="w-3.5 h-3.5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -171,7 +171,7 @@ export default function PrepChecklist({ domainSlug, domainLabel, duration }: Pre
             <div key={section.id} className="rounded-xl border border-[#e1e8ed] overflow-hidden">
               <button
                 onClick={() => toggleSection(section.id)}
-                className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-[#f7f9f9] transition-colors"
+                className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-[#f8fafc] transition-colors"
                 aria-expanded={isOpen}
               >
                 <span className="text-base">{section.icon}</span>

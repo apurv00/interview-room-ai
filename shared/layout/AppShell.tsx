@@ -66,7 +66,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                     className={`relative px-4 h-full flex items-center text-sm font-medium transition-colors ${
                       isActive
                         ? 'text-[#0f1419]'
-                        : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#f7f9f9]'
+                        : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#f8fafc]'
                     }`}
                   >
                     {link.label}
@@ -82,7 +82,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 className={`relative px-4 h-full flex items-center text-sm font-medium transition-colors ${
                   pathname === '/pricing'
                     ? 'text-[#0f1419]'
-                    : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#f7f9f9]'
+                    : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#f8fafc]'
                 }`}
               >
                 Pricing
@@ -158,7 +158,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                     key={link.href}
                     href={link.href}
                     onClick={() => setMoreOpen(false)}
-                    className="block px-6 py-3.5 text-sm text-[#0f1419] hover:bg-[#f7f9f9] transition-colors"
+                    className="block px-6 py-3.5 text-sm text-[#0f1419] hover:bg-[#f8fafc] transition-colors"
                   >
                     {link.label}
                   </Link>
@@ -173,7 +173,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                     } catch { /* ignore */ }
                     signOut({ callbackUrl: '/' })
                   }}
-                  className="w-full text-left px-6 py-3.5 text-sm text-[#f4212e] hover:bg-[#f7f9f9] transition-colors"
+                  className="w-full text-left px-6 py-3.5 text-sm text-[#f4212e] hover:bg-[#f8fafc] transition-colors"
                 >
                   Sign Out
                 </button>

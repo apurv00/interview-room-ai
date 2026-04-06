@@ -157,7 +157,7 @@ export default function TailorPage() {
                 <label className="text-[10px] text-[#71767b] uppercase tracking-wider">From Saved Resumes</label>
                 <select
                   onChange={e => e.target.value && handleSelectSaved(e.target.value)}
-                  className="w-full mt-1 px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full mt-1 px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   defaultValue=""
                 >
                   <option value="">Choose a saved resume...</option>
@@ -195,14 +195,14 @@ export default function TailorPage() {
               value={companyName}
               onChange={e => setCompanyName(e.target.value)}
               placeholder="Company name (optional)"
-              className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500"
             />
             <textarea
               value={jobDescription}
               onChange={e => setJobDescription(e.target.value)}
               placeholder="Paste the job description here..."
               rows={8}
-              className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
+              className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
             />
           </div>
 
@@ -288,7 +288,7 @@ export default function TailorPage() {
                 </button>
               </div>
             </div>
-            <pre className="whitespace-pre-wrap text-xs text-[#536471] bg-[#f7f9f9] rounded-xl p-4 max-h-96 overflow-y-auto">
+            <pre className="whitespace-pre-wrap text-xs text-[#536471] bg-[#f8fafc] rounded-xl p-4 max-h-96 overflow-y-auto">
               {result.tailoredResume}
             </pre>
           </div>

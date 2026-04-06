@@ -28,7 +28,7 @@ const WarningIcon = () => (
 )
 
 const CloudOffIcon = () => (
-  <div className="w-10 h-10 rounded-[10px] bg-[#f7f9f9] flex items-center justify-center">
+  <div className="w-10 h-10 rounded-[10px] bg-[#f8fafc] flex items-center justify-center">
     <svg className="w-5 h-5 text-[#8b98a5]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 5.636a9 9 0 010 12.728m0 0l-12.728-12.728m12.728 12.728L5.636 5.636M12 3v.01M3 12h.01M12 21v.01M21 12h.01" />
     </svg>
@@ -121,7 +121,7 @@ export default function StateView({
   return (
     <div className="flex flex-col items-center text-center max-w-[320px] mx-auto py-8">
       {icon && (
-        <div className="w-10 h-10 rounded-[10px] bg-[#f7f9f9] flex items-center justify-center text-[#8b98a5]">
+        <div className="w-10 h-10 rounded-[10px] bg-[#f8fafc] flex items-center justify-center text-[#8b98a5]">
           {icon}
         </div>
       )}

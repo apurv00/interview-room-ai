@@ -90,7 +90,7 @@ export default function CandidatesPage() {
               {/* Summary row */}
               <button
                 onClick={() => setExpandedId(expandedId === c.id ? null : c.id)}
-                className="w-full flex items-center justify-between p-4 hover:bg-[#f7f9f9] transition-colors text-left"
+                className="w-full flex items-center justify-between p-4 hover:bg-[#f8fafc] transition-colors text-left"
               >
                 <div className="flex items-center gap-4 min-w-0">
                   <div className="w-9 h-9 rounded-full bg-blue-600/20 flex items-center justify-center text-[#2563eb] text-sm font-bold flex-shrink-0">
@@ -117,7 +117,7 @@ export default function CandidatesPage() {
                     c.status === 'completed' ? 'bg-emerald-500/20 text-[#059669]' :
                     c.status === 'in_progress' ? 'bg-amber-500/20 text-amber-400' :
                     c.status === 'created' ? 'bg-blue-500/20 text-[#2563eb]' :
-                    'bg-[#f7f9f9] text-[#536471]'
+                    'bg-[#f8fafc] text-[#536471]'
                   }`}>
                     {c.status.replace(/_/g, ' ')}
                   </span>

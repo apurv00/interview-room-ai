@@ -61,7 +61,7 @@ const PHASE_COLORS: Record<string, { text: string; bg: string; border: string; d
   DESIGN_CANVAS: { text: 'text-teal-600', bg: 'bg-teal-500/10', border: 'border-teal-500/25', dot: 'bg-teal-600' },
 }
 
-const DEFAULT_PHASE_COLOR = { text: 'text-[#71767b]', bg: 'bg-[#f7f9f9]', border: 'border-[#e1e8ed]', dot: 'bg-[#71767b]' }
+const DEFAULT_PHASE_COLOR = { text: 'text-[#71767b]', bg: 'bg-[#f8fafc]', border: 'border-[#e1e8ed]', dot: 'bg-[#71767b]' }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 

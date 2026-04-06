@@ -3,7 +3,7 @@ export const tokens = {
     bg: {
       page: '#ffffff',
       card: '#ffffff',
-      surface: '#f7f9f9',
+      surface: '#f8fafc',
       raised: '#eff3f4',
       overlay: 'rgba(0,0,0,0.4)',
     },

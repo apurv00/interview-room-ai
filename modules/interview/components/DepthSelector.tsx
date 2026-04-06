@@ -82,7 +82,7 @@ export default function DepthSelector({ selectedDomain, selectedDepth, onSelect 
 
   if (!selectedDomain) {
     return (
-      <div className="w-full px-4 py-3 bg-[#f7f9f9] border border-[#e1e8ed] rounded-[10px] text-sm text-[var(--foreground-tertiary)]">
+      <div className="w-full px-4 py-3 bg-[#f8fafc] border border-[#e1e8ed] rounded-[10px] text-sm text-[var(--foreground-tertiary)]">
         Select a domain first to choose an interview type.
       </div>
     )

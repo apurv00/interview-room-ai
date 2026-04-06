@@ -97,7 +97,7 @@ export default function ResourcesPage() {
             </Link>
             <Link
               href="/"
-              className="inline-flex items-center justify-center h-11 px-5 bg-[#f7f9f9] hover:bg-[#eff3f4] text-[#536471] rounded-[10px] text-sm font-medium transition-colors border border-[#e1e8ed]"
+              className="inline-flex items-center justify-center h-11 px-5 bg-[#f8fafc] hover:bg-[#eff3f4] text-[#536471] rounded-[10px] text-sm font-medium transition-colors border border-[#e1e8ed]"
             >
               Try an Interview
             </Link>

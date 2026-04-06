@@ -62,7 +62,7 @@ export default function HireLayout({ children }: { children: React.ReactNode }) 
                 className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
                   isActive
                     ? 'bg-blue-600/10 text-[#2563eb] border border-[#2563eb]/20'
-                    : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#f7f9f9]'
+                    : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#f8fafc]'
                 }`}
               >
                 <svg className="w-4.5 h-4.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>

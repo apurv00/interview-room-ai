@@ -81,7 +81,7 @@ export default function DomainsListPage() {
           </thead>
           <tbody>
             {domains.map((domain) => (
-              <tr key={domain.slug} className="border-b border-[#eff3f4] hover:bg-[#f7f9f9]">
+              <tr key={domain.slug} className="border-b border-[#eff3f4] hover:bg-[#f8fafc]">
                 <td className="px-4 py-3 font-mono text-xs">{domain.slug}</td>
                 <td className="px-4 py-3">{domain.label}</td>
                 <td className="px-4 py-3 capitalize">{domain.category}</td>

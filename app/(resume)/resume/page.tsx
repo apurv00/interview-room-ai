@@ -70,7 +70,7 @@ export default function ResumeDashboardPage() {
             <Link href="/signup" className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-medium transition-colors">
               Get Started Free
             </Link>
-            <Link href="/signin" className="px-6 py-3 bg-[#f7f9f9] hover:bg-[#eff3f4] text-[#0f1419] rounded-xl font-medium transition-colors">
+            <Link href="/signin" className="px-6 py-3 bg-[#f8fafc] hover:bg-[#eff3f4] text-[#0f1419] rounded-xl font-medium transition-colors">
               Sign In
             </Link>
           </div>
@@ -138,7 +138,7 @@ export default function ResumeDashboardPage() {
           </p>
         </div>
         {atLimit ? (
-          <span className="px-4 py-2 bg-[#f7f9f9] text-[#71767b] text-sm rounded-xl font-medium cursor-not-allowed">
+          <span className="px-4 py-2 bg-[#f8fafc] text-[#71767b] text-sm rounded-xl font-medium cursor-not-allowed">
             Limit Reached
           </span>
         ) : (

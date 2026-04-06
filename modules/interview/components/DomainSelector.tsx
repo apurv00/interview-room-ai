@@ -145,7 +145,7 @@ export default function DomainSelector({ selectedDomain, onSelect }: DomainSelec
             className={`px-4 py-2.5 rounded-[6px] text-sm font-medium transition-all duration-[120ms] ${
               activeCategory === cat.key
                 ? 'bg-[rgba(37,99,235,0.08)] text-[#2563eb] border border-[rgba(37,99,235,0.15)]'
-                : 'text-[#71767b] hover:text-[#536471] hover:bg-[#f7f9f9]'
+                : 'text-[#71767b] hover:text-[#536471] hover:bg-[#f8fafc]'
             }`}
           >
             {cat.label}
@@ -159,7 +159,7 @@ export default function DomainSelector({ selectedDomain, onSelect }: DomainSelec
         <button
           onClick={() => scroll('left')}
           disabled={!canScrollLeft}
-          className={`absolute left-0 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full bg-white/90 border border-[#e1e8ed] items-center justify-center text-[#536471] hover:text-[#0f1419] hover:bg-[#f7f9f9] transition hidden sm:flex ${
+          className={`absolute left-0 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full bg-white/90 border border-[#e1e8ed] items-center justify-center text-[#536471] hover:text-[#0f1419] hover:bg-[#f8fafc] transition hidden sm:flex ${
             canScrollLeft ? 'opacity-100' : 'opacity-30 cursor-default'
           }`}
           aria-label="Scroll left"
@@ -173,7 +173,7 @@ export default function DomainSelector({ selectedDomain, onSelect }: DomainSelec
         <button
           onClick={() => scroll('right')}
           disabled={!canScrollRight}
-          className={`absolute right-0 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full bg-white/90 border border-[#e1e8ed] items-center justify-center text-[#536471] hover:text-[#0f1419] hover:bg-[#f7f9f9] transition hidden sm:flex ${
+          className={`absolute right-0 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full bg-white/90 border border-[#e1e8ed] items-center justify-center text-[#536471] hover:text-[#0f1419] hover:bg-[#f8fafc] transition hidden sm:flex ${
             canScrollRight ? 'opacity-100' : 'opacity-30 cursor-default'
           }`}
           aria-label="Scroll right"

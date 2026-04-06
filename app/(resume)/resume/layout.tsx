@@ -60,7 +60,7 @@ export default function ResumeLayout({ children }: { children: React.ReactNode }
                 className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] font-medium transition-all ${
                   isActive
                     ? 'bg-emerald-600/10 text-emerald-600 border border-emerald-500/20'
-                    : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#f7f9f9] border border-transparent'
+                    : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#f8fafc] border border-transparent'
                 }`}
               >
                 <svg className="w-[18px] h-[18px] flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>

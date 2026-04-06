@@ -301,7 +301,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
           )}
 
           {/* Upload / Import */}
-          <div className="bg-[#f7f9f9] border border-[#e1e8ed] rounded-2xl p-4 space-y-3">
+          <div className="bg-[#f8fafc] border border-[#e1e8ed] rounded-2xl p-4 space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-semibold text-[#536471]">Quick Start</h3>
               <button
@@ -321,7 +321,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
           </div>
 
           {/* Meta: target role, company, template */}
-          <div className="bg-[#f7f9f9] border border-[#e1e8ed] rounded-2xl p-4 space-y-3">
+          <div className="bg-[#f8fafc] border border-[#e1e8ed] rounded-2xl p-4 space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Target Role</label>
@@ -395,7 +395,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
               {(resume.sectionOrder || DEFAULT_SECTION_ORDER).map(sectionId => (
                 <SortableItem key={sectionId} id={sectionId}>
                   {({ listeners, attributes }) => (
-                    <div className="bg-[#f7f9f9] border border-[#e1e8ed] rounded-2xl p-4">
+                    <div className="bg-[#f8fafc] border border-[#e1e8ed] rounded-2xl p-4">
                       <div className="flex items-start gap-2">
                         <div className="pt-1">
                           <DragHandle listeners={listeners} attributes={attributes} />

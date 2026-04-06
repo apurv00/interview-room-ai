@@ -122,7 +122,7 @@ export default function SelectionGroup<T>({
                   ${layout === 'list' && selected ? 'border-l-[3px] border-l-[#2563eb]' : ''}
                   ${selected
                     ? 'bg-[rgba(37,99,235,0.06)] border border-[rgba(37,99,235,0.15)] text-[#2563eb]'
-                    : 'bg-white border border-[#eff3f4] text-[#536471] hover:bg-[#f7f9f9] hover:border-[#e1e8ed]'
+                    : 'bg-white border border-[#eff3f4] text-[#536471] hover:bg-[#f8fafc] hover:border-[#e1e8ed]'
                   }
                   rounded-[10px]
                 `}

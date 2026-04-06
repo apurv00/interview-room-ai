@@ -116,7 +116,7 @@ export default function ATSCheckPage() {
                 <label className="text-[10px] text-[#71767b] uppercase tracking-wider">From Saved Resumes</label>
                 <select
                   onChange={e => e.target.value && handleSelectSaved(e.target.value)}
-                  className="w-full mt-1 px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full mt-1 px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   defaultValue=""
                 >
                   <option value="">Choose a saved resume...</option>
@@ -154,7 +154,7 @@ export default function ATSCheckPage() {
               onChange={e => setJobDescription(e.target.value)}
               placeholder="Paste job description for keyword matching..."
               rows={5}
-              className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
+              className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
             />
           </div>
 

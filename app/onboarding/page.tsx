@@ -399,7 +399,7 @@ export default function OnboardingPage() {
                       className={`flex flex-col items-center gap-1.5 py-3 rounded-xl border text-xs font-medium transition-all duration-200 ${
                         targetRole === d.slug
                           ? 'border-[#2563eb] bg-blue-50 text-[#2563eb]'
-                          : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'
+                          : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#cfd9de]'
                       }`}
                     >
                       {d.icon && <span className="text-lg">{d.icon}</span>}
@@ -422,7 +422,7 @@ export default function OnboardingPage() {
                       className={`py-3 rounded-xl border text-xs font-medium transition-all duration-200 ${
                         experienceLevel === e
                           ? 'border-[#2563eb] bg-blue-50 text-[#2563eb]'
-                          : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'
+                          : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#cfd9de]'
                       }`}
                     >
                       {EXPERIENCE_LABELS[e]}
@@ -442,7 +442,7 @@ export default function OnboardingPage() {
                   onChange={(e) => setCurrentTitle(e.target.value)}
                   maxLength={100}
                   placeholder="e.g. Senior Software Engineer"
-                  className="w-full px-4 py-3 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-[#0f1419] text-sm placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-[#2563eb] focus:border-transparent"
+                  className="w-full px-4 py-3 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-[#0f1419] text-sm placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-[#2563eb] focus:border-transparent"
                 />
               </div>
 
@@ -459,7 +459,7 @@ export default function OnboardingPage() {
                       className={`py-2 rounded-lg border text-xs font-medium transition-all duration-200 ${
                         currentIndustry === i.value
                           ? 'border-[#2563eb] bg-blue-50 text-[#2563eb]'
-                          : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'
+                          : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#cfd9de]'
                       }`}
                     >
                       {i.label}
@@ -474,7 +474,7 @@ export default function OnboardingPage() {
                   type="checkbox"
                   checked={isCareerSwitcher}
                   onChange={(e) => setIsCareerSwitcher(e.target.checked)}
-                  className="w-4 h-4 rounded border-[#e1e8ed] bg-[#f7f9f9] text-[#2563eb] focus:ring-[#2563eb]"
+                  className="w-4 h-4 rounded border-[#e1e8ed] bg-[#f8fafc] text-[#2563eb] focus:ring-[#2563eb]"
                 />
                 <span className="text-sm text-[#536471]">I&apos;m switching careers</span>
               </label>
@@ -492,7 +492,7 @@ export default function OnboardingPage() {
                     onChange={(e) => setSwitchingFrom(e.target.value)}
                     maxLength={100}
                     placeholder="Switching from... (e.g. Engineering)"
-                    className="w-full px-4 py-3 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-[#0f1419] text-sm placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-[#2563eb] focus:border-transparent"
+                    className="w-full px-4 py-3 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-[#0f1419] text-sm placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-[#2563eb] focus:border-transparent"
                   />
                 </motion.div>
               )}
@@ -553,7 +553,7 @@ export default function OnboardingPage() {
                       className={`py-3 rounded-xl border text-xs font-medium transition-all duration-200 ${
                         targetCompanyType === c.value
                           ? 'border-[#2563eb] bg-blue-50 text-[#2563eb]'
-                          : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'
+                          : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#cfd9de]'
                       }`}
                     >
                       {c.label}
@@ -575,7 +575,7 @@ export default function OnboardingPage() {
                       className={`w-full text-left px-4 py-3 rounded-xl border transition-all duration-200 ${
                         interviewGoal === g.value
                           ? 'border-[#2563eb] bg-blue-50'
-                          : 'border-[#e1e8ed] bg-[#f7f9f9] hover:border-[#cfd9de]'
+                          : 'border-[#e1e8ed] bg-[#f8fafc] hover:border-[#cfd9de]'
                       }`}
                     >
                       <span className={`text-sm font-medium ${interviewGoal === g.value ? 'text-[#2563eb]' : 'text-[#0f1419]'}`}>
@@ -600,7 +600,7 @@ export default function OnboardingPage() {
                       className={`py-2.5 rounded-lg border text-xs font-medium transition-all duration-200 ${
                         weakAreas.includes(w.value)
                           ? 'border-[#2563eb] bg-blue-50 text-[#2563eb]'
-                          : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'
+                          : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#cfd9de]'
                       }`}
                     >
                       {w.label}

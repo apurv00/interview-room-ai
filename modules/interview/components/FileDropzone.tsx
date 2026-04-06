@@ -107,7 +107,7 @@ export default function FileDropzone({
         flex flex-col items-center justify-center gap-2 py-6 px-4 rounded-xl border-2 border-dashed cursor-pointer transition-all duration-200
         ${isDragging
           ? 'border-blue-600 bg-blue-500/10'
-          : 'border-[#e1e8ed] hover:border-[#536471] bg-white hover:bg-[#f7f9f9]'
+          : 'border-[#e1e8ed] hover:border-[#536471] bg-white hover:bg-[#f8fafc]'
         }
       `}
     >

@@ -119,7 +119,7 @@ export default function HireDashboardPage() {
             {data.org.monthlyInterviewsUsed} / {data.org.monthlyInterviewLimit} this month
           </span>
         </div>
-        <div className="h-2 bg-[#f7f9f9] rounded-full overflow-hidden">
+        <div className="h-2 bg-[#f8fafc] rounded-full overflow-hidden">
           <div
             className="h-full rounded-full transition-all bg-blue-500"
             style={{ width: `${usagePct}%` }}
@@ -170,7 +170,7 @@ export default function HireDashboardPage() {
                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
                         c.status === 'completed' ? 'bg-emerald-500/20 text-[#059669]' :
                         c.status === 'in_progress' ? 'bg-amber-500/20 text-amber-400' :
-                        'bg-[#f7f9f9] text-[#536471]'
+                        'bg-[#f8fafc] text-[#536471]'
                       }`}>
                         {c.status.replace(/_/g, ' ')}
                       </span>

@@ -120,7 +120,7 @@ export default function ScorecardPage() {
   const minutes = Math.round(data.duration / 60)
 
   return (
-    <main className="min-h-screen bg-[#f7f9f9] py-12 px-4">
+    <main className="min-h-screen bg-[#f8fafc] py-12 px-4">
       <motion.div
         className="max-w-md mx-auto"
         initial={{ opacity: 0, y: 20 }}

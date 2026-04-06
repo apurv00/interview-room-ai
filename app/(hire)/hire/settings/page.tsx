@@ -134,7 +134,7 @@ export default function HireSettingsPage() {
               value={newName}
               onChange={e => { setNewName(e.target.value); if (!newSlug) setNewSlug(e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '-')) }}
               placeholder="Acme Corp"
-              className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
 
@@ -145,7 +145,7 @@ export default function HireSettingsPage() {
               value={newSlug}
               onChange={e => setNewSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-'))}
               placeholder="acme-corp"
-              className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
             <p className="text-[10px] text-[#8b98a5]">Only lowercase letters, numbers, and hyphens</p>
           </div>
@@ -157,7 +157,7 @@ export default function HireSettingsPage() {
               value={newDomain}
               onChange={e => setNewDomain(e.target.value)}
               placeholder="acme.com"
-              className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
 
@@ -249,7 +249,7 @@ export default function HireSettingsPage() {
                 key={d}
                 onClick={() => setEditDuration(d)}
                 className={`py-2 rounded-lg border text-xs font-medium transition-all ${
-                  editDuration === d ? 'border-blue-500 bg-blue-500/10 text-[#2563eb]' : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#e1e8ed]'
+                  editDuration === d ? 'border-blue-500 bg-blue-500/10 text-[#2563eb]' : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#e1e8ed]'
                 }`}
               >
                 {d} min
@@ -266,7 +266,7 @@ export default function HireSettingsPage() {
             maxLength={500}
             rows={2}
             placeholder="A message shown to candidates before starting..."
-            className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+            className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
           />
         </div>
 
@@ -277,7 +277,7 @@ export default function HireSettingsPage() {
             value={editWebhook}
             onChange={e => setEditWebhook(e.target.value)}
             placeholder="https://your-ats.com/webhooks/interview-complete"
-            className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
 

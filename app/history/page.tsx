@@ -119,7 +119,7 @@ export default function HistoryPage() {
                     router.push(`/feedback/${s._id}`)
                   }
                 }}
-                className="w-full bg-white border border-[#e1e8ed] rounded-2xl p-5 flex items-center gap-4 hover:border-[#cfd9de] hover:bg-[#f7f9f9] transition text-left cursor-pointer"
+                className="w-full bg-white border border-[#e1e8ed] rounded-2xl p-5 flex items-center gap-4 hover:border-[#cfd9de] hover:bg-[#f8fafc] transition text-left cursor-pointer"
               >
                 {/* Score badge */}
                 <div className="w-11 h-11 rounded-[10px] bg-blue-50 flex items-center justify-center flex-shrink-0">

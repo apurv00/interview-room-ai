@@ -44,7 +44,7 @@ export default function BadgeGallery() {
     return (
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {Array.from({ length: 8 }).map((_, i) => (
-          <div key={i} className="h-32 bg-[#f7f9f9] rounded-xl animate-pulse" />
+          <div key={i} className="h-32 bg-[#f8fafc] rounded-xl animate-pulse" />
         ))}
       </div>
     )

@@ -36,7 +36,7 @@ export default function CmsLayout({ children }: { children: ReactNode }) {
                 className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
                   isActive
                     ? 'bg-blue-600/20 text-[#2563eb] font-medium'
-                    : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#f7f9f9]'
+                    : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#f8fafc]'
                 }`}
               >
                 <span>{item.icon}</span>

@@ -161,7 +161,7 @@ export default function SkillEditorPage() {
             Active
           </label>
           <button onClick={() => setShowPreview(!showPreview)}
-            className="px-3 py-1.5 text-xs border border-[#e1e8ed] rounded-lg hover:bg-[#f7f9f9] transition-colors">
+            className="px-3 py-1.5 text-xs border border-[#e1e8ed] rounded-lg hover:bg-[#f8fafc] transition-colors">
             {showPreview ? 'Hide' : 'Show'} Preview
           </button>
           {hasCustomContent && (

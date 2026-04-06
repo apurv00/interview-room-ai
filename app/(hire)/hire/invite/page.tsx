@@ -144,7 +144,7 @@ export default function InvitePage() {
                 type="text"
                 value={result.inviteLink}
                 readOnly
-                className="flex-1 px-3 py-2 bg-[#f7f9f9] border border-[#e1e8ed] rounded-lg text-xs text-[#536471] font-mono"
+                className="flex-1 px-3 py-2 bg-[#f8fafc] border border-[#e1e8ed] rounded-lg text-xs text-[#536471] font-mono"
               />
               <button
                 onClick={() => copyLink(result.inviteLink)}
@@ -175,7 +175,7 @@ export default function InvitePage() {
                     value={email}
                     onChange={e => setEmail(e.target.value)}
                     placeholder="candidate@company.com"
-                    className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -185,7 +185,7 @@ export default function InvitePage() {
                     value={name}
                     onChange={e => setName(e.target.value)}
                     placeholder="John Doe"
-                    className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
               </div>
@@ -198,7 +198,7 @@ export default function InvitePage() {
                 onChange={e => setBulkEmails(e.target.value)}
                 placeholder={'candidate1@company.com\ncandidate2@company.com\ncandidate3@company.com'}
                 rows={5}
-                className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
               />
             </div>
           )}
@@ -223,7 +223,7 @@ export default function InvitePage() {
                     key={e}
                     onClick={() => setExperience(e)}
                     className={`py-2 rounded-lg border text-xs font-medium transition-all ${
-                      experience === e ? 'border-blue-500 bg-blue-500/10 text-[#2563eb]' : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#e1e8ed]'
+                      experience === e ? 'border-blue-500 bg-blue-500/10 text-[#2563eb]' : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#e1e8ed]'
                     }`}
                   >
                     {e} yrs
@@ -239,7 +239,7 @@ export default function InvitePage() {
                     key={d}
                     onClick={() => setDuration(d)}
                     className={`py-2 rounded-lg border text-xs font-medium transition-all ${
-                      duration === d ? 'border-blue-500 bg-blue-500/10 text-[#2563eb]' : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#e1e8ed]'
+                      duration === d ? 'border-blue-500 bg-blue-500/10 text-[#2563eb]' : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#e1e8ed]'
                     }`}
                   >
                     {d} min
@@ -258,7 +258,7 @@ export default function InvitePage() {
                 maxLength={1000}
                 placeholder="Any context for this candidate..."
                 rows={2}
-                className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
               />
             </div>
           )}
@@ -271,7 +271,7 @@ export default function InvitePage() {
               maxLength={50000}
               placeholder="Paste the job description here for role-specific questions..."
               rows={3}
-              className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+              className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
             />
           </div>
 

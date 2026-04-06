@@ -33,7 +33,7 @@ export default function StageExport({
       </div>
 
       {/* Strength Score Card */}
-      <div className="bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl p-4 space-y-3">
+      <div className="bg-[#f8fafc] border border-[#e1e8ed] rounded-xl p-4 space-y-3">
         <div className="flex items-center justify-between">
           <span className="text-sm font-medium text-[#0f1419]">Resume Strength</span>
           <motion.span
@@ -78,7 +78,7 @@ export default function StageExport({
               className={`p-3 rounded-xl border text-left transition-all ${
                 selectedTemplate === template.id
                   ? 'border-[#2563eb]/50 bg-[#2563eb]/10 ring-1 ring-[#2563eb]/20'
-                  : 'border-[#e1e8ed] bg-[#f7f9f9] hover:border-[#e1e8ed]'
+                  : 'border-[#e1e8ed] bg-[#f8fafc] hover:border-[#e1e8ed]'
               }`}
             >
               <div className="w-full h-12 rounded bg-card mb-2 flex items-center justify-center">

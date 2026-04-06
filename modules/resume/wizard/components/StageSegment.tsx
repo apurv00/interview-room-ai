@@ -32,7 +32,7 @@ export default function StageSegment({ selected, onSelect, isLoading }: Props) {
               border
               ${selected === segment.id
                 ? 'bg-[#2563eb]/10 border-[#2563eb]/50 ring-1 ring-[#2563eb]/20'
-                : 'bg-[#f7f9f9] border-[#e1e8ed] hover:border-[#e1e8ed]'
+                : 'bg-[#f8fafc] border-[#e1e8ed] hover:border-[#e1e8ed]'
               }
               disabled:opacity-50 disabled:cursor-not-allowed
             `}

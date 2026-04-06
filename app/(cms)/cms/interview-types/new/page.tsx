@@ -230,7 +230,7 @@ export default function NewInterviewTypePage() {
           </button>
           <Link
             href="/cms/interview-types"
-            className="px-6 py-2 bg-[#f7f9f9] hover:bg-[#f7f9f9] rounded-lg text-sm font-medium transition-colors"
+            className="px-6 py-2 bg-[#f8fafc] hover:bg-[#f8fafc] rounded-lg text-sm font-medium transition-colors"
           >
             Cancel
           </Link>

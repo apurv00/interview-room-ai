@@ -55,14 +55,14 @@ export default function InterviewControls({
             ? 'bg-red-500/15 border border-red-500/25 text-red-500 hover:bg-red-500/20'
             : darkMode
               ? 'bg-gray-800 border border-gray-600/50 text-gray-300 hover:bg-gray-700'
-              : 'bg-[#f7f9f9] border border-[#e1e8ed] text-[#536471] hover:bg-[#eff3f4]'
+              : 'bg-[#f8fafc] border border-[#e1e8ed] text-[#536471] hover:bg-[#eff3f4]'
           }
         `}
         aria-label={muted ? 'Unmute microphone' : 'Mute microphone'}
       >
         <MicIcon muted={muted} />
         <span>{muted ? 'Unmute' : 'Mute'}</span>
-        <kbd className={`hidden sm:inline-block text-[10px] px-1.5 py-0.5 rounded ml-1 font-mono ${darkMode ? 'text-gray-500 bg-gray-800 border border-gray-600/50' : 'text-[#8b98a5] bg-[#f7f9f9] border border-[#e1e8ed]'}`}>
+        <kbd className={`hidden sm:inline-block text-[10px] px-1.5 py-0.5 rounded ml-1 font-mono ${darkMode ? 'text-gray-500 bg-gray-800 border border-gray-600/50' : 'text-[#8b98a5] bg-[#f8fafc] border border-[#e1e8ed]'}`}>
           M
         </kbd>
       </motion.button>
@@ -78,7 +78,7 @@ export default function InterviewControls({
           ${isScoring
             ? darkMode
               ? 'bg-gray-800 border border-gray-600/50 text-gray-500 cursor-not-allowed'
-              : 'bg-[#f7f9f9] border border-[#e1e8ed] text-[#8b98a5] cursor-not-allowed'
+              : 'bg-[#f8fafc] border border-[#e1e8ed] text-[#8b98a5] cursor-not-allowed'
             : 'bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-600/20'
           }
         `}

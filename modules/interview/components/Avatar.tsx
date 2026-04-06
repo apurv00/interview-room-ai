@@ -61,7 +61,7 @@ export default function Avatar({ emotion, isTalking, ttsText, isListening, isPro
   const nodY = state.isNodding ? Math.sin(state.nodProgress * Math.PI) * 5 : 0
 
   return (
-    <div className="w-full h-full flex items-center justify-center bg-gradient-to-b from-white via-[#f7f9f9] to-white relative overflow-hidden">
+    <div className="w-full h-full flex items-center justify-center bg-gradient-to-b from-white via-[#f8fafc] to-white relative overflow-hidden">
       {/* Ambient background glow — crossfades with emotion */}
       <motion.div
         className="absolute inset-0"

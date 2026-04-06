@@ -23,7 +23,7 @@ export default function StreakLeaderboard() {
   }, [])
 
   if (loading) {
-    return <div className="h-48 bg-[#f7f9f9] rounded-xl animate-pulse" />
+    return <div className="h-48 bg-[#f8fafc] rounded-xl animate-pulse" />
   }
 
   if (entries.length === 0) {

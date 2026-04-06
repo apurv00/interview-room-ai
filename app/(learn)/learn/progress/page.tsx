@@ -82,7 +82,7 @@ export default function ProgressPage() {
           <p className="text-[#f4212e] mb-6">{error}</p>
           <button
             onClick={() => { setLoading(true); setError(null); setPeriod('all') }}
-            className="px-6 py-3 bg-[#f7f9f9] hover:bg-[#eff3f4] text-[#0f1419] rounded-xl font-medium transition"
+            className="px-6 py-3 bg-[#f8fafc] hover:bg-[#eff3f4] text-[#0f1419] rounded-xl font-medium transition"
           >
             Retry
           </button>

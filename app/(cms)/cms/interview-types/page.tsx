@@ -81,7 +81,7 @@ export default function InterviewTypesListPage() {
           </thead>
           <tbody>
             {types.map((t) => (
-              <tr key={t.slug} className="border-b border-[#eff3f4] hover:bg-[#f7f9f9]">
+              <tr key={t.slug} className="border-b border-[#eff3f4] hover:bg-[#f8fafc]">
                 <td className="px-4 py-3 font-mono text-xs">{t.slug}</td>
                 <td className="px-4 py-3">{t.label}</td>
                 <td className="px-4 py-3 text-xs text-[#536471]">

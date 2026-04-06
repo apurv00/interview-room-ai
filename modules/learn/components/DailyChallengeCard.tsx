@@ -77,7 +77,7 @@ export default function DailyChallengeCard() {
   }, [])
 
   if (loading) {
-    return <div className="h-48 bg-[#f7f9f9] rounded-xl animate-pulse" />
+    return <div className="h-48 bg-[#f8fafc] rounded-xl animate-pulse" />
   }
 
   if (!challenge) return null
@@ -123,7 +123,7 @@ export default function DailyChallengeCard() {
         value={answer}
         onChange={e => setAnswer(e.target.value)}
         placeholder="Type your answer here... (minimum 10 characters)"
-        className="w-full bg-[#f7f9f9] border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:border-[#2563eb] resize-none"
+        className="w-full bg-[#f8fafc] border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:border-[#2563eb] resize-none"
         rows={5}
         maxLength={5000}
       />

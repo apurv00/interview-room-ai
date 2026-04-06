@@ -74,7 +74,7 @@ export default function WizardConfigPage() {
             aria-checked={costCapEnabled}
             onClick={() => setCostCapEnabled(!costCapEnabled)}
             className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ${
-              costCapEnabled ? 'bg-blue-600' : 'bg-[#f7f9f9]'
+              costCapEnabled ? 'bg-blue-600' : 'bg-[#f8fafc]'
             }`}
           >
             <span
@@ -102,7 +102,7 @@ export default function WizardConfigPage() {
               step={0.01}
               value={costCapUsd}
               onChange={e => setCostCapUsd(parseFloat(e.target.value) || 0.01)}
-              className="w-full pl-7 pr-3 py-2 bg-[#f7f9f9] border border-[#e1e8ed] rounded-lg text-[#0f1419] text-sm focus:border-blue-500 focus:outline-none"
+              className="w-full pl-7 pr-3 py-2 bg-[#f8fafc] border border-[#e1e8ed] rounded-lg text-[#0f1419] text-sm focus:border-blue-500 focus:outline-none"
             />
           </div>
         </div>

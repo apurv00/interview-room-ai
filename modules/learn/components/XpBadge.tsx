@@ -10,7 +10,7 @@ export default function XpBadge() {
     : 0
 
   return (
-    <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-[#f7f9f9] border border-[#e1e8ed]">
+    <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-[#f8fafc] border border-[#e1e8ed]">
       <span
         className="w-5 h-5 rounded-full bg-[#2563eb] flex items-center justify-center text-[10px] font-bold text-white"
         title={title}

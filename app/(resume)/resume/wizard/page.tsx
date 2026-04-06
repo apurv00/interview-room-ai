@@ -27,7 +27,7 @@ export default function WizardPage() {
           <Link href="/signup" className="px-5 py-2.5 bg-[#2563eb] hover:bg-[#1d4ed8] text-white rounded-xl text-sm font-medium transition-colors">
             Get Started Free
           </Link>
-          <Link href="/signin" className="px-5 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] text-[#536471] rounded-xl text-sm font-medium transition-colors hover:bg-[#eff3f4]">
+          <Link href="/signin" className="px-5 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] text-[#536471] rounded-xl text-sm font-medium transition-colors hover:bg-[#eff3f4]">
             Sign In
           </Link>
         </div>
