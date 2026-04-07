@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { Mic } from 'lucide-react'
 
 // Pages where footer is hidden (full-screen experiences)
 const HIDDEN_PREFIXES = ['/interview', '/lobby']
@@ -42,13 +43,13 @@ const TIP_LINKS = [
 function FooterColumn({ title, links }: { title: string; links: { href: string; label: string }[] }) {
   return (
     <div>
-      <h3 className="step-label mb-3">{title}</h3>
-      <ul className="space-y-2">
+      <h3 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400 mb-4">{title}</h3>
+      <ul className="space-y-2.5">
         {links.map((link) => (
           <li key={link.href}>
             <Link
               href={link.href}
-              className="text-caption text-[var(--foreground-tertiary)] hover:text-[var(--foreground-secondary)] transition-colors"
+              className="text-[13px] text-slate-500 hover:text-slate-800 transition-colors"
             >
               {link.label}
             </Link>
@@ -67,10 +68,25 @@ export default function Footer() {
   }
 
   return (
-    <footer className="border-t border-[var(--color-border-subtle)] mt-auto">
-      <div className="max-w-[1100px] mx-auto px-4 sm:px-6 py-10">
-        {/* Columns */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-8 mb-8">
+    <footer className="bg-white border-t border-slate-200 mt-auto">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+        {/* Top: brand + columns */}
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-8 mb-10">
+          {/* Brand column */}
+          <div className="col-span-2 md:col-span-1">
+            <Link href="/" className="flex items-center gap-2 no-underline mb-3">
+              <div className="w-7 h-7 rounded-xl bg-blue-600 flex items-center justify-center">
+                <Mic className="w-3.5 h-3.5 text-white" />
+              </div>
+              <span className="font-bold text-[15px] tracking-tight text-slate-800">
+                interviewprep<span className="text-blue-600">.guru</span>
+              </span>
+            </Link>
+            <p className="text-[12px] text-slate-400 leading-relaxed max-w-[200px]">
+              AI-powered interview coaching with face, voice, and content analysis.
+            </p>
+          </div>
+
           <FooterColumn title="Product" links={PRODUCT_LINKS} />
           <FooterColumn title="Tools" links={TOOLS_LINKS} />
           <FooterColumn title="Interview Questions" links={QUESTION_LINKS} />
@@ -78,12 +94,15 @@ export default function Footer() {
         </div>
 
         {/* Bottom bar */}
-        <div className="border-t border-[var(--color-border-subtle)] pt-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-[var(--foreground-muted)]">
-          <span>&copy; {new Date().getFullYear()} Interview Prep Guru</span>
-          <nav aria-label="Legal" className="flex items-center gap-4">
-            <Link href="/privacy" className="hover:text-[var(--foreground-secondary)] transition-colors">Privacy</Link>
-            <Link href="/terms" className="hover:text-[var(--foreground-secondary)] transition-colors">Terms</Link>
-            <Link href="/signin" className="hover:text-[var(--foreground-secondary)] transition-colors">Sign In</Link>
+        <div className="border-t border-slate-100 pt-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="text-[12px] text-slate-400">
+            &copy; {new Date().getFullYear()} InterviewPrep.guru
+          </div>
+          <nav aria-label="Legal" className="flex items-center gap-6 text-[12px] text-slate-400">
+            <Link href="/privacy" className="hover:text-slate-700 transition-colors">Privacy</Link>
+            <Link href="/terms" className="hover:text-slate-700 transition-colors">Terms</Link>
+            <a href="mailto:contact@interviewprep.guru" className="hover:text-slate-700 transition-colors">Contact</a>
+            <Link href="/signin" className="hover:text-slate-700 transition-colors">Sign In</Link>
           </nav>
         </div>
       </div>
