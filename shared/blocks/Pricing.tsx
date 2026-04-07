@@ -17,7 +17,7 @@ const plans = [
   },
   {
     name: 'Pro',
-    price: '$19',
+    price: '$11',
     period: '/month',
     description: 'Unlimited practice for serious prep',
     features: ['Unlimited interviews', 'Advanced AI coaching', 'Resume builder & tailor', 'Priority support', 'Custom practice plans'],
