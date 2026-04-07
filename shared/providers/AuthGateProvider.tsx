@@ -13,15 +13,21 @@
  *   </button>
  *
  * If the user is authenticated, `onAuthed` runs immediately.
- * Otherwise the modal opens and `onAuthed` is discarded — the user
- * lands back on the same page after OAuth round-trip and clicks the
- * action again. (We deliberately do not persist callbacks across the
- * OAuth redirect — that would require serialization and is brittle.)
+ * Otherwise the modal opens and we **hold the callback in a ref**.
+ * When NextAuth's session status flips to `authenticated` while the
+ * modal is open (credentials sign-in in place), we invoke the callback
+ * and close the modal — so users don't have to re-click the CTA.
+ *
+ * For OAuth flows that do a full page round-trip, the ref is lost
+ * across the navigation; those users still land back on the same page
+ * after sign-in. We accept that corner case until we have evidence it
+ * materially hurts conversion.
  */
 
-import { createContext, useCallback, useContext, useState, useMemo } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import AuthGateModal, { type AuthReason } from '@shared/ui/AuthGateModal'
+import { track } from '@shared/analytics/track'
 
 interface AuthGateContextValue {
   requireAuth: (reason: AuthReason, onAuthed?: () => void | Promise<void>) => void
@@ -34,9 +40,16 @@ const AuthGateContext = createContext<AuthGateContextValue | null>(null)
 export function AuthGateProvider({ children }: { children: React.ReactNode }) {
   const { status } = useSession()
   const [openReason, setOpenReason] = useState<AuthReason | null>(null)
+  const pendingCallbackRef = useRef<(() => void | Promise<void>) | null>(null)
 
-  const close = useCallback(() => setOpenReason(null), [])
-  const open = useCallback((reason: AuthReason) => setOpenReason(reason), [])
+  const close = useCallback(() => {
+    setOpenReason(null)
+    pendingCallbackRef.current = null
+  }, [])
+  const open = useCallback((reason: AuthReason) => {
+    setOpenReason(reason)
+    track('auth_gate_opened', { reason })
+  }, [])
 
   const requireAuth = useCallback(
     (reason: AuthReason, onAuthed?: () => void | Promise<void>) => {
@@ -45,10 +58,28 @@ export function AuthGateProvider({ children }: { children: React.ReactNode }) {
         return
       }
       // 'loading' — treat as not-yet-authed; open modal so user gets feedback
+      pendingCallbackRef.current = onAuthed ?? null
       setOpenReason(reason)
+      track('auth_gate_opened', { reason })
     },
     [status]
   )
+
+  // When the user successfully signs in via the modal, NextAuth's session
+  // status flips to 'authenticated'. Fire any pending callback and close.
+  useEffect(() => {
+    if (status !== 'authenticated') return
+    if (!openReason && !pendingCallbackRef.current) return
+    const cb = pendingCallbackRef.current
+    pendingCallbackRef.current = null
+    setOpenReason(null)
+    if (cb) {
+      track('auth_completed', { had_pending_action: true })
+      void cb()
+    } else {
+      track('auth_completed', { had_pending_action: false })
+    }
+  }, [status, openReason])
 
   const value = useMemo(() => ({ requireAuth, open, close }), [requireAuth, open, close])
 

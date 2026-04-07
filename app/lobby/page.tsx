@@ -10,6 +10,7 @@ import { STORAGE_KEYS } from '@shared/storageKeys'
 import { useAuthGate } from '@shared/providers/AuthGateProvider'
 import { COMPANY_PROFILES } from '@interview/config/companyProfiles'
 import PrepChecklist from '@interview/components/PrepChecklist'
+import { track } from '@shared/analytics/track'
 
 type CheckStatus = 'pending' | 'ok' | 'error'
 
@@ -202,7 +203,13 @@ export default function LobbyPage() {
       const hasSR = 'SpeechRecognition' in window || 'webkitSpeechRecognition' in window
       setChecks(prev => prev.map(c =>
         c.label === 'Speech recognition'
-          ? { ...c, status: hasSR ? 'ok' : 'error', detail: hasSR ? 'Browser supported' : 'Use Chrome or Edge' }
+          ? {
+              ...c,
+              status: hasSR ? 'ok' : 'error',
+              detail: hasSR
+                ? 'Browser supported'
+                : 'Not supported — you can still join in text mode',
+            }
           : c
       ))
 
@@ -245,14 +252,32 @@ export default function LobbyPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config])
 
-  // Update allOk
+  // Update allOk.
+  //
+  // Hard-required checks (camera, mic, network, interview context) must pass.
+  // Speech recognition is treated as a soft requirement: if unsupported
+  // (Safari/Firefox), we still allow joining in text-only "degraded" mode.
+  // This prevents hard-blocking a meaningful slice of organic traffic.
   useEffect(() => {
     const done = checks.every(c => c.status !== 'pending')
-    const ok = checks.every(c => c.status === 'ok')
-    if (done) {
-      setAllOk(ok)
-    } else {
+    if (!done) {
       setAllOk(false)
+      return
+    }
+    const hardOk = checks.every(
+      c => c.status === 'ok' || c.label === 'Speech recognition'
+    )
+    setAllOk(hardOk)
+
+    // Fire funnel event exactly once per page render when checks settle.
+    const srFailed = checks.some(
+      c => c.label === 'Speech recognition' && c.status === 'error'
+    )
+    if (hardOk) {
+      track('lobby_ready', { degraded: srFailed })
+    } else {
+      const failed = checks.filter(c => c.status === 'error').map(c => c.label)
+      track('lobby_check_failed', { failed })
     }
   }, [checks])
 
@@ -274,15 +299,33 @@ export default function LobbyPage() {
   }, [joining, router])
 
   function enterRoom() {
-    // Save optional company context to config before entering
-    if (lobbyCompany.trim() && config) {
-      const updated = { ...config, targetCompany: lobbyCompany.trim() }
-      setConfig(updated)
-      localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(updated))
+    // If speech recognition failed, persist a `degraded: true` flag so the
+    // interview runtime can skip SR-dependent features and fall back to a
+    // text-input interaction model.
+    const srFailed = checks.some(
+      c => c.label === 'Speech recognition' && c.status === 'error'
+    )
+
+    // Save optional company context and degraded flag to config before entering
+    if (config) {
+      const patch: Partial<InterviewConfig> = {}
+      if (lobbyCompany.trim()) patch.targetCompany = lobbyCompany.trim()
+      if (srFailed) patch.degraded = true
+      if (Object.keys(patch).length > 0) {
+        const updated = { ...config, ...patch }
+        setConfig(updated)
+        localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(updated))
+      }
     }
+
+    track('interview_join_clicked', { degraded: srFailed })
+
     if (authStatus !== 'authenticated') {
       // Anonymous: gate at the room entry. Config is already in localStorage.
-      requireAuth('start_interview')
+      requireAuth('start_interview', () => {
+        setJoining(true)
+        if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
+      })
       return
     }
     setJoining(true)
@@ -527,7 +570,11 @@ export default function LobbyPage() {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -4 }}
                 >
-                  {allOk ? 'Join Interview Room' : 'Waiting for checks...'}
+                  {allOk
+                    ? (checks.some(c => c.label === 'Speech recognition' && c.status === 'error')
+                        ? 'Join in Text Mode'
+                        : 'Join Interview Room')
+                    : 'Waiting for checks...'}
                 </motion.button>
               ) : (
                 <motion.div
