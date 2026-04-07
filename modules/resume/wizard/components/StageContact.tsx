@@ -17,7 +17,7 @@ export default function StageContact({ contactInfo, onChange }: Props) {
     <div className="space-y-6">
       <div className="space-y-1">
         <h2 className="text-xl font-bold text-white">Contact Information</h2>
-        <p className="text-sm text-[#6b7280]">How should employers reach you?</p>
+        <p className="text-sm text-slate-500">How should employers reach you?</p>
       </div>
 
       <div className="space-y-4">

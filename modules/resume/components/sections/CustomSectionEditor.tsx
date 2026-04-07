@@ -1,6 +1,7 @@
 import type { ResumeCustomSection } from '../../validators/resume'
 import SortableList from '../SortableList'
 import SortableItem, { DragHandle } from '../SortableItem'
+import { X } from 'lucide-react'
 
 interface Props {
   items: ResumeCustomSection[]
@@ -17,7 +18,7 @@ export default function CustomSectionEditor({ items, onAdd, onUpdate, onRemove, 
 
   function renderCard(section: ResumeCustomSection, dragListeners?: Record<string, Function>, dragAttributes?: Record<string, unknown>) {
     return (
-      <div className="border border-[#e1e8ed] rounded-xl p-4 space-y-2">
+      <div className="border border-slate-200 rounded-xl p-4 space-y-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             {dragListeners && (
@@ -27,12 +28,12 @@ export default function CustomSectionEditor({ items, onAdd, onUpdate, onRemove, 
               type="text"
               value={section.title}
               onChange={e => onUpdate(section.id, { title: e.target.value })}
-              className="text-sm font-semibold text-[#0f1419] bg-transparent border-none focus:outline-none"
+              className="text-sm font-semibold text-slate-900 bg-transparent border-none focus:outline-none"
               placeholder="Section Title"
             />
           </div>
-          <button onClick={() => onRemove(section.id)} className="text-[#8b98a5] hover:text-[#f4212e] transition-colors">
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+          <button onClick={() => onRemove(section.id)} className="text-slate-400 hover:text-[#f4212e] transition-colors">
+            <X className="w-4 h-4" strokeWidth={2} />
           </button>
         </div>
         <textarea
@@ -40,7 +41,7 @@ export default function CustomSectionEditor({ items, onAdd, onUpdate, onRemove, 
           onChange={e => onUpdate(section.id, { content: e.target.value })}
           placeholder="Section content..."
           rows={3}
-          className="w-full px-3 py-2.5 bg-white border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
+          className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
         />
       </div>
     )
@@ -64,7 +65,7 @@ export default function CustomSectionEditor({ items, onAdd, onUpdate, onRemove, 
 
       <button
         onClick={addNew}
-        className="w-full py-3 border border-dashed border-[#e1e8ed] rounded-xl text-sm text-[#8b98a5] hover:text-[#0f1419] hover:border-[#536471] transition-colors"
+        className="w-full py-3 border border-dashed border-slate-200 rounded-xl text-sm text-slate-400 hover:text-slate-900 hover:border-slate-400 transition-colors"
       >
         + Add Custom Section
       </button>

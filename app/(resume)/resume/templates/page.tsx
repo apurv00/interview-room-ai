@@ -19,8 +19,8 @@ export default function ResumeTemplatesPage() {
   return (
     <div className="max-w-6xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-[#0f1419]">Resume Templates</h1>
-        <p className="text-sm text-[#536471] mt-1">
+        <h1 className="text-2xl font-bold text-slate-900">Resume Templates</h1>
+        <p className="text-sm text-slate-500 mt-1">
           Choose a template that matches your career stage and industry. Click any template to preview it.
         </p>
       </div>
@@ -37,22 +37,22 @@ export default function ResumeTemplatesPage() {
                 onClick={() => setSelectedId(t.id)}
                 className={`w-full text-left p-4 rounded-xl border transition-all ${
                   isSelected
-                    ? `bg-[#f8fafc] border-emerald-500/40 ring-1 ring-emerald-500/20`
-                    : 'bg-white border-[#e1e8ed] hover:border-[#536471]'
+                    ? `bg-slate-50 border-emerald-500/40 ring-1 ring-emerald-500/20`
+                    : 'bg-white border-slate-200 hover:border-slate-400'
                 }`}
               >
                 <div className="flex items-center justify-between mb-1">
-                  <h3 className={`text-sm font-semibold ${isSelected ? 'text-emerald-600' : 'text-[#0f1419]'}`}>
+                  <h3 className={`text-sm font-semibold ${isSelected ? 'text-emerald-600' : 'text-slate-900'}`}>
                     {t.name}
                   </h3>
                   <span className={`px-2 py-0.5 rounded-full text-[9px] font-semibold ${tColors.bg} border ${tColors.border} ${tColors.text}`}>
                     {t.industries[0]}
                   </span>
                 </div>
-                <p className="text-[11px] text-[#536471] leading-relaxed">{t.desc}</p>
+                <p className="text-[11px] text-slate-500 leading-relaxed">{t.desc}</p>
                 <div className="flex flex-wrap gap-1 mt-2">
                   {t.sections.slice(0, 4).map(s => (
-                    <span key={s} className="px-1.5 py-0.5 bg-[#f8fafc] rounded text-[9px] text-[#71767b]">
+                    <span key={s} className="px-1.5 py-0.5 bg-slate-50 rounded text-[9px] text-slate-500">
                       {s}
                     </span>
                   ))}
@@ -68,7 +68,7 @@ export default function ResumeTemplatesPage() {
             {/* Template info header */}
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-3">
-                <h2 className="text-lg font-semibold text-[#0f1419]">{selected.name}</h2>
+                <h2 className="text-lg font-semibold text-slate-900">{selected.name}</h2>
                 <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${colors.bg} border ${colors.border} ${colors.text}`}>
                   {selected.industries.join(', ')}
                 </span>
@@ -86,7 +86,7 @@ export default function ResumeTemplatesPage() {
               <ResumePreview data={sampleData} templateId={selectedId} />
             </div>
 
-            <p className="text-center text-[10px] text-[#8b98a5] mt-3">
+            <p className="text-center text-[10px] text-slate-400 mt-3">
               Preview uses sample data. Your content will replace this when you build your resume.
             </p>
           </div>

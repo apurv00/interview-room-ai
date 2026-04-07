@@ -251,7 +251,7 @@ export default function WizardShell({ initialSessionId }: Props) {
   if (state.isLoading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <div className="w-6 h-6 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
+        <div className="w-6 h-6 rounded-full border-2 border-blue-600 border-t-transparent animate-spin" />
       </div>
     )
   }
@@ -270,7 +270,7 @@ export default function WizardShell({ initialSessionId }: Props) {
         <button
           onClick={() => setMobileTab('wizard')}
           className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors ${
-            mobileTab === 'wizard' ? 'bg-[#2563eb] text-white' : 'bg-surface text-[#6b7280]'
+            mobileTab === 'wizard' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500'
           }`}
         >
           Edit
@@ -278,7 +278,7 @@ export default function WizardShell({ initialSessionId }: Props) {
         <button
           onClick={() => setMobileTab('preview')}
           className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors ${
-            mobileTab === 'preview' ? 'bg-[#2563eb] text-white' : 'bg-surface text-[#6b7280]'
+            mobileTab === 'preview' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500'
           }`}
         >
           Preview
@@ -317,7 +317,7 @@ export default function WizardShell({ initialSessionId }: Props) {
 
           {/* Navigation buttons */}
           {!showFollowUps && (
-            <div className="flex items-center justify-between mt-6 pt-4 border-t border-[#e1e8ed]">
+            <div className="flex items-center justify-between mt-6 pt-4 border-t border-slate-200">
               <div>
                 {state.stage > 0 && (
                   <Button variant="ghost" size="sm" onClick={handleBack} disabled={state.isSaving}>
@@ -365,9 +365,9 @@ export default function WizardShell({ initialSessionId }: Props) {
 
         {/* Right: Live Preview */}
         <div className={`w-[380px] shrink-0 sticky top-4 self-start ${mobileTab !== 'preview' ? 'hidden md:block' : ''}`}>
-          <div className="bg-white border border-[#e1e8ed] rounded-xl p-3">
+          <div className="bg-white border border-slate-200 rounded-xl p-3">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-medium text-[#8b98a5] uppercase tracking-wider">Live Preview</span>
+              <span className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">Live Preview</span>
             </div>
             <div className="transform scale-[0.55] origin-top-left" style={{ width: '182%', height: '500px', overflow: 'hidden' }}>
               <WizardPreview state={state} />

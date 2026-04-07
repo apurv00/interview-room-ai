@@ -182,7 +182,7 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
               {/* Page number badge */}
               {pageCount > 1 && (
                 <div className="flex justify-end mb-1">
-                  <span className="text-[9px] text-[#8b98a5]">
+                  <span className="text-[9px] text-slate-400">
                     Page {pageIndex + 1} of {pageCount}
                   </span>
                 </div>

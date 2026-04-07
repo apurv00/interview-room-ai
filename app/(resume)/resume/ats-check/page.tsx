@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import FileDropzone from '@interview/components/FileDropzone'
+import { Check } from 'lucide-react'
 
 interface SavedResume {
   id: string
@@ -95,28 +96,28 @@ export default function ATSCheckPage() {
   const severityStyles = {
     critical: { bg: 'bg-red-500/10', border: 'border-red-500/20', text: 'text-red-400' },
     warning: { bg: 'bg-amber-500/10', border: 'border-amber-500/20', text: 'text-amber-400' },
-    info: { bg: 'bg-blue-500/10', border: 'border-blue-500/20', text: 'text-[#2563eb]' },
+    info: { bg: 'bg-blue-500/10', border: 'border-blue-500/20', text: 'text-blue-600' },
   }
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      <h1 className="text-2xl font-bold text-[#0f1419]">ATS Compatibility Check</h1>
-      <p className="text-sm text-[#536471]">
+      <h1 className="text-2xl font-bold text-slate-900">ATS Compatibility Check</h1>
+      <p className="text-sm text-slate-500">
         Score your resume against Applicant Tracking System parsers and get specific fixes.
       </p>
 
       {!result ? (
         <div className="space-y-6">
-          <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
-            <h2 className="text-sm font-semibold text-[#536471]">Select Resume</h2>
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-3">
+            <h2 className="text-sm font-semibold text-slate-500">Select Resume</h2>
 
             {/* Saved resumes dropdown */}
             {savedResumes.length > 0 && (
               <div>
-                <label className="text-[10px] text-[#71767b] uppercase tracking-wider">From Saved Resumes</label>
+                <label className="text-[10px] text-slate-500 uppercase tracking-wider">From Saved Resumes</label>
                 <select
                   onChange={e => e.target.value && handleSelectSaved(e.target.value)}
-                  className="w-full mt-1 px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   defaultValue=""
                 >
                   <option value="">Choose a saved resume...</option>
@@ -127,34 +128,32 @@ export default function ATSCheckPage() {
               </div>
             )}
 
-            {savedResumes.length > 0 && <div className="text-center text-[10px] text-[#8b98a5]">or</div>}
+            {savedResumes.length > 0 && <div className="text-center text-[10px] text-slate-400">or</div>}
 
             {!resumeText ? (
               <FileDropzone label="Upload Resume" isUploading={uploading} onFileSelect={handleUpload} onRemove={() => {}} onError={setError} />
             ) : (
               <div className="flex items-center justify-between bg-emerald-500/5 border border-emerald-500/15 rounded-xl px-4 py-3">
                 <div className="flex items-center gap-2">
-                  <svg className="w-4 h-4 text-[#059669]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                  </svg>
+                  <Check className="w-4 h-4 text-[#059669]" strokeWidth={2} />
                   <span className="text-sm text-[#059669]">{resumeFileName || 'Resume loaded'}</span>
-                  <span className="text-[10px] text-[#71767b]">({resumeSource === 'saved' ? 'saved' : 'uploaded'})</span>
+                  <span className="text-[10px] text-slate-500">({resumeSource === 'saved' ? 'saved' : 'uploaded'})</span>
                 </div>
-                <button onClick={() => { setResumeText(''); setResumeFileName('') }} className="text-xs text-[#71767b] hover:text-[#536471]">
+                <button onClick={() => { setResumeText(''); setResumeFileName('') }} className="text-xs text-slate-500 hover:text-slate-500">
                   Remove
                 </button>
               </div>
             )}
           </div>
 
-          <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
-            <h2 className="text-sm font-semibold text-[#536471]">Job Description (optional, improves keyword analysis)</h2>
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-3">
+            <h2 className="text-sm font-semibold text-slate-500">Job Description (optional, improves keyword analysis)</h2>
             <textarea
               value={jobDescription}
               onChange={e => setJobDescription(e.target.value)}
               placeholder="Paste job description for keyword matching..."
               rows={5}
-              className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
+              className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
             />
           </div>
 
@@ -170,17 +169,17 @@ export default function ATSCheckPage() {
         </div>
       ) : (
         <div className="space-y-6 animate-fade-in">
-          <div className="bg-white border border-[#e1e8ed] rounded-2xl p-6 text-center">
-            <p className="text-sm text-[#536471] mb-2">ATS Compatibility Score</p>
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 text-center">
+            <p className="text-sm text-slate-500 mb-2">ATS Compatibility Score</p>
             <p className={`text-5xl font-bold ${result.score >= 80 ? 'text-[#059669]' : result.score >= 60 ? 'text-amber-400' : 'text-red-400'}`}>
               {result.score}
             </p>
-            <p className="text-xs text-[#71767b] mt-2">{result.summary}</p>
+            <p className="text-xs text-slate-500 mt-2">{result.summary}</p>
           </div>
 
           {result.issues.length > 0 && (
-            <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
-              <h3 className="text-sm font-semibold text-[#536471]">Issues Found ({result.issues.length})</h3>
+            <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-3">
+              <h3 className="text-sm font-semibold text-slate-500">Issues Found ({result.issues.length})</h3>
               {result.issues.map((issue, i) => {
                 const style = severityStyles[issue.severity]
                 return (
@@ -188,8 +187,8 @@ export default function ATSCheckPage() {
                     <div className="flex items-start gap-2">
                       <span className={`text-[10px] font-bold ${style.text} uppercase mt-0.5`}>{issue.severity}</span>
                       <div>
-                        <p className="text-xs text-[#536471]">{issue.message}</p>
-                        <p className="text-[11px] text-[#71767b] mt-1">Fix: {issue.fix}</p>
+                        <p className="text-xs text-slate-500">{issue.message}</p>
+                        <p className="text-[11px] text-slate-500 mt-1">Fix: {issue.fix}</p>
                       </div>
                     </div>
                   </div>
@@ -198,9 +197,9 @@ export default function ATSCheckPage() {
             </div>
           )}
 
-          <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5">
+          <div className="bg-white border border-slate-200 rounded-2xl p-5">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-[#536471]">Formatting</h3>
+              <h3 className="text-sm font-semibold text-slate-500">Formatting</h3>
               <span className={`text-sm font-bold ${result.formatting.score >= 80 ? 'text-[#059669]' : 'text-amber-400'}`}>
                 {result.formatting.score}/100
               </span>
@@ -208,7 +207,7 @@ export default function ATSCheckPage() {
             {result.formatting.issues.length > 0 && (
               <ul className="space-y-1">
                 {result.formatting.issues.map((issue, i) => (
-                  <li key={i} className="text-xs text-[#536471] flex items-start gap-1.5">
+                  <li key={i} className="text-xs text-slate-500 flex items-start gap-1.5">
                     <span className="text-amber-400 mt-0.5">-</span> {issue}
                   </li>
                 ))}
@@ -217,7 +216,7 @@ export default function ATSCheckPage() {
           </div>
 
           <div className="grid md:grid-cols-2 gap-4">
-            <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5">
+            <div className="bg-white border border-slate-200 rounded-2xl p-5">
               <h3 className="text-xs font-semibold text-[#059669] uppercase tracking-wider mb-2">Sections Found</h3>
               <div className="flex flex-wrap gap-1.5">
                 {result.sections.found.map((s, i) => (
@@ -225,7 +224,7 @@ export default function ATSCheckPage() {
                 ))}
               </div>
             </div>
-            <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5">
+            <div className="bg-white border border-slate-200 rounded-2xl p-5">
               <h3 className="text-xs font-semibold text-amber-400 uppercase tracking-wider mb-2">Recommended Sections</h3>
               <div className="flex flex-wrap gap-1.5">
                 {result.sections.recommended.map((s, i) => (
@@ -235,7 +234,7 @@ export default function ATSCheckPage() {
             </div>
           </div>
 
-          <button onClick={() => setResult(null)} className="text-sm text-[#2563eb] hover:text-blue-500 transition-colors">
+          <button onClick={() => setResult(null)} className="text-sm text-blue-600 hover:text-blue-500 transition-colors">
             Check Another Resume
           </button>
         </div>

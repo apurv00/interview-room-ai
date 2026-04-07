@@ -9,7 +9,7 @@ export default function SummaryEditor({ value, onChange, onEnhance, enhancing }:
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-[#0f1419]">Professional Summary</h3>
+        <h3 className="text-sm font-semibold text-slate-900">Professional Summary</h3>
         {onEnhance && (
           <button
             onClick={onEnhance}
@@ -25,7 +25,7 @@ export default function SummaryEditor({ value, onChange, onEnhance, enhancing }:
         onChange={e => onChange(e.target.value)}
         placeholder="A brief 2-3 sentence professional summary highlighting your key strengths and career objectives..."
         rows={4}
-        className="w-full px-3 py-2.5 bg-white border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
+        className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
       />
     </div>
   )

@@ -28,20 +28,20 @@ export default function StageFollowUps({
     <div className="space-y-6">
       <div className="space-y-1">
         <div className="flex items-center gap-2">
-          <h2 className="text-xl font-bold text-[#0f1419]">Follow-Up Questions</h2>
-          <span className="text-xs text-[#8b98a5]">
+          <h2 className="text-xl font-bold text-slate-900">Follow-Up Questions</h2>
+          <span className="text-xs text-slate-400">
             Role {currentRoleIndex + 1} of {roles.length}
           </span>
         </div>
-        <p className="text-sm text-[#6b7280]">
-          Help us add metrics and impact to your <span className="text-[#0f1419] font-medium">{role.title || 'role'}</span>
-          {role.company ? <> at <span className="text-[#0f1419] font-medium">{role.company}</span></> : ''}
+        <p className="text-sm text-slate-500">
+          Help us add metrics and impact to your <span className="text-slate-900 font-medium">{role.title || 'role'}</span>
+          {role.company ? <> at <span className="text-slate-900 font-medium">{role.company}</span></> : ''}
         </p>
       </div>
 
       {!hasQuestions && !isGenerating && (
         <div className="text-center py-6 space-y-3">
-          <p className="text-sm text-[#8b98a5]">
+          <p className="text-sm text-slate-400">
             Generate AI-powered questions to extract key achievements
           </p>
           <div className="flex items-center justify-center gap-3">
@@ -66,17 +66,17 @@ export default function StageFollowUps({
       )}
 
       {isGenerating && (
-        <div className="flex items-center gap-3 p-4 bg-surface rounded-xl border border-[#e1e8ed]">
-          <div className="w-5 h-5 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
-          <span className="text-sm text-[#6b7280]">Generating personalized questions...</span>
+        <div className="flex items-center gap-3 p-4 bg-slate-100 rounded-xl border border-slate-200">
+          <div className="w-5 h-5 rounded-full border-2 border-blue-600 border-t-transparent animate-spin" />
+          <span className="text-sm text-slate-500">Generating personalized questions...</span>
         </div>
       )}
 
       {hasQuestions && !isGenerating && (
         <div className="space-y-4">
           {role.followUpQuestions.map((fq, i) => (
-            <div key={i} className="bg-surface border border-[#e1e8ed] rounded-xl p-4 space-y-2">
-              <p className="text-sm text-[#0f1419] font-medium">{fq.question}</p>
+            <div key={i} className="bg-slate-100 border border-slate-200 rounded-xl p-4 space-y-2">
+              <p className="text-sm text-slate-900 font-medium">{fq.question}</p>
               <Input
                 value={fq.answer}
                 onChange={e => onAnswerChange(role.id, i, e.target.value)}

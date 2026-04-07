@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback, type KeyboardEvent } from 'react'
+import { X } from 'lucide-react'
 
 interface Props {
   skills: { hard: string[]; soft: string[]; technical: string[] }
@@ -36,21 +37,19 @@ function TagInput({ label, placeholder, tags, onAdd, onRemove }: {
 
   return (
     <div className="space-y-2">
-      <label className="text-caption text-[#536471]">{label}</label>
-      <div className="min-h-[44px] bg-surface border border-[#e1e8ed] rounded-[6px] p-2 flex flex-wrap gap-1.5 focus-within:border-[#2563eb] focus-within:ring-1 focus-within:ring-[rgba(37,99,235,0.15)] transition-all duration-[120ms]">
+      <label className="text-caption text-slate-500">{label}</label>
+      <div className="min-h-[44px] bg-slate-100 border border-slate-200 rounded-[6px] p-2 flex flex-wrap gap-1.5 focus-within:border-blue-600 focus-within:ring-1 focus-within:ring-[rgba(37,99,235,0.15)] transition-all duration-[120ms]">
         {tags.map((tag, i) => (
           <span
             key={`${tag}-${i}`}
-            className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#2563eb]/10 border border-[#2563eb]/20 rounded text-xs text-[#2563eb]"
+            className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-600/10 border border-blue-600/20 rounded text-xs text-blue-600"
           >
             {tag}
             <button
               onClick={() => onRemove(i)}
-              className="text-[#2563eb] hover:text-[#0f1419] transition-colors"
+              className="text-blue-600 hover:text-slate-900 transition-colors"
             >
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
+              <X className="w-3 h-3" strokeWidth={2} />
             </button>
           </span>
         ))}
@@ -59,10 +58,10 @@ function TagInput({ label, placeholder, tags, onAdd, onRemove }: {
           onChange={e => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={tags.length === 0 ? placeholder : 'Add more...'}
-          className="flex-1 min-w-[120px] bg-transparent text-sm text-[#0f1419] placeholder-[#8b98a5] outline-none"
+          className="flex-1 min-w-[120px] bg-transparent text-sm text-slate-900 placeholder-slate-400 outline-none"
         />
       </div>
-      <p className="text-[10px] text-[#8b98a5]">Press Enter or comma to add</p>
+      <p className="text-[10px] text-slate-400">Press Enter or comma to add</p>
     </div>
   )
 }
@@ -80,8 +79,8 @@ export default function StageSkills({ skills, onChange }: Props) {
   return (
     <div className="space-y-6">
       <div className="space-y-1">
-        <h2 className="text-xl font-bold text-[#0f1419]">Skills</h2>
-        <p className="text-sm text-[#6b7280]">Add your key skills across categories</p>
+        <h2 className="text-xl font-bold text-slate-900">Skills</h2>
+        <p className="text-sm text-slate-500">Add your key skills across categories</p>
       </div>
 
       {CATEGORIES.map(cat => (
