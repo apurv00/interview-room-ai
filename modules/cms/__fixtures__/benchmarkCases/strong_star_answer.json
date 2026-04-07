@@ -1,0 +1,22 @@
+{
+  "caseId": "fixture_strong_star_001",
+  "domain": "product",
+  "interviewType": "behavioral",
+  "seniorityBand": "mid",
+  "category": "pm_behavioral",
+  "question": "Tell me about a time you led a cross-functional initiative under tight constraints.",
+  "candidateAnswer": "At Acme, our checkout team had a 12% drop-off at the payment step that was costing us about $400k/quarter. I led a six-week effort with engineering, design, and risk to fix it. I started by interviewing the support team to surface the top three failure modes, then built a prioritized backlog and got buy-in from each function lead in a single working session. I owned the daily stand-up, unblocked the team on a vendor API issue by escalating to our Stripe rep, and shipped a redesigned payment step plus a retry flow. We measured a 38% reduction in drop-off in the first two weeks, recovering an estimated $150k in the first month. I learned that aligning on the metric upfront made every later trade-off easy.",
+  "expectedStrengthTags": ["quantified impact", "ownership", "structured story"],
+  "expectedWeaknessTags": [],
+  "expectedCompetencyScoreBands": {
+    "relevance": { "min": 80, "max": 100 },
+    "structure": { "min": 75, "max": 100 },
+    "specificity": { "min": 80, "max": 100 },
+    "ownership": { "min": 80, "max": 100 }
+  },
+  "expectedFollowUpRelevance": "low",
+  "idealFollowUpExamples": ["What pushback did you face from any of the function leads?"],
+  "idealFeedbackPoints": ["Strong STAR structure", "Quantified outcomes", "Clear personal ownership"],
+  "tags": ["behavioral", "leadership"],
+  "isActive": true
+}

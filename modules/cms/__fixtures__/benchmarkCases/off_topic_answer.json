@@ -1,0 +1,22 @@
+{
+  "caseId": "fixture_off_topic_003",
+  "domain": "engineering",
+  "interviewType": "behavioral",
+  "seniorityBand": "mid",
+  "category": "swe_behavioral",
+  "question": "Describe a time you disagreed with a teammate and how you resolved it.",
+  "candidateAnswer": "I really enjoy working with React and TypeScript. I've been building web apps for about five years now and I love how the ecosystem has evolved. Tailwind is also great. I think my favorite project was a dashboard I built last year — it had a lot of charts.",
+  "expectedStrengthTags": [],
+  "expectedWeaknessTags": ["off topic", "did not answer", "missing conflict"],
+  "expectedCompetencyScoreBands": {
+    "relevance": { "min": 0, "max": 25 },
+    "structure": { "min": 10, "max": 40 },
+    "specificity": { "min": 20, "max": 50 },
+    "ownership": { "min": 10, "max": 40 }
+  },
+  "expectedFollowUpRelevance": "high",
+  "idealFollowUpExamples": ["Let's come back to the question — tell me about a specific disagreement with a teammate."],
+  "idealFeedbackPoints": ["Did not address the question", "Pivoted to unrelated topic"],
+  "tags": ["behavioral", "off-topic"],
+  "isActive": true
+}

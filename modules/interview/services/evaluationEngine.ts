@@ -118,6 +118,12 @@ interface StructuredEvaluationInput {
   questionIndex: number
   sessionBriefContext?: string     // from personalization engine
   jobDescription?: string
+  /**
+   * Optional sampling temperature override. Defaults to the SDK default (≈1.0).
+   * Used by the offline evaluation harness to drive determinism (temperature: 0).
+   * Do NOT set this from production code paths without intent.
+   */
+  temperature?: number
 }
 
 interface StructuredEvaluationResult {
@@ -189,6 +195,7 @@ Respond with ONLY valid JSON:
       max_tokens: 600,
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }],
+      ...(typeof input.temperature === 'number' ? { temperature: input.temperature } : {}),
     })
 
     const raw = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}'

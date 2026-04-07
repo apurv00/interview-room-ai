@@ -146,19 +146,43 @@ export default function CodeEditor({
   onSubmit,
   disabled = false,
 }: CodeEditorProps) {
-  const [code, setCode] = useState(initialCode)
+  const [code, setCode] = useState(initialCode ?? '')
   const [showLangDropdown, setShowLangDropdown] = useState(false)
   const [copied, setCopied] = useState(false)
   const [lineCount, setLineCount] = useState(1)
   const editorRef = useRef<MonacoEditorType.IStandaloneCodeEditor | null>(null)
   const themeDefinedRef = useRef(false)
+  const prevLanguageRef = useRef(language)
 
   const currentLang = LANGUAGES.find((l) => l.value === language) || LANGUAGES[0]
 
-  // Update initial code when language/problem changes
+  // Reset editor contents when the user switches language (new starter code)
+  // or when the parent swaps the underlying problem.
+  useEffect(() => {
+    if (prevLanguageRef.current !== language) {
+      setCode(initialCode ?? '')
+      prevLanguageRef.current = language
+    }
+  }, [language, initialCode])
+
+  // First-time hydration of starter code if it loads after mount
   useEffect(() => {
     if (initialCode && !code) setCode(initialCode)
   }, [initialCode]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleLanguageSelect = useCallback(
+    (lang: CodeLanguage) => {
+      try {
+        onLanguageChange(lang)
+      } catch (err) {
+        // Defensive: never let a language switch leave the editor in a broken state
+        console.error('[CodeEditor] language switch failed:', err)
+      } finally {
+        setShowLangDropdown(false)
+      }
+    },
+    [onLanguageChange]
+  )
 
   const handleSubmit = useCallback(() => {
     if (!disabled) onSubmit(code)
@@ -231,10 +255,7 @@ export default function CodeEditor({
                 {LANGUAGES.map((lang) => (
                   <button
                     key={lang.value}
-                    onClick={() => {
-                      onLanguageChange(lang.value)
-                      setShowLangDropdown(false)
-                    }}
+                    onClick={() => handleLanguageSelect(lang.value)}
                     className={`flex items-center gap-2 w-full text-left px-4 py-2.5 text-sm hover:bg-gray-700/50 transition-colors ${
                       lang.value === language ? 'text-emerald-400 bg-emerald-500/10' : 'text-gray-200'
                     }`}
@@ -285,10 +306,11 @@ export default function CodeEditor({
       {/* Monaco Editor */}
       <div className="flex-1 min-h-0">
         <MonacoEditor
+          key={currentLang.value}
           height="100%"
           language={currentLang.monacoId}
-          value={code}
-          onChange={(value) => setCode(value || '')}
+          value={code ?? ''}
+          onChange={(value) => setCode(value ?? '')}
           theme="interview-monokai"
           beforeMount={handleBeforeMount}
           onMount={handleEditorMount}
