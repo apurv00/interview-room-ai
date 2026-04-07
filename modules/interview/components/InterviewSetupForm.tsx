@@ -264,6 +264,15 @@ export default function InterviewSetupForm() {
   const handleFileUpload = useCallback(
     async (file: File, docType: 'jd' | 'resume') => {
       setUploadError('')
+      // Anonymous users can browse setup but resume/JD parsing requires
+      // /api/documents/upload (auth-required). Open the auth modal instead
+      // of attempting the upload — otherwise the middleware redirects to
+      // /signin and the response isn't JSON, which surfaces as a confusing
+      // "server returned an unexpected response" error.
+      if (status !== 'authenticated') {
+        requireAuth('start_interview')
+        return
+      }
       const setUploading = docType === 'jd' ? setJdUploading : setResumeUploading
       setUploading(true)
       try {
@@ -335,7 +344,7 @@ export default function InterviewSetupForm() {
         setUploading(false)
       }
     },
-    [role, experience]
+    [role, experience, status, requireAuth]
   )
 
   const start = useCallback(() => {
