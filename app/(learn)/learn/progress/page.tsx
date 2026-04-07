@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { ScoreRing } from '@interview/components/ScoreBar'
+import SignedOutEmptyState from '@shared/ui/SignedOutEmptyState'
 
 interface ProgressData {
   stats: {
@@ -33,18 +34,17 @@ const DIMENSION_LABELS: Record<string, string> = {
 
 export default function ProgressPage() {
   const router = useRouter()
-  const { data: session, status: authStatus } = useSession()
+  const { status: authStatus } = useSession()
   const [data, setData] = useState<ProgressData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [period, setPeriod] = useState<'7d' | '30d' | 'all'>('all')
 
   useEffect(() => {
-    if (authStatus === 'unauthenticated') {
-      router.push('/signin')
+    if (authStatus !== 'authenticated') {
+      setLoading(false)
       return
     }
-    if (authStatus !== 'authenticated') return
 
     async function load() {
       setLoading(true)
@@ -64,7 +64,19 @@ export default function ProgressPage() {
     }
 
     load()
-  }, [authStatus, period, router])
+  }, [authStatus, period])
+
+  if (authStatus === 'unauthenticated') {
+    return (
+      <main className="min-h-screen bg-white">
+        <SignedOutEmptyState
+          reason="view_progress"
+          headline="Track your progress here"
+          description="Once you sign in and run an interview, your competency growth, streaks, and milestones show up on this page."
+        />
+      </main>
+    )
+  }
 
   if (loading) {
     return (
@@ -100,7 +112,7 @@ export default function ProgressPage() {
             Complete your first interview to start tracking your progress.
           </p>
           <button
-            onClick={() => router.push('/')}
+            onClick={() => router.push('/interview/setup')}
             className="px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium transition"
           >
             Start Your First Interview

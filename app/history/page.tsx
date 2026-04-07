@@ -69,6 +69,7 @@ export default function HistoryPage() {
           reason="view_history"
           headline="See your past interviews here"
           description="Once you sign in and run an interview, your sessions and feedback show up on this page."
+          primaryHref="/interview/setup"
         />
       </main>
     )
@@ -93,7 +94,7 @@ export default function HistoryPage() {
             </p>
           </div>
           <div className="flex gap-3">
-            <Button variant="primary" size="md" onClick={() => router.push('/')}>
+            <Button variant="primary" size="md" onClick={() => router.push('/interview/setup')}>
               New Interview
             </Button>
           </div>
@@ -117,7 +118,7 @@ export default function HistoryPage() {
             }
             title="No interviews yet"
             description="Start your first mock interview and get AI-powered feedback."
-            action={{ label: 'Start Your First Interview', onClick: () => router.push('/') }}
+            action={{ label: 'Start Your First Interview', onClick: () => router.push('/interview/setup') }}
           />
         ) : (
           <div className="space-y-3">
