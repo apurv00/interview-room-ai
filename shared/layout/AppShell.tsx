@@ -19,8 +19,11 @@ const NAV_LINKS = [
   { href: '/pricing', label: 'Pricing' },
 ]
 
-// Pages where the shell is hidden (full-screen experience)
-const HIDDEN_PATHS = ['/interview', '/signin', '/signup']
+// Pages where the shell is hidden (full-screen experience).
+// /interview/setup is intentionally NOT hidden — it shows the standard nav.
+// Only the interview lobby/room itself (/interview, /interview/[id]) is full-screen.
+const HIDDEN_PATHS = ['/signin', '/signup']
+const INTERVIEW_ALLOW_NAV = ['/interview/setup']
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
@@ -29,7 +32,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const isAuthenticated = status === 'authenticated'
 
   // Hide shell on full-screen pages
-  const isHidden = HIDDEN_PATHS.some((p) => pathname.startsWith(p))
+  const isInterviewRoute = pathname.startsWith('/interview') && !INTERVIEW_ALLOW_NAV.includes(pathname)
+  const isHidden = isInterviewRoute || HIDDEN_PATHS.some((p) => pathname.startsWith(p))
   if (isHidden) return <>{children}</>
 
   const handleSignOut = () => {

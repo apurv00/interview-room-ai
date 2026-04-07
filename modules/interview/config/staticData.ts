@@ -21,8 +21,6 @@ export interface StaticDepth {
 }
 
 export const STATIC_DOMAINS: StaticDomain[] = [
-  // General
-  { slug: 'general', label: 'General / Any Role', shortLabel: 'GEN', icon: '🎯', color: 'indigo', category: 'general', description: 'General interview practice — problem-solving, communication, leadership, teamwork, and adaptability.' },
   // Engineering
   { slug: 'frontend', label: 'Frontend Engineer', shortLabel: 'FE', icon: '🖥', color: 'indigo', category: 'engineering', description: 'UI development, React/Angular/Vue, web performance, accessibility, and responsive design.' },
   { slug: 'backend', label: 'Backend / Infra Engineer', shortLabel: 'BE', icon: '🔧', color: 'indigo', category: 'engineering', description: 'APIs, databases, system design, microservices, scalability, infrastructure, CI/CD, and cloud platforms.' },
@@ -33,6 +31,8 @@ export const STATIC_DOMAINS: StaticDomain[] = [
   { slug: 'design', label: 'Design / UX', shortLabel: 'UX', icon: '🎨', color: 'indigo', category: 'product', description: 'User research, design thinking, prototyping, and design system expertise.' },
   // Business
   { slug: 'business', label: 'Business & Strategy', shortLabel: 'BIZ', icon: '🎓', color: 'indigo', category: 'business', description: 'Strategy, consulting, finance, marketing, sales, leadership, and cross-functional impact.' },
+  // General — fallback when no domain fits, shown last
+  { slug: 'general', label: 'General / Any Role', shortLabel: 'GEN', icon: '🎯', color: 'indigo', category: 'general', description: 'General interview practice — problem-solving, communication, leadership, teamwork, and adaptability.' },
 ]
 
 export const STATIC_DEPTHS: StaticDepth[] = [
