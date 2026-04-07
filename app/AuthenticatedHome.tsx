@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import Link from 'next/link'
+import { CheckCircle2, Video } from 'lucide-react'
 import FileDropzone from '@interview/components/FileDropzone'
 import DomainSelector from '@interview/components/DomainSelector'
 import DepthSelector from '@interview/components/DepthSelector'
@@ -347,7 +348,7 @@ export default function AuthenticatedHome() {
       <div className="max-w-[1100px] mx-auto space-y-5 animate-fade-in">
         {/* Compact header */}
         <div className="text-center">
-          <h1 className="text-heading text-[#0f1419]">
+          <h1 className="text-heading text-slate-900">
             {authSession?.user?.name
               ? sessionCount && sessionCount > 0
                 ? `Welcome back, ${authSession.user.name.split(' ')[0]}`
@@ -358,18 +359,18 @@ export default function AuthenticatedHome() {
 
         {/* Returning user quick stats */}
         {sessionCount !== null && sessionCount > 0 && (
-          <div className="surface-card flex items-center gap-4 p-3 rounded-xl">
+          <div className="bg-white border border-slate-200 shadow-sm flex items-center gap-4 p-3 rounded-xl">
             {lastScore !== null && (
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center">
                   <span className="text-sm font-bold text-[#2563eb]">{lastScore}</span>
                 </div>
-                <span className="text-xs text-[#536471]">Last score</span>
+                <span className="text-xs text-slate-500">Last score</span>
               </div>
             )}
             <div className="flex items-center gap-2">
-              <span className="text-sm font-bold text-[#0f1419]">{sessionCount}</span>
-              <span className="text-xs text-[#536471]">{sessionCount === 1 ? 'session' : 'sessions'} completed</span>
+              <span className="text-sm font-bold text-slate-900">{sessionCount}</span>
+              <span className="text-xs text-slate-500">{sessionCount === 1 ? 'session' : 'sessions'} completed</span>
             </div>
             <div className="flex-1" />
             <Link href="/history" className="text-xs text-[#2563eb] hover:text-[#1d4ed8] font-medium transition">
@@ -382,26 +383,24 @@ export default function AuthenticatedHome() {
         <div className="grid sm:grid-cols-2 gap-4">
           {/* Resume card */}
           <div id="step-resume">
-            <p className="text-xs font-medium text-[#536471] uppercase tracking-wide mb-2">Resume {!hasResume && <span className="text-[#f4212e]">*</span>}</p>
+            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-[0.12em] mb-2">Resume {!hasResume && <span className="text-[#f4212e]">*</span>}</p>
             {hasResume && resumeFileName ? (
               <div className="flex items-center gap-2 py-2.5 px-3 rounded-xl border-2 border-emerald-500/30 bg-emerald-500/5">
-                <svg className="w-4 h-4 text-emerald-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                 <p className="text-xs text-emerald-600 font-medium truncate flex-1">{resumeFileName}</p>
-                <button onClick={() => { setResumeText(''); setResumeFileName(''); setQuickProfileDone(false) }} className="text-xs text-[#71767b] hover:text-[#2563eb] transition">Change</button>
+                <button onClick={() => { setResumeText(''); setResumeFileName(''); setQuickProfileDone(false) }} className="text-xs text-slate-500 hover:text-[#2563eb] transition">Change</button>
               </div>
             ) : showNoResumeOptions ? (
-              <div className="grid grid-cols-2 gap-2 p-3 rounded-xl border border-[#e1e8ed] bg-[#f8fafc]">
+              <div className="grid grid-cols-2 gap-2 p-3 rounded-xl border border-slate-200 bg-slate-50">
                 <div className="space-y-2">
-                  <p className="text-xs font-semibold text-[#0f1419]">Quick Profile</p>
-                  <input type="text" value={quickTitle} onChange={(e) => setQuickTitle(e.target.value)} placeholder="Job title (e.g. Senior SWE)" className="w-full text-xs px-2.5 py-1.5 border border-[#e1e8ed] rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
-                  <input type="text" value={quickSkills} onChange={(e) => setQuickSkills(e.target.value)} placeholder="Skills (comma-separated)" className="w-full text-xs px-2.5 py-1.5 border border-[#e1e8ed] rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
+                  <p className="text-xs font-semibold text-slate-900">Quick Profile</p>
+                  <input type="text" value={quickTitle} onChange={(e) => setQuickTitle(e.target.value)} placeholder="Job title (e.g. Senior SWE)" className="w-full text-xs px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
+                  <input type="text" value={quickSkills} onChange={(e) => setQuickSkills(e.target.value)} placeholder="Skills (comma-separated)" className="w-full text-xs px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
                   <Button variant="secondary" size="sm" onClick={handleQuickProfile} disabled={!quickTitle.trim()}>Continue</Button>
                 </div>
-                <div className="flex flex-col items-center justify-center text-center p-2 rounded-xl border border-dashed border-[#e1e8ed]">
-                  <p className="text-xs font-semibold text-[#0f1419] mb-1">Build a Resume</p>
-                  <p className="text-[10px] text-[#71767b] mb-2">AI-powered, 5 minutes</p>
+                <div className="flex flex-col items-center justify-center text-center p-2 rounded-xl border border-dashed border-slate-200">
+                  <p className="text-xs font-semibold text-slate-900 mb-1">Build a Resume</p>
+                  <p className="text-[10px] text-slate-500 mb-2">AI-powered, 5 minutes</p>
                   <Link href="/resume/wizard" target="_blank" className="text-xs text-[#2563eb] hover:underline font-medium">Open Wizard &rarr;</Link>
                 </div>
               </div>
@@ -411,40 +410,38 @@ export default function AuthenticatedHome() {
                 {savedResumes.length > 0 && (
                   <div className="flex flex-wrap gap-1.5">
                     {savedResumes.map((r) => (
-                      <button key={r.id} onClick={() => handleSelectSavedResume(r.id)} className="text-[10px] px-2 py-1 rounded-full border border-[#e1e8ed] hover:border-[#2563eb] hover:text-[#2563eb] transition bg-white">{r.name}</button>
+                      <button key={r.id} onClick={() => handleSelectSavedResume(r.id)} className="text-[10px] px-2 py-1 rounded-full border border-slate-200 hover:border-[#2563eb] hover:text-[#2563eb] transition bg-white">{r.name}</button>
                     ))}
                   </div>
                 )}
-                <button onClick={() => setShowNoResumeOptions(true)} className="text-[10px] text-[#536471] hover:text-[#2563eb] transition underline underline-offset-2">I don&apos;t have a resume</button>
+                <button onClick={() => setShowNoResumeOptions(true)} className="text-[10px] text-slate-500 hover:text-[#2563eb] transition underline underline-offset-2">I don&apos;t have a resume</button>
               </div>
             )}
           </div>
 
           {/* JD card */}
           <div>
-            <p className="text-xs font-medium text-[#536471] uppercase tracking-wide mb-2">Job Description <span className="normal-case text-[10px] font-normal">(recommended)</span></p>
+            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-[0.12em] mb-2">Job Description <span className="normal-case text-[10px] font-normal">(recommended)</span></p>
             {jdText ? (
               <div className="flex items-center gap-2 py-2.5 px-3 rounded-xl border-2 border-emerald-500/30 bg-emerald-500/5">
-                <svg className="w-4 h-4 text-emerald-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                 <div className="flex-1 min-w-0">
                   <p className="text-xs text-emerald-600 font-medium truncate">{jdFileName || 'Job Description'}</p>
-                  {targetCompany && <p className="text-[10px] text-[#71767b]">{targetCompany}{targetIndustry ? ` · ${targetIndustry}` : ''}</p>}
+                  {targetCompany && <p className="text-[10px] text-slate-500">{targetCompany}{targetIndustry ? ` · ${targetIndustry}` : ''}</p>}
                 </div>
-                <button onClick={() => { setJdText(''); setJdFileName(''); setTargetCompany(''); setTargetIndustry(''); setJdPasteText('') }} className="text-xs text-[#71767b] hover:text-[#2563eb] transition">Change</button>
+                <button onClick={() => { setJdText(''); setJdFileName(''); setTargetCompany(''); setTargetIndustry(''); setJdPasteText('') }} className="text-xs text-slate-500 hover:text-[#2563eb] transition">Change</button>
               </div>
             ) : (
               <div className="space-y-2">
-                <div className="flex gap-1 p-0.5 rounded-lg bg-[#f8fafc] border border-[#e1e8ed] w-fit">
-                  <button onClick={() => setJdTab('upload')} className={`text-[10px] px-2.5 py-1 rounded-md transition ${jdTab === 'upload' ? 'bg-white shadow-sm text-[#0f1419] font-medium' : 'text-[#536471]'}`}>Upload / Paste</button>
-                  <button onClick={() => setJdTab('generate')} className={`text-[10px] px-2.5 py-1 rounded-md transition ${jdTab === 'generate' ? 'bg-white shadow-sm text-[#0f1419] font-medium' : 'text-[#536471]'}`}>Company &amp; Role</button>
+                <div className="flex gap-1 p-0.5 rounded-lg bg-slate-50 border border-slate-200 w-fit">
+                  <button onClick={() => setJdTab('upload')} className={`text-[10px] px-2.5 py-1 rounded-md transition ${jdTab === 'upload' ? 'bg-white shadow-sm text-slate-900 font-medium' : 'text-slate-500'}`}>Upload / Paste</button>
+                  <button onClick={() => setJdTab('generate')} className={`text-[10px] px-2.5 py-1 rounded-md transition ${jdTab === 'generate' ? 'bg-white shadow-sm text-slate-900 font-medium' : 'text-slate-500'}`}>Company &amp; Role</button>
                 </div>
                 {jdTab === 'upload' ? (
                   <div className="space-y-2">
                     <FileDropzone label="Job Description" fileName={jdFileName || undefined} isUploading={jdUploading} onFileSelect={(file) => handleFileUpload(file, 'jd')} onRemove={() => { setJdText(''); setJdFileName(''); setTargetCompany(''); setTargetIndustry('') }} onError={setUploadError} />
                     <div className="relative">
-                      <textarea value={jdPasteText} onChange={(e) => setJdPasteText(e.target.value)} placeholder="Or paste JD text here..." rows={2} className="w-full text-xs px-3 py-2 border border-[#e1e8ed] rounded-xl bg-white focus:outline-none focus:ring-1 focus:ring-[#2563eb] resize-none" />
+                      <textarea value={jdPasteText} onChange={(e) => setJdPasteText(e.target.value)} placeholder="Or paste JD text here..." rows={2} className="w-full text-xs px-3 py-2 border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-1 focus:ring-[#2563eb] resize-none" />
                       {jdPasteText.trim().length > 20 && (
                         <button onClick={handleJdPaste} className="absolute bottom-2 right-2 text-[10px] px-2 py-0.5 bg-[#2563eb] text-white rounded-lg hover:bg-[#1d4ed8] transition">Use this JD</button>
                       )}
@@ -452,9 +449,9 @@ export default function AuthenticatedHome() {
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    <input type="text" value={jdCompany} onChange={(e) => { setJdCompany(e.target.value); setTargetCompany(e.target.value) }} placeholder="Company (e.g. Google)" className="w-full text-xs px-3 py-2 border border-[#e1e8ed] rounded-xl bg-white focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
-                    <input type="text" value={jdRole} onChange={(e) => setJdRole(e.target.value)} placeholder="Role (e.g. Senior PM)" className="w-full text-xs px-3 py-2 border border-[#e1e8ed] rounded-xl bg-white focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
-                    <p className="text-[10px] text-[#8b98a5]">JD will be auto-generated when you enter the interview room.</p>
+                    <input type="text" value={jdCompany} onChange={(e) => { setJdCompany(e.target.value); setTargetCompany(e.target.value) }} placeholder="Company (e.g. Google)" className="w-full text-xs px-3 py-2 border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
+                    <input type="text" value={jdRole} onChange={(e) => setJdRole(e.target.value)} placeholder="Role (e.g. Senior PM)" className="w-full text-xs px-3 py-2 border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
+                    <p className="text-[10px] text-slate-400">JD will be auto-generated when you enter the interview room.</p>
                   </div>
                 )}
                 {extractingContext && <p className="text-[10px] text-[var(--foreground-muted)] animate-pulse">Detecting company...</p>}
@@ -466,18 +463,18 @@ export default function AuthenticatedHome() {
 
         {/* Domain selector */}
         <div id="step-3">
-          <p className="text-xs font-medium text-[#536471] uppercase tracking-wide mb-2">Interview Domain <span className="text-[#f4212e]">*</span></p>
+          <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-[0.12em] mb-2">Interview Domain <span className="text-[#f4212e]">*</span></p>
           <DomainSelector selectedDomain={role} onSelect={(slug) => { setRole(slug); setInterviewType(null) }} />
         </div>
 
         {/* Interview Type + Experience + Duration — 3 columns */}
         <div className="grid sm:grid-cols-3 gap-4">
           <div>
-            <p className="text-xs font-medium text-[#536471] uppercase tracking-wide mb-2">Type <span className="text-[#f4212e]">*</span></p>
+            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-[0.12em] mb-2">Type <span className="text-[#f4212e]">*</span></p>
             <DepthSelector selectedDomain={role} selectedDepth={interviewType} onSelect={setInterviewType} />
           </div>
           <div id="step-5">
-            <p className="text-xs font-medium text-[#536471] uppercase tracking-wide mb-2">Experience <span className="text-[#f4212e]">*</span></p>
+            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-[0.12em] mb-2">Experience <span className="text-[#f4212e]">*</span></p>
             <SelectionGroup<ExperienceLevel>
               items={EXPERIENCES}
               value={experience}
@@ -492,7 +489,7 @@ export default function AuthenticatedHome() {
             />
           </div>
           <div id="step-6">
-            <p className="text-xs font-medium text-[#536471] uppercase tracking-wide mb-2">Duration <span className="text-[#f4212e]">*</span></p>
+            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-[0.12em] mb-2">Duration <span className="text-[#f4212e]">*</span></p>
             <SelectionGroup<Duration>
               items={DURATIONS}
               value={duration !== null ? String(duration) : null}
@@ -513,10 +510,8 @@ export default function AuthenticatedHome() {
           <Button variant="primary" size="lg" glow={!!ready} isFullWidth className="max-w-md" disabled={status === 'loading'} onClick={handleCtaClick}>
             {ctaText}
           </Button>
-          <p className="text-xs text-[#536471] flex items-center gap-1.5">
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-            </svg>
+          <p className="text-xs text-slate-500 flex items-center gap-1.5">
+            <Video className="w-3.5 h-3.5" />
             Chrome or Edge &middot; Camera &amp; mic needed
           </p>
         </div>
@@ -524,13 +519,13 @@ export default function AuthenticatedHome() {
 
       {/* Sticky CTA bottom bar */}
       <div
-        className={`fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur border-t border-[#e1e8ed] shadow-[0_-4px_12px_rgba(0,0,0,0.06)] transition-all duration-300 ${
+        className={`fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur border-t border-slate-200 shadow-[0_-4px_12px_rgba(0,0,0,0.06)] transition-all duration-300 ${
           showStickyBar ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0 pointer-events-none'
         }`}
       >
         <div className="max-w-[1100px] mx-auto px-4 sm:px-6 py-3 flex items-center gap-4">
           {selectionSummary && (
-            <p className="text-xs text-[#536471] truncate hidden sm:block flex-1">{selectionSummary}</p>
+            <p className="text-xs text-slate-500 truncate hidden sm:block flex-1">{selectionSummary}</p>
           )}
           <div className={selectionSummary ? '' : 'flex-1'}>
             <Button variant="primary" size="md" glow={!!ready} isFullWidth={!selectionSummary} className={selectionSummary ? 'min-w-[220px]' : 'max-w-md mx-auto'} disabled={status === 'loading'} onClick={handleCtaClick}>

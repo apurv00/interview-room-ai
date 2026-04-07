@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { ChevronDown } from 'lucide-react'
 import { STATIC_DEPTHS, type StaticDepth } from '../config/staticData'
 
 interface InterviewDepth {
@@ -82,7 +83,7 @@ export default function DepthSelector({ selectedDomain, selectedDepth, onSelect 
 
   if (!selectedDomain) {
     return (
-      <div className="w-full px-4 py-3 bg-[#f8fafc] border border-[#e1e8ed] rounded-[10px] text-sm text-[var(--foreground-tertiary)]">
+      <div className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-400">
         Select a domain first to choose an interview type.
       </div>
     )
@@ -92,27 +93,24 @@ export default function DepthSelector({ selectedDomain, selectedDepth, onSelect 
 
   return (
     <div className="space-y-2">
-      <select
-        value={selectedDepth || ''}
-        onChange={(e) => onSelect(e.target.value)}
-        className="w-full px-4 py-3 bg-white border border-[#e1e8ed] rounded-[10px] text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-[rgba(37,99,235,0.4)] focus:border-[rgba(37,99,235,0.3)] appearance-none cursor-pointer"
-        style={{
-          backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E")`,
-          backgroundRepeat: 'no-repeat',
-          backgroundPosition: 'right 12px center',
-          paddingRight: '40px',
-        }}
-      >
-        {types.map((t) => (
-          <option key={t.slug} value={t.slug}>
-            {t.icon} {t.label}
-          </option>
-        ))}
-      </select>
+      <div className="relative">
+        <select
+          value={selectedDepth || ''}
+          onChange={(e) => onSelect(e.target.value)}
+          className="w-full pl-4 pr-10 py-3 bg-white border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-[rgba(37,99,235,0.4)] focus:border-[rgba(37,99,235,0.3)] appearance-none cursor-pointer"
+        >
+          {types.map((t) => (
+            <option key={t.slug} value={t.slug}>
+              {t.icon} {t.label}
+            </option>
+          ))}
+        </select>
+        <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+      </div>
 
       {/* Description of selected type */}
       {selectedType && (
-        <p className="text-xs text-[#71767b] px-1">{selectedType.description}</p>
+        <p className="text-xs text-slate-500 px-1">{selectedType.description}</p>
       )}
     </div>
   )
