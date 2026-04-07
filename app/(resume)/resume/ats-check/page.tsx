@@ -2,9 +2,9 @@
 
 import { useState, useEffect } from 'react'
 import { useSession } from 'next-auth/react'
-import { useRouter } from 'next/navigation'
 import FileDropzone from '@interview/components/FileDropzone'
 import { Check } from 'lucide-react'
+import { useAuthGate } from '@shared/providers/AuthGateProvider'
 
 interface SavedResume {
   id: string
@@ -22,8 +22,9 @@ interface ATSResult {
 }
 
 export default function ATSCheckPage() {
-  const router = useRouter()
   const { status: authStatus } = useSession()
+  const { requireAuth } = useAuthGate()
+  const isAnonymous = authStatus !== 'authenticated'
   const [savedResumes, setSavedResumes] = useState<SavedResume[]>([])
   const [resumeText, setResumeText] = useState('')
   const [resumeSource, setResumeSource] = useState<'upload' | 'saved'>('upload')
@@ -35,14 +36,13 @@ export default function ATSCheckPage() {
   const [uploading, setUploading] = useState(false)
 
   useEffect(() => {
-    if (authStatus === 'unauthenticated') router.push('/signin')
     if (authStatus === 'authenticated') {
       fetch('/api/resume/save')
         .then(r => r.json())
         .then(data => setSavedResumes(data.resumes || []))
         .catch(() => {})
     }
-  }, [authStatus, router])
+  }, [authStatus])
 
   async function handleSelectSaved(id: string) {
     const resume = savedResumes.find(r => r.id === id)
@@ -59,6 +59,7 @@ export default function ATSCheckPage() {
   }
 
   async function handleUpload(file: File) {
+    if (isAnonymous) { requireAuth('parse_resume'); return }
     setUploading(true)
     setError('')
     try {
@@ -78,6 +79,7 @@ export default function ATSCheckPage() {
 
   async function handleCheck() {
     if (!resumeText) { setError('Upload a resume or select a saved one first'); return }
+    if (isAnonymous) { requireAuth('ats_check'); return }
     setError('')
     setChecking(true)
     try {

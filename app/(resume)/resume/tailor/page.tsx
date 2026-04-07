@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import FileDropzone from '@interview/components/FileDropzone'
+import { useAuthGate } from '@shared/providers/AuthGateProvider'
 import { Check, AlertTriangle } from 'lucide-react'
 
 interface SavedResume {
@@ -23,6 +24,8 @@ interface TailorResult {
 export default function TailorPage() {
   const router = useRouter()
   const { status: authStatus } = useSession()
+  const { requireAuth } = useAuthGate()
+  const isAnonymous = authStatus !== 'authenticated'
   const [savedResumes, setSavedResumes] = useState<SavedResume[]>([])
   const [resumeText, setResumeText] = useState('')
   const [resumeSource, setResumeSource] = useState<'upload' | 'saved'>('upload')
@@ -36,14 +39,13 @@ export default function TailorPage() {
   const [savingCopy, setSavingCopy] = useState(false)
 
   useEffect(() => {
-    if (authStatus === 'unauthenticated') router.push('/signin')
     if (authStatus === 'authenticated') {
       fetch('/api/resume/save')
         .then(r => r.json())
         .then(data => setSavedResumes(data.resumes || []))
         .catch(() => {})
     }
-  }, [authStatus, router])
+  }, [authStatus])
 
   async function handleSelectSaved(id: string) {
     const resume = savedResumes.find(r => r.id === id)
@@ -60,6 +62,7 @@ export default function TailorPage() {
   }
 
   async function handleUpload(file: File) {
+    if (isAnonymous) { requireAuth('parse_resume'); return }
     setUploading(true)
     setError('')
     try {
@@ -82,6 +85,7 @@ export default function TailorPage() {
       setError('Both resume and job description are required')
       return
     }
+    if (isAnonymous) { requireAuth('tailor_resume'); return }
     setError('')
     setTailoring(true)
     try {
@@ -99,6 +103,7 @@ export default function TailorPage() {
 
   async function handleSaveAsCopy() {
     if (!result) return
+    if (isAnonymous) { requireAuth('save_resume'); return }
     setSavingCopy(true)
     setError('')
     try {

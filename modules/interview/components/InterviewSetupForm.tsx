@@ -51,7 +51,7 @@ import {
 } from '@interview/config/interviewConfig'
 import { deduplicatedFetch } from '@shared/cachedFetch'
 import { STORAGE_KEYS } from '@shared/storageKeys'
-import { getStartRedirect } from '@shared/authRedirect'
+import { useAuthGate } from '@shared/providers/AuthGateProvider'
 
 const EXPERIENCES: ExperienceLevel[] = ['0-2', '3-6', '7+']
 const DURATIONS: Duration[] = [10, 20, 30]
@@ -67,6 +67,7 @@ interface SavedResumeMeta {
 export default function InterviewSetupForm() {
   const router = useRouter()
   const { data: authSession, status } = useSession()
+  const { requireAuth } = useAuthGate()
 
   // ─── Step state ────────────────────────────────────────────────────────
   const [step, setStep] = useState(0)
@@ -339,8 +340,7 @@ export default function InterviewSetupForm() {
 
   const start = useCallback(() => {
     if (!ready) return
-    const redirect = getStartRedirect(status)
-    if (!redirect) return
+    if (status === 'loading') return
     const effectiveCompany = targetCompany || jdCompany.trim()
     const config: InterviewConfig = {
       role: role!,
@@ -352,15 +352,25 @@ export default function InterviewSetupForm() {
       ...(effectiveCompany && { targetCompany: effectiveCompany }),
       ...(targetIndustry && { targetIndustry }),
     }
+    // Always persist the config so it survives an OAuth round-trip.
     const userId = authSession?.user?.id
-    localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(config))
-    if (userId) {
-      localStorage.setItem(
-        `${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`,
-        JSON.stringify(config)
-      )
+    try {
+      localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(config))
+      if (userId) {
+        localStorage.setItem(
+          `${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`,
+          JSON.stringify(config)
+        )
+      }
+    } catch { /* quota */ }
+
+    if (status !== 'authenticated') {
+      // Anonymous: open the auth modal. After OAuth, the user lands back
+      // here and can click Start again — config is already in localStorage.
+      requireAuth('start_interview')
+      return
     }
-    router.push(redirect)
+    router.push('/lobby')
   }, [
     ready,
     status,
@@ -377,6 +387,7 @@ export default function InterviewSetupForm() {
     targetIndustry,
     authSession?.user?.id,
     router,
+    requireAuth,
   ])
 
   // JSX rendered in chunk 2.

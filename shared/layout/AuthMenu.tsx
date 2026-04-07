@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useSession, signOut } from 'next-auth/react'
 import Link from 'next/link'
 import Image from 'next/image'
+import { useAuthGate } from '@shared/providers/AuthGateProvider'
 
 const PLAN_BADGE: Record<string, { label: string; className: string }> = {
   free: { label: 'Free', className: 'bg-slate-100 text-slate-600' },
@@ -13,6 +14,7 @@ const PLAN_BADGE: Record<string, { label: string; className: string }> = {
 
 export default function AuthMenu() {
   const { data: session } = useSession()
+  const { open: openAuthGate } = useAuthGate()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -29,12 +31,13 @@ export default function AuthMenu() {
 
   if (!session?.user) {
     return (
-      <Link
-        href="/signin"
+      <button
+        type="button"
+        onClick={() => openAuthGate('generic')}
         className="px-5 py-1.5 text-[13px] font-semibold rounded-full bg-blue-600 text-white hover:bg-blue-700 transition-colors"
       >
         Sign In
-      </Link>
+      </button>
     )
   }
 

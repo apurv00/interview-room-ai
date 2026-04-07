@@ -7,6 +7,7 @@ import { getDomainLabel } from '@interview/config/interviewConfig'
 import Badge from '@shared/ui/Badge'
 import StateView from '@shared/ui/StateView'
 import Button from '@shared/ui/Button'
+import SignedOutEmptyState from '@shared/ui/SignedOutEmptyState'
 
 interface SessionSummary {
   _id: string
@@ -27,7 +28,7 @@ const STATUS_BADGE_VARIANT: Record<string, 'success' | 'caution' | 'danger' | 'd
 
 export default function HistoryPage() {
   const router = useRouter()
-  const { data: session, status: authStatus } = useSession()
+  const { status: authStatus } = useSession()
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -35,11 +36,10 @@ export default function HistoryPage() {
   const [totalPages, setTotalPages] = useState(1)
 
   useEffect(() => {
-    if (authStatus === 'unauthenticated') {
-      router.push('/signin')
+    if (authStatus !== 'authenticated') {
+      setLoading(false)
       return
     }
-    if (authStatus !== 'authenticated') return
 
     async function fetchSessions() {
       setError(null)
@@ -60,7 +60,19 @@ export default function HistoryPage() {
     }
 
     fetchSessions()
-  }, [authStatus, page, router])
+  }, [authStatus, page])
+
+  if (authStatus === 'unauthenticated') {
+    return (
+      <main className="min-h-screen bg-white">
+        <SignedOutEmptyState
+          reason="view_history"
+          headline="See your past interviews here"
+          description="Once you sign in and run an interview, your sessions and feedback show up on this page."
+        />
+      </main>
+    )
+  }
 
   if (loading) {
     return (
