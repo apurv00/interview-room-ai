@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import FileDropzone from '@interview/components/FileDropzone'
+import { Check, AlertTriangle } from 'lucide-react'
 
 interface SavedResume {
   id: string
@@ -142,22 +143,22 @@ export default function TailorPage() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      <h1 className="text-2xl font-bold text-[#0f1419]">Tailor Resume for Job</h1>
-      <p className="text-sm text-[#536471]">
+      <h1 className="text-2xl font-bold text-slate-900">Tailor Resume for Job</h1>
+      <p className="text-sm text-slate-500">
         Upload your resume and paste a job description. AI will tailor your resume to highlight the most relevant experience.
       </p>
 
       {!result ? (
         <div className="space-y-6">
-          <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
-            <h2 className="text-sm font-semibold text-[#536471]">Your Resume</h2>
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-3">
+            <h2 className="text-sm font-semibold text-slate-500">Your Resume</h2>
 
             {savedResumes.length > 0 && (
               <div>
-                <label className="text-[10px] text-[#71767b] uppercase tracking-wider">From Saved Resumes</label>
+                <label className="text-[10px] text-slate-500 uppercase tracking-wider">From Saved Resumes</label>
                 <select
                   onChange={e => e.target.value && handleSelectSaved(e.target.value)}
-                  className="w-full mt-1 px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   defaultValue=""
                 >
                   <option value="">Choose a saved resume...</option>
@@ -168,41 +169,39 @@ export default function TailorPage() {
               </div>
             )}
 
-            {savedResumes.length > 0 && <div className="text-center text-[10px] text-[#8b98a5]">or</div>}
+            {savedResumes.length > 0 && <div className="text-center text-[10px] text-slate-400">or</div>}
 
             {!resumeText ? (
               <FileDropzone label="Upload Resume" isUploading={uploading} onFileSelect={handleUpload} onRemove={() => {}} onError={setError} />
             ) : (
               <div className="flex items-center justify-between bg-emerald-500/5 border border-emerald-500/15 rounded-xl px-4 py-3">
                 <div className="flex items-center gap-2">
-                  <svg className="w-4 h-4 text-[#059669]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                  </svg>
+                  <Check className="w-4 h-4 text-[#059669]" strokeWidth={2} />
                   <span className="text-sm text-[#059669]">{resumeFileName || 'Resume loaded'}</span>
-                  <span className="text-[10px] text-[#71767b]">({resumeSource === 'saved' ? 'saved' : 'uploaded'})</span>
+                  <span className="text-[10px] text-slate-500">({resumeSource === 'saved' ? 'saved' : 'uploaded'})</span>
                 </div>
-                <button onClick={() => { setResumeText(''); setResumeFileName('') }} className="text-xs text-[#71767b] hover:text-[#536471]">
+                <button onClick={() => { setResumeText(''); setResumeFileName('') }} className="text-xs text-slate-500 hover:text-slate-500">
                   Remove
                 </button>
               </div>
             )}
           </div>
 
-          <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
-            <h2 className="text-sm font-semibold text-[#536471]">Job Description</h2>
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-3">
+            <h2 className="text-sm font-semibold text-slate-500">Job Description</h2>
             <input
               type="text"
               value={companyName}
               onChange={e => setCompanyName(e.target.value)}
               placeholder="Company name (optional)"
-              className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
             />
             <textarea
               value={jobDescription}
               onChange={e => setJobDescription(e.target.value)}
               placeholder="Paste the job description here..."
               rows={8}
-              className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
+              className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
             />
           </div>
 
@@ -220,14 +219,12 @@ export default function TailorPage() {
         <div className="space-y-6 animate-fade-in">
           {error && (
             <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 flex items-start gap-2">
-              <svg className="w-4 h-4 text-red-400 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
-              </svg>
+              <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" strokeWidth={2} />
               <p className="text-xs text-red-400">{error}</p>
             </div>
           )}
-          <div className="bg-white border border-[#e1e8ed] rounded-2xl p-6 text-center">
-            <p className="text-sm text-[#536471] mb-2">Job Match Score</p>
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 text-center">
+            <p className="text-sm text-slate-500 mb-2">Job Match Score</p>
             <p className={`text-4xl font-bold ${result.matchScore >= 80 ? 'text-[#059669]' : result.matchScore >= 60 ? 'text-amber-400' : 'text-red-400'}`}>
               {result.matchScore}%
             </p>
@@ -235,7 +232,7 @@ export default function TailorPage() {
 
           <div className="grid md:grid-cols-2 gap-4">
             {result.addedKeywords.length > 0 && (
-              <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5">
+              <div className="bg-white border border-slate-200 rounded-2xl p-5">
                 <h3 className="text-xs font-semibold text-[#059669] uppercase tracking-wider mb-2">Keywords Added</h3>
                 <div className="flex flex-wrap gap-1.5">
                   {result.addedKeywords.map((k, i) => (
@@ -245,7 +242,7 @@ export default function TailorPage() {
               </div>
             )}
             {result.missingKeywords.length > 0 && (
-              <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5">
+              <div className="bg-white border border-slate-200 rounded-2xl p-5">
                 <h3 className="text-xs font-semibold text-amber-400 uppercase tracking-wider mb-2">Still Missing</h3>
                 <div className="flex flex-wrap gap-1.5">
                   {result.missingKeywords.map((k, i) => (
@@ -257,21 +254,21 @@ export default function TailorPage() {
           </div>
 
           {result.changes.length > 0 && (
-            <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
-              <h3 className="text-sm font-semibold text-[#536471]">Changes Made</h3>
+            <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-3">
+              <h3 className="text-sm font-semibold text-slate-500">Changes Made</h3>
               {result.changes.map((c, i) => (
                 <div key={i} className="border-l-2 border-emerald-500/30 pl-3 py-1">
-                  <p className="text-xs font-medium text-[#536471]">{c.section}</p>
-                  <p className="text-[11px] text-[#536471] mt-0.5">{c.change}</p>
-                  <p className="text-[10px] text-[#71767b] mt-0.5">{c.reason}</p>
+                  <p className="text-xs font-medium text-slate-500">{c.section}</p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">{c.change}</p>
+                  <p className="text-[10px] text-slate-500 mt-0.5">{c.reason}</p>
                 </div>
               ))}
             </div>
           )}
 
-          <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-3">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-[#536471]">Tailored Resume</h3>
+              <h3 className="text-sm font-semibold text-slate-500">Tailored Resume</h3>
               <div className="flex gap-2">
                 <button
                   onClick={() => navigator.clipboard.writeText(result.tailoredResume)}
@@ -282,18 +279,18 @@ export default function TailorPage() {
                 <button
                   onClick={handleSaveAsCopy}
                   disabled={savingCopy}
-                  className="px-3 py-1.5 bg-blue-600/10 border border-blue-500/20 text-[#2563eb] text-[10px] rounded-lg font-medium hover:bg-blue-600/20 transition-colors disabled:opacity-50"
+                  className="px-3 py-1.5 bg-blue-600/10 border border-blue-500/20 text-blue-600 text-[10px] rounded-lg font-medium hover:bg-blue-600/20 transition-colors disabled:opacity-50"
                 >
                   {savingCopy ? 'Parsing & Saving...' : 'Save as New Resume'}
                 </button>
               </div>
             </div>
-            <pre className="whitespace-pre-wrap text-xs text-[#536471] bg-[#f8fafc] rounded-xl p-4 max-h-96 overflow-y-auto">
+            <pre className="whitespace-pre-wrap text-xs text-slate-500 bg-slate-50 rounded-xl p-4 max-h-96 overflow-y-auto">
               {result.tailoredResume}
             </pre>
           </div>
 
-          <button onClick={() => setResult(null)} className="text-sm text-[#2563eb] hover:text-blue-500 transition-colors">
+          <button onClick={() => setResult(null)} className="text-sm text-blue-600 hover:text-blue-500 transition-colors">
             Start Over
           </button>
         </div>

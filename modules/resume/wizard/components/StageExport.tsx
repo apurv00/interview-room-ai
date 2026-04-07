@@ -28,20 +28,20 @@ export default function StageExport({
   return (
     <div className="space-y-6">
       <div className="space-y-1">
-        <h2 className="text-xl font-bold text-[#0f1419]">Export Your Resume</h2>
-        <p className="text-sm text-[#6b7280]">Choose a template and download your polished resume</p>
+        <h2 className="text-xl font-bold text-slate-900">Export Your Resume</h2>
+        <p className="text-sm text-slate-500">Choose a template and download your polished resume</p>
       </div>
 
       {/* Strength Score Card */}
-      <div className="bg-[#f8fafc] border border-[#e1e8ed] rounded-xl p-4 space-y-3">
+      <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
         <div className="flex items-center justify-between">
-          <span className="text-sm font-medium text-[#0f1419]">Resume Strength</span>
+          <span className="text-sm font-medium text-slate-900">Resume Strength</span>
           <motion.span
             key={strengthScore}
             className={`text-2xl font-bold ${
               strengthScore >= 75 ? 'text-[#059669]'
                 : strengthScore >= 50 ? 'text-amber-400'
-                  : 'text-[#2563eb]'
+                  : 'text-blue-600'
             }`}
             initial={{ scale: 0.8 }}
             animate={{ scale: 1 }}
@@ -52,16 +52,16 @@ export default function StageExport({
         <div className="space-y-1.5">
           {Object.entries(strengthBreakdown).map(([key, value]) => (
             <div key={key} className="flex items-center gap-2">
-              <span className="text-[10px] text-[#6b7280] w-16 capitalize">{key}</span>
+              <span className="text-[10px] text-slate-500 w-16 capitalize">{key}</span>
               <div className="flex-1 h-1.5 rounded-full bg-card overflow-hidden">
                 <motion.div
-                  className="h-full rounded-full bg-[#2563eb]"
+                  className="h-full rounded-full bg-blue-600"
                   initial={false}
                   animate={{ width: `${(value / getMax(key)) * 100}%` }}
                   transition={{ duration: 0.4 }}
                 />
               </div>
-              <span className="text-[10px] text-[#8b98a5] w-8 text-right">{value}/{getMax(key)}</span>
+              <span className="text-[10px] text-slate-400 w-8 text-right">{value}/{getMax(key)}</span>
             </div>
           ))}
         </div>
@@ -69,7 +69,7 @@ export default function StageExport({
 
       {/* Template Selector */}
       <div className="space-y-3">
-        <h3 className="text-sm font-semibold text-[#536471]">Choose Template</h3>
+        <h3 className="text-sm font-semibold text-slate-500">Choose Template</h3>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
           {RESUME_TEMPLATES.slice(0, 6).map(template => (
             <button
@@ -77,14 +77,14 @@ export default function StageExport({
               onClick={() => onSelectTemplate(template.id)}
               className={`p-3 rounded-xl border text-left transition-all ${
                 selectedTemplate === template.id
-                  ? 'border-[#2563eb]/50 bg-[#2563eb]/10 ring-1 ring-[#2563eb]/20'
-                  : 'border-[#e1e8ed] bg-[#f8fafc] hover:border-[#e1e8ed]'
+                  ? 'border-blue-600/50 bg-blue-600/10 ring-1 ring-blue-600/20'
+                  : 'border-slate-200 bg-slate-50 hover:border-slate-200'
               }`}
             >
               <div className="w-full h-12 rounded bg-card mb-2 flex items-center justify-center">
-                <span className="text-[8px] text-[#8b98a5] uppercase tracking-wider">{template.id}</span>
+                <span className="text-[8px] text-slate-400 uppercase tracking-wider">{template.id}</span>
               </div>
-              <p className="text-xs font-medium text-[#0f1419] truncate">{template.name}</p>
+              <p className="text-xs font-medium text-slate-900 truncate">{template.name}</p>
             </button>
           ))}
         </div>
@@ -112,7 +112,7 @@ export default function StageExport({
         >
           Download PDF
         </Button>
-        <p className="text-[10px] text-center text-[#8b98a5]">
+        <p className="text-[10px] text-center text-slate-400">
           Your resume will also be saved to your dashboard for future editing
         </p>
       </div>

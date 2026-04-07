@@ -3,6 +3,7 @@
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import type { ReactNode } from 'react'
+import { GripVertical } from 'lucide-react'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type DragRenderFn = (props: { listeners: any; attributes: any }) => ReactNode
@@ -16,18 +17,11 @@ export function DragHandle({ listeners, attributes }: { listeners?: any; attribu
   return (
     <button
       type="button"
-      className="cursor-grab active:cursor-grabbing text-[#8b98a5] hover:text-[#536471] transition-colors touch-none"
+      className="cursor-grab active:cursor-grabbing text-slate-400 hover:text-slate-500 transition-colors touch-none"
       {...attributes}
       {...listeners}
     >
-      <svg className="w-4 h-4" viewBox="0 0 16 16" fill="currentColor">
-        <circle cx="5" cy="3" r="1.5" />
-        <circle cx="11" cy="3" r="1.5" />
-        <circle cx="5" cy="8" r="1.5" />
-        <circle cx="11" cy="8" r="1.5" />
-        <circle cx="5" cy="13" r="1.5" />
-        <circle cx="11" cy="13" r="1.5" />
-      </svg>
+      <GripVertical className="w-4 h-4" />
     </button>
   )
 }

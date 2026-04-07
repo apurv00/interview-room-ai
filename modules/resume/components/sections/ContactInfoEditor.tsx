@@ -18,17 +18,17 @@ const FIELDS: Array<{ key: keyof ResumeContactInfo; label: string; placeholder: 
 export default function ContactInfoEditor({ data, onChange }: Props) {
   return (
     <div className="space-y-3">
-      <h3 className="text-sm font-semibold text-[#0f1419]">Contact Information</h3>
+      <h3 className="text-sm font-semibold text-slate-900">Contact Information</h3>
       <div className="grid grid-cols-2 gap-3">
         {FIELDS.map(f => (
           <div key={f.key} className={f.key === 'fullName' ? 'col-span-2' : ''}>
-            <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">{f.label}</label>
+            <label className="text-[10px] text-slate-400 uppercase tracking-wider">{f.label}</label>
             <input
               type="text"
               value={data[f.key] || ''}
               onChange={e => onChange({ [f.key]: e.target.value })}
               placeholder={f.placeholder}
-              className="w-full mt-1 px-3 py-2 bg-white border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className="w-full mt-1 px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
             />
           </div>
         ))}

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { ResumeSkillCategory } from '../../validators/resume'
+import { X } from 'lucide-react'
 
 interface Props {
   items: ResumeSkillCategory[]
@@ -41,33 +42,33 @@ export default function SkillsEditor({ items, onChange }: Props) {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-[#0f1419]">Skills</h3>
-        <button onClick={addCategory} className="px-2.5 py-1 bg-[#eff3f4] hover:bg-[#e1e8ed] text-[#536471] text-[10px] rounded-lg font-medium transition-colors">
+        <h3 className="text-sm font-semibold text-slate-900">Skills</h3>
+        <button onClick={addCategory} className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-500 text-[10px] rounded-lg font-medium transition-colors">
           + Add Category
         </button>
       </div>
 
       {items.map((cat, catIdx) => (
-        <div key={catIdx} className="border border-[#e1e8ed] rounded-xl p-4 space-y-2">
+        <div key={catIdx} className="border border-slate-200 rounded-xl p-4 space-y-2">
           <div className="flex items-center justify-between">
             <input
               type="text"
               value={cat.category}
               onChange={e => updateCategory(catIdx, e.target.value)}
-              className="text-xs font-semibold text-[#0f1419] bg-transparent border-none focus:outline-none"
+              className="text-xs font-semibold text-slate-900 bg-transparent border-none focus:outline-none"
               placeholder="Category name"
             />
-            <button onClick={() => removeCategory(catIdx)} className="text-[#8b98a5] hover:text-[#f4212e] transition-colors">
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+            <button onClick={() => removeCategory(catIdx)} className="text-slate-400 hover:text-[#f4212e] transition-colors">
+              <X className="w-3.5 h-3.5" strokeWidth={2} />
             </button>
           </div>
 
           <div className="flex flex-wrap gap-1.5">
             {cat.items.map((skill, skillIdx) => (
-              <span key={skillIdx} className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#eff3f4] rounded text-[11px] text-[#0f1419]">
+              <span key={skillIdx} className="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-100 rounded text-[11px] text-slate-900">
                 {skill}
-                <button onClick={() => removeSkill(catIdx, skillIdx)} className="text-[#8b98a5] hover:text-[#f4212e]">
-                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                <button onClick={() => removeSkill(catIdx, skillIdx)} className="text-slate-400 hover:text-[#f4212e]">
+                  <X className="w-3 h-3" strokeWidth={2} />
                 </button>
               </span>
             ))}
@@ -80,7 +81,7 @@ export default function SkillsEditor({ items, onChange }: Props) {
               onChange={e => setNewSkill(prev => ({ ...prev, [catIdx]: e.target.value }))}
               onKeyDown={e => e.key === 'Enter' && addSkillToCategory(catIdx)}
               placeholder="Add skill..."
-              className="flex-1 px-2.5 py-1.5 bg-white border border-[#e1e8ed] rounded-lg text-xs text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className="flex-1 px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
             />
             <button onClick={() => addSkillToCategory(catIdx)} className="px-2.5 py-1.5 bg-emerald-50 text-[#059669] text-xs rounded-lg hover:bg-emerald-100 transition-colors">
               Add
@@ -89,7 +90,7 @@ export default function SkillsEditor({ items, onChange }: Props) {
         </div>
       ))}
 
-      {items.length === 0 && <p className="text-xs text-[#8b98a5] text-center py-4">No skills added yet.</p>}
+      {items.length === 0 && <p className="text-xs text-slate-400 text-center py-4">No skills added yet.</p>}
     </div>
   )
 }
