@@ -82,7 +82,7 @@ export default function DepthSelector({ selectedDomain, selectedDepth, onSelect 
 
   if (!selectedDomain) {
     return (
-      <div className="w-full px-4 py-3 bg-[#f7f9f9] border border-[#e1e8ed] rounded-[10px] text-sm text-[var(--foreground-tertiary)]">
+      <div className="w-full px-4 py-3 bg-[#f8fafc] border border-[#e1e8ed] rounded-[10px] text-sm text-[var(--foreground-tertiary)]">
         Select a domain first to choose an interview type.
       </div>
     )
@@ -95,7 +95,7 @@ export default function DepthSelector({ selectedDomain, selectedDepth, onSelect 
       <select
         value={selectedDepth || ''}
         onChange={(e) => onSelect(e.target.value)}
-        className="w-full px-4 py-3 bg-white border border-[#e1e8ed] rounded-[10px] text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-[rgba(99,102,241,0.4)] focus:border-[rgba(99,102,241,0.3)] appearance-none cursor-pointer"
+        className="w-full px-4 py-3 bg-white border border-[#e1e8ed] rounded-[10px] text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-[rgba(37,99,235,0.4)] focus:border-[rgba(37,99,235,0.3)] appearance-none cursor-pointer"
         style={{
           backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E")`,
           backgroundRepeat: 'no-repeat',

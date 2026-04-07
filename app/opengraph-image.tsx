@@ -29,7 +29,7 @@ export default function OgImage() {
             width: 80,
             height: 80,
             borderRadius: 20,
-            background: '#4f46e5',
+            background: '#1d4ed8',
             marginBottom: 32,
           }}
         >

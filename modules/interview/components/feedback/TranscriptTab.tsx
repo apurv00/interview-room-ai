@@ -42,7 +42,7 @@ export default function TranscriptTab({
               ref={isActive ? (activeEntryRef as React.RefObject<HTMLDivElement>) : undefined}
               className={`flex gap-3 ${entry.speaker === 'interviewer' ? '' : 'flex-row-reverse'} ${
                 canSeek ? 'cursor-pointer' : ''
-              } ${isActive ? 'ring-2 ring-indigo-500/50 rounded-2xl' : ''} transition-all duration-200`}
+              } ${isActive ? 'ring-2 ring-blue-500/50 rounded-2xl' : ''} transition-all duration-200`}
               onClick={() => {
                 if (canSeek && seekTo) {
                   seekTo(computeOffsetSeconds(entry.timestamp, sessionStartedAt))
@@ -52,7 +52,7 @@ export default function TranscriptTab({
               <div
                 className={`shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${
                   entry.speaker === 'interviewer'
-                    ? 'bg-indigo-600 text-white'
+                    ? 'bg-blue-600 text-white'
                     : 'bg-[#eff3f4] text-[#536471]'
                 }`}
               >
@@ -61,8 +61,8 @@ export default function TranscriptTab({
               <div
                 className={`max-w-[78%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
                   entry.speaker === 'interviewer'
-                    ? 'bg-[#f7f9f9] text-[#0f1419]'
-                    : 'bg-indigo-50 border border-indigo-200 text-indigo-900'
+                    ? 'bg-[#f8fafc] text-[#0f1419]'
+                    : 'bg-blue-50 border border-blue-200 text-blue-900'
                 }`}
               >
                 {s(entry.text)}

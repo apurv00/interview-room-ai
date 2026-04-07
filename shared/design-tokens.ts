@@ -3,7 +3,7 @@ export const tokens = {
     bg: {
       page: '#ffffff',
       card: '#ffffff',
-      surface: '#f7f9f9',
+      surface: '#f8fafc',
       raised: '#eff3f4',
       overlay: 'rgba(0,0,0,0.4)',
     },
@@ -11,7 +11,7 @@ export const tokens = {
       subtle: '#eff3f4',
       default: '#e1e8ed',
       strong: '#cfd9de',
-      focus: '#6366f1',
+      focus: '#2563eb',
     },
     text: {
       primary: '#0f1419',
@@ -21,11 +21,11 @@ export const tokens = {
       disabled: '#cfd9de',
     },
     primary: {
-      text: '#6366f1',
-      surface: 'rgba(99,102,241,0.08)',
-      border: 'rgba(99,102,241,0.15)',
-      solid: '#6366f1',
-      hover: '#5558e6',
+      text: '#2563eb',
+      surface: 'rgba(37,99,235,0.08)',
+      border: 'rgba(37,99,235,0.15)',
+      solid: '#2563eb',
+      hover: '#1d4ed8',
     },
     success: {
       text: '#059669',
@@ -71,7 +71,7 @@ export const tokens = {
   shadow: {
     sm: '0 2px 8px rgba(0,0,0,0.06)',
     md: '0 8px 24px rgba(0,0,0,0.08)',
-    glow: '0 0 20px rgba(99,102,241,0.25)',
+    glow: '0 0 20px rgba(37,99,235,0.25)',
   },
 
   motion: {

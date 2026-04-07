@@ -37,16 +37,16 @@ function TagInput({ label, placeholder, tags, onAdd, onRemove }: {
   return (
     <div className="space-y-2">
       <label className="text-caption text-[#536471]">{label}</label>
-      <div className="min-h-[44px] bg-surface border border-[#e1e8ed] rounded-[6px] p-2 flex flex-wrap gap-1.5 focus-within:border-[#6366f1] focus-within:ring-1 focus-within:ring-[rgba(99,102,241,0.15)] transition-all duration-[120ms]">
+      <div className="min-h-[44px] bg-surface border border-[#e1e8ed] rounded-[6px] p-2 flex flex-wrap gap-1.5 focus-within:border-[#2563eb] focus-within:ring-1 focus-within:ring-[rgba(37,99,235,0.15)] transition-all duration-[120ms]">
         {tags.map((tag, i) => (
           <span
             key={`${tag}-${i}`}
-            className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#6366f1]/10 border border-[#6366f1]/20 rounded text-xs text-[#6366f1]"
+            className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#2563eb]/10 border border-[#2563eb]/20 rounded text-xs text-[#2563eb]"
           >
             {tag}
             <button
               onClick={() => onRemove(i)}
-              className="text-[#6366f1] hover:text-[#0f1419] transition-colors"
+              className="text-[#2563eb] hover:text-[#0f1419] transition-colors"
             >
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />

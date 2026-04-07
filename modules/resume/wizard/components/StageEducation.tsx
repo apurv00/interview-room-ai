@@ -51,7 +51,7 @@ export default function StageEducation({ education, onChange }: Props) {
           className="bg-surface border border-[#e1e8ed] rounded-xl p-4 space-y-3"
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-[#6366f1]">Education {i + 1}</span>
+            <span className="text-xs font-medium text-[#2563eb]">Education {i + 1}</span>
             {education.length > 1 && (
               <button onClick={() => removeEntry(entry.id)} className="text-xs text-[#8b98a5] hover:text-[#f87171] transition-colors">
                 Remove

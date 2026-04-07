@@ -39,7 +39,7 @@ function DeltaBadge({ delta, label }: { delta: number | null; label: string }) {
   const isPositive = delta > 0
   const isNeutral = Math.abs(delta) <= 2
   const color = isNeutral
-    ? 'text-[#71767b] bg-[#f7f9f9]'
+    ? 'text-[#71767b] bg-[#f8fafc]'
     : isPositive
     ? 'text-emerald-600 bg-emerald-500/10'
     : 'text-[#f4212e] bg-red-500/10'
@@ -101,9 +101,9 @@ export default function ComparisonCard({ currentScores, overallScore, domain }: 
   if (loading) {
     return (
       <div className="surface-card-bordered p-5 animate-pulse">
-        <div className="h-4 bg-[#f7f9f9] rounded w-40 mb-4" />
+        <div className="h-4 bg-[#f8fafc] rounded w-40 mb-4" />
         <div className="grid grid-cols-2 gap-3">
-          {[1, 2, 3, 4].map(i => <div key={i} className="h-12 bg-[#f7f9f9] rounded" />)}
+          {[1, 2, 3, 4].map(i => <div key={i} className="h-12 bg-[#f8fafc] rounded" />)}
         </div>
       </div>
     )
@@ -128,7 +128,7 @@ export default function ComparisonCard({ currentScores, overallScore, domain }: 
 
       {/* Overall delta */}
       {data.overallDelta !== null && (
-        <div className="flex items-center gap-3 p-3 rounded-xl bg-[#f7f9f9]">
+        <div className="flex items-center gap-3 p-3 rounded-xl bg-[#f8fafc]">
           <ArrowIcon direction={data.overallDirection} />
           <div className="flex-1">
             <span className="text-sm text-[#0f1419] font-medium">Overall Score</span>
@@ -143,7 +143,7 @@ export default function ComparisonCard({ currentScores, overallScore, domain }: 
       {/* Per-dimension deltas */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {data.dimensions.map(dim => (
-          <div key={dim.dimension} className="flex items-center gap-3 p-3 rounded-xl bg-[#f7f9f9]">
+          <div key={dim.dimension} className="flex items-center gap-3 p-3 rounded-xl bg-[#f8fafc]">
             <ArrowIcon direction={dim.direction} />
             <div className="flex-1 min-w-0">
               <div className="text-sm text-[#536471]">{dim.label}</div>

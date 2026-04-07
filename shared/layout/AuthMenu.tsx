@@ -7,7 +7,7 @@ import Image from 'next/image'
 
 const PLAN_BADGE: Record<string, { label: string; className: string }> = {
   free: { label: 'Free', className: 'bg-[#eff3f4] text-[#536471]' },
-  pro: { label: 'Pro', className: 'bg-[rgba(99,102,241,0.1)] text-[#6366f1]' },
+  pro: { label: 'Pro', className: 'bg-[rgba(37,99,235,0.1)] text-[#2563eb]' },
   enterprise: { label: 'Enterprise', className: 'bg-[rgba(139,92,246,0.1)] text-[#7c3aed]' },
 }
 
@@ -31,7 +31,7 @@ export default function AuthMenu() {
     return (
       <Link
         href="/signin"
-        className="px-4 py-2 bg-[#6366f1] hover:bg-[#5558e6] text-white rounded-xl text-sm font-medium transition"
+        className="px-5 py-1.5 text-[13px] font-semibold rounded-full bg-blue-600 text-white hover:bg-blue-700 transition-colors"
       >
         Sign In
       </Link>
@@ -60,10 +60,10 @@ export default function AuthMenu() {
             alt="Profile"
             width={32}
             height={32}
-            className="w-8 h-8 rounded-full border-2 border-[#e1e8ed] group-hover:border-[#6366f1] transition"
+            className="w-8 h-8 rounded-full border-2 border-[#e1e8ed] group-hover:border-[#2563eb] transition"
           />
         ) : (
-          <div className="w-8 h-8 rounded-full bg-[#6366f1] flex items-center justify-center text-xs font-bold text-white border-2 border-[#e1e8ed] group-hover:border-[#6366f1] transition">
+          <div className="w-8 h-8 rounded-full bg-[#2563eb] flex items-center justify-center text-xs font-bold text-white border-2 border-[#e1e8ed] group-hover:border-[#2563eb] transition">
             {initials}
           </div>
         )}
@@ -84,7 +84,7 @@ export default function AuthMenu() {
               <Link
                 href="/pricing"
                 onClick={() => setOpen(false)}
-                className="inline-block mt-1.5 text-[11px] text-[#6366f1] hover:text-[#4f46e5] transition"
+                className="inline-block mt-1.5 text-[11px] text-[#2563eb] hover:text-[#1d4ed8] transition"
               >
                 Upgrade your plan →
               </Link>
@@ -96,7 +96,7 @@ export default function AuthMenu() {
             <Link
               href="/history"
               onClick={() => setOpen(false)}
-              className="flex items-center gap-3 px-4 py-2.5 text-sm text-[#536471] hover:bg-[#f7f9f9] transition"
+              className="flex items-center gap-3 px-4 py-2.5 text-sm text-[#536471] hover:bg-[#f8fafc] transition"
             >
               <svg className="w-4 h-4 text-[#8b98a5]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -106,7 +106,7 @@ export default function AuthMenu() {
             <Link
               href="/learn/progress"
               onClick={() => setOpen(false)}
-              className="flex items-center gap-3 px-4 py-2.5 text-sm text-[#536471] hover:bg-[#f7f9f9] transition"
+              className="flex items-center gap-3 px-4 py-2.5 text-sm text-[#536471] hover:bg-[#f8fafc] transition"
             >
               <svg className="w-4 h-4 text-[#8b98a5]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
@@ -116,7 +116,7 @@ export default function AuthMenu() {
             <Link
               href="/settings"
               onClick={() => setOpen(false)}
-              className="flex items-center gap-3 px-4 py-2.5 text-sm text-[#536471] hover:bg-[#f7f9f9] transition"
+              className="flex items-center gap-3 px-4 py-2.5 text-sm text-[#536471] hover:bg-[#f8fafc] transition"
             >
               <svg className="w-4 h-4 text-[#8b98a5]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -138,7 +138,7 @@ export default function AuthMenu() {
                 } catch { /* ignore */ }
                 signOut({ callbackUrl: '/' })
               }}
-              className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-[#f4212e] hover:bg-[#f7f9f9] transition"
+              className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-[#f4212e] hover:bg-[#f8fafc] transition"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />

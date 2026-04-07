@@ -133,7 +133,7 @@ export default function EditInterviewTypePage() {
         </Link>
         <h2 className="text-2xl font-bold">Edit Interview Type: {slug}</h2>
         {isBuiltIn && (
-          <span className="text-xs bg-[#f7f9f9] text-[#536471] px-2 py-1 rounded">Built-in</span>
+          <span className="text-xs bg-[#f8fafc] text-[#536471] px-2 py-1 rounded">Built-in</span>
         )}
       </div>
 
@@ -150,7 +150,7 @@ export default function EditInterviewTypePage() {
             type="text"
             value={slug}
             disabled
-            className="w-full bg-[#f7f9f9] border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#8b98a5] cursor-not-allowed"
+            className="w-full bg-[#f8fafc] border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#8b98a5] cursor-not-allowed"
           />
         </div>
 
@@ -162,7 +162,7 @@ export default function EditInterviewTypePage() {
               required
               value={form.label}
               onChange={(e) => updateField('label', e.target.value)}
-              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
             />
           </div>
           <div>
@@ -172,7 +172,7 @@ export default function EditInterviewTypePage() {
               required
               value={form.icon}
               onChange={(e) => updateField('icon', e.target.value)}
-              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
             />
           </div>
         </div>
@@ -184,7 +184,7 @@ export default function EditInterviewTypePage() {
             value={form.description}
             onChange={(e) => updateField('description', e.target.value)}
             rows={2}
-            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
           />
         </div>
 
@@ -194,7 +194,7 @@ export default function EditInterviewTypePage() {
             value={form.systemPromptTemplate}
             onChange={(e) => updateField('systemPromptTemplate', e.target.value)}
             rows={4}
-            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none font-mono"
+            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none font-mono"
           />
         </div>
 
@@ -204,7 +204,7 @@ export default function EditInterviewTypePage() {
             value={form.questionStrategy}
             onChange={(e) => updateField('questionStrategy', e.target.value)}
             rows={3}
-            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none font-mono"
+            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none font-mono"
           />
         </div>
 
@@ -214,7 +214,7 @@ export default function EditInterviewTypePage() {
             value={form.evaluationCriteria}
             onChange={(e) => updateField('evaluationCriteria', e.target.value)}
             rows={3}
-            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none font-mono"
+            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none font-mono"
           />
         </div>
 
@@ -224,7 +224,7 @@ export default function EditInterviewTypePage() {
             value={form.avatarPersona}
             onChange={(e) => updateField('avatarPersona', e.target.value)}
             rows={2}
-            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
           />
         </div>
 
@@ -236,7 +236,7 @@ export default function EditInterviewTypePage() {
             type="text"
             value={form.applicableDomains}
             onChange={(e) => updateField('applicableDomains', e.target.value)}
-            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
           />
         </div>
 
@@ -248,7 +248,7 @@ export default function EditInterviewTypePage() {
             value={form.scoringDimensions}
             onChange={(e) => updateField('scoringDimensions', e.target.value)}
             rows={6}
-            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none font-mono"
+            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none font-mono"
           />
           <p className="text-xs text-[#8b98a5] mt-1">
             Array of {`{ "name": string, "label": string, "weight": number }`}
@@ -262,7 +262,7 @@ export default function EditInterviewTypePage() {
               type="number"
               value={form.sortOrder}
               onChange={(e) => updateField('sortOrder', e.target.value)}
-              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
             />
           </div>
           <div className="flex items-end pb-2">
@@ -282,13 +282,13 @@ export default function EditInterviewTypePage() {
           <button
             type="submit"
             disabled={saving}
-            className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50 rounded-lg text-sm font-medium transition-colors"
+            className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 rounded-lg text-sm font-medium transition-colors"
           >
             {saving ? 'Saving...' : 'Save Changes'}
           </button>
           <Link
             href="/cms/interview-types"
-            className="px-6 py-2 bg-[#f7f9f9] hover:bg-[#f7f9f9] rounded-lg text-sm font-medium transition-colors"
+            className="px-6 py-2 bg-[#f8fafc] hover:bg-[#f8fafc] rounded-lg text-sm font-medium transition-colors"
           >
             Cancel
           </Link>

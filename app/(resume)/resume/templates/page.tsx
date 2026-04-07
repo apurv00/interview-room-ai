@@ -9,7 +9,7 @@ import type { ResumeData } from '@resume/validators/resume'
 export default function ResumeTemplatesPage() {
   const [selectedId, setSelectedId] = useState(RESUME_TEMPLATES[0].id)
   const selected = RESUME_TEMPLATES.find(t => t.id === selectedId) || RESUME_TEMPLATES[0]
-  const colors = TEMPLATE_COLOR_MAP[selected.color] || TEMPLATE_COLOR_MAP.indigo
+  const colors = TEMPLATE_COLOR_MAP[selected.color] || TEMPLATE_COLOR_MAP.blue
 
   const sampleData: ResumeData = {
     ...SAMPLE_RESUME_DATA,
@@ -29,7 +29,7 @@ export default function ResumeTemplatesPage() {
         {/* Template list - left side */}
         <div className="w-[340px] shrink-0 space-y-2 overflow-y-auto max-h-[calc(100vh-180px)] pr-1">
           {RESUME_TEMPLATES.map(t => {
-            const tColors = TEMPLATE_COLOR_MAP[t.color] || TEMPLATE_COLOR_MAP.indigo
+            const tColors = TEMPLATE_COLOR_MAP[t.color] || TEMPLATE_COLOR_MAP.blue
             const isSelected = t.id === selectedId
             return (
               <button
@@ -37,7 +37,7 @@ export default function ResumeTemplatesPage() {
                 onClick={() => setSelectedId(t.id)}
                 className={`w-full text-left p-4 rounded-xl border transition-all ${
                   isSelected
-                    ? `bg-[#f7f9f9] border-emerald-500/40 ring-1 ring-emerald-500/20`
+                    ? `bg-[#f8fafc] border-emerald-500/40 ring-1 ring-emerald-500/20`
                     : 'bg-white border-[#e1e8ed] hover:border-[#536471]'
                 }`}
               >
@@ -52,7 +52,7 @@ export default function ResumeTemplatesPage() {
                 <p className="text-[11px] text-[#536471] leading-relaxed">{t.desc}</p>
                 <div className="flex flex-wrap gap-1 mt-2">
                   {t.sections.slice(0, 4).map(s => (
-                    <span key={s} className="px-1.5 py-0.5 bg-[#f7f9f9] rounded text-[9px] text-[#71767b]">
+                    <span key={s} className="px-1.5 py-0.5 bg-[#f8fafc] rounded text-[9px] text-[#71767b]">
                       {s}
                     </span>
                   ))}

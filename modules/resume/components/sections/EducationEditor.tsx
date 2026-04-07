@@ -29,7 +29,7 @@ export default function EducationEditor({ items, onAdd, onUpdate, onRemove, onRe
       <div className="border border-[#e1e8ed] rounded-xl overflow-hidden">
         <button
           onClick={() => setExpandedId(expandedId === edu.id ? null : edu.id)}
-          className="w-full flex items-center justify-between px-4 py-3 bg-[#f7f9f9] hover:bg-[#eff3f4] transition-colors text-left"
+          className="w-full flex items-center justify-between px-4 py-3 bg-[#f8fafc] hover:bg-[#eff3f4] transition-colors text-left"
         >
           <div className="flex items-center gap-2">
             {dragListeners && (

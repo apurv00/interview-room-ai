@@ -250,7 +250,7 @@ export default function OnboardingPage() {
   if (status === 'loading' || loading) {
     return (
       <main className="min-h-screen flex items-center justify-center">
-        <div className="w-6 h-6 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
+        <div className="w-6 h-6 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
       </main>
     )
   }
@@ -275,7 +275,7 @@ export default function OnboardingPage() {
             <div
               key={s}
               className={`h-1 flex-1 rounded-full transition-colors duration-300 ${
-                s < step ? 'bg-indigo-600' : s === step ? 'bg-indigo-500' : 'bg-[#e1e8ed]'
+                s < step ? 'bg-blue-600' : s === step ? 'bg-blue-500' : 'bg-[#e1e8ed]'
               }`}
             />
           ))}
@@ -324,8 +324,8 @@ export default function OnboardingPage() {
               {uploadError && <p className="text-xs text-red-400">{uploadError}</p>}
 
               {extracting && (
-                <div className="flex items-center gap-3 text-sm text-[#6366f1]">
-                  <div className="w-4 h-4 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
+                <div className="flex items-center gap-3 text-sm text-[#2563eb]">
+                  <div className="w-4 h-4 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
                   Analyzing your resume...
                 </div>
               )}
@@ -350,7 +350,7 @@ export default function OnboardingPage() {
                     }
                   }}
                   disabled={resumeUploading || extracting || saving}
-                  className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium transition-colors disabled:opacity-50"
+                  className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium transition-colors disabled:opacity-50"
                 >
                   {saving ? 'Saving...' : 'Continue'}
                 </button>
@@ -398,8 +398,8 @@ export default function OnboardingPage() {
                       onClick={() => setTargetRole(d.slug)}
                       className={`flex flex-col items-center gap-1.5 py-3 rounded-xl border text-xs font-medium transition-all duration-200 ${
                         targetRole === d.slug
-                          ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]'
-                          : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'
+                          ? 'border-[#2563eb] bg-blue-50 text-[#2563eb]'
+                          : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#cfd9de]'
                       }`}
                     >
                       {d.icon && <span className="text-lg">{d.icon}</span>}
@@ -421,8 +421,8 @@ export default function OnboardingPage() {
                       onClick={() => setExperienceLevel(e)}
                       className={`py-3 rounded-xl border text-xs font-medium transition-all duration-200 ${
                         experienceLevel === e
-                          ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]'
-                          : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'
+                          ? 'border-[#2563eb] bg-blue-50 text-[#2563eb]'
+                          : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#cfd9de]'
                       }`}
                     >
                       {EXPERIENCE_LABELS[e]}
@@ -442,7 +442,7 @@ export default function OnboardingPage() {
                   onChange={(e) => setCurrentTitle(e.target.value)}
                   maxLength={100}
                   placeholder="e.g. Senior Software Engineer"
-                  className="w-full px-4 py-3 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-[#0f1419] text-sm placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-[#6366f1] focus:border-transparent"
+                  className="w-full px-4 py-3 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-[#0f1419] text-sm placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-[#2563eb] focus:border-transparent"
                 />
               </div>
 
@@ -458,8 +458,8 @@ export default function OnboardingPage() {
                       onClick={() => setCurrentIndustry(i.value)}
                       className={`py-2 rounded-lg border text-xs font-medium transition-all duration-200 ${
                         currentIndustry === i.value
-                          ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]'
-                          : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'
+                          ? 'border-[#2563eb] bg-blue-50 text-[#2563eb]'
+                          : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#cfd9de]'
                       }`}
                     >
                       {i.label}
@@ -474,7 +474,7 @@ export default function OnboardingPage() {
                   type="checkbox"
                   checked={isCareerSwitcher}
                   onChange={(e) => setIsCareerSwitcher(e.target.checked)}
-                  className="w-4 h-4 rounded border-[#e1e8ed] bg-[#f7f9f9] text-[#6366f1] focus:ring-[#6366f1]"
+                  className="w-4 h-4 rounded border-[#e1e8ed] bg-[#f8fafc] text-[#2563eb] focus:ring-[#2563eb]"
                 />
                 <span className="text-sm text-[#536471]">I&apos;m switching careers</span>
               </label>
@@ -492,7 +492,7 @@ export default function OnboardingPage() {
                     onChange={(e) => setSwitchingFrom(e.target.value)}
                     maxLength={100}
                     placeholder="Switching from... (e.g. Engineering)"
-                    className="w-full px-4 py-3 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-[#0f1419] text-sm placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-[#6366f1] focus:border-transparent"
+                    className="w-full px-4 py-3 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-[#0f1419] text-sm placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-[#2563eb] focus:border-transparent"
                   />
                 </motion.div>
               )}
@@ -508,7 +508,7 @@ export default function OnboardingPage() {
                     switchingFrom: isCareerSwitcher ? switchingFrom || undefined : undefined,
                   })}
                   disabled={saving}
-                  className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium transition-colors disabled:opacity-50"
+                  className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium transition-colors disabled:opacity-50"
                 >
                   {saving ? 'Saving...' : 'Continue'}
                 </button>
@@ -552,8 +552,8 @@ export default function OnboardingPage() {
                       onClick={() => setTargetCompanyType(c.value)}
                       className={`py-3 rounded-xl border text-xs font-medium transition-all duration-200 ${
                         targetCompanyType === c.value
-                          ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]'
-                          : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'
+                          ? 'border-[#2563eb] bg-blue-50 text-[#2563eb]'
+                          : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#cfd9de]'
                       }`}
                     >
                       {c.label}
@@ -574,11 +574,11 @@ export default function OnboardingPage() {
                       onClick={() => setInterviewGoal(g.value)}
                       className={`w-full text-left px-4 py-3 rounded-xl border transition-all duration-200 ${
                         interviewGoal === g.value
-                          ? 'border-[#6366f1] bg-indigo-50'
-                          : 'border-[#e1e8ed] bg-[#f7f9f9] hover:border-[#cfd9de]'
+                          ? 'border-[#2563eb] bg-blue-50'
+                          : 'border-[#e1e8ed] bg-[#f8fafc] hover:border-[#cfd9de]'
                       }`}
                     >
-                      <span className={`text-sm font-medium ${interviewGoal === g.value ? 'text-[#6366f1]' : 'text-[#0f1419]'}`}>
+                      <span className={`text-sm font-medium ${interviewGoal === g.value ? 'text-[#2563eb]' : 'text-[#0f1419]'}`}>
                         {g.label}
                       </span>
                       <p className="text-xs text-[#8b98a5] mt-0.5">{g.desc}</p>
@@ -599,8 +599,8 @@ export default function OnboardingPage() {
                       onClick={() => toggleWeakArea(w.value)}
                       className={`py-2.5 rounded-lg border text-xs font-medium transition-all duration-200 ${
                         weakAreas.includes(w.value)
-                          ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]'
-                          : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'
+                          ? 'border-[#2563eb] bg-blue-50 text-[#2563eb]'
+                          : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#cfd9de]'
                       }`}
                     >
                       {w.label}
@@ -613,7 +613,7 @@ export default function OnboardingPage() {
                 <button
                   onClick={handleComplete}
                   disabled={saving}
-                  className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-semibold transition-colors disabled:opacity-50"
+                  className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-semibold transition-colors disabled:opacity-50"
                 >
                   {saving ? 'Setting up...' : 'Start Practicing →'}
                 </button>

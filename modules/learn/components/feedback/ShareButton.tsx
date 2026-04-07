@@ -47,7 +47,7 @@ export default function ShareButton({ sessionId }: ShareButtonProps) {
       <div className="flex items-center gap-2">
         <button
           onClick={copyLink}
-          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[#f7f9f9] text-[#536471] hover:bg-[#eff3f4] transition-colors"
+          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[#f8fafc] text-[#536471] hover:bg-[#eff3f4] transition-colors"
         >
           {copied ? 'Copied!' : 'Copy Link'}
         </button>
@@ -63,7 +63,7 @@ export default function ShareButton({ sessionId }: ShareButtonProps) {
           href={`https://twitter.com/intent/tweet?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent('Check out my interview scorecard!')}`}
           target="_blank"
           rel="noopener noreferrer"
-          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[#f7f9f9] text-[#536471] hover:bg-[#eff3f4] transition-colors"
+          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[#f8fafc] text-[#536471] hover:bg-[#eff3f4] transition-colors"
         >
           X
         </a>

@@ -45,7 +45,7 @@ const DIFFICULTY_STYLES = {
 
 const STATUS_STYLES = {
   not_started: { bg: 'bg-[#eff3f4]', text: 'text-[#536471]', label: 'Not Started' },
-  in_progress: { bg: 'bg-indigo-500/20', text: 'text-[#6366f1]', label: 'In Progress' },
+  in_progress: { bg: 'bg-blue-500/20', text: 'text-[#2563eb]', label: 'In Progress' },
   mastered: { bg: 'bg-emerald-500/20', text: 'text-[#059669]', label: 'Mastered' },
 }
 
@@ -98,7 +98,7 @@ export default function PracticePage() {
   if (loading) {
     return (
       <main className="min-h-screen flex items-center justify-center">
-        <div className="w-6 h-6 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
+        <div className="w-6 h-6 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
       </main>
     )
   }
@@ -125,7 +125,7 @@ export default function PracticePage() {
         </div>
         <Link
           href="/settings"
-          className="text-xs text-[#6366f1] hover:text-[#5558e6] transition-colors"
+          className="text-xs text-[#2563eb] hover:text-[#1d4ed8] transition-colors"
         >
           Update Profile
         </Link>
@@ -136,7 +136,7 @@ export default function PracticePage() {
         {[
           { label: 'Total Sets', value: stats.total, color: 'text-[#0f1419]' },
           { label: 'Mastered', value: stats.mastered, color: 'text-[#059669]' },
-          { label: 'In Progress', value: stats.inProgress, color: 'text-[#6366f1]' },
+          { label: 'In Progress', value: stats.inProgress, color: 'text-[#2563eb]' },
           { label: 'Not Started', value: stats.notStarted, color: 'text-[#536471]' },
         ].map(s => (
           <div key={s.label} className="bg-white border border-[#e1e8ed] rounded-xl p-4 text-center">
@@ -164,7 +164,7 @@ export default function PracticePage() {
             )}
             {stats.inProgress > 0 && (
               <div
-                className="h-full bg-indigo-500 transition-all"
+                className="h-full bg-blue-500 transition-all"
                 style={{ width: `${(stats.inProgress / stats.total) * 100}%` }}
               />
             )}
@@ -180,7 +180,7 @@ export default function PracticePage() {
             onClick={() => setFilter(f)}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
               filter === f
-                ? 'bg-indigo-600 text-white'
+                ? 'bg-blue-600 text-white'
                 : 'text-[#536471] hover:text-[#0f1419]'
             }`}
           >
@@ -195,7 +195,7 @@ export default function PracticePage() {
           <p className="text-[#536471]">No practice sets match this filter.</p>
           {!data?.profile?.targetRole && (
             <p className="text-sm text-[#8b98a5] mt-2">
-              <Link href="/settings" className="text-[#6366f1] hover:text-[#5558e6]">Complete your profile</Link> to get personalized practice sets.
+              <Link href="/settings" className="text-[#2563eb] hover:text-[#1d4ed8]">Complete your profile</Link> to get personalized practice sets.
             </p>
           )}
         </div>
@@ -238,8 +238,8 @@ export default function PracticePage() {
 
                 {/* Personalized tip */}
                 {set.personalizedTip && (
-                  <div className="bg-indigo-500/5 border border-indigo-500/10 rounded-lg px-3 py-2 mb-3">
-                    <p className="text-[11px] text-[#6366f1]">{set.personalizedTip}</p>
+                  <div className="bg-blue-500/5 border border-blue-500/10 rounded-lg px-3 py-2 mb-3">
+                    <p className="text-[11px] text-[#2563eb]">{set.personalizedTip}</p>
                   </div>
                 )}
 
@@ -258,7 +258,7 @@ export default function PracticePage() {
                 {/* CTA */}
                 <button
                   onClick={() => startPractice(set)}
-                  className="w-full py-2.5 rounded-xl text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white transition-colors group-hover:shadow-[0_0_20px_rgba(99,102,241,0.15)]"
+                  className="w-full py-2.5 rounded-xl text-sm font-medium bg-blue-600 hover:bg-blue-500 text-white transition-colors group-hover:shadow-[0_0_20px_rgba(37,99,235,0.15)]"
                 >
                   {set.status === 'not_started' ? 'Start Practice' : set.status === 'mastered' ? 'Practice Again' : 'Continue Practice'}
                 </button>

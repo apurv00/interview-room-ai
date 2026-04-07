@@ -46,8 +46,8 @@ export default function HowItWorks() {
               </span>
 
               {/* Icon */}
-              <div className="mt-4 w-11 h-11 rounded-xl bg-indigo-50 flex items-center justify-center">
-                <item.icon className="size-5 text-[#6366f1]" strokeWidth={1.5} />
+              <div className="mt-4 w-11 h-11 rounded-xl bg-blue-50 flex items-center justify-center">
+                <item.icon className="size-5 text-[#2563eb]" strokeWidth={1.5} />
               </div>
 
               <h3 className="mt-4 text-lg font-semibold text-[#0f1419]">

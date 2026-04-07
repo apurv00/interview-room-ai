@@ -120,7 +120,7 @@ export default function EditDomainPage() {
         </Link>
         <h2 className="text-2xl font-bold">Edit Domain: {slug}</h2>
         {isBuiltIn && (
-          <span className="text-xs bg-[#f7f9f9] text-[#536471] px-2 py-1 rounded">Built-in</span>
+          <span className="text-xs bg-[#f8fafc] text-[#536471] px-2 py-1 rounded">Built-in</span>
         )}
       </div>
 
@@ -137,7 +137,7 @@ export default function EditDomainPage() {
             type="text"
             value={slug}
             disabled
-            className="w-full bg-[#f7f9f9] border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#8b98a5] cursor-not-allowed"
+            className="w-full bg-[#f8fafc] border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#8b98a5] cursor-not-allowed"
           />
         </div>
 
@@ -149,7 +149,7 @@ export default function EditDomainPage() {
               required
               value={form.label}
               onChange={(e) => updateField('label', e.target.value)}
-              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
             />
           </div>
           <div>
@@ -159,7 +159,7 @@ export default function EditDomainPage() {
               required
               value={form.shortLabel}
               onChange={(e) => updateField('shortLabel', e.target.value)}
-              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
             />
           </div>
         </div>
@@ -172,7 +172,7 @@ export default function EditDomainPage() {
               required
               value={form.icon}
               onChange={(e) => updateField('icon', e.target.value)}
-              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
             />
           </div>
           <div>
@@ -181,7 +181,7 @@ export default function EditDomainPage() {
               type="text"
               value={form.color}
               onChange={(e) => updateField('color', e.target.value)}
-              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
             />
           </div>
         </div>
@@ -193,7 +193,7 @@ export default function EditDomainPage() {
             value={form.description}
             onChange={(e) => updateField('description', e.target.value)}
             rows={2}
-            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
           />
         </div>
 
@@ -203,7 +203,7 @@ export default function EditDomainPage() {
             <select
               value={form.category}
               onChange={(e) => updateField('category', e.target.value)}
-              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
             >
               <option value="engineering">Engineering</option>
               <option value="business">Business</option>
@@ -217,7 +217,7 @@ export default function EditDomainPage() {
               type="number"
               value={form.sortOrder}
               onChange={(e) => updateField('sortOrder', e.target.value)}
-              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
             />
           </div>
         </div>
@@ -239,7 +239,7 @@ export default function EditDomainPage() {
             value={form.systemPromptContext}
             onChange={(e) => updateField('systemPromptContext', e.target.value)}
             rows={4}
-            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none font-mono"
+            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none font-mono"
           />
         </div>
 
@@ -251,7 +251,7 @@ export default function EditDomainPage() {
             value={form.sampleQuestions}
             onChange={(e) => updateField('sampleQuestions', e.target.value)}
             rows={4}
-            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
           />
         </div>
 
@@ -263,7 +263,7 @@ export default function EditDomainPage() {
             value={form.evaluationEmphasis}
             onChange={(e) => updateField('evaluationEmphasis', e.target.value)}
             rows={3}
-            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
           />
         </div>
 
@@ -271,13 +271,13 @@ export default function EditDomainPage() {
           <button
             type="submit"
             disabled={saving}
-            className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50 rounded-lg text-sm font-medium transition-colors"
+            className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 rounded-lg text-sm font-medium transition-colors"
           >
             {saving ? 'Saving...' : 'Save Changes'}
           </button>
           <Link
             href="/cms/domains"
-            className="px-6 py-2 bg-[#f7f9f9] hover:bg-[#f7f9f9] rounded-lg text-sm font-medium transition-colors"
+            className="px-6 py-2 bg-[#f8fafc] hover:bg-[#f8fafc] rounded-lg text-sm font-medium transition-colors"
           >
             Cancel
           </Link>

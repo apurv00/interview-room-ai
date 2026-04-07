@@ -9,19 +9,19 @@ export default function Hero() {
   return (
     <section className="relative overflow-hidden">
       {/* Background gradient */}
-      <div className="absolute inset-0 bg-gradient-to-b from-white via-indigo-50/30 to-white pointer-events-none" />
+      <div className="absolute inset-0 bg-gradient-to-b from-white via-blue-50/30 to-white pointer-events-none" />
 
       {/* Decorative grid pattern */}
       <div
         className="absolute inset-0 opacity-[0.03] pointer-events-none"
         style={{
-          backgroundImage: 'radial-gradient(circle, #6366f1 1px, transparent 1px)',
+          backgroundImage: 'radial-gradient(circle, #2563eb 1px, transparent 1px)',
           backgroundSize: '24px 24px',
         }}
       />
 
       {/* Decorative blurred orbs */}
-      <div className="absolute top-20 left-[15%] w-80 h-80 bg-indigo-200 rounded-full blur-[100px] opacity-30 pointer-events-none" />
+      <div className="absolute top-20 left-[15%] w-80 h-80 bg-blue-200 rounded-full blur-[100px] opacity-30 pointer-events-none" />
       <div className="absolute top-40 right-[15%] w-64 h-64 bg-violet-200 rounded-full blur-[100px] opacity-20 pointer-events-none" />
 
       <div className="relative max-w-[900px] mx-auto px-4 sm:px-6 pt-24 pb-20 text-center">
@@ -39,7 +39,7 @@ export default function Hero() {
           style={{ animationDelay: '80ms' }}
         >
           Practice interviews that{' '}
-          <span className="bg-gradient-to-r from-[#6366f1] to-[#a855f7] bg-clip-text text-transparent">
+          <span className="bg-gradient-to-r from-[#2563eb] to-[#3b82f6] bg-clip-text text-transparent">
             feel real.
           </span>
         </h1>

@@ -8,9 +8,9 @@ const HIDDEN_PREFIXES = ['/interview', '/lobby']
 
 const PRODUCT_LINKS = [
   { href: '/', label: 'Home' },
-  { href: '/learn/practice', label: 'Practice Sets' },
+  { href: '/interview/setup', label: 'Interview' },
   { href: '/pricing', label: 'Pricing' },
-  { href: '/learn/guides', label: 'Resources' },
+  { href: '/resources', label: 'Resources' },
   { href: '/signup', label: 'Get Started' },
 ]
 

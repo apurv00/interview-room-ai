@@ -53,7 +53,7 @@ const PHASE_COLORS: Record<string, { text: string; bg: string; border: string; d
   LISTENING: { text: 'text-emerald-600', bg: 'bg-emerald-500/10', border: 'border-emerald-500/25', dot: 'bg-emerald-600' },
   PROCESSING: { text: 'text-amber-600', bg: 'bg-amber-500/10', border: 'border-amber-500/25', dot: 'bg-amber-600' },
   COACHING: { text: 'text-violet-600', bg: 'bg-violet-500/10', border: 'border-violet-500/25', dot: 'bg-violet-600' },
-  ASK_QUESTION: { text: 'text-[#6366f1]', bg: 'bg-indigo-500/10', border: 'border-indigo-500/25', dot: 'bg-[#6366f1]' },
+  ASK_QUESTION: { text: 'text-[#2563eb]', bg: 'bg-blue-500/10', border: 'border-blue-500/25', dot: 'bg-[#2563eb]' },
   FOLLOW_UP: { text: 'text-purple-600', bg: 'bg-purple-500/10', border: 'border-purple-500/25', dot: 'bg-purple-600' },
   WRAP_UP: { text: 'text-orange-600', bg: 'bg-orange-500/10', border: 'border-orange-500/25', dot: 'bg-orange-600' },
   SCORING: { text: 'text-cyan-600', bg: 'bg-cyan-500/10', border: 'border-cyan-500/25', dot: 'bg-cyan-600' },
@@ -61,7 +61,7 @@ const PHASE_COLORS: Record<string, { text: string; bg: string; border: string; d
   DESIGN_CANVAS: { text: 'text-teal-600', bg: 'bg-teal-500/10', border: 'border-teal-500/25', dot: 'bg-teal-600' },
 }
 
-const DEFAULT_PHASE_COLOR = { text: 'text-[#71767b]', bg: 'bg-[#f7f9f9]', border: 'border-[#e1e8ed]', dot: 'bg-[#71767b]' }
+const DEFAULT_PHASE_COLOR = { text: 'text-[#71767b]', bg: 'bg-[#f8fafc]', border: 'border-[#e1e8ed]', dot: 'bg-[#71767b]' }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -381,7 +381,7 @@ export default function InterviewPage() {
           animate={{ opacity: 1 }}
           transition={{ duration: 0.5 }}
         >
-          <div className="w-8 h-8 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
+          <div className="w-8 h-8 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
           <p className="text-sm text-[#71767b]">Loading interview...</p>
         </motion.div>
       </div>
@@ -510,14 +510,14 @@ export default function InterviewPage() {
                   {[0, 1, 2].map((i) => (
                     <motion.div
                       key={i}
-                      className="w-[2.5px] bg-[#6366f1] rounded-full origin-bottom"
+                      className="w-[2.5px] bg-[#2563eb] rounded-full origin-bottom"
                       animate={{ scaleY: [0.3, 1, 0.3] }}
                       transition={{ duration: 0.5, repeat: Infinity, delay: i * 0.1, ease: 'easeInOut' }}
                       style={{ height: '10px' }}
                     />
                   ))}
                 </div>
-                <span className="text-[10px] text-[#6366f1] font-medium ml-1">AI</span>
+                <span className="text-[10px] text-[#2563eb] font-medium ml-1">AI</span>
               </div>
             ) : null
           }

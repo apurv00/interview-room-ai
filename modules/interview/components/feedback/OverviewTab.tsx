@@ -119,14 +119,14 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
               </span>
             </div>
             <div className="space-y-3">
-              <ScoreBar label="Engagement depth" score={engagementSignals.engagement_score} color="indigo" />
-              <ScoreBar label="Composure under pressure" score={engagementSignals.composure_under_pressure} color="indigo" />
-              <ScoreBar label="Energy consistency" score={Math.round(engagementSignals.energy_consistency * 100)} color="indigo" />
+              <ScoreBar label="Engagement depth" score={engagementSignals.engagement_score} color="blue" />
+              <ScoreBar label="Composure under pressure" score={engagementSignals.composure_under_pressure} color="blue" />
+              <ScoreBar label="Energy consistency" score={Math.round(engagementSignals.energy_consistency * 100)} color="blue" />
             </div>
             <div className="pt-2 border-t border-[#e1e8ed] space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-caption text-[#8b98a5]">Confidence trend</span>
-                <span className={`text-xs px-2 py-0.5 rounded-full border ${CONFIDENCE_TREND_LABELS[engagementSignals.confidence_trend as keyof typeof CONFIDENCE_TREND_LABELS]?.color || 'text-[#71767b] bg-[#f7f9f9] border-[#e1e8ed]'}`}>
+                <span className={`text-xs px-2 py-0.5 rounded-full border ${CONFIDENCE_TREND_LABELS[engagementSignals.confidence_trend as keyof typeof CONFIDENCE_TREND_LABELS]?.color || 'text-[#71767b] bg-[#f8fafc] border-[#e1e8ed]'}`}>
                   {CONFIDENCE_TREND_LABELS[engagementSignals.confidence_trend as keyof typeof CONFIDENCE_TREND_LABELS]?.text || s(engagementSignals.confidence_trend)}
                 </span>
               </div>
@@ -144,9 +144,9 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
               </span>
             </div>
             <div className="space-y-3">
-              <ScoreBar label="Gaze / eye contact" score={Math.round(deliverySignals.gaze_ratio * 100)} color="indigo" />
-              <ScoreBar label="Head stability" score={Math.round(deliverySignals.head_stability * 100)} color="indigo" />
-              <ScoreBar label="Affect variability" score={Math.round(deliverySignals.affect_variability * 100)} color="indigo" />
+              <ScoreBar label="Gaze / eye contact" score={Math.round(deliverySignals.gaze_ratio * 100)} color="blue" />
+              <ScoreBar label="Head stability" score={Math.round(deliverySignals.head_stability * 100)} color="blue" />
+              <ScoreBar label="Affect variability" score={Math.round(deliverySignals.affect_variability * 100)} color="blue" />
             </div>
             <div className="pt-2 border-t border-[#e1e8ed]">
               <div className={`text-xs px-2 py-1 rounded-full border w-fit ${PROBABILITY_COLORS[deliverySignals.confidence_band]}`}>

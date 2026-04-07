@@ -361,8 +361,8 @@ export default function AuthenticatedHome() {
           <div className="surface-card flex items-center gap-4 p-3 rounded-xl">
             {lastScore !== null && (
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-indigo-50 flex items-center justify-center">
-                  <span className="text-sm font-bold text-[#6366f1]">{lastScore}</span>
+                <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center">
+                  <span className="text-sm font-bold text-[#2563eb]">{lastScore}</span>
                 </div>
                 <span className="text-xs text-[#536471]">Last score</span>
               </div>
@@ -372,7 +372,7 @@ export default function AuthenticatedHome() {
               <span className="text-xs text-[#536471]">{sessionCount === 1 ? 'session' : 'sessions'} completed</span>
             </div>
             <div className="flex-1" />
-            <Link href="/history" className="text-xs text-[#6366f1] hover:text-[#4f46e5] font-medium transition">
+            <Link href="/history" className="text-xs text-[#2563eb] hover:text-[#1d4ed8] font-medium transition">
               View all &rarr;
             </Link>
           </div>
@@ -389,20 +389,20 @@ export default function AuthenticatedHome() {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
                 <p className="text-xs text-emerald-600 font-medium truncate flex-1">{resumeFileName}</p>
-                <button onClick={() => { setResumeText(''); setResumeFileName(''); setQuickProfileDone(false) }} className="text-xs text-[#71767b] hover:text-[#6366f1] transition">Change</button>
+                <button onClick={() => { setResumeText(''); setResumeFileName(''); setQuickProfileDone(false) }} className="text-xs text-[#71767b] hover:text-[#2563eb] transition">Change</button>
               </div>
             ) : showNoResumeOptions ? (
-              <div className="grid grid-cols-2 gap-2 p-3 rounded-xl border border-[#e1e8ed] bg-[#f7f9f9]">
+              <div className="grid grid-cols-2 gap-2 p-3 rounded-xl border border-[#e1e8ed] bg-[#f8fafc]">
                 <div className="space-y-2">
                   <p className="text-xs font-semibold text-[#0f1419]">Quick Profile</p>
-                  <input type="text" value={quickTitle} onChange={(e) => setQuickTitle(e.target.value)} placeholder="Job title (e.g. Senior SWE)" className="w-full text-xs px-2.5 py-1.5 border border-[#e1e8ed] rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-[#6366f1]" />
-                  <input type="text" value={quickSkills} onChange={(e) => setQuickSkills(e.target.value)} placeholder="Skills (comma-separated)" className="w-full text-xs px-2.5 py-1.5 border border-[#e1e8ed] rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-[#6366f1]" />
+                  <input type="text" value={quickTitle} onChange={(e) => setQuickTitle(e.target.value)} placeholder="Job title (e.g. Senior SWE)" className="w-full text-xs px-2.5 py-1.5 border border-[#e1e8ed] rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
+                  <input type="text" value={quickSkills} onChange={(e) => setQuickSkills(e.target.value)} placeholder="Skills (comma-separated)" className="w-full text-xs px-2.5 py-1.5 border border-[#e1e8ed] rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
                   <Button variant="secondary" size="sm" onClick={handleQuickProfile} disabled={!quickTitle.trim()}>Continue</Button>
                 </div>
                 <div className="flex flex-col items-center justify-center text-center p-2 rounded-xl border border-dashed border-[#e1e8ed]">
                   <p className="text-xs font-semibold text-[#0f1419] mb-1">Build a Resume</p>
                   <p className="text-[10px] text-[#71767b] mb-2">AI-powered, 5 minutes</p>
-                  <Link href="/resume/wizard" target="_blank" className="text-xs text-[#6366f1] hover:underline font-medium">Open Wizard &rarr;</Link>
+                  <Link href="/resume/wizard" target="_blank" className="text-xs text-[#2563eb] hover:underline font-medium">Open Wizard &rarr;</Link>
                 </div>
               </div>
             ) : (
@@ -411,11 +411,11 @@ export default function AuthenticatedHome() {
                 {savedResumes.length > 0 && (
                   <div className="flex flex-wrap gap-1.5">
                     {savedResumes.map((r) => (
-                      <button key={r.id} onClick={() => handleSelectSavedResume(r.id)} className="text-[10px] px-2 py-1 rounded-full border border-[#e1e8ed] hover:border-[#6366f1] hover:text-[#6366f1] transition bg-white">{r.name}</button>
+                      <button key={r.id} onClick={() => handleSelectSavedResume(r.id)} className="text-[10px] px-2 py-1 rounded-full border border-[#e1e8ed] hover:border-[#2563eb] hover:text-[#2563eb] transition bg-white">{r.name}</button>
                     ))}
                   </div>
                 )}
-                <button onClick={() => setShowNoResumeOptions(true)} className="text-[10px] text-[#536471] hover:text-[#6366f1] transition underline underline-offset-2">I don&apos;t have a resume</button>
+                <button onClick={() => setShowNoResumeOptions(true)} className="text-[10px] text-[#536471] hover:text-[#2563eb] transition underline underline-offset-2">I don&apos;t have a resume</button>
               </div>
             )}
           </div>
@@ -432,11 +432,11 @@ export default function AuthenticatedHome() {
                   <p className="text-xs text-emerald-600 font-medium truncate">{jdFileName || 'Job Description'}</p>
                   {targetCompany && <p className="text-[10px] text-[#71767b]">{targetCompany}{targetIndustry ? ` · ${targetIndustry}` : ''}</p>}
                 </div>
-                <button onClick={() => { setJdText(''); setJdFileName(''); setTargetCompany(''); setTargetIndustry(''); setJdPasteText('') }} className="text-xs text-[#71767b] hover:text-[#6366f1] transition">Change</button>
+                <button onClick={() => { setJdText(''); setJdFileName(''); setTargetCompany(''); setTargetIndustry(''); setJdPasteText('') }} className="text-xs text-[#71767b] hover:text-[#2563eb] transition">Change</button>
               </div>
             ) : (
               <div className="space-y-2">
-                <div className="flex gap-1 p-0.5 rounded-lg bg-[#f7f9f9] border border-[#e1e8ed] w-fit">
+                <div className="flex gap-1 p-0.5 rounded-lg bg-[#f8fafc] border border-[#e1e8ed] w-fit">
                   <button onClick={() => setJdTab('upload')} className={`text-[10px] px-2.5 py-1 rounded-md transition ${jdTab === 'upload' ? 'bg-white shadow-sm text-[#0f1419] font-medium' : 'text-[#536471]'}`}>Upload / Paste</button>
                   <button onClick={() => setJdTab('generate')} className={`text-[10px] px-2.5 py-1 rounded-md transition ${jdTab === 'generate' ? 'bg-white shadow-sm text-[#0f1419] font-medium' : 'text-[#536471]'}`}>Company &amp; Role</button>
                 </div>
@@ -444,16 +444,16 @@ export default function AuthenticatedHome() {
                   <div className="space-y-2">
                     <FileDropzone label="Job Description" fileName={jdFileName || undefined} isUploading={jdUploading} onFileSelect={(file) => handleFileUpload(file, 'jd')} onRemove={() => { setJdText(''); setJdFileName(''); setTargetCompany(''); setTargetIndustry('') }} onError={setUploadError} />
                     <div className="relative">
-                      <textarea value={jdPasteText} onChange={(e) => setJdPasteText(e.target.value)} placeholder="Or paste JD text here..." rows={2} className="w-full text-xs px-3 py-2 border border-[#e1e8ed] rounded-xl bg-white focus:outline-none focus:ring-1 focus:ring-[#6366f1] resize-none" />
+                      <textarea value={jdPasteText} onChange={(e) => setJdPasteText(e.target.value)} placeholder="Or paste JD text here..." rows={2} className="w-full text-xs px-3 py-2 border border-[#e1e8ed] rounded-xl bg-white focus:outline-none focus:ring-1 focus:ring-[#2563eb] resize-none" />
                       {jdPasteText.trim().length > 20 && (
-                        <button onClick={handleJdPaste} className="absolute bottom-2 right-2 text-[10px] px-2 py-0.5 bg-[#6366f1] text-white rounded-lg hover:bg-[#5558e6] transition">Use this JD</button>
+                        <button onClick={handleJdPaste} className="absolute bottom-2 right-2 text-[10px] px-2 py-0.5 bg-[#2563eb] text-white rounded-lg hover:bg-[#1d4ed8] transition">Use this JD</button>
                       )}
                     </div>
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    <input type="text" value={jdCompany} onChange={(e) => { setJdCompany(e.target.value); setTargetCompany(e.target.value) }} placeholder="Company (e.g. Google)" className="w-full text-xs px-3 py-2 border border-[#e1e8ed] rounded-xl bg-white focus:outline-none focus:ring-1 focus:ring-[#6366f1]" />
-                    <input type="text" value={jdRole} onChange={(e) => setJdRole(e.target.value)} placeholder="Role (e.g. Senior PM)" className="w-full text-xs px-3 py-2 border border-[#e1e8ed] rounded-xl bg-white focus:outline-none focus:ring-1 focus:ring-[#6366f1]" />
+                    <input type="text" value={jdCompany} onChange={(e) => { setJdCompany(e.target.value); setTargetCompany(e.target.value) }} placeholder="Company (e.g. Google)" className="w-full text-xs px-3 py-2 border border-[#e1e8ed] rounded-xl bg-white focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
+                    <input type="text" value={jdRole} onChange={(e) => setJdRole(e.target.value)} placeholder="Role (e.g. Senior PM)" className="w-full text-xs px-3 py-2 border border-[#e1e8ed] rounded-xl bg-white focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
                     <p className="text-[10px] text-[#8b98a5]">JD will be auto-generated when you enter the interview room.</p>
                   </div>
                 )}
@@ -485,7 +485,7 @@ export default function AuthenticatedHome() {
               getKey={(e) => e}
               layout="inline"
               renderItem={(e, selected) => (
-                <div className={`py-2 px-1 text-center ${selected ? 'text-[#6366f1]' : ''}`}>
+                <div className={`py-2 px-1 text-center ${selected ? 'text-[#2563eb]' : ''}`}>
                   <span className="text-xs font-medium">{EXPERIENCE_LABELS[e]}</span>
                 </div>
               )}
@@ -500,7 +500,7 @@ export default function AuthenticatedHome() {
               getKey={(d) => String(d)}
               layout="inline"
               renderItem={(d, selected) => (
-                <div className={`py-2 px-1 text-center ${selected ? 'text-[#6366f1]' : ''}`}>
+                <div className={`py-2 px-1 text-center ${selected ? 'text-[#2563eb]' : ''}`}>
                   <span className="text-xs font-medium">{getDurationLabel(d)}</span>
                 </div>
               )}

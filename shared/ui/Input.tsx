@@ -35,7 +35,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
               border rounded-[6px] transition-all duration-[120ms]
               ${error
                 ? 'border-[rgba(244,33,46,0.3)] focus:border-[rgba(244,33,46,0.5)] focus:ring-1 focus:ring-[rgba(244,33,46,0.15)]'
-                : 'border-[#e1e8ed] focus:border-[#6366f1] focus:ring-1 focus:ring-[rgba(99,102,241,0.15)]'
+                : 'border-[#e1e8ed] focus:border-[#2563eb] focus:ring-1 focus:ring-[rgba(37,99,235,0.15)]'
               }
               focus:outline-none
               ${leftIcon ? 'pl-9' : 'pl-3'}

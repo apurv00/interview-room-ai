@@ -42,7 +42,7 @@ export default function PrivacyPage() {
         <section>
           <h2 className="text-lg font-semibold text-[#0f1419] mb-3">4. Data Retention</h2>
           <p className="text-[#536471]">
-            Interview recordings and transcripts are stored as long as your account is active. You can delete individual interview records from your <Link href="/history" className="text-[#6366f1] hover:text-indigo-700">history page</Link>. If you delete your account, all associated data will be permanently removed within 30 days.
+            Interview recordings and transcripts are stored as long as your account is active. You can delete individual interview records from your <Link href="/history" className="text-[#2563eb] hover:text-blue-700">history page</Link>. If you delete your account, all associated data will be permanently removed within 30 days.
           </p>
         </section>
 
@@ -56,7 +56,7 @@ export default function PrivacyPage() {
         <section>
           <h2 className="text-lg font-semibold text-[#0f1419] mb-3">6. Your Rights</h2>
           <p className="text-[#536471]">
-            You have the right to access, correct, or delete your personal data at any time. You can manage your data from your <Link href="/settings" className="text-[#6366f1] hover:text-indigo-700">account settings</Link> or by contacting us directly.
+            You have the right to access, correct, or delete your personal data at any time. You can manage your data from your <Link href="/settings" className="text-[#2563eb] hover:text-blue-700">account settings</Link> or by contacting us directly.
           </p>
         </section>
 
@@ -64,13 +64,13 @@ export default function PrivacyPage() {
           <h2 className="text-lg font-semibold text-[#0f1419] mb-3">7. Contact</h2>
           <p className="text-[#536471]">
             For privacy-related questions, contact us at{' '}
-            <a href="mailto:privacy@interviewprep.guru" className="text-[#6366f1] hover:text-indigo-700">privacy@interviewprep.guru</a>.
+            <a href="mailto:privacy@interviewprep.guru" className="text-[#2563eb] hover:text-blue-700">privacy@interviewprep.guru</a>.
           </p>
         </section>
       </div>
 
       <div className="mt-12 pt-8 border-t border-[#e1e8ed] text-sm text-[#8b98a5]">
-        <Link href="/" className="text-[#6366f1] hover:text-indigo-700 transition">
+        <Link href="/" className="text-[#2563eb] hover:text-blue-700 transition">
           ← Back to home
         </Link>
       </div>

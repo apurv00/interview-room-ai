@@ -50,7 +50,7 @@ export default function HireDashboardPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <div className="w-6 h-6 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
+        <div className="w-6 h-6 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
       </div>
     )
   }
@@ -58,8 +58,8 @@ export default function HireDashboardPage() {
   if (!data?.org) {
     return (
       <div className="max-w-lg mx-auto py-20 text-center">
-        <div className="w-16 h-16 rounded-2xl bg-indigo-600/10 flex items-center justify-center mx-auto mb-6">
-          <svg className="w-8 h-8 text-[#6366f1]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <div className="w-16 h-16 rounded-2xl bg-blue-600/10 flex items-center justify-center mx-auto mb-6">
+          <svg className="w-8 h-8 text-[#2563eb]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M21 13.255A23.193 23.193 0 0112 15c-3.183 0-6.22-.64-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
           </svg>
         </div>
@@ -69,7 +69,7 @@ export default function HireDashboardPage() {
         </p>
         <Link
           href="/hire/settings"
-          className="inline-block px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium transition-colors"
+          className="inline-block px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium transition-colors"
         >
           Create Organization
         </Link>
@@ -89,7 +89,7 @@ export default function HireDashboardPage() {
         </div>
         <Link
           href="/hire/invite"
-          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm rounded-xl font-medium transition-colors"
+          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-xl font-medium transition-colors"
         >
           Invite Candidate
         </Link>
@@ -119,9 +119,9 @@ export default function HireDashboardPage() {
             {data.org.monthlyInterviewsUsed} / {data.org.monthlyInterviewLimit} this month
           </span>
         </div>
-        <div className="h-2 bg-[#f7f9f9] rounded-full overflow-hidden">
+        <div className="h-2 bg-[#f8fafc] rounded-full overflow-hidden">
           <div
-            className="h-full rounded-full transition-all bg-indigo-500"
+            className="h-full rounded-full transition-all bg-blue-500"
             style={{ width: `${usagePct}%` }}
           />
         </div>
@@ -137,14 +137,14 @@ export default function HireDashboardPage() {
       <section className="bg-white border border-[#e1e8ed] rounded-2xl p-5">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-semibold text-[#536471]">Recent Candidates</h2>
-          <Link href="/hire/candidates" className="text-xs text-[#6366f1] hover:text-[#6366f1] transition-colors">
+          <Link href="/hire/candidates" className="text-xs text-[#2563eb] hover:text-[#2563eb] transition-colors">
             View All
           </Link>
         </div>
 
         {data.recentCandidates.length === 0 ? (
           <p className="text-sm text-[#8b98a5] text-center py-6">
-            No candidates yet. <Link href="/hire/invite" className="text-[#6366f1]">Send your first invite</Link>
+            No candidates yet. <Link href="/hire/invite" className="text-[#2563eb]">Send your first invite</Link>
           </p>
         ) : (
           <div className="overflow-x-auto">
@@ -170,7 +170,7 @@ export default function HireDashboardPage() {
                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
                         c.status === 'completed' ? 'bg-emerald-500/20 text-[#059669]' :
                         c.status === 'in_progress' ? 'bg-amber-500/20 text-amber-400' :
-                        'bg-[#f7f9f9] text-[#536471]'
+                        'bg-[#f8fafc] text-[#536471]'
                       }`}>
                         {c.status.replace(/_/g, ' ')}
                       </span>
@@ -200,7 +200,7 @@ export default function HireDashboardPage() {
             className="bg-white border border-[#e1e8ed] rounded-2xl p-5 hover:border-[#e1e8ed] transition-all group"
           >
             <span className="text-2xl">{action.icon}</span>
-            <h3 className="text-sm font-semibold text-[#0f1419] mt-3 group-hover:text-[#6366f1] transition-colors">
+            <h3 className="text-sm font-semibold text-[#0f1419] mt-3 group-hover:text-[#2563eb] transition-colors">
               {action.title}
             </h3>
             <p className="text-xs text-[#8b98a5] mt-1">{action.desc}</p>

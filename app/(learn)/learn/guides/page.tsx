@@ -43,7 +43,7 @@ export default function ResourcesPage() {
       <div className="max-w-[1100px] mx-auto">
         {/* Header */}
         <nav aria-label="Breadcrumb" className="text-caption text-[#71767b] mb-6">
-          <Link href="/" className="hover:text-[#6366f1] transition-colors">Home</Link>
+          <Link href="/" className="hover:text-[#2563eb] transition-colors">Home</Link>
           <span className="mx-2">&rsaquo;</span>
           <span className="text-[#536471]">Resources</span>
         </nav>
@@ -67,7 +67,7 @@ export default function ResourcesPage() {
                         href={`/learn/guides/${r.slug}`}
                         className="block py-2 px-3 rounded-[8px] hover:bg-[var(--color-surface)] transition-colors group"
                       >
-                        <span className="text-subheading text-[var(--foreground)] group-hover:text-[#6366f1] transition-colors">
+                        <span className="text-subheading text-[var(--foreground)] group-hover:text-[#2563eb] transition-colors">
                           {r.title}
                         </span>
                         <p className="text-caption text-[var(--foreground-tertiary)] mt-0.5 line-clamp-2">
@@ -91,13 +91,13 @@ export default function ResourcesPage() {
           <div className="mt-4 flex items-center justify-center gap-3">
             <Link
               href="/signup"
-              className="inline-flex items-center justify-center h-11 px-5 bg-[#6366f1] hover:bg-[#5558e6] text-white rounded-[10px] text-sm font-medium transition-colors"
+              className="inline-flex items-center justify-center h-11 px-5 bg-[#2563eb] hover:bg-[#1d4ed8] text-white rounded-[10px] text-sm font-medium transition-colors"
             >
               Start Practicing Free
             </Link>
             <Link
               href="/"
-              className="inline-flex items-center justify-center h-11 px-5 bg-[#f7f9f9] hover:bg-[#eff3f4] text-[#536471] rounded-[10px] text-sm font-medium transition-colors border border-[#e1e8ed]"
+              className="inline-flex items-center justify-center h-11 px-5 bg-[#f8fafc] hover:bg-[#eff3f4] text-[#536471] rounded-[10px] text-sm font-medium transition-colors border border-[#e1e8ed]"
             >
               Try an Interview
             </Link>

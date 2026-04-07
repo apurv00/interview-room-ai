@@ -197,7 +197,7 @@ function DrillPageInner() {
                 {showOriginal ? 'Hide' : 'Show'} original answer
               </button>
               {showOriginal && (
-                <div className="p-3 rounded-lg bg-[#f7f9f9] text-sm text-[#8b98a5] mb-4 border border-[#e1e8ed]">
+                <div className="p-3 rounded-lg bg-[#f8fafc] text-sm text-[#8b98a5] mb-4 border border-[#e1e8ed]">
                   {activeQuestion.answer}
                 </div>
               )}
@@ -230,7 +230,7 @@ function DrillPageInner() {
                   animate={{ opacity: 1, y: 0 }}
                 >
                   {/* Score comparison */}
-                  <div className="flex items-center gap-4 p-4 rounded-xl bg-[#f7f9f9]">
+                  <div className="flex items-center gap-4 p-4 rounded-xl bg-[#f8fafc]">
                     <div className="text-center">
                       <div className="text-xs text-[#71767b]">Original</div>
                       <div className="text-xl font-bold text-[#8b98a5]">{activeQuestion.avgScore}</div>
@@ -259,7 +259,7 @@ function DrillPageInner() {
                       const orig = activeQuestion[dim as keyof typeof activeQuestion] as number
                       const d = score - orig
                       return (
-                        <div key={dim} className="p-3 rounded-lg bg-[#f7f9f9]">
+                        <div key={dim} className="p-3 rounded-lg bg-[#f8fafc]">
                           <div className="text-xs text-[#8b98a5] capitalize mb-1">{dim}</div>
                           <div className="flex items-baseline gap-2">
                             <span className="text-sm font-medium text-[#0f1419]">{score}</span>
@@ -277,7 +277,7 @@ function DrillPageInner() {
                   <div className="flex gap-3">
                     <button
                       onClick={() => { setResult(null); setNewAnswer('') }}
-                      className="px-4 py-2 bg-[#f7f9f9] hover:bg-[#eff3f4] text-sm text-[#536471] rounded-lg transition-colors"
+                      className="px-4 py-2 bg-[#f8fafc] hover:bg-[#eff3f4] text-sm text-[#536471] rounded-lg transition-colors"
                     >
                       Try Again
                     </button>

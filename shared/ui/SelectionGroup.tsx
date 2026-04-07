@@ -76,7 +76,7 @@ export default function SelectionGroup<T>({
                 px-4 py-2.5 rounded-[6px] text-micro font-medium whitespace-nowrap
                 transition-all duration-[120ms]
                 ${activeFilter === cat.key
-                  ? 'bg-[rgba(99,102,241,0.08)] text-[#6366f1] border border-[rgba(99,102,241,0.15)]'
+                  ? 'bg-[rgba(37,99,235,0.08)] text-[#2563eb] border border-[rgba(37,99,235,0.15)]'
                   : 'bg-transparent text-[#8b98a5] border border-transparent hover:text-[#536471]'
                 }
               `}
@@ -119,10 +119,10 @@ export default function SelectionGroup<T>({
                 className={`
                   text-left transition-all duration-[250ms] cursor-pointer
                   ${layout === 'inline' ? 'flex-1 text-center' : ''}
-                  ${layout === 'list' && selected ? 'border-l-[3px] border-l-[#6366f1]' : ''}
+                  ${layout === 'list' && selected ? 'border-l-[3px] border-l-[#2563eb]' : ''}
                   ${selected
-                    ? 'bg-[rgba(99,102,241,0.06)] border border-[rgba(99,102,241,0.15)] text-[#6366f1]'
-                    : 'bg-white border border-[#eff3f4] text-[#536471] hover:bg-[#f7f9f9] hover:border-[#e1e8ed]'
+                    ? 'bg-[rgba(37,99,235,0.06)] border border-[rgba(37,99,235,0.15)] text-[#2563eb]'
+                    : 'bg-white border border-[#eff3f4] text-[#536471] hover:bg-[#f8fafc] hover:border-[#e1e8ed]'
                   }
                   rounded-[10px]
                 `}
@@ -138,7 +138,7 @@ export default function SelectionGroup<T>({
       {maxVisible && !showAll && items.length > maxVisible && (
         <button
           onClick={() => setShowAll(true)}
-          className="text-caption text-[#6366f1] hover:text-[#4f46e5] transition-colors"
+          className="text-caption text-[#2563eb] hover:text-[#1d4ed8] transition-colors"
         >
           Show all {items.length} items &rarr;
         </button>
@@ -146,7 +146,7 @@ export default function SelectionGroup<T>({
       {maxVisible && showAll && items.length > maxVisible && (
         <button
           onClick={() => setShowAll(false)}
-          className="text-caption text-[#6366f1] hover:text-[#4f46e5] transition-colors"
+          className="text-caption text-[#2563eb] hover:text-[#1d4ed8] transition-colors"
         >
           Show less
         </button>

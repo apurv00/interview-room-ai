@@ -59,14 +59,14 @@ export default function SkillsListPage() {
           value={filter}
           onChange={e => setFilter(e.target.value)}
           placeholder="Filter by domain or depth..."
-          className="px-3 py-2 text-sm border border-[#e1e8ed] rounded-lg bg-[#f7f9f9] focus:outline-none focus:ring-2 focus:ring-[#6366f1]/30 w-64"
+          className="px-3 py-2 text-sm border border-[#e1e8ed] rounded-lg bg-[#f8fafc] focus:outline-none focus:ring-2 focus:ring-[#2563eb]/30 w-64"
         />
       </div>
 
       <div className="space-y-6">
         {Object.entries(grouped).map(([domainLabel, entries]) => (
           <div key={domainLabel} className="border border-[#e1e8ed] rounded-xl overflow-hidden">
-            <div className="bg-[#f7f9f9] px-4 py-2.5 border-b border-[#e1e8ed]">
+            <div className="bg-[#f8fafc] px-4 py-2.5 border-b border-[#e1e8ed]">
               <h2 className="text-sm font-semibold text-[#0f1419]">{domainLabel}</h2>
             </div>
             <div className="divide-y divide-[#e1e8ed]">
@@ -74,14 +74,14 @@ export default function SkillsListPage() {
                 <Link
                   key={`${s.domain}-${s.depth}`}
                   href={`/cms/skills/${s.domain}/${s.depth}`}
-                  className="flex items-center justify-between px-4 py-3 hover:bg-[#f7f9f9] transition-colors group"
+                  className="flex items-center justify-between px-4 py-3 hover:bg-[#f8fafc] transition-colors group"
                 >
                   <div className="flex items-center gap-3">
-                    <span className="text-sm font-medium text-[#0f1419] group-hover:text-[#6366f1] transition-colors">
+                    <span className="text-sm font-medium text-[#0f1419] group-hover:text-[#2563eb] transition-colors">
                       {s.depthLabel}
                     </span>
                     {s.hasCustomContent && (
-                      <span className="text-xs px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded-full">
+                      <span className="text-xs px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full">
                         customized
                       </span>
                     )}
@@ -96,7 +96,7 @@ export default function SkillsListPage() {
                       <span>Edited {new Date(s.lastEditedAt).toLocaleDateString()}</span>
                     )}
                     {s.version > 0 && <span>v{s.version}</span>}
-                    <svg className="w-4 h-4 text-[#8b98a5] group-hover:text-[#6366f1] transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <svg className="w-4 h-4 text-[#8b98a5] group-hover:text-[#2563eb] transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                     </svg>
                   </div>

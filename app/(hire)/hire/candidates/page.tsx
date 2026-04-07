@@ -47,7 +47,7 @@ export default function CandidatesPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <div className="w-6 h-6 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
+        <div className="w-6 h-6 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
       </div>
     )
   }
@@ -58,7 +58,7 @@ export default function CandidatesPage() {
         <h1 className="text-2xl font-bold text-[#0f1419]">Candidates</h1>
         <Link
           href="/hire/invite"
-          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm rounded-xl font-medium transition-colors"
+          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-xl font-medium transition-colors"
         >
           Invite New
         </Link>
@@ -71,7 +71,7 @@ export default function CandidatesPage() {
             key={f}
             onClick={() => { setStatusFilter(f); setLoading(true) }}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-              statusFilter === f ? 'bg-indigo-600 text-white' : 'text-[#536471] hover:text-[#0f1419]'
+              statusFilter === f ? 'bg-blue-600 text-white' : 'text-[#536471] hover:text-[#0f1419]'
             }`}
           >
             {f === 'all' ? 'All' : f.replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase())}
@@ -90,10 +90,10 @@ export default function CandidatesPage() {
               {/* Summary row */}
               <button
                 onClick={() => setExpandedId(expandedId === c.id ? null : c.id)}
-                className="w-full flex items-center justify-between p-4 hover:bg-[#f7f9f9] transition-colors text-left"
+                className="w-full flex items-center justify-between p-4 hover:bg-[#f8fafc] transition-colors text-left"
               >
                 <div className="flex items-center gap-4 min-w-0">
-                  <div className="w-9 h-9 rounded-full bg-indigo-600/20 flex items-center justify-center text-[#6366f1] text-sm font-bold flex-shrink-0">
+                  <div className="w-9 h-9 rounded-full bg-blue-600/20 flex items-center justify-center text-[#2563eb] text-sm font-bold flex-shrink-0">
                     {(c.candidateName || c.candidateEmail)?.[0]?.toUpperCase() || '?'}
                   </div>
                   <div className="min-w-0">
@@ -116,8 +116,8 @@ export default function CandidatesPage() {
                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
                     c.status === 'completed' ? 'bg-emerald-500/20 text-[#059669]' :
                     c.status === 'in_progress' ? 'bg-amber-500/20 text-amber-400' :
-                    c.status === 'created' ? 'bg-indigo-500/20 text-[#6366f1]' :
-                    'bg-[#f7f9f9] text-[#536471]'
+                    c.status === 'created' ? 'bg-blue-500/20 text-[#2563eb]' :
+                    'bg-[#f8fafc] text-[#536471]'
                   }`}>
                     {c.status.replace(/_/g, ' ')}
                   </span>
@@ -198,7 +198,7 @@ export default function CandidatesPage() {
                   {c.status === 'completed' && (
                     <Link
                       href={`/feedback/${c.id}`}
-                      className="inline-block text-xs text-[#6366f1] hover:text-[#6366f1] transition-colors"
+                      className="inline-block text-xs text-[#2563eb] hover:text-[#2563eb] transition-colors"
                     >
                       View Full Report →
                     </Link>

@@ -155,7 +155,7 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
         <button
           onClick={togglePlay}
           disabled={isLoading}
-          className="shrink-0 w-11 h-11 sm:w-9 sm:h-9 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-[#e1e8ed] disabled:cursor-not-allowed flex items-center justify-center transition"
+          className="shrink-0 w-11 h-11 sm:w-9 sm:h-9 rounded-full bg-blue-600 hover:bg-blue-500 disabled:bg-[#e1e8ed] disabled:cursor-not-allowed flex items-center justify-center transition"
           aria-label={isLoading ? 'Loading audio' : isPlaying ? 'Pause' : 'Play'}
         >
           {isLoading ? (
@@ -187,11 +187,11 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
             aria-valuenow={currentTime}
             className="w-full h-1.5 bg-[#e1e8ed] rounded-full appearance-none cursor-pointer disabled:cursor-not-allowed
               [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 sm:[&::-webkit-slider-thumb]:w-3 sm:[&::-webkit-slider-thumb]:h-3
-              [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-indigo-600
-              [&::-webkit-slider-thumb]:hover:bg-indigo-500 [&::-webkit-slider-thumb]:transition"
+              [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-600
+              [&::-webkit-slider-thumb]:hover:bg-blue-500 [&::-webkit-slider-thumb]:transition"
             style={{
               background: duration
-                ? `linear-gradient(to right, #6366f1 0%, #6366f1 ${(currentTime / duration) * 100}%, #e1e8ed ${(currentTime / duration) * 100}%, #e1e8ed 100%)`
+                ? `linear-gradient(to right, #2563eb 0%, #2563eb ${(currentTime / duration) * 100}%, #e1e8ed ${(currentTime / duration) * 100}%, #e1e8ed 100%)`
                 : '#e1e8ed',
             }}
           />
@@ -231,7 +231,7 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
             aria-pressed={speed === s}
             className={`px-2.5 py-1 sm:px-2 sm:py-0.5 rounded-md text-xs font-medium transition ${
               speed === s
-                ? 'bg-indigo-600 text-white'
+                ? 'bg-blue-600 text-white'
                 : 'bg-[#eff3f4] text-[#536471] hover:bg-[#e1e8ed]'
             }`}
           >

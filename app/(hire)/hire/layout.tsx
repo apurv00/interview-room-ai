@@ -21,7 +21,7 @@ export default function HireLayout({ children }: { children: React.ReactNode }) 
   if (status === 'loading') {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="w-6 h-6 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
+        <div className="w-6 h-6 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
       </div>
     )
   }
@@ -38,7 +38,7 @@ export default function HireLayout({ children }: { children: React.ReactNode }) 
         {/* Brand */}
         <div className="h-14 flex items-center px-5 border-b border-[#e1e8ed]">
           <Link href="/hire/dashboard" className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-md bg-indigo-600 flex items-center justify-center">
+            <div className="w-7 h-7 rounded-md bg-blue-600 flex items-center justify-center">
               <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M21 13.255A23.193 23.193 0 0112 15c-3.183 0-6.22-.64-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
               </svg>
@@ -61,8 +61,8 @@ export default function HireLayout({ children }: { children: React.ReactNode }) 
                 onClick={() => setSidebarOpen(false)}
                 className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
                   isActive
-                    ? 'bg-indigo-600/10 text-[#6366f1] border border-[#6366f1]/20'
-                    : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#f7f9f9]'
+                    ? 'bg-blue-600/10 text-[#2563eb] border border-[#2563eb]/20'
+                    : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#f8fafc]'
                 }`}
               >
                 <svg className="w-4.5 h-4.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>

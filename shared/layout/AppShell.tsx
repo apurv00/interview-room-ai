@@ -10,11 +10,11 @@ import XpBadge from '@learn/components/XpBadge'
 import BadgeUnlockChecker from '@learn/components/BadgeUnlockChecker'
 
 const NAV_LINKS = [
-  { href: '/', label: 'Home', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
-  { href: '/learn/practice', label: 'Practice', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4' },
+  { href: '/interview/setup', label: 'Interview', icon: 'M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z' },
   { href: '/resume', label: 'Resume', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
   { href: '/history', label: 'History', icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z' },
   { href: '/learn/progress', label: 'Progress', icon: 'M13 7h8m0 0v8m0-8l-8 8-4-4-6 6' },
+  { href: '/resources', label: 'Resources', icon: 'M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253' },
 ]
 
 const MORE_LINKS = [
@@ -45,13 +45,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <div className="flex items-center justify-between h-full">
             {/* Left: brand */}
             <Link href="/" className="flex items-center gap-2.5 group">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#6366f1] to-[#4f46e5] flex items-center justify-center shadow-sm">
+              <div className="w-8 h-8 rounded-xl bg-blue-600 flex items-center justify-center">
                 <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
                 </svg>
               </div>
-              <span className="text-[15px] font-bold text-[#0f1419] group-hover:text-[#6366f1] transition-colors hidden sm:block">
-                Interview Prep Guru
+              <span className="text-[15px] font-bold text-slate-800 hidden sm:block">
+                interviewprep<span className="text-[#2563eb]">.guru</span>
               </span>
             </Link>
 
@@ -66,13 +66,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                     className={`relative px-4 h-full flex items-center text-sm font-medium transition-colors ${
                       isActive
                         ? 'text-[#0f1419]'
-                        : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#f7f9f9]'
+                        : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#f8fafc]'
                     }`}
                   >
                     {link.label}
                     {/* Active indicator bar */}
                     {isActive && (
-                      <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[calc(100%-16px)] h-[3px] bg-[#6366f1] rounded-full" />
+                      <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[calc(100%-16px)] h-[3px] bg-[#2563eb] rounded-full" />
                     )}
                   </Link>
                 )
@@ -82,12 +82,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 className={`relative px-4 h-full flex items-center text-sm font-medium transition-colors ${
                   pathname === '/pricing'
                     ? 'text-[#0f1419]'
-                    : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#f7f9f9]'
+                    : 'text-[#536471] hover:text-[#0f1419] hover:bg-[#f8fafc]'
                 }`}
               >
                 Pricing
                 {pathname === '/pricing' && (
-                  <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[calc(100%-16px)] h-[3px] bg-[#6366f1] rounded-full" />
+                  <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[calc(100%-16px)] h-[3px] bg-[#2563eb] rounded-full" />
                 )}
               </Link>
             </div>
@@ -119,12 +119,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   key={link.href}
                   href={link.href}
                   className={`relative flex flex-col items-center gap-0.5 py-1 px-3 transition-colors ${
-                    isActive ? 'text-[#6366f1]' : 'text-[#8b98a5]'
+                    isActive ? 'text-[#2563eb]' : 'text-[#8b98a5]'
                   }`}
                 >
                   {/* Top indicator bar for mobile */}
                   {isActive && (
-                    <span className="absolute -top-1 left-1/2 -translate-x-1/2 w-4 h-[3px] bg-[#6366f1] rounded-full" />
+                    <span className="absolute -top-1 left-1/2 -translate-x-1/2 w-4 h-[3px] bg-[#2563eb] rounded-full" />
                   )}
                   <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={isActive ? 2.5 : 2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d={link.icon} />
@@ -137,7 +137,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             <button
               onClick={() => setMoreOpen(!moreOpen)}
               className={`flex flex-col items-center gap-0.5 py-1 px-3 transition-colors ${
-                moreOpen ? 'text-[#6366f1]' : 'text-[#8b98a5]'
+                moreOpen ? 'text-[#2563eb]' : 'text-[#8b98a5]'
               }`}
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -158,7 +158,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                     key={link.href}
                     href={link.href}
                     onClick={() => setMoreOpen(false)}
-                    className="block px-6 py-3.5 text-sm text-[#0f1419] hover:bg-[#f7f9f9] transition-colors"
+                    className="block px-6 py-3.5 text-sm text-[#0f1419] hover:bg-[#f8fafc] transition-colors"
                   >
                     {link.label}
                   </Link>
@@ -173,7 +173,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                     } catch { /* ignore */ }
                     signOut({ callbackUrl: '/' })
                   }}
-                  className="w-full text-left px-6 py-3.5 text-sm text-[#f4212e] hover:bg-[#f7f9f9] transition-colors"
+                  className="w-full text-left px-6 py-3.5 text-sm text-[#f4212e] hover:bg-[#f8fafc] transition-colors"
                 >
                   Sign Out
                 </button>

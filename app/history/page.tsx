@@ -65,7 +65,7 @@ export default function HistoryPage() {
   if (loading) {
     return (
       <div className="min-h-screen bg-white flex items-center justify-center">
-        <div className="w-6 h-6 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
+        <div className="w-6 h-6 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
       </div>
     )
   }
@@ -119,11 +119,11 @@ export default function HistoryPage() {
                     router.push(`/feedback/${s._id}`)
                   }
                 }}
-                className="w-full bg-white border border-[#e1e8ed] rounded-2xl p-5 flex items-center gap-4 hover:border-[#cfd9de] hover:bg-[#f7f9f9] transition text-left cursor-pointer"
+                className="w-full bg-white border border-[#e1e8ed] rounded-2xl p-5 flex items-center gap-4 hover:border-[#cfd9de] hover:bg-[#f8fafc] transition text-left cursor-pointer"
               >
                 {/* Score badge */}
-                <div className="w-11 h-11 rounded-[10px] bg-indigo-50 flex items-center justify-center flex-shrink-0">
-                  <span className="text-lg font-bold text-[#6366f1]">
+                <div className="w-11 h-11 rounded-[10px] bg-blue-50 flex items-center justify-center flex-shrink-0">
+                  <span className="text-lg font-bold text-[#2563eb]">
                     {s.feedback?.overall_score || '--'}
                   </span>
                 </div>

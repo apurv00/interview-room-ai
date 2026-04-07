@@ -34,7 +34,7 @@ export default function DomainShowcase() {
 
         <Link
           href="/signup"
-          className="inline-block mt-8 text-sm font-semibold text-[#6366f1] hover:text-[#4f46e5] transition-colors"
+          className="inline-block mt-8 text-sm font-semibold text-[#2563eb] hover:text-[#1d4ed8] transition-colors"
         >
           See all domains &rarr;
         </Link>

@@ -95,7 +95,7 @@ export default function ATSCheckPage() {
   const severityStyles = {
     critical: { bg: 'bg-red-500/10', border: 'border-red-500/20', text: 'text-red-400' },
     warning: { bg: 'bg-amber-500/10', border: 'border-amber-500/20', text: 'text-amber-400' },
-    info: { bg: 'bg-indigo-500/10', border: 'border-indigo-500/20', text: 'text-[#6366f1]' },
+    info: { bg: 'bg-blue-500/10', border: 'border-blue-500/20', text: 'text-[#2563eb]' },
   }
 
   return (
@@ -116,7 +116,7 @@ export default function ATSCheckPage() {
                 <label className="text-[10px] text-[#71767b] uppercase tracking-wider">From Saved Resumes</label>
                 <select
                   onChange={e => e.target.value && handleSelectSaved(e.target.value)}
-                  className="w-full mt-1 px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full mt-1 px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   defaultValue=""
                 >
                   <option value="">Choose a saved resume...</option>
@@ -154,7 +154,7 @@ export default function ATSCheckPage() {
               onChange={e => setJobDescription(e.target.value)}
               placeholder="Paste job description for keyword matching..."
               rows={5}
-              className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
+              className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
             />
           </div>
 
@@ -235,7 +235,7 @@ export default function ATSCheckPage() {
             </div>
           </div>
 
-          <button onClick={() => setResult(null)} className="text-sm text-[#6366f1] hover:text-indigo-500 transition-colors">
+          <button onClick={() => setResult(null)} className="text-sm text-[#2563eb] hover:text-blue-500 transition-colors">
             Check Another Resume
           </button>
         </div>

@@ -61,7 +61,7 @@ export default function InterviewTypesListPage() {
         <h2 className="text-2xl font-bold">Interview Types</h2>
         <Link
           href="/cms/interview-types/new"
-          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 rounded-lg text-sm font-medium transition-colors"
+          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm font-medium transition-colors"
         >
           Add Interview Type
         </Link>
@@ -81,7 +81,7 @@ export default function InterviewTypesListPage() {
           </thead>
           <tbody>
             {types.map((t) => (
-              <tr key={t.slug} className="border-b border-[#eff3f4] hover:bg-[#f7f9f9]">
+              <tr key={t.slug} className="border-b border-[#eff3f4] hover:bg-[#f8fafc]">
                 <td className="px-4 py-3 font-mono text-xs">{t.slug}</td>
                 <td className="px-4 py-3">{t.label}</td>
                 <td className="px-4 py-3 text-xs text-[#536471]">
@@ -105,7 +105,7 @@ export default function InterviewTypesListPage() {
                 <td className="px-4 py-3 space-x-2">
                   <Link
                     href={`/cms/interview-types/${t.slug}`}
-                    className="text-[#6366f1] hover:text-[#6366f1] text-xs"
+                    className="text-[#2563eb] hover:text-[#2563eb] text-xs"
                   >
                     Edit
                   </Link>

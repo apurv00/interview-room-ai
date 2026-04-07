@@ -13,7 +13,7 @@ export default function WizardPage() {
   if (status === 'loading') {
     return (
       <div className="flex items-center justify-center py-20">
-        <div className="w-6 h-6 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
+        <div className="w-6 h-6 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
       </div>
     )
   }
@@ -24,10 +24,10 @@ export default function WizardPage() {
         <h1 className="text-2xl font-bold text-[#0f1419]">Sign in to use the Smart Wizard</h1>
         <p className="text-sm text-[#71767b]">Create an account to build your resume step-by-step with AI guidance</p>
         <div className="flex items-center justify-center gap-3 pt-2">
-          <Link href="/signup" className="px-5 py-2.5 bg-[#6366f1] hover:bg-[#5558e6] text-white rounded-xl text-sm font-medium transition-colors">
+          <Link href="/signup" className="px-5 py-2.5 bg-[#2563eb] hover:bg-[#1d4ed8] text-white rounded-xl text-sm font-medium transition-colors">
             Get Started Free
           </Link>
-          <Link href="/signin" className="px-5 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] text-[#536471] rounded-xl text-sm font-medium transition-colors hover:bg-[#eff3f4]">
+          <Link href="/signin" className="px-5 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] text-[#536471] rounded-xl text-sm font-medium transition-colors hover:bg-[#eff3f4]">
             Sign In
           </Link>
         </div>

@@ -54,7 +54,7 @@ export default function StageExtras({ projects, certifications, onProjectsChange
         {projects.map((proj, i) => (
           <div key={proj.id} className="bg-surface border border-[#e1e8ed] rounded-xl p-4 space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-[#6366f1]">Project {i + 1}</span>
+              <span className="text-xs font-medium text-[#2563eb]">Project {i + 1}</span>
               <button onClick={() => removeProject(proj.id)} className="text-xs text-[#8b98a5] hover:text-[#f87171] transition-colors">
                 Remove
               </button>
@@ -72,7 +72,7 @@ export default function StageExtras({ projects, certifications, onProjectsChange
                 onChange={e => updateProject(proj.id, 'description', e.target.value)}
                 placeholder="Brief description of the project and your contribution"
                 rows={2}
-                className="w-full mt-1.5 bg-surface text-sm text-[#0f1419] placeholder-[#8b98a5] border border-[#e1e8ed] rounded-[6px] px-3 py-2 focus:outline-none focus:border-[#6366f1] focus:ring-1 focus:ring-[rgba(99,102,241,0.15)] transition-all duration-[120ms] resize-none"
+                className="w-full mt-1.5 bg-surface text-sm text-[#0f1419] placeholder-[#8b98a5] border border-[#e1e8ed] rounded-[6px] px-3 py-2 focus:outline-none focus:border-[#2563eb] focus:ring-1 focus:ring-[rgba(37,99,235,0.15)] transition-all duration-[120ms] resize-none"
               />
             </div>
             <Input
@@ -94,7 +94,7 @@ export default function StageExtras({ projects, certifications, onProjectsChange
         {certifications.map((cert, i) => (
           <div key={i} className="bg-surface border border-[#e1e8ed] rounded-xl p-4 space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-[#6366f1]">Certification {i + 1}</span>
+              <span className="text-xs font-medium text-[#2563eb]">Certification {i + 1}</span>
               <button onClick={() => removeCert(i)} className="text-xs text-[#8b98a5] hover:text-[#f87171] transition-colors">
                 Remove
               </button>

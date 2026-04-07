@@ -25,14 +25,14 @@ const CATEGORY_TABS = [
 const DOMAIN_GRADIENTS: Record<string, string> = {
   general: 'from-gray-500/30 to-slate-500/30',
   frontend: 'from-blue-600/30 to-cyan-600/30',
-  backend: 'from-indigo-600/30 to-blue-600/30',
+  backend: 'from-blue-600/30 to-blue-600/30',
   sdet: 'from-teal-600/30 to-cyan-600/30',
   'data-science': 'from-emerald-600/30 to-teal-600/30',
-  pm: 'from-violet-600/30 to-indigo-600/30',
+  pm: 'from-violet-600/30 to-blue-600/30',
   design: 'from-pink-600/30 to-rose-600/30',
   business: 'from-purple-600/30 to-violet-600/30',
 }
-const DEFAULT_GRADIENT = 'from-indigo-600/30 to-violet-600/30'
+const DEFAULT_GRADIENT = 'from-blue-600/30 to-violet-600/30'
 
 const CARD_WIDTH = 180
 const CARD_GAP = 12
@@ -144,8 +144,8 @@ export default function DomainSelector({ selectedDomain, onSelect }: DomainSelec
             onClick={() => setActiveCategory(cat.key)}
             className={`px-4 py-2.5 rounded-[6px] text-sm font-medium transition-all duration-[120ms] ${
               activeCategory === cat.key
-                ? 'bg-[rgba(99,102,241,0.08)] text-[#6366f1] border border-[rgba(99,102,241,0.15)]'
-                : 'text-[#71767b] hover:text-[#536471] hover:bg-[#f7f9f9]'
+                ? 'bg-[rgba(37,99,235,0.08)] text-[#2563eb] border border-[rgba(37,99,235,0.15)]'
+                : 'text-[#71767b] hover:text-[#536471] hover:bg-[#f8fafc]'
             }`}
           >
             {cat.label}
@@ -159,7 +159,7 @@ export default function DomainSelector({ selectedDomain, onSelect }: DomainSelec
         <button
           onClick={() => scroll('left')}
           disabled={!canScrollLeft}
-          className={`absolute left-0 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full bg-white/90 border border-[#e1e8ed] items-center justify-center text-[#536471] hover:text-[#0f1419] hover:bg-[#f7f9f9] transition hidden sm:flex ${
+          className={`absolute left-0 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full bg-white/90 border border-[#e1e8ed] items-center justify-center text-[#536471] hover:text-[#0f1419] hover:bg-[#f8fafc] transition hidden sm:flex ${
             canScrollLeft ? 'opacity-100' : 'opacity-30 cursor-default'
           }`}
           aria-label="Scroll left"
@@ -173,7 +173,7 @@ export default function DomainSelector({ selectedDomain, onSelect }: DomainSelec
         <button
           onClick={() => scroll('right')}
           disabled={!canScrollRight}
-          className={`absolute right-0 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full bg-white/90 border border-[#e1e8ed] items-center justify-center text-[#536471] hover:text-[#0f1419] hover:bg-[#f7f9f9] transition hidden sm:flex ${
+          className={`absolute right-0 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full bg-white/90 border border-[#e1e8ed] items-center justify-center text-[#536471] hover:text-[#0f1419] hover:bg-[#f8fafc] transition hidden sm:flex ${
             canScrollRight ? 'opacity-100' : 'opacity-30 cursor-default'
           }`}
           aria-label="Scroll right"
@@ -208,7 +208,7 @@ export default function DomainSelector({ selectedDomain, onSelect }: DomainSelec
                 onClick={() => onSelect(d.slug)}
                 className={`flex-shrink-0 snap-start w-[180px] h-[120px] rounded-[10px] bg-gradient-to-br ${gradient} flex flex-col items-center justify-center gap-2 transition-all duration-[120ms] border-2 ${
                   isSelected
-                    ? 'border-[#6366f1] ring-2 ring-[rgba(99,102,241,0.3)]'
+                    ? 'border-[#2563eb] ring-2 ring-[rgba(37,99,235,0.3)]'
                     : 'border-transparent hover:border-[#e1e8ed]'
                 }`}
               >
@@ -231,7 +231,7 @@ export default function DomainSelector({ selectedDomain, onSelect }: DomainSelec
               onClick={() => scrollToDot(i)}
               className={`rounded-full transition-all duration-200 ${
                 i === activeDot
-                  ? 'w-5 h-2 bg-[#6366f1]'
+                  ? 'w-5 h-2 bg-[#2563eb]'
                   : 'w-2 h-2 bg-[#e1e8ed] hover:bg-[#cfd9de]'
               }`}
               aria-label={`Go to page ${i + 1}`}

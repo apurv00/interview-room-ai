@@ -42,7 +42,7 @@ interface UsageData {
 
 const PLAN_BADGE_STYLES: Record<string, string> = {
   free: 'bg-[#eff3f4] text-[#536471]',
-  pro: 'bg-indigo-600 text-white',
+  pro: 'bg-blue-600 text-white',
   enterprise: 'bg-violet-600 text-white',
 }
 
@@ -119,7 +119,7 @@ export default function SettingsPage() {
   if (status === 'loading' || !session?.user) {
     return (
       <main className="min-h-screen flex items-center justify-center">
-        <div className="w-6 h-6 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
+        <div className="w-6 h-6 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
       </main>
     )
   }
@@ -177,7 +177,7 @@ export default function SettingsPage() {
               className="w-14 h-14 rounded-full border-2 border-[#e1e8ed]"
             />
           ) : (
-            <div className="w-14 h-14 rounded-full bg-indigo-600 flex items-center justify-center text-lg font-bold text-white border-2 border-[#e1e8ed]">
+            <div className="w-14 h-14 rounded-full bg-blue-600 flex items-center justify-center text-lg font-bold text-white border-2 border-[#e1e8ed]">
               {initials}
             </div>
           )}
@@ -200,7 +200,7 @@ export default function SettingsPage() {
           {!profileEditing ? (
             <button
               onClick={() => setProfileEditing(true)}
-              className="text-xs text-[#6366f1] hover:text-indigo-700 transition-colors"
+              className="text-xs text-[#2563eb] hover:text-blue-700 transition-colors"
             >
               Edit
             </button>
@@ -256,7 +256,7 @@ export default function SettingsPage() {
                   setProfileSaving(false)
                 }}
                 disabled={profileSaving}
-                className="text-xs text-[#6366f1] hover:text-indigo-700 font-medium transition-colors disabled:opacity-50"
+                className="text-xs text-[#2563eb] hover:text-blue-700 font-medium transition-colors disabled:opacity-50"
               >
                 {profileSaving ? 'Saving...' : 'Save'}
               </button>
@@ -266,14 +266,14 @@ export default function SettingsPage() {
 
         {!profile ? (
           <div className="flex items-center justify-center py-6">
-            <div className="w-5 h-5 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
+            <div className="w-5 h-5 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
           </div>
         ) : !profileEditing ? (
           <div className="space-y-3">
             {!profile.targetRole && !profile.currentTitle && !profile.interviewGoal && (
-              <div className="bg-indigo-50 border border-indigo-200 rounded-lg px-4 py-3 text-sm text-[#6366f1]">
+              <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-sm text-[#2563eb]">
                 Complete your profile for more personalized interviews.
-                <button onClick={() => setProfileEditing(true)} className="ml-2 underline hover:text-indigo-700">Set up now</button>
+                <button onClick={() => setProfileEditing(true)} className="ml-2 underline hover:text-blue-700">Set up now</button>
               </div>
             )}
             {profile.targetRole && (
@@ -368,7 +368,7 @@ export default function SettingsPage() {
               <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Target Role</label>
               <div className="grid grid-cols-4 gap-2">
                 {(['frontend', 'backend', 'sdet', 'devops', 'data-science', 'pm', 'design', 'business', 'marketing', 'finance', 'sales']).map((r) => (
-                  <button key={r} onClick={() => setEditTargetRole(r as Role)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editTargetRole === r ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]' : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'}`}>
+                  <button key={r} onClick={() => setEditTargetRole(r as Role)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editTargetRole === r ? 'border-[#2563eb] bg-blue-50 text-[#2563eb]' : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#cfd9de]'}`}>
                     {ROLE_LABELS[r as Role] || r.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
                   </button>
                 ))}
@@ -379,7 +379,7 @@ export default function SettingsPage() {
               <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Experience</label>
               <div className="grid grid-cols-3 gap-2">
                 {(['0-2', '3-6', '7+'] as ExperienceLevel[]).map((e) => (
-                  <button key={e} onClick={() => setEditExperience(e)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editExperience === e ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]' : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'}`}>
+                  <button key={e} onClick={() => setEditExperience(e)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editExperience === e ? 'border-[#2563eb] bg-blue-50 text-[#2563eb]' : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#cfd9de]'}`}>
                     {EXPERIENCE_LABELS[e]}
                   </button>
                 ))}
@@ -388,14 +388,14 @@ export default function SettingsPage() {
             {/* Title */}
             <div className="space-y-1.5">
               <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Current Title</label>
-              <input type="text" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} maxLength={100} placeholder="e.g. Senior Software Engineer" className="w-full px-3 py-2 bg-[#f7f9f9] border border-[#e1e8ed] rounded-lg text-[#0f1419] text-sm placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-[#6366f1]" />
+              <input type="text" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} maxLength={100} placeholder="e.g. Senior Software Engineer" className="w-full px-3 py-2 bg-[#f8fafc] border border-[#e1e8ed] rounded-lg text-[#0f1419] text-sm placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-[#2563eb]" />
             </div>
             {/* Industry */}
             <div className="space-y-1.5">
               <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Industry</label>
               <div className="grid grid-cols-5 gap-1.5">
                 {['tech', 'finance', 'consulting', 'healthcare', 'retail', 'media', 'government', 'education', 'startup', 'other'].map((i) => (
-                  <button key={i} onClick={() => setEditIndustry(i)} className={`py-1.5 rounded-lg border text-xs font-medium transition-all capitalize ${editIndustry === i ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]' : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'}`}>
+                  <button key={i} onClick={() => setEditIndustry(i)} className={`py-1.5 rounded-lg border text-xs font-medium transition-all capitalize ${editIndustry === i ? 'border-[#2563eb] bg-blue-50 text-[#2563eb]' : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#cfd9de]'}`}>
                     {i}
                   </button>
                 ))}
@@ -406,7 +406,7 @@ export default function SettingsPage() {
               <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Target Companies</label>
               <div className="grid grid-cols-3 gap-2">
                 {[{v:'faang',l:'FAANG'},{v:'startup',l:'Startup'},{v:'midsize',l:'Mid-size'},{v:'consulting',l:'Consulting'},{v:'enterprise',l:'Enterprise'},{v:'any',l:'Any'}].map((c) => (
-                  <button key={c.v} onClick={() => setEditCompanyType(c.v)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editCompanyType === c.v ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]' : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'}`}>
+                  <button key={c.v} onClick={() => setEditCompanyType(c.v)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editCompanyType === c.v ? 'border-[#2563eb] bg-blue-50 text-[#2563eb]' : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#cfd9de]'}`}>
                     {c.l}
                   </button>
                 ))}
@@ -417,7 +417,7 @@ export default function SettingsPage() {
               <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Interview Goal</label>
               <div className="space-y-1.5">
                 {[{v:'first_interview',l:'First interview'},{v:'improve_scores',l:'Improve skills'},{v:'career_switch',l:'Career switch'},{v:'promotion',l:'Promotion prep'},{v:'general_practice',l:'General practice'}].map((g) => (
-                  <button key={g.v} onClick={() => setEditGoal(g.v)} className={`w-full text-left px-3 py-2 rounded-lg border text-xs font-medium transition-all ${editGoal === g.v ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]' : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'}`}>
+                  <button key={g.v} onClick={() => setEditGoal(g.v)} className={`w-full text-left px-3 py-2 rounded-lg border text-xs font-medium transition-all ${editGoal === g.v ? 'border-[#2563eb] bg-blue-50 text-[#2563eb]' : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#cfd9de]'}`}>
                     {g.l}
                   </button>
                 ))}
@@ -428,7 +428,7 @@ export default function SettingsPage() {
               <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Focus Areas (up to 3)</label>
               <div className="grid grid-cols-3 gap-1.5">
                 {[{v:'star_structure',l:'STAR Structure'},{v:'specificity',l:'Specificity'},{v:'conciseness',l:'Conciseness'},{v:'confidence',l:'Confidence'},{v:'technical_depth',l:'Tech Depth'},{v:'storytelling',l:'Storytelling'}].map((w) => (
-                  <button key={w.v} onClick={() => setEditWeakAreas(prev => prev.includes(w.v) ? prev.filter(a => a !== w.v) : prev.length < 3 ? [...prev, w.v] : prev)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editWeakAreas.includes(w.v) ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]' : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'}`}>
+                  <button key={w.v} onClick={() => setEditWeakAreas(prev => prev.includes(w.v) ? prev.filter(a => a !== w.v) : prev.length < 3 ? [...prev, w.v] : prev)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editWeakAreas.includes(w.v) ? 'border-[#2563eb] bg-blue-50 text-[#2563eb]' : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#cfd9de]'}`}>
                     {w.l}
                   </button>
                 ))}
@@ -443,7 +443,7 @@ export default function SettingsPage() {
             {/* Top Skills */}
             <div className="space-y-1.5">
               <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Top Skills (comma-separated, up to 10)</label>
-              <input type="text" value={editTopSkills} onChange={(e) => setEditTopSkills(e.target.value)} maxLength={500} placeholder="e.g. Python, System Design, Leadership" className="w-full px-3 py-2 bg-[#f7f9f9] border border-[#e1e8ed] rounded-lg text-[#0f1419] text-sm placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-[#6366f1]" />
+              <input type="text" value={editTopSkills} onChange={(e) => setEditTopSkills(e.target.value)} maxLength={500} placeholder="e.g. Python, System Design, Leadership" className="w-full px-3 py-2 bg-[#f8fafc] border border-[#e1e8ed] rounded-lg text-[#0f1419] text-sm placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-[#2563eb]" />
             </div>
 
             {/* Education Level */}
@@ -451,7 +451,7 @@ export default function SettingsPage() {
               <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Education Level</label>
               <div className="grid grid-cols-3 gap-1.5">
                 {[{v:'high_school',l:'High School'},{v:'bachelors',l:'Bachelors'},{v:'masters',l:'Masters'},{v:'phd',l:'PhD'},{v:'bootcamp',l:'Bootcamp'},{v:'self_taught',l:'Self-Taught'}].map((e) => (
-                  <button key={e.v} onClick={() => setEditEducation(e.v)} className={`py-1.5 rounded-lg border text-xs font-medium transition-all ${editEducation === e.v ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]' : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'}`}>
+                  <button key={e.v} onClick={() => setEditEducation(e.v)} className={`py-1.5 rounded-lg border text-xs font-medium transition-all ${editEducation === e.v ? 'border-[#2563eb] bg-blue-50 text-[#2563eb]' : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#cfd9de]'}`}>
                     {e.l}
                   </button>
                 ))}
@@ -461,13 +461,13 @@ export default function SettingsPage() {
             {/* Years in Current Role */}
             <div className="space-y-1.5">
               <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Years in Current Role</label>
-              <input type="number" min={0} max={50} value={editYearsInRole} onChange={(e) => setEditYearsInRole(e.target.value)} placeholder="e.g. 3" className="w-full px-3 py-2 bg-[#f7f9f9] border border-[#e1e8ed] rounded-lg text-[#0f1419] text-sm placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-[#6366f1]" />
+              <input type="number" min={0} max={50} value={editYearsInRole} onChange={(e) => setEditYearsInRole(e.target.value)} placeholder="e.g. 3" className="w-full px-3 py-2 bg-[#f8fafc] border border-[#e1e8ed] rounded-lg text-[#0f1419] text-sm placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-[#2563eb]" />
             </div>
 
             {/* Target Companies */}
             <div className="space-y-1.5">
               <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Target Companies (comma-separated, up to 5)</label>
-              <input type="text" value={editTargetCompanies} onChange={(e) => setEditTargetCompanies(e.target.value)} maxLength={300} placeholder="e.g. Google, Stripe, Airbnb" className="w-full px-3 py-2 bg-[#f7f9f9] border border-[#e1e8ed] rounded-lg text-[#0f1419] text-sm placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-[#6366f1]" />
+              <input type="text" value={editTargetCompanies} onChange={(e) => setEditTargetCompanies(e.target.value)} maxLength={300} placeholder="e.g. Google, Stripe, Airbnb" className="w-full px-3 py-2 bg-[#f8fafc] border border-[#e1e8ed] rounded-lg text-[#0f1419] text-sm placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-[#2563eb]" />
             </div>
 
             {/* Communication Style */}
@@ -475,7 +475,7 @@ export default function SettingsPage() {
               <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Communication Style</label>
               <div className="grid grid-cols-3 gap-2">
                 {[{v:'concise',l:'Concise'},{v:'detailed',l:'Detailed'},{v:'storyteller',l:'Storyteller'}].map((s) => (
-                  <button key={s.v} onClick={() => setEditCommStyle(s.v)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editCommStyle === s.v ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]' : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'}`}>
+                  <button key={s.v} onClick={() => setEditCommStyle(s.v)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editCommStyle === s.v ? 'border-[#2563eb] bg-blue-50 text-[#2563eb]' : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#cfd9de]'}`}>
                     {s.l}
                   </button>
                 ))}
@@ -487,7 +487,7 @@ export default function SettingsPage() {
               <label className="text-xs text-[#8b98a5] uppercase tracking-wide">Feedback Preference</label>
               <div className="grid grid-cols-3 gap-2">
                 {[{v:'encouraging',l:'Encouraging'},{v:'balanced',l:'Balanced'},{v:'tough_love',l:'Tough Love'}].map((f) => (
-                  <button key={f.v} onClick={() => setEditFeedbackPref(f.v)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editFeedbackPref === f.v ? 'border-[#6366f1] bg-indigo-50 text-[#6366f1]' : 'border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de]'}`}>
+                  <button key={f.v} onClick={() => setEditFeedbackPref(f.v)} className={`py-2 rounded-lg border text-xs font-medium transition-all ${editFeedbackPref === f.v ? 'border-[#2563eb] bg-blue-50 text-[#2563eb]' : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#cfd9de]'}`}>
                     {f.l}
                   </button>
                 ))}
@@ -512,7 +512,7 @@ export default function SettingsPage() {
 
         {loading ? (
           <div className="flex items-center justify-center py-8">
-            <div className="w-5 h-5 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
+            <div className="w-5 h-5 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
           </div>
         ) : (
           <div className="space-y-5">
@@ -570,7 +570,7 @@ export default function SettingsPage() {
             {plan === 'free' && (
               <Link
                 href="/pricing"
-                className="block w-full py-3 rounded-xl text-center text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white transition"
+                className="block w-full py-3 rounded-xl text-center text-sm font-medium bg-blue-600 hover:bg-blue-500 text-white transition"
               >
                 View Upgrade Options →
               </Link>
@@ -595,7 +595,7 @@ export default function SettingsPage() {
             <Link
               key={link.href}
               href={link.href}
-              className="flex flex-col items-center gap-2 py-4 rounded-xl border border-[#e1e8ed] bg-[#f7f9f9] text-[#536471] hover:border-[#cfd9de] hover:text-[#0f1419] transition"
+              className="flex flex-col items-center gap-2 py-4 rounded-xl border border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#cfd9de] hover:text-[#0f1419] transition"
             >
               <svg className="w-5 h-5 text-[#8b98a5]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d={link.icon} />

@@ -27,7 +27,7 @@ export default function WizardProgressBar({ currentStage, strengthScore }: Props
                     ${isCompleted
                       ? 'bg-emerald-500 text-white'
                       : isCurrent
-                        ? 'bg-[#6366f1] text-white ring-2 ring-[#6366f1]/30'
+                        ? 'bg-[#2563eb] text-white ring-2 ring-[#2563eb]/30'
                         : 'bg-surface border border-[#e1e8ed] text-[#8b98a5]'
                     }
                   `}
@@ -43,7 +43,7 @@ export default function WizardProgressBar({ currentStage, strengthScore }: Props
                     i
                   )}
                 </motion.div>
-                <span className={`text-[9px] mt-1 hidden sm:block ${isCurrent ? 'text-[#6366f1] font-medium' : 'text-[#8b98a5]'}`}>
+                <span className={`text-[9px] mt-1 hidden sm:block ${isCurrent ? 'text-[#2563eb] font-medium' : 'text-[#8b98a5]'}`}>
                   {stage.shortLabel}
                 </span>
               </div>
@@ -76,7 +76,7 @@ export default function WizardProgressBar({ currentStage, strengthScore }: Props
               className={`h-full rounded-full ${
                 strengthScore >= 75 ? 'bg-emerald-500'
                   : strengthScore >= 50 ? 'bg-amber-400'
-                    : 'bg-[#6366f1]'
+                    : 'bg-[#2563eb]'
               }`}
               initial={false}
               animate={{ width: `${strengthScore}%` }}
@@ -88,7 +88,7 @@ export default function WizardProgressBar({ currentStage, strengthScore }: Props
             className={`text-xs font-bold ${
               strengthScore >= 75 ? 'text-[#059669]'
                 : strengthScore >= 50 ? 'text-amber-400'
-                  : 'text-[#6366f1]'
+                  : 'text-[#2563eb]'
             }`}
             initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0 }}

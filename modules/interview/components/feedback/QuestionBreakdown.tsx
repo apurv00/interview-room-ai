@@ -59,7 +59,7 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
             {/* Header — always visible */}
             <button
               onClick={() => setExpandedIdx(isOpen ? null : i)}
-              className="w-full flex items-center gap-3 sm:gap-4 p-3 sm:p-4 text-left hover:bg-[#f7f9f9] transition"
+              className="w-full flex items-center gap-3 sm:gap-4 p-3 sm:p-4 text-left hover:bg-[#f8fafc] transition"
             >
               <div
                 className={`shrink-0 w-11 h-11 sm:w-10 sm:h-10 rounded-xl border flex items-center justify-center text-sm font-bold ${scoreBg} ${scoreColor}`}
@@ -99,7 +99,7 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
                   <p className="text-xs text-[#8b98a5] font-medium mb-1 uppercase tracking-wide">
                     Your Answer
                   </p>
-                  <p className="text-sm text-[#536471] leading-relaxed bg-[#f7f9f9] rounded-xl p-3">
+                  <p className="text-sm text-[#536471] leading-relaxed bg-[#f8fafc] rounded-xl p-3">
                     {ev.answer ? s(ev.answer) : (
                       <span className="italic text-[#8b98a5]">No answer captured</span>
                     )}
@@ -160,7 +160,7 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
                     </p>
                     {followUpEntries.map((fq, fi) => (
                       <div key={fi} className="mb-2">
-                        <p className="text-xs text-indigo-600 mb-1">{s(fq.text)}</p>
+                        <p className="text-xs text-blue-600 mb-1">{s(fq.text)}</p>
                         {/* Find the candidate's follow-up answer */}
                         {transcript
                           .filter(
@@ -171,7 +171,7 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
                           )
                           .slice(0, 1)
                           .map((a, ai) => (
-                            <p key={ai} className="text-xs text-[#8b98a5] bg-[#f7f9f9] rounded-lg p-2">
+                            <p key={ai} className="text-xs text-[#8b98a5] bg-[#f8fafc] rounded-lg p-2">
                               {s(a.text)}
                             </p>
                           ))}

@@ -282,7 +282,7 @@ export default function LobbyPage() {
 
   const StatusIcon = ({ status }: { status: CheckStatus }) => {
     if (status === 'pending') return (
-      <div className="w-5 h-5 rounded-full border-2 border-[#e1e8ed] border-t-[#6366f1] animate-spin" />
+      <div className="w-5 h-5 rounded-full border-2 border-[#e1e8ed] border-t-[#2563eb] animate-spin" />
     )
     if (status === 'ok') return (
       <motion.div
@@ -349,7 +349,7 @@ export default function LobbyPage() {
                   )}
                   <button
                     onClick={() => router.push('/')}
-                    className="text-xs text-[#71767b] hover:text-[#6366f1] transition underline underline-offset-2"
+                    className="text-xs text-[#71767b] hover:text-[#2563eb] transition underline underline-offset-2"
                   >
                     Change
                   </button>
@@ -362,7 +362,7 @@ export default function LobbyPage() {
         <div className="grid md:grid-cols-2 gap-5">
           {/* Camera preview */}
           <motion.div className="space-y-3" variants={itemVariants}>
-            <div className="relative aspect-video rounded-2xl overflow-hidden bg-[#f7f9f9] border border-[#e1e8ed]">
+            <div className="relative aspect-video rounded-2xl overflow-hidden bg-[#f8fafc] border border-[#e1e8ed]">
               <video
                 ref={videoRef}
                 autoPlay
@@ -467,7 +467,7 @@ export default function LobbyPage() {
                     onFocus={() => setShowSuggestions(true)}
                     onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
                     placeholder="e.g. Google, Stripe, McKinsey..."
-                    className="w-full text-sm px-3 py-2 border border-[#e1e8ed] rounded-xl bg-[#f7f9f9] focus:outline-none focus:ring-2 focus:ring-[#6366f1]/30 focus:border-[#6366f1] transition-colors placeholder:text-[#8b98a5]"
+                    className="w-full text-sm px-3 py-2 border border-[#e1e8ed] rounded-xl bg-[#f8fafc] focus:outline-none focus:ring-2 focus:ring-[#2563eb]/30 focus:border-[#2563eb] transition-colors placeholder:text-[#8b98a5]"
                   />
                   {showSuggestions && lobbyCompany.length >= 1 && (
                     (() => {
@@ -484,7 +484,7 @@ export default function LobbyPage() {
                               type="button"
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={() => { setLobbyCompany(p.name); setShowSuggestions(false) }}
-                              className="w-full text-left px-3 py-2 text-sm hover:bg-[#f7f9f9] transition-colors flex items-center justify-between"
+                              className="w-full text-left px-3 py-2 text-sm hover:bg-[#f8fafc] transition-colors flex items-center justify-between"
                             >
                               <span className="font-medium text-[#0f1419]">{p.name}</span>
                               <span className="text-xs text-[#8b98a5]">{p.industry}</span>
@@ -510,8 +510,8 @@ export default function LobbyPage() {
                   className={`
                     w-full py-4 rounded-2xl font-semibold text-sm transition-colors
                     ${allOk
-                      ? 'bg-[#6366f1] hover:bg-indigo-500 text-white btn-glow'
-                      : 'bg-[#f7f9f9] text-[#8b98a5] cursor-not-allowed border border-[#e1e8ed]'
+                      ? 'bg-[#2563eb] hover:bg-blue-500 text-white btn-glow'
+                      : 'bg-[#f8fafc] text-[#8b98a5] cursor-not-allowed border border-[#e1e8ed]'
                     }
                   `}
                   initial={{ opacity: 0, y: 8 }}
@@ -523,12 +523,12 @@ export default function LobbyPage() {
               ) : (
                 <motion.div
                   key="joining-state"
-                  className="w-full py-4 rounded-2xl bg-[#6366f1]/10 border border-[#6366f1]/20 flex items-center justify-center gap-3"
+                  className="w-full py-4 rounded-2xl bg-[#2563eb]/10 border border-[#2563eb]/20 flex items-center justify-center gap-3"
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
                 >
-                  <div className="w-4 h-4 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
-                  <span className="text-[#6366f1] text-sm font-medium">Interviewer joining...</span>
+                  <div className="w-4 h-4 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
+                  <span className="text-[#2563eb] text-sm font-medium">Interviewer joining...</span>
                 </motion.div>
               )}
             </AnimatePresence>

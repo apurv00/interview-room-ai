@@ -468,7 +468,7 @@ function FeedbackPageInner() {
             <button onClick={handleRetry} className="px-5 py-2 bg-brand-500 hover:bg-brand-600 text-white rounded-[var(--radius-md)] text-sm font-medium transition">
               Try again
             </button>
-            <button onClick={() => router.push('/')} className="px-5 py-2 bg-[#f7f9f9] hover:bg-[#eff3f4] border border-[#e1e8ed] text-[#536471] rounded-[var(--radius-md)] text-sm font-medium transition">
+            <button onClick={() => router.push('/')} className="px-5 py-2 bg-[#f8fafc] hover:bg-[#eff3f4] border border-[#e1e8ed] text-[#536471] rounded-[var(--radius-md)] text-sm font-medium transition">
               Go home
             </button>
           </div>
@@ -518,7 +518,7 @@ function FeedbackPageInner() {
           <div className="flex items-center gap-3">
             <button
               onClick={() => router.back()}
-              className="p-1.5 rounded-lg hover:bg-[#f7f9f9] transition text-[#536471] hover:text-[#0f1419]"
+              className="p-1.5 rounded-lg hover:bg-[#f8fafc] transition text-[#536471] hover:text-[#0f1419]"
               aria-label="Go back"
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -656,7 +656,7 @@ function FeedbackPageInner() {
         {activeTab === 'transcript' && (
           transcriptLoading ? (
             <div className="flex items-center justify-center py-16">
-              <div className="w-6 h-6 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
+              <div className="w-6 h-6 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
             </div>
           ) : (
             <TranscriptTab
@@ -686,7 +686,7 @@ function FeedbackPageInner() {
           {recordingUrl && (
             <button
               onClick={() => router.push(`/replay/${sessionId}`)}
-              className="px-8 py-3 bg-[#f7f9f9] hover:bg-[#eff3f4] border border-[#e1e8ed] text-[#536471] rounded-[var(--radius-md)] font-medium transition"
+              className="px-8 py-3 bg-[#f8fafc] hover:bg-[#eff3f4] border border-[#e1e8ed] text-[#536471] rounded-[var(--radius-md)] font-medium transition"
             >
               View Replay
             </button>
@@ -700,7 +700,7 @@ function FeedbackPageInner() {
               a.download = 'interview-transcript.txt'
               a.click()
             }}
-            className="px-8 py-3 bg-[#f7f9f9] hover:bg-[#eff3f4] border border-[#e1e8ed] text-[#536471] rounded-[var(--radius-md)] font-medium transition"
+            className="px-8 py-3 bg-[#f8fafc] hover:bg-[#eff3f4] border border-[#e1e8ed] text-[#536471] rounded-[var(--radius-md)] font-medium transition"
           >
             Download Transcript
           </button>

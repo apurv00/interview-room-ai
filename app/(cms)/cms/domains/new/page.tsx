@@ -88,7 +88,7 @@ export default function NewDomainPage() {
               required
               value={form.slug}
               onChange={(e) => updateField('slug', e.target.value)}
-              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
               placeholder="e.g. backend-engineering"
             />
           </div>
@@ -99,7 +99,7 @@ export default function NewDomainPage() {
               required
               value={form.label}
               onChange={(e) => updateField('label', e.target.value)}
-              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
               placeholder="e.g. Backend Engineering"
             />
           </div>
@@ -113,7 +113,7 @@ export default function NewDomainPage() {
               required
               value={form.shortLabel}
               onChange={(e) => updateField('shortLabel', e.target.value)}
-              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
               placeholder="e.g. Backend"
             />
           </div>
@@ -124,7 +124,7 @@ export default function NewDomainPage() {
               required
               value={form.icon}
               onChange={(e) => updateField('icon', e.target.value)}
-              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
               placeholder="e.g. Server or emoji"
             />
           </div>
@@ -137,7 +137,7 @@ export default function NewDomainPage() {
             value={form.description}
             onChange={(e) => updateField('description', e.target.value)}
             rows={2}
-            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
           />
         </div>
 
@@ -148,7 +148,7 @@ export default function NewDomainPage() {
               type="text"
               value={form.color}
               onChange={(e) => updateField('color', e.target.value)}
-              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
               placeholder="e.g. indigo"
             />
           </div>
@@ -157,7 +157,7 @@ export default function NewDomainPage() {
             <select
               value={form.category}
               onChange={(e) => updateField('category', e.target.value)}
-              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+              className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
             >
               <option value="engineering">Engineering</option>
               <option value="business">Business</option>
@@ -173,7 +173,7 @@ export default function NewDomainPage() {
             type="number"
             value={form.sortOrder}
             onChange={(e) => updateField('sortOrder', e.target.value)}
-            className="w-32 bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+            className="w-32 bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
           />
         </div>
 
@@ -183,7 +183,7 @@ export default function NewDomainPage() {
             value={form.systemPromptContext}
             onChange={(e) => updateField('systemPromptContext', e.target.value)}
             rows={4}
-            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none font-mono"
+            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none font-mono"
           />
         </div>
 
@@ -195,7 +195,7 @@ export default function NewDomainPage() {
             value={form.sampleQuestions}
             onChange={(e) => updateField('sampleQuestions', e.target.value)}
             rows={4}
-            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
             placeholder="Tell me about a complex system you built&#10;How do you handle code reviews?"
           />
         </div>
@@ -208,7 +208,7 @@ export default function NewDomainPage() {
             value={form.evaluationEmphasis}
             onChange={(e) => updateField('evaluationEmphasis', e.target.value)}
             rows={3}
-            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-indigo-500 focus:outline-none"
+            className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
             placeholder="System design thinking&#10;Technical depth"
           />
         </div>
@@ -217,13 +217,13 @@ export default function NewDomainPage() {
           <button
             type="submit"
             disabled={saving}
-            className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50 rounded-lg text-sm font-medium transition-colors"
+            className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 rounded-lg text-sm font-medium transition-colors"
           >
             {saving ? 'Creating...' : 'Create Domain'}
           </button>
           <Link
             href="/cms/domains"
-            className="px-6 py-2 bg-[#f7f9f9] hover:bg-[#f7f9f9] rounded-lg text-sm font-medium transition-colors"
+            className="px-6 py-2 bg-[#f8fafc] hover:bg-[#f8fafc] rounded-lg text-sm font-medium transition-colors"
           >
             Cancel
           </Link>

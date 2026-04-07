@@ -62,10 +62,10 @@ export default function CmsDashboard() {
   }
 
   const cards = [
-    { title: 'Total Domains', value: stats?.totalDomains ?? 0, color: 'text-[#6366f1]' },
+    { title: 'Total Domains', value: stats?.totalDomains ?? 0, color: 'text-[#2563eb]' },
     { title: 'Active Domains', value: stats?.activeDomains ?? 0, color: 'text-green-400' },
     { title: 'Inactive Domains', value: stats?.inactiveDomains ?? 0, color: 'text-yellow-400' },
-    { title: 'Total Interview Types', value: stats?.totalInterviewTypes ?? 0, color: 'text-[#6366f1]' },
+    { title: 'Total Interview Types', value: stats?.totalInterviewTypes ?? 0, color: 'text-[#2563eb]' },
     { title: 'Active Interview Types', value: stats?.activeInterviewTypes ?? 0, color: 'text-green-400' },
     { title: 'Inactive Interview Types', value: stats?.inactiveInterviewTypes ?? 0, color: 'text-yellow-400' },
   ]

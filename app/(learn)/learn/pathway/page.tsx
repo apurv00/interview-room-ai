@@ -263,7 +263,7 @@ export default function PathwayPage() {
             <div
               key={task.taskId}
               className={`flex items-start gap-3 p-3 rounded-xl transition-colors ${
-                task.completed ? 'bg-[#f7f9f9]' : 'bg-[#eff3f4]'
+                task.completed ? 'bg-[#f8fafc]' : 'bg-[#eff3f4]'
               }`}
             >
               <button

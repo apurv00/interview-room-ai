@@ -16,9 +16,9 @@ export default function VideoTile({ label, sublabel, children, isActive, indicat
     <motion.div
       className="relative flex-1 rounded-2xl overflow-hidden bg-white"
       animate={{
-        borderColor: isActive ? 'rgba(99,102,241,0.5)' : '#e1e8ed',
+        borderColor: isActive ? 'rgba(37,99,235,0.5)' : '#e1e8ed',
         boxShadow: isActive
-          ? '0 0 0 1px rgba(99,102,241,0.3), 0 8px 32px rgba(99,102,241,0.12)'
+          ? '0 0 0 1px rgba(37,99,235,0.3), 0 8px 32px rgba(37,99,235,0.12)'
           : '0 0 0 1px rgba(225,232,237,0.6), 0 4px 16px rgba(0,0,0,0.06)',
       }}
       transition={{ duration: 0.4, ease: 'easeOut' }}
@@ -45,7 +45,7 @@ export default function VideoTile({ label, sublabel, children, isActive, indicat
           {/* Active dot */}
           {isActive && (
             <motion.div
-              className="w-1.5 h-1.5 rounded-full bg-[#6366f1]"
+              className="w-1.5 h-1.5 rounded-full bg-[#2563eb]"
               animate={{ opacity: [0.5, 1, 0.5] }}
               transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
             />
@@ -66,7 +66,7 @@ export default function VideoTile({ label, sublabel, children, isActive, indicat
           exit={{ opacity: 0 }}
           transition={{ duration: 0.3 }}
           style={{
-            boxShadow: 'inset 0 0 60px rgba(99,102,241,0.06)',
+            boxShadow: 'inset 0 0 60px rgba(37,99,235,0.06)',
           }}
         />
       )}

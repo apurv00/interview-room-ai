@@ -67,7 +67,7 @@ export default function StageFollowUps({
 
       {isGenerating && (
         <div className="flex items-center gap-3 p-4 bg-surface rounded-xl border border-[#e1e8ed]">
-          <div className="w-5 h-5 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
+          <div className="w-5 h-5 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
           <span className="text-sm text-[#6b7280]">Generating personalized questions...</span>
         </div>
       )}

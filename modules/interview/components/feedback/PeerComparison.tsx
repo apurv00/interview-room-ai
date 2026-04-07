@@ -87,7 +87,7 @@ export default function PeerComparison({ data, loading, userFeedback }: PeerComp
     return (
       <section className="bg-white border border-[#e1e8ed] rounded-2xl p-5 animate-fade-in">
         <div className="flex items-center gap-3">
-          <div className="w-4 h-4 rounded-full border-2 border-indigo-600 border-t-transparent animate-spin" />
+          <div className="w-4 h-4 rounded-full border-2 border-blue-600 border-t-transparent animate-spin" />
           <span className="text-sm text-[#8b98a5]">Loading peer comparison...</span>
         </div>
       </section>

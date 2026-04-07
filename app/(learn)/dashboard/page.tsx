@@ -214,8 +214,8 @@ export default function DashboardPage() {
                   <PolarRadiusAxis domain={[0, 100]} tick={{ fontSize: 9, fill: '#71767b' }} />
                   <Radar
                     dataKey="score"
-                    stroke="#6366f1"
-                    fill="#6366f1"
+                    stroke="#2563eb"
+                    fill="#2563eb"
                     fillOpacity={0.2}
                   />
                 </RadarChart>

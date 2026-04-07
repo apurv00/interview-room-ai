@@ -157,7 +157,7 @@ export default function TailorPage() {
                 <label className="text-[10px] text-[#71767b] uppercase tracking-wider">From Saved Resumes</label>
                 <select
                   onChange={e => e.target.value && handleSelectSaved(e.target.value)}
-                  className="w-full mt-1 px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full mt-1 px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   defaultValue=""
                 >
                   <option value="">Choose a saved resume...</option>
@@ -195,14 +195,14 @@ export default function TailorPage() {
               value={companyName}
               onChange={e => setCompanyName(e.target.value)}
               placeholder="Company name (optional)"
-              className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500"
             />
             <textarea
               value={jobDescription}
               onChange={e => setJobDescription(e.target.value)}
               placeholder="Paste the job description here..."
               rows={8}
-              className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
+              className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
             />
           </div>
 
@@ -282,18 +282,18 @@ export default function TailorPage() {
                 <button
                   onClick={handleSaveAsCopy}
                   disabled={savingCopy}
-                  className="px-3 py-1.5 bg-indigo-600/10 border border-indigo-500/20 text-[#6366f1] text-[10px] rounded-lg font-medium hover:bg-indigo-600/20 transition-colors disabled:opacity-50"
+                  className="px-3 py-1.5 bg-blue-600/10 border border-blue-500/20 text-[#2563eb] text-[10px] rounded-lg font-medium hover:bg-blue-600/20 transition-colors disabled:opacity-50"
                 >
                   {savingCopy ? 'Parsing & Saving...' : 'Save as New Resume'}
                 </button>
               </div>
             </div>
-            <pre className="whitespace-pre-wrap text-xs text-[#536471] bg-[#f7f9f9] rounded-xl p-4 max-h-96 overflow-y-auto">
+            <pre className="whitespace-pre-wrap text-xs text-[#536471] bg-[#f8fafc] rounded-xl p-4 max-h-96 overflow-y-auto">
               {result.tailoredResume}
             </pre>
           </div>
 
-          <button onClick={() => setResult(null)} className="text-sm text-[#6366f1] hover:text-indigo-500 transition-colors">
+          <button onClick={() => setResult(null)} className="text-sm text-[#2563eb] hover:text-blue-500 transition-colors">
             Start Over
           </button>
         </div>

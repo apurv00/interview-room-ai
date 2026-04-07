@@ -23,26 +23,26 @@ interface MetricCardProps {
   expandable?: boolean
 }
 
-function resolveColor(score: number, color: MetricColor): 'emerald' | 'amber' | 'rose' | 'indigo' {
+function resolveColor(score: number, color: MetricColor): 'emerald' | 'amber' | 'rose' | 'blue' {
   if (color === 'auto') {
     if (score >= 70) return 'emerald'
     if (score >= 50) return 'amber'
     return 'rose'
   }
-  const map: Record<string, 'emerald' | 'amber' | 'rose' | 'indigo'> = {
-    primary: 'indigo',
+  const map: Record<string, 'emerald' | 'amber' | 'rose' | 'blue'> = {
+    primary: 'blue',
     success: 'emerald',
     caution: 'amber',
     danger: 'rose',
   }
-  return map[color] || 'indigo'
+  return map[color] || 'blue'
 }
 
 const scoreTextColor: Record<string, string> = {
   emerald: 'text-emerald-600',
   amber: 'text-amber-600',
   rose: 'text-rose-600',
-  indigo: 'text-indigo-600',
+  blue: 'text-blue-600',
 }
 
 export default function MetricCard({

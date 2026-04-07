@@ -84,7 +84,7 @@ export default function TemplatesPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <div className="w-6 h-6 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
+        <div className="w-6 h-6 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
       </div>
     )
   }
@@ -95,7 +95,7 @@ export default function TemplatesPage() {
         <h1 className="text-2xl font-bold text-[#0f1419]">Interview Templates</h1>
         <button
           onClick={() => setShowCreate(!showCreate)}
-          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm rounded-xl font-medium transition-colors"
+          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-xl font-medium transition-colors"
         >
           {showCreate ? 'Cancel' : 'Create Template'}
         </button>
@@ -114,7 +114,7 @@ export default function TemplatesPage() {
                 value={newName}
                 onChange={e => setNewName(e.target.value)}
                 placeholder="e.g. Senior SWE Behavioral"
-                className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
             <div className="space-y-1.5">
@@ -124,7 +124,7 @@ export default function TemplatesPage() {
                 value={newDesc}
                 onChange={e => setNewDesc(e.target.value)}
                 placeholder="Brief description..."
-                className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
           </div>
@@ -135,7 +135,7 @@ export default function TemplatesPage() {
               <select
                 value={newRole}
                 onChange={e => setNewRole(e.target.value)}
-                className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 {['frontend', 'backend', 'sdet', 'devops', 'data-science', 'pm', 'design', 'business', 'marketing', 'finance', 'sales'].map(r => (
                   <option key={r} value={r}>{r.toUpperCase()}</option>
@@ -147,7 +147,7 @@ export default function TemplatesPage() {
               <select
                 value={newExp}
                 onChange={e => setNewExp(e.target.value)}
-                className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <option value="all">All Levels</option>
                 <option value="0-2">0-2 years</option>
@@ -160,7 +160,7 @@ export default function TemplatesPage() {
               <select
                 value={newDuration}
                 onChange={e => setNewDuration(Number(e.target.value))}
-                className="w-full px-3 py-2.5 bg-[#f7f9f9] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <option value={10}>10 min</option>
                 <option value={20}>20 min</option>
@@ -179,12 +179,12 @@ export default function TemplatesPage() {
                   value={q.text}
                   onChange={e => setNewQuestions(prev => prev.map((p, j) => j === i ? { ...p, text: e.target.value } : p))}
                   placeholder={`Question ${i + 1}...`}
-                  className="flex-1 px-3 py-2 bg-[#f7f9f9] border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="flex-1 px-3 py-2 bg-[#f8fafc] border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
                 <select
                   value={q.category}
                   onChange={e => setNewQuestions(prev => prev.map((p, j) => j === i ? { ...p, category: e.target.value } : p))}
-                  className="px-2 py-2 bg-[#f7f9f9] border border-[#e1e8ed] rounded-lg text-xs text-[#536471] focus:outline-none"
+                  className="px-2 py-2 bg-[#f8fafc] border border-[#e1e8ed] rounded-lg text-xs text-[#536471] focus:outline-none"
                 >
                   <option value="behavioral">Behavioral</option>
                   <option value="situational">Situational</option>
@@ -201,7 +201,7 @@ export default function TemplatesPage() {
                 )}
               </div>
             ))}
-            <button onClick={addQuestion} className="text-xs text-[#6366f1] hover:text-[#6366f1] transition-colors">
+            <button onClick={addQuestion} className="text-xs text-[#2563eb] hover:text-[#2563eb] transition-colors">
               + Add Question
             </button>
           </div>
@@ -209,7 +209,7 @@ export default function TemplatesPage() {
           <button
             onClick={handleCreate}
             disabled={creating || !newName.trim()}
-            className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium text-sm transition-colors disabled:opacity-50"
+            className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium text-sm transition-colors disabled:opacity-50"
           >
             {creating ? 'Creating...' : 'Create Template'}
           </button>
@@ -228,7 +228,7 @@ export default function TemplatesPage() {
             <div key={t.id} className="bg-white border border-[#e1e8ed] rounded-2xl p-5 hover:border-[#e1e8ed] transition-all">
               <div className="flex items-start justify-between mb-2">
                 <h3 className="text-sm font-semibold text-[#0f1419]">{t.name}</h3>
-                <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${t.isActive ? 'bg-emerald-500/20 text-[#059669]' : 'bg-[#f7f9f9] text-[#536471]'}`}>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${t.isActive ? 'bg-emerald-500/20 text-[#059669]' : 'bg-[#f8fafc] text-[#536471]'}`}>
                   {t.isActive ? 'Active' : 'Inactive'}
                 </span>
               </div>
