@@ -11,7 +11,8 @@
     "test:run": "vitest run",
     "test:smoke-qa": "bash qa/smoke-test.sh",
     "eval:harness": "npx tsx scripts/runEvalHarness.ts",
-    "eval:load-fixtures": "npx tsx scripts/loadBenchmarkFixtures.ts"
+    "eval:load-fixtures": "npx tsx scripts/loadBenchmarkFixtures.ts",
+    "check:links": "npx tsx scripts/check-internal-links.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.27.0",

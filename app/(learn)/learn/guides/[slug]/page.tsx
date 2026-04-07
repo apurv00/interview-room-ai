@@ -84,6 +84,22 @@ export default function ResourcePage({ params }: Props) {
               <div className="text-body text-[var(--foreground-secondary)] mt-2 leading-relaxed whitespace-pre-line">
                 {section.body}
               </div>
+              {section.links && section.links.length > 0 && (
+                <p className="mt-3 text-caption text-[var(--foreground-tertiary)]">
+                  Related:{' '}
+                  {section.links.map((link, j) => (
+                    <span key={link.href}>
+                      <Link
+                        href={link.href}
+                        className="text-[#2563eb] hover:underline"
+                      >
+                        {link.text}
+                      </Link>
+                      {j < section.links!.length - 1 ? ' · ' : ''}
+                    </span>
+                  ))}
+                </p>
+              )}
             </section>
           ))}
         </div>
