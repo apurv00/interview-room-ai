@@ -10,16 +10,16 @@ export default function XpBadge() {
     : 0
 
   return (
-    <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-[#f8fafc] border border-[#e1e8ed]">
+    <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-slate-50 border border-slate-200">
       <span
-        className="w-5 h-5 rounded-full bg-[#2563eb] flex items-center justify-center text-[10px] font-bold text-white"
+        className="w-5 h-5 rounded-full bg-blue-600 flex items-center justify-center text-[10px] font-bold text-white"
         title={title}
       >
         {level}
       </span>
-      <div className="w-12 h-1.5 rounded-full bg-[#eff3f4] overflow-hidden">
+      <div className="w-12 h-1.5 rounded-full bg-slate-100 overflow-hidden">
         <div
-          className="h-full rounded-full bg-[#2563eb] transition-all duration-500"
+          className="h-full rounded-full bg-blue-600 transition-all duration-500"
           style={{ width: `${Math.min(progress, 100)}%` }}
         />
       </div>

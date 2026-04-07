@@ -6,9 +6,9 @@ import Link from 'next/link'
 import Image from 'next/image'
 
 const PLAN_BADGE: Record<string, { label: string; className: string }> = {
-  free: { label: 'Free', className: 'bg-[#eff3f4] text-[#536471]' },
-  pro: { label: 'Pro', className: 'bg-[rgba(37,99,235,0.1)] text-[#2563eb]' },
-  enterprise: { label: 'Enterprise', className: 'bg-[rgba(139,92,246,0.1)] text-[#7c3aed]' },
+  free: { label: 'Free', className: 'bg-slate-100 text-slate-600' },
+  pro: { label: 'Pro', className: 'bg-blue-50 text-blue-700' },
+  enterprise: { label: 'Enterprise', className: 'bg-violet-50 text-violet-700' },
 }
 
 export default function AuthMenu() {
@@ -60,31 +60,31 @@ export default function AuthMenu() {
             alt="Profile"
             width={32}
             height={32}
-            className="w-8 h-8 rounded-full border-2 border-[#e1e8ed] group-hover:border-[#2563eb] transition"
+            className="w-8 h-8 rounded-full border-2 border-slate-200 group-hover:border-blue-600 transition"
           />
         ) : (
-          <div className="w-8 h-8 rounded-full bg-[#2563eb] flex items-center justify-center text-xs font-bold text-white border-2 border-[#e1e8ed] group-hover:border-[#2563eb] transition">
+          <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-xs font-bold text-white border-2 border-slate-200 group-hover:border-blue-600 transition">
             {initials}
           </div>
         )}
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-56 bg-white border border-[#e1e8ed] rounded-2xl shadow-[var(--shadow-dropdown)] overflow-hidden z-50 animate-slide-up">
+        <div className="absolute right-0 mt-2 w-56 bg-white border border-slate-200 rounded-2xl shadow-lg overflow-hidden z-50 animate-slide-up">
           {/* Header with plan badge */}
-          <div className="px-4 py-3 border-b border-[#eff3f4]">
+          <div className="px-4 py-3 border-b border-slate-100">
             <div className="flex items-center justify-between">
-              <p className="text-sm font-medium text-[#0f1419] truncate">{user.name}</p>
+              <p className="text-sm font-medium text-slate-900 truncate">{user.name}</p>
               <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${badge.className}`}>
                 {badge.label}
               </span>
             </div>
-            <p className="text-xs text-[#536471] truncate">{user.email}</p>
+            <p className="text-xs text-slate-500 truncate">{user.email}</p>
             {plan === 'free' && (
               <Link
                 href="/pricing"
                 onClick={() => setOpen(false)}
-                className="inline-block mt-1.5 text-[11px] text-[#2563eb] hover:text-[#1d4ed8] transition"
+                className="inline-block mt-1.5 text-[11px] text-blue-600 hover:text-blue-700 transition"
               >
                 Upgrade your plan →
               </Link>
@@ -96,9 +96,9 @@ export default function AuthMenu() {
             <Link
               href="/history"
               onClick={() => setOpen(false)}
-              className="flex items-center gap-3 px-4 py-2.5 text-sm text-[#536471] hover:bg-[#f8fafc] transition"
+              className="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 transition"
             >
-              <svg className="w-4 h-4 text-[#8b98a5]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <svg className="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               History
@@ -106,9 +106,9 @@ export default function AuthMenu() {
             <Link
               href="/learn/progress"
               onClick={() => setOpen(false)}
-              className="flex items-center gap-3 px-4 py-2.5 text-sm text-[#536471] hover:bg-[#f8fafc] transition"
+              className="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 transition"
             >
-              <svg className="w-4 h-4 text-[#8b98a5]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <svg className="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
               </svg>
               Progress
@@ -116,9 +116,9 @@ export default function AuthMenu() {
             <Link
               href="/settings"
               onClick={() => setOpen(false)}
-              className="flex items-center gap-3 px-4 py-2.5 text-sm text-[#536471] hover:bg-[#f8fafc] transition"
+              className="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 transition"
             >
-              <svg className="w-4 h-4 text-[#8b98a5]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <svg className="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                 <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
@@ -126,7 +126,7 @@ export default function AuthMenu() {
             </Link>
           </div>
 
-          <div className="border-t border-[#eff3f4] py-1">
+          <div className="border-t border-slate-100 py-1">
             <button
               onClick={() => {
                 setOpen(false)
@@ -138,7 +138,7 @@ export default function AuthMenu() {
                 } catch { /* ignore */ }
                 signOut({ callbackUrl: '/' })
               }}
-              className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-[#f4212e] hover:bg-[#f8fafc] transition"
+              className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-slate-50 transition"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
