@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import { useSession } from 'next-auth/react'
 import {
   Play, Eye, Mic, Brain, Activity,
   ChevronRight, CheckCircle2, User,
@@ -33,6 +34,10 @@ interface JourneyStep {
 
 export default function MarketingHomepage() {
   const [activeTab, setActiveTab] = useState(0)
+  // Authenticated users should be sent straight into the interview setup,
+  // not back to the signup page.
+  const { status } = useSession()
+  const ctaHref = status === 'authenticated' ? '/interview/setup' : '/signup'
 
   const heroTabs: HeroTab[] = [
     { icon: <Mic className="w-4 h-4" />, label: 'Live Interview' },
@@ -63,7 +68,7 @@ export default function MarketingHomepage() {
                 AI that tracks your facial expressions, voice patterns, and answer quality simultaneously — then gives you a second-by-second replay showing the exact moment your confidence dropped, your pace doubled, and your answer lost structure.
               </p>
 
-              <Link href="/signup" className="inline-block px-8 py-3.5 text-[15px] font-semibold rounded-full bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-600/20 transition-all text-center">
+              <Link href={ctaHref} className="inline-block px-8 py-3.5 text-[15px] font-semibold rounded-full bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-600/20 transition-all text-center">
                 Take Your First Interview — Free
               </Link>
               <p className="mt-4 text-sm text-slate-400">No credit card · No downloads · Takes 30 seconds to start</p>
@@ -119,7 +124,7 @@ export default function MarketingHomepage() {
                   ))}
                 </div>
 
-                <div className="relative bg-slate-50 overflow-hidden" style={{ minHeight: '340px' }}>
+                <div className="relative bg-slate-50 overflow-hidden" style={{ minHeight: '440px' }}>
                   {/* TAB 1: Live Interview */}
                   <div className={`absolute inset-0 p-4 flex flex-col transition-opacity duration-300 ${activeTab === 0 ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
                     <div className="flex-1 flex gap-3">
@@ -421,7 +426,7 @@ export default function MarketingHomepage() {
           </div>
 
           <div className="mt-10 text-center">
-            <Link href="/signup" className="inline-flex items-center gap-2 text-blue-600 font-semibold text-[14px] hover:text-blue-700 transition-colors">
+            <Link href={ctaHref} className="inline-flex items-center gap-2 text-blue-600 font-semibold text-[14px] hover:text-blue-700 transition-colors">
               Experience a free interview with replay <ChevronRight className="w-4 h-4" />
             </Link>
           </div>
@@ -441,8 +446,8 @@ export default function MarketingHomepage() {
             {([
               { step: '1', title: 'Resume gets you in', desc: 'AI-powered resume builder with 10 templates, ATS scoring, and JD-specific tailoring.', icon: <FileText className="w-5 h-5 text-amber-600" />, iconBg: 'bg-amber-50 border-amber-100', href: '/resume', label: 'Resume Tools' },
               { step: '2', title: 'Guides prep your mind', desc: 'Company-specific guides for Google, Amazon, McKinsey, and 8 more. STAR frameworks, negotiation scripts — all free.', icon: <BookOpen className="w-5 h-5 text-sky-600" />, iconBg: 'bg-sky-50 border-sky-100', href: '/resources', label: '26+ Guides' },
-              { step: '3', title: 'Live AI coaching', desc: 'Voice conversation with an AI that watches your face, listens to your voice, and scores your answers. Real-time nudges. 12+ domains.', icon: <Mic className="w-5 h-5 text-blue-600" />, iconBg: 'bg-blue-50 border-blue-100', href: '/signup', label: 'Try Free', core: true },
-              { step: '4', title: 'Replay the truth', desc: 'Synchronized video + transcript + signal timeline. See the exact second you lost confidence.', icon: <MonitorPlay className="w-5 h-5 text-emerald-600" />, iconBg: 'bg-emerald-50 border-emerald-100', href: '/signup', label: 'View Replays' },
+              { step: '3', title: 'Live AI coaching', desc: 'Voice conversation with an AI that watches your face, listens to your voice, and scores your answers. Real-time nudges. 12+ domains.', icon: <Mic className="w-5 h-5 text-blue-600" />, iconBg: 'bg-blue-50 border-blue-100', href: ctaHref, label: 'Try Free', core: true },
+              { step: '4', title: 'Replay the truth', desc: 'Synchronized video + transcript + signal timeline. See the exact second you lost confidence.', icon: <MonitorPlay className="w-5 h-5 text-emerald-600" />, iconBg: 'bg-emerald-50 border-emerald-100', href: ctaHref, label: 'View Replays' },
               { step: '5', title: 'Track and repeat', desc: 'Session comparison. Score trends. Competency tracking showing which skills improve and which decay.', icon: <RotateCcw className="w-5 h-5 text-teal-600" />, iconBg: 'bg-teal-50 border-teal-100', href: '/learn/progress', label: 'Progress' },
             ] as JourneyStep[]).map((s, i) => (
               <Link
@@ -478,7 +483,7 @@ export default function MarketingHomepage() {
             <p className="text-sm text-slate-400">
               Every tool points to one outcome: <span className="text-slate-700 font-semibold">you walk into the interview room and perform.</span>
             </p>
-            <Link href="/signup" className="inline-flex items-center gap-2 text-blue-600 font-semibold text-sm hover:text-blue-700 transition-colors flex-shrink-0">
+            <Link href={ctaHref} className="inline-flex items-center gap-2 text-blue-600 font-semibold text-sm hover:text-blue-700 transition-colors flex-shrink-0">
               Start the journey free <ChevronRight className="w-4 h-4" />
             </Link>
           </div>
@@ -569,7 +574,7 @@ export default function MarketingHomepage() {
                   </li>
                 ))}
               </ul>
-              <Link href="/signup" className="block w-full py-3 text-[14px] font-semibold rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors text-center">
+              <Link href={ctaHref} className="block w-full py-3 text-[14px] font-semibold rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors text-center">
                 Get Started Free
               </Link>
             </div>
@@ -580,7 +585,7 @@ export default function MarketingHomepage() {
               </div>
               <h3 className="text-xl font-bold text-white mb-1">Pro</h3>
               <div className="flex items-baseline gap-1 mb-6 pb-6 border-b border-slate-700">
-                <span className="text-4xl font-extrabold text-white">$19</span>
+                <span className="text-4xl font-extrabold text-white">$11</span>
                 <span className="text-slate-400">/ month</span>
               </div>
               <ul className="space-y-3 mb-8 flex-1">
@@ -615,7 +620,7 @@ export default function MarketingHomepage() {
           <p className="text-lg text-slate-500 mb-10">
             3 AI systems. 5 scoring dimensions. 147 facial landmarks. 1 question — what are you waiting for?
           </p>
-          <Link href="/signup" className="inline-block px-10 py-4 text-[16px] font-bold rounded-full bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-600/20 transition-all">
+          <Link href={ctaHref} className="inline-block px-10 py-4 text-[16px] font-bold rounded-full bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-600/20 transition-all">
             Take Your First Interview — Free
           </Link>
         </div>

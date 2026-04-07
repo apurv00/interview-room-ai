@@ -580,9 +580,9 @@ function InterviewSetupFormView(p: ViewProps) {
                   Resume <span className="text-red-500">*</span>
                 </h3>
                 {p.hasResume && p.resumeFileName ? (
-                  <div className="flex items-center gap-3 py-3 px-4 rounded-xl border-2 border-emerald-500/30 bg-emerald-500/5">
-                    <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-                    <p className="text-sm text-emerald-700 font-medium truncate flex-1">
+                  <div className="flex items-center gap-3 py-3 px-4 rounded-xl border border-blue-200 bg-blue-50">
+                    <CheckCircle2 className="w-5 h-5 text-blue-600 shrink-0" />
+                    <p className="text-sm text-slate-800 font-medium truncate flex-1">
                       {p.resumeFileName}
                     </p>
                     <button
@@ -712,10 +712,10 @@ function InterviewSetupFormView(p: ViewProps) {
                 </h3>
 
                 {p.jdText ? (
-                  <div className="flex items-center gap-3 py-3 px-4 rounded-xl border-2 border-emerald-500/30 bg-emerald-500/5">
-                    <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                  <div className="flex items-center gap-3 py-3 px-4 rounded-xl border border-blue-200 bg-blue-50">
+                    <CheckCircle2 className="w-5 h-5 text-blue-600 shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm text-emerald-700 font-medium truncate">
+                      <p className="text-sm text-slate-800 font-medium truncate">
                         {p.jdFileName || 'Job Description'}
                       </p>
                       {p.targetCompany && (
