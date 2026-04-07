@@ -25,6 +25,31 @@ function PlanCard({ plan, isCurrent }: { plan: PlanConfig; isCurrent: boolean })
   const isHighlighted = plan.highlighted
   const [email, setEmail] = useState('')
   const [notifySubmitted, setNotifySubmitted] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [notifyError, setNotifyError] = useState<string | null>(null)
+
+  async function submitWaitlist() {
+    if (submitting) return
+    setSubmitting(true)
+    setNotifyError(null)
+    try {
+      const res = await fetch('/api/waitlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, source: 'pricing-pro' }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setNotifyError(data?.error || 'Could not save your email. Try again.')
+        return
+      }
+      setNotifySubmitted(true)
+    } catch {
+      setNotifyError('Network error. Try again.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
 
   return (
     <div
@@ -102,14 +127,24 @@ function PlanCard({ plan, isCurrent }: { plan: PlanConfig; isCurrent: boolean })
                 <p className="text-xs text-[#536471] font-medium text-center">Get notified when Pro launches</p>
                 <div className="flex gap-2">
                   <Input
+                    type="email"
                     placeholder="your@email.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
+                    disabled={submitting}
                   />
-                  <Button variant="primary" size="sm" disabled={!email.includes('@')} onClick={() => setNotifySubmitted(true)}>
-                    Notify Me
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    disabled={!email.includes('@') || submitting}
+                    onClick={submitWaitlist}
+                  >
+                    {submitting ? 'Saving…' : 'Notify Me'}
                   </Button>
                 </div>
+                {notifyError && (
+                  <p className="text-xs text-red-600 text-center" role="alert">{notifyError}</p>
+                )}
               </>
             )}
           </div>
