@@ -4,6 +4,7 @@ import { useState, useCallback } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useAuthGate } from '@shared/providers/AuthGateProvider'
+import { track } from '@shared/analytics/track'
 import {
   Play, Eye, Mic, Brain, Activity,
   ChevronRight, CheckCircle2, User,
@@ -43,6 +44,7 @@ export default function MarketingHomepage() {
   // the interview setup; anonymous users see the auth modal first and
   // are redirected to setup once they sign in.
   const handleStartCta = useCallback(() => {
+    track('cta_clicked', { cta: 'start_interview', location: 'marketing_home' })
     requireAuth('start_interview', () => router.push('/interview/setup'))
   }, [requireAuth, router])
 

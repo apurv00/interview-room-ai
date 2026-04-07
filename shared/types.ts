@@ -24,6 +24,7 @@ export interface InterviewConfig {
   targetCompany?: string        // extracted from JD or entered in lobby
   targetIndustry?: string       // extracted from JD or entered in lobby
   coachMode?: boolean           // active STAR framework coaching during answers
+  degraded?: boolean            // true when lobby detected unsupported speech recognition; runtime should fall back to text-only input
 }
 
 // ─── State Machine ────────────────────────────────────────────────────────────
