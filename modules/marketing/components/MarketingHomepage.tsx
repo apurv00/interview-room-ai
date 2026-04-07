@@ -647,6 +647,63 @@ export default function MarketingHomepage() {
         </div>
       </section>
 
+      {/* ── FOLD 7.5: POPULAR GUIDES ── SEO topic-cluster anchors to hero guides */}
+      <section className="py-20 bg-white border-t border-slate-200">
+        <div className="max-w-5xl mx-auto px-4">
+          <div className="text-center mb-10">
+            <h2 className="text-3xl md:text-[2.5rem] font-extrabold text-slate-900 leading-tight">
+              Start with a popular guide
+            </h2>
+            <p className="text-lg text-slate-500 mt-3">
+              Free, in-depth guides for the questions and companies most candidates are searching for.
+            </p>
+          </div>
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {[
+              {
+                href: '/learn/guides/behavioral-questions',
+                title: 'Behavioral Interview Questions',
+                desc: 'The 12 most common behavioral questions and how to answer them with the STAR method.',
+              },
+              {
+                href: '/learn/guides/star-method-guide',
+                title: 'The STAR Method',
+                desc: 'A complete guide to Situation, Task, Action, Result — with a full worked example.',
+              },
+              {
+                href: '/learn/guides/how-to-interview-at-google',
+                title: 'How to Interview at Google',
+                desc: 'The full Google loop, the four scoring attributes, and what Googleyness actually means.',
+              },
+              {
+                href: '/learn/guides/amazon-leadership-principles-guide',
+                title: 'Amazon Leadership Principles',
+                desc: 'The 16 LPs in plain English, how the Bar Raiser works, and a 30-story preparation system.',
+              },
+              {
+                href: '/learn/guides/mckinsey-interview-guide',
+                title: 'McKinsey Interview Guide',
+                desc: 'Case interview structure, the PEI three dimensions, and a 6-week prep plan.',
+              },
+              {
+                href: '/learn/guides',
+                title: 'See all 26 guides →',
+                desc: 'Question banks, frameworks, company guides, and prep tips — all free.',
+              },
+            ].map((g) => (
+              <Link
+                key={g.href}
+                href={g.href}
+                className="block p-5 rounded-2xl border border-slate-200 hover:border-blue-300 hover:shadow-md transition bg-white"
+              >
+                <h3 className="text-base font-semibold text-slate-900">{g.title}</h3>
+                <p className="text-sm text-slate-500 mt-1.5 leading-relaxed">{g.desc}</p>
+              </Link>
+            ))}
+          </div>
+        </div>
+      </section>
+
       {/* ── FOLD 8: FINAL CTA ── */}
       <section className="py-20 bg-slate-50 border-t border-slate-200">
         <div className="max-w-3xl mx-auto px-4 text-center">

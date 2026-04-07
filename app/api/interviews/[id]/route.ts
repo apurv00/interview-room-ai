@@ -11,6 +11,7 @@ import { checkAndAwardBadges } from '@learn/services/badgeService'
 import { XP_AMOUNTS } from '@learn/config/xpTable'
 import { logger } from '@shared/logger'
 import { AppError } from '@shared/errors'
+import { deleteInterviewSession } from '@shared/services/accountDeletion'
 
 export const dynamic = 'force-dynamic'
 
@@ -126,5 +127,53 @@ export async function PATCH(
     }
     logger.error({ err, sessionId: params.id }, 'Failed to update interview session')
     return NextResponse.json({ error: 'Failed to update session' }, { status: 500 })
+  }
+}
+
+/**
+ * DELETE /api/interviews/[id]
+ *
+ * Permanently removes a single interview session: the session document,
+ * its multimodal analysis, its session summary, and any R2 artefacts
+ * (recording, facial landmarks, resume, JD). Verifies ownership.
+ *
+ * This is the *full* delete used by the /history "Delete" button. The
+ * sibling /api/interviews/[id]/data endpoint only redacts sensitive
+ * fields and is kept for backwards compatibility with the existing
+ * "Forget my data" flow on the feedback page.
+ */
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(params.id)) {
+      return NextResponse.json({ error: 'Invalid session ID format' }, { status: 400 })
+    }
+
+    const authSession = await getServerSession(authOptions)
+    if (!authSession?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const result = await deleteInterviewSession(
+      params.id,
+      authSession.user.id,
+      authSession.user.role === 'platform_admin'
+    )
+    return NextResponse.json({ ok: true, ...result })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'unknown'
+    if (message === 'Forbidden') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
+    if (message === 'Session not found') {
+      return NextResponse.json({ error: 'Session not found' }, { status: 404 })
+    }
+    if (message === 'Invalid session id') {
+      return NextResponse.json({ error: 'Invalid session ID format' }, { status: 400 })
+    }
+    logger.error({ err, sessionId: params.id }, 'Failed to delete interview session')
+    return NextResponse.json({ error: 'Failed to delete session' }, { status: 500 })
   }
 }

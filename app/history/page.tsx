@@ -34,6 +34,30 @@ export default function HistoryPage() {
   const [error, setError] = useState<string | null>(null)
   const [page, setPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [deleteRowError, setDeleteRowError] = useState<string | null>(null)
+
+  async function handleDeleteSession(id: string) {
+    if (deletingId) return
+    setDeletingId(id)
+    setDeleteRowError(null)
+    try {
+      const res = await fetch(`/api/interviews/${id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setDeleteRowError(data?.error || 'Could not delete this session.')
+        setDeletingId(null)
+        return
+      }
+      setSessions((prev) => prev.filter((s) => s._id !== id))
+      setConfirmDeleteId(null)
+    } catch {
+      setDeleteRowError('Network error. Please try again.')
+    } finally {
+      setDeletingId(null)
+    }
+  }
 
   useEffect(() => {
     if (authStatus !== 'authenticated') {
@@ -190,12 +214,63 @@ export default function HistoryPage() {
                   </div>
                 </div>
 
+                {/* Delete */}
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(s._id); setDeleteRowError(null) }}
+                  aria-label="Delete this session"
+                  className="p-1.5 rounded-md text-[#8b98a5] hover:text-red-600 hover:bg-red-50 transition flex-shrink-0"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3" />
+                  </svg>
+                </button>
+
                 {/* Chevron */}
                 <svg className="w-4 h-4 text-[#71767b] flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                 </svg>
               </button>
             ))}
+
+            {confirmDeleteId && (
+              <div className="fixed inset-0 z-[100] flex items-center justify-center px-4 py-6" role="dialog" aria-modal="true">
+                <button
+                  type="button"
+                  aria-label="Close"
+                  onClick={() => !deletingId && setConfirmDeleteId(null)}
+                  className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+                />
+                <div className="relative w-full max-w-sm bg-white rounded-2xl shadow-2xl border border-[#e1e8ed] p-6 animate-fade-in">
+                  <h3 className="text-lg font-semibold text-[#0f1419]">Delete this session?</h3>
+                  <p className="text-sm text-[#536471] mt-2">
+                    This permanently removes the session, recording, transcript, and feedback.
+                    This cannot be undone.
+                  </p>
+                  {deleteRowError && (
+                    <p className="text-xs text-red-600 mt-3" role="alert">{deleteRowError}</p>
+                  )}
+                  <div className="mt-5 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteId(null)}
+                      disabled={!!deletingId}
+                      className="px-4 py-2 rounded-lg text-sm font-medium text-[#536471] hover:bg-[#f8fafc] transition"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteSession(confirmDeleteId)}
+                      disabled={!!deletingId}
+                      className="px-4 py-2 rounded-lg text-sm font-semibold bg-red-600 text-white hover:bg-red-700 transition disabled:opacity-50"
+                    >
+                      {deletingId === confirmDeleteId ? 'Deleting…' : 'Delete'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Pagination */}
             {totalPages > 1 && (

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useSession } from 'next-auth/react'
+import { useSession, signOut } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Image from 'next/image'
@@ -70,6 +70,33 @@ export default function SettingsPage() {
   const [editTargetCompanies, setEditTargetCompanies] = useState('')
   const [editEducation, setEditEducation] = useState('')
   const [editYearsInRole, setEditYearsInRole] = useState('')
+
+  // Account deletion state
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleteConfirmEmail, setDeleteConfirmEmail] = useState('')
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  async function handleDeleteAccount() {
+    if (deleting) return
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      const res = await fetch('/api/account', { method: 'DELETE' })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setDeleteError(data?.error || 'Could not delete account. Please try again.')
+        setDeleting(false)
+        return
+      }
+      // Server cascade succeeded — sign out client-side and redirect home.
+      await signOut({ redirect: false })
+      window.location.href = '/?account_deleted=1'
+    } catch {
+      setDeleteError('Network error. Please try again.')
+      setDeleting(false)
+    }
+  }
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -605,6 +632,75 @@ export default function SettingsPage() {
           ))}
         </div>
       </section>
+
+      {/* Danger Zone — account deletion */}
+      <section className="bg-white border border-red-200 rounded-2xl p-6 animate-fade-in">
+        <h2 className="text-sm font-semibold text-red-700 uppercase tracking-widest mb-2">
+          Danger Zone
+        </h2>
+        <p className="text-sm text-[#536471] mb-4">
+          Permanently delete your account and all associated data — interview history,
+          recordings, transcripts, scores, and learning progress. This cannot be undone.
+        </p>
+        <button
+          type="button"
+          onClick={() => { setDeleteOpen(true); setDeleteConfirmEmail(''); setDeleteError(null) }}
+          className="px-4 py-2 rounded-lg border border-red-300 text-sm font-medium text-red-700 hover:bg-red-50 transition"
+        >
+          Delete account
+        </button>
+      </section>
+
+      {deleteOpen && session?.user?.email && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center px-4 py-6" role="dialog" aria-modal="true">
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={() => !deleting && setDeleteOpen(false)}
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+          />
+          <div className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl border border-[#e1e8ed] p-6 animate-fade-in">
+            <h3 className="text-lg font-semibold text-[#0f1419]">Delete your account?</h3>
+            <p className="text-sm text-[#536471] mt-2">
+              This permanently removes your interview history, recordings, transcripts,
+              scores, and learning progress. We cannot recover this data after deletion.
+            </p>
+            <p className="text-sm text-[#536471] mt-4">
+              To confirm, type your email address <span className="font-mono text-[#0f1419]">{session.user.email}</span> below.
+            </p>
+            <input
+              type="email"
+              value={deleteConfirmEmail}
+              onChange={(e) => setDeleteConfirmEmail(e.target.value)}
+              placeholder={session.user.email}
+              className="mt-3 w-full px-3 py-2 border border-[#e1e8ed] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-300"
+              disabled={deleting}
+              aria-label="Confirm email"
+            />
+            {deleteError && (
+              <p className="text-xs text-red-600 mt-2" role="alert">{deleteError}</p>
+            )}
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setDeleteOpen(false)}
+                disabled={deleting}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-[#536471] hover:bg-[#f8fafc] transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteAccount}
+                disabled={deleting || deleteConfirmEmail.trim().toLowerCase() !== session.user.email.toLowerCase()}
+                className="px-4 py-2 rounded-lg text-sm font-semibold bg-red-600 text-white hover:bg-red-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {deleting ? 'Deleting…' : 'Delete forever'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   )
 }
