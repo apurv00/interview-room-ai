@@ -325,7 +325,7 @@ export default function DashboardPage() {
         <div className="text-center py-16">
           <p className="text-[#71767b] mb-4">No session data yet. Complete an interview to see your analytics!</p>
           <a
-            href="/lobby"
+            href="/interview/setup"
             className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors"
           >
             Start an Interview

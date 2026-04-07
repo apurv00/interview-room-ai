@@ -83,4 +83,30 @@ describe('SignedOutEmptyState', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
     expect(screen.getByText('Sign in to see your interview history')).toBeTruthy()
   })
+
+  it('uses the view_progress reason copy', () => {
+    render(
+      <AuthGateProvider>
+        <SignedOutEmptyState
+          reason="view_progress"
+          headline="Track your progress here"
+        />
+      </AuthGateProvider>
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+    expect(screen.getByText('Sign in to track your progress')).toBeTruthy()
+  })
+
+  it('primary CTA links to /interview/setup by default', () => {
+    render(
+      <AuthGateProvider>
+        <SignedOutEmptyState
+          reason="view_history"
+          headline="See your past interviews here"
+        />
+      </AuthGateProvider>
+    )
+    const cta = screen.getByRole('link', { name: 'Start your first interview' })
+    expect(cta.getAttribute('href')).toBe('/interview/setup')
+  })
 })

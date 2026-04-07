@@ -1,7 +1,11 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useSession } from 'next-auth/react'
+import { useRouter } from 'next/navigation'
 import { motion } from 'framer-motion'
+import SignedOutEmptyState from '@shared/ui/SignedOutEmptyState'
+import { useAuthGate } from '@shared/providers/AuthGateProvider'
 
 interface PracticeTask {
   taskId: string
@@ -81,16 +85,27 @@ const TYPE_ICONS: Record<string, string> = {
 }
 
 export default function PathwayPage() {
+  const router = useRouter()
+  const { status: authStatus } = useSession()
+  const { requireAuth } = useAuthGate()
   const [data, setData] = useState<PathwayData | null>(null)
   const [loading, setLoading] = useState(true)
   const [completing, setCompleting] = useState<string | null>(null)
 
   useEffect(() => {
+    if (authStatus !== 'authenticated') {
+      setLoading(false)
+      return
+    }
     fetch('/api/learn/pathway')
-      .then(r => r.json())
+      .then(r => r.ok ? r.json() : null)
       .then(d => { setData(d); setLoading(false) })
       .catch(() => setLoading(false))
-  }, [])
+  }, [authStatus])
+
+  const startInterview = () => {
+    requireAuth('start_interview', () => router.push('/interview/setup'))
+  }
 
   const completeTask = async (taskId: string) => {
     setCompleting(taskId)
@@ -118,6 +133,18 @@ export default function PathwayPage() {
     }
   }
 
+  if (authStatus === 'unauthenticated') {
+    return (
+      <main className="max-w-4xl mx-auto px-4 py-8">
+        <SignedOutEmptyState
+          reason="view_progress"
+          headline="Build your personalized pathway"
+          description="Sign in and run your first interview — we'll generate a tailored learning pathway with practice tasks and milestones."
+        />
+      </main>
+    )
+  }
+
   if (loading) {
     return (
       <main className="max-w-4xl mx-auto px-4 py-8">
@@ -137,12 +164,13 @@ export default function PathwayPage() {
       <main className="max-w-4xl mx-auto px-4 py-8 text-center py-16">
         <h1 className="text-2xl font-bold text-[#0f1419] mb-4">Learning Pathway</h1>
         <p className="text-[#71767b] mb-6">Complete your first interview to generate a personalized learning pathway.</p>
-        <a
-          href="/lobby"
+        <button
+          type="button"
+          onClick={startInterview}
           className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors"
         >
           Start an Interview
-        </a>
+        </button>
       </main>
     )
   }
@@ -358,12 +386,13 @@ export default function PathwayPage() {
               </span>
             ))}
           </div>
-          <a
-            href="/lobby"
+          <button
+            type="button"
+            onClick={startInterview}
             className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors"
           >
             Start Practice
-          </a>
+          </button>
         </motion.section>
       )}
     </main>

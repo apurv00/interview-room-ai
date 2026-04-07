@@ -1,8 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import Link from 'next/link'
-import { useSession } from 'next-auth/react'
+import { useRouter } from 'next/navigation'
+import { useAuthGate } from '@shared/providers/AuthGateProvider'
 import {
   Play, Eye, Mic, Brain, Activity,
   ChevronRight, CheckCircle2, User,
@@ -27,6 +28,7 @@ interface JourneyStep {
   desc: string
   icon: React.ReactNode
   iconBg: string
+  /** Either a regular path, or `'__cta__'` to trigger the start-interview auth gate. */
   href: string
   label: string
   core?: boolean
@@ -34,10 +36,19 @@ interface JourneyStep {
 
 export default function MarketingHomepage() {
   const [activeTab, setActiveTab] = useState(0)
-  // Authenticated users should be sent straight into the interview setup,
-  // not back to the signup page.
-  const { status } = useSession()
-  const ctaHref = status === 'authenticated' ? '/interview/setup' : '/signup'
+  const router = useRouter()
+  const { requireAuth } = useAuthGate()
+
+  // Single hero/CTA click handler. Authenticated users go straight into
+  // the interview setup; anonymous users see the auth modal first and
+  // are redirected to setup once they sign in.
+  const handleStartCta = useCallback(() => {
+    requireAuth('start_interview', () => router.push('/interview/setup'))
+  }, [requireAuth, router])
+
+  // Sentinel used inside the JourneyStep array below to mark steps that
+  // should trigger handleStartCta instead of a normal navigation.
+  const CTA_SENTINEL = '__cta__'
 
   const heroTabs: HeroTab[] = [
     { icon: <Mic className="w-4 h-4" />, label: 'Live Interview' },
@@ -68,9 +79,13 @@ export default function MarketingHomepage() {
                 AI that tracks your facial expressions, voice patterns, and answer quality simultaneously — then gives you a second-by-second replay showing the exact moment your confidence dropped, your pace doubled, and your answer lost structure.
               </p>
 
-              <Link href={ctaHref} className="inline-block px-8 py-3.5 text-[15px] font-semibold rounded-full bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-600/20 transition-all text-center">
+              <button
+                type="button"
+                onClick={handleStartCta}
+                className="inline-block px-8 py-3.5 text-[15px] font-semibold rounded-full bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-600/20 transition-all text-center"
+              >
                 Take Your First Interview — Free
-              </Link>
+              </button>
               <p className="mt-4 text-sm text-slate-400">No credit card · No downloads · Takes 30 seconds to start</p>
 
               <div className="mt-10 pt-8 border-t border-slate-200 grid grid-cols-3 gap-4">
@@ -426,9 +441,13 @@ export default function MarketingHomepage() {
           </div>
 
           <div className="mt-10 text-center">
-            <Link href={ctaHref} className="inline-flex items-center gap-2 text-blue-600 font-semibold text-[14px] hover:text-blue-700 transition-colors">
+            <button
+              type="button"
+              onClick={handleStartCta}
+              className="inline-flex items-center gap-2 text-blue-600 font-semibold text-[14px] hover:text-blue-700 transition-colors"
+            >
               Experience a free interview with replay <ChevronRight className="w-4 h-4" />
-            </Link>
+            </button>
           </div>
         </div>
       </section>
@@ -446,14 +465,20 @@ export default function MarketingHomepage() {
             {([
               { step: '1', title: 'Resume gets you in', desc: 'AI-powered resume builder with 10 templates, ATS scoring, and JD-specific tailoring.', icon: <FileText className="w-5 h-5 text-amber-600" />, iconBg: 'bg-amber-50 border-amber-100', href: '/resume', label: 'Resume Tools' },
               { step: '2', title: 'Guides prep your mind', desc: 'Company-specific guides for Google, Amazon, McKinsey, and 8 more. STAR frameworks, negotiation scripts — all free.', icon: <BookOpen className="w-5 h-5 text-sky-600" />, iconBg: 'bg-sky-50 border-sky-100', href: '/resources', label: '26+ Guides' },
-              { step: '3', title: 'Live AI coaching', desc: 'Voice conversation with an AI that watches your face, listens to your voice, and scores your answers. Real-time nudges. 12+ domains.', icon: <Mic className="w-5 h-5 text-blue-600" />, iconBg: 'bg-blue-50 border-blue-100', href: ctaHref, label: 'Try Free', core: true },
-              { step: '4', title: 'Replay the truth', desc: 'Synchronized video + transcript + signal timeline. See the exact second you lost confidence.', icon: <MonitorPlay className="w-5 h-5 text-emerald-600" />, iconBg: 'bg-emerald-50 border-emerald-100', href: ctaHref, label: 'View Replays' },
+              { step: '3', title: 'Live AI coaching', desc: 'Voice conversation with an AI that watches your face, listens to your voice, and scores your answers. Real-time nudges. 12+ domains.', icon: <Mic className="w-5 h-5 text-blue-600" />, iconBg: 'bg-blue-50 border-blue-100', href: CTA_SENTINEL, label: 'Try Free', core: true },
+              { step: '4', title: 'Replay the truth', desc: 'Synchronized video + transcript + signal timeline. See the exact second you lost confidence.', icon: <MonitorPlay className="w-5 h-5 text-emerald-600" />, iconBg: 'bg-emerald-50 border-emerald-100', href: CTA_SENTINEL, label: 'View Replays' },
               { step: '5', title: 'Track and repeat', desc: 'Session comparison. Score trends. Competency tracking showing which skills improve and which decay.', icon: <RotateCcw className="w-5 h-5 text-teal-600" />, iconBg: 'bg-teal-50 border-teal-100', href: '/learn/progress', label: 'Progress' },
-            ] as JourneyStep[]).map((s, i) => (
-              <Link
+            ] as JourneyStep[]).map((s, i) => {
+              const isCta = s.href === CTA_SENTINEL
+              const Wrapper: React.ElementType = isCta ? 'button' : Link
+              const wrapperProps = isCta
+                ? { type: 'button' as const, onClick: handleStartCta }
+                : { href: s.href }
+              return (
+              <Wrapper
                 key={i}
-                href={s.href}
-                className={`group flex flex-col md:flex-row md:items-center gap-4 md:gap-6 p-5 rounded-2xl transition-all no-underline ${
+                {...wrapperProps}
+                className={`group flex flex-col md:flex-row md:items-center gap-4 md:gap-6 p-5 rounded-2xl transition-all no-underline text-left w-full ${
                   s.core
                     ? 'bg-blue-50 border border-blue-200 hover:shadow-lg hover:shadow-blue-100/50'
                     : 'bg-white border border-slate-200 hover:shadow-lg hover:shadow-slate-100/50'
@@ -475,17 +500,22 @@ export default function MarketingHomepage() {
                   <span className={`text-[12px] font-medium ${s.core ? 'text-blue-500 group-hover:text-blue-600' : 'text-slate-400 group-hover:text-slate-600'} transition-colors`}>{s.label}</span>
                   <ArrowRight className={`w-4 h-4 ${s.core ? 'text-blue-400 group-hover:text-blue-500' : 'text-slate-300 group-hover:text-slate-500'} transition-colors`} />
                 </div>
-              </Link>
-            ))}
+              </Wrapper>
+              )
+            })}
           </div>
 
           <div className="mt-8 pt-6 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4">
             <p className="text-sm text-slate-400">
               Every tool points to one outcome: <span className="text-slate-700 font-semibold">you walk into the interview room and perform.</span>
             </p>
-            <Link href={ctaHref} className="inline-flex items-center gap-2 text-blue-600 font-semibold text-sm hover:text-blue-700 transition-colors flex-shrink-0">
+            <button
+              type="button"
+              onClick={handleStartCta}
+              className="inline-flex items-center gap-2 text-blue-600 font-semibold text-sm hover:text-blue-700 transition-colors flex-shrink-0"
+            >
               Start the journey free <ChevronRight className="w-4 h-4" />
-            </Link>
+            </button>
           </div>
         </div>
       </section>
@@ -574,9 +604,13 @@ export default function MarketingHomepage() {
                   </li>
                 ))}
               </ul>
-              <Link href={ctaHref} className="block w-full py-3 text-[14px] font-semibold rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors text-center">
+              <button
+                type="button"
+                onClick={handleStartCta}
+                className="block w-full py-3 text-[14px] font-semibold rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors text-center"
+              >
                 Get Started Free
-              </Link>
+              </button>
             </div>
 
             <div className="bg-slate-800 rounded-2xl p-7 relative flex flex-col">
@@ -620,9 +654,13 @@ export default function MarketingHomepage() {
           <p className="text-lg text-slate-500 mb-10">
             3 AI systems. 5 scoring dimensions. 147 facial landmarks. 1 question — what are you waiting for?
           </p>
-          <Link href={ctaHref} className="inline-block px-10 py-4 text-[16px] font-bold rounded-full bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-600/20 transition-all">
+          <button
+            type="button"
+            onClick={handleStartCta}
+            className="inline-block px-10 py-4 text-[16px] font-bold rounded-full bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-600/20 transition-all"
+          >
             Take Your First Interview — Free
-          </Link>
+          </button>
         </div>
       </section>
 
