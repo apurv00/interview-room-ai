@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { ResumeData } from '../validators/resume'
 import { useResume, DEFAULT_SECTION_ORDER } from '../hooks/useResume'
 import { RESUME_TEMPLATES } from '../config/templates'
@@ -17,14 +17,21 @@ import FileDropzone from '@interview/components/FileDropzone'
 import FontStyleControls from './FontStyleControls'
 import SortableList from './SortableList'
 import SortableItem, { DragHandle } from './SortableItem'
+import AnonymousDraftBanner from './AnonymousDraftBanner'
+import { useAuthGate } from '@shared/providers/AuthGateProvider'
 
 interface Props {
   initialData?: Partial<ResumeData>
   resumeId?: string
   onSave: (data: ResumeData) => Promise<{ id?: string; error?: string; code?: string }>
+  /** When true, AI/save/download actions are gated behind the auth modal
+   *  and edits are auto-persisted to localStorage via onAnonymousChange. */
+  isAnonymous?: boolean
+  onAnonymousChange?: (data: ResumeData) => void
 }
 
-export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
+export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymous = false, onAnonymousChange }: Props) {
+  const { requireAuth } = useAuthGate()
   const {
     resume, isDirty, update, setContactInfo,
     addExperience, updateExperience, removeExperience,
@@ -46,6 +53,13 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
   const [mobileTab, setMobileTab] = useState<'edit' | 'preview'>('edit')
   const [downloading, setDownloading] = useState(false)
 
+  // Persist anonymous edits to localStorage so the user's work survives
+  // page reloads and an OAuth round-trip.
+  useEffect(() => {
+    if (!isAnonymous || !onAnonymousChange) return
+    onAnonymousChange(resume)
+  }, [resume, isAnonymous, onAnonymousChange])
+
   async function handleSave() {
     setSaving(true)
     setError('')
@@ -62,6 +76,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
 
   async function handleEnhanceSummary() {
     if (!resume.summary?.trim()) return
+    if (isAnonymous) { requireAuth('enhance_resume'); return }
     setEnhancingSection('summary')
     try {
       const res = await fetch('/api/resume/generate', {
@@ -84,6 +99,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
   async function handleEnhanceBullets(expId: string) {
     const exp = resume.experience?.find(e => e.id === expId)
     if (!exp || exp.bullets.every(b => !b.trim())) return
+    if (isAnonymous) { requireAuth('enhance_resume'); return }
     setEnhancingSection(expId)
     try {
       const res = await fetch('/api/resume/generate', {
@@ -102,6 +118,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
   }
 
   async function handleUpload(file: File) {
+    if (isAnonymous) { requireAuth('parse_resume'); return }
     setUploading(true)
     setError('')
     try {
@@ -129,6 +146,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
   }
 
   async function handleImportProfile() {
+    if (isAnonymous) { requireAuth('save_resume'); return }
     try {
       const res = await fetch('/api/resume/profile')
       const data = await res.json()
@@ -140,6 +158,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
 
   async function handleGenerateFull() {
     if (!resume.targetRole) return
+    if (isAnonymous) { requireAuth('enhance_resume'); return }
     setEnhancingSection('full')
     try {
       const res = await fetch('/api/resume/generate', {
@@ -213,6 +232,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
   }
 
   async function handleDownloadPDF() {
+    if (isAnonymous) { requireAuth('download_resume'); return }
     setDownloading(true)
     try {
       const res = await fetch('/api/resume/pdf', {
@@ -246,6 +266,11 @@ export default function ResumeEditor({ initialData, resumeId, onSave }: Props) {
 
   return (
     <div>
+      {isAnonymous && (
+        <div className="mb-4">
+          <AnonymousDraftBanner />
+        </div>
+      )}
       {/* Mobile tab toggle */}
       <div className="md:hidden flex border-b border-slate-200 mb-4">
         <button

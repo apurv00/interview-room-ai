@@ -122,6 +122,20 @@ export default withAuth(
           pathname.startsWith('/pricing') ||
           pathname.startsWith('/privacy') ||
           pathname.startsWith('/terms') ||
+          // ── Deferred-auth public surface (browseable anonymously;
+          // auth gated client-side at value-capture actions only) ──
+          pathname === '/resume' ||
+          pathname.startsWith('/resume/builder') ||
+          pathname.startsWith('/resume/tailor') ||
+          pathname.startsWith('/resume/ats-check') ||
+          pathname.startsWith('/resume/templates') ||
+          pathname === '/interview/setup' ||
+          pathname.startsWith('/lobby') ||
+          pathname === '/history' ||
+          pathname === '/dashboard' ||
+          pathname.startsWith('/learn/progress') ||
+          pathname.startsWith('/learn/pathway') ||
+          pathname.startsWith('/learn/dashboard') ||
           pathname.startsWith('/_next') ||
           pathname === '/favicon.ico' ||
           pathname === '/sitemap.xml' ||

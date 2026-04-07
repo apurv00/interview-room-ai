@@ -3,6 +3,7 @@ import { SpeedInsights } from '@vercel/speed-insights/next'
 import SessionProvider from '@shared/providers/SessionProvider'
 import { ThemeProvider } from '@shared/providers/ThemeProvider'
 import XpProvider from '@shared/providers/XpProvider'
+import { AuthGateProvider } from '@shared/providers/AuthGateProvider'
 import AppShell from '@shared/layout/AppShell'
 import JsonLd from '@shared/seo/JsonLd'
 import { siteConfig } from '@shared/siteConfig'
@@ -87,11 +88,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           }}
         />
         <SessionProvider>
-          <ThemeProvider>
-            <XpProvider>
-              <AppShell>{children}</AppShell>
-            </XpProvider>
-          </ThemeProvider>
+          <AuthGateProvider>
+            <ThemeProvider>
+              <XpProvider>
+                <AppShell>{children}</AppShell>
+              </XpProvider>
+            </ThemeProvider>
+          </AuthGateProvider>
         </SessionProvider>
         <SpeedInsights />
       </body>

@@ -1,41 +1,54 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useSession } from 'next-auth/react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useSearchParams } from 'next/navigation'
 import ResumeEditor from '@resume/components/ResumeEditor'
 import type { ResumeData } from '@resume/validators/resume'
+import { useAuthGate } from '@shared/providers/AuthGateProvider'
+
+const ANON_DRAFT_KEY = 'resume:draft:anon'
 
 export default function ResumeBuilderPage() {
-  const router = useRouter()
   const searchParams = useSearchParams()
   const { status: authStatus } = useSession()
+  const { requireAuth } = useAuthGate()
   const [initialData, setInitialData] = useState<Partial<ResumeData> | null>(null)
   const [resumeId, setResumeId] = useState<string | undefined>()
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    if (authStatus === 'unauthenticated') {
-      router.push('/signin')
-      return
-    }
-    if (authStatus !== 'authenticated') return
+    if (authStatus === 'loading') return
 
     const editId = searchParams.get('id')
     const template = searchParams.get('template')
 
+    // Anonymous: hydrate from localStorage draft (if any) or start fresh.
+    if (authStatus === 'unauthenticated') {
+      try {
+        const raw = localStorage.getItem(ANON_DRAFT_KEY)
+        if (raw) {
+          setInitialData(JSON.parse(raw))
+        } else {
+          setInitialData({ template: template || 'professional' })
+        }
+      } catch {
+        setInitialData({ template: template || 'professional' })
+      }
+      setLoading(false)
+      return
+    }
+
+    // Authenticated: load existing resume by id, or fresh.
     if (editId) {
-      // Load existing resume for editing
       fetch('/api/resume/save')
         .then(r => r.json())
         .then(data => {
           const resume = data.resumes?.find((r: { id: string }) => r.id === editId)
           if (resume) {
-            // Fetch full resume data
             fetch(`/api/resume/save?id=${editId}`)
               .then(r => r.json())
               .then(async (fullData) => {
-                // If resume only has fullText but no structured fields, auto-parse
                 const hasStructuredContent = !!(
                   fullData.summary ||
                   fullData.experience?.length ||
@@ -56,7 +69,6 @@ export default function ResumeBuilderPage() {
                       setInitialData(mergedData)
                       setResumeId(editId)
                       setLoading(false)
-                      // Save the parsed fields back so future loads are instant
                       fetch('/api/resume/save', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -84,30 +96,65 @@ export default function ResumeBuilderPage() {
           setLoading(false)
         })
     } else {
-      setInitialData({ template: template || 'professional' })
+      // Authenticated, no editId — check if a pending anonymous draft exists.
+      // If so, hydrate it so the user's pre-signin work isn't lost.
+      try {
+        const raw = localStorage.getItem(ANON_DRAFT_KEY)
+        if (raw) {
+          setInitialData(JSON.parse(raw))
+        } else {
+          setInitialData({ template: template || 'professional' })
+        }
+      } catch {
+        setInitialData({ template: template || 'professional' })
+      }
       setLoading(false)
     }
-  }, [authStatus, router, searchParams])
+  }, [authStatus, searchParams])
 
-  async function handleSave(data: ResumeData) {
-    try {
-      const res = await fetch('/api/resume/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...data, id: resumeId }),
-      })
-      const result = await res.json()
-      if (!res.ok) {
-        return { error: result.error || 'Save failed', code: result.code }
+  const persistAnonDraft = useCallback((data: ResumeData) => {
+    try { localStorage.setItem(ANON_DRAFT_KEY, JSON.stringify(data)) } catch { /* quota */ }
+  }, [])
+
+  const handleSave = useCallback(
+    async (data: ResumeData): Promise<{ id?: string; error?: string; code?: string }> => {
+      // Anonymous: persist locally and prompt for sign-in.
+      if (authStatus !== 'authenticated') {
+        persistAnonDraft(data)
+        return new Promise((resolve) => {
+          requireAuth('save_resume', () => {
+            // After auth (which redirects via OAuth), this callback rarely fires
+            // because the page reloads. Resolve with a soft error so the editor
+            // shows a friendly state in the meantime.
+            resolve({ error: 'Sign in to save to the cloud' })
+          })
+          // If user dismisses modal, the resolver above never fires; resolve here.
+          setTimeout(() => resolve({ error: 'Sign in to save to the cloud' }), 300)
+        })
       }
-      if (result.id && !resumeId) {
-        setResumeId(result.id)
+
+      try {
+        const res = await fetch('/api/resume/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...data, id: resumeId }),
+        })
+        const result = await res.json()
+        if (!res.ok) {
+          return { error: result.error || 'Save failed', code: result.code }
+        }
+        if (result.id && !resumeId) {
+          setResumeId(result.id)
+        }
+        // Clear any leftover anonymous draft now that it's persisted.
+        try { localStorage.removeItem(ANON_DRAFT_KEY) } catch { /* ignore */ }
+        return { id: result.id }
+      } catch {
+        return { error: 'Network error' }
       }
-      return { id: result.id }
-    } catch {
-      return { error: 'Network error' }
-    }
-  }
+    },
+    [authStatus, resumeId, requireAuth, persistAnonDraft]
+  )
 
   if (authStatus === 'loading' || loading || !initialData) {
     return (
@@ -117,5 +164,13 @@ export default function ResumeBuilderPage() {
     )
   }
 
-  return <ResumeEditor initialData={initialData} resumeId={resumeId} onSave={handleSave} />
+  return (
+    <ResumeEditor
+      initialData={initialData}
+      resumeId={resumeId}
+      onSave={handleSave}
+      isAnonymous={authStatus !== 'authenticated'}
+      onAnonymousChange={persistAnonDraft}
+    />
+  )
 }

@@ -1,11 +1,13 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useSession } from 'next-auth/react'
 import { motion } from 'framer-motion'
 import dynamic from 'next/dynamic'
 import DailyChallengeCard from '@learn/components/DailyChallengeCard'
 import StreakCalendar from '@learn/components/StreakCalendar'
 import StreakMilestoneBar from '@learn/components/StreakMilestoneBar'
+import SignedOutEmptyState from '@shared/ui/SignedOutEmptyState'
 
 // Lazy-load recharts to avoid SSR issues and reduce bundle size
 const LineChart = dynamic(() => import('recharts').then(m => m.LineChart), { ssr: false })
@@ -47,17 +49,34 @@ function StatCard({ label, value, sub }: { label: string; value: string | number
 }
 
 export default function DashboardPage() {
+  const { status: authStatus } = useSession()
   const [data, setData] = useState<AnalyticsData | null>(null)
   const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState<'7d' | '30d' | 'all'>('all')
 
   useEffect(() => {
+    if (authStatus !== 'authenticated') {
+      setLoading(false)
+      return
+    }
     setLoading(true)
     fetch(`/api/learn/analytics?period=${period}`)
       .then(r => r.json())
       .then(d => { setData(d); setLoading(false) })
       .catch(() => setLoading(false))
-  }, [period])
+  }, [period, authStatus])
+
+  if (authStatus === 'unauthenticated') {
+    return (
+      <main className="max-w-6xl mx-auto px-4 py-8">
+        <SignedOutEmptyState
+          reason="view_dashboard"
+          headline="Your analytics dashboard"
+          description="Sign in and run an interview to unlock score trends, competency radar, and streak tracking."
+        />
+      </main>
+    )
+  }
 
   if (loading) {
     return (

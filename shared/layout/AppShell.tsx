@@ -9,6 +9,7 @@ import AuthMenu from './AuthMenu'
 import Footer from './Footer'
 import XpBadge from '@learn/components/XpBadge'
 import BadgeUnlockChecker from '@learn/components/BadgeUnlockChecker'
+import { useAuthGate } from '@shared/providers/AuthGateProvider'
 
 const NAV_LINKS = [
   { href: '/interview/setup', label: 'Interview' },
@@ -28,6 +29,7 @@ const INTERVIEW_ALLOW_NAV = ['/interview/setup']
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const { status } = useSession()
+  const { open: openAuthGate } = useAuthGate()
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const isAuthenticated = status === 'authenticated'
 
@@ -93,18 +95,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   </>
                 ) : (
                   <>
-                    <Link
-                      href="/signin"
+                    <button
+                      type="button"
+                      onClick={() => openAuthGate('generic')}
                       className="text-[13px] font-medium text-slate-600 hover:text-slate-900 transition-colors px-2"
                     >
                       Sign in
-                    </Link>
-                    <Link
-                      href="/signup"
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openAuthGate('generic')}
                       className="px-4 py-2 rounded-full text-[13px] font-semibold bg-blue-600 text-white hover:bg-blue-700 shadow-sm shadow-blue-600/20 transition-all"
                     >
                       Get started
-                    </Link>
+                    </button>
                   </>
                 )}
               </div>
@@ -163,20 +167,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   </>
                 ) : (
                   <div className="space-y-2">
-                    <Link
-                      href="/signin"
-                      onClick={() => setIsMobileMenuOpen(false)}
-                      className="block px-3 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 rounded-lg text-center"
+                    <button
+                      type="button"
+                      onClick={() => { setIsMobileMenuOpen(false); openAuthGate('generic') }}
+                      className="block w-full px-3 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 rounded-lg text-center"
                     >
                       Sign in
-                    </Link>
-                    <Link
-                      href="/signup"
-                      onClick={() => setIsMobileMenuOpen(false)}
-                      className="block px-3 py-2.5 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg text-center"
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setIsMobileMenuOpen(false); openAuthGate('generic') }}
+                      className="block w-full px-3 py-2.5 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg text-center"
                     >
                       Get started
-                    </Link>
+                    </button>
                   </div>
                 )}
               </div>

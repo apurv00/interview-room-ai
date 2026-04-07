@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useSession } from 'next-auth/react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { InterviewConfig } from '@shared/types'
 import { getDomainLabel } from '@interview/config/interviewConfig'
 import { STORAGE_KEYS } from '@shared/storageKeys'
+import { useAuthGate } from '@shared/providers/AuthGateProvider'
 import { COMPANY_PROFILES } from '@interview/config/companyProfiles'
 import PrepChecklist from '@interview/components/PrepChecklist'
 
@@ -62,6 +64,8 @@ const itemVariants = {
 
 export default function LobbyPage() {
   const router = useRouter()
+  const { status: authStatus } = useSession()
+  const { requireAuth } = useAuthGate()
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
@@ -275,6 +279,11 @@ export default function LobbyPage() {
       const updated = { ...config, targetCompany: lobbyCompany.trim() }
       setConfig(updated)
       localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(updated))
+    }
+    if (authStatus !== 'authenticated') {
+      // Anonymous: gate at the room entry. Config is already in localStorage.
+      requireAuth('start_interview')
+      return
     }
     setJoining(true)
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
