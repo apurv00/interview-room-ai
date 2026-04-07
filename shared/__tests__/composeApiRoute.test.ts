@@ -150,6 +150,77 @@ describe('composeApiRoute', () => {
     expect(body.error).toContain('Rate limit')
   })
 
+  it('returns 429 with ANON_DAILY_LIMIT code when anonymous daily cap exceeded', async () => {
+    vi.mocked(getServerSession).mockResolvedValue(null)
+    // First incr (per-minute) is under maxRequests; second incr (anon-day) exceeds.
+    let call = 0
+    vi.mocked(redis.incr).mockImplementation(async () => {
+      call++
+      return call === 1 ? 1 : 4 // minute=1 (ok), day=4 (exceeds 3)
+    })
+
+    const mockHandler = vi.fn()
+    const handler = composeApiRoute({
+      ...defaultOptions,
+      authOptional: true,
+      rateLimit: { ...defaultOptions.rateLimit, anonDailyLimit: 3 },
+      handler: mockHandler,
+    })
+
+    const res = await handler(createRequest({ name: 'test', value: 1 }))
+    expect(res.status).toBe(429)
+    const body = await res.json()
+    expect(body.code).toBe('ANON_DAILY_LIMIT')
+    expect(mockHandler).not.toHaveBeenCalled()
+  })
+
+  it('allows anonymous request when daily counter under cap', async () => {
+    vi.mocked(getServerSession).mockResolvedValue(null)
+    let call = 0
+    vi.mocked(redis.incr).mockImplementation(async () => {
+      call++
+      return call === 1 ? 1 : 2 // minute=1, day=2 (under 3)
+    })
+
+    const mockHandler = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 })
+    )
+    const handler = composeApiRoute({
+      ...defaultOptions,
+      authOptional: true,
+      rateLimit: { ...defaultOptions.rateLimit, anonDailyLimit: 3 },
+      handler: mockHandler,
+    })
+
+    const res = await handler(createRequest({ name: 'test', value: 1 }))
+    expect(res.status).toBe(200)
+    expect(mockHandler).toHaveBeenCalledTimes(1)
+  })
+
+  it('does NOT enforce anonDailyLimit on authenticated users', async () => {
+    vi.mocked(getServerSession).mockResolvedValue({
+      user: { id: 'user123', role: 'candidate', plan: 'free', email: 'test@test.com' },
+      expires: '',
+    })
+    // Single incr (only the minute window); no day-window check fires.
+    vi.mocked(redis.incr).mockClear()
+    vi.mocked(redis.incr).mockResolvedValue(1)
+
+    const mockHandler = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 })
+    )
+    const handler = composeApiRoute({
+      ...defaultOptions,
+      authOptional: true,
+      rateLimit: { ...defaultOptions.rateLimit, anonDailyLimit: 3 },
+      handler: mockHandler,
+    })
+
+    const res = await handler(createRequest({ name: 'test', value: 1 }))
+    expect(res.status).toBe(200)
+    expect(redis.incr).toHaveBeenCalledTimes(1) // only minute window
+  })
+
   it('allows request through when under rate limit', async () => {
     vi.mocked(getServerSession).mockResolvedValue({
       user: { id: 'user123', role: 'candidate', plan: 'free', email: 'test@test.com' },

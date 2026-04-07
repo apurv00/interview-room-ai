@@ -78,8 +78,7 @@ export default function ATSCheckPage() {
   }
 
   async function handleCheck() {
-    if (!resumeText) { setError('Upload a resume or select a saved one first'); return }
-    if (isAnonymous) { requireAuth('ats_check'); return }
+    if (!resumeText) { setError('Paste a resume or upload one first'); return }
     setError('')
     setChecking(true)
     try {
@@ -89,8 +88,14 @@ export default function ATSCheckPage() {
         body: JSON.stringify({ resumeText, jobDescription: jobDescription || undefined }),
       })
       const data = await res.json()
-      if (res.ok) setResult(data)
-      else setError(data.error || 'Check failed')
+      if (res.ok) {
+        setResult(data)
+      } else if (res.status === 429 && data.code === 'ANON_DAILY_LIMIT') {
+        setError('Daily limit reached. Sign in for unlimited ATS checks.')
+        requireAuth('ats_check')
+      } else {
+        setError(data.error || 'Check failed')
+      }
     } catch { setError('Network error') }
     setChecking(false)
   }
@@ -133,7 +138,27 @@ export default function ATSCheckPage() {
             {savedResumes.length > 0 && <div className="text-center text-[10px] text-slate-400">or</div>}
 
             {!resumeText ? (
-              <FileDropzone label="Upload Resume" isUploading={uploading} onFileSelect={handleUpload} onRemove={() => {}} onError={setError} />
+              <>
+                {!isAnonymous && (
+                  <FileDropzone label="Upload Resume" isUploading={uploading} onFileSelect={handleUpload} onRemove={() => {}} onError={setError} />
+                )}
+                {isAnonymous && (
+                  <div className="space-y-2">
+                    <label className="text-[10px] text-slate-500 uppercase tracking-wider">Paste your resume text</label>
+                    <textarea
+                      value={resumeText}
+                      onChange={e => { setResumeText(e.target.value); if (e.target.value) setResumeFileName('Pasted resume') }}
+                      placeholder="Paste your resume here. To upload a PDF or DOCX, sign in."
+                      rows={8}
+                      className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
+                    />
+                    <p className="text-[10px] text-slate-400">
+                      <button type="button" onClick={() => requireAuth('parse_resume')} className="text-blue-600 hover:underline">Sign in</button>
+                      {' '}to upload a PDF or DOCX instead.
+                    </p>
+                  </div>
+                )}
+              </>
             ) : (
               <div className="flex items-center justify-between bg-emerald-500/5 border border-emerald-500/15 rounded-xl px-4 py-3">
                 <div className="flex items-center gap-2">

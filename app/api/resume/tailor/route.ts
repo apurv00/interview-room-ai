@@ -1,27 +1,29 @@
 import { NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@shared/auth/authOptions'
+import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { tailorResume } from '@resume/services/resumeAIService'
 import { TailorSchema } from '@resume/validators/resume'
 
 export const dynamic = 'force-dynamic'
 
-export async function POST(req: Request) {
-  const session = await getServerSession(authOptions)
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const body = await req.json()
-  const parsed = TailorSchema.safeParse(body)
-  if (!parsed.success) {
-    return NextResponse.json({ error: 'Invalid data' }, { status: 400 })
-  }
-
-  try {
-    const result = await tailorResume(parsed.data)
-    return NextResponse.json(result)
-  } catch {
-    return NextResponse.json({ error: 'Failed to tailor resume' }, { status: 500 })
-  }
-}
+// Open to anonymous users so the strongest "wow" tool of the resume funnel
+// (job-specific tailoring) is reachable from SEO landings without sign-in.
+// Stateless service — no user.id dependency. Anonymous IPs capped at 3
+// tailors per day; one full Sonnet call ~$0.05 → bounded ~$0.15/day/IP.
+export const POST = composeApiRoute({
+  schema: TailorSchema,
+  authOptional: true,
+  rateLimit: {
+    keyPrefix: 'rl:resume-tailor',
+    windowMs: 60_000,
+    maxRequests: 5,
+    anonDailyLimit: 3,
+  },
+  handler: async (_req, { body }) => {
+    try {
+      const result = await tailorResume(body)
+      return NextResponse.json(result)
+    } catch {
+      return NextResponse.json({ error: 'Failed to tailor resume' }, { status: 500 })
+    }
+  },
+})

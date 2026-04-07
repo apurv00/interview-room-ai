@@ -85,7 +85,6 @@ export default function TailorPage() {
       setError('Both resume and job description are required')
       return
     }
-    if (isAnonymous) { requireAuth('tailor_resume'); return }
     setError('')
     setTailoring(true)
     try {
@@ -95,8 +94,15 @@ export default function TailorPage() {
         body: JSON.stringify({ resumeText, jobDescription, companyName: companyName || undefined }),
       })
       const data = await res.json()
-      if (res.ok) setResult(data)
-      else setError(data.error || 'Tailoring failed')
+      if (res.ok) {
+        setResult(data)
+      } else if (res.status === 429 && data.code === 'ANON_DAILY_LIMIT') {
+        // Anonymous user hit the daily IP cap — soft-prompt them to sign in
+        setError('Daily limit reached. Sign in for unlimited tailoring.')
+        requireAuth('tailor_resume')
+      } else {
+        setError(data.error || 'Tailoring failed')
+      }
     } catch { setError('Network error') }
     setTailoring(false)
   }
@@ -177,7 +183,27 @@ export default function TailorPage() {
             {savedResumes.length > 0 && <div className="text-center text-[10px] text-slate-400">or</div>}
 
             {!resumeText ? (
-              <FileDropzone label="Upload Resume" isUploading={uploading} onFileSelect={handleUpload} onRemove={() => {}} onError={setError} />
+              <>
+                {!isAnonymous && (
+                  <FileDropzone label="Upload Resume" isUploading={uploading} onFileSelect={handleUpload} onRemove={() => {}} onError={setError} />
+                )}
+                {isAnonymous && (
+                  <div className="space-y-2">
+                    <label className="text-[10px] text-slate-500 uppercase tracking-wider">Paste your resume text</label>
+                    <textarea
+                      value={resumeText}
+                      onChange={e => { setResumeText(e.target.value); if (e.target.value) setResumeFileName('Pasted resume') }}
+                      placeholder="Paste your resume here. To upload a PDF or DOCX, sign in."
+                      rows={8}
+                      className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
+                    />
+                    <p className="text-[10px] text-slate-400">
+                      <button type="button" onClick={() => requireAuth('parse_resume')} className="text-blue-600 hover:underline">Sign in</button>
+                      {' '}to upload a PDF or DOCX instead.
+                    </p>
+                  </div>
+                )}
+              </>
             ) : (
               <div className="flex items-center justify-between bg-emerald-500/5 border border-emerald-500/15 rounded-xl px-4 py-3">
                 <div className="flex items-center gap-2">
