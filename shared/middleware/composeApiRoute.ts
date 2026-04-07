@@ -25,7 +25,15 @@ interface RateLimitConfig {
   windowMs: number
   maxRequests: number
   keyPrefix: string
+  /**
+   * Optional per-day cap applied only to anonymous (non-authenticated) callers,
+   * keyed by client IP. Used to bound abuse on AI endpoints opened to anon users
+   * without forcing sign-in. Authed users are unaffected.
+   */
+  anonDailyLimit?: number
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000
 
 export interface ComposeOptions<T> {
   schema?: ZodSchema<T>
@@ -93,6 +101,33 @@ export function composeApiRoute<T>(options: ComposeOptions<T>) {
               },
             }
           )
+        }
+
+        // Anonymous-only daily cap (IP-keyed). Bounds abuse on AI endpoints
+        // that are open to anon users without sign-in. Authed users skip this.
+        if (user.id === 'anonymous' && options.rateLimit.anonDailyLimit) {
+          const dayKey = `${options.rateLimit.keyPrefix}:anon-day:${rateLimitKey}`
+          const dayCount = await redis.incr(dayKey)
+          if (dayCount === 1) {
+            await redis.pexpire(dayKey, DAY_MS)
+          }
+          if (dayCount > options.rateLimit.anonDailyLimit) {
+            aiLogger.warn(
+              { ip: rateLimitKey, dayKey, dayCount },
+              'Anonymous daily limit exceeded'
+            )
+            return NextResponse.json(
+              {
+                error:
+                  'Daily limit reached. Sign in for unlimited access.',
+                code: 'ANON_DAILY_LIMIT',
+              },
+              {
+                status: 429,
+                headers: { 'Retry-After': String(Math.ceil(DAY_MS / 1000)) },
+              }
+            )
+          }
         }
       } catch (err) {
         aiLogger.error({ err }, 'Rate limit check failed, allowing request')

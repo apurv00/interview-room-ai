@@ -119,6 +119,15 @@ export default withAuth(
           pathname.startsWith('/api/health') ||
           pathname.startsWith('/api/domains') ||
           pathname.startsWith('/api/interview-types') ||
+          // JD context extraction is regex-first and only invokes Claude Haiku
+          // as a fallback. Cost is bounded; allow anonymous so JD pasting on
+          // /interview/setup auto-fills company/industry without sign-in.
+          pathname.startsWith('/api/extract-company-context') ||
+          // AI endpoints intentionally opened to anonymous users with strict
+          // per-IP daily caps enforced inside composeApiRoute (anonDailyLimit).
+          pathname.startsWith('/api/resume/parse') ||
+          pathname.startsWith('/api/resume/tailor') ||
+          pathname.startsWith('/api/resume/ats-check') ||
           pathname.startsWith('/pricing') ||
           pathname.startsWith('/privacy') ||
           pathname.startsWith('/terms') ||

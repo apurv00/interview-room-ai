@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { Mic } from 'lucide-react'
 import StartCta from '@shared/ui/StartCta'
+import { useAuthGate } from '@shared/providers/AuthGateProvider'
 
 // Pages where footer is hidden (full-screen experiences)
 const HIDDEN_PREFIXES = ['/interview', '/lobby']
@@ -74,6 +75,7 @@ function FooterColumn({
 
 export default function Footer() {
   const pathname = usePathname()
+  const { open: openAuthGate } = useAuthGate()
 
   if (HIDDEN_PREFIXES.some((p) => pathname.startsWith(p))) {
     return null
@@ -122,7 +124,13 @@ export default function Footer() {
             <Link href="/privacy" className="hover:text-slate-700 transition-colors">Privacy</Link>
             <Link href="/terms" className="hover:text-slate-700 transition-colors">Terms</Link>
             <a href="mailto:contact@interviewprep.guru" className="hover:text-slate-700 transition-colors">Contact</a>
-            <Link href="/signin" className="hover:text-slate-700 transition-colors">Sign In</Link>
+            <button
+              type="button"
+              onClick={() => openAuthGate('generic')}
+              className="hover:text-slate-700 transition-colors"
+            >
+              Sign In
+            </button>
           </nav>
         </div>
       </div>
