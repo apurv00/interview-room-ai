@@ -1,0 +1,22 @@
+{
+  "caseId": "fixture_weak_vague_002",
+  "domain": "product",
+  "interviewType": "behavioral",
+  "seniorityBand": "mid",
+  "category": "pm_behavioral",
+  "question": "Tell me about a time you led a cross-functional initiative under tight constraints.",
+  "candidateAnswer": "Yeah, so I've done a lot of cross-functional work. I usually try to make sure everyone is on the same page and we communicate well. There was a project that was challenging but I think we did a good job in the end. I learned a lot from it.",
+  "expectedStrengthTags": [],
+  "expectedWeaknessTags": ["vague", "no specifics", "missing impact"],
+  "expectedCompetencyScoreBands": {
+    "relevance": { "min": 30, "max": 60 },
+    "structure": { "min": 10, "max": 40 },
+    "specificity": { "min": 0, "max": 25 },
+    "ownership": { "min": 10, "max": 40 }
+  },
+  "expectedFollowUpRelevance": "high",
+  "idealFollowUpExamples": ["Can you walk me through the specific project? What was the constraint and what did you personally do?"],
+  "idealFeedbackPoints": ["No quantification", "No STAR structure", "Generic language"],
+  "tags": ["behavioral", "vague"],
+  "isActive": true
+}

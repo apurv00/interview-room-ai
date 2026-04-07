@@ -1,11 +1,13 @@
 'use client'
 
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { FileText, Code2, MessageSquare } from 'lucide-react'
 import Avatar from '@interview/components/Avatar'
 import CodeEditor from './CodeEditor'
+import ClarificationsPanel from './ClarificationsPanel'
 import type { AvatarEmotion, InterviewState, CodeLanguage } from '@shared/types'
 import type { CodingProblem } from '@interview/config/codingProblems'
+import type { CodingClarificationRecord } from '@interview/validators/clarifyCoding'
 
 type MobileTab = 'problem' | 'code' | 'chat'
 
@@ -25,6 +27,9 @@ interface CodingLayoutProps {
   language: CodeLanguage
   onLanguageChange: (lang: CodeLanguage) => void
   onCodeSubmit: (code: string) => void
+
+  // Clarifications
+  sessionId?: string
 
   // Transcript
   currentQuestion: string
@@ -50,6 +55,7 @@ export default function CodingLayout({
   language,
   onLanguageChange,
   onCodeSubmit,
+  sessionId,
   currentQuestion,
   liveAnswer,
   children,
@@ -57,6 +63,37 @@ export default function CodingLayout({
   const [mobileTab, setMobileTab] = useState<MobileTab>('code')
   const starterCode = problem?.starterCode?.[language] || ''
   const editorDisabled = EDITOR_DISABLED_PHASES.has(phase)
+
+  // ── Clarifications: append-only Q&A about the current problem ──
+  const [clarifications, setClarifications] = useState<CodingClarificationRecord[]>([])
+
+  // Reset clarifications when the problem changes
+  useEffect(() => {
+    setClarifications([])
+  }, [problem?.id])
+
+  const askClarification = useCallback(
+    async (question: string) => {
+      if (!problem) throw new Error('No active problem')
+      const res = await fetch('/api/interview/clarify-coding', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          problemId: problem.id,
+          candidateQuestion: question,
+          language,
+        }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error || `Request failed (${res.status})`)
+      }
+      const record = (await res.json()) as CodingClarificationRecord
+      setClarifications((prev) => [...prev, record])
+    },
+    [problem, sessionId, language]
+  )
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -122,6 +159,13 @@ export default function CodingLayout({
                   ))}
                 </ul>
               </div>
+
+              {/* Clarifications */}
+              <ClarificationsPanel
+                clarifications={clarifications}
+                onAsk={askClarification}
+                disabled={editorDisabled}
+              />
 
               {/* Live transcript */}
               {(currentQuestion || liveAnswer) && (

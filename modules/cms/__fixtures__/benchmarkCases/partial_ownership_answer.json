@@ -1,0 +1,22 @@
+{
+  "caseId": "fixture_partial_ownership_004",
+  "domain": "engineering",
+  "interviewType": "behavioral",
+  "seniorityBand": "mid",
+  "category": "swe_behavioral",
+  "question": "Tell me about a difficult bug you debugged in production.",
+  "candidateAnswer": "We had a memory leak in our Node service. The team noticed it after a deploy and we worked together to fix it. We used heap snapshots to find the source, which turned out to be event listeners that weren't being cleaned up. After we patched it, memory usage dropped back to normal. It was a good team effort.",
+  "expectedStrengthTags": ["clear technical detail", "concrete tooling"],
+  "expectedWeaknessTags": ["weak ownership", "we language"],
+  "expectedCompetencyScoreBands": {
+    "relevance": { "min": 70, "max": 95 },
+    "structure": { "min": 50, "max": 80 },
+    "specificity": { "min": 55, "max": 80 },
+    "ownership": { "min": 25, "max": 55 }
+  },
+  "expectedFollowUpRelevance": "medium",
+  "idealFollowUpExamples": ["What specifically did you do versus your teammates? Who took the heap snapshot?"],
+  "idealFeedbackPoints": ["Used 'we' throughout — unclear personal contribution", "Good technical content"],
+  "tags": ["behavioral", "ownership"],
+  "isActive": true
+}

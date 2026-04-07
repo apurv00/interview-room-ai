@@ -465,6 +465,7 @@ export default function InterviewPage() {
           language={codingLanguage}
           onLanguageChange={setCodingLanguage}
           onCodeSubmit={handleCodeSubmit}
+          sessionId={interview.sessionId ?? undefined}
           currentQuestion={currentQuestion}
           liveAnswer={displayAnswer}
         >

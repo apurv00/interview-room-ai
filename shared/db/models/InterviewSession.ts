@@ -56,6 +56,16 @@ export interface IInterviewSession extends Document {
     language: string
     submittedAt: Date
   }>
+  // Coding clarifications: AI answers to candidate questions about a coding problem.
+  // Append-only — original problem description and test cases are never mutated.
+  codingClarifications?: Array<{
+    problemId: string
+    question: string
+    answer: string
+    addedExamples?: Array<{ input: string; output: string; explanation?: string }>
+    addedConstraints?: string[]
+    createdAt: Date
+  }>
 
   templateId?: mongoose.Types.ObjectId
   candidateEmail?: string
@@ -136,6 +146,7 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
     // Design interview
     designProblemId: { type: String },
     codeSubmissions: { type: Schema.Types.Mixed },
+    codingClarifications: { type: Schema.Types.Mixed, default: [] },
 
     templateId: { type: Schema.Types.ObjectId, ref: 'InterviewTemplate' },
     candidateEmail: { type: String, lowercase: true },
