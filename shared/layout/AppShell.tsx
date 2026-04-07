@@ -48,29 +48,36 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <>
-      <nav aria-label="Main navigation" className="sticky top-0 w-full bg-white/80 backdrop-blur-md z-50 border-b border-slate-200/80">
+      <nav
+        aria-label="Main navigation"
+        className="sticky top-0 w-full bg-white/85 backdrop-blur-xl z-50 border-b border-slate-200/60"
+      >
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
+          <div className="flex justify-between items-center h-[68px]">
             {/* Brand */}
-            <Link href="/" className="flex items-center gap-2 no-underline">
-              <div className="w-8 h-8 rounded-xl bg-blue-600 flex items-center justify-center">
-                <Mic className="w-4 h-4 text-white" />
+            <Link href="/" className="flex items-center gap-2.5 no-underline group">
+              <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center shadow-sm shadow-blue-600/20 transition-transform duration-200 group-hover:scale-105">
+                <Mic className="w-[18px] h-[18px] text-white" />
               </div>
-              <span className="font-bold text-lg tracking-tight text-slate-800">
+              <span className="font-bold text-[17px] tracking-tight text-slate-900">
                 interviewprep<span className="text-blue-600">.guru</span>
               </span>
             </Link>
 
             {/* Desktop nav */}
-            <div className="hidden md:flex items-center gap-6">
+            <div className="hidden md:flex items-center gap-1">
               {NAV_LINKS.map((link) => {
-                const isActive = pathname === link.href
+                const isActive =
+                  pathname === link.href ||
+                  (link.href !== '/' && pathname.startsWith(link.href + '/'))
                 return (
                   <Link
                     key={link.href}
                     href={link.href}
-                    className={`text-[13px] font-medium transition-colors ${
-                      isActive ? 'text-slate-900' : 'text-slate-500 hover:text-slate-800'
+                    className={`px-3.5 py-2 rounded-full text-[13px] font-medium transition-all duration-150 ${
+                      isActive
+                        ? 'bg-blue-50 text-blue-700'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                     }`}
                   >
                     {link.label}
@@ -78,16 +85,35 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 )
               })}
 
-              <div className="ml-2 flex items-center gap-3">
-                {isAuthenticated && <XpBadge />}
-                <AuthMenu />
+              <div className="ml-3 pl-3 border-l border-slate-200 flex items-center gap-3">
+                {isAuthenticated ? (
+                  <>
+                    <XpBadge />
+                    <AuthMenu />
+                  </>
+                ) : (
+                  <>
+                    <Link
+                      href="/signin"
+                      className="text-[13px] font-medium text-slate-600 hover:text-slate-900 transition-colors px-2"
+                    >
+                      Sign in
+                    </Link>
+                    <Link
+                      href="/signup"
+                      className="px-4 py-2 rounded-full text-[13px] font-semibold bg-blue-600 text-white hover:bg-blue-700 shadow-sm shadow-blue-600/20 transition-all"
+                    >
+                      Get started
+                    </Link>
+                  </>
+                )}
               </div>
             </div>
 
             {/* Mobile menu toggle */}
             <button
               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="md:hidden text-slate-500 hover:text-slate-800"
+              className="md:hidden -mr-2 p-2 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100/70 transition"
               aria-label={isMobileMenuOpen ? 'Close menu' : 'Open menu'}
             >
               {isMobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
@@ -97,18 +123,27 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
         {/* Mobile dropdown menu */}
         {isMobileMenuOpen && (
-          <div className="md:hidden border-t border-slate-200 bg-white">
+          <div className="md:hidden border-t border-slate-200/60 bg-white">
             <div className="px-4 py-3 space-y-1">
-              {NAV_LINKS.map((link) => (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  onClick={() => setIsMobileMenuOpen(false)}
-                  className="block px-3 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 rounded-lg"
-                >
-                  {link.label}
-                </Link>
-              ))}
+              {NAV_LINKS.map((link) => {
+                const isActive =
+                  pathname === link.href ||
+                  (link.href !== '/' && pathname.startsWith(link.href + '/'))
+                return (
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    onClick={() => setIsMobileMenuOpen(false)}
+                    className={`block px-3 py-2.5 text-sm font-medium rounded-lg transition-colors ${
+                      isActive
+                        ? 'bg-blue-50 text-blue-700'
+                        : 'text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    {link.label}
+                  </Link>
+                )
+              })}
               <div className="pt-3 mt-3 border-t border-slate-100">
                 {isAuthenticated ? (
                   <>
@@ -127,13 +162,22 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                     </button>
                   </>
                 ) : (
-                  <Link
-                    href="/signin"
-                    onClick={() => setIsMobileMenuOpen(false)}
-                    className="block px-3 py-2.5 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg text-center"
-                  >
-                    Sign In
-                  </Link>
+                  <div className="space-y-2">
+                    <Link
+                      href="/signin"
+                      onClick={() => setIsMobileMenuOpen(false)}
+                      className="block px-3 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 rounded-lg text-center"
+                    >
+                      Sign in
+                    </Link>
+                    <Link
+                      href="/signup"
+                      onClick={() => setIsMobileMenuOpen(false)}
+                      className="block px-3 py-2.5 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg text-center"
+                    >
+                      Get started
+                    </Link>
+                  </div>
                 )}
               </div>
             </div>
