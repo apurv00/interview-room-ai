@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { STATIC_DOMAINS, type StaticDomain } from '../config/staticData'
 
 interface Domain {
@@ -145,7 +146,7 @@ export default function DomainSelector({ selectedDomain, onSelect }: DomainSelec
             className={`px-4 py-2.5 rounded-[6px] text-sm font-medium transition-all duration-[120ms] ${
               activeCategory === cat.key
                 ? 'bg-[rgba(37,99,235,0.08)] text-[#2563eb] border border-[rgba(37,99,235,0.15)]'
-                : 'text-[#71767b] hover:text-[#536471] hover:bg-[#f8fafc]'
+                : 'text-slate-500 hover:text-slate-500 hover:bg-slate-50'
             }`}
           >
             {cat.label}
@@ -159,28 +160,24 @@ export default function DomainSelector({ selectedDomain, onSelect }: DomainSelec
         <button
           onClick={() => scroll('left')}
           disabled={!canScrollLeft}
-          className={`absolute left-0 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full bg-white/90 border border-[#e1e8ed] items-center justify-center text-[#536471] hover:text-[#0f1419] hover:bg-[#f8fafc] transition hidden sm:flex ${
+          className={`absolute left-0 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full bg-white/90 border border-slate-200 items-center justify-center text-slate-500 hover:text-slate-900 hover:bg-slate-50 transition hidden sm:flex ${
             canScrollLeft ? 'opacity-100' : 'opacity-30 cursor-default'
           }`}
           aria-label="Scroll left"
         >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-          </svg>
+          <ChevronLeft className="w-4 h-4" />
         </button>
 
         {/* Right arrow — always visible on desktop, disabled at scroll end */}
         <button
           onClick={() => scroll('right')}
           disabled={!canScrollRight}
-          className={`absolute right-0 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full bg-white/90 border border-[#e1e8ed] items-center justify-center text-[#536471] hover:text-[#0f1419] hover:bg-[#f8fafc] transition hidden sm:flex ${
+          className={`absolute right-0 top-1/2 -translate-y-1/2 z-10 w-8 h-8 rounded-full bg-white/90 border border-slate-200 items-center justify-center text-slate-500 hover:text-slate-900 hover:bg-slate-50 transition hidden sm:flex ${
             canScrollRight ? 'opacity-100' : 'opacity-30 cursor-default'
           }`}
           aria-label="Scroll right"
         >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-          </svg>
+          <ChevronRight className="w-4 h-4" />
         </button>
 
         {/* Mobile fade indicators */}
@@ -206,16 +203,16 @@ export default function DomainSelector({ selectedDomain, onSelect }: DomainSelec
                 role="option"
                 aria-selected={isSelected}
                 onClick={() => onSelect(d.slug)}
-                className={`flex-shrink-0 snap-start w-[180px] h-[120px] rounded-[10px] bg-gradient-to-br ${gradient} flex flex-col items-center justify-center gap-2 transition-all duration-[120ms] border-2 ${
+                className={`flex-shrink-0 snap-start w-[180px] h-[120px] rounded-xl bg-gradient-to-br ${gradient} flex flex-col items-center justify-center gap-2 transition-all duration-[120ms] border-2 ${
                   isSelected
                     ? 'border-[#2563eb] ring-2 ring-[rgba(37,99,235,0.3)]'
-                    : 'border-transparent hover:border-[#e1e8ed]'
+                    : 'border-transparent hover:border-slate-200'
                 }`}
               >
-                <span className="text-subheading text-[#0f1419] font-semibold">
+                <span className="text-subheading text-slate-900 font-semibold">
                   {d.shortLabel || d.label}
                 </span>
-                <span className="text-caption text-[#536471]">{d.label}</span>
+                <span className="text-caption text-slate-500">{d.label}</span>
               </button>
             )
           })}
@@ -232,7 +229,7 @@ export default function DomainSelector({ selectedDomain, onSelect }: DomainSelec
               className={`rounded-full transition-all duration-200 ${
                 i === activeDot
                   ? 'w-5 h-2 bg-[#2563eb]'
-                  : 'w-2 h-2 bg-[#e1e8ed] hover:bg-[#cfd9de]'
+                  : 'w-2 h-2 bg-slate-200 hover:bg-slate-300'
               }`}
               aria-label={`Go to page ${i + 1}`}
             />
@@ -245,9 +242,9 @@ export default function DomainSelector({ selectedDomain, onSelect }: DomainSelec
         <div className="surface-card p-4">
           <div className="flex items-center gap-2 mb-1">
             <span className="text-lg">{selectedDomainData.icon}</span>
-            <span className="text-subheading text-[#0f1419]">{selectedDomainData.label}</span>
+            <span className="text-subheading text-slate-900">{selectedDomainData.label}</span>
           </div>
-          <p className="text-body text-[#536471]">{selectedDomainData.description}</p>
+          <p className="text-body text-slate-500">{selectedDomainData.description}</p>
         </div>
       )}
     </div>

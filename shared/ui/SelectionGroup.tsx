@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useMemo, type ReactNode } from 'react'
+import { Search } from 'lucide-react'
 import Input from './Input'
 
 type Layout = 'list' | 'grid-2' | 'grid-3' | 'inline'
@@ -77,7 +78,7 @@ export default function SelectionGroup<T>({
                 transition-all duration-[120ms]
                 ${activeFilter === cat.key
                   ? 'bg-[rgba(37,99,235,0.08)] text-[#2563eb] border border-[rgba(37,99,235,0.15)]'
-                  : 'bg-transparent text-[#8b98a5] border border-transparent hover:text-[#536471]'
+                  : 'bg-transparent text-slate-400 border border-transparent hover:text-slate-500'
                 }
               `}
             >
@@ -93,17 +94,13 @@ export default function SelectionGroup<T>({
           value={search}
           onChange={handleSearch}
           placeholder={searchPlaceholder}
-          leftIcon={
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-          }
+          leftIcon={<Search className="w-4 h-4" />}
         />
       )}
 
       {/* Items */}
       {visibleItems.length === 0 ? (
-        <p className="text-body text-[#8b98a5] text-center py-8">{emptyMessage}</p>
+        <p className="text-body text-slate-400 text-center py-8">{emptyMessage}</p>
       ) : (
         <div className={layoutClasses[layout]} role="listbox">
           {visibleItems.map((item) => {
@@ -122,7 +119,7 @@ export default function SelectionGroup<T>({
                   ${layout === 'list' && selected ? 'border-l-[3px] border-l-[#2563eb]' : ''}
                   ${selected
                     ? 'bg-[rgba(37,99,235,0.06)] border border-[rgba(37,99,235,0.15)] text-[#2563eb]'
-                    : 'bg-white border border-[#eff3f4] text-[#536471] hover:bg-[#f8fafc] hover:border-[#e1e8ed]'
+                    : 'bg-white border border-slate-100 text-slate-500 hover:bg-slate-50 hover:border-slate-200'
                   }
                   rounded-[10px]
                 `}
