@@ -2,62 +2,10 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { Mic } from 'lucide-react'
 
 // Pages where footer is hidden (full-screen experiences)
 const HIDDEN_PREFIXES = ['/interview', '/lobby']
-
-const PRODUCT_LINKS = [
-  { href: '/', label: 'Home' },
-  { href: '/interview/setup', label: 'Interview' },
-  { href: '/pricing', label: 'Pricing' },
-  { href: '/resources', label: 'Resources' },
-  { href: '/signup', label: 'Get Started' },
-]
-
-const TOOLS_LINKS = [
-  { href: '/resume', label: 'Resume Builder' },
-  { href: '/resume/tailor', label: 'Resume Tailor' },
-  { href: '/resume/ats-check', label: 'ATS Checker' },
-  { href: '/resume/templates', label: 'Resume Templates' },
-  { href: '/hire', label: 'For Recruiters' },
-]
-
-const QUESTION_LINKS = [
-  { href: '/learn/guides/common-interview-questions', label: 'Common Questions' },
-  { href: '/learn/guides/behavioral-questions', label: 'Behavioral Questions' },
-  { href: '/learn/guides/technical-interview-questions', label: 'Technical Questions' },
-  { href: '/learn/guides/mock-interview-guide', label: 'Mock Interview Guide' },
-  { href: '/learn/guides/interview-readiness-quiz', label: 'Readiness Quiz' },
-]
-
-const TIP_LINKS = [
-  { href: '/learn/guides/interview-tips', label: '50+ Interview Tips' },
-  { href: '/learn/guides/phone-interview-tips', label: 'Phone Tips' },
-  { href: '/learn/guides/video-interview-tips', label: 'Video Tips' },
-  { href: '/learn/guides/star-method-guide', label: 'STAR Method Guide' },
-  { href: '/learn/guides/body-language-guide', label: 'Body Language' },
-  { href: '/learn/guides/interview-frameworks', label: 'Frameworks' },
-]
-
-function FooterColumn({ title, links }: { title: string; links: { href: string; label: string }[] }) {
-  return (
-    <div>
-      <h3 className="step-label mb-3">{title}</h3>
-      <ul className="space-y-2">
-        {links.map((link) => (
-          <li key={link.href}>
-            <Link
-              href={link.href}
-              className="text-caption text-[var(--foreground-tertiary)] hover:text-[var(--foreground-secondary)] transition-colors"
-            >
-              {link.label}
-            </Link>
-          </li>
-        ))}
-      </ul>
-    </div>
-  )
-}
 
 export default function Footer() {
   const pathname = usePathname()
@@ -67,25 +15,26 @@ export default function Footer() {
   }
 
   return (
-    <footer className="border-t border-[var(--color-border-subtle)] mt-auto">
-      <div className="max-w-[1100px] mx-auto px-4 sm:px-6 py-10">
-        {/* Columns */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-8 mb-8">
-          <FooterColumn title="Product" links={PRODUCT_LINKS} />
-          <FooterColumn title="Tools" links={TOOLS_LINKS} />
-          <FooterColumn title="Interview Questions" links={QUESTION_LINKS} />
-          <FooterColumn title="Tips & Frameworks" links={TIP_LINKS} />
-        </div>
+    <footer className="bg-white border-t border-slate-200 py-8 mt-auto">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row justify-between items-center gap-4">
+        <Link href="/" className="flex items-center gap-2 no-underline">
+          <div className="w-6 h-6 rounded-lg bg-blue-600 flex items-center justify-center">
+            <Mic className="w-3 h-3 text-white" />
+          </div>
+          <span className="text-[13px] font-semibold text-slate-600">
+            interviewprep<span className="text-blue-600">.guru</span>
+          </span>
+        </Link>
 
-        {/* Bottom bar */}
-        <div className="border-t border-[var(--color-border-subtle)] pt-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-[var(--foreground-muted)]">
-          <span>&copy; {new Date().getFullYear()} Interview Prep Guru</span>
-          <nav aria-label="Legal" className="flex items-center gap-4">
-            <Link href="/privacy" className="hover:text-[var(--foreground-secondary)] transition-colors">Privacy</Link>
-            <Link href="/terms" className="hover:text-[var(--foreground-secondary)] transition-colors">Terms</Link>
-            <Link href="/signin" className="hover:text-[var(--foreground-secondary)] transition-colors">Sign In</Link>
-          </nav>
-        </div>
+        <nav aria-label="Footer links" className="flex gap-6 text-[12px] text-slate-400">
+          <Link href="/resources" className="hover:text-slate-700 transition-colors">Resources</Link>
+          <Link href="/pricing" className="hover:text-slate-700 transition-colors">Pricing</Link>
+          <Link href="/privacy" className="hover:text-slate-700 transition-colors">Privacy</Link>
+          <Link href="/terms" className="hover:text-slate-700 transition-colors">Terms</Link>
+          <a href="mailto:contact@interviewprep.guru" className="hover:text-slate-700 transition-colors">Contact</a>
+        </nav>
+
+        <div className="text-[12px] text-slate-400">&copy; {new Date().getFullYear()} InterviewPrep.guru</div>
       </div>
     </footer>
   )
