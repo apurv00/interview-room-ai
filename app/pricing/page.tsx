@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useSession } from 'next-auth/react'
 import Link from 'next/link'
+import StartCta from '@shared/ui/StartCta'
 import { PLANS, type PlanConfig } from '@shared/services/stripe'
 import { FAQ } from '@shared/pricingFaq'
 import Badge from '@shared/ui/Badge'
@@ -82,11 +83,11 @@ function PlanCard({ plan, isCurrent }: { plan: PlanConfig; isCurrent: boolean })
             Current Plan
           </Button>
         ) : plan.name === 'free' ? (
-          <Link href="/signup">
+          <StartCta>
             <Button variant="secondary" isFullWidth>
               Get Started Free
             </Button>
-          </Link>
+          </StartCta>
         ) : plan.name === 'pro' ? (
           <div className="flex flex-col gap-element">
             {notifySubmitted ? (

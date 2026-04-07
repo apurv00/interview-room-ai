@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import type { Metadata } from 'next'
+import StartCta from '@shared/ui/StartCta'
 import { RESOURCES, getResourcesByCategory } from '@learn/lib/resources'
 import { siteConfig } from '@shared/siteConfig'
 import JsonLd from '@shared/seo/JsonLd'
@@ -89,12 +90,9 @@ export default function ResourcesPage() {
             Practice with our AI interviewer and get instant scored feedback on your answers.
           </p>
           <div className="mt-4 flex items-center justify-center gap-3">
-            <Link
-              href="/signup"
-              className="inline-flex items-center justify-center h-11 px-5 bg-[#2563eb] hover:bg-[#1d4ed8] text-white rounded-[10px] text-sm font-medium transition-colors"
-            >
+            <StartCta className="inline-flex items-center justify-center h-11 px-5 bg-[#2563eb] hover:bg-[#1d4ed8] text-white rounded-[10px] text-sm font-medium transition-colors">
               Start Practicing Free
-            </Link>
+            </StartCta>
             <Link
               href="/"
               className="inline-flex items-center justify-center h-11 px-5 bg-[#f8fafc] hover:bg-[#eff3f4] text-[#536471] rounded-[10px] text-sm font-medium transition-colors border border-[#e1e8ed]"

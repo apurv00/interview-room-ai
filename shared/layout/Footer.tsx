@@ -3,16 +3,19 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { Mic } from 'lucide-react'
+import StartCta from '@shared/ui/StartCta'
 
 // Pages where footer is hidden (full-screen experiences)
 const HIDDEN_PREFIXES = ['/interview', '/lobby']
 
+// "Get Started" lives outside this list so it can be rendered as a
+// <StartCta> that respects auth state — see <FooterColumn extraCta={...}/>
+// in the Product column below.
 const PRODUCT_LINKS = [
   { href: '/', label: 'Home' },
   { href: '/interview/setup', label: 'Interview' },
   { href: '/pricing', label: 'Pricing' },
   { href: '/resources', label: 'Resources' },
-  { href: '/signup', label: 'Get Started' },
 ]
 
 const TOOLS_LINKS = [
@@ -40,7 +43,15 @@ const TIP_LINKS = [
   { href: '/learn/guides/interview-frameworks', label: 'Frameworks' },
 ]
 
-function FooterColumn({ title, links }: { title: string; links: { href: string; label: string }[] }) {
+function FooterColumn({
+  title,
+  links,
+  extraCta,
+}: {
+  title: string
+  links: { href: string; label: string }[]
+  extraCta?: React.ReactNode
+}) {
   return (
     <div>
       <h3 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400 mb-4">{title}</h3>
@@ -55,6 +66,7 @@ function FooterColumn({ title, links }: { title: string; links: { href: string; 
             </Link>
           </li>
         ))}
+        {extraCta && <li>{extraCta}</li>}
       </ul>
     </div>
   )
@@ -87,7 +99,15 @@ export default function Footer() {
             </p>
           </div>
 
-          <FooterColumn title="Product" links={PRODUCT_LINKS} />
+          <FooterColumn
+            title="Product"
+            links={PRODUCT_LINKS}
+            extraCta={
+              <StartCta className="text-[13px] text-slate-500 hover:text-slate-800 transition-colors">
+                Get Started
+              </StartCta>
+            }
+          />
           <FooterColumn title="Tools" links={TOOLS_LINKS} />
           <FooterColumn title="Interview Questions" links={QUESTION_LINKS} />
           <FooterColumn title="Tips & Frameworks" links={TIP_LINKS} />
