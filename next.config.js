@@ -21,7 +21,18 @@ const nextConfig = {
       },
       {
         source: '/resources/behavioral-interview-questions',
-        destination: '/resources/behavioral-questions',
+        destination: '/learn/guides/behavioral-questions',
+        permanent: true,
+      },
+      // SEO: canonicalize /resources/* on /learn/guides/* to avoid duplicate content.
+      {
+        source: '/resources',
+        destination: '/learn/guides',
+        permanent: true,
+      },
+      {
+        source: '/resources/:slug',
+        destination: '/learn/guides/:slug',
         permanent: true,
       },
     ]

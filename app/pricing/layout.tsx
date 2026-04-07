@@ -5,7 +5,7 @@ import { FAQ } from '@shared/pricingFaq'
 
 export const metadata: Metadata = {
   title: 'Pricing',
-  description: `Simple, transparent pricing for ${siteConfig.name}. Start free with unlimited interviews during development.`,
+  description: `Simple, transparent pricing for ${siteConfig.name}. Free during beta — unlimited interviews with fair-use limits.`,
   alternates: { canonical: '/pricing' },
 }
 

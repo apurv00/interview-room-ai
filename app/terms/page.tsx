@@ -57,7 +57,7 @@ export default function TermsPage() {
         <section>
           <h2 className="text-lg font-semibold text-[#0f1419] mb-3">7. Subscriptions &amp; Billing</h2>
           <p className="text-[#536471]">
-            Free accounts include a limited number of interviews per month. Paid plans are billed monthly and renew automatically. You may cancel at any time; cancellation takes effect at the end of the current billing period. Refunds are not provided for partial months.
+            Interview Prep Guru is currently in beta. Free accounts include unlimited interviews subject to fair-use limits that protect the service from abuse. Paid plans, when available, will be billed monthly and renew automatically. You may cancel at any time; cancellation takes effect at the end of the current billing period. Refunds are not provided for partial months.
           </p>
         </section>
 

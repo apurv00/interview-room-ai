@@ -87,6 +87,10 @@ export type { IMultimodalAnalysis } from './MultimodalAnalysis'
 export { FailedJob } from './FailedJob'
 export type { IFailedJob } from './FailedJob'
 
+// Pro waitlist
+export { WaitlistEntry } from './WaitlistEntry'
+export type { IWaitlistEntry } from './WaitlistEntry'
+
 // Smart Wizard
 export { WizardConfig } from './WizardConfig'
 export type { IWizardConfig } from './WizardConfig'
