@@ -538,7 +538,7 @@ function InterviewSetupFormView(p: ViewProps) {
       </div>
 
       {/* Inline step header — back + step counter */}
-      <div className="w-full px-4 sm:px-6 py-3 flex items-center justify-between max-w-2xl mx-auto w-full">
+      <div className="w-full px-4 sm:px-6 py-3 flex items-center justify-between max-w-[1100px] mx-auto w-full">
         <button
           onClick={p.onPrev}
           disabled={p.step === 0}
@@ -559,7 +559,7 @@ function InterviewSetupFormView(p: ViewProps) {
       </div>
 
       <main className="flex-1 flex flex-col items-center px-4 sm:px-6 pb-32 pt-2">
-        <div className="w-full max-w-2xl animate-fade-in">
+        <div className="w-full max-w-[1100px] animate-fade-in">
           <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 mb-1.5 leading-tight">
             {stepTitles[p.step]}
           </h1>
@@ -912,7 +912,7 @@ function InterviewSetupFormView(p: ViewProps) {
         className="fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur border-t border-slate-200 shadow-[0_-4px_12px_rgba(0,0,0,0.06)]"
         style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       >
-        <div className="max-w-2xl mx-auto px-4 sm:px-6 py-3 flex items-center gap-4">
+        <div className="max-w-[1100px] mx-auto px-4 sm:px-6 py-3 flex items-center gap-4">
           <p className="text-xs text-slate-500 flex-1 truncate">{ctaHint}</p>
           {p.step < TOTAL_STEPS - 1 ? (
             <Button
