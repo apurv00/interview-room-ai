@@ -6,6 +6,7 @@ import {
   getDownloadPresignedUrl,
   recordingKey,
   screenRecordingKey,
+  audioRecordingKey,
   documentKey,
   isR2Configured,
 } from '@shared/storage/r2'
@@ -17,7 +18,7 @@ export const dynamic = 'force-dynamic'
 
 const PresignSchema = z.object({
   action: z.enum(['upload', 'download']),
-  type: z.enum(['recording', 'screen-recording', 'document']).optional(),
+  type: z.enum(['recording', 'screen-recording', 'audio-recording', 'document']).optional(),
   sessionId: z.string().max(100).optional(),
   docType: z.enum(['jd', 'resume']).optional(),
   fileName: z.string().max(500).optional(),
@@ -51,7 +52,11 @@ export async function POST(req: NextRequest) {
       let r2Key: string
       let contentType: string
 
-      if (type === 'recording' || type === 'screen-recording') {
+      if (
+        type === 'recording' ||
+        type === 'screen-recording' ||
+        type === 'audio-recording'
+      ) {
         if (!sessionId) {
           return NextResponse.json({ error: 'sessionId required for recording upload' }, { status: 400 })
         }
@@ -63,13 +68,16 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
         }
 
-        r2Key =
-          type === 'screen-recording'
-            ? screenRecordingKey(userId, sessionId)
-            : recordingKey(userId, sessionId)
-        // Preserve the existing 'audio/webm' content type for the camera
-        // recording so existing presign-signature behavior is unchanged.
-        // The screen track is also a webm container.
+        if (type === 'screen-recording') {
+          r2Key = screenRecordingKey(userId, sessionId)
+        } else if (type === 'audio-recording') {
+          r2Key = audioRecordingKey(userId, sessionId)
+        } else {
+          r2Key = recordingKey(userId, sessionId)
+        }
+        // Preserve the existing 'audio/webm' content type for all recording
+        // variants so presign-signature behavior is unchanged. All three
+        // upload a webm container.
         contentType = 'audio/webm'
       } else if (type === 'document') {
         if (!docType || !fileName) {

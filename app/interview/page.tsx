@@ -102,6 +102,10 @@ export default function InterviewPage() {
   const { isRecording, recordingDuration, startRecording, stopRecording } = useMediaRecorder()
   // ── Recording (screen track for coding / system-design) ──
   const screenRecorder = useMediaRecorder()
+  // ── Recording (audio-only track — what Whisper transcribes). Kept
+  //    separate from the camera webm because Groq Whisper rejects files
+  //    >25MB and a multi-minute HD camera recording easily exceeds that.
+  const audioRecorder = useMediaRecorder()
 
   // ── Facial landmarks (multimodal analysis) ──
   const isMultimodalEnabled = process.env.NEXT_PUBLIC_FEATURE_MULTIMODAL === 'true'
@@ -113,15 +117,21 @@ export default function InterviewPage() {
     async (
       blob: Blob,
       sessionId: string,
-      kind: 'camera' | 'screen'
+      kind: 'camera' | 'screen' | 'audio'
     ): Promise<boolean> => {
       try {
+        const presignType =
+          kind === 'screen'
+            ? 'screen-recording'
+            : kind === 'audio'
+            ? 'audio-recording'
+            : 'recording'
         const presignRes = await fetch('/api/storage/presign', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             action: 'upload',
-            type: kind === 'screen' ? 'screen-recording' : 'recording',
+            type: presignType,
             sessionId,
           }),
         })
@@ -144,6 +154,8 @@ export default function InterviewPage() {
         const patchBody =
           kind === 'screen'
             ? { screenRecordingR2Key: key, screenRecordingSizeBytes: blob.size }
+            : kind === 'audio'
+            ? { audioRecordingR2Key: key, audioRecordingSizeBytes: blob.size }
             : { recordingR2Key: key, recordingSizeBytes: blob.size }
 
         await fetch(`/api/interviews/${sessionId}`, {
@@ -162,11 +174,13 @@ export default function InterviewPage() {
 
   // Handle recording stop
   const handleRecordingStop = useCallback(async () => {
-    // Stop both recorders in parallel — the screen recorder is a no-op
-    // when no screen track was ever started.
-    const [cameraBlob, screenBlob] = await Promise.all([
+    // Stop all three recorders in parallel — the screen recorder is a
+    // no-op when no screen track was ever started; the audio recorder
+    // runs for every interview.
+    const [cameraBlob, screenBlob, audioBlob] = await Promise.all([
       stopRecording(),
       screenRecorder.stopRecording(),
+      audioRecorder.stopRecording(),
     ])
 
     // Release any active screen capture tracks
@@ -191,12 +205,13 @@ export default function InterviewPage() {
     const sessionId = interviewRef.current?.sessionId
     if (!sessionId) return
 
-    // Upload the camera and (optional) screen tracks in parallel
+    // Upload the camera, audio, and (optional) screen tracks in parallel
     const uploads: Promise<boolean>[] = []
     if (cameraBlob) uploads.push(uploadRecordingBlob(cameraBlob, sessionId, 'camera'))
+    if (audioBlob) uploads.push(uploadRecordingBlob(audioBlob, sessionId, 'audio'))
     if (screenBlob) uploads.push(uploadRecordingBlob(screenBlob, sessionId, 'screen'))
     await Promise.all(uploads)
-  }, [stopRecording, screenRecorder, isMultimodalEnabled, stopCapture, uploadRecordingBlob])
+  }, [stopRecording, screenRecorder, audioRecorder, isMultimodalEnabled, stopCapture, uploadRecordingBlob])
 
   // ── Interview engine ──
   const interview = useInterview({
@@ -412,6 +427,20 @@ export default function InterviewPage() {
         : stream
 
       startRecording(cameraRecordingStream)
+
+      // Audio-only recording for Whisper transcription. Groq Whisper
+      // rejects files >25MB, and a 5+ minute HD camera webm blows past
+      // that limit. An audio-only webm for the same duration is ~1–2MB.
+      // We feed it the same mixed audio (candidate mic + AI voice) so
+      // the transcript contains both sides of the conversation. If the
+      // mixer isn't available, fall back to the raw mic tracks.
+      const audioTracks = mixedAudio
+        ? mixedAudio.getAudioTracks()
+        : stream.getAudioTracks()
+      if (audioTracks.length > 0) {
+        const audioOnlyStream = new MediaStream(audioTracks)
+        audioRecorder.startRecording(audioOnlyStream)
+      }
 
       // Coding & system-design: also capture the screen so the candidate's
       // work surface is replayable. Best-effort — if the user denies the

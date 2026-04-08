@@ -75,6 +75,7 @@ export async function GET(req: NextRequest) {
       const hasScreenRecording = !!obj.screenRecordingR2Key
       delete obj.recordingR2Key
       delete obj.screenRecordingR2Key
+      delete obj.audioRecordingR2Key
       return { ...obj, hasRecording, hasScreenRecording }
     })
 

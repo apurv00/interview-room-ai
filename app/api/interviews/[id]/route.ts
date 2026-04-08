@@ -44,6 +44,7 @@ export async function GET(
     const hasScreenRecording = !!responseData.screenRecordingR2Key
     delete responseData.recordingR2Key
     delete responseData.screenRecordingR2Key
+    delete responseData.audioRecordingR2Key
     responseData.hasRecording = hasRecording
     responseData.hasScreenRecording = hasScreenRecording
 

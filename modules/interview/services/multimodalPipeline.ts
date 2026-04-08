@@ -16,6 +16,9 @@ import type { AuthUser } from '@shared/middleware/withAuth'
 export interface SessionData {
   sessionId: string
   recordingR2Key: string
+  /** Optional audio-only key used in preference to the camera webm for Whisper
+   * transcription, since Groq Whisper rejects files >25MB. */
+  audioRecordingR2Key?: string
   facialLandmarksR2Key?: string
   transcript: Array<{ speaker: string; text: string; timestamp: number; questionIndex?: number | null }>
   evaluations: Array<Record<string, unknown>>
@@ -56,6 +59,7 @@ export async function stepFetchSession(sessionId: string): Promise<SessionData> 
   return {
     sessionId,
     recordingR2Key: session.recordingR2Key,
+    audioRecordingR2Key: session.audioRecordingR2Key,
     facialLandmarksR2Key: session.facialLandmarksR2Key,
     transcript: session.transcript || [],
     evaluations: session.evaluations as unknown as Array<Record<string, unknown>>,
@@ -67,10 +71,17 @@ export async function stepFetchSession(sessionId: string): Promise<SessionData> 
 /** Step 2: Transcribe recording + download facial data (parallel) */
 export async function stepTranscribeAndDownload(
   recordingR2Key: string,
-  facialLandmarksR2Key?: string
+  facialLandmarksR2Key?: string,
+  audioRecordingR2Key?: string
 ): Promise<{ whisper: TranscribeResult; facialFrames: FacialFrame[] }> {
+  // Prefer the audio-only track when present — it's typically ~1–2MB vs
+  // 30–80MB for the camera webm, so Whisper stays comfortably under Groq's
+  // 25MB upload limit. Legacy sessions without an audio track fall back
+  // to the camera webm (which may still hit 413 for long recordings).
+  const whisperKey = audioRecordingR2Key || recordingR2Key
+
   const [whisperResult, facialFrames] = await Promise.all([
-    transcribeRecording(recordingR2Key),
+    transcribeRecording(whisperKey),
     downloadFacialFrames(facialLandmarksR2Key),
   ])
 
@@ -227,7 +238,8 @@ export async function runMultimodalPipeline(
     const session = await stepFetchSession(sessionId)
     const { whisper, facialFrames } = await stepTranscribeAndDownload(
       session.recordingR2Key,
-      session.facialLandmarksR2Key
+      session.facialLandmarksR2Key,
+      session.audioRecordingR2Key
     )
     const signals = stepProcessSignals(
       whisper.segments,
