@@ -1,9 +1,11 @@
 import { connectDB } from '@shared/db/connection'
 import { InterviewSession } from '@shared/db/models/InterviewSession'
 import { MultimodalAnalysis } from '@shared/db/models/MultimodalAnalysis'
+import { User } from '@shared/db/models/User'
 import { getDownloadPresignedUrl } from '@shared/storage/r2'
 import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
+import { isFeatureEnabled } from '@shared/featureFlags'
 import { transcribeRecording } from './whisperService'
 import { extractProsody } from './prosodyService'
 import { aggregateFacialData } from './facialAggregator'
@@ -170,7 +172,8 @@ export async function stepRunFusion(
   facialSegments: Array<Record<string, unknown>>,
   evaluations: Array<Record<string, unknown>>,
   transcript: Array<Record<string, unknown>>,
-  config: Record<string, unknown>
+  config: Record<string, unknown>,
+  options: { includeBlendshapes?: boolean } = {}
 ) {
   return await runFusionAnalysis({
     prosodySegments: prosodySegments as unknown as Parameters<typeof runFusionAnalysis>[0]['prosodySegments'],
@@ -178,6 +181,7 @@ export async function stepRunFusion(
     evaluations: evaluations as unknown as Parameters<typeof runFusionAnalysis>[0]['evaluations'],
     transcript: transcript as unknown as Parameters<typeof runFusionAnalysis>[0]['transcript'],
     config: config as unknown as Parameters<typeof runFusionAnalysis>[0]['config'],
+    includeBlendshapes: options.includeBlendshapes === true,
   })
 }
 
@@ -297,24 +301,74 @@ export async function runMultimodalPipeline(
       session.questionBoundaries,
       whisper.durationSeconds
     )
-    const fusionResult = await stepRunFusion(
+
+    // ─── Dual-pipeline gating (#4, Option B) ──────────────────────────
+    // Run the fusion twice — once with blendshape stats in the facial
+    // block, once without — only when:
+    //   1. The research_comparison feature flag is on, AND
+    //   2. The session owner has opted in via researchDonationConsent, AND
+    //   3. The aggregator actually produced blendshape stats (i.e. the
+    //      session has post-April-2026 frames carrying blendshapes).
+    // Otherwise run the enhanced variant once and persist it as usual.
+    const dualRun = await shouldRunDualPipeline(userId, signals.facialSegments)
+
+    // Enhanced variant (what the user sees)
+    const enhanced = await stepRunFusion(
       signals.prosodySegments,
       signals.facialSegments,
       session.evaluations,
       session.transcript as unknown as Array<Record<string, unknown>>,
-      session.config
+      session.config,
+      { includeBlendshapes: true }
     )
+
+    // Baseline variant (categorical expression only) — only run when
+    // dual-pipeline gating passed. Same prosody + content + transcript
+    // inputs; only the facial block changes.
+    let baseline: Awaited<ReturnType<typeof stepRunFusion>> | null = null
+    if (dualRun) {
+      baseline = await stepRunFusion(
+        signals.prosodySegments,
+        signals.facialSegments,
+        session.evaluations,
+        session.transcript as unknown as Array<Record<string, unknown>>,
+        session.config,
+        { includeBlendshapes: false }
+      )
+      aiLogger.info(
+        {
+          sessionId,
+          enhancedPromptBytes: enhanced.promptLength,
+          baselinePromptBytes: baseline.promptLength,
+          promptByteDelta: enhanced.promptLength - baseline.promptLength,
+          enhancedBodyLanguage: enhanced.fusionSummary.overallBodyLanguageScore,
+          baselineBodyLanguage: baseline.fusionSummary.overallBodyLanguageScore,
+          enhancedEyeContact: enhanced.fusionSummary.eyeContactScore,
+          baselineEyeContact: baseline.fusionSummary.eyeContactScore,
+        },
+        'Dual-pipeline comparison run completed'
+      )
+    }
+
     await stepPersistResults(sessionId, userId, {
       whisperSegments: whisper.segments,
       prosodySegments: signals.prosodySegments,
       facialSegments: signals.facialSegments,
       facialTimeseries: signals.facialTimeseries,
-      timeline: fusionResult.timeline as unknown as Array<Record<string, unknown>>,
-      fusionSummary: fusionResult.fusionSummary as unknown as Record<string, unknown>,
+      timeline: enhanced.timeline as unknown as Array<Record<string, unknown>>,
+      fusionSummary: enhanced.fusionSummary as unknown as Record<string, unknown>,
+      baselineTimeline: baseline
+        ? (baseline.timeline as unknown as Array<Record<string, unknown>>)
+        : undefined,
+      baselineFusionSummary: baseline
+        ? (baseline.fusionSummary as unknown as Record<string, unknown>)
+        : undefined,
       facialLandmarksR2Key: session.facialLandmarksR2Key,
       whisperCostUsd: whisper.costUsd,
-      fusionInputTokens: fusionResult.inputTokens,
-      fusionOutputTokens: fusionResult.outputTokens,
+      // Sum token counts across both runs when dual-pipeline ran so cost
+      // tracking reflects the actual Claude spend.
+      fusionInputTokens: enhanced.inputTokens + (baseline?.inputTokens || 0),
+      fusionOutputTokens: enhanced.outputTokens + (baseline?.outputTokens || 0),
       startTime,
     })
   } catch (err) {
@@ -322,6 +376,33 @@ export async function runMultimodalPipeline(
     aiLogger.error({ err, sessionId }, 'Multimodal analysis pipeline failed')
     await stepMarkFailed(sessionId, errorMessage, startTime)
     throw err
+  }
+}
+
+/**
+ * Decide whether to run the dual-pipeline comparison for this session.
+ * Requires the feature flag, opted-in user consent, and at least one facial
+ * segment carrying blendshape summary statistics (otherwise the enhanced
+ * and baseline variants would receive identical inputs and the comparison
+ * would be meaningless).
+ */
+async function shouldRunDualPipeline(
+  userId: string,
+  facialSegments: Array<Record<string, unknown>>
+): Promise<boolean> {
+  if (!isFeatureEnabled('research_comparison')) return false
+  if (facialSegments.length === 0) return false
+
+  const hasBlendshapeStats = facialSegments.some(
+    (s) => s.meanBlendshapes && typeof s.meanBlendshapes === 'object'
+  )
+  if (!hasBlendshapeStats) return false
+
+  try {
+    const user = await User.findById(userId).select('privacyConsent').lean()
+    return user?.privacyConsent?.researchDonationConsent === true
+  } catch {
+    return false
   }
 }
 
