@@ -235,30 +235,57 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
     if (isAnonymous) { requireAuth('download_resume'); return }
     setDownloading(true)
     try {
+      const previewEl = document.getElementById('resume-preview-container')
+      if (!previewEl) {
+        handlePrintPDF()
+        return
+      }
+
+      const styleTags = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
+        .map(el => el.outerHTML)
+        .join('\n')
+
+      const previewHtml = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  ${styleTags}
+  <style>
+    body { margin: 0; background: #ffffff; }
+    #resume-export-root { padding: 0; margin: 0; }
+    #resume-export-root .shadow-lg { box-shadow: none !important; }
+    #resume-export-root .rounded-lg { border-radius: 0 !important; }
+  </style>
+</head>
+<body>
+  <div id="resume-export-root">${previewEl.innerHTML}</div>
+</body>
+</html>`
+
       const res = await fetch('/api/resume/pdf', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           resumeData: resume,
           templateId: resume.template || 'professional',
+          previewHtml,
         }),
       })
-      if (res.ok) {
-        const blob = await res.blob()
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = `${resume.name || 'resume'}.pdf`
-        document.body.appendChild(a)
-        a.click()
-        document.body.removeChild(a)
-        URL.revokeObjectURL(url)
-      } else {
-        // Fallback to browser print
+      if (!res.ok) {
         handlePrintPDF()
+        return
       }
+
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${resume.name || 'resume'}.pdf`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
     } catch {
-      // Fallback to browser print
       handlePrintPDF()
     }
     setDownloading(false)
