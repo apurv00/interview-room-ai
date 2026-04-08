@@ -235,85 +235,15 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
     if (isAnonymous) { requireAuth('download_resume'); return }
     setDownloading(true)
     try {
-      const previewEl = document.getElementById('resume-preview-container')
-      if (!previewEl) {
-        handlePrintPDF()
-        return
-      }
-
-      // Pull the *unscaled* template root from the hidden measurer
-      // (ResumePreview renders the visible pages via CSS scale, which would
-      // shrink/clip the layout if we exported them directly).
-      const unscaledTemplateRoot = previewEl.querySelector('[aria-hidden] > div') as HTMLElement | null
-      const exportContent = unscaledTemplateRoot ? unscaledTemplateRoot.outerHTML : previewEl.innerHTML
-
-      // Inline every stylesheet so puppeteer renders Tailwind correctly.
-      // Reading `sheet.cssRules` throws SecurityError for any sheet the browser
-      // considers cross-origin (Next.js sometimes loads CSS that way), so we
-      // fetch the actual CSS text via HTTP and combine it with any inline
-      // <style> tags. fetch() is same-origin by default and yields the raw
-      // compiled Tailwind bundle.
-      const linkHrefs = Array.from(
-        document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')
-      )
-        .map(link => link.href)
-        .filter(href => href && href.startsWith(window.location.origin))
-
-      const fetchedCss = await Promise.all(
-        linkHrefs.map(async href => {
-          try {
-            const res = await fetch(href)
-            if (!res.ok) return ''
-            return await res.text()
-          } catch {
-            return ''
-          }
-        })
-      )
-
-      const inlineStyleCss = Array.from(
-        document.querySelectorAll<HTMLStyleElement>('style')
-      )
-        .map(s => s.textContent || '')
-        .join('\n')
-
-      const inlineCss = [...fetchedCss, inlineStyleCss].filter(Boolean).join('\n')
-
-      const previewHtml = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <style>
-    ${inlineCss}
-    @page { size: A4; margin: 0; }
-    body {
-      margin: 0;
-      background: #ffffff;
-      -webkit-print-color-adjust: exact;
-      print-color-adjust: exact;
-    }
-    #resume-export-page {
-      width: 595px;
-      min-height: 842px;
-      margin: 0 auto;
-      padding: 24px;
-      box-sizing: border-box;
-      background: #fff;
-    }
-  </style>
-</head>
-<body>
-  <div id="resume-export-page">${exportContent}</div>
-</body>
-</html>`
-
+      // The server renders the same React template the preview uses, inlines
+      // a pre-compiled Tailwind bundle, and runs puppeteer. No DOM extraction
+      // or CSS scraping — the client only sends resume data + template id.
       const res = await fetch('/api/resume/pdf', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           resumeData: resume,
           templateId: resume.template || 'professional',
-          previewHtml,
         }),
       })
       if (!res.ok) {

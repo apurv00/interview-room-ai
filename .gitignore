@@ -40,3 +40,7 @@ uploads/
 # IDE
 .vscode/
 .idea/
+
+# generated: pre-compiled Tailwind bundle for resume PDF (built via
+# scripts/build-resume-css.js; prebuild/predev/pretest hooks keep it fresh)
+modules/resume/styles/resume-pdf-css.json

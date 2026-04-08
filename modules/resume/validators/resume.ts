@@ -131,7 +131,6 @@ export const ParseResumeSchema = z.object({
 export const PDFGenerateSchema = z.object({
   resumeData: ResumeSchema,
   templateId: z.string().max(50),
-  previewHtml: z.string().max(8_000_000).optional(),
 })
 
 // ─── Type exports ───────────────────────────────────────────────────────────
