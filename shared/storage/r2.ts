@@ -38,6 +38,11 @@ export function recordingKey(userId: string, sessionId: string): string {
   return `recordings/${userId}/${sessionId}-${Date.now()}.webm`
 }
 
+/** Build a namespaced R2 key for the screen-share track of a coding/system-design interview */
+export function screenRecordingKey(userId: string, sessionId: string): string {
+  return `recordings/${userId}/${sessionId}-screen-${Date.now()}.webm`
+}
+
 /** Build a namespaced R2 key: documents/{userId}/{docType}/{filename} */
 export function documentKey(userId: string, docType: string, filename: string): string {
   const safe = filename.replace(/[^a-zA-Z0-9._-]/g, '_')

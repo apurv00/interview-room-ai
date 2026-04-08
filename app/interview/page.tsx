@@ -17,6 +17,11 @@ import { useCoachingNudge } from '@interview/hooks/useCoachingNudge'
 import { useFacialLandmarks } from '@interview/hooks/useFacialLandmarks'
 import { useRealtimeFacialCoaching } from '@interview/hooks/useRealtimeFacialCoaching'
 import { useRealtimeProsody } from '@interview/hooks/useRealtimeProsody'
+import {
+  setMicStream as setVoiceMixerMic,
+  getMixedAudioStream,
+  resetVoiceMixer,
+} from '@interview/audio/voiceMixer'
 import { useCoachMode } from '@interview/hooks/useCoachMode'
 import CoachOverlay from '@interview/components/interview/CoachOverlay'
 import CodingLayout from '@interview/components/interview/CodingLayout'
@@ -79,7 +84,13 @@ export default function InterviewPage() {
   // ── Camera ──
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
+  const screenStreamRef = useRef<MediaStream | null>(null)
   const [muted, setMuted] = useState(false)
+
+  // Screen capture is gated to coding & system-design — those interviews
+  // produce work that lives on screen (IDE / canvas) and the camera-only
+  // recording can't replay it.
+  const wantsScreenCapture = isCodingMode || isDesignMode
 
   // ── Voices loaded ──
   const [voicesReady, setVoicesReady] = useState(false)
@@ -87,16 +98,82 @@ export default function InterviewPage() {
   // ── Speech recognition ──
   const { isListening, liveTranscript, startListening, stopListening, warmUp, setExternalStream } = useSpeechRecognition()
 
-  // ── Recording ──
+  // ── Recording (camera track) ──
   const { isRecording, recordingDuration, startRecording, stopRecording } = useMediaRecorder()
+  // ── Recording (screen track for coding / system-design) ──
+  const screenRecorder = useMediaRecorder()
 
   // ── Facial landmarks (multimodal analysis) ──
   const isMultimodalEnabled = process.env.NEXT_PUBLIC_FEATURE_MULTIMODAL === 'true'
   const { startCapture, stopCapture, framesRef } = useFacialLandmarks()
 
+  // Upload a recording blob via presigned R2 PUT and patch the session
+  // with the resulting key. Returns true on success.
+  const uploadRecordingBlob = useCallback(
+    async (
+      blob: Blob,
+      sessionId: string,
+      kind: 'camera' | 'screen'
+    ): Promise<boolean> => {
+      try {
+        const presignRes = await fetch('/api/storage/presign', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'upload',
+            type: kind === 'screen' ? 'screen-recording' : 'recording',
+            sessionId,
+          }),
+        })
+        if (!presignRes.ok) {
+          console.error('Presign request failed:', presignRes.status)
+          return false
+        }
+        const { url, key } = await presignRes.json()
+
+        const uploadRes = await fetch(url, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'video/webm' },
+          body: blob,
+        })
+        if (!uploadRes.ok) {
+          console.error('R2 upload failed:', uploadRes.status)
+          return false
+        }
+
+        const patchBody =
+          kind === 'screen'
+            ? { screenRecordingR2Key: key, screenRecordingSizeBytes: blob.size }
+            : { recordingR2Key: key, recordingSizeBytes: blob.size }
+
+        await fetch(`/api/interviews/${sessionId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patchBody),
+        }).catch((err) => console.error('Failed to update session with R2 key:', err))
+        return true
+      } catch (err) {
+        console.error('Recording upload error:', err)
+        return false
+      }
+    },
+    []
+  )
+
   // Handle recording stop
   const handleRecordingStop = useCallback(async () => {
-    const blob = await stopRecording()
+    // Stop both recorders in parallel — the screen recorder is a no-op
+    // when no screen track was ever started.
+    const [cameraBlob, screenBlob] = await Promise.all([
+      stopRecording(),
+      screenRecorder.stopRecording(),
+    ])
+
+    // Release any active screen capture tracks
+    if (screenStreamRef.current) {
+      screenStreamRef.current.getTracks().forEach((t) => t.stop())
+      screenStreamRef.current = null
+    }
 
     // Stop facial capture and upload landmarks
     if (isMultimodalEnabled) {
@@ -111,45 +188,15 @@ export default function InterviewPage() {
       }
     }
 
-    if (!blob) return
-
     const sessionId = interviewRef.current?.sessionId
-    if (sessionId) {
-      // Use presigned URL to upload directly to R2, bypassing Vercel's 4.5MB body limit
-      try {
-        const presignRes = await fetch('/api/storage/presign', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'upload', type: 'recording', sessionId }),
-        })
-        if (!presignRes.ok) {
-          console.error('Presign request failed:', presignRes.status)
-          return
-        }
-        const { url, key } = await presignRes.json()
+    if (!sessionId) return
 
-        // Upload directly to R2 via presigned PUT
-        const uploadRes = await fetch(url, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'video/webm' },
-          body: blob,
-        })
-        if (!uploadRes.ok) {
-          console.error('R2 upload failed:', uploadRes.status)
-          return
-        }
-
-        // Update the interview session record with the R2 key
-        await fetch(`/api/interviews/${sessionId}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ recordingR2Key: key, recordingSizeBytes: blob.size }),
-        }).catch((err) => console.error('Failed to update session with R2 key:', err))
-      } catch (err) {
-        console.error('Recording upload error:', err)
-      }
-    }
-  }, [stopRecording, isMultimodalEnabled, stopCapture])
+    // Upload the camera and (optional) screen tracks in parallel
+    const uploads: Promise<boolean>[] = []
+    if (cameraBlob) uploads.push(uploadRecordingBlob(cameraBlob, sessionId, 'camera'))
+    if (screenBlob) uploads.push(uploadRecordingBlob(screenBlob, sessionId, 'screen'))
+    await Promise.all(uploads)
+  }, [stopRecording, screenRecorder, isMultimodalEnabled, stopCapture, uploadRecordingBlob])
 
   // ── Interview engine ──
   const interview = useInterview({
@@ -323,29 +370,111 @@ export default function InterviewPage() {
   // ─── Camera init + start recording (only after config is loaded) ───────────
   useEffect(() => {
     if (!config) return // Don't start camera until interview config is ready
-    navigator.mediaDevices
-      .getUserMedia({ video: true, audio: true })
-      .then((stream) => {
-        streamRef.current = stream
-        // Share the audio stream with speech recognition to avoid redundant getUserMedia
-        setExternalStream(stream)
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream
-          // Start facial landmark capture if multimodal is enabled
-          if (isMultimodalEnabled) {
-            startCapture(videoRef.current).catch(() => {})
-          }
+
+    let cancelled = false
+
+    async function initCapture() {
+      let stream: MediaStream
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+      } catch (err) {
+        console.error(err)
+        return
+      }
+      if (cancelled) {
+        stream.getTracks().forEach((t) => t.stop())
+        return
+      }
+
+      streamRef.current = stream
+      // Share the audio stream with speech recognition to avoid redundant getUserMedia
+      setExternalStream(stream)
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream
+        // Start facial landmark capture if multimodal is enabled
+        if (isMultimodalEnabled) {
+          startCapture(videoRef.current).catch(() => {})
         }
-        startRecording(stream)
-      })
-      .catch(console.error)
+      }
+
+      // Build the recording stream with the AI voice mixed in.
+      // The mixer combines the candidate's mic with any tapped TTS
+      // <audio> elements so the saved webm contains both sides.
+      // Falls back to the raw camera+mic stream if Web Audio API is
+      // unavailable.
+      setVoiceMixerMic(stream)
+      const mixedAudio = getMixedAudioStream()
+      const cameraRecordingStream = mixedAudio
+        ? new MediaStream([
+            ...stream.getVideoTracks(),
+            ...mixedAudio.getAudioTracks(),
+          ])
+        : stream
+
+      startRecording(cameraRecordingStream)
+
+      // Coding & system-design: also capture the screen so the candidate's
+      // work surface is replayable. Best-effort — if the user denies the
+      // browser prompt or screen capture is unsupported (iOS Safari), we
+      // continue with camera-only.
+      if (wantsScreenCapture && typeof navigator.mediaDevices.getDisplayMedia === 'function') {
+        try {
+          const screenStream = await navigator.mediaDevices.getDisplayMedia({
+            video: { frameRate: 10 },
+            audio: false,
+          })
+          if (cancelled) {
+            screenStream.getTracks().forEach((t) => t.stop())
+            return
+          }
+          screenStreamRef.current = screenStream
+
+          // If the user clicks the browser "Stop sharing" button, the
+          // video track ends — drop the recorder gracefully.
+          screenStream.getVideoTracks().forEach((track) => {
+            track.addEventListener('ended', () => {
+              screenRecorder.stopRecording().catch(() => {})
+              screenStreamRef.current = null
+            })
+          })
+
+          // Reuse the same mixed audio so the screen track also has both
+          // sides of the conversation. Falls back to silent screen track.
+          const screenRecordingStream = mixedAudio
+            ? new MediaStream([
+                ...screenStream.getVideoTracks(),
+                ...mixedAudio.getAudioTracks(),
+              ])
+            : new MediaStream([...screenStream.getVideoTracks()])
+
+          screenRecorder.startRecording(screenRecordingStream)
+        } catch (err) {
+          // User cancelled or capture unavailable — continue with camera only.
+          console.warn('Screen capture unavailable, continuing without it:', err)
+        }
+      }
+    }
+
+    initCapture()
+
     return () => {
+      cancelled = true
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop())
         streamRef.current = null
       }
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach((t) => t.stop())
+        screenStreamRef.current = null
+      }
+      resetVoiceMixer()
     }
-  }, [config, startRecording])
+    // Hook return objects (screenRecorder, etc.) hold stable functions but
+    // are themselves a fresh reference each render — listing them would
+    // re-prompt the user for screen-share on every render. Re-run only when
+    // the underlying interview config or capture mode changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config, wantsScreenCapture])
 
   // ─── Load TTS voices ──────────────────────────────────────────────────────
   useEffect(() => {

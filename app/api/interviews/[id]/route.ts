@@ -41,8 +41,11 @@ export async function GET(
     // Strip internal storage keys from response — expose a boolean flag instead
     const responseData = interviewSession.toObject ? interviewSession.toObject() : { ...interviewSession }
     const hasRecording = !!responseData.recordingR2Key
+    const hasScreenRecording = !!responseData.screenRecordingR2Key
     delete responseData.recordingR2Key
+    delete responseData.screenRecordingR2Key
     responseData.hasRecording = hasRecording
+    responseData.hasScreenRecording = hasScreenRecording
 
     // Strip PII and non-essential fields for non-owner viewers (recruiters viewing org sessions)
     const isOwner = responseData.userId?.toString() === session.user.id

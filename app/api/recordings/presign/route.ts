@@ -32,22 +32,30 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid session ID format' }, { status: 400 })
   }
 
+  // Optional `kind` query param: 'camera' (default) | 'screen'
+  const kind = req.nextUrl.searchParams.get('kind') === 'screen' ? 'screen' : 'camera'
+
   await connectDB()
   const interviewSession = await InterviewSession.findOne({
     _id: sessionId,
     userId: session.user.id,
-  }).select('recordingR2Key')
+  }).select('recordingR2Key screenRecordingR2Key')
 
   if (!interviewSession) {
     return NextResponse.json({ error: 'Session not found' }, { status: 404 })
   }
 
-  if (!interviewSession.recordingR2Key) {
+  const r2Key =
+    kind === 'screen'
+      ? interviewSession.screenRecordingR2Key
+      : interviewSession.recordingR2Key
+
+  if (!r2Key) {
     return NextResponse.json({ error: 'No recording for this session' }, { status: 404 })
   }
 
   try {
-    const url = await getDownloadPresignedUrl(interviewSession.recordingR2Key)
+    const url = await getDownloadPresignedUrl(r2Key)
     return NextResponse.json({ url })
   } catch {
     return NextResponse.json({ error: 'Failed to generate download URL' }, { status: 500 })
