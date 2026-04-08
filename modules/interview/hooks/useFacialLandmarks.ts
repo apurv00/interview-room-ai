@@ -131,6 +131,13 @@ export function useFacialLandmarks(): UseFacialLandmarksReturn {
           const expression = classifyExpression(blendShapes)
           const eyeContactScore = computeEyeContactScore(gazeX, gazeY, headPoseYaw, headPosePitch)
 
+          // Round blendshape scores to 3 decimals to keep per-frame payload ~350 bytes.
+          // Keeps enough precision for aggregation without bloating R2 storage.
+          const roundedBlendshapes: Record<string, number> = {}
+          for (const key in blendShapes) {
+            roundedBlendshapes[key] = parseFloat(blendShapes[key].toFixed(3))
+          }
+
           const ts = (Date.now() - startTimeRef.current) / 1000
 
           framesRef.current.push({
@@ -141,6 +148,7 @@ export function useFacialLandmarks(): UseFacialLandmarksReturn {
             headPosePitch: parseFloat(headPosePitch.toFixed(1)),
             expression,
             eyeContactScore: parseFloat(eyeContactScore.toFixed(3)),
+            blendshapes: roundedBlendshapes,
           })
 
           setFrameCount(framesRef.current.length)

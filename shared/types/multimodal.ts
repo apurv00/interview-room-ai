@@ -39,6 +39,12 @@ export interface FacialFrame {
   headPosePitch: number
   expression: 'neutral' | 'smile' | 'frown' | 'surprise' | 'focused'
   eyeContactScore: number          // 0–1 (1 = looking at camera)
+
+  // Full MediaPipe blendshape vector (52 ARKit-style dimensions, each 0–1).
+  // Optional for backwards compatibility with sessions recorded before April 2026.
+  // Used by the post-interview fusion pipeline to provide a richer facial signal
+  // than the 5-class `expression` label alone.
+  blendshapes?: Record<string, number>
 }
 
 // ─── Aggregated Facial Metrics (per question window) ────────────────────────
