@@ -25,6 +25,14 @@ export interface InterviewConfig {
   targetIndustry?: string       // extracted from JD or entered in lobby
   coachMode?: boolean           // active STAR framework coaching during answers
   degraded?: boolean            // true when lobby detected unsupported speech recognition; runtime should fall back to text-only input
+  /**
+   * Privacy mode — if true, the candidate's camera webm is never uploaded to
+   * R2. Only the small audio-only track (needed for Whisper transcription)
+   * and the facial-landmark JSON (already client-derived and tiny) are kept.
+   * The replay page renders without video but still shows signal timeline
+   * and fusion scores. Gated behind `NEXT_PUBLIC_FEATURE_PRIVACY_MODE`.
+   */
+  privacyMode?: boolean
 }
 
 // ─── State Machine ────────────────────────────────────────────────────────────

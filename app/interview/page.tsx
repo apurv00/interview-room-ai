@@ -205,13 +205,24 @@ export default function InterviewPage() {
     const sessionId = interviewRef.current?.sessionId
     if (!sessionId) return
 
+    // Privacy mode — opt out of video storage. The big camera webm
+    // (~30–80MB per session) is dropped on the floor; only the small
+    // audio-only track (needed by Whisper for the post-interview
+    // transcription pipeline) and the facial-landmark JSON (already
+    // client-derived and tiny) hit R2.
+    const privacyMode = config?.privacyMode === true
+
     // Upload the camera, audio, and (optional) screen tracks in parallel
     const uploads: Promise<boolean>[] = []
-    if (cameraBlob) uploads.push(uploadRecordingBlob(cameraBlob, sessionId, 'camera'))
+    if (cameraBlob && !privacyMode) {
+      uploads.push(uploadRecordingBlob(cameraBlob, sessionId, 'camera'))
+    }
     if (audioBlob) uploads.push(uploadRecordingBlob(audioBlob, sessionId, 'audio'))
-    if (screenBlob) uploads.push(uploadRecordingBlob(screenBlob, sessionId, 'screen'))
+    if (screenBlob && !privacyMode) {
+      uploads.push(uploadRecordingBlob(screenBlob, sessionId, 'screen'))
+    }
     await Promise.all(uploads)
-  }, [stopRecording, screenRecorder, audioRecorder, isMultimodalEnabled, stopCapture, uploadRecordingBlob])
+  }, [stopRecording, screenRecorder, audioRecorder, isMultimodalEnabled, stopCapture, uploadRecordingBlob, config?.privacyMode])
 
   // ── Interview engine ──
   const interview = useInterview({

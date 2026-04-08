@@ -71,7 +71,11 @@ export const POST = composeApiRoute<StartPayload>({
       await MultimodalAnalysis.deleteOne({ _id: existing._id })
     }
 
-    // Verify session ownership and has recording
+    // Verify session ownership and that some audio source is available
+    // for transcription. Non-privacy-mode sessions upload the full camera
+    // webm; privacy-mode sessions upload only the small audio-only track.
+    // Either satisfies the pipeline — `stepTranscribeAndDownload` already
+    // prefers the audio-only key when present.
     const session = await InterviewSession.findOne({
       _id: sessionId,
       userId,
@@ -79,9 +83,9 @@ export const POST = composeApiRoute<StartPayload>({
     if (!session) {
       return NextResponse.json({ error: 'Session not found' }, { status: 404 })
     }
-    if (!session.recordingR2Key) {
+    if (!session.recordingR2Key && !session.audioRecordingR2Key) {
       return NextResponse.json(
-        { error: 'Session has no recording — multimodal analysis requires a recording' },
+        { error: 'Session has no audio to transcribe — multimodal analysis requires a recording or audio track' },
         { status: 400 }
       )
     }

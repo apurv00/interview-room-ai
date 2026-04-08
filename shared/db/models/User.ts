@@ -143,6 +143,15 @@ export interface IUser extends Document {
     analysisConsent: boolean
     analysisConsentAt?: Date
     marketingOptIn: boolean
+    /**
+     * Research donation consent — when true, the user has opted in to have
+     * their multimodal signals run through the dual-pipeline comparison
+     * experiment (baseline facial label vs. blendshape-enriched fusion).
+     * Scoped to the paper's evaluation only. Never affects the user-facing
+     * analysis, which always runs the enhanced variant.
+     */
+    researchDonationConsent?: boolean
+    researchDonationConsentAt?: Date
   }
 
   // XP & Levels
@@ -328,6 +337,10 @@ const UserSchema = new Schema<IUser>(
       analysisConsent: { type: Boolean, default: false },
       analysisConsentAt: { type: Date },
       marketingOptIn: { type: Boolean, default: false },
+      // Research donation consent — scoped to the dual-pipeline comparison
+      // experiment only. Safe to leave undefined; defaults to opted out.
+      researchDonationConsent: { type: Boolean, default: false },
+      researchDonationConsentAt: { type: Date },
     },
 
     xp: { type: Number, default: 0 },

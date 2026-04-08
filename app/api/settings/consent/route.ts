@@ -10,6 +10,7 @@ const UpdateConsentSchema = z.object({
   recordingConsent: z.boolean().optional(),
   analysisConsent: z.boolean().optional(),
   marketingOptIn: z.boolean().optional(),
+  researchDonationConsent: z.boolean().optional(),
 })
 
 type ConsentPayload = z.infer<typeof UpdateConsentSchema>
@@ -29,6 +30,7 @@ export const GET = composeApiRoute({
         recordingConsent: false,
         analysisConsent: false,
         marketingOptIn: false,
+        researchDonationConsent: false,
       },
     })
   },
@@ -55,6 +57,10 @@ export const PATCH = composeApiRoute<ConsentPayload>({
     }
     if (body.marketingOptIn !== undefined) {
       update['privacyConsent.marketingOptIn'] = body.marketingOptIn
+    }
+    if (body.researchDonationConsent !== undefined) {
+      update['privacyConsent.researchDonationConsent'] = body.researchDonationConsent
+      update['privacyConsent.researchDonationConsentAt'] = now
     }
 
     await User.findByIdAndUpdate(user.id, { $set: update })

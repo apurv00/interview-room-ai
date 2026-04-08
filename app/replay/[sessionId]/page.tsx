@@ -177,16 +177,23 @@ export default function ReplayPage() {
       </header>
 
       <div className="max-w-7xl mx-auto px-6 py-6 space-y-6">
-        {/* No recording state */}
+        {/* Privacy-mode / no-video state — sessions that opted out of video
+            storage still show analysis, timeline, and coaching below. */}
         {!hasRecording && (
-          <div className="flex flex-col items-center gap-4 p-12 rounded-xl bg-gray-800/30 border border-gray-700/30">
-            <Video className="w-12 h-12 text-gray-500" />
-            <p className="text-gray-400">No recording available for this session</p>
-            <p className="text-sm text-gray-500">Enable recording in your next interview to use replay</p>
+          <div className="flex items-center gap-3 p-4 rounded-xl bg-gray-800/30 border border-gray-700/30">
+            <Video className="w-5 h-5 text-gray-500 shrink-0" />
+            <div>
+              <p className="text-sm text-gray-300">No video recording for this session</p>
+              <p className="text-xs text-gray-500">
+                {hasAnalysis
+                  ? 'Multimodal analysis still ran on audio + facial signals.'
+                  : 'You can still run multimodal analysis on the audio and facial signals captured during the interview.'}
+              </p>
+            </div>
           </div>
         )}
 
-        {/* Video player + Timeline */}
+        {/* Video player */}
         {hasRecording && (
           <>
             <VideoPlayer
@@ -212,16 +219,17 @@ export default function ReplayPage() {
                 />
               </div>
             )}
-
-            {hasAnalysis && analysis.timeline && (
-              <TimelineTrack
-                events={analysis.timeline}
-                totalDurationSec={totalDurationSec}
-                currentTimeSec={currentTime}
-                onSeek={handleSeek}
-              />
-            )}
           </>
+        )}
+
+        {/* Timeline — shown whenever analysis exists, regardless of video. */}
+        {hasAnalysis && analysis.timeline && (
+          <TimelineTrack
+            events={analysis.timeline}
+            totalDurationSec={totalDurationSec}
+            currentTimeSec={currentTime}
+            onSeek={handleSeek}
+          />
         )}
 
         {/* Score summary badges */}
@@ -252,8 +260,10 @@ export default function ReplayPage() {
           </div>
         )}
 
-        {/* Analysis trigger (no analysis yet) */}
-        {hasRecording && !hasAnalysis && (
+        {/* Analysis trigger — shown whenever analysis hasn't run yet. The
+            backend decides whether enough data exists to transcribe (camera
+            webm OR audio-only track) and rejects otherwise. */}
+        {!hasAnalysis && (
           <AnalysisTrigger
             sessionId={sessionId}
             onAnalysisComplete={handleAnalysisComplete}

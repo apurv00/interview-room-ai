@@ -75,6 +75,11 @@ export default function LobbyPage() {
   const [config, setConfig] = useState<InterviewConfig | null>(null)
   const [lobbyCompany, setLobbyCompany] = useState('')
   const [showSuggestions, setShowSuggestions] = useState(false)
+  // Privacy mode — per-interview opt-out of video storage. Gated behind
+  // NEXT_PUBLIC_FEATURE_PRIVACY_MODE so it only appears in environments
+  // where the feature has been explicitly enabled.
+  const privacyModeFeatureEnabled = process.env.NEXT_PUBLIC_FEATURE_PRIVACY_MODE === 'true'
+  const [privacyMode, setPrivacyMode] = useState(false)
   const [checks, setChecks] = useState<Check[]>([
     { label: 'Camera', status: 'pending' },
     { label: 'Microphone', status: 'pending' },
@@ -306,11 +311,13 @@ export default function LobbyPage() {
       c => c.label === 'Speech recognition' && c.status === 'error'
     )
 
-    // Save optional company context and degraded flag to config before entering
+    // Save optional company context, degraded flag, and privacy-mode opt-in
+    // to config before entering
     if (config) {
       const patch: Partial<InterviewConfig> = {}
       if (lobbyCompany.trim()) patch.targetCompany = lobbyCompany.trim()
       if (srFailed) patch.degraded = true
+      if (privacyModeFeatureEnabled && privacyMode) patch.privacyMode = true
       if (Object.keys(patch).length > 0) {
         const updated = { ...config, ...patch }
         setConfig(updated)
@@ -548,6 +555,26 @@ export default function LobbyPage() {
                   )}
                 </div>
               </div>
+            )}
+
+            {/* Privacy mode — per-interview opt-out of video storage */}
+            {privacyModeFeatureEnabled && (
+              <label className="bg-white border border-[#e1e8ed] rounded-2xl p-4 flex items-start gap-3 cursor-pointer hover:border-[#2563eb]/30 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={privacyMode}
+                  onChange={(e) => setPrivacyMode(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 accent-[#2563eb]"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-[#0f1419]">Privacy mode</div>
+                  <div className="text-xs text-[#71767b] mt-0.5 leading-relaxed">
+                    Don&apos;t store a video recording of this interview. We&apos;ll still capture
+                    facial landmarks and audio on-device for analysis, and the post-interview
+                    replay will show your signal timeline without video.
+                  </div>
+                </div>
+              </label>
             )}
 
             {/* CTA */}

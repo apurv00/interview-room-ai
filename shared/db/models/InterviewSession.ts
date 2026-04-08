@@ -97,6 +97,14 @@ export interface IInterviewSession extends Document {
   consentedToRecording?: boolean
   consentedToAnalysis?: boolean
 
+  // Privacy mode — candidate opted out of video storage. Camera webm is
+  // never uploaded; audio-only webm and facial-landmark JSON still are.
+  privacyMode?: boolean
+
+  // Research donation — candidate opted in to contribute this session's
+  // signals to the dual-pipeline comparison experiment. Gate for #4.
+  researchDonation?: boolean
+
   // Multimodal analysis
   multimodalAnalysisId?: mongoose.Types.ObjectId
   facialLandmarksR2Key?: string
@@ -180,6 +188,10 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
     // Consent
     consentedToRecording: { type: Boolean },
     consentedToAnalysis: { type: Boolean },
+
+    // Privacy mode & research donation (per-session opt-in flags)
+    privacyMode: { type: Boolean },
+    researchDonation: { type: Boolean },
 
     // Sharing
     shareToken: { type: String, unique: true, sparse: true },

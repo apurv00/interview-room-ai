@@ -15,9 +15,15 @@ import type { AuthUser } from '@shared/middleware/withAuth'
 
 export interface SessionData {
   sessionId: string
-  recordingR2Key: string
+  /**
+   * Camera webm key — present for normal sessions, absent for privacy-mode
+   * sessions where the candidate opted out of video storage. The pipeline
+   * transcribes whichever audio source is available (see `audioRecordingR2Key`).
+   */
+  recordingR2Key?: string
   /** Optional audio-only key used in preference to the camera webm for Whisper
-   * transcription, since Groq Whisper rejects files >25MB. */
+   * transcription, since Groq Whisper rejects files >25MB. Required when
+   * `recordingR2Key` is absent (privacy mode). */
   audioRecordingR2Key?: string
   facialLandmarksR2Key?: string
   transcript: Array<{ speaker: string; text: string; timestamp: number; questionIndex?: number | null }>
@@ -50,7 +56,12 @@ export async function stepFetchSession(sessionId: string): Promise<SessionData> 
 
   const session = await InterviewSession.findById(sessionId)
   if (!session) throw new Error(`Session ${sessionId} not found`)
-  if (!session.recordingR2Key) throw new Error('Session has no recording')
+  // Privacy-mode sessions skip the camera webm upload but still ship the
+  // small audio-only track, which is all Whisper needs. Require at least
+  // one audio source.
+  if (!session.recordingR2Key && !session.audioRecordingR2Key) {
+    throw new Error('Session has no recording or audio track')
+  }
 
   const questionBoundaries = (session.transcript || [])
     .filter((t) => t.speaker === 'interviewer')
@@ -70,7 +81,7 @@ export async function stepFetchSession(sessionId: string): Promise<SessionData> 
 
 /** Step 2: Transcribe recording + download facial data (parallel) */
 export async function stepTranscribeAndDownload(
-  recordingR2Key: string,
+  recordingR2Key: string | undefined,
   facialLandmarksR2Key?: string,
   audioRecordingR2Key?: string
 ): Promise<{ whisper: TranscribeResult; facialFrames: FacialFrame[] }> {
@@ -78,7 +89,12 @@ export async function stepTranscribeAndDownload(
   // 30–80MB for the camera webm, so Whisper stays comfortably under Groq's
   // 25MB upload limit. Legacy sessions without an audio track fall back
   // to the camera webm (which may still hit 413 for long recordings).
+  // Privacy-mode sessions skip the camera webm entirely and rely on the
+  // audio-only key exclusively.
   const whisperKey = audioRecordingR2Key || recordingR2Key
+  if (!whisperKey) {
+    throw new Error('No audio source available for transcription')
+  }
 
   const [whisperResult, facialFrames] = await Promise.all([
     transcribeRecording(whisperKey),
