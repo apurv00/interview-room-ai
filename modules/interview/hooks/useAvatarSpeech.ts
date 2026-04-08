@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState } from 'react'
 import type { AvatarEmotion } from '@shared/types'
 import { useStreamingAudio } from './useStreamingAudio'
+import { tapAudioElement } from '@interview/audio/voiceMixer'
 
 interface UseAvatarSpeechOptions {
   interviewType?: string
@@ -58,6 +59,10 @@ export function useAvatarSpeech({
     return new Promise<void>((resolve) => {
       const url = URL.createObjectURL(blob)
       const audio = new Audio(url)
+      // Route into the voice mixer so the AI's voice is captured by
+      // MediaRecorder alongside the candidate's mic. Safe no-op when
+      // the mixer isn't initialised.
+      tapAudioElement(audio)
       audio.onended = () => {
         URL.revokeObjectURL(url)
         setIsAvatarTalking(false)

@@ -58,6 +58,13 @@ export async function DELETE(
         )
       )
     }
+    if (session.screenRecordingR2Key) {
+      r2Deletions.push(
+        deleteFromR2(session.screenRecordingR2Key).catch((err) =>
+          logger.warn({ err, key: session.screenRecordingR2Key }, 'Failed to delete screen recording from R2')
+        )
+      )
+    }
     if (session.facialLandmarksR2Key) {
       r2Deletions.push(
         deleteFromR2(session.facialLandmarksR2Key).catch((err) =>
@@ -91,6 +98,8 @@ export async function DELETE(
         recordingUrl: 1,
         recordingR2Key: 1,
         recordingSizeBytes: 1,
+        screenRecordingR2Key: 1,
+        screenRecordingSizeBytes: 1,
         facialLandmarksR2Key: 1,
         resumeR2Key: 1,
         jdR2Key: 1,

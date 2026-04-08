@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { useSession } from 'next-auth/react'
-import { ArrowLeft, Video, BarChart3, MessageSquare, Lightbulb, Eye, Mic } from 'lucide-react'
+import { ArrowLeft, Video, BarChart3, MessageSquare, Lightbulb, Eye, Mic, Monitor } from 'lucide-react'
 import VideoPlayer from '@interview/components/replay/VideoPlayer'
 import TimelineTrack from '@interview/components/replay/TimelineTrack'
 import SignalCharts from '@interview/components/replay/SignalCharts'
@@ -20,6 +20,7 @@ interface SessionData {
   transcript: TranscriptEntry[]
   recordingUrl?: string
   hasRecording?: boolean
+  hasScreenRecording?: boolean
 }
 
 export default function ReplayPage() {
@@ -31,6 +32,7 @@ export default function ReplayPage() {
   const [sessionData, setSessionData] = useState<SessionData | null>(null)
   const [analysis, setAnalysis] = useState<MultimodalAnalysisData | null>(null)
   const [videoSrc, setVideoSrc] = useState<string | null>(null)
+  const [screenVideoSrc, setScreenVideoSrc] = useState<string | null>(null)
   const [currentTime, setCurrentTime] = useState(0)
   const [activeTab, setActiveTab] = useState<Tab>('transcript')
   const [loading, setLoading] = useState(true)
@@ -54,6 +56,7 @@ export default function ReplayPage() {
           transcript: sessionJson.transcript || [],
           recordingUrl: sessionJson.recordingUrl,
           hasRecording: sessionJson.hasRecording,
+          hasScreenRecording: sessionJson.hasScreenRecording,
         })
 
         // Get presigned URL for video (R2), or fall back to legacy recordingUrl
@@ -65,6 +68,17 @@ export default function ReplayPage() {
           }
         } else if (sessionJson.recordingUrl) {
           setVideoSrc(sessionJson.recordingUrl)
+        }
+
+        // Screen recording (coding & system-design only)
+        if (sessionJson.hasScreenRecording) {
+          const screenPresignRes = await fetch(
+            `/api/recordings/presign?sessionId=${sessionId}&kind=screen`
+          )
+          if (screenPresignRes.ok) {
+            const screenPresignJson = await screenPresignRes.json()
+            setScreenVideoSrc(screenPresignJson.url)
+          }
         }
 
         // Fetch analysis (may not exist yet)
@@ -181,6 +195,23 @@ export default function ReplayPage() {
               onTimeUpdate={handleTimeUpdate}
               onSeek={(fn) => { seekFnRef.current = fn }}
             />
+
+            {/* Screen recording (coding / system-design interviews) */}
+            {screenVideoSrc && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-sm text-gray-300">
+                  <Monitor className="w-4 h-4 text-blue-400" />
+                  <span className="font-medium">Screen recording</span>
+                  <span className="text-gray-500">
+                    &middot; the work surface (IDE / canvas) you used during this interview
+                  </span>
+                </div>
+                <VideoPlayer
+                  src={screenVideoSrc}
+                  questionMarkers={questionMarkers}
+                />
+              </div>
+            )}
 
             {hasAnalysis && analysis.timeline && (
               <TimelineTrack

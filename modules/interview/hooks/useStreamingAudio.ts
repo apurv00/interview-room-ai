@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useRef } from 'react'
+import { tapAudioElement } from '@interview/audio/voiceMixer'
 
 /**
  * Hook for streaming audio playback via MediaSource API.
@@ -61,6 +62,10 @@ export function useStreamingAudio() {
         const audio = new Audio()
         audioRef.current = audio
         audio.src = URL.createObjectURL(mediaSource)
+        // Tap into the voice mixer so the streamed AI voice is captured
+        // by MediaRecorder alongside the candidate's mic. Must run before
+        // playback starts so the first chunk gets routed.
+        tapAudioElement(audio)
 
         // Track whether playback has started
         let playbackStarted = false

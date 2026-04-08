@@ -72,8 +72,10 @@ export async function GET(req: NextRequest) {
     const sanitizedSessions = result.sessions.map((s: any) => { // eslint-disable-line
       const obj = s.toObject ? s.toObject() : { ...s }
       const hasRecording = !!obj.recordingR2Key
+      const hasScreenRecording = !!obj.screenRecordingR2Key
       delete obj.recordingR2Key
-      return { ...obj, hasRecording }
+      delete obj.screenRecordingR2Key
+      return { ...obj, hasRecording, hasScreenRecording }
     })
 
     return NextResponse.json({ ...result, sessions: sanitizedSessions })

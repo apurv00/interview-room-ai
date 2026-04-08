@@ -41,6 +41,11 @@ export interface IInterviewSession extends Document {
   recordingSizeBytes?: number
   recordingR2Key?: string
 
+  // Screen recording (coding & system-design interviews) — captures the
+  // candidate's work surface (IDE / canvas) alongside the camera track.
+  screenRecordingR2Key?: string
+  screenRecordingSizeBytes?: number
+
   resumeR2Key?: string
   jdR2Key?: string
 
@@ -131,6 +136,10 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
     recordingUrl: { type: String },
     recordingSizeBytes: { type: Number },
     recordingR2Key: { type: String },
+
+    // Screen recording (coding & system-design)
+    screenRecordingR2Key: { type: String },
+    screenRecordingSizeBytes: { type: Number },
 
     parsedJobDescription: { type: Schema.Types.Mixed },
     persona: { type: String },
