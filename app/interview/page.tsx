@@ -22,6 +22,10 @@ import {
   getMixedAudioStream,
   resetVoiceMixer,
 } from '@interview/audio/voiceMixer'
+import {
+  setRecordingStartedAt,
+  resetRecordingClock,
+} from '@interview/audio/recordingClock'
 import { useCoachMode } from '@interview/hooks/useCoachMode'
 import CoachOverlay from '@interview/components/interview/CoachOverlay'
 import CodingLayout from '@interview/components/interview/CodingLayout'
@@ -426,6 +430,11 @@ export default function InterviewPage() {
           ])
         : stream
 
+      // Mark t=0 of the audio timeline right before we kick off the
+      // recorder. useDeepgramRecognition uses this to convert its
+      // per-turn word timestamps into recording-relative offsets so
+      // the multimodal analysis pipeline can skip Whisper entirely.
+      setRecordingStartedAt(Date.now())
       startRecording(cameraRecordingStream)
 
       // Audio-only recording for Whisper transcription. Groq Whisper
@@ -497,6 +506,7 @@ export default function InterviewPage() {
         screenStreamRef.current = null
       }
       resetVoiceMixer()
+      resetRecordingClock()
     }
     // Hook return objects (screenRecorder, etc.) hold stable functions but
     // are themselves a fresh reference each render — listing them would
