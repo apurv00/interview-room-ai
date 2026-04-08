@@ -30,10 +30,12 @@ export default function VideoPlayer({ src, questionMarkers, onTimeUpdate, onSeek
   const [error, setError] = useState<string | null>(null)
 
   const seekTo = useCallback((seconds: number) => {
-    if (videoRef.current) {
-      videoRef.current.currentTime = seconds
-      setCurrentTime(seconds)
-    }
+    // Guard against NaN/Infinity from upstream callers (e.g. progress bar
+    // clicks before duration is known) — setting currentTime to a
+    // non-finite value throws a TypeError on HTMLMediaElement.
+    if (!videoRef.current || !Number.isFinite(seconds)) return
+    videoRef.current.currentTime = seconds
+    setCurrentTime(seconds)
   }, [])
 
   useEffect(() => {
@@ -47,11 +49,56 @@ export default function VideoPlayer({ src, questionMarkers, onTimeUpdate, onSeek
     const video = videoRef.current
     if (!video) return
 
+    // MediaRecorder-produced webm files don't include a duration header,
+    // so `video.duration` is Infinity until the browser has scanned to
+    // the end. Workaround: on loadedmetadata, if duration is non-finite,
+    // seek to a very large value to force the browser to read to EOF;
+    // the real duration then arrives via the `durationchange` event,
+    // after which we seek back to 0.
+    let durationProbeInProgress = false
+
     const handleLoadedMetadata = () => {
-      setDuration(video.duration)
-      setIsLoading(false)
+      if (Number.isFinite(video.duration) && video.duration > 0) {
+        setDuration(video.duration)
+        setIsLoading(false)
+        return
+      }
+      // Trigger the probe — set a flag so handleDurationChange knows to
+      // restore currentTime when the real duration arrives.
+      durationProbeInProgress = true
+      try {
+        video.currentTime = Number.MAX_SAFE_INTEGER
+      } catch {
+        // Some browsers throw immediately on non-finite seeks; nothing we
+        // can do beyond leaving the duration at 0 in the UI.
+        setIsLoading(false)
+      }
     }
+
+    const handleDurationChange = () => {
+      if (Number.isFinite(video.duration) && video.duration > 0) {
+        setDuration(video.duration)
+        if (durationProbeInProgress) {
+          durationProbeInProgress = false
+          // Restore playhead to the start now that the browser knows the
+          // real duration. Use 0 (not the previous currentTime) because
+          // we just jumped to MAX_SAFE_INTEGER.
+          try {
+            video.currentTime = 0
+          } catch {
+            /* ignore */
+          }
+          setCurrentTime(0)
+          setIsLoading(false)
+        }
+      }
+    }
+
     const handleTimeUpdate = () => {
+      // While probing for duration we may receive timeupdate events with
+      // very large currentTime values — ignore them so the UI doesn't
+      // flicker to "Infinity".
+      if (durationProbeInProgress) return
       const now = Date.now()
       if (now - lastUpdateRef.current < THROTTLE_MS) return
       lastUpdateRef.current = now
@@ -68,6 +115,7 @@ export default function VideoPlayer({ src, questionMarkers, onTimeUpdate, onSeek
     const handleCanPlay = () => setIsLoading(false)
 
     video.addEventListener('loadedmetadata', handleLoadedMetadata)
+    video.addEventListener('durationchange', handleDurationChange)
     video.addEventListener('timeupdate', handleTimeUpdate)
     video.addEventListener('play', handlePlay)
     video.addEventListener('pause', handlePause)
@@ -77,6 +125,7 @@ export default function VideoPlayer({ src, questionMarkers, onTimeUpdate, onSeek
 
     return () => {
       video.removeEventListener('loadedmetadata', handleLoadedMetadata)
+      video.removeEventListener('durationchange', handleDurationChange)
       video.removeEventListener('timeupdate', handleTimeUpdate)
       video.removeEventListener('play', handlePlay)
       video.removeEventListener('pause', handlePause)
@@ -115,6 +164,7 @@ export default function VideoPlayer({ src, questionMarkers, onTimeUpdate, onSeek
   }, [duration, seekTo])
 
   const formatTime = (s: number) => {
+    if (!Number.isFinite(s) || s < 0) return '0:00'
     const m = Math.floor(s / 60)
     const sec = Math.floor(s % 60)
     return `${m}:${sec.toString().padStart(2, '0')}`
@@ -128,7 +178,7 @@ export default function VideoPlayer({ src, questionMarkers, onTimeUpdate, onSeek
     )
   }
 
-  const progress = duration > 0 ? (currentTime / duration) * 100 : 0
+  const progress = Number.isFinite(duration) && duration > 0 ? (currentTime / duration) * 100 : 0
 
   return (
     <div className="rounded-xl bg-gray-900 overflow-hidden">
