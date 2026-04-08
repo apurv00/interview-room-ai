@@ -236,7 +236,11 @@ export function generateResumeHTML(data: ResumeData, templateId: string): string
 </html>`
 }
 
-async function renderPdfFromHtml(html: string): Promise<Buffer> {
+interface RenderPdfOptions {
+  margin?: { top: string; right: string; bottom: string; left: string }
+}
+
+async function renderPdfFromHtml(html: string, options?: RenderPdfOptions): Promise<Buffer> {
   // Dynamic import to handle environments without Puppeteer
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const puppeteer = require('puppeteer-core')
@@ -263,7 +267,7 @@ async function renderPdfFromHtml(html: string): Promise<Buffer> {
     const pdfBuffer = await page.pdf({
       format: 'A4',
       printBackground: true,
-      margin: { top: '40px', bottom: '40px', left: '50px', right: '50px' },
+      margin: options?.margin ?? { top: '40px', bottom: '40px', left: '50px', right: '50px' },
     })
     return Buffer.from(pdfBuffer)
   } finally {
@@ -277,5 +281,9 @@ export async function generatePDF(data: ResumeData, templateId: string): Promise
 }
 
 export async function generatePDFFromHTML(html: string): Promise<Buffer> {
-  return renderPdfFromHtml(html)
+  // Preview HTML already encodes its own A4 sizing + page padding via @page CSS,
+  // so suppress puppeteer's default margins to avoid double indentation.
+  return renderPdfFromHtml(html, {
+    margin: { top: '0', right: '0', bottom: '0', left: '0' },
+  })
 }
