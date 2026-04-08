@@ -14,12 +14,26 @@ const anthropic = getAnthropicClient()
 const FUSION_MODEL = 'claude-haiku-4-5-20251001'
 const MAX_TOKENS = 1500
 
+// Number of top blendshapes (by mean score within the window) to include
+// per facial segment in the enhanced variant of the dual-pipeline run.
+// 8 keeps the prompt footprint manageable while still giving Claude more
+// signal than the 5-class expression label alone.
+const BLENDSHAPES_TOP_N = 8
+
 interface FusionInput {
   prosodySegments: ProsodySegment[]
   facialSegments: FacialSegment[]
   evaluations: AnswerEvaluation[]
   transcript: TranscriptEntry[]
   config: InterviewConfig
+  /**
+   * When true, the user prompt includes per-segment blendshape summary
+   * statistics alongside the existing categorical expression label. When
+   * false (default, and what production uses today), the facial block is
+   * restricted to the categorical label — this is the baseline variant in
+   * the dual-pipeline comparison experiment.
+   */
+  includeBlendshapes?: boolean
 }
 
 interface FusionOutput {
@@ -27,10 +41,12 @@ interface FusionOutput {
   fusionSummary: FusionSummary
   inputTokens: number
   outputTokens: number
+  /** Length of the rendered user prompt, for dual-pipeline audit logging. */
+  promptLength: number
 }
 
 export async function runFusionAnalysis(input: FusionInput): Promise<FusionOutput> {
-  const { prosodySegments, facialSegments, evaluations, transcript, config } = input
+  const { prosodySegments, facialSegments, evaluations, transcript, config, includeBlendshapes } = input
 
   // Build the analysis prompt
   const systemPrompt = `You are an expert interview coach analyzing multimodal signals from a recorded mock interview. The candidate was interviewing for a ${config.role} position (${config.experience} years experience, ${config.interviewType || 'screening'} interview).
@@ -69,7 +85,13 @@ Guidelines:
 - Score body language based on eye contact, expressions, and head stability
 - Score eye contact based on facial data averages`
 
-  const userPrompt = buildUserPrompt(prosodySegments, facialSegments, evaluations, transcript)
+  const userPrompt = buildUserPrompt(
+    prosodySegments,
+    facialSegments,
+    evaluations,
+    transcript,
+    { includeBlendshapes: includeBlendshapes === true }
+  )
 
   const response = await anthropic.messages.create({
     model: FUSION_MODEL,
@@ -129,6 +151,7 @@ Guidelines:
     fusionSummary: parsed.fusionSummary,
     inputTokens: response.usage.input_tokens,
     outputTokens: response.usage.output_tokens,
+    promptLength: userPrompt.length,
   }
 }
 
@@ -136,7 +159,8 @@ function buildUserPrompt(
   prosody: ProsodySegment[],
   facial: FacialSegment[],
   evaluations: AnswerEvaluation[],
-  transcript: TranscriptEntry[]
+  transcript: TranscriptEntry[],
+  options: { includeBlendshapes: boolean } = { includeBlendshapes: false }
 ): string {
   const sections: string[] = []
 
@@ -156,14 +180,23 @@ function buildUserPrompt(
 
   // Facial signals
   if (facial.length > 0) {
-    const facialData = facial.map((f) => ({
-      questionIndex: f.questionIndex,
-      timeRange: `${f.startSec.toFixed(0)}s - ${f.endSec.toFixed(0)}s`,
-      eyeContact: `${(f.avgEyeContact * 100).toFixed(0)}%`,
-      dominantExpression: f.dominantExpression,
-      headStability: `${(f.headStability * 100).toFixed(0)}%`,
-      gestureLevel: f.gestureLevel,
-    }))
+    const facialData = facial.map((f) => {
+      const base: Record<string, unknown> = {
+        questionIndex: f.questionIndex,
+        timeRange: `${f.startSec.toFixed(0)}s - ${f.endSec.toFixed(0)}s`,
+        eyeContact: `${(f.avgEyeContact * 100).toFixed(0)}%`,
+        dominantExpression: f.dominantExpression,
+        headStability: `${(f.headStability * 100).toFixed(0)}%`,
+        gestureLevel: f.gestureLevel,
+      }
+      // Enhanced variant: enrich each segment with the top-N blendshapes
+      // (by mean score within the window). Baseline variant (the default)
+      // leaves the categorical label alone.
+      if (options.includeBlendshapes && f.meanBlendshapes) {
+        base.topBlendshapes = selectTopBlendshapes(f.meanBlendshapes, BLENDSHAPES_TOP_N)
+      }
+      return base
+    })
     sections.push(`<facial_signals>\n${JSON.stringify(facialData, null, 2)}\n</facial_signals>`)
   }
 
@@ -193,4 +226,25 @@ function buildUserPrompt(
   }
 
   return `Analyze this interview and generate the multimodal coaching timeline:\n\n${sections.join('\n\n')}`
+}
+
+/**
+ * Pick the top-N blendshapes from a window by mean score (descending).
+ * Returns a compact `{name: value}` map with values rounded to 3 decimals.
+ * Used only by the enhanced variant of the dual-pipeline comparison — the
+ * baseline variant never sees blendshape data in the prompt.
+ */
+function selectTopBlendshapes(
+  means: Record<string, number>,
+  n: number
+): Record<string, number> {
+  const entries = Object.entries(means)
+    .filter(([, v]) => v > 0.02) // drop near-zero noise
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, n)
+  const top: Record<string, number> = {}
+  for (const [k, v] of entries) {
+    top[k] = parseFloat(v.toFixed(3))
+  }
+  return top
 }

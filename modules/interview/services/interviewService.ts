@@ -145,6 +145,9 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
       resumeText: input.resumeText,
       jdFileName: input.jdFileName,
       resumeFileName: input.resumeFileName,
+      // Privacy mode — promoted from config to a top-level field so it can
+      // be queried/audited independently of the nested config blob.
+      privacyMode: input.config.privacyMode === true ? true : undefined,
     })
   } catch (err) {
     // Rollback the usage increment if session creation fails

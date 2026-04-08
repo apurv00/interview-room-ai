@@ -28,6 +28,7 @@ export type FeatureFlag =
   | 'live_coding'
   | 'embedding_search'
   | 'monthly_plan'
+  | 'research_comparison'
 
 const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   personalization_engine: true,
@@ -55,6 +56,11 @@ const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   live_coding: false,
   embedding_search: false,
   monthly_plan: true,
+  // Dual-pipeline comparison experiment (#4). When true AND the session
+  // owner has opted in via researchDonationConsent, the analysis pipeline
+  // runs fusion twice (baseline categorical vs blendshape-enriched) and
+  // persists both outputs for offline evaluation.
+  research_comparison: false,
 }
 
 export function isFeatureEnabled(flag: FeatureFlag): boolean {

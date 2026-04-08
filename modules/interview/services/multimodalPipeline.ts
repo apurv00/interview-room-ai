@@ -1,9 +1,11 @@
 import { connectDB } from '@shared/db/connection'
 import { InterviewSession } from '@shared/db/models/InterviewSession'
 import { MultimodalAnalysis } from '@shared/db/models/MultimodalAnalysis'
+import { User } from '@shared/db/models/User'
 import { getDownloadPresignedUrl } from '@shared/storage/r2'
 import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
+import { isFeatureEnabled } from '@shared/featureFlags'
 import { transcribeRecording } from './whisperService'
 import { extractProsody } from './prosodyService'
 import { aggregateFacialData } from './facialAggregator'
@@ -26,9 +28,15 @@ interface LiveTranscriptWord {
 
 export interface SessionData {
   sessionId: string
-  recordingR2Key: string
+  /**
+   * Camera webm key — present for normal sessions, absent for privacy-mode
+   * sessions where the candidate opted out of video storage. The pipeline
+   * transcribes whichever audio source is available (see `audioRecordingR2Key`).
+   */
+  recordingR2Key?: string
   /** Optional audio-only key used in preference to the camera webm for Whisper
-   * transcription, since Groq Whisper rejects files >25MB. */
+   * transcription, since Groq Whisper rejects files >25MB. Required when
+   * `recordingR2Key` is absent (privacy mode). */
   audioRecordingR2Key?: string
   facialLandmarksR2Key?: string
   /** Deepgram-captured words from the live interview with audio-timeline
@@ -50,7 +58,19 @@ export interface TranscribeResult {
 export interface ProcessedSignals {
   prosodySegments: Array<Record<string, unknown>>
   facialSegments: Array<Record<string, unknown>>
+  /**
+   * Fine-grained facial timeseries — the aggregator re-run with fixed 1-second
+   * windows and blendshape statistics enabled. Persisted for the replay UI's
+   * high-resolution signal plots and as direct input to the dual-pipeline
+   * comparison experiment.
+   */
+  facialTimeseries: Array<Record<string, unknown>>
 }
+
+// Fixed-width window used for the facial timeseries. 1s chosen to match the
+// per-second resolution the replay UI's signal chart expects; a 10-min
+// interview produces ~600 windows × ~100B ≈ 60KB in Mongo.
+export const FACIAL_TIMESERIES_WINDOW_SEC = 1
 
 // ─── Pipeline steps (each can be called independently for testing) ─────────
 
@@ -65,7 +85,12 @@ export async function stepFetchSession(sessionId: string): Promise<SessionData> 
 
   const session = await InterviewSession.findById(sessionId)
   if (!session) throw new Error(`Session ${sessionId} not found`)
-  if (!session.recordingR2Key) throw new Error('Session has no recording')
+  // Privacy-mode sessions skip the camera webm upload but still ship the
+  // small audio-only track, which is all Whisper needs. Require at least
+  // one audio source.
+  if (!session.recordingR2Key && !session.audioRecordingR2Key) {
+    throw new Error('Session has no recording or audio track')
+  }
 
   const questionBoundaries = (session.transcript || [])
     .filter((t) => t.speaker === 'interviewer')
@@ -92,12 +117,14 @@ export async function stepFetchSession(sessionId: string): Promise<SessionData> 
  * Deepgram-dedup change landed. Legacy sessions fall back to Whisper.
  */
 export async function stepTranscribeAndDownload(
-  recordingR2Key: string,
+  recordingR2Key: string | undefined,
   facialLandmarksR2Key?: string,
   audioRecordingR2Key?: string,
   liveTranscriptWords?: LiveTranscriptWord[]
 ): Promise<{ whisper: TranscribeResult; facialFrames: FacialFrame[] }> {
-  // Fast path: synthesise the Whisper-shaped result from the live words.
+  // Fast path: synthesise the Whisper-shaped result from the live Deepgram
+  // words. Skips the Whisper API call entirely — no download, no cost, no
+  // 25MB upload limit. Primary path for all sessions post-Deepgram-dedup.
   if (liveTranscriptWords && liveTranscriptWords.length > 0) {
     const facialFrames = await downloadFacialFrames(facialLandmarksR2Key)
     const synthetic = synthesiseWhisperResultFromLiveWords(liveTranscriptWords)
@@ -115,9 +142,15 @@ export async function stepTranscribeAndDownload(
     }
   }
 
-  // Fallback: post-hoc Whisper on the audio-only track (or camera webm
-  // for pre-#183 sessions). Kept for backward compatibility.
+  // Fallback: post-hoc Whisper on the audio-only track (or the camera webm
+  // for pre-#183 legacy sessions). Prefer the audio-only key — it's ~1–2MB
+  // vs 30–80MB for the camera webm, keeping us under Groq's 25MB upload
+  // limit. Privacy-mode sessions that opted out of the camera webm rely
+  // on the audio-only key here; error if neither exists AND no live words.
   const whisperKey = audioRecordingR2Key || recordingR2Key
+  if (!whisperKey) {
+    throw new Error('No audio source available for transcription')
+  }
   const [whisperResult, facialFrames] = await Promise.all([
     transcribeRecording(whisperKey),
     downloadFacialFrames(facialLandmarksR2Key),
@@ -206,15 +239,31 @@ export function stepProcessSignals(
     totalDurationSec
   )
 
+  // Two aggregator runs:
+  //   1. Per-question boundaries — compact output for the fusion prompt.
+  //      Always includes blendshape stats when available, since the dual-
+  //      pipeline experiment (#4) gates enhanced vs baseline on whether
+  //      those stats are visible to Claude in the prompt.
+  //   2. Fixed 1s windows — fine-grained timeseries for the replay UI and
+  //      the research dataset. Always emits blendshape stats.
   const facialSegments = aggregateFacialData(
     facialFrames,
     questionBoundaries,
-    totalDurationSec
+    totalDurationSec,
+    { includeBlendshapeStats: true }
+  )
+
+  const facialTimeseries = aggregateFacialData(
+    facialFrames,
+    questionBoundaries,
+    totalDurationSec,
+    { windowSec: FACIAL_TIMESERIES_WINDOW_SEC, includeBlendshapeStats: true }
   )
 
   return {
     prosodySegments: prosodySegments as unknown as Array<Record<string, unknown>>,
     facialSegments: facialSegments as unknown as Array<Record<string, unknown>>,
+    facialTimeseries: facialTimeseries as unknown as Array<Record<string, unknown>>,
   }
 }
 
@@ -224,7 +273,8 @@ export async function stepRunFusion(
   facialSegments: Array<Record<string, unknown>>,
   evaluations: Array<Record<string, unknown>>,
   transcript: Array<Record<string, unknown>>,
-  config: Record<string, unknown>
+  config: Record<string, unknown>,
+  options: { includeBlendshapes?: boolean } = {}
 ) {
   return await runFusionAnalysis({
     prosodySegments: prosodySegments as unknown as Parameters<typeof runFusionAnalysis>[0]['prosodySegments'],
@@ -232,6 +282,7 @@ export async function stepRunFusion(
     evaluations: evaluations as unknown as Parameters<typeof runFusionAnalysis>[0]['evaluations'],
     transcript: transcript as unknown as Parameters<typeof runFusionAnalysis>[0]['transcript'],
     config: config as unknown as Parameters<typeof runFusionAnalysis>[0]['config'],
+    includeBlendshapes: options.includeBlendshapes === true,
   })
 }
 
@@ -243,8 +294,11 @@ export async function stepPersistResults(
     whisperSegments: Array<Record<string, unknown>>
     prosodySegments: Array<Record<string, unknown>>
     facialSegments: Array<Record<string, unknown>>
+    facialTimeseries: Array<Record<string, unknown>>
     timeline: Array<Record<string, unknown>>
     fusionSummary: Record<string, unknown>
+    baselineTimeline?: Array<Record<string, unknown>>
+    baselineFusionSummary?: Record<string, unknown>
     facialLandmarksR2Key?: string
     whisperCostUsd: number
     fusionInputTokens: number
@@ -267,8 +321,11 @@ export async function stepPersistResults(
       whisperTranscript: data.whisperSegments,
       prosodySegments: data.prosodySegments,
       facialSegments: data.facialSegments,
+      facialTimeseries: data.facialTimeseries,
       timeline: data.timeline,
       fusionSummary: data.fusionSummary,
+      ...(data.baselineTimeline && { baselineTimeline: data.baselineTimeline }),
+      ...(data.baselineFusionSummary && { baselineFusionSummary: data.baselineFusionSummary }),
       facialFramesR2Key: data.facialLandmarksR2Key || undefined,
       whisperCostUsd: data.whisperCostUsd,
       claudeCostUsd,
@@ -346,23 +403,74 @@ export async function runMultimodalPipeline(
       session.questionBoundaries,
       whisper.durationSeconds
     )
-    const fusionResult = await stepRunFusion(
+
+    // ─── Dual-pipeline gating (#4, Option B) ──────────────────────────
+    // Run the fusion twice — once with blendshape stats in the facial
+    // block, once without — only when:
+    //   1. The research_comparison feature flag is on, AND
+    //   2. The session owner has opted in via researchDonationConsent, AND
+    //   3. The aggregator actually produced blendshape stats (i.e. the
+    //      session has post-April-2026 frames carrying blendshapes).
+    // Otherwise run the enhanced variant once and persist it as usual.
+    const dualRun = await shouldRunDualPipeline(userId, signals.facialSegments)
+
+    // Enhanced variant (what the user sees)
+    const enhanced = await stepRunFusion(
       signals.prosodySegments,
       signals.facialSegments,
       session.evaluations,
       session.transcript as unknown as Array<Record<string, unknown>>,
-      session.config
+      session.config,
+      { includeBlendshapes: true }
     )
+
+    // Baseline variant (categorical expression only) — only run when
+    // dual-pipeline gating passed. Same prosody + content + transcript
+    // inputs; only the facial block changes.
+    let baseline: Awaited<ReturnType<typeof stepRunFusion>> | null = null
+    if (dualRun) {
+      baseline = await stepRunFusion(
+        signals.prosodySegments,
+        signals.facialSegments,
+        session.evaluations,
+        session.transcript as unknown as Array<Record<string, unknown>>,
+        session.config,
+        { includeBlendshapes: false }
+      )
+      aiLogger.info(
+        {
+          sessionId,
+          enhancedPromptBytes: enhanced.promptLength,
+          baselinePromptBytes: baseline.promptLength,
+          promptByteDelta: enhanced.promptLength - baseline.promptLength,
+          enhancedBodyLanguage: enhanced.fusionSummary.overallBodyLanguageScore,
+          baselineBodyLanguage: baseline.fusionSummary.overallBodyLanguageScore,
+          enhancedEyeContact: enhanced.fusionSummary.eyeContactScore,
+          baselineEyeContact: baseline.fusionSummary.eyeContactScore,
+        },
+        'Dual-pipeline comparison run completed'
+      )
+    }
+
     await stepPersistResults(sessionId, userId, {
       whisperSegments: whisper.segments,
       prosodySegments: signals.prosodySegments,
       facialSegments: signals.facialSegments,
-      timeline: fusionResult.timeline as unknown as Array<Record<string, unknown>>,
-      fusionSummary: fusionResult.fusionSummary as unknown as Record<string, unknown>,
+      facialTimeseries: signals.facialTimeseries,
+      timeline: enhanced.timeline as unknown as Array<Record<string, unknown>>,
+      fusionSummary: enhanced.fusionSummary as unknown as Record<string, unknown>,
+      baselineTimeline: baseline
+        ? (baseline.timeline as unknown as Array<Record<string, unknown>>)
+        : undefined,
+      baselineFusionSummary: baseline
+        ? (baseline.fusionSummary as unknown as Record<string, unknown>)
+        : undefined,
       facialLandmarksR2Key: session.facialLandmarksR2Key,
       whisperCostUsd: whisper.costUsd,
-      fusionInputTokens: fusionResult.inputTokens,
-      fusionOutputTokens: fusionResult.outputTokens,
+      // Sum token counts across both runs when dual-pipeline ran so cost
+      // tracking reflects the actual Claude spend.
+      fusionInputTokens: enhanced.inputTokens + (baseline?.inputTokens || 0),
+      fusionOutputTokens: enhanced.outputTokens + (baseline?.outputTokens || 0),
       startTime,
     })
   } catch (err) {
@@ -370,6 +478,33 @@ export async function runMultimodalPipeline(
     aiLogger.error({ err, sessionId }, 'Multimodal analysis pipeline failed')
     await stepMarkFailed(sessionId, errorMessage, startTime)
     throw err
+  }
+}
+
+/**
+ * Decide whether to run the dual-pipeline comparison for this session.
+ * Requires the feature flag, opted-in user consent, and at least one facial
+ * segment carrying blendshape summary statistics (otherwise the enhanced
+ * and baseline variants would receive identical inputs and the comparison
+ * would be meaningless).
+ */
+async function shouldRunDualPipeline(
+  userId: string,
+  facialSegments: Array<Record<string, unknown>>
+): Promise<boolean> {
+  if (!isFeatureEnabled('research_comparison')) return false
+  if (facialSegments.length === 0) return false
+
+  const hasBlendshapeStats = facialSegments.some(
+    (s) => s.meanBlendshapes && typeof s.meanBlendshapes === 'object'
+  )
+  if (!hasBlendshapeStats) return false
+
+  try {
+    const user = await User.findById(userId).select('privacyConsent').lean()
+    return user?.privacyConsent?.researchDonationConsent === true
+  } catch {
+    return false
   }
 }
 

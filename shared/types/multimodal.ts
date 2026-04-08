@@ -39,9 +39,15 @@ export interface FacialFrame {
   headPosePitch: number
   expression: 'neutral' | 'smile' | 'frown' | 'surprise' | 'focused'
   eyeContactScore: number          // 0–1 (1 = looking at camera)
+
+  // Full MediaPipe blendshape vector (52 ARKit-style dimensions, each 0–1).
+  // Optional for backwards compatibility with sessions recorded before April 2026.
+  // Used by the post-interview fusion pipeline to provide a richer facial signal
+  // than the 5-class `expression` label alone.
+  blendshapes?: Record<string, number>
 }
 
-// ─── Aggregated Facial Metrics (per question window) ────────────────────────
+// ─── Aggregated Facial Metrics (per question window, or per fixed-width window) ──
 
 export interface FacialSegment {
   startSec: number
@@ -51,6 +57,13 @@ export interface FacialSegment {
   headStability: number            // 0–1 (1 = very stable)
   gestureLevel: 'minimal' | 'moderate' | 'expressive'
   questionIndex?: number
+
+  // Blendshape summary statistics for this window — present when the source
+  // FacialFrames carried blendshapes. Consumed by the dual-pipeline
+  // comparison experiment (#4) to test whether a richer facial representation
+  // produces measurably different coaching signals than the categorical label.
+  meanBlendshapes?: Record<string, number>
+  maxBlendshapes?: Record<string, number>
 }
 
 // ─── Timeline Events (fused output) ─────────────────────────────────────────
@@ -99,6 +112,13 @@ export interface MultimodalAnalysisData {
   // Facial pipeline output (raw frames stored in R2 if large)
   facialFramesR2Key?: string
   facialSegments?: FacialSegment[]
+  /**
+   * Fine-grained facial time series — the same aggregator re-run over fixed
+   * N-second windows (default 1s) instead of per-question boundaries. Used
+   * for higher-resolution signal plots in the replay UI and as the direct
+   * input to the dual-pipeline comparison experiment.
+   */
+  facialTimeseries?: FacialSegment[]
 
   // Fusion output
   timeline?: TimelineEvent[]
