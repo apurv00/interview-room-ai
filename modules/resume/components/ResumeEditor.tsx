@@ -241,46 +241,24 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
         return
       }
 
-      const inlineCss = Array.from(document.styleSheets)
-        .map(sheet => {
-          try {
-            return Array.from(sheet.cssRules).map(rule => rule.cssText).join('\n')
-          } catch {
-            // Cross-origin stylesheets can throw SecurityError in browsers.
-            return ''
-          }
-        })
-        .filter(Boolean)
+      const styleTags = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
+        .map(el => el.outerHTML)
         .join('\n')
-
-      const unscaledTemplateRoot = previewEl.querySelector('[aria-hidden] > div') as HTMLElement | null
-      const exportContent = unscaledTemplateRoot ? unscaledTemplateRoot.outerHTML : previewEl.innerHTML
 
       const previewHtml = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
+  ${styleTags}
   <style>
-    ${inlineCss}
-    @page { size: A4; margin: 0; }
-    body {
-      margin: 0;
-      background: #ffffff;
-      -webkit-print-color-adjust: exact;
-      print-color-adjust: exact;
-    }
-    #resume-export-page {
-      width: 595px;
-      min-height: 842px;
-      margin: 0 auto;
-      padding: 24px;
-      box-sizing: border-box;
-      background: #fff;
-    }
+    body { margin: 0; background: #ffffff; }
+    #resume-export-root { padding: 0; margin: 0; }
+    #resume-export-root .shadow-lg { box-shadow: none !important; }
+    #resume-export-root .rounded-lg { border-radius: 0 !important; }
   </style>
 </head>
 <body>
-  <div id="resume-export-page">${exportContent}</div>
+  <div id="resume-export-root">${previewEl.innerHTML}</div>
 </body>
 </html>`
 
