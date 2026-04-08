@@ -19,10 +19,20 @@ export async function GET(_req: NextRequest) {
   monthStart.setDate(1)
   monthStart.setHours(0, 0, 0, 0)
 
+  // A "consumed" analysis is either completed, OR pending/processing AND
+  // started recently (within the last 10 minutes). Anything older than 10
+  // minutes that hasn't reached completed/failed is treated as abandoned —
+  // counting it would permanently lock the user out due to a stuck job.
+  const STALE_PENDING_CUTOFF_MS = 10 * 60 * 1000
+  const staleCutoff = new Date(Date.now() - STALE_PENDING_CUTOFF_MS)
+
   const used = await MultimodalAnalysis.countDocuments({
     userId: session.user.id,
     createdAt: { $gte: monthStart },
-    status: { $in: ['completed', 'processing', 'pending'] },
+    $or: [
+      { status: 'completed' },
+      { status: { $in: ['pending', 'processing'] }, createdAt: { $gte: staleCutoff } },
+    ],
   })
 
   const plan = session.user.plan || 'free'

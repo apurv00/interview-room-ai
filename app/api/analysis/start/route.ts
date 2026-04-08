@@ -6,10 +6,14 @@ import { InterviewSession } from '@shared/db/models/InterviewSession'
 import { MultimodalAnalysis } from '@shared/db/models/MultimodalAnalysis'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { getPlanLimits } from '@shared/services/stripe'
-import { inngest } from '@interview/services/inngestClient'
+import { runMultimodalPipeline } from '@interview/services/multimodalPipeline'
+import { aiLogger } from '@shared/logger'
 import { StartAnalysisSchema } from '@interview/validators/multimodal'
 
 export const dynamic = 'force-dynamic'
+// Allow up to 60s — covers a ~5-minute interview at Groq Whisper's
+// 10× real-time + Claude Haiku fusion + persistence with headroom.
+export const maxDuration = 60
 
 interface StartPayload {
   sessionId: string
@@ -36,6 +40,12 @@ export const POST = composeApiRoute<StartPayload>({
 
     await connectDB()
 
+    // A stuck pending/processing record (e.g. server killed mid-pipeline)
+    // should not lock the user out forever. Anything older than 10 minutes
+    // still in pending/processing is considered abandoned.
+    const STALE_PENDING_CUTOFF_MS = 10 * 60 * 1000
+    const staleCutoff = new Date(Date.now() - STALE_PENDING_CUTOFF_MS)
+
     // Check if analysis already exists
     const existing = await MultimodalAnalysis.findOne({ sessionId })
     if (existing) {
@@ -47,13 +57,17 @@ export const POST = composeApiRoute<StartPayload>({
         })
       }
       if (existing.status === 'processing' || existing.status === 'pending') {
-        return NextResponse.json({
-          jobId: existing._id.toString(),
-          status: existing.status,
-          message: 'Analysis already in progress',
-        })
+        // Recent in-flight job — let the client keep polling.
+        if (existing.createdAt >= staleCutoff) {
+          return NextResponse.json({
+            jobId: existing._id.toString(),
+            status: existing.status,
+            message: 'Analysis already in progress',
+          })
+        }
+        // Stale: treat as abandoned and recreate below.
       }
-      // If failed, allow retry — delete the old one
+      // If failed or stale, allow retry — delete the old one
       await MultimodalAnalysis.deleteOne({ _id: existing._id })
     }
 
@@ -72,7 +86,8 @@ export const POST = composeApiRoute<StartPayload>({
       )
     }
 
-    // Quota check
+    // Quota check — exclude stale pending/processing records (>10 min old)
+    // so a stuck job doesn't permanently consume the user's monthly quota.
     const planLimits = getPlanLimits(ctx.user.plan || 'free')
     const monthStart = new Date()
     monthStart.setDate(1)
@@ -81,7 +96,10 @@ export const POST = composeApiRoute<StartPayload>({
     const usedThisMonth = await MultimodalAnalysis.countDocuments({
       userId,
       createdAt: { $gte: monthStart },
-      status: { $in: ['completed', 'processing', 'pending'] },
+      $or: [
+        { status: 'completed' },
+        { status: { $in: ['pending', 'processing'] }, createdAt: { $gte: staleCutoff } },
+      ],
     })
 
     if (usedThisMonth >= planLimits.monthlyAnalysisLimit) {
@@ -107,15 +125,36 @@ export const POST = composeApiRoute<StartPayload>({
     session.multimodalAnalysisId = analysis._id
     await session.save()
 
-    // Trigger Inngest pipeline
-    await inngest.send({
-      name: 'interview/analysis.requested',
-      data: { sessionId, userId },
-    })
-
-    return NextResponse.json({
-      jobId: analysis._id.toString(),
-      status: 'pending',
-    })
+    // Run the pipeline inline. Total work is ~10–15s for a typical
+    // interview (Groq Whisper ~3s + facial download <1s + prosody/facial
+    // aggregation <1s + Claude Haiku fusion ~5s + persistence <1s),
+    // well inside the maxDuration cap above. The client polls
+    // /api/analysis/[sessionId] every 3s and sees the DB row advance
+    // pending → processing → completed as the pipeline progresses.
+    //
+    // No external worker, no event keys, no signing keys, no dashboard.
+    try {
+      await runMultimodalPipeline(sessionId, userId)
+      return NextResponse.json({
+        jobId: analysis._id.toString(),
+        status: 'completed',
+      })
+    } catch (err) {
+      // runMultimodalPipeline already calls stepMarkFailed on any error,
+      // so the DB row is now status:'failed' with an error message —
+      // the polling client will pick that up. We also surface the error
+      // directly in the HTTP response so the trigger UI can render it
+      // without waiting for the next poll tick.
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error'
+      aiLogger.error({ err, sessionId, userId }, 'Inline multimodal pipeline failed')
+      return NextResponse.json(
+        {
+          jobId: analysis._id.toString(),
+          status: 'failed',
+          error: errorMessage,
+        },
+        { status: 500 }
+      )
+    }
   },
 })

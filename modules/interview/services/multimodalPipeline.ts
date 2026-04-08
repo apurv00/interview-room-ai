@@ -11,7 +11,7 @@ import { runFusionAnalysis } from './fusionService'
 import type { FacialFrame } from '@shared/types/multimodal'
 import type { AuthUser } from '@shared/middleware/withAuth'
 
-// ─── Step result types (serializable for Inngest step boundaries) ───────────
+// ─── Step result types ──────────────────────────────────────────────────────
 
 export interface SessionData {
   sessionId: string
@@ -34,7 +34,7 @@ export interface ProcessedSignals {
   facialSegments: Array<Record<string, unknown>>
 }
 
-// ─── Pipeline steps (each can be called independently by Inngest) ───────────
+// ─── Pipeline steps (each can be called independently for testing) ─────────
 
 /** Step 1: Fetch session data and validate */
 export async function stepFetchSession(sessionId: string): Promise<SessionData> {
@@ -211,11 +211,11 @@ export async function stepMarkFailed(
   )
 }
 
-// ─── Full pipeline (convenience for testing or direct invocation) ───────────
+// ─── Full pipeline ──────────────────────────────────────────────────────────
 
 /**
  * Run the full multimodal analysis pipeline for a completed interview.
- * For Inngest, use the individual step functions instead.
+ * Called inline from POST /api/analysis/start (no external worker).
  */
 export async function runMultimodalPipeline(
   sessionId: string,
