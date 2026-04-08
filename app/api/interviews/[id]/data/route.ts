@@ -65,6 +65,13 @@ export async function DELETE(
         )
       )
     }
+    if (session.audioRecordingR2Key) {
+      r2Deletions.push(
+        deleteFromR2(session.audioRecordingR2Key).catch((err) =>
+          logger.warn({ err, key: session.audioRecordingR2Key }, 'Failed to delete audio recording from R2')
+        )
+      )
+    }
     if (session.facialLandmarksR2Key) {
       r2Deletions.push(
         deleteFromR2(session.facialLandmarksR2Key).catch((err) =>
@@ -100,6 +107,8 @@ export async function DELETE(
         recordingSizeBytes: 1,
         screenRecordingR2Key: 1,
         screenRecordingSizeBytes: 1,
+        audioRecordingR2Key: 1,
+        audioRecordingSizeBytes: 1,
         facialLandmarksR2Key: 1,
         resumeR2Key: 1,
         jdR2Key: 1,

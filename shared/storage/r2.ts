@@ -43,6 +43,13 @@ export function screenRecordingKey(userId: string, sessionId: string): string {
   return `recordings/${userId}/${sessionId}-screen-${Date.now()}.webm`
 }
 
+/** Build a namespaced R2 key for the audio-only recording used by Whisper transcription.
+ * Recorded in parallel with the camera webm so Whisper isn't handed a large
+ * video file that would exceed Groq's 25MB upload limit. */
+export function audioRecordingKey(userId: string, sessionId: string): string {
+  return `recordings/${userId}/${sessionId}-audio-${Date.now()}.webm`
+}
+
 /** Build a namespaced R2 key: documents/{userId}/{docType}/{filename} */
 export function documentKey(userId: string, docType: string, filename: string): string {
   const safe = filename.replace(/[^a-zA-Z0-9._-]/g, '_')

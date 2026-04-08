@@ -46,12 +46,34 @@ export async function transcribeRecording(r2Key: string): Promise<WhisperResult>
   // Create a File object from the buffer for the API
   const file = new File([buffer], 'recording.webm', { type: 'video/webm' })
 
-  const transcription = await getGroqClient().audio.transcriptions.create({
-    model: 'whisper-large-v3-turbo',
-    file,
-    response_format: 'verbose_json',
-    timestamp_granularities: ['word', 'segment'],
-  })
+  let transcription
+  try {
+    transcription = await getGroqClient().audio.transcriptions.create({
+      model: 'whisper-large-v3-turbo',
+      file,
+      response_format: 'verbose_json',
+      timestamp_granularities: ['word', 'segment'],
+    })
+  } catch (err: unknown) {
+    // Groq Whisper has a 25MB upload limit. A multi-minute camera webm
+    // can easily exceed that; modern sessions upload a separate audio-only
+    // track to dodge this, but legacy sessions recorded before that fix
+    // will still hit it. Surface a clear, actionable error instead of the
+    // raw SDK message ("413 Request Entity Too Large") so the user knows
+    // the recording itself is the problem and a re-recording will fix it.
+    const message = err instanceof Error ? err.message : String(err)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const status = (err as any)?.status
+    const sizeMb = (buffer.length / (1024 * 1024)).toFixed(1)
+    if (status === 413 || /413|too large|entity too large/i.test(message)) {
+      throw new Error(
+        `Recording is too large for transcription (${sizeMb}MB, Groq Whisper's limit is 25MB). ` +
+        `This usually happens with legacy recordings from before we started uploading a separate audio-only track. ` +
+        `Re-record this interview to generate a new session that stays under the limit.`
+      )
+    }
+    throw new Error(`Whisper transcription failed (${status ?? 'unknown status'}): ${message}`)
+  }
 
   // 3. Parse the response into our types
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

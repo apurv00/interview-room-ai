@@ -46,6 +46,13 @@ export interface IInterviewSession extends Document {
   screenRecordingR2Key?: string
   screenRecordingSizeBytes?: number
 
+  // Audio-only recording — uploaded in parallel with the camera webm so
+  // Whisper transcription reads a small file (typically 1–2MB for a
+  // 6-minute interview) instead of the multi-megabyte video webm. Keeps
+  // Groq's 25MB upload limit comfortably out of reach.
+  audioRecordingR2Key?: string
+  audioRecordingSizeBytes?: number
+
   resumeR2Key?: string
   jdR2Key?: string
 
@@ -140,6 +147,10 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
     // Screen recording (coding & system-design)
     screenRecordingR2Key: { type: String },
     screenRecordingSizeBytes: { type: Number },
+
+    // Audio-only recording (used by Whisper to avoid 25MB Groq limit)
+    audioRecordingR2Key: { type: String },
+    audioRecordingSizeBytes: { type: Number },
 
     parsedJobDescription: { type: Schema.Types.Mixed },
     persona: { type: String },
