@@ -102,6 +102,11 @@ export function useInterview({
   const transcriptRef = useRef<TranscriptEntry[]>([])
   const evaluationsRef = useRef<AnswerEvaluation[]>([])
   const speechMetricsRef = useRef<SpeechMetrics[]>([])
+  /** Audio-timeline-relative words captured live by Deepgram across
+   *  every candidate turn. Fed into the multimodal analysis pipeline
+   *  as a drop-in replacement for post-interview Whisper transcription,
+   *  eliminating a redundant STT pass plus its 25MB Groq upload limit. */
+  const liveWordsRef = useRef<import('./useSpeechRecognition').LiveTranscriptWord[]>([])
 
   // ── Live answer capture ──
   const [liveAnswer, _setLiveAnswer] = useState('')
@@ -334,6 +339,9 @@ export function useInterview({
         if (result.metrics) {
           speechMetricsRef.current.push(result.metrics)
         }
+        if (result.words?.length) {
+          liveWordsRef.current.push(...result.words)
+        }
         if (showLive) setLiveAnswer(result.text)
         resolve(result.text)
       })
@@ -440,6 +448,10 @@ export function useInterview({
           transcript: transcriptRef.current,
           evaluations: evaluationsRef.current,
           speechMetrics: speechMetricsRef.current,
+          // Hand Deepgram's captured words to the post-interview pipeline
+          // so it can skip Whisper entirely. Empty array for Web Speech
+          // API fallback users.
+          liveTranscriptWords: liveWordsRef.current,
         }),
         new Promise((r) => setTimeout(r, 10000)),
       ])
@@ -514,6 +526,9 @@ export function useInterview({
 
       startListening((result) => {
         clearTimeout(silenceTimer)
+        if (result.words?.length) {
+          liveWordsRef.current.push(...result.words)
+        }
         resolve(result.text.trim() || null)
       })
     })
