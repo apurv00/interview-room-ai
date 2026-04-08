@@ -99,14 +99,30 @@ async function renderPdfFromHtml(
   html: string,
   options?: RenderPdfOptions,
 ): Promise<Buffer> {
-  // Dynamic import to handle environments without Puppeteer.
+  // Dynamic require to handle environments without Puppeteer.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const puppeteer = require('puppeteer-core')
 
+  // @sparticuz/chromium v110+ extracts a brotli-compressed Chromium at runtime.
+  // For this to work on Vercel/Lambda, the package must be in
+  // next.config.js → experimental.serverComponentsExternalPackages so webpack
+  // leaves the archive intact. We also MUST pass chromium.args (the ~22 flags
+  // tuned for serverless single-process execution); passing only --no-sandbox
+  // causes the browser to crash or fail to spawn.
+  let launchArgs: string[] = ['--no-sandbox', '--disable-setuid-sandbox']
   let executablePath: string
+
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const chromium = require('@sparticuz/chromium')
+    const chromiumMod = require('@sparticuz/chromium')
+    const chromium = chromiumMod.default ?? chromiumMod
+    if (Array.isArray(chromium.args) && chromium.args.length > 0) {
+      launchArgs = [
+        ...chromium.args,
+        '--hide-scrollbars',
+        '--disable-web-security',
+      ]
+    }
     executablePath = await chromium.executablePath()
   } catch {
     executablePath =
@@ -114,13 +130,14 @@ async function renderPdfFromHtml(
   }
 
   const browser = await puppeteer.launch({
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    args: launchArgs,
     executablePath,
     headless: true,
   })
 
   try {
     const page = await browser.newPage()
+    await page.setViewport({ width: 1280, height: 1696 })
     await page.setContent(html, { waitUntil: 'networkidle0' })
     const pdfBuffer = await page.pdf({
       format: 'A4',

@@ -5,7 +5,9 @@ import { PDFGenerateSchema } from '@resume/validators/resume'
 import { generatePDF } from '@resume/services/pdfService'
 
 export const dynamic = 'force-dynamic'
-export const maxDuration = 30 // Allow up to 30s for PDF generation
+// 60s gives puppeteer headroom on cold starts (@sparticuz/chromium extracts
+// a brotli-compressed archive on first invocation, which takes ~3-5s).
+export const maxDuration = 60
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions)
@@ -34,8 +36,14 @@ export async function POST(req: Request) {
       },
     })
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'PDF generation failed'
-    console.error('PDF generation error:', message)
+    // Log full stack so runtime logs surface the root cause (previous
+    // truncated "Browser was not found" messages hid the stack trace).
+    if (err instanceof Error) {
+      console.error('PDF generation error:', err.message)
+      console.error('PDF generation stack:', err.stack)
+    } else {
+      console.error('PDF generation error (non-Error):', err)
+    }
     return NextResponse.json(
       {
         error: 'PDF generation failed. Use browser print (Ctrl+P) as an alternative.',
