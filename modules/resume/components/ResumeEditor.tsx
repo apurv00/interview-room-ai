@@ -247,19 +247,37 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
       const unscaledTemplateRoot = previewEl.querySelector('[aria-hidden] > div') as HTMLElement | null
       const exportContent = unscaledTemplateRoot ? unscaledTemplateRoot.outerHTML : previewEl.innerHTML
 
-      // Inline every same-origin stylesheet by reading cssRules. External
-      // <link> tags would otherwise fail to fetch inside puppeteer setContent.
-      const inlineCss = Array.from(document.styleSheets)
-        .map(sheet => {
+      // Inline every stylesheet so puppeteer renders Tailwind correctly.
+      // Reading `sheet.cssRules` throws SecurityError for any sheet the browser
+      // considers cross-origin (Next.js sometimes loads CSS that way), so we
+      // fetch the actual CSS text via HTTP and combine it with any inline
+      // <style> tags. fetch() is same-origin by default and yields the raw
+      // compiled Tailwind bundle.
+      const linkHrefs = Array.from(
+        document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')
+      )
+        .map(link => link.href)
+        .filter(href => href && href.startsWith(window.location.origin))
+
+      const fetchedCss = await Promise.all(
+        linkHrefs.map(async href => {
           try {
-            return Array.from(sheet.cssRules).map(rule => rule.cssText).join('\n')
+            const res = await fetch(href)
+            if (!res.ok) return ''
+            return await res.text()
           } catch {
-            // Cross-origin stylesheets (e.g. Google Fonts) throw SecurityError.
             return ''
           }
         })
-        .filter(Boolean)
+      )
+
+      const inlineStyleCss = Array.from(
+        document.querySelectorAll<HTMLStyleElement>('style')
+      )
+        .map(s => s.textContent || '')
         .join('\n')
+
+      const inlineCss = [...fetchedCss, inlineStyleCss].filter(Boolean).join('\n')
 
       const previewHtml = `<!DOCTYPE html>
 <html>
