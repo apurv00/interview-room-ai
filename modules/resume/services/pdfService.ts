@@ -236,9 +236,7 @@ export function generateResumeHTML(data: ResumeData, templateId: string): string
 </html>`
 }
 
-export async function generatePDF(data: ResumeData, templateId: string): Promise<Buffer> {
-  const html = generateResumeHTML(data, templateId)
-
+async function renderPdfFromHtml(html: string): Promise<Buffer> {
   // Dynamic import to handle environments without Puppeteer
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const puppeteer = require('puppeteer-core')
@@ -271,4 +269,13 @@ export async function generatePDF(data: ResumeData, templateId: string): Promise
   } finally {
     await browser.close()
   }
+}
+
+export async function generatePDF(data: ResumeData, templateId: string): Promise<Buffer> {
+  const html = generateResumeHTML(data, templateId)
+  return renderPdfFromHtml(html)
+}
+
+export async function generatePDFFromHTML(html: string): Promise<Buffer> {
+  return renderPdfFromHtml(html)
 }
