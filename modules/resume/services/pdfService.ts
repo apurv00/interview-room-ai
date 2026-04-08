@@ -71,7 +71,8 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
     }
     #resume-page {
       width: 595px;
-      min-height: 842px;
+      /* No min-height: with puppeteer scale: 1.3345, any min-height close
+         to 842px scales past A4 (1123px) and forces a blank second page. */
       padding: 24px;
       box-sizing: border-box;
       background: #ffffff;
@@ -137,11 +138,20 @@ async function renderPdfFromHtml(
 
   try {
     const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 1696 })
+    // Match puppeteer's A4 CSS-pixel dimensions (8.27in × 11.69in @ 96dpi).
+    // This ensures the browser's layout engine sees the same viewport that
+    // the subsequent page.pdf({ format: 'A4' }) call will use.
+    await page.setViewport({ width: 794, height: 1123 })
     await page.setContent(html, { waitUntil: 'networkidle0' })
     const pdfBuffer = await page.pdf({
       format: 'A4',
       printBackground: true,
+      // The #resume-page element is sized to 595×842 CSS px to match the
+      // editor preview (which uses 72dpi A4 math). Puppeteer renders at
+      // 96dpi, so A4 = 794×1123 CSS px. Scale the rendered content up by
+      // 794/595 = 1.3345 so the 595px-wide design fills the A4 page
+      // edge-to-edge instead of leaving a ~25% empty strip on the right.
+      scale: 1.3345,
       // Zero puppeteer margins — the #resume-page element encodes its own
       // 24px padding that matches the preview's PAGE_PADDING.
       margin: options?.margin ?? {
