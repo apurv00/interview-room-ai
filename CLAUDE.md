@@ -85,7 +85,6 @@ middleware.ts               # Route protection, subdomain rewriting, security he
 
 Required: `ANTHROPIC_API_KEY`, `NEXTAUTH_SECRET`, `MONGODB_URI`, `REDIS_URL`
 Multimodal: `GROQ_API_KEY`, `DEEPGRAM_API_KEY`, `FEATURE_FLAG_MULTIMODAL_ANALYSIS=true`, `NEXT_PUBLIC_FEATURE_MULTIMODAL=true`
-Auto-injected (Vercel): `INNGEST_EVENT_KEY`, `INNGEST_SIGNING_KEY`
 Optional: `GOOGLE_CLIENT_ID/SECRET`, `GITHUB_CLIENT_ID/SECRET`, Stripe keys, `OPENAI_API_KEY`
 Full list: `.env.local.example`
 
@@ -109,7 +108,7 @@ Full list: `.env.local.example`
 
 _Update this section each session to carry context forward._
 
-- **Multimodal interview analysis (Phase 2)**: Post-interview async analysis pipeline — Groq Whisper transcription + MediaPipe facial landmarks + Claude Haiku fusion → Interview Replay page with synced video, signal timeline, word-level transcript, coaching tips. Inngest orchestration, feature-flagged, quota-gated (Free: 1/month, Pro: 10/month, Enterprise: unlimited). 662 tests passing.
+- **Multimodal interview analysis (Phase 2)**: Post-interview analysis pipeline — Groq Whisper transcription + MediaPipe facial landmarks + Claude Haiku fusion → Interview Replay page with synced video, signal timeline, word-level transcript, coaching tips. Runs inline inside `/api/analysis/start` (`maxDuration = 60`); ~10–15s for a typical interview, no external worker. Feature-flagged, quota-gated (Free: 1/month, Pro: 10/month, Enterprise: unlimited).
 - **Real-time multimodal coaching**: Client-side MediaPipe facial coaching (eye contact, expression, head stability nudges), reactive avatar (responds to candidate), Deepgram Aura TTS (natural AI voice), Deepgram streaming STT (replaces Web Speech API), real-time prosody coaching.
 - **Performance**: Switched fusion from Sonnet→Haiku (~15s→3-5s), Whisper from OpenAI→Groq (~25s→3s), eval+question gen from Sonnet→Haiku (~4s→1-2s), coaching delay 1500ms→800ms.
 - **Bug fixes**: history/feedback navigation, login redirect flow, first question timing delay, voice synthesis, branding consistency

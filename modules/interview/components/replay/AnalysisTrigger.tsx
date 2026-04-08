@@ -166,8 +166,9 @@ export default function AnalysisTrigger({ sessionId, onAnalysisComplete }: Analy
     setTimeout(() => startAnalysis(), 0)
   }, [sessionId, refreshQuota, startAnalysis])
 
-  // Stuck state — pending for >2 min and never advanced. Almost always
-  // means the background worker (Inngest) isn't picking up the event.
+  // Stuck state — pending for >2 min and never advanced. Usually means
+  // the server function got killed mid-pipeline (timeout / cold start
+  // miss / crash) before the DB row was updated.
   if ((status === 'pending' || status === 'processing') && isStuck) {
     return (
       <div className="flex flex-col items-center gap-4 p-8 rounded-xl bg-amber-900/20 border border-amber-500/30">

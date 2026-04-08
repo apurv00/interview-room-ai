@@ -6,10 +6,14 @@ import { InterviewSession } from '@shared/db/models/InterviewSession'
 import { MultimodalAnalysis } from '@shared/db/models/MultimodalAnalysis'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { getPlanLimits } from '@shared/services/stripe'
-import { inngest } from '@interview/services/inngestClient'
+import { runMultimodalPipeline } from '@interview/services/multimodalPipeline'
+import { aiLogger } from '@shared/logger'
 import { StartAnalysisSchema } from '@interview/validators/multimodal'
 
 export const dynamic = 'force-dynamic'
+// Allow up to 60s — covers a ~5-minute interview at Groq Whisper's
+// 10× real-time + Claude Haiku fusion + persistence with headroom.
+export const maxDuration = 60
 
 interface StartPayload {
   sessionId: string
@@ -36,9 +40,9 @@ export const POST = composeApiRoute<StartPayload>({
 
     await connectDB()
 
-    // A stuck pending/processing record (e.g. Inngest worker never picked up
-    // the event) should not lock the user out forever. Anything older than
-    // 10 minutes still in pending/processing is considered abandoned.
+    // A stuck pending/processing record (e.g. server killed mid-pipeline)
+    // should not lock the user out forever. Anything older than 10 minutes
+    // still in pending/processing is considered abandoned.
     const STALE_PENDING_CUTOFF_MS = 10 * 60 * 1000
     const staleCutoff = new Date(Date.now() - STALE_PENDING_CUTOFF_MS)
 
@@ -121,15 +125,36 @@ export const POST = composeApiRoute<StartPayload>({
     session.multimodalAnalysisId = analysis._id
     await session.save()
 
-    // Trigger Inngest pipeline
-    await inngest.send({
-      name: 'interview/analysis.requested',
-      data: { sessionId, userId },
-    })
-
-    return NextResponse.json({
-      jobId: analysis._id.toString(),
-      status: 'pending',
-    })
+    // Run the pipeline inline. Total work is ~10–15s for a typical
+    // interview (Groq Whisper ~3s + facial download <1s + prosody/facial
+    // aggregation <1s + Claude Haiku fusion ~5s + persistence <1s),
+    // well inside the maxDuration cap above. The client polls
+    // /api/analysis/[sessionId] every 3s and sees the DB row advance
+    // pending → processing → completed as the pipeline progresses.
+    //
+    // No external worker, no event keys, no signing keys, no dashboard.
+    try {
+      await runMultimodalPipeline(sessionId, userId)
+      return NextResponse.json({
+        jobId: analysis._id.toString(),
+        status: 'completed',
+      })
+    } catch (err) {
+      // runMultimodalPipeline already calls stepMarkFailed on any error,
+      // so the DB row is now status:'failed' with an error message —
+      // the polling client will pick that up. We also surface the error
+      // directly in the HTTP response so the trigger UI can render it
+      // without waiting for the next poll tick.
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error'
+      aiLogger.error({ err, sessionId, userId }, 'Inline multimodal pipeline failed')
+      return NextResponse.json(
+        {
+          jobId: analysis._id.toString(),
+          status: 'failed',
+          error: errorMessage,
+        },
+        { status: 500 }
+      )
+    }
   },
 })
