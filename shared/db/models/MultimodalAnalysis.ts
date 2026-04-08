@@ -24,10 +24,26 @@ export interface IMultimodalAnalysis extends Document {
   // Facial pipeline output
   facialFramesR2Key?: string
   facialSegments?: FacialSegment[]
+  /**
+   * Fine-grained facial timeseries — same aggregator re-run over fixed
+   * 1-second windows with blendshape statistics. Used by the replay UI's
+   * high-resolution signal charts and by the dual-pipeline comparison
+   * experiment (#4).
+   */
+  facialTimeseries?: FacialSegment[]
 
   // Fusion output
   timeline?: TimelineEvent[]
   fusionSummary?: FusionSummary
+  /**
+   * Dual-pipeline comparison outputs (#4). Populated only when the session
+   * was gated on researchDonationConsent AND the research_comparison feature
+   * flag was on. `baselineFusionSummary` is the categorical-expression-only
+   * run; `fusionSummary` above remains the enhanced (blendshape-enriched)
+   * run shown to the user.
+   */
+  baselineTimeline?: TimelineEvent[]
+  baselineFusionSummary?: FusionSummary
 
   // Cost tracking
   whisperCostUsd?: number
@@ -83,10 +99,15 @@ const MultimodalAnalysisSchema = new Schema<IMultimodalAnalysis>(
     // Facial pipeline output
     facialFramesR2Key: { type: String },
     facialSegments: { type: Schema.Types.Mixed },
+    facialTimeseries: { type: Schema.Types.Mixed },
 
     // Fusion output
     timeline: { type: Schema.Types.Mixed },
     fusionSummary: { type: Schema.Types.Mixed },
+
+    // Dual-pipeline comparison (#4) — baseline run without blendshape stats
+    baselineTimeline: { type: Schema.Types.Mixed },
+    baselineFusionSummary: { type: Schema.Types.Mixed },
 
     // Cost tracking
     whisperCostUsd: { type: Number },

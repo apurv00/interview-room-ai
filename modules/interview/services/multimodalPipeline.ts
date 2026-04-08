@@ -41,7 +41,19 @@ export interface TranscribeResult {
 export interface ProcessedSignals {
   prosodySegments: Array<Record<string, unknown>>
   facialSegments: Array<Record<string, unknown>>
+  /**
+   * Fine-grained facial timeseries — the aggregator re-run with fixed 1-second
+   * windows and blendshape statistics enabled. Persisted for the replay UI's
+   * high-resolution signal plots and as direct input to the dual-pipeline
+   * comparison experiment.
+   */
+  facialTimeseries: Array<Record<string, unknown>>
 }
+
+// Fixed-width window used for the facial timeseries. 1s chosen to match the
+// per-second resolution the replay UI's signal chart expects; a 10-min
+// interview produces ~600 windows × ~100B ≈ 60KB in Mongo.
+export const FACIAL_TIMESERIES_WINDOW_SEC = 1
 
 // ─── Pipeline steps (each can be called independently for testing) ─────────
 
@@ -124,15 +136,31 @@ export function stepProcessSignals(
     totalDurationSec
   )
 
+  // Two aggregator runs:
+  //   1. Per-question boundaries — compact output for the fusion prompt.
+  //      Always includes blendshape stats when available, since the dual-
+  //      pipeline experiment (#4) gates enhanced vs baseline on whether
+  //      those stats are visible to Claude in the prompt.
+  //   2. Fixed 1s windows — fine-grained timeseries for the replay UI and
+  //      the research dataset. Always emits blendshape stats.
   const facialSegments = aggregateFacialData(
     facialFrames,
     questionBoundaries,
-    totalDurationSec
+    totalDurationSec,
+    { includeBlendshapeStats: true }
+  )
+
+  const facialTimeseries = aggregateFacialData(
+    facialFrames,
+    questionBoundaries,
+    totalDurationSec,
+    { windowSec: FACIAL_TIMESERIES_WINDOW_SEC, includeBlendshapeStats: true }
   )
 
   return {
     prosodySegments: prosodySegments as unknown as Array<Record<string, unknown>>,
     facialSegments: facialSegments as unknown as Array<Record<string, unknown>>,
+    facialTimeseries: facialTimeseries as unknown as Array<Record<string, unknown>>,
   }
 }
 
@@ -161,8 +189,11 @@ export async function stepPersistResults(
     whisperSegments: Array<Record<string, unknown>>
     prosodySegments: Array<Record<string, unknown>>
     facialSegments: Array<Record<string, unknown>>
+    facialTimeseries: Array<Record<string, unknown>>
     timeline: Array<Record<string, unknown>>
     fusionSummary: Record<string, unknown>
+    baselineTimeline?: Array<Record<string, unknown>>
+    baselineFusionSummary?: Record<string, unknown>
     facialLandmarksR2Key?: string
     whisperCostUsd: number
     fusionInputTokens: number
@@ -185,8 +216,11 @@ export async function stepPersistResults(
       whisperTranscript: data.whisperSegments,
       prosodySegments: data.prosodySegments,
       facialSegments: data.facialSegments,
+      facialTimeseries: data.facialTimeseries,
       timeline: data.timeline,
       fusionSummary: data.fusionSummary,
+      ...(data.baselineTimeline && { baselineTimeline: data.baselineTimeline }),
+      ...(data.baselineFusionSummary && { baselineFusionSummary: data.baselineFusionSummary }),
       facialFramesR2Key: data.facialLandmarksR2Key || undefined,
       whisperCostUsd: data.whisperCostUsd,
       claudeCostUsd,
@@ -274,6 +308,7 @@ export async function runMultimodalPipeline(
       whisperSegments: whisper.segments,
       prosodySegments: signals.prosodySegments,
       facialSegments: signals.facialSegments,
+      facialTimeseries: signals.facialTimeseries,
       timeline: fusionResult.timeline as unknown as Array<Record<string, unknown>>,
       fusionSummary: fusionResult.fusionSummary as unknown as Record<string, unknown>,
       facialLandmarksR2Key: session.facialLandmarksR2Key,
