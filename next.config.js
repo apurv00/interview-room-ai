@@ -10,7 +10,15 @@ const nextConfig = {
     ],
   },
   experimental: {
-    serverComponentsExternalPackages: ['unpdf'],
+    // @sparticuz/chromium ships a brotli-compressed Chromium archive that is
+    // extracted at runtime. Webpack bundling mangles the non-JS assets, so
+    // we must mark it as an external serverless dependency. puppeteer-core
+    // follows for the same reason.
+    serverComponentsExternalPackages: [
+      'unpdf',
+      '@sparticuz/chromium',
+      'puppeteer-core',
+    ],
   },
   async redirects() {
     return [
