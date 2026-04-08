@@ -1,12 +1,11 @@
 'use client'
 
 import { useCallback, useRef, useState } from 'react'
-
-interface SpeechRecognitionResult {
-  text: string
-  durationMinutes: number
-  metrics: import('@shared/types').SpeechMetrics
-}
+import { wallClockMsToAudioSeconds } from '@interview/audio/recordingClock'
+import type {
+  SpeechRecognitionResult,
+  LiveTranscriptWord,
+} from './useSpeechRecognition'
 
 export interface UseDeepgramRecognitionReturn {
   isListening: boolean
@@ -37,6 +36,10 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   const audioStreamRef = useRef<MediaStream | null>(null)
   const externalStreamRef = useRef<MediaStream | null>(null)
   const finalTextRef = useRef('')
+  /** Audio-timeline-relative words accumulated across all finalised
+   *  results for the current turn. Translated from Deepgram's
+   *  session-relative offsets via the recording clock. */
+  const wordsRef = useRef<LiveTranscriptWord[]>([])
   const onCompleteRef = useRef<((result: SpeechRecognitionResult) => void) | null>(null)
   const startTimeRef = useRef(0)
   const rafRef = useRef<number>(0)
@@ -60,6 +63,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     (onComplete: (result: SpeechRecognitionResult) => void) => {
       onCompleteRef.current = onComplete
       finalTextRef.current = ''
+      wordsRef.current = []
       lastTranscriptRef.current = ''
       reconnectAttemptsRef.current = 0
       isFinishingRef.current = false
@@ -236,6 +240,26 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             finalTextRef.current = finalTextRef.current
               ? `${finalTextRef.current} ${transcript}`
               : transcript
+
+            // Capture word-level timestamps for the multimodal analysis
+            // pipeline. Deepgram's `start`/`end` are seconds from when
+            // the WebSocket audio capture began for this turn. We
+            // translate them into seconds from when the recording
+            // started so they align with the camera video timeline.
+            const rawWords = data.channel?.alternatives?.[0]?.words as
+              | Array<{ word: string; start: number; end: number; confidence?: number }>
+              | undefined
+            if (rawWords?.length) {
+              const turnStartAudioSec = wallClockMsToAudioSeconds(startTimeRef.current)
+              for (const w of rawWords) {
+                wordsRef.current.push({
+                  word: w.word,
+                  start: turnStartAudioSec + w.start,
+                  end: turnStartAudioSec + w.end,
+                  confidence: typeof w.confidence === 'number' ? w.confidence : 1,
+                })
+              }
+            }
           }
 
           // Update live transcript (RAF-throttled)
@@ -384,12 +408,17 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     // Build result
     const text = finalTextRef.current.trim()
     const durationMinutes = (Date.now() - startTimeRef.current) / 60000
+    // Snapshot the accumulated words before we clear the ref — these
+    // flow into the multimodal analysis pipeline so it can skip the
+    // post-interview Whisper call entirely.
+    const turnWords = wordsRef.current
+    wordsRef.current = []
 
     // Import analyzeSpeech dynamically to avoid circular deps
     import('@interview/config/speechMetrics')
       .then(({ analyzeSpeech }) => {
         const metrics = analyzeSpeech(text, durationMinutes)
-        onCompleteRef.current?.({ text, durationMinutes, metrics })
+        onCompleteRef.current?.({ text, durationMinutes, metrics, words: turnWords })
       })
       .catch(() => {
         onCompleteRef.current?.({
@@ -404,6 +433,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             fillerWordCount: 0,
             durationMinutes,
           },
+          words: turnWords,
         })
       })
       .finally(() => {

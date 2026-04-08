@@ -4,10 +4,24 @@ import { useCallback, useRef, useState } from 'react'
 import { analyzeSpeech } from '@interview/config/speechMetrics'
 import type { SpeechMetrics } from '@shared/types'
 
+/** A single word with audio-timeline-relative timestamps (seconds from the
+ *  start of the recording). Shape matches Whisper's WhisperWord so the
+ *  multimodal pipeline can consume either source transparently. */
+export interface LiveTranscriptWord {
+  word: string
+  /** Seconds from the start of the *recording* (not the STT session). */
+  start: number
+  end: number
+  confidence: number
+}
+
 export interface SpeechRecognitionResult {
   text: string
   durationMinutes: number
   metrics: SpeechMetrics | null
+  /** Word-level timestamps captured by streaming STT (Deepgram). Empty
+   *  for the Web Speech API fallback, which doesn't expose per-word data. */
+  words?: LiveTranscriptWord[]
 }
 
 export interface UseSpeechRecognitionReturn {

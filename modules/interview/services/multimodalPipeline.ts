@@ -10,8 +10,19 @@ import { transcribeRecording } from './whisperService'
 import { extractProsody } from './prosodyService'
 import { aggregateFacialData } from './facialAggregator'
 import { runFusionAnalysis } from './fusionService'
-import type { FacialFrame } from '@shared/types/multimodal'
+import type {
+  FacialFrame,
+  WhisperSegment,
+  WhisperWord,
+} from '@shared/types/multimodal'
 import type { AuthUser } from '@shared/middleware/withAuth'
+
+interface LiveTranscriptWord {
+  word: string
+  start: number
+  end: number
+  confidence: number
+}
 
 // ─── Step result types ──────────────────────────────────────────────────────
 
@@ -28,6 +39,10 @@ export interface SessionData {
    * `recordingR2Key` is absent (privacy mode). */
   audioRecordingR2Key?: string
   facialLandmarksR2Key?: string
+  /** Deepgram-captured words from the live interview with audio-timeline
+   * relative timestamps. When present, the pipeline skips Whisper entirely
+   * and uses these directly — no network call, no 25MB limit, no cost. */
+  liveTranscriptWords?: LiveTranscriptWord[]
   transcript: Array<{ speaker: string; text: string; timestamp: number; questionIndex?: number | null }>
   evaluations: Array<Record<string, unknown>>
   config: Record<string, unknown>
@@ -86,6 +101,7 @@ export async function stepFetchSession(sessionId: string): Promise<SessionData> 
     recordingR2Key: session.recordingR2Key,
     audioRecordingR2Key: session.audioRecordingR2Key,
     facialLandmarksR2Key: session.facialLandmarksR2Key,
+    liveTranscriptWords: (session.liveTranscriptWords as LiveTranscriptWord[] | undefined) ?? undefined,
     transcript: session.transcript || [],
     evaluations: session.evaluations as unknown as Array<Record<string, unknown>>,
     config: session.config as unknown as Record<string, unknown>,
@@ -93,23 +109,48 @@ export async function stepFetchSession(sessionId: string): Promise<SessionData> 
   }
 }
 
-/** Step 2: Transcribe recording + download facial data (parallel) */
+/** Step 2: Transcribe recording + download facial data (parallel).
+ *
+ * When `liveTranscriptWords` is present (captured from Deepgram during the
+ * interview), Whisper is skipped entirely — no API call, no download, no
+ * cost. This is the primary path for all sessions recorded after the
+ * Deepgram-dedup change landed. Legacy sessions fall back to Whisper.
+ */
 export async function stepTranscribeAndDownload(
   recordingR2Key: string | undefined,
   facialLandmarksR2Key?: string,
-  audioRecordingR2Key?: string
+  audioRecordingR2Key?: string,
+  liveTranscriptWords?: LiveTranscriptWord[]
 ): Promise<{ whisper: TranscribeResult; facialFrames: FacialFrame[] }> {
-  // Prefer the audio-only track when present — it's typically ~1–2MB vs
-  // 30–80MB for the camera webm, so Whisper stays comfortably under Groq's
-  // 25MB upload limit. Legacy sessions without an audio track fall back
-  // to the camera webm (which may still hit 413 for long recordings).
-  // Privacy-mode sessions skip the camera webm entirely and rely on the
-  // audio-only key exclusively.
+  // Fast path: synthesise the Whisper-shaped result from the live Deepgram
+  // words. Skips the Whisper API call entirely — no download, no cost, no
+  // 25MB upload limit. Primary path for all sessions post-Deepgram-dedup.
+  if (liveTranscriptWords && liveTranscriptWords.length > 0) {
+    const facialFrames = await downloadFacialFrames(facialLandmarksR2Key)
+    const synthetic = synthesiseWhisperResultFromLiveWords(liveTranscriptWords)
+    aiLogger.info(
+      { source: 'live-deepgram', words: liveTranscriptWords.length, durationSec: synthetic.durationSeconds },
+      'Multimodal analysis using live transcript (Whisper skipped)'
+    )
+    return {
+      whisper: {
+        segments: synthetic.segments as unknown as Array<Record<string, unknown>>,
+        durationSeconds: synthetic.durationSeconds,
+        costUsd: 0,
+      },
+      facialFrames: facialFrames as unknown as FacialFrame[],
+    }
+  }
+
+  // Fallback: post-hoc Whisper on the audio-only track (or the camera webm
+  // for pre-#183 legacy sessions). Prefer the audio-only key — it's ~1–2MB
+  // vs 30–80MB for the camera webm, keeping us under Groq's 25MB upload
+  // limit. Privacy-mode sessions that opted out of the camera webm rely
+  // on the audio-only key here; error if neither exists AND no live words.
   const whisperKey = audioRecordingR2Key || recordingR2Key
   if (!whisperKey) {
     throw new Error('No audio source available for transcription')
   }
-
   const [whisperResult, facialFrames] = await Promise.all([
     transcribeRecording(whisperKey),
     downloadFacialFrames(facialLandmarksR2Key),
@@ -123,6 +164,66 @@ export async function stepTranscribeAndDownload(
     },
     facialFrames: facialFrames as unknown as FacialFrame[],
   }
+}
+
+/**
+ * Shape live Deepgram words into the WhisperSegment structure that the
+ * prosody extractor and replay UI already consume. Produces a single
+ * "segment" per continuous talking chunk — we split when the gap between
+ * consecutive words exceeds 1.5s, which matches how Whisper itself
+ * segments utterances. No external call, no cost.
+ */
+function synthesiseWhisperResultFromLiveWords(words: LiveTranscriptWord[]): {
+  segments: WhisperSegment[]
+  durationSeconds: number
+} {
+  if (words.length === 0) return { segments: [], durationSeconds: 0 }
+
+  // Sort defensively — words should already be ordered by start time, but
+  // out-of-order pushes across reconnects could break the invariant.
+  const sorted = [...words].sort((a, b) => a.start - b.start)
+
+  const SEGMENT_GAP_SEC = 1.5
+  const segments: WhisperSegment[] = []
+  let currentStart = sorted[0].start
+  let currentWords: WhisperWord[] = []
+
+  for (let i = 0; i < sorted.length; i++) {
+    const w = sorted[i]
+    const prev = sorted[i - 1]
+    if (prev && w.start - prev.end > SEGMENT_GAP_SEC) {
+      // Flush the current segment.
+      segments.push({
+        id: segments.length,
+        start: currentStart,
+        end: prev.end,
+        text: currentWords.map((x) => x.word).join(' ').trim(),
+        words: currentWords,
+      })
+      currentStart = w.start
+      currentWords = []
+    }
+    currentWords.push({
+      word: w.word,
+      start: w.start,
+      end: w.end,
+      confidence: w.confidence,
+    })
+  }
+
+  // Flush trailing segment.
+  if (currentWords.length > 0) {
+    segments.push({
+      id: segments.length,
+      start: currentStart,
+      end: currentWords[currentWords.length - 1].end,
+      text: currentWords.map((x) => x.word).join(' ').trim(),
+      words: currentWords,
+    })
+  }
+
+  const durationSeconds = sorted[sorted.length - 1].end
+  return { segments, durationSeconds }
 }
 
 /** Step 3: Extract prosody + aggregate facial signals */
@@ -293,7 +394,8 @@ export async function runMultimodalPipeline(
     const { whisper, facialFrames } = await stepTranscribeAndDownload(
       session.recordingR2Key,
       session.facialLandmarksR2Key,
-      session.audioRecordingR2Key
+      session.audioRecordingR2Key,
+      session.liveTranscriptWords
     )
     const signals = stepProcessSignals(
       whisper.segments,

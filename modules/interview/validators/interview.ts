@@ -156,6 +156,17 @@ export const UpdateSessionSchema = z.object({
   screenRecordingSizeBytes: z.number().int().min(0).optional(),
   audioRecordingR2Key: z.string().max(1000).optional(),
   audioRecordingSizeBytes: z.number().int().min(0).optional(),
+  liveTranscriptWords: z
+    .array(
+      z.object({
+        word: z.string().max(200),
+        start: z.number().min(0).max(10000),
+        end: z.number().min(0).max(10000),
+        confidence: z.number().min(0).max(1),
+      })
+    )
+    .max(50000)
+    .optional(),
   codingProblemId: z.string().max(200).optional(),
   designProblemId: z.string().max(200).optional(),
   scoringDimensions: z.array(z.object({

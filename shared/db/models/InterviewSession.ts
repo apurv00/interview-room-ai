@@ -109,6 +109,17 @@ export interface IInterviewSession extends Document {
   multimodalAnalysisId?: mongoose.Types.ObjectId
   facialLandmarksR2Key?: string
 
+  // Live transcript captured by Deepgram streaming STT during the
+  // interview, with audio-timeline-relative word timestamps. When
+  // present, the multimodal analysis pipeline uses these directly
+  // and skips the post-interview Whisper call (cost + 25MB limit).
+  liveTranscriptWords?: Array<{
+    word: string
+    start: number
+    end: number
+    confidence: number
+  }>
+
   userAgent?: string
 
   createdAt: Date
@@ -201,6 +212,10 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
     // Multimodal analysis
     multimodalAnalysisId: { type: Schema.Types.ObjectId, ref: 'MultimodalAnalysis' },
     facialLandmarksR2Key: { type: String },
+
+    // Live transcript with audio-timeline-relative word timestamps
+    // (Deepgram-captured during the interview; skips post-hoc Whisper)
+    liveTranscriptWords: { type: Schema.Types.Mixed },
 
     userAgent: { type: String },
   },
