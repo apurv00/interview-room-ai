@@ -1,4 +1,4 @@
-import { getAnthropicClient } from '@shared/services/llmClient'
+import { completion } from '@shared/services/modelRouter'
 import { aiLogger } from '@shared/logger'
 
 export interface CompanyContext {
@@ -86,17 +86,16 @@ export async function extractCompanyContext(jdText: string): Promise<CompanyCont
   // If regex found nothing, try Claude Haiku for extraction
   if (!company || !industry) {
     try {
-      const client = getAnthropicClient()
-      const response = await client.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 150,
+      const response = await completion({
+        taskSlot: 'interview.jd-extract',
+        system: 'Extract structured information from job descriptions. Return ONLY valid JSON.',
         messages: [{
           role: 'user',
           content: `Extract the company name and industry from this job description. Return ONLY a JSON object with "company" and "industry" fields. Use null if not found.\n\nJob description (first 2000 chars):\n${jdText.slice(0, 2000)}`,
         }],
       })
 
-      const raw = response.content[0].type === 'text' ? response.content[0].text.trim() : '{}'
+      const raw = response.text || '{}'
       const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
       const parsed = JSON.parse(cleaned)
 

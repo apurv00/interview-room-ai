@@ -1,13 +1,11 @@
 import { NextResponse } from 'next/server'
-import { getAnthropicClient } from '@shared/services/llmClient'
+import { completion } from '@shared/services/modelRouter'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
-
-const client = getAnthropicClient()
 
 const EvaluateCodeSchema = z.object({
   code: z.string().min(1).max(50000),
@@ -32,9 +30,8 @@ export const POST = composeApiRoute<EvaluateCodePayload>({
     const startTime = Date.now()
 
     try {
-      const message = await client.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 800,
+      const result = await completion({
+        taskSlot: 'interview.evaluate-code',
         system: `You are a senior technical interviewer evaluating a coding solution. Evaluate the code strictly but fairly.
 
 Return ONLY valid JSON matching this schema:
@@ -54,7 +51,7 @@ Return ONLY valid JSON matching this schema:
         }],
       })
 
-      const raw = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}'
+      const raw = result.text || '{}'
       const jsonMatch = raw.match(/\{[\s\S]*\}/)
       if (!jsonMatch) {
         return NextResponse.json({ error: 'Failed to parse evaluation' }, { status: 502 })
@@ -67,9 +64,9 @@ Return ONLY valid JSON matching this schema:
         user: ctx.user,
         type: 'api_call_evaluate',
         sessionId,
-        inputTokens: message.usage.input_tokens,
-        outputTokens: message.usage.output_tokens,
-        modelUsed: 'claude-haiku-4-5-20251001',
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
+        modelUsed: result.model,
         durationMs: Date.now() - startTime,
         success: true,
       }).catch(() => {})

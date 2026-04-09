@@ -8,14 +8,11 @@ vi.mock('@shared/logger', () => ({
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }))
 
-const mockCreate = vi.fn()
+const mockCompletion = vi.fn()
 
-vi.mock('@anthropic-ai/sdk', () => {
-  class MockAnthropic {
-    messages = { create: mockCreate }
-  }
-  return { default: MockAnthropic }
-})
+vi.mock('@shared/services/modelRouter', () => ({
+  completion: (...args: unknown[]) => mockCompletion(...args),
+}))
 
 import { parseJobDescription, buildParsedJDContext } from '@interview/services/persona/jdParserService'
 import { isFeatureEnabled } from '@shared/featureFlags'
@@ -25,21 +22,23 @@ describe('jdParserService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(isFeatureEnabled).mockReturnValue(true)
-    mockCreate.mockResolvedValue({
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          company: 'Acme Corp',
-          role: 'Senior Product Manager',
-          inferredDomain: 'pm',
-          requirements: [
-            { id: 'req_1', category: 'experience', requirement: '5+ years product management experience', importance: 'must-have', targetCompetencies: ['product_sense', 'execution'] },
-            { id: 'req_2', category: 'behavioral', requirement: 'Cross-functional leadership', importance: 'must-have', targetCompetencies: ['stakeholder_management'] },
-            { id: 'req_3', category: 'technical', requirement: 'SQL and data analysis', importance: 'nice-to-have', targetCompetencies: ['metrics_thinking'] },
-          ],
-          keyThemes: ['leadership', 'data-driven', 'user-centric'],
-        }),
-      }],
+    mockCompletion.mockResolvedValue({
+      text: JSON.stringify({
+        company: 'Acme Corp',
+        role: 'Senior Product Manager',
+        inferredDomain: 'pm',
+        requirements: [
+          { id: 'req_1', category: 'experience', requirement: '5+ years product management experience', importance: 'must-have', targetCompetencies: ['product_sense', 'execution'] },
+          { id: 'req_2', category: 'behavioral', requirement: 'Cross-functional leadership', importance: 'must-have', targetCompetencies: ['stakeholder_management'] },
+          { id: 'req_3', category: 'technical', requirement: 'SQL and data analysis', importance: 'nice-to-have', targetCompetencies: ['metrics_thinking'] },
+        ],
+        keyThemes: ['leadership', 'data-driven', 'user-centric'],
+      }),
+      model: 'claude-sonnet-4-6-20250514',
+      provider: 'anthropic',
+      inputTokens: 100,
+      outputTokens: 200,
+      usedFallback: false,
     })
   })
 

@@ -28,11 +28,9 @@ vi.mock('@shared/db/models/UserCompetencyState', () => ({
   },
 }))
 
-const mockClaudeCreate = vi.fn()
-vi.mock('@shared/services/llmClient', () => ({
-  getAnthropicClient: () => ({
-    messages: { create: mockClaudeCreate },
-  }),
+const mockCompletion = vi.fn()
+vi.mock('@shared/services/modelRouter', () => ({
+  completion: (...args: unknown[]) => mockCompletion(...args),
 }))
 
 // ObjectId constructor — just pass through
@@ -55,9 +53,13 @@ import { getRecruiterScorecard } from '@b2b/services/scorecardService'
 describe('scorecardService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockClaudeCreate.mockResolvedValue({
-      content: [{ type: 'text', text: 'Solid candidate overall.' }],
-      usage: { input_tokens: 50, output_tokens: 20 },
+    mockCompletion.mockResolvedValue({
+      text: 'Solid candidate overall.',
+      model: 'claude-haiku-4-5-20251001',
+      provider: 'anthropic',
+      inputTokens: 50,
+      outputTokens: 20,
+      usedFallback: false,
     })
   })
 
@@ -161,7 +163,7 @@ describe('scorecardService', () => {
 
       // Recruiter summary came from Claude
       expect(result!.recruiterSummary).toBe('Solid candidate overall.')
-      expect(mockClaudeCreate).toHaveBeenCalledTimes(1)
+      expect(mockCompletion).toHaveBeenCalledTimes(1)
     })
 
     it('gracefully handles missing competency data', async () => {
@@ -199,7 +201,7 @@ describe('scorecardService', () => {
         evaluations: [],
         transcript: [],
       })
-      mockClaudeCreate.mockRejectedValueOnce(new Error('LLM down'))
+      mockCompletion.mockRejectedValueOnce(new Error('LLM down'))
       const result = await getRecruiterScorecard('sess1', 'org1')
       expect(result).not.toBeNull()
       expect(result!.recruiterSummary).toBe('Candidate scored 55/100 in Design interview.')

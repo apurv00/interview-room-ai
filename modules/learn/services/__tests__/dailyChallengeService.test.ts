@@ -56,11 +56,9 @@ vi.mock('@shared/db/models/User', () => ({
   },
 }))
 
-const mockAnthropicCreate = vi.fn()
-vi.mock('@anthropic-ai/sdk', () => ({
-  default: class {
-    messages = { create: (...args: unknown[]) => mockAnthropicCreate(...args) }
-  },
+const mockCompletion = vi.fn()
+vi.mock('@shared/services/modelRouter', () => ({
+  completion: (...args: unknown[]) => mockCompletion(...args),
 }))
 
 import {
@@ -157,16 +155,18 @@ describe('dailyChallengeService', () => {
           }),
         }),
       })
-      mockAnthropicCreate.mockResolvedValue({
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            question: 'AI-generated question',
-            category: 'problem-solving',
-            targetCompetencies: ['analysis'],
-            idealAnswerPoints: ['point1'],
-          }),
-        }],
+      mockCompletion.mockResolvedValue({
+        text: JSON.stringify({
+          question: 'AI-generated question',
+          category: 'problem-solving',
+          targetCompetencies: ['analysis'],
+          idealAnswerPoints: ['point1'],
+        }),
+        model: 'claude-haiku-4-5-20251001',
+        provider: 'anthropic',
+        inputTokens: 100,
+        outputTokens: 50,
+        usedFallback: false,
       })
       mockDailyChallengeCreate.mockResolvedValue({
         toObject: () => ({
@@ -182,7 +182,7 @@ describe('dailyChallengeService', () => {
       const result = await getTodaysChallenge()
 
       expect(result).toBeDefined()
-      expect(mockAnthropicCreate).toHaveBeenCalled()
+      expect(mockCompletion).toHaveBeenCalled()
     })
 
     it('falls back to hardcoded question when Claude fails', async () => {
@@ -196,7 +196,7 @@ describe('dailyChallengeService', () => {
           }),
         }),
       })
-      mockAnthropicCreate.mockRejectedValue(new Error('API error'))
+      mockCompletion.mockRejectedValue(new Error('API error'))
       mockDailyChallengeCreate.mockResolvedValue({
         toObject: () => ({
           date: '2026-03-16',
@@ -252,7 +252,7 @@ describe('dailyChallengeService', () => {
 
       expect(result).toBeDefined()
       expect(result!.score).toBe(85)
-      expect(mockAnthropicCreate).not.toHaveBeenCalled()
+      expect(mockCompletion).not.toHaveBeenCalled()
     })
 
     it('scores via Claude and saves attempt', async () => {
@@ -268,11 +268,13 @@ describe('dailyChallengeService', () => {
         }),
       })
       // Claude scoring
-      mockAnthropicCreate.mockResolvedValue({
-        content: [{
-          type: 'text',
-          text: '{"relevance": 80, "structure": 75, "specificity": 70, "ownership": 85}',
-        }],
+      mockCompletion.mockResolvedValue({
+        text: '{"relevance": 80, "structure": 75, "specificity": 70, "ownership": 85}',
+        model: 'claude-sonnet-4-6-20250514',
+        provider: 'anthropic',
+        inputTokens: 100,
+        outputTokens: 50,
+        usedFallback: false,
       })
       // Attempt counts for percentile
       mockAttemptCountDocuments
@@ -322,11 +324,13 @@ describe('dailyChallengeService', () => {
       mockDailyChallengeFindOne.mockReturnValue({
         lean: vi.fn().mockResolvedValue({ question: 'Test', domain: 'pm' }),
       })
-      mockAnthropicCreate.mockResolvedValue({
-        content: [{
-          type: 'text',
-          text: '```json\n{"relevance": 80, "structure": 80, "specificity": 80, "ownership": 80}\n```',
-        }],
+      mockCompletion.mockResolvedValue({
+        text: '```json\n{"relevance": 80, "structure": 80, "specificity": 80, "ownership": 80}\n```',
+        model: 'claude-sonnet-4-6-20250514',
+        provider: 'anthropic',
+        inputTokens: 100,
+        outputTokens: 50,
+        usedFallback: false,
       })
       mockAttemptCountDocuments.mockResolvedValue(0)
       mockAttemptCreate.mockResolvedValue({})
@@ -342,8 +346,13 @@ describe('dailyChallengeService', () => {
     it('updates challenge participantCount atomically', async () => {
       mockAttemptFindOne.mockReturnValue({ lean: vi.fn().mockResolvedValue(null) })
       mockDailyChallengeFindOne.mockReturnValue({ lean: vi.fn().mockResolvedValue({ question: 'Q', domain: 'd' }) })
-      mockAnthropicCreate.mockResolvedValue({
-        content: [{ type: 'text', text: '{"relevance":70,"structure":70,"specificity":70,"ownership":70}' }],
+      mockCompletion.mockResolvedValue({
+        text: '{"relevance":70,"structure":70,"specificity":70,"ownership":70}',
+        model: 'claude-sonnet-4-6-20250514',
+        provider: 'anthropic',
+        inputTokens: 100,
+        outputTokens: 50,
+        usedFallback: false,
       })
       mockAttemptCountDocuments.mockResolvedValue(0)
       mockAttemptCreate.mockResolvedValue({})

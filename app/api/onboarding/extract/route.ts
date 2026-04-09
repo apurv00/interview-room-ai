@@ -1,14 +1,12 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
-import { getAnthropicClient } from '@shared/services/llmClient'
+import { completion } from '@shared/services/modelRouter'
 import { authOptions } from '@shared/auth/authOptions'
 import { ResumeExtractSchema, ExtractedProfileSchema } from '@shared/validators/onboarding'
 import { aiLogger } from '@shared/logger'
 import { checkRateLimit } from '@shared/middleware/checkRateLimit'
 
 export const dynamic = 'force-dynamic'
-
-const client = getAnthropicClient()
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions)
@@ -33,9 +31,8 @@ export async function POST(req: Request) {
   const resumeText = parsed.data.resumeText.slice(0, 4000)
 
   try {
-    const message = await client.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 300,
+    const aiResult = await completion({
+      taskSlot: 'onboarding.extract-profile',
       system: `You extract structured profile information from resumes. Return ONLY valid JSON. For any field you cannot confidently determine, use null.`,
       messages: [{
         role: 'user',
@@ -54,7 +51,7 @@ Return JSON matching this exact schema:
       }],
     })
 
-    const raw = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}'
+    const raw = aiResult.text || '{}'
     const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
     const extracted = JSON.parse(cleaned)
 

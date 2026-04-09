@@ -1,5 +1,4 @@
-import type Anthropic from '@anthropic-ai/sdk'
-import { getAnthropicClient } from '@shared/services/llmClient'
+import { completion } from '@shared/services/modelRouter'
 import { aiLogger } from '@shared/logger'
 import type {
   ProsodySegment,
@@ -8,11 +7,6 @@ import type {
   FusionSummary,
 } from '@shared/types/multimodal'
 import type { AnswerEvaluation, TranscriptEntry, InterviewConfig } from '@shared/types'
-
-const anthropic = getAnthropicClient()
-
-const FUSION_MODEL = 'claude-haiku-4-5-20251001'
-const MAX_TOKENS = 1500
 
 // Number of top blendshapes (by mean score within the window) to include
 // per facial segment in the enhanced variant of the dual-pipeline run.
@@ -93,17 +87,13 @@ Guidelines:
     { includeBlendshapes: includeBlendshapes === true }
   )
 
-  const response = await anthropic.messages.create({
-    model: FUSION_MODEL,
-    max_tokens: MAX_TOKENS,
+  const response = await completion({
+    taskSlot: 'interview.fusion-analysis',
     system: systemPrompt,
     messages: [{ role: 'user', content: userPrompt }],
   })
 
-  const text = response.content
-    .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-    .map((block) => block.text)
-    .join('')
+  const text = response.text
 
   // Parse the JSON response
   const jsonMatch = text.match(/\{[\s\S]*\}/)
@@ -155,8 +145,8 @@ Guidelines:
   return {
     timeline: parsed.timeline,
     fusionSummary: parsed.fusionSummary,
-    inputTokens: response.usage.input_tokens,
-    outputTokens: response.usage.output_tokens,
+    inputTokens: response.inputTokens,
+    outputTokens: response.outputTokens,
     promptLength: userPrompt.length,
   }
 }

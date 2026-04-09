@@ -6,12 +6,10 @@ import { awardXp } from '@learn/services/xpService'
 import { recordActivity, updateStreak } from '@learn/services/streakService'
 import { checkAndAwardBadges } from '@learn/services/badgeService'
 import { XP_AMOUNTS } from '@learn/config/xpTable'
-import { getAnthropicClient } from '@shared/services/llmClient'
+import { completion } from '@shared/services/modelRouter'
 import { aiLogger } from '@shared/logger'
 
 export const dynamic = 'force-dynamic'
-
-const client = getAnthropicClient()
 
 export async function POST(req: Request) {
   try {
@@ -28,9 +26,8 @@ export async function POST(req: Request) {
     }
 
     // Score the new answer using Claude
-    const message = await client.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 300,
+    const aiResult = await completion({
+      taskSlot: 'learn.drill-evaluate',
       system: 'You are an expert interview coach. Score the candidate\'s answer objectively.',
       messages: [{
         role: 'user',
@@ -53,7 +50,7 @@ Respond with ONLY valid JSON:
       }],
     })
 
-    const raw = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}'
+    const raw = aiResult.text || '{}'
     const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
     const scores = JSON.parse(cleaned)
 

@@ -2,7 +2,7 @@ import mongoose from 'mongoose'
 import { connectDB } from '@shared/db/connection'
 import { InterviewSession, User } from '@shared/db/models'
 import { UserCompetencyState } from '@shared/db/models/UserCompetencyState'
-import { getAnthropicClient } from '@shared/services/llmClient'
+import { completion } from '@shared/services/modelRouter'
 import { logger } from '@shared/logger'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -205,17 +205,15 @@ async function generateRecruiterSummary(
   redFlags: string[]
 ): Promise<string> {
   try {
-    const client = getAnthropicClient()
-    const message = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 200,
+    const result = await completion({
+      taskSlot: 'b2b.scorecard',
       system: 'You are a hiring manager writing a brief candidate assessment. Write 2-3 sentences summarizing the candidate\'s interview performance. Be professional and objective.',
       messages: [{
         role: 'user',
         content: `Domain: ${domain}\nScore: ${overallScore}/100\nStrengths: ${strengths.join(', ')}\nWeaknesses: ${weaknesses.join(', ')}\nRed flags: ${redFlags.join(', ') || 'None'}`,
       }],
     })
-    return message.content[0].type === 'text' ? message.content[0].text.trim() : ''
+    return result.text || ''
   } catch {
     return `Candidate scored ${overallScore}/100 in ${domain} interview.`
   }

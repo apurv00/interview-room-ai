@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getAnthropicClient } from '@shared/services/llmClient'
+import { completion } from '@shared/services/modelRouter'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { GenerateFeedbackSchema } from '@interview/validators/interview'
 import { trackUsage } from '@shared/services/usageTracking'
@@ -21,8 +21,6 @@ import { buildHistorySummary } from '@learn/services/sessionSummaryService'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
-
-const client = getAnthropicClient()
 
 type GenerateFeedbackBody = z.infer<typeof GenerateFeedbackSchema>
 
@@ -288,14 +286,13 @@ Generate a comprehensive feedback report as VALID JSON only (no markdown), match
 Be honest. Use ${commScore} for communication.score exactly as provided.`
 
     try {
-      const message = await client.messages.create({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 1200,
+      const result = await completion({
+        taskSlot: 'interview.generate-feedback',
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
       })
 
-      const raw = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}'
+      const raw = result.text || '{}'
       const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
       let feedback: FeedbackData
       try {
@@ -340,9 +337,9 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         user,
         type: 'api_call_feedback',
         sessionId: body.sessionId,
-        inputTokens: message.usage.input_tokens,
-        outputTokens: message.usage.output_tokens,
-        modelUsed: 'claude-sonnet-4-6',
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
+        modelUsed: result.model,
         durationMs: Date.now() - startTime,
         success: true,
       }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
@@ -422,7 +419,7 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         sessionId: body.sessionId,
         inputTokens: 0,
         outputTokens: 0,
-        modelUsed: 'claude-sonnet-4-6',
+        modelUsed: 'interview.generate-feedback',
         durationMs: Date.now() - startTime,
         success: false,
         errorMessage: err instanceof Error ? err.message : 'Unknown error',

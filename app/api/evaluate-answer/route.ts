@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getAnthropicClient } from '@shared/services/llmClient'
+import { completionStream } from '@shared/services/modelRouter'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { EvaluateAnswerSchema } from '@interview/validators/interview'
 import { trackUsage } from '@shared/services/usageTracking'
@@ -16,8 +16,6 @@ import type { AnswerEvaluation } from '@shared/types'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
-
-const client = getAnthropicClient()
 
 type EvaluateAnswerBody = z.infer<typeof EvaluateAnswerSchema>
 
@@ -232,23 +230,13 @@ ${dimensionSchema}${jdAlignmentSchema},
 }`
 
     try {
-      // Use prompt caching: the system prompt is stable across turns within
-      // a single interview (same role/depth/JD/profile) — only the user
-      // message changes. Marking the system prompt as ephemeral lets the
-      // API cache and reuse the KV-cache across sequential evaluations,
-      // cutting TTFT significantly after the first turn.
-      // Prompt caching: cache_control is supported by the API but not typed in SDK v0.27
-      const systemBlocks = [{ type: 'text' as const, text: systemPrompt, cache_control: { type: 'ephemeral' } }] as unknown as Parameters<typeof client.messages.stream>[0]['system']
-      const stream = client.messages.stream({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 400,
-        system: systemBlocks,
+      const result = await completionStream({
+        taskSlot: 'interview.evaluate-answer',
+        system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
       })
 
-      const message = await stream.finalMessage()
-
-      const raw = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}'
+      const raw = result.text || '{}'
       const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
       const scores = JSON.parse(cleaned)
 
@@ -276,16 +264,16 @@ ${dimensionSchema}${jdAlignmentSchema},
         user,
         type: 'api_call_evaluate',
         sessionId: body.sessionId,
-        inputTokens: message.usage.input_tokens,
-        outputTokens: message.usage.output_tokens,
-        modelUsed: 'claude-haiku-4-5-20251001',
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
+        modelUsed: result.model,
         durationMs: Date.now() - startTime,
         success: true,
       }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
 
       return NextResponse.json(evaluation)
     } catch (err) {
-      aiLogger.error({ err }, 'Claude API error in evaluate-answer')
+      aiLogger.error({ err }, 'LLM API error in evaluate-answer')
 
       trackUsage({
         user,
@@ -293,7 +281,7 @@ ${dimensionSchema}${jdAlignmentSchema},
         sessionId: body.sessionId,
         inputTokens: 0,
         outputTokens: 0,
-        modelUsed: 'claude-haiku-4-5-20251001',
+        modelUsed: 'unknown',
         durationMs: Date.now() - startTime,
         success: false,
         errorMessage: err instanceof Error ? err.message : 'Unknown error',

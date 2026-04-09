@@ -1,4 +1,4 @@
-import { getAnthropicClient } from '@shared/services/llmClient'
+import { completion } from '@shared/services/modelRouter'
 import { logger } from '@shared/logger'
 
 export interface GenerateJDInput {
@@ -21,9 +21,8 @@ export async function generateJobDescription(input: GenerateJDInput): Promise<Ge
     : ''
 
   try {
-    const response = await getAnthropicClient().messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 2000,
+    const result = await completion({
+      taskSlot: 'interview.jd-extract',
       system: `You are a job description writer. Generate realistic, professional job descriptions based on a company name and role title.
 
 Return ONLY valid JSON matching this schema. No markdown, no explanation.
@@ -45,7 +44,7 @@ Guidelines:
       }],
     })
 
-    const text = response.content[0]?.type === 'text' ? response.content[0].text : ''
+    const text = result.text
 
     const jsonMatch = text.match(/\{[\s\S]*\}/)
     if (!jsonMatch) {

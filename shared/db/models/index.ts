@@ -112,3 +112,8 @@ export type {
   IStrengthBreakdown, IFollowUpQA, IBulletDecisionEntry,
   WizardSegment, WizardStatus, BulletDecision,
 } from './WizardSession'
+
+// ── CMS / Config ──
+
+export { ModelConfig, TASK_SLOTS, TASK_SLOT_DEFAULTS } from './ModelConfig'
+export type { IModelConfig, IModelSlotConfig, TaskSlot } from './ModelConfig'
