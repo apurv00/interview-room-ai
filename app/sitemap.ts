@@ -1,14 +1,22 @@
 import type { MetadataRoute } from 'next'
 import { siteConfig } from '@shared/siteConfig'
 import { getAllSlugs } from '@learn/lib/resources'
+import { getAllPillarSlugs } from '@learn/lib/pillars'
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const resourceSlugs = getAllSlugs()
+  const pillarSlugs = getAllPillarSlugs()
 
   return [
     { url: siteConfig.url, lastModified: new Date(), changeFrequency: 'weekly', priority: 1.0 },
     { url: `${siteConfig.url}/pricing`, lastModified: new Date(), changeFrequency: 'monthly', priority: 0.8 },
     { url: `${siteConfig.url}/learn/guides`, lastModified: new Date(), changeFrequency: 'weekly', priority: 0.8 },
+    ...pillarSlugs.map((slug) => ({
+      url: `${siteConfig.url}/learn/guides/${slug}`,
+      lastModified: new Date(),
+      changeFrequency: 'weekly' as const,
+      priority: 0.9,
+    })),
     ...resourceSlugs.map((slug) => ({
       url: `${siteConfig.url}/learn/guides/${slug}`,
       lastModified: new Date(),

@@ -16,7 +16,7 @@ const PRODUCT_LINKS = [
   { href: '/', label: 'Home' },
   { href: '/interview/setup', label: 'Interview' },
   { href: '/pricing', label: 'Pricing' },
-  { href: '/resources', label: 'Resources' },
+  { href: '/learn/guides', label: 'Resources' },
 ]
 
 const TOOLS_LINKS = [
@@ -27,8 +27,14 @@ const TOOLS_LINKS = [
   { href: '/hire', label: 'For Recruiters' },
 ]
 
+const HUB_LINKS = [
+  { href: '/learn/guides/behavioral-interviews', label: 'Behavioral Interviews' },
+  { href: '/learn/guides/company-interviews', label: 'Company Interview Guides' },
+  { href: '/learn/guides/interview-types', label: 'Interview Types & Formats' },
+]
+
 const QUESTION_LINKS = [
-  { href: '/learn/guides/common-interview-questions', label: 'Common Questions' },
+  { href: '/learn/guides/common-interview-questions', label: 'Common Interview Questions' },
   { href: '/learn/guides/behavioral-questions', label: 'Behavioral Questions' },
   { href: '/learn/guides/technical-interview-questions', label: 'Technical Questions' },
   { href: '/learn/guides/mock-interview-guide', label: 'Mock Interview Guide' },
@@ -37,11 +43,11 @@ const QUESTION_LINKS = [
 
 const TIP_LINKS = [
   { href: '/learn/guides/interview-tips', label: '50+ Interview Tips' },
-  { href: '/learn/guides/phone-interview-tips', label: 'Phone Tips' },
-  { href: '/learn/guides/video-interview-tips', label: 'Video Tips' },
+  { href: '/learn/guides/phone-interview-tips', label: 'Phone Interview Tips' },
+  { href: '/learn/guides/video-interview-tips', label: 'Video Interview Tips' },
   { href: '/learn/guides/star-method-guide', label: 'STAR Method Guide' },
-  { href: '/learn/guides/body-language-guide', label: 'Body Language' },
-  { href: '/learn/guides/interview-frameworks', label: 'Frameworks' },
+  { href: '/learn/guides/body-language-guide', label: 'Body Language Tips' },
+  { href: '/learn/guides/interview-frameworks', label: 'Interview Frameworks' },
 ]
 
 function FooterColumn({
@@ -85,7 +91,7 @@ export default function Footer() {
     <footer className="bg-white border-t border-slate-200 mt-auto">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
         {/* Top: brand + columns */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-8 mb-10">
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-8 mb-10">
           {/* Brand column */}
           <div className="col-span-2 md:col-span-1">
             <Link href="/" className="flex items-center gap-2 no-underline mb-3">
@@ -111,6 +117,7 @@ export default function Footer() {
             }
           />
           <FooterColumn title="Tools" links={TOOLS_LINKS} />
+          <FooterColumn title="Topic Hubs" links={HUB_LINKS} />
           <FooterColumn title="Interview Questions" links={QUESTION_LINKS} />
           <FooterColumn title="Tips & Frameworks" links={TIP_LINKS} />
         </div>

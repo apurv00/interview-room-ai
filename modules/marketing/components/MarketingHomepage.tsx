@@ -77,8 +77,12 @@ export default function MarketingHomepage() {
                 <span className="text-blue-600">You just don&apos;t know why yet.</span>
               </h1>
 
+              <h2 className="text-lg md:text-xl font-semibold text-slate-700 mb-4">
+                AI-Powered Mock Interview Practice with Real-Time Feedback
+              </h2>
+
               <p className="text-base text-slate-500 leading-relaxed mb-8">
-                AI that tracks your facial expressions, voice patterns, and answer quality simultaneously — then gives you a second-by-second replay showing the exact moment your confidence dropped, your pace doubled, and your answer lost structure.
+                Practice realistic AI mock interviews with an interviewer that tracks your facial expressions, voice patterns, and answer quality — then replays the exact moment your confidence dropped, your pace doubled, and your answer lost structure.
               </p>
 
               <button

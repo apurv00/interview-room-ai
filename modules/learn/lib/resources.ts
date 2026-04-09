@@ -24,17 +24,26 @@ export interface ResourceSection {
   links?: ResourceLink[]
 }
 
+export interface ResourceHowToStep {
+  name: string
+  text: string
+}
+
 export interface Resource {
   slug: string
   title: string
   description: string
   category: 'questions' | 'tips' | 'frameworks' | 'companies'
+  /** Slug of the topical pillar/hub page this resource belongs to. Used to render a "Part of: {pillar}" backlink and to power the hub-and-spoke internal-linking mesh. */
+  pillarSlug?: 'behavioral-interviews' | 'company-interviews' | 'interview-types'
   keywords: string[]
   relevantDomains: string[]       // empty = all
   relevantExperience: string[]    // empty = all
   relevantWeakAreas: string[]
   relevantGoals: string[]
   isCareerSwitcher?: boolean      // true = boost for career switchers
+  /** Optional HowTo step mapping for `HowTo` JSON-LD. Only populated for resources where the framework maps cleanly onto a step-by-step structure (e.g. STAR method). */
+  howToSteps?: ResourceHowToStep[]
   content: {
     intro: string
     sections: ResourceSection[]
@@ -50,6 +59,7 @@ export const RESOURCES: Resource[] = [
     title: 'Common Interview Questions & Answers',
     description: 'Master the most frequently asked interview questions with expert-crafted sample answers and strategies for every career level.',
     category: 'questions',
+    pillarSlug: 'behavioral-interviews',
     keywords: ['common interview questions', 'interview questions and answers', 'job interview questions', 'most asked interview questions'],
     relevantDomains: [],
     relevantExperience: [],
@@ -99,6 +109,7 @@ export const RESOURCES: Resource[] = [
     title: 'Behavioral Interview Questions: The Complete Guide (2026)',
     description: 'A complete guide to answering behavioral interview questions using the STAR method. Covers leadership, teamwork, conflict, failure, and ambiguity, with prep templates, real example answers, and the 12 most common questions you should prepare for.',
     category: 'questions',
+    pillarSlug: 'behavioral-interviews',
     keywords: ['behavioral interview questions', 'STAR method examples', 'tell me about a time', 'situational interview questions', 'competency-based questions', 'behavioral interview prep', 'most common behavioral questions'],
     relevantDomains: [],
     relevantExperience: [],
@@ -171,6 +182,7 @@ export const RESOURCES: Resource[] = [
     title: 'Technical Interview Questions',
     description: 'Prepare for technical interviews with domain-specific questions for software engineering, data science, DevOps, and more.',
     category: 'questions',
+    pillarSlug: 'interview-types',
     keywords: ['technical interview questions', 'coding interview', 'system design interview', 'data science interview', 'software engineer interview questions'],
     relevantDomains: ['backend', 'ds', 'devops'],
     relevantExperience: [],
@@ -215,6 +227,7 @@ export const RESOURCES: Resource[] = [
     title: 'Second Interview Questions',
     description: 'Prepare for second-round interviews with deeper questions about culture fit, leadership, and role-specific scenarios.',
     category: 'questions',
+    pillarSlug: 'interview-types',
     keywords: ['second interview questions', 'second round interview', 'final interview questions', 'panel interview', 'interview with hiring manager'],
     relevantDomains: [],
     relevantExperience: ['3-6', '7+'],
@@ -259,6 +272,7 @@ export const RESOURCES: Resource[] = [
     title: 'Complete Mock Interview Guide',
     description: 'Everything you need to know about mock interviews: how to practice effectively, get feedback, and build confidence before the real thing.',
     category: 'questions',
+    pillarSlug: 'interview-types',
     keywords: ['mock interview', 'practice interview', 'interview practice', 'mock interview tips', 'interview simulation'],
     relevantDomains: [],
     relevantExperience: [],
@@ -349,6 +363,7 @@ export const RESOURCES: Resource[] = [
     title: 'Phone Interview Tips',
     description: 'Expert tips for phone screening interviews including preparation, delivery, and how to make a strong impression without visual cues.',
     category: 'tips',
+    pillarSlug: 'interview-types',
     keywords: ['phone interview tips', 'phone screening', 'phone interview preparation', 'recruiter phone call', 'telephone interview'],
     relevantDomains: [],
     relevantExperience: [],
@@ -389,6 +404,7 @@ export const RESOURCES: Resource[] = [
     title: 'Video Interview Tips',
     description: 'Master video interviews with tips on setup, camera presence, body language, and technology to make a professional impression on Zoom, Teams, and more.',
     category: 'tips',
+    pillarSlug: 'interview-types',
     keywords: ['video interview tips', 'zoom interview', 'virtual interview', 'online interview tips', 'remote interview'],
     relevantDomains: [],
     relevantExperience: [],
@@ -429,6 +445,7 @@ export const RESOURCES: Resource[] = [
     title: 'Body Language Guide for Interviews',
     description: 'Master non-verbal communication in interviews: posture, eye contact, hand gestures, facial expressions, and confidence signals.',
     category: 'tips',
+    pillarSlug: 'behavioral-interviews',
     keywords: ['interview body language', 'non-verbal communication', 'interview confidence', 'eye contact in interviews', 'hand gestures interview'],
     relevantDomains: [],
     relevantExperience: [],
@@ -472,6 +489,7 @@ export const RESOURCES: Resource[] = [
     title: 'The STAR Method: Complete Guide with Examples (2026)',
     description: 'A complete guide to the STAR interview method (Situation, Task, Action, Result). Includes a full worked example, the time budget interviewers expect, common mistakes to avoid, and how STAR compares to alternative frameworks like SOAR, CAR, and SPAR.',
     category: 'frameworks',
+    pillarSlug: 'behavioral-interviews',
     keywords: ['STAR method', 'STAR interview technique', 'situation task action result', 'behavioral interview framework', 'STAR method examples', 'STAR vs CAR', 'STAR worked example'],
     relevantDomains: [],
     relevantExperience: [],
@@ -536,12 +554,31 @@ export const RESOURCES: Resource[] = [
         { q: 'How do I handle aggressive follow-up questions like "tell me more about your role specifically"?', a: 'Follow-ups are a sign your story interested the interviewer — that is good. The trap is reaching for new details you did not actually know. If you do not remember an exact number, say "approximately X" or "I can ballpark it but I am not certain". Honesty about the edges of your memory builds trust; bluffing destroys it. Amazon and McKinsey interviewers in particular probe hard precisely to test for this.' },
       ],
     },
+    howToSteps: [
+      {
+        name: 'Situation — Set the scene',
+        text: 'Briefly describe the context in 2-3 sentences (about 15 seconds). Where were you working, what was the team or project, and why was the situation significant? Give the interviewer just enough scaffolding to understand the challenge, then move on.',
+      },
+      {
+        name: 'Task — Make your individual responsibility clear',
+        text: 'In 1-2 sentences (about 10-15 seconds), clarify your specific role and what was expected of you personally, separately from what the team had to deliver. Avoid "we" — say "I owned X".',
+      },
+      {
+        name: 'Action — Walk through 3-5 specific steps',
+        text: 'Spend 60-90 seconds on the actions you took, in order, with the reasoning behind each. Use "I" not "we", include at least one obstacle and how you handled it, and tie your actions to skills relevant to the job.',
+      },
+      {
+        name: 'Result — Quantify the outcome',
+        text: 'In 15-30 seconds, share the outcome with at least one specific metric (percentage change, dollar impact, latency improvement, customer count, etc.). If the result was not positive, name it honestly and add the learning.',
+      },
+    ],
   },
   {
     slug: 'interview-frameworks',
     title: 'Interview Frameworks: SPAR, PPF & More',
     description: 'Beyond STAR: learn SPAR, Present-Past-Future, CAR, and other interview answer frameworks for different question types.',
     category: 'frameworks',
+    pillarSlug: 'behavioral-interviews',
     keywords: ['interview frameworks', 'SPAR method', 'present past future method', 'CAR method', 'interview answer structure'],
     relevantDomains: [],
     relevantExperience: ['3-6', '7+'],
@@ -719,6 +756,7 @@ export const RESOURCES: Resource[] = [
     title: 'How to Interview at Google: The Complete 2026 Guide',
     description: 'A complete guide to interviewing at Google in 2026 — the full hiring loop, what "Googleyness" actually means, the four scoring attributes, what the hiring committee looks for, and a 4-week prep plan that has worked for hundreds of candidates.',
     category: 'companies',
+    pillarSlug: 'company-interviews',
     keywords: ['google interview', 'googleyness', 'google behavioral interview', 'google interview process', 'google hiring committee', 'google interview prep'],
     relevantDomains: [],
     relevantExperience: [],
@@ -779,6 +817,7 @@ export const RESOURCES: Resource[] = [
     title: 'Amazon Leadership Principles: The Complete Interview Guide (2026)',
     description: 'A complete guide to interviewing at Amazon in 2026: the 16 Leadership Principles in plain English, the Bar Raiser explained, the loop format, the most common LP questions, and a story-mapping system that builds the 30+ STAR stories Amazon expects from senior candidates.',
     category: 'companies',
+    pillarSlug: 'company-interviews',
     keywords: ['amazon interview', 'amazon leadership principles', 'amazon behavioral interview', 'bar raiser interview', 'amazon LP questions', '16 leadership principles'],
     relevantDomains: [],
     relevantExperience: [],
@@ -842,6 +881,7 @@ export const RESOURCES: Resource[] = [
     title: 'How to Interview at Meta — Complete Guide 2026',
     description: 'Prepare for Meta interviews with tips on demonstrating impact, moving fast, and navigating the behavioral and technical rounds.',
     category: 'companies',
+    pillarSlug: 'company-interviews',
     keywords: ['meta interview', 'facebook interview', 'meta behavioral interview', 'meta interview process'],
     relevantDomains: [],
     relevantExperience: [],
@@ -873,6 +913,7 @@ export const RESOURCES: Resource[] = [
     title: 'How to Interview at Apple — Complete Guide 2026',
     description: 'Navigate Apple\'s secretive interview process with insights on demonstrating craft, product passion, and attention to detail.',
     category: 'companies',
+    pillarSlug: 'company-interviews',
     keywords: ['apple interview', 'apple interview process', 'apple behavioral interview', 'apple hiring'],
     relevantDomains: [],
     relevantExperience: [],
@@ -904,6 +945,7 @@ export const RESOURCES: Resource[] = [
     title: 'How to Interview at Microsoft — Growth Mindset Guide 2026',
     description: 'Prepare for Microsoft interviews with tips on demonstrating growth mindset, inclusive leadership, and customer empathy.',
     category: 'companies',
+    pillarSlug: 'company-interviews',
     keywords: ['microsoft interview', 'microsoft growth mindset', 'microsoft behavioral interview'],
     relevantDomains: [],
     relevantExperience: [],
@@ -935,6 +977,7 @@ export const RESOURCES: Resource[] = [
     title: 'How to Interview at Netflix — Freedom & Responsibility Guide 2026',
     description: 'Navigate Netflix\'s unique culture with tips on demonstrating independent judgment, candor, and high-performance standards.',
     category: 'companies',
+    pillarSlug: 'company-interviews',
     keywords: ['netflix interview', 'netflix culture', 'netflix freedom and responsibility', 'netflix interview process'],
     relevantDomains: [],
     relevantExperience: [],
@@ -966,6 +1009,7 @@ export const RESOURCES: Resource[] = [
     title: 'How to Interview at Stripe — Craft & Systems Thinking Guide 2026',
     description: 'Prepare for Stripe interviews with tips on demonstrating craft, systems thinking, and clear written communication.',
     category: 'companies',
+    pillarSlug: 'company-interviews',
     keywords: ['stripe interview', 'stripe interview process', 'stripe culture', 'stripe hiring'],
     relevantDomains: [],
     relevantExperience: [],
@@ -996,6 +1040,7 @@ export const RESOURCES: Resource[] = [
     title: 'How to Interview at Salesforce — Ohana Culture Guide 2026',
     description: 'Prepare for Salesforce interviews with tips on demonstrating trust, customer success, and values-driven leadership.',
     category: 'companies',
+    pillarSlug: 'company-interviews',
     keywords: ['salesforce interview', 'salesforce ohana', 'salesforce interview process', 'salesforce culture'],
     relevantDomains: [],
     relevantExperience: [],
@@ -1026,6 +1071,7 @@ export const RESOURCES: Resource[] = [
     title: 'McKinsey Interview Guide: Case Interview and PEI Mastery (2026)',
     description: 'A complete 2026 guide to the McKinsey interview: the full hiring process, the Case Interview format with hypothesis-driven structure, the Personal Experience Interview (PEI) and its three dimensions, the McKinsey Solve game, and a focused 6-week preparation plan.',
     category: 'companies',
+    pillarSlug: 'company-interviews',
     keywords: ['mckinsey interview', 'mckinsey case interview', 'mckinsey pei', 'mckinsey personal experience interview', 'consulting interview', 'mckinsey solve game', 'mckinsey hypothesis-driven case'],
     relevantDomains: ['business'],
     relevantExperience: [],
@@ -1085,6 +1131,7 @@ export const RESOURCES: Resource[] = [
     title: 'BCG Interview Guide — Creative Problem-Solving 2026',
     description: 'Prepare for BCG interviews with tips on creative case approaches, hypothesis-driven thinking, and behavioral questions.',
     category: 'companies',
+    pillarSlug: 'company-interviews',
     keywords: ['bcg interview', 'bcg case interview', 'boston consulting group interview', 'consulting interview'],
     relevantDomains: ['business'],
     relevantExperience: [],
@@ -1115,6 +1162,7 @@ export const RESOURCES: Resource[] = [
     title: 'Goldman Sachs Interview Guide — Super Day Preparation 2026',
     description: 'Navigate Goldman Sachs\' Super Day interview format with tips on technical finance questions, market awareness, and behavioral preparation.',
     category: 'companies',
+    pillarSlug: 'company-interviews',
     keywords: ['goldman sachs interview', 'goldman sachs super day', 'investment banking interview', 'finance interview'],
     relevantDomains: ['finance'],
     relevantExperience: [],
@@ -1145,6 +1193,7 @@ export const RESOURCES: Resource[] = [
     title: 'JPMorgan Interview Guide — Risk & Analytics Focus 2026',
     description: 'Prepare for JPMorgan interviews with tips on demonstrating risk awareness, analytical rigor, and client relationship skills.',
     category: 'companies',
+    pillarSlug: 'company-interviews',
     keywords: ['jpmorgan interview', 'jp morgan interview', 'chase interview', 'banking interview'],
     relevantDomains: ['finance'],
     relevantExperience: [],
@@ -1171,6 +1220,14 @@ export const RESOURCES: Resource[] = [
     },
   },
 ]
+
+// Build-time guardrail: pillar slugs are reserved for static hub routes under
+// app/(learn)/learn/guides/{pillar}/page.tsx — they must NOT collide with any
+// resource slug or the static route would shadow the [slug] dynamic page.
+const PILLAR_SLUGS = ['behavioral-interviews', 'company-interviews', 'interview-types']
+if (RESOURCES.some(r => PILLAR_SLUGS.includes(r.slug))) {
+  throw new Error('Pillar slugs must not be in RESOURCES — they are reserved for static hub routes')
+}
 
 export function getResourceBySlug(slug: string): Resource | undefined {
   return RESOURCES.find(r => r.slug === slug)

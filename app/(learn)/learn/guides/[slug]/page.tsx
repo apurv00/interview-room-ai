@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { getResourceBySlug, RESOURCES } from '@learn/lib/resources'
+import { getPillarTitle } from '@learn/lib/pillars'
 import { siteConfig } from '@shared/siteConfig'
 import JsonLd from '@shared/seo/JsonLd'
 
@@ -60,6 +61,37 @@ export default function ResourcePage({ params }: Props) {
         }}
       />
 
+      {/* JSON-LD: BreadcrumbList */}
+      <JsonLd
+        data={{
+          '@context': 'https://schema.org',
+          '@type': 'BreadcrumbList',
+          itemListElement: [
+            { '@type': 'ListItem', position: 1, name: 'Home', item: siteConfig.url },
+            { '@type': 'ListItem', position: 2, name: 'Resources', item: `${siteConfig.url}/learn/guides` },
+            { '@type': 'ListItem', position: 3, name: resource.title, item: `${siteConfig.url}/learn/guides/${resource.slug}` },
+          ],
+        }}
+      />
+
+      {/* JSON-LD: HowTo (STAR method only) */}
+      {resource.slug === 'star-method-guide' && resource.howToSteps && (
+        <JsonLd
+          data={{
+            '@context': 'https://schema.org',
+            '@type': 'HowTo',
+            name: resource.title,
+            description: resource.description,
+            step: resource.howToSteps.map((s, i) => ({
+              '@type': 'HowToStep',
+              position: i + 1,
+              name: s.name,
+              text: s.text,
+            })),
+          }}
+        />
+      )}
+
       <div className="max-w-[800px] mx-auto">
         {/* Breadcrumb */}
         <nav aria-label="Breadcrumb" className="text-caption text-[var(--foreground-tertiary)] mb-6">
@@ -69,6 +101,19 @@ export default function ResourcePage({ params }: Props) {
           <span className="mx-2">&rsaquo;</span>
           <span className="text-[var(--foreground-secondary)]">{resource.title}</span>
         </nav>
+
+        {/* Pillar backlink (hub-and-spoke mesh) */}
+        {resource.pillarSlug && (
+          <p className="text-caption text-[var(--foreground-tertiary)] mb-2">
+            Part of:{' '}
+            <Link
+              href={`/learn/guides/${resource.pillarSlug}`}
+              className="text-[#2563eb] hover:underline"
+            >
+              {getPillarTitle(resource.pillarSlug)}
+            </Link>
+          </p>
+        )}
 
         {/* Title */}
         <h1 className="text-display text-[var(--foreground)]">{resource.title}</h1>
