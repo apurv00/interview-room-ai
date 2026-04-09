@@ -81,6 +81,7 @@ const ModelSlotSchema = z.object({
   provider: z.enum(['anthropic', 'openrouter']),
   temperature: z.number().min(0).max(2).optional(),
   isActive: z.boolean(),
+  useToonInput: z.boolean().optional(),
 })
 
 export const UpdateModelConfigSchema = z.object({

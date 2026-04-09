@@ -1,4 +1,5 @@
 import { completion } from '@shared/services/modelRouter'
+import { DATA_BOUNDARY_RULE } from '@shared/services/promptSecurity'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { logger } from '@shared/logger'
 import type { IParsedJobDescription, ParsedRequirement } from '@shared/db/models/SavedJobDescription'
@@ -21,7 +22,9 @@ export async function parseJobDescription(rawText: string): Promise<IParsedJobDe
 
     const response = await completion({
       taskSlot: 'interview.jd-extract',
-      system: `You are a job description parser. Extract structured data from job descriptions.
+      system: `${DATA_BOUNDARY_RULE}
+
+You are a job description parser. Extract structured data from job descriptions.
 Return ONLY valid JSON matching the schema below. No markdown, no explanation.
 
 Available competencies for mapping: ${uniqueCompetencies.join(', ')}

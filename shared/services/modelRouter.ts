@@ -10,6 +10,7 @@ interface SlotConfig {
   provider: 'anthropic' | 'openrouter'
   temperature?: number
   isActive: boolean
+  useToonInput?: boolean
 }
 import { aiLogger } from '@shared/logger'
 
@@ -85,6 +86,7 @@ export interface ResolvedModel {
   provider: 'anthropic' | 'openrouter'
   temperature?: number
   fallbackModel?: string
+  useToonInput: boolean
 }
 
 export async function resolveModel(taskSlot: TaskSlot): Promise<ResolvedModel> {
@@ -93,7 +95,7 @@ export async function resolveModel(taskSlot: TaskSlot): Promise<ResolvedModel> {
 
   // If OpenRouter is disabled globally, use Anthropic defaults
   if (!config.openRouterEnabled) {
-    return { model: defaults.model, maxTokens: defaults.maxTokens, provider: 'anthropic' }
+    return { model: defaults.model, maxTokens: defaults.maxTokens, provider: 'anthropic', useToonInput: false }
   }
 
   // Check if there's a CMS-configured slot override
@@ -105,11 +107,12 @@ export async function resolveModel(taskSlot: TaskSlot): Promise<ResolvedModel> {
       provider: slotConfig.provider,
       temperature: slotConfig.temperature,
       fallbackModel: slotConfig.fallbackModel,
+      useToonInput: slotConfig.useToonInput ?? false,
     }
   }
 
   // No override — use hardcoded default via Anthropic
-  return { model: defaults.model, maxTokens: defaults.maxTokens, provider: 'anthropic' }
+  return { model: defaults.model, maxTokens: defaults.maxTokens, provider: 'anthropic', useToonInput: false }
 }
 
 // ─── OpenRouter client ──────────────────────────────────────────────────────
@@ -151,6 +154,10 @@ export interface CompletionOptions {
   taskSlot: TaskSlot
   system: string | Array<{ type: 'text'; text: string; cache_control?: { type: string } }>
   messages: Array<{ role: 'user' | 'assistant'; content: string }>
+  /** Structured data to TOON-encode and append to the last user message.
+   *  Only encoded as TOON when the slot has useToonInput=true in CMS config;
+   *  otherwise JSON.stringify'd. Falls back to JSON on any encoding error. */
+  contextData?: Record<string, unknown>
   /** Override max_tokens from the resolved model config */
   maxTokens?: number
   /** Override temperature */
@@ -182,10 +189,28 @@ export async function completion(opts: CompletionOptions): Promise<CompletionRes
   const maxTokens = opts.maxTokens ?? resolved.maxTokens
   const temperature = opts.temperature ?? resolved.temperature
 
+  // If contextData provided, encode and append to last user message
+  let messages = opts.messages
+  if (opts.contextData && Object.keys(opts.contextData).length > 0) {
+    const { encodeContextData } = await import('./toonEncoder')
+    const suffix = resolved.useToonInput
+      ? encodeContextData(opts.contextData)
+      : '\n\n' + Object.entries(opts.contextData)
+          .filter(([, v]) => v != null)
+          .map(([k, v]) => `${k}:\n${JSON.stringify(v, null, 0)}`)
+          .join('\n\n')
+
+    messages = [...opts.messages]
+    const lastIdx = messages.length - 1
+    if (lastIdx >= 0 && messages[lastIdx].role === 'user') {
+      messages[lastIdx] = { ...messages[lastIdx], content: messages[lastIdx].content + suffix }
+    }
+  }
+
   const params = {
     max_tokens: maxTokens,
     system: opts.system as string,
-    messages: opts.messages,
+    messages,
     ...(temperature !== undefined && { temperature }),
   }
 
@@ -266,10 +291,28 @@ export async function completionStream(opts: CompletionOptions): Promise<Complet
   const maxTokens = opts.maxTokens ?? resolved.maxTokens
   const temperature = opts.temperature ?? resolved.temperature
 
+  // If contextData provided, encode and append to last user message
+  let messages = opts.messages
+  if (opts.contextData && Object.keys(opts.contextData).length > 0) {
+    const { encodeContextData } = await import('./toonEncoder')
+    const suffix = resolved.useToonInput
+      ? encodeContextData(opts.contextData)
+      : '\n\n' + Object.entries(opts.contextData)
+          .filter(([, v]) => v != null)
+          .map(([k, v]) => `${k}:\n${JSON.stringify(v, null, 0)}`)
+          .join('\n\n')
+
+    messages = [...opts.messages]
+    const lastIdx = messages.length - 1
+    if (lastIdx >= 0 && messages[lastIdx].role === 'user') {
+      messages[lastIdx] = { ...messages[lastIdx], content: messages[lastIdx].content + suffix }
+    }
+  }
+
   const params = {
     max_tokens: maxTokens,
     system: opts.system as string,
-    messages: opts.messages,
+    messages,
     ...(temperature !== undefined && { temperature }),
   }
 

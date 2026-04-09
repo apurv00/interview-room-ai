@@ -1,4 +1,5 @@
 import { completion } from '@shared/services/modelRouter'
+import { DATA_BOUNDARY_RULE } from '@shared/services/promptSecurity'
 import { logger } from '@shared/logger'
 
 export interface GenerateJDInput {
@@ -23,7 +24,9 @@ export async function generateJobDescription(input: GenerateJDInput): Promise<Ge
   try {
     const result = await completion({
       taskSlot: 'interview.jd-extract',
-      system: `You are a job description writer. Generate realistic, professional job descriptions based on a company name and role title.
+      system: `${DATA_BOUNDARY_RULE}
+
+You are a job description writer. Generate realistic, professional job descriptions based on a company name and role title.
 
 Return ONLY valid JSON matching this schema. No markdown, no explanation.
 {

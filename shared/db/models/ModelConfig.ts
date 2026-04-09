@@ -20,6 +20,8 @@ export interface IModelSlotConfig {
   temperature?: number
   /** Whether this slot is active. Inactive = use hardcoded default. */
   isActive: boolean
+  /** When true, structured contextData is TOON-encoded instead of JSON. */
+  useToonInput: boolean
 }
 
 export interface IModelConfig extends Document {
@@ -45,6 +47,7 @@ const ModelSlotConfigSchema = new Schema<IModelSlotConfig>(
     provider: { type: String, required: true, enum: ['anthropic', 'openrouter'], default: 'anthropic' },
     temperature: { type: Number, min: 0, max: 2 },
     isActive: { type: Boolean, default: true },
+    useToonInput: { type: Boolean, default: false },
   },
   { _id: false }
 )

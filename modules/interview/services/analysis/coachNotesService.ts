@@ -68,11 +68,11 @@ export async function generateCoachNotes(input: GenerateCoachNotesInput): Promis
   if (momentContexts.length === 0) return []
 
   try {
-    const momentsJson = JSON.stringify(momentContexts.map(m => ({
+    const momentsData = momentContexts.map(m => ({
       originalText: m.originalText,
       issue: m.description,
       dimension: m.dimension,
-    })))
+    }))
 
     const result = await completion({
       taskSlot: 'interview.coach-notes',
@@ -84,8 +84,9 @@ Return JSON array: [{ "suggestion": "...", "rewriteExample": "..." }]
 Keep rewrites concise (2-4 sentences). Preserve the candidate's facts but improve structure, specificity, and impact.`,
       messages: [{
         role: 'user',
-        content: `Generate coaching rewrites for these interview moments:\n${momentsJson}`,
+        content: `Generate coaching rewrites for these interview moments:`,
       }],
+      contextData: { moments: momentsData },
     })
 
     const responseText = result.text || ''
