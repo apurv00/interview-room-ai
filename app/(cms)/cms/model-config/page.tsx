@@ -2,12 +2,19 @@
 
 import { useEffect, useState } from 'react'
 
+interface ProviderInfo {
+  name: string
+  label: string
+  configured: boolean
+}
+
 interface SlotConfig {
   taskSlot: string
   model: string
+  provider: string
   fallbackModel: string
+  fallbackProvider: string
   maxTokens: number
-  provider: 'anthropic' | 'openrouter'
   temperature: number | undefined
   isActive: boolean
   useToonInput: boolean
@@ -22,10 +29,11 @@ export default function ModelConfigPage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
-  const [openRouterEnabled, setOpenRouterEnabled] = useState(false)
+  const [routingEnabled, setRoutingEnabled] = useState(false)
   const [slots, setSlots] = useState<SlotConfig[]>([])
   const [taskSlots, setTaskSlots] = useState<string[]>([])
   const [defaults, setDefaults] = useState<Defaults>({})
+  const [providers, setProviders] = useState<ProviderInfo[]>([])
 
   useEffect(() => {
     fetch('/api/cms/model-config')
@@ -33,33 +41,34 @@ export default function ModelConfigPage() {
       .then(data => {
         setTaskSlots(data.taskSlots)
         setDefaults(data.defaults)
-        setOpenRouterEnabled(data.config.openRouterEnabled || false)
+        setProviders(data.providers || [])
+        setRoutingEnabled(data.config.routingEnabled || data.config.openRouterEnabled || false)
 
-        // Merge existing config with all available task slots
         const existingSlots = new Map<string, SlotConfig>()
         for (const s of data.config.slots || []) {
           existingSlots.set(s.taskSlot, {
             taskSlot: s.taskSlot,
             model: s.model,
+            provider: s.provider || 'anthropic',
             fallbackModel: s.fallbackModel || '',
+            fallbackProvider: s.fallbackProvider || 'anthropic',
             maxTokens: s.maxTokens,
-            provider: s.provider,
             temperature: s.temperature,
             isActive: s.isActive,
             useToonInput: s.useToonInput || false,
           })
         }
 
-        // Build full slot list from all registered task slots
         const fullSlots: SlotConfig[] = data.taskSlots.map((ts: string) => {
           const existing = existingSlots.get(ts)
           const def = data.defaults[ts]
           return existing || {
             taskSlot: ts,
             model: def?.model || '',
+            provider: 'anthropic',
             fallbackModel: '',
+            fallbackProvider: 'anthropic',
             maxTokens: def?.maxTokens || 1000,
-            provider: 'anthropic' as const,
             temperature: undefined,
             isActive: false,
             useToonInput: false,
@@ -84,15 +93,15 @@ export default function ModelConfigPage() {
     setError('')
     setSuccess('')
     try {
-      // Only send active slots to DB
       const payload = {
-        openRouterEnabled,
+        routingEnabled,
         slots: slots.filter(s => s.isActive).map(s => ({
           taskSlot: s.taskSlot,
           model: s.model,
-          fallbackModel: s.fallbackModel || undefined,
-          maxTokens: s.maxTokens,
           provider: s.provider,
+          fallbackModel: s.fallbackModel || undefined,
+          fallbackProvider: s.fallbackProvider || undefined,
+          maxTokens: s.maxTokens,
           temperature: s.temperature ?? undefined,
           isActive: true,
           useToonInput: s.useToonInput,
@@ -116,13 +125,15 @@ export default function ModelConfigPage() {
     }
   }
 
-  // Group slots by category
   const categories = new Map<string, SlotConfig[]>()
   for (const s of slots) {
     const cat = s.taskSlot.split('.')[0]
     if (!categories.has(cat)) categories.set(cat, [])
     categories.get(cat)!.push(s)
   }
+
+  const configuredProviders = providers.filter(p => p.configured)
+  const unconfiguredProviders = providers.filter(p => !p.configured)
 
   if (loading) return <div className="text-[#536471]">Loading model config...</div>
 
@@ -148,17 +159,48 @@ export default function ModelConfigPage() {
       {/* Global toggle */}
       <div className="bg-white border border-[#e1e8ed] rounded-xl p-5 flex items-center justify-between">
         <div>
-          <p className="font-medium text-[#0f1419]">OpenRouter Routing</p>
+          <p className="font-medium text-[#0f1419]">Model Routing</p>
           <p className="text-sm text-[#536471]">
-            When enabled, active slots route through OpenRouter. When disabled, all calls use hardcoded Anthropic defaults.
+            When enabled, active slots route through their configured provider. When disabled, all calls use Anthropic defaults.
           </p>
         </div>
         <button
-          onClick={() => setOpenRouterEnabled(!openRouterEnabled)}
-          className={`relative w-12 h-6 rounded-full transition-colors ${openRouterEnabled ? 'bg-[#2563eb]' : 'bg-[#cfd9de]'}`}
+          onClick={() => setRoutingEnabled(!routingEnabled)}
+          className={`relative w-12 h-6 rounded-full transition-colors ${routingEnabled ? 'bg-[#2563eb]' : 'bg-[#cfd9de]'}`}
         >
-          <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${openRouterEnabled ? 'translate-x-6' : 'translate-x-0.5'}`} />
+          <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${routingEnabled ? 'translate-x-6' : 'translate-x-0.5'}`} />
         </button>
+      </div>
+
+      {/* Provider status */}
+      <div className="bg-white border border-[#e1e8ed] rounded-xl p-5">
+        <p className="font-medium text-[#0f1419] mb-3">Available Providers</p>
+        <div className="flex flex-wrap gap-2">
+          {configuredProviders.map(p => (
+            <span key={p.name} className="px-3 py-1 bg-green-50 text-green-700 border border-green-200 rounded-full text-xs font-medium">
+              {p.label}
+            </span>
+          ))}
+          {unconfiguredProviders.map(p => (
+            <span key={p.name} className="px-3 py-1 bg-[#f7f9f9] text-[#71767b] border border-[#e1e8ed] rounded-full text-xs">
+              {p.label} (no API key)
+            </span>
+          ))}
+        </div>
+        {unconfiguredProviders.length > 0 && (
+          <p className="text-xs text-[#71767b] mt-2">
+            Set environment variables to enable more providers: {unconfiguredProviders.map(p => {
+              const envMap: Record<string, string> = {
+                anthropic: 'ANTHROPIC_API_KEY',
+                openai: 'OPENAI_API_KEY',
+                openrouter: 'OPENROUTER_API_KEY',
+                google: 'GOOGLE_AI_API_KEY',
+                groq: 'GROQ_API_KEY',
+              }
+              return envMap[p.name] || `${p.name.toUpperCase()}_API_KEY`
+            }).join(', ')}
+          </p>
+        )}
       </div>
 
       {/* Per-category slot configuration */}
@@ -178,7 +220,7 @@ export default function ModelConfigPage() {
                     <div>
                       <p className="font-medium text-sm text-[#0f1419] capitalize">{taskLabel}</p>
                       <p className="text-xs text-[#71767b]">
-                        Default: {def?.model} ({def?.maxTokens} tokens)
+                        Default: {def?.provider} / {def?.model} ({def?.maxTokens} tokens)
                       </p>
                     </div>
                     <label className="flex items-center gap-2 text-sm text-[#536471] cursor-pointer">
@@ -193,69 +235,93 @@ export default function ModelConfigPage() {
                   </div>
 
                   {slot.isActive && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                      <div>
-                        <label className="block text-xs text-[#71767b] mb-1">Primary Model</label>
-                        <input
-                          type="text"
-                          value={slot.model}
-                          onChange={e => updateSlot(idx, 'model', e.target.value)}
-                          placeholder="e.g. anthropic/claude-sonnet-4-6"
-                          className="w-full px-3 py-2 border border-[#cfd9de] rounded-lg text-sm focus:outline-none focus:border-[#2563eb]"
-                        />
+                    <div className="space-y-3">
+                      {/* Primary config */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                        <div>
+                          <label className="block text-xs text-[#71767b] mb-1">Provider</label>
+                          <select
+                            value={slot.provider}
+                            onChange={e => updateSlot(idx, 'provider', e.target.value)}
+                            className="w-full px-3 py-2 border border-[#cfd9de] rounded-lg text-sm focus:outline-none focus:border-[#2563eb]"
+                          >
+                            {providers.map(p => (
+                              <option key={p.name} value={p.name} disabled={!p.configured}>
+                                {p.label}{!p.configured ? ' (no key)' : ''}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs text-[#71767b] mb-1">Model</label>
+                          <input
+                            type="text"
+                            value={slot.model}
+                            onChange={e => updateSlot(idx, 'model', e.target.value)}
+                            placeholder="e.g. gpt-4.1-mini"
+                            className="w-full px-3 py-2 border border-[#cfd9de] rounded-lg text-sm focus:outline-none focus:border-[#2563eb]"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-[#71767b] mb-1">Max Tokens</label>
+                          <input
+                            type="number"
+                            value={slot.maxTokens}
+                            onChange={e => updateSlot(idx, 'maxTokens', parseInt(e.target.value) || 500)}
+                            className="w-full px-3 py-2 border border-[#cfd9de] rounded-lg text-sm focus:outline-none focus:border-[#2563eb]"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-[#71767b] mb-1">Temperature</label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={slot.temperature ?? ''}
+                            onChange={e => updateSlot(idx, 'temperature', e.target.value ? parseFloat(e.target.value) : undefined)}
+                            placeholder="Default"
+                            className="w-full px-3 py-2 border border-[#cfd9de] rounded-lg text-sm focus:outline-none focus:border-[#2563eb]"
+                          />
+                        </div>
                       </div>
-                      <div>
-                        <label className="block text-xs text-[#71767b] mb-1">Fallback Model</label>
-                        <input
-                          type="text"
-                          value={slot.fallbackModel}
-                          onChange={e => updateSlot(idx, 'fallbackModel', e.target.value)}
-                          placeholder="e.g. anthropic/claude-haiku-4-5"
-                          className="w-full px-3 py-2 border border-[#cfd9de] rounded-lg text-sm focus:outline-none focus:border-[#2563eb]"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs text-[#71767b] mb-1">Provider</label>
-                        <select
-                          value={slot.provider}
-                          onChange={e => updateSlot(idx, 'provider', e.target.value)}
-                          className="w-full px-3 py-2 border border-[#cfd9de] rounded-lg text-sm focus:outline-none focus:border-[#2563eb]"
-                        >
-                          <option value="anthropic">Anthropic (direct)</option>
-                          <option value="openrouter">OpenRouter</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs text-[#71767b] mb-1">Max Tokens</label>
-                        <input
-                          type="number"
-                          value={slot.maxTokens}
-                          onChange={e => updateSlot(idx, 'maxTokens', parseInt(e.target.value) || 500)}
-                          className="w-full px-3 py-2 border border-[#cfd9de] rounded-lg text-sm focus:outline-none focus:border-[#2563eb]"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs text-[#71767b] mb-1">Temperature (optional)</label>
-                        <input
-                          type="number"
-                          step="0.1"
-                          value={slot.temperature ?? ''}
-                          onChange={e => updateSlot(idx, 'temperature', e.target.value ? parseFloat(e.target.value) : undefined)}
-                          placeholder="Provider default"
-                          className="w-full px-3 py-2 border border-[#cfd9de] rounded-lg text-sm focus:outline-none focus:border-[#2563eb]"
-                        />
-                      </div>
-                      <div className="flex items-center gap-2 pt-5">
-                        <input
-                          type="checkbox"
-                          id={`toon-${slot.taskSlot}`}
-                          checked={slot.useToonInput}
-                          onChange={e => updateSlot(idx, 'useToonInput', e.target.checked)}
-                          className="w-4 h-4 rounded border-[#cfd9de]"
-                        />
-                        <label htmlFor={`toon-${slot.taskSlot}`} className="text-xs text-[#71767b] cursor-pointer">
-                          TOON input encoding (saves ~30-40% input tokens)
-                        </label>
+
+                      {/* Fallback config */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                        <div>
+                          <label className="block text-xs text-[#71767b] mb-1">Fallback Provider</label>
+                          <select
+                            value={slot.fallbackProvider}
+                            onChange={e => updateSlot(idx, 'fallbackProvider', e.target.value)}
+                            className="w-full px-3 py-2 border border-[#cfd9de] rounded-lg text-sm focus:outline-none focus:border-[#2563eb]"
+                          >
+                            {providers.map(p => (
+                              <option key={p.name} value={p.name} disabled={!p.configured}>
+                                {p.label}{!p.configured ? ' (no key)' : ''}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs text-[#71767b] mb-1">Fallback Model</label>
+                          <input
+                            type="text"
+                            value={slot.fallbackModel}
+                            onChange={e => updateSlot(idx, 'fallbackModel', e.target.value)}
+                            placeholder="e.g. claude-haiku-4-5-20251001"
+                            className="w-full px-3 py-2 border border-[#cfd9de] rounded-lg text-sm focus:outline-none focus:border-[#2563eb]"
+                          />
+                        </div>
+                        <div className="flex items-center gap-2 pt-5">
+                          <input
+                            type="checkbox"
+                            id={`toon-${slot.taskSlot}`}
+                            checked={slot.useToonInput}
+                            onChange={e => updateSlot(idx, 'useToonInput', e.target.checked)}
+                            className="w-4 h-4 rounded border-[#cfd9de]"
+                          />
+                          <label htmlFor={`toon-${slot.taskSlot}`} className="text-xs text-[#71767b] cursor-pointer">
+                            TOON input encoding
+                          </label>
+                        </div>
                       </div>
                     </div>
                   )}

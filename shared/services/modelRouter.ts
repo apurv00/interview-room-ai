@@ -1,24 +1,24 @@
-import Anthropic from '@anthropic-ai/sdk'
 import { TASK_SLOT_DEFAULTS, type TaskSlot } from '@shared/services/taskSlots'
+import { aiLogger } from '@shared/logger'
 
-// Inline the slot config interface to avoid importing ModelConfig (which pulls mongoose into client bundles)
+// ─── Slot config (inlined to avoid pulling mongoose into client bundles) ────
+
 interface SlotConfig {
   taskSlot: string
   model: string
   fallbackModel?: string
+  fallbackProvider?: string
   maxTokens: number
-  provider: 'anthropic' | 'openrouter'
+  provider: string
   temperature?: number
   isActive: boolean
   useToonInput?: boolean
 }
-import { aiLogger } from '@shared/logger'
 
 // ─── In-memory cache ────────────────────────────────────────────────────────
-// Reloaded from DB every 60s. Falls back to hardcoded defaults if DB is down.
 
 interface CachedConfig {
-  openRouterEnabled: boolean
+  routingEnabled: boolean
   slots: Map<TaskSlot, SlotConfig>
   loadedAt: number
 }
@@ -28,15 +28,11 @@ let _cache: CachedConfig | null = null
 let _loadPromise: Promise<void> | null = null
 
 async function loadConfig(): Promise<void> {
-  // Skip DB access entirely on the client — only server-side loads config
   if (typeof window !== 'undefined') {
-    _cache = { openRouterEnabled: false, slots: new Map(), loadedAt: Date.now() }
+    _cache = { routingEnabled: false, slots: new Map(), loadedAt: Date.now() }
     return
   }
   try {
-    // Use eval('require') to prevent webpack from statically analyzing
-    // and bundling mongoose into client-side chunks. This code only runs
-    // server-side (guarded by the typeof window check above).
     const _require = eval('require') as NodeRequire
     const { connectDB } = _require('@shared/db/connection') as typeof import('@shared/db/connection')
     const { ModelConfig } = _require('@shared/db/models/ModelConfig') as typeof import('@shared/db/models/ModelConfig')
@@ -49,15 +45,14 @@ async function loadConfig(): Promise<void> {
           slotMap.set(slot.taskSlot, slot)
         }
       }
-      _cache = { openRouterEnabled: doc.openRouterEnabled, slots: slotMap, loadedAt: Date.now() }
+      _cache = { routingEnabled: doc.routingEnabled, slots: slotMap, loadedAt: Date.now() }
     } else {
-      // No config in DB — use defaults via Anthropic
-      _cache = { openRouterEnabled: false, slots: new Map(), loadedAt: Date.now() }
+      _cache = { routingEnabled: false, slots: new Map(), loadedAt: Date.now() }
     }
   } catch (err) {
     aiLogger.warn({ err }, 'ModelRouter: failed to load config from DB, using hardcoded defaults')
     if (!_cache) {
-      _cache = { openRouterEnabled: false, slots: new Map(), loadedAt: Date.now() }
+      _cache = { routingEnabled: false, slots: new Map(), loadedAt: Date.now() }
     }
   }
 }
@@ -73,7 +68,6 @@ async function ensureConfig(): Promise<CachedConfig> {
   return _cache!
 }
 
-/** Force-refresh the cached config (e.g. after CMS update). */
 export function invalidateModelConfigCache(): void {
   _cache = null
 }
@@ -83,9 +77,10 @@ export function invalidateModelConfigCache(): void {
 export interface ResolvedModel {
   model: string
   maxTokens: number
-  provider: 'anthropic' | 'openrouter'
+  provider: string
   temperature?: number
   fallbackModel?: string
+  fallbackProvider?: string
   useToonInput: boolean
 }
 
@@ -93,12 +88,10 @@ export async function resolveModel(taskSlot: TaskSlot): Promise<ResolvedModel> {
   const config = await ensureConfig()
   const defaults = TASK_SLOT_DEFAULTS[taskSlot]
 
-  // If OpenRouter is disabled globally, use Anthropic defaults
-  if (!config.openRouterEnabled) {
+  if (!config.routingEnabled) {
     return { model: defaults.model, maxTokens: defaults.maxTokens, provider: 'anthropic', useToonInput: false }
   }
 
-  // Check if there's a CMS-configured slot override
   const slotConfig = config.slots.get(taskSlot)
   if (slotConfig) {
     return {
@@ -107,71 +100,75 @@ export async function resolveModel(taskSlot: TaskSlot): Promise<ResolvedModel> {
       provider: slotConfig.provider,
       temperature: slotConfig.temperature,
       fallbackModel: slotConfig.fallbackModel,
+      fallbackProvider: slotConfig.fallbackProvider ?? 'anthropic',
       useToonInput: slotConfig.useToonInput ?? false,
     }
   }
 
-  // No override — use hardcoded default via Anthropic
   return { model: defaults.model, maxTokens: defaults.maxTokens, provider: 'anthropic', useToonInput: false }
 }
 
-// ─── OpenRouter client ──────────────────────────────────────────────────────
-// OpenRouter is API-compatible with the Anthropic SDK — we just point it at
-// a different base URL and use OPENROUTER_API_KEY instead.
-
-let _anthropicClient: Anthropic | null = null
-let _openRouterClient: Anthropic | null = null
-
-function getAnthropicClient(): Anthropic {
-  if (!_anthropicClient) {
-    _anthropicClient = new Anthropic()
-  }
-  return _anthropicClient
-}
-
-function getOpenRouterClient(): Anthropic {
-  if (!_openRouterClient) {
-    const apiKey = process.env.OPENROUTER_API_KEY
-    if (!apiKey) {
-      aiLogger.warn('OPENROUTER_API_KEY not set — falling back to Anthropic')
-      return getAnthropicClient()
-    }
-    _openRouterClient = new Anthropic({
-      apiKey,
-      baseURL: 'https://openrouter.ai/api/v1',
-    })
-  }
-  return _openRouterClient
-}
-
-function getClient(provider: 'anthropic' | 'openrouter'): Anthropic {
-  return provider === 'openrouter' ? getOpenRouterClient() : getAnthropicClient()
-}
-
-// ─── Public API: create a completion with automatic fallback ────────────────
+// ─── Public API ─────────────────────────────────────────────────────────────
 
 export interface CompletionOptions {
   taskSlot: TaskSlot
   system: string | Array<{ type: 'text'; text: string; cache_control?: { type: string } }>
   messages: Array<{ role: 'user' | 'assistant'; content: string }>
-  /** Structured data to TOON-encode and append to the last user message.
-   *  Only encoded as TOON when the slot has useToonInput=true in CMS config;
-   *  otherwise JSON.stringify'd. Falls back to JSON on any encoding error. */
   contextData?: Record<string, unknown>
-  /** Override max_tokens from the resolved model config */
   maxTokens?: number
-  /** Override temperature */
   temperature?: number
 }
 
 export interface CompletionResult {
   text: string
   model: string
-  provider: 'anthropic' | 'openrouter'
+  provider: string
   inputTokens: number
   outputTokens: number
-  /** Whether this used the fallback model */
   usedFallback: boolean
+}
+
+async function prepareMessages(
+  opts: CompletionOptions,
+  resolved: ResolvedModel,
+): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
+  let messages = opts.messages
+  if (opts.contextData && Object.keys(opts.contextData).length > 0) {
+    const { encodeContextData } = await import('./toonEncoder')
+    const suffix = resolved.useToonInput
+      ? encodeContextData(opts.contextData)
+      : '\n\n' + Object.entries(opts.contextData)
+          .filter(([, v]) => v != null)
+          .map(([k, v]) => `${k}:\n${JSON.stringify(v, null, 0)}`)
+          .join('\n\n')
+
+    messages = [...opts.messages]
+    const lastIdx = messages.length - 1
+    if (lastIdx >= 0 && messages[lastIdx].role === 'user') {
+      messages[lastIdx] = { ...messages[lastIdx], content: messages[lastIdx].content + suffix }
+    }
+  }
+  return messages
+}
+
+async function callProvider(
+  providerName: string,
+  model: string,
+  system: string,
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+  maxTokens: number,
+  temperature?: number,
+): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
+  // Dynamic import to avoid pulling all provider SDKs into client bundles
+  const { getProvider } = await import('./providers/index')
+  const provider = getProvider(providerName)
+  if (!provider) {
+    throw new Error(`Provider "${providerName}" not registered`)
+  }
+  if (!provider.isConfigured()) {
+    throw new Error(`Provider "${providerName}" not configured (missing API key)`)
+  }
+  return provider.complete({ model, system, messages, maxTokens, temperature })
 }
 
 /**
@@ -179,198 +176,59 @@ export interface CompletionResult {
  *
  * Fallback chain:
  *   1. Primary model via configured provider
- *   2. Fallback model (if configured) via same provider
+ *   2. Fallback model via fallback provider (can differ from primary)
  *   3. Hardcoded Anthropic default for this slot
- *
- * If all three fail, the error propagates to the caller.
  */
 export async function completion(opts: CompletionOptions): Promise<CompletionResult> {
   const resolved = await resolveModel(opts.taskSlot)
   const maxTokens = opts.maxTokens ?? resolved.maxTokens
   const temperature = opts.temperature ?? resolved.temperature
+  const system = typeof opts.system === 'string' ? opts.system : opts.system.map(b => b.text).join('\n\n')
+  const messages = await prepareMessages(opts, resolved)
 
-  // If contextData provided, encode and append to last user message
-  let messages = opts.messages
-  if (opts.contextData && Object.keys(opts.contextData).length > 0) {
-    const { encodeContextData } = await import('./toonEncoder')
-    const suffix = resolved.useToonInput
-      ? encodeContextData(opts.contextData)
-      : '\n\n' + Object.entries(opts.contextData)
-          .filter(([, v]) => v != null)
-          .map(([k, v]) => `${k}:\n${JSON.stringify(v, null, 0)}`)
-          .join('\n\n')
-
-    messages = [...opts.messages]
-    const lastIdx = messages.length - 1
-    if (lastIdx >= 0 && messages[lastIdx].role === 'user') {
-      messages[lastIdx] = { ...messages[lastIdx], content: messages[lastIdx].content + suffix }
-    }
-  }
-
-  const params = {
-    max_tokens: maxTokens,
-    system: opts.system as string,
-    messages,
-    ...(temperature !== undefined && { temperature }),
-  }
-
-  // Attempt 1: primary model
+  // Attempt 1: primary model via configured provider
   try {
-    const client = getClient(resolved.provider)
-    const message = await client.messages.create({
-      ...params,
-      model: resolved.model,
-    })
-    const text = message.content[0].type === 'text' ? message.content[0].text.trim() : ''
-    return {
-      text,
-      model: resolved.model,
-      provider: resolved.provider,
-      inputTokens: message.usage.input_tokens,
-      outputTokens: message.usage.output_tokens,
-      usedFallback: false,
-    }
+    const result = await callProvider(resolved.provider, resolved.model, system, messages, maxTokens, temperature)
+    return { ...result, model: resolved.model, provider: resolved.provider, usedFallback: false }
   } catch (primaryErr) {
-    aiLogger.warn({ err: primaryErr, taskSlot: opts.taskSlot, model: resolved.model },
-      'ModelRouter: primary model failed, trying fallback')
+    aiLogger.warn({ err: primaryErr, taskSlot: opts.taskSlot, model: resolved.model, provider: resolved.provider },
+      'ModelRouter: primary failed, trying fallback')
   }
 
-  // Attempt 2: fallback model (if configured)
+  // Attempt 2: fallback model via fallback provider (may differ from primary)
   if (resolved.fallbackModel) {
+    const fbProvider = resolved.fallbackProvider ?? 'anthropic'
     try {
-      const client = getClient(resolved.provider)
-      const message = await client.messages.create({
-        ...params,
-        model: resolved.fallbackModel,
-      })
-      const text = message.content[0].type === 'text' ? message.content[0].text.trim() : ''
-      return {
-        text,
-        model: resolved.fallbackModel,
-        provider: resolved.provider,
-        inputTokens: message.usage.input_tokens,
-        outputTokens: message.usage.output_tokens,
-        usedFallback: true,
-      }
+      const result = await callProvider(fbProvider, resolved.fallbackModel, system, messages, maxTokens, temperature)
+      return { ...result, model: resolved.fallbackModel, provider: fbProvider, usedFallback: true }
     } catch (fallbackErr) {
-      aiLogger.warn({ err: fallbackErr, taskSlot: opts.taskSlot, fallbackModel: resolved.fallbackModel },
-        'ModelRouter: fallback model failed, trying hardcoded Anthropic default')
+      aiLogger.warn({ err: fallbackErr, taskSlot: opts.taskSlot, fallbackModel: resolved.fallbackModel, fallbackProvider: fbProvider },
+        'ModelRouter: fallback failed, trying hardcoded Anthropic default')
     }
   }
 
-  // Attempt 3: hardcoded Anthropic default (always available)
+  // Attempt 3: hardcoded Anthropic default
   const defaults = TASK_SLOT_DEFAULTS[opts.taskSlot]
   if (resolved.model === defaults.model && resolved.provider === 'anthropic') {
-    // Already tried this exact model — don't retry, just throw
     throw new Error(`ModelRouter: all attempts failed for ${opts.taskSlot}`)
   }
 
-  const anthropicClient = getAnthropicClient()
-  const message = await anthropicClient.messages.create({
-    ...params,
-    model: defaults.model,
-    max_tokens: defaults.maxTokens,
-  })
-  const text = message.content[0].type === 'text' ? message.content[0].text.trim() : ''
-  return {
-    text,
-    model: defaults.model,
-    provider: 'anthropic',
-    inputTokens: message.usage.input_tokens,
-    outputTokens: message.usage.output_tokens,
-    usedFallback: true,
-  }
+  const result = await callProvider('anthropic', defaults.model, system, messages, defaults.maxTokens, temperature)
+  return { ...result, model: defaults.model, provider: 'anthropic', usedFallback: true }
 }
 
 /**
  * Streaming version of completion. Same fallback chain.
- * Returns a stream that yields the final message.
  */
 export async function completionStream(opts: CompletionOptions): Promise<CompletionResult> {
-  const resolved = await resolveModel(opts.taskSlot)
-  const maxTokens = opts.maxTokens ?? resolved.maxTokens
-  const temperature = opts.temperature ?? resolved.temperature
-
-  // If contextData provided, encode and append to last user message
-  let messages = opts.messages
-  if (opts.contextData && Object.keys(opts.contextData).length > 0) {
-    const { encodeContextData } = await import('./toonEncoder')
-    const suffix = resolved.useToonInput
-      ? encodeContextData(opts.contextData)
-      : '\n\n' + Object.entries(opts.contextData)
-          .filter(([, v]) => v != null)
-          .map(([k, v]) => `${k}:\n${JSON.stringify(v, null, 0)}`)
-          .join('\n\n')
-
-    messages = [...opts.messages]
-    const lastIdx = messages.length - 1
-    if (lastIdx >= 0 && messages[lastIdx].role === 'user') {
-      messages[lastIdx] = { ...messages[lastIdx], content: messages[lastIdx].content + suffix }
-    }
-  }
-
-  const params = {
-    max_tokens: maxTokens,
-    system: opts.system as string,
-    messages,
-    ...(temperature !== undefined && { temperature }),
-  }
-
-  // Attempt 1: primary
-  try {
-    const client = getClient(resolved.provider)
-    const stream = client.messages.stream({ ...params, model: resolved.model })
-    const message = await stream.finalMessage()
-    const text = message.content[0].type === 'text' ? message.content[0].text.trim() : ''
-    return {
-      text,
-      model: resolved.model,
-      provider: resolved.provider,
-      inputTokens: message.usage.input_tokens,
-      outputTokens: message.usage.output_tokens,
-      usedFallback: false,
-    }
-  } catch (primaryErr) {
-    aiLogger.warn({ err: primaryErr, taskSlot: opts.taskSlot, model: resolved.model },
-      'ModelRouter: stream primary failed, trying fallback')
-  }
-
-  // Attempt 2: fallback
-  if (resolved.fallbackModel) {
-    try {
-      const client = getClient(resolved.provider)
-      const stream = client.messages.stream({ ...params, model: resolved.fallbackModel })
-      const message = await stream.finalMessage()
-      const text = message.content[0].type === 'text' ? message.content[0].text.trim() : ''
-      return {
-        text,
-        model: resolved.fallbackModel,
-        provider: resolved.provider,
-        inputTokens: message.usage.input_tokens,
-        outputTokens: message.usage.output_tokens,
-        usedFallback: true,
-      }
-    } catch {
-      // fall through
-    }
-  }
-
-  // Attempt 3: hardcoded default
-  const defaults = TASK_SLOT_DEFAULTS[opts.taskSlot]
-  const anthropicClient = getAnthropicClient()
-  const stream = anthropicClient.messages.stream({ ...params, model: defaults.model, max_tokens: defaults.maxTokens })
-  const message = await stream.finalMessage()
-  const text = message.content[0].type === 'text' ? message.content[0].text.trim() : ''
-  return {
-    text,
-    model: defaults.model,
-    provider: 'anthropic',
-    inputTokens: message.usage.input_tokens,
-    outputTokens: message.usage.output_tokens,
-    usedFallback: true,
-  }
+  // For non-Anthropic providers, streaming uses the same path as completion
+  // since the provider adapter handles the full request/response cycle.
+  // For Anthropic specifically, we could use the streaming SDK, but
+  // the adapter pattern abstracts this — callers get the same interface.
+  return completion(opts)
 }
 
-// Re-export for backward compat — existing code that imports getAnthropicClient still works
-export { getAnthropicClient }
+// ─── Re-exports for backward compatibility ──────────────────────────────────
+
+export { getAnthropicClient } from './providers/anthropic'
 export { parseClaudeJSON } from './llmClient'
