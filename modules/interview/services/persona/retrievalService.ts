@@ -89,7 +89,7 @@ export async function searchQuestions(
   // Try semantic (vector) search first if enabled
   if (isFeatureEnabled('embedding_search')) {
     try {
-      const { vectorSearchQuestions } = await import('./embeddingService')
+      const { vectorSearchQuestions } = await import('../core/embeddingService')
       const results = await vectorSearchQuestions(query, { domain }, limit)
       if (results.length > 0) return results
     } catch {

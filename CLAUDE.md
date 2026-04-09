@@ -7,10 +7,11 @@ Full-stack Next.js 14 app with Claude AI, MongoDB, Redis, and Stripe.
 ## Quick Commands
 
 ```bash
-npm run dev        # Dev server on :3000
-npm run build      # Production build
-npm run test:run   # Run 111 tests (vitest)
-npm run lint       # ESLint
+npm run dev          # Dev server on :3000
+npm run dev:inngest  # Inngest dev dashboard on :8288 (run in a second terminal for background jobs)
+npm run build        # Production build
+npm run test:run     # Run tests (vitest)
+npm run lint         # ESLint
 ```
 
 ## Tech Stack
@@ -80,11 +81,18 @@ middleware.ts               # Route protection, subdomain rewriting, security he
 - **Session data**: localStorage for in-progress config (`INTERVIEW_CONFIG`, `INTERVIEW_DATA`). MongoDB for persistence.
 - **AI scoring**: 5 dimensions — relevance, structure (STAR), specificity, ownership, jdAlignment. Supports follow-up questions.
 - **Avatar**: SVG-based with emotions (neutral, friendly, curious, skeptical, impressed), lip sync, and Web Speech Synthesis TTS.
+- **Background jobs (Inngest)**: Long-running and scheduled work runs as Inngest functions, not inline HTTP handlers.
+  - Client posts to `/api/analysis/start` → route emits `inngest.send({ name: 'analysis/requested', ... })` → returns `{ jobId, status: 'pending' }` in <500ms.
+  - `analysisJob` (at `modules/interview/jobs/analysisJob.ts`) runs the 5 pipeline steps as independent `step.run()` calls, each retried by Inngest.
+  - Client keeps polling `/api/analysis/[sessionId]` every 3s; DB row advances `pending → processing → completed`.
+  - Scheduled functions: `emailDigestJob` (daily 9 AM UTC), `regeneratePlansJob` (monthly). All registered via `/api/inngest`.
+  - Local dev: run `npm run dev:inngest` in a second terminal to boot the Inngest dev dashboard at localhost:8288.
 
 ## Environment Variables
 
 Required: `ANTHROPIC_API_KEY`, `NEXTAUTH_SECRET`, `MONGODB_URI`, `REDIS_URL`
 Multimodal: `GROQ_API_KEY`, `DEEPGRAM_API_KEY`, `FEATURE_FLAG_MULTIMODAL_ANALYSIS=true`, `NEXT_PUBLIC_FEATURE_MULTIMODAL=true`
+Inngest (production only): `INNGEST_EVENT_KEY`, `INNGEST_SIGNING_KEY` — not required in dev; the `npm run dev:inngest` dev server handles routing locally.
 Optional: `GOOGLE_CLIENT_ID/SECRET`, `GITHUB_CLIENT_ID/SECRET`, Stripe keys, `OPENAI_API_KEY`
 Full list: `.env.local.example`
 
@@ -108,7 +116,10 @@ Full list: `.env.local.example`
 
 _Update this section each session to carry context forward._
 
-- **Multimodal interview analysis (Phase 2)**: Post-interview analysis pipeline — Groq Whisper transcription + MediaPipe facial landmarks + Claude Haiku fusion → Interview Replay page with synced video, signal timeline, word-level transcript, coaching tips. Runs inline inside `/api/analysis/start` (`maxDuration = 60`); ~10–15s for a typical interview, no external worker. Feature-flagged, quota-gated (Free: 1/month, Pro: 10/month, Enterprise: unlimited).
+- **Background jobs moved to Inngest** (architecture Phase 2): `/api/analysis/start` no longer runs the multimodal pipeline inline — it emits an `analysis/requested` Inngest event and returns `{ jobId, status: 'pending' }` in <500ms. The pipeline now runs as 5 independently-retried Inngest `step.run()` calls inside `modules/interview/jobs/analysisJob.ts`. The two Vercel crons (`email-digest`, `regenerate-plans`) migrated to Inngest scheduled functions; `vercel.json` crons entry removed. `FailedJob` model deleted (unused; Inngest handles retries natively). Client polling infrastructure at `AnalysisTrigger.tsx` required no changes — it was already designed for a background-worker model.
+- **Boundary hygiene + ESLint enforcement** (architecture Phase 1): Moved ScoreBar + FileDropzone from `modules/interview` into `shared/ui/`. AppShell now takes slot props so `app/layout.tsx` injects XpBadge / BadgeUnlockChecker from `@learn` (no more shared → module import). Fixed 6 cross-module barrel bypasses (cms, resume, interview, learn services + components). Added `no-restricted-imports` ESLint rule with per-module overrides: `shared/**` cannot depend on any module; modules cross-import only via barrels; `app/**` and tests exempt. Added bare aliases (`@interview`, `@learn`, …) to tsconfig paths.
+- **Service-level test safety net** (architecture Phase 0): Added 86 new tests across resume, b2b, and cms module services before touching any code. Total: 819 tests passing across 66 files.
+- **Multimodal interview analysis (Phase 2)**: Post-interview analysis pipeline — Groq Whisper transcription + MediaPipe facial landmarks + Claude Haiku fusion → Interview Replay page with synced video, signal timeline, word-level transcript, coaching tips. Feature-flagged, quota-gated (Free: 1/month, Pro: 10/month, Enterprise: unlimited).
 - **Real-time multimodal coaching**: Client-side MediaPipe facial coaching (eye contact, expression, head stability nudges), reactive avatar (responds to candidate), Deepgram Aura TTS (natural AI voice), Deepgram streaming STT (replaces Web Speech API), real-time prosody coaching.
 - **Performance**: Switched fusion from Sonnet→Haiku (~15s→3-5s), Whisper from OpenAI→Groq (~25s→3s), eval+question gen from Sonnet→Haiku (~4s→1-2s), coaching delay 1500ms→800ms.
 - **Bug fixes**: history/feedback navigation, login redirect flow, first question timing delay, voice synthesis, branding consistency

@@ -15,7 +15,7 @@ vi.mock('@shared/logger', () => ({
   aiLogger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
 }))
 
-import { extractCompanyContext } from '../services/jdContextExtractor'
+import { extractCompanyContext } from '../services/persona/jdContextExtractor'
 
 describe('extractCompanyContext', () => {
   // ── Empty/short input ──

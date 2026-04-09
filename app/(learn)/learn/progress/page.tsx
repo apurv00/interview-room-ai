@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
-import { ScoreRing } from '@interview/components/ScoreBar'
+import { ScoreRing } from '@shared/ui/ScoreBar'
 import SignedOutEmptyState from '@shared/ui/SignedOutEmptyState'
 
 interface ProgressData {

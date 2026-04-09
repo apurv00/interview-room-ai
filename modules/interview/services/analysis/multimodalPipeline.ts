@@ -488,7 +488,7 @@ export async function runMultimodalPipeline(
  * and baseline variants would receive identical inputs and the comparison
  * would be meaningless).
  */
-async function shouldRunDualPipeline(
+export async function shouldRunDualPipeline(
   userId: string,
   facialSegments: Array<Record<string, unknown>>
 ): Promise<boolean> {

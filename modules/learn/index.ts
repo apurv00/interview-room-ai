@@ -34,6 +34,8 @@ export type { ComparisonResult, DimensionDelta } from './services/comparisonServ
 export { default as ResourceLinks } from './components/ResourceLinks'
 export { default as ComparisonCard } from './components/feedback/ComparisonCard'
 export { default as ShareButton } from './components/feedback/ShareButton'
+export { default as XpBadge } from './components/XpBadge'
+export { default as BadgeUnlockChecker } from './components/BadgeUnlockChecker'
 
 // ── XP ──
 export { awardXp, getXpSummary, getXpHistory } from './services/xpService'
@@ -54,3 +56,6 @@ export { getTodaysChallenge, submitChallengeAnswer, getUserChallengeHistory, get
 // ── Share ──
 export { generateShareToken, getPublicScorecard, revokeShareToken } from './services/shareService'
 export type { PublicScorecard } from './services/shareService'
+
+// ── Daily plan regen (used by monthly scheduled job) ──
+export { autoRegeneratePlan } from './services/dailyPlanService'

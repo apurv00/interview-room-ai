@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
-import { generateJobDescription } from '@interview/services/jdGeneratorService'
+import { generateJobDescription } from '@interview/services/persona/jdGeneratorService'
 
 export const dynamic = 'force-dynamic'
 

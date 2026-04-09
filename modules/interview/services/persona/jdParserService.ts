@@ -2,7 +2,7 @@ import { getAnthropicClient } from '@shared/services/llmClient'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { logger } from '@shared/logger'
 import type { IParsedJobDescription, ParsedRequirement } from '@shared/db/models/SavedJobDescription'
-import { DOMAIN_COMPETENCIES, UNIVERSAL_COMPETENCIES } from '@learn/services/competencyService'
+import { DOMAIN_COMPETENCIES, UNIVERSAL_COMPETENCIES } from '@learn'
 
 // ─── Parse Job Description ─────────────────────────────────────────────────
 

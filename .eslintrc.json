@@ -1,3 +1,149 @@
 {
-  "extends": "next/core-web-vitals"
+  "extends": "next/core-web-vitals",
+  "rules": {
+    "no-restricted-imports": [
+      "error",
+      {
+        "patterns": [
+          {
+            "group": [
+              "@interview/*",
+              "@learn/*",
+              "@b2b/*",
+              "@resume/*",
+              "@cms/*"
+            ],
+            "message": "Cross-module imports must go through the module barrel (e.g. '@interview') rather than reaching into internal paths. If the symbol you need isn't exported, add it to the module's index.ts."
+          }
+        ]
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["modules/interview/**/*"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["@learn/*", "@b2b/*", "@resume/*", "@cms/*"],
+                "message": "Cross-module imports must use the module barrel (e.g. '@learn')."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["modules/learn/**/*"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["@interview/*", "@b2b/*", "@resume/*", "@cms/*"],
+                "message": "Cross-module imports must use the module barrel (e.g. '@interview')."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["modules/b2b/**/*"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["@interview/*", "@learn/*", "@resume/*", "@cms/*"],
+                "message": "Cross-module imports must use the module barrel."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["modules/resume/**/*"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["@interview/*", "@learn/*", "@b2b/*", "@cms/*"],
+                "message": "Cross-module imports must use the module barrel."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["modules/cms/**/*"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["@interview/*", "@learn/*", "@b2b/*", "@resume/*"],
+                "message": "Cross-module imports must use the module barrel."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["shared/**/*"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "@interview",
+                  "@interview/*",
+                  "@learn",
+                  "@learn/*",
+                  "@b2b",
+                  "@b2b/*",
+                  "@resume",
+                  "@resume/*",
+                  "@cms",
+                  "@cms/*"
+                ],
+                "message": "shared/ is the kernel — it cannot depend on any domain module. Inject module-specific behavior via slot props or callbacks from the composition root (app/)."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["app/**/*", "middleware.ts", "next.config.js", "instrumentation.ts"],
+      "rules": {
+        "no-restricted-imports": "off"
+      }
+    },
+    {
+      "files": [
+        "**/__tests__/**/*",
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.spec.ts",
+        "**/*.spec.tsx"
+      ],
+      "rules": {
+        "no-restricted-imports": "off"
+      }
+    }
+  ]
 }

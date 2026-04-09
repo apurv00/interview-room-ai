@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from 'vitest'
 vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockRejectedValue(new Error('no db in test')) }))
 vi.mock('@shared/db/models', () => ({ InterviewSkill: { findOne: vi.fn().mockResolvedValue(null) } }))
 
-import { getSkillContent, getSkillSections, selectSkillQuestions } from '../services/skillLoader'
+import { getSkillContent, getSkillSections, selectSkillQuestions } from '../services/core/skillLoader'
 
 const DOMAINS = [
   'general', 'frontend', 'backend', 'sdet', 'data-science',

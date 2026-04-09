@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import { motion, AnimatePresence } from 'framer-motion'
-import FileDropzone from '@interview/components/FileDropzone'
+import FileDropzone from '@shared/ui/FileDropzone'
 import { EXPERIENCE_LABELS } from '@interview/config/interviewConfig'
 import type { ExperienceLevel } from '@shared/types'
 

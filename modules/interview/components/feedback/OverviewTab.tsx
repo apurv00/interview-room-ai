@@ -2,7 +2,7 @@
 
 import { useMemo } from 'react'
 import MetricCard from '@shared/ui/MetricCard'
-import { ScoreBar } from '@interview/components/ScoreBar'
+import { ScoreBar } from '@shared/ui/ScoreBar'
 import CommunicationDetail from '@interview/components/feedback/CommunicationDetail'
 import PeerComparison, { type PeerData } from '@interview/components/feedback/PeerComparison'
 import type { FeedbackData, StoredInterviewData, EngagementSignals, DeliverySignals } from '@shared/types'

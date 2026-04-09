@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
-import FileDropzone from '@interview/components/FileDropzone'
+import FileDropzone from '@shared/ui/FileDropzone'
 import { useAuthGate } from '@shared/providers/AuthGateProvider'
 import { Check, AlertTriangle } from 'lucide-react'
 

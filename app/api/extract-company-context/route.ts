@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { extractCompanyContext } from '@interview/services/jdContextExtractor'
+import { extractCompanyContext } from '@interview/services/persona/jdContextExtractor'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'

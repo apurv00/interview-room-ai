@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useSession } from 'next-auth/react'
-import FileDropzone from '@interview/components/FileDropzone'
+import FileDropzone from '@shared/ui/FileDropzone'
 import { Check } from 'lucide-react'
 import { useAuthGate } from '@shared/providers/AuthGateProvider'
 

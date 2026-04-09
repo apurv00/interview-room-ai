@@ -88,21 +88,11 @@ describe('P1 Regression — Feature Flags', () => {
   })
 })
 
-// ─── P1: FailedJob Model ────────────────────────────────────────────────────
-
-describe('P1 Regression — FailedJob Model', () => {
-  it('FailedJob model is exported from models index', async () => {
-    const { FailedJob } = await import('@shared/db/models')
-    expect(FailedJob).toBeDefined()
-    expect(FailedJob.modelName).toBe('FailedJob')
-  })
-})
-
 // ─── Phase 3: Coach Notes ───────────────────────────────────────────────────
 
 describe('Phase 3 Regression — Coach Notes Service', () => {
   it('generateCoachNotes returns empty array for empty input', async () => {
-    const { generateCoachNotes } = await import('@interview/services/coachNotesService')
+    const { generateCoachNotes } = await import('@interview/services/analysis/coachNotesService')
     const result = await generateCoachNotes({
       transcript: [],
       evaluations: [],
@@ -112,7 +102,7 @@ describe('Phase 3 Regression — Coach Notes Service', () => {
   })
 
   it('generateCoachNotes returns empty for missing transcript', async () => {
-    const { generateCoachNotes } = await import('@interview/services/coachNotesService')
+    const { generateCoachNotes } = await import('@interview/services/analysis/coachNotesService')
     const result = await generateCoachNotes({
       transcript: [],
       evaluations: [],
@@ -136,7 +126,7 @@ describe('Phase 3 Regression — STAR Stories', () => {
 
 describe('Phase 4 Regression — Embedding Service', () => {
   it('vectorSearchQuestions returns empty when feature disabled', async () => {
-    const { vectorSearchQuestions } = await import('@interview/services/embeddingService')
+    const { vectorSearchQuestions } = await import('@interview/services/core/embeddingService')
     // embedding_search is disabled by default
     const results = await vectorSearchQuestions('test query')
     expect(results).toEqual([])
@@ -147,7 +137,7 @@ describe('Phase 4 Regression — Embedding Service', () => {
 
 describe('Phase 4 Regression — Code Sandbox', () => {
   it('executeCode returns error for unsupported language', async () => {
-    const { executeCode } = await import('@interview/services/codeSandboxService')
+    const { executeCode } = await import('@interview/services/core/codeSandboxService')
     const result = await executeCode('print("hello")', 'ruby' as any)
     expect(result.exitCode).toBe(1)
     expect(result.stderr).toContain('Unsupported language')

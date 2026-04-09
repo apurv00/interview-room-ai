@@ -360,7 +360,7 @@ export default function InterviewPage() {
           // If pool exhausted, generate a fresh problem via AI
           if (!problem) {
             try {
-              const { generateCodingProblem } = await import('@interview/services/codingProblemGenerator')
+              const { generateCodingProblem } = await import('@interview/services/core/codingProblemGenerator')
               problem = await generateCodingProblem(parsed.role, parsed.experience, solvedProblemIds)
             } catch {
               // Fall back to any problem from pool (allow repeats as last resort)

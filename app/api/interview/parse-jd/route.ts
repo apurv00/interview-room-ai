@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
-import { parseJobDescription } from '@interview/services/jdParserService'
+import { parseJobDescription } from '@interview/services/persona/jdParserService'
 
 export const dynamic = 'force-dynamic'
 

@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import { InterviewSkill } from '@shared/db/models'
-import { getDefaultSkillContent, invalidateSkillCache } from '@interview/services/skillLoader'
+import { getDefaultSkillContent, invalidateSkillCache } from '@interview/services/core/skillLoader'
 import { logger } from '@shared/logger'
 
 export const dynamic = 'force-dynamic'

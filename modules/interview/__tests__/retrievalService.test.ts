@@ -43,7 +43,7 @@ vi.mock('@shared/db/models', () => ({
   },
 }))
 
-import { retrieveQuestions, getQuestionBankContext } from '@interview/services/retrievalService'
+import { retrieveQuestions, getQuestionBankContext } from '@interview/services/persona/retrievalService'
 import { isFeatureEnabled } from '@shared/featureFlags'
 
 describe('retrievalService', () => {

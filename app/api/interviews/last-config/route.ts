@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
-import { listSessions } from '@interview/services/interviewService'
+import { listSessions } from '@interview/services/core/interviewService'
 import { logger } from '@shared/logger'
 import type { InterviewConfig } from '@shared/types'
 

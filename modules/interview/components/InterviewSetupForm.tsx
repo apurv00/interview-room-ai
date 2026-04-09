@@ -32,7 +32,7 @@ import {
   Briefcase,
   Video,
 } from 'lucide-react'
-import FileDropzone from '@interview/components/FileDropzone'
+import FileDropzone from '@shared/ui/FileDropzone'
 import DomainSelector from '@interview/components/DomainSelector'
 import DepthSelector from '@interview/components/DepthSelector'
 import RepeatSetupConfirmModal, { type RepeatSetupStep } from '@interview/components/RepeatSetupConfirmModal'

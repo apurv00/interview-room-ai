@@ -5,6 +5,11 @@ import { PDFGenerateSchema } from '@resume/validators/resume'
 import { generatePDF } from '@resume/services/pdfService'
 
 export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
+// Pin to a single region so the Chromium binary cache stays warm across
+// invocations. iad1 (US East) is the default Vercel region and closest to
+// our primary MongoDB Atlas cluster.
+export const preferredRegion = 'iad1'
 // 60s gives puppeteer headroom on cold starts (@sparticuz/chromium extracts
 // a brotli-compressed archive on first invocation, which takes ~3-5s).
 export const maxDuration = 60

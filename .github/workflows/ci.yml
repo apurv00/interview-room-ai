@@ -21,6 +21,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Module size budget
+        run: node scripts/check-module-size.mjs
+
       - name: Lint
         run: npm run lint
 
