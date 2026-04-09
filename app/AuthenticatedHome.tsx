@@ -91,20 +91,17 @@ export default function AuthenticatedHome() {
           setResumeText(c.resumeText)
           setResumeFileName(c.resumeFileName || 'Resume')
         }
-        // Don't restore JD, company, or industry from previous session —
-        // these are interview-specific context and should not carry over.
-        // Also scrub stale fields from stored config so the lobby page
-        // doesn't pick them up from an old localStorage entry.
-        const { jobDescription, jdFileName: _jf, targetCompany: _tc, targetIndustry: _ti, ...cleanConfig } = c
-        if (jobDescription || _tc || _ti) {
-          const cleanStr = JSON.stringify(cleanConfig)
-          localStorage.setItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`, cleanStr)
-          localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, cleanStr)
+        // Restore JD/company/industry — these now persist across sessions so
+        // repeat users keep their previous context until they replace it.
+        if (c.jobDescription) {
+          setJdText(c.jobDescription)
+          setJdFileName(c.jdFileName || 'Saved JD')
         }
-        // Migrate legacy key to user-scoped key
+        if (c.targetCompany) setTargetCompany(c.targetCompany)
+        if (c.targetIndustry) setTargetIndustry(c.targetIndustry)
+        // Migrate legacy unscoped key to user-scoped key.
         if (legacy && !stored) {
-          const cleanStr = JSON.stringify(cleanConfig)
-          localStorage.setItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`, cleanStr)
+          localStorage.setItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`, configStr)
           localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
         }
       }

@@ -35,6 +35,7 @@ import {
 import FileDropzone from '@interview/components/FileDropzone'
 import DomainSelector from '@interview/components/DomainSelector'
 import DepthSelector from '@interview/components/DepthSelector'
+import RepeatSetupConfirmModal, { type RepeatSetupStep } from '@interview/components/RepeatSetupConfirmModal'
 import SelectionGroup from '@shared/ui/SelectionGroup'
 import Button from '@shared/ui/Button'
 import type {
@@ -103,18 +104,27 @@ export default function InterviewSetupForm() {
 
   const [uploadError, setUploadError] = useState('')
 
+  // Repeat-user modal state
+  const [showRepeatModal, setShowRepeatModal] = useState(false)
+  const [repeatCheckDone, setRepeatCheckDone] = useState(false)
+
   const hasResume = !!(resumeText || quickProfileDone)
 
-  // ─── Pre-fill from last session (scoped to user) ───────────────────────
+  // ─── Pre-fill from last session (localStorage, then DB fallback) ───────
+  // Single effect that:
+  //   1. Reads localStorage for `${INTERVIEW_CONFIG}:${userId}` (or legacy).
+  //   2. Falls back to GET /api/interviews/last-config on a fresh device.
+  //   3. Hydrates form state and, if the config is complete, opens the
+  //      repeat-user confirmation modal.
   useEffect(() => {
     if (status !== 'authenticated' || !authSession?.user?.id) return
-    try {
-      const userId = authSession.user.id
-      const stored = localStorage.getItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`)
-      const legacy = !stored ? localStorage.getItem(STORAGE_KEYS.INTERVIEW_CONFIG) : null
-      const configStr = stored || legacy
-      if (!configStr) return
-      const c: InterviewConfig = JSON.parse(configStr)
+    if (repeatCheckDone) return
+
+    const userId = authSession.user.id
+    let cancelled = false
+
+    const hydrate = (c: InterviewConfig) => {
+      if (cancelled) return
       setLastConfig(c)
       setRole(c.role)
       if (c.interviewType) setInterviewType(c.interviewType)
@@ -124,26 +134,73 @@ export default function InterviewSetupForm() {
         setResumeText(c.resumeText)
         setResumeFileName(c.resumeFileName || 'Resume')
       }
-      // Scrub JD/company/industry — these are per-session, not persistent.
-      const {
-        jobDescription,
-        jdFileName: _jf,
-        targetCompany: _tc,
-        targetIndustry: _ti,
-        ...cleanConfig
-      } = c
-      if (jobDescription || _tc || _ti) {
-        const cleanStr = JSON.stringify(cleanConfig)
-        localStorage.setItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`, cleanStr)
-        localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, cleanStr)
+      if (c.jobDescription) {
+        setJdText(c.jobDescription)
+        setJdFileName(c.jdFileName || 'Saved JD')
       }
-      if (legacy && !stored) {
-        const cleanStr = JSON.stringify(cleanConfig)
-        localStorage.setItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`, cleanStr)
-        localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
+      if (c.targetCompany) setTargetCompany(c.targetCompany)
+      if (c.targetIndustry) setTargetIndustry(c.targetIndustry)
+    }
+
+    const isCompleteConfig = (c: InterviewConfig): boolean => {
+      if (!c.role || !c.interviewType || !c.experience || !c.duration) return false
+      if (!c.resumeText) return false
+      // General domain requires company/JD context to start directly.
+      if (c.role === 'general' && !c.jobDescription && !c.targetCompany) return false
+      return true
+    }
+
+    const finalize = (c: InterviewConfig | null) => {
+      if (cancelled) return
+      if (c) hydrate(c)
+      if (c && isCompleteConfig(c)) setShowRepeatModal(true)
+      setRepeatCheckDone(true)
+    }
+
+    try {
+      const stored = localStorage.getItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`)
+      const legacy = !stored ? localStorage.getItem(STORAGE_KEYS.INTERVIEW_CONFIG) : null
+      const configStr = stored || legacy
+
+      if (configStr) {
+        const c: InterviewConfig = JSON.parse(configStr)
+        // Migrate legacy unscoped key to user-scoped key.
+        if (legacy && !stored) {
+          localStorage.setItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`, configStr)
+          localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
+        }
+        finalize(c)
+        return
       }
     } catch {
-      /* ignore */
+      /* fall through to DB fallback */
+    }
+
+    // DB fallback — fresh device or cleared cache.
+    fetch('/api/interviews/last-config')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { config: InterviewConfig | null } | null) => {
+        if (cancelled) return
+        const c = data?.config || null
+        if (c) {
+          // Hydrate localStorage so future visits skip the network hop.
+          try {
+            localStorage.setItem(
+              `${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`,
+              JSON.stringify(c)
+            )
+          } catch {
+            /* quota */
+          }
+        }
+        finalize(c)
+      })
+      .catch(() => {
+        if (!cancelled) finalize(null)
+      })
+
+    return () => {
+      cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, authSession?.user?.id])
@@ -399,8 +456,41 @@ export default function InterviewSetupForm() {
     requireAuth,
   ])
 
+  // ─── Repeat-modal handlers ─────────────────────────────────────────────
+  const handleRepeatEdit = useCallback((target: RepeatSetupStep) => {
+    setShowRepeatModal(false)
+    setStep(target)
+  }, [])
+
+  const handleRepeatClose = useCallback(() => {
+    // X button / Esc / backdrop — dismiss but keep pre-filled state.
+    setShowRepeatModal(false)
+  }, [])
+
+  const handleRepeatStartOver = useCallback(() => {
+    // Clear every setup selection so the user can build a fresh config.
+    setRole(null)
+    setInterviewType(null)
+    setExperience(null)
+    setDuration(20)
+    setResumeText('')
+    setResumeFileName('')
+    setQuickProfileDone(false)
+    setJdText('')
+    setJdFileName('')
+    setJdCompany('')
+    setJdRole('')
+    setJdPasteText('')
+    setTargetCompany('')
+    setTargetIndustry('')
+    setLastConfig(null)
+    setShowRepeatModal(false)
+    setStep(0)
+  }, [])
+
   // JSX rendered in chunk 2.
-  return <InterviewSetupFormView
+  return <>
+    <InterviewSetupFormView
     step={step}
     progress={progress}
     canGoNext={canGoNext}
@@ -455,6 +545,17 @@ export default function InterviewSetupForm() {
     onJumpToStep={setStep}
     uploadError={uploadError}
   />
+    {showRepeatModal && lastConfig && (
+      <RepeatSetupConfirmModal
+        config={lastConfig}
+        resumeFileName={resumeFileName}
+        onStart={start}
+        onEdit={handleRepeatEdit}
+        onClose={handleRepeatClose}
+        onStartOver={handleRepeatStartOver}
+      />
+    )}
+  </>
 }
 
 // ─── View component ────────────────────────────────────────────────────
