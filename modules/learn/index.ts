@@ -34,6 +34,8 @@ export type { ComparisonResult, DimensionDelta } from './services/comparisonServ
 export { default as ResourceLinks } from './components/ResourceLinks'
 export { default as ComparisonCard } from './components/feedback/ComparisonCard'
 export { default as ShareButton } from './components/feedback/ShareButton'
+export { default as XpBadge } from './components/XpBadge'
+export { default as BadgeUnlockChecker } from './components/BadgeUnlockChecker'
 
 // ── XP ──
 export { awardXp, getXpSummary, getXpHistory } from './services/xpService'

@@ -1,9 +1,12 @@
 import { connectDB } from '@shared/db/connection'
 import { User, InterviewDomain, InterviewDepth, InterviewerPersona } from '@shared/db/models'
 import { isFeatureEnabled } from '@shared/featureFlags'
-import { getUserCompetencySummary } from '@learn/services/competencyService'
-import { getUserWeaknesses } from '@learn/services/competencyService'
-import { buildHistorySummary, getRecentSummaries } from '@learn/services/sessionSummaryService'
+import {
+  getUserCompetencySummary,
+  getUserWeaknesses,
+  buildHistorySummary,
+  getRecentSummaries,
+} from '@learn'
 import { getCompanyContext } from './retrievalService'
 import { buildParsedJDContext } from './jdParserService'
 import type { IParsedJobDescription } from '@shared/db/models/SavedJobDescription'

@@ -21,10 +21,15 @@
       "@/*": ["./*"],
       "@shared/*": ["./shared/*"],
       "@modules/*": ["./modules/*"],
+      "@interview": ["./modules/interview"],
       "@interview/*": ["./modules/interview/*"],
+      "@learn": ["./modules/learn"],
       "@learn/*": ["./modules/learn/*"],
+      "@b2b": ["./modules/b2b"],
       "@b2b/*": ["./modules/b2b/*"],
+      "@cms": ["./modules/cms"],
       "@cms/*": ["./modules/cms/*"],
+      "@resume": ["./modules/resume"],
       "@resume/*": ["./modules/resume/*"]
     }
   },

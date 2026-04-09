@@ -2,7 +2,7 @@
 
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useRouter, useParams } from 'next/navigation'
-import { ScoreRing } from '@interview/components/ScoreBar'
+import { ScoreRing } from '@shared/ui/ScoreBar'
 import ScoreTrendChart from '@interview/components/feedback/ScoreTrendChart'
 import QuestionBreakdown from '@interview/components/feedback/QuestionBreakdown'
 import AudioPlayer from '@interview/components/feedback/AudioPlayer'

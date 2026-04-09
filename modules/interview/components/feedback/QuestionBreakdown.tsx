@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { ScoreBar } from '@interview/components/ScoreBar'
+import { ScoreBar } from '@shared/ui/ScoreBar'
 import type { TranscriptEntry, AnswerEvaluation } from '@shared/types'
 
 // Safe string coerce to prevent React #310

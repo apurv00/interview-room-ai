@@ -6,7 +6,7 @@ import type { IPathwayPlan, PracticeTask, Milestone } from '@shared/db/models'
 import type { FeedbackData } from '@shared/types'
 import { getUserCompetencySummary, getUserWeaknesses } from './competencyService'
 import { getRecentSummaries } from './sessionSummaryService'
-import type { SessionEvaluationSummary } from '@interview/services/evaluationEngine'
+import type { SessionEvaluationSummary } from '@interview'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { logger } from '@shared/logger'
 

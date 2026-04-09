@@ -1,14 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { usePathname } from 'next/navigation'
 import { useSession, signOut } from 'next-auth/react'
 import Link from 'next/link'
 import { Mic, Menu, X } from 'lucide-react'
 import AuthMenu from './AuthMenu'
 import Footer from './Footer'
-import XpBadge from '@learn/components/XpBadge'
-import BadgeUnlockChecker from '@learn/components/BadgeUnlockChecker'
 import { useAuthGate } from '@shared/providers/AuthGateProvider'
 
 const NAV_LINKS = [
@@ -26,7 +24,27 @@ const NAV_LINKS = [
 const HIDDEN_PATHS = ['/signin', '/signup']
 const INTERVIEW_ALLOW_NAV = ['/interview/setup']
 
-export default function AppShell({ children }: { children: React.ReactNode }) {
+interface AppShellProps {
+  children: ReactNode
+  /**
+   * Optional element rendered in the desktop nav next to AuthMenu when the
+   * user is authenticated. Used by the composition root (app/layout.tsx) to
+   * inject domain-owned widgets (e.g. XP badge from the learn module) without
+   * pulling a module dependency into the shared layout.
+   */
+  navAuthExtras?: ReactNode
+  /**
+   * Optional global widgets (toasts, pollers, etc.) rendered when the user
+   * is authenticated. Keeps domain-specific global UX out of shared/.
+   */
+  authedGlobalWidgets?: ReactNode
+}
+
+export default function AppShell({
+  children,
+  navAuthExtras,
+  authedGlobalWidgets,
+}: AppShellProps) {
   const pathname = usePathname()
   const { status } = useSession()
   const { open: openAuthGate } = useAuthGate()
@@ -90,7 +108,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <div className="ml-3 pl-3 border-l border-slate-200 flex items-center gap-3">
                 {isAuthenticated ? (
                   <>
-                    <XpBadge />
+                    {navAuthExtras}
                     <AuthMenu />
                   </>
                 ) : (
@@ -194,8 +212,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       {/* Footer */}
       <Footer />
 
-      {/* Badge unlock notifications */}
-      {isAuthenticated && <BadgeUnlockChecker />}
+      {/* Injected global widgets (e.g. badge unlock notifications) */}
+      {isAuthenticated && authedGlobalWidgets}
     </>
   )
 }

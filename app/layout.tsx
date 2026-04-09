@@ -7,6 +7,7 @@ import { AuthGateProvider } from '@shared/providers/AuthGateProvider'
 import AppShell from '@shared/layout/AppShell'
 import JsonLd from '@shared/seo/JsonLd'
 import { siteConfig } from '@shared/siteConfig'
+import { XpBadge, BadgeUnlockChecker } from '@learn'
 import './globals.css'
 
 export const viewport: Viewport = {
@@ -100,7 +101,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <AuthGateProvider>
             <ThemeProvider>
               <XpProvider>
-                <AppShell>{children}</AppShell>
+                <AppShell
+                  navAuthExtras={<XpBadge />}
+                  authedGlobalWidgets={<BadgeUnlockChecker />}
+                >
+                  {children}
+                </AppShell>
               </XpProvider>
             </ThemeProvider>
           </AuthGateProvider>
