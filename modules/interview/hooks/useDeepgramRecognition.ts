@@ -22,6 +22,10 @@ export interface UseDeepgramRecognitionReturn {
   warmUp: () => void
   /** Provide an existing audio stream to avoid redundant getUserMedia calls. */
   setExternalStream: (stream: MediaStream) => void
+  /** Pause audio capture (e.g., during TTS playback). Deepgram WS stays open but receives no audio bytes. */
+  pauseCapture: () => void
+  /** Resume audio capture after TTS playback ends. */
+  resumeCapture: () => void
 }
 
 /**
@@ -56,6 +60,8 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   const fallbackFinishTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** Capture-ready callback — fired once after audio processing starts. */
   const onCaptureReadyRef = useRef<(() => void) | null>(null)
+  /** When true, audio frames are not sent to Deepgram (TTS playback active). */
+  const capturePausedRef = useRef(false)
   // Token cache — avoids re-fetching for each question
   const cachedTokenRef = useRef<string | null>(null)
   // Whether warmUp() has been called and WebSocket is ready
@@ -385,6 +391,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
 
     processor.onaudioprocess = (e) => {
       if (ws.readyState !== WebSocket.OPEN) return
+      if (capturePausedRef.current) return // Skip during TTS playback
       const inputData = e.inputBuffer.getChannelData(0)
       // Convert Float32 to Int16 PCM
       const pcm = new Int16Array(inputData.length)
@@ -483,5 +490,8 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  return { isListening, liveTranscript, startListening, stopListening, warmUp, setExternalStream }
+  const pauseCapture = useCallback(() => { capturePausedRef.current = true }, [])
+  const resumeCapture = useCallback(() => { capturePausedRef.current = false }, [])
+
+  return { isListening, liveTranscript, startListening, stopListening, warmUp, setExternalStream, pauseCapture, resumeCapture }
 }

@@ -42,6 +42,10 @@ interface UseInterviewOptions {
   stopListening: () => void
   /** Pre-warm STT WebSocket so startListening is instant. */
   warmUpListening?: () => void
+  /** Pause Deepgram audio capture during TTS playback to save billable minutes. */
+  pauseCapture?: () => void
+  /** Resume Deepgram audio capture after TTS ends. */
+  resumeCapture?: () => void
   onRecordingStop?: () => void
   currentProblem?: { id: string; title: string; description: string } | null
   currentDesignProblem?: { id: string; title: string; description: string; requirements: string[] } | null
@@ -72,6 +76,8 @@ export function useInterview({
   startListening,
   stopListening,
   warmUpListening,
+  pauseCapture,
+  resumeCapture,
   onRecordingStop,
   currentProblem,
   currentDesignProblem,
@@ -88,10 +94,21 @@ export function useInterview({
 
   // ── Avatar (extracted to useAvatarSpeech) ──
   const isMultimodalEnabled = process.env.NEXT_PUBLIC_FEATURE_MULTIMODAL === 'true'
-  const { avatarEmotion, isAvatarTalking, setAvatarEmotion, avatarSpeak, prefetchTTS } = useAvatarSpeech({
+  const { avatarEmotion, isAvatarTalking, setAvatarEmotion, avatarSpeak: rawAvatarSpeak, prefetchTTS } = useAvatarSpeech({
     interviewType: config?.interviewType,
     isMultimodalEnabled,
   })
+
+  // Wrap avatarSpeak to pause Deepgram audio capture during TTS playback.
+  // This saves ~8% of Deepgram billable minutes by not streaming silence/AI voice.
+  const avatarSpeak = useCallback(async (text: string, emotion?: import('@shared/types').AvatarEmotion) => {
+    pauseCapture?.()
+    try {
+      await rawAvatarSpeak(text, emotion)
+    } finally {
+      resumeCapture?.()
+    }
+  }, [rawAvatarSpeak, pauseCapture, resumeCapture])
 
   // ── API calls (extracted to useInterviewAPI) ──
   const { generateQuestion: apiGenerateQuestion, evaluateAnswer: apiEvaluateAnswer } = useInterviewAPI({ config })
