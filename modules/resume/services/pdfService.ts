@@ -143,15 +143,44 @@ async function renderPdfFromHtml(
     // the subsequent page.pdf({ format: 'A4' }) call will use.
     await page.setViewport({ width: 794, height: 1123 })
     await page.setContent(html, { waitUntil: 'networkidle0' })
+
+    // ── Compute the exact scale to match the preview's page count ───────────
+    //
+    // The editor preview designs every page at 595×842 CSS px (A4 at 72dpi)
+    // and decides page breaks based on that. Puppeteer's PDF output uses
+    // 96dpi, where A4 = 794×1123 CSS px. The "naive" width-filling scale is
+    // 794/595 = 1.3345, but at that scale, a resume that exactly fills one
+    // preview page (842 px source height) scales to 1123.65 px — 0.65 px
+    // over A4, which forces one orphan line onto a second page.
+    //
+    // Fix: measure the actual rendered element height, figure out how many
+    // A4 pages the preview would have shown for that height (1 page per
+    // 842 px source), then pick the largest scale that (a) still fills the
+    // A4 width as much as possible and (b) never exceeds `pages × 1123 px`
+    // after scaling. This snaps the PDF page count to the preview's exactly.
+    const SOURCE_WIDTH = 595
+    const SOURCE_PAGE_HEIGHT = 842
+    const A4_WIDTH = 794
+    const A4_HEIGHT = 1123
+
+    const naturalHeight: number = await page.evaluate(() => {
+      const el = document.getElementById('resume-page') as HTMLElement | null
+      return el ? el.offsetHeight : 842
+    })
+
+    const pagesIntended = Math.max(
+      1,
+      Math.ceil(naturalHeight / SOURCE_PAGE_HEIGHT),
+    )
+    const widthScale = A4_WIDTH / SOURCE_WIDTH
+    const heightScale = (pagesIntended * A4_HEIGHT) / naturalHeight
+    // Clamp to puppeteer's valid scale range (0.1, 2).
+    const scale = Math.max(0.1, Math.min(2, Math.min(widthScale, heightScale)))
+
     const pdfBuffer = await page.pdf({
       format: 'A4',
       printBackground: true,
-      // The #resume-page element is sized to 595×842 CSS px to match the
-      // editor preview (which uses 72dpi A4 math). Puppeteer renders at
-      // 96dpi, so A4 = 794×1123 CSS px. Scale the rendered content up by
-      // 794/595 = 1.3345 so the 595px-wide design fills the A4 page
-      // edge-to-edge instead of leaving a ~25% empty strip on the right.
-      scale: 1.3345,
+      scale,
       // Zero puppeteer margins — the #resume-page element encodes its own
       // 24px padding that matches the preview's PAGE_PADDING.
       margin: options?.margin ?? {
