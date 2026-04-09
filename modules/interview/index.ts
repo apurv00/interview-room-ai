@@ -1,10 +1,14 @@
-// ── Services (server-side, used by API routes) ──
-export { createSession, updateSession, getSession, listSessions } from './services/interviewService'
-export { getScoringDimensions, buildRubricPromptSection, evaluateStructured, evaluateSession } from './services/evaluationEngine'
-export type { SessionEvaluationSummary } from './services/evaluationEngine'
-export { generateSessionBrief, briefToPromptContext } from './services/personalizationEngine'
-export { retrieveQuestions, getQuestionBankContext, getCompanyContext } from './services/retrievalService'
-export { parseJobDescription, buildParsedJDContext } from './services/jdParserService'
+// ── Services: Core ──
+export { createSession, updateSession, getSession, listSessions } from './services/core/interviewService'
+
+// ── Services: Eval ──
+export { getScoringDimensions, buildRubricPromptSection, evaluateStructured, evaluateSession } from './services/eval/evaluationEngine'
+export type { SessionEvaluationSummary } from './services/eval/evaluationEngine'
+
+// ── Services: Persona ──
+export { generateSessionBrief, briefToPromptContext } from './services/persona/personalizationEngine'
+export { retrieveQuestions, getQuestionBankContext, getCompanyContext } from './services/persona/retrievalService'
+export { parseJobDescription, buildParsedJDContext } from './services/persona/jdParserService'
 
 // ── Config ──
 export { QUESTION_COUNT, PRESSURE_QUESTION_INDEX, getDomainLabel, AVATAR_NAME, AVATAR_TITLE, getInterviewIntro, getAvatarTitle, WRAP_UP_LINE, EXPERIENCE_LABELS, DURATION_LABELS, ROLE_LABELS } from './config/interviewConfig'

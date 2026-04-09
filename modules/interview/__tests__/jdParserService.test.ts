@@ -17,7 +17,7 @@ vi.mock('@anthropic-ai/sdk', () => {
   return { default: MockAnthropic }
 })
 
-import { parseJobDescription, buildParsedJDContext } from '@interview/services/jdParserService'
+import { parseJobDescription, buildParsedJDContext } from '@interview/services/persona/jdParserService'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import type { IParsedJobDescription } from '@shared/db/models/SavedJobDescription'
 

@@ -8,7 +8,7 @@ import {
   stepPersistResults,
   stepMarkFailed,
   shouldRunDualPipeline,
-} from '../services/multimodalPipeline'
+} from '../services/analysis/multimodalPipeline'
 
 /**
  * Multimodal analysis background job.

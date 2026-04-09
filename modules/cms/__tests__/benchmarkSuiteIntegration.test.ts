@@ -22,7 +22,7 @@ vi.mock('@shared/db/models', () => ({
 }))
 
 const mockEvaluateStructured = vi.fn()
-vi.mock('@interview/services/evaluationEngine', () => ({
+vi.mock('@interview/services/eval/evaluationEngine', () => ({
   evaluateStructured: (...args: unknown[]) => mockEvaluateStructured(...args),
 }))
 

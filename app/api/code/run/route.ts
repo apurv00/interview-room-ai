@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
-import { executeCode, runTestCases } from '@interview/services/codeSandboxService'
+import { executeCode, runTestCases } from '@interview/services/core/codeSandboxService'
 
 export const dynamic = 'force-dynamic'
 

@@ -4,7 +4,7 @@ import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import { InterviewSkill } from '@shared/db/models'
 import { UpdateSkillSchema, validateSkillSections } from '@cms/validators/skills'
-import { getDefaultSkillContent, invalidateSkillCache } from '@interview/services/skillLoader'
+import { getDefaultSkillContent, invalidateSkillCache } from '@interview/services/core/skillLoader'
 import { logger } from '@shared/logger'
 
 export const dynamic = 'force-dynamic'

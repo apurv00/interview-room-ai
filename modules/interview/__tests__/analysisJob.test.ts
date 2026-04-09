@@ -29,7 +29,7 @@ const mockPersistResults = vi.fn()
 const mockMarkFailed = vi.fn()
 const mockShouldRunDual = vi.fn()
 
-vi.mock('../services/multimodalPipeline', () => ({
+vi.mock('../services/analysis/multimodalPipeline', () => ({
   stepFetchSession: (...args: unknown[]) => mockFetchSession(...args),
   stepTranscribeAndDownload: (...args: unknown[]) => mockTranscribe(...args),
   stepProcessSignals: (...args: unknown[]) => mockProcessSignals(...args),
