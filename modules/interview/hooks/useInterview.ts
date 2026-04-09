@@ -326,6 +326,9 @@ export function useInterview({
    *  @param showLive - whether to update live answer display
    *  @param timeoutMs - max time to wait for speech (default 30s). 0 = no timeout.
    */
+  /** Max answer duration (120s) — prevents candidate from monopolizing time */
+  const MAX_ANSWER_MS = 120_000
+
   function listenForAnswer(
     showLive: boolean = true,
     timeoutMs: number = 30000,
@@ -337,26 +340,32 @@ export function useInterview({
       const currentAnswer = liveAnswerRef.current || ''
       const wordCount = currentAnswer.split(/\s+/).filter(Boolean).length
       if (wordCount > lastWordCount) {
-        // Candidate is actively speaking — show engagement
         if (wordCount > 80) {
-          setAvatarEmotion('impressed') // Long detailed answer
+          setAvatarEmotion('impressed')
         } else if (wordCount > 30) {
-          setAvatarEmotion('friendly')  // Building momentum
+          setAvatarEmotion('friendly')
         } else {
-          setAvatarEmotion('curious')   // Listening attentively
+          setAvatarEmotion('curious')
         }
         lastWordCount = wordCount
       }
-    }, 3000) // Check every 3 seconds
+    }, 3000)
 
     return new Promise((resolve) => {
       let resolved = false
       let timeoutTimer: ReturnType<typeof setTimeout> | undefined
+      let maxTimer: ReturnType<typeof setTimeout> | undefined
+
+      // Ensure Deepgram audio is unpaused when capture is ready
+      const wrappedOnCaptureReady = onCaptureReady
+        ? () => { resumeCapture?.(); onCaptureReady() }
+        : undefined
 
       startListening((result) => {
         if (resolved) return
         resolved = true
         clearTimeout(timeoutTimer)
+        clearTimeout(maxTimer)
         clearInterval(emotionInterval)
         if (result.metrics) {
           speechMetricsRef.current.push(result.metrics)
@@ -366,19 +375,32 @@ export function useInterview({
         }
         if (showLive) setLiveAnswer(result.text)
         resolve(result.text)
-      }, { onCaptureReady })
+      }, { onCaptureReady: wrappedOnCaptureReady })
 
-      // Auto-resolve with empty string after timeout if no speech detected
+      // Auto-resolve with empty string after silence timeout
       if (timeoutMs > 0) {
         timeoutTimer = setTimeout(() => {
           if (!resolved) {
             resolved = true
+            clearTimeout(maxTimer)
             clearInterval(emotionInterval)
             stopListening()
             resolve('')
           }
         }, timeoutMs)
       }
+
+      // Hard cap: stop listening after MAX_ANSWER_MS regardless of speech
+      maxTimer = setTimeout(() => {
+        if (!resolved) {
+          resolved = true
+          clearTimeout(timeoutTimer)
+          clearInterval(emotionInterval)
+          stopListening()
+          // Resolve with whatever was captured so far
+          resolve(liveAnswerRef.current || '')
+        }
+      }, MAX_ANSWER_MS)
     })
   }
 
@@ -571,9 +593,9 @@ export function useInterview({
     const wordCount = answer.trim().split(/\s+/).length
     if (wordCount >= 30) return Promise.resolve(null)
 
-    // Adaptive chance: very short answers get higher silence probability
-    const silenceChance = wordCount < 15 ? 0.40 : 0.25
-    if (Math.random() >= silenceChance) return Promise.resolve(null)
+    // Very short answers (<15 words) ALWAYS get silence pause (deterministic).
+    // Medium answers (15-30 words) get 35% chance — enough to feel natural, not every time.
+    if (wordCount >= 15 && Math.random() >= 0.35) return Promise.resolve(null)
 
     // Set avatar to "curious" (waiting look)
     setAvatarEmotion('curious')
@@ -814,8 +836,17 @@ export function useInterview({
           if (isInterviewOver()) return
         }
 
-        // ── Probe loop (only if no pushback already fired, or after pushback evaluation) ──
-        while (shouldProbeOrAdvance(currentEval) === 'probe') {
+        // ── Probe loop — depth varies by interview type ──
+        // Case studies need deeper probing (framework → analysis → recommendation → trade-offs).
+        // Behavioral/screening should cap sooner to avoid interrogation.
+        const probeLimit: Record<string, number> = {
+          'case-study': 5,
+          technical: 3,
+          behavioral: 2,
+          screening: 2,
+        }
+        const MAX_PROBES_PER_TOPIC = probeLimit[config?.interviewType || 'screening'] ?? 2
+        while (shouldProbeOrAdvance(currentEval) === 'probe' && currentProbeDepthRef.current < MAX_PROBES_PER_TOPIC) {
           if (isInterviewOver()) return
 
           const probeQ = currentEval.probeDecision!.probeQuestion!

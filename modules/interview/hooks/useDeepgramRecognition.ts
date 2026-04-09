@@ -86,14 +86,15 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       setLiveTranscript('')
 
       // Safety timeout: if capture-ready never fires (e.g. getUserMedia rejected),
-      // fire the callback anyway after 500ms so the UI doesn't stall.
+      // fire the callback anyway after 1500ms so the UI doesn't stall.
+      // 1500ms accounts for first-call getUserMedia latency (400-800ms) + AudioContext init.
       const captureReadySafety = options?.onCaptureReady
         ? setTimeout(() => {
             if (onCaptureReadyRef.current) {
               onCaptureReadyRef.current()
               onCaptureReadyRef.current = null
             }
-          }, 500)
+          }, 1500)
         : undefined
 
       // Wrap the original onCaptureReady to also clear the safety timeout

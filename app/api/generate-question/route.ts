@@ -222,18 +222,29 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
       } catch { /* RAG failed — continue without it */ }
     }
 
-    // Build base prompt — always interview-type-aware, no DB dependency
+    // Build base prompt — interview-type-aware with format-specific instructions
     const typeLabels: Record<string, string> = {
-      behavioral: 'behavioral interview',
+      screening: 'HR screening interview',
+      behavioral: 'behavioral deep-dive interview',
       technical: 'technical interview',
       'case-study': 'case study session',
     }
     const roleLabels: Record<string, string> = {
-      behavioral: 'senior hiring manager',
+      screening: 'senior recruiter',
+      behavioral: 'senior hiring manager focused on behavioral assessment',
       technical: 'technical interview lead',
-      'case-study': 'strategy and assessment lead',
+      'case-study': 'strategy and case assessment lead',
     }
-    const basePrompt = `You are Alex Chen, a ${roleLabels[interviewType] || 'senior interviewer'}. You are conducting a ${config.duration}-minute ${typeLabels[interviewType] || interviewType + ' interview'} for a ${domainLabel} role (${config.experience} years experience).`
+    // Type-specific format instructions ensure fundamentally different question styles
+    const typeInstructions: Record<string, string> = {
+      screening: 'Ask about motivation, culture fit, career trajectory, and basic competencies. Mix behavioral (STAR) and situational questions.',
+      behavioral: 'Ask exclusively about PAST experiences using behavioral prompts ("Tell me about a time when...", "Describe a situation where..."). Every question must probe a real event the candidate lived through. Never ask hypothetical scenarios.',
+      technical: 'Ask domain-specific technical questions that test depth of knowledge, problem-solving approach, and system thinking. Include trade-off analysis.',
+      'case-study': 'Present a realistic SCENARIO or business problem for the candidate to solve. Frame it as a case: "Imagine you are the PM for X. How would you approach Y?" Guide them through framework → analysis → recommendation. Never ask about past experiences — every question must be a forward-looking scenario.',
+    }
+    const basePrompt = `You are Alex Chen, a ${roleLabels[interviewType] || 'senior interviewer'}. You are conducting a ${config.duration}-minute ${typeLabels[interviewType] || interviewType + ' interview'} for a ${domainLabel} role (${config.experience} years experience).
+
+QUESTION FORMAT: ${typeInstructions[interviewType] || 'Ask one focused question at a time.'}`
 
     const defaultStrategy = ''
 
@@ -252,7 +263,12 @@ Do NOT use generic transitions like "Great, next question..." or "Moving on...".
       const summaries = completedThreads.map((t, i) =>
         `Topic ${i + 1}: "${t.topicQuestion}" (avg score: ${t.avgScore}, probes: ${t.probeCount})`
       ).join('\n')
-      threadContext = `\n\nTOPICS ALREADY COVERED:\n${summaries}\n\nDo NOT repeat these topics. You MAY occasionally reference a pattern or connection across topics when a genuine link exists (e.g., "Earlier you described X — how does that compare to Y?"). Use cross-references sparingly.`
+      // Detect topic diversity — nudge the interviewer to explore uncovered areas
+      const topicCount = completedThreads.length
+      const diversityNote = topicCount >= 3
+        ? `\nIMPORTANT: You have already covered ${topicCount} topics. Ensure your next question explores a DIFFERENT competency area (e.g., if past questions focused on leadership and stakeholder management, now ask about technical depth, failure handling, data-driven decisions, or innovation). Variety across competencies is critical for a thorough assessment.`
+        : ''
+      threadContext = `\n\nTOPICS ALREADY COVERED:\n${summaries}\n\nDo NOT repeat these topics.${diversityNote} You MAY occasionally reference a pattern across topics when a genuine link exists. Use cross-references sparingly.`
     }
 
     // Progressive difficulty guidance based on candidate performance
