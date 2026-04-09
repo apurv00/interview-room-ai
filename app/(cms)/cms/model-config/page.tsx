@@ -10,6 +10,7 @@ interface SlotConfig {
   provider: 'anthropic' | 'openrouter'
   temperature: number | undefined
   isActive: boolean
+  useToonInput: boolean
 }
 
 interface Defaults {
@@ -45,6 +46,7 @@ export default function ModelConfigPage() {
             provider: s.provider,
             temperature: s.temperature,
             isActive: s.isActive,
+            useToonInput: s.useToonInput || false,
           })
         }
 
@@ -60,6 +62,7 @@ export default function ModelConfigPage() {
             provider: 'anthropic' as const,
             temperature: undefined,
             isActive: false,
+            useToonInput: false,
           }
         })
         setSlots(fullSlots)
@@ -92,6 +95,7 @@ export default function ModelConfigPage() {
           provider: s.provider,
           temperature: s.temperature ?? undefined,
           isActive: true,
+          useToonInput: s.useToonInput,
         })),
       }
       const res = await fetch('/api/cms/model-config', {
@@ -240,6 +244,18 @@ export default function ModelConfigPage() {
                           placeholder="Provider default"
                           className="w-full px-3 py-2 border border-[#cfd9de] rounded-lg text-sm focus:outline-none focus:border-[#2563eb]"
                         />
+                      </div>
+                      <div className="flex items-center gap-2 pt-5">
+                        <input
+                          type="checkbox"
+                          id={`toon-${slot.taskSlot}`}
+                          checked={slot.useToonInput}
+                          onChange={e => updateSlot(idx, 'useToonInput', e.target.checked)}
+                          className="w-4 h-4 rounded border-[#cfd9de]"
+                        />
+                        <label htmlFor={`toon-${slot.taskSlot}`} className="text-xs text-[#71767b] cursor-pointer">
+                          TOON input encoding (saves ~30-40% input tokens)
+                        </label>
                       </div>
                     </div>
                   )}

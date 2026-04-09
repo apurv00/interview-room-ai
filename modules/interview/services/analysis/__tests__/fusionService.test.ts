@@ -1,20 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// Captured prompts from each mock Anthropic call — inspected by the
+// Captured contextData from each mock completion call — inspected by the
 // dual-pipeline tests to verify what the model actually sees.
 const capturedPrompts: string[] = []
+const capturedContextData: Array<Record<string, unknown> | undefined> = []
 
-// Mock Anthropic SDK
-vi.mock('@anthropic-ai/sdk', () => ({
-  default: class {
-    messages = {
-      create: vi.fn().mockImplementation(async (req: { messages: Array<{ content: string }> }) => {
-        capturedPrompts.push(req.messages[0].content)
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
+// Mock the model router's completion function
+vi.mock('@shared/services/modelRouter', () => ({
+  completion: vi.fn().mockImplementation(async (opts: { messages: Array<{ content: string }>; contextData?: Record<string, unknown> }) => {
+    capturedPrompts.push(opts.messages[0].content + (opts.contextData ? JSON.stringify(opts.contextData) : ''))
+    capturedContextData.push(opts.contextData)
+    return {
+      text: JSON.stringify({
                 timeline: [
                   {
                     startSec: 10,
@@ -36,13 +33,13 @@ vi.mock('@anthropic-ai/sdk', () => ({
                   coachingTips: ['Reduce filler words in opening.'],
                 },
               }),
-            },
-          ],
-          usage: { input_tokens: 500, output_tokens: 300 },
-        }
-      }),
+      model: 'mock-model',
+      provider: 'anthropic' as const,
+      inputTokens: 500,
+      outputTokens: 300,
+      usedFallback: false,
     }
-  },
+  }),
 }))
 
 vi.mock('@shared/logger', () => ({
@@ -55,6 +52,7 @@ describe('fusionService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     capturedPrompts.length = 0
+    capturedContextData.length = 0
   })
 
   it('returns timeline events and fusion summary', async () => {
@@ -173,12 +171,14 @@ describe('fusionService', () => {
         includeBlendshapes: false,
       })
 
-      expect(capturedPrompts).toHaveLength(1)
-      const prompt = capturedPrompts[0]
-      expect(prompt).toContain('<facial_signals>')
-      expect(prompt).toContain('dominantExpression')
-      expect(prompt).not.toContain('topBlendshapes')
-      expect(prompt).not.toContain('mouthSmileLeft')
+      expect(capturedContextData).toHaveLength(1)
+      const ctx = capturedContextData[0]
+      expect(ctx).toBeDefined()
+      // Baseline: facial signals present but without blendshape enrichment
+      const facialSignals = (ctx!.facialSignals as Array<Record<string, unknown>>)
+      expect(facialSignals).toBeDefined()
+      expect(facialSignals[0]).toHaveProperty('dominantExpression')
+      expect(facialSignals[0]).not.toHaveProperty('topBlendshapes')
     })
 
     it('enhanced variant includes top blendshapes in the prompt', async () => {
@@ -188,13 +188,16 @@ describe('fusionService', () => {
         includeBlendshapes: true,
       })
 
-      expect(capturedPrompts).toHaveLength(1)
-      const prompt = capturedPrompts[0]
-      expect(prompt).toContain('topBlendshapes')
+      expect(capturedContextData).toHaveLength(1)
+      const ctx = capturedContextData[0]
+      expect(ctx).toBeDefined()
+      const facialSignals = (ctx!.facialSignals as Array<Record<string, unknown>>)
+      expect(facialSignals[0]).toHaveProperty('topBlendshapes')
       // Top blendshape by mean value (0.38) should be in the top list
-      expect(prompt).toContain('mouthSmileRight')
+      const topBlendshapes = facialSignals[0].topBlendshapes as Record<string, number>
+      expect(topBlendshapes).toHaveProperty('mouthSmileRight')
       // Categorical label still present (shared across both variants)
-      expect(prompt).toContain('dominantExpression')
+      expect(facialSignals[0]).toHaveProperty('dominantExpression')
     })
 
     it('baseline and enhanced produce measurably different prompts', async () => {

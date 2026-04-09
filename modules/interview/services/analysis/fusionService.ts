@@ -79,7 +79,7 @@ Guidelines:
 - Score body language based on eye contact, expressions, and head stability
 - Score eye contact based on facial data averages`
 
-  const userPrompt = buildUserPrompt(
+  const { userPrompt, contextData } = buildUserPromptWithContext(
     prosodySegments,
     facialSegments,
     evaluations,
@@ -91,6 +91,7 @@ Guidelines:
     taskSlot: 'interview.fusion-analysis',
     system: systemPrompt,
     messages: [{ role: 'user', content: userPrompt }],
+    contextData,
   })
 
   const text = response.text
@@ -147,81 +148,72 @@ Guidelines:
     fusionSummary: parsed.fusionSummary,
     inputTokens: response.inputTokens,
     outputTokens: response.outputTokens,
-    promptLength: userPrompt.length,
+    promptLength: userPrompt.length + JSON.stringify(contextData).length,
   }
 }
 
-function buildUserPrompt(
+function buildUserPromptWithContext(
   prosody: ProsodySegment[],
   facial: FacialSegment[],
   evaluations: AnswerEvaluation[],
   transcript: TranscriptEntry[],
   options: { includeBlendshapes: boolean } = { includeBlendshapes: false }
-): string {
-  const sections: string[] = []
+): { userPrompt: string; contextData: Record<string, unknown> } {
+  const contextData: Record<string, unknown> = {}
 
-  // Audio signals
+  // Audio signals — uniform array, TOON-friendly
   if (prosody.length > 0) {
-    const audioData = prosody.map((p) => ({
+    contextData.audioSignals = prosody.map((p) => ({
       questionIndex: p.questionIndex,
-      timeRange: `${p.startSec.toFixed(0)}s - ${p.endSec.toFixed(0)}s`,
+      timeRange: `${p.startSec.toFixed(0)}s-${p.endSec.toFixed(0)}s`,
       wpm: p.wpm,
       fillerCount: p.fillerWords.length,
-      fillerExamples: p.fillerWords.slice(0, 3).map((f) => f.word),
-      pauseDuration: `${p.pauseDurationSec}s`,
+      fillerExamples: p.fillerWords.slice(0, 3).map((f) => f.word).join(';'),
+      pauseDuration: p.pauseDurationSec,
       confidence: p.confidenceMarker,
     }))
-    sections.push(`<audio_signals>\n${JSON.stringify(audioData, null, 2)}\n</audio_signals>`)
   }
 
-  // Facial signals
+  // Facial signals — uniform array, TOON-friendly
   if (facial.length > 0) {
-    const facialData = facial.map((f) => {
+    contextData.facialSignals = facial.map((f) => {
       const base: Record<string, unknown> = {
         questionIndex: f.questionIndex,
-        timeRange: `${f.startSec.toFixed(0)}s - ${f.endSec.toFixed(0)}s`,
-        eyeContact: `${(f.avgEyeContact * 100).toFixed(0)}%`,
+        timeRange: `${f.startSec.toFixed(0)}s-${f.endSec.toFixed(0)}s`,
+        eyeContact: Math.round(f.avgEyeContact * 100),
         dominantExpression: f.dominantExpression,
-        headStability: `${(f.headStability * 100).toFixed(0)}%`,
+        headStability: Math.round(f.headStability * 100),
         gestureLevel: f.gestureLevel,
       }
-      // Enhanced variant: enrich each segment with the top-N blendshapes
-      // (by mean score within the window). Baseline variant (the default)
-      // leaves the categorical label alone.
       if (options.includeBlendshapes && f.meanBlendshapes) {
         base.topBlendshapes = selectTopBlendshapes(f.meanBlendshapes, BLENDSHAPES_TOP_N)
       }
       return base
     })
-    sections.push(`<facial_signals>\n${JSON.stringify(facialData, null, 2)}\n</facial_signals>`)
   }
 
-  // Content scores
+  // Content scores — uniform array, TOON-friendly
   if (evaluations.length > 0) {
-    const contentData = evaluations.map((e) => ({
+    contextData.contentScores = evaluations.map((e) => ({
       questionIndex: e.questionIndex,
       question: e.question.slice(0, 100),
       relevance: e.relevance,
       structure: e.structure,
       specificity: e.specificity,
       ownership: e.ownership,
-      flags: e.flags,
+      flags: (e.flags || []).join(';'),
     }))
-    sections.push(`<content_scores>\n${JSON.stringify(contentData, null, 2)}\n</content_scores>`)
   }
 
-  // Skip full transcript — evaluations already contain questions and scores.
-  // Only include question count and total duration for context.
+  // Interview meta (small, keep inline)
+  let metaBlock = ''
   if (transcript.length > 0) {
     const interviewerEntries = transcript.filter((t) => t.speaker === 'interviewer')
-    sections.push(`<interview_meta>\n${JSON.stringify({
-      totalQuestions: interviewerEntries.length,
-      totalTranscriptEntries: transcript.length,
-      durationSec: Math.max(...transcript.map((t) => t.timestamp)),
-    })}\n</interview_meta>`)
+    metaBlock = `\n\nInterview: ${interviewerEntries.length} questions, ${transcript.length} transcript entries, ${Math.max(...transcript.map((t) => t.timestamp)).toFixed(0)}s duration.`
   }
 
-  return `Analyze this interview and generate the multimodal coaching timeline:\n\n${sections.join('\n\n')}`
+  const userPrompt = `Analyze this interview and generate the multimodal coaching timeline.${metaBlock}`
+  return { userPrompt, contextData }
 }
 
 /**

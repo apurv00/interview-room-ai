@@ -39,6 +39,7 @@
     "@sparticuz/chromium": "^143.0.4",
     "@stripe/stripe-js": "^8.9.0",
     "@testing-library/dom": "^10.4.1",
+    "@toon-format/toon": "^2.1.0",
     "@vercel/speed-insights": "^2.0.0",
     "bcryptjs": "^3.0.3",
     "class-variance-authority": "^0.7.1",
