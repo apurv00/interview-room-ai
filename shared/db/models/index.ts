@@ -83,10 +83,6 @@ export type { IInterviewSkill } from './InterviewSkill'
 export { MultimodalAnalysis } from './MultimodalAnalysis'
 export type { IMultimodalAnalysis } from './MultimodalAnalysis'
 
-// Observability
-export { FailedJob } from './FailedJob'
-export type { IFailedJob } from './FailedJob'
-
 // Pro waitlist
 export { WaitlistEntry } from './WaitlistEntry'
 export type { IWaitlistEntry } from './WaitlistEntry'

@@ -56,3 +56,6 @@ export { getTodaysChallenge, submitChallengeAnswer, getUserChallengeHistory, get
 // ── Share ──
 export { generateShareToken, getPublicScorecard, revokeShareToken } from './services/shareService'
 export type { PublicScorecard } from './services/shareService'
+
+// ── Daily plan regen (used by monthly scheduled job) ──
+export { autoRegeneratePlan } from './services/dailyPlanService'

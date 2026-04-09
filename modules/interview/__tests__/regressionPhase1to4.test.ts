@@ -88,16 +88,6 @@ describe('P1 Regression — Feature Flags', () => {
   })
 })
 
-// ─── P1: FailedJob Model ────────────────────────────────────────────────────
-
-describe('P1 Regression — FailedJob Model', () => {
-  it('FailedJob model is exported from models index', async () => {
-    const { FailedJob } = await import('@shared/db/models')
-    expect(FailedJob).toBeDefined()
-    expect(FailedJob.modelName).toBe('FailedJob')
-  })
-})
-
 // ─── Phase 3: Coach Notes ───────────────────────────────────────────────────
 
 describe('Phase 3 Regression — Coach Notes Service', () => {
