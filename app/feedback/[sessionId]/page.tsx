@@ -9,6 +9,12 @@ import AudioPlayer from '@interview/components/feedback/AudioPlayer'
 import OverviewTab from '@interview/components/feedback/OverviewTab'
 import TranscriptTab from '@interview/components/feedback/TranscriptTab'
 import type { PeerData } from '@interview/components/feedback/PeerComparison'
+import TimelineTrack from '@interview/components/replay/TimelineTrack'
+import SignalCharts from '@interview/components/replay/SignalCharts'
+import CoachingPanel from '@interview/components/replay/CoachingPanel'
+import VideoPlayer from '@interview/components/replay/VideoPlayer'
+import ReplayTranscript from '@interview/components/replay/ReplayTranscript'
+import type { MultimodalAnalysisData } from '@shared/types/multimodal'
 import type { FeedbackData, StoredInterviewData } from '@shared/types'
 import { ROLE_LABELS, getDomainLabel } from '@interview/config/interviewConfig'
 import { computeOffsetSeconds } from '@interview/utils/offsetHelpers'
@@ -63,8 +69,35 @@ function s(v: unknown): string {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const PEER_CACHE_PREFIX = 'peerData:'
+const SESSION_CACHE_PREFIX = 'feedback-session:'
+const RECORDING_URL_PREFIX = 'recording-url:'
+const SESSION_CACHE_TTL_MS = 120_000  // 2 minutes
+const RECORDING_URL_TTL_MS = 600_000  // 10 minutes
 
-type FeedbackTab = 'overview' | 'questions' | 'transcript'
+function getCachedJSON<T>(key: string, ttlMs: number): T | null {
+  try {
+    const raw = sessionStorage.getItem(key)
+    if (!raw) return null
+    const { data, cachedAt } = JSON.parse(raw) as { data: T; cachedAt: number }
+    if (Date.now() - cachedAt > ttlMs) {
+      sessionStorage.removeItem(key)
+      return null
+    }
+    return data
+  } catch {
+    return null
+  }
+}
+
+function setCachedJSON<T>(key: string, data: T): void {
+  try {
+    sessionStorage.setItem(key, JSON.stringify({ data, cachedAt: Date.now() }))
+  } catch {
+    // sessionStorage unavailable or full — non-critical
+  }
+}
+
+type FeedbackTab = 'overview' | 'questions' | 'transcript' | 'analysis'
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -99,6 +132,18 @@ function FeedbackPageInner() {
   const [peerData, setPeerData] = useState<PeerData | null>(null)
   const [peerLoading, setPeerLoading] = useState(true)
 
+  // Multimodal analysis state
+  const [analysis, setAnalysis] = useState<MultimodalAnalysisData | null>(null)
+  const [analysisLoading, setAnalysisLoading] = useState(false)
+  const [analysisError, setAnalysisError] = useState<string | null>(null)
+  const [analysisProgress, setAnalysisProgress] = useState<string>('')
+  const analysisTriggeredRef = useRef(false)
+  const [hasRecording, setHasRecording] = useState(false)
+  // Video for analysis tab
+  const [videoSrc, setVideoSrc] = useState<string | null>(null)
+  const [analysisVideoTime, setAnalysisVideoTime] = useState(0)
+  const analysisSeekRef = useRef<((seconds: number) => void) | null>(null)
+
   // Audio player sync state
   const [currentAudioTime, setCurrentAudioTime] = useState(0)
   const seekToRef = useRef<((s: number) => void) | null>(null)
@@ -106,6 +151,115 @@ function FeedbackPageInner() {
   const handleSeekExpose = useCallback((fn: (s: number) => void) => { seekToRef.current = fn }, [])
 
   // ── Tab switching with lazy transcript fetch ────────────────────────────────
+
+  // ── Analysis fetch + auto-trigger ─────────────────────────────────────────
+
+  const fetchAnalysis = useCallback(async () => {
+    if (!sessionId || sessionId === 'local') return
+    setAnalysisLoading(true)
+    setAnalysisError(null)
+
+    try {
+      // First try to fetch existing analysis
+      const res = await fetch(`/api/analysis/${sessionId}`)
+      if (res.ok) {
+        const data = await res.json()
+        if (data.status === 'completed') {
+          setAnalysis(data)
+          setAnalysisLoading(false)
+          return
+        }
+        if (data.status === 'processing' || data.status === 'pending') {
+          setAnalysisProgress('Analysis in progress...')
+          pollAnalysis()
+          return
+        }
+      }
+
+      // No analysis exists — trigger if recording available
+      if (hasRecording && !analysisTriggeredRef.current) {
+        analysisTriggeredRef.current = true
+        setAnalysisProgress('Starting analysis...')
+        const startRes = await fetch('/api/analysis/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId }),
+        })
+        if (startRes.ok) {
+          const startData = await startRes.json()
+          if (startData.status === 'completed') {
+            // Pipeline completed inline
+            const analysisRes = await fetch(`/api/analysis/${sessionId}`)
+            if (analysisRes.ok) {
+              setAnalysis(await analysisRes.json())
+              setAnalysisLoading(false)
+              return
+            }
+          }
+          // Still processing — poll
+          pollAnalysis()
+        } else {
+          const errData = await startRes.json().catch(() => ({}))
+          setAnalysisError(errData.error || 'Failed to start analysis')
+          setAnalysisLoading(false)
+        }
+      } else if (!hasRecording) {
+        setAnalysisError('No recording available for analysis')
+        setAnalysisLoading(false)
+      } else {
+        setAnalysisLoading(false)
+      }
+    } catch {
+      setAnalysisError('Failed to load analysis')
+      setAnalysisLoading(false)
+    }
+  }, [sessionId, hasRecording]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const pollAnalysis = useCallback(() => {
+    const phases = [
+      'Transcribing audio...',
+      'Aggregating facial signals...',
+      'Fusing insights with AI...',
+    ]
+    let phaseIdx = 0
+    let elapsed = 0
+    const interval = setInterval(async () => {
+      elapsed += 2000
+      // Rotate progress phases every 5s
+      if (elapsed % 5000 === 0 && phaseIdx < phases.length - 1) {
+        phaseIdx++
+      }
+      setAnalysisProgress(phases[phaseIdx])
+
+      try {
+        const res = await fetch(`/api/analysis/${sessionId}`)
+        if (res.ok) {
+          const data = await res.json()
+          if (data.status === 'completed') {
+            clearInterval(interval)
+            setAnalysis(data)
+            setAnalysisLoading(false)
+            return
+          }
+          if (data.status === 'failed') {
+            clearInterval(interval)
+            setAnalysisError(data.error || 'Analysis failed')
+            setAnalysisLoading(false)
+            return
+          }
+        }
+      } catch { /* continue polling */ }
+
+      // Timeout after 90s
+      if (elapsed >= 90000) {
+        clearInterval(interval)
+        setAnalysisError('Analysis timed out — please try again later')
+        setAnalysisLoading(false)
+      }
+    }, 2000)
+
+    return () => clearInterval(interval)
+  }, [sessionId])
 
   const handleTabChange = useCallback((tab: FeedbackTab) => {
     setActiveTab(tab)
@@ -124,7 +278,11 @@ function FeedbackPageInner() {
         .catch(() => {})
         .finally(() => setTranscriptLoading(false))
     }
-  }, [lazyTranscript, transcriptLoading, sessionId])
+    // Auto-load analysis when tab is first opened
+    if (tab === 'analysis' && !analysis && !analysisLoading) {
+      fetchAnalysis()
+    }
+  }, [lazyTranscript, transcriptLoading, sessionId, analysis, analysisLoading, fetchAnalysis])
 
   // ── Data loading ────────────────────────────────────────────────────────────
 
@@ -140,37 +298,73 @@ function FeedbackPageInner() {
       }
 
       if (sessionId && sessionId !== 'local') {
-        try {
-          const res = await fetch(`/api/interviews/${sessionId}?excludeTranscript=true`, { signal })
-          if (res.ok) {
-            const session = await res.json()
-            let d: StoredInterviewData & { scoringDimensions?: Array<{ name: string; label: string; weight: number }> } = {
-              config: session.config,
-              transcript: session.transcript || [],
-              evaluations: session.evaluations || [],
-              speechMetrics: session.speechMetrics || [],
-              feedback: session.feedback,
-              scoringDimensions: session.scoringDimensions,
+        // Check sessionStorage cache first to avoid re-fetching on back-navigation
+        const cachedSession = getCachedJSON<{ session: Record<string, unknown>; d: StoredInterviewData & { scoringDimensions?: Array<{ name: string; label: string; weight: number }> } }>(
+          `${SESSION_CACHE_PREFIX}${sessionId}`, SESSION_CACHE_TTL_MS
+        )
+
+        let session: Record<string, unknown> | null = cachedSession?.session ?? null
+        let d = cachedSession?.d ?? null
+
+        if (!session) {
+          try {
+            const res = await fetch(`/api/interviews/${sessionId}?excludeTranscript=true`, { signal })
+            if (res.ok) {
+              session = await res.json()
+            }
+          } catch (e) {
+            if ((e as Error).name === 'AbortError') return
+            // fall through to local data path
+          }
+        }
+
+        if (session) {
+            if (!d) {
+              d = {
+                config: session.config as StoredInterviewData['config'],
+                transcript: (session.transcript as StoredInterviewData['transcript']) || [],
+                evaluations: (session.evaluations as StoredInterviewData['evaluations']) || [],
+                speechMetrics: (session.speechMetrics as StoredInterviewData['speechMetrics']) || [],
+                feedback: session.feedback as StoredInterviewData['feedback'],
+                scoringDimensions: session.scoringDimensions as Array<{ name: string; label: string; weight: number }> | undefined,
+              }
+              d = mergeWithLocalData(d, sessionId)
+              // Cache the session data for back-navigation
+              setCachedJSON(`${SESSION_CACHE_PREFIX}${sessionId}`, { session, d })
             }
 
-            d = mergeWithLocalData(d, sessionId)
             setData(d)
             cleanupLocalInterviewData(sessionId)
-            // Fetch presigned recording URL if an R2 recording exists, else fall back to legacy URL
+
+            // Fetch presigned recording URL — check cache first
             if (session.hasRecording) {
-              fetch(`/api/recordings/presign?sessionId=${sessionId}`)
-                .then(r => r.ok ? r.json() : null)
-                .then(data => { if (data?.url) setRecordingUrl(data.url) })
-                .catch(() => {})
+              setHasRecording(true)
+              const cachedUrl = getCachedJSON<string>(`${RECORDING_URL_PREFIX}${sessionId}`, RECORDING_URL_TTL_MS)
+              if (cachedUrl) {
+                setRecordingUrl(cachedUrl)
+                setVideoSrc(cachedUrl)
+              } else {
+                fetch(`/api/recordings/presign?sessionId=${sessionId}`)
+                  .then(r => r.ok ? r.json() : null)
+                  .then(presignData => {
+                    if (presignData?.url) {
+                      setRecordingUrl(presignData.url)
+                      setVideoSrc(presignData.url)
+                      setCachedJSON(`${RECORDING_URL_PREFIX}${sessionId}`, presignData.url)
+                    }
+                  })
+                  .catch(() => {})
+              }
             } else if (session.recordingUrl) {
-              setRecordingUrl(session.recordingUrl)
+              setRecordingUrl(session.recordingUrl as string)
+              setVideoSrc(session.recordingUrl as string)
             }
-            if (session.startedAt) setSessionStartedAt(new Date(session.startedAt).getTime())
+            if (session.startedAt) setSessionStartedAt(new Date(session.startedAt as string).getTime())
 
             fetchPeerData(d.config, signal)
 
             if (session.feedback) {
-              setFeedback(session.feedback)
+              setFeedback(session.feedback as FeedbackData)
               setLoading(false)
               // Recover stuck sessions: if feedback exists but status is not completed, fix it
               if (session.status && session.status !== 'completed') {
@@ -185,9 +379,6 @@ function FeedbackPageInner() {
 
             await generateFeedback(d, sessionId, signal)
             return
-          }
-        } catch (e) {
-          if ((e as Error).name === 'AbortError') return
         }
       }
 
@@ -506,6 +697,7 @@ function FeedbackPageInner() {
     { key: 'overview', label: 'Overview' },
     { key: 'questions', label: 'Questions' },
     { key: 'transcript', label: 'Transcript' },
+    ...(hasRecording || analysis ? [{ key: 'analysis' as const, label: 'AI Analysis' }] : []),
   ]
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -670,6 +862,114 @@ function FeedbackPageInner() {
           )
         )}
 
+        {/* AI Analysis tab */}
+        {activeTab === 'analysis' && (
+          <div className="animate-fade-in space-y-6">
+            {analysisLoading && (
+              <div className="surface-card-bordered p-8 text-center space-y-4">
+                <div className="w-8 h-8 rounded-full border-2 border-brand-500 border-t-transparent animate-spin mx-auto" />
+                <p className="text-body text-[#536471]">{analysisProgress || 'Loading analysis...'}</p>
+              </div>
+            )}
+
+            {analysisError && (
+              <div className="surface-card-bordered border-red-500/30 p-6 text-center space-y-3">
+                <p className="text-body text-red-600">{analysisError}</p>
+                {hasRecording && (
+                  <button
+                    onClick={() => {
+                      analysisTriggeredRef.current = false
+                      fetchAnalysis()
+                    }}
+                    className="px-4 py-2 bg-brand-500 hover:bg-brand-600 text-white rounded-[var(--radius-md)] text-sm font-medium transition"
+                  >
+                    Retry Analysis
+                  </button>
+                )}
+              </div>
+            )}
+
+            {analysis && analysis.status === 'completed' && (
+              <>
+                {/* Video player */}
+                {videoSrc && (
+                  <VideoPlayer
+                    src={videoSrc}
+                    questionMarkers={questionMarkers}
+                    onTimeUpdate={setAnalysisVideoTime}
+                    onSeek={(fn) => { analysisSeekRef.current = fn }}
+                  />
+                )}
+
+                {/* Timeline */}
+                {analysis.timeline && analysis.timeline.length > 0 && (
+                  <TimelineTrack
+                    events={analysis.timeline}
+                    totalDurationSec={
+                      analysis.timeline.length > 0
+                        ? Math.ceil(analysis.timeline[analysis.timeline.length - 1].endSec)
+                        : 300
+                    }
+                    currentTimeSec={analysisVideoTime}
+                    onSeek={(sec) => analysisSeekRef.current?.(sec)}
+                  />
+                )}
+
+                {/* Score badges */}
+                {analysis.fusionSummary && (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="surface-card-bordered p-4 text-center">
+                      <p className="text-caption text-[#71767b]">Eye Contact</p>
+                      <p className="text-heading">{analysis.fusionSummary.eyeContactScore}<span className="text-sm text-[#71767b]">/100</span></p>
+                    </div>
+                    <div className="surface-card-bordered p-4 text-center">
+                      <p className="text-caption text-[#71767b]">Body Language</p>
+                      <p className="text-heading">{analysis.fusionSummary.overallBodyLanguageScore}<span className="text-sm text-[#71767b]">/100</span></p>
+                    </div>
+                    <div className="surface-card-bordered p-4 text-center">
+                      <p className="text-caption text-[#71767b]">Timeline Events</p>
+                      <p className="text-heading">{analysis.timeline?.length || 0}</p>
+                    </div>
+                    <div className="surface-card-bordered p-4 text-center">
+                      <p className="text-caption text-[#71767b]">Coaching Tips</p>
+                      <p className="text-heading">{analysis.fusionSummary.coachingTips.length}</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Signal charts */}
+                <SignalCharts
+                  prosodySegments={analysis.prosodySegments || []}
+                  facialSegments={analysis.facialSegments || []}
+                  currentTimeSec={analysisVideoTime}
+                />
+
+                {/* Coaching panel */}
+                {analysis.fusionSummary && (
+                  <CoachingPanel
+                    fusionSummary={analysis.fusionSummary}
+                    timeline={analysis.timeline || []}
+                    onSeek={(sec) => analysisSeekRef.current?.(sec)}
+                  />
+                )}
+
+                {/* Whisper transcript with word-level alignment */}
+                {analysis.whisperTranscript && analysis.whisperTranscript.length > 0 && (
+                  <div className="space-y-2">
+                    <h3 className="text-subheading">Word-Level Transcript</h3>
+                    <ReplayTranscript
+                      whisperSegments={analysis.whisperTranscript}
+                      transcript={data.transcript}
+                      currentTimeSec={analysisVideoTime}
+                      onWordClick={(sec) => analysisSeekRef.current?.(sec)}
+                    />
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
         {/* CTA */}
         <div className="flex gap-3 justify-center pb-8 animate-fade-in flex-wrap">
           <button
@@ -683,12 +983,12 @@ function FeedbackPageInner() {
           >
             Reattempt Interview
           </button>
-          {recordingUrl && (
+          {(hasRecording || analysis) && (
             <button
-              onClick={() => router.push(`/replay/${sessionId}`)}
+              onClick={() => handleTabChange('analysis')}
               className="px-8 py-3 bg-[#f8fafc] hover:bg-[#eff3f4] border border-[#e1e8ed] text-[#536471] rounded-[var(--radius-md)] font-medium transition"
             >
-              View Replay
+              View AI Analysis
             </button>
           )}
           <button

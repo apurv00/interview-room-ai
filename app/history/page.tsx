@@ -203,7 +203,7 @@ export default function HistoryPage() {
                         <button
                           onClick={(e) => {
                             e.stopPropagation()
-                            router.push(`/replay/${s._id}`)
+                            router.push(`/feedback/${s._id}`)
                           }}
                           className="text-xs text-brand-500 hover:underline"
                         >

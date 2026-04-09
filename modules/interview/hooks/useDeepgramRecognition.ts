@@ -7,10 +7,16 @@ import type {
   LiveTranscriptWord,
 } from './useSpeechRecognition'
 
+export interface StartListeningOptions {
+  /** Called once audio capture is actually running (mic open, ScriptProcessor connected).
+   *  Use this to flip UI state — avoids the "Listening…" label appearing before audio flows. */
+  onCaptureReady?: () => void
+}
+
 export interface UseDeepgramRecognitionReturn {
   isListening: boolean
   liveTranscript: string
-  startListening: (onComplete: (result: SpeechRecognitionResult) => void) => void
+  startListening: (onComplete: (result: SpeechRecognitionResult) => void, options?: StartListeningOptions) => void
   stopListening: () => void
   /** Pre-warm: fetch token + connect WebSocket so startListening is instant. */
   warmUp: () => void
@@ -48,6 +54,8 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isFinishingRef = useRef(false)
   const fallbackFinishTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Capture-ready callback — fired once after audio processing starts. */
+  const onCaptureReadyRef = useRef<(() => void) | null>(null)
   // Token cache — avoids re-fetching for each question
   const cachedTokenRef = useRef<string | null>(null)
   // Whether warmUp() has been called and WebSocket is ready
@@ -60,8 +68,9 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   }, [])
 
   const startListening = useCallback(
-    (onComplete: (result: SpeechRecognitionResult) => void) => {
+    (onComplete: (result: SpeechRecognitionResult) => void, options?: StartListeningOptions) => {
       onCompleteRef.current = onComplete
+      onCaptureReadyRef.current = options?.onCaptureReady ?? null
       finalTextRef.current = ''
       wordsRef.current = []
       lastTranscriptRef.current = ''
@@ -69,6 +78,27 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       isFinishingRef.current = false
       startTimeRef.current = Date.now()
       setLiveTranscript('')
+
+      // Safety timeout: if capture-ready never fires (e.g. getUserMedia rejected),
+      // fire the callback anyway after 500ms so the UI doesn't stall.
+      const captureReadySafety = options?.onCaptureReady
+        ? setTimeout(() => {
+            if (onCaptureReadyRef.current) {
+              onCaptureReadyRef.current()
+              onCaptureReadyRef.current = null
+            }
+          }, 500)
+        : undefined
+
+      // Wrap the original onCaptureReady to also clear the safety timeout
+      const originalOnCaptureReady = onCaptureReadyRef.current
+      if (originalOnCaptureReady && captureReadySafety) {
+        onCaptureReadyRef.current = () => {
+          clearTimeout(captureReadySafety)
+          originalOnCaptureReady()
+          onCaptureReadyRef.current = null
+        }
+      }
 
       // If warmed up and WebSocket is already connected, start capture immediately
       if (isWarmedUpRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
@@ -128,7 +158,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     const promise = fetchTokenCached()
       .then((token) => {
         return new Promise<void>((resolve) => {
-          const wsUrl = 'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&filler_words=true&utterance_end_ms=3500&interim_results=true&language=en&encoding=linear16&sample_rate=16000'
+          const wsUrl = 'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&filler_words=true&utterance_end_ms=2500&interim_results=true&language=en&encoding=linear16&sample_rate=16000'
           const ws = new WebSocket(wsUrl, ['token', token])
 
           ws.onopen = () => {
@@ -209,7 +239,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       return
     }
 
-    const wsUrl = 'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&filler_words=true&utterance_end_ms=3500&interim_results=true&language=en&encoding=linear16&sample_rate=16000'
+    const wsUrl = 'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&filler_words=true&utterance_end_ms=2500&interim_results=true&language=en&encoding=linear16&sample_rate=16000'
     // Use auth via websocket subprotocol so transient token is not logged in the URL.
     const ws = new WebSocket(wsUrl, ['token', token])
     let disconnectHandled = false
@@ -367,6 +397,12 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
 
     source.connect(processor)
     processor.connect(audioContext.destination)
+
+    // Audio is now flowing — notify the caller so UI can flip to LISTENING
+    if (onCaptureReadyRef.current) {
+      onCaptureReadyRef.current()
+      onCaptureReadyRef.current = null
+    }
   }
 
   function finishRecognition() {

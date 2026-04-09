@@ -232,12 +232,21 @@ ${dimensionSchema}${jdAlignmentSchema},
 }`
 
     try {
-      const message = await client.messages.create({
+      // Use prompt caching: the system prompt is stable across turns within
+      // a single interview (same role/depth/JD/profile) — only the user
+      // message changes. Marking the system prompt as ephemeral lets the
+      // API cache and reuse the KV-cache across sequential evaluations,
+      // cutting TTFT significantly after the first turn.
+      // Prompt caching: cache_control is supported by the API but not typed in SDK v0.27
+      const systemBlocks = [{ type: 'text' as const, text: systemPrompt, cache_control: { type: 'ephemeral' } }] as unknown as Parameters<typeof client.messages.stream>[0]['system']
+      const stream = client.messages.stream({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 600,
-        system: systemPrompt,
+        max_tokens: 400,
+        system: systemBlocks,
         messages: [{ role: 'user', content: userPrompt }],
       })
+
+      const message = await stream.finalMessage()
 
       const raw = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}'
       const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')

@@ -21,12 +21,14 @@ export default function SignalCharts({ prosodySegments, facialSegments, currentT
     confidence: p.confidenceMarker,
   }))
 
-  // Eye contact data
-  const eyeContactData = facialSegments.map((f, i) => ({
-    name: `Q${(f.questionIndex ?? i) + 1}`,
-    eyeContact: Math.round(f.avgEyeContact * 100),
-    midpoint: (f.startSec + f.endSec) / 2,
-  }))
+  // Eye contact data — skip segments with no facial data (sentinel value -1)
+  const eyeContactData = facialSegments
+    .filter((f) => f.avgEyeContact >= 0)
+    .map((f, i) => ({
+      name: `Q${(f.questionIndex ?? i) + 1}`,
+      eyeContact: Math.round(f.avgEyeContact * 100),
+      midpoint: (f.startSec + f.endSec) / 2,
+    }))
 
   // Filler density
   const fillerData = prosodySegments.map((p, i) => ({

@@ -22,6 +22,7 @@ import {
 import { deriveCoachingTip } from '@interview/config/coachingTips'
 import { STORAGE_KEYS, sessionScopedKey } from '@shared/storageKeys'
 import type { SpeechRecognitionResult } from './useSpeechRecognition'
+import type { StartListeningOptions } from './useDeepgramRecognition'
 import {
   computePerformanceSignal as computeSignal,
   shouldProbeOrAdvance as probeOrAdvance,
@@ -37,7 +38,7 @@ import { createDbSession, persistSession } from './interviewPersistence'
 interface UseInterviewOptions {
   config: InterviewConfig | null
   voicesReady: boolean
-  startListening: (onComplete: (result: SpeechRecognitionResult) => void) => void
+  startListening: (onComplete: (result: SpeechRecognitionResult) => void, options?: StartListeningOptions) => void
   stopListening: () => void
   /** Pre-warm STT WebSocket so startListening is instant. */
   warmUpListening?: () => void
@@ -308,7 +309,11 @@ export function useInterview({
    *  @param showLive - whether to update live answer display
    *  @param timeoutMs - max time to wait for speech (default 30s). 0 = no timeout.
    */
-  function listenForAnswer(showLive: boolean = true, timeoutMs: number = 30000): Promise<string> {
+  function listenForAnswer(
+    showLive: boolean = true,
+    timeoutMs: number = 30000,
+    onCaptureReady?: () => void,
+  ): Promise<string> {
     // Periodically update avatar emotion during listening based on answer growth
     let lastWordCount = 0
     const emotionInterval = setInterval(() => {
@@ -344,7 +349,7 @@ export function useInterview({
         }
         if (showLive) setLiveAnswer(result.text)
         resolve(result.text)
-      })
+      }, { onCaptureReady })
 
       // Auto-resolve with empty string after timeout if no speech detected
       if (timeoutMs > 0) {
@@ -368,25 +373,44 @@ export function useInterview({
     )
   }
 
-  /** Show coaching tip for 1.5s (cancellable via coachingAbortRef). */
+  /** Show coaching tip briefly.
+   *  In coach mode: blocks for 3s so the candidate reads the full tip.
+   *  In normal mode: fires-and-forgets so the next question can start
+   *  immediately — the tip auto-dismisses after 800ms or when the next
+   *  transitionTo('ASK_QUESTION') clears it, whichever comes first. */
   async function showCoachingTip(evaluation: AnswerEvaluation): Promise<void> {
     transitionTo('COACHING')
-    setCoachingTip(deriveCoachingTip(evaluation, config?.role, config?.interviewType))
-    const abortCtrl = new AbortController()
-    coachingAbortRef.current = abortCtrl
-    await new Promise<void>((resolve) => {
-      const coachingDisplayMs = config?.coachMode ? 3000 : 800
-      const timer = setTimeout(resolve, coachingDisplayMs)
-      abortCtrl.signal.addEventListener('abort', () => {
-        clearTimeout(timer)
-        resolve()
+    const tip = deriveCoachingTip(evaluation, config?.role, config?.interviewType)
+    setCoachingTip(tip)
+
+    if (config?.coachMode) {
+      // Coach mode: block so the candidate can read the full tip
+      const abortCtrl = new AbortController()
+      coachingAbortRef.current = abortCtrl
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 3000)
+        abortCtrl.signal.addEventListener('abort', () => {
+          clearTimeout(timer)
+          resolve()
+        })
       })
-    })
-    coachingAbortRef.current = null
-    if (!abortCtrl.signal.aborted) {
-      setCoachingTip(null)
+      coachingAbortRef.current = null
+      if (!abortCtrl.signal.aborted) {
+        setCoachingTip(null)
+      }
+    } else {
+      // Normal mode: don't block — auto-dismiss after 800ms in the background.
+      // The tip is also cleared on next transitionTo('ASK_QUESTION').
+      setTimeout(() => {
+        // Only clear if coaching tip hasn't been replaced by something else
+        setCoachingTip((prev) => (prev === tip ? null : prev))
+      }, 800)
     }
   }
+
+  // Thinking acknowledgments — short filler phrases to avoid dead silence
+  const THINKING_ACKS = ['Got it.', 'Mm-hmm.', 'Interesting.', 'I see.']
+  const ackCountRef = useRef(0)
 
   /** Evaluate answer, accumulate result, show coaching tip. Optionally runs a concurrent task in parallel with evaluation. */
   async function evaluateAndCoach<T = void>(
@@ -398,11 +422,30 @@ export function useInterview({
   ): Promise<{ evaluation: AnswerEvaluation; concurrentResult: T }> {
     transitionTo('PROCESSING')
     setLiveAnswer('')
+    setAvatarEmotion('curious') // Show engagement during processing
+
+    // Play a brief thinking acknowledgment if eval takes >1.5s
+    // Only fires once every ~3 turns to avoid sounding robotic
+    let ackCancelled = false
+    const shouldAck = !config?.coachMode && ackCountRef.current % 3 === 0
+    const ackTimer = shouldAck
+      ? setTimeout(() => {
+          if (!ackCancelled) {
+            const ack = THINKING_ACKS[ackCountRef.current % THINKING_ACKS.length]
+            avatarSpeak(ack, 'friendly')
+          }
+        }, 1500)
+      : undefined
 
     const [evaluation, concurrentResult] = await Promise.all([
       evaluateAnswer(question, answer, qIdx, probeDepth),
       concurrentTask ?? (Promise.resolve(undefined) as Promise<T>),
     ])
+
+    // Cancel acknowledgment if eval returned before 1.5s
+    ackCancelled = true
+    if (ackTimer) clearTimeout(ackTimer)
+    ackCountRef.current++
 
     evaluationsRef.current = [...evaluationsRef.current, { ...evaluation, question, answer }]
     performanceSignalRef.current = computePerformanceSignal()
@@ -590,10 +633,9 @@ export function useInterview({
     warmUpListening?.()
     await avatarSpeak(line, emotion)
 
-    // Listen for response
-    transitionTo('LISTENING')
+    // Listen for response — defer LISTENING until capture starts
     setLiveAnswer('')
-    const response = await listenForAnswer()
+    const response = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
 
     if (isInterviewOver()) return line
 
@@ -667,11 +709,10 @@ export function useInterview({
         warmUpListening?.()
         await avatarSpeak(question, emotion)
 
-        // Listen for answer
+        // Listen for answer — defer LISTENING state until audio capture is actually running
         checkAbort()
-        transitionTo('LISTENING')
         setLiveAnswer('')
-        const answer = await listenForAnswer()
+        const answer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
 
         if (isInterviewOver()) return
 
@@ -685,9 +726,8 @@ export function useInterview({
           await avatarSpeak(retryPrompt, 'friendly')
 
           checkAbort()
-          transitionTo('LISTENING')
           setLiveAnswer('')
-          const retryAnswer = await listenForAnswer()
+          const retryAnswer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
 
           if (isInterviewOver()) return
           if (!retryAnswer) {
@@ -781,11 +821,10 @@ export function useInterview({
           warmUpListening?.()
           await avatarSpeak(probeQ, 'curious')
 
-          // Listen for probe answer
+          // Listen for probe answer — defer LISTENING until capture starts
           checkAbort()
-          transitionTo('LISTENING')
           setLiveAnswer('')
-          const probeAnswer = await listenForAnswer()
+          const probeAnswer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
 
           if (isInterviewOver()) return
 
@@ -831,9 +870,8 @@ export function useInterview({
       await avatarSpeak(WRAP_UP_LINE, 'friendly')
 
       // Listen for user's wrap-up questions (15s timeout)
-      transitionTo('LISTENING')
       setLiveAnswer('')
-      const wrapUpAnswer = await listenForAnswer(true, 15000)
+      const wrapUpAnswer = await listenForAnswer(true, 15000, () => transitionTo('LISTENING'))
 
       if (wrapUpAnswer && wrapUpAnswer.trim().length > 5) {
         addToTranscript('candidate', wrapUpAnswer)
@@ -952,9 +990,8 @@ export function useInterview({
           await avatarSpeak(followUp, 'curious')
 
           checkAbort()
-          transitionTo('LISTENING')
           setLiveAnswer('')
-          const answer = await listenForAnswer()
+          const answer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
 
           if (answer && !isInterviewOver()) {
             addToTranscript('candidate', answer, 2)
@@ -968,9 +1005,8 @@ export function useInterview({
           addToTranscript('interviewer', WRAP_UP_LINE)
           await avatarSpeak(WRAP_UP_LINE, 'friendly')
 
-          transitionTo('LISTENING')
           setLiveAnswer('')
-          const codingWrapUpAnswer = await listenForAnswer(true, 15000)
+          const codingWrapUpAnswer = await listenForAnswer(true, 15000, () => transitionTo('LISTENING'))
 
           if (codingWrapUpAnswer && codingWrapUpAnswer.trim().length > 5) {
             addToTranscript('candidate', codingWrapUpAnswer)
@@ -1077,9 +1113,8 @@ export function useInterview({
           await avatarSpeak(followUp, 'curious')
 
           checkAbort()
-          transitionTo('LISTENING')
           setLiveAnswer('')
-          const answer = await listenForAnswer()
+          const answer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
 
           if (answer && !isInterviewOver()) {
             addToTranscript('candidate', answer, 2)
@@ -1099,9 +1134,8 @@ export function useInterview({
           await avatarSpeak(tradeOffQ, 'skeptical')
 
           checkAbort()
-          transitionTo('LISTENING')
           setLiveAnswer('')
-          const answer2 = await listenForAnswer()
+          const answer2 = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
 
           if (answer2 && !isInterviewOver()) {
             addToTranscript('candidate', answer2, 3)
@@ -1115,9 +1149,8 @@ export function useInterview({
           addToTranscript('interviewer', WRAP_UP_LINE)
           await avatarSpeak(WRAP_UP_LINE, 'friendly')
 
-          transitionTo('LISTENING')
           setLiveAnswer('')
-          const designWrapUpAnswer = await listenForAnswer(true, 15000)
+          const designWrapUpAnswer = await listenForAnswer(true, 15000, () => transitionTo('LISTENING'))
 
           if (designWrapUpAnswer && designWrapUpAnswer.trim().length > 5) {
             addToTranscript('candidate', designWrapUpAnswer)
@@ -1152,7 +1185,6 @@ export function useInterview({
 
       // Listen for the candidate's response to the intro ("tell me about yourself")
       checkAbort()
-      transitionTo('LISTENING')
       setLiveAnswer('')
       questionIndexRef.current = 0
       setQuestionIndex(0)
@@ -1162,7 +1194,7 @@ export function useInterview({
         { role: 'interviewer', text: intro, isProbe: false, probeDepth: 0 },
       ]
 
-      const introAnswer = await listenForAnswer()
+      const introAnswer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
 
       if (isInterviewOver()) return
 
