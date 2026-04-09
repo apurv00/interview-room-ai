@@ -76,15 +76,16 @@ export const UpdateWizardCostCapSchema = z.object({
 const ModelSlotSchema = z.object({
   taskSlot: z.string().min(1),
   model: z.string().min(1).max(200),
+  provider: z.string().min(1).max(50),
   fallbackModel: z.string().max(200).optional(),
+  fallbackProvider: z.string().max(50).optional(),
   maxTokens: z.number().int().min(100).max(16000),
-  provider: z.enum(['anthropic', 'openrouter']),
   temperature: z.number().min(0).max(2).optional(),
   isActive: z.boolean(),
   useToonInput: z.boolean().optional(),
 })
 
 export const UpdateModelConfigSchema = z.object({
-  openRouterEnabled: z.boolean(),
+  routingEnabled: z.boolean(),
   slots: z.array(ModelSlotSchema).max(50),
 })

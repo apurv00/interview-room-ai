@@ -5,6 +5,7 @@ import { connectDB } from '@shared/db/connection'
 import { ModelConfig, TASK_SLOTS, TASK_SLOT_DEFAULTS } from '@shared/db/models'
 import { UpdateModelConfigSchema } from '@cms/validators/cms'
 import { invalidateModelConfigCache } from '@shared/services/modelRouter'
+import { getAllProviders } from '@shared/services/providers'
 import { logger } from '@shared/logger'
 
 export const dynamic = 'force-dynamic'
@@ -28,11 +29,11 @@ export async function GET() {
     await connectDB()
     const doc = await ModelConfig.findOne().lean()
 
-    // Return the config plus the full list of available task slots with defaults
     return NextResponse.json({
-      config: doc || { openRouterEnabled: false, slots: [] },
+      config: doc || { routingEnabled: false, slots: [] },
       taskSlots: TASK_SLOTS,
       defaults: TASK_SLOT_DEFAULTS,
+      providers: getAllProviders(),
     })
   } catch (err) {
     logger.error({ err }, 'CMS GET /model-config error')
@@ -55,7 +56,6 @@ export async function PUT(req: NextRequest) {
       )
     }
 
-    // Validate that all task slots are valid
     for (const slot of parsed.data.slots) {
       if (!TASK_SLOTS.includes(slot.taskSlot as typeof TASK_SLOTS[number])) {
         return NextResponse.json(
@@ -69,7 +69,7 @@ export async function PUT(req: NextRequest) {
       {},
       {
         $set: {
-          openRouterEnabled: parsed.data.openRouterEnabled,
+          routingEnabled: parsed.data.routingEnabled,
           slots: parsed.data.slots,
           updatedBy: auth.session!.user.id,
         },
@@ -77,7 +77,6 @@ export async function PUT(req: NextRequest) {
       { upsert: true, new: true }
     )
 
-    // Invalidate the in-memory cache so the next AI call picks up the new config
     invalidateModelConfigCache()
 
     return NextResponse.json({ config })
