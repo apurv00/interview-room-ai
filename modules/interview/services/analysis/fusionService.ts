@@ -123,7 +123,13 @@ Guidelines:
   const resolveEvents = (items: number[] | TimelineEvent[]): TimelineEvent[] => {
     if (items.length === 0) return []
     if (typeof items[0] === 'number') {
-      return (items as number[]).map((i) => raw.timeline[i]).filter(Boolean)
+      return (items as number[]).map((i) => {
+        if (i < 0 || i >= raw.timeline.length) {
+          aiLogger.warn({ index: i, timelineLength: raw.timeline.length }, 'Fusion: out-of-bounds timeline index from Claude')
+          return undefined as unknown as TimelineEvent
+        }
+        return raw.timeline[i]
+      }).filter(Boolean)
     }
     return items as TimelineEvent[]
   }

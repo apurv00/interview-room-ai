@@ -72,6 +72,13 @@ export default withAuth(
       return NextResponse.rewrite(url)
     }
 
+    // Redirect /replay/:sessionId → /feedback/:sessionId (replay page removed)
+    if (pathname.startsWith('/replay/')) {
+      const url = req.nextUrl.clone()
+      url.pathname = pathname.replace('/replay/', '/feedback/')
+      return NextResponse.redirect(url, 301)
+    }
+
     const response = NextResponse.next()
 
     // Request correlation ID for tracing

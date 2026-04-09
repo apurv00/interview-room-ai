@@ -133,8 +133,9 @@ describe('facialAggregator', () => {
       const frames = makeFrames([{ ts: 0.5 }, { ts: 2.5 }])
       const result = aggregateFacialData(frames, [], 3, { windowSec: 1 })
       expect(result).toHaveLength(3)
-      // Middle window has no frames — synthesizes a neutral empty segment
-      expect(result[1].avgEyeContact).toBe(0)
+      // Middle window has no frames — uses sentinel values (-1) to indicate no data
+      expect(result[1].avgEyeContact).toBe(-1)
+      expect(result[1].headStability).toBe(-1)
       expect(result[1].dominantExpression).toBe('neutral')
     })
   })

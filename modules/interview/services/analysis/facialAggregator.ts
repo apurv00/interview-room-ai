@@ -63,12 +63,14 @@ export function aggregateFacialData(
     )
 
     if (windowFrames.length === 0) {
+      // No frames in window — emit neutral/null values so downstream
+      // doesn't penalize this segment as "no eye contact" or "unstable".
       const empty: FacialSegment = {
         startSec: window.startSec,
         endSec: window.endSec,
-        avgEyeContact: 0,
+        avgEyeContact: -1,  // sentinel: no data (downstream should skip, not treat as 0)
         dominantExpression: 'neutral',
-        headStability: 0,
+        headStability: -1,  // sentinel: no data
         gestureLevel: 'minimal',
       }
       if (window.questionIndex !== undefined) empty.questionIndex = window.questionIndex
@@ -94,17 +96,22 @@ export function aggregateFacialData(
       }
     })
 
-    // Head stability: inverse of yaw/pitch variance (1 = very stable)
+    // Head stability: bounded exponential decay of yaw/pitch variance.
+    // exp(-var/150) maps: variance 0 → stability 1.0, variance 75 → ~0.6,
+    // variance 150 → ~0.37, variance 300 → ~0.14 (naturally bounded 0..1).
     const yawValues = windowFrames.map((f) => f.headPoseYaw)
     const pitchValues = windowFrames.map((f) => f.headPosePitch)
     const yawVariance = variance(yawValues)
     const pitchVariance = variance(pitchValues)
-    // Normalize: variance of ~0 = stability 1, variance of ~100+ = stability ~0
     const headStability = parseFloat(
-      Math.max(0, Math.min(1, 1 - (yawVariance + pitchVariance) / 200)).toFixed(3)
+      Math.exp(-(yawVariance + pitchVariance) / 150).toFixed(3)
     )
 
-    // Gesture level: based on head movement magnitude
+    // Gesture level: average frame-to-frame head movement in degrees.
+    // Thresholds calibrated from pilot recordings:
+    //   > 8 deg/frame avg = expressive (large head turns/nods)
+    //   > 3 deg/frame avg = moderate (natural conversational movement)
+    //   <= 3 deg/frame    = minimal
     const totalMovement = windowFrames.reduce((sum, f, i) => {
       if (i === 0) return 0
       const prev = windowFrames[i - 1]
@@ -113,8 +120,8 @@ export function aggregateFacialData(
     const avgMovementPerFrame = windowFrames.length > 1 ? totalMovement / (windowFrames.length - 1) : 0
 
     let gestureLevel: FacialSegment['gestureLevel'] = 'minimal'
-    if (avgMovementPerFrame > 5) gestureLevel = 'expressive'
-    else if (avgMovementPerFrame > 2) gestureLevel = 'moderate'
+    if (avgMovementPerFrame > 8) gestureLevel = 'expressive'
+    else if (avgMovementPerFrame > 3) gestureLevel = 'moderate'
 
     const segment: FacialSegment = {
       startSec: window.startSec,
