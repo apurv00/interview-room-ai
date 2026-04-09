@@ -18,7 +18,7 @@ import { generatePathwayPlan } from '@learn/services/pathwayPlanner'
 import { evaluateSession } from '@interview/services/eval/evaluationEngine'
 import { getUserCompetencySummary } from '@learn/services/competencyService'
 import { buildHistorySummary } from '@learn/services/sessionSummaryService'
-import { DATA_BOUNDARY_RULE } from '@shared/services/promptSecurity'
+import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -257,7 +257,7 @@ ${perQSummary}${pressureContext}
 ${transcriptText.slice(0, 2000)}
 </interview_transcript>
 
-Generate a comprehensive feedback report as VALID JSON only (no markdown), matching this exact schema:
+${JSON_OUTPUT_RULE}
 {
   "overall_score": <integer 0-100>,
   "pass_probability": <"High"|"Medium"|"Low">,

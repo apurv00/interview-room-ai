@@ -1,4 +1,5 @@
 import { completion } from '@shared/services/modelRouter'
+import { JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 import { aiLogger } from '@shared/logger'
 
 export interface CompanyContext {
@@ -88,7 +89,7 @@ export async function extractCompanyContext(jdText: string): Promise<CompanyCont
     try {
       const response = await completion({
         taskSlot: 'interview.jd-extract',
-        system: 'Extract structured information from job descriptions. Return ONLY valid JSON.',
+        system: `Extract structured information from job descriptions. ${JSON_OUTPUT_RULE}`,
         messages: [{
           role: 'user',
           content: `Extract the company name and industry from this job description. Return ONLY a JSON object with "company" and "industry" fields. Use null if not found.\n\nJob description (first 2000 chars):\n${jdText.slice(0, 2000)}`,

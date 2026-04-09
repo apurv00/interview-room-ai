@@ -4,7 +4,7 @@ import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { EvaluateAnswerSchema } from '@interview/validators/interview'
 import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
-import { DATA_BOUNDARY_RULE } from '@shared/services/promptSecurity'
+import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 import { getDomainLabel } from '@interview/config/interviewConfig'
 import { getSkillSections } from '@interview/services/core/skillLoader'
 import { findCompanyProfile } from '@interview/config/companyProfiles'
@@ -213,7 +213,7 @@ Determine pushback:
 - pushback.tone: "curious" (genuinely want more), "probing" (gently questioning claims), or "encouraging" (supportive redirect)
 - If all dimensions are >= 50, set pushback to null.
 
-Respond with ONLY valid JSON matching this schema:
+${JSON_OUTPUT_RULE}
 {
 ${dimensionSchema}${jdAlignmentSchema},
   "flags": string[],

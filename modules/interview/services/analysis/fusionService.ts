@@ -1,4 +1,5 @@
 import { completion } from '@shared/services/modelRouter'
+import { JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 import { aiLogger } from '@shared/logger'
 import type {
   ProsodySegment,
@@ -47,7 +48,7 @@ export async function runFusionAnalysis(input: FusionInput): Promise<FusionOutpu
 
 Your job is to stitch together audio, visual, and content signals into a unified coaching timeline. Focus on specific, actionable moments — not generic advice.
 
-Return ONLY valid JSON matching this exact schema:
+${JSON_OUTPUT_RULE}
 {
   "timeline": [
     {

@@ -1,5 +1,5 @@
 import { completion } from '@shared/services/modelRouter'
-import { DATA_BOUNDARY_RULE } from '@shared/services/promptSecurity'
+import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 import { aiLogger } from '@shared/logger'
 import { trackUsage } from '@shared/services/usageTracking'
 import { connectDB } from '@shared/db/connection'
@@ -72,7 +72,7 @@ Rules:
 - Questions should probe for numbers, metrics, team sizes, dollar amounts, percentages
 - Tailor questions to the industry and role level
 - Keep questions conversational and easy to answer
-- Return ONLY a valid JSON array of question strings, no other text`,
+- ${JSON_OUTPUT_RULE}`,
       messages: [{
         role: 'user',
         content: `<role_info>
@@ -189,13 +189,12 @@ You are an expert resume writer who transforms basic job descriptions into power
 Rules:
 - Start each bullet with a strong action verb (Led, Managed, Developed, Resolved, etc.)
 - Incorporate metrics and numbers from the follow-up context when available
-- NEVER fabricate details — only use information provided by the candidate
 - Keep bullets concise (1-2 lines each)
 - Make bullets ATS-friendly with industry keywords
 - Generate 3-5 enhanced bullets per role
 - Also generate a 2-3 sentence professional summary based on ALL roles
 
-Return ONLY valid JSON matching this structure:
+${JSON_OUTPUT_RULE}
 {
   "roles": [
     {

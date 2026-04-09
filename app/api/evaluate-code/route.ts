@@ -3,7 +3,7 @@ import { completion } from '@shared/services/modelRouter'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
-import { DATA_BOUNDARY_RULE } from '@shared/services/promptSecurity'
+import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -37,7 +37,7 @@ export const POST = composeApiRoute<EvaluateCodePayload>({
 
 You are a senior technical interviewer evaluating a coding solution. Evaluate the code strictly but fairly.
 
-Return ONLY valid JSON matching this schema:
+${JSON_OUTPUT_RULE}
 {
   "correctness": number (0-100, does it solve the problem correctly for all cases?),
   "efficiency": number (0-100, time and space complexity quality),

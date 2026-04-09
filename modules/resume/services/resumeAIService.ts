@@ -1,5 +1,5 @@
 import { completion } from '@shared/services/modelRouter'
-import { DATA_BOUNDARY_RULE } from '@shared/services/promptSecurity'
+import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 import { getUserProfileContext } from './resumeService'
 import { extractJSON } from '@shared/utils'
 
@@ -36,9 +36,8 @@ export async function enhanceBullets(
 Rules:
 - Start each bullet with a strong action verb
 - Include metrics and quantified achievements where possible
-- Keep the same factual content — never fabricate
 - Make bullets ATS-friendly with relevant keywords
-- Return ONLY a valid JSON array of strings, no other text`,
+- ${JSON_OUTPUT_RULE}`,
     messages: [{ role: 'user', content: `Enhance these bullet points:` }],
     contextData: { bullets: data.bullets },
   })
@@ -73,7 +72,7 @@ export async function generateFullResume(
     taskSlot: 'resume.generate-full',
     system: `You are an expert resume writer. Generate professional resume content based on the user's profile and any existing content. ${profileContext}${data.targetRole ? `Target role: ${data.targetRole}. ` : ''}${data.targetCompany ? `Target company: ${data.targetCompany}. ` : ''}Make content ATS-friendly with strong action verbs and quantified achievements.
 
-Return ONLY valid JSON with this structure:
+${JSON_OUTPUT_RULE}
 {"sections": [{"type": "summary", "content": "..."}, {"type": "experience", "content": "..."}, {"type": "education", "content": "..."}, {"type": "skills", "content": "..."}, {"type": "projects", "content": "..."}]}`,
     messages: [{ role: 'user', content: `Generate resume section suggestions. Existing content:\n\n${existingContent}` }],
   })
@@ -109,7 +108,7 @@ Check for:
 5. Date formatting consistency
 6. File structure and readability
 
-Return ONLY valid JSON matching this schema:
+${JSON_OUTPUT_RULE}
 {
   "score": number (0-100),
   "issues": [{"category": "formatting|keywords|structure|content", "severity": "critical|warning|info", "message": "description", "fix": "how to fix"}],
@@ -168,11 +167,10 @@ Rules:
 2. Add relevant keywords from the JD naturally into existing descriptions
 3. Quantify achievements where possible
 4. Keep the resume ATS-friendly (clean formatting, standard section headers)
-5. Maintain truthfulness — only rephrase existing content, never invent
 
 ${data.companyName ? `Target company: ${data.companyName}. Tailor language to match this company's culture.` : ''}
 
-Return ONLY valid JSON matching this schema:
+${JSON_OUTPUT_RULE}
 {
   "tailoredResume": "the full tailored resume text",
   "changes": [{"section": "string", "change": "what was changed", "reason": "why"}],
@@ -208,7 +206,7 @@ Return ONLY valid JSON matching this schema:
 export async function parseResumeToStructured(text: string) {
   const parseResult = await completion({
     taskSlot: 'resume.parse',
-    system: `Parse the resume into structured JSON. Return ONLY valid JSON:
+    system: `Parse the resume into structured JSON. ${JSON_OUTPUT_RULE}
 {contactInfo: {fullName, email, phone?, location?, linkedin?, website?, github?},
 summary: str,
 experience: [{id: "exp-N", company, title, location?, startDate: "Mon YYYY", endDate: "Mon YYYY"|"Present", bullets: [str]}],
@@ -286,7 +284,8 @@ For each story:
 - Never fabricate details — expand on what's implied by the bullet
 - List 2-3 skills demonstrated
 
-Return JSON array: [{ "bulletIndex": <number>, "situation": "...", "task": "...", "action": "...", "result": "...", "targetQuestion": "Tell me about a time when...", "skills": ["skill1", "skill2"] }]`,
+${JSON_OUTPUT_RULE}
+[{ "bulletIndex": <number>, "situation": "...", "task": "...", "action": "...", "result": "...", "targetQuestion": "Tell me about a time when...", "skills": ["skill1", "skill2"] }]`,
     messages: [{
       role: 'user',
       content: `Generate ${count} STAR stories from these resume bullets:${jdContext}\n\n${bulletsText}`,

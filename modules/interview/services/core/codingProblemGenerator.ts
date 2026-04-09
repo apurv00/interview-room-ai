@@ -1,4 +1,5 @@
 import { completion } from '@shared/services/modelRouter'
+import { JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 import { aiLogger } from '@shared/logger'
 import type { CodingProblem } from '@interview/config/codingProblems'
 import type { CodeLanguage } from '@shared/types'
@@ -26,7 +27,7 @@ export async function generateCodingProblem(
       taskSlot: 'interview.coding-problem-gen',
       system: `You are an expert coding interview problem designer. Generate a unique coding problem that has NOT been asked before. The problem should be practical, well-defined, and testable.
 
-Return ONLY valid JSON matching this schema:
+${JSON_OUTPUT_RULE}
 {
   "id": "unique-kebab-case-id",
   "title": "Problem Title",

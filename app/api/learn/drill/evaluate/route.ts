@@ -8,6 +8,7 @@ import { checkAndAwardBadges } from '@learn/services/badgeService'
 import { XP_AMOUNTS } from '@learn/config/xpTable'
 import { completion } from '@shared/services/modelRouter'
 import { aiLogger } from '@shared/logger'
+import { JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 
 export const dynamic = 'force-dynamic'
 
@@ -45,7 +46,7 @@ Score on:
 - specificity: Are there concrete examples, metrics, and details?
 - ownership: Does the candidate show personal contribution and accountability?
 
-Respond with ONLY valid JSON:
+${JSON_OUTPUT_RULE}
 {"relevance": number, "structure": number, "specificity": number, "ownership": number}`,
       }],
     })
