@@ -1,5 +1,5 @@
 import { completion } from '@shared/services/modelRouter'
-import { DATA_BOUNDARY_RULE } from '@shared/services/promptSecurity'
+import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 import { connectDB } from '@shared/db/connection'
 import { EvaluationRubric, InterviewDepth } from '@shared/db/models'
 import type { IEvaluationRubric, RubricDimension } from '@shared/db/models'
@@ -178,7 +178,7 @@ Also provide:
 - weaknessTags: areas for improvement (1-3 tags)
 - evidenceSpans: specific phrases from the answer supporting your scores (1-3 spans)
 
-Respond with ONLY valid JSON:
+${JSON_OUTPUT_RULE}
 {
   "scores": { ${dimensionNames} },
   "needsFollowUp": boolean,

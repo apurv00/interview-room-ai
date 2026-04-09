@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { aiLogger } from '@shared/logger'
+import { getCachedTTS, cacheTTS } from '@shared/services/ttsCache'
 
 export const dynamic = 'force-dynamic'
 
@@ -9,9 +10,8 @@ const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY
 const TTS_MODEL = process.env.DEEPGRAM_TTS_MODEL || 'aura-2-zeus-en'
 
 /**
- * Streaming TTS endpoint — pipes Deepgram's audio response directly
- * to the client without buffering. This reduces time-to-first-sound
- * from ~1-3s (buffered) to ~300-500ms (streaming).
+ * Streaming TTS endpoint — checks R2 cache first, then falls back to
+ * Deepgram Aura. Caches the result for future hits.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -29,13 +29,24 @@ export async function POST(req: NextRequest) {
       return new Response(JSON.stringify({ error: 'Invalid text' }), { status: 400 })
     }
 
+    const encoding = req.nextUrl.searchParams.get('encoding') === 'opus' ? 'opus' : 'mp3'
+    const contentType = encoding === 'opus' ? 'audio/opus' : 'audio/mpeg'
+
+    // Check R2 cache first — serves cached audio without Deepgram call
+    const cached = await getCachedTTS(text, encoding)
+    if (cached) {
+      return new Response(new Uint8Array(cached), {
+        headers: {
+          'Content-Type': contentType,
+          'Cache-Control': 'public, max-age=86400',
+          'X-TTS-Cache': 'hit',
+        },
+      })
+    }
+
     // Add punctuation-based pauses (Deepgram Aura does not support SSML)
     let processedText = text
     processedText = processedText.replace(/\b(So,|Now,|Alright,|Great,|Okay,|Well,) /g, '$1... ')
-
-    // Determine encoding — prefer opus if client requests it
-    const encoding = req.nextUrl.searchParams.get('encoding') === 'opus' ? 'opus' : 'mp3'
-    const contentType = encoding === 'opus' ? 'audio/opus' : 'audio/mpeg'
 
     const response = await fetch(
       `https://api.deepgram.com/v1/speak?model=${TTS_MODEL}&encoding=${encoding}`,
@@ -55,12 +66,18 @@ export async function POST(req: NextRequest) {
       return new Response(JSON.stringify({ error: 'TTS generation failed' }), { status: 502 })
     }
 
-    // Pass through Deepgram's response body as a stream — no buffering
-    return new Response(response.body, {
+    // Buffer the response so we can both return it AND cache it
+    const audioBuffer = await response.arrayBuffer()
+    const audioBytes = Buffer.from(audioBuffer)
+
+    // Cache in R2 (fire-and-forget)
+    cacheTTS(text, audioBytes, encoding).catch(() => {})
+
+    return new Response(audioBytes, {
       headers: {
         'Content-Type': contentType,
         'Cache-Control': 'no-store',
-        'Transfer-Encoding': 'chunked',
+        'X-TTS-Cache': 'miss',
       },
     })
   } catch (err) {

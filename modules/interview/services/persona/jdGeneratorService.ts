@@ -1,5 +1,5 @@
 import { completion } from '@shared/services/modelRouter'
-import { DATA_BOUNDARY_RULE } from '@shared/services/promptSecurity'
+import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 import { logger } from '@shared/logger'
 
 export interface GenerateJDInput {
@@ -28,7 +28,7 @@ export async function generateJobDescription(input: GenerateJDInput): Promise<Ge
 
 You are a job description writer. Generate realistic, professional job descriptions based on a company name and role title.
 
-Return ONLY valid JSON matching this schema. No markdown, no explanation.
+${JSON_OUTPUT_RULE}
 {
   "jobDescription": "Full job description text (300-500 words). Include: company overview (1 sentence), role summary, key responsibilities (5-7 bullets), required qualifications (5-7 bullets), nice-to-haves (3-4 bullets), and what we offer (3-4 bullets).",
   "company": "Company name",
@@ -36,11 +36,7 @@ Return ONLY valid JSON matching this schema. No markdown, no explanation.
 }
 
 Guidelines:
-- Use real, publicly known information about the company if available (industry, size, products).
-- For unknown companies, infer a reasonable profile from the name and role.
-- Write requirements that are specific and testable, not vague.
-- Include both technical and behavioral qualifications.
-- Keep the tone professional but not generic.`,
+- Write requirements that are specific and testable, not vague.`,
       messages: [{
         role: 'user',
         content: `Generate a job description for the role "${role}" at "${company}".${resumeContext}`,

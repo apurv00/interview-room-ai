@@ -18,7 +18,7 @@ import { generatePathwayPlan } from '@learn/services/pathwayPlanner'
 import { evaluateSession } from '@interview/services/eval/evaluationEngine'
 import { getUserCompetencySummary } from '@learn/services/competencyService'
 import { buildHistorySummary } from '@learn/services/sessionSummaryService'
-import { DATA_BOUNDARY_RULE } from '@shared/services/promptSecurity'
+import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -133,7 +133,7 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
     let jdBlock = ''
     let jdSchemaBlock = ''
     if (config.jobDescription) {
-      jdBlock = `\n\n<job_description>\n${config.jobDescription.slice(0, 3000)}\n</job_description>\n\nEvaluate how well the candidate's answers align with the JD requirements.`
+      jdBlock = `\n\n<job_description>\n${config.jobDescription.slice(0, 2000)}\n</job_description>\n\nEvaluate how well the candidate's answers align with the JD requirements.`
       jdSchemaBlock = `,
   "jd_match_score": <integer 0-100, overall alignment with JD requirements>,
   "jd_requirement_breakdown": [
@@ -254,10 +254,10 @@ Speech metrics:
 ${perQSummary}${pressureContext}
 
 <interview_transcript>
-${transcriptText.slice(0, 3000)}
+${transcriptText.slice(0, 2000)}
 </interview_transcript>
 
-Generate a comprehensive feedback report as VALID JSON only (no markdown), matching this exact schema:
+${JSON_OUTPUT_RULE}
 {
   "overall_score": <integer 0-100>,
   "pass_probability": <"High"|"Medium"|"Low">,

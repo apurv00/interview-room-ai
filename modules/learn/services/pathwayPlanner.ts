@@ -1,5 +1,6 @@
 import mongoose from 'mongoose'
 import { completion } from '@shared/services/modelRouter'
+import { JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 import { connectDB } from '@shared/db/connection'
 import { PathwayPlan, User } from '@shared/db/models'
 import type { IPathwayPlan, PracticeTask, Milestone } from '@shared/db/models'
@@ -414,7 +415,7 @@ async function generateAIPlan(
       system: 'You are an interview coaching expert. Generate 2-3 specific, actionable practice tasks based on the candidate\'s performance. Each task should be concrete and completable in 10-30 minutes.',
       messages: [{
         role: 'user',
-        content: `Based on this performance data, suggest 2-3 practice tasks:\n\n${context}\n\nRespond with ONLY valid JSON:\n{\n  "suggestedTasks": [\n    {\n      "type": "drill" | "homework" | "review",\n      "title": "short title",\n      "description": "specific instructions",\n      "targetCompetency": "competency_name",\n      "difficulty": "easy" | "medium" | "hard",\n      "estimatedMinutes": number\n    }\n  ]\n}`,
+        content: `Based on this performance data, suggest 2-3 practice tasks:\n\n${context}\n\n${JSON_OUTPUT_RULE}\n{\n  "suggestedTasks": [\n    {\n      "type": "drill" | "homework" | "review",\n      "title": "short title",\n      "description": "specific instructions",\n      "targetCompetency": "competency_name",\n      "difficulty": "easy" | "medium" | "hard",\n      "estimatedMinutes": number\n    }\n  ]\n}`,
       }],
     })
 

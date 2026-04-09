@@ -1,4 +1,5 @@
 import { completion } from '@shared/services/modelRouter'
+import { JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 import { aiLogger } from '@shared/logger'
 
 export interface CoachNote {
@@ -80,7 +81,8 @@ export async function generateCoachNotes(input: GenerateCoachNotesInput): Promis
 1. A specific suggestion (1-2 sentences) on what to change
 2. A rewritten example showing how the candidate could have answered better
 
-Return JSON array: [{ "suggestion": "...", "rewriteExample": "..." }]
+${JSON_OUTPUT_RULE}
+[{ "suggestion": "...", "rewriteExample": "..." }]
 Keep rewrites concise (2-4 sentences). Preserve the candidate's facts but improve structure, specificity, and impact.`,
       messages: [{
         role: 'user',

@@ -100,7 +100,7 @@ export default function InterviewPage() {
   const [voicesReady, setVoicesReady] = useState(false)
 
   // ── Speech recognition ──
-  const { isListening, liveTranscript, startListening, stopListening, warmUp, setExternalStream } = useSpeechRecognition()
+  const { isListening, liveTranscript, startListening, stopListening, warmUp, setExternalStream, pauseCapture, resumeCapture } = useSpeechRecognition()
 
   // ── Recording (camera track) ──
   const { isRecording, recordingDuration, startRecording, stopRecording } = useMediaRecorder()
@@ -235,6 +235,8 @@ export default function InterviewPage() {
     startListening,
     stopListening,
     warmUpListening: warmUp,
+    pauseCapture,
+    resumeCapture,
     onRecordingStop: handleRecordingStop,
     currentProblem,
     currentDesignProblem,

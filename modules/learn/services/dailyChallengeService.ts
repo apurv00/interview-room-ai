@@ -7,6 +7,7 @@ import { User } from '@shared/db/models/User'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { aiLogger as logger } from '@shared/logger'
 import { completion } from '@shared/services/modelRouter'
+import { JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 
 const DOMAINS_ROTATION = [
   'general', 'frontend', 'backend', 'sdet', 'data-science',
@@ -94,7 +95,7 @@ async function generateDailyChallenge(date: string) {
   try {
     const result = await completion({
       taskSlot: 'learn.daily-challenge-gen',
-      system: 'You generate behavioral interview questions. Respond with ONLY valid JSON.',
+      system: `You generate behavioral interview questions. ${JSON_OUTPUT_RULE}`,
       messages: [{
         role: 'user',
         content: `Generate a medium-difficulty behavioral interview question for the "${domain}" domain.
@@ -193,7 +194,7 @@ Score on:
 - specificity: Are there concrete examples, metrics, and details?
 - ownership: Does the candidate show personal contribution and accountability?
 
-Respond with ONLY valid JSON:
+${JSON_OUTPUT_RULE}
 {"relevance": number, "structure": number, "specificity": number, "ownership": number}`,
       }],
     })

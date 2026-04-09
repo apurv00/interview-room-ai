@@ -3,7 +3,7 @@ import { completion } from '@shared/services/modelRouter'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
-import { DATA_BOUNDARY_RULE } from '@shared/services/promptSecurity'
+import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -89,7 +89,7 @@ You are a senior system design interviewer evaluating a candidate's architecture
 
 The candidate placed components on a canvas and drew connections between them. Their architecture is described below in text form.
 
-Return ONLY valid JSON matching this schema:
+${JSON_OUTPUT_RULE}
 {
   "requirements_clarity": number (0-100, did they address the stated requirements?),
   "architecture": number (0-100, is the architecture sound and well-structured?),

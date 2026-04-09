@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { aiLogger } from '@shared/logger'
+import { getCachedTTS, cacheTTS } from '@shared/services/ttsCache'
 
 export const dynamic = 'force-dynamic'
 
@@ -35,6 +36,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid text' }, { status: 400 })
     }
 
+    // Check R2 cache first
+    const cached = await getCachedTTS(text, 'mp3')
+    if (cached) {
+      return new NextResponse(new Uint8Array(cached), {
+        headers: {
+          'Content-Type': 'audio/mpeg',
+          'Cache-Control': 'public, max-age=86400',
+          'X-TTS-Cache': 'hit',
+        },
+      })
+    }
+
     const processedText = addNaturalPauses(text)
 
     const response = await fetch(
@@ -56,11 +69,16 @@ export async function POST(req: NextRequest) {
     }
 
     const audioBuffer = await response.arrayBuffer()
+    const audioBytes = Buffer.from(audioBuffer)
 
-    return new NextResponse(audioBuffer, {
+    // Cache in R2 (fire-and-forget)
+    cacheTTS(text, audioBytes, 'mp3').catch(() => {})
+
+    return new NextResponse(audioBytes, {
       headers: {
         'Content-Type': 'audio/mpeg',
         'Cache-Control': 'no-store',
+        'X-TTS-Cache': 'miss',
       },
     })
   } catch (err) {

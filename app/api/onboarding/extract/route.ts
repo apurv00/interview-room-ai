@@ -4,6 +4,7 @@ import { completion } from '@shared/services/modelRouter'
 import { authOptions } from '@shared/auth/authOptions'
 import { ResumeExtractSchema, ExtractedProfileSchema } from '@shared/validators/onboarding'
 import { aiLogger } from '@shared/logger'
+import { JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 import { checkRateLimit } from '@shared/middleware/checkRateLimit'
 
 export const dynamic = 'force-dynamic'
@@ -33,7 +34,7 @@ export async function POST(req: Request) {
   try {
     const aiResult = await completion({
       taskSlot: 'onboarding.extract-profile',
-      system: `You extract structured profile information from resumes. Return ONLY valid JSON. For any field you cannot confidently determine, use null.`,
+      system: `You extract structured profile information from resumes. ${JSON_OUTPUT_RULE} For any field you cannot confidently determine, use null.`,
       messages: [{
         role: 'user',
         content: `Extract profile data from this resume:
