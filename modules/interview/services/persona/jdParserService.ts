@@ -47,7 +47,7 @@ Schema:
 }`,
       messages: [{
         role: 'user',
-        content: `Parse this job description:\n\n<job_description>\n${rawText.slice(0, 6000)}\n</job_description>`,
+        content: `Parse this job description:\n\n<job_description>\n${rawText.slice(0, 4000)}\n</job_description>`,
       }],
     })
 

@@ -92,7 +92,7 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
     // Build JD context if available — wrapped in XML tags to prevent prompt injection
     let jdContext = ''
     if (config.jobDescription) {
-      jdContext = `\n\n<job_description>\n${config.jobDescription.slice(0, 3000)}\n</job_description>\n\nUse the job description above to evaluate how well the answer aligns with the role's requirements.`
+      jdContext = `\n\n<job_description>\n${config.jobDescription.slice(0, 2000)}\n</job_description>\n\nUse the job description above to evaluate how well the answer aligns with the role's requirements.`
     }
 
     // Build profile context

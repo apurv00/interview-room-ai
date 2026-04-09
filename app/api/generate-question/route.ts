@@ -41,10 +41,10 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     // Build context from JD and resume — wrapped in XML tags to prevent prompt injection
     let contextBlock = ''
     if (config.jobDescription) {
-      contextBlock += `\n\n<job_description>\n${config.jobDescription.slice(0, 4000)}\n</job_description>\nUse the job description above to ask targeted questions that probe the candidate's fit for the specific requirements listed.`
+      contextBlock += `\n\n<job_description>\n${config.jobDescription.slice(0, 2500)}\n</job_description>\nUse the job description above to ask targeted questions that probe the candidate's fit for the specific requirements listed.`
     }
     if (config.resumeText) {
-      contextBlock += `\n\n<candidate_resume>\n${config.resumeText.slice(0, 4000)}\n</candidate_resume>\nProbe specific experiences, projects, and claims from the resume above. Ask for concrete details.`
+      contextBlock += `\n\n<candidate_resume>\n${config.resumeText.slice(0, 2500)}\n</candidate_resume>\nProbe specific experiences, projects, and claims from the resume above. Ask for concrete details.`
     }
     if (config.jobDescription && config.resumeText) {
       contextBlock += `\n\nCross-reference the resume against the JD requirements. Identify gaps or areas where the candidate's experience may not fully match, and explore those.`
