@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getAnthropicClient, parseClaudeJSON } from '@shared/services/llmClient'
+import { completion, parseClaudeJSON } from '@shared/services/modelRouter'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
@@ -14,8 +14,6 @@ import {
 } from '@interview/validators/clarifyCoding'
 
 export const dynamic = 'force-dynamic'
-
-const client = getAnthropicClient()
 
 const SYSTEM_PROMPT = `You are the AI interviewer. The candidate is solving a coding problem and has asked a clarifying question.
 
@@ -96,14 +94,13 @@ ${codeBlock}
 Answer the candidate's clarifying question per the rules. Return JSON only.`
 
     try {
-      const message = await client.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 600,
+      const result = await completion({
+        taskSlot: 'interview.clarify-coding',
         system: SYSTEM_PROMPT,
         messages: [{ role: 'user', content: userMessage }],
       })
 
-      const raw = message.content[0].type === 'text' ? message.content[0].text : '{}'
+      const raw = result.text || '{}'
       let parsed: ClarifyCodingResponse
       try {
         parsed = parseClaudeJSON(raw, ClarifyCodingResponseSchema)
@@ -136,9 +133,9 @@ Answer the candidate's clarifying question per the rules. Return JSON only.`
         user: ctx.user,
         type: 'api_call_evaluate',
         sessionId,
-        inputTokens: message.usage.input_tokens,
-        outputTokens: message.usage.output_tokens,
-        modelUsed: 'claude-haiku-4-5-20251001',
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
+        modelUsed: result.model,
         durationMs: Date.now() - startTime,
         success: true,
       }).catch(() => {})

@@ -13,11 +13,9 @@ import { isFeatureEnabled } from '@shared/featureFlags'
 import { generateSessionBrief, briefToPromptContext } from '@interview/services/persona/personalizationEngine'
 import { getQuestionBankContext } from '@interview/services/persona/retrievalService'
 import { z } from 'zod'
-import { getAnthropicClient } from '@shared/services/llmClient'
+import { completion } from '@shared/services/modelRouter'
 
 export const dynamic = 'force-dynamic'
-
-const client = getAnthropicClient()
 
 type GenerateQuestionBody = z.infer<typeof GenerateQuestionSchema>
 
@@ -300,38 +298,30 @@ ${isLastQuestion ? 'This is the FINAL substantive question before wrap-up — ma
 Return ONLY the question text. No preamble, no numbering, no quotation marks. Just the question.`
 
     try {
-      // Prompt caching: cache_control is supported by the API but not typed in SDK v0.27
-      const systemBlocks: Array<{ type: 'text'; text: string; cache_control?: { type: string } }> = [
-        { type: 'text', text: staticSystemPrompt, cache_control: { type: 'ephemeral' } },
-      ]
-      if (dynamicSystemPrompt.trim()) {
-        systemBlocks.push({ type: 'text', text: dynamicSystemPrompt })
-      }
+      const fullSystem = dynamicSystemPrompt.trim()
+        ? `${staticSystemPrompt}\n\n${dynamicSystemPrompt}`
+        : staticSystemPrompt
 
-      const message = await client.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 300,
-        system: systemBlocks as unknown as Parameters<typeof client.messages.create>[0]['system'],
+      const result = await completion({
+        taskSlot: 'interview.generate-question',
+        system: fullSystem,
         messages: [{ role: 'user', content: userPrompt }],
       })
-
-      const question =
-        message.content[0].type === 'text' ? message.content[0].text.trim() : ''
 
       trackUsage({
         user,
         type: 'api_call_question',
         sessionId: body.sessionId,
-        inputTokens: message.usage.input_tokens,
-        outputTokens: message.usage.output_tokens,
-        modelUsed: 'claude-haiku-4-5-20251001',
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
+        modelUsed: result.model,
         durationMs: Date.now() - startTime,
         success: true,
       }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
 
-      return NextResponse.json({ question })
+      return NextResponse.json({ question: result.text })
     } catch (err) {
-      aiLogger.error({ err }, 'Claude API error in generate-question')
+      aiLogger.error({ err }, 'LLM API error in generate-question')
 
       trackUsage({
         user,
@@ -339,7 +329,7 @@ Return ONLY the question text. No preamble, no numbering, no quotation marks. Ju
         sessionId: body.sessionId,
         inputTokens: 0,
         outputTokens: 0,
-        modelUsed: 'claude-haiku-4-5-20251001',
+        modelUsed: 'unknown',
         durationMs: Date.now() - startTime,
         success: false,
         errorMessage: err instanceof Error ? err.message : 'Unknown error',

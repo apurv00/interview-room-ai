@@ -1,5 +1,5 @@
 import mongoose from 'mongoose'
-import { getAnthropicClient } from '@shared/services/llmClient'
+import { completion } from '@shared/services/modelRouter'
 import { connectDB } from '@shared/db/connection'
 import { PathwayPlan, User } from '@shared/db/models'
 import type { IPathwayPlan, PracticeTask, Milestone } from '@shared/db/models'
@@ -398,8 +398,6 @@ async function generateAIPlan(
   profile: Record<string, unknown> | null
 ): Promise<AIPlan | null> {
   try {
-    const client = getAnthropicClient()
-
     const context = [
       `Domain: ${input.domain}`,
       `Experience: ${input.experience}`,
@@ -411,9 +409,8 @@ async function generateAIPlan(
       input.feedback.top_3_improvements?.length ? `Improvements needed: ${input.feedback.top_3_improvements.join('; ')}` : '',
     ].filter(Boolean).join('\n')
 
-    const message = await client.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 500,
+    const result = await completion({
+      taskSlot: 'learn.pathway-plan',
       system: 'You are an interview coaching expert. Generate 2-3 specific, actionable practice tasks based on the candidate\'s performance. Each task should be concrete and completable in 10-30 minutes.',
       messages: [{
         role: 'user',
@@ -421,7 +418,7 @@ async function generateAIPlan(
       }],
     })
 
-    const raw = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}'
+    const raw = result.text || '{}'
     const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
     return JSON.parse(cleaned) as AIPlan
   } catch (err) {

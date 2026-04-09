@@ -2,14 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
-// Use vi.hoisted so the mock reference is available at module-load time,
-// because resumeAIService creates the Anthropic client at import time.
-const { mockCreate } = vi.hoisted(() => ({ mockCreate: vi.fn() }))
+// Use vi.hoisted so the mock reference is available at module-load time.
+const { mockCompletion } = vi.hoisted(() => ({ mockCompletion: vi.fn() }))
 
-vi.mock('@shared/services/llmClient', () => ({
-  getAnthropicClient: () => ({
-    messages: { create: mockCreate },
-  }),
+vi.mock('@shared/services/modelRouter', () => ({
+  completion: (...args: unknown[]) => mockCompletion(...args),
 }))
 
 vi.mock('@shared/db/connection', () => ({
@@ -42,9 +39,13 @@ import {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function mockTextResponse(text: string) {
-  mockCreate.mockResolvedValueOnce({
-    content: [{ type: 'text', text }],
-    usage: { input_tokens: 100, output_tokens: 200 },
+  mockCompletion.mockResolvedValueOnce({
+    text,
+    model: 'claude-sonnet-4-6-20250514',
+    provider: 'anthropic',
+    inputTokens: 100,
+    outputTokens: 200,
+    usedFallback: false,
   })
 }
 
@@ -57,23 +58,27 @@ describe('resumeAIService', () => {
 
   describe('enhanceSection', () => {
     it('returns the enhanced text from Claude', async () => {
-      mockTextResponse('  Enhanced summary text.  ')
+      mockTextResponse('Enhanced summary text.')
       const result = await enhanceSection('user-1', {
         sectionType: 'summary',
         currentContent: 'basic summary',
         targetRole: 'Staff Engineer',
       })
       expect(result).toEqual({ enhanced: 'Enhanced summary text.' })
-      expect(mockCreate).toHaveBeenCalledTimes(1)
-      const args = mockCreate.mock.calls[0][0]
+      expect(mockCompletion).toHaveBeenCalledTimes(1)
+      const args = mockCompletion.mock.calls[0][0]
       expect(args.system).toContain('Target role: Staff Engineer')
       expect(args.messages[0].content).toContain('basic summary')
     })
 
-    it('returns empty enhanced string when Claude returns non-text content', async () => {
-      mockCreate.mockResolvedValueOnce({
-        content: [{ type: 'tool_use', text: 'ignored' }],
-        usage: { input_tokens: 10, output_tokens: 10 },
+    it('returns empty enhanced string when Claude returns empty text', async () => {
+      mockCompletion.mockResolvedValueOnce({
+        text: '',
+        model: 'claude-sonnet-4-6-20250514',
+        provider: 'anthropic',
+        inputTokens: 10,
+        outputTokens: 10,
+        usedFallback: false,
       })
       const result = await enhanceSection('user-1', {
         sectionType: 'summary',
@@ -159,7 +164,7 @@ describe('resumeAIService', () => {
     it('passes job description context to Claude', async () => {
       mockTextResponse('{"score": 70}')
       await checkATS({ resumeText: 'resume text here', jobDescription: 'JD text here' })
-      const args = mockCreate.mock.calls[0][0]
+      const args = mockCompletion.mock.calls[0][0]
       expect(args.messages[0].content).toContain('JD text here')
       expect(args.messages[0].content).toContain('<job_description>')
     })
@@ -187,7 +192,7 @@ describe('resumeAIService', () => {
       expect(result.tailoredResume).toBe('NEW RESUME')
       expect(result.matchScore).toBe(78)
       expect(result.addedKeywords).toEqual(['typescript', 'react'])
-      const args = mockCreate.mock.calls[0][0]
+      const args = mockCompletion.mock.calls[0][0]
       expect(args.system).toContain('Target company: Acme')
     })
 
@@ -238,7 +243,7 @@ describe('resumeAIService', () => {
     it('returns empty array when no bullets provided', async () => {
       const result = await generateSTARStories('user-1', { experience: [] })
       expect(result).toEqual([])
-      expect(mockCreate).not.toHaveBeenCalled()
+      expect(mockCompletion).not.toHaveBeenCalled()
     })
 
     it('returns empty array when experience has no bullets', async () => {
@@ -246,7 +251,7 @@ describe('resumeAIService', () => {
         experience: [{ id: 'e1', company: 'Acme', title: 'Eng', bullets: [] }],
       })
       expect(result).toEqual([])
-      expect(mockCreate).not.toHaveBeenCalled()
+      expect(mockCompletion).not.toHaveBeenCalled()
     })
 
     it('parses STAR stories and maps them back to experience ids', async () => {

@@ -1,4 +1,4 @@
-import { getAnthropicClient } from '@shared/services/llmClient'
+import { completion } from '@shared/services/modelRouter'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { logger } from '@shared/logger'
 import type { IParsedJobDescription, ParsedRequirement } from '@shared/db/models/SavedJobDescription'
@@ -19,9 +19,8 @@ export async function parseJobDescription(rawText: string): Promise<IParsedJobDe
     ]
     const uniqueCompetencies = Array.from(new Set(allCompetencies))
 
-    const response = await getAnthropicClient().messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 2048,
+    const response = await completion({
+      taskSlot: 'interview.jd-extract',
       system: `You are a job description parser. Extract structured data from job descriptions.
 Return ONLY valid JSON matching the schema below. No markdown, no explanation.
 
@@ -49,7 +48,7 @@ Schema:
       }],
     })
 
-    const text = response.content[0]?.type === 'text' ? response.content[0].text : ''
+    const text = response.text
 
     // Extract JSON from response
     const jsonMatch = text.match(/\{[\s\S]*\}/)

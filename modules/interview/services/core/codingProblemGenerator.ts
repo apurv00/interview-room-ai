@@ -1,9 +1,7 @@
-import { getAnthropicClient } from '@shared/services/llmClient'
+import { completion } from '@shared/services/modelRouter'
 import { aiLogger } from '@shared/logger'
 import type { CodingProblem } from '@interview/config/codingProblems'
 import type { CodeLanguage } from '@shared/types'
-
-const client = getAnthropicClient()
 
 /**
  * Generate a fresh coding problem using Claude when the static pool is exhausted.
@@ -24,9 +22,8 @@ export async function generateCodingProblem(
   }
 
   try {
-    const message = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1000,
+    const result = await completion({
+      taskSlot: 'interview.coding-problem-gen',
       system: `You are an expert coding interview problem designer. Generate a unique coding problem that has NOT been asked before. The problem should be practical, well-defined, and testable.
 
 Return ONLY valid JSON matching this schema:
@@ -53,7 +50,7 @@ Generate something fresh and different from the above.`,
       }],
     })
 
-    const text = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}'
+    const text = result.text || '{}'
     const jsonMatch = text.match(/\{[\s\S]*\}/)
     if (!jsonMatch) return null
 

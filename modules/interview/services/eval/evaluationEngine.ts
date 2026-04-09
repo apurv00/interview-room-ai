@@ -1,4 +1,4 @@
-import { getAnthropicClient } from '@shared/services/llmClient'
+import { completion } from '@shared/services/modelRouter'
 import { connectDB } from '@shared/db/connection'
 import { EvaluationRubric, InterviewDepth } from '@shared/db/models'
 import type { IEvaluationRubric, RubricDimension } from '@shared/db/models'
@@ -145,8 +145,6 @@ export async function evaluateStructured(
   try {
     const dimensions = await getScoringDimensions(input.domain, input.interviewType, input.seniorityBand)
 
-    const client = getAnthropicClient()
-
     const dimensionPrompt = buildRubricPromptSection(dimensions)
     const dimensionNames = dimensions.map(d => `"${d.name}": number`).join(', ')
 
@@ -190,15 +188,14 @@ Respond with ONLY valid JSON:
   "evidenceSpans": string[]
 }`
 
-    const message = await client.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 600,
+    const completionResult = await completion({
+      taskSlot: 'interview.evaluation-engine-v2',
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }],
       ...(typeof input.temperature === 'number' ? { temperature: input.temperature } : {}),
     })
 
-    const raw = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}'
+    const raw = completionResult.text || '{}'
     const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
     const result = JSON.parse(cleaned)
 

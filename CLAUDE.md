@@ -88,9 +88,12 @@ middleware.ts               # Route protection, subdomain rewriting, security he
   - Scheduled functions: `emailDigestJob` (daily 9 AM UTC), `regeneratePlansJob` (monthly). All registered via `/api/inngest`.
   - Local dev: run `npm run dev:inngest` in a second terminal to boot the Inngest dev dashboard at localhost:8288.
 
+- **Model Router** (`shared/services/modelRouter.ts`): All LLM calls go through `completion()` / `completionStream()` which resolve the model+provider from CMS config (ModelConfig collection). 26 task slots cover every AI call site. Fallback chain: CMS primary → CMS fallback → hardcoded Anthropic default. Config cached in-memory for 60s, invalidated on CMS save. OpenRouter integration via Anthropic SDK pointed at `https://openrouter.ai/api/v1`. CMS admin: `/cms/model-config`.
+
 ## Environment Variables
 
 Required: `ANTHROPIC_API_KEY`, `NEXTAUTH_SECRET`, `MONGODB_URI`, `REDIS_URL`
+Optional model routing: `OPENROUTER_API_KEY` — enables routing AI calls through OpenRouter (configure per-task in CMS)
 Multimodal: `GROQ_API_KEY`, `DEEPGRAM_API_KEY`, `FEATURE_FLAG_MULTIMODAL_ANALYSIS=true`, `NEXT_PUBLIC_FEATURE_MULTIMODAL=true`
 Inngest (production only): `INNGEST_EVENT_KEY`, `INNGEST_SIGNING_KEY` — not required in dev; the `npm run dev:inngest` dev server handles routing locally.
 Optional: `GOOGLE_CLIENT_ID/SECRET`, `GITHUB_CLIENT_ID/SECRET`, Stripe keys, `OPENAI_API_KEY`

@@ -6,7 +6,7 @@ import { QuestionBank } from '@shared/db/models/QuestionBank'
 import { User } from '@shared/db/models/User'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { aiLogger as logger } from '@shared/logger'
-import { getAnthropicClient } from '@shared/services/llmClient'
+import { completion } from '@shared/services/modelRouter'
 
 const DOMAINS_ROTATION = [
   'general', 'frontend', 'backend', 'sdet', 'data-science',
@@ -92,10 +92,8 @@ async function generateDailyChallenge(date: string) {
 
   // Fallback: generate via Claude
   try {
-    const client = getAnthropicClient()
-    const message = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 500,
+    const result = await completion({
+      taskSlot: 'learn.daily-challenge-gen',
       system: 'You generate behavioral interview questions. Respond with ONLY valid JSON.',
       messages: [{
         role: 'user',
@@ -106,7 +104,7 @@ Respond as JSON:
       }],
     })
 
-    const raw = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}'
+    const raw = result.text || '{}'
     const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
     const parsed = JSON.parse(cleaned)
 
@@ -176,10 +174,8 @@ export async function submitChallengeAnswer(
     if (!challenge) return null
 
     // Score via Claude
-    const client = getAnthropicClient()
-    const message = await client.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 300,
+    const scoreResult = await completion({
+      taskSlot: 'learn.daily-challenge-score',
       system: 'You are an expert interview coach. Score the candidate\'s answer objectively.',
       messages: [{
         role: 'user',
@@ -202,7 +198,7 @@ Respond with ONLY valid JSON:
       }],
     })
 
-    const raw = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}'
+    const raw = scoreResult.text || '{}'
     const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
     const scores = JSON.parse(cleaned)
 

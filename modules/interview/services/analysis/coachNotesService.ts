@@ -1,4 +1,4 @@
-import { getAnthropicClient } from '@shared/services/llmClient'
+import { completion } from '@shared/services/modelRouter'
 import { aiLogger } from '@shared/logger'
 
 export interface CoachNote {
@@ -68,17 +68,14 @@ export async function generateCoachNotes(input: GenerateCoachNotesInput): Promis
   if (momentContexts.length === 0) return []
 
   try {
-    const client = getAnthropicClient()
-
     const momentsJson = JSON.stringify(momentContexts.map(m => ({
       originalText: m.originalText,
       issue: m.description,
       dimension: m.dimension,
     })))
 
-    const message = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 2000,
+    const result = await completion({
+      taskSlot: 'interview.coach-notes',
       system: `You are an expert interview coach. For each improvement moment, provide:
 1. A specific suggestion (1-2 sentences) on what to change
 2. A rewritten example showing how the candidate could have answered better
@@ -91,7 +88,7 @@ Keep rewrites concise (2-4 sentences). Preserve the candidate's facts but improv
       }],
     })
 
-    const responseText = message.content[0].type === 'text' ? message.content[0].text : ''
+    const responseText = result.text || ''
 
     // Parse JSON from response
     const jsonMatch = responseText.match(/\[[\s\S]*\]/)

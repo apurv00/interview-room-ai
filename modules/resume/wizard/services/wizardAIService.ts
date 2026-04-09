@@ -1,4 +1,4 @@
-import { getAnthropicClient } from '@shared/services/llmClient'
+import { completion } from '@shared/services/modelRouter'
 import { aiLogger } from '@shared/logger'
 import { trackUsage } from '@shared/services/usageTracking'
 import { connectDB } from '@shared/db/connection'
@@ -7,8 +7,6 @@ import { WizardSession } from '@shared/db/models/WizardSession'
 import { WizardConfig } from '@shared/db/models/WizardConfig'
 import { WIZARD_COST_CAP_USD, FALLBACK_FOLLOW_UPS, SEGMENT_PROMPT_CONTEXT } from '../config/wizardConfig'
 import type { AuthUser } from '@shared/middleware/composeApiRoute'
-
-const client = getAnthropicClient()
 
 // ─── Cost Cap Check ────────────────────────────────────────────────────────
 
@@ -61,9 +59,8 @@ export async function generateFollowUpQuestions(
   const startTime = Date.now()
 
   try {
-    const message = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 500,
+    const followUpResult = await completion({
+      taskSlot: 'resume.wizard-followup',
       system: `You are an expert resume consultant helping a candidate build a strong resume. ${segmentContext}
 
 Generate 2-3 targeted follow-up questions about their role to extract quantifiable achievements, specific metrics, and impactful details that will strengthen their resume bullets.
@@ -86,9 +83,9 @@ Generate 2-3 follow-up questions to help this candidate add metrics and impact t
     })
 
     const durationMs = Date.now() - startTime
-    const raw = message.content[0].type === 'text' ? message.content[0].text.trim() : '[]'
-    const inputTokens = message.usage.input_tokens
-    const outputTokens = message.usage.output_tokens
+    const raw = followUpResult.text || '[]'
+    const inputTokens = followUpResult.inputTokens
+    const outputTokens = followUpResult.outputTokens
 
     // Track usage
     trackUsage({
@@ -97,7 +94,7 @@ Generate 2-3 follow-up questions to help this candidate add metrics and impact t
       sessionId,
       inputTokens,
       outputTokens,
-      modelUsed: 'claude-haiku-4-5-20251001',
+      modelUsed: followUpResult.model,
       durationMs,
       success: true,
     }).catch(() => {})
@@ -109,7 +106,7 @@ Generate 2-3 follow-up questions to help this candidate add metrics and impact t
     try {
       const questions = JSON.parse(cleaned)
       if (Array.isArray(questions) && questions.length > 0) {
-        return { questions: questions.slice(0, 3), cost, model: 'claude-haiku-4-5-20251001' }
+        return { questions: questions.slice(0, 3), cost, model: followUpResult.model }
       }
     } catch {
       aiLogger.error({ raw: raw.slice(0, 300) }, 'Follow-up questions JSON parse failed')
@@ -180,9 +177,8 @@ export async function enhanceAllBullets(
   }))
 
   try {
-    const message = await client.messages.create({
-      model: 'claude-opus-4-6',
-      max_tokens: 4000,
+    const enrichResult = await completion({
+      taskSlot: 'resume.wizard-enrich',
       system: `You are an expert resume writer who transforms basic job descriptions into powerful, ATS-optimized resume bullets. ${segmentContext}
 
 Rules:
@@ -215,9 +211,9 @@ Enhance the resume bullets for each role and generate a professional summary. Tr
     })
 
     const durationMs = Date.now() - startTime
-    const raw = message.content[0].type === 'text' ? message.content[0].text.trim() : '{}'
-    const inputTokens = message.usage.input_tokens
-    const outputTokens = message.usage.output_tokens
+    const raw = enrichResult.text || '{}'
+    const inputTokens = enrichResult.inputTokens
+    const outputTokens = enrichResult.outputTokens
 
     // Track usage
     trackUsage({
@@ -226,7 +222,7 @@ Enhance the resume bullets for each role and generate a professional summary. Tr
       sessionId,
       inputTokens,
       outputTokens,
-      modelUsed: 'claude-opus-4-6',
+      modelUsed: enrichResult.model,
       durationMs,
       success: true,
     }).catch(() => {})
@@ -250,7 +246,7 @@ Enhance the resume bullets for each role and generate a professional summary. Tr
         enhancedRoles,
         summary: result.summary || '',
         cost,
-        model: 'claude-opus-4-6',
+        model: enrichResult.model,
       }
     } catch {
       aiLogger.error({ raw: raw.slice(0, 500) }, 'Enhancement JSON parse failed')
