@@ -87,6 +87,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             },
           }}
         />
+        <JsonLd
+          data={{
+            '@context': 'https://schema.org',
+            '@type': 'Organization',
+            name: siteConfig.name,
+            url: siteConfig.url,
+            logo: `${siteConfig.url}/icon`,
+          }}
+        />
         <SessionProvider>
           <AuthGateProvider>
             <ThemeProvider>

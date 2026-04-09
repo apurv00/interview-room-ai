@@ -2,6 +2,7 @@ import Link from 'next/link'
 import type { Metadata } from 'next'
 import StartCta from '@shared/ui/StartCta'
 import { RESOURCES, getResourcesByCategory } from '@learn/lib/resources'
+import { PILLARS } from '@learn/lib/pillars'
 import { siteConfig } from '@shared/siteConfig'
 import JsonLd from '@shared/seo/JsonLd'
 
@@ -41,6 +42,17 @@ export default function ResourcesPage() {
         }}
       />
 
+      <JsonLd
+        data={{
+          '@context': 'https://schema.org',
+          '@type': 'BreadcrumbList',
+          itemListElement: [
+            { '@type': 'ListItem', position: 1, name: 'Home', item: siteConfig.url },
+            { '@type': 'ListItem', position: 2, name: 'Resources', item: `${siteConfig.url}/learn/guides` },
+          ],
+        }}
+      />
+
       <div className="max-w-[1100px] mx-auto">
         {/* Header */}
         <nav aria-label="Breadcrumb" className="text-caption text-[#71767b] mb-6">
@@ -53,6 +65,25 @@ export default function ResourcesPage() {
         <p className="text-body text-[#71767b] mt-3 max-w-[640px]">
           Everything you need to ace your next interview — from common questions and proven frameworks to salary negotiation strategies.
         </p>
+
+        {/* Topic Hubs — primary entry points into the hub-and-spoke architecture */}
+        <section className="mt-section">
+          <h2 className="text-heading text-[var(--foreground)] mb-4">Topic Hubs</h2>
+          <div className="grid sm:grid-cols-3 gap-element">
+            {PILLARS.map((pillar) => (
+              <Link
+                key={pillar.slug}
+                href={`/learn/guides/${pillar.slug}`}
+                className="surface-card-bordered p-5 hover:bg-[var(--color-surface)] transition-colors block"
+              >
+                <p className="text-subheading text-[var(--foreground)]">{pillar.title}</p>
+                <p className="text-caption text-[var(--foreground-tertiary)] mt-1.5 leading-relaxed line-clamp-3">
+                  {pillar.metaDescription}
+                </p>
+              </Link>
+            ))}
+          </div>
+        </section>
 
         {/* Category Grid */}
         <div className="mt-section grid md:grid-cols-3 gap-section">
