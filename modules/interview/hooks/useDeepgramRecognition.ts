@@ -109,6 +109,9 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       // If warmed up and WebSocket is already connected, start capture immediately
       if (isWarmedUpRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
         setIsListening(true)
+        // The warmUp WebSocket was created without an onmessage handler —
+        // attach it now so Deepgram results are actually received.
+        attachMessageHandler(wsRef.current)
         startAudioCapture(wsRef.current)
         isWarmedUpRef.current = false
         return
@@ -120,6 +123,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           .then(() => {
             if (wsRef.current?.readyState === WebSocket.OPEN) {
               setIsListening(true)
+              attachMessageHandler(wsRef.current)
               startAudioCapture(wsRef.current)
               isWarmedUpRef.current = false
             } else {
@@ -238,6 +242,76 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     return data.token
   }
 
+  /** Attach the Deepgram message handler to a WebSocket.
+   *  Called from both connectWebSocket (cold path) and the fast warmUp path.
+   *  Without this, the warmed-up WS has no onmessage → transcripts are never received. */
+  function attachMessageHandler(ws: WebSocket) {
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+
+        if (data.type === 'Results') {
+          const transcript = data.channel?.alternatives?.[0]?.transcript || ''
+          const isFinal = data.is_final
+
+          // Interrupt detection: speech detected while no active listening session.
+          if (isFinal && transcript && !onCompleteRef.current && onInterruptRef.current) {
+            onInterruptRef.current()
+            return
+          }
+
+          if (isFinal && transcript) {
+            finalTextRef.current = finalTextRef.current
+              ? `${finalTextRef.current} ${transcript}`
+              : transcript
+
+            const rawWords = data.channel?.alternatives?.[0]?.words as
+              | Array<{ word: string; start: number; end: number; confidence?: number }>
+              | undefined
+            if (rawWords?.length) {
+              const turnStartAudioSec = wallClockMsToAudioSeconds(startTimeRef.current)
+              for (const w of rawWords) {
+                wordsRef.current.push({
+                  word: w.word,
+                  start: turnStartAudioSec + w.start,
+                  end: turnStartAudioSec + w.end,
+                  confidence: typeof w.confidence === 'number' ? w.confidence : 1,
+                })
+              }
+            }
+
+            // Early question detection: short utterances ending with "?" →
+            // respond immediately instead of waiting 2.5s for UtteranceEnd
+            const accumulated = finalTextRef.current.trim()
+            const wordCount = accumulated.split(/\s+/).length
+            if (accumulated.endsWith('?') && wordCount < 20) {
+              finishRecognition()
+              return
+            }
+          }
+
+          // Update live transcript (RAF-throttled)
+          const combined = finalTextRef.current + (isFinal ? '' : ` ${transcript}`)
+          if (combined !== lastTranscriptRef.current) {
+            lastTranscriptRef.current = combined
+            cancelAnimationFrame(rafRef.current)
+            rafRef.current = requestAnimationFrame(() => {
+              setLiveTranscript(combined.trim())
+            })
+          }
+        }
+
+        if (data.type === 'UtteranceEnd') {
+          if (finalTextRef.current.trim().length > 0) {
+            finishRecognition()
+          }
+        }
+      } catch {
+        // Ignore JSON parse errors from Deepgram metadata messages
+      }
+    }
+  }
+
   function connectWebSocket(token: string) {
     if (!navigator.onLine) {
       console.warn('[Deepgram] Browser is offline, skipping WebSocket connect')
@@ -264,78 +338,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       startAudioCapture(ws)
     }
 
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-
-        if (data.type === 'Results') {
-          const transcript = data.channel?.alternatives?.[0]?.transcript || ''
-          const isFinal = data.is_final
-
-          // Interrupt detection: speech detected while no active listening session.
-          // This means the candidate is speaking while the AI avatar is talking.
-          if (isFinal && transcript && !onCompleteRef.current && onInterruptRef.current) {
-            onInterruptRef.current()
-            return
-          }
-
-          if (isFinal && transcript) {
-            finalTextRef.current = finalTextRef.current
-              ? `${finalTextRef.current} ${transcript}`
-              : transcript
-
-            // Capture word-level timestamps for the multimodal analysis
-            // pipeline. Deepgram's `start`/`end` are seconds from when
-            // the WebSocket audio capture began for this turn. We
-            // translate them into seconds from when the recording
-            // started so they align with the camera video timeline.
-            const rawWords = data.channel?.alternatives?.[0]?.words as
-              | Array<{ word: string; start: number; end: number; confidence?: number }>
-              | undefined
-            if (rawWords?.length) {
-              const turnStartAudioSec = wallClockMsToAudioSeconds(startTimeRef.current)
-              for (const w of rawWords) {
-                wordsRef.current.push({
-                  word: w.word,
-                  start: turnStartAudioSec + w.start,
-                  end: turnStartAudioSec + w.end,
-                  confidence: typeof w.confidence === 'number' ? w.confidence : 1,
-                })
-              }
-            }
-
-            // Early question detection: short utterances ending with "?" are
-            // likely clarification requests or candidate questions. Respond
-            // immediately instead of waiting 2.5s for UtteranceEnd.
-            const accumulated = finalTextRef.current.trim()
-            const wordCount = accumulated.split(/\s+/).length
-            if (accumulated.endsWith('?') && wordCount < 20) {
-              finishRecognition()
-              return
-            }
-          }
-
-          // Update live transcript (RAF-throttled)
-          const combined = finalTextRef.current + (isFinal ? '' : ` ${transcript}`)
-          if (combined !== lastTranscriptRef.current) {
-            lastTranscriptRef.current = combined
-            cancelAnimationFrame(rafRef.current)
-            rafRef.current = requestAnimationFrame(() => {
-              setLiveTranscript(combined.trim())
-            })
-          }
-        }
-
-        if (data.type === 'UtteranceEnd') {
-          // End of speech detected (3500ms silence)
-          if (finalTextRef.current.trim().length > 0) {
-            finishRecognition()
-          }
-        }
-      } catch {
-        // Ignore JSON parse errors from Deepgram metadata messages
-      }
-    }
+    attachMessageHandler(ws)
 
     ws.onerror = (err) => {
       console.error('[Deepgram] WebSocket error:', err)
