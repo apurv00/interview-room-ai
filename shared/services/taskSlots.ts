@@ -34,6 +34,8 @@ export const TASK_SLOTS = [
   'onboarding.extract-profile',
   // Evaluation Engine V2
   'interview.evaluation-engine-v2',
+  // Conversational — answering candidate's proactive questions
+  'interview.answer-candidate-question',
 ] as const
 
 export type TaskSlot = (typeof TASK_SLOTS)[number]
@@ -65,4 +67,5 @@ export const TASK_SLOT_DEFAULTS: Record<TaskSlot, { model: string; maxTokens: nu
   'b2b.scorecard':                  { model: 'claude-haiku-4-5-20251001', maxTokens: 1000, provider: 'anthropic' },
   'onboarding.extract-profile':     { model: 'claude-sonnet-4-6-20250514', maxTokens: 2000, provider: 'anthropic' },
   'interview.evaluation-engine-v2': { model: 'claude-sonnet-4-6-20250514', maxTokens: 2000, provider: 'anthropic' },
+  'interview.answer-candidate-question': { model: 'claude-haiku-4-5-20251001', maxTokens: 200, provider: 'anthropic' },
 }

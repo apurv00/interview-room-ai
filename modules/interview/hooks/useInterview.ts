@@ -24,6 +24,13 @@ import { STORAGE_KEYS, sessionScopedKey } from '@shared/storageKeys'
 import type { SpeechRecognitionResult } from './useSpeechRecognition'
 import type { StartListeningOptions } from './useDeepgramRecognition'
 import {
+  classifyIntent,
+  CONVERSATION_RESPONSES,
+  simplifyQuestion,
+  pickRandom,
+} from '@interview/config/conversationalResponses'
+import { completion } from '@shared/services/modelRouter'
+import {
   computePerformanceSignal as computeSignal,
   shouldProbeOrAdvance as probeOrAdvance,
   buildThreadSummary as buildSummary,
@@ -42,10 +49,8 @@ interface UseInterviewOptions {
   stopListening: () => void
   /** Pre-warm STT WebSocket so startListening is instant. */
   warmUpListening?: () => void
-  /** Pause Deepgram audio capture during TTS playback to save billable minutes. */
-  pauseCapture?: () => void
-  /** Resume Deepgram audio capture after TTS ends. */
-  resumeCapture?: () => void
+  /** Set interrupt callback for speech-during-TTS detection. */
+  setOnInterrupt?: (cb: (() => void) | null) => void
   onRecordingStop?: () => void
   currentProblem?: { id: string; title: string; description: string } | null
   currentDesignProblem?: { id: string; title: string; description: string; requirements: string[] } | null
@@ -76,8 +81,7 @@ export function useInterview({
   startListening,
   stopListening,
   warmUpListening,
-  pauseCapture,
-  resumeCapture,
+  setOnInterrupt,
   onRecordingStop,
   currentProblem,
   currentDesignProblem,
@@ -94,21 +98,24 @@ export function useInterview({
 
   // ── Avatar (extracted to useAvatarSpeech) ──
   const isMultimodalEnabled = process.env.NEXT_PUBLIC_FEATURE_MULTIMODAL === 'true'
-  const { avatarEmotion, isAvatarTalking, setAvatarEmotion, avatarSpeak: rawAvatarSpeak, prefetchTTS } = useAvatarSpeech({
+  const { avatarEmotion, isAvatarTalking, setAvatarEmotion, avatarSpeak: rawAvatarSpeak, prefetchTTS, cancelTTS } = useAvatarSpeech({
     interviewType: config?.interviewType,
     isMultimodalEnabled,
   })
 
-  // Wrap avatarSpeak to pause Deepgram audio capture during TTS playback.
-  // This saves ~8% of Deepgram billable minutes by not streaming silence/AI voice.
+  // Interrupt-capable avatarSpeak: if candidate starts talking during TTS,
+  // cancel speech and let the candidate be heard. Deepgram streams continuously.
+  const interruptedRef = useRef(false)
   const avatarSpeak = useCallback(async (text: string, emotion?: import('@shared/types').AvatarEmotion) => {
-    pauseCapture?.()
-    try {
-      await rawAvatarSpeak(text, emotion)
-    } finally {
-      resumeCapture?.()
-    }
-  }, [rawAvatarSpeak, pauseCapture, resumeCapture])
+    interruptedRef.current = false
+    // Set interrupt detector — fires if Deepgram hears speech during TTS
+    setOnInterrupt?.(() => {
+      interruptedRef.current = true
+      cancelTTS()
+    })
+    await rawAvatarSpeak(text, emotion)
+    setOnInterrupt?.(null) // Clear interrupt handler after TTS finishes
+  }, [rawAvatarSpeak, setOnInterrupt, cancelTTS])
 
   // ── API calls (extracted to useInterviewAPI) ──
   const { generateQuestion: apiGenerateQuestion, evaluateAnswer: apiEvaluateAnswer } = useInterviewAPI({ config })
@@ -326,6 +333,9 @@ export function useInterview({
    *  @param showLive - whether to update live answer display
    *  @param timeoutMs - max time to wait for speech (default 30s). 0 = no timeout.
    */
+  /** Max answer duration (120s) — prevents candidate from monopolizing time */
+  const MAX_ANSWER_MS = 120_000
+
   function listenForAnswer(
     showLive: boolean = true,
     timeoutMs: number = 30000,
@@ -337,26 +347,29 @@ export function useInterview({
       const currentAnswer = liveAnswerRef.current || ''
       const wordCount = currentAnswer.split(/\s+/).filter(Boolean).length
       if (wordCount > lastWordCount) {
-        // Candidate is actively speaking — show engagement
         if (wordCount > 80) {
-          setAvatarEmotion('impressed') // Long detailed answer
+          setAvatarEmotion('impressed')
         } else if (wordCount > 30) {
-          setAvatarEmotion('friendly')  // Building momentum
+          setAvatarEmotion('friendly')
         } else {
-          setAvatarEmotion('curious')   // Listening attentively
+          setAvatarEmotion('curious')
         }
         lastWordCount = wordCount
       }
-    }, 3000) // Check every 3 seconds
+    }, 3000)
 
     return new Promise((resolve) => {
       let resolved = false
       let timeoutTimer: ReturnType<typeof setTimeout> | undefined
+      let maxTimer: ReturnType<typeof setTimeout> | undefined
+
+      const wrappedOnCaptureReady = onCaptureReady
 
       startListening((result) => {
         if (resolved) return
         resolved = true
         clearTimeout(timeoutTimer)
+        clearTimeout(maxTimer)
         clearInterval(emotionInterval)
         if (result.metrics) {
           speechMetricsRef.current.push(result.metrics)
@@ -366,19 +379,32 @@ export function useInterview({
         }
         if (showLive) setLiveAnswer(result.text)
         resolve(result.text)
-      }, { onCaptureReady })
+      }, { onCaptureReady: wrappedOnCaptureReady })
 
-      // Auto-resolve with empty string after timeout if no speech detected
+      // Auto-resolve with empty string after silence timeout
       if (timeoutMs > 0) {
         timeoutTimer = setTimeout(() => {
           if (!resolved) {
             resolved = true
+            clearTimeout(maxTimer)
             clearInterval(emotionInterval)
             stopListening()
             resolve('')
           }
         }, timeoutMs)
       }
+
+      // Hard cap: stop listening after MAX_ANSWER_MS regardless of speech
+      maxTimer = setTimeout(() => {
+        if (!resolved) {
+          resolved = true
+          clearTimeout(timeoutTimer)
+          clearInterval(emotionInterval)
+          stopListening()
+          // Resolve with whatever was captured so far
+          resolve(liveAnswerRef.current || '')
+        }
+      }, MAX_ANSWER_MS)
     })
   }
 
@@ -428,6 +454,8 @@ export function useInterview({
   // Thinking acknowledgments — short filler phrases to avoid dead silence
   const THINKING_ACKS = ['Got it.', 'Mm-hmm.', 'Interesting.', 'I see.']
   const ackCountRef = useRef(0)
+  /** Track candidate-initiated clarifying questions for scoring signal */
+  const clarifyingQCountRef = useRef(0)
 
   /** Evaluate answer, accumulate result, show coaching tip. Optionally runs a concurrent task in parallel with evaluation. */
   async function evaluateAndCoach<T = void>(
@@ -571,9 +599,9 @@ export function useInterview({
     const wordCount = answer.trim().split(/\s+/).length
     if (wordCount >= 30) return Promise.resolve(null)
 
-    // Adaptive chance: very short answers get higher silence probability
-    const silenceChance = wordCount < 15 ? 0.40 : 0.25
-    if (Math.random() >= silenceChance) return Promise.resolve(null)
+    // Very short answers (<15 words) ALWAYS get silence pause (deterministic).
+    // Medium answers (15-30 words) get 35% chance — enough to feel natural, not every time.
+    if (wordCount >= 15 && Math.random() >= 0.35) return Promise.resolve(null)
 
     // Set avatar to "curious" (waiting look)
     setAvatarEmotion('curious')
@@ -726,45 +754,98 @@ export function useInterview({
         warmUpListening?.()
         await avatarSpeak(question, emotion)
 
-        // Listen for answer — defer LISTENING state until audio capture is actually running
+        // ── Conversational listen loop ──
+        // Instead of rigid listen → evaluate, classify candidate intent first.
+        // Handles: clarifications, redirects, proactive questions, thinking pauses.
         checkAbort()
         setLiveAnswer('')
-        const answer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
+        let answer = ''
+        let conversationTurns = 0
+        const MAX_CONVERSATION_TURNS = 3
+
+        while (conversationTurns <= MAX_CONVERSATION_TURNS) {
+          const speech = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
+          if (isInterviewOver()) return
+
+          if (!speech) {
+            if (conversationTurns === 0) {
+              // First attempt empty — nudge candidate
+              checkAbort()
+              const retryPrompt = "Take your time — whenever you're ready, I'd love to hear your thoughts on this."
+              addToTranscript('interviewer', retryPrompt, qIdx)
+              warmUpListening?.()
+              await avatarSpeak(retryPrompt, 'friendly')
+              conversationTurns++
+              continue
+            }
+            // Still empty after conversation — skip
+            const skipMsg = "No problem — let's move on to the next question."
+            addToTranscript('interviewer', skipMsg, qIdx)
+            await avatarSpeak(skipMsg, 'friendly')
+            break
+          }
+
+          const intent = classifyIntent(speech)
+
+          if (intent === 'answer') {
+            answer = speech
+            break
+          }
+
+          conversationTurns++
+          addToTranscript('candidate', speech, qIdx)
+
+          if (intent === 'clarification') {
+            const rephrase = pickRandom(CONVERSATION_RESPONSES.clarification) + ' ' + simplifyQuestion(question)
+            addToTranscript('interviewer', rephrase, qIdx)
+            warmUpListening?.()
+            await avatarSpeak(rephrase, 'friendly')
+            continue
+          }
+
+          if (intent === 'redirect') {
+            const redirectReply = pickRandom(CONVERSATION_RESPONSES.redirect)
+            addToTranscript('interviewer', redirectReply, qIdx)
+            warmUpListening?.()
+            await avatarSpeak(redirectReply, 'friendly')
+            continue
+          }
+
+          if (intent === 'thinking') {
+            const thinkReply = pickRandom(CONVERSATION_RESPONSES.thinking)
+            addToTranscript('interviewer', thinkReply, qIdx)
+            warmUpListening?.()
+            await avatarSpeak(thinkReply, 'friendly')
+            continue
+          }
+
+          if (intent === 'question') {
+            // Proactive candidate question — AI answers in character
+            clarifyingQCountRef.current++
+            try {
+              const aiAnswer = await completion({
+                taskSlot: 'interview.answer-candidate-question',
+                system: 'You are Alex Chen, an interviewer. The candidate asked a clarifying question. Give a brief, helpful answer (1-2 sentences). Stay in character. Then naturally guide back to the original question.',
+                messages: [{ role: 'user', content: `Interview question: "${question}"\nCandidate asks: "${speech}"` }],
+              })
+              addToTranscript('interviewer', aiAnswer.text, qIdx)
+              warmUpListening?.()
+              await avatarSpeak(aiAnswer.text, 'friendly')
+            } catch {
+              // Fallback if LLM call fails
+              const fallback = "Great question! For the purposes of this interview, let's assume a standard scenario. Now, back to my question —"
+              addToTranscript('interviewer', fallback, qIdx)
+              warmUpListening?.()
+              await avatarSpeak(fallback, 'friendly')
+            }
+            continue
+          }
+        }
 
         if (isInterviewOver()) return
 
         if (!answer) {
-          // Empty answer — nudge the candidate and re-ask.
-          // This can happen if speech recognition timed out or failed to initialize.
-          checkAbort()
-          const retryPrompt = "Take your time — whenever you're ready, I'd love to hear your thoughts on this."
-          addToTranscript('interviewer', retryPrompt, qIdx)
-          warmUpListening?.()
-          await avatarSpeak(retryPrompt, 'friendly')
-
-          checkAbort()
-          setLiveAnswer('')
-          const retryAnswer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
-
-          if (isInterviewOver()) return
-          if (!retryAnswer) {
-            // Still empty after retry — move to next question with a gentle transition
-            const skipMsg = "No problem — let's move on to the next question."
-            addToTranscript('interviewer', skipMsg, qIdx)
-            await avatarSpeak(skipMsg, 'friendly')
-            finalizeThread(topicQuestion)
-            currentTopicIndexRef.current++
-            qIdx++
-            continue
-          }
-          // Use retry answer
-          addToTranscript('candidate', retryAnswer, qIdx)
-          currentThreadRef.current.push({
-            role: 'candidate', text: retryAnswer, isProbe: false, probeDepth: 0,
-          })
-          const { evaluation: retryEval } = await evaluateAndCoach(
-            question, retryAnswer, qIdx, undefined, 0,
-          )
+          // No answer after conversation loop — skip to next question
           finalizeThread(topicQuestion)
           currentTopicIndexRef.current++
           qIdx++
@@ -814,8 +895,17 @@ export function useInterview({
           if (isInterviewOver()) return
         }
 
-        // ── Probe loop (only if no pushback already fired, or after pushback evaluation) ──
-        while (shouldProbeOrAdvance(currentEval) === 'probe') {
+        // ── Probe loop — depth varies by interview type ──
+        // Case studies need deeper probing (framework → analysis → recommendation → trade-offs).
+        // Behavioral/screening should cap sooner to avoid interrogation.
+        const probeLimit: Record<string, number> = {
+          'case-study': 5,
+          technical: 3,
+          behavioral: 2,
+          screening: 2,
+        }
+        const MAX_PROBES_PER_TOPIC = probeLimit[config?.interviewType || 'screening'] ?? 2
+        while (shouldProbeOrAdvance(currentEval) === 'probe' && currentProbeDepthRef.current < MAX_PROBES_PER_TOPIC) {
           if (isInterviewOver()) return
 
           const probeQ = currentEval.probeDecision!.probeQuestion!
