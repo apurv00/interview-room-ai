@@ -629,6 +629,20 @@ function FeedbackPageInner() {
     return [...top, ...improve].sort((a, b) => a.startSec - b.startSec)
   }, [analysis])
 
+  // Compute active warning from timeline events at current playback position
+  const activeWarning = useMemo(() => {
+    if (!analysis?.timeline) return null
+    const current = analysis.timeline.find(
+      (e) => analysisVideoTime >= e.startSec && analysisVideoTime <= e.endSec &&
+        (e.type === 'improvement' || e.type === 'coaching_tip')
+    )
+    if (!current) return null
+    return {
+      label: current.title,
+      type: (current.severity === 'attention' ? 'attention' : 'neutral') as 'attention' | 'neutral',
+    }
+  }, [analysis, analysisVideoTime])
+
   // Auto-scroll to active transcript entry
   useEffect(() => {
     if (activeEntryRef.current && activeTab === 'transcript') {
@@ -968,6 +982,7 @@ function FeedbackPageInner() {
                         questionMarkers={questionMarkers}
                         onTimeUpdate={setAnalysisVideoTime}
                         onSeek={(fn) => { analysisSeekRef.current = fn }}
+                        activeWarning={activeWarning}
                       />
                     )}
                     {analysis.whisperTranscript && analysis.whisperTranscript.length > 0 && (

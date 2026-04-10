@@ -17,6 +17,13 @@ const EVENT_COLORS: Record<TimelineEvent['type'], string> = {
   observation: 'bg-[#8b98a5]/40 hover:bg-[#8b98a5]/60',
 }
 
+const DOT_COLORS: Record<TimelineEvent['type'], string> = {
+  strength: 'bg-emerald-500',
+  improvement: 'bg-red-400',
+  coaching_tip: 'bg-blue-500',
+  observation: 'bg-amber-400',
+}
+
 export default function TimelineTrack({ events, totalDurationSec, currentTimeSec, onSeek }: TimelineTrackProps) {
   const playheadPosition = totalDurationSec > 0 ? (currentTimeSec / totalDurationSec) * 100 : 0
 
@@ -69,6 +76,25 @@ export default function TimelineTrack({ events, totalDurationSec, currentTimeSec
             />
           )
         })}
+
+        {/* Dot markers for key moments */}
+        {sortedEvents
+          .filter((e) => e.type === 'strength' || e.type === 'improvement' || e.type === 'coaching_tip')
+          .map((event, i) => {
+            const pos = (event.startSec / totalDurationSec) * 100
+            return (
+              <div
+                key={`dot-${i}`}
+                className={`absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full ${DOT_COLORS[event.type]} ring-2 ring-white z-[5] cursor-pointer`}
+                style={{ left: `${pos}%` }}
+                title={event.title}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onSeek(event.startSec)
+                }}
+              />
+            )
+          })}
 
         {/* Playhead */}
         <div

@@ -4,6 +4,16 @@ import { useEffect, useRef } from 'react'
 import type { WhisperSegment } from '@shared/types/multimodal'
 import type { TranscriptEntry } from '@shared/types'
 
+const FILLER_WORDS = new Set([
+  'um', 'umm', 'uh', 'uhh', 'er', 'erm', 'ah', 'ahh',
+  'like', 'basically', 'literally', 'actually', 'honestly',
+  'right', 'okay', 'so', 'well', 'yeah', 'you know',
+])
+
+function isFiller(word: string): boolean {
+  return FILLER_WORDS.has(word.toLowerCase().replace(/[.,!?;:]/g, ''))
+}
+
 interface ReplayTranscriptProps {
   whisperSegments: WhisperSegment[]
   transcript: TranscriptEntry[]
@@ -28,35 +38,52 @@ export default function ReplayTranscript({
   if (whisperSegments.length > 0) {
     return (
       <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 transcript-scroll">
-        {whisperSegments.map((segment) => (
-          <div key={segment.id} className="space-y-1">
-            <span className="text-caption text-[#8b98a5] tabular-nums">
-              {formatTime(segment.start)}
-            </span>
-            <p className="text-sm leading-relaxed">
-              {segment.words.map((word, wi) => {
-                const isActive = currentTimeSec >= word.start && currentTimeSec < word.end
-                const isPast = currentTimeSec >= word.end
-                return (
-                  <span
-                    key={`${segment.id}-${wi}`}
-                    ref={isActive ? activeRef : undefined}
-                    onClick={() => onWordClick(word.start)}
-                    className={`cursor-pointer transition-colors rounded px-0.5 ${
-                      isActive
-                        ? 'bg-blue-500/20 text-blue-700 font-medium'
-                        : isPast
-                        ? 'text-[#0f1419]'
-                        : 'text-[#8b98a5]'
-                    } hover:bg-blue-500/10`}
-                  >
-                    {word.word}{' '}
-                  </span>
-                )
-              })}
-            </p>
-          </div>
-        ))}
+        {whisperSegments.map((segment) => {
+          const isActiveSegment = currentTimeSec >= segment.start &&
+            currentTimeSec < (segment.words.length > 0 ? segment.words[segment.words.length - 1].end : segment.end)
+
+          return (
+            <div
+              key={segment.id}
+              className={`rounded-lg p-3 transition-colors ${
+                isActiveSegment
+                  ? 'bg-blue-50/80 border border-blue-200/50'
+                  : 'bg-transparent'
+              }`}
+            >
+              <span className="text-caption text-[#8b98a5] tabular-nums">
+                {formatTime(segment.start)}
+              </span>
+              <p className="text-sm leading-relaxed mt-1">
+                <span className="text-[#8b98a5]">&ldquo;</span>
+                {segment.words.map((word, wi) => {
+                  const isActive = currentTimeSec >= word.start && currentTimeSec < word.end
+                  const isPast = currentTimeSec >= word.end
+                  const filler = isFiller(word.word)
+                  return (
+                    <span
+                      key={`${segment.id}-${wi}`}
+                      ref={isActive ? activeRef : undefined}
+                      onClick={() => onWordClick(word.start)}
+                      className={`cursor-pointer transition-colors rounded px-0.5 ${
+                        filler
+                          ? 'bg-red-100 text-red-600 font-medium'
+                          : isActive
+                          ? 'bg-blue-500/20 text-blue-700 font-medium'
+                          : isPast
+                          ? 'text-[#0f1419]'
+                          : 'text-[#8b98a5]'
+                      } hover:bg-blue-500/10`}
+                    >
+                      {word.word}{' '}
+                    </span>
+                  )
+                })}
+                <span className="text-[#8b98a5]">&rdquo;</span>
+              </p>
+            </div>
+          )
+        })}
       </div>
     )
   }
@@ -81,7 +108,7 @@ export default function ReplayTranscript({
               {formatTime(entry.timestamp)}
             </span>
           </div>
-          <p className="text-body text-[#0f1419]">{entry.text}</p>
+          <p className="text-body text-[#0f1419]">&ldquo;{entry.text}&rdquo;</p>
         </div>
       ))}
     </div>
