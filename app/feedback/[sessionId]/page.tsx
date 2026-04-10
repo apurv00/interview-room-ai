@@ -513,6 +513,20 @@ function FeedbackPageInner() {
         if (!saved) {
           setSaveWarning('Feedback generated but could not be saved. It may not appear in history.')
         }
+        // Update sessionStorage cache so back-navigation doesn't re-generate
+        try {
+          const cacheKey = `${SESSION_CACHE_PREFIX}${sid}`
+          const raw = sessionStorage.getItem(cacheKey)
+          if (raw) {
+            const cached = JSON.parse(raw)
+            if (cached.data) {
+              cached.data.session.feedback = fb
+              cached.data.session.status = 'completed'
+              if (cached.data.d) cached.data.d.feedback = fb
+              sessionStorage.setItem(cacheKey, JSON.stringify(cached))
+            }
+          }
+        } catch { /* non-critical */ }
       }
     } catch (e) {
       if ((e as Error).name === 'AbortError') return

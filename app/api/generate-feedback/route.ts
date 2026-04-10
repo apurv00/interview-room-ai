@@ -10,7 +10,7 @@ import { getPressureQuestionIndex, getDomainLabel } from '@interview/config/inte
 import { getSkillSections } from '@interview/services/core/skillLoader'
 import { findCompanyProfile } from '@interview/config/companyProfiles'
 import { connectDB } from '@shared/db/connection'
-import { User } from '@shared/db/models'
+import { User, InterviewSession } from '@shared/db/models'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { updateCompetencyState, updateWeaknessClusters } from '@learn/services/competencyService'
 import { generateSessionSummary } from '@learn/services/sessionSummaryService'
@@ -103,6 +103,13 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
           'Practice with shorter 10-minute sessions to build confidence',
           'Use the Coach Mode for guided STAR framework practice',
         ],
+      }
+      if (body.sessionId) {
+        InterviewSession.findByIdAndUpdate(body.sessionId, {
+          feedback: noDataFeedback,
+          status: 'completed',
+          completedAt: new Date(),
+        }).catch((err) => aiLogger.warn({ err, sessionId: body.sessionId }, 'Failed to persist no-data feedback'))
       }
       return NextResponse.json(noDataFeedback)
     }
@@ -364,6 +371,21 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       feedback.overall_score = Math.round(aqScore * 0.4 + commScore * 0.3 + engScore * 0.3)
       feedback.pass_probability = feedback.overall_score >= 75 ? 'High' : feedback.overall_score >= 50 ? 'Medium' : 'Low'
 
+      // Persist feedback to session document server-side so it survives page
+      // reloads without relying on the client PATCH call (which can fail due
+      // to Zod validation mismatches or network issues).
+      if (body.sessionId) {
+        try {
+          await InterviewSession.findByIdAndUpdate(body.sessionId, {
+            feedback,
+            status: 'completed',
+            completedAt: new Date(),
+          })
+        } catch (err) {
+          aiLogger.warn({ err, sessionId: body.sessionId }, 'Failed to persist feedback to session')
+        }
+      }
+
       trackUsage({
         user,
         type: 'api_call_feedback',
@@ -482,6 +504,13 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
           'Include specific metrics and outcomes to strengthen specificity',
           'Reduce filler words — pause instead of using "um" or "like"',
         ],
+      }
+      if (body.sessionId) {
+        InterviewSession.findByIdAndUpdate(body.sessionId, {
+          feedback: fallback,
+          status: 'completed',
+          completedAt: new Date(),
+        }).catch((err) => aiLogger.warn({ err, sessionId: body.sessionId }, 'Failed to persist fallback feedback'))
       }
       return NextResponse.json(fallback)
     }
