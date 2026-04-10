@@ -155,11 +155,17 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
       companyContext += `\nThe role is in the ${config.targetIndustry} industry. Weight industry-relevant knowledge and terminology appropriately.`
     }
 
+    // Build resume context for cross-reference verification
+    let resumeContext = ''
+    if (config.resumeText) {
+      resumeContext = `\n\n<candidate_resume>\n${config.resumeText.slice(0, 1500)}\n</candidate_resume>\nCross-reference the candidate's answer with their resume claims. Flag inconsistencies in the flags array (e.g., "Resume claims team lead but answer suggests IC role").`
+    }
+
     const evalCriteriaBlock = evalCriteria ? `\n\nEVALUATION FOCUS: ${evalCriteria}` : ''
 
     const systemPrompt = `${DATA_BOUNDARY_RULE}
 
-You are an expert interview coach evaluating candidates for ${domainLabel} roles at the ${config.experience} experience level. Interview type: ${interviewType}. You score objectively and fairly.${evalCriteriaBlock}${companyContext}${jdContext}${profileContext}`
+You are an expert interview coach evaluating candidates for ${domainLabel} roles at the ${config.experience} experience level. Interview type: ${interviewType}. You score objectively and fairly.${evalCriteriaBlock}${companyContext}${jdContext}${resumeContext}${profileContext}`
 
     // Build dynamic scoring dimensions
     const dimensionPrompt = scoringDims.map(d =>

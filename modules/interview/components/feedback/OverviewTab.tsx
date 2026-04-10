@@ -1,14 +1,17 @@
 'use client'
 
 import { useMemo } from 'react'
-import MetricCard from '@shared/ui/MetricCard'
 import { ScoreBar } from '@shared/ui/ScoreBar'
-import CommunicationDetail from '@interview/components/feedback/CommunicationDetail'
 import PeerComparison, { type PeerData } from '@interview/components/feedback/PeerComparison'
-import type { FeedbackData, StoredInterviewData, EngagementSignals, DeliverySignals } from '@shared/types'
+import ScoreProgressionChart from '@interview/components/feedback/ScoreProgressionChart'
+import SpeechMetricsChart from '@interview/components/feedback/SpeechMetricsChart'
+import DimensionRadar from '@interview/components/feedback/DimensionRadar'
+import ConfidenceTrend from '@interview/components/feedback/ConfidenceTrend'
+import QuestionHeatmap from '@interview/components/feedback/QuestionHeatmap'
+import RedFlagCards from '@interview/components/feedback/RedFlagCards'
+import type { FeedbackData, StoredInterviewData } from '@shared/types'
 import { PROBABILITY_COLORS, CONFIDENCE_TREND_LABELS } from '@interview/config/feedbackConfig'
 
-// Helper: safely coerce to string for rendering (prevents React #310 on unexpected objects)
 function s(v: unknown): string {
   if (v === null || v === undefined) return ''
   if (typeof v === 'object') return JSON.stringify(v)
@@ -26,165 +29,121 @@ interface OverviewTabProps {
 export default function OverviewTab({ data, feedback, sessionId, peerData, peerLoading }: OverviewTabProps) {
   const { dimensions, red_flags, top_3_improvements } = feedback
   const { answer_quality, communication } = dimensions
+  const engagementSignals = dimensions.engagement_signals || null
 
-  const engagementSignals: EngagementSignals | null = dimensions.engagement_signals || null
-  const deliverySignals: DeliverySignals | null = dimensions.delivery_signals || null
+  // Compute evaluation data for charts
+  const evalData = useMemo(() =>
+    (data.evaluations || []).map((e) => {
+      const ev = e as unknown as Record<string, unknown>
+      return {
+        question: (ev.question as string) || '',
+        answer: (ev.answer as string) || '',
+        relevance: Number(ev.relevance) || 0,
+        structure: Number(ev.structure) || 0,
+        specificity: Number(ev.specificity) || 0,
+        ownership: Number(ev.ownership) || 0,
+        jdAlignment: ev.jdAlignment as number | undefined,
+        flags: (ev.flags as string[]) || [],
+      }
+    })
+  , [data.evaluations])
 
-  // Default scoring dimensions (behavioral/legacy)
-  const DEFAULT_DIMS = [
-    { name: 'relevance', label: 'Relevance' },
-    { name: 'structure', label: 'STAR Structure' },
-    { name: 'specificity', label: 'Specificity' },
-    { name: 'ownership', label: 'Ownership' },
-  ]
-
-  // Use stored scoring dimensions if available, otherwise fall back to defaults
-  const scoringDims = useMemo(() => {
-    // Check for scoringDimensions on the session data (stored at creation)
-    const stored = (data as unknown as Record<string, unknown>).scoringDimensions as Array<{ name: string; label: string }> | undefined
-    if (stored?.length) return stored.map(d => ({ name: d.name, label: d.label }))
-    return DEFAULT_DIMS
-  }, [data])
-
-  // Dynamic one-pass reduce for avg scores based on scoring dimensions
-  const avgScores = useMemo(() => {
-    if (!data.evaluations || data.evaluations.length === 0) return null
-    const n = data.evaluations.length
-    const result: Record<string, number> = {}
-    for (const dim of scoringDims) {
-      const sum = data.evaluations.reduce((acc, e) => acc + (Number((e as unknown as Record<string, unknown>)[dim.name]) || 0), 0)
-      result[dim.name] = Math.round(sum / n)
-    }
-    return result
-  }, [data.evaluations, scoringDims])
+  const speechData = useMemo(() =>
+    (data.speechMetrics || []).map((m) => {
+      const sm = m as unknown as Record<string, unknown>
+      return {
+        wpm: Number(sm.wpm) || 0,
+        fillerRate: Number(sm.fillerRate) || 0,
+        totalWords: Number(sm.totalWords) || 0,
+      }
+    })
+  , [data.speechMetrics])
 
   return (
-    <div className="space-y-6">
-      {/* Score breakdown */}
-      <section className="grid md:grid-cols-2 lg:grid-cols-3 gap-component animate-fade-in">
-        {/* Answer Quality */}
-        <MetricCard
-          title="Answer Quality"
-          score={Number(answer_quality.score) || 0}
-          color="auto"
-          metrics={scoringDims.map(dim => ({
-            label: dim.label,
-            value: avgScores?.[dim.name] ?? answer_quality.score,
-          }))}
-          insights={{
-            strengths: Array.isArray(answer_quality.strengths) ? answer_quality.strengths.map((str) => s(str)) : undefined,
-            improvements: Array.isArray(answer_quality.weaknesses) ? answer_quality.weaknesses.map((w) => s(w)) : undefined,
-          }}
-        />
+    <div className="space-y-6 animate-fade-in">
+      {/* Row 1: Dimension Radar + Communication + Engagement */}
+      <section className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {/* Dimension Radar */}
+        <div className="surface-card-bordered p-4 sm:p-5">
+          <h3 className="text-subheading text-[#0f1419] mb-3">Scoring Dimensions</h3>
+          {evalData.length > 0 ? (
+            <DimensionRadar evaluations={evalData} />
+          ) : (
+            <p className="text-caption text-[#71767b]">No evaluation data</p>
+          )}
+        </div>
 
-        {/* Communication */}
-        <div className="surface-card-bordered p-4 sm:p-5 space-y-4">
+        {/* Communication Summary */}
+        <div className="surface-card-bordered p-4 sm:p-5 space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-subheading text-[#0f1419]">Communication</span>
-            <span className="text-heading font-bold text-cyan-400" role="meter" aria-valuenow={Number(communication.score) || 0} aria-valuemin={0} aria-valuemax={100} aria-label={`Communication score: ${Number(communication.score) || 0} out of 100`}>
-              {Number(communication.score) || 0}
-            </span>
+            <span className="text-heading font-bold text-cyan-500">{Number(communication.score) || 0}</span>
           </div>
-          <div className="space-y-3">
+          <div className="space-y-2">
             <ScoreBar label="Pacing" score={communication.pause_score} color="cyan" detail={`${communication.wpm} wpm`} />
             <ScoreBar label="Filler words" score={Math.round(Math.max(0, 100 - communication.filler_rate * 200))} color="cyan" detail={`${(communication.filler_rate * 100).toFixed(1)}%`} />
             <ScoreBar label="Conciseness" score={Math.round(Math.max(0, 100 - communication.rambling_index * 100))} color="cyan" />
           </div>
-          <div className="pt-2 border-t border-[#e1e8ed]">
-            <CommunicationDetail metrics={data.speechMetrics} />
-          </div>
-          <div className="pt-2 border-t border-[#e1e8ed] space-y-1">
-            {[
-              { label: 'Avg. WPM', value: s(communication.wpm), ideal: '120-160' },
-              { label: 'Filler rate', value: `${(Number(communication.filler_rate) * 100).toFixed(1)}%`, ideal: '<5%' },
-              { label: 'Rambling index', value: Number(communication.rambling_index).toFixed(2), ideal: '<0.30' },
-            ].map(({ label, value, ideal }) => (
-              <div key={label} className="flex justify-between text-xs">
-                <span className="text-[#8b98a5]">{label}</span>
-                <span className="text-[#0f1419] tabular-nums">
-                  {value} <span className="text-[#536471]">({ideal})</span>
-                </span>
-              </div>
-            ))}
-          </div>
         </div>
 
-        {/* Engagement (or legacy Delivery) */}
-        {engagementSignals ? (
-          <div className="surface-card-bordered p-4 sm:p-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <span className="text-subheading text-[#0f1419]">Engagement</span>
-              <span className="text-heading font-bold text-violet-400" role="meter" aria-valuenow={Number(engagementSignals.score) || 0} aria-valuemin={0} aria-valuemax={100} aria-label={`Engagement score: ${Number(engagementSignals.score) || 0} out of 100`}>
-                {Number(engagementSignals.score) || 0}
+        {/* Confidence Trend */}
+        <div className="surface-card-bordered p-4 sm:p-5">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-subheading text-[#0f1419]">Confidence Trend</span>
+            {engagementSignals && (
+              <span className={`text-xs px-2 py-0.5 rounded-full border ${CONFIDENCE_TREND_LABELS[engagementSignals.confidence_trend as keyof typeof CONFIDENCE_TREND_LABELS]?.color || 'text-[#71767b] bg-[#f8fafc] border-[#e1e8ed]'}`}>
+                {CONFIDENCE_TREND_LABELS[engagementSignals.confidence_trend as keyof typeof CONFIDENCE_TREND_LABELS]?.text || s(engagementSignals.confidence_trend)}
               </span>
-            </div>
-            <div className="space-y-3">
-              <ScoreBar label="Engagement depth" score={engagementSignals.engagement_score} color="blue" />
-              <ScoreBar label="Composure under pressure" score={engagementSignals.composure_under_pressure} color="blue" />
-              <ScoreBar label="Energy consistency" score={Math.round(engagementSignals.energy_consistency * 100)} color="blue" />
-            </div>
-            <div className="pt-2 border-t border-[#e1e8ed] space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-caption text-[#8b98a5]">Confidence trend</span>
-                <span className={`text-xs px-2 py-0.5 rounded-full border ${CONFIDENCE_TREND_LABELS[engagementSignals.confidence_trend as keyof typeof CONFIDENCE_TREND_LABELS]?.color || 'text-[#71767b] bg-[#f8fafc] border-[#e1e8ed]'}`}>
-                  {CONFIDENCE_TREND_LABELS[engagementSignals.confidence_trend as keyof typeof CONFIDENCE_TREND_LABELS]?.text || s(engagementSignals.confidence_trend)}
-                </span>
-              </div>
-              <p className="text-caption text-[#536471]">
-                Engagement scores are AI-estimated from speech patterns, answer depth, and consistency.
-              </p>
-            </div>
+            )}
           </div>
-        ) : deliverySignals ? (
-          <div className="surface-card-bordered p-4 sm:p-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <span className="text-subheading text-[#0f1419]">Delivery</span>
-              <span className="text-heading font-bold text-violet-400" role="meter" aria-valuenow={Number(deliverySignals.score) || 0} aria-valuemin={0} aria-valuemax={100} aria-label={`Delivery score: ${Number(deliverySignals.score) || 0} out of 100`}>
-                {Number(deliverySignals.score) || 0}
-              </span>
-            </div>
-            <div className="space-y-3">
-              <ScoreBar label="Gaze / eye contact" score={Math.round(deliverySignals.gaze_ratio * 100)} color="blue" />
-              <ScoreBar label="Head stability" score={Math.round(deliverySignals.head_stability * 100)} color="blue" />
-              <ScoreBar label="Affect variability" score={Math.round(deliverySignals.affect_variability * 100)} color="blue" />
-            </div>
-            <div className="pt-2 border-t border-[#e1e8ed]">
-              <div className={`text-xs px-2 py-1 rounded-full border w-fit ${PROBABILITY_COLORS[deliverySignals.confidence_band]}`}>
-                Confidence band: {deliverySignals.confidence_band}
-              </div>
-              <p className="text-caption text-[#536471] mt-2">
-                Delivery scores are AI-estimated. Updated engagement analysis available in new sessions.
-              </p>
-            </div>
-          </div>
-        ) : null}
+          {speechData.length > 0 ? (
+            <ConfidenceTrend speechMetrics={speechData} />
+          ) : (
+            <p className="text-caption text-[#71767b]">No speech data</p>
+          )}
+        </div>
       </section>
 
-      {/* JD Alignment Section */}
+      {/* Row 2: Score Progression */}
+      {evalData.length > 1 && (
+        <section className="surface-card-bordered p-4 sm:p-5">
+          <h3 className="text-subheading text-[#0f1419] mb-3">Score Progression</h3>
+          <ScoreProgressionChart evaluations={evalData} />
+        </section>
+      )}
+
+      {/* Row 3: Speech Metrics */}
+      {speechData.length > 1 && (
+        <section className="surface-card-bordered p-4 sm:p-5">
+          <h3 className="text-subheading text-[#0f1419] mb-3">Speech Metrics</h3>
+          <SpeechMetricsChart speechMetrics={speechData} />
+        </section>
+      )}
+
+      {/* Row 4: Question Heatmap */}
+      {evalData.length > 0 && (
+        <section className="surface-card-bordered p-4 sm:p-5">
+          <h3 className="text-subheading text-[#0f1419] mb-3">Question Breakdown</h3>
+          <QuestionHeatmap evaluations={evalData} transcript={data.transcript} />
+        </section>
+      )}
+
+      {/* JD Alignment */}
       {feedback.jd_match_score !== undefined && (
-        <section className="surface-card-bordered p-4 sm:p-5 space-y-4 animate-fade-in">
+        <section className="surface-card-bordered p-4 sm:p-5 space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-subheading text-[#0f1419]">JD Alignment</span>
-            <span className="text-heading font-bold text-cyan-400">{feedback.jd_match_score}</span>
+            <span className="text-heading font-bold text-cyan-500">{feedback.jd_match_score}</span>
           </div>
           <ScoreBar label="Overall JD Match" score={feedback.jd_match_score} color="cyan" />
           {feedback.jd_requirement_breakdown && feedback.jd_requirement_breakdown.length > 0 && (
             <div className="pt-2 border-t border-[#e1e8ed] space-y-2">
-              <p className="step-label">Requirement Breakdown</p>
               {feedback.jd_requirement_breakdown.map((req, i) => (
                 <div key={i} className="flex items-start gap-2">
-                  <span className={`shrink-0 mt-0.5 ${req.matched ? 'text-[#059669]' : 'text-red-400'}`}>
-                    {req.matched ? (
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                      </svg>
-                    ) : (
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    )}
+                  <span className={`shrink-0 mt-0.5 ${req.matched ? 'text-green-600' : 'text-red-500'}`}>
+                    {req.matched ? '✓' : '✗'}
                   </span>
-                  <div className="flex-1">
+                  <div>
                     <p className="text-body text-[#0f1419]">{s(req.requirement)}</p>
                     {req.evidence && <p className="text-caption text-[#8b98a5] mt-0.5">{s(req.evidence)}</p>}
                   </div>
@@ -195,23 +154,12 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
         </section>
       )}
 
-      {/* Red flags */}
-      {Array.isArray(red_flags) && red_flags.length > 0 && (
-        <section className="bg-red-50 border border-red-200 rounded-[var(--radius-md)] p-5 animate-fade-in">
-          <h3 className="text-subheading text-red-600 mb-3">Red flags detected</h3>
-          <ul className="space-y-2">
-            {red_flags.map((flag, idx) => (
-              <li key={idx} className="flex items-start gap-2 text-body text-red-700">
-                <span className="shrink-0">·</span> {s(flag)}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      {/* Red Flags */}
+      <RedFlagCards redFlags={Array.isArray(red_flags) ? red_flags.map(f => s(f)) : []} />
 
-      {/* Top 3 improvements */}
-      <section className="surface-card-bordered p-5 animate-fade-in">
-        <h3 className="text-subheading text-[#0f1419] mb-4">Top improvements for next attempt</h3>
+      {/* Top 3 Improvements */}
+      <section className="surface-card-bordered p-5">
+        <h3 className="text-subheading text-[#0f1419] mb-4">Top Improvements</h3>
         <div className="space-y-3">
           {Array.isArray(top_3_improvements) && top_3_improvements.map((tip, i) => (
             <div key={i} className="flex items-start gap-3">

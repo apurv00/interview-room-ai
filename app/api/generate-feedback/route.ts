@@ -239,9 +239,17 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
       companyFeedbackContext += `\nThe role is in the ${config.targetIndustry} industry. Weight industry-relevant strengths and gaps accordingly.`
     }
 
+    // Resume context for feedback specificity
+    let resumeBlock = ''
+    if (config.resumeText) {
+      resumeBlock = `\n\n<candidate_resume>\n${config.resumeText.slice(0, 1500)}\n</candidate_resume>\nReference resume claims when giving feedback. If the candidate's answers contradict or underperform their resume claims, note this specifically.`
+    }
+
     const systemPrompt = `${DATA_BOUNDARY_RULE}
 
-You are an expert interview coach. Generate honest, specific, and actionable feedback for a candidate.${interviewTypeContext}${domainFeedbackContext}${companyFeedbackContext}${jdBlock}${profileBlock}${competencyBlock}${historyBlock}`
+You are an expert interview coach. Generate honest, specific, and actionable feedback for a candidate.
+
+SPECIFICITY RULE: Reference specific questions by number (e.g., "In Q3...") and quote brief phrases from the candidate's actual answers. Never give generic feedback like "improve your structure" — instead say "In Q3, you said 'we did X' without clarifying your personal role — use 'I led/managed/designed' instead."${interviewTypeContext}${domainFeedbackContext}${companyFeedbackContext}${jdBlock}${resumeBlock}${profileBlock}${competencyBlock}${historyBlock}`
 
     const userPrompt = `Interview summary for ${domainLabel} (${config.experience} yrs), ${config.duration}-min ${interviewType} session.
 
@@ -254,7 +262,7 @@ Speech metrics:
 ${perQSummary}${pressureContext}
 
 <interview_transcript>
-${transcriptText.slice(0, 2000)}
+${transcriptText.slice(0, 4000)}
 </interview_transcript>
 
 ${JSON_OUTPUT_RULE}
