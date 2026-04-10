@@ -231,6 +231,7 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
         companyFeedbackContext += `\nThe candidate was preparing for ${companyProfile.name} (${companyProfile.difficultyLevel} difficulty).`
         companyFeedbackContext += ` Reference ${companyProfile.name}'s interview standards: ${companyProfile.interviewStyle}`
         companyFeedbackContext += `\nTip to include in improvements: "${companyProfile.tips}"`
+        companyFeedbackContext += `\nCalibrate pass_probability to ${companyProfile.difficultyLevel} difficulty. For "Elite" companies (FAANG), a score of 75 should be "Medium" not "High". For "Standard" companies, use normal thresholds.`
       } else {
         companyFeedbackContext += `\nThe candidate was preparing for ${config.targetCompany}. Reference this company's known interview standards and culture in the feedback where relevant.`
       }
