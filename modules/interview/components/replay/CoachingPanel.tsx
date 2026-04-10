@@ -17,10 +17,10 @@ const SIGNAL_ICONS: Record<string, React.ReactNode> = {
 }
 
 const SIGNAL_COLORS: Record<string, string> = {
-  audio: 'text-purple-400',
-  facial: 'text-emerald-400',
-  content: 'text-blue-400',
-  fused: 'text-yellow-400',
+  audio: 'text-purple-600',
+  facial: 'text-emerald-600',
+  content: 'text-blue-600',
+  fused: 'text-amber-600',
 }
 
 export default function CoachingPanel({ fusionSummary, timeline, onSeek }: CoachingPanelProps) {
@@ -30,18 +30,18 @@ export default function CoachingPanel({ fusionSummary, timeline, onSeek }: Coach
   return (
     <div className="space-y-6">
       {/* Actionable coaching tips */}
-      <div>
-        <h4 className="text-sm font-semibold text-gray-200 mb-3">Coaching Tips</h4>
+      <div className="surface-card-bordered p-4 sm:p-5">
+        <h4 className="text-subheading text-[#0f1419] mb-3">Coaching Tips</h4>
         <div className="space-y-2">
           {fusionSummary.coachingTips.map((tip, i) => (
             <div
               key={i}
-              className="flex items-start gap-3 p-3 rounded-lg bg-blue-500/10 border border-blue-500/20"
+              className="flex items-start gap-3 p-3 rounded-lg bg-blue-500/8 border border-blue-500/15"
             >
-              <span className="mt-0.5 text-blue-400">
+              <span className="mt-0.5 text-blue-600">
                 <Lightbulb className="w-4 h-4" />
               </span>
-              <p className="text-sm text-gray-200">{tip}</p>
+              <p className="text-body text-[#0f1419]">{tip}</p>
             </div>
           ))}
         </div>
@@ -49,24 +49,24 @@ export default function CoachingPanel({ fusionSummary, timeline, onSeek }: Coach
 
       {/* Improvement moments with "watch" buttons */}
       {improvementEvents.length > 0 && (
-        <div>
-          <h4 className="text-sm font-semibold text-gray-200 mb-3">Key Moments to Review</h4>
+        <div className="surface-card-bordered p-4 sm:p-5">
+          <h4 className="text-subheading text-[#0f1419] mb-3">Key Moments to Review</h4>
           <div className="space-y-2">
             {improvementEvents.map((event, i) => (
               <div
                 key={i}
-                className="flex items-start gap-3 p-3 rounded-lg bg-gray-800/50 border border-gray-700/50"
+                className="flex items-start gap-3 p-3 rounded-lg bg-[#f8fafc] border border-[#e1e8ed]"
               >
-                <span className={SIGNAL_COLORS[event.signal] || 'text-gray-400'}>
+                <span className={SIGNAL_COLORS[event.signal] || 'text-[#71767b]'}>
                   {SIGNAL_ICONS[event.signal] || <Lightbulb className="w-4 h-4" />}
                 </span>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-200">{event.title}</p>
-                  <p className="text-xs text-gray-400 mt-0.5">{event.description}</p>
+                  <p className="text-sm font-medium text-[#0f1419]">{event.title}</p>
+                  <p className="text-caption text-[#71767b] mt-0.5">{event.description}</p>
                 </div>
                 <button
                   onClick={() => onSeek(event.startSec)}
-                  className="flex items-center gap-1 px-2 py-1 text-xs rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors shrink-0"
+                  className="flex items-center gap-1 px-2 py-1 text-xs rounded-md bg-[#eff3f4] hover:bg-[#e1e8ed] text-[#536471] transition-colors shrink-0"
                   title={`Jump to ${formatTime(event.startSec)}`}
                 >
                   <Play className="w-3 h-3" />
@@ -80,24 +80,24 @@ export default function CoachingPanel({ fusionSummary, timeline, onSeek }: Coach
 
       {/* Timeline coaching tip events */}
       {coachingEvents.length > 0 && (
-        <div>
-          <h4 className="text-sm font-semibold text-gray-200 mb-3">Coaching Moments</h4>
+        <div className="surface-card-bordered p-4 sm:p-5">
+          <h4 className="text-subheading text-[#0f1419] mb-3">Coaching Moments</h4>
           <div className="space-y-2">
             {coachingEvents.map((event, i) => (
               <div
                 key={i}
-                className="flex items-start gap-3 p-3 rounded-lg bg-gray-800/30 border border-gray-700/30"
+                className="flex items-start gap-3 p-3 rounded-lg bg-[#f8fafc] border border-[#eff3f4]"
               >
-                <span className={SIGNAL_COLORS[event.signal] || 'text-gray-400'}>
+                <span className={SIGNAL_COLORS[event.signal] || 'text-[#71767b]'}>
                   {SIGNAL_ICONS[event.signal] || <Lightbulb className="w-4 h-4" />}
                 </span>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm text-gray-300">{event.title}</p>
-                  <p className="text-xs text-gray-500 mt-0.5">{event.description}</p>
+                  <p className="text-sm text-[#0f1419]">{event.title}</p>
+                  <p className="text-caption text-[#8b98a5] mt-0.5">{event.description}</p>
                 </div>
                 <button
                   onClick={() => onSeek(event.startSec)}
-                  className="flex items-center gap-1 px-2 py-1 text-xs rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors shrink-0"
+                  className="flex items-center gap-1 px-2 py-1 text-xs rounded-md bg-[#eff3f4] hover:bg-[#e1e8ed] text-[#536471] transition-colors shrink-0"
                 >
                   <Play className="w-3 h-3" />
                   {formatTime(event.startSec)}

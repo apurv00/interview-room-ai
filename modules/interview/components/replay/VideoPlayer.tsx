@@ -172,7 +172,7 @@ export default function VideoPlayer({ src, questionMarkers, onTimeUpdate, onSeek
 
   if (error) {
     return (
-      <div className="rounded-xl bg-red-900/20 border border-red-500/30 p-6 text-center text-red-400">
+      <div className="rounded-xl bg-red-500/10 border border-red-500/20 p-6 text-center text-red-600">
         {error}
       </div>
     )
@@ -181,9 +181,9 @@ export default function VideoPlayer({ src, questionMarkers, onTimeUpdate, onSeek
   const progress = Number.isFinite(duration) && duration > 0 ? (currentTime / duration) * 100 : 0
 
   return (
-    <div className="rounded-xl bg-gray-900 overflow-hidden">
+    <div className="rounded-xl border border-[#e1e8ed] overflow-hidden bg-white">
       {/* Video element */}
-      <div className="relative aspect-video bg-black">
+      <div className="relative aspect-video bg-[#0f1419]">
         <video
           ref={videoRef}
           src={src}
@@ -192,8 +192,8 @@ export default function VideoPlayer({ src, questionMarkers, onTimeUpdate, onSeek
           preload="metadata"
         />
         {isLoading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/50">
-            <Loader2 className="w-8 h-8 animate-spin text-white/60" />
+          <div className="absolute inset-0 flex items-center justify-center bg-black/40">
+            <Loader2 className="w-8 h-8 animate-spin text-white/70" />
           </div>
         )}
       </div>
@@ -202,7 +202,7 @@ export default function VideoPlayer({ src, questionMarkers, onTimeUpdate, onSeek
       <div className="px-4 py-3 space-y-2">
         {/* Seek bar with question markers */}
         <div
-          className="relative h-2 bg-gray-700 rounded-full cursor-pointer group"
+          className="relative h-2 bg-[#e1e8ed] rounded-full cursor-pointer group"
           onClick={handleSeekBarClick}
           role="slider"
           aria-label="Seek"
@@ -211,7 +211,7 @@ export default function VideoPlayer({ src, questionMarkers, onTimeUpdate, onSeek
           aria-valuenow={Math.round(currentTime)}
         >
           <div
-            className="absolute inset-y-0 left-0 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full transition-[width] duration-100"
+            className="absolute inset-y-0 left-0 bg-blue-600 rounded-full transition-[width] duration-100"
             style={{ width: `${progress}%` }}
           />
           {/* Question markers */}
@@ -220,7 +220,7 @@ export default function VideoPlayer({ src, questionMarkers, onTimeUpdate, onSeek
             return (
               <div
                 key={i}
-                className="absolute top-1/2 -translate-y-1/2 w-2 h-2 bg-yellow-400 rounded-full opacity-70 hover:opacity-100 z-10"
+                className="absolute top-1/2 -translate-y-1/2 w-2 h-2 bg-amber-400 rounded-full opacity-70 hover:opacity-100 z-10"
                 style={{ left: `${markerPos}%` }}
                 title={marker.label}
               />
@@ -229,30 +229,30 @@ export default function VideoPlayer({ src, questionMarkers, onTimeUpdate, onSeek
         </div>
 
         {/* Buttons row */}
-        <div className="flex items-center justify-between text-sm text-gray-300">
+        <div className="flex items-center justify-between text-sm text-[#536471]">
           <div className="flex items-center gap-3">
             <button
               onClick={togglePlay}
-              className="p-1.5 rounded-lg hover:bg-gray-700 transition-colors"
+              className="p-1.5 rounded-lg hover:bg-[#f8fafc] transition-colors"
               aria-label={isPlaying ? 'Pause' : 'Play'}
             >
               {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
             </button>
             <button
               onClick={toggleMute}
-              className="p-1.5 rounded-lg hover:bg-gray-700 transition-colors"
+              className="p-1.5 rounded-lg hover:bg-[#f8fafc] transition-colors"
               aria-label={isMuted ? 'Unmute' : 'Mute'}
             >
               {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
             </button>
-            <span className="text-xs text-gray-500 tabular-nums">
+            <span className="text-xs text-[#71767b] tabular-nums">
               {formatTime(currentTime)} / {formatTime(duration)}
             </span>
           </div>
 
           <button
             onClick={cycleSpeed}
-            className="px-2 py-1 text-xs rounded-md bg-gray-700 hover:bg-gray-600 tabular-nums transition-colors"
+            className="px-2 py-1 text-xs rounded-md bg-[#f8fafc] hover:bg-[#eff3f4] border border-[#e1e8ed] text-[#536471] tabular-nums transition-colors"
           >
             {speed}x
           </button>
