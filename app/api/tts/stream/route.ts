@@ -44,8 +44,11 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    // Add punctuation-based pauses (Deepgram Aura does not support SSML)
+    // Sanitize text for TTS: replace dashes (read as "dash") and add pauses
     let processedText = text
+    processedText = processedText.replace(/\u2014/g, ',') // em-dash —
+    processedText = processedText.replace(/\u2013/g, ',') // en-dash –
+    processedText = processedText.replace(/--/g, ',')     // double-hyphen
     processedText = processedText.replace(/\b(So,|Now,|Alright,|Great,|Okay,|Well,) /g, '$1... ')
 
     const response = await fetch(
