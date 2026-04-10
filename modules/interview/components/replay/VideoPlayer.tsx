@@ -6,6 +6,12 @@ import { Play, Pause, Volume2, VolumeX, Loader2 } from 'lucide-react'
 interface QuestionMarker {
   label: string
   offsetSeconds: number
+  topic?: string
+}
+
+interface ActiveWarning {
+  label: string
+  type?: 'attention' | 'positive' | 'neutral'
 }
 
 interface VideoPlayerProps {
@@ -13,12 +19,14 @@ interface VideoPlayerProps {
   questionMarkers: QuestionMarker[]
   onTimeUpdate?: (currentTimeSeconds: number) => void
   onSeek?: (seekFn: (seconds: number) => void) => void
+  /** Currently active warning badge (e.g. "Pace Warning") shown top-right */
+  activeWarning?: ActiveWarning | null
 }
 
 const SPEEDS = [0.5, 1, 1.25, 1.5, 2] as const
 const THROTTLE_MS = 200
 
-export default function VideoPlayer({ src, questionMarkers, onTimeUpdate, onSeek }: VideoPlayerProps) {
+export default function VideoPlayer({ src, questionMarkers, onTimeUpdate, onSeek, activeWarning }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const lastUpdateRef = useRef(0)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -180,10 +188,15 @@ export default function VideoPlayer({ src, questionMarkers, onTimeUpdate, onSeek
 
   const progress = Number.isFinite(duration) && duration > 0 ? (currentTime / duration) * 100 : 0
 
+  // Find the currently active question based on playback position
+  const activeQuestion = questionMarkers.length > 0
+    ? [...questionMarkers].reverse().find((m) => currentTime >= m.offsetSeconds)
+    : undefined
+
   return (
     <div className="rounded-xl border border-[#e1e8ed] overflow-hidden bg-white">
       {/* Video element */}
-      <div className="relative aspect-video bg-[#0f1419]">
+      <div className="relative aspect-video bg-[#0f1419] cursor-pointer" onClick={togglePlay}>
         <video
           ref={videoRef}
           src={src}
@@ -191,6 +204,47 @@ export default function VideoPlayer({ src, questionMarkers, onTimeUpdate, onSeek
           playsInline
           preload="metadata"
         />
+
+        {/* Question context badge — top left */}
+        {activeQuestion && (
+          <div className="absolute top-3 left-3 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-black/60 backdrop-blur-sm text-white text-xs font-medium">
+            <span>{activeQuestion.label}</span>
+            {activeQuestion.topic && (
+              <>
+                <span className="opacity-50">&middot;</span>
+                <span className="opacity-80">{activeQuestion.topic}</span>
+              </>
+            )}
+            <span className="opacity-50">&middot;</span>
+            <span className="tabular-nums opacity-80">{formatTime(currentTime)}</span>
+          </div>
+        )}
+
+        {/* Warning badge — top right */}
+        {activeWarning && (
+          <div className={`absolute top-3 right-3 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold ${
+            activeWarning.type === 'attention'
+              ? 'bg-red-500 text-white'
+              : activeWarning.type === 'positive'
+              ? 'bg-emerald-500 text-white'
+              : 'bg-amber-500 text-white'
+          }`}>
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            {activeWarning.label}
+          </div>
+        )}
+
+        {/* Centered play button overlay */}
+        {!isPlaying && !isLoading && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="w-16 h-16 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center border border-white/30 hover:bg-white/30 transition-colors">
+              <Play className="w-7 h-7 text-white ml-1" />
+            </div>
+          </div>
+        )}
+
         {isLoading && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/40">
             <Loader2 className="w-8 h-8 animate-spin text-white/70" />
