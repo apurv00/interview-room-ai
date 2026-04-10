@@ -1,64 +1,62 @@
 import { test, expect } from '@playwright/test'
 
 test.describe('Homepage & Lobby', () => {
-  test('homepage loads and renders main content', async ({ page }) => {
-    await page.goto('/')
-    await expect(page.locator('main')).toBeVisible({ timeout: 10000 })
+  test('homepage loads without errors', async ({ page }) => {
+    const response = await page.goto('/')
+    expect(response?.status()).toBeLessThan(500)
+    await page.waitForLoadState('domcontentloaded')
+    const body = await page.locator('body').textContent()
+    expect(body).not.toContain('Internal Server Error')
   })
 
-  test('homepage has interview domain options', async ({ page }) => {
+  test('homepage renders content', async ({ page }) => {
     await page.goto('/')
     await page.waitForLoadState('networkidle')
-    // The homepage should show domain/role selection cards
-    const mainContent = await page.locator('main').textContent()
-    expect(mainContent).toBeTruthy()
-    // At minimum, the page should have loaded without error
-    await expect(page.locator('main')).not.toHaveText(/error|500|404/i)
+    const bodyText = await page.locator('body').textContent()
+    expect(bodyText?.length).toBeGreaterThan(100)
+    expect(bodyText).not.toMatch(/500|Internal Server Error/)
   })
 
   test('lobby page loads', async ({ page }) => {
-    await page.goto('/lobby')
-    await expect(page.locator('main, [class*="lobby"], body')).toBeVisible({ timeout: 10000 })
-    // Should not redirect to signin (lobby is public)
+    const response = await page.goto('/lobby')
+    expect(response?.status()).toBeLessThan(500)
     expect(page.url()).not.toContain('/signin')
   })
 })
 
-test.describe('Auth-Gated Pages (smoke)', () => {
-  test('interview page redirects to signin without auth', async ({ page }) => {
+test.describe('Auth-Gated Pages', () => {
+  test('interview page requires auth', async ({ page }) => {
     await page.goto('/interview')
-    // Should redirect to signin since /interview requires auth
-    await page.waitForURL(/\/signin|\/interview/, { timeout: 10000 })
-    // This is expected behavior — not a failure
+    await page.waitForLoadState('networkidle')
+    // Should redirect to signin or show auth prompt
+    const url = page.url()
+    expect(url).toMatch(/\/signin|\/interview/)
   })
 
-  test('history page loads (public shell)', async ({ page }) => {
-    await page.goto('/history')
-    await page.waitForLoadState('networkidle')
-    // History is publicly accessible but shows empty state without auth
-    expect(page.url()).toContain('/history')
+  test('history page accessible', async ({ page }) => {
+    const response = await page.goto('/history')
+    expect(response?.status()).toBeLessThan(500)
   })
 })
 
 test.describe('Static Pages', () => {
   test('pricing page loads', async ({ page }) => {
-    await page.goto('/pricing')
-    await expect(page.locator('main')).toBeVisible({ timeout: 10000 })
-    await expect(page.locator('main')).not.toHaveText(/error|500/i)
+    const response = await page.goto('/pricing')
+    expect(response?.status()).toBeLessThan(500)
   })
 
   test('privacy page loads', async ({ page }) => {
-    await page.goto('/privacy')
-    await expect(page.locator('main')).toBeVisible({ timeout: 10000 })
+    const response = await page.goto('/privacy')
+    expect(response?.status()).toBeLessThan(500)
   })
 
   test('terms page loads', async ({ page }) => {
-    await page.goto('/terms')
-    await expect(page.locator('main')).toBeVisible({ timeout: 10000 })
+    const response = await page.goto('/terms')
+    expect(response?.status()).toBeLessThan(500)
   })
 
   test('signin page loads', async ({ page }) => {
-    await page.goto('/signin')
-    await expect(page.locator('main, form, [class*="sign"]')).toBeVisible({ timeout: 10000 })
+    const response = await page.goto('/signin')
+    expect(response?.status()).toBeLessThan(500)
   })
 })

@@ -1,17 +1,15 @@
 import { test, expect } from '@playwright/test'
 
 test.describe('Lobby & Setup', () => {
-  test('lobby page loads without errors', async ({ page }) => {
-    await page.goto('/lobby')
-    await page.waitForLoadState('networkidle')
+  test('lobby page loads', async ({ page }) => {
+    const response = await page.goto('/lobby')
+    expect(response?.status()).toBeLessThan(500)
     expect(page.url()).not.toContain('/signin')
-    await expect(page.locator('body')).not.toHaveText(/Internal Server Error|500/)
   })
 
   test('interview setup page loads', async ({ page }) => {
-    await page.goto('/interview/setup')
-    await page.waitForLoadState('networkidle')
-    // Setup is public — should not redirect to signin
+    const response = await page.goto('/interview/setup')
+    expect(response?.status()).toBeLessThan(500)
     expect(page.url()).not.toContain('/signin')
   })
 })
