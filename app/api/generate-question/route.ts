@@ -30,8 +30,19 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     const interviewType = config.interviewType || 'behavioral'
 
     const totalQuestions = getQuestionCount(config.duration)
-    const isPressureQuestion = questionIndex === getPressureQuestionIndex(config.duration)
     const isLastQuestion = questionIndex === totalQuestions - 1
+
+    // TN3: Progressive pressure escalation for strong candidates
+    // Instead of a single binary "pressure question", escalate gradually:
+    //  - 'normal': default tone
+    //  - 'elevated': after Q3 for strong performers — skeptical probes, devil's advocate
+    //  - 'high': after Q6 for strong performers — direct challenges, ethical dilemmas
+    let pressureLevel: 'normal' | 'elevated' | 'high' = 'normal'
+    if (performanceSignal === 'strong' && questionIndex >= 6) {
+      pressureLevel = 'high'
+    } else if (performanceSignal === 'strong' && questionIndex >= 3) {
+      pressureLevel = 'elevated'
+    }
 
     // previousQA is now passed via contextData for TOON encoding
 
@@ -317,8 +328,25 @@ ${DATA_BOUNDARY_RULE}`
     // Dynamic context changes every turn — not cached
     const dynamicSystemPrompt = `${difficultyBlock}${transitionBlock}${threadContext}${recallContext}`
 
+    // F5: Curveball injection — once per session after Q3
+    // Uses a hash of session-unique data for deterministic slot selection.
+    // Falls back to config-based seed when sessionId is unavailable (client doesn't always pass it).
+    const seedSource = body.sessionId || `${config.role}:${config.duration}:${config.experience}:${user.id}`
+    const sessionSeed = seedSource.split('').reduce((a, c) => a + c.charCodeAt(0), 0)
+    const curveballEligible = questionIndex >= 3 && !isLastQuestion && pressureLevel === 'normal'
+    const curveballSlot = (sessionSeed % 7) + 3 // deterministic slot between Q3-Q9
+    const isCurveball = curveballEligible && questionIndex === curveballSlot
+
+    // TN3: Progressive pressure instructions
+    const pressureInstructions: Record<string, string> = {
+      normal: '',
+      elevated: '⚠️ PRESSURE LEVEL: ELEVATED. The candidate is performing well. Ask a skeptical or devil\'s advocate question that tests their reasoning under pressure. Challenge an assumption from their previous answer, or present a "what if" scenario that complicates their approach. Stay professional but push them.',
+      high: '⚠️ PRESSURE LEVEL: HIGH. The candidate is excelling. Ask a direct challenge: an ethical dilemma, a cross-functional conflict scenario, a "convince me you\'re wrong" question, or a question that forces them to defend a difficult trade-off. Be respectful but don\'t go easy.',
+    }
+
     const userPrompt = `Generate question ${questionIndex + 1} of ${totalQuestions}.
-${isPressureQuestion ? '⚠️ This is the PRESSURE moment — ask a mildly challenging follow-up or a "devil\'s advocate" question that tests resilience or self-awareness. Keep it professional.' : ''}
+${pressureInstructions[pressureLevel]}
+${isCurveball ? '🎯 CURVEBALL: Ask an unexpected question that tests composure and adaptability. Examples: a left-field hypothetical ("If you had unlimited budget but only 2 weeks..."), a deliberately ambiguous scenario, or a question that forces creative thinking outside the candidate\'s comfort zone. Keep it relevant to the domain but surprising in angle.' : ''}
 ${isLastQuestion ? 'This is the FINAL substantive question before wrap-up — make it memorable and forward-looking.' : ''}
 
 Return ONLY the question text. No preamble, no numbering, no quotation marks. Just the question.`

@@ -50,6 +50,16 @@ export function deriveNudge(metrics: SpeechMetrics, elapsedSeconds: number): Coa
     }
   }
 
+  // TM4: Focus nudge — long duration but low substance (slow ramblers)
+  if (elapsedSeconds > 90 && metrics.totalWords > 50 && metrics.totalWords < 120) {
+    return {
+      id: 'focus',
+      message: 'Try to focus on the key point — what was the outcome?',
+      type: 'pace',
+      severity: 'info',
+    }
+  }
+
   if (metrics.totalWords < 30 && elapsedSeconds > 30) {
     return {
       id: 'more-detail',

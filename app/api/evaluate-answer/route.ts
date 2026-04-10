@@ -222,12 +222,16 @@ ${dimensionPrompt}${jdAlignmentDimension}
 Also determine:
 - flags: array of red-flag strings (e.g. "Blame-shifting", "No measurable impact", "Contradiction: [detail]"). Empty array if none.
 - keyAssertions: extract 2-3 factual claims from this answer that can be verified against future answers (e.g. "Led a team of 8", "Increased revenue by 30%", "Worked at Company X for 3 years"). These are used for cross-answer consistency tracking.
+- isNonsensical: true ONLY if the answer is clearly a joke, gibberish, completely absurd, or has absolutely nothing to do with an interview context. A weak or vague answer is NOT nonsensical. Reserve this for genuinely absurd responses.
+
+Think-aloud detection: If the answer reads like the candidate is thinking out loud (exploratory language like "so maybe...", "I guess...", hedging, self-corrections, no clear conclusion) rather than giving a final answer, set shouldProbe to true with probeType "clarify" and ask them to synthesize their thinking into a clear answer (e.g. "Those are interesting threads, can you pull them together into a clear recommendation?").
 
 Determine probing decision:
 - probeDecision.shouldProbe: true if the answer would benefit from probing — answer is vague, too short (<30 words), surface-level, evasive, missing key info, or exceptionally interesting and worth exploring deeper
 - probeDecision.probeType: one of "clarify" (ambiguous terms or unclear details), "challenge" (logical gaps or untested assumptions), "expand" (promising answer worth exploring deeper), or "quantify" (lacks measurable impact or metrics)
 - probeDecision.probeQuestion: a natural, conversational follow-up probe (one sentence). Frame as curious exploration, not interrogation.
-- probeDecision.probingRationale: brief reason for the probing decision (for coaching context)${probeDepthContext}
+- probeDecision.probingRationale: brief reason for the probing decision (for coaching context)
+- probeDecision.isPivot: true ONLY if the candidate clearly changed the subject or gave an answer about a completely different topic than what was asked. A partially relevant or weak answer is NOT a pivot — a pivot is when the answer has essentially nothing to do with the question asked. If isPivot is true, probeQuestion should re-anchor to the original question (e.g. "I appreciate that context, but I'd love to hear specifically about [original topic]. Can you walk me through that?").${probeDepthContext}
 
 Determine pushback:
 - If ANY scoring dimension is below 50, generate a pushback response. Pick the lowest-scoring dimension.
@@ -245,11 +249,13 @@ ${JSON_OUTPUT_RULE}
 ${dimensionSchema}${jdAlignmentSchema},
   "flags": string[],
   "keyAssertions": string[],
+  "isNonsensical": boolean,
   "probeDecision": {
     "shouldProbe": boolean,
     "probeType": "clarify" | "challenge" | "expand" | "quantify" | null,
     "probeQuestion": string | null,
-    "probingRationale": string | null
+    "probingRationale": string | null,
+    "isPivot": boolean
   },
   "pushback": {
     "line": string,
@@ -289,6 +295,8 @@ ${dimensionSchema}${jdAlignmentSchema},
         ...(scores.pushback && { pushback: scores.pushback }),
         // LLM-extracted key assertions for cross-answer consistency tracking (C2)
         ...(scores.keyAssertions?.length && { keyAssertions: scores.keyAssertions }),
+        // E7: nonsensical/joke answer detection
+        ...(scores.isNonsensical && { isNonsensical: true }),
       }
 
       trackUsage({

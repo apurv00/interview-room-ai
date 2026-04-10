@@ -166,6 +166,41 @@ describe('classifyIntent', () => {
       )).toBe('answer')
     })
   })
+
+  // ── E4: Challenge question ──
+
+  describe('challenge_question detection', () => {
+    it('detects question fairness challenges', () => {
+      expect(classifyIntent("That's not a fair question")).toBe('challenge_question')
+      expect(classifyIntent("This question is flawed")).toBe('challenge_question')
+      expect(classifyIntent("I don't think that's relevant")).toBe('challenge_question')
+      expect(classifyIntent("That doesn't apply to my role")).toBe('challenge_question')
+      expect(classifyIntent("Why are you asking that?")).toBe('challenge_question')
+    })
+
+    it('does NOT match long answers discussing fairness', () => {
+      expect(classifyIntent(
+        "I think that's not a fair comparison between the two approaches because the first one had significantly more resources"
+      )).toBe('answer')
+    })
+  })
+
+  // ── E8: Gaming detection ──
+
+  describe('gaming detection', () => {
+    it('detects attempts to extract the answer', () => {
+      expect(classifyIntent("Just tell me the right answer")).toBe('gaming')
+      expect(classifyIntent("What should I say?")).toBe('gaming')
+      expect(classifyIntent("What are you looking for?")).toBe('gaming')
+      expect(classifyIntent("Tell me what you want to hear")).toBe('gaming')
+    })
+
+    it('does NOT match genuine clarification questions about interview scope', () => {
+      expect(classifyIntent(
+        "What should I focus on in terms of the technical architecture for this distributed system design?"
+      )).toBe('question')
+    })
+  })
 })
 
 describe('simplifyQuestion', () => {
@@ -198,6 +233,8 @@ describe('CONVERSATION_RESPONSES', () => {
     expect(CONVERSATION_RESPONSES.repetition.length).toBeGreaterThan(0)
     expect(CONVERSATION_RESPONSES.dontKnow.probe.length).toBeGreaterThan(0)
     expect(CONVERSATION_RESPONSES.dontKnow.advance.length).toBeGreaterThan(0)
+    expect(CONVERSATION_RESPONSES.challenge_question.length).toBeGreaterThan(0)
+    expect(CONVERSATION_RESPONSES.gaming.length).toBeGreaterThan(0)
   })
 
   it('has hint responses for all interview types', () => {
