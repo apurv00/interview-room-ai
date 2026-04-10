@@ -595,7 +595,15 @@ export function useInterview({
   // ─── Intentional silence ───────────────────────────────────────────────────
 
   /**
-   * After a short answer, occasionally pause for 2.5s to see if the candidate elaborates.
+   * After an answer, briefly listen for continuation speech before moving to evaluation.
+   * This catches users who pause naturally then continue elaborating — especially common
+   * in system design and case study interviews where answers are long and thinking-heavy.
+   *
+   * Timeout varies by answer length:
+   *  - Short (<15 words): always listens, 2.5s window (likely incomplete answer)
+   *  - Medium (15-30 words): 35% chance, 2.0s window
+   *  - Long (30+ words): always listens, 1.5s window (brief catch for trailing thoughts)
+   *
    * Returns additional text if the candidate spoke, or null if silence held.
    */
   function maybeIntentionalSilence(answer: string, isProbe: boolean): Promise<string | null> {
@@ -609,11 +617,20 @@ export function useInterview({
     if (performanceSignalRef.current === 'struggling') return Promise.resolve(null)
 
     const wordCount = answer.trim().split(/\s+/).length
-    if (wordCount >= 30) return Promise.resolve(null)
 
-    // Very short answers (<15 words) ALWAYS get silence pause (deterministic).
-    // Medium answers (15-30 words) get 35% chance — enough to feel natural, not every time.
-    if (wordCount >= 15 && Math.random() >= 0.35) return Promise.resolve(null)
+    // Determine timeout and whether to apply silence check
+    let silenceMs: number
+    if (wordCount < 15) {
+      // Short answers — always check, longer window
+      silenceMs = 2500
+    } else if (wordCount < 30) {
+      // Medium answers — probabilistic (35% chance)
+      if (Math.random() >= 0.35) return Promise.resolve(null)
+      silenceMs = 2000
+    } else {
+      // Long answers — always check with a brief window to catch trailing speech
+      silenceMs = 1500
+    }
 
     // Set avatar to "curious" (waiting look)
     setAvatarEmotion('curious')
@@ -622,7 +639,7 @@ export function useInterview({
       const silenceTimer = setTimeout(() => {
         stopListening()
         resolve(null)
-      }, 2500)
+      }, silenceMs)
 
       startListening((result) => {
         clearTimeout(silenceTimer)
