@@ -164,9 +164,13 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
     const evalCriteriaBlock = evalCriteria ? `\n\nEVALUATION FOCUS: ${evalCriteria}` : ''
 
     // Cross-answer consistency: surface prior claims so the LLM can flag contradictions
+    // Uses LLM-extracted key claims from previous answers (not raw truncated text)
     let consistencyContext = ''
     if (body.previousAnswerSummaries?.length) {
-      consistencyContext = `\n\nPREVIOUS ANSWERS (check for consistency):\n${body.previousAnswerSummaries.map((s, i) => `Q${i+1}: ${s.keyClaimsFromAnswer}`).join('\n')}\nFlag any contradictions between this answer and previous claims.`
+      consistencyContext = `\n\nPREVIOUS ANSWERS — KEY CLAIMS (check for consistency):
+${body.previousAnswerSummaries.map((s, i) => `Q${i+1} ("${s.question.slice(0, 60)}"): ${s.keyClaimsFromAnswer}`).join('\n')}
+
+If the candidate's current answer contradicts any prior claims (e.g., different role, conflicting timelines, inconsistent team sizes), flag it in the flags array as "Contradiction: [specific inconsistency]" and consider a "challenge" probe to surface it.`
     }
 
     const systemPrompt = `${DATA_BOUNDARY_RULE}
@@ -190,9 +194,19 @@ You are an expert interview coach evaluating candidates for ${domainLabel} roles
       ? `,\n  "jdAlignment": number`
       : ''
 
-    const probeDepthContext = probeDepth != null && probeDepth > 0
-      ? `\nThis is probe depth ${probeDepth} on the same topic. Only recommend further probing if genuinely new information can be uncovered. After 2+ probes on the same topic, strongly prefer to move on.`
-      : ''
+    // Funnel probe sequencing (P7): guide probe type based on depth
+    // depth 0 (first probe) → expand (broad), depth 1 → clarify/quantify (specific),
+    // depth 2+ → challenge (deep). The LLM can override if context demands it.
+    let probeDepthContext = ''
+    if (probeDepth != null && probeDepth > 0) {
+      const funnelGuidance: Record<number, string> = {
+        1: 'This is probe depth 1. PREFERRED probe type: "clarify" or "quantify" — drill into specifics (numbers, names, timelines, concrete details). Avoid broad "expand" probes at this depth.',
+        2: 'This is probe depth 2. PREFERRED probe type: "challenge" — test assumptions, ask "what would you do differently?", or surface trade-offs. Only recommend further probing if genuinely new insight is possible.',
+      }
+      probeDepthContext = `\n${funnelGuidance[probeDepth] || `This is probe depth ${probeDepth}. Strongly prefer to move on — only probe if critical information is missing.`}`
+    } else if (probeDepth === 0 || probeDepth == null) {
+      probeDepthContext = '\nIf probing, PREFERRED probe type for first probe: "expand" — ask the candidate to tell you more, elaborate, or walk you through their thought process.'
+    }
 
     const userPrompt = `Evaluate this interview answer:
 
@@ -206,7 +220,8 @@ Score on these dimensions (integer 0–100):
 ${dimensionPrompt}${jdAlignmentDimension}
 
 Also determine:
-- flags: array of red-flag strings (e.g. "Blame-shifting", "No measurable impact", "Inconsistency detected"). Empty array if none.
+- flags: array of red-flag strings (e.g. "Blame-shifting", "No measurable impact", "Contradiction: [detail]"). Empty array if none.
+- keyAssertions: extract 2-3 factual claims from this answer that can be verified against future answers (e.g. "Led a team of 8", "Increased revenue by 30%", "Worked at Company X for 3 years"). These are used for cross-answer consistency tracking.
 
 Determine probing decision:
 - probeDecision.shouldProbe: true if the answer would benefit from probing — answer is vague, too short (<30 words), surface-level, evasive, missing key info, or exceptionally interesting and worth exploring deeper
@@ -229,6 +244,7 @@ ${JSON_OUTPUT_RULE}
 {
 ${dimensionSchema}${jdAlignmentSchema},
   "flags": string[],
+  "keyAssertions": string[],
   "probeDecision": {
     "shouldProbe": boolean,
     "probeType": "clarify" | "challenge" | "expand" | "quantify" | null,
@@ -271,6 +287,8 @@ ${dimensionSchema}${jdAlignmentSchema},
         flags: scores.flags ?? [],
         probeDecision,
         ...(scores.pushback && { pushback: scores.pushback }),
+        // LLM-extracted key assertions for cross-answer consistency tracking (C2)
+        ...(scores.keyAssertions?.length && { keyAssertions: scores.keyAssertions }),
       }
 
       trackUsage({

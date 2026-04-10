@@ -26,6 +26,8 @@ import type { StartListeningOptions } from './useDeepgramRecognition'
 import {
   classifyIntent,
   CONVERSATION_RESPONSES,
+  THINKING_ACKS,
+  PRE_QUESTION_FILLERS,
   simplifyQuestion,
   pickRandom,
 } from '@interview/config/conversationalResponses'
@@ -223,6 +225,9 @@ export function useInterview({
   const currentThreadRef = useRef<ThreadEntry[]>([])
   const completedThreadsRef = useRef<ThreadSummary[]>([])
 
+  // ── Thinking pause mode (TM1) — suspends silence timeout while candidate thinks ──
+  const isThinkingPauseRef = useRef(false)
+
   // ── Timer ──
   const [timeRemaining, setTimeRemaining] = useState(0)
   const timeRemainingRef = useRef(0)
@@ -326,7 +331,10 @@ export function useInterview({
       apiEvaluateAnswer(question, answer, qIdx, probeDepth, getAbortSignal(),
         evaluationsRef.current.slice(-5).map(e => ({
           question: e.question?.slice(0, 80) || '',
-          keyClaimsFromAnswer: e.answer?.slice(0, 150) || '',
+          // Use LLM-extracted key assertions when available (C2 upgrade);
+          // fall back to truncated raw answer for backward compat
+          keyClaimsFromAnswer: (e as AnswerEvaluation & { keyAssertions?: string[] }).keyAssertions?.join('; ')
+            || e.answer?.slice(0, 150) || '',
         })),
       ),
     [apiEvaluateAnswer]
@@ -456,8 +464,7 @@ export function useInterview({
     }
   }
 
-  // Thinking acknowledgments — short filler phrases to avoid dead silence
-  const THINKING_ACKS = ['Got it.', 'Mm-hmm.', 'Interesting.', 'I see.']
+  // Thinking acknowledgments — uses expanded set from conversationalResponses
   const ackCountRef = useRef(0)
   /** Track candidate-initiated clarifying questions for scoring signal */
   const clarifyingQCountRef = useRef(0)
@@ -752,27 +759,43 @@ export function useInterview({
         }]
         currentProbeDepthRef.current = 0
 
-        // Avatar speaks the question
+        // Avatar speaks the question (with occasional filler for realism — T1)
         checkAbort()
         const emotion: AvatarEmotion =
           qIdx === 0 ? 'friendly' : qIdx % 3 === 0 ? 'curious' : 'neutral'
+        // After Q2, occasionally prepend a natural transition filler (~40% chance)
+        // to avoid the robotic "question, question, question" cadence
+        const useTransitionFiller = qIdx >= 2 && !prefetchedQuestionRef.current && Math.random() < 0.4
+        if (useTransitionFiller) {
+          const filler = pickRandom(PRE_QUESTION_FILLERS)
+          await avatarSpeak(filler, 'neutral')
+        }
         warmUpListening?.()
         await avatarSpeak(question, emotion)
 
         // ── Conversational listen loop ──
-        // Instead of rigid listen → evaluate, classify candidate intent first.
-        // Handles: clarifications, redirects, proactive questions, thinking pauses.
+        // Classifies candidate intent before processing. Handles: clarifications,
+        // redirects, thinking pauses, distress, corrections, repetitions,
+        // time checks, hint requests, proactive questions, and "I don't know".
         checkAbort()
         setLiveAnswer('')
         let answer = ''
         let conversationTurns = 0
-        const MAX_CONVERSATION_TURNS = 3
+        let dontKnowAttempts = 0
+        const MAX_CONVERSATION_TURNS = 5 // raised from 3 to accommodate non-answer intents
 
         while (conversationTurns <= MAX_CONVERSATION_TURNS) {
           const speech = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
           if (isInterviewOver()) return
 
           if (!speech) {
+            // If in thinking pause, candidate went silent — give them more time
+            // with a gentle check-in (up to 90s total, then advance)
+            if (isThinkingPauseRef.current) {
+              isThinkingPauseRef.current = false
+              // They were thinking but went silent — treat as ready to move on
+            }
+
             if (conversationTurns === 0) {
               // First attempt empty — nudge candidate
               checkAbort()
@@ -793,12 +816,94 @@ export function useInterview({
           const intent = classifyIntent(speech)
 
           if (intent === 'answer') {
+            // Check for "I don't know" pattern (E3)
+            const dontKnowPattern = /^(i don'?t know|i('m| am) not sure|no idea|i haven'?t (thought about|considered)|i (really )?don'?t know)/i
+            if (dontKnowPattern.test(speech.trim()) && speech.trim().length < 60) {
+              dontKnowAttempts++
+              addToTranscript('candidate', speech, qIdx)
+
+              if (dontKnowAttempts === 1) {
+                // First "I don't know" — probe for partial knowledge
+                const probe = pickRandom(CONVERSATION_RESPONSES.dontKnow.probe)
+                addToTranscript('interviewer', probe, qIdx)
+                warmUpListening?.()
+                await avatarSpeak(probe, 'friendly')
+                conversationTurns++
+                continue
+              }
+              // Second "I don't know" — advance gracefully
+              const advance = pickRandom(CONVERSATION_RESPONSES.dontKnow.advance)
+              addToTranscript('interviewer', advance, qIdx)
+              await avatarSpeak(advance, 'friendly')
+              break
+            }
+
+            isThinkingPauseRef.current = false
             answer = speech
             break
           }
 
-          conversationTurns++
+          // Non-answer intents: distress, correction, repetition don't count as conversation turns
           addToTranscript('candidate', speech, qIdx)
+
+          if (intent === 'distress') {
+            // (I5, E6) — Emotional support, don't count as turn, enter thinking pause
+            const comfort = pickRandom(CONVERSATION_RESPONSES.distress)
+            addToTranscript('interviewer', comfort, qIdx)
+            isThinkingPauseRef.current = true
+            warmUpListening?.()
+            await avatarSpeak(comfort, 'friendly')
+            // Don't increment conversationTurns — distress doesn't count
+            continue
+          }
+
+          if (intent === 'correction') {
+            // (I4) — Let candidate restart, clear live answer, don't re-ask
+            const reply = pickRandom(CONVERSATION_RESPONSES.correction)
+            addToTranscript('interviewer', reply, qIdx)
+            setLiveAnswer('')
+            warmUpListening?.()
+            await avatarSpeak(reply, 'friendly')
+            // Don't increment conversationTurns — correction doesn't count
+            continue
+          }
+
+          if (intent === 'repetition') {
+            // (E5) — Re-read the question with a natural prefix
+            const prefix = pickRandom(CONVERSATION_RESPONSES.repetition)
+            const fullRepeat = prefix + ' ' + question
+            addToTranscript('interviewer', fullRepeat, qIdx)
+            warmUpListening?.()
+            await avatarSpeak(fullRepeat, 'friendly')
+            // Don't increment conversationTurns
+            continue
+          }
+
+          if (intent === 'timecheck') {
+            // (TM3) — Report remaining time in character
+            const minutesLeft = Math.floor(timeRemainingRef.current / 60)
+            const isStrong = performanceSignalRef.current === 'strong'
+            const timeMsg = CONVERSATION_RESPONSES.timecheck(minutesLeft, isStrong)
+            addToTranscript('interviewer', timeMsg, qIdx)
+            warmUpListening?.()
+            await avatarSpeak(timeMsg, 'friendly')
+            // Don't increment conversationTurns
+            continue
+          }
+
+          if (intent === 'hint') {
+            // (E2) — Provide light scaffold hint based on interview type
+            const interviewType = config?.interviewType || 'screening'
+            const hintKey = (interviewType in CONVERSATION_RESPONSES.hint ? interviewType : 'screening') as keyof typeof CONVERSATION_RESPONSES.hint
+            const hintMsg = CONVERSATION_RESPONSES.hint[hintKey]
+            addToTranscript('interviewer', hintMsg, qIdx)
+            warmUpListening?.()
+            await avatarSpeak(hintMsg, 'friendly')
+            conversationTurns++
+            continue
+          }
+
+          conversationTurns++
 
           if (intent === 'clarification') {
             const rephrase = pickRandom(CONVERSATION_RESPONSES.clarification) + ' ' + simplifyQuestion(question)
@@ -817,8 +922,10 @@ export function useInterview({
           }
 
           if (intent === 'thinking') {
+            // (TM1) — Enter thinking pause mode
             const thinkReply = pickRandom(CONVERSATION_RESPONSES.thinking)
             addToTranscript('interviewer', thinkReply, qIdx)
+            isThinkingPauseRef.current = true
             warmUpListening?.()
             await avatarSpeak(thinkReply, 'friendly')
             continue
@@ -848,6 +955,7 @@ export function useInterview({
         }
 
         if (isInterviewOver()) return
+        isThinkingPauseRef.current = false
 
         if (!answer) {
           // No answer after conversation loop — skip to next question
