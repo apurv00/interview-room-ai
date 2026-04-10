@@ -53,7 +53,7 @@ export default function ResourcesPage() {
         }}
       />
 
-      <div className="max-w-[1100px] mx-auto">
+      <div className="max-w-6xl mx-auto">
         {/* Header */}
         <nav aria-label="Breadcrumb" className="text-caption text-[#71767b] mb-6">
           <Link href="/" className="hover:text-[#2563eb] transition-colors">Home</Link>
@@ -62,7 +62,7 @@ export default function ResourcesPage() {
         </nav>
 
         <h1 className="text-display text-[#0f1419]">Interview Preparation Resources</h1>
-        <p className="text-body text-[#71767b] mt-3 max-w-[640px]">
+        <p className="text-body text-[#71767b] mt-3 max-w-2xl">
           Everything you need to ace your next interview — from common questions and proven frameworks to salary negotiation strategies.
         </p>
 

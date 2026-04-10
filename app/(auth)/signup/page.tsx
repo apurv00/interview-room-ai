@@ -21,7 +21,7 @@ export default function SignUpPage() {
 
   return (
     <main className="min-h-screen bg-[#ffffff] flex items-center justify-center px-4 sm:px-6">
-      <div className="w-full max-w-[640px]">
+      <div className="w-full max-w-2xl">
         <div className="bg-white border border-[#e1e8ed] rounded-2xl p-7 sm:p-8">
           {/* Logo */}
           <div className="flex justify-center mb-section">
