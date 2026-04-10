@@ -108,6 +108,8 @@ export interface ProbeDecision {
   probeType?: ProbeType | null
   probeQuestion?: string | null
   probingRationale?: string | null
+  /** P6: True if candidate pivoted away from the question (evasion/topic shift) */
+  isPivot?: boolean
 }
 
 export interface ThreadEntry {
@@ -236,6 +238,18 @@ export interface FeedbackData {
   jd_requirement_breakdown?: JdRequirementMatch[]
   red_flags: string[]
   top_3_improvements: string[]
+  /** FB1: Per-question ideal answer outlines for comparison */
+  ideal_answers?: Array<{
+    questionIndex: number
+    strongAnswer: string
+    keyElements: string[]
+  }>
+  /** FB7: Targeted practice recommendations based on session gaps */
+  drill_recommendations?: Array<{
+    skillArea: string
+    description: string
+    practiceQuestions: string[]
+  }>
 }
 
 // ─── Stored interview data ────────────────────────────────────────────────────

@@ -107,6 +107,7 @@ export function useInterview({
 
   // Interrupt-capable avatarSpeak: if candidate starts talking during TTS,
   // cancel speech and let the candidate be heard. Deepgram streams continuously.
+  // Also discards any queued coaching messages (I6) to avoid stale overlaps.
   const interruptedRef = useRef(false)
   const avatarSpeak = useCallback(async (text: string, emotion?: import('@shared/types').AvatarEmotion) => {
     interruptedRef.current = false
@@ -114,6 +115,9 @@ export function useInterview({
     setOnInterrupt?.(() => {
       interruptedRef.current = true
       cancelTTS()
+      // I6: Discard any pending coaching message on interrupt
+      coachingAbortRef.current?.abort()
+      setCoachingTip(null)
     })
     await rawAvatarSpeak(text, emotion)
     setOnInterrupt?.(null) // Clear interrupt handler after TTS finishes
@@ -279,7 +283,9 @@ export function useInterview({
     })
   }, [config]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ─── Timer countdown ───────────────────────────────────────────────────────
+  // ─── Timer countdown with milestone nudges (TM6) ────────────────────────
+
+  const firedMilestonesRef = useRef<Set<number>>(new Set())
 
   useEffect(() => {
     if (!config) return
@@ -287,8 +293,32 @@ export function useInterview({
       setTimeRemaining((t) => {
         const next = Math.max(0, t - 1)
         timeRemainingRef.current = next
+
+        // TM6: Milestone nudges at 90s and 30s remaining
+        if (next === 90 && !firedMilestonesRef.current.has(90) && phaseRef.current !== 'SCORING' && phaseRef.current !== 'ENDED') {
+          firedMilestonesRef.current.add(90)
+          setCoachingTip("We're running low on time, aim to wrap up your current thought.")
+          setTimeout(() => setCoachingTip(prev => prev?.includes('running low') ? null : prev), 4000)
+        }
+        if (next === 30 && !firedMilestonesRef.current.has(30) && phaseRef.current !== 'SCORING' && phaseRef.current !== 'ENDED') {
+          firedMilestonesRef.current.add(30)
+          setCoachingTip('Last 30 seconds, wrap up when ready.')
+          setTimeout(() => setCoachingTip(prev => prev?.includes('Last 30') ? null : prev), 4000)
+        }
+
+        // TM6: At time=0, give a 15s grace if user is mid-answer (LISTENING phase)
         if (next === 0 && phaseRef.current !== 'SCORING' && phaseRef.current !== 'ENDED') {
-          finishInterview()
+          if (phaseRef.current === 'LISTENING') {
+            // User is mid-answer — give 15s grace before finishing
+            setCoachingTip('Time is up, please finish your current thought.')
+            setTimeout(() => {
+              if (phaseRef.current !== 'SCORING' && phaseRef.current !== 'ENDED') {
+                finishInterview()
+              }
+            }, 15000)
+          } else {
+            finishInterview()
+          }
         }
         return next
       })
@@ -1015,6 +1045,39 @@ export function useInterview({
         // Pre-fetch TTS for probe question if evaluation decided to probe
         if (evaluation.probeDecision?.shouldProbe && evaluation.probeDecision.probeQuestion) {
           prefetchTTS(evaluation.probeDecision.probeQuestion)
+        }
+
+        // ── P6: Pivot re-anchoring — if candidate dodged the question, re-ask ──
+        if (evaluation.probeDecision?.isPivot && currentProbeDepthRef.current === 0 && timeRemainingRef.current >= 60) {
+          const reAnchorQ = evaluation.probeDecision.probeQuestion
+            || `Let me bring us back to the original question. ${question}`
+          currentProbeDepthRef.current++
+          qIdx++
+          currentThreadRef.current.push({
+            role: 'interviewer', text: reAnchorQ, isProbe: true,
+            probeType: 'clarify', probeDepth: currentProbeDepthRef.current,
+          })
+          checkAbort()
+          transitionTo('ASK_QUESTION')
+          questionIndexRef.current = qIdx
+          setQuestionIndex(qIdx)
+          setCurrentQuestion(reAnchorQ)
+          addToTranscript('interviewer', reAnchorQ, qIdx)
+          warmUpListening?.()
+          await avatarSpeak(reAnchorQ, 'curious')
+
+          setLiveAnswer('')
+          const pivotAnswer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
+          if (isInterviewOver()) return
+
+          if (pivotAnswer) {
+            addToTranscript('candidate', pivotAnswer, qIdx)
+            currentThreadRef.current.push({
+              role: 'candidate', text: pivotAnswer, isProbe: true,
+              probeDepth: currentProbeDepthRef.current,
+            })
+            await evaluateAndCoach(reAnchorQ, pivotAnswer, qIdx, undefined, currentProbeDepthRef.current)
+          }
         }
 
         // ── Handle pushback (fires before probe loop, can act as ad-hoc probe) ──

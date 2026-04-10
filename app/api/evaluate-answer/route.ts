@@ -227,7 +227,8 @@ Determine probing decision:
 - probeDecision.shouldProbe: true if the answer would benefit from probing — answer is vague, too short (<30 words), surface-level, evasive, missing key info, or exceptionally interesting and worth exploring deeper
 - probeDecision.probeType: one of "clarify" (ambiguous terms or unclear details), "challenge" (logical gaps or untested assumptions), "expand" (promising answer worth exploring deeper), or "quantify" (lacks measurable impact or metrics)
 - probeDecision.probeQuestion: a natural, conversational follow-up probe (one sentence). Frame as curious exploration, not interrogation.
-- probeDecision.probingRationale: brief reason for the probing decision (for coaching context)${probeDepthContext}
+- probeDecision.probingRationale: brief reason for the probing decision (for coaching context)
+- probeDecision.isPivot: true ONLY if the candidate clearly changed the subject or gave an answer about a completely different topic than what was asked. A partially relevant or weak answer is NOT a pivot — a pivot is when the answer has essentially nothing to do with the question asked. If isPivot is true, probeQuestion should re-anchor to the original question (e.g. "I appreciate that context, but I'd love to hear specifically about [original topic]. Can you walk me through that?").${probeDepthContext}
 
 Determine pushback:
 - If ANY scoring dimension is below 50, generate a pushback response. Pick the lowest-scoring dimension.
@@ -249,7 +250,8 @@ ${dimensionSchema}${jdAlignmentSchema},
     "shouldProbe": boolean,
     "probeType": "clarify" | "challenge" | "expand" | "quantify" | null,
     "probeQuestion": string | null,
-    "probingRationale": string | null
+    "probingRationale": string | null,
+    "isPivot": boolean
   },
   "pushback": {
     "line": string,

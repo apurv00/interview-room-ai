@@ -293,8 +293,25 @@ ${JSON_OUTPUT_RULE}
     }
   },
   "red_flags": [<array of red flag strings, may be empty>],
-  "top_3_improvements": [<exactly 3 specific, actionable improvement strings>]${jdSchemaBlock}
+  "top_3_improvements": [<exactly 3 specific, actionable improvement strings>],
+  "ideal_answers": [
+    {
+      "questionIndex": <0-based question index>,
+      "strongAnswer": "<2-3 sentence outline of what a strong answer would include — not a full script, but the key points and structure>",
+      "keyElements": ["<element 1 they should have included>", "<element 2>", "<element 3>"]
+    }
+  ],
+  "drill_recommendations": [
+    {
+      "skillArea": "<e.g. STAR Structure, Metrics Thinking, Leadership Impact, Technical Depth>",
+      "description": "<one sentence on why this drill matters based on THIS session's gaps>",
+      "practiceQuestions": ["<specific practice question 1>", "<specific practice question 2>"]
+    }
+  ]${jdSchemaBlock}
 }
+
+For ideal_answers: Generate for the 2-3 WEAKEST-scoring questions only (not all questions). Show what good looks like without fabricating the candidate's experience — use generic strong-answer patterns.
+For drill_recommendations: Generate 2-3 drills targeting the candidate's weakest dimensions. Each drill should have 2 specific practice questions they can try in their next session.
 
 Be honest. Use ${commScore} for communication.score exactly as provided.`
 
