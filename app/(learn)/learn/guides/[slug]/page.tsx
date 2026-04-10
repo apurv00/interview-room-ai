@@ -92,7 +92,7 @@ export default function ResourcePage({ params }: Props) {
         />
       )}
 
-      <div className="max-w-3xl mx-auto">
+      <div className="max-w-4xl mx-auto">
         {/* Breadcrumb */}
         <nav aria-label="Breadcrumb" className="text-caption text-[var(--foreground-tertiary)] mb-6">
           <Link href="/" className="hover:text-[#2563eb] transition-colors">Home</Link>
