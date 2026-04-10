@@ -271,6 +271,24 @@ Do NOT use generic transitions like "Great, next question..." or "Moving on...".
       threadContext = `\n\nTOPICS ALREADY COVERED:\n${summaries}\n\nDo NOT repeat these topics.${diversityNote} You MAY occasionally reference a pattern across topics when a genuine link exists. Use cross-references sparingly.`
     }
 
+    // ── Explicit answer recall (C1) — cross-reference earlier answers ──
+    // Real interviewers remember what candidates said and build on it.
+    // Extract key points from recent threads so the LLM can reference them naturally.
+    let recallContext = ''
+    if (completedThreads?.length && completedThreads.length >= 2) {
+      const recallPoints = completedThreads.slice(-4).map((t, i) =>
+        `Q${i + 1}: "${t.topicQuestion.slice(0, 80)}" → Key takeaway: "${t.summary.slice(0, 120)}"`
+      ).join('\n')
+      recallContext = `\n\nCANDIDATE'S PREVIOUS ANSWERS (use for continuity and cross-referencing):
+${recallPoints}
+
+When relevant, reference what the candidate said earlier with natural transitions like:
+- "You mentioned [X] earlier — building on that..."
+- "Coming back to what you said about [Y]..."
+- "That connects to something you shared earlier about [Z]..."
+Do this only when a genuine link exists (roughly 1 in 3 questions). Do NOT force cross-references.`
+    }
+
     // Progressive difficulty guidance based on candidate performance
     const difficultyGuidance: Record<string, string> = {
       calibrating: '',
@@ -297,7 +315,7 @@ Your interview style is warm but professional. You ask ONE focused question at a
 ${DATA_BOUNDARY_RULE}`
 
     // Dynamic context changes every turn — not cached
-    const dynamicSystemPrompt = `${difficultyBlock}${transitionBlock}${threadContext}`
+    const dynamicSystemPrompt = `${difficultyBlock}${transitionBlock}${threadContext}${recallContext}`
 
     const userPrompt = `Generate question ${questionIndex + 1} of ${totalQuestions}.
 ${isPressureQuestion ? '⚠️ This is the PRESSURE moment — ask a mildly challenging follow-up or a "devil\'s advocate" question that tests resilience or self-awareness. Keep it professional.' : ''}

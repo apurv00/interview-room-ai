@@ -166,6 +166,8 @@ export interface AnswerEvaluation {
   flags: string[]
   probeDecision?: ProbeDecision | null
   pushback?: Pushback | null
+  /** LLM-extracted factual claims for cross-answer consistency tracking (C2) */
+  keyAssertions?: string[]
 }
 
 // ─── Speech metrics ───────────────────────────────────────────────────────────
