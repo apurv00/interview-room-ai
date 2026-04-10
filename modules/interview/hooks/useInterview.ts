@@ -612,15 +612,29 @@ export function useInterview({
       }
 
       // Auto-trigger AI analysis if recording exists (fire-and-forget).
-      // The analysis runs inline or via Inngest depending on server config.
-      // When the user reaches the feedback page, analysis is either complete
-      // or in-progress with the polling indicator showing progress.
       if (isMultimodalEnabled) {
         fetch('/api/analysis/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessionId: sid }),
-        }).catch(() => {}) // Don't block navigation on failure
+        }).catch(() => {})
+      }
+
+      // Pre-generate feedback so it's ready when user opens feedback page.
+      // Fire-and-forget — persists to session.feedback in DB. The feedback
+      // page checks session.feedback on load and skips re-generation if present.
+      if (config) {
+        fetch('/api/generate-feedback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            config,
+            transcript: transcriptRef.current,
+            evaluations: evaluationsRef.current,
+            speechMetrics: speechMetricsRef.current,
+            sessionId: sid,
+          }),
+        }).catch(() => {}) // Don't block navigation — feedback page handles missing feedback gracefully
       }
 
       // Clear session state — interview is complete
