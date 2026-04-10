@@ -3,8 +3,25 @@
 import { useState, useEffect } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
+import { CheckCircle, Copy } from 'lucide-react'
 import DomainSelector from '@interview/components/DomainSelector'
 import DepthSelector from '@interview/components/DepthSelector'
+import Input from '@shared/ui/Input'
+import Button from '@shared/ui/Button'
+import Badge from '@shared/ui/Badge'
+import SelectionGroup from '@shared/ui/SelectionGroup'
+
+const EXPERIENCE_OPTIONS = [
+  { key: '0-2', label: '0-2 yrs' },
+  { key: '3-6', label: '3-6 yrs' },
+  { key: '7+', label: '7+ yrs' },
+]
+
+const DURATION_OPTIONS = [
+  { key: '10', label: '10 min' },
+  { key: '20', label: '20 min' },
+  { key: '30', label: '30 min' },
+]
 
 export default function InvitePage() {
   const router = useRouter()
@@ -14,7 +31,7 @@ export default function InvitePage() {
   const [role, setRole] = useState<string | null>(null)
   const [interviewType, setInterviewType] = useState<string | null>(null)
   const [experience, setExperience] = useState<string>('3-6')
-  const [duration, setDuration] = useState<number>(20)
+  const [duration, setDuration] = useState<string>('20')
   const [notes, setNotes] = useState('')
   const [jdText, setJdText] = useState('')
   const [sending, setSending] = useState(false)
@@ -49,7 +66,7 @@ export default function InvitePage() {
           role,
           interviewType: interviewType || 'screening',
           experience,
-          duration,
+          duration: Number(duration),
           recruiterNotes: notes || undefined,
           jobDescription: jdText || undefined,
         }),
@@ -85,7 +102,7 @@ export default function InvitePage() {
             role,
             interviewType: interviewType || 'screening',
             experience,
-            duration,
+            duration: Number(duration),
             jobDescription: jdText || undefined,
           }),
         })
@@ -114,195 +131,182 @@ export default function InvitePage() {
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-[#0f1419]">Invite Candidates</h1>
+        <h1 className="text-heading text-[var(--foreground)]">Invite Candidates</h1>
         <button
           onClick={() => { setBulkMode(!bulkMode); setResult(null); setBulkResults([]) }}
-          className="text-xs text-[#2563eb] hover:text-[#2563eb] transition-colors"
+          className="text-caption text-[var(--ds-primary)] hover:underline transition-colors"
         >
           {bulkMode ? 'Single Invite' : 'Bulk Invite'}
         </button>
       </div>
 
       {result ? (
-        <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-2xl p-6 space-y-4 animate-fade-in">
+        <div className="surface-card-bordered p-6 space-y-4 border-l-4 border-l-emerald-500">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-emerald-500/20 flex items-center justify-center">
-              <svg className="w-5 h-5 text-[#059669]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-              </svg>
+            <div className="w-10 h-10 rounded-full bg-emerald-50 flex items-center justify-center">
+              <CheckCircle className="w-5 h-5 text-emerald-600" />
             </div>
             <div>
-              <p className="text-sm font-semibold text-[#059669]">Invite Sent!</p>
-              <p className="text-xs text-emerald-300/70">Sent to {result.candidateEmail}</p>
+              <p className="text-subheading text-emerald-700">Invite Sent!</p>
+              <p className="text-caption text-[var(--foreground-tertiary)]">Sent to {result.candidateEmail}</p>
             </div>
           </div>
 
           <div>
-            <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Interview Link</label>
+            <p className="step-label">Interview Link</p>
             <div className="flex gap-2 mt-1">
               <input
                 type="text"
                 value={result.inviteLink}
                 readOnly
-                className="flex-1 px-3 py-2 bg-[#f8fafc] border border-[#e1e8ed] rounded-lg text-xs text-[#536471] font-mono"
+                className="flex-1 px-3 py-2 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--ds-radius-sm)] text-caption text-[var(--foreground-secondary)] font-mono"
               />
-              <button
-                onClick={() => copyLink(result.inviteLink)}
-                className="px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded-lg font-medium transition-colors"
-              >
+              <Button variant="primary" size="sm" onClick={() => copyLink(result.inviteLink)}>
+                <Copy className="w-3.5 h-3.5 mr-1" />
                 {copied ? 'Copied!' : 'Copy'}
-              </button>
+              </Button>
             </div>
           </div>
 
           <button
             onClick={() => { setResult(null); setEmail(''); setName(''); setNotes('') }}
-            className="text-xs text-[#2563eb] hover:text-[#2563eb] transition-colors"
+            className="text-caption text-[var(--ds-primary)] hover:underline transition-colors"
           >
             Send Another Invite
           </button>
         </div>
       ) : (
-        <div className="bg-white border border-[#e1e8ed] rounded-2xl p-6 space-y-5">
+        <div className="surface-card-bordered p-6 space-y-5">
           {!bulkMode ? (
-            <>
-              {/* Single invite */}
-              <div className="grid md:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Candidate Email *</label>
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={e => setEmail(e.target.value)}
-                    placeholder="candidate@company.com"
-                    className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Candidate Name</label>
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={e => setName(e.target.value)}
-                    placeholder="John Doe"
-                    className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-              </div>
-            </>
+            <div className="grid md:grid-cols-2 gap-4">
+              <Input
+                label="Candidate Email"
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                placeholder="candidate@company.com"
+              />
+              <Input
+                label="Candidate Name"
+                type="text"
+                value={name}
+                onChange={e => setName(e.target.value)}
+                placeholder="John Doe"
+                hint="Optional"
+              />
+            </div>
           ) : (
             <div className="space-y-1.5">
-              <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Candidate Emails (one per line or comma-separated)</label>
+              <label className="text-caption text-[var(--foreground-secondary)]">Candidate Emails (one per line or comma-separated)</label>
               <textarea
                 value={bulkEmails}
                 onChange={e => setBulkEmails(e.target.value)}
                 placeholder={'candidate1@company.com\ncandidate2@company.com\ncandidate3@company.com'}
                 rows={5}
-                className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                className="w-full px-3 py-2.5 bg-[var(--color-card)] border border-[var(--color-border)] rounded-[var(--ds-radius-sm)] text-body text-[var(--foreground)] placeholder-[var(--foreground-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--ds-primary)] resize-none"
               />
             </div>
           )}
 
           {/* Interview config */}
           <div className="space-y-1.5">
-            <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Interview Domain *</label>
+            <label className="text-caption text-[var(--foreground-secondary)]">Interview Domain *</label>
             <DomainSelector selectedDomain={role} onSelect={slug => { setRole(slug); setInterviewType(null) }} />
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Interview Type *</label>
+            <label className="text-caption text-[var(--foreground-secondary)]">Interview Type *</label>
             <DepthSelector selectedDomain={role} selectedDepth={interviewType} onSelect={setInterviewType} />
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Experience Level</label>
-              <div className="grid grid-cols-3 gap-2">
-                {['0-2', '3-6', '7+'].map(e => (
-                  <button
-                    key={e}
-                    onClick={() => setExperience(e)}
-                    className={`py-2 rounded-lg border text-xs font-medium transition-all ${
-                      experience === e ? 'border-blue-500 bg-blue-500/10 text-[#2563eb]' : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#e1e8ed]'
-                    }`}
-                  >
-                    {e} yrs
-                  </button>
-                ))}
-              </div>
+              <label className="text-caption text-[var(--foreground-secondary)]">Experience Level</label>
+              <SelectionGroup
+                items={EXPERIENCE_OPTIONS}
+                value={experience}
+                onChange={setExperience}
+                getKey={(item) => item.key}
+                layout="inline"
+                renderItem={(item, selected) => (
+                  <span className={`block px-2 py-2 text-caption font-medium text-center ${selected ? '' : ''}`}>
+                    {item.label}
+                  </span>
+                )}
+              />
             </div>
             <div className="space-y-1.5">
-              <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Duration</label>
-              <div className="grid grid-cols-3 gap-2">
-                {[10, 20, 30].map(d => (
-                  <button
-                    key={d}
-                    onClick={() => setDuration(d)}
-                    className={`py-2 rounded-lg border text-xs font-medium transition-all ${
-                      duration === d ? 'border-blue-500 bg-blue-500/10 text-[#2563eb]' : 'border-[#e1e8ed] bg-[#f8fafc] text-[#536471] hover:border-[#e1e8ed]'
-                    }`}
-                  >
-                    {d} min
-                  </button>
-                ))}
-              </div>
+              <label className="text-caption text-[var(--foreground-secondary)]">Duration</label>
+              <SelectionGroup
+                items={DURATION_OPTIONS}
+                value={duration}
+                onChange={setDuration}
+                getKey={(item) => item.key}
+                layout="inline"
+                renderItem={(item, selected) => (
+                  <span className={`block px-2 py-2 text-caption font-medium text-center ${selected ? '' : ''}`}>
+                    {item.label}
+                  </span>
+                )}
+              />
             </div>
           </div>
 
           {!bulkMode && (
             <div className="space-y-1.5">
-              <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Recruiter Notes (internal)</label>
+              <label className="text-caption text-[var(--foreground-secondary)]">Recruiter Notes (internal)</label>
               <textarea
                 value={notes}
                 onChange={e => setNotes(e.target.value)}
                 maxLength={1000}
                 placeholder="Any context for this candidate..."
                 rows={2}
-                className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                className="w-full px-3 py-2.5 bg-[var(--color-card)] border border-[var(--color-border)] rounded-[var(--ds-radius-sm)] text-body text-[var(--foreground)] placeholder-[var(--foreground-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--ds-primary)] resize-none"
               />
             </div>
           )}
 
           <div className="space-y-1.5">
-            <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Job Description (optional)</label>
+            <label className="text-caption text-[var(--foreground-secondary)]">Job Description (optional)</label>
             <textarea
               value={jdText}
               onChange={e => setJdText(e.target.value)}
               maxLength={50000}
               placeholder="Paste the job description here for role-specific questions..."
               rows={3}
-              className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+              className="w-full px-3 py-2.5 bg-[var(--color-card)] border border-[var(--color-border)] rounded-[var(--ds-radius-sm)] text-body text-[var(--foreground)] placeholder-[var(--foreground-tertiary)] focus:outline-none focus:ring-2 focus:ring-[var(--ds-primary)] resize-none"
             />
           </div>
 
-          {error && <p className="text-xs text-red-400">{error}</p>}
+          {error && <p className="text-caption text-rose-500">{error}</p>}
 
-          <button
+          <Button
+            variant="primary"
+            className="w-full"
             onClick={bulkMode ? handleBulkSend : handleSend}
             disabled={sending || bulkSending}
-            className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium transition-colors disabled:opacity-50"
           >
             {sending || bulkSending ? 'Sending...' : bulkMode ? 'Send All Invites' : 'Send Interview Invite'}
-          </button>
+          </Button>
         </div>
       )}
 
       {/* Bulk results */}
       {bulkResults.length > 0 && (
-        <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
-          <h3 className="text-sm font-semibold text-[#0f1419]">Bulk Invite Results</h3>
+        <div className="surface-card-bordered p-5 space-y-3">
+          <h3 className="text-subheading text-[var(--foreground)]">Bulk Invite Results</h3>
           {bulkResults.map((r, i) => (
-            <div key={i} className={`flex items-center justify-between px-3 py-2 rounded-lg ${r.success ? 'bg-emerald-500/5' : 'bg-red-500/5'}`}>
-              <span className="text-xs text-[#536471]">{r.email}</span>
+            <div key={i} className={`flex items-center justify-between px-3 py-2 rounded-[var(--ds-radius-sm)] ${r.success ? 'bg-emerald-50' : 'bg-rose-50'}`}>
+              <span className="text-caption text-[var(--foreground-secondary)]">{r.email}</span>
               {r.success ? (
                 <button
                   onClick={() => r.link && copyLink(r.link)}
-                  className="text-[10px] text-[#2563eb] hover:text-[#2563eb]"
+                  className="text-micro text-[var(--ds-primary)] hover:underline"
                 >
                   Copy Link
                 </button>
               ) : (
-                <span className="text-[10px] text-red-400">{r.error}</span>
+                <Badge variant="danger">{r.error}</Badge>
               )}
             </div>
           ))}
