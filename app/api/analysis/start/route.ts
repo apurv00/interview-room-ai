@@ -6,11 +6,18 @@ import { InterviewSession } from '@shared/db/models/InterviewSession'
 import { MultimodalAnalysis } from '@shared/db/models/MultimodalAnalysis'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { getPlanLimits } from '@shared/services/stripe'
-import { inngest } from '@shared/services/inngest'
 import { aiLogger } from '@shared/logger'
 import { StartAnalysisSchema } from '@interview/validators/multimodal'
 
 export const dynamic = 'force-dynamic'
+// Allow up to 60s for inline fallback — covers a ~5-minute interview at
+// Groq Whisper's 10× real-time + Claude Haiku fusion + persistence.
+export const maxDuration = 60
+
+/** Check if Inngest is configured (both keys present). */
+function isInngestConfigured(): boolean {
+  return !!(process.env.INNGEST_EVENT_KEY && process.env.INNGEST_SIGNING_KEY)
+}
 
 interface StartPayload {
   sessionId: string
@@ -128,31 +135,43 @@ export const POST = composeApiRoute<StartPayload>({
     session.multimodalAnalysisId = analysis._id
     await session.save()
 
-    // Enqueue the background job. The client is already polling
-    // /api/analysis/[sessionId] every 3s and watches the DB row advance
-    // pending → processing → completed as the Inngest function steps run.
-    // Retries and dead-lettering are handled by Inngest; onFailure in the
-    // job handler marks the row status='failed' so the polling UI surfaces
-    // the error.
+    // ── Dispatch: Inngest (background) or inline (fallback) ──
+    // When Inngest keys are configured, enqueue a background job — the client
+    // polls /api/analysis/[sessionId] and watches the DB row advance.
+    // When keys are NOT set, run the pipeline inline within this request
+    // (capped at maxDuration=60s). Results are saved to DB identically.
+
+    if (isInngestConfigured()) {
+      try {
+        const { inngest } = await import('@shared/services/inngest')
+        await inngest.send({
+          name: 'analysis/requested',
+          data: { sessionId, userId, startTime: Date.now() },
+        })
+        return NextResponse.json({
+          jobId: analysis._id.toString(),
+          status: 'pending',
+        })
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'Unknown error'
+        aiLogger.error({ err, sessionId, userId }, 'Failed to enqueue Inngest analysis event — falling back to inline')
+        // Fall through to inline execution below
+      }
+    }
+
+    // Inline fallback: run the pipeline synchronously within this request.
+    // This is the pre-Inngest behavior. Results are persisted to the same
+    // MultimodalAnalysis collection — the polling client picks them up.
     try {
-      await inngest.send({
-        name: 'analysis/requested',
-        data: { sessionId, userId, startTime: Date.now() },
-      })
+      const { runMultimodalPipeline } = await import('@interview/services/analysis/multimodalPipeline')
+      await runMultimodalPipeline(sessionId, userId)
       return NextResponse.json({
         jobId: analysis._id.toString(),
-        status: 'pending',
+        status: 'completed',
       })
     } catch (err) {
-      // If Inngest itself is unreachable (network / signing error), mark
-      // the row failed so the polling client shows the error immediately
-      // instead of spinning until the stuck timeout.
       const errorMessage = err instanceof Error ? err.message : 'Unknown error'
-      aiLogger.error({ err, sessionId, userId }, 'Failed to enqueue Inngest analysis event')
-      await MultimodalAnalysis.findByIdAndUpdate(analysis._id, {
-        status: 'failed',
-        error: `Failed to enqueue analysis: ${errorMessage}`,
-      })
+      aiLogger.error({ err, sessionId, userId }, 'Inline multimodal pipeline failed')
       return NextResponse.json(
         {
           jobId: analysis._id.toString(),
