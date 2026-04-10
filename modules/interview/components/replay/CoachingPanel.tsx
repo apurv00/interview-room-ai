@@ -7,6 +7,7 @@ interface CoachingPanelProps {
   fusionSummary: FusionSummary
   timeline: TimelineEvent[]
   onSeek: (seconds: number) => void
+  hideMoments?: boolean
 }
 
 const SIGNAL_ICONS: Record<string, React.ReactNode> = {
@@ -23,7 +24,7 @@ const SIGNAL_COLORS: Record<string, string> = {
   fused: 'text-amber-600',
 }
 
-export default function CoachingPanel({ fusionSummary, timeline, onSeek }: CoachingPanelProps) {
+export default function CoachingPanel({ fusionSummary, timeline, onSeek, hideMoments }: CoachingPanelProps) {
   const coachingEvents = timeline.filter((e) => e.type === 'coaching_tip')
   const improvementEvents = fusionSummary.improvementMoments || []
 
@@ -48,7 +49,7 @@ export default function CoachingPanel({ fusionSummary, timeline, onSeek }: Coach
       </div>
 
       {/* Improvement moments with "watch" buttons */}
-      {improvementEvents.length > 0 && (
+      {!hideMoments && improvementEvents.length > 0 && (
         <div className="surface-card-bordered p-4 sm:p-5">
           <h4 className="text-subheading text-[#0f1419] mb-3">Key Moments to Review</h4>
           <div className="space-y-2">
@@ -79,7 +80,7 @@ export default function CoachingPanel({ fusionSummary, timeline, onSeek }: Coach
       )}
 
       {/* Timeline coaching tip events */}
-      {coachingEvents.length > 0 && (
+      {!hideMoments && coachingEvents.length > 0 && (
         <div className="surface-card-bordered p-4 sm:p-5">
           <h4 className="text-subheading text-[#0f1419] mb-3">Coaching Moments</h4>
           <div className="space-y-2">
