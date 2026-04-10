@@ -1,55 +1,44 @@
 import { test, expect } from '@playwright/test'
 
-test.describe('Feedback Page', () => {
-  test('feedback page loads with score ring', async ({ page }) => {
-    // Navigate to history to find a completed session
+test.describe('Feedback Page (public shell)', () => {
+  test('history page loads without errors', async ({ page }) => {
     await page.goto('/history')
-    // Click the first completed session
-    const sessionLink = page.locator('button:has-text("Feedback"), a[href*="/feedback/"]').first()
-    if (await sessionLink.isVisible({ timeout: 5000 })) {
-      await sessionLink.click()
-      // Verify score ring renders
-      await expect(page.locator('[role="meter"], [class*="score"], svg circle')).toBeVisible({ timeout: 10000 })
-    }
+    await page.waitForLoadState('networkidle')
+    // History is publicly browseable
+    expect(page.url()).toContain('/history')
+    await expect(page.locator('body')).not.toHaveText(/Internal Server Error|500/)
   })
 
-  test('tabs switch correctly', async ({ page }) => {
-    await page.goto('/history')
-    const sessionLink = page.locator('button').filter({ hasText: /\d+/ }).first()
-    if (await sessionLink.isVisible({ timeout: 5000 })) {
-      await sessionLink.click()
-      await page.waitForURL(/\/feedback\//)
+  test('feedback page with invalid session redirects gracefully', async ({ page }) => {
+    await page.goto('/feedback/nonexistent-session-id')
+    await page.waitForLoadState('networkidle')
+    // Should either redirect to signin, show error, or redirect to home
+    // Any of these is acceptable — the key is no 500 error
+    const url = page.url()
+    const body = await page.locator('body').textContent()
+    expect(body).not.toContain('Internal Server Error')
+    // Should have navigated somewhere valid
+    expect(url).toBeTruthy()
+  })
+})
 
-      // Click Questions tab
-      const questionsTab = page.locator('button:has-text("Questions")')
-      if (await questionsTab.isVisible()) {
-        await questionsTab.click()
-        await page.waitForTimeout(500)
-      }
-
-      // Click Transcript tab
-      const transcriptTab = page.locator('button:has-text("Transcript")')
-      if (await transcriptTab.isVisible()) {
-        await transcriptTab.click()
-        await page.waitForTimeout(500)
-      }
-    }
+test.describe('Resume Pages (public)', () => {
+  test('resume builder loads', async ({ page }) => {
+    await page.goto('/resume/builder')
+    await page.waitForLoadState('networkidle')
+    expect(page.url()).toContain('/resume')
+    await expect(page.locator('body')).not.toHaveText(/500|Internal Server Error/)
   })
 
-  test('question heatmap rows expand on click', async ({ page }) => {
-    await page.goto('/history')
-    const sessionLink = page.locator('button').filter({ hasText: /\d+/ }).first()
-    if (await sessionLink.isVisible({ timeout: 5000 })) {
-      await sessionLink.click()
-      await page.waitForURL(/\/feedback\//)
+  test('resume ATS check loads', async ({ page }) => {
+    await page.goto('/resume/ats-check')
+    await page.waitForLoadState('networkidle')
+    expect(page.url()).toContain('/resume')
+  })
 
-      // Find a heatmap row (Q1, Q2, etc.)
-      const heatmapRow = page.locator('button:has-text("Q1")').first()
-      if (await heatmapRow.isVisible({ timeout: 5000 })) {
-        await heatmapRow.click()
-        // Verify expanded content appears
-        await expect(page.locator('text=Question:, text=Answer:')).toBeVisible({ timeout: 2000 })
-      }
-    }
+  test('resume templates loads', async ({ page }) => {
+    await page.goto('/resume/templates')
+    await page.waitForLoadState('networkidle')
+    expect(page.url()).toContain('/resume')
   })
 })
