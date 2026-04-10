@@ -131,7 +131,7 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
   // Error state
   if (error) {
     return (
-      <div className="bg-white border border-red-500/30 rounded-2xl p-4 sticky top-28 z-10" role="alert">
+      <div className="bg-white border border-red-500/30 rounded-2xl p-4 sticky top-[172px] z-[8]" role="alert">
         <audio ref={audioRef} src={src} preload="metadata" />
         <div className="flex items-center gap-3">
           <div className="shrink-0 w-9 h-9 rounded-full bg-red-600/20 flex items-center justify-center">
@@ -146,7 +146,7 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
   }
 
   return (
-    <div className="bg-white border border-[#e1e8ed] rounded-2xl p-4 sticky top-28 z-10">
+    <div className="bg-white/95 backdrop-blur-md border border-[#e1e8ed] rounded-2xl p-4 sticky top-[172px] z-[8] shadow-sm">
       <audio ref={audioRef} src={src} preload="metadata" />
 
       {/* Top row: play/pause + seek bar + time */}
