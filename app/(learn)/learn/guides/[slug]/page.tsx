@@ -92,7 +92,7 @@ export default function ResourcePage({ params }: Props) {
         />
       )}
 
-      <div className="max-w-[800px] mx-auto">
+      <div className="max-w-3xl mx-auto">
         {/* Breadcrumb */}
         <nav aria-label="Breadcrumb" className="text-caption text-[var(--foreground-tertiary)] mb-6">
           <Link href="/" className="hover:text-[#2563eb] transition-colors">Home</Link>
@@ -117,7 +117,7 @@ export default function ResourcePage({ params }: Props) {
 
         {/* Title */}
         <h1 className="text-display text-[var(--foreground)]">{resource.title}</h1>
-        <p className="text-body text-[var(--foreground-tertiary)] mt-3 max-w-[640px]">
+        <p className="text-body text-[var(--foreground-tertiary)] mt-3 max-w-2xl">
           {resource.content.intro}
         </p>
 

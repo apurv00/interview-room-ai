@@ -170,7 +170,7 @@ export default function PricingPage() {
   }))
 
   return (
-    <main className="min-h-screen px-4 py-16 max-w-[1000px] mx-auto">
+    <main className="min-h-screen px-4 sm:px-6 lg:px-8 py-16 max-w-5xl mx-auto">
       {/* Header */}
       <div className="text-center space-y-3 mb-14 animate-fade-in">
         <h1 className="text-display text-center text-[#0f1419]">Simple pricing</h1>
