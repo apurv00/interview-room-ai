@@ -274,8 +274,25 @@ export async function stepRunFusion(
   evaluations: Array<Record<string, unknown>>,
   transcript: Array<Record<string, unknown>>,
   config: Record<string, unknown>,
-  options: { includeBlendshapes?: boolean } = {}
+  options: { includeBlendshapes?: boolean; whisperSegments?: Array<Record<string, unknown>> } = {}
 ) {
+  // Extract low-confidence words from whisper segments for fusion analysis
+  let lowConfidenceWords: Array<{ word: string; start: number; confidence: number }> | undefined
+  if (options.whisperSegments) {
+    const allWords: Array<{ word: string; start: number; confidence: number }> = []
+    for (const seg of options.whisperSegments) {
+      const words = (seg.words as Array<{ word: string; start: number; confidence: number }>) || []
+      for (const w of words) {
+        if (typeof w.confidence === 'number' && w.confidence < 0.85) {
+          allWords.push({ word: w.word, start: w.start, confidence: Math.round(w.confidence * 100) / 100 })
+        }
+      }
+    }
+    if (allWords.length > 0) {
+      lowConfidenceWords = allWords.sort((a, b) => a.confidence - b.confidence).slice(0, 20)
+    }
+  }
+
   return await runFusionAnalysis({
     prosodySegments: prosodySegments as unknown as Parameters<typeof runFusionAnalysis>[0]['prosodySegments'],
     facialSegments: facialSegments as unknown as Parameters<typeof runFusionAnalysis>[0]['facialSegments'],
@@ -283,6 +300,7 @@ export async function stepRunFusion(
     transcript: transcript as unknown as Parameters<typeof runFusionAnalysis>[0]['transcript'],
     config: config as unknown as Parameters<typeof runFusionAnalysis>[0]['config'],
     includeBlendshapes: options.includeBlendshapes === true,
+    lowConfidenceWords,
   })
 }
 
