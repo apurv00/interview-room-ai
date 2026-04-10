@@ -27,10 +27,10 @@ export default function ReplayTranscript({
   // If we have Whisper word-level data, show karaoke-style transcript
   if (whisperSegments.length > 0) {
     return (
-      <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+      <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 transcript-scroll">
         {whisperSegments.map((segment) => (
           <div key={segment.id} className="space-y-1">
-            <span className="text-xs text-gray-500 tabular-nums">
+            <span className="text-caption text-[#8b98a5] tabular-nums">
               {formatTime(segment.start)}
             </span>
             <p className="text-sm leading-relaxed">
@@ -44,11 +44,11 @@ export default function ReplayTranscript({
                     onClick={() => onWordClick(word.start)}
                     className={`cursor-pointer transition-colors rounded px-0.5 ${
                       isActive
-                        ? 'bg-blue-500/30 text-white font-medium'
+                        ? 'bg-blue-500/20 text-blue-700 font-medium'
                         : isPast
-                        ? 'text-gray-300'
-                        : 'text-gray-500'
-                    } hover:bg-blue-500/20`}
+                        ? 'text-[#0f1419]'
+                        : 'text-[#8b98a5]'
+                    } hover:bg-blue-500/10`}
                   >
                     {word.word}{' '}
                   </span>
@@ -63,25 +63,25 @@ export default function ReplayTranscript({
 
   // Fallback: show existing transcript entries
   return (
-    <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+    <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2 transcript-scroll">
       {transcript.map((entry, i) => (
         <div
           key={i}
           className={`p-3 rounded-lg ${
             entry.speaker === 'interviewer'
-              ? 'bg-gray-800/50 border-l-2 border-blue-500/50'
-              : 'bg-gray-800/30 border-l-2 border-purple-500/50'
+              ? 'bg-[#f8fafc] border-l-2 border-blue-500/40'
+              : 'bg-white border-l-2 border-purple-500/40'
           }`}
         >
           <div className="flex items-center gap-2 mb-1">
-            <span className="text-xs font-medium text-gray-400 uppercase">
+            <span className="text-caption font-medium text-[#71767b] uppercase">
               {entry.speaker === 'interviewer' ? 'Alex Chen' : 'You'}
             </span>
-            <span className="text-xs text-gray-500 tabular-nums">
+            <span className="text-caption text-[#8b98a5] tabular-nums">
               {formatTime(entry.timestamp)}
             </span>
           </div>
-          <p className="text-sm text-gray-200">{entry.text}</p>
+          <p className="text-body text-[#0f1419]">{entry.text}</p>
         </div>
       ))}
     </div>

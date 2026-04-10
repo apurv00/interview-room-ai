@@ -261,10 +261,14 @@ function FeedbackPageInner() {
 
   const handleTabChange = useCallback((tab: FeedbackTab) => {
     setActiveTab(tab)
-    // Scroll to tab content area on switch
+    // Scroll to tab content area on switch (offset for sticky headers)
     requestAnimationFrame(() => {
       const el = document.getElementById('tab-content')
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      if (el) {
+        const yOffset = -180 // account for sticky nav + header + tab bar
+        const y = el.getBoundingClientRect().top + window.scrollY + yOffset
+        window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' })
+      }
     })
     // Lazy-load transcript when the tab is first opened
     if ((tab === 'transcript' || tab === 'questions') && !lazyTranscript && !transcriptLoading && sessionId && sessionId !== 'local') {
@@ -800,8 +804,8 @@ function FeedbackPageInner() {
           </div>
         </section>
 
-        {/* Audio Player — below hero, above tabs */}
-        {recordingUrl && (
+        {/* Audio Player — below hero, above tabs. Hidden on analysis tab since VideoPlayer replaces it. */}
+        {recordingUrl && activeTab !== 'analysis' && (
           <AudioPlayer
             src={recordingUrl}
             questionMarkers={questionMarkers}

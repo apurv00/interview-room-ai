@@ -41,55 +41,55 @@ export default function SignalCharts({ prosodySegments, facialSegments, currentT
     <div className="space-y-6">
       {/* WPM over time */}
       {wpmData.length > 0 && (
-        <div>
-          <h4 className="text-sm font-medium text-gray-300 mb-2">Speaking Pace (WPM)</h4>
+        <div className="surface-card-bordered p-4 sm:p-5">
+          <h4 className="text-subheading text-[#0f1419] mb-2">Speaking Pace (WPM)</h4>
           <div className="h-40">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={wpmData}>
-                <XAxis dataKey="name" tick={{ fill: '#9ca3af', fontSize: 11 }} />
-                <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} domain={[0, 'auto']} />
+                <XAxis dataKey="name" tick={{ fill: '#71767b', fontSize: 11 }} />
+                <YAxis tick={{ fill: '#71767b', fontSize: 11 }} domain={[0, 'auto']} />
                 <Tooltip
-                  contentStyle={{ backgroundColor: '#1f2937', border: 'none', borderRadius: '8px' }}
-                  labelStyle={{ color: '#e5e7eb' }}
+                  contentStyle={{ backgroundColor: '#ffffff', border: '1px solid #e1e8ed', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}
+                  labelStyle={{ color: '#0f1419' }}
                 />
                 {/* Ideal WPM zone */}
-                <ReferenceLine y={120} stroke="#4ade80" strokeDasharray="3 3" strokeOpacity={0.4} />
-                <ReferenceLine y={160} stroke="#4ade80" strokeDasharray="3 3" strokeOpacity={0.4} />
+                <ReferenceLine y={120} stroke="#059669" strokeDasharray="3 3" strokeOpacity={0.4} />
+                <ReferenceLine y={160} stroke="#059669" strokeDasharray="3 3" strokeOpacity={0.4} />
                 <Line
                   type="monotone"
                   dataKey="wpm"
-                  stroke="#818cf8"
+                  stroke="#2563eb"
                   strokeWidth={2}
-                  dot={{ fill: '#818cf8', r: 4 }}
+                  dot={{ fill: '#2563eb', r: 4 }}
                   activeDot={{ r: 6 }}
                 />
               </LineChart>
             </ResponsiveContainer>
           </div>
-          <p className="text-xs text-gray-500 mt-1">Green zone: ideal 120–160 WPM</p>
+          <p className="text-caption text-[#8b98a5] mt-1">Green zone: ideal 120-160 WPM</p>
         </div>
       )}
 
       {/* Eye contact */}
       {eyeContactData.length > 0 && (
-        <div>
-          <h4 className="text-sm font-medium text-gray-300 mb-2">Eye Contact</h4>
+        <div className="surface-card-bordered p-4 sm:p-5">
+          <h4 className="text-subheading text-[#0f1419] mb-2">Eye Contact</h4>
           <div className="h-40">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={eyeContactData}>
-                <XAxis dataKey="name" tick={{ fill: '#9ca3af', fontSize: 11 }} />
-                <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} domain={[0, 100]} unit="%" />
+                <XAxis dataKey="name" tick={{ fill: '#71767b', fontSize: 11 }} />
+                <YAxis tick={{ fill: '#71767b', fontSize: 11 }} domain={[0, 100]} unit="%" />
                 <Tooltip
-                  contentStyle={{ backgroundColor: '#1f2937', border: 'none', borderRadius: '8px' }}
-                  labelStyle={{ color: '#e5e7eb' }}
+                  contentStyle={{ backgroundColor: '#ffffff', border: '1px solid #e1e8ed', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}
+                  labelStyle={{ color: '#0f1419' }}
                   formatter={(value) => [`${value}%`, 'Eye Contact']}
                 />
                 <Area
                   type="monotone"
                   dataKey="eyeContact"
-                  stroke="#34d399"
-                  fill="#34d399"
-                  fillOpacity={0.2}
+                  stroke="#059669"
+                  fill="#059669"
+                  fillOpacity={0.1}
                   strokeWidth={2}
                 />
               </AreaChart>
@@ -100,18 +100,18 @@ export default function SignalCharts({ prosodySegments, facialSegments, currentT
 
       {/* Filler word density */}
       {fillerData.length > 0 && (
-        <div>
-          <h4 className="text-sm font-medium text-gray-300 mb-2">Filler Words per Question</h4>
+        <div className="surface-card-bordered p-4 sm:p-5">
+          <h4 className="text-subheading text-[#0f1419] mb-2">Filler Words per Question</h4>
           <div className="h-40">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={fillerData}>
-                <XAxis dataKey="name" tick={{ fill: '#9ca3af', fontSize: 11 }} />
-                <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} allowDecimals={false} />
+                <XAxis dataKey="name" tick={{ fill: '#71767b', fontSize: 11 }} />
+                <YAxis tick={{ fill: '#71767b', fontSize: 11 }} allowDecimals={false} />
                 <Tooltip
-                  contentStyle={{ backgroundColor: '#1f2937', border: 'none', borderRadius: '8px' }}
-                  labelStyle={{ color: '#e5e7eb' }}
+                  contentStyle={{ backgroundColor: '#ffffff', border: '1px solid #e1e8ed', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}
+                  labelStyle={{ color: '#0f1419' }}
                 />
-                <Bar dataKey="fillers" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="fillers" fill="#d97706" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -119,7 +119,7 @@ export default function SignalCharts({ prosodySegments, facialSegments, currentT
       )}
 
       {/* Current time indicator (just informational) */}
-      <p className="text-xs text-gray-500 text-center">
+      <p className="text-caption text-[#8b98a5] text-center">
         Playback: {Math.floor(currentTimeSec / 60)}:{Math.floor(currentTimeSec % 60).toString().padStart(2, '0')}
       </p>
     </div>
