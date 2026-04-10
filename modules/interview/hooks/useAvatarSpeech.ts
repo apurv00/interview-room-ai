@@ -16,6 +16,8 @@ export interface UseAvatarSpeechReturn {
   setAvatarEmotion: (emotion: AvatarEmotion) => void
   avatarSpeak: (text: string, emotion?: AvatarEmotion) => Promise<void>
   prefetchTTS: (text: string) => void
+  /** Cancel any in-progress TTS playback (used for candidate interrupt). */
+  cancelTTS: () => void
 }
 
 /**
@@ -189,5 +191,11 @@ export function useAvatarSpeech({
     [interviewType, isMultimodalEnabled, isStreamingSupported, streamAndPlay, cancelStream] // eslint-disable-line react-hooks/exhaustive-deps
   )
 
-  return { avatarEmotion, isAvatarTalking, setAvatarEmotion, avatarSpeak, prefetchTTS }
+  const cancelTTS = useCallback(() => {
+    cancelStream()
+    window.speechSynthesis?.cancel()
+    setIsAvatarTalking(false)
+  }, [cancelStream])
+
+  return { avatarEmotion, isAvatarTalking, setAvatarEmotion, avatarSpeak, prefetchTTS, cancelTTS }
 }

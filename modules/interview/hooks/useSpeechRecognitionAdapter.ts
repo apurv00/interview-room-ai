@@ -19,5 +19,5 @@ export function useSpeechRecognitionAdapter() {
   // eslint-disable-next-line react-hooks/rules-of-hooks
   const base = useSpeechRecognition()
   // Provide no-op stubs for warmUp/setExternalStream when using Web Speech API
-  return { ...base, warmUp: () => {}, setExternalStream: (_s: MediaStream) => {}, pauseCapture: () => {}, resumeCapture: () => {} }
+  return { ...base, warmUp: () => {}, setExternalStream: (_s: MediaStream) => {}, setOnInterrupt: (_cb: (() => void) | null) => {} }
 }

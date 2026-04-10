@@ -22,10 +22,9 @@ export interface UseDeepgramRecognitionReturn {
   warmUp: () => void
   /** Provide an existing audio stream to avoid redundant getUserMedia calls. */
   setExternalStream: (stream: MediaStream) => void
-  /** Pause audio capture (e.g., during TTS playback). Deepgram WS stays open but receives no audio bytes. */
-  pauseCapture: () => void
-  /** Resume audio capture after TTS playback ends. */
-  resumeCapture: () => void
+  /** Set a callback that fires when speech is detected while no active listening session.
+   *  Used to detect candidate interrupting TTS playback. */
+  setOnInterrupt: (cb: (() => void) | null) => void
 }
 
 /**
@@ -60,8 +59,8 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   const fallbackFinishTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** Capture-ready callback — fired once after audio processing starts. */
   const onCaptureReadyRef = useRef<(() => void) | null>(null)
-  /** When true, audio frames are not sent to Deepgram (TTS playback active). */
-  const capturePausedRef = useRef(false)
+  /** Interrupt callback — fired when speech is detected while avatar is speaking. */
+  const onInterruptRef = useRef<(() => void) | null>(null)
   // Token cache — avoids re-fetching for each question
   const cachedTokenRef = useRef<string | null>(null)
   // Whether warmUp() has been called and WebSocket is ready
@@ -273,6 +272,13 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           const transcript = data.channel?.alternatives?.[0]?.transcript || ''
           const isFinal = data.is_final
 
+          // Interrupt detection: speech detected while no active listening session.
+          // This means the candidate is speaking while the AI avatar is talking.
+          if (isFinal && transcript && !onCompleteRef.current && onInterruptRef.current) {
+            onInterruptRef.current()
+            return
+          }
+
           if (isFinal && transcript) {
             finalTextRef.current = finalTextRef.current
               ? `${finalTextRef.current} ${transcript}`
@@ -296,6 +302,16 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
                   confidence: typeof w.confidence === 'number' ? w.confidence : 1,
                 })
               }
+            }
+
+            // Early question detection: short utterances ending with "?" are
+            // likely clarification requests or candidate questions. Respond
+            // immediately instead of waiting 2.5s for UtteranceEnd.
+            const accumulated = finalTextRef.current.trim()
+            const wordCount = accumulated.split(/\s+/).length
+            if (accumulated.endsWith('?') && wordCount < 20) {
+              finishRecognition()
+              return
             }
           }
 
@@ -392,7 +408,6 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
 
     processor.onaudioprocess = (e) => {
       if (ws.readyState !== WebSocket.OPEN) return
-      if (capturePausedRef.current) return // Skip during TTS playback
       const inputData = e.inputBuffer.getChannelData(0)
       // Convert Float32 to Int16 PCM
       const pcm = new Int16Array(inputData.length)
@@ -491,8 +506,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const pauseCapture = useCallback(() => { capturePausedRef.current = true }, [])
-  const resumeCapture = useCallback(() => { capturePausedRef.current = false }, [])
+  const setOnInterrupt = useCallback((cb: (() => void) | null) => { onInterruptRef.current = cb }, [])
 
-  return { isListening, liveTranscript, startListening, stopListening, warmUp, setExternalStream, pauseCapture, resumeCapture }
+  return { isListening, liveTranscript, startListening, stopListening, warmUp, setExternalStream, setOnInterrupt }
 }
