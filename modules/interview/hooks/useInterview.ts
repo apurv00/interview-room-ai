@@ -611,6 +611,18 @@ export function useInterview({
         }
       }
 
+      // Auto-trigger AI analysis if recording exists (fire-and-forget).
+      // The analysis runs inline or via Inngest depending on server config.
+      // When the user reaches the feedback page, analysis is either complete
+      // or in-progress with the polling indicator showing progress.
+      if (isMultimodalEnabled) {
+        fetch('/api/analysis/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: sid }),
+        }).catch(() => {}) // Don't block navigation on failure
+      }
+
       // Clear session state — interview is complete
       localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
       localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)

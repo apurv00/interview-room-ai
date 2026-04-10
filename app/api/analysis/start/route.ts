@@ -5,12 +5,20 @@ import { connectDB } from '@shared/db/connection'
 import { InterviewSession } from '@shared/db/models/InterviewSession'
 import { MultimodalAnalysis } from '@shared/db/models/MultimodalAnalysis'
 import { isFeatureEnabled } from '@shared/featureFlags'
-import { getPlanLimits } from '@shared/services/stripe'
-import { inngest } from '@shared/services/inngest'
+import { enforceAnalysisCap } from '@shared/services/analysisCleanup'
 import { aiLogger } from '@shared/logger'
 import { StartAnalysisSchema } from '@interview/validators/multimodal'
 
 export const dynamic = 'force-dynamic'
+// Allow up to 60s for inline fallback — covers a ~5-minute interview
+export const maxDuration = 60
+
+const MAX_ACTIVE_ANALYSES = 10
+
+/** Check if Inngest is configured (both keys present). */
+function isInngestConfigured(): boolean {
+  return !!(process.env.INNGEST_EVENT_KEY && process.env.INNGEST_SIGNING_KEY)
+}
 
 interface StartPayload {
   sessionId: string
@@ -87,30 +95,20 @@ export const POST = composeApiRoute<StartPayload>({
       )
     }
 
-    // Quota check — exclude stale pending/processing records (>10 min old)
-    // so a stuck job doesn't permanently consume the user's monthly quota.
-    const planLimits = getPlanLimits(ctx.user.plan || 'free')
-    const monthStart = new Date()
-    monthStart.setDate(1)
-    monthStart.setHours(0, 0, 0, 0)
-
-    const usedThisMonth = await MultimodalAnalysis.countDocuments({
+    // Cap check: max 10 active analyses per user (rolling, not monthly).
+    // We allow the request even at cap — the cleanup runs AFTER the new
+    // analysis completes, so the user always keeps their latest 10.
+    // Only block if there are already 10 in-flight (pending/processing)
+    // to prevent runaway concurrent requests.
+    const inFlightCount = await MultimodalAnalysis.countDocuments({
       userId,
-      createdAt: { $gte: monthStart },
-      $or: [
-        { status: 'completed' },
-        { status: { $in: ['pending', 'processing'] }, createdAt: { $gte: staleCutoff } },
-      ],
+      status: { $in: ['pending', 'processing'] },
+      createdAt: { $gte: staleCutoff },
     })
 
-    if (usedThisMonth >= planLimits.monthlyAnalysisLimit) {
+    if (inFlightCount >= 3) {
       return NextResponse.json(
-        {
-          error: 'Monthly analysis quota reached',
-          used: usedThisMonth,
-          limit: planLimits.monthlyAnalysisLimit,
-          plan: ctx.user.plan || 'free',
-        },
+        { error: 'Analysis already in progress — please wait for it to complete' },
         { status: 429 }
       )
     }
@@ -128,31 +126,40 @@ export const POST = composeApiRoute<StartPayload>({
     session.multimodalAnalysisId = analysis._id
     await session.save()
 
-    // Enqueue the background job. The client is already polling
-    // /api/analysis/[sessionId] every 3s and watches the DB row advance
-    // pending → processing → completed as the Inngest function steps run.
-    // Retries and dead-lettering are handled by Inngest; onFailure in the
-    // job handler marks the row status='failed' so the polling UI surfaces
-    // the error.
+    // ── Dispatch: Inngest (background) or inline (fallback) ──
+    if (isInngestConfigured()) {
+      try {
+        const { inngest } = await import('@shared/services/inngest')
+        await inngest.send({
+          name: 'analysis/requested',
+          data: { sessionId, userId, startTime: Date.now() },
+        })
+        return NextResponse.json({
+          jobId: analysis._id.toString(),
+          status: 'pending',
+        })
+      } catch (err) {
+        aiLogger.warn({ err, sessionId }, 'Inngest send failed — falling back to inline')
+        // Fall through to inline
+      }
+    }
+
+    // Inline fallback: run the pipeline synchronously.
+    // Results saved to same MultimodalAnalysis collection.
     try {
-      await inngest.send({
-        name: 'analysis/requested',
-        data: { sessionId, userId, startTime: Date.now() },
-      })
+      const { runMultimodalPipeline } = await import('@interview/services/analysis/multimodalPipeline')
+      await runMultimodalPipeline(sessionId, userId)
+
+      // Enforce 10-analysis cap — delete oldest + their R2 recordings
+      await enforceAnalysisCap(userId, MAX_ACTIVE_ANALYSES)
+
       return NextResponse.json({
         jobId: analysis._id.toString(),
-        status: 'pending',
+        status: 'completed',
       })
     } catch (err) {
-      // If Inngest itself is unreachable (network / signing error), mark
-      // the row failed so the polling client shows the error immediately
-      // instead of spinning until the stuck timeout.
       const errorMessage = err instanceof Error ? err.message : 'Unknown error'
-      aiLogger.error({ err, sessionId, userId }, 'Failed to enqueue Inngest analysis event')
-      await MultimodalAnalysis.findByIdAndUpdate(analysis._id, {
-        status: 'failed',
-        error: `Failed to enqueue analysis: ${errorMessage}`,
-      })
+      aiLogger.error({ err, sessionId, userId }, 'Inline multimodal pipeline failed')
       return NextResponse.json(
         {
           jobId: analysis._id.toString(),
