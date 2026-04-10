@@ -10,11 +10,17 @@ const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY
 const TTS_MODEL = process.env.DEEPGRAM_TTS_MODEL || 'aura-2-zeus-en'
 
 /**
- * Add punctuation-based pauses for more natural TTS delivery.
+ * Sanitize and add punctuation-based pauses for more natural TTS delivery.
  * Deepgram Aura does not support SSML — use punctuation instead.
  */
-function addNaturalPauses(text: string): string {
+function sanitizeForTTS(text: string): string {
   let result = text
+  // Replace em-dashes and en-dashes with commas — Deepgram reads them
+  // as "dash" or creates unnatural pauses
+  result = result.replace(/\u2014/g, ',') // em-dash —
+  result = result.replace(/\u2013/g, ',') // en-dash –
+  // Also handle double-hyphens used as em-dashes
+  result = result.replace(/--/g, ',')
   // Add ellipsis after transitional phrases for a slight pause
   result = result.replace(/\b(So,|Now,|Alright,|Great,|Okay,|Well,) /g, '$1... ')
   return result
@@ -48,7 +54,7 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    const processedText = addNaturalPauses(text)
+    const processedText = sanitizeForTTS(text)
 
     const response = await fetch(
       `https://api.deepgram.com/v1/speak?model=${TTS_MODEL}&encoding=mp3`,

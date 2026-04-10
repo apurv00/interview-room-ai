@@ -764,14 +764,16 @@ export function useInterview({
         const emotion: AvatarEmotion =
           qIdx === 0 ? 'friendly' : qIdx % 3 === 0 ? 'curious' : 'neutral'
         // After Q2, occasionally prepend a natural transition filler (~40% chance)
-        // to avoid the robotic "question, question, question" cadence
-        const useTransitionFiller = qIdx >= 2 && !prefetchedQuestionRef.current && Math.random() < 0.4
-        if (useTransitionFiller) {
+        // to avoid the robotic "question, question, question" cadence.
+        // Filler is prepended to question text as a single TTS call to avoid
+        // double network roundtrip delay.
+        let spokenQuestion = question
+        if (qIdx >= 2 && Math.random() < 0.4) {
           const filler = pickRandom(PRE_QUESTION_FILLERS)
-          await avatarSpeak(filler, 'neutral')
+          spokenQuestion = `${filler} ${question}`
         }
         warmUpListening?.()
-        await avatarSpeak(question, emotion)
+        await avatarSpeak(spokenQuestion, emotion)
 
         // ── Conversational listen loop ──
         // Classifies candidate intent before processing. Handles: clarifications,
@@ -785,6 +787,7 @@ export function useInterview({
         const MAX_CONVERSATION_TURNS = 5 // raised from 3 to accommodate non-answer intents
 
         while (conversationTurns <= MAX_CONVERSATION_TURNS) {
+          setLiveAnswer('') // Fresh slate each iteration — prevents stale text from prior turns
           const speech = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
           if (isInterviewOver()) return
 
@@ -851,6 +854,7 @@ export function useInterview({
             const comfort = pickRandom(CONVERSATION_RESPONSES.distress)
             addToTranscript('interviewer', comfort, qIdx)
             isThinkingPauseRef.current = true
+            setLiveAnswer('') // Clear stale answer text so fresh listening starts clean
             warmUpListening?.()
             await avatarSpeak(comfort, 'friendly')
             // Don't increment conversationTurns — distress doesn't count

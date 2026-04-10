@@ -188,8 +188,9 @@ describe('useDeepgramRecognition', () => {
 
     await act(async () => {
       mockWsInstance!.simulateMessage(makeUtteranceEnd())
-      // Allow dynamic import of speechMetrics to resolve
-      await vi.advanceTimersByTimeAsync(10)
+      // Advance past the grace period (2500ms for short answers <15 words)
+      // + allow dynamic import of speechMetrics to resolve
+      await vi.advanceTimersByTimeAsync(3000)
     })
 
     expect(onComplete).toHaveBeenCalledWith(
@@ -325,7 +326,8 @@ describe('useDeepgramRecognition', () => {
     await act(async () => {
       mockWsInstance!.simulateMessage(makeResult('Some answer', true))
       mockWsInstance!.simulateMessage(makeUtteranceEnd())
-      await vi.advanceTimersByTimeAsync(10)
+      // Advance past the grace period (2500ms for short answers <15 words)
+      await vi.advanceTimersByTimeAsync(3000)
     })
 
     expect(onInterrupt).not.toHaveBeenCalled()

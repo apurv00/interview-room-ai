@@ -57,6 +57,9 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isFinishingRef = useRef(false)
   const fallbackFinishTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Grace period timer — delays finalization after UtteranceEnd to allow
+   *  users with natural thinking pauses to continue speaking. */
+  const graceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** Capture-ready callback — fired once after audio processing starts. */
   const onCaptureReadyRef = useRef<(() => void) | null>(null)
   /** Interrupt callback — fired when speech is detected while avatar is speaking. */
@@ -261,6 +264,13 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           }
 
           if (isFinal && transcript) {
+            // New speech arrived — cancel any pending grace period timer.
+            // The user is still talking; don't finalize yet.
+            if (graceTimerRef.current) {
+              clearTimeout(graceTimerRef.current)
+              graceTimerRef.current = null
+            }
+
             finalTextRef.current = finalTextRef.current
               ? `${finalTextRef.current} ${transcript}`
               : transcript
@@ -281,7 +291,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             }
 
             // Early question detection: short utterances ending with "?" →
-            // respond immediately instead of waiting 2.5s for UtteranceEnd
+            // respond immediately instead of waiting for UtteranceEnd
             const accumulated = finalTextRef.current.trim()
             const wordCount = accumulated.split(/\s+/).length
             if (accumulated.endsWith('?') && wordCount < 20) {
@@ -301,9 +311,25 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           }
         }
 
+        // ── Adaptive grace period on UtteranceEnd ──
+        // Instead of immediately finalizing when Deepgram detects silence,
+        // start a grace period. If the user resumes speaking, the timer is
+        // cancelled (above). This prevents cutting off users who pause
+        // naturally while thinking. Short answers get a longer grace period
+        // since the user likely isn't done yet.
         if (data.type === 'UtteranceEnd') {
           if (finalTextRef.current.trim().length > 0) {
-            finishRecognition()
+            // Clear any existing grace timer (e.g., from a previous UtteranceEnd)
+            if (graceTimerRef.current) {
+              clearTimeout(graceTimerRef.current)
+            }
+            const wordCount = finalTextRef.current.trim().split(/\s+/).length
+            // Short answers (<15 words) get longer grace — user probably isn't done
+            const graceMs = wordCount < 15 ? 2500 : 1500
+            graceTimerRef.current = setTimeout(() => {
+              graceTimerRef.current = null
+              finishRecognition()
+            }, graceMs)
           }
         }
       } catch {
@@ -445,6 +471,10 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current)
       reconnectTimerRef.current = null
+    }
+    if (graceTimerRef.current) {
+      clearTimeout(graceTimerRef.current)
+      graceTimerRef.current = null
     }
 
     // Cleanup audio processing
