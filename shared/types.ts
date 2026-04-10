@@ -170,6 +170,8 @@ export interface AnswerEvaluation {
   pushback?: Pushback | null
   /** LLM-extracted factual claims for cross-answer consistency tracking (C2) */
   keyAssertions?: string[]
+  /** E7: True if the answer is nonsensical, a joke, or completely off-topic */
+  isNonsensical?: boolean
 }
 
 // ─── Speech metrics ───────────────────────────────────────────────────────────

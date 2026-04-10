@@ -222,6 +222,9 @@ ${dimensionPrompt}${jdAlignmentDimension}
 Also determine:
 - flags: array of red-flag strings (e.g. "Blame-shifting", "No measurable impact", "Contradiction: [detail]"). Empty array if none.
 - keyAssertions: extract 2-3 factual claims from this answer that can be verified against future answers (e.g. "Led a team of 8", "Increased revenue by 30%", "Worked at Company X for 3 years"). These are used for cross-answer consistency tracking.
+- isNonsensical: true ONLY if the answer is clearly a joke, gibberish, completely absurd, or has absolutely nothing to do with an interview context. A weak or vague answer is NOT nonsensical. Reserve this for genuinely absurd responses.
+
+Think-aloud detection: If the answer reads like the candidate is thinking out loud (exploratory language like "so maybe...", "I guess...", hedging, self-corrections, no clear conclusion) rather than giving a final answer, set shouldProbe to true with probeType "clarify" and ask them to synthesize their thinking into a clear answer (e.g. "Those are interesting threads, can you pull them together into a clear recommendation?").
 
 Determine probing decision:
 - probeDecision.shouldProbe: true if the answer would benefit from probing — answer is vague, too short (<30 words), surface-level, evasive, missing key info, or exceptionally interesting and worth exploring deeper
@@ -246,6 +249,7 @@ ${JSON_OUTPUT_RULE}
 ${dimensionSchema}${jdAlignmentSchema},
   "flags": string[],
   "keyAssertions": string[],
+  "isNonsensical": boolean,
   "probeDecision": {
     "shouldProbe": boolean,
     "probeType": "clarify" | "challenge" | "expand" | "quantify" | null,
@@ -291,6 +295,8 @@ ${dimensionSchema}${jdAlignmentSchema},
         ...(scores.pushback && { pushback: scores.pushback }),
         // LLM-extracted key assertions for cross-answer consistency tracking (C2)
         ...(scores.keyAssertions?.length && { keyAssertions: scores.keyAssertions }),
+        // E7: nonsensical/joke answer detection
+        ...(scores.isNonsensical && { isNonsensical: true }),
       }
 
       trackUsage({

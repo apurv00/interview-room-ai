@@ -954,6 +954,26 @@ export function useInterview({
             continue
           }
 
+          if (intent === 'challenge_question') {
+            // (E4) — Candidate pushes back on the question. Respond professionally, reframe.
+            const reframe = pickRandom(CONVERSATION_RESPONSES.challenge_question) + ' ' + simplifyQuestion(question)
+            addToTranscript('interviewer', reframe, qIdx)
+            warmUpListening?.()
+            await avatarSpeak(reframe, 'friendly')
+            // Don't increment conversationTurns — challenge doesn't count
+            continue
+          }
+
+          if (intent === 'gaming') {
+            // (E8) — Candidate tries to extract the answer. Stay in character.
+            const deflect = pickRandom(CONVERSATION_RESPONSES.gaming)
+            addToTranscript('interviewer', deflect, qIdx)
+            warmUpListening?.()
+            await avatarSpeak(deflect, 'neutral')
+            // Don't increment conversationTurns
+            continue
+          }
+
           conversationTurns++
 
           if (intent === 'clarification') {
@@ -1045,6 +1065,29 @@ export function useInterview({
         // Pre-fetch TTS for probe question if evaluation decided to probe
         if (evaluation.probeDecision?.shouldProbe && evaluation.probeDecision.probeQuestion) {
           prefetchTTS(evaluation.probeDecision.probeQuestion)
+        }
+
+        // ── E7: Nonsensical/joke answer — re-ask without breaking character ──
+        if (evaluation.isNonsensical && currentProbeDepthRef.current === 0) {
+          const reaskMsg = "I want to make sure I understand you correctly. Could you walk me through that more seriously?"
+          addToTranscript('interviewer', reaskMsg, qIdx)
+          warmUpListening?.()
+          await avatarSpeak(reaskMsg, 'neutral')
+
+          setLiveAnswer('')
+          const retryAnswer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
+          if (isInterviewOver()) return
+          if (retryAnswer) {
+            addToTranscript('candidate', retryAnswer, qIdx)
+            currentThreadRef.current.push({
+              role: 'candidate', text: retryAnswer, isProbe: true,
+              probeDepth: 1,
+            })
+            currentProbeDepthRef.current++
+            const { evaluation: retryEval } = await evaluateAndCoach(question, retryAnswer, qIdx, undefined, 1)
+            // Use retry evaluation for subsequent logic
+            Object.assign(evaluation, retryEval)
+          }
         }
 
         // ── P6: Pivot re-anchoring — if candidate dodged the question, re-ask ──

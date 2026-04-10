@@ -11,9 +11,11 @@
 //   5. hint         — "give me a hint"
 //   6. thinking     — filler / stalling (short utterances only)
 //   7. clarification— "can you rephrase?"
-//   8. redirect     — "can I try a different example?"
-//   9. question     — candidate asks interviewer something
-//  10. answer       — default: everything else goes to evaluation
+//   8. challenge_question — "that's not a fair question" (E4)
+//   9. gaming       — "just tell me the right answer" (E8)
+//  10. redirect     — "can I try a different example?"
+//  11. question     — candidate asks interviewer something
+//  12. answer       — default: everything else goes to evaluation
 
 export type CandidateIntent =
   | 'answer'
@@ -26,6 +28,8 @@ export type CandidateIntent =
   | 'repetition'
   | 'timecheck'
   | 'hint'
+  | 'challenge_question'
+  | 'gaming'
 
 /**
  * Classify candidate speech intent. Local regex — no API call, <1ms.
@@ -95,7 +99,24 @@ export function classifyIntent(text: string): CandidateIntent {
     return 'clarification'
   }
 
-  // ── 8. Redirect — candidate wants to change their answer (short utterances only)
+  // ── 8. Challenge question — candidate pushes back on the question itself (E4)
+  if (
+    lower.length < 80 &&
+    /that('s| is) (not )?(a )?(fair|valid|relevant|appropriate|good) question|this question (is|seems) (flawed|unfair|irrelevant|biased)|i don('t| not) (think|see how) that('s| is) relevant|that doesn('t| not) apply to my role|why (are you|would you) ask(ing)? (that|this)/i.test(lower)
+  ) {
+    return 'challenge_question'
+  }
+
+  // ── 9. Gaming — candidate tries to extract the answer (E8)
+  // Must be checked BEFORE 'question' intent (priority) since gaming phrases end with "?"
+  if (
+    lower.length < 60 &&
+    /(just )?tell me (the|what the) (right|correct|best) answer|what (should i|do you want me to|are you looking for me to) say|what('s| is| are) (the right|you looking for)|tell me what you want to hear|can you just give me the answer/i.test(lower)
+  ) {
+    return 'gaming'
+  }
+
+  // ── 10. Redirect — candidate wants to change their answer (short utterances only)
   if (
     lower.length < 80 &&
     /can i (give|share|use|try) (a |an )?(different|another|better) (example|story|answer|one)|let me (try|start) (again|over|fresh)|actually,? (can i|let me|i('d| would) like to)/i.test(lower)
@@ -164,6 +185,18 @@ export const CONVERSATION_RESPONSES = {
     minutesLeft >= 1
       ? `You have about ${minutesLeft} minute${minutesLeft !== 1 ? 's' : ''} left — ${isStrong ? "you're doing great on pace" : "you're doing fine"}.`
       : "We're almost at time — wrap up your current thought.",
+  challenge_question: [
+    "Fair point. Let me reframe that.",
+    "I hear you. Let me approach this differently.",
+    "That's a valid perspective. Let me adjust the question.",
+    "Good pushback. Let me put it another way.",
+  ],
+  gaming: [
+    "I'm really interested in YOUR perspective here. There's no single right answer.",
+    "This is about how you think through problems, not about a specific answer. Walk me through your approach.",
+    "There's no script here. I want to hear how you'd genuinely handle this.",
+    "What matters is your reasoning, not a perfect answer. Give it your best shot.",
+  ],
   dontKnow: {
     probe: [
       "That's okay — what part of this are you most confident about?",

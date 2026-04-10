@@ -328,6 +328,13 @@ ${DATA_BOUNDARY_RULE}`
     // Dynamic context changes every turn — not cached
     const dynamicSystemPrompt = `${difficultyBlock}${transitionBlock}${threadContext}${recallContext}`
 
+    // F5: Curveball injection — ~15% chance after Q3, once per session
+    // Uses a hash of sessionId to ensure deterministic "once per session" behavior
+    const sessionSeed = (body.sessionId || '').split('').reduce((a, c) => a + c.charCodeAt(0), 0)
+    const curveballEligible = questionIndex >= 3 && !isLastQuestion && pressureLevel === 'normal'
+    const curveballSlot = (sessionSeed % 7) + 3 // deterministic slot between Q3-Q9
+    const isCurveball = curveballEligible && questionIndex === curveballSlot
+
     // TN3: Progressive pressure instructions
     const pressureInstructions: Record<string, string> = {
       normal: '',
@@ -337,6 +344,7 @@ ${DATA_BOUNDARY_RULE}`
 
     const userPrompt = `Generate question ${questionIndex + 1} of ${totalQuestions}.
 ${pressureInstructions[pressureLevel]}
+${isCurveball ? '🎯 CURVEBALL: Ask an unexpected question that tests composure and adaptability. Examples: a left-field hypothetical ("If you had unlimited budget but only 2 weeks..."), a deliberately ambiguous scenario, or a question that forces creative thinking outside the candidate\'s comfort zone. Keep it relevant to the domain but surprising in angle.' : ''}
 ${isLastQuestion ? 'This is the FINAL substantive question before wrap-up — make it memorable and forward-looking.' : ''}
 
 Return ONLY the question text. No preamble, no numbering, no quotation marks. Just the question.`
