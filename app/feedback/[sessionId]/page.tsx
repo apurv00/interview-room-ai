@@ -3,7 +3,6 @@
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import { ScoreRing } from '@shared/ui/ScoreBar'
-import ScoreTrendChart from '@interview/components/feedback/ScoreTrendChart'
 import QuestionBreakdown from '@interview/components/feedback/QuestionBreakdown'
 import AudioPlayer from '@interview/components/feedback/AudioPlayer'
 import OverviewTab from '@interview/components/feedback/OverviewTab'
@@ -16,13 +15,12 @@ import VideoPlayer from '@interview/components/replay/VideoPlayer'
 import ReplayTranscript from '@interview/components/replay/ReplayTranscript'
 import type { MultimodalAnalysisData } from '@shared/types/multimodal'
 import type { FeedbackData, StoredInterviewData } from '@shared/types'
-import { ROLE_LABELS, getDomainLabel } from '@interview/config/interviewConfig'
+import { getDomainLabel } from '@interview/config/interviewConfig'
 import { computeOffsetSeconds } from '@interview/utils/offsetHelpers'
 import { mergeWithLocalData, readLocalInterviewData, cleanupLocalInterviewData } from '@interview/utils/mergeSessionData'
 import { fetchWithRetry } from '@shared/fetchWithRetry'
 import { bisectLastLE } from '@shared/utils'
 import { PROBABILITY_COLORS } from '@interview/config/feedbackConfig'
-import ComparisonCard from '@learn/components/feedback/ComparisonCard'
 import ShareButton from '@learn/components/feedback/ShareButton'
 
 // ─── Error Boundary ──────────────────────────────────────────────────────────
@@ -263,6 +261,11 @@ function FeedbackPageInner() {
 
   const handleTabChange = useCallback((tab: FeedbackTab) => {
     setActiveTab(tab)
+    // Scroll to tab content area on switch
+    requestAnimationFrame(() => {
+      const el = document.getElementById('tab-content')
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
     // Lazy-load transcript when the tab is first opened
     if ((tab === 'transcript' || tab === 'questions') && !lazyTranscript && !transcriptLoading && sessionId && sessionId !== 'local') {
       setTranscriptLoading(true)
@@ -705,8 +708,8 @@ function FeedbackPageInner() {
   return (
     <div className="min-h-screen bg-white text-[#0f1419]">
       {/* Header */}
-      <header className="sticky top-14 z-10 bg-white border-b border-[#e1e8ed] h-[52px] flex items-center px-6">
-        <div className="max-w-[800px] mx-auto w-full flex items-center justify-between">
+      <header className="sticky top-[68px] z-10 bg-white/90 backdrop-blur-xl border-b border-[#e1e8ed] h-[52px] flex items-center px-4 sm:px-6">
+        <div className="max-w-5xl mx-auto w-full flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button
               onClick={() => router.back()}
@@ -717,18 +720,40 @@ function FeedbackPageInner() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
               </svg>
             </button>
-            <h1 className="text-heading">Interview Feedback</h1>
+            <div>
+              <h1 className="text-subheading sm:text-heading leading-tight">Interview Feedback</h1>
+              <p className="text-caption text-[#71767b] hidden sm:block">
+                {data.config &&
+                  `${getDomainLabel(data.config.role)} · ${data.config.experience} yrs · ${data.config.duration} min`}
+              </p>
+            </div>
           </div>
-          <p className="text-caption text-[#71767b]">
-            {data.config &&
-              `${getDomainLabel(data.config.role)} · ${data.config.experience} yrs · ${data.config.duration} min`}
-          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                const text = data.transcript.map((e) => `${e.speaker.toUpperCase()}: ${e.text}`).join('\n\n')
+                const blob = new Blob([text], { type: 'text/plain' })
+                const a = document.createElement('a')
+                a.href = URL.createObjectURL(blob)
+                a.download = 'interview-transcript.txt'
+                a.click()
+              }}
+              className="p-2 rounded-lg hover:bg-[#f8fafc] transition text-[#536471] hover:text-[#0f1419]"
+              aria-label="Download transcript"
+              title="Download transcript"
+            >
+              <svg className="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17v3a2 2 0 002 2h14a2 2 0 002-2v-3" />
+              </svg>
+            </button>
+            <ShareButton sessionId={sessionId} />
+          </div>
         </div>
       </header>
 
       {/* Save warning banner */}
       {saveWarning && (
-        <div className="max-w-[800px] mx-auto px-4 mt-4">
+        <div className="max-w-5xl mx-auto px-4 mt-4">
           <div className="bg-amber-500/10 border border-amber-500/30 rounded-[var(--radius-md)] px-5 py-3 text-sm text-amber-600 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -745,21 +770,11 @@ function FeedbackPageInner() {
         </div>
       )}
 
-      <main className="max-w-[800px] mx-auto px-4 py-8 space-y-8">
-        {/* Audio Player */}
-        {recordingUrl && (
-          <AudioPlayer
-            src={recordingUrl}
-            questionMarkers={questionMarkers}
-            onTimeUpdate={setCurrentAudioTime}
-            onSeek={handleSeekExpose}
-          />
-        )}
-
-        {/* Hero: overall score */}
-        <section className="flex flex-col items-center gap-4 surface-card-bordered p-6 sm:p-8 animate-fade-in">
-          <ScoreRing score={overall_score} size={140} />
-          <div className="text-center space-y-2">
+      <main className="max-w-5xl mx-auto px-4 py-6 space-y-6">
+        {/* Hero: overall score — compact horizontal layout */}
+        <section className="flex flex-col sm:flex-row items-center gap-5 sm:gap-8 py-4 border-b border-[#e1e8ed] animate-fade-in">
+          <ScoreRing score={overall_score} size={110} />
+          <div className="flex-1 text-center sm:text-left space-y-2">
             <h2 className="text-heading">
               {overall_score >= 75
                 ? 'Strong Performance'
@@ -774,59 +789,48 @@ function FeedbackPageInner() {
                 ? 'Solid foundation — refining structure and specificity will elevate your score.'
                 : 'Focus on the STAR framework and concrete examples in your next attempt.'}
             </p>
-          </div>
-          <div className="flex items-center gap-3 justify-center flex-wrap">
-            <div className={`px-3 py-1 rounded-full border text-sm font-medium ${PROBABILITY_COLORS[pass_probability]}`}>
-              {s(pass_probability)} pass probability
+            <div className="flex items-center gap-3 justify-center sm:justify-start flex-wrap">
+              <div className={`px-3 py-1 rounded-full border text-sm font-medium ${PROBABILITY_COLORS[pass_probability]}`}>
+                {s(pass_probability)} pass probability
+              </div>
+              <div className="px-3 py-1 rounded-full border border-[#e1e8ed] text-[#536471] text-sm">
+                {s(feedback.confidence_level)} confidence
+              </div>
             </div>
-            <div className="px-3 py-1 rounded-full border border-[#e1e8ed] text-[#536471] text-sm">
-              {s(feedback.confidence_level)} confidence
-            </div>
-          </div>
-          <ShareButton sessionId={sessionId} />
-          <div className="w-full pt-2">
-            <p className="text-caption text-[#8b98a5] mb-1">Score trend</p>
-            <ScoreTrendChart currentScore={overall_score} sessionId={sessionId} />
           </div>
         </section>
 
-        {/* Comparative Feedback */}
-        {data.evaluations.length > 0 && (() => {
-          const evals = data.evaluations
-          const avg = (key: 'relevance' | 'structure' | 'specificity' | 'ownership') =>
-            Math.round(evals.reduce((s, e) => s + (e[key] || 0), 0) / evals.length)
-          return (
-            <ComparisonCard
-              currentScores={{
-                relevance: avg('relevance'),
-                structure: avg('structure'),
-                specificity: avg('specificity'),
-                ownership: avg('ownership'),
-              }}
-              overallScore={overall_score}
-              domain={data.config?.role}
-            />
-          )
-        })()}
+        {/* Audio Player — below hero, above tabs */}
+        {recordingUrl && (
+          <AudioPlayer
+            src={recordingUrl}
+            questionMarkers={questionMarkers}
+            onTimeUpdate={setCurrentAudioTime}
+            onSeek={handleSeekExpose}
+          />
+        )}
 
-        {/* Tab navigation */}
-        <div className="flex gap-1 surface-card-bordered p-1 w-fit">
-          {TABS.map((tab) => (
-            <button
-              key={tab.key}
-              onClick={() => handleTabChange(tab.key)}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                activeTab === tab.key
-                  ? 'bg-brand-500 text-white'
-                  : 'text-[#71767b] hover:text-[#0f1419]'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
+        {/* Sticky tab navigation */}
+        <div className="sticky top-[120px] z-[9] bg-white pt-1 pb-3 -mx-4 px-4 border-b border-transparent [&.stuck]:border-[#e1e8ed]">
+          <div className="flex gap-1 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl p-1">
+            {TABS.map((tab) => (
+              <button
+                key={tab.key}
+                onClick={() => handleTabChange(tab.key)}
+                className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                  activeTab === tab.key
+                    ? 'bg-brand-500 text-white shadow-sm'
+                    : 'text-[#71767b] hover:text-[#0f1419] hover:bg-white'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Overview tab */}
+        <div id="tab-content">
         {activeTab === 'overview' && (
           <OverviewTab
             data={data}
@@ -834,6 +838,19 @@ function FeedbackPageInner() {
             sessionId={sessionId}
             peerData={peerData}
             peerLoading={peerLoading}
+            currentScore={overall_score}
+            currentScores={data.evaluations.length > 0 ? (() => {
+              const evals = data.evaluations
+              const avg = (key: 'relevance' | 'structure' | 'specificity' | 'ownership') =>
+                Math.round(evals.reduce((s, e) => s + (e[key] || 0), 0) / evals.length)
+              return {
+                relevance: avg('relevance'),
+                structure: avg('structure'),
+                specificity: avg('specificity'),
+                ownership: avg('ownership'),
+              }
+            })() : undefined}
+            domain={data.config?.role}
           />
         )}
 
@@ -890,121 +907,120 @@ function FeedbackPageInner() {
             )}
 
             {analysis && analysis.status === 'completed' && (
-              <>
-                {/* Video player */}
-                {videoSrc && (
-                  <VideoPlayer
-                    src={videoSrc}
-                    questionMarkers={questionMarkers}
-                    onTimeUpdate={setAnalysisVideoTime}
-                    onSeek={(fn) => { analysisSeekRef.current = fn }}
-                  />
-                )}
-
-                {/* Timeline */}
-                {analysis.timeline && analysis.timeline.length > 0 && (
-                  <TimelineTrack
-                    events={analysis.timeline}
-                    totalDurationSec={
-                      analysis.timeline.length > 0
-                        ? Math.ceil(analysis.timeline[analysis.timeline.length - 1].endSec)
-                        : 300
-                    }
-                    currentTimeSec={analysisVideoTime}
-                    onSeek={(sec) => analysisSeekRef.current?.(sec)}
-                  />
-                )}
-
-                {/* Score badges */}
-                {analysis.fusionSummary && (
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    <div className="surface-card-bordered p-4 text-center">
-                      <p className="text-caption text-[#71767b]">Eye Contact</p>
-                      <p className="text-heading">{analysis.fusionSummary.eyeContactScore}<span className="text-sm text-[#71767b]">/100</span></p>
-                    </div>
-                    <div className="surface-card-bordered p-4 text-center">
-                      <p className="text-caption text-[#71767b]">Body Language</p>
-                      <p className="text-heading">{analysis.fusionSummary.overallBodyLanguageScore}<span className="text-sm text-[#71767b]">/100</span></p>
-                    </div>
-                    <div className="surface-card-bordered p-4 text-center">
-                      <p className="text-caption text-[#71767b]">Timeline Events</p>
-                      <p className="text-heading">{analysis.timeline?.length || 0}</p>
-                    </div>
-                    <div className="surface-card-bordered p-4 text-center">
-                      <p className="text-caption text-[#71767b]">Coaching Tips</p>
-                      <p className="text-heading">{analysis.fusionSummary.coachingTips.length}</p>
-                    </div>
-                  </div>
-                )}
-
-                {/* Signal charts */}
-                <SignalCharts
-                  prosodySegments={analysis.prosodySegments || []}
-                  facialSegments={analysis.facialSegments || []}
-                  currentTimeSec={analysisVideoTime}
-                />
-
-                {/* Coaching panel */}
-                {analysis.fusionSummary && (
-                  <CoachingPanel
-                    fusionSummary={analysis.fusionSummary}
-                    timeline={analysis.timeline || []}
-                    onSeek={(sec) => analysisSeekRef.current?.(sec)}
-                  />
-                )}
-
-                {/* Whisper transcript with word-level alignment */}
-                {analysis.whisperTranscript && analysis.whisperTranscript.length > 0 && (
-                  <div className="space-y-2">
-                    <h3 className="text-subheading">Word-Level Transcript</h3>
-                    <ReplayTranscript
-                      whisperSegments={analysis.whisperTranscript}
-                      transcript={data.transcript}
-                      currentTimeSec={analysisVideoTime}
-                      onWordClick={(sec) => analysisSeekRef.current?.(sec)}
+              <div className="lg:grid lg:grid-cols-[1fr_1fr] lg:gap-6">
+                {/* Left column: video + timeline + score badges (sticky on desktop) */}
+                <div className="lg:sticky lg:top-[172px] lg:self-start space-y-4">
+                  {/* Video player */}
+                  {videoSrc && (
+                    <VideoPlayer
+                      src={videoSrc}
+                      questionMarkers={questionMarkers}
+                      onTimeUpdate={setAnalysisVideoTime}
+                      onSeek={(fn) => { analysisSeekRef.current = fn }}
                     />
-                  </div>
-                )}
-              </>
+                  )}
+
+                  {/* Timeline */}
+                  {analysis.timeline && analysis.timeline.length > 0 && (
+                    <TimelineTrack
+                      events={analysis.timeline}
+                      totalDurationSec={
+                        analysis.timeline.length > 0
+                          ? Math.ceil(analysis.timeline[analysis.timeline.length - 1].endSec)
+                          : 300
+                      }
+                      currentTimeSec={analysisVideoTime}
+                      onSeek={(sec) => analysisSeekRef.current?.(sec)}
+                    />
+                  )}
+
+                  {/* Score badges */}
+                  {analysis.fusionSummary && (
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="surface-card-bordered p-4 text-center">
+                        <p className="text-caption text-[#71767b]">Eye Contact</p>
+                        <p className="text-heading">{analysis.fusionSummary.eyeContactScore}<span className="text-sm text-[#71767b]">/100</span></p>
+                      </div>
+                      <div className="surface-card-bordered p-4 text-center">
+                        <p className="text-caption text-[#71767b]">Body Language</p>
+                        <p className="text-heading">{analysis.fusionSummary.overallBodyLanguageScore}<span className="text-sm text-[#71767b]">/100</span></p>
+                      </div>
+                      <div className="surface-card-bordered p-4 text-center">
+                        <p className="text-caption text-[#71767b]">Timeline Events</p>
+                        <p className="text-heading">{analysis.timeline?.length || 0}</p>
+                      </div>
+                      <div className="surface-card-bordered p-4 text-center">
+                        <p className="text-caption text-[#71767b]">Coaching Tips</p>
+                        <p className="text-heading">{analysis.fusionSummary.coachingTips.length}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Right column: charts + coaching + transcript (scrollable) */}
+                <div className="space-y-6 mt-6 lg:mt-0">
+                  {/* Signal charts */}
+                  <SignalCharts
+                    prosodySegments={analysis.prosodySegments || []}
+                    facialSegments={analysis.facialSegments || []}
+                    currentTimeSec={analysisVideoTime}
+                  />
+
+                  {/* Coaching panel */}
+                  {analysis.fusionSummary && (
+                    <CoachingPanel
+                      fusionSummary={analysis.fusionSummary}
+                      timeline={analysis.timeline || []}
+                      onSeek={(sec) => analysisSeekRef.current?.(sec)}
+                    />
+                  )}
+
+                  {/* Whisper transcript with word-level alignment */}
+                  {analysis.whisperTranscript && analysis.whisperTranscript.length > 0 && (
+                    <div className="space-y-2">
+                      <h3 className="text-subheading">Word-Level Transcript</h3>
+                      <ReplayTranscript
+                        whisperSegments={analysis.whisperTranscript}
+                        transcript={data.transcript}
+                        currentTimeSec={analysisVideoTime}
+                        onWordClick={(sec) => analysisSeekRef.current?.(sec)}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
           </div>
         )}
+        </div>{/* close #tab-content */}
 
         {/* CTA */}
-        <div className="flex gap-3 justify-center pb-8 animate-fade-in flex-wrap">
-          <button
-            onClick={() => {
-              // Clear stale interview config to force fresh setup
-              localStorage.removeItem('interviewConfig')
-              localStorage.removeItem('interviewActiveSession')
-              router.push('/')
-            }}
-            className="px-8 py-3 bg-brand-500 hover:bg-brand-600 text-white rounded-[var(--radius-md)] font-semibold btn-glow transition"
-          >
-            Reattempt Interview
-          </button>
-          {(hasRecording || analysis) && (
+        <section className="surface-card-bordered p-5 sm:p-6 flex flex-col sm:flex-row items-center justify-between gap-4 animate-fade-in">
+          <div>
+            <p className="text-subheading text-[#0f1419]">Ready for another round?</p>
+            <p className="text-body text-[#71767b]">Practice makes perfect — each session sharpens your skills.</p>
+          </div>
+          <div className="flex gap-3 flex-wrap shrink-0">
             <button
-              onClick={() => handleTabChange('analysis')}
-              className="px-8 py-3 bg-[#f8fafc] hover:bg-[#eff3f4] border border-[#e1e8ed] text-[#536471] rounded-[var(--radius-md)] font-medium transition"
+              onClick={() => {
+                localStorage.removeItem('interviewConfig')
+                localStorage.removeItem('interviewActiveSession')
+                router.push('/')
+              }}
+              className="px-6 py-2.5 bg-brand-500 hover:bg-brand-600 text-white rounded-[var(--radius-md)] font-semibold btn-glow transition text-sm"
             >
-              View AI Analysis
+              Reattempt Interview
             </button>
-          )}
-          <button
-            onClick={() => {
-              const text = data.transcript.map((e) => `${e.speaker.toUpperCase()}: ${e.text}`).join('\n\n')
-              const blob = new Blob([text], { type: 'text/plain' })
-              const a = document.createElement('a')
-              a.href = URL.createObjectURL(blob)
-              a.download = 'interview-transcript.txt'
-              a.click()
-            }}
-            className="px-8 py-3 bg-[#f8fafc] hover:bg-[#eff3f4] border border-[#e1e8ed] text-[#536471] rounded-[var(--radius-md)] font-medium transition"
-          >
-            Download Transcript
-          </button>
-        </div>
+            {(hasRecording || analysis) && (
+              <button
+                onClick={() => handleTabChange('analysis')}
+                className="px-6 py-2.5 bg-[#f8fafc] hover:bg-[#eff3f4] border border-[#e1e8ed] text-[#536471] rounded-[var(--radius-md)] font-medium transition text-sm"
+              >
+                View AI Analysis
+              </button>
+            )}
+          </div>
+        </section>
       </main>
     </div>
   )

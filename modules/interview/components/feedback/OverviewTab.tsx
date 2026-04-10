@@ -9,6 +9,8 @@ import DimensionRadar from '@interview/components/feedback/DimensionRadar'
 import ConfidenceTrend from '@interview/components/feedback/ConfidenceTrend'
 import QuestionHeatmap from '@interview/components/feedback/QuestionHeatmap'
 import RedFlagCards from '@interview/components/feedback/RedFlagCards'
+import ScoreTrendChart from '@interview/components/feedback/ScoreTrendChart'
+import ComparisonCard from '@learn/components/feedback/ComparisonCard'
 import type { FeedbackData, StoredInterviewData } from '@shared/types'
 import { PROBABILITY_COLORS, CONFIDENCE_TREND_LABELS } from '@interview/config/feedbackConfig'
 
@@ -24,9 +26,12 @@ interface OverviewTabProps {
   sessionId: string
   peerData: PeerData | null
   peerLoading: boolean
+  currentScore: number
+  currentScores?: { relevance: number; structure: number; specificity: number; ownership: number }
+  domain?: string
 }
 
-export default function OverviewTab({ data, feedback, sessionId, peerData, peerLoading }: OverviewTabProps) {
+export default function OverviewTab({ data, feedback, sessionId, peerData, peerLoading, currentScore, currentScores, domain }: OverviewTabProps) {
   const { dimensions, red_flags, top_3_improvements } = feedback
   const { answer_quality, communication } = dimensions
   const engagementSignals = dimensions.engagement_signals || null
@@ -61,6 +66,21 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
 
   return (
     <div className="space-y-6 animate-fade-in">
+      {/* Score Trend + Comparison */}
+      <div className="grid md:grid-cols-2 gap-4">
+        <section className="surface-card-bordered p-4 sm:p-5">
+          <h3 className="text-subheading text-[#0f1419] mb-3">Score Trend</h3>
+          <ScoreTrendChart currentScore={currentScore} sessionId={sessionId} />
+        </section>
+        {currentScores && (
+          <ComparisonCard
+            currentScores={currentScores}
+            overallScore={currentScore}
+            domain={domain}
+          />
+        )}
+      </div>
+
       {/* Row 1: Dimension Radar + Communication + Engagement */}
       <section className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
         {/* Dimension Radar */}
