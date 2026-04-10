@@ -328,9 +328,11 @@ ${DATA_BOUNDARY_RULE}`
     // Dynamic context changes every turn — not cached
     const dynamicSystemPrompt = `${difficultyBlock}${transitionBlock}${threadContext}${recallContext}`
 
-    // F5: Curveball injection — ~15% chance after Q3, once per session
-    // Uses a hash of sessionId to ensure deterministic "once per session" behavior
-    const sessionSeed = (body.sessionId || '').split('').reduce((a, c) => a + c.charCodeAt(0), 0)
+    // F5: Curveball injection — once per session after Q3
+    // Uses a hash of session-unique data for deterministic slot selection.
+    // Falls back to config-based seed when sessionId is unavailable (client doesn't always pass it).
+    const seedSource = body.sessionId || `${config.role}:${config.duration}:${config.experience}:${user.id}`
+    const sessionSeed = seedSource.split('').reduce((a, c) => a + c.charCodeAt(0), 0)
     const curveballEligible = questionIndex >= 3 && !isLastQuestion && pressureLevel === 'normal'
     const curveballSlot = (sessionSeed % 7) + 3 // deterministic slot between Q3-Q9
     const isCurveball = curveballEligible && questionIndex === curveballSlot

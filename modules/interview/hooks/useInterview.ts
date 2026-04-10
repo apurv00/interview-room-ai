@@ -1119,7 +1119,9 @@ export function useInterview({
               role: 'candidate', text: pivotAnswer, isProbe: true,
               probeDepth: currentProbeDepthRef.current,
             })
-            await evaluateAndCoach(reAnchorQ, pivotAnswer, qIdx, undefined, currentProbeDepthRef.current)
+            const { evaluation: pivotEval } = await evaluateAndCoach(reAnchorQ, pivotAnswer, qIdx, undefined, currentProbeDepthRef.current)
+            // Use pivot re-answer evaluation for downstream pushback/probe decisions
+            Object.assign(evaluation, pivotEval)
           }
         }
 
