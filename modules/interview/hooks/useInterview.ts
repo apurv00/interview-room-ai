@@ -323,7 +323,12 @@ export function useInterview({
 
   const evaluateAnswer = useCallback(
     (question: string, answer: string, qIdx: number, probeDepth?: number): Promise<AnswerEvaluation> =>
-      apiEvaluateAnswer(question, answer, qIdx, probeDepth, getAbortSignal()),
+      apiEvaluateAnswer(question, answer, qIdx, probeDepth, getAbortSignal(),
+        evaluationsRef.current.slice(-5).map(e => ({
+          question: e.question?.slice(0, 80) || '',
+          keyClaimsFromAnswer: e.answer?.slice(0, 150) || '',
+        })),
+      ),
     [apiEvaluateAnswer]
   )
 
@@ -1326,7 +1331,8 @@ export function useInterview({
       }
     }
 
-    const t = setTimeout(start, 500)
+    // Brief delay to let React render settle before starting the interview flow
+    const t = setTimeout(start, 200)
     return () => clearTimeout(t)
   }, [config, voicesReady]) // eslint-disable-line react-hooks/exhaustive-deps
 

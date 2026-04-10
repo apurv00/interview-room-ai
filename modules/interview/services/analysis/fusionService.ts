@@ -21,6 +21,8 @@ interface FusionInput {
   evaluations: AnswerEvaluation[]
   transcript: TranscriptEntry[]
   config: InterviewConfig
+  /** Low-confidence word segments from Deepgram STT — highlights uncertain speech */
+  lowConfidenceWords?: Array<{ word: string; start: number; confidence: number }>
   /**
    * When true, the user prompt includes per-segment blendshape summary
    * statistics alongside the existing categorical expression label. When
@@ -41,7 +43,7 @@ interface FusionOutput {
 }
 
 export async function runFusionAnalysis(input: FusionInput): Promise<FusionOutput> {
-  const { prosodySegments, facialSegments, evaluations, transcript, config, includeBlendshapes } = input
+  const { prosodySegments, facialSegments, evaluations, transcript, config, includeBlendshapes, lowConfidenceWords } = input
 
   // Build the analysis prompt
   const systemPrompt = `You are an expert interview coach analyzing multimodal signals from a recorded mock interview. The candidate was interviewing for a ${config.role} position (${config.experience} years experience, ${config.interviewType || 'screening'} interview).
@@ -85,7 +87,8 @@ Guidelines:
     facialSegments,
     evaluations,
     transcript,
-    { includeBlendshapes: includeBlendshapes === true }
+    { includeBlendshapes: includeBlendshapes === true },
+    lowConfidenceWords,
   )
 
   const response = await completion({
@@ -158,9 +161,15 @@ function buildUserPromptWithContext(
   facial: FacialSegment[],
   evaluations: AnswerEvaluation[],
   transcript: TranscriptEntry[],
-  options: { includeBlendshapes: boolean } = { includeBlendshapes: false }
+  options: { includeBlendshapes: boolean } = { includeBlendshapes: false },
+  lowConfidenceWords?: Array<{ word: string; start: number; confidence: number }>,
 ): { userPrompt: string; contextData: Record<string, unknown> } {
   const contextData: Record<string, unknown> = {}
+
+  // Low-confidence words from Deepgram — highlights uncertain/unclear speech moments
+  if (lowConfidenceWords && lowConfidenceWords.length > 0) {
+    contextData.lowConfidenceWords = lowConfidenceWords.slice(0, 20) // Top 20 most uncertain words
+  }
 
   // Audio signals — uniform array, TOON-friendly
   if (prosody.length > 0) {

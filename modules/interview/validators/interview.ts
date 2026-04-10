@@ -124,6 +124,7 @@ export const EvaluateAnswerSchema = z.object({
   questionIndex: z.number().int().min(0).max(100),
   probeDepth: z.number().int().min(0).max(20).optional(),
   sessionId: z.string().optional(),
+  previousAnswerSummaries: z.array(z.object({ question: z.string(), keyClaimsFromAnswer: z.string() })).max(10).optional(),
 })
 
 export const GenerateFeedbackSchema = z.object({

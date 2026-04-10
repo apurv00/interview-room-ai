@@ -13,6 +13,11 @@ interface UseInterviewAPIOptions {
   config: InterviewConfig | null
 }
 
+export interface PreviousAnswerSummary {
+  question: string
+  keyClaimsFromAnswer: string
+}
+
 export interface UseInterviewAPIReturn {
   generateQuestion: (
     qIdx: number,
@@ -27,6 +32,7 @@ export interface UseInterviewAPIReturn {
     qIdx: number,
     probeDepth?: number,
     signal?: AbortSignal,
+    previousSummaries?: PreviousAnswerSummary[],
   ) => Promise<AnswerEvaluation>
 }
 
@@ -75,16 +81,46 @@ export function useInterviewAPI({ config }: UseInterviewAPIOptions): UseIntervie
       qIdx: number,
       probeDepth?: number,
       signal?: AbortSignal,
+      previousSummaries?: PreviousAnswerSummary[],
     ): Promise<AnswerEvaluation> => {
+      const timeoutController = new AbortController()
+      const timeoutId = setTimeout(() => timeoutController.abort(), 5000)
       try {
+        const combinedSignal = signal && AbortSignal.any
+          ? AbortSignal.any([signal, timeoutController.signal])
+          : timeoutController.signal
         const res = await fetch('/api/evaluate-answer', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          signal,
-          body: JSON.stringify({ config, question, answer, questionIndex: qIdx, probeDepth }),
+          signal: combinedSignal,
+          body: JSON.stringify({
+            config,
+            question,
+            answer,
+            questionIndex: qIdx,
+            probeDepth,
+            previousAnswerSummaries: previousSummaries,
+          }),
         })
+        clearTimeout(timeoutId)
         return res.json()
-      } catch {
+      } catch (err) {
+        clearTimeout(timeoutId)
+        if (timeoutController.signal.aborted) {
+          // Timeout — return quick fallback scores
+          return {
+            questionIndex: qIdx,
+            question,
+            answer,
+            relevance: 50,
+            structure: 50,
+            specificity: 50,
+            ownership: 50,
+            needsFollowUp: false,
+            flags: ['Evaluation timed out — approximate scores'],
+            probeDecision: { shouldProbe: false },
+          }
+        }
         return {
           questionIndex: qIdx,
           question,

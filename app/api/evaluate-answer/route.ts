@@ -163,9 +163,15 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
 
     const evalCriteriaBlock = evalCriteria ? `\n\nEVALUATION FOCUS: ${evalCriteria}` : ''
 
+    // Cross-answer consistency: surface prior claims so the LLM can flag contradictions
+    let consistencyContext = ''
+    if (body.previousAnswerSummaries?.length) {
+      consistencyContext = `\n\nPREVIOUS ANSWERS (check for consistency):\n${body.previousAnswerSummaries.map((s, i) => `Q${i+1}: ${s.keyClaimsFromAnswer}`).join('\n')}\nFlag any contradictions between this answer and previous claims.`
+    }
+
     const systemPrompt = `${DATA_BOUNDARY_RULE}
 
-You are an expert interview coach evaluating candidates for ${domainLabel} roles at the ${config.experience} experience level. Interview type: ${interviewType}. You score objectively and fairly.${evalCriteriaBlock}${companyContext}${jdContext}${resumeContext}${profileContext}`
+You are an expert interview coach evaluating candidates for ${domainLabel} roles at the ${config.experience} experience level. Interview type: ${interviewType}. You score objectively and fairly.${evalCriteriaBlock}${companyContext}${jdContext}${resumeContext}${profileContext}${consistencyContext}`
 
     // Build dynamic scoring dimensions
     const dimensionPrompt = scoringDims.map(d =>
