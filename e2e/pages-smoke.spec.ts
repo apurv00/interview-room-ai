@@ -4,12 +4,16 @@ import { expectCleanPageLoad, gotoAndTrack } from './helpers/page-checks'
 /**
  * Parametrized "does this page load cleanly" suite across every public
  * surface. Each case asserts:
- *   - status < 500
+ *   - final response is 2xx (catches silent 4xx regressions)
+ *   - final pathname matches the requested path (catches silent redirects
+ *     like a public page quietly redirecting to /signin)
  *   - body rendered (>100 chars, no error overlay)
  *   - zero non-allowlisted console errors
  *   - zero non-allowlisted 5xx network responses
  *
- * If a new public page is added, add it here.
+ * If a new public page is added, add it here. Pages that are EXPECTED to
+ * redirect (e.g., /resources → /learn/guides) do not belong in this list;
+ * assert their redirect behavior in auth-gating.spec.ts instead.
  */
 
 interface PageCase {
