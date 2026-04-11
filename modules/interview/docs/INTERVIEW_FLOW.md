@@ -311,8 +311,25 @@ covering "text must be eager", and no interrupt-threshold contract.
 - A unit test for the interrupt threshold in
   `modules/interview/__tests__/deepgramRecognition.test.ts` —
   mechanical guard against regressing rule-of-3 filter.
+- A streaming contract test for `/api/tts/stream` at
+  `modules/interview/__tests__/ttsStreamRoute.test.ts`. Mocks
+  `fetch` to return a ReadableStream whose second chunk is gated
+  behind a test-controlled promise; asserts the POST handler returns
+  and the client's first read resolves BEFORE the gate is released.
+  If someone re-introduces `await response.arrayBuffer()`, the
+  POST handler hangs on the gate and the test times out with the
+  message "POST did not return within 500ms — route is buffering
+  the response". Proven to detect the regression: running the test
+  against the original commit-`133e44f` buffered version produces
+  exactly that failure.
+- A local TTFB measurement script at `scripts/measure-tts-ttfb.mjs`.
+  Not run in CI (requires external `api.deepgram.com` access), but
+  runs the real tee-vs-arrayBuffer comparison against live Deepgram
+  Aura and prints the TTFB delta. Useful for anyone who wants the
+  empirical number behind the contract test before shipping.
 
-_Follow-up considerations (not fixed in this commit):_ contract test
-for `/api/tts/stream` that asserts `Transfer-Encoding: chunked` and
-first chunk arrives before full body; making `test:pipeline`
-PR-blocking in CI; nightly scripted interview against real APIs.
+_Follow-up considerations (not fixed in this commit):_ making
+`test:pipeline` PR-blocking in CI; nightly scripted interview against
+real APIs; co-locating `app/api/tts/stream/route.ts` logic into a
+`modules/interview/api/` shim so the ESLint hot-path rules apply to
+its imports.
