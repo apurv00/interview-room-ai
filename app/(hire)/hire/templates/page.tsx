@@ -3,6 +3,11 @@
 import { useEffect, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
+import { X } from 'lucide-react'
+import Input from '@shared/ui/Input'
+import Button from '@shared/ui/Button'
+import Badge from '@shared/ui/Badge'
+import StateView from '@shared/ui/StateView'
 
 interface Template {
   id: string
@@ -15,6 +20,9 @@ interface Template {
   isActive: boolean
   createdAt: string
 }
+
+const ROLES = ['frontend', 'backend', 'sdet', 'devops', 'data-science', 'pm', 'design', 'business', 'marketing', 'finance', 'sales']
+const CATEGORIES = ['behavioral', 'situational', 'technical', 'motivation', 'custom']
 
 export default function TemplatesPage() {
   const router = useRouter()
@@ -69,7 +77,6 @@ export default function TemplatesPage() {
           settings: { duration: newDuration, questionCount: newQuestions.filter(q => q.text.trim()).length },
         }),
       })
-      // Reload
       const res = await fetch('/api/hire/templates')
       const data = await res.json()
       setTemplates(data.templates || [])
@@ -83,8 +90,9 @@ export default function TemplatesPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-20">
-        <div className="w-6 h-6 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
+      <div className="max-w-4xl mx-auto space-y-6">
+        <h1 className="text-heading text-[var(--foreground)]">Interview Templates</h1>
+        <StateView state="loading" skeletonLayout="grid" skeletonCount={4} />
       </div>
     )
   }
@@ -92,62 +100,57 @@ export default function TemplatesPage() {
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-[#0f1419]">Interview Templates</h1>
-        <button
+        <h1 className="text-heading text-[var(--foreground)]">Interview Templates</h1>
+        <Button
+          variant={showCreate ? 'secondary' : 'primary'}
+          size="md"
           onClick={() => setShowCreate(!showCreate)}
-          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-xl font-medium transition-colors"
         >
           {showCreate ? 'Cancel' : 'Create Template'}
-        </button>
+        </Button>
       </div>
 
       {/* Create template form */}
       {showCreate && (
-        <div className="bg-white border border-[#e1e8ed] rounded-2xl p-6 space-y-4 animate-fade-in">
-          <h2 className="text-sm font-semibold text-[#536471]">New Template</h2>
+        <div className="surface-card-bordered p-6 space-y-4">
+          <h2 className="text-subheading text-[var(--foreground-secondary)]">New Template</h2>
 
           <div className="grid md:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Template Name *</label>
-              <input
-                type="text"
-                value={newName}
-                onChange={e => setNewName(e.target.value)}
-                placeholder="e.g. Senior SWE Behavioral"
-                className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Description</label>
-              <input
-                type="text"
-                value={newDesc}
-                onChange={e => setNewDesc(e.target.value)}
-                placeholder="Brief description..."
-                className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
+            <Input
+              label="Template Name"
+              type="text"
+              value={newName}
+              onChange={e => setNewName(e.target.value)}
+              placeholder="e.g. Senior SWE Behavioral"
+            />
+            <Input
+              label="Description"
+              type="text"
+              value={newDesc}
+              onChange={e => setNewDesc(e.target.value)}
+              placeholder="Brief description..."
+            />
           </div>
 
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-1.5">
-              <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Role</label>
+              <label className="text-caption text-[var(--foreground-secondary)]">Role</label>
               <select
                 value={newRole}
                 onChange={e => setNewRole(e.target.value)}
-                className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full h-9 px-3 bg-[var(--color-card)] border border-[var(--color-border)] rounded-[6px] text-body text-[var(--foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--ds-primary)]"
               >
-                {['frontend', 'backend', 'sdet', 'devops', 'data-science', 'pm', 'design', 'business', 'marketing', 'finance', 'sales'].map(r => (
+                {ROLES.map(r => (
                   <option key={r} value={r}>{r.toUpperCase()}</option>
                 ))}
               </select>
             </div>
             <div className="space-y-1.5">
-              <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Experience</label>
+              <label className="text-caption text-[var(--foreground-secondary)]">Experience</label>
               <select
                 value={newExp}
                 onChange={e => setNewExp(e.target.value)}
-                className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full h-9 px-3 bg-[var(--color-card)] border border-[var(--color-border)] rounded-[6px] text-body text-[var(--foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--ds-primary)]"
               >
                 <option value="all">All Levels</option>
                 <option value="0-2">0-2 years</option>
@@ -156,11 +159,11 @@ export default function TemplatesPage() {
               </select>
             </div>
             <div className="space-y-1.5">
-              <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Duration</label>
+              <label className="text-caption text-[var(--foreground-secondary)]">Duration</label>
               <select
                 value={newDuration}
                 onChange={e => setNewDuration(Number(e.target.value))}
-                className="w-full px-3 py-2.5 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full h-9 px-3 bg-[var(--color-card)] border border-[var(--color-border)] rounded-[6px] text-body text-[var(--foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--ds-primary)]"
               >
                 <option value={10}>10 min</option>
                 <option value={20}>20 min</option>
@@ -171,7 +174,7 @@ export default function TemplatesPage() {
 
           {/* Questions */}
           <div className="space-y-2">
-            <label className="text-[10px] text-[#8b98a5] uppercase tracking-wider">Custom Questions</label>
+            <label className="text-caption text-[var(--foreground-secondary)]">Custom Questions</label>
             {newQuestions.map((q, i) => (
               <div key={i} className="flex gap-2">
                 <input
@@ -179,61 +182,60 @@ export default function TemplatesPage() {
                   value={q.text}
                   onChange={e => setNewQuestions(prev => prev.map((p, j) => j === i ? { ...p, text: e.target.value } : p))}
                   placeholder={`Question ${i + 1}...`}
-                  className="flex-1 px-3 py-2 bg-[#f8fafc] border border-[#e1e8ed] rounded-lg text-sm text-[#0f1419] placeholder-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="flex-1 h-9 px-3 bg-[var(--color-card)] border border-[var(--color-border)] rounded-[6px] text-body text-[var(--foreground)] placeholder-[var(--foreground-tertiary)] focus:outline-none focus:ring-1 focus:ring-[var(--ds-primary)]"
                 />
                 <select
                   value={q.category}
                   onChange={e => setNewQuestions(prev => prev.map((p, j) => j === i ? { ...p, category: e.target.value } : p))}
-                  className="px-2 py-2 bg-[#f8fafc] border border-[#e1e8ed] rounded-lg text-xs text-[#536471] focus:outline-none"
+                  className="h-9 px-2 bg-[var(--color-card)] border border-[var(--color-border)] rounded-[6px] text-caption text-[var(--foreground-secondary)] focus:outline-none"
                 >
-                  <option value="behavioral">Behavioral</option>
-                  <option value="situational">Situational</option>
-                  <option value="technical">Technical</option>
-                  <option value="motivation">Motivation</option>
-                  <option value="custom">Custom</option>
+                  {CATEGORIES.map(cat => (
+                    <option key={cat} value={cat}>{cat.charAt(0).toUpperCase() + cat.slice(1)}</option>
+                  ))}
                 </select>
                 {newQuestions.length > 1 && (
-                  <button onClick={() => removeQuestion(i)} className="text-[#8b98a5] hover:text-red-400 transition-colors">
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
+                  <button onClick={() => removeQuestion(i)} className="text-[var(--foreground-tertiary)] hover:text-rose-500 transition-colors">
+                    <X className="w-4 h-4" />
                   </button>
                 )}
               </div>
             ))}
-            <button onClick={addQuestion} className="text-xs text-[#2563eb] hover:text-[#2563eb] transition-colors">
+            <button onClick={addQuestion} className="text-caption text-[var(--ds-primary)] hover:underline transition-colors">
               + Add Question
             </button>
           </div>
 
-          <button
+          <Button
+            variant="primary"
+            className="w-full"
             onClick={handleCreate}
             disabled={creating || !newName.trim()}
-            className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium text-sm transition-colors disabled:opacity-50"
           >
             {creating ? 'Creating...' : 'Create Template'}
-          </button>
+          </Button>
         </div>
       )}
 
       {/* Template list */}
       {templates.length === 0 && !showCreate ? (
-        <div className="text-center py-12 bg-white border border-[#e1e8ed] rounded-2xl">
-          <p className="text-[#536471] mb-2">No templates yet.</p>
-          <p className="text-xs text-[#8b98a5]">Create a template to standardize interviews across your team.</p>
-        </div>
+        <StateView
+          state="empty"
+          title="No templates yet"
+          description="Create a template to standardize interviews across your team."
+          action={{ label: 'Create Template', onClick: () => setShowCreate(true) }}
+        />
       ) : (
         <div className="grid md:grid-cols-2 gap-4">
           {templates.map(t => (
-            <div key={t.id} className="bg-white border border-[#e1e8ed] rounded-2xl p-5 hover:border-[#e1e8ed] transition-all">
+            <div key={t.id} className="surface-card-bordered p-5">
               <div className="flex items-start justify-between mb-2">
-                <h3 className="text-sm font-semibold text-[#0f1419]">{t.name}</h3>
-                <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${t.isActive ? 'bg-emerald-500/20 text-[#059669]' : 'bg-[#f8fafc] text-[#536471]'}`}>
+                <h3 className="text-subheading text-[var(--foreground)]">{t.name}</h3>
+                <Badge variant={t.isActive ? 'success' : 'default'}>
                   {t.isActive ? 'Active' : 'Inactive'}
-                </span>
+                </Badge>
               </div>
-              {t.description && <p className="text-xs text-[#536471] mb-3">{t.description}</p>}
-              <div className="flex items-center gap-3 text-[10px] text-[#8b98a5]">
+              {t.description && <p className="text-caption text-[var(--foreground-secondary)] mb-3">{t.description}</p>}
+              <div className="flex items-center gap-3 text-micro text-[var(--foreground-tertiary)]">
                 <span className="capitalize">{t.role}</span>
                 <span>{t.experienceLevel === 'all' ? 'All levels' : t.experienceLevel}</span>
                 <span>{t.questionCount} questions</span>
