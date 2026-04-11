@@ -219,6 +219,15 @@ ${answer}
 Score on these dimensions (integer 0–100):
 ${dimensionPrompt}${jdAlignmentDimension}
 
+SCORING GUIDE — anchor your numbers to these levels. Be honest; do not default to the middle.
+- 0–20  : Off-topic, no real answer, or fabricated. The candidate failed to address the question.
+- 21–40 : Weak. Missing key elements, no specifics, no ownership, or wrong framing.
+- 41–60 : Adequate but generic. The shape of an answer is there but lacks depth, structure, or concrete detail.
+- 61–80 : Good. Clear structure (STAR or domain equivalent), specific examples, candidate's own contribution is visible.
+- 81–100: Excellent. Structured, specific, quantified outcomes, demonstrable personal impact, no red flags.
+
+Most real answers will fall in 41–80. Only push above 80 when the answer is genuinely strong on every dimension.
+
 Also determine:
 - flags: array of red-flag strings (e.g. "Blame-shifting", "No measurable impact", "Contradiction: [detail]"). Empty array if none.
 - keyAssertions: extract 2-3 factual claims from this answer that can be verified against future answers (e.g. "Led a team of 8", "Increased revenue by 30%", "Worked at Company X for 3 years"). These are used for cross-answer consistency tracking.
