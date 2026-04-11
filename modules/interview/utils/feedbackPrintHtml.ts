@@ -86,13 +86,14 @@ export function buildFeedbackPrintHtml(opts: FeedbackPrintOptions): string {
   const transcriptEntries = (data.transcript || []).slice(0, 200)
   const transcriptHtml = transcriptEntries.length
     ? transcriptEntries
-        .map(
-          (e) => `
-          <div class="tx-entry ${e.speaker === 'ai' ? 'tx-ai' : 'tx-you'}">
-            <div class="tx-speaker">${e.speaker === 'ai' ? 'Interviewer' : 'You'}</div>
+        .map((e) => {
+          const isInterviewer = e.speaker === 'interviewer'
+          return `
+          <div class="tx-entry ${isInterviewer ? 'tx-ai' : 'tx-you'}">
+            <div class="tx-speaker">${isInterviewer ? 'Interviewer' : 'You'}</div>
             <div class="tx-text">${escapeHtml(e.text)}</div>
           </div>`
-        )
+        })
         .join('')
     : '<p class="muted">No transcript recorded.</p>'
 
