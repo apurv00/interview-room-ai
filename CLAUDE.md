@@ -4,6 +4,13 @@ AI-powered mock interview simulator. Users practice HR screening interviews with
 
 Full-stack Next.js 14 app with Claude AI, MongoDB, Redis, and Stripe.
 
+## Session Setup (run first)
+
+```bash
+git pull origin main        # Get latest changes
+npx gitnexus analyze        # Rebuild codebase graph for full awareness
+```
+
 ## Quick Commands
 
 ```bash
