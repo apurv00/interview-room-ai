@@ -7,16 +7,6 @@ on:
         description: "URL to test against"
         required: false
         default: "https://staging.interviewprep.guru"
-  pull_request:
-    branches: [main]
-    paths:
-      - "e2e/**"
-      - "playwright.config.ts"
-      - "middleware.ts"
-      - "app/**"
-      - "modules/**"
-      - "shared/**"
-      - ".github/workflows/e2e-tests.yml"
 
 concurrency:
   group: e2e-tests
