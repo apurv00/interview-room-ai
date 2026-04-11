@@ -102,7 +102,7 @@ export function useInterview({
 
   // ── Avatar (extracted to useAvatarSpeech) ──
   const isMultimodalEnabled = process.env.NEXT_PUBLIC_FEATURE_MULTIMODAL === 'true'
-  const { avatarEmotion, isAvatarTalking, setAvatarEmotion, avatarSpeak: rawAvatarSpeak, prefetchTTS, cancelTTS, playAck } = useAvatarSpeech({
+  const { avatarEmotion, isAvatarTalking, setAvatarEmotion, avatarSpeak: rawAvatarSpeak, prefetchTTS, cancelTTS, playAck, cancelAck } = useAvatarSpeech({
     interviewType: config?.interviewType,
     isMultimodalEnabled,
   })
@@ -573,9 +573,21 @@ export function useInterview({
       concurrentTask ?? (Promise.resolve(undefined) as Promise<T>),
     ])
 
-    // Cancel acknowledgment if eval returned before 1.5s
+    // Cancel acknowledgment.
+    //
+    // `ackCancelled` + `clearTimeout` only protect the case where eval
+    // returns BEFORE the 800ms timer fires. If eval returns AFTER the
+    // timer fires, `playAck` has already been launched and its fetch
+    // is in flight on the isolated ack channel. Without `cancelAck`,
+    // a slow /api/tts fetch (especially first cache-miss phrases) can
+    // resolve AFTER the next `avatarSpeak(question)` starts speaking,
+    // producing overlapping AI audio — the next question's
+    // `cancelStream()` deliberately does NOT touch the ack channel,
+    // so we must abort it here. No-op in the healthy case.
+    // Reported by Codex review on PR #228; see INTERVIEW_FLOW.md §8.
     ackCancelled = true
     if (ackTimer) clearTimeout(ackTimer)
+    cancelAck()
     ackCountRef.current++
 
     evaluationsRef.current = [...evaluationsRef.current, { ...evaluation, question, answer }]

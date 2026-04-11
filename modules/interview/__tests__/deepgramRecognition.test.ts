@@ -302,7 +302,90 @@ describe('useDeepgramRecognition', () => {
     }
   })
 
-  it('interrupt does NOT fire on 1-2 word false positives (noise, mic pops)', async () => {
+  it('interrupt fires when 3 words arrive split across two final packets', async () => {
+    // Regression test for Codex P1 on PR #228:
+    // Deepgram can emit one utterance as multiple `is_final: true`
+    // packets (e.g. "wait can" then "I clarify"). Checking word count
+    // per-packet drops genuine multi-word interrupts. The accumulator
+    // must span packets.
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onInterrupt = vi.fn()
+
+    // Attach a message handler by starting + stopping listening once.
+    await act(async () => {
+      result.current.startListening(vi.fn())
+      await vi.advanceTimersByTimeAsync(10)
+    })
+    if (mockWsInstance) act(() => { mockWsInstance!.simulateOpen() })
+    await act(async () => {
+      result.current.stopListening()
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    act(() => {
+      result.current.setOnInterrupt(onInterrupt)
+    })
+
+    if (mockWsInstance?.onmessage) {
+      // Packet 1: 2 words — below threshold alone, should NOT fire yet.
+      act(() => {
+        mockWsInstance!.simulateMessage(makeResult('wait can', true))
+      })
+      expect(onInterrupt).not.toHaveBeenCalled()
+
+      // Packet 2: 2 more words — accumulator now holds "wait can I clarify"
+      // (4 words total). Should fire.
+      act(() => {
+        mockWsInstance!.simulateMessage(makeResult('I clarify', true))
+      })
+      expect(onInterrupt).toHaveBeenCalledTimes(1)
+    }
+  })
+
+  it('interrupt accumulator resets after 2s inactivity', async () => {
+    // Regression test for Codex P1 on PR #228:
+    // A stale 2-word fragment from a mic pop must not combine with a
+    // later unrelated 1-word misheard noise to spuriously cross the
+    // 3-word threshold. After 2s of silence the accumulator clears.
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onInterrupt = vi.fn()
+
+    await act(async () => {
+      result.current.startListening(vi.fn())
+      await vi.advanceTimersByTimeAsync(10)
+    })
+    if (mockWsInstance) act(() => { mockWsInstance!.simulateOpen() })
+    await act(async () => {
+      result.current.stopListening()
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    act(() => {
+      result.current.setOnInterrupt(onInterrupt)
+    })
+
+    if (mockWsInstance?.onmessage) {
+      // Packet 1: 2 words (noise misheard as "um hmm").
+      act(() => {
+        mockWsInstance!.simulateMessage(makeResult('um hmm', true))
+      })
+      expect(onInterrupt).not.toHaveBeenCalled()
+
+      // 2 seconds of silence → accumulator resets to ''.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2001)
+      })
+
+      // Packet 2: a single unrelated word. Total accumulated is now "yes"
+      // (1 word), not "um hmm yes" (3 words). Must NOT fire.
+      act(() => {
+        mockWsInstance!.simulateMessage(makeResult('yes', true))
+      })
+      expect(onInterrupt).not.toHaveBeenCalled()
+    }
+  })
+
+  it('interrupt does NOT fire on sparse 1-2 word false positives (noise, mic pops)', async () => {
     const { result } = renderHook(() => useDeepgramRecognition())
     const onInterrupt = vi.fn()
 
@@ -322,16 +405,24 @@ describe('useDeepgramRecognition', () => {
       result.current.setOnInterrupt(onInterrupt)
     })
 
-    // Single-word transcripts should be ignored (these are Deepgram mishearings
-    // of breathing, mic pops, keyboard clicks, etc.)
+    // Isolated 1- and 2-word mishearings (breathing, mic pops, keyboard
+    // clicks) should NOT fire. Each event is separated by >2s so the
+    // accumulator resets between them — matching realistic noise-event
+    // spacing (Deepgram's VAD needs a silence gap to emit `is_final`,
+    // so isolated noise events are naturally separated).
     if (mockWsInstance?.onmessage) {
       act(() => { mockWsInstance!.simulateMessage(makeResult('um', true)) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(2100) })
+
       act(() => { mockWsInstance!.simulateMessage(makeResult('hello', true)) })
-      // Two words also below threshold
+      await act(async () => { await vi.advanceTimersByTimeAsync(2100) })
+
       act(() => { mockWsInstance!.simulateMessage(makeResult('yes okay', true)) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(2100) })
+
       expect(onInterrupt).not.toHaveBeenCalled()
 
-      // Three words crosses the threshold
+      // A genuine 3-word interrupt fires in one packet.
       act(() => { mockWsInstance!.simulateMessage(makeResult('can I clarify', true)) })
       expect(onInterrupt).toHaveBeenCalledTimes(1)
     }
