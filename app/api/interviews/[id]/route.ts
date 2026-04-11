@@ -12,6 +12,7 @@ import { XP_AMOUNTS } from '@learn/config/xpTable'
 import { logger } from '@shared/logger'
 import { AppError } from '@shared/errors'
 import { deleteInterviewSession } from '@shared/services/accountDeletion'
+import { flushUsageBuffer } from '@shared/services/usageBuffer'
 
 export const dynamic = 'force-dynamic'
 
@@ -94,6 +95,11 @@ export async function PATCH(
 
     // Award XP and update streak when interview is completed
     if (validated.status === 'completed') {
+      // Flush buffered usage records to Mongo (fire-and-forget, non-fatal)
+      void flushUsageBuffer(params.id).catch((err) =>
+        logger.warn({ err, sessionId: params.id }, 'Failed to flush usage buffer (non-fatal)'),
+      )
+
       const overallScore = validated.feedback?.overall_score
       try {
         await awardXp(session.user.id, 'interview_complete', XP_AMOUNTS.interview_complete, { sessionId: params.id })

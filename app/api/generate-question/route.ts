@@ -13,6 +13,7 @@ import { isFeatureEnabled } from '@shared/featureFlags'
 import { generateSessionBrief, briefToPromptContext } from '@interview/services/persona/personalizationEngine'
 import { getQuestionBankContext } from '@interview/services/persona/retrievalService'
 import { getOrLoadJDContext, getOrLoadResumeContext } from '@interview/services/persona/documentContextCache'
+import { getOrLoadSessionConfig } from '@interview/services/core/sessionConfigCache'
 import { z } from 'zod'
 import { completion } from '@shared/services/modelRouter'
 import { DATA_BOUNDARY_RULE } from '@shared/services/promptSecurity'
@@ -71,7 +72,19 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
       contextBlock += `\n\nCross-reference the resume against the JD requirements. Identify gaps or areas where the candidate's experience may not fully match, and explore those.`
     }
 
-    // Fetch domain and depth config from DB (with fallback)
+    // Pre-fetch session config (domain, depth, user profile) from Redis cache.
+    // Falls through to per-query Mongo fetches below when sessionId is absent
+    // or a cache field is null.
+    const sessionCfg = sessionId
+      ? await getOrLoadSessionConfig(sessionId, {
+          role: config.role,
+          interviewType,
+          userId: user.id,
+          experience: config.experience,
+        }).catch(() => null)
+      : null
+
+    // Fetch domain and depth config — cache-first, Mongo fallback
     let domainContext = ''
     let depthStrategy = ''
     let domainLabel = getDomainLabel(config.role)
@@ -80,12 +93,19 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
       await connectDB()
 
       const [domainDoc, depthDoc] = await Promise.all([
-        InterviewDomain.findOne({ slug: config.role, isActive: true }).lean(),
-        InterviewDepth.findOne({ slug: interviewType, isActive: true }).lean(),
-      ])
+        sessionCfg?.domain != null
+          ? Promise.resolve(sessionCfg.domain)
+          : InterviewDomain.findOne({ slug: config.role, isActive: true }).lean(),
+        sessionCfg?.depth != null
+          ? Promise.resolve(sessionCfg.depth)
+          : InterviewDepth.findOne({ slug: interviewType, isActive: true }).lean(),
+      ]) as [
+        { label?: string; systemPromptContext?: string } | null,
+        { questionStrategy?: string } | null,
+      ]
 
       if (domainDoc) {
-        domainLabel = domainDoc.label
+        domainLabel = domainDoc.label ?? domainLabel
         domainContext = domainDoc.systemPromptContext ? `\n\nDOMAIN CONTEXT: ${domainDoc.systemPromptContext}` : ''
       } else {
         const fallback = FALLBACK_DOMAINS.find(d => d.slug === config.role)
@@ -155,11 +175,28 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     let profileBlock = ''
     try {
       await connectDB()
-      const profile = await User.findById(user.id).select(
-        'currentTitle currentIndustry isCareerSwitcher switchingFrom targetCompanyType weakAreas ' +
-        'topSkills educationLevel yearsInCurrentRole communicationStyle ' +
-        'targetCompanies practiceStats interviewGoal'
-      ).lean()
+      // Use cached user profile when available; fall back to Mongo.
+      const profile = (sessionCfg?.userProfile != null
+        ? sessionCfg.userProfile
+        : await User.findById(user.id).select(
+            'currentTitle currentIndustry isCareerSwitcher switchingFrom targetCompanyType weakAreas ' +
+            'topSkills educationLevel yearsInCurrentRole communicationStyle ' +
+            'targetCompanies practiceStats interviewGoal',
+          ).lean()) as {
+        currentTitle?: string
+        currentIndustry?: string
+        isCareerSwitcher?: boolean
+        switchingFrom?: string
+        targetCompanyType?: string
+        weakAreas?: string[]
+        topSkills?: string[]
+        educationLevel?: string
+        yearsInCurrentRole?: number
+        communicationStyle?: string
+        targetCompanies?: string[]
+        practiceStats?: Record<string, { totalSessions?: number; avgScore?: number; weakDimensions?: string[] }>
+        interviewGoal?: string
+      } | null
       if (profile?.currentTitle) {
         profileBlock += `\nThe candidate's current title is: ${profile.currentTitle}.`
       }

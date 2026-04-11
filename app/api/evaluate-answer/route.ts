@@ -14,6 +14,7 @@ import { FALLBACK_DEPTHS } from '@shared/db/seed'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { getScoringDimensions, buildRubricPromptSection } from '@interview/services/eval/evaluationEngine'
 import { getOrLoadJDContext, getOrLoadResumeContext } from '@interview/services/persona/documentContextCache'
+import { getOrLoadSessionConfig } from '@interview/services/core/sessionConfigCache'
 import type { AnswerEvaluation } from '@shared/types'
 import { z } from 'zod'
 
@@ -49,13 +50,28 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
       })
     }
 
-    // Fetch depth-specific evaluation criteria
+    // Pre-fetch session config (depth, rubric, user profile) from Redis cache.
+    const sessionCfg = sessionId
+      ? await getOrLoadSessionConfig(sessionId, {
+          role: config.role,
+          interviewType,
+          userId: user.id,
+          experience: config.experience,
+        }).catch(() => null)
+      : null
+
+    // Fetch depth-specific evaluation criteria — cache-first, Mongo fallback
     let evalCriteria = ''
     let scoringDims: { name: string; label: string; weight: number }[] = []
 
     try {
       await connectDB()
-      const depthDoc = await InterviewDepth.findOne({ slug: interviewType, isActive: true }).lean()
+      const depthDoc = (sessionCfg?.depth != null
+        ? sessionCfg.depth
+        : await InterviewDepth.findOne({ slug: interviewType, isActive: true }).lean()) as {
+        evaluationCriteria?: string
+        scoringDimensions?: { name: string; label: string; weight: number }[]
+      } | null
       if (depthDoc) {
         evalCriteria = depthDoc.evaluationCriteria || ''
         scoringDims = depthDoc.scoringDimensions || []
@@ -80,10 +96,14 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
       ]
     }
 
-    // Try rubric-enhanced dimensions from evaluation engine
+    // Try rubric-enhanced dimensions from evaluation engine.
+    // Pass the cached rubric (if available) to avoid a redundant DB fetch.
     if (isFeatureEnabled('rubric_registry')) {
       try {
-        const rubricDims = await getScoringDimensions(config.role, interviewType, config.experience)
+        const preloadedRubric = sessionCfg !== null
+          ? (sessionCfg.rubric as { dimensions?: import('@shared/db/models').RubricDimension[] } | null)
+          : undefined
+        const rubricDims = await getScoringDimensions(config.role, interviewType, config.experience, preloadedRubric)
         if (rubricDims.length > 0) {
           scoringDims = rubricDims.map(d => ({ name: d.name, label: d.label, weight: d.weight }))
         }
@@ -101,14 +121,26 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
         : `\n\n<job_description>\n${config.jobDescription.slice(0, 2000)}\n</job_description>\n\nUse the job description above to evaluate how well the answer aligns with the role's requirements.`
     }
 
-    // Build profile context
+    // Build profile context — cache-first, Mongo fallback
     let profileContext = ''
     try {
       await connectDB()
-      const profile = await User.findById(user.id).select(
-        'isCareerSwitcher switchingFrom interviewGoal weakAreas feedbackPreference ' +
-        'targetCompanyType topSkills communicationStyle practiceStats'
-      ).lean()
+      const profile = (sessionCfg?.userProfile != null
+        ? sessionCfg.userProfile
+        : await User.findById(user.id).select(
+            'isCareerSwitcher switchingFrom interviewGoal weakAreas feedbackPreference ' +
+            'targetCompanyType topSkills communicationStyle practiceStats',
+          ).lean()) as {
+        isCareerSwitcher?: boolean
+        switchingFrom?: string
+        interviewGoal?: string
+        weakAreas?: string[]
+        feedbackPreference?: string
+        targetCompanyType?: string
+        topSkills?: string[]
+        communicationStyle?: string
+        practiceStats?: Record<string, { totalSessions?: number; avgScore?: number }>
+      } | null
       if (profile?.isCareerSwitcher && profile?.switchingFrom) {
         profileContext += `\nThis candidate is transitioning from ${profile.switchingFrom} — weight transferable skills and learning agility more heavily when scoring.`
       }
