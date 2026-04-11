@@ -20,6 +20,7 @@ import type { FeedbackData, StoredInterviewData } from '@shared/types'
 import { getDomainLabel } from '@interview/config/interviewConfig'
 import { computeOffsetSeconds } from '@interview/utils/offsetHelpers'
 import { mergeWithLocalData, readLocalInterviewData, cleanupLocalInterviewData } from '@interview/utils/mergeSessionData'
+import { buildFeedbackPrintHtml } from '@interview/utils/feedbackPrintHtml'
 import { fetchWithRetry } from '@shared/fetchWithRetry'
 import { bisectLastLE } from '@shared/utils'
 import { PROBABILITY_COLORS } from '@interview/config/feedbackConfig'
@@ -809,6 +810,32 @@ function FeedbackPageInner() {
             >
               <svg className="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17v3a2 2 0 002 2h14a2 2 0 002-2v-3" />
+              </svg>
+            </button>
+            {/* PDF download: builds a self-contained print HTML from the
+                feedback data we already have and hands it to the browser's
+                Print-to-PDF. No server round-trip, no new API route. */}
+            <button
+              onClick={() => {
+                const html = buildFeedbackPrintHtml({
+                  feedback,
+                  data,
+                  domainLabel: getDomainLabel(data.config.role),
+                })
+                const w = window.open('', '_blank')
+                if (!w) {
+                  alert('Pop-up blocked. Please allow pop-ups to download the PDF.')
+                  return
+                }
+                w.document.write(html)
+                w.document.close()
+              }}
+              className="p-2 rounded-lg hover:bg-[#f8fafc] transition text-[#536471] hover:text-[#0f1419]"
+              aria-label="Download report as PDF"
+              title="Download report (PDF)"
+            >
+              <svg className="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
             </button>
             <ShareButton sessionId={sessionId} />

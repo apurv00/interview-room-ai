@@ -1,6 +1,7 @@
 'use client'
 
 import { useReducer, useCallback, useEffect, useRef } from 'react'
+import { useSession } from 'next-auth/react'
 import { calculateStrengthScore } from '../services/strengthScorer'
 import type { StrengthResult } from '../services/strengthScorer'
 import type { WizardSegment } from '../validators/wizardSchemas'
@@ -296,19 +297,31 @@ function wizardReducer(state: WizardState, action: WizardAction): WizardState {
 }
 
 // ─── localStorage ──────────────────────────────────────────────────────────
+// Wizard drafts are scoped by userId so that a draft left by one user on a
+// shared browser cannot be hydrated into another user's wizard — fixing a
+// PII leak where the wizard would load Stage 6/7 data belonging to whoever
+// previously used the device.
+//
+// Legacy global key: `wizardDraft`          (unscoped; purged on first load)
+// Current key:       `wizardDraft:{userId}`
 
-const STORAGE_KEY = 'wizardDraft'
+const LEGACY_STORAGE_KEY = 'wizardDraft'
 
-function saveToStorage(state: WizardState) {
+function storageKeyFor(userId: string | null | undefined): string | null {
+  if (!userId) return null
+  return `${LEGACY_STORAGE_KEY}:${userId}`
+}
+
+function saveToStorage(state: WizardState, key: string) {
   try {
     const { isLoading, isSaving, isGeneratingFollowUps, isEnhancing, error, ...data } = state
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+    localStorage.setItem(key, JSON.stringify(data))
   } catch { /* ignore */ }
 }
 
-function loadFromStorage(): Partial<WizardState> | null {
+function loadFromStorage(key: string): Partial<WizardState> | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(key)
     if (!raw) return null
     return JSON.parse(raw)
   } catch {
@@ -316,9 +329,20 @@ function loadFromStorage(): Partial<WizardState> | null {
   }
 }
 
-function clearStorage() {
+function clearStorage(key: string) {
   try {
-    localStorage.removeItem(STORAGE_KEY)
+    localStorage.removeItem(key)
+  } catch { /* ignore */ }
+}
+
+/** One-time cleanup: drop the legacy unscoped `wizardDraft` key on mount.
+ *  We cannot know whose data it belongs to, and blindly migrating it into
+ *  the current user's scope would reintroduce the leak. It's safer to
+ *  discard it — the worst case is a user loses a draft they never got to
+ *  save anyway. */
+function purgeLegacyStorage() {
+  try {
+    localStorage.removeItem(LEGACY_STORAGE_KEY)
   } catch { /* ignore */ }
 }
 
@@ -327,27 +351,38 @@ function clearStorage() {
 export function useWizard(initialSessionId?: string) {
   const [state, dispatch] = useReducer(wizardReducer, initialState)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const { data: session } = useSession()
+  const userId = session?.user?.id ?? null
+  const storageKey = storageKeyFor(userId)
 
-  // Auto-save to localStorage (debounced)
+  // Auto-save to localStorage (debounced), scoped to the current user.
+  // If there's no user, skip persistence entirely — the wizard is auth-gated
+  // at the page level, but we defend in depth here.
   useEffect(() => {
-    if (!state.sessionId) return
+    if (!state.sessionId || !storageKey) return
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(() => saveToStorage(state), 500)
+    const key = storageKey
+    saveTimerRef.current = setTimeout(() => saveToStorage(state, key), 500)
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
-  }, [state])
+  }, [state, storageKey])
 
-  // Load session on mount
+  // Load session on mount — only hydrate a draft that was saved under the
+  // CURRENT user's id. Also purge any legacy unscoped `wizardDraft` key so
+  // stale cross-user data cannot leak on subsequent sessions.
   useEffect(() => {
+    purgeLegacyStorage()
     if (initialSessionId) {
       loadSession(initialSessionId)
-    } else {
-      const saved = loadFromStorage()
-      if (saved?.sessionId) {
-        dispatch({ type: 'LOAD_SESSION', session: saved })
-      }
+      return
     }
+    if (!storageKey) return
+    const saved = loadFromStorage(storageKey)
+    if (saved?.sessionId) {
+      dispatch({ type: 'LOAD_SESSION', session: saved })
+    }
+  // Re-run when the user id changes (e.g. sign-in or account switch).
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [storageKey])
 
   // ─── API Calls ─────────────────────────────────────────────────────────
 
@@ -545,7 +580,7 @@ export function useWizard(initialSessionId?: string) {
         a.click()
         a.remove()
         URL.revokeObjectURL(url)
-        clearStorage()
+        if (storageKey) clearStorage(storageKey)
       } else {
         // PDF generation unavailable on server — use browser print fallback
         const data = await res.json()
@@ -560,10 +595,10 @@ export function useWizard(initialSessionId?: string) {
           } else {
             dispatch({ type: 'SET_ERROR', error: 'Pop-up blocked. Please allow pop-ups and try again.' })
           }
-          clearStorage()
+          if (storageKey) clearStorage(storageKey)
         } else {
           // Resume was saved but no PDF or HTML returned
-          clearStorage()
+          if (storageKey) clearStorage(storageKey)
           dispatch({
             type: 'SET_ERROR',
             error: data.message || 'Resume saved to your dashboard but PDF download is temporarily unavailable. Use browser print (Ctrl+P) on the preview.',
@@ -575,7 +610,7 @@ export function useWizard(initialSessionId?: string) {
     } finally {
       dispatch({ type: 'SET_UI_FLAG', key: 'isSaving', value: false })
     }
-  }, [state.sessionId, state.selectedTemplate, state.contactInfo.fullName, state.fontFamily, state.fontSize, state.headingSize, state.bodySize])
+  }, [state.sessionId, state.selectedTemplate, state.contactInfo.fullName, state.fontFamily, state.fontSize, state.headingSize, state.bodySize, storageKey])
 
   // ─── Navigation ────────────────────────────────────────────────────────
 
@@ -586,9 +621,9 @@ export function useWizard(initialSessionId?: string) {
   }, [state.stage])
 
   const resetWizard = useCallback(() => {
-    clearStorage()
+    if (storageKey) clearStorage(storageKey)
     dispatch({ type: 'LOAD_SESSION', session: initialState })
-  }, [])
+  }, [storageKey])
 
   return {
     state,

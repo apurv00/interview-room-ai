@@ -414,3 +414,14 @@ The product deliberately exposes a few write endpoints without auth, always rate
 - `GET /api/health` — liveness.
 
 No other writes are possible without authentication.
+
+---
+
+## 14. Known gaps surfaced by QA Run 2
+
+A note for future doc updates — these are documented realities that differ from the ideal state captured elsewhere in this file:
+
+- **`robots.txt` stale disallow path** (QA Issue #5): `app/robots.ts` currently disallows the legacy `/progress` route, which no longer exists. The live authenticated data page is `/learn/progress` (and its sibling `/learn/pathway`), neither of which is in the disallow list. Crawlers could therefore index SignedOutEmptyState versions of these paths. Fix pending.
+- **Homepage vs pricing page price mismatch** (QA Issue #6): previously the homepage Pro plan card hardcoded `$11/month` while `/pricing` showed `$19/month` (from `shared/services/stripe.ts`). Fixed on this branch — the homepage now reads `PLANS.pro.priceMonthly` so the two surfaces are guaranteed to agree.
+- **`callbackUrl=/api/learn/xp` leak** (QA Issue #7): when a logged-out user lands on the homepage, the XP badge still attempts to fetch `/api/learn/xp`, NextAuth catches the 401, and constructs a redirect with `callbackUrl=/api/learn/xp`. After OAuth, the user lands on the raw JSON endpoint. Guard pending.
+- **No custom 404** (QA Issue #8): Next.js default is served; a branded `app/not-found.tsx` is pending.
