@@ -63,22 +63,26 @@ Before navigation, config is persisted to `localStorage.INTERVIEW_CONFIG` and cl
 
 ## 3. Lobby (`/lobby`)
 
-Pre-interview device/consent check.
+Pre-interview readiness check.
 
 - Reads `INTERVIEW_CONFIG` from localStorage. Missing config → `router.replace('/interview/setup')`.
 - **Camera preview** with live video, mirrored.
-- **Mic level meter** (WebAudio) — green bar pulses with voice.
-- **Device pickers**: camera, microphone (populated via `navigator.mediaDevices.enumerateDevices`).
-- **"Test Audio"** → records 3 s and plays it back.
-- **Consent checkboxes**:
-  1. "I consent to be recorded for this session"
-  2. "I understand feedback uses AI analysis"
-- **Tips row**: posture, lighting, mic distance, eye contact.
+- **Mic level meter** (WebAudio) — shows a live percentage and a "picking up audio" confirmation message.
+- **Auto-detection system checks** (four rows, no manual picker):
+  - **Camera** → "HD video ready" on success / "Permission denied" on failure.
+  - **Microphone** → "Audio detected" on success.
+  - **Speech recognition** → "Browser supported" / "Not supported — you can still join in text mode".
+  - **Network** → HEAD pings `/api/health` twice (first warms up the serverless cold start; second measures latency). Shows e.g. "276 ms latency" when healthy; "High latency (N ms)" or "Server returned an error" on failure.
+- **Prep checklist** (12 items across 4 accordions): Environment, Technology, Content Prep, Mindset.
+- **"Start 60s warm-up (not scored)"** → optional practice question that doesn't consume quota.
 - **"Back"** → `/interview/setup`
-- **"I'm Ready — Start Interview"** → requires both consents → `router.push('/interview')`. Plays entry chime.
+- **"Join Interview Room"** → `router.push('/interview')`. Plays entry chime.
+
+> **Removed in a redesign** (noted in QA Run 2): the earlier build had manual device-picker dropdowns (camera / microphone) and two consent checkboxes ("I consent to be recorded", "I understand AI analysis"). Both were replaced by automatic detection and implicit consent via the Terms page. The "Test Audio" playback button was also removed in favor of the live mic meter.
 
 Errors:
-- Camera/mic permission denied → inline modal **"Enable camera & microphone"** with OS-specific help.
+- Camera/mic permission denied → the camera/mic rows flip to error state with "Permission denied"; the Join button stays enabled but the candidate is nudged to re-grant permissions.
+- Network check fails → "Server returned an error" row; the Join button remains enabled so the candidate can still try.
 - No devices found → fallback to audio-only mode (recorded, but avatar reactions degrade).
 
 ---
@@ -164,11 +168,13 @@ Each question card shows:
 
 ### 5.3 Coaching actions
 
-- **"Download report (PDF)"** → `GET /api/interview/[sessionId]/report.pdf` → server-rendered PDF.
-- **"Share scorecard"** → opens `ShareScorecardModal` (see `04-*.md §5`).
-- **"Start a drill on weak areas"** → `/practice/drill?from={sessionId}` (pre-seeds failing questions).
-- **"Practice this again"** → `/interview/setup?retry={sessionId}` (re-uses same config).
+- **"Share Scorecard"** → dropdown with **Copy Link** and **Share on LinkedIn** (see `04-*.md §5`).
+- **"Retake"** → `/interview/setup?retry={sessionId}` (re-uses same config).
+- **"View Pathway"** → `/learn/pathway`.
+- **"New Interview"** → `/interview/setup`.
 - **"Back to history"** → `/history`.
+
+> **Not currently shipped** (QA Run 2 gap): a **"Download Report (PDF)"** button was originally planned for this row — a server-rendered scorecard with score, dimensions, transcript, and improvement list. No such endpoint or button exists today. Track as a feature gap, not a bug. If/when added, the natural home is next to **"Share Scorecard"** and the natural endpoint is `GET /api/interview/[sessionId]/report.pdf`.
 
 ### 5.4 Multimodal Replay block
 
@@ -274,3 +280,20 @@ Drill does not count against the monthly interview quota (Pro perk; free users g
 | Session deleted | 404 → `/history` with toast |
 | Replay unavailable | Feedback page hides Replay block |
 | Inngest job stuck > 10 min | Marked `failed`; retry CTA appears |
+
+---
+
+## 10. Behaviors confirmed & gaps surfaced by QA Run 2
+
+Confirmed live:
+- Resume upload drives **personalized questions** — QA observed Q2 referencing "Swiggy Minis" from the uploaded PDF. (`POST /api/resume/parse` feeds structured resume text into `personalizationEngine`, which the question generator then conditions on.)
+- Interview state machine transitions **STARTING → SPEAKING → LISTENING** all render their expected UI states.
+- Post-interview pipeline (`/api/analysis/start` + `/api/storage/presign`) fires on session completion as documented in §4.5.
+- Feedback page renders Score Ring, Scoring Dimensions, Communication metrics (Pacing / Filler words / Conciseness), "How You Compare" benchmarks (Overall / Answer Quality / Communication / Engagement), Top Improvements, per-question Questions tab, and full Transcript tab.
+- History page lists sessions with scores, statuses (completed / in-progress), and Replay links.
+
+Gaps vs. this document:
+- **Lobby redesign**: device-picker dropdowns and consent checkboxes are no longer present — see note in §3.
+- **PDF download on Feedback**: documented as a CTA but never shipped — see note in §5.3.
+- **`/api/health` HEAD returning 503** during interview (QA Issue #2): the QA observed three consecutive 503s on the lobby warm-up pings. Fixed on this branch — the HEAD handler now reflects actual `mongoose.connection.readyState` and heavy deps are dynamic-imported so a module-load failure can't take the route down.
+- **Mongoose stale-connection warnings** (QA Issue #1): addressed on this branch by validating `readyState` on every `connectDB()` call instead of trusting the cached handle indefinitely; a no-op `.catch()` is attached to the pending connect promise so parallel-invocation races can't leak UnhandledPromiseRejection warnings.
