@@ -26,6 +26,12 @@ interface Props {
   onEdit: (step: RepeatSetupStep) => void
   onClose: () => void
   onStartOver: () => void
+  /**
+   * When true, the modal frames the action as "retaking" a specific prior
+   * interview (rather than the default "you ran this before, want to go
+   * again?" prompt). Used by the feedback page's Retake CTA.
+   */
+  isRetake?: boolean
 }
 
 interface Row {
@@ -41,6 +47,7 @@ export default function RepeatSetupConfirmModal({
   onEdit,
   onClose,
   onStartOver,
+  isRetake = false,
 }: Props) {
   // Lock body scroll while open
   useEffect(() => {
@@ -108,10 +115,12 @@ export default function RepeatSetupConfirmModal({
         </div>
 
         <h2 id="repeat-setup-title" className="text-xl font-semibold text-[#0f1419] text-center">
-          Ready for another round?
+          {isRetake ? 'Retake this interview?' : 'Ready for another round?'}
         </h2>
         <p className="text-sm text-[#71767b] text-center mt-1.5">
-          Here&apos;s your last setup. Jump straight in, or tweak anything below.
+          {isRetake
+            ? 'Same setup, fresh attempt. Your new scores will be compared directly against your first attempt.'
+            : 'Here\u2019s your last setup. Jump straight in, or tweak anything below.'}
         </p>
 
         {/* Summary rows */}

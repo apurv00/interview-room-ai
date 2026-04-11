@@ -29,9 +29,11 @@ interface OverviewTabProps {
   currentScore: number
   currentScores?: { relevance: number; structure: number; specificity: number; ownership: number }
   domain?: string
+  /** Set when this session is a retake — drives "vs first attempt" comparison. */
+  parentSessionId?: string
 }
 
-export default function OverviewTab({ data, feedback, sessionId, peerData, peerLoading, currentScore, currentScores, domain }: OverviewTabProps) {
+export default function OverviewTab({ data, feedback, sessionId, peerData, peerLoading, currentScore, currentScores, domain, parentSessionId }: OverviewTabProps) {
   const { dimensions, red_flags, top_3_improvements } = feedback
   const { answer_quality, communication } = dimensions
   const engagementSignals = dimensions.engagement_signals || null
@@ -77,6 +79,7 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
             currentScores={currentScores}
             overallScore={currentScore}
             domain={domain}
+            parentSessionId={parentSessionId}
           />
         )}
       </div>

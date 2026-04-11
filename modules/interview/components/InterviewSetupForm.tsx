@@ -18,7 +18,7 @@
  */
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import Link from 'next/link'
 import {
@@ -67,6 +67,8 @@ interface SavedResumeMeta {
 
 export default function InterviewSetupForm() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const retakeParentId = searchParams?.get('retake') || null
   const { data: authSession, status } = useSession()
   const { requireAuth } = useAuthGate()
 
@@ -158,17 +160,23 @@ export default function InterviewSetupForm() {
     }
 
     try {
-      const stored = localStorage.getItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`)
-      const legacy = !stored ? localStorage.getItem(STORAGE_KEYS.INTERVIEW_CONFIG) : null
-      const configStr = stored || legacy
+      // Retake hand-off: the feedback page's "Retake this interview" button
+      // writes the parent's config to the legacy INTERVIEW_CONFIG key. In
+      // retake mode we prefer that freshly-written legacy value over any
+      // older scoped key, so the setup form shows the retake subject (not a
+      // stale "last run" config) even if the user has run other interviews
+      // in between.
+      const scoped = localStorage.getItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`)
+      const legacy = localStorage.getItem(STORAGE_KEYS.INTERVIEW_CONFIG)
+      const configStr = retakeParentId ? (legacy || scoped) : (scoped || legacy)
 
       if (configStr) {
         const c: InterviewConfig = JSON.parse(configStr)
-        // Migrate legacy unscoped key to user-scoped key.
-        if (legacy && !stored) {
-          localStorage.setItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`, configStr)
-          localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
-        }
+        // Sync the scoped key so subsequent visits short-circuit the DB
+        // fallback. Also clear the legacy key once it's been consumed by a
+        // retake to prevent the next non-retake visit from picking it up.
+        localStorage.setItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`, configStr)
+        if (legacy) localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
         finalize(c)
         return
       }
@@ -203,7 +211,7 @@ export default function InterviewSetupForm() {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, authSession?.user?.id])
+  }, [status, authSession?.user?.id, retakeParentId])
 
   // ─── Pre-fill from onboarding profile ──────────────────────────────────
   useEffect(() => {
@@ -553,6 +561,7 @@ export default function InterviewSetupForm() {
         onEdit={handleRepeatEdit}
         onClose={handleRepeatClose}
         onStartOver={handleRepeatStartOver}
+        isRetake={!!retakeParentId}
       />
     )}
   </>

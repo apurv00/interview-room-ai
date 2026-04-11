@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation'
 import { motion } from 'framer-motion'
 import SignedOutEmptyState from '@shared/ui/SignedOutEmptyState'
 import { useAuthGate } from '@shared/providers/AuthGateProvider'
+import NextStepHero from '@learn/components/pathway/NextStepHero'
+import RecentSessionsStrip from '@learn/components/pathway/RecentSessionsStrip'
 
 interface PracticeTask {
   taskId: string
@@ -189,6 +191,17 @@ export default function PathwayPage() {
       >
         Learning Pathway
       </motion.h1>
+
+      {/* Next Step Hero — answers "what should I do right now?" */}
+      <NextStepHero
+        practiceTasks={pathway.practiceTasks}
+        nextSessionRecommendation={pathway.nextSessionRecommendation}
+        readinessScore={pathway.readinessScore}
+        onStartInterview={startInterview}
+      />
+
+      {/* Recent Sessions Strip — closes the habit loop with inline Retake */}
+      <RecentSessionsStrip />
 
       {/* Readiness Gauge */}
       <motion.section

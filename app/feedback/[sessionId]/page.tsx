@@ -24,6 +24,7 @@ import { fetchWithRetry } from '@shared/fetchWithRetry'
 import { bisectLastLE } from '@shared/utils'
 import { PROBABILITY_COLORS } from '@interview/config/feedbackConfig'
 import ShareButton from '@learn/components/feedback/ShareButton'
+import { STORAGE_KEYS } from '@shared/storageKeys'
 
 // ─── Error Boundary ──────────────────────────────────────────────────────────
 
@@ -144,6 +145,12 @@ function FeedbackPageInner() {
   const [analysisVideoTime, setAnalysisVideoTime] = useState(0)
   const analysisSeekRef = useRef<((seconds: number) => void) | null>(null)
   const [replayFullscreen, setReplayFullscreen] = useState(false)
+
+  // Retake flow
+  const [retakeLoading, setRetakeLoading] = useState(false)
+  // Parent session id for retake comparison — populated from the session
+  // GET response when the current session has `parentSessionId` set.
+  const [parentSessionId, setParentSessionId] = useState<string | null>(null)
 
   // Audio player sync state
   const [currentAudioTime, setCurrentAudioTime] = useState(0)
@@ -339,6 +346,11 @@ function FeedbackPageInner() {
         }
 
         if (session) {
+            // Capture retake linkage for the comparison card. Sessions
+            // created before the retake feature was added have no
+            // parentSessionId, so this silently no-ops for them.
+            const pId = session.parentSessionId as string | undefined
+            if (pId) setParentSessionId(pId)
             if (!d) {
               d = {
                 config: session.config as StoredInterviewData['config'],
@@ -904,6 +916,7 @@ function FeedbackPageInner() {
               }
             })() : undefined}
             domain={data.config?.role}
+            parentSessionId={parentSessionId || undefined}
           />
         )}
 
@@ -1145,27 +1158,71 @@ function FeedbackPageInner() {
         )}
         </div>{/* close #tab-content */}
 
-        {/* CTA */}
-        <section className="surface-card-bordered p-5 sm:p-6 flex flex-col sm:flex-row items-center justify-between gap-4 animate-fade-in">
+        {/* CTA — habit-loop strip */}
+        <section className="surface-card-bordered p-5 sm:p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-fade-in">
           <div>
-            <p className="text-subheading text-[#0f1419]">Ready for another round?</p>
-            <p className="text-body text-[#71767b]">Practice makes perfect — each session sharpens your skills.</p>
+            <p className="text-subheading text-[#0f1419]">Keep the momentum going</p>
+            <p className="text-body text-[#71767b]">Retake this mock to see your improvement, or head to your pathway.</p>
           </div>
-          <div className="flex gap-3 flex-wrap shrink-0">
+          <div className="flex gap-3 flex-wrap shrink-0 w-full sm:w-auto">
             <button
+              type="button"
+              disabled={retakeLoading || sessionId === 'local'}
+              onClick={async () => {
+                if (!sessionId || sessionId === 'local') return
+                setRetakeLoading(true)
+                try {
+                  const res = await fetch(`/api/interviews/${sessionId}/retake`, { method: 'POST' })
+                  if (!res.ok) {
+                    setRetakeLoading(false)
+                    return
+                  }
+                  const { parentSessionId } = await res.json()
+                  // Merge the parent's config into the setup form via
+                  // localStorage so hydration picks it up seamlessly. We
+                  // use the feedback page's own `data.config` (already
+                  // fetched) rather than the endpoint's summary to preserve
+                  // JD / resume / target company fields.
+                  try {
+                    const fullConfig = data?.config
+                    if (fullConfig) {
+                      localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(fullConfig))
+                    }
+                    localStorage.setItem(STORAGE_KEYS.PENDING_RETAKE_PARENT, parentSessionId || sessionId)
+                    localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
+                  } catch { /* ignore */ }
+                  router.push(`/interview/setup?retake=${parentSessionId || sessionId}`)
+                } catch {
+                  setRetakeLoading(false)
+                }
+              }}
+              className="px-5 py-2.5 bg-brand-500 hover:bg-brand-600 disabled:bg-brand-500/60 text-white rounded-[var(--radius-md)] font-semibold btn-glow transition text-sm"
+            >
+              {retakeLoading ? 'Preparing…' : 'Retake this interview'}
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push('/learn/pathway')}
+              className="px-5 py-2.5 bg-white hover:bg-blue-50 border border-blue-500/40 text-blue-600 rounded-[var(--radius-md)] font-semibold transition text-sm"
+            >
+              View pathway
+            </button>
+            <button
+              type="button"
               onClick={() => {
                 localStorage.removeItem('interviewConfig')
                 localStorage.removeItem('interviewActiveSession')
-                router.push('/')
+                router.push('/interview/setup')
               }}
-              className="px-6 py-2.5 bg-brand-500 hover:bg-brand-600 text-white rounded-[var(--radius-md)] font-semibold btn-glow transition text-sm"
+              className="px-5 py-2.5 bg-[#f8fafc] hover:bg-[#eff3f4] border border-[#e1e8ed] text-[#536471] rounded-[var(--radius-md)] font-medium transition text-sm"
             >
-              Reattempt Interview
+              New interview
             </button>
             {(hasRecording || analysis) && (
               <button
+                type="button"
                 onClick={() => handleTabChange('analysis')}
-                className="px-6 py-2.5 bg-[#f8fafc] hover:bg-[#eff3f4] border border-[#e1e8ed] text-[#536471] rounded-[var(--radius-md)] font-medium transition text-sm"
+                className="px-5 py-2.5 text-[#536471] hover:text-[#0f1419] text-sm font-medium transition"
               >
                 View AI Analysis
               </button>

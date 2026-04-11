@@ -6,12 +6,18 @@ export interface CreateDbSessionResult {
   limitReached?: boolean
 }
 
-export async function createDbSession(config: InterviewConfig): Promise<CreateDbSessionResult> {
+export async function createDbSession(
+  config: InterviewConfig,
+  parentSessionId?: string
+): Promise<CreateDbSessionResult> {
   try {
     const res = await fetch('/api/interviews', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config }),
+      body: JSON.stringify({
+        config,
+        ...(parentSessionId ? { parentSessionId } : {}),
+      }),
     })
     if (res.status === 402) return { sessionId: null, limitReached: true }
     if (!res.ok) return { sessionId: null }

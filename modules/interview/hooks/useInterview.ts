@@ -251,7 +251,19 @@ export function useInterview({
     // sessionIdRef may not be populated during the intro phase. This is safe
     // because no DB persist occurs until finishInterview(), which runs much later.
     // localStorage captures all data as a backup regardless.
-    createDbSession(config).then((result) => {
+    //
+    // Retake linkage: if the user initiated this session as a retake from
+    // the feedback page, a pending parent id was written to localStorage.
+    // We read and clear it here so the backend can link the new session to
+    // the chain root and later feedback pages can diff scores vs. parent.
+    let pendingRetakeParent: string | undefined
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.PENDING_RETAKE_PARENT)
+      if (raw) pendingRetakeParent = raw
+      localStorage.removeItem(STORAGE_KEYS.PENDING_RETAKE_PARENT)
+    } catch { /* ignore */ }
+
+    createDbSession(config, pendingRetakeParent).then((result) => {
       if (result.limitReached) {
         usageLimitReachedRef.current = true
         interviewAbortRef.current?.abort()
