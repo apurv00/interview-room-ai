@@ -44,7 +44,7 @@ export type TaskSlot = (typeof TASK_SLOTS)[number]
 
 export const TASK_SLOT_DEFAULTS: Record<TaskSlot, { model: string; maxTokens: number; provider: string }> = {
   'interview.generate-question':    { model: 'claude-haiku-4-5-20251001', maxTokens: 300, provider: 'anthropic' },
-  'interview.evaluate-answer':      { model: 'claude-haiku-4-5-20251001', maxTokens: 600, provider: 'anthropic' },
+  'interview.evaluate-answer':      { model: 'claude-haiku-4-5-20251001', maxTokens: 250, provider: 'anthropic' },
   'interview.generate-feedback':    { model: 'claude-sonnet-4-6-20250514', maxTokens: 4000, provider: 'anthropic' },
   'interview.evaluate-code':        { model: 'claude-haiku-4-5-20251001', maxTokens: 1000, provider: 'anthropic' },
   'interview.evaluate-design':      { model: 'claude-haiku-4-5-20251001', maxTokens: 1500, provider: 'anthropic' },

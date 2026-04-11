@@ -43,11 +43,10 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
         structure: 0,
         specificity: 0,
         ownership: 0,
-        needsFollowUp: false,
-        flags: ['No substantive answer provided'],
+        primaryGap: 'relevance',
+        primaryStrength: 'relevance',
         probeDecision: { shouldProbe: false },
-        pushback: null,
-      })
+      } as AnswerEvaluation)
     }
 
     // Pre-fetch session config (depth, rubric, user profile) from Redis cache.
@@ -206,14 +205,13 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
 
     const evalCriteriaBlock = evalCriteria ? `\n\nEVALUATION FOCUS: ${evalCriteria}` : ''
 
-    // Cross-answer consistency: surface prior claims so the LLM can flag contradictions
-    // Uses LLM-extracted key claims from previous answers (not raw truncated text)
+    // Cross-answer consistency: surface prior answer summaries so the LLM can detect contradictions
     let consistencyContext = ''
     if (body.previousAnswerSummaries?.length) {
-      consistencyContext = `\n\nPREVIOUS ANSWERS — KEY CLAIMS (check for consistency):
-${body.previousAnswerSummaries.map((s, i) => `Q${i+1} ("${s.question.slice(0, 60)}"): ${s.keyClaimsFromAnswer}`).join('\n')}
+      consistencyContext = `\n\nPREVIOUS ANSWERS (check for consistency):
+${body.previousAnswerSummaries.map((s, i) => `Q${i+1} ("${s.question.slice(0, 60)}"): ${s.answerSummary}`).join('\n')}
 
-If the candidate's current answer contradicts any prior claims (e.g., different role, conflicting timelines, inconsistent team sizes), flag it in the flags array as "Contradiction: [specific inconsistency]" and consider a "challenge" probe to surface it.`
+If the current answer contradicts any prior claim (different role, conflicting timeline, inconsistent team size), set probeType to "challenge" and set probeTarget to the specific contradiction.`
     }
 
     const systemPrompt = `${DATA_BOUNDARY_RULE}
@@ -262,58 +260,36 @@ ${answer}
 Score on these dimensions (integer 0–100):
 ${dimensionPrompt}${jdAlignmentDimension}
 
-SCORING GUIDE — anchor your numbers to these levels. Be honest; do not default to the middle.
-- 0–20  : Off-topic, no real answer, or fabricated. The candidate failed to address the question.
-- 21–40 : Weak. Missing key elements, no specifics, no ownership, or wrong framing.
-- 41–60 : Adequate but generic. The shape of an answer is there but lacks depth, structure, or concrete detail.
-- 61–80 : Good. Clear structure (STAR or domain equivalent), specific examples, candidate's own contribution is visible.
-- 81–100: Excellent. Structured, specific, quantified outcomes, demonstrable personal impact, no red flags.
+SCORING GUIDE — be honest; do not default to the middle.
+- 0–20  : Off-topic, no real answer, or fabricated.
+- 21–40 : Weak. Missing key elements, no specifics, no ownership.
+- 41–60 : Adequate but generic. Lacks depth, structure, or concrete detail.
+- 61–80 : Good. Clear structure, specific examples, visible personal contribution.
+- 81–100: Excellent. Structured, specific, quantified outcomes, no red flags.
 
-Most real answers will fall in 41–80. Only push above 80 when the answer is genuinely strong on every dimension.
+Most real answers fall in 41–80. Only push above 80 when genuinely strong on every dimension.
 
 Also determine:
-- flags: array of red-flag strings (e.g. "Blame-shifting", "No measurable impact", "Contradiction: [detail]"). Empty array if none.
-- keyAssertions: extract 2-3 factual claims from this answer that can be verified against future answers (e.g. "Led a team of 8", "Increased revenue by 30%", "Worked at Company X for 3 years"). These are used for cross-answer consistency tracking.
-- isNonsensical: true ONLY if the answer is clearly a joke, gibberish, completely absurd, or has absolutely nothing to do with an interview context. A weak or vague answer is NOT nonsensical. Reserve this for genuinely absurd responses.
+- primaryGap: the dimension name with the lowest score (one of the dimension names above)
+- primaryStrength: the dimension name with the highest score
+- answerSummary: one concise sentence capturing the key factual claim(s) in this answer (e.g. "Led a cross-functional team of 8 to reduce churn by 20% at Company X"). Used for consistency tracking.
 
-Think-aloud detection: If the answer reads like the candidate is thinking out loud (exploratory language like "so maybe...", "I guess...", hedging, self-corrections, no clear conclusion) rather than giving a final answer, set shouldProbe to true with probeType "clarify" and ask them to synthesize their thinking into a clear answer (e.g. "Those are interesting threads, can you pull them together into a clear recommendation?").
-
-Determine probing decision:
-- probeDecision.shouldProbe: true if the answer would benefit from probing — answer is vague, too short (<30 words), surface-level, evasive, missing key info, or exceptionally interesting and worth exploring deeper
-- probeDecision.probeType: one of "clarify" (ambiguous terms or unclear details), "challenge" (logical gaps or untested assumptions), "expand" (promising answer worth exploring deeper), or "quantify" (lacks measurable impact or metrics)
-- probeDecision.probeQuestion: a natural, conversational follow-up probe (one sentence). Frame as curious exploration, not interrogation.
-- probeDecision.probingRationale: brief reason for the probing decision (for coaching context)
-- probeDecision.isPivot: true ONLY if the candidate clearly changed the subject or gave an answer about a completely different topic than what was asked. A partially relevant or weak answer is NOT a pivot — a pivot is when the answer has essentially nothing to do with the question asked. If isPivot is true, probeQuestion should re-anchor to the original question (e.g. "I appreciate that context, but I'd love to hear specifically about [original topic]. Can you walk me through that?").${probeDepthContext}
-
-Determine pushback:
-- If ANY scoring dimension is below 50, generate a pushback response. Pick the lowest-scoring dimension.
-- pushback.line: A professional, in-character challenge from the interviewer (1-2 sentences max). Examples:
-  * Low specificity: "That's helpful context — could you walk me through a specific instance with concrete numbers?"
-  * Low ownership: "I'd love to understand your personal contribution — what was your specific role?"
-  * Low structure: "There's a lot there — could you walk me through the situation, what you did, and what happened?"
-  * Low relevance: "Interesting — how does that connect to what I was asking about?"
-- pushback.targetDimension: The dimension name that triggered the pushback
-- pushback.tone: "curious" (genuinely want more), "probing" (gently questioning claims), or "encouraging" (supportive redirect)
-- If all dimensions are >= 50, set pushback to null.
+Probing decision:
+- shouldProbe: true if the answer is vague, too short (<30 words), surface-level, evasive, missing key info, think-aloud rambling, or exceptionally interesting and worth exploring deeper
+- probeType: "clarify" (ambiguous/unclear), "challenge" (logical gaps or untested assumptions), "expand" (worth exploring deeper), or "quantify" (lacks metrics/impact)
+- probeTarget: a short phrase (3–8 words) naming what to probe — the specific gap, claim, or topic to follow up on (e.g. "the team's specific contribution", "the 20% improvement claim", "what you did after the pivot"). This is used to construct the follow-up question.
+- isPivot: true ONLY if the answer has essentially nothing to do with the question asked (not just weak or partial).${probeDepthContext}
 
 ${JSON_OUTPUT_RULE}
 {
 ${dimensionSchema}${jdAlignmentSchema},
-  "flags": string[],
-  "keyAssertions": string[],
-  "isNonsensical": boolean,
-  "probeDecision": {
-    "shouldProbe": boolean,
-    "probeType": "clarify" | "challenge" | "expand" | "quantify" | null,
-    "probeQuestion": string | null,
-    "probingRationale": string | null,
-    "isPivot": boolean
-  },
-  "pushback": {
-    "line": string,
-    "targetDimension": string,
-    "tone": "curious" | "probing" | "encouraging"
-  } | null
+  "primaryGap": string,
+  "primaryStrength": string,
+  "answerSummary": string,
+  "shouldProbe": boolean,
+  "probeType": "clarify" | "challenge" | "expand" | "quantify" | null,
+  "probeTarget": string | null,
+  "isPivot": boolean
 }`
 
     try {
@@ -327,9 +303,6 @@ ${dimensionSchema}${jdAlignmentSchema},
       const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
       const scores = JSON.parse(cleaned)
 
-      // Map depth-specific dimensions back to standard eval format
-      // Always include relevance/structure/specificity/ownership for backward compat
-      const probeDecision = scores.probeDecision ?? { shouldProbe: false }
       const evaluation: AnswerEvaluation = {
         questionIndex,
         question,
@@ -339,16 +312,15 @@ ${dimensionSchema}${jdAlignmentSchema},
         specificity: scores.specificity ?? scores[scoringDims[2]?.name] ?? 50,
         ownership: scores.ownership ?? scores[scoringDims[3]?.name] ?? 50,
         ...(scores.jdAlignment !== undefined && { jdAlignment: scores.jdAlignment }),
-        // Backward compat: populate needsFollowUp/followUpQuestion from probeDecision
-        needsFollowUp: probeDecision.shouldProbe ?? false,
-        followUpQuestion: probeDecision.probeQuestion ?? undefined,
-        flags: scores.flags ?? [],
-        probeDecision,
-        ...(scores.pushback && { pushback: scores.pushback }),
-        // LLM-extracted key assertions for cross-answer consistency tracking (C2)
-        ...(scores.keyAssertions?.length && { keyAssertions: scores.keyAssertions }),
-        // E7: nonsensical/joke answer detection
-        ...(scores.isNonsensical && { isNonsensical: true }),
+        ...(scores.primaryGap && { primaryGap: scores.primaryGap }),
+        ...(scores.primaryStrength && { primaryStrength: scores.primaryStrength }),
+        ...(scores.answerSummary && { answerSummary: scores.answerSummary }),
+        probeDecision: {
+          shouldProbe: scores.shouldProbe ?? false,
+          probeType: scores.probeType ?? null,
+          probeTarget: scores.probeTarget ?? null,
+          isPivot: scores.isPivot === true,
+        },
       }
 
       trackUsage({
@@ -386,8 +358,7 @@ ${dimensionSchema}${jdAlignmentSchema},
         structure: 55,
         specificity: 55,
         ownership: 60,
-        needsFollowUp: false,
-        flags: [],
+        probeDecision: { shouldProbe: false },
       } as AnswerEvaluation)
     }
   },

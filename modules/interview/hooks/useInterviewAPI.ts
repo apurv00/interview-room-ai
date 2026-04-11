@@ -24,7 +24,7 @@ interface UseInterviewAPIOptions {
 
 export interface PreviousAnswerSummary {
   question: string
-  keyClaimsFromAnswer: string
+  answerSummary: string
 }
 
 export interface TurnRouterResult {
@@ -143,8 +143,6 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
             structure: 50,
             specificity: 50,
             ownership: 50,
-            needsFollowUp: false,
-            flags: ['Evaluation timed out — approximate scores'],
             probeDecision: { shouldProbe: false },
           }
         }
@@ -156,8 +154,7 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
           structure: 55,
           specificity: 55,
           ownership: 60,
-          needsFollowUp: false,
-          flags: [],
+          probeDecision: { shouldProbe: false },
         }
       }
     },

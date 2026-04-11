@@ -123,9 +123,9 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
                 </div>
 
                 {/* Flags */}
-                {ev.flags.length > 0 && (
+                {(ev.flags?.length ?? 0) > 0 && (
                   <div className="flex flex-wrap gap-1.5">
-                    {ev.flags.map((flag, fi) => (
+                    {ev.flags!.map((flag, fi) => (
                       <span
                         key={fi}
                         className="px-2 py-0.5 bg-red-500/10 border border-red-500/20 rounded-full text-xs text-red-400"
