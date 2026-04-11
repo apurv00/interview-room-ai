@@ -258,9 +258,16 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           const isFinal = data.is_final
 
           // Interrupt detection: speech detected while no active listening session.
+          // Require ≥3 words to avoid false positives from breaths, mic pops,
+          // keyboard clicks, or 1-word mishearings like "uh" / "mm". Real
+          // candidate interrupts ("wait, can I clarify", "I'd like to restart")
+          // are always multi-word. See modules/interview/docs/INTERVIEW_FLOW.md §8.
           if (isFinal && transcript && !onCompleteRef.current && onInterruptRef.current) {
-            onInterruptRef.current()
-            return
+            const wordCount = transcript.trim().split(/\s+/).filter(Boolean).length
+            if (wordCount >= 3) {
+              onInterruptRef.current()
+              return
+            }
           }
 
           if (isFinal && transcript) {

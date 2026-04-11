@@ -225,7 +225,7 @@ describe('useDeepgramRecognition', () => {
     )
   })
 
-  it('interrupt fires when speech detected during non-listening', async () => {
+  it('interrupt fires when ≥3-word speech detected during non-listening', async () => {
     const { result } = renderHook(() => useDeepgramRecognition())
     const onInterrupt = vi.fn()
 
@@ -290,14 +290,50 @@ describe('useDeepgramRecognition', () => {
         result.current.setOnInterrupt(onInterrupt)
       })
 
-      // The ws should still have the message handler attached
-      // Send a final result while not listening — should trigger interrupt
+      // The ws should still have the message handler attached.
+      // Send a ≥3-word final result while not listening — should trigger interrupt.
+      // (Fix 3: single-word noise like "um" or "hello" must NOT interrupt.)
       if (mockWsInstance?.onmessage) {
         act(() => {
-          mockWsInstance!.simulateMessage(makeResult('Hello', true))
+          mockWsInstance!.simulateMessage(makeResult('wait can I clarify', true))
         })
         expect(onInterrupt).toHaveBeenCalled()
       }
+    }
+  })
+
+  it('interrupt does NOT fire on 1-2 word false positives (noise, mic pops)', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onInterrupt = vi.fn()
+
+    // Get a WS with a message handler attached by starting+stopping listening
+    await act(async () => {
+      result.current.startListening(vi.fn())
+      await vi.advanceTimersByTimeAsync(10)
+    })
+    if (mockWsInstance) act(() => { mockWsInstance!.simulateOpen() })
+    await act(async () => {
+      result.current.stopListening()
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    // Register the interrupt handler AFTER listening stopped so onCompleteRef is null
+    act(() => {
+      result.current.setOnInterrupt(onInterrupt)
+    })
+
+    // Single-word transcripts should be ignored (these are Deepgram mishearings
+    // of breathing, mic pops, keyboard clicks, etc.)
+    if (mockWsInstance?.onmessage) {
+      act(() => { mockWsInstance!.simulateMessage(makeResult('um', true)) })
+      act(() => { mockWsInstance!.simulateMessage(makeResult('hello', true)) })
+      // Two words also below threshold
+      act(() => { mockWsInstance!.simulateMessage(makeResult('yes okay', true)) })
+      expect(onInterrupt).not.toHaveBeenCalled()
+
+      // Three words crosses the threshold
+      act(() => { mockWsInstance!.simulateMessage(makeResult('can I clarify', true)) })
+      expect(onInterrupt).toHaveBeenCalledTimes(1)
     }
   })
 

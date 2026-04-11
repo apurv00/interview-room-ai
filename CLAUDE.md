@@ -90,6 +90,62 @@ middleware.ts               # Route protection, subdomain rewriting, security he
 
 - **Model Router** (`shared/services/modelRouter.ts`): All LLM calls go through `completion()` / `completionStream()` which resolve the model+provider from CMS config (ModelConfig collection). 26 task slots cover every AI call site. Fallback chain: CMS primary → CMS fallback → hardcoded Anthropic default. Config cached in-memory for 60s, invalidated on CMS save. OpenRouter integration via Anthropic SDK pointed at `https://openrouter.ai/api/v1`. CMS admin: `/cms/model-config`.
 
+## HOT PATH — DO NOT BREAK
+
+These files drive the live interview and AI analysis pipelines. A regression
+here is a P0 that reaches users on the next deploy:
+
+- `modules/interview/hooks/useInterview.ts`
+- `modules/interview/hooks/useAvatarSpeech.ts`
+- `modules/interview/hooks/useDeepgramRecognition.ts`
+- `modules/interview/hooks/useStreamingAudio.ts`
+- `modules/interview/audio/voiceMixer.ts`
+- `app/api/tts/route.ts`
+- `app/api/tts/stream/route.ts`
+- `app/api/generate-question/route.ts`
+- `app/api/evaluate-answer/route.ts`
+- `modules/interview/jobs/analysisJob.ts`
+
+**Rules for ANY change to these files (no exceptions):**
+
+1. **Measure before theorizing.** If the bug is about timing or latency,
+   reproduce it locally with DevTools Network panel open and record actual
+   numbers before proposing a fix. Never defer a UI update to "smooth over"
+   a slow backend — fix the backend.
+
+2. **Check the neighborhood.** Run `git log --since="7 days ago" -- modules/interview app/api/tts app/api/generate-question app/api/evaluate-answer`
+   before diagnosing. The root cause may be two commits upstream in a file
+   the bug report doesn't mention.
+
+3. **End-to-end verification is mandatory.** Unit tests, type checks, and
+   `npm run build` are NOT sufficient. Run `npm run dev` with real
+   `DEEPGRAM_API_KEY` and `ANTHROPIC_API_KEY` set, complete one full
+   interview, and verify:
+   - Intro text appears ≤500 ms after clicking Start
+   - First audio byte on `/api/tts/stream` arrives ≤600 ms (cold cache)
+   - TranscriptPanel's "Preparing next question..." placeholder is never
+     visible for >500 ms
+   - Candidate can interrupt the AI with ≥3 words of speech
+   - One-word background noise does NOT interrupt the AI
+   - End-interview button stops all audio within 100 ms
+
+4. **Do not treat symptoms.** If the obvious fix is "hide this slow thing
+   from the user" or "add a delay so timings line up", STOP and find the
+   actual cause. Deferring UI to match a slow API is not a fix, it's
+   camouflage. This is the exact failure mode that broke BUG-7.
+
+5. **When in doubt, ask before merging.** The cost of a clarifying
+   question is zero. The cost of re-breaking the investor demo is not.
+
+6. **Read the flow doc first.** Before touching any hot-path file, read
+   the relevant spec in `modules/interview/docs/`:
+   - `INTERVIEW_FLOW.md` — live interview pipeline
+   - `AI_ANALYSIS.md` — post-interview multimodal analysis
+
+   Update section 8 (Known Failure Modes) whenever you fix a bug in
+   these files. The log is append-only and is the institutional memory
+   of what has broken and why.
+
 ## Environment Variables
 
 Required: `ANTHROPIC_API_KEY`, `NEXTAUTH_SECRET`, `MONGODB_URI`, `REDIS_URL`

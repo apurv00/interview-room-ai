@@ -11,7 +11,16 @@ const TTS_MODEL = process.env.DEEPGRAM_TTS_MODEL || 'aura-2-zeus-en'
 
 /**
  * Streaming TTS endpoint — checks R2 cache first, then falls back to
- * Deepgram Aura. Caches the result for future hits.
+ * Deepgram Aura. On a cache miss the Deepgram response body is tee'd:
+ * one branch streams progressively to the client (time-to-first-sound
+ * ~300–500ms), the other branch drains in the background and writes
+ * the complete audio to R2 so the next identical request hits the
+ * cache fast path.
+ *
+ * HOT PATH — see CLAUDE.md. Do NOT change this to buffer the whole
+ * response before returning. That regression broke the interview
+ * pipeline in commit 133e44f; see
+ * modules/interview/docs/INTERVIEW_FLOW.md §8.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -69,14 +78,33 @@ export async function POST(req: NextRequest) {
       return new Response(JSON.stringify({ error: 'TTS generation failed' }), { status: 502 })
     }
 
-    // Buffer the response so we can both return it AND cache it
-    const audioBuffer = await response.arrayBuffer()
-    const audioBytes = Buffer.from(audioBuffer)
+    // Tee the Deepgram stream: one branch streams to the client so the
+    // browser starts decoding audio as the first chunk arrives (~300ms
+    // time-to-first-sound), the other drains in the background and
+    // writes the complete buffer to R2 for next time.
+    const [clientStream, cacheStream] = response.body.tee()
 
-    // Cache in R2 (fire-and-forget)
-    cacheTTS(text, audioBytes, encoding).catch(() => {})
+    // Fire-and-forget: drain the cache branch and upload to R2. Errors
+    // are non-fatal — a missing cache write just means the next identical
+    // request will re-hit Deepgram, same as before the cache existed.
+    ;(async () => {
+      try {
+        const reader = cacheStream.getReader()
+        const chunks: Uint8Array[] = []
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          if (value) chunks.push(value)
+        }
+        if (chunks.length > 0) {
+          await cacheTTS(text, Buffer.concat(chunks), encoding)
+        }
+      } catch (err) {
+        aiLogger.warn({ err }, 'TTS cache branch drain failed — non-fatal')
+      }
+    })()
 
-    return new Response(audioBytes, {
+    return new Response(clientStream, {
       headers: {
         'Content-Type': contentType,
         'Cache-Control': 'no-store',
