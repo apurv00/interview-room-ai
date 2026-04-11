@@ -449,8 +449,8 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
 
         // Update weakness clusters from flags
         const weaknessInputs = typedEvaluations
-          .filter(e => e.flags?.length > 0)
-          .flatMap(e => e.flags.map(flag => ({
+          .filter(e => (e.flags?.length ?? 0) > 0)
+          .flatMap(e => (e.flags ?? []).map(flag => ({
             name: flag.toLowerCase().replace(/\s+/g, '_'),
             description: flag,
             linkedCompetencies: inferLinkedCompetencies(flag),

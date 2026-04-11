@@ -300,7 +300,7 @@ export async function evaluateSession(
   const allStrengths = additionalResults?.flatMap(r => r.strengthTags) || []
   const allWeaknessTags = additionalResults?.flatMap(r => r.weaknessTags) || []
   const allFlags = [
-    ...evaluations.flatMap(e => e.flags),
+    ...evaluations.flatMap(e => e.flags ?? []),
     ...(additionalResults?.flatMap(r => r.flags) || []),
   ]
 

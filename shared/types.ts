@@ -106,8 +106,8 @@ export type ProbeType = 'clarify' | 'challenge' | 'expand' | 'quantify'
 export interface ProbeDecision {
   shouldProbe: boolean
   probeType?: ProbeType | null
-  probeQuestion?: string | null
-  probingRationale?: string | null
+  /** Short target phrase for probe wording construction (e.g. "the outcome of the project") */
+  probeTarget?: string | null
   /** P6: True if candidate pivoted away from the question (evasion/topic shift) */
   isPivot?: boolean
 }
@@ -129,15 +129,9 @@ export interface ThreadSummary {
   probeTypes: string[]
 }
 
-// ─── Pushback ───────────────────────────────────────────────────────────────
+// ─── Pushback tone (kept for toneToEmotion mapping in turn-router style) ─────
 
 export type PushbackTone = 'curious' | 'probing' | 'encouraging'
-
-export interface Pushback {
-  line: string
-  targetDimension: string
-  tone: PushbackTone
-}
 
 // ─── Avatar ───────────────────────────────────────────────────────────────────
 
@@ -163,15 +157,15 @@ export interface AnswerEvaluation {
   specificity: number     // 0–100  (metrics / examples)
   ownership: number       // 0–100
   jdAlignment?: number | null    // 0–100, only present when JD was provided
-  needsFollowUp: boolean
-  followUpQuestion?: string | null
-  flags: string[]
+  /** Dimension with the lowest score — used for coaching tip selection */
+  primaryGap?: string
+  /** Dimension with the highest score — used for reinforcement */
+  primaryStrength?: string
   probeDecision?: ProbeDecision | null
-  pushback?: Pushback | null
-  /** LLM-extracted factual claims for cross-answer consistency tracking (C2) */
-  keyAssertions?: string[]
-  /** E7: True if the answer is nonsensical, a joke, or completely off-topic */
-  isNonsensical?: boolean
+  /** One-sentence factual summary for cross-answer consistency tracking */
+  answerSummary?: string
+  /** Red-flag strings — populated by offline/post-session evaluator, not live evaluator */
+  flags?: string[]
 }
 
 // ─── Speech metrics ───────────────────────────────────────────────────────────

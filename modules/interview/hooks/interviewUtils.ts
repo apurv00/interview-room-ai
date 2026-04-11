@@ -33,13 +33,32 @@ export function shouldProbeOrAdvance(
   duration: Duration,
 ): 'probe' | 'advance' {
   const probe = evaluation.probeDecision
-  if (!probe?.shouldProbe || !probe.probeQuestion) return 'advance'
+  if (!probe?.shouldProbe) return 'advance'
   if (timeRemaining < 60) return 'advance'
   // Don't probe if we haven't covered minimum topics and are running low on time
   const topicsNeeded = getMinimumTopics(duration) - completedThreadsCount
   const roughTimePerTopic = 90 // ~1.5 min per topic
   if (topicsNeeded > 0 && topicsNeeded * roughTimePerTopic > timeRemaining) return 'advance'
   return 'probe'
+}
+
+/**
+ * Construct a natural probe question from the evaluator's intent fields.
+ * The evaluator provides *what* to probe (probeType + probeTarget);
+ * this function provides the conversational *wording*.
+ */
+export function buildProbeQuestion(
+  probeType: import('@shared/types').ProbeType | null | undefined,
+  probeTarget?: string | null,
+): string {
+  const t = probeTarget?.trim() || 'that'
+  switch (probeType) {
+    case 'expand':    return `Can you tell me more about ${t}?`
+    case 'clarify':   return `What exactly do you mean by ${t}?`
+    case 'challenge': return `How did you specifically approach ${t}?`
+    case 'quantify':  return `Can you put a number on ${t} — what was the measurable outcome?`
+    default:          return `Can you elaborate on ${t}?`
+  }
 }
 
 /**

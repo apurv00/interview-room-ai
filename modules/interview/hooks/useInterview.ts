@@ -11,7 +11,6 @@ import type {
   SpeechMetrics,
   PerformanceSignal,
   ProbeType,
-  PushbackTone,
   ThreadEntry,
   ThreadSummary,
 } from '@shared/types'
@@ -38,6 +37,7 @@ import {
   computePerformanceSignal as computeSignal,
   shouldProbeOrAdvance as probeOrAdvance,
   buildThreadSummary as buildSummary,
+  buildProbeQuestion,
   toneToEmotion,
 } from './interviewUtils'
 import { useAvatarSpeech } from './useAvatarSpeech'
@@ -397,10 +397,7 @@ export function useInterview({
       apiEvaluateAnswer(question, answer, qIdx, probeDepth, getAbortSignal(),
         evaluationsRef.current.slice(-5).map(e => ({
           question: e.question?.slice(0, 80) || '',
-          // Use LLM-extracted key assertions when available (C2 upgrade);
-          // fall back to truncated raw answer for backward compat
-          keyClaimsFromAnswer: (e as AnswerEvaluation & { keyAssertions?: string[] }).keyAssertions?.join('; ')
-            || e.answer?.slice(0, 150) || '',
+          answerSummary: e.answerSummary || e.answer?.slice(0, 150) || '',
         })),
       ),
     [apiEvaluateAnswer]
@@ -502,7 +499,7 @@ export function useInterview({
    *  or when the next transitionTo('ASK_QUESTION') clears it. */
   async function showCoachingTip(evaluation: AnswerEvaluation): Promise<void> {
     transitionTo('COACHING')
-    const tip = deriveCoachingTip(evaluation, config?.role, config?.interviewType)
+    const tip = deriveCoachingTip(evaluation, config?.role, config?.interviewType, evaluation.primaryGap)
     setCoachingTip(tip)
 
     // BUG 5 fix: scale dismissal time to tip length so longer STAR-style
@@ -644,7 +641,7 @@ export function useInterview({
         evaluationsRef.current = [...evaluationsRef.current, { ...evaluation, question, answer }]
         performanceSignalRef.current = computePerformanceSignal()
         // Coaching tip as non-blocking overlay — appears during TTS or while listening
-        const tip = deriveCoachingTip(evaluation, config?.role, config?.interviewType)
+        const tip = deriveCoachingTip(evaluation, config?.role, config?.interviewType, evaluation.primaryGap)
         if (tip) {
           setCoachingTip(tip)
           const dismissMs = tip.length > 100 ? 6000 : tip.length > 50 ? 4000 : 2000
@@ -663,8 +660,7 @@ export function useInterview({
             structure: 55,
             specificity: 55,
             ownership: 60,
-            needsFollowUp: false,
-            flags: [],
+            probeDecision: { shouldProbe: false },
           },
         ]
         performanceSignalRef.current = computePerformanceSignal()
@@ -865,58 +861,6 @@ export function useInterview({
       thread.some(t => t.role === 'candidate' && t.text === e.answer)
     )
     return buildSummary(topicIdx, topicQuestion, thread, threadEvals)
-  }
-
-  // toneToEmotion is imported from interviewUtils
-
-  /**
-   * Handle pushback after evaluation. Returns the spoken question text if pushback
-   * was delivered (to be used instead of probeQuestion), or null if no pushback.
-   */
-  async function handlePushback(
-    evaluation: AnswerEvaluation,
-    qIdx: number,
-  ): Promise<string | null> {
-    if (!evaluation.pushback || timeRemainingRef.current < 60) return null
-
-    const { line, tone } = evaluation.pushback
-    const emotion = toneToEmotion(tone)
-
-    currentProbeDepthRef.current++
-
-    currentThreadRef.current.push({
-      role: 'interviewer', text: line, isProbe: true,
-      probeType: 'clarify', probeDepth: currentProbeDepthRef.current,
-    })
-
-    // Speak pushback line
-    transitionTo('ASK_QUESTION')
-    const pushbackQIdx = qIdx + 1
-    questionIndexRef.current = pushbackQIdx
-    setQuestionIndex(pushbackQIdx)
-    setCurrentQuestion(line)
-    addToTranscript('interviewer', line, pushbackQIdx)
-    warmUpListening?.()
-    await avatarSpeak(line, emotion)
-
-    // Listen for response — defer LISTENING until capture starts
-    setLiveAnswer('')
-    const response = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
-
-    if (isInterviewOver()) return line
-
-    if (response) {
-      addToTranscript('candidate', response, pushbackQIdx)
-      currentThreadRef.current.push({
-        role: 'candidate', text: response, isProbe: true,
-        probeDepth: currentProbeDepthRef.current,
-      })
-
-      // Evaluate pushback response
-      await evaluateAndCoach(line, response, pushbackQIdx, undefined, currentProbeDepthRef.current)
-    }
-
-    return line
   }
 
   /** Finalize current thread and reset for next topic. */
@@ -1374,7 +1318,10 @@ export function useInterview({
 
           // Next probe decision comes from the full eval (not turn-router)
           nextProbeAction = shouldProbeOrAdvance(probeEval)
-          nextProbeQ = probeEval.probeDecision?.probeQuestion ?? undefined
+          nextProbeQ = buildProbeQuestion(
+            probeEval.probeDecision?.probeType,
+            probeEval.probeDecision?.probeTarget,
+          )
           nextProbeType = probeEval.probeDecision?.probeType ?? 'expand'
         }
 
