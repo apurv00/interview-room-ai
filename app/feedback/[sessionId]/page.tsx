@@ -269,10 +269,14 @@ function FeedbackPageInner() {
         }
       } catch { /* continue polling */ }
 
-      // Timeout after 90s
-      if (elapsed >= 90000) {
+      // BUG 9 fix: bump cap to 180s (3 minutes) and surface a friendlier
+      // message that nudges the user to refresh rather than reporting a
+      // hard failure. The inline pipeline can legitimately take 60s on
+      // a long interview; the previous 90s cap caused false-positive
+      // timeouts when the server was still processing.
+      if (elapsed >= 180000) {
         clearInterval(interval)
-        setAnalysisError('Analysis timed out — please try again later')
+        setAnalysisError('Analysis is taking longer than expected — please refresh in a minute.')
         setAnalysisLoading(false)
       }
     }, 2000)

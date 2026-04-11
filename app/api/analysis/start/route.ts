@@ -146,9 +146,20 @@ export const POST = composeApiRoute<StartPayload>({
 
     // Inline fallback: run the pipeline synchronously.
     // Results saved to same MultimodalAnalysis collection.
+    //
+    // BUG 9 fix: wrap in a 55s soft timeout (5s buffer below maxDuration=60).
+    // If the pipeline doesn't finish in time, leave the row in 'processing'
+    // state instead of 'failed' so the next visit / next /start call can
+    // pick up where it left off via the existing intermediate persistence.
+    const INLINE_SOFT_TIMEOUT_MS = 55_000
     try {
       const { runMultimodalPipeline } = await import('@interview/services/analysis/multimodalPipeline')
-      await runMultimodalPipeline(sessionId, userId)
+      await Promise.race([
+        runMultimodalPipeline(sessionId, userId),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('SOFT_TIMEOUT')), INLINE_SOFT_TIMEOUT_MS)
+        ),
+      ])
 
       // Enforce 10-analysis cap — delete oldest + their R2 recordings
       await enforceAnalysisCap(userId, MAX_ACTIVE_ANALYSES)
@@ -159,6 +170,24 @@ export const POST = composeApiRoute<StartPayload>({
       })
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error'
+
+      // Soft timeout — leave row in processing so polling client can keep
+      // waiting. The pipeline may still complete in the background even
+      // after this response is sent (Node serverless functions don't
+      // hard-kill on early return), and the client will pick it up.
+      if (errorMessage === 'SOFT_TIMEOUT') {
+        aiLogger.warn({ sessionId, userId }, 'Inline multimodal pipeline soft timeout — pipeline still running')
+        await MultimodalAnalysis.findOneAndUpdate(
+          { _id: analysis._id },
+          { status: 'processing' }
+        ).catch(() => {})
+        return NextResponse.json({
+          jobId: analysis._id.toString(),
+          status: 'processing',
+          message: 'Analysis is taking longer than expected — please refresh in a minute.',
+        })
+      }
+
       aiLogger.error({ err, sessionId, userId }, 'Inline multimodal pipeline failed')
       return NextResponse.json(
         {
