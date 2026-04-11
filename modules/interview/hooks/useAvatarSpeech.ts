@@ -14,7 +14,14 @@ export interface UseAvatarSpeechReturn {
   avatarEmotion: AvatarEmotion
   isAvatarTalking: boolean
   setAvatarEmotion: (emotion: AvatarEmotion) => void
-  avatarSpeak: (text: string, emotion?: AvatarEmotion) => Promise<void>
+  /**
+   * Speak `text` via Deepgram Aura (streaming or buffered) with browser
+   * speechSynthesis fallback. `onAudioStart` fires the moment audio
+   * playback actually begins — use it to sync UI (e.g. revealing the
+   * question text) with the start of audio so the user sees text and
+   * hears voice simultaneously.
+   */
+  avatarSpeak: (text: string, emotion?: AvatarEmotion, onAudioStart?: () => void) => Promise<void>
   prefetchTTS: (text: string) => void
   /** Cancel any in-progress TTS playback (used for candidate interrupt). */
   cancelTTS: () => void
@@ -63,7 +70,7 @@ export function useAvatarSpeech({
   )
 
   /** Play a blob via Audio element (used for cached/prefetched audio). */
-  function playBlob(blob: Blob): Promise<void> {
+  function playBlob(blob: Blob, onAudioStart?: () => void): Promise<void> {
     return new Promise<void>((resolve) => {
       const url = URL.createObjectURL(blob)
       const audio = new Audio(url)
@@ -82,6 +89,14 @@ export function useAvatarSpeech({
       // MediaRecorder alongside the candidate's mic. Safe no-op when
       // the mixer isn't initialised.
       tapAudioElement(audio)
+      // Fire onAudioStart the moment playback actually begins
+      let startedFired = false
+      audio.onplaying = () => {
+        if (!startedFired) {
+          startedFired = true
+          try { onAudioStart?.() } catch { /* swallow caller errors */ }
+        }
+      }
       audio.onended = () => {
         cleanup()
         resolve()
@@ -145,7 +160,7 @@ export function useAvatarSpeech({
   }
 
   const avatarSpeak = useCallback(
-    async (text: string, emotion: AvatarEmotion = 'friendly'): Promise<void> => {
+    async (text: string, emotion: AvatarEmotion = 'friendly', onAudioStart?: () => void): Promise<void> => {
       setAvatarEmotion(emotion)
       setIsAvatarTalking(true)
       cancelStream() // Cancel any in-progress stream
@@ -153,6 +168,14 @@ export function useAvatarSpeech({
       // Fresh AbortController for this speak call so cancelTTS() can stop it
       const fetchAbort = new AbortController()
       currentFetchAbortRef.current = fetchAbort
+
+      // Helper so each playback path fires the start callback exactly once
+      let startedFired = false
+      const fireStart = () => {
+        if (startedFired) return
+        startedFired = true
+        try { onAudioStart?.() } catch { /* swallow */ }
+      }
 
       if (isMultimodalEnabled) {
         try {
@@ -162,7 +185,7 @@ export function useAvatarSpeech({
             const blob = await cached
             ttsCacheRef.current.delete(text)
             if (blob) {
-              await playBlob(blob)
+              await playBlob(blob, fireStart)
               return
             }
           }
@@ -178,13 +201,13 @@ export function useAvatarSpeech({
               })
               if (res.ok && res.body) {
                 await streamAndPlay(res, () => {
-                  // Called when first chunk starts playing
+                  // First chunk starts playing — sync UI now
+                  fireStart()
                 })
                 setIsAvatarTalking(false)
                 return
               }
             } catch (err) {
-              // If aborted, propagate so caller knows we're cancelled
               if ((err as Error)?.name === 'AbortError') {
                 setIsAvatarTalking(false)
                 return
@@ -207,7 +230,7 @@ export function useAvatarSpeech({
               setIsAvatarTalking(false)
               return
             }
-            await playBlob(blob)
+            await playBlob(blob, fireStart)
             return
           }
         } catch (err) {
@@ -219,7 +242,9 @@ export function useAvatarSpeech({
         }
       }
 
-      // Priority 4: Browser speechSynthesis fallback
+      // Priority 4: Browser speechSynthesis fallback — fires immediately
+      // since browser TTS has no buffering delay
+      fireStart()
       await speakWithBrowser(text)
     },
     [interviewType, isMultimodalEnabled, isStreamingSupported, streamAndPlay, cancelStream] // eslint-disable-line react-hooks/exhaustive-deps

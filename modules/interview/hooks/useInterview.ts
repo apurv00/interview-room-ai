@@ -109,7 +109,11 @@ export function useInterview({
   // cancel speech and let the candidate be heard. Deepgram streams continuously.
   // Also discards any queued coaching messages (I6) to avoid stale overlaps.
   const interruptedRef = useRef(false)
-  const avatarSpeak = useCallback(async (text: string, emotion?: import('@shared/types').AvatarEmotion) => {
+  const avatarSpeak = useCallback(async (
+    text: string,
+    emotion?: import('@shared/types').AvatarEmotion,
+    onAudioStart?: () => void,
+  ) => {
     interruptedRef.current = false
     // Set interrupt detector — fires if Deepgram hears speech during TTS
     setOnInterrupt?.(() => {
@@ -119,7 +123,7 @@ export function useInterview({
       coachingAbortRef.current?.abort()
       setCoachingTip(null)
     })
-    await rawAvatarSpeak(text, emotion)
+    await rawAvatarSpeak(text, emotion, onAudioStart)
     setOnInterrupt?.(null) // Clear interrupt handler after TTS finishes
   }, [rawAvatarSpeak, setOnInterrupt, cancelTTS])
 
@@ -846,8 +850,10 @@ export function useInterview({
         const topicQuestion = question // Save for thread summary
         questionIndexRef.current = qIdx
         setQuestionIndex(qIdx)
-        setCurrentQuestion(question)
-        addToTranscript('interviewer', question, qIdx)
+        // BUG 7 fix: don't show question text yet — defer until audio
+        // actually starts playing so text and voice appear simultaneously.
+        // The transcript entry is also deferred to avoid the chat history
+        // updating before the user hears the question.
 
         // Track in current thread
         currentThreadRef.current = [{
@@ -869,7 +875,12 @@ export function useInterview({
           spokenQuestion = `${filler} ${question}`
         }
         warmUpListening?.()
-        await avatarSpeak(spokenQuestion, emotion)
+        // BUG 7 fix: pass onAudioStart callback so question text + transcript
+        // entry appear precisely when audio playback begins, not 5-10s before.
+        await avatarSpeak(spokenQuestion, emotion, () => {
+          setCurrentQuestion(question)
+          addToTranscript('interviewer', question, qIdx)
+        })
         // BUG 1 fix: re-check after the long avatarSpeak await — user may have
         // ended the interview while TTS was playing.
         if (isInterviewOver()) return
