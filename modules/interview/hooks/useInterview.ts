@@ -457,15 +457,28 @@ export function useInterview({
         resolve(result.text)
       }, { onCaptureReady: wrappedOnCaptureReady })
 
-      // Auto-resolve with empty string after silence timeout
+      // Auto-resolve after silence timeout.
+      // IMPORTANT: do NOT set resolved=true or call resolve('') here — doing so
+      // creates a race with finishRecognition's async onComplete callback (which
+      // fires after a dynamic import). If resolved=true is set first, the
+      // startListening callback guard discards the actual captured text and the
+      // promise resolves with '' even when finalTextRef had a full answer.
+      // Instead, let stopListening() → finishRecognition() → onComplete fire
+      // naturally with result.text. A 3-second safety timeout handles the edge
+      // case where onComplete never fires (e.g. dynamic import hangs).
       if (timeoutMs > 0) {
         timeoutTimer = setTimeout(() => {
           if (!resolved) {
-            resolved = true
             clearTimeout(maxTimer)
             clearInterval(emotionInterval)
             stopListening()
-            resolve('')
+            // Safety net: if onComplete doesn't fire within 3s, resolve empty
+            setTimeout(() => {
+              if (!resolved) {
+                resolved = true
+                resolve('')
+              }
+            }, 3000)
           }
         }, timeoutMs)
       }

@@ -555,8 +555,11 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     }
     wsRef.current = null
 
-    // Build result
-    const text = finalTextRef.current.trim()
+    // Build result.
+    // Fall back to lastTranscriptRef (FINAL + INTERIM combined) when finalTextRef
+    // is empty — this captures answers where the user spoke in one continuous run
+    // without any sentence-boundary pauses that trigger Deepgram is_final commits.
+    const text = finalTextRef.current.trim() || lastTranscriptRef.current.trim()
     const durationMinutes = (Date.now() - startTimeRef.current) / 60000
     // Snapshot the accumulated words before we clear the ref — these
     // flow into the multimodal analysis pipeline so it can skip the
