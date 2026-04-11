@@ -36,6 +36,14 @@ export interface UseAvatarSpeechReturn {
    * cached so every ack after the first returns instantly).
    */
   playAck: (text: string) => Promise<void>
+  /**
+   * Abort any in-flight thinking ack (fetch + audio element) without
+   * touching the main speech channel. Called by the interview loop
+   * after evaluation completes so a late-resolving `/api/tts` fetch
+   * cannot start playing AFTER the next question has begun speaking.
+   * Safe to call unconditionally — no-op when nothing is pending.
+   */
+  cancelAck: () => void
 }
 
 /**
@@ -267,6 +275,29 @@ export function useAvatarSpeech({
     [interviewType, isMultimodalEnabled, isStreamingSupported, streamAndPlay, cancelStream] // eslint-disable-line react-hooks/exhaustive-deps
   )
 
+  // Clears the isolated thinking-ack channel: aborts any in-flight
+  // /api/tts fetch and tears down the ack audio element. Shared between
+  // cancelTTS (End Interview — stops everything) and cancelAck (eval
+  // completion — stops only the ack without touching the main channel).
+  const clearAckChannel = useCallback(() => {
+    currentAckFetchAbortRef.current?.abort()
+    currentAckFetchAbortRef.current = null
+    if (currentAckAudioRef.current) {
+      try {
+        currentAckAudioRef.current.pause()
+        currentAckAudioRef.current.src = ''
+        currentAckAudioRef.current.load()
+      } catch { /* ignore */ }
+      if (currentAckUrlRef.current) {
+        try { URL.revokeObjectURL(currentAckUrlRef.current) } catch { /* ignore */ }
+      }
+      currentAckAudioRef.current = null
+      currentAckUrlRef.current = null
+    }
+  }, [])
+
+  const cancelAck = clearAckChannel
+
   const cancelTTS = useCallback(() => {
     // 1. Abort any in-flight TTS fetch
     currentFetchAbortRef.current?.abort()
@@ -290,24 +321,11 @@ export function useAvatarSpeech({
     //    cancelStream() above does NOT touch the ack channel, so we
     //    must clear it explicitly here to honor the "End Interview
     //    stops all audio within 100ms" invariant.
-    currentAckFetchAbortRef.current?.abort()
-    currentAckFetchAbortRef.current = null
-    if (currentAckAudioRef.current) {
-      try {
-        currentAckAudioRef.current.pause()
-        currentAckAudioRef.current.src = ''
-        currentAckAudioRef.current.load()
-      } catch { /* ignore */ }
-      if (currentAckUrlRef.current) {
-        try { URL.revokeObjectURL(currentAckUrlRef.current) } catch { /* ignore */ }
-      }
-      currentAckAudioRef.current = null
-      currentAckUrlRef.current = null
-    }
+    clearAckChannel()
     // 5. Cancel browser speechSynthesis fallback
     window.speechSynthesis?.cancel()
     setIsAvatarTalking(false)
-  }, [cancelStream])
+  }, [cancelStream, clearAckChannel])
 
   /**
    * Thinking-ack channel: fire-and-forget short phrase ("Got it.", "Okay.")
@@ -359,5 +377,14 @@ export function useAvatarSpeech({
     [isMultimodalEnabled]
   )
 
-  return { avatarEmotion, isAvatarTalking, setAvatarEmotion, avatarSpeak, prefetchTTS, cancelTTS, playAck }
+  return {
+    avatarEmotion,
+    isAvatarTalking,
+    setAvatarEmotion,
+    avatarSpeak,
+    prefetchTTS,
+    cancelTTS,
+    playAck,
+    cancelAck,
+  }
 }

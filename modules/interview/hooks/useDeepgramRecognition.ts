@@ -64,6 +64,19 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   const onCaptureReadyRef = useRef<(() => void) | null>(null)
   /** Interrupt callback — fired when speech is detected while avatar is speaking. */
   const onInterruptRef = useRef<(() => void) | null>(null)
+  /** Accumulated final-packet transcript for the current interrupt window.
+   *  Deepgram can emit a single utterance as multiple `is_final: true`
+   *  packets (e.g. "wait can" then "I clarify"). If we checked the
+   *  3-word threshold per packet, a genuine 4-word interrupt split
+   *  across two 2-word packets would never fire. Instead we accumulate
+   *  across packets while the avatar is speaking and reset on (a) the
+   *  interrupt actually firing, (b) `startListening` (a fresh session),
+   *  or (c) an inactivity timeout (see `interruptAccumTimerRef`).
+   *  Reported by Codex review on PR #228. */
+  const interruptAccumRef = useRef<string>('')
+  /** Inactivity reset timer for `interruptAccumRef`. Prevents stale
+   *  fragments from a prior utterance leaking into the next one. */
+  const interruptAccumTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Token cache — avoids re-fetching for each question
   const cachedTokenRef = useRef<string | null>(null)
   // Whether warmUp() has been called and WebSocket is ready
@@ -86,6 +99,15 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       isFinishingRef.current = false
       startTimeRef.current = Date.now()
       setLiveTranscript('')
+
+      // Fresh listening session — drop any stale interrupt-accumulator
+      // fragments so a prior almost-interrupt doesn't combine with this
+      // session's early words to spuriously cross the ≥3-word threshold.
+      interruptAccumRef.current = ''
+      if (interruptAccumTimerRef.current) {
+        clearTimeout(interruptAccumTimerRef.current)
+        interruptAccumTimerRef.current = null
+      }
 
       // Safety timeout: if capture-ready never fires (e.g. getUserMedia rejected),
       // fire the callback anyway after 1500ms so the UI doesn't stall.
@@ -261,10 +283,39 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           // Require ≥3 words to avoid false positives from breaths, mic pops,
           // keyboard clicks, or 1-word mishearings like "uh" / "mm". Real
           // candidate interrupts ("wait, can I clarify", "I'd like to restart")
-          // are always multi-word. See modules/interview/docs/INTERVIEW_FLOW.md §8.
+          // are always multi-word.
+          //
+          // Deepgram can split one utterance into multiple `is_final` packets
+          // (e.g. "wait can" then "I clarify"), so checking per-packet misses
+          // genuine multi-word interrupts. Accumulate across packets and check
+          // the running total. See INTERVIEW_FLOW.md §8 (Codex P1).
           if (isFinal && transcript && !onCompleteRef.current && onInterruptRef.current) {
-            const wordCount = transcript.trim().split(/\s+/).filter(Boolean).length
+            interruptAccumRef.current = interruptAccumRef.current
+              ? `${interruptAccumRef.current} ${transcript}`
+              : transcript
+
+            // Reset the accumulator after 2s of silence so fragments from
+            // one mic blip don't linger and combine with unrelated later
+            // noise to cross the threshold.
+            if (interruptAccumTimerRef.current) {
+              clearTimeout(interruptAccumTimerRef.current)
+            }
+            interruptAccumTimerRef.current = setTimeout(() => {
+              interruptAccumRef.current = ''
+              interruptAccumTimerRef.current = null
+            }, 2000)
+
+            const wordCount = interruptAccumRef.current
+              .trim()
+              .split(/\s+/)
+              .filter(Boolean).length
             if (wordCount >= 3) {
+              // Clear the accumulator so subsequent packets don't re-fire.
+              interruptAccumRef.current = ''
+              if (interruptAccumTimerRef.current) {
+                clearTimeout(interruptAccumTimerRef.current)
+                interruptAccumTimerRef.current = null
+              }
               onInterruptRef.current()
               return
             }

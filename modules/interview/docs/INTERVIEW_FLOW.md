@@ -333,3 +333,113 @@ _Follow-up considerations (not fixed in this commit):_ making
 real APIs; co-locating `app/api/tts/stream/route.ts` logic into a
 `modules/interview/api/` shim so the ESLint hot-path rules apply to
 its imports.
+
+---
+
+### Follow-up: 2026-04-11 — Codex review findings on PR #228
+
+Two bugs in the original fix pair above, caught by Codex automated
+review and shipped as a follow-up PR immediately after the merge of
+#228.
+
+**P1 — interrupt word count was per-packet, not accumulated (user-visible):**
+
+Fix 3 from the original commit counted `transcript.trim().split(...).length`
+on each individual Deepgram `is_final` packet. Deepgram can split a
+single utterance into multiple finals (e.g. `"wait can"` then
+`"I clarify"`). Each packet is <3 words alone, so the genuine
+4-word interrupt was dropped — the candidate could speak a multi-word
+interruption and the AI would keep talking right over them,
+reproducing the BUG-1-class symptom the original fix was meant to
+rule out. Confirmed by reading the existing in-session final-packet
+handler at `useDeepgramRecognition.ts:283-285`, which already
+acknowledges multi-packet utterances by accumulating into
+`finalTextRef` — but only while a listening session is active, not
+during interrupt detection.
+
+Fixed at `modules/interview/hooks/useDeepgramRecognition.ts:66-79,
+273-311`:
+
+- New `interruptAccumRef` + `interruptAccumTimerRef` track the
+  running transcript across final packets while the avatar is
+  speaking.
+- Each packet appends to the accumulator; the ≥3-word threshold
+  now applies to the accumulated text, not the single packet.
+- 2s inactivity timer resets the accumulator so isolated noise
+  bursts cannot combine over time to spuriously cross the
+  threshold.
+- `startListening` also resets the accumulator so stale fragments
+  from a prior interrupt window don't leak into the next
+  candidate turn.
+- Tests added at
+  `modules/interview/__tests__/deepgramRecognition.test.ts`:
+  - `interrupt fires when 3 words arrive split across two final packets`
+  - `interrupt accumulator resets after 2s inactivity`
+- Existing `1-2 word false positives` test rewritten to advance
+  fake timers between events (matches realistic sparse noise
+  spacing; previously it implicitly tested per-packet behavior).
+
+**P2 — pending `playAck` could leak past evaluation (audibly-broken):**
+
+Fix 4 from the original commit guarded the ack timer with an
+`ackCancelled` flag that was only checked INSIDE the setTimeout
+callback. Once the 800ms timer fired and launched `playAck()`,
+the fetch was in flight on the isolated ack channel with nothing
+left to cancel it. If evaluation returned right after the timer
+fired, the flow was:
+
+1. Timer fires at t=800ms → `playAck("Got it.")` → `/api/tts`
+   fetch starts
+2. Evaluation returns at t=900ms → `ackCancelled = true;
+   clearTimeout(ackTimer)` (both no-ops at this point — timer
+   already fired)
+3. Main loop runs `avatarSpeak(nextQuestion)` → calls
+   `cancelStream()` which deliberately does NOT touch the ack
+   channel (invariant #4 — acks must survive the next speak to
+   fire during PROCESSING without getting cut off)
+4. `/api/tts` fetch resolves at t=1200ms (~300ms cache-miss) →
+   "Got it." starts playing OVER the next question's audio
+
+The ack channel did the right thing protecting acks from
+`cancelStream()`, but it needed an escape hatch for
+"eval finished — abandon the ack". The original fix had no way
+to trigger that cleanup from outside the hook.
+
+Fixed at `modules/interview/hooks/useAvatarSpeech.ts:278-297,
+362-371` and `modules/interview/hooks/useInterview.ts:103,
+566-583`:
+
+- Extracted the ack-clearing block in `cancelTTS` into a
+  `clearAckChannel` helper (abort fetch + tear down audio
+  element + revoke URL).
+- New `cancelAck` public method on `UseAvatarSpeechReturn` that
+  delegates to `clearAckChannel`. Isolated from the main
+  channel — calling it does NOT touch `currentAudioRef`,
+  `currentFetchAbortRef`, or `cancelStream()`.
+- `cancelTTS` now calls `clearAckChannel()` instead of
+  inlining the same code twice — one source of truth.
+- `useInterview.ts:evaluateAndCoach` destructures `cancelAck`
+  and calls it immediately after `clearTimeout(ackTimer)` so
+  both the pre-fire and post-fire race windows are closed.
+  No-op in the healthy case (ack already finished or never
+  started).
+
+No new test added for P2 — the race is purely a timing concern
+between real `fetch` resolution and `cancelStream`; unit-testing
+it would require mocking `fetch` + `Audio` + the interview loop's
+full state machine, which is more brittle than useful. The fix
+is simple enough to read and reason about directly, and the
+manual verification in the PR test plan exercises it end-to-end.
+
+**Why existing tests didn't catch either:**
+
+Neither regression was caught by the 900-test suite. P1 needed a
+test that sends multiple final packets — the existing interrupt
+tests used a single packet. P2 is a race condition that only
+manifests in real-time with a slow `/api/tts` fetch; unit tests
+use resolved promises and can't reproduce it. Automated review
+(Codex) caught both by reasoning about the code paths directly,
+which suggests the test suite needs: (a) multi-packet interrupt
+tests (added), and (b) probably an integration-style test for
+the ack channel lifecycle (deferred — too brittle for the
+benefit, manual verification covers it).
