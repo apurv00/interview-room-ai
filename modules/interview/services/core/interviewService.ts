@@ -11,6 +11,7 @@ import { logger } from '@shared/logger'
 import { parseJobDescription, buildParsedJDContext } from '../persona/jdParserService'
 import { parseAndCacheResume, buildParsedResumeContext } from '../persona/resumeContextService'
 import { setCachedJDContext, setCachedResumeContext } from '../persona/documentContextCache'
+import { warmSessionConfigCache } from './sessionConfigCache'
 
 interface CreateSessionInput {
   userId: string
@@ -244,6 +245,15 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
       logger.warn({ err, sessionId: session._id }, 'Document Intelligence Layer failed (non-fatal)')
     }
   }
+
+  // Pre-warm session config cache (domain, depth, rubric, user profile) so
+  // the first generate-question call hits Redis instead of Mongo.
+  warmSessionConfigCache((session._id as mongoose.Types.ObjectId).toString(), {
+    role: input.config.role,
+    interviewType: input.config.interviewType || 'behavioral',
+    userId: input.userId,
+    experience: input.config.experience || '0-2',
+  })
 
   return session
 }

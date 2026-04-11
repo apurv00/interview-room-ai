@@ -42,10 +42,15 @@ export async function getRubric(
 export async function getScoringDimensions(
   domain: string,
   interviewType: string,
-  seniorityBand: string
+  seniorityBand: string,
+  preloadedRubric?: { dimensions?: RubricDimension[] } | null,
 ): Promise<RubricDimension[]> {
-  // Try rubric registry first
-  const rubric = await getRubric(domain, interviewType, seniorityBand)
+  // Use pre-loaded rubric when provided (avoids a redundant DB fetch when the
+  // session config cache already fetched it). Explicit undefined means "not
+  // provided" — fall through to getRubric(). Explicit null means "no rubric
+  // available" — skip DB lookup and proceed to fallbacks.
+  const rubric =
+    preloadedRubric !== undefined ? preloadedRubric : await getRubric(domain, interviewType, seniorityBand)
   if (rubric?.dimensions?.length) {
     return rubric.dimensions
   }

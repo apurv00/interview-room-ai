@@ -30,6 +30,7 @@ export type FeatureFlag =
   | 'embedding_search'
   | 'monthly_plan'
   | 'research_comparison'
+  | 'session_config_cache'
 
 const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   personalization_engine: true,
@@ -63,6 +64,7 @@ const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   // runs fusion twice (baseline categorical vs blendshape-enriched) and
   // persists both outputs for offline evaluation.
   research_comparison: false,
+  session_config_cache: true,
 }
 
 export function isFeatureEnabled(flag: FeatureFlag): boolean {
