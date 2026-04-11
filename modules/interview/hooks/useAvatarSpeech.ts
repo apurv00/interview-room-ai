@@ -25,6 +25,17 @@ export interface UseAvatarSpeechReturn {
   prefetchTTS: (text: string) => void
   /** Cancel any in-progress TTS playback (used for candidate interrupt). */
   cancelTTS: () => void
+  /**
+   * Play a short thinking acknowledgment ("Got it", "Okay") on a
+   * dedicated audio channel that is isolated from the main `avatarSpeak`
+   * pipeline: a subsequent `avatarSpeak(...)` will NOT cancel an
+   * in-flight ack (the next question's `cancelStream()` only touches
+   * the main channel). The ack is still stopped by `cancelTTS()` so
+   * End Interview honors the "stop all audio within 100ms" invariant.
+   * Uses /api/tts (buffered + R2-cached — THINKING_ACKS are permanently
+   * cached so every ack after the first returns instantly).
+   */
+  playAck: (text: string) => Promise<void>
 }
 
 /**
@@ -45,6 +56,12 @@ export function useAvatarSpeech({
   const currentAudioUrlRef = useRef<string | null>(null)
   // Track in-flight TTS fetches so they can be aborted on cancelTTS().
   const currentFetchAbortRef = useRef<AbortController | null>(null)
+  // Thinking-ack audio channel — tracked separately so the next
+  // avatarSpeak's cancelStream() does NOT cancel an in-flight ack.
+  // Cleared by cancelTTS() so End Interview still stops acks.
+  const currentAckAudioRef = useRef<HTMLAudioElement | null>(null)
+  const currentAckUrlRef = useRef<string | null>(null)
+  const currentAckFetchAbortRef = useRef<AbortController | null>(null)
   // Streaming audio playback (MediaSource API)
   const { streamAndPlay, cancel: cancelStream, isSupported: isStreamingSupported } = useStreamingAudio()
 
@@ -269,10 +286,78 @@ export function useAvatarSpeech({
       currentAudioRef.current = null
       currentAudioUrlRef.current = null
     }
-    // 4. Cancel browser speechSynthesis fallback
+    // 4. Stop any in-flight thinking ack (fetch + audio element).
+    //    cancelStream() above does NOT touch the ack channel, so we
+    //    must clear it explicitly here to honor the "End Interview
+    //    stops all audio within 100ms" invariant.
+    currentAckFetchAbortRef.current?.abort()
+    currentAckFetchAbortRef.current = null
+    if (currentAckAudioRef.current) {
+      try {
+        currentAckAudioRef.current.pause()
+        currentAckAudioRef.current.src = ''
+        currentAckAudioRef.current.load()
+      } catch { /* ignore */ }
+      if (currentAckUrlRef.current) {
+        try { URL.revokeObjectURL(currentAckUrlRef.current) } catch { /* ignore */ }
+      }
+      currentAckAudioRef.current = null
+      currentAckUrlRef.current = null
+    }
+    // 5. Cancel browser speechSynthesis fallback
     window.speechSynthesis?.cancel()
     setIsAvatarTalking(false)
   }, [cancelStream])
 
-  return { avatarEmotion, isAvatarTalking, setAvatarEmotion, avatarSpeak, prefetchTTS, cancelTTS }
+  /**
+   * Thinking-ack channel: fire-and-forget short phrase ("Got it.", "Okay.")
+   * via /api/tts (buffered, R2-cached). Isolated from avatarSpeak so a
+   * subsequent main-channel speak does NOT cancel the ack. Cleared by
+   * cancelTTS() — see invariant #5 in INTERVIEW_FLOW.md §7.
+   */
+  const playAck = useCallback(
+    (text: string): Promise<void> => {
+      if (!isMultimodalEnabled) return Promise.resolve()
+
+      // Abort any previous ack still in flight — only one ack channel.
+      currentAckFetchAbortRef.current?.abort()
+      const fetchAbort = new AbortController()
+      currentAckFetchAbortRef.current = fetchAbort
+
+      return fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+        signal: fetchAbort.signal,
+      })
+        .then((res) => (res.ok ? res.blob() : null))
+        .then((blob) => {
+          if (!blob || fetchAbort.signal.aborted) return
+          const url = URL.createObjectURL(blob)
+          const audio = new Audio(url)
+          currentAckAudioRef.current = audio
+          currentAckUrlRef.current = url
+          // Route into the recording mixer so the AI voice is captured
+          // alongside the candidate's mic in the session recording.
+          tapAudioElement(audio)
+          return new Promise<void>((resolve) => {
+            const cleanup = () => {
+              if (currentAckAudioRef.current === audio) {
+                currentAckAudioRef.current = null
+                currentAckUrlRef.current = null
+              }
+              try { URL.revokeObjectURL(url) } catch { /* ignore */ }
+              resolve()
+            }
+            audio.onended = cleanup
+            audio.onerror = cleanup
+            audio.play().catch(cleanup)
+          })
+        })
+        .catch(() => undefined)
+    },
+    [isMultimodalEnabled]
+  )
+
+  return { avatarEmotion, isAvatarTalking, setAvatarEmotion, avatarSpeak, prefetchTTS, cancelTTS, playAck }
 }

@@ -100,7 +100,7 @@ export function useInterview({
 
   // ── Avatar (extracted to useAvatarSpeech) ──
   const isMultimodalEnabled = process.env.NEXT_PUBLIC_FEATURE_MULTIMODAL === 'true'
-  const { avatarEmotion, isAvatarTalking, setAvatarEmotion, avatarSpeak: rawAvatarSpeak, prefetchTTS, cancelTTS } = useAvatarSpeech({
+  const { avatarEmotion, isAvatarTalking, setAvatarEmotion, avatarSpeak: rawAvatarSpeak, prefetchTTS, cancelTTS, playAck } = useAvatarSpeech({
     interviewType: config?.interviewType,
     isMultimodalEnabled,
   })
@@ -541,17 +541,21 @@ export function useInterview({
     setLiveAnswer('')
     setAvatarEmotion('curious') // Show engagement during processing
 
-    // Play a brief thinking acknowledgment if eval takes >1.5s
-    // Only fires once every ~3 turns to avoid sounding robotic
+    // Play a brief thinking acknowledgment if eval takes >800ms.
+    // Only fires once every ~3 turns to avoid sounding robotic. Uses
+    // the decoupled `playAck` channel so the next question's avatarSpeak
+    // does NOT cancel an in-flight ack (see INTERVIEW_FLOW.md §7.6).
+    // The 800ms delay (was 1500ms) matches Haiku's ~1-2s eval latency
+    // so the ack actually fires before evaluation returns.
     let ackCancelled = false
     const shouldAck = !config?.coachMode && ackCountRef.current % 3 === 0
     const ackTimer = shouldAck
       ? setTimeout(() => {
           if (!ackCancelled) {
             const ack = THINKING_ACKS[ackCountRef.current % THINKING_ACKS.length]
-            avatarSpeak(ack, 'friendly')
+            playAck(ack)
           }
-        }, 1500)
+        }, 800)
       : undefined
 
     const [evaluation, concurrentResult] = await Promise.all([
@@ -857,10 +861,15 @@ export function useInterview({
         const topicQuestion = question // Save for thread summary
         questionIndexRef.current = qIdx
         setQuestionIndex(qIdx)
-        // BUG 7 fix: don't show question text yet — defer until audio
-        // actually starts playing so text and voice appear simultaneously.
-        // The transcript entry is also deferred to avoid the chat history
-        // updating before the user hears the question.
+        // Eagerly show the question text and log it to the transcript so
+        // the user sees the UI advance immediately. With streaming TTS
+        // restored (see `/api/tts/stream`), the text-to-voice gap is
+        // <500ms (audio decode only) — imperceptible. Do NOT defer this
+        // to `onAudioStart` to "sync" with slow audio; that hides a
+        // backend regression behind a blank screen (see BUG-7 in
+        // modules/interview/docs/INTERVIEW_FLOW.md §8).
+        setCurrentQuestion(question)
+        addToTranscript('interviewer', question, qIdx)
 
         // Track in current thread
         currentThreadRef.current = [{
@@ -882,12 +891,7 @@ export function useInterview({
           spokenQuestion = `${filler} ${question}`
         }
         warmUpListening?.()
-        // BUG 7 fix: pass onAudioStart callback so question text + transcript
-        // entry appear precisely when audio playback begins, not 5-10s before.
-        await avatarSpeak(spokenQuestion, emotion, () => {
-          setCurrentQuestion(question)
-          addToTranscript('interviewer', question, qIdx)
-        })
+        await avatarSpeak(spokenQuestion, emotion)
         // BUG 1 fix: re-check after the long avatarSpeak await — user may have
         // ended the interview while TTS was playing.
         if (isInterviewOver()) return
