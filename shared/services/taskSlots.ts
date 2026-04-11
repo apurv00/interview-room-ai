@@ -50,7 +50,7 @@ export const TASK_SLOT_DEFAULTS: Record<TaskSlot, { model: string; maxTokens: nu
   'interview.coding-problem-gen':   { model: 'claude-haiku-4-5-20251001', maxTokens: 1000, provider: 'anthropic' },
   'interview.coach-notes':          { model: 'claude-haiku-4-5-20251001', maxTokens: 500, provider: 'anthropic' },
   'interview.jd-extract':           { model: 'claude-haiku-4-5-20251001', maxTokens: 800, provider: 'anthropic' },
-  'interview.fusion-analysis':      { model: 'claude-haiku-4-5-20251001', maxTokens: 2000, provider: 'anthropic' },
+  'interview.fusion-analysis':      { model: 'claude-haiku-4-5-20251001', maxTokens: 1500, provider: 'anthropic' },
   'resume.enhance-section':         { model: 'claude-sonnet-4-6-20250514', maxTokens: 1000, provider: 'anthropic' },
   'resume.enhance-bullets':         { model: 'claude-sonnet-4-6-20250514', maxTokens: 1000, provider: 'anthropic' },
   'resume.generate-full':           { model: 'claude-sonnet-4-6-20250514', maxTokens: 3000, provider: 'anthropic' },

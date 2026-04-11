@@ -58,7 +58,8 @@ export async function runAnalysisJobHandler(
       session.recordingR2Key,
       session.facialLandmarksR2Key,
       session.audioRecordingR2Key,
-      session.liveTranscriptWords
+      session.liveTranscriptWords,
+      session.transcript
     )
   )
 
