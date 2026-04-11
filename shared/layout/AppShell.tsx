@@ -70,7 +70,7 @@ export default function AppShell({
     <>
       <nav
         aria-label="Main navigation"
-        className="sticky top-0 w-full bg-white/85 backdrop-blur-xl z-50 border-b border-slate-200/60"
+        className="fixed top-0 left-0 right-0 w-full bg-white/85 backdrop-blur-xl z-50 border-b border-slate-200/60"
       >
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-[68px]">
@@ -207,7 +207,10 @@ export default function AppShell({
         )}
       </nav>
 
-      <div className="flex-1">{children}</div>
+      {/* pt-[68px] compensates for the now-fixed nav (h-[68px]) so children
+          don't slide underneath. Sticky was unreliable on iOS Safari with
+          backdrop-blur ancestors. */}
+      <div className="flex-1 pt-[68px]">{children}</div>
 
       {/* Footer */}
       <Footer />
