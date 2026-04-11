@@ -5,6 +5,7 @@ export {
   isOrgAdmin,
   getDashboardData,
   listCandidates,
+  getCandidateById,
   createInvite,
   listPendingInvites,
   createOrg,

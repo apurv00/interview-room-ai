@@ -80,6 +80,7 @@ export async function getDashboardData(organizationId: OrgId) {
     : 0
 
   const recentCandidates = sessions.slice(0, 10).map(s => ({
+    id: s._id?.toString() || '',
     email: s.candidateEmail || '',
     name: s.candidateName || '',
     status: s.status,
@@ -155,6 +156,43 @@ export async function listCandidates(
   return {
     candidates,
     pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+  }
+}
+
+export async function getCandidateById(
+  organizationId: OrgId,
+  sessionId: string
+): Promise<CandidateListItem | null> {
+  await connectDB()
+
+  if (!mongoose.Types.ObjectId.isValid(sessionId)) {
+    return null
+  }
+
+  const s = await InterviewSession.findOne({
+    _id: new mongoose.Types.ObjectId(sessionId),
+    organizationId,
+  }).lean()
+
+  if (!s) return null
+
+  return {
+    id: s._id.toString(),
+    candidateEmail: s.candidateEmail || '',
+    candidateName: s.candidateName || '',
+    role: s.config?.role || '',
+    interviewType: s.config?.interviewType || 'screening',
+    experience: s.config?.experience || '',
+    status: s.status,
+    overallScore: s.feedback?.overall_score ?? null,
+    passProb: s.feedback?.pass_probability ?? null,
+    strengths: s.feedback?.dimensions?.answer_quality?.strengths?.slice(0, 2) || [],
+    weaknesses: s.feedback?.dimensions?.answer_quality?.weaknesses?.slice(0, 2) || [],
+    redFlags: s.feedback?.red_flags?.slice(0, 3) || [],
+    recruiterNotes: s.recruiterNotes || '',
+    createdAt: s.createdAt.toISOString(),
+    completedAt: s.completedAt?.toISOString() || null,
+    durationSeconds: s.durationActualSeconds || null,
   }
 }
 
