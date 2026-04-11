@@ -49,16 +49,23 @@ test.describe('Public data APIs', () => {
   test('GET /api/domains returns a non-empty domain list', async ({ request }) => {
     const response = await request.get('/api/domains')
     expect(response.ok()).toBeTruthy()
+    // Route handler returns a bare JSON array (see app/api/domains/route.ts).
     const data = await response.json()
-    expect(Array.isArray(data.domains)).toBeTruthy()
-    expect(data.domains.length).toBeGreaterThan(0)
+    expect(Array.isArray(data)).toBeTruthy()
+    expect(data.length).toBeGreaterThan(0)
+    // Every entry should at least carry a slug + label.
+    expect(data[0].slug).toBeDefined()
+    expect(data[0].label).toBeDefined()
   })
 
   test('GET /api/interview-types returns a non-empty type list', async ({ request }) => {
     const response = await request.get('/api/interview-types')
     expect(response.ok()).toBeTruthy()
+    // Route handler returns a bare JSON array (see app/api/interview-types/route.ts).
     const data = await response.json()
-    expect(Array.isArray(data.interviewTypes)).toBeTruthy()
-    expect(data.interviewTypes.length).toBeGreaterThan(0)
+    expect(Array.isArray(data)).toBeTruthy()
+    expect(data.length).toBeGreaterThan(0)
+    expect(data[0].slug).toBeDefined()
+    expect(data[0].label).toBeDefined()
   })
 })

@@ -20,19 +20,21 @@ test.describe('Lobby & Setup', () => {
 })
 
 test.describe('API Health', () => {
+  // Note: both endpoints return a bare JSON array, not an object wrapper
+  // (see app/api/domains/route.ts and app/api/interview-types/route.ts).
   test('domains API returns data', async ({ page }) => {
     const response = await page.request.get('/api/domains')
     expect(response.ok()).toBeTruthy()
     const data = await response.json()
-    expect(data.domains).toBeDefined()
-    expect(Array.isArray(data.domains)).toBeTruthy()
+    expect(Array.isArray(data)).toBeTruthy()
+    expect(data.length).toBeGreaterThan(0)
   })
 
   test('interview-types API returns data', async ({ page }) => {
     const response = await page.request.get('/api/interview-types')
     expect(response.ok()).toBeTruthy()
     const data = await response.json()
-    expect(data.interviewTypes).toBeDefined()
-    expect(Array.isArray(data.interviewTypes)).toBeTruthy()
+    expect(Array.isArray(data)).toBeTruthy()
+    expect(data.length).toBeGreaterThan(0)
   })
 })

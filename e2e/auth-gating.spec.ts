@@ -22,7 +22,14 @@ test.describe('Redirect-gated pages', () => {
     // The redirect may land on /signin (with or without a callbackUrl param)
     // or on the NextAuth /api/auth/signin staging page. Either way, the
     // anonymous user must end up on an auth surface, not on /settings.
-    await page.waitForURL(/\/signin|\/api\/auth\/signin/, { timeout: 15_000 })
+    // Use a predicate instead of a regex so the match is robust against
+    // query-string permutations during the redirect chain.
+    await page.waitForURL(
+      (url) =>
+        url.pathname.startsWith('/signin') ||
+        url.pathname.startsWith('/api/auth/signin'),
+      { timeout: 15_000 },
+    )
     expect(page.url()).not.toContain('/settings')
   })
 })
@@ -33,10 +40,16 @@ test.describe('Deferred-auth empty states', () => {
     expect(response?.status()).toBeLessThan(500)
     expect(page.url()).not.toContain('/signin')
 
-    // `SignedOutEmptyState` headline from app/history/page.tsx:94.
-    await expect(page.getByRole('heading', { name: /See your past interviews here/i })).toBeVisible()
+    // The empty state only renders AFTER useSession() resolves to
+    // 'unauthenticated' — give the client a generous budget for slow
+    // serverless cold-starts.
+    await expect(
+      page.getByRole('heading', { name: /See your past interviews here/i }),
+    ).toBeVisible({ timeout: 10_000 })
     // Empty state provides a "Sign in" button (see shared/ui/SignedOutEmptyState.tsx:52).
-    await expect(page.getByRole('button', { name: /^Sign in$/i })).toBeVisible()
+    await expect(
+      page.getByRole('button', { name: /^Sign in$/i }),
+    ).toBeVisible({ timeout: 10_000 })
   })
 
   test('/learn/progress shows the signed-out empty state', async ({ page }) => {
@@ -44,9 +57,12 @@ test.describe('Deferred-auth empty states', () => {
     expect(response?.status()).toBeLessThan(500)
     expect(page.url()).not.toContain('/signin')
 
-    // `SignedOutEmptyState` headline from app/(learn)/learn/progress/page.tsx:74.
-    await expect(page.getByRole('heading', { name: /Track your progress here/i })).toBeVisible()
-    await expect(page.getByRole('button', { name: /^Sign in$/i })).toBeVisible()
+    await expect(
+      page.getByRole('heading', { name: /Track your progress here/i }),
+    ).toBeVisible({ timeout: 10_000 })
+    await expect(
+      page.getByRole('button', { name: /^Sign in$/i }),
+    ).toBeVisible({ timeout: 10_000 })
   })
 })
 

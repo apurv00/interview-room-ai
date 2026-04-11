@@ -55,8 +55,10 @@ test.describe('Interview Setup wizard — Step 0', () => {
     await expect(backButton).toBeDisabled()
 
     // Continue CTA is rendered but disabled until the user picks a domain
-    // + provides a resume (canGoNext === false).
-    const continueCta = page.getByRole('button', { name: /^Continue/ })
+    // + provides a resume (canGoNext === false). Use exact: true to avoid
+    // matching "Continue with quick profile" once that button renders on
+    // later steps.
+    const continueCta = page.getByRole('button', { name: 'Continue', exact: true })
     await expect(continueCta).toBeVisible()
     await expect(continueCta).toBeDisabled()
 
@@ -93,9 +95,15 @@ test.describe('Interview Setup wizard — step progression', () => {
 
     // 1) Pick a domain. DomainSelector renders cards as role="option"
     //    (see DomainSelector.tsx:203). "Frontend Engineer" is a stable label.
+    //    DomainSelector does a background fetch to /api/domains on mount
+    //    (DomainSelector.tsx:62) and may re-render the carousel after first
+    //    paint — wait for the specific option to be visible before clicking
+    //    to avoid a stale-element race.
     const domainCarousel = page.getByRole('listbox', { name: /Interview domains/i })
     await expect(domainCarousel).toBeVisible()
-    await domainCarousel.getByRole('option', { name: /Frontend Engineer/i }).click()
+    const frontendOption = domainCarousel.getByRole('option', { name: /Frontend Engineer/i })
+    await expect(frontendOption).toBeVisible({ timeout: 10_000 })
+    await frontendOption.click()
 
     // 2) Take the quick-profile path for the resume requirement.
     await page.getByRole('button', { name: /I don.?t have a resume/i }).click()
@@ -104,8 +112,10 @@ test.describe('Interview Setup wizard — step progression', () => {
     await page.getByRole('button', { name: /Continue with quick profile/i }).click()
 
     // 3) After quick-profile, hasResume becomes true and canGoNext === true.
-    const continueCta = page.getByRole('button', { name: /^Continue/ })
-    await expect(continueCta).toBeEnabled()
+    //    Use exact: true so this locator never matches "Continue with quick
+    //    profile" (both buttons can briefly coexist during React re-render).
+    const continueCta = page.getByRole('button', { name: 'Continue', exact: true })
+    await expect(continueCta).toBeEnabled({ timeout: 10_000 })
     await continueCta.click()
 
     // 4) Step 1 should now render.

@@ -12,6 +12,15 @@ const DEFAULT_ALLOWLIST: (string | RegExp)[] = [
   /google-analytics/i,
   /sentry\.io/i,
   /\/api\/analytics/i,
+  // Next.js image / metadata routes that can cold-boot 5xx but don't affect
+  // page correctness.
+  /\/opengraph-image/i,
+  /\/apple-icon/i,
+  /\/icon(\?|$)/i,
+  /manifest\.webmanifest/i,
+  /\/favicon\.ico/i,
+  // Third-party fonts — failure falls back to system fonts, not a page break.
+  /fonts\.(gstatic|googleapis)\.com/i,
 ]
 
 interface TrackerOptions {

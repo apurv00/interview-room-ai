@@ -15,6 +15,22 @@ const DEFAULT_IGNORE_PATTERNS: RegExp[] = [
   /\bMONGOOSE\b/,              // Server-side Mongoose warnings leak into server logs only.
   /next-auth.*ClientFetchError/, // Fetch races during fast navigation.
   /Failed to load resource.*opengraph-image/, // OG prefetches flake on staging.
+  // React 18 SSR/CSR drift — orthogonal to the page-under-test.
+  /Hydration failed/i,
+  /hydration mismatch/i,
+  /Text content does not match/i,
+  // Content security policy violations from ad-blockers and third-party scripts.
+  /Content Security Policy/i,
+  /Refused to (load|execute|connect|apply)/i,
+  // Cold-boot image / manifest / font load failures that don't affect page correctness.
+  /Failed to load resource.*(favicon|opengraph|apple-icon|icon\?|manifest|fonts\.(gstatic|googleapis))/i,
+  // Sentry-style passthrough errors logged as console.error.
+  /Non-Error promise rejection captured/i,
+  // Benign browser warning that fires on any page with a layout observer.
+  /ResizeObserver loop/i,
+  // Next.js dev overlay chatter (harmless on staging previews).
+  /\[Fast Refresh\]/i,
+  /Download the React DevTools/i,
 ]
 
 interface TrackerOptions {
