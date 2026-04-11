@@ -111,20 +111,24 @@ export async function stepFetchSession(sessionId: string): Promise<SessionData> 
 
 /** Step 2: Transcribe recording + download facial data (parallel).
  *
- * When `liveTranscriptWords` is present (captured from Deepgram during the
- * interview), Whisper is skipped entirely — no API call, no download, no
- * cost. This is the primary path for all sessions recorded after the
- * Deepgram-dedup change landed. Legacy sessions fall back to Whisper.
+ * Three paths, in order of preference:
+ *   1. `liveTranscriptWords` (Deepgram fast path) — synthesised word-level
+ *      segments. Primary path. No API call, no cost, instant.
+ *   2. `sessionTranscript` fallback — for sessions without Deepgram words,
+ *      build coarse segments from the stored transcript entries. No word-level
+ *      timestamps but everything downstream still works. Avoids the slow
+ *      Whisper call when running on a constrained function timeout.
+ *   3. Whisper API (slow path) — 60-120s. Only used if no transcript source
+ *      is available (effectively never with the fallback in place).
  */
 export async function stepTranscribeAndDownload(
   recordingR2Key: string | undefined,
   facialLandmarksR2Key?: string,
   audioRecordingR2Key?: string,
-  liveTranscriptWords?: LiveTranscriptWord[]
+  liveTranscriptWords?: LiveTranscriptWord[],
+  sessionTranscript?: Array<{ speaker: string; text: string; timestamp: number }>
 ): Promise<{ whisper: TranscribeResult; facialFrames: FacialFrame[] }> {
-  // Fast path: synthesise the Whisper-shaped result from the live Deepgram
-  // words. Skips the Whisper API call entirely — no download, no cost, no
-  // 25MB upload limit. Primary path for all sessions post-Deepgram-dedup.
+  // Path 1: Fast path — live Deepgram words (primary, no cost, instant)
   if (liveTranscriptWords && liveTranscriptWords.length > 0) {
     const facialFrames = await downloadFacialFrames(facialLandmarksR2Key)
     const synthetic = synthesiseWhisperResultFromLiveWords(liveTranscriptWords)
@@ -142,11 +146,30 @@ export async function stepTranscribeAndDownload(
     }
   }
 
-  // Fallback: post-hoc Whisper on the audio-only track (or the camera webm
-  // for pre-#183 legacy sessions). Prefer the audio-only key — it's ~1–2MB
-  // vs 30–80MB for the camera webm, keeping us under Groq's 25MB upload
-  // limit. Privacy-mode sessions that opted out of the camera webm rely
-  // on the audio-only key here; error if neither exists AND no live words.
+  // Path 2: Legacy text fallback — use stored transcript entries as segments.
+  // No word-level timestamps, but downstream prosody + fusion only need
+  // segment-level start/end/text. Saves 60-120s of Whisper time, important
+  // when running inline within a Vercel function timeout.
+  if (sessionTranscript && sessionTranscript.length > 0) {
+    const facialFrames = await downloadFacialFrames(facialLandmarksR2Key)
+    const synthetic = synthesiseWhisperResultFromTranscript(sessionTranscript)
+    aiLogger.info(
+      { source: 'session-transcript', entries: sessionTranscript.length, durationSec: synthetic.durationSeconds },
+      'Multimodal analysis using session transcript fallback (Whisper skipped)'
+    )
+    return {
+      whisper: {
+        segments: synthetic.segments as unknown as Array<Record<string, unknown>>,
+        durationSeconds: synthetic.durationSeconds,
+        costUsd: 0,
+      },
+      facialFrames: facialFrames as unknown as FacialFrame[],
+    }
+  }
+
+  // Path 3: Whisper API (slow path, 60-120s).
+  // Prefer the audio-only key — it's ~1–2MB vs 30–80MB for the camera webm,
+  // keeping us under Groq's 25MB upload limit.
   const whisperKey = audioRecordingR2Key || recordingR2Key
   if (!whisperKey) {
     throw new Error('No audio source available for transcription')
@@ -223,6 +246,52 @@ function synthesiseWhisperResultFromLiveWords(words: LiveTranscriptWord[]): {
   }
 
   const durationSeconds = sorted[sorted.length - 1].end
+  return { segments, durationSeconds }
+}
+
+/**
+ * Legacy fallback: build WhisperSegment[] from session transcript entries.
+ * No word-level timestamps — each candidate transcript entry becomes a segment
+ * spanning from its timestamp to the next entry's timestamp. Words are
+ * synthesised by even distribution within the segment duration. Used when
+ * no liveTranscriptWords are present, to avoid the 60-120s Whisper call
+ * that doesn't fit in a tight inline budget.
+ */
+function synthesiseWhisperResultFromTranscript(
+  transcript: Array<{ speaker: string; text: string; timestamp: number }>
+): { segments: WhisperSegment[]; durationSeconds: number } {
+  const candidateEntries = transcript
+    .filter((e) => e.speaker === 'candidate' || e.speaker === 'user')
+    .sort((a, b) => a.timestamp - b.timestamp)
+
+  if (candidateEntries.length === 0) {
+    return { segments: [], durationSeconds: 0 }
+  }
+
+  // Normalise timestamps to seconds relative to the first candidate utterance.
+  const t0 = candidateEntries[0].timestamp
+  const segments: WhisperSegment[] = candidateEntries.map((entry, i) => {
+    const start = Math.max(0, (entry.timestamp - t0) / 1000)
+    const nextTimestamp = i + 1 < candidateEntries.length ? candidateEntries[i + 1].timestamp : entry.timestamp + 5000
+    const end = Math.max(start + 1, (nextTimestamp - t0) / 1000)
+    const wordTokens = entry.text.split(/\s+/).filter(Boolean)
+    const perWord = wordTokens.length > 0 ? (end - start) / wordTokens.length : 0
+    const words: WhisperWord[] = wordTokens.map((w, wi) => ({
+      word: w,
+      start: start + wi * perWord,
+      end: start + (wi + 1) * perWord,
+      confidence: 1,
+    }))
+    return {
+      id: i,
+      start,
+      end,
+      text: entry.text,
+      words,
+    }
+  })
+
+  const durationSeconds = segments.length > 0 ? segments[segments.length - 1].end : 0
   return { segments, durationSeconds }
 }
 
@@ -413,7 +482,8 @@ export async function runMultimodalPipeline(
       session.recordingR2Key,
       session.facialLandmarksR2Key,
       session.audioRecordingR2Key,
-      session.liveTranscriptWords
+      session.liveTranscriptWords,
+      session.transcript
     )
     const signals = stepProcessSignals(
       whisper.segments,

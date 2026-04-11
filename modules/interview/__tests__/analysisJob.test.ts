@@ -148,7 +148,8 @@ describe('analysisJob', () => {
         'rec.webm',
         'facial.json',
         'audio.webm',
-        undefined
+        undefined,
+        [{ speaker: 'candidate', text: 'hello', timestamp: 0 }]
       )
     })
 

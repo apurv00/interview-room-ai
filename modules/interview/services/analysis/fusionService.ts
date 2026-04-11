@@ -91,12 +91,22 @@ Guidelines:
     lowConfidenceWords,
   )
 
-  const response = await completion({
-    taskSlot: 'interview.fusion-analysis',
-    system: systemPrompt,
-    messages: [{ role: 'user', content: userPrompt }],
-    contextData,
-  })
+  // 30s safety timeout to bound the worst case. With maxDuration=60 on the
+  // inline fallback path, anything longer than 30s for fusion alone risks
+  // hitting the function timeout. Failing here lets the client retry cleanly
+  // instead of waiting until Vercel kills the function.
+  const FUSION_TIMEOUT_MS = 30_000
+  const response = await Promise.race([
+    completion({
+      taskSlot: 'interview.fusion-analysis',
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
+      contextData,
+    }),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`Fusion analysis timed out after ${FUSION_TIMEOUT_MS}ms`)), FUSION_TIMEOUT_MS)
+    ),
+  ])
 
   const text = response.text
 
