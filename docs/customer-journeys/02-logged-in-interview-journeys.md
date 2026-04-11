@@ -166,15 +166,18 @@ Each question card shows:
 - **"Better answer"** expand → sample rewrite
 - **"Add to drill"** → adds to drill queue → confirmation toast.
 
-### 5.3 Coaching actions
+### 5.3 Header toolbar (top-right of feedback page)
 
+- **"Download transcript"** (↓ icon) → client-generates a plain-text `interview-transcript.txt` from `data.transcript` and triggers a download.
+- **"Download report (PDF)"** (document icon) → calls `buildFeedbackPrintHtml({ feedback, data, domainLabel })` to construct a print-optimized scorecard (hero score ring, Answer Quality / Communication / Engagement dimensions, strengths, weaknesses, top improvements, red flags, full transcript), opens it in a new window, and auto-launches the browser print dialog. User saves as PDF via the browser's "Print to PDF". Pop-up blocked → fallback alert.
 - **"Share Scorecard"** → dropdown with **Copy Link** and **Share on LinkedIn** (see `04-*.md §5`).
+
+### 5.4 Coaching actions (bottom of feedback page)
+
 - **"Retake"** → `/interview/setup?retry={sessionId}` (re-uses same config).
 - **"View Pathway"** → `/learn/pathway`.
 - **"New Interview"** → `/interview/setup`.
-- **"Back to history"** → `/history`.
-
-> **Not currently shipped** (QA Run 2 gap): a **"Download Report (PDF)"** button was originally planned for this row — a server-rendered scorecard with score, dimensions, transcript, and improvement list. No such endpoint or button exists today. Track as a feature gap, not a bug. If/when added, the natural home is next to **"Share Scorecard"** and the natural endpoint is `GET /api/interview/[sessionId]/report.pdf`.
+- **"Back to history"** → `/history` (via `router.back()` on the header back arrow).
 
 ### 5.4 Multimodal Replay block
 
@@ -294,6 +297,6 @@ Confirmed live:
 
 Gaps vs. this document:
 - **Lobby redesign**: device-picker dropdowns and consent checkboxes are no longer present — see note in §3.
-- **PDF download on Feedback**: documented as a CTA but never shipped — see note in §5.3.
+- **PDF download on Feedback** (QA Issue #10): originally documented as a CTA but never shipped. **Now shipped on this branch** via `modules/interview/utils/feedbackPrintHtml.ts` + a new button in the feedback page header. Uses client-side print-to-PDF (matches the Resume editor's print fallback pattern), no new API route. See §5.3.
 - **`/api/health` HEAD returning 503** during interview (QA Issue #2): the QA observed three consecutive 503s on the lobby warm-up pings. Fixed on this branch — the HEAD handler now reflects actual `mongoose.connection.readyState` and heavy deps are dynamic-imported so a module-load failure can't take the route down.
 - **Mongoose stale-connection warnings** (QA Issue #1): addressed on this branch by validating `readyState` on every `connectDB()` call instead of trusting the cached handle indefinitely; a no-op `.catch()` is attached to the pending connect promise so parallel-invocation races can't leak UnhandledPromiseRejection warnings.
