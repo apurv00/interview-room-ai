@@ -10,9 +10,11 @@ import { useAuthGate } from '@shared/providers/AuthGateProvider'
 const ANON_DRAFT_KEY = 'resume:draft:anon'
 
 /** A draft has "meaningful content" if it contains any PII or user-typed resume
- *  data — not just a template selection. We only prompt the user to import a
- *  draft when it's non-trivial; empty drafts are silently cleared. This is the
- *  check that gates whether we risk showing another user's data. */
+ *  data — not just a template or styling selection. We only prompt the user to
+ *  import a draft when it's non-trivial; empty drafts are silently cleared.
+ *  This is the check that gates whether we risk showing another user's data,
+ *  AND whether we risk silently discarding a legitimate draft — so err on the
+ *  side of flagging anything a user actually typed. */
 function hasMeaningfulContent(draft: Partial<ResumeData> | null | undefined): boolean {
   if (!draft) return false
   const contact = draft.contactInfo
@@ -25,6 +27,11 @@ function hasMeaningfulContent(draft: Partial<ResumeData> | null | undefined): bo
   if (draft.skills && draft.skills.length > 0) return true
   if (draft.projects && draft.projects.length > 0) return true
   if (draft.certifications && draft.certifications.length > 0) return true
+  if (draft.customSections && draft.customSections.length > 0) return true
+  if (draft.targetRole && draft.targetRole.trim()) return true
+  if (draft.targetCompany && draft.targetCompany.trim()) return true
+  // A non-default resume name means the user typed their own title.
+  if (draft.name && draft.name.trim() && draft.name !== 'My Resume') return true
   return false
 }
 
@@ -45,6 +52,11 @@ export default function ResumeBuilderPage() {
    *  import it. We NEVER auto-hydrate it into the editor, because the draft
    *  may belong to a previous visitor on the same browser (PII leak). */
   const [pendingAnonDraft, setPendingAnonDraft] = useState<Partial<ResumeData> | null>(null)
+  /** Bumped when we commit a new initialData snapshot (e.g. importing a
+   *  pending anonymous draft). React uses this as the ResumeEditor's key
+   *  so it fully unmounts/remounts — otherwise `useResume(initial)` would
+   *  ignore the new prop since `useState` only uses its initializer once. */
+  const [editorKey, setEditorKey] = useState(0)
 
   useEffect(() => {
     if (authStatus === 'loading') return
@@ -147,6 +159,10 @@ export default function ResumeBuilderPage() {
   const importAnonDraft = useCallback(() => {
     if (!pendingAnonDraft) return
     setInitialData(pendingAnonDraft)
+    // Force the ResumeEditor to remount so useResume() re-initializes from
+    // the new initialData. Without the key bump, the editor would keep its
+    // existing internal state and the imported draft would be discarded.
+    setEditorKey((k) => k + 1)
     setPendingAnonDraft(null)
     try { localStorage.removeItem(ANON_DRAFT_KEY) } catch { /* ignore */ }
   }, [pendingAnonDraft])
@@ -218,6 +234,7 @@ export default function ResumeBuilderPage() {
         />
       )}
       <ResumeEditor
+        key={editorKey}
         initialData={initialData}
         resumeId={resumeId}
         onSave={handleSave}
