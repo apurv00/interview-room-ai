@@ -109,7 +109,11 @@ export function useInterview({
   // cancel speech and let the candidate be heard. Deepgram streams continuously.
   // Also discards any queued coaching messages (I6) to avoid stale overlaps.
   const interruptedRef = useRef(false)
-  const avatarSpeak = useCallback(async (text: string, emotion?: import('@shared/types').AvatarEmotion) => {
+  const avatarSpeak = useCallback(async (
+    text: string,
+    emotion?: import('@shared/types').AvatarEmotion,
+    onAudioStart?: () => void,
+  ) => {
     interruptedRef.current = false
     // Set interrupt detector — fires if Deepgram hears speech during TTS
     setOnInterrupt?.(() => {
@@ -119,7 +123,7 @@ export function useInterview({
       coachingAbortRef.current?.abort()
       setCoachingTip(null)
     })
-    await rawAvatarSpeak(text, emotion)
+    await rawAvatarSpeak(text, emotion, onAudioStart)
     setOnInterrupt?.(null) // Clear interrupt handler after TTS finishes
   }, [rawAvatarSpeak, setOnInterrupt, cancelTTS])
 
@@ -231,6 +235,13 @@ export function useInterview({
 
   // ── Thinking pause mode (TM1) — suspends silence timeout while candidate thinks ──
   const isThinkingPauseRef = useRef(false)
+
+  // ── BUG 4 fix: cooldown for "take your time" nudge ──
+  // Once fired, don't repeat for 2 minutes (effectively once per short
+  // interview). Reset on finish, not per question — Rakshit reported it
+  // firing on the 4th question after 3 successful answers, which felt
+  // patronizing.
+  const lastTakeYourTimeRef = useRef<number>(0)
 
   // ── Timer ──
   const [timeRemaining, setTimeRemaining] = useState(0)
@@ -472,21 +483,28 @@ export function useInterview({
   }
 
   /** Show coaching tip briefly.
-   *  In coach mode: blocks for 3s so the candidate reads the full tip.
+   *  In coach mode: blocks so the candidate reads the full tip.
    *  In normal mode: fires-and-forgets so the next question can start
-   *  immediately — the tip auto-dismisses after 800ms or when the next
-   *  transitionTo('ASK_QUESTION') clears it, whichever comes first. */
+   *  immediately — the tip auto-dismisses after a length-aware delay
+   *  or when the next transitionTo('ASK_QUESTION') clears it. */
   async function showCoachingTip(evaluation: AnswerEvaluation): Promise<void> {
     transitionTo('COACHING')
     const tip = deriveCoachingTip(evaluation, config?.role, config?.interviewType)
     setCoachingTip(tip)
+
+    // BUG 5 fix: scale dismissal time to tip length so longer STAR-style
+    // tips (100+ chars) don't disappear before the candidate can read them.
+    // Reading speed ~50 chars/sec; add 1s buffer for context-switching.
+    const tipLength = tip.length
+    const normalDismissMs = tipLength > 100 ? 6000 : tipLength > 50 ? 4000 : 2000
+    const coachDismissMs = Math.max(3000, normalDismissMs)
 
     if (config?.coachMode) {
       // Coach mode: block so the candidate can read the full tip
       const abortCtrl = new AbortController()
       coachingAbortRef.current = abortCtrl
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 3000)
+        const timer = setTimeout(resolve, coachDismissMs)
         abortCtrl.signal.addEventListener('abort', () => {
           clearTimeout(timer)
           resolve()
@@ -497,12 +515,12 @@ export function useInterview({
         setCoachingTip(null)
       }
     } else {
-      // Normal mode: don't block — auto-dismiss after 800ms in the background.
+      // Normal mode: don't block — auto-dismiss after the length-aware delay.
       // The tip is also cleared on next transitionTo('ASK_QUESTION').
       setTimeout(() => {
         // Only clear if coaching tip hasn't been replaced by something else
         setCoachingTip((prev) => (prev === tip ? null : prev))
-      }, 800)
+      }, normalDismissMs)
     }
   }
 
@@ -556,14 +574,18 @@ export function useInterview({
   // ─── Finish interview ──────────────────────────────────────────────────────
 
   const finishInterview = useCallback(async () => {
-    transitionTo('SCORING')
+    // CRITICAL: cancel everything BEFORE the state transition so any in-flight
+    // avatarSpeak / question generation / coaching sleep is interrupted
+    // synchronously. Without these the loop can fire one more question after
+    // the user clicks End.
+    interviewAbortRef.current?.abort()
+    coachingAbortRef.current?.abort()
+    cancelTTS() // stops streaming + buffered audio + in-flight TTS fetches
     window.speechSynthesis.cancel()
     stopListening()
     onRecordingStop?.()
-    // Cancel the interview loop and coaching sleep
-    interviewAbortRef.current?.abort()
-    coachingAbortRef.current?.abort()
     setCoachingTip(null)
+    transitionTo('SCORING')
 
     const data = {
       config,
@@ -658,7 +680,7 @@ export function useInterview({
       localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
       router.push('/feedback/local')
     }
-  }, [config, router, stopListening, onRecordingStop])
+  }, [config, router, stopListening, onRecordingStop, cancelTTS]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Intentional silence ───────────────────────────────────────────────────
 
@@ -835,8 +857,10 @@ export function useInterview({
         const topicQuestion = question // Save for thread summary
         questionIndexRef.current = qIdx
         setQuestionIndex(qIdx)
-        setCurrentQuestion(question)
-        addToTranscript('interviewer', question, qIdx)
+        // BUG 7 fix: don't show question text yet — defer until audio
+        // actually starts playing so text and voice appear simultaneously.
+        // The transcript entry is also deferred to avoid the chat history
+        // updating before the user hears the question.
 
         // Track in current thread
         currentThreadRef.current = [{
@@ -858,7 +882,15 @@ export function useInterview({
           spokenQuestion = `${filler} ${question}`
         }
         warmUpListening?.()
-        await avatarSpeak(spokenQuestion, emotion)
+        // BUG 7 fix: pass onAudioStart callback so question text + transcript
+        // entry appear precisely when audio playback begins, not 5-10s before.
+        await avatarSpeak(spokenQuestion, emotion, () => {
+          setCurrentQuestion(question)
+          addToTranscript('interviewer', question, qIdx)
+        })
+        // BUG 1 fix: re-check after the long avatarSpeak await — user may have
+        // ended the interview while TTS was playing.
+        if (isInterviewOver()) return
 
         // ── Conversational listen loop ──
         // Classifies candidate intent before processing. Handles: clarifications,
@@ -885,12 +917,21 @@ export function useInterview({
             }
 
             if (conversationTurns === 0) {
-              // First attempt empty — nudge candidate
-              checkAbort()
-              const retryPrompt = "Take your time — whenever you're ready, I'd love to hear your thoughts on this."
-              addToTranscript('interviewer', retryPrompt, qIdx)
-              warmUpListening?.()
-              await avatarSpeak(retryPrompt, 'friendly')
+              // First attempt empty — nudge candidate.
+              // BUG 4 fix: only fire the "take your time" nudge once per
+              // 2 minutes per session. Reported issue: after 3 successful
+              // answers, hearing "take your time" again felt patronizing
+              // and out-of-context. Skip the spoken nudge if we recently
+              // fired one — just bump the counter and silently keep listening.
+              const NUDGE_COOLDOWN_MS = 120_000
+              if (Date.now() - lastTakeYourTimeRef.current > NUDGE_COOLDOWN_MS) {
+                checkAbort()
+                const retryPrompt = "Take your time — whenever you're ready, I'd love to hear your thoughts on this."
+                addToTranscript('interviewer', retryPrompt, qIdx)
+                warmUpListening?.()
+                await avatarSpeak(retryPrompt, 'friendly')
+                lastTakeYourTimeRef.current = Date.now()
+              }
               conversationTurns++
               continue
             }

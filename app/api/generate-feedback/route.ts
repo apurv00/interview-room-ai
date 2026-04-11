@@ -365,8 +365,30 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         feedback.dimensions.communication.score = commScore
       }
 
+      // BUG 2 fix: derive answer_quality from the actual per-question evaluation
+      // scores instead of trusting Claude's free-form summary value, which had
+      // no rubric anchors and tended to inflate to 60-75.
+      // True per-question average across (relevance + structure + specificity + ownership):
+      const perQAvg = evaluations.length > 0
+        ? Math.round(
+            evaluations.reduce((sum, e) => {
+              const ev = e as unknown as Record<string, number>
+              const r = Number(ev.relevance) || 0
+              const s = Number(ev.structure) || 0
+              const sp = Number(ev.specificity) || 0
+              const o = Number(ev.ownership) || 0
+              return sum + (r + s + sp + o) / 4
+            }, 0) / evaluations.length
+          )
+        : 0
+
+      // Override Claude's answer_quality score with the deterministic average
+      if (feedback.dimensions?.answer_quality) {
+        feedback.dimensions.answer_quality.score = perQAvg
+      }
+
       // Deterministic overall score: weighted average of dimensions (40% AQ, 30% Comm, 30% Engagement)
-      const aqScore = feedback.dimensions?.answer_quality?.score ?? 0
+      const aqScore = perQAvg
       const engScore = feedback.dimensions?.engagement_signals?.score ?? 0
       feedback.overall_score = Math.round(aqScore * 0.4 + commScore * 0.3 + engScore * 0.3)
       feedback.pass_probability = feedback.overall_score >= 75 ? 'High' : feedback.overall_score >= 50 ? 'Medium' : 'Low'

@@ -14,7 +14,14 @@ export interface UseAvatarSpeechReturn {
   avatarEmotion: AvatarEmotion
   isAvatarTalking: boolean
   setAvatarEmotion: (emotion: AvatarEmotion) => void
-  avatarSpeak: (text: string, emotion?: AvatarEmotion) => Promise<void>
+  /**
+   * Speak `text` via Deepgram Aura (streaming or buffered) with browser
+   * speechSynthesis fallback. `onAudioStart` fires the moment audio
+   * playback actually begins — use it to sync UI (e.g. revealing the
+   * question text) with the start of audio so the user sees text and
+   * hears voice simultaneously.
+   */
+  avatarSpeak: (text: string, emotion?: AvatarEmotion, onAudioStart?: () => void) => Promise<void>
   prefetchTTS: (text: string) => void
   /** Cancel any in-progress TTS playback (used for candidate interrupt). */
   cancelTTS: () => void
@@ -32,6 +39,12 @@ export function useAvatarSpeech({
   const [isAvatarTalking, setIsAvatarTalking] = useState(false)
   // Cache for pre-fetched TTS audio blobs keyed by text
   const ttsCacheRef = useRef<Map<string, Promise<Blob | null>>>(new Map())
+  // Track the currently-playing audio element + its object URL so cancelTTS()
+  // can interrupt buffered/cached playback (not just streaming).
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null)
+  const currentAudioUrlRef = useRef<string | null>(null)
+  // Track in-flight TTS fetches so they can be aborted on cancelTTS().
+  const currentFetchAbortRef = useRef<AbortController | null>(null)
   // Streaming audio playback (MediaSource API)
   const { streamAndPlay, cancel: cancelStream, isSupported: isStreamingSupported } = useStreamingAudio()
 
@@ -57,27 +70,43 @@ export function useAvatarSpeech({
   )
 
   /** Play a blob via Audio element (used for cached/prefetched audio). */
-  function playBlob(blob: Blob): Promise<void> {
+  function playBlob(blob: Blob, onAudioStart?: () => void): Promise<void> {
     return new Promise<void>((resolve) => {
       const url = URL.createObjectURL(blob)
       const audio = new Audio(url)
+      // Track refs so cancelTTS() can interrupt this playback synchronously
+      currentAudioRef.current = audio
+      currentAudioUrlRef.current = url
+      const cleanup = () => {
+        if (currentAudioRef.current === audio) {
+          currentAudioRef.current = null
+          currentAudioUrlRef.current = null
+        }
+        URL.revokeObjectURL(url)
+        setIsAvatarTalking(false)
+      }
       // Route into the voice mixer so the AI's voice is captured by
       // MediaRecorder alongside the candidate's mic. Safe no-op when
       // the mixer isn't initialised.
       tapAudioElement(audio)
+      // Fire onAudioStart the moment playback actually begins
+      let startedFired = false
+      audio.onplaying = () => {
+        if (!startedFired) {
+          startedFired = true
+          try { onAudioStart?.() } catch { /* swallow caller errors */ }
+        }
+      }
       audio.onended = () => {
-        URL.revokeObjectURL(url)
-        setIsAvatarTalking(false)
+        cleanup()
         resolve()
       }
       audio.onerror = () => {
-        URL.revokeObjectURL(url)
-        setIsAvatarTalking(false)
+        cleanup()
         resolve()
       }
       audio.play().catch(() => {
-        URL.revokeObjectURL(url)
-        setIsAvatarTalking(false)
+        cleanup()
         resolve()
       })
     })
@@ -131,10 +160,22 @@ export function useAvatarSpeech({
   }
 
   const avatarSpeak = useCallback(
-    async (text: string, emotion: AvatarEmotion = 'friendly'): Promise<void> => {
+    async (text: string, emotion: AvatarEmotion = 'friendly', onAudioStart?: () => void): Promise<void> => {
       setAvatarEmotion(emotion)
       setIsAvatarTalking(true)
       cancelStream() // Cancel any in-progress stream
+
+      // Fresh AbortController for this speak call so cancelTTS() can stop it
+      const fetchAbort = new AbortController()
+      currentFetchAbortRef.current = fetchAbort
+
+      // Helper so each playback path fires the start callback exactly once
+      let startedFired = false
+      const fireStart = () => {
+        if (startedFired) return
+        startedFired = true
+        try { onAudioStart?.() } catch { /* swallow */ }
+      }
 
       if (isMultimodalEnabled) {
         try {
@@ -144,7 +185,7 @@ export function useAvatarSpeech({
             const blob = await cached
             ttsCacheRef.current.delete(text)
             if (blob) {
-              await playBlob(blob)
+              await playBlob(blob, fireStart)
               return
             }
           }
@@ -156,15 +197,21 @@ export function useAvatarSpeech({
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text }),
+                signal: fetchAbort.signal,
               })
               if (res.ok && res.body) {
                 await streamAndPlay(res, () => {
-                  // Called when first chunk starts playing
+                  // First chunk starts playing — sync UI now
+                  fireStart()
                 })
                 setIsAvatarTalking(false)
                 return
               }
-            } catch {
+            } catch (err) {
+              if ((err as Error)?.name === 'AbortError') {
+                setIsAvatarTalking(false)
+                return
+              }
               // Streaming failed — fall through to buffered
             }
           }
@@ -174,25 +221,55 @@ export function useAvatarSpeech({
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text }),
+            signal: fetchAbort.signal,
           })
           if (res.ok) {
             const blob = await res.blob()
-            await playBlob(blob)
+            // Re-check abort: user may have ended interview while blob downloaded
+            if (fetchAbort.signal.aborted) {
+              setIsAvatarTalking(false)
+              return
+            }
+            await playBlob(blob, fireStart)
             return
           }
-        } catch {
+        } catch (err) {
+          if ((err as Error)?.name === 'AbortError') {
+            setIsAvatarTalking(false)
+            return
+          }
           // Fall through to browser TTS
         }
       }
 
-      // Priority 4: Browser speechSynthesis fallback
+      // Priority 4: Browser speechSynthesis fallback — fires immediately
+      // since browser TTS has no buffering delay
+      fireStart()
       await speakWithBrowser(text)
     },
     [interviewType, isMultimodalEnabled, isStreamingSupported, streamAndPlay, cancelStream] // eslint-disable-line react-hooks/exhaustive-deps
   )
 
   const cancelTTS = useCallback(() => {
+    // 1. Abort any in-flight TTS fetch
+    currentFetchAbortRef.current?.abort()
+    currentFetchAbortRef.current = null
+    // 2. Stop the streaming MediaSource pipeline
     cancelStream()
+    // 3. Stop any currently-playing buffered <audio> element
+    if (currentAudioRef.current) {
+      try {
+        currentAudioRef.current.pause()
+        currentAudioRef.current.src = ''
+        currentAudioRef.current.load()
+      } catch { /* ignore */ }
+      if (currentAudioUrlRef.current) {
+        try { URL.revokeObjectURL(currentAudioUrlRef.current) } catch { /* ignore */ }
+      }
+      currentAudioRef.current = null
+      currentAudioUrlRef.current = null
+    }
+    // 4. Cancel browser speechSynthesis fallback
     window.speechSynthesis?.cancel()
     setIsAvatarTalking(false)
   }, [cancelStream])

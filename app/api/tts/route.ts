@@ -21,8 +21,12 @@ function sanitizeForTTS(text: string): string {
   result = result.replace(/\u2013/g, ',') // en-dash –
   // Also handle double-hyphens used as em-dashes
   result = result.replace(/--/g, ',')
-  // Add ellipsis after transitional phrases for a slight pause
-  result = result.replace(/\b(So,|Now,|Alright,|Great,|Okay,|Well,) /g, '$1... ')
+  // BUG 3 fix: only add ellipsis pauses to short phrases. On long
+  // questions the cumulative pauses cause perceived volume drops and
+  // unnatural pacing toward the end of the utterance.
+  if (result.length < 200) {
+    result = result.replace(/\b(So,|Now,|Alright,|Great,|Okay,|Well,) /g, '$1... ')
+  }
   return result
 }
 

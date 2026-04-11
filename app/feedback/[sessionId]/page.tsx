@@ -269,10 +269,14 @@ function FeedbackPageInner() {
         }
       } catch { /* continue polling */ }
 
-      // Timeout after 90s
-      if (elapsed >= 90000) {
+      // BUG 9 fix: bump cap to 180s (3 minutes) and surface a friendlier
+      // message that nudges the user to refresh rather than reporting a
+      // hard failure. The inline pipeline can legitimately take 60s on
+      // a long interview; the previous 90s cap caused false-positive
+      // timeouts when the server was still processing.
+      if (elapsed >= 180000) {
         clearInterval(interval)
-        setAnalysisError('Analysis timed out — please try again later')
+        setAnalysisError('Analysis is taking longer than expected — please refresh in a minute.')
         setAnalysisLoading(false)
       }
     }, 2000)
@@ -1063,49 +1067,61 @@ function FeedbackPageInner() {
                   )}
                 </section>
 
-                {/* ── Segment 2: Deep Analysis ────────────────────────────── */}
-                <section className="space-y-6">
-                  <h3 className="text-heading text-[#0f1419]">Deep Analysis</h3>
-
-                  {/* Score badges */}
-                  {analysis.fusionSummary && (
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                      <div className="surface-card-bordered p-4 text-center">
-                        <p className="text-caption text-[#71767b]">Eye Contact</p>
-                        <p className="text-heading">{analysis.fusionSummary.eyeContactScore}<span className="text-sm text-[#71767b]">/100</span></p>
-                      </div>
-                      <div className="surface-card-bordered p-4 text-center">
-                        <p className="text-caption text-[#71767b]">Body Language</p>
-                        <p className="text-heading">{analysis.fusionSummary.overallBodyLanguageScore}<span className="text-sm text-[#71767b]">/100</span></p>
-                      </div>
-                      <div className="surface-card-bordered p-4 text-center">
-                        <p className="text-caption text-[#71767b]">Timeline Events</p>
-                        <p className="text-heading">{analysis.timeline?.length || 0}</p>
-                      </div>
-                      <div className="surface-card-bordered p-4 text-center">
-                        <p className="text-caption text-[#71767b]">Coaching Tips</p>
-                        <p className="text-heading">{analysis.fusionSummary.coachingTips.length}</p>
-                      </div>
+                {/* ── Segment 2: Deep Analysis (collapsed by default) ────── */}
+                {/* BUG 10 fix: collapse by default to reduce visual overload.
+                    The replay segment above is the primary value; charts and
+                    score badges are secondary and available on click. */}
+                <details className="group">
+                  <summary className="cursor-pointer flex items-center justify-between p-4 surface-card-bordered hover:bg-[#f8fafc] transition-colors list-none">
+                    <div>
+                      <h3 className="text-heading text-[#0f1419]">Deep Analysis</h3>
+                      <p className="text-caption text-[#71767b] mt-0.5">Eye contact, body language, signal charts &amp; coaching tips</p>
                     </div>
-                  )}
+                    <svg className="w-5 h-5 text-[#71767b] transition-transform group-open:rotate-180 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </summary>
+                  <div className="mt-4 space-y-6">
+                    {/* Score badges */}
+                    {analysis.fusionSummary && (
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        <div className="surface-card-bordered p-4 text-center">
+                          <p className="text-caption text-[#71767b]">Eye Contact</p>
+                          <p className="text-heading">{analysis.fusionSummary.eyeContactScore}<span className="text-sm text-[#71767b]">/100</span></p>
+                        </div>
+                        <div className="surface-card-bordered p-4 text-center">
+                          <p className="text-caption text-[#71767b]">Body Language</p>
+                          <p className="text-heading">{analysis.fusionSummary.overallBodyLanguageScore}<span className="text-sm text-[#71767b]">/100</span></p>
+                        </div>
+                        <div className="surface-card-bordered p-4 text-center">
+                          <p className="text-caption text-[#71767b]">Timeline Events</p>
+                          <p className="text-heading">{analysis.timeline?.length || 0}</p>
+                        </div>
+                        <div className="surface-card-bordered p-4 text-center">
+                          <p className="text-caption text-[#71767b]">Coaching Tips</p>
+                          <p className="text-heading">{analysis.fusionSummary.coachingTips.length}</p>
+                        </div>
+                      </div>
+                    )}
 
-                  {/* Signal charts */}
-                  <SignalCharts
-                    prosodySegments={analysis.prosodySegments || []}
-                    facialSegments={analysis.facialSegments || []}
-                    currentTimeSec={analysisVideoTime}
-                  />
-
-                  {/* Coaching panel (tips only — moments are in Segment 1) */}
-                  {analysis.fusionSummary && (
-                    <CoachingPanel
-                      fusionSummary={analysis.fusionSummary}
-                      timeline={analysis.timeline || []}
-                      onSeek={(sec) => analysisSeekRef.current?.(sec)}
-                      hideMoments
+                    {/* Signal charts */}
+                    <SignalCharts
+                      prosodySegments={analysis.prosodySegments || []}
+                      facialSegments={analysis.facialSegments || []}
+                      currentTimeSec={analysisVideoTime}
                     />
-                  )}
-                </section>
+
+                    {/* Coaching panel (tips only — moments are in Segment 1) */}
+                    {analysis.fusionSummary && (
+                      <CoachingPanel
+                        fusionSummary={analysis.fusionSummary}
+                        timeline={analysis.timeline || []}
+                        onSeek={(sec) => analysisSeekRef.current?.(sec)}
+                        hideMoments
+                      />
+                    )}
+                  </div>
+                </details>
 
                 {/* ── Learning & Development ──────────────────────────────── */}
                 {feedback && (
