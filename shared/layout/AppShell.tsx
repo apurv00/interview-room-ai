@@ -11,9 +11,9 @@ import { useAuthGate } from '@shared/providers/AuthGateProvider'
 
 const NAV_LINKS = [
   { href: '/interview/setup', label: 'Interview' },
+  { href: '/learn/pathway', label: 'Pathway' },
   { href: '/resume', label: 'Resume' },
   { href: '/history', label: 'History' },
-  { href: '/learn/progress', label: 'Progress' },
   { href: '/resources', label: 'Resources' },
   { href: '/pricing', label: 'Pricing' },
 ]

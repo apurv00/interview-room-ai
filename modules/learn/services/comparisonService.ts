@@ -21,6 +21,14 @@ export interface ComparisonResult {
   overallDirection: 'up' | 'down' | 'same' | 'new'
   sessionsCompared: number
   sinceFirstDelta: number | null  // vs first-ever session
+  /**
+   * 'parent' — the `previous` column is the parent of a retake (first
+   *            attempt at this specific mock). Shown when the current
+   *            session has a `parentSessionId` set.
+   * 'history' — the `previous` column is whichever session happened
+   *             chronologically before this one, regardless of config.
+   */
+  comparisonMode: 'parent' | 'history'
 }
 
 const DIMENSION_MAP: { key: string; label: string }[] = [
@@ -40,15 +48,22 @@ function direction(delta: number | null): 'up' | 'down' | 'same' | 'new' {
 /**
  * Compute comparative feedback: diff current session scores against
  * previous session, 5-session rolling average, and first-ever session.
+ *
+ * When `parentSessionId` is provided, the `previous` column is populated
+ * from exactly that session's summary instead of the chronologically
+ * previous one — this powers "vs your first attempt" messaging on the
+ * retake feedback page. The rolling-average view is preserved as a
+ * secondary signal.
  */
 export async function computeComparison(
   userId: string,
   currentScores: Record<string, number>,
   currentOverall: number,
   domain?: string,
+  parentSessionId?: string,
 ): Promise<ComparisonResult> {
   if (!isFeatureEnabled('session_summaries')) {
-    return { dimensions: [], overallDelta: null, overallDirection: 'new', sessionsCompared: 0, sinceFirstDelta: null }
+    return { dimensions: [], overallDelta: null, overallDirection: 'new', sessionsCompared: 0, sinceFirstDelta: null, comparisonMode: 'history' }
   }
 
   try {
@@ -64,7 +79,21 @@ export async function computeComparison(
       .select('overallScore competencyScores sessionDate')
       .lean()
 
-    if (summaries.length === 0) {
+    // Resolve the "previous" anchor. Retake mode prefers the explicit parent
+    // summary so the delta compares against the exact first attempt rather
+    // than whichever session ran most recently.
+    let parentSummary: Pick<NonNullable<typeof summaries[number]>, 'overallScore' | 'competencyScores'> | null = null
+    if (parentSessionId && mongoose.Types.ObjectId.isValid(parentSessionId)) {
+      parentSummary = await SessionSummary.findOne({
+        userId: new mongoose.Types.ObjectId(userId),
+        sessionId: new mongoose.Types.ObjectId(parentSessionId),
+      })
+        .select('overallScore competencyScores')
+        .lean() as typeof parentSummary
+    }
+    const comparisonMode: 'parent' | 'history' = parentSummary ? 'parent' : 'history'
+
+    if (summaries.length === 0 && !parentSummary) {
       return {
         dimensions: DIMENSION_MAP.map(d => ({
           dimension: d.key,
@@ -80,10 +109,13 @@ export async function computeComparison(
         overallDirection: 'new',
         sessionsCompared: 0,
         sinceFirstDelta: null,
+        comparisonMode,
       }
     }
 
-    const previousSession = summaries[0]
+    // In parent mode the `previous` column comes from the parent row;
+    // otherwise it's the chronologically previous session summary.
+    const previousSession = parentSummary || summaries[0]
     const last5 = summaries.slice(0, 5)
 
     // Get first-ever session
@@ -131,9 +163,10 @@ export async function computeComparison(
       overallDirection: direction(overallDelta),
       sessionsCompared: summaries.length,
       sinceFirstDelta,
+      comparisonMode,
     }
   } catch (err) {
     logger.error({ err }, 'Failed to compute comparison')
-    return { dimensions: [], overallDelta: null, overallDirection: 'new', sessionsCompared: 0, sinceFirstDelta: null }
+    return { dimensions: [], overallDelta: null, overallDirection: 'new', sessionsCompared: 0, sinceFirstDelta: null, comparisonMode: 'history' }
   }
 }

@@ -20,6 +20,7 @@ interface ComparisonResult {
   overallDirection: 'up' | 'down' | 'same' | 'new'
   sessionsCompared: number
   sinceFirstDelta: number | null
+  comparisonMode?: 'parent' | 'history'
 }
 
 interface ComparisonCardProps {
@@ -31,6 +32,12 @@ interface ComparisonCardProps {
   }
   overallScore: number
   domain?: string
+  /**
+   * When set, the comparison API diffs current scores against this exact
+   * parent session (the first attempt of a retake chain) rather than the
+   * chronologically previous session. Drives "vs first attempt" copy.
+   */
+  parentSessionId?: string
 }
 
 function DeltaBadge({ delta, label }: { delta: number | null; label: string }) {
@@ -78,7 +85,7 @@ function ArrowIcon({ direction }: { direction: 'up' | 'down' | 'same' | 'new' })
   return null
 }
 
-export default function ComparisonCard({ currentScores, overallScore, domain }: ComparisonCardProps) {
+export default function ComparisonCard({ currentScores, overallScore, domain, parentSessionId }: ComparisonCardProps) {
   const [data, setData] = useState<ComparisonResult | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -91,12 +98,13 @@ export default function ComparisonCard({ currentScores, overallScore, domain }: 
       overall: String(overallScore),
     })
     if (domain) params.set('domain', domain)
+    if (parentSessionId) params.set('parentSessionId', parentSessionId)
 
     fetch(`/api/learn/comparison?${params}`)
       .then(r => r.json())
       .then(d => { setData(d); setLoading(false) })
       .catch(() => setLoading(false))
-  }, [currentScores, overallScore, domain])
+  }, [currentScores, overallScore, domain, parentSessionId])
 
   if (loading) {
     return (
@@ -109,7 +117,10 @@ export default function ComparisonCard({ currentScores, overallScore, domain }: 
     )
   }
 
-  if (!data || data.sessionsCompared === 0) return null
+  // In parent mode we render even with only 1 session compared, because
+  // the parent row is fetched independently of the rolling window.
+  const isParentMode = data?.comparisonMode === 'parent'
+  if (!data || (data.sessionsCompared === 0 && !isParentMode)) return null
 
   return (
     <motion.section
@@ -120,9 +131,13 @@ export default function ComparisonCard({ currentScores, overallScore, domain }: 
     >
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-[#0f1419]">Compared to Previous</h3>
+        <h3 className="text-sm font-semibold text-[#0f1419]">
+          {isParentMode ? 'Compared to your first attempt' : 'Compared to Previous'}
+        </h3>
         <span className="text-xs text-[#71767b]">
-          Based on {data.sessionsCompared} past session{data.sessionsCompared !== 1 ? 's' : ''}
+          {isParentMode
+            ? 'Same mock, fresh attempt'
+            : `Based on ${data.sessionsCompared} past session${data.sessionsCompared !== 1 ? 's' : ''}`}
         </span>
       </div>
 
@@ -133,8 +148,8 @@ export default function ComparisonCard({ currentScores, overallScore, domain }: 
           <div className="flex-1">
             <span className="text-sm text-[#0f1419] font-medium">Overall Score</span>
           </div>
-          <DeltaBadge delta={data.overallDelta} label="vs last" />
-          {data.sinceFirstDelta !== null && data.sinceFirstDelta !== data.overallDelta && (
+          <DeltaBadge delta={data.overallDelta} label={isParentMode ? 'vs first attempt' : 'vs last'} />
+          {!isParentMode && data.sinceFirstDelta !== null && data.sinceFirstDelta !== data.overallDelta && (
             <DeltaBadge delta={data.sinceFirstDelta} label="since start" />
           )}
         </div>

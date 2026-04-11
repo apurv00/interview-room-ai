@@ -107,14 +107,14 @@ export default function AuthMenu() {
               History
             </Link>
             <Link
-              href="/learn/progress"
+              href="/learn/pathway"
               onClick={() => setOpen(false)}
               className="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 transition"
             >
               <svg className="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
               </svg>
-              Progress
+              Pathway
             </Link>
             <Link
               href="/settings"

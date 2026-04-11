@@ -36,6 +36,9 @@ export { default as ComparisonCard } from './components/feedback/ComparisonCard'
 export { default as ShareButton } from './components/feedback/ShareButton'
 export { default as XpBadge } from './components/XpBadge'
 export { default as BadgeUnlockChecker } from './components/BadgeUnlockChecker'
+export { default as PathwayStatusBanner } from './components/PathwayStatusBanner'
+export { default as NextStepHero } from './components/pathway/NextStepHero'
+export { default as RecentSessionsStrip } from './components/pathway/RecentSessionsStrip'
 
 // ── XP ──
 export { awardXp, getXpSummary, getXpHistory } from './services/xpService'

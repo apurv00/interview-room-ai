@@ -14,6 +14,7 @@ export async function GET(req: Request) {
 
     const { searchParams } = new URL(req.url)
     const domain = searchParams.get('domain') || undefined
+    const parentSessionId = searchParams.get('parentSessionId') || undefined
 
     // Current scores passed as query params
     const relevance = Number(searchParams.get('relevance') || 0)
@@ -24,10 +25,10 @@ export async function GET(req: Request) {
 
     const currentScores: Record<string, number> = { relevance, structure, specificity, ownership }
 
-    const comparison = await computeComparison(session.user.id, currentScores, overall, domain)
+    const comparison = await computeComparison(session.user.id, currentScores, overall, domain, parentSessionId)
 
     return NextResponse.json(comparison)
   } catch {
-    return NextResponse.json({ dimensions: [], overallDelta: null, overallDirection: 'new', sessionsCompared: 0, sinceFirstDelta: null })
+    return NextResponse.json({ dimensions: [], overallDelta: null, overallDirection: 'new', sessionsCompared: 0, sinceFirstDelta: null, comparisonMode: 'history' })
   }
 }

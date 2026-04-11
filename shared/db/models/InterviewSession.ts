@@ -122,6 +122,14 @@ export interface IInterviewSession extends Document {
 
   userAgent?: string
 
+  // Retake linkage — when a session is a retake of a prior one, `parentSessionId`
+  // points to the ROOT of the retake chain (not the immediate parent). This
+  // keeps the comparison query trivial: all retakes of the same original share
+  // a single parent id. `retakeNumber` starts at 1 for the first retake.
+  // Both fields optional — legacy sessions read as undefined and remain valid.
+  parentSessionId?: mongoose.Types.ObjectId
+  retakeNumber?: number
+
   createdAt: Date
   updatedAt: Date
 }
@@ -218,6 +226,11 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
     liveTranscriptWords: { type: Schema.Types.Mixed },
 
     userAgent: { type: String },
+
+    // Retake linkage — see interface comment. Both optional so existing
+    // sessions (pre-change) remain valid without a migration.
+    parentSessionId: { type: Schema.Types.ObjectId, ref: 'InterviewSession', index: true },
+    retakeNumber: { type: Number, min: 1 },
   },
   { timestamps: true }
 )
@@ -228,6 +241,8 @@ InterviewSessionSchema.index({ organizationId: 1, candidateEmail: 1 })
 InterviewSessionSchema.index({ status: 1, createdAt: -1 })
 InterviewSessionSchema.index({ status: 1, 'config.role': 1, 'config.experience': 1 })
 InterviewSessionSchema.index({ userId: 1, status: 1 })
+// Retake chain lookup — all retakes of a given root session
+InterviewSessionSchema.index({ userId: 1, parentSessionId: 1 })
 
 export const InterviewSession: Model<IInterviewSession> =
   mongoose.models.InterviewSession ||

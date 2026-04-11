@@ -22,6 +22,18 @@ export default function LearningPlanSection({ feedback }: LearningPlanSectionPro
         <h3 className="text-heading text-[#0f1419]">Learning &amp; Development</h3>
       </div>
 
+      {/* Pathway callout — promoted to the top so users see it before drills */}
+      <Link
+        href="/learn/pathway"
+        className="flex items-center justify-between p-4 rounded-xl bg-gradient-to-r from-brand-500/10 to-blue-500/10 border border-brand-500/20 hover:from-brand-500/15 hover:to-blue-500/15 transition-colors group"
+      >
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-[#0f1419]">Your pathway was just updated</p>
+          <p className="text-caption text-[#536471] mt-0.5">Personalized milestones, drills, and your next recommended session — all in one place.</p>
+        </div>
+        <ArrowRight className="w-5 h-5 text-brand-500 group-hover:translate-x-0.5 transition-transform shrink-0" />
+      </Link>
+
       {/* Drill Recommendations */}
       {hasDrills && (
         <div className="space-y-3">
@@ -85,17 +97,6 @@ export default function LearningPlanSection({ feedback }: LearningPlanSectionPro
         </div>
       )}
 
-      {/* Link to full pathway */}
-      <Link
-        href="/learn/pathway"
-        className="flex items-center justify-between p-4 rounded-xl bg-brand-500/5 border border-brand-500/15 hover:bg-brand-500/10 transition-colors group"
-      >
-        <div>
-          <p className="text-sm font-medium text-[#0f1419]">View Full Learning Pathway</p>
-          <p className="text-caption text-[#71767b] mt-0.5">See your personalized practice plan and track progress</p>
-        </div>
-        <ArrowRight className="w-5 h-5 text-brand-500 group-hover:translate-x-0.5 transition-transform shrink-0" />
-      </Link>
     </div>
   )
 }

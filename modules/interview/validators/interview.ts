@@ -150,6 +150,9 @@ export const CreateSessionSchema = z.object({
   templateId: z.string().optional(),
   candidateEmail: z.string().email().optional(),
   candidateName: z.string().max(200).optional(),
+  // Retake linkage — when present, the new session is a retake of the given
+  // parent session. The service resolves the root of the chain.
+  parentSessionId: z.string().optional(),
 })
 
 export const UpdateSessionSchema = z.object({

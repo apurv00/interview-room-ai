@@ -30,6 +30,7 @@ export async function POST(req: NextRequest) {
       resumeText: validated.config.resumeText,
       jdFileName: validated.config.jdFileName,
       resumeFileName: validated.config.resumeFileName,
+      parentSessionId: validated.parentSessionId,
     })
 
     return NextResponse.json(

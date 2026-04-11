@@ -21,6 +21,13 @@ interface CreateSessionInput {
   resumeText?: string
   jdFileName?: string
   resumeFileName?: string
+  /**
+   * If set, the new session is a retake. The service resolves this id to
+   * the root of the retake chain so every retake of the same original
+   * session shares the same `parentSessionId`. `retakeNumber` is then
+   * derived from the current max within that chain + 1.
+   */
+  parentSessionId?: string
 }
 
 interface UpdateSessionInput {
@@ -125,6 +132,36 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
     if (fallback?.scoringDimensions) scoringDimensions = fallback.scoringDimensions
   }
 
+  // Resolve the retake chain root — if the caller passes a parent that is
+  // itself a retake, we link to its root so the chain stays flat. We also
+  // compute the next `retakeNumber` in that chain.
+  let rootParentId: mongoose.Types.ObjectId | undefined
+  let retakeNumber: number | undefined
+  if (input.parentSessionId) {
+    try {
+      const parent = await InterviewSession.findById(input.parentSessionId)
+        .select('_id parentSessionId userId')
+        .lean()
+      if (parent && parent.userId.toString() === input.userId) {
+        rootParentId = (parent.parentSessionId as mongoose.Types.ObjectId | undefined) ||
+          (parent._id as mongoose.Types.ObjectId)
+        const maxInChain = await InterviewSession.findOne({
+          userId: new mongoose.Types.ObjectId(input.userId),
+          parentSessionId: rootParentId,
+        })
+          .select('retakeNumber')
+          .sort({ retakeNumber: -1 })
+          .lean()
+        retakeNumber = ((maxInChain?.retakeNumber as number | undefined) || 0) + 1
+      }
+    } catch {
+      // If lookup fails we simply skip the retake linkage rather than
+      // blocking session creation — retake is an enhancement, not a gate.
+      rootParentId = undefined
+      retakeNumber = undefined
+    }
+  }
+
   let session: IInterviewSession
   try {
     session = await InterviewSession.create({
@@ -148,6 +185,8 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
       // Privacy mode — promoted from config to a top-level field so it can
       // be queried/audited independently of the nested config blob.
       privacyMode: input.config.privacyMode === true ? true : undefined,
+      parentSessionId: rootParentId,
+      retakeNumber,
     })
   } catch (err) {
     // Rollback the usage increment if session creation fails
