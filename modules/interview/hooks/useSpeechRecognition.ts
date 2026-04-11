@@ -42,9 +42,10 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
   const rafPendingRef = useRef(false)
 
   const stopListening = useCallback(() => {
-    if (recognitionRef.current) {
+    const current = recognitionRef.current
+    if (current) {
       try {
-        recognitionRef.current.stop()
+        current.abort()
       } catch {
         /* ignore */
       }
@@ -59,13 +60,14 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
         return
       }
 
-      // Clean up any previous instance
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.stop()
-        } catch {
-          /* ignore */
-        }
+      // Clean up any previous instance — null handlers first so late-firing
+      // onend/onerror events from the stale instance are silently dropped.
+      const stale = recognitionRef.current
+      if (stale) {
+        stale.onresult = null
+        stale.onend = null
+        stale.onerror = null
+        try { stale.abort() } catch { /* ignore */ }
       }
 
       const recognition = new SR()
@@ -85,6 +87,18 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
         const metrics = text ? analyzeSpeech(text, durationMinutes) : null
         return { text, durationMinutes, metrics }
       }
+
+      // Prevent double-invocation: abort() fires onerror('aborted') then onend
+      let completed = false
+      const complete = (result: SpeechRecognitionResult) => {
+        if (completed) return
+        completed = true
+        setIsListening(false)
+        onComplete(result)
+      }
+
+      // Capture for stale-instance guard in onend/onerror
+      const thisRecognition = recognition
 
       recognition.onresult = (event: SpeechRecognitionEvent) => {
         clearTimeout(silenceTimerRef.current)
@@ -120,18 +134,18 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
       }
 
       recognition.onend = () => {
+        if (recognitionRef.current !== thisRecognition) return // stale instance — ignore
         clearTimeout(silenceTimerRef.current)
-        setIsListening(false)
-        onComplete(buildResult())
+        complete(buildResult())
       }
 
       recognition.onerror = (e: SpeechRecognitionErrorEvent) => {
+        if (recognitionRef.current !== thisRecognition) return // stale instance — ignore
         if (e.error !== 'no-speech' && e.error !== 'aborted') {
           console.error('SR error:', e.error)
         }
         clearTimeout(silenceTimerRef.current)
-        setIsListening(false)
-        onComplete(buildResult())
+        complete(buildResult())
       }
 
       recognition.start()

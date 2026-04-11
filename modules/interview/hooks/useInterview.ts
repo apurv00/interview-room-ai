@@ -10,6 +10,7 @@ import type {
   AnswerEvaluation,
   SpeechMetrics,
   PerformanceSignal,
+  ProbeType,
   PushbackTone,
   ThreadEntry,
   ThreadSummary,
@@ -23,6 +24,7 @@ import { deriveCoachingTip } from '@interview/config/coachingTips'
 import { STORAGE_KEYS, sessionScopedKey } from '@shared/storageKeys'
 import type { SpeechRecognitionResult } from './useSpeechRecognition'
 import type { StartListeningOptions } from './useDeepgramRecognition'
+import type { TurnRouterResult } from './useInterviewAPI'
 import {
   classifyIntent,
   CONVERSATION_RESPONSES,
@@ -133,7 +135,7 @@ export function useInterview({
   // ── API calls (extracted to useInterviewAPI) ──
   // Pass a lazy getter for sessionId so the fetch body sends the latest value
   // once createDbSession resolves — without forcing a re-render of this hook.
-  const { generateQuestion: apiGenerateQuestion, evaluateAnswer: apiEvaluateAnswer } = useInterviewAPI({
+  const { generateQuestion: apiGenerateQuestion, evaluateAnswer: apiEvaluateAnswer, callTurnRouter: apiCallTurnRouter } = useInterviewAPI({
     config,
     getSessionId: () => sessionIdRef.current,
   })
@@ -380,7 +382,9 @@ export function useInterview({
     (qIdx: number): Promise<string> =>
       apiGenerateQuestion(
         qIdx,
-        transcriptRef.current,
+        // Cap to last 8 transcript entries (~4 Q&A pairs) to keep prompt size bounded.
+        // completedThreadsRef already carries older topic summaries for context diversity.
+        transcriptRef.current.slice(-8),
         performanceSignalRef.current,
         completedThreadsRef.current,
         getAbortSignal(),
@@ -578,6 +582,95 @@ export function useInterview({
     await showCoachingTip(evaluation)
 
     return { evaluation, concurrentResult }
+  }
+
+  /**
+   * Fast-path evaluation for main (non-probe) answers.
+   *
+   * Uses the turn-router (~400ms) in the critical path instead of the full
+   * evaluate-answer call, so TTS for the next utterance can start immediately
+   * after the turn-router resolves.
+   *
+   * Full evaluation runs concurrently in the background; when it resolves it:
+   *   - updates evaluationsRef (for session feedback)
+   *   - shows the coaching tip as a non-blocking overlay (fires during TTS)
+   *
+   * Returns { routerResult, prefetchedQ } so the caller can branch immediately.
+   */
+  async function evaluateMainAnswer(
+    question: string,
+    answer: string,
+    qIdx: number,
+    nextQPromise?: Promise<string>,
+    probeDepth?: number,
+  ): Promise<{ routerResult: TurnRouterResult; prefetchedQ: string | null }> {
+    transitionTo('PROCESSING')
+    setLiveAnswer('')
+    setAvatarEmotion('curious')
+
+    // Thinking acknowledgment — same cadence as evaluateAndCoach
+    let ackCancelled = false
+    const shouldAck = !config?.coachMode && ackCountRef.current % 3 === 0
+    const ackTimer = shouldAck
+      ? setTimeout(() => {
+          if (!ackCancelled) {
+            const ack = THINKING_ACKS[ackCountRef.current % THINKING_ACKS.length]
+            void avatarSpeak(ack, 'friendly')
+          }
+        }, 1500)
+      : undefined
+
+    // Critical path: turn-router + next question prefetch in parallel (~400ms)
+    const [routerResult, prefetchedQ] = await Promise.all([
+      apiCallTurnRouter({
+        question,
+        answer,
+        probeDepth: probeDepth ?? 0,
+        questionIndex: qIdx,
+        interviewType: config?.interviewType || 'behavioral',
+        signal: getAbortSignal(),
+      }),
+      nextQPromise ?? Promise.resolve(null),
+    ])
+
+    ackCancelled = true
+    if (ackTimer) clearTimeout(ackTimer)
+    ackCountRef.current++
+
+    // Background: full evaluation (non-blocking from here on)
+    // Updates evaluationsRef and shows coaching tip overlay when resolved.
+    void evaluateAnswer(question, answer, qIdx, probeDepth)
+      .then((evaluation) => {
+        evaluationsRef.current = [...evaluationsRef.current, { ...evaluation, question, answer }]
+        performanceSignalRef.current = computePerformanceSignal()
+        // Coaching tip as non-blocking overlay — appears during TTS or while listening
+        const tip = deriveCoachingTip(evaluation, config?.role, config?.interviewType)
+        if (tip) {
+          setCoachingTip(tip)
+          const dismissMs = tip.length > 100 ? 6000 : tip.length > 50 ? 4000 : 2000
+          setTimeout(() => setCoachingTip((prev) => (prev === tip ? null : prev)), dismissMs)
+        }
+      })
+      .catch(() => {
+        // Push a minimal eval so session summary still has an entry
+        evaluationsRef.current = [
+          ...evaluationsRef.current,
+          {
+            questionIndex: qIdx,
+            question,
+            answer,
+            relevance: 60,
+            structure: 55,
+            specificity: 55,
+            ownership: 60,
+            needsFollowUp: false,
+            flags: [],
+          },
+        ]
+        performanceSignalRef.current = computePerformanceSignal()
+      })
+
+    return { routerResult, prefetchedQ: prefetchedQ as string | null }
   }
 
   // ─── Finish interview ──────────────────────────────────────────────────────
@@ -1136,27 +1229,28 @@ export function useInterview({
           role: 'candidate', text: finalAnswer, isProbe: false, probeDepth: 0,
         })
 
-        // Evaluate answer + generate next question in parallel for faster transitions
+        // ── Fast routing: turn-router + next question prefetch in parallel (~400ms) ──
+        // Full evaluation runs concurrently in the background (see evaluateMainAnswer).
+        // Coaching tip overlay fires when the bg eval resolves — non-blocking.
         checkAbort()
         const nextQIdx = qIdx + 1
         const shouldPrefetch = nextQIdx < maxQ && timeRemainingRef.current > 60
         const nextQuestionPromise = shouldPrefetch ? generateQuestion(nextQIdx) : undefined
-        const { evaluation, concurrentResult: prefetchedQ } = await evaluateAndCoach(
+        const { routerResult, prefetchedQ } = await evaluateMainAnswer(
           question, finalAnswer, qIdx, nextQuestionPromise, currentProbeDepthRef.current,
         )
         if (prefetchedQ) {
-          prefetchedQuestionRef.current = Promise.resolve(prefetchedQ as string)
-          // Pre-fetch TTS audio for the next question to eliminate voice delay
-          prefetchTTS(prefetchedQ as string)
+          prefetchedQuestionRef.current = Promise.resolve(prefetchedQ)
+          prefetchTTS(prefetchedQ)
         }
 
-        // Pre-fetch TTS for probe question if evaluation decided to probe
-        if (evaluation.probeDecision?.shouldProbe && evaluation.probeDecision.probeQuestion) {
-          prefetchTTS(evaluation.probeDecision.probeQuestion)
+        // Pre-fetch TTS for probe question the moment the router decides to probe
+        if (routerResult.nextAction === 'probe' && routerResult.probeQuestion) {
+          prefetchTTS(routerResult.probeQuestion)
         }
 
         // ── E7: Nonsensical/joke answer — re-ask without breaking character ──
-        if (evaluation.isNonsensical && currentProbeDepthRef.current === 0) {
+        if (routerResult.isNonsensical && currentProbeDepthRef.current === 0) {
           const reaskMsg = "I want to make sure I understand you correctly. Could you walk me through that more seriously?"
           addToTranscript('interviewer', reaskMsg, qIdx)
           warmUpListening?.()
@@ -1172,15 +1266,15 @@ export function useInterview({
               probeDepth: 1,
             })
             currentProbeDepthRef.current++
-            const { evaluation: retryEval } = await evaluateAndCoach(question, retryAnswer, qIdx, undefined, 1)
-            // Use retry evaluation for subsequent logic
-            Object.assign(evaluation, retryEval)
+            // Full eval for the retry — blocks but this is an edge case
+            await evaluateAndCoach(question, retryAnswer, qIdx, undefined, 1)
           }
         }
 
         // ── P6: Pivot re-anchoring — if candidate dodged the question, re-ask ──
-        if (evaluation.probeDecision?.isPivot && currentProbeDepthRef.current === 0 && timeRemainingRef.current >= 60) {
-          const reAnchorQ = evaluation.probeDecision.probeQuestion
+        // Use re-anchor question from router (it detects topic drift) or generate one.
+        if (routerResult.isPivot && currentProbeDepthRef.current === 0 && timeRemainingRef.current >= 60) {
+          const reAnchorQ = routerResult.probeQuestion
             || `Let me bring us back to the original question. ${question}`
           currentProbeDepthRef.current++
           qIdx++
@@ -1192,10 +1286,12 @@ export function useInterview({
           transitionTo('ASK_QUESTION')
           questionIndexRef.current = qIdx
           setQuestionIndex(qIdx)
-          setCurrentQuestion(reAnchorQ)
-          addToTranscript('interviewer', reAnchorQ, qIdx)
           warmUpListening?.()
-          await avatarSpeak(reAnchorQ, 'curious')
+          // BUG-7 fix: defer text + transcript until audio starts
+          await avatarSpeak(reAnchorQ, 'curious', () => {
+            setCurrentQuestion(reAnchorQ)
+            addToTranscript('interviewer', reAnchorQ, qIdx)
+          })
 
           setLiveAnswer('')
           const pivotAnswer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
@@ -1207,27 +1303,14 @@ export function useInterview({
               role: 'candidate', text: pivotAnswer, isProbe: true,
               probeDepth: currentProbeDepthRef.current,
             })
-            const { evaluation: pivotEval } = await evaluateAndCoach(reAnchorQ, pivotAnswer, qIdx, undefined, currentProbeDepthRef.current)
-            // Use pivot re-answer evaluation for downstream pushback/probe decisions
-            Object.assign(evaluation, pivotEval)
+            await evaluateAndCoach(reAnchorQ, pivotAnswer, qIdx, undefined, currentProbeDepthRef.current)
           }
         }
 
-        // ── Handle pushback (fires before probe loop, can act as ad-hoc probe) ──
-        let currentEval = evaluation
-        if (currentEval.pushback && timeRemainingRef.current >= 60) {
-          const pushbackResult = await handlePushback(currentEval, qIdx)
-          if (pushbackResult) {
-            qIdx++ // handlePushback used qIdx+1 for the pushback exchange
-            // Re-read the latest evaluation (from the pushback response)
-            currentEval = evaluationsRef.current[evaluationsRef.current.length - 1]
-          }
-          if (isInterviewOver()) return
-        }
-
-        // ── Probe loop — depth varies by interview type ──
-        // Case studies need deeper probing (framework → analysis → recommendation → trade-offs).
-        // Behavioral/screening should cap sooner to avoid interrogation.
+        // ── Probe loop ──
+        // First probe decision comes from the turn-router (routerResult.nextAction).
+        // Subsequent probe decisions come from the full evaluation inside evaluateAndCoach.
+        // Probe limits vary by interview type: case studies go deeper, screening stays shallow.
         const probeLimit: Record<string, number> = {
           'case-study': 5,
           technical: 3,
@@ -1235,30 +1318,37 @@ export function useInterview({
           screening: 2,
         }
         const MAX_PROBES_PER_TOPIC = probeLimit[config?.interviewType || 'screening'] ?? 2
-        while (shouldProbeOrAdvance(currentEval) === 'probe' && currentProbeDepthRef.current < MAX_PROBES_PER_TOPIC) {
+
+        // First-level probe: driven by turn-router (TTS can start as soon as router returns)
+        let nextProbeAction: 'probe' | 'advance' = routerResult.nextAction
+        let nextProbeQ: string | undefined = routerResult.probeQuestion
+        let nextProbeType: ProbeType | undefined = routerResult.style === 'probing' ? 'challenge' : 'expand'
+
+        while (nextProbeAction === 'probe' && nextProbeQ && currentProbeDepthRef.current < MAX_PROBES_PER_TOPIC) {
           if (isInterviewOver()) return
 
-          const probeQ = currentEval.probeDecision!.probeQuestion!
-          const probeType = currentEval.probeDecision!.probeType ?? undefined
+          const probeQ = nextProbeQ
+          const probeType = nextProbeType
           currentProbeDepthRef.current++
-          qIdx++ // Increment global exchange counter
+          qIdx++
 
           currentThreadRef.current.push({
             role: 'interviewer', text: probeQ, isProbe: true,
             probeType, probeDepth: currentProbeDepthRef.current,
           })
 
-          // Ask probe
+          // Ask probe — BUG-7 fix: defer text + transcript until audio starts
           checkAbort()
           transitionTo('ASK_QUESTION')
           questionIndexRef.current = qIdx
           setQuestionIndex(qIdx)
-          setCurrentQuestion(probeQ)
-          addToTranscript('interviewer', probeQ, qIdx)
           warmUpListening?.()
-          await avatarSpeak(probeQ, 'curious')
+          await avatarSpeak(probeQ, routerResult.style !== 'neutral' ? toneToEmotion(routerResult.style) : 'curious', () => {
+            setCurrentQuestion(probeQ)
+            addToTranscript('interviewer', probeQ, qIdx)
+          })
 
-          // Listen for probe answer — defer LISTENING until capture starts
+          // Listen for probe answer
           checkAbort()
           setLiveAnswer('')
           const probeAnswer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
@@ -1277,23 +1367,29 @@ export function useInterview({
             probeType, probeDepth: currentProbeDepthRef.current,
           })
 
-          // Evaluate probe answer
+          // Full evaluation for probe answer (30s listen window already covered it)
           const { evaluation: probeEval } = await evaluateAndCoach(
             probeQ, probeAnswer, qIdx, undefined, currentProbeDepthRef.current,
           )
-          currentEval = probeEval
+
+          // Next probe decision comes from the full eval (not turn-router)
+          nextProbeAction = shouldProbeOrAdvance(probeEval)
+          nextProbeQ = probeEval.probeDecision?.probeQuestion ?? undefined
+          nextProbeType = probeEval.probeDecision?.probeType ?? 'expand'
         }
 
         // ── Finalize thread, advance to next topic ──
         finalizeThread(topicQuestion)
         currentTopicIndexRef.current++
 
-        // Avatar emotion based on last evaluation quality
-        const avgScore =
-          (currentEval.relevance + currentEval.structure +
-           currentEval.specificity + currentEval.ownership) / 4
-        const responseEmotion: AvatarEmotion =
-          avgScore >= 75 ? 'impressed' : avgScore >= 55 ? 'friendly' : 'curious'
+        // Avatar emotion: use the last eval in the ref (bg eval has resolved by now
+        // since probe loop / TTS playback covered the 2-3s eval window).
+        const lastEval = evaluationsRef.current[evaluationsRef.current.length - 1]
+        const responseEmotion: AvatarEmotion = (() => {
+          if (!lastEval) return 'friendly'
+          const avg = (lastEval.relevance + lastEval.structure + lastEval.specificity + lastEval.ownership) / 4
+          return avg >= 75 ? 'impressed' : avg >= 55 ? 'friendly' : 'curious'
+        })()
         setAvatarEmotion(responseEmotion)
 
         qIdx++

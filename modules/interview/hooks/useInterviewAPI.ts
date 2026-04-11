@@ -27,6 +27,14 @@ export interface PreviousAnswerSummary {
   keyClaimsFromAnswer: string
 }
 
+export interface TurnRouterResult {
+  nextAction: 'probe' | 'advance'
+  probeQuestion?: string
+  style: 'curious' | 'probing' | 'encouraging' | 'neutral'
+  isNonsensical: boolean
+  isPivot: boolean
+}
+
 export interface UseInterviewAPIReturn {
   generateQuestion: (
     qIdx: number,
@@ -43,6 +51,14 @@ export interface UseInterviewAPIReturn {
     signal?: AbortSignal,
     previousSummaries?: PreviousAnswerSummary[],
   ) => Promise<AnswerEvaluation>
+  callTurnRouter: (params: {
+    question: string
+    answer: string
+    probeDepth: number
+    questionIndex: number
+    interviewType: string
+    signal?: AbortSignal
+  }) => Promise<TurnRouterResult>
 }
 
 /**
@@ -148,5 +164,45 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
     [config, getSessionId]
   )
 
-  return { generateQuestion, evaluateAnswer }
+  const TURN_ROUTER_FALLBACK: TurnRouterResult = {
+    nextAction: 'advance',
+    probeQuestion: undefined,
+    style: 'neutral',
+    isNonsensical: false,
+    isPivot: false,
+  }
+
+  const callTurnRouter = useCallback(
+    async ({
+      question,
+      answer,
+      probeDepth,
+      questionIndex,
+      interviewType,
+      signal,
+    }: {
+      question: string
+      answer: string
+      probeDepth: number
+      questionIndex: number
+      interviewType: string
+      signal?: AbortSignal
+    }): Promise<TurnRouterResult> => {
+      try {
+        const res = await fetch('/api/turn-router', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal,
+          body: JSON.stringify({ question, answer, probeDepth, questionIndex, interviewType }),
+        })
+        if (!res.ok) return TURN_ROUTER_FALLBACK
+        return (await res.json()) as TurnRouterResult
+      } catch {
+        return TURN_ROUTER_FALLBACK
+      }
+    },
+    [], // no deps — pure fetch
+  )
+
+  return { generateQuestion, evaluateAnswer, callTurnRouter }
 }
