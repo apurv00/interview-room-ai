@@ -19,7 +19,7 @@ interface DashboardData {
     monthlyInterviewLimit: number
   }
   recentCandidates: Array<{
-    id: string
+    id?: string
     email: string
     name: string
     status: string

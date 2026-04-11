@@ -46,13 +46,13 @@ export default function CandidateDetailPage() {
     if (authStatus === 'unauthenticated') { router.push('/signin'); return }
     if (authStatus !== 'authenticated') return
 
-    fetch('/api/hire/candidates')
-      .then(r => r.json())
-      .then(data => {
-        const found = (data.candidates || []).find((c: CandidateDetail) => c.id === sessionId)
-        setCandidate(found || null)
+    fetch(`/api/hire/candidates/${sessionId}`)
+      .then(r => {
+        if (!r.ok) throw new Error('Candidate not found')
+        return r.json()
       })
-      .catch(() => {})
+      .then(data => setCandidate(data.candidate || null))
+      .catch(() => setCandidate(null))
       .finally(() => setLoading(false))
   }, [authStatus, router, sessionId])
 
