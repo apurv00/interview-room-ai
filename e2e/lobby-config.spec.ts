@@ -7,10 +7,15 @@ test.describe('Lobby & Setup', () => {
     expect(page.url()).not.toContain('/signin')
   })
 
-  test('interview setup page loads', async ({ page }) => {
+  test('interview setup page renders the wizard shell', async ({ page }) => {
     const response = await page.goto('/interview/setup')
     expect(response?.status()).toBeLessThan(500)
     expect(page.url()).not.toContain('/signin')
+
+    // The step counter is the cheapest stable selector to prove the wizard
+    // component actually rendered (see InterviewSetupForm.tsx:675). The
+    // setup-wizard.spec.ts suite covers the step progression in detail.
+    await expect(page.getByText(/Step 1 of \d+/i)).toBeVisible()
   })
 })
 
