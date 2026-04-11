@@ -6,7 +6,7 @@ on:
       url:
         description: "URL to test against"
         required: false
-        default: "https://interviewprep.guru"
+        default: "https://staging.interviewprep.guru"
 
 concurrency:
   group: e2e-tests
@@ -55,7 +55,7 @@ jobs:
       - name: Run E2E tests
         run: npm run test:e2e
         env:
-          TEST_URL: ${{ inputs.url }}
+          TEST_URL: ${{ inputs.url || 'https://staging.interviewprep.guru' }}
 
       - name: Upload test results
         if: always()
