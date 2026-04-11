@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useAuthGate } from '@shared/providers/AuthGateProvider'
 import { track } from '@shared/analytics/track'
+import { PLANS } from '@shared/services/stripe'
 import {
   Play, Eye, Mic, Brain, Activity,
   ChevronRight, CheckCircle2, User,
@@ -625,7 +626,9 @@ export default function MarketingHomepage() {
               </div>
               <h3 className="text-xl font-bold text-white mb-1">Pro</h3>
               <div className="flex items-baseline gap-1 mb-6 pb-6 border-b border-slate-700">
-                <span className="text-4xl font-extrabold text-white">$11</span>
+                {/* Price pulled from the shared PLANS config (source of truth)
+                    so this preview can never drift from /pricing again. */}
+                <span className="text-4xl font-extrabold text-white">${PLANS.pro.priceMonthly}</span>
                 <span className="text-slate-400">/ month</span>
               </div>
               <ul className="space-y-3 mb-8 flex-1">
