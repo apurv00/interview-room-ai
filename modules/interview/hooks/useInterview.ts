@@ -556,14 +556,18 @@ export function useInterview({
   // ─── Finish interview ──────────────────────────────────────────────────────
 
   const finishInterview = useCallback(async () => {
-    transitionTo('SCORING')
+    // CRITICAL: cancel everything BEFORE the state transition so any in-flight
+    // avatarSpeak / question generation / coaching sleep is interrupted
+    // synchronously. Without these the loop can fire one more question after
+    // the user clicks End.
+    interviewAbortRef.current?.abort()
+    coachingAbortRef.current?.abort()
+    cancelTTS() // stops streaming + buffered audio + in-flight TTS fetches
     window.speechSynthesis.cancel()
     stopListening()
     onRecordingStop?.()
-    // Cancel the interview loop and coaching sleep
-    interviewAbortRef.current?.abort()
-    coachingAbortRef.current?.abort()
     setCoachingTip(null)
+    transitionTo('SCORING')
 
     const data = {
       config,
@@ -658,7 +662,7 @@ export function useInterview({
       localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
       router.push('/feedback/local')
     }
-  }, [config, router, stopListening, onRecordingStop])
+  }, [config, router, stopListening, onRecordingStop, cancelTTS]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Intentional silence ───────────────────────────────────────────────────
 
@@ -859,6 +863,9 @@ export function useInterview({
         }
         warmUpListening?.()
         await avatarSpeak(spokenQuestion, emotion)
+        // BUG 1 fix: re-check after the long avatarSpeak await — user may have
+        // ended the interview while TTS was playing.
+        if (isInterviewOver()) return
 
         // ── Conversational listen loop ──
         // Classifies candidate intent before processing. Handles: clarifications,

@@ -32,6 +32,12 @@ export function useAvatarSpeech({
   const [isAvatarTalking, setIsAvatarTalking] = useState(false)
   // Cache for pre-fetched TTS audio blobs keyed by text
   const ttsCacheRef = useRef<Map<string, Promise<Blob | null>>>(new Map())
+  // Track the currently-playing audio element + its object URL so cancelTTS()
+  // can interrupt buffered/cached playback (not just streaming).
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null)
+  const currentAudioUrlRef = useRef<string | null>(null)
+  // Track in-flight TTS fetches so they can be aborted on cancelTTS().
+  const currentFetchAbortRef = useRef<AbortController | null>(null)
   // Streaming audio playback (MediaSource API)
   const { streamAndPlay, cancel: cancelStream, isSupported: isStreamingSupported } = useStreamingAudio()
 
@@ -61,23 +67,31 @@ export function useAvatarSpeech({
     return new Promise<void>((resolve) => {
       const url = URL.createObjectURL(blob)
       const audio = new Audio(url)
+      // Track refs so cancelTTS() can interrupt this playback synchronously
+      currentAudioRef.current = audio
+      currentAudioUrlRef.current = url
+      const cleanup = () => {
+        if (currentAudioRef.current === audio) {
+          currentAudioRef.current = null
+          currentAudioUrlRef.current = null
+        }
+        URL.revokeObjectURL(url)
+        setIsAvatarTalking(false)
+      }
       // Route into the voice mixer so the AI's voice is captured by
       // MediaRecorder alongside the candidate's mic. Safe no-op when
       // the mixer isn't initialised.
       tapAudioElement(audio)
       audio.onended = () => {
-        URL.revokeObjectURL(url)
-        setIsAvatarTalking(false)
+        cleanup()
         resolve()
       }
       audio.onerror = () => {
-        URL.revokeObjectURL(url)
-        setIsAvatarTalking(false)
+        cleanup()
         resolve()
       }
       audio.play().catch(() => {
-        URL.revokeObjectURL(url)
-        setIsAvatarTalking(false)
+        cleanup()
         resolve()
       })
     })
@@ -136,6 +150,10 @@ export function useAvatarSpeech({
       setIsAvatarTalking(true)
       cancelStream() // Cancel any in-progress stream
 
+      // Fresh AbortController for this speak call so cancelTTS() can stop it
+      const fetchAbort = new AbortController()
+      currentFetchAbortRef.current = fetchAbort
+
       if (isMultimodalEnabled) {
         try {
           // Priority 1: Use pre-fetched audio if available (instant playback)
@@ -156,6 +174,7 @@ export function useAvatarSpeech({
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text }),
+                signal: fetchAbort.signal,
               })
               if (res.ok && res.body) {
                 await streamAndPlay(res, () => {
@@ -164,7 +183,12 @@ export function useAvatarSpeech({
                 setIsAvatarTalking(false)
                 return
               }
-            } catch {
+            } catch (err) {
+              // If aborted, propagate so caller knows we're cancelled
+              if ((err as Error)?.name === 'AbortError') {
+                setIsAvatarTalking(false)
+                return
+              }
               // Streaming failed — fall through to buffered
             }
           }
@@ -174,13 +198,23 @@ export function useAvatarSpeech({
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text }),
+            signal: fetchAbort.signal,
           })
           if (res.ok) {
             const blob = await res.blob()
+            // Re-check abort: user may have ended interview while blob downloaded
+            if (fetchAbort.signal.aborted) {
+              setIsAvatarTalking(false)
+              return
+            }
             await playBlob(blob)
             return
           }
-        } catch {
+        } catch (err) {
+          if ((err as Error)?.name === 'AbortError') {
+            setIsAvatarTalking(false)
+            return
+          }
           // Fall through to browser TTS
         }
       }
@@ -192,7 +226,25 @@ export function useAvatarSpeech({
   )
 
   const cancelTTS = useCallback(() => {
+    // 1. Abort any in-flight TTS fetch
+    currentFetchAbortRef.current?.abort()
+    currentFetchAbortRef.current = null
+    // 2. Stop the streaming MediaSource pipeline
     cancelStream()
+    // 3. Stop any currently-playing buffered <audio> element
+    if (currentAudioRef.current) {
+      try {
+        currentAudioRef.current.pause()
+        currentAudioRef.current.src = ''
+        currentAudioRef.current.load()
+      } catch { /* ignore */ }
+      if (currentAudioUrlRef.current) {
+        try { URL.revokeObjectURL(currentAudioUrlRef.current) } catch { /* ignore */ }
+      }
+      currentAudioRef.current = null
+      currentAudioUrlRef.current = null
+    }
+    // 4. Cancel browser speechSynthesis fallback
     window.speechSynthesis?.cancel()
     setIsAvatarTalking(false)
   }, [cancelStream])
