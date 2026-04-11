@@ -127,8 +127,16 @@ export function useInterview({
     setOnInterrupt?.(null) // Clear interrupt handler after TTS finishes
   }, [rawAvatarSpeak, setOnInterrupt, cancelTTS])
 
+  // ── DB session id (hoisted above useInterviewAPI so the hook can read it) ──
+  const sessionIdRef = useRef<string | null>(null)
+
   // ── API calls (extracted to useInterviewAPI) ──
-  const { generateQuestion: apiGenerateQuestion, evaluateAnswer: apiEvaluateAnswer } = useInterviewAPI({ config })
+  // Pass a lazy getter for sessionId so the fetch body sends the latest value
+  // once createDbSession resolves — without forcing a re-render of this hook.
+  const { generateQuestion: apiGenerateQuestion, evaluateAnswer: apiEvaluateAnswer } = useInterviewAPI({
+    config,
+    getSessionId: () => sessionIdRef.current,
+  })
 
   // ── Interview content ──
   const [currentQuestion, setCurrentQuestion] = useState('')
@@ -248,7 +256,8 @@ export function useInterview({
   const timeRemainingRef = useRef(0)
 
   // ── DB session ──
-  const sessionIdRef = useRef<string | null>(null)
+  // Note: sessionIdRef is declared above (near useInterviewAPI) so it can be
+  // passed to the API hook. Declared here would cause a duplicate-identifier error.
   const usageLimitReachedRef = useRef(false)
 
   // ─── Init timer + DB session ────────────────────────────────────────────────
