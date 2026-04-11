@@ -19,9 +19,13 @@ const DEFAULT_IGNORE_PATTERNS: RegExp[] = [
   /Hydration failed/i,
   /hydration mismatch/i,
   /Text content does not match/i,
-  // Content security policy violations from ad-blockers and third-party scripts.
-  /Content Security Policy/i,
-  /Refused to (load|execute|connect|apply)/i,
+  // CSP violations from known third-party beacons / ad networks only.
+  // Intentionally scoped to specific blocked-origin hosts so that a
+  // first-party CSP regression (e.g., a broken nonce/hash on
+  // `/_next/static/chunks/*` or a blocked same-origin font) still fails
+  // the test. googletagmanager / google-analytics / sentry.io are already
+  // covered above by plain host rules, so they're not duplicated here.
+  /Refused to (?:load|execute|connect|apply|frame) [^\n]*(?:doubleclick|facebook\.(?:net|com)|hotjar|segment\.(?:io|com)|intercom|fullstory|linkedin|clarity\.ms|stripe\.com|cloudflareinsights|cdn\.segment|mixpanel|amplitude|posthog|launchdarkly)/i,
   // Cold-boot image / manifest / font load failures that don't affect page correctness.
   /Failed to load resource.*(favicon|opengraph|apple-icon|icon\?|manifest|fonts\.(gstatic|googleapis))/i,
   // Sentry-style passthrough errors logged as console.error.
