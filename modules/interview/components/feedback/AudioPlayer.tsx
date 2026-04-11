@@ -50,7 +50,19 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
     const audio = audioRef.current
     if (!audio) return
 
+    // MediaRecorder-produced WebM files don't include a duration header,
+    // so `audio.duration` is Infinity until the browser has scanned to the
+    // end. Workaround: on loadedmetadata, if duration is non-finite, seek
+    // to a very large value to force the browser to read to EOF; the real
+    // duration then arrives via the `durationchange` event, after which we
+    // seek back to 0. Mirrors the pattern in VideoPlayer.tsx.
+    let durationProbeInProgress = false
+
     const handleTimeUpdate = () => {
+      // While probing for duration we may receive timeupdate events with
+      // very large currentTime values — ignore them so the UI doesn't
+      // flicker to "Infinity".
+      if (durationProbeInProgress) return
       const now = performance.now()
       if (now - lastUpdateRef.current < THROTTLE_MS) return
       lastUpdateRef.current = now
@@ -58,9 +70,36 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
       onTimeUpdateRef.current?.(audio.currentTime)
     }
     const handleLoadedMetadata = () => {
-      setDuration(audio.duration)
-      setIsLoading(false)
-      setError(null)
+      if (Number.isFinite(audio.duration) && audio.duration > 0) {
+        setDuration(audio.duration)
+        setIsLoading(false)
+        setError(null)
+        return
+      }
+      // Duration is Infinity — trigger the probe.
+      durationProbeInProgress = true
+      try {
+        audio.currentTime = Number.MAX_SAFE_INTEGER
+      } catch {
+        // Some browsers throw on non-finite seeks; bail out gracefully.
+        setIsLoading(false)
+      }
+    }
+    const handleDurationChange = () => {
+      if (Number.isFinite(audio.duration) && audio.duration > 0) {
+        setDuration(audio.duration)
+        if (durationProbeInProgress) {
+          durationProbeInProgress = false
+          try {
+            audio.currentTime = 0
+          } catch {
+            /* ignore */
+          }
+          setCurrentTime(0)
+          setIsLoading(false)
+          setError(null)
+        }
+      }
     }
     const handleCanPlay = () => {
       setIsLoading(false)
@@ -90,6 +129,7 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
 
     audio.addEventListener('timeupdate', handleTimeUpdate)
     audio.addEventListener('loadedmetadata', handleLoadedMetadata)
+    audio.addEventListener('durationchange', handleDurationChange)
     audio.addEventListener('canplay', handleCanPlay)
     audio.addEventListener('ended', handleEnded)
     audio.addEventListener('error', handleError)
@@ -97,6 +137,7 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
     return () => {
       audio.removeEventListener('timeupdate', handleTimeUpdate)
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata)
+      audio.removeEventListener('durationchange', handleDurationChange)
       audio.removeEventListener('canplay', handleCanPlay)
       audio.removeEventListener('ended', handleEnded)
       audio.removeEventListener('error', handleError)

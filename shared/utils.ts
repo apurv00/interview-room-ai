@@ -1,7 +1,10 @@
 /**
- * Format seconds as MM:SS string.
+ * Format seconds as MM:SS string. Guards against Infinity / NaN / negatives
+ * which can come from MediaRecorder WebM files whose duration metadata is
+ * not yet available.
  */
 export function formatTime(s: number): string {
+  if (!Number.isFinite(s) || s < 0) return '0:00'
   const m = Math.floor(s / 60)
   const sec = Math.floor(s % 60)
   return `${m}:${sec.toString().padStart(2, '0')}`
