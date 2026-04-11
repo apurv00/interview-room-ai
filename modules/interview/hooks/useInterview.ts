@@ -483,21 +483,28 @@ export function useInterview({
   }
 
   /** Show coaching tip briefly.
-   *  In coach mode: blocks for 3s so the candidate reads the full tip.
+   *  In coach mode: blocks so the candidate reads the full tip.
    *  In normal mode: fires-and-forgets so the next question can start
-   *  immediately — the tip auto-dismisses after 800ms or when the next
-   *  transitionTo('ASK_QUESTION') clears it, whichever comes first. */
+   *  immediately — the tip auto-dismisses after a length-aware delay
+   *  or when the next transitionTo('ASK_QUESTION') clears it. */
   async function showCoachingTip(evaluation: AnswerEvaluation): Promise<void> {
     transitionTo('COACHING')
     const tip = deriveCoachingTip(evaluation, config?.role, config?.interviewType)
     setCoachingTip(tip)
+
+    // BUG 5 fix: scale dismissal time to tip length so longer STAR-style
+    // tips (100+ chars) don't disappear before the candidate can read them.
+    // Reading speed ~50 chars/sec; add 1s buffer for context-switching.
+    const tipLength = tip.length
+    const normalDismissMs = tipLength > 100 ? 6000 : tipLength > 50 ? 4000 : 2000
+    const coachDismissMs = Math.max(3000, normalDismissMs)
 
     if (config?.coachMode) {
       // Coach mode: block so the candidate can read the full tip
       const abortCtrl = new AbortController()
       coachingAbortRef.current = abortCtrl
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 3000)
+        const timer = setTimeout(resolve, coachDismissMs)
         abortCtrl.signal.addEventListener('abort', () => {
           clearTimeout(timer)
           resolve()
@@ -508,12 +515,12 @@ export function useInterview({
         setCoachingTip(null)
       }
     } else {
-      // Normal mode: don't block — auto-dismiss after 800ms in the background.
+      // Normal mode: don't block — auto-dismiss after the length-aware delay.
       // The tip is also cleared on next transitionTo('ASK_QUESTION').
       setTimeout(() => {
         // Only clear if coaching tip hasn't been replaced by something else
         setCoachingTip((prev) => (prev === tip ? null : prev))
-      }, 800)
+      }, normalDismissMs)
     }
   }
 
