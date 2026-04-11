@@ -232,6 +232,13 @@ export function useInterview({
   // ── Thinking pause mode (TM1) — suspends silence timeout while candidate thinks ──
   const isThinkingPauseRef = useRef(false)
 
+  // ── BUG 4 fix: cooldown for "take your time" nudge ──
+  // Once fired, don't repeat for 2 minutes (effectively once per short
+  // interview). Reset on finish, not per question — Rakshit reported it
+  // firing on the 4th question after 3 successful answers, which felt
+  // patronizing.
+  const lastTakeYourTimeRef = useRef<number>(0)
+
   // ── Timer ──
   const [timeRemaining, setTimeRemaining] = useState(0)
   const timeRemainingRef = useRef(0)
@@ -892,12 +899,21 @@ export function useInterview({
             }
 
             if (conversationTurns === 0) {
-              // First attempt empty — nudge candidate
-              checkAbort()
-              const retryPrompt = "Take your time — whenever you're ready, I'd love to hear your thoughts on this."
-              addToTranscript('interviewer', retryPrompt, qIdx)
-              warmUpListening?.()
-              await avatarSpeak(retryPrompt, 'friendly')
+              // First attempt empty — nudge candidate.
+              // BUG 4 fix: only fire the "take your time" nudge once per
+              // 2 minutes per session. Reported issue: after 3 successful
+              // answers, hearing "take your time" again felt patronizing
+              // and out-of-context. Skip the spoken nudge if we recently
+              // fired one — just bump the counter and silently keep listening.
+              const NUDGE_COOLDOWN_MS = 120_000
+              if (Date.now() - lastTakeYourTimeRef.current > NUDGE_COOLDOWN_MS) {
+                checkAbort()
+                const retryPrompt = "Take your time — whenever you're ready, I'd love to hear your thoughts on this."
+                addToTranscript('interviewer', retryPrompt, qIdx)
+                warmUpListening?.()
+                await avatarSpeak(retryPrompt, 'friendly')
+                lastTakeYourTimeRef.current = Date.now()
+              }
               conversationTurns++
               continue
             }
