@@ -36,6 +36,8 @@ export const TASK_SLOTS = [
   'interview.evaluation-engine-v2',
   // Conversational — answering candidate's proactive questions
   'interview.answer-candidate-question',
+  // Fast turn router — probe-vs-advance decision in the critical conversation path
+  'interview.turn-router',
 ] as const
 
 export type TaskSlot = (typeof TASK_SLOTS)[number]
@@ -68,4 +70,5 @@ export const TASK_SLOT_DEFAULTS: Record<TaskSlot, { model: string; maxTokens: nu
   'onboarding.extract-profile':     { model: 'claude-sonnet-4-6-20250514', maxTokens: 2000, provider: 'anthropic' },
   'interview.evaluation-engine-v2': { model: 'claude-sonnet-4-6-20250514', maxTokens: 2000, provider: 'anthropic' },
   'interview.answer-candidate-question': { model: 'claude-haiku-4-5-20251001', maxTokens: 200, provider: 'anthropic' },
+  'interview.turn-router':               { model: 'claude-haiku-4-5-20251001', maxTokens: 150, provider: 'anthropic' },
 }
