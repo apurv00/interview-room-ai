@@ -8,6 +8,9 @@ import { NotFoundError, ForbiddenError, UsageLimitError } from '@shared/errors'
 import { canViewSession, canEditSession } from '@shared/auth/permissions'
 import { FALLBACK_DEPTHS } from '@shared/db/seed'
 import { logger } from '@shared/logger'
+import { parseJobDescription, buildParsedJDContext } from '../persona/jdParserService'
+import { parseAndCacheResume, buildParsedResumeContext } from '../persona/resumeContextService'
+import { setCachedJDContext, setCachedResumeContext } from '../persona/documentContextCache'
 
 interface CreateSessionInput {
   userId: string
@@ -197,6 +200,50 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
   }
 
   logger.info({ sessionId: session._id, userId: input.userId }, 'Interview session created')
+
+  // ── Document Intelligence Layer ────────────────────────────────────────
+  // Parse JD + resume in parallel so the runtime loop (generate-question /
+  // evaluate-answer) can send compact, importance-ranked context instead of
+  // a raw .slice(0, 2500) of the source text. Parse failures are NON-FATAL —
+  // the on-demand fallback in `documentContextCache` handles the gap.
+  if (input.jobDescription || input.resumeText) {
+    const sid = (session._id as mongoose.Types.ObjectId).toString()
+    const domain = input.config.role
+    try {
+      const [jdResult, resumeResult] = await Promise.allSettled([
+        input.jobDescription ? parseJobDescription(input.jobDescription) : Promise.resolve(null),
+        input.resumeText ? parseAndCacheResume(sid, input.resumeText, domain) : Promise.resolve(null),
+      ])
+
+      const update: Record<string, unknown> = {}
+
+      if (jdResult.status === 'fulfilled' && jdResult.value && jdResult.value.requirements?.length) {
+        update.parsedJobDescription = jdResult.value
+        const ctx = buildParsedJDContext(jdResult.value)
+        if (ctx) {
+          try { await setCachedJDContext(sid, ctx) } catch { /* non-fatal */ }
+        }
+      }
+
+      if (resumeResult.status === 'fulfilled' && resumeResult.value) {
+        update.parsedResume = resumeResult.value
+        const ctx = buildParsedResumeContext(resumeResult.value, domain)
+        if (ctx) {
+          try { await setCachedResumeContext(sid, ctx) } catch { /* non-fatal */ }
+        }
+      }
+
+      if (Object.keys(update).length > 0) {
+        try {
+          await InterviewSession.findByIdAndUpdate(session._id, update)
+        } catch (err) {
+          logger.warn({ err, sessionId: sid }, 'Failed to persist parsed documents (non-fatal)')
+        }
+      }
+    } catch (err) {
+      logger.warn({ err, sessionId: session._id }, 'Document Intelligence Layer failed (non-fatal)')
+    }
+  }
 
   return session
 }

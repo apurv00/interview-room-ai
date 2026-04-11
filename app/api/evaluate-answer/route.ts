@@ -13,6 +13,7 @@ import { User, InterviewDepth } from '@shared/db/models'
 import { FALLBACK_DEPTHS } from '@shared/db/seed'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { getScoringDimensions, buildRubricPromptSection } from '@interview/services/eval/evaluationEngine'
+import { getOrLoadJDContext, getOrLoadResumeContext } from '@interview/services/persona/documentContextCache'
 import type { AnswerEvaluation } from '@shared/types'
 import { z } from 'zod'
 
@@ -25,7 +26,7 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
   rateLimit: { windowMs: 60_000, maxRequests: 15, keyPrefix: 'rl:eval' },
 
   async handler(req, { user, body }) {
-    const { config, question, answer, questionIndex, probeDepth } = body
+    const { config, question, answer, questionIndex, probeDepth, sessionId } = body
     const startTime = Date.now()
     const interviewType = config.interviewType || 'behavioral'
     const domainLabel = getDomainLabel(config.role)
@@ -89,10 +90,15 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
       } catch { /* continue with existing dims */ }
     }
 
-    // Build JD context if available — wrapped in XML tags to prevent prompt injection
+    // Build JD context if available — wrapped in XML tags to prevent prompt injection.
+    // Prefers the Document Intelligence Layer (structured JD analysis) when
+    // available; falls back to raw .slice() for legacy sessions or parse failures.
     let jdContext = ''
     if (config.jobDescription) {
-      jdContext = `\n\n<job_description>\n${config.jobDescription.slice(0, 2000)}\n</job_description>\n\nUse the job description above to evaluate how well the answer aligns with the role's requirements.`
+      const jdCtx = sessionId ? await getOrLoadJDContext(sessionId, config.jobDescription) : null
+      jdContext = jdCtx
+        ? `\n\n<job_description_analysis>\n${jdCtx}\n</job_description_analysis>\n\nUse the structured analysis above to evaluate how well the answer aligns with the role's must-have requirements.`
+        : `\n\n<job_description>\n${config.jobDescription.slice(0, 2000)}\n</job_description>\n\nUse the job description above to evaluate how well the answer aligns with the role's requirements.`
     }
 
     // Build profile context
@@ -155,10 +161,15 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
       companyContext += `\nThe role is in the ${config.targetIndustry} industry. Weight industry-relevant knowledge and terminology appropriately.`
     }
 
-    // Build resume context for cross-reference verification
+    // Build resume context for cross-reference verification.
+    // Prefers the Document Intelligence Layer (domain-filtered structured
+    // resume) when available; falls back to raw .slice() for legacy sessions.
     let resumeContext = ''
     if (config.resumeText) {
-      resumeContext = `\n\n<candidate_resume>\n${config.resumeText.slice(0, 1500)}\n</candidate_resume>\nCross-reference the candidate's answer with their resume claims. Flag inconsistencies in the flags array (e.g., "Resume claims team lead but answer suggests IC role").`
+      const resumeCtx = sessionId ? await getOrLoadResumeContext(sessionId, config.resumeText, config.role) : null
+      resumeContext = resumeCtx
+        ? `\n\n<candidate_resume_analysis>\n${resumeCtx}\n</candidate_resume_analysis>\nCross-reference the candidate's answer with their resume claims above. Flag inconsistencies in the flags array (e.g., "Resume claims team lead but answer suggests IC role").`
+        : `\n\n<candidate_resume>\n${config.resumeText.slice(0, 1500)}\n</candidate_resume>\nCross-reference the candidate's answer with their resume claims. Flag inconsistencies in the flags array (e.g., "Resume claims team lead but answer suggests IC role").`
     }
 
     const evalCriteriaBlock = evalCriteria ? `\n\nEVALUATION FOCUS: ${evalCriteria}` : ''

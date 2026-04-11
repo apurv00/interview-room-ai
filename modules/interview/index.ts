@@ -9,6 +9,20 @@ export type { SessionEvaluationSummary } from './services/eval/evaluationEngine'
 export { generateSessionBrief, briefToPromptContext } from './services/persona/personalizationEngine'
 export { retrieveQuestions, getQuestionBankContext, getCompanyContext } from './services/persona/retrievalService'
 export { parseJobDescription, buildParsedJDContext } from './services/persona/jdParserService'
+export {
+  parseAndCacheResume,
+  buildParsedResumeContext,
+  filterResumeByDomain,
+} from './services/persona/resumeContextService'
+export type { ParsedResume } from './services/persona/resumeContextService'
+export {
+  getOrLoadJDContext,
+  getOrLoadResumeContext,
+  getCachedJDContext,
+  setCachedJDContext,
+  getCachedResumeContext,
+  setCachedResumeContext,
+} from './services/persona/documentContextCache'
 
 // ── Config ──
 export { QUESTION_COUNT, PRESSURE_QUESTION_INDEX, getDomainLabel, AVATAR_NAME, AVATAR_TITLE, getInterviewIntro, getAvatarTitle, WRAP_UP_LINE, EXPERIENCE_LABELS, DURATION_LABELS, ROLE_LABELS } from './config/interviewConfig'

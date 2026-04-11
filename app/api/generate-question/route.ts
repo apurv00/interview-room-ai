@@ -12,6 +12,7 @@ import { FALLBACK_DOMAINS, FALLBACK_DEPTHS } from '@shared/db/seed'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { generateSessionBrief, briefToPromptContext } from '@interview/services/persona/personalizationEngine'
 import { getQuestionBankContext } from '@interview/services/persona/retrievalService'
+import { getOrLoadJDContext, getOrLoadResumeContext } from '@interview/services/persona/documentContextCache'
 import { z } from 'zod'
 import { completion } from '@shared/services/modelRouter'
 import { DATA_BOUNDARY_RULE } from '@shared/services/promptSecurity'
@@ -25,7 +26,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
   rateLimit: { windowMs: 60_000, maxRequests: 15, keyPrefix: 'rl:gen-q' },
 
   async handler(req, { user, body }) {
-    const { config, questionIndex, previousQA, performanceSignal, lastThreadSummary, completedThreads } = body
+    const { config, questionIndex, previousQA, performanceSignal, lastThreadSummary, completedThreads, sessionId } = body
     const startTime = Date.now()
     const interviewType = config.interviewType || 'behavioral'
 
@@ -49,13 +50,22 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     // Note: qaContext contains user-provided answers which are wrapped
     // in <prior_conversation> tags in the prompt to prevent injection
 
-    // Build context from JD and resume — wrapped in XML tags to prevent prompt injection
+    // Build context from JD and resume — wrapped in XML tags to prevent prompt injection.
+    // Prefers the Document Intelligence Layer (importance-ranked structured context)
+    // when available; falls back to raw .slice() so legacy sessions and parse
+    // failures still produce a valid prompt.
     let contextBlock = ''
     if (config.jobDescription) {
-      contextBlock += `\n\n<job_description>\n${config.jobDescription.slice(0, 2500)}\n</job_description>\nUse the job description above to ask targeted questions that probe the candidate's fit for the specific requirements listed.`
+      const jdCtx = sessionId ? await getOrLoadJDContext(sessionId, config.jobDescription) : null
+      contextBlock += jdCtx
+        ? `\n\n<job_description_analysis>\n${jdCtx}\n</job_description_analysis>\nUse the structured analysis above to ask targeted questions that probe must-have requirements.`
+        : `\n\n<job_description>\n${config.jobDescription.slice(0, 2500)}\n</job_description>\nUse the job description above to ask targeted questions that probe the candidate's fit for the specific requirements listed.`
     }
     if (config.resumeText) {
-      contextBlock += `\n\n<candidate_resume>\n${config.resumeText.slice(0, 2500)}\n</candidate_resume>\nProbe specific experiences, projects, and claims from the resume above. Ask for concrete details.`
+      const resumeCtx = sessionId ? await getOrLoadResumeContext(sessionId, config.resumeText, config.role) : null
+      contextBlock += resumeCtx
+        ? `\n\n<candidate_resume_analysis>\n${resumeCtx}\n</candidate_resume_analysis>\nProbe the highlighted experiences. Ask for concrete details and metrics.`
+        : `\n\n<candidate_resume>\n${config.resumeText.slice(0, 2500)}\n</candidate_resume>\nProbe specific experiences, projects, and claims from the resume above. Ask for concrete details.`
     }
     if (config.jobDescription && config.resumeText) {
       contextBlock += `\n\nCross-reference the resume against the JD requirements. Identify gaps or areas where the candidate's experience may not fully match, and explore those.`

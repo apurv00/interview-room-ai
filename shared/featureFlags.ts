@@ -16,6 +16,7 @@ export type FeatureFlag =
   | 'rubric_registry'
   | 'resume_to_interview'
   | 'jd_structured_parsing'
+  | 'resume_structured_parsing'
   | 'interviewer_personas'
   | 'spaced_repetition'
   | 'engagement_xp'
@@ -44,6 +45,7 @@ const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   rubric_registry: true,
   resume_to_interview: true,
   jd_structured_parsing: true,
+  resume_structured_parsing: true,
   interviewer_personas: true,
   spaced_repetition: true,
   engagement_xp: true,

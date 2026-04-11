@@ -11,6 +11,15 @@ import type {
 
 interface UseInterviewAPIOptions {
   config: InterviewConfig | null
+  /**
+   * Lazy getter for the current session id. Used to pass `sessionId` in the
+   * body of generate-question / evaluate-answer requests so the server-side
+   * Document Intelligence Layer can look up cached JD/resume context. A
+   * getter (rather than a value) is used because `sessionIdRef` is populated
+   * asynchronously after `createDbSession` resolves, and we want the latest
+   * value at the moment of the fetch call.
+   */
+  getSessionId?: () => string | null
 }
 
 export interface PreviousAnswerSummary {
@@ -39,7 +48,7 @@ export interface UseInterviewAPIReturn {
 /**
  * Encapsulates API calls for question generation and answer evaluation.
  */
-export function useInterviewAPI({ config }: UseInterviewAPIOptions): UseInterviewAPIReturn {
+export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions): UseInterviewAPIReturn {
   const generateQuestion = useCallback(
     async (
       qIdx: number,
@@ -63,6 +72,7 @@ export function useInterviewAPI({ config }: UseInterviewAPIOptions): UseIntervie
             performanceSignal,
             lastThreadSummary: lastThread,
             completedThreads: completedThreads.length > 0 ? completedThreads : undefined,
+            sessionId: getSessionId?.() ?? undefined,
           }),
         })
         const data = await res.json()
@@ -71,7 +81,7 @@ export function useInterviewAPI({ config }: UseInterviewAPIOptions): UseIntervie
         return 'Tell me about a challenge you faced recently and how you handled it.'
       }
     },
-    [config]
+    [config, getSessionId]
   )
 
   const evaluateAnswer = useCallback(
@@ -100,6 +110,7 @@ export function useInterviewAPI({ config }: UseInterviewAPIOptions): UseIntervie
             questionIndex: qIdx,
             probeDepth,
             previousAnswerSummaries: previousSummaries,
+            sessionId: getSessionId?.() ?? undefined,
           }),
         })
         clearTimeout(timeoutId)
@@ -134,7 +145,7 @@ export function useInterviewAPI({ config }: UseInterviewAPIOptions): UseIntervie
         }
       }
     },
-    [config]
+    [config, getSessionId]
   )
 
   return { generateQuestion, evaluateAnswer }

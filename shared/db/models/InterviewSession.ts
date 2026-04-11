@@ -23,6 +23,7 @@ export interface IInterviewSession extends Document {
   jdFileName?: string
   resumeFileName?: string
   parsedJobDescription?: Record<string, unknown>
+  parsedResume?: Record<string, unknown>
 
   // Persona
   persona?: string
@@ -180,6 +181,7 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
     audioRecordingSizeBytes: { type: Number },
 
     parsedJobDescription: { type: Schema.Types.Mixed },
+    parsedResume: { type: Schema.Types.Mixed },
     persona: { type: String },
 
     resumeR2Key: { type: String },
