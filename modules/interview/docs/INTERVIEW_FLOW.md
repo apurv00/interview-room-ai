@@ -443,3 +443,53 @@ which suggests the test suite needs: (a) multi-packet interrupt
 tests (added), and (b) probably an integration-style test for
 the ack channel lifecycle (deferred — too brittle for the
 benefit, manual verification covers it).
+
+---
+
+### 2026-04-12 · Feedback scores corrupted / last answer missing from feedback
+
+**Symptoms:**
+
+1. Feedback page occasionally shows `NaN` for dimension averages or
+   impossible score values (e.g. `undefined` rendered as 0).
+2. Feedback page sometimes omits the last answered question's evaluation,
+   producing feedback for N-1 questions instead of N.
+
+**Root causes:**
+
+- **A (corrupted evaluations).** `useInterviewAPI.ts:evaluateAnswer`
+  called `res.json()` without checking `res.ok`. When `/api/evaluate-answer`
+  returned a non-2xx status (429 rate limit, 500 server error), the error
+  body `{ error: "..." }` was parsed as an `AnswerEvaluation` and pushed
+  into `evaluationsRef`. All score fields (`relevance`, `structure`, etc.)
+  were `undefined`, producing `NaN` in downstream average computations
+  (`finishInterview` lines 776-780) and corrupting the persisted session
+  feedback. Every other fetch in the same file (`callTurnRouter` line 195)
+  already checked `res.ok` — this was the only gap.
+
+- **B (race condition — last eval missing).** `evaluateMainAnswer` fires
+  the full evaluation as fire-and-forget (`void evaluateAnswer(...)`) at
+  line 689. The `.then()` handler updates `evaluationsRef` asynchronously
+  (~1-3s). If the interview ends (timer or user click) before the eval
+  settles, `finishInterview` reads `evaluationsRef.current` at lines
+  741/761/773/815 with the last evaluation missing. No synchronization
+  mechanism existed to ensure the background eval had resolved.
+
+**Fixes:**
+
+- Fix A — `useInterviewAPI.ts:133`: added `if (!res.ok)` guard before
+  `res.json()`, returning fallback scores (60/55/55/60) matching the
+  existing catch block pattern. Prevents error responses from corrupting
+  `evaluationsRef`.
+
+- Fix B — `useInterview.ts`: three surgical changes:
+  1. New `pendingEvalRef = useRef<Promise<void> | null>(null)` (line 168)
+     to track the in-flight background eval promise.
+  2. `evaluateMainAnswer` line 691: replaced `void evaluateAnswer(...)` with
+     `pendingEvalRef.current = evaluateAnswer(...)` to capture the promise.
+     The `.then()` / `.catch()` handlers are unchanged.
+  3. `finishInterview` line 742: await `pendingEvalRef.current` with a 3s
+     timeout before reading `evaluationsRef`. The abort signal fired at
+     line 731 causes in-flight fetches to fail fast (catch returns fallback
+     scores), so the await resolves almost immediately in practice. The 3s
+     cap is a safety net for edge cases.

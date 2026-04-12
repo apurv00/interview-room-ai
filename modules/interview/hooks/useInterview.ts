@@ -165,6 +165,7 @@ export function useInterview({
   const questionIndexRef = useRef(0)
   const transcriptRef = useRef<TranscriptEntry[]>([])
   const evaluationsRef = useRef<AnswerEvaluation[]>([])
+  const pendingEvalRef = useRef<Promise<void> | null>(null)
   const speechMetricsRef = useRef<SpeechMetrics[]>([])
   /** Audio-timeline-relative words captured live by Deepgram across
    *  every candidate turn. Fed into the multimodal analysis pipeline
@@ -686,7 +687,8 @@ export function useInterview({
 
     // Background: full evaluation (non-blocking from here on)
     // Updates evaluationsRef and shows coaching tip overlay when resolved.
-    void evaluateAnswer(question, answer, qIdx, probeDepth)
+    // Captured in pendingEvalRef so finishInterview can await the last eval.
+    pendingEvalRef.current = evaluateAnswer(question, answer, qIdx, probeDepth)
       .then((evaluation) => {
         evaluationsRef.current = [...evaluationsRef.current, { ...evaluation, question, answer }]
         performanceSignalRef.current = computePerformanceSignal()
@@ -734,6 +736,16 @@ export function useInterview({
     onRecordingStop?.()
     setCoachingTip(null)
     transitionTo('SCORING')
+
+    // Wait for any in-flight background evaluation to settle so
+    // evaluationsRef includes the last answer's scores.
+    if (pendingEvalRef.current) {
+      await Promise.race([
+        pendingEvalRef.current,
+        new Promise<void>((r) => setTimeout(r, 3000)),
+      ])
+      pendingEvalRef.current = null
+    }
 
     const data = {
       config,
