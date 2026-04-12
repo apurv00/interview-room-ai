@@ -109,76 +109,80 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
       } catch { /* continue with existing dims */ }
     }
 
-    // Build JD context if available — wrapped in XML tags to prevent prompt injection.
-    // Prefers the Document Intelligence Layer (structured JD analysis) when
-    // available; falls back to raw .slice() for legacy sessions or parse failures.
+    // ── Context assembly — 4 independent fetches run in parallel ──
+    // Previously sequential: JD → profile → skill file → resume, adding
+    // 400-1200ms of avoidable latency from DB/cache round-trips. Each
+    // fetch is independent; failures produce empty strings (same as before).
+    const [jdResult, profileResult, skillResult, resumeResult] = await Promise.allSettled([
+      // 1. JD context
+      config.jobDescription && sessionId
+        ? getOrLoadJDContext(sessionId, config.jobDescription)
+        : Promise.resolve(null),
+      // 2. User profile (cache-first from session config)
+      (async () => {
+        if (sessionCfg?.userProfile != null) return sessionCfg.userProfile
+        await connectDB()
+        return User.findById(user.id).select(
+          'isCareerSwitcher switchingFrom interviewGoal weakAreas feedbackPreference ' +
+          'targetCompanyType topSkills communicationStyle practiceStats',
+        ).lean()
+      })(),
+      // 3. Skill file sections
+      getSkillSections(config.role, interviewType, [
+        'scoring-emphasis', 'red-flags', 'experience-calibration',
+      ]).catch(() => null),
+      // 4. Resume context
+      config.resumeText && sessionId
+        ? getOrLoadResumeContext(sessionId, config.resumeText, config.role)
+        : Promise.resolve(null),
+    ])
+
+    // Build JD context
     let jdContext = ''
     if (config.jobDescription) {
-      const jdCtx = sessionId ? await getOrLoadJDContext(sessionId, config.jobDescription) : null
+      const jdCtx = jdResult.status === 'fulfilled' ? jdResult.value : null
       jdContext = jdCtx
         ? `\n\n<job_description_analysis>\n${jdCtx}\n</job_description_analysis>\n\nUse the structured analysis above to evaluate how well the answer aligns with the role's must-have requirements.`
         : `\n\n<job_description>\n${config.jobDescription.slice(0, 2000)}\n</job_description>\n\nUse the job description above to evaluate how well the answer aligns with the role's requirements.`
     }
 
-    // Build profile context — cache-first, Mongo fallback
+    // Build profile context
     let profileContext = ''
-    try {
-      await connectDB()
-      const profile = (sessionCfg?.userProfile != null
-        ? sessionCfg.userProfile
-        : await User.findById(user.id).select(
-            'isCareerSwitcher switchingFrom interviewGoal weakAreas feedbackPreference ' +
-            'targetCompanyType topSkills communicationStyle practiceStats',
-          ).lean()) as {
-        isCareerSwitcher?: boolean
-        switchingFrom?: string
-        interviewGoal?: string
-        weakAreas?: string[]
-        feedbackPreference?: string
-        targetCompanyType?: string
-        topSkills?: string[]
-        communicationStyle?: string
-        practiceStats?: Record<string, { totalSessions?: number; avgScore?: number }>
-      } | null
-      if (profile?.isCareerSwitcher && profile?.switchingFrom) {
+    if (profileResult.status === 'fulfilled' && profileResult.value) {
+      const profile = profileResult.value as Record<string, unknown>
+      if (profile.isCareerSwitcher && profile.switchingFrom) {
         profileContext += `\nThis candidate is transitioning from ${profile.switchingFrom} — weight transferable skills and learning agility more heavily when scoring.`
       }
-      if (profile?.interviewGoal === 'first_interview') {
+      if (profile.interviewGoal === 'first_interview') {
         profileContext += `\nThis is the candidate's first interview preparation — be encouraging in follow-up framing while still being honest about scores.`
       }
-      if (profile?.weakAreas?.length) {
-        profileContext += `\nThe candidate wants to improve: ${profile.weakAreas.join(', ')}. Flag related issues more explicitly in the flags array.`
+      if ((profile.weakAreas as string[] | undefined)?.length) {
+        profileContext += `\nThe candidate wants to improve: ${(profile.weakAreas as string[]).join(', ')}. Flag related issues more explicitly in the flags array.`
       }
-      if (profile?.feedbackPreference) {
+      if (profile.feedbackPreference) {
         const prefGuide: Record<string, string> = {
           encouraging: 'Frame follow-ups encouragingly. Acknowledge strengths before noting gaps.',
           balanced: 'Provide balanced feedback — acknowledge both strengths and areas for improvement.',
           tough_love: 'Be direct and critical. The candidate wants honest, unfiltered feedback.',
         }
-        profileContext += `\n${prefGuide[profile.feedbackPreference] || ''}`
+        profileContext += `\n${prefGuide[profile.feedbackPreference as string] || ''}`
       }
-      if (profile?.targetCompanyType && profile.targetCompanyType !== 'any') {
+      if (profile.targetCompanyType && profile.targetCompanyType !== 'any') {
         profileContext += `\nCalibrate scoring to ${profile.targetCompanyType} company standards.`
       }
-      // Check practice history for adaptive scoring
       const practiceKey = `${config.role}:${interviewType}`
-      const stats = (profile?.practiceStats as Record<string, { totalSessions?: number; avgScore?: number }> | undefined)?.[practiceKey]
+      const stats = (profile.practiceStats as Record<string, { totalSessions?: number; avgScore?: number }> | undefined)?.[practiceKey]
       if (stats?.totalSessions && stats.totalSessions >= 3) {
         profileContext += `\nExperienced practitioner (${stats.totalSessions} sessions, avg ${stats.avgScore}). Raise the bar — score more critically.`
       }
-    } catch { /* continue without profile */ }
+    }
 
-    // Inject evaluation-relevant sections from skill file
-    try {
-      const evalSkillContent = await getSkillSections(config.role, interviewType, [
-        'scoring-emphasis', 'red-flags', 'experience-calibration',
-      ])
-      if (evalSkillContent) {
-        evalCriteria = evalSkillContent + (evalCriteria ? `\n${evalCriteria}` : '')
-      }
-    } catch { /* skill file unavailable — continue with DB eval criteria */ }
+    // Inject skill file sections
+    if (skillResult.status === 'fulfilled' && skillResult.value) {
+      evalCriteria = skillResult.value + (evalCriteria ? `\n${evalCriteria}` : '')
+    }
 
-    // Build company/industry context for evaluation calibration
+    // Build company/industry context (synchronous — in-memory lookup)
     let companyContext = ''
     if (config.targetCompany) {
       const companyProfile = findCompanyProfile(config.targetCompany)
@@ -192,12 +196,10 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
       companyContext += `\nThe role is in the ${config.targetIndustry} industry. Weight industry-relevant knowledge and terminology appropriately.`
     }
 
-    // Build resume context for cross-reference verification.
-    // Prefers the Document Intelligence Layer (domain-filtered structured
-    // resume) when available; falls back to raw .slice() for legacy sessions.
+    // Build resume context
     let resumeContext = ''
     if (config.resumeText) {
-      const resumeCtx = sessionId ? await getOrLoadResumeContext(sessionId, config.resumeText, config.role) : null
+      const resumeCtx = resumeResult.status === 'fulfilled' ? resumeResult.value : null
       resumeContext = resumeCtx
         ? `\n\n<candidate_resume_analysis>\n${resumeCtx}\n</candidate_resume_analysis>\nCross-reference the candidate's answer with their resume claims above. Flag inconsistencies in the flags array (e.g., "Resume claims team lead but answer suggests IC role").`
         : `\n\n<candidate_resume>\n${config.resumeText.slice(0, 1500)}\n</candidate_resume>\nCross-reference the candidate's answer with their resume claims. Flag inconsistencies in the flags array (e.g., "Resume claims team lead but answer suggests IC role").`

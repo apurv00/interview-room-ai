@@ -11,8 +11,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 const MAX_ANSWER_MS = 180_000
 const INACTIVITY_TIMEOUT_MS = 30_000
 const UTTERANCE_END_MS = 2500
-const GRACE_SHORT_MS = 2500 // <15 words
-const GRACE_LONG_MS = 1500  // >=15 words
+const GRACE_SHORT_MS = 4000 // <15 words
+const GRACE_LONG_MS = 3500  // >=15 words
 
 describe('Group 2: Answer Duration + Timeouts', () => {
   beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true }) })
@@ -28,9 +28,9 @@ describe('Group 2: Answer Duration + Timeouts', () => {
     const graceMs = GRACE_LONG_MS // assume >15 words in 10s
 
     const totalTime = speechDuration + silenceToUtteranceEnd + graceMs
-    expect(totalTime).toBe(14_000)
+    expect(totalTime).toBe(16_000)
 
-    // Inactivity timeout (30s) never fires because Deepgram finishes at 14s
+    // Inactivity timeout (30s) never fires because Deepgram finishes at 16s
     expect(totalTime).toBeLessThan(INACTIVITY_TIMEOUT_MS)
   })
 
@@ -104,14 +104,14 @@ describe('Group 2: Answer Duration + Timeouts', () => {
   })
 
   it('2.6 Short answer (3 words) then 5s silence', () => {
-    // Speech(3 words, ~2s) → stop → UtteranceEnd(2.5s) → grace(2.5s, <15 words)
-    // finishRecognition at ~7s. Inactivity timeout (30s) never reached.
+    // Speech(3 words, ~2s) → stop → UtteranceEnd(2.5s) → grace(4s, <15 words)
+    // finishRecognition at ~8.5s. Inactivity timeout (30s) never reached.
 
     const speechEnd = 2_000
     const utteranceEnd = speechEnd + UTTERANCE_END_MS
     const graceEnd = utteranceEnd + GRACE_SHORT_MS
 
-    expect(graceEnd).toBe(7_000) // 7s total
+    expect(graceEnd).toBe(8_500) // 8.5s total
     expect(graceEnd).toBeLessThan(INACTIVITY_TIMEOUT_MS) // Deepgram wins
   })
 

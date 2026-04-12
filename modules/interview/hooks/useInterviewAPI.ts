@@ -86,7 +86,12 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
           body: JSON.stringify({
             config,
             questionIndex: qIdx,
-            previousQA: transcript,
+            // Cap previousQA to last 10 entries (~2 recent topics with probes).
+            // Older topics are already summarized in completedThreads (topic
+            // question, avg score, probe count, company). Sending the full
+            // transcript caused unbounded input growth: ~11.5K tokens at Q16
+            // in a 30-min interview, adding 500-800ms TTFT latency.
+            previousQA: transcript.slice(-10),
             performanceSignal,
             lastThreadSummary: lastThread,
             completedThreads: completedThreads.length > 0 ? completedThreads : undefined,

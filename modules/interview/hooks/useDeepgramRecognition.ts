@@ -352,6 +352,17 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
               clearTimeout(graceTimerRef.current)
               graceTimerRef.current = null
             }
+          } else if (!isFinal && transcript && graceTimerRef.current) {
+            // Interim results also indicate active speech — cancel grace.
+            // Deepgram sends interim results ~200ms before is_final. Without
+            // this, a natural 2.5s pause triggers UtteranceEnd → 1.5s grace,
+            // and if is_final arrives after 1.5s (high latency), the user
+            // gets cut off mid-sentence. Interim results arrive faster.
+            clearTimeout(graceTimerRef.current)
+            graceTimerRef.current = null
+          }
+
+          if (isFinal && transcript) {
 
             finalTextRef.current = finalTextRef.current
               ? `${finalTextRef.current} ${transcript}`
@@ -406,8 +417,13 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
               clearTimeout(graceTimerRef.current)
             }
             const wordCount = finalTextRef.current.trim().split(/\s+/).length
-            // Short answers (<15 words) get longer grace — user probably isn't done
-            const graceMs = wordCount < 15 ? 2500 : 1500
+            // Grace period must exceed the time for Deepgram to produce an
+            // is_final or interim result after the user resumes speaking
+            // (~200-800ms). Previous values (2500/1500) were too tight —
+            // users with natural 2.5-3s sentence pauses got cut off because
+            // the is_final arrived after the grace expired on high-latency
+            // connections. Doubling gives comfortable headroom.
+            const graceMs = wordCount < 15 ? 4000 : 3500
             graceTimerRef.current = setTimeout(() => {
               graceTimerRef.current = null
               finishRecognition()

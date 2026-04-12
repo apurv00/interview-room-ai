@@ -6,8 +6,8 @@
 import { describe, it, expect } from 'vitest'
 
 const UTTERANCE_END_MS = 2500
-const GRACE_SHORT_MS = 2500
-const GRACE_LONG_MS = 1500
+const GRACE_SHORT_MS = 4000
+const GRACE_LONG_MS = 3500
 const WS_RECONNECT_DELAY_BASE = 800
 const WS_MAX_RECONNECTS = 2
 
@@ -21,7 +21,7 @@ describe('Group 3: Silence Detection + Abrupt Stop', () => {
     const utteranceEnd = micCutTime + UTTERANCE_END_MS
     const graceDone = utteranceEnd + GRACE_LONG_MS // >15 words
 
-    expect(graceDone).toBe(12_000) // resolves at 12s — text captured
+    expect(graceDone).toBe(14_000) // resolves at 14s — text captured
   })
 
   it('3.2 Short answer ending with "?" → instant finish', () => {
