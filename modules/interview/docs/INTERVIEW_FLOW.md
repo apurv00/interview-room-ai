@@ -493,3 +493,35 @@ benefit, manual verification covers it).
      line 731 causes in-flight fetches to fail fast (catch returns fallback
      scores), so the await resolves almost immediately in practice. The 3s
      cap is a safety net for edge cases.
+
+---
+
+### 2026-04-12 · Candidate cut off mid-answer after ~15-20 seconds
+
+**Symptom:** Candidate actively speaking for 15-20 seconds, then AI says
+"Got it" and moves to next question. Not a silence issue — user was
+mid-sentence.
+
+**Root cause:** `listenForAnswer` (useInterview.ts:491-506) had a 30-second
+**absolute** `setTimeout` that called `stopListening()` unconditionally.
+The timer started when `listenForAnswer()` was called (before Deepgram
+connected and before the user started speaking). Effective speaking time
+was 30s minus connection setup (2-5s) minus user think time (2-5s) ≈
+15-20s. The comment said "silence timeout" but the implementation was a
+hard wall clock cutoff.
+
+**Fix:** Replaced the absolute timeout with a **speech-aware inactivity
+timeout**. The timer still fires after `timeoutMs` (30s), but now checks
+if `liveAnswerRef.current` has grown since the last check. If the user is
+still speaking, it reschedules itself. Only fires `stopListening()` when
+no new speech has arrived for the full `timeoutMs` window.
+
+Also increased `MAX_ANSWER_MS` from 120s to 180s to give candidates more
+room for long-form answers (case study, system design).
+
+**Why gitnexus flagged HIGH risk:** `listenForAnswer` is called from
+`useInterview.start` (the main interview loop) at 10+ call sites covering
+main answers, probe answers, wrap-up, retry, and pivot flows. All share
+the same `timeoutMs=30000` default. The fix is internal to `listenForAnswer`
+and does not change its signature or return contract, so all callers
+benefit without modification.

@@ -431,8 +431,8 @@ export function useInterview({
    *  @param showLive - whether to update live answer display
    *  @param timeoutMs - max time to wait for speech (default 30s). 0 = no timeout.
    */
-  /** Max answer duration (120s) — prevents candidate from monopolizing time */
-  const MAX_ANSWER_MS = 120_000
+  /** Max answer duration (180s) — prevents candidate from monopolizing time */
+  const MAX_ANSWER_MS = 180_000
 
   function listenForAnswer(
     showLive: boolean = true,
@@ -479,7 +479,12 @@ export function useInterview({
         resolve(result.text)
       }, { onCaptureReady: wrappedOnCaptureReady })
 
-      // Auto-resolve after silence timeout.
+      // Speech-aware inactivity timeout.
+      // Fires after timeoutMs of NO speech progress. If the user is actively
+      // speaking (liveAnswerRef growing), the timer reschedules itself so the
+      // candidate is never cut off mid-answer. Only fires when the user hasn't
+      // started speaking or has gone silent for timeoutMs.
+      //
       // IMPORTANT: do NOT set resolved=true or call resolve('') here — doing so
       // creates a race with finishRecognition's async onComplete callback (which
       // fires after a dynamic import). If resolved=true is set first, the
@@ -489,20 +494,31 @@ export function useInterview({
       // naturally with result.text. A 3-second safety timeout handles the edge
       // case where onComplete never fires (e.g. dynamic import hangs).
       if (timeoutMs > 0) {
-        timeoutTimer = setTimeout(() => {
-          if (!resolved) {
-            clearTimeout(maxTimer)
-            clearInterval(emotionInterval)
-            stopListening()
-            // Safety net: if onComplete doesn't fire within 3s, resolve empty
-            setTimeout(() => {
-              if (!resolved) {
-                resolved = true
-                resolve('')
-              }
-            }, 3000)
-          }
-        }, timeoutMs)
+        let lastSeenLength = 0
+        const scheduleInactivityTimeout = () => {
+          timeoutTimer = setTimeout(() => {
+            if (resolved) return
+            const currentLength = (liveAnswerRef.current || '').length
+            if (currentLength > lastSeenLength) {
+              // User is still speaking — reset the inactivity clock
+              lastSeenLength = currentLength
+              scheduleInactivityTimeout()
+            } else {
+              // No new speech for timeoutMs — stop listening
+              clearTimeout(maxTimer)
+              clearInterval(emotionInterval)
+              stopListening()
+              // Safety net: if onComplete doesn't fire within 3s, resolve empty
+              setTimeout(() => {
+                if (!resolved) {
+                  resolved = true
+                  resolve('')
+                }
+              }, 3000)
+            }
+          }, timeoutMs)
+        }
+        scheduleInactivityTimeout()
       }
 
       // Hard cap: stop listening after MAX_ANSWER_MS regardless of speech
