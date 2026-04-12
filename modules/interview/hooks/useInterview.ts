@@ -13,6 +13,7 @@ import type {
   ProbeType,
   ThreadEntry,
   ThreadSummary,
+  InterruptContext,
 } from '@shared/types'
 import {
   getInterviewIntro,
@@ -114,12 +115,17 @@ export function useInterview({
   // cancel speech and let the candidate be heard. Deepgram streams continuously.
   // Also discards any queued coaching messages (I6) to avoid stale overlaps.
   const interruptedRef = useRef(false)
+  /** Captured interrupt context — populated when candidate interrupts AI speech. */
+  const interruptContextRef = useRef<InterruptContext | null>(null)
+  /** Topics the AI acknowledged but deferred ("we'll come back to that"). */
+  const deferredTopicsRef = useRef<string[]>([])
   const avatarSpeak = useCallback(async (
     text: string,
     emotion?: import('@shared/types').AvatarEmotion,
     onAudioStart?: () => void,
   ) => {
     interruptedRef.current = false
+    interruptContextRef.current = null
     // Suppress interrupt detection during TTS to prevent the AI's own
     // speech (picked up by the mic via speaker feedback) from triggering
     // false interrupts. Only enable interrupts after audio actually starts
@@ -127,6 +133,17 @@ export function useInterview({
     setSuppressInterrupt?.(true)
     setOnInterrupt?.(() => {
       interruptedRef.current = true
+      // Capture interrupt context for downstream decision-making.
+      // interruptSpeech comes from Deepgram's interruptAccumRef (the ≥3 words
+      // that triggered this handler). spokenPortion is approximated as the full
+      // text for now — Phase 2 will add chunk-level TTS progress tracking.
+      interruptContextRef.current = {
+        interruptedUtterance: text,
+        spokenPortion: text, // TODO(Phase 2): track actual TTS progress
+        interruptSpeech: '',  // TODO(Phase 4): bridge from getAndClearInterruptAccum
+        phase: phaseRef.current,
+        questionIndex: questionIndexRef.current,
+      }
       cancelTTS()
       setSuppressInterrupt?.(false)
       // I6: Discard any pending coaching message on interrupt

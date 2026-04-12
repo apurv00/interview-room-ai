@@ -170,6 +170,29 @@ export interface AnswerEvaluation {
   flags?: string[]
 }
 
+// ─── Interrupt context ──────────────────────────────────────────────────────
+
+/** Captured when a candidate interrupts the AI mid-speech. */
+export interface InterruptContext {
+  /** Full text the AI was speaking when interrupted */
+  interruptedUtterance: string
+  /** Approximate text already spoken (from TTS chunk tracking) */
+  spokenPortion: string
+  /** What the candidate said during the interrupt */
+  interruptSpeech: string
+  /** Interview phase when interrupt occurred */
+  phase: InterviewState
+  /** Question index at time of interrupt */
+  questionIndex: number
+}
+
+/** AI's decision on how to handle a candidate interrupt. */
+export type InterruptResolution =
+  | 'finish_then_address'  // complete current sentence, then respond to interrupt
+  | 'abort_and_pivot'      // drop current speech, respond to new context
+  | 'acknowledge_defer'    // "good point, we'll come back to that"
+  | 'absorbed'             // interrupt was noise/irrelevant, continue
+
 // ─── Speech metrics ───────────────────────────────────────────────────────────
 
 export interface SpeechMetrics {
