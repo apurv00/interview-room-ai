@@ -12,6 +12,11 @@ const TurnRouterSchema = z.object({
   probeDepth: z.number().int().min(0).max(10).default(0),
   questionIndex: z.number().int().min(0).default(0),
   interviewType: z.string().max(50).default('behavioral'),
+  interruptContext: z.object({
+    interruptSpeech: z.string().max(500),
+    interruptedUtterance: z.string().max(2000),
+    spokenPortion: z.string().max(2000),
+  }).optional(),
 })
 
 type TurnRouterBody = z.infer<typeof TurnRouterSchema>
@@ -51,12 +56,12 @@ export const POST = composeApiRoute<TurnRouterBody>({
   rateLimit: { windowMs: 60_000, maxRequests: 60, keyPrefix: 'rl:turn-router' },
 
   async handler(_req, { user, body }) {
-    const { question, answer, probeDepth, questionIndex, interviewType } = body
+    const { question, answer, probeDepth, questionIndex, interviewType, interruptContext } = body
     const startTime = Date.now()
 
     // Empty/very short answer → immediate probe without LLM call
     const trimmedAnswer = (answer || '').trim()
-    if (trimmedAnswer.length < 8) {
+    if (trimmedAnswer.length < 8 && !interruptContext) {
       return NextResponse.json({
         nextAction: 'probe',
         probeQuestion: "Take your time — can you walk me through your thinking on that?",
@@ -66,13 +71,31 @@ export const POST = composeApiRoute<TurnRouterBody>({
       })
     }
 
-    const userPrompt = `Interview type: ${interviewType}
+    let userPrompt = `Interview type: ${interviewType}
 Probe depth: ${probeDepth} (${probeDepth >= 2 ? 'deep — only probe if truly critical' : probeDepth === 1 ? 'mid — prefer specific clarification' : 'first probe — prefer broad expansion'})
 Question index: ${questionIndex}
 
 Question: ${question}
 
 Candidate answer: ${trimmedAnswer}`
+
+    // When the candidate interrupted AI speech, add context so the model
+    // can decide how to handle the interruption.
+    if (interruptContext) {
+      userPrompt += `
+
+CANDIDATE INTERRUPTED while you were speaking.
+You were saying: "${interruptContext.interruptedUtterance}"
+The candidate said: "${interruptContext.interruptSpeech}"
+
+Decide interruptResolution:
+- "finish_then_address": your remaining words matter — finish thought, then address their point
+- "abort_and_pivot": drop your speech, respond directly to what they said
+- "acknowledge_defer": say "Good point — let me finish this thought and we'll circle back"
+- "absorbed": the interruption is noise/irrelevant — continue where you left off
+
+Add "interruptResolution" to your JSON response.`
+    }
 
     try {
       const result = await completion({
@@ -102,6 +125,7 @@ Candidate answer: ${trimmedAnswer}`
         style: 'curious' | 'probing' | 'encouraging' | 'neutral'
         isNonsensical: boolean
         isPivot: boolean
+        interruptResolution?: 'finish_then_address' | 'abort_and_pivot' | 'acknowledge_defer' | 'absorbed'
       }
 
       return NextResponse.json({
@@ -110,6 +134,9 @@ Candidate answer: ${trimmedAnswer}`
         style: parsed.style ?? 'neutral',
         isNonsensical: parsed.isNonsensical === true,
         isPivot: parsed.isPivot === true,
+        ...(interruptContext && {
+          interruptResolution: parsed.interruptResolution ?? 'abort_and_pivot',
+        }),
       })
     } catch (err) {
       void trackUsage({

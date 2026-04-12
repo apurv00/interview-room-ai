@@ -13,6 +13,7 @@ import type {
   ProbeType,
   ThreadEntry,
   ThreadSummary,
+  InterruptContext,
 } from '@shared/types'
 import {
   getInterviewIntro,
@@ -57,6 +58,8 @@ interface UseInterviewOptions {
   setOnInterrupt?: (cb: (() => void) | null) => void
   /** Suppress interrupt detection during TTS to prevent self-interruption. */
   setSuppressInterrupt?: (suppress: boolean) => void
+  /** Return and clear accumulated interrupt speech for answer prepending. */
+  getAndClearInterruptAccum?: () => string
   onRecordingStop?: () => void
   currentProblem?: { id: string; title: string; description: string } | null
   currentDesignProblem?: { id: string; title: string; description: string; requirements: string[] } | null
@@ -89,6 +92,7 @@ export function useInterview({
   warmUpListening,
   setOnInterrupt,
   setSuppressInterrupt,
+  getAndClearInterruptAccum,
   onRecordingStop,
   currentProblem,
   currentDesignProblem,
@@ -105,7 +109,7 @@ export function useInterview({
 
   // ── Avatar (extracted to useAvatarSpeech) ──
   const isMultimodalEnabled = process.env.NEXT_PUBLIC_FEATURE_MULTIMODAL === 'true'
-  const { avatarEmotion, isAvatarTalking, setAvatarEmotion, avatarSpeak: rawAvatarSpeak, prefetchTTS, cancelTTS, playAck, cancelAck } = useAvatarSpeech({
+  const { avatarEmotion, isAvatarTalking, setAvatarEmotion, avatarSpeak: rawAvatarSpeak, prefetchTTS, cancelTTS, softCancelTTS, playAck, cancelAck } = useAvatarSpeech({
     interviewType: config?.interviewType,
     isMultimodalEnabled,
   })
@@ -114,12 +118,17 @@ export function useInterview({
   // cancel speech and let the candidate be heard. Deepgram streams continuously.
   // Also discards any queued coaching messages (I6) to avoid stale overlaps.
   const interruptedRef = useRef(false)
+  /** Captured interrupt context — populated when candidate interrupts AI speech. */
+  const interruptContextRef = useRef<InterruptContext | null>(null)
+  /** Topics the AI acknowledged but deferred ("we'll come back to that"). */
+  const deferredTopicsRef = useRef<string[]>([])
   const avatarSpeak = useCallback(async (
     text: string,
     emotion?: import('@shared/types').AvatarEmotion,
     onAudioStart?: () => void,
-  ) => {
+  ): Promise<{ interrupted: boolean; interruptContext: InterruptContext | null }> => {
     interruptedRef.current = false
+    interruptContextRef.current = null
     // Suppress interrupt detection during TTS to prevent the AI's own
     // speech (picked up by the mic via speaker feedback) from triggering
     // false interrupts. Only enable interrupts after audio actually starts
@@ -127,7 +136,20 @@ export function useInterview({
     setSuppressInterrupt?.(true)
     setOnInterrupt?.(() => {
       interruptedRef.current = true
-      cancelTTS()
+      // Capture interrupt context for downstream decision-making.
+      // interruptSpeech comes from Deepgram's interruptAccumRef (the ≥3 words
+      // that triggered this handler). spokenPortion is approximated as the full
+      // text for now — refined when chunk-level TTS progress tracking is added.
+      interruptContextRef.current = {
+        interruptedUtterance: text,
+        spokenPortion: text,
+        interruptSpeech: getAndClearInterruptAccum?.() ?? '',
+        phase: phaseRef.current,
+        questionIndex: questionIndexRef.current,
+      }
+      // Soft-cancel: let the current audio buffer drain so the AI finishes
+      // its sentence naturally (~1-2s) instead of hard-cutting mid-word.
+      softCancelTTS()
       setSuppressInterrupt?.(false)
       // I6: Discard any pending coaching message on interrupt
       coachingAbortRef.current?.abort()
@@ -142,7 +164,11 @@ export function useInterview({
     })
     setOnInterrupt?.(null) // Clear interrupt handler after TTS finishes
     setSuppressInterrupt?.(false) // Ensure suppression is cleared
-  }, [rawAvatarSpeak, setOnInterrupt, setSuppressInterrupt, cancelTTS])
+    return {
+      interrupted: interruptedRef.current,
+      interruptContext: interruptContextRef.current,
+    }
+  }, [rawAvatarSpeak, setOnInterrupt, setSuppressInterrupt, softCancelTTS])
 
   // ── DB session id (hoisted above useInterviewAPI so the hook can read it) ──
   const sessionIdRef = useRef<string | null>(null)
@@ -362,16 +388,26 @@ export function useInterview({
           setTimeout(() => setCoachingTip(prev => prev?.includes('Last 30') ? null : prev), 4000)
         }
 
-        // TM6: At time=0, give a 15s grace if user is mid-answer (LISTENING phase)
+        // TM6: At time=0, give grace for any active phase so the AI doesn't
+        // cut off mid-word (ASK_QUESTION) or lose an in-flight eval (PROCESSING).
+        // LISTENING gets 15s (user finishing answer), other active phases get 5s
+        // (AI finishing current sentence / eval completing).
         if (next === 0 && phaseRef.current !== 'SCORING' && phaseRef.current !== 'ENDED') {
-          if (phaseRef.current === 'LISTENING') {
-            // User is mid-answer — give 15s grace before finishing
+          const activePhase = phaseRef.current
+          if (activePhase === 'LISTENING') {
             setCoachingTip('Time is up, please finish your current thought.')
             setTimeout(() => {
               if (phaseRef.current !== 'SCORING' && phaseRef.current !== 'ENDED') {
                 finishInterview()
               }
             }, 15000)
+          } else if (activePhase === 'ASK_QUESTION' || activePhase === 'PROCESSING' || activePhase === 'COACHING') {
+            // Let AI finish speaking / eval settle before ending
+            setTimeout(() => {
+              if (phaseRef.current !== 'SCORING' && phaseRef.current !== 'ENDED') {
+                finishInterview()
+              }
+            }, 5000)
           } else {
             finishInterview()
           }
@@ -439,6 +475,15 @@ export function useInterview({
     timeoutMs: number = 30000,
     onCaptureReady?: () => void,
   ): Promise<string> {
+    // Bridge interrupt words: if the candidate interrupted AI speech, their
+    // interrupt words (≥3 words from Deepgram) are the start of their answer.
+    // Prepend them so the candidate doesn't have to repeat themselves.
+    const interruptPrefix = interruptContextRef.current?.interruptSpeech ?? ''
+    if (interruptPrefix) {
+      // Seed the live answer display so it shows immediately
+      setLiveAnswer(interruptPrefix)
+    }
+
     // Periodically update avatar emotion during listening based on answer growth
     let lastWordCount = 0
     const emotionInterval = setInterval(() => {
@@ -475,8 +520,11 @@ export function useInterview({
         if (result.words?.length) {
           liveWordsRef.current.push(...result.words)
         }
-        if (showLive) setLiveAnswer(result.text)
-        resolve(result.text)
+        const fullText = interruptPrefix
+          ? `${interruptPrefix} ${result.text}`.trim()
+          : result.text
+        if (showLive) setLiveAnswer(fullText)
+        resolve(fullText)
       }, { onCaptureReady: wrappedOnCaptureReady })
 
       // Speech-aware inactivity timeout.
@@ -494,7 +542,9 @@ export function useInterview({
       // naturally with result.text. A 3-second safety timeout handles the edge
       // case where onComplete never fires (e.g. dynamic import hangs).
       if (timeoutMs > 0) {
-        let lastSeenLength = 0
+        // Start from the interrupt prefix length so the prefix alone
+        // doesn't count as "speech progress" and cause a false reschedule.
+        let lastSeenLength = interruptPrefix.length
         const scheduleInactivityTimeout = () => {
           timeoutTimer = setTimeout(() => {
             if (resolved) return
@@ -740,6 +790,8 @@ export function useInterview({
   // ─── Finish interview ──────────────────────────────────────────────────────
 
   const finishInterview = useCallback(async () => {
+    // Idempotency guard: timer=0 and End button can both fire this.
+    if (phaseRef.current === 'SCORING' || phaseRef.current === 'ENDED') return
     // CRITICAL: cancel everything BEFORE the state transition so any in-flight
     // avatarSpeak / question generation / coaching sleep is interrupted
     // synchronously. Without these the loop can fire one more question after
@@ -1177,6 +1229,14 @@ export function useInterview({
             continue
           }
 
+          if (intent === 'skip') {
+            // Candidate wants to skip this question — move on gracefully
+            const skipMsg = "No problem at all — let's move on to the next one."
+            addToTranscript('interviewer', skipMsg, qIdx)
+            await avatarSpeak(skipMsg, 'friendly')
+            break
+          }
+
           conversationTurns++
 
           if (intent === 'clarification') {
@@ -1418,6 +1478,50 @@ export function useInterview({
         setAvatarEmotion(responseEmotion)
 
         qIdx++
+
+        // ── Surface a deferred topic if the candidate interrupted earlier ──
+        // Max 2 per interview, only when enough time remains.
+        if (deferredTopicsRef.current.length > 0 && timeRemainingRef.current > 90 && qIdx < maxQ) {
+          const deferredTopic = deferredTopicsRef.current.shift()!
+          const bridgeMsg = `Earlier you mentioned something interesting — "${deferredTopic}". I'd love to hear more about that.`
+          checkAbort()
+          addToTranscript('interviewer', bridgeMsg, qIdx)
+          setCurrentQuestion(bridgeMsg)
+          warmUpListening?.()
+          await avatarSpeak(bridgeMsg, 'curious')
+          if (isInterviewOver()) return
+
+          setLiveAnswer('')
+          const deferredAnswer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
+          if (isInterviewOver()) return
+          if (deferredAnswer) {
+            addToTranscript('candidate', deferredAnswer, qIdx)
+            await evaluateAndCoach(bridgeMsg, deferredAnswer, qIdx, undefined, 0)
+          }
+          qIdx++
+        }
+      }
+
+      // ── Surface remaining deferred topics during wrap-up ──
+      if (deferredTopicsRef.current.length > 0) {
+        checkAbort()
+        if (!isInterviewOver()) {
+          const remaining = deferredTopicsRef.current.splice(0, 2)
+          for (const topic of remaining) {
+            const followUp = `Before we wrap up — you raised an interesting point earlier about "${topic}". Can you tell me more?`
+            addToTranscript('interviewer', followUp)
+            warmUpListening?.()
+            await avatarSpeak(followUp, 'curious')
+            if (isInterviewOver()) break
+
+            setLiveAnswer('')
+            const topicAnswer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
+            if (isInterviewOver()) break
+            if (topicAnswer) {
+              addToTranscript('candidate', topicAnswer)
+            }
+          }
+        }
       }
 
       // Wrap-up — listen for user questions and respond

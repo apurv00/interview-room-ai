@@ -85,10 +85,13 @@ const mockSource = {
 
 class MockAudioContext {
   sampleRate = 16000
+  state = 'running'
   createMediaStreamSource = vi.fn(() => mockSource)
   createScriptProcessor = vi.fn(() => mockProcessor)
   destination = {}
   close = vi.fn().mockResolvedValue(undefined)
+  resume = vi.fn().mockResolvedValue(undefined)
+  addEventListener = vi.fn()
 }
 
 vi.stubGlobal('AudioContext', MockAudioContext)

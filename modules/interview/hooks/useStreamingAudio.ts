@@ -14,6 +14,8 @@ export function useStreamingAudio() {
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const mediaSourceRef = useRef<MediaSource | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  /** When true, stop appending new chunks but let current buffer drain. */
+  const softStopRef = useRef(false)
 
   const isSupported =
     typeof window !== 'undefined' &&
@@ -39,6 +41,19 @@ export function useStreamingAudio() {
   }, [])
 
   /**
+   * Soft-cancel: stop fetching new audio chunks from the server but let the
+   * currently-buffered audio finish playing. The streamAndPlay promise resolves
+   * naturally when audio.onended fires. Used for graceful sentence-finish on
+   * candidate interrupt (vs. hard cancel which silences immediately).
+   */
+  const softCancel = useCallback(() => {
+    softStopRef.current = true
+    // Abort the fetch reader so no new chunks arrive from the server
+    abortRef.current?.abort()
+    abortRef.current = null
+  }, [])
+
+  /**
    * Stream audio from a fetch Response and play progressively.
    * Resolves when playback finishes, rejects on error.
    */
@@ -46,6 +61,7 @@ export function useStreamingAudio() {
     (response: Response, onPlaybackStarted?: () => void): Promise<void> => {
       // Cancel any previous stream
       cancel()
+      softStopRef.current = false
 
       return new Promise<void>((resolve, reject) => {
         if (!response.body) {
@@ -104,6 +120,20 @@ export function useStreamingAudio() {
             if (appending || chunkQueue.length === 0) return
             if (mediaSource.readyState !== 'open') return
 
+            // Soft-stop: discard remaining queued chunks and finalize.
+            // The audio already buffered in the SourceBuffer continues
+            // playing to completion — the candidate hears the current
+            // sentence finish naturally instead of a hard cut.
+            if (softStopRef.current) {
+              chunkQueue.length = 0
+              try {
+                if (mediaSource.readyState === 'open') {
+                  mediaSource.endOfStream()
+                }
+              } catch { /* already ended */ }
+              return
+            }
+
             appending = true
             const chunk = chunkQueue.shift()!
             try {
@@ -125,6 +155,16 @@ export function useStreamingAudio() {
                 reject(new Error('Playback blocked'))
               })
               onPlaybackStarted?.()
+            }
+
+            // Soft-stop: drain current buffer, don't append more
+            if (softStopRef.current && chunkQueue.length === 0) {
+              try {
+                if (mediaSource.readyState === 'open') {
+                  mediaSource.endOfStream()
+                }
+              } catch { /* already ended */ }
+              return
             }
 
             // If stream is done and queue is empty, end the stream
@@ -174,5 +214,5 @@ export function useStreamingAudio() {
     [cancel]
   )
 
-  return { streamAndPlay, cancel, isSupported }
+  return { streamAndPlay, cancel, softCancel, isSupported }
 }

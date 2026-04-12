@@ -28,6 +28,9 @@ export interface UseDeepgramRecognitionReturn {
   /** Set a callback that fires when speech is detected while no active listening session.
    *  Used to detect candidate interrupting TTS playback. */
   setOnInterrupt: (cb: (() => void) | null) => void
+  /** Return and clear the accumulated interrupt speech so it can be prepended to the
+   *  next listenForAnswer result. */
+  getAndClearInterruptAccum: () => string
 }
 
 /**
@@ -185,11 +188,16 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           .catch((err) => {
             console.error('Deepgram token fetch failed after retries:', err)
             setIsListening(false)
+            // Fire onCaptureReady so the UI transitions from "connecting" state
+            // instead of hanging silently. Resolve recognition after 5s (not 30s)
+            // so the conversation loop can nudge the user or retry.
+            onCaptureReadyRef.current?.()
+            onCaptureReadyRef.current = null
             fallbackFinishTimerRef.current = setTimeout(() => {
               if (onCompleteRef.current) {
                 finishRecognition()
               }
-            }, 30000)
+            }, 5000)
           })
       }
     },
@@ -524,6 +532,28 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     source.connect(processor)
     processor.connect(audioContext.destination)
 
+    // Resume AudioContext when tab becomes visible again. Browsers suspend
+    // AudioContext when the tab is backgrounded — no audio flows to Deepgram,
+    // triggering UtteranceEnd and terminating the answer. This handler resumes
+    // the context and cancels any grace timer that fired during the suspension.
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && audioContext.state === 'suspended') {
+        audioContext.resume().catch(() => {})
+        // Cancel any grace timer that fired while the tab was hidden
+        if (graceTimerRef.current) {
+          clearTimeout(graceTimerRef.current)
+          graceTimerRef.current = null
+        }
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    // Clean up in finishRecognition — store ref for removal
+    const cleanupVisibility = () => document.removeEventListener('visibilitychange', handleVisibility)
+    // Attach to audioContext close so it's cleaned up with the rest of audio processing
+    audioContext.addEventListener('statechange', () => {
+      if (audioContext.state === 'closed') cleanupVisibility()
+    })
+
     // Audio is now flowing — notify the caller so UI can flip to LISTENING
     if (onCaptureReadyRef.current) {
       onCaptureReadyRef.current()
@@ -637,5 +667,18 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     }
   }, [])
 
-  return { isListening, liveTranscript, startListening, stopListening, warmUp, setExternalStream, setOnInterrupt, setSuppressInterrupt }
+  /** Return and clear the accumulated interrupt speech. Called by listenForAnswer
+   *  to prepend interrupt words to the next answer so the candidate doesn't have
+   *  to repeat what they said during the interrupt. */
+  const getAndClearInterruptAccum = useCallback(() => {
+    const text = interruptAccumRef.current.trim()
+    interruptAccumRef.current = ''
+    if (interruptAccumTimerRef.current) {
+      clearTimeout(interruptAccumTimerRef.current)
+      interruptAccumTimerRef.current = null
+    }
+    return text
+  }, [])
+
+  return { isListening, liveTranscript, startListening, stopListening, warmUp, setExternalStream, setOnInterrupt, setSuppressInterrupt, getAndClearInterruptAccum }
 }

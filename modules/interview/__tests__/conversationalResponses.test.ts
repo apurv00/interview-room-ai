@@ -42,9 +42,36 @@ describe('classifyIntent', () => {
     expect(classifyIntent("That's a great question")).toBe('thinking')
   })
 
+  it('detects time-buying phrases as thinking', () => {
+    expect(classifyIntent('Give me a moment')).toBe('thinking')
+    expect(classifyIntent('One second')).toBe('thinking')
+    expect(classifyIntent('Hold on')).toBe('thinking')
+    expect(classifyIntent('Bear with me')).toBe('thinking')
+    expect(classifyIntent('I need some time')).toBe('thinking')
+    expect(classifyIntent('Can I have a minute')).toBe('thinking')
+    expect(classifyIntent('I need like 2 minutes')).toBe('thinking')
+    expect(classifyIntent('Give me a second to think')).toBe('thinking')
+    expect(classifyIntent("Actually, let me think about that")).toBe('thinking')
+  })
+
   it('treats long thinking starters as answers', () => {
     expect(classifyIntent(
       'Good question, so in my previous role I actually managed a team of 12 engineers working on the payment infrastructure'
+    )).toBe('answer')
+  })
+
+  it('detects skip intent', () => {
+    expect(classifyIntent('Can we move on')).toBe('skip')
+    expect(classifyIntent('Next question please')).toBe('skip')
+    expect(classifyIntent("I'd rather skip this")).toBe('skip')
+    expect(classifyIntent("Let's move on")).toBe('skip')
+    expect(classifyIntent('Pass on this one')).toBe('skip')
+    expect(classifyIntent('Can we skip this')).toBe('skip')
+  })
+
+  it('does NOT classify long answers mentioning "move on" as skip', () => {
+    expect(classifyIntent(
+      "So we decided to move on from the legacy system and rebuilt the entire platform from scratch using microservices"
     )).toBe('answer')
   })
 
@@ -60,9 +87,11 @@ describe('classifyIntent', () => {
       expect(classifyIntent("My mind went blank")).toBe('distress')
     })
 
-    it('detects needing a moment', () => {
-      expect(classifyIntent("I need a second")).toBe('distress')
-      expect(classifyIntent("I need a moment")).toBe('distress')
+    it('detects needing a moment as thinking (not distress)', () => {
+      // "I need a second/moment/minute" is buying time, not emotional distress
+      expect(classifyIntent("I need a second")).toBe('thinking')
+      expect(classifyIntent("I need a moment")).toBe('thinking')
+      // "I can't think" is genuine distress — mind blank
       expect(classifyIntent("I can't think")).toBe('distress')
     })
 

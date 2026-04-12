@@ -33,6 +33,7 @@ export interface TurnRouterResult {
   style: 'curious' | 'probing' | 'encouraging' | 'neutral'
   isNonsensical: boolean
   isPivot: boolean
+  interruptResolution?: import('@shared/types').InterruptResolution
 }
 
 export interface UseInterviewAPIReturn {
@@ -58,6 +59,7 @@ export interface UseInterviewAPIReturn {
     questionIndex: number
     interviewType: string
     signal?: AbortSignal
+    interruptContext?: { interruptSpeech: string; interruptedUtterance: string; spokenPortion: string }
   }) => Promise<TurnRouterResult>
 }
 
@@ -189,6 +191,7 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
       questionIndex,
       interviewType,
       signal,
+      interruptContext,
     }: {
       question: string
       answer: string
@@ -196,13 +199,14 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
       questionIndex: number
       interviewType: string
       signal?: AbortSignal
+      interruptContext?: { interruptSpeech: string; interruptedUtterance: string; spokenPortion: string }
     }): Promise<TurnRouterResult> => {
       try {
         const res = await fetch('/api/turn-router', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal,
-          body: JSON.stringify({ question, answer, probeDepth, questionIndex, interviewType }),
+          body: JSON.stringify({ question, answer, probeDepth, questionIndex, interviewType, interruptContext }),
         })
         if (!res.ok) return TURN_ROUTER_FALLBACK
         return (await res.json()) as TurnRouterResult
