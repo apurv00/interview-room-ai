@@ -10,7 +10,7 @@ import { aiLogger } from '@shared/logger'
 import { StartAnalysisSchema } from '@interview/validators/multimodal'
 
 export const dynamic = 'force-dynamic'
-// Allow up to 60s for inline fallback — covers a ~5-minute interview
+// Vercel Free plan hard-caps serverless functions at 60s.
 export const maxDuration = 60
 
 const MAX_ACTIVE_ANALYSES = 10
@@ -147,15 +147,18 @@ export const POST = composeApiRoute<StartPayload>({
     // Inline fallback: run the pipeline synchronously.
     // Results saved to same MultimodalAnalysis collection.
     //
-    // BUG 9 fix: wrap in a 55s soft timeout (5s buffer below maxDuration=60).
-    // If the pipeline doesn't finish in time, leave the row in 'processing'
-    // state instead of 'failed' so the next visit / next /start call can
-    // pick up where it left off via the existing intermediate persistence.
-    const INLINE_SOFT_TIMEOUT_MS = 55_000
+    // Soft timeout: 50s (10s buffer below maxDuration=60) so the response
+    // is sent before Vercel hard-kills the function. If the pipeline
+    // doesn't finish in time, leave the row in 'processing' state and
+    // surface a retry option to the user.
+    if (!isInngestConfigured()) {
+      aiLogger.warn({ sessionId }, 'Inngest not configured — running analysis inline (may timeout for long interviews)')
+    }
+    const INLINE_SOFT_TIMEOUT_MS = 50_000
     try {
       const { runMultimodalPipeline } = await import('@interview/services/analysis/multimodalPipeline')
       await Promise.race([
-        runMultimodalPipeline(sessionId, userId),
+        runMultimodalPipeline(sessionId, userId, { inline: true }),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('SOFT_TIMEOUT')), INLINE_SOFT_TIMEOUT_MS)
         ),

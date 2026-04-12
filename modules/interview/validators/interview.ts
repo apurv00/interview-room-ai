@@ -114,6 +114,7 @@ const ThreadSummarySchema = z.object({
   avgScore: z.number(),
   probeCount: z.number(),
   probeTypes: z.array(z.string().max(100)).max(20),
+  company: z.string().max(200).optional(),
 })
 
 export const GenerateQuestionSchema = z.object({

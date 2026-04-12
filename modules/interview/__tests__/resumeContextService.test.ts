@@ -99,10 +99,10 @@ describe('resumeContextService', () => {
       // favour PM-relevant experiences over low-scoring ones.
       expect(filtered.experience[0].id).toBe('exp-1')
       const ids = filtered.experience.map((e) => e.id)
-      // PM role must appear; the Intern with almost no PM keywords should be
-      // crowded out by the other two experiences.
+      // PM role must appear; with MAX_EXPERIENCES=5, all 4 experiences
+      // fit — the test verifies that the most recent (PM) is always first.
       expect(ids).toContain('exp-1')
-      expect(ids).not.toContain('exp-4')
+      expect(ids[0]).toBe('exp-1')
     })
 
     it('always includes most-recent experience even with 0 keyword hits', () => {
@@ -132,7 +132,7 @@ describe('resumeContextService', () => {
       expect(filtered.experience.length).toBeGreaterThanOrEqual(2)
     })
 
-    it('caps at 3 experiences / 10 skills / 3 projects', () => {
+    it('caps at 5 experiences / 10 skills / 3 projects', () => {
       const resume = makeResume({
         experience: Array.from({ length: 8 }, (_, i) => ({
           id: `exp-${i}`,
@@ -157,7 +157,7 @@ describe('resumeContextService', () => {
       })
 
       const filtered = filterResumeByDomain(resume, 'pm')
-      expect(filtered.experience.length).toBeLessThanOrEqual(3)
+      expect(filtered.experience.length).toBeLessThanOrEqual(5)
       const flatSkills = filtered.skills.flatMap((g) => g.items)
       expect(flatSkills.length).toBeLessThanOrEqual(10)
       expect(filtered.projects.length).toBeLessThanOrEqual(3)

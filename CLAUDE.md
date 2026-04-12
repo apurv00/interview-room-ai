@@ -266,6 +266,8 @@ Users can download their resume as a PDF. The system generates a server-side PDF
 
 _Add items as they arise. Remove when resolved._
 
+- **Tech debt: Re-enable research pipeline once Vercel Pro + Inngest configured.** The inline analysis fallback (`runMultimodalPipeline({ inline: true })`) skips the dual-pipeline research comparison and per-second facial timeseries generation to fit within Vercel Hobby's 60s function timeout. Once Inngest is configured in production (env vars `INNGEST_EVENT_KEY` + `INNGEST_SIGNING_KEY`) or Vercel Pro is available, these features run automatically via the background job path. No code change needed — just configure the env vars. To also enable them for the inline path, remove the `isInline` guards in `modules/interview/services/analysis/multimodalPipeline.ts`.
+
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 

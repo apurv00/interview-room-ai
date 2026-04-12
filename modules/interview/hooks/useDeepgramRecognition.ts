@@ -90,6 +90,16 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
 
   const startListening = useCallback(
     (onComplete: (result: SpeechRecognitionResult) => void, options?: StartListeningOptions) => {
+      // Guard: if already listening (e.g. called twice in rapid succession),
+      // finish the current session before starting a new one. Without this,
+      // both sessions share the same WebSocket and the second call overwrites
+      // the first's callbacks, causing spurious interrupts. See Issue #2.
+      // finishRecognition snapshots onCompleteRef synchronously, so the old
+      // session's async callback won't alias with the new one set below.
+      if (onCompleteRef.current && !isFinishingRef.current) {
+        finishRecognition()
+      }
+
       onCompleteRef.current = onComplete
       onCaptureReadyRef.current = options?.onCaptureReady ?? null
       finalTextRef.current = ''
@@ -567,14 +577,22 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     const turnWords = wordsRef.current
     wordsRef.current = []
 
+    // Snapshot the callback NOW (synchronously) so the async .then() below
+    // fires the correct handler even if startListening is called again before
+    // the dynamic import resolves. Without this, a rapid double-call to
+    // startListening would overwrite onCompleteRef.current and the old
+    // session's result would be delivered to the new session's callback.
+    const onComplete = onCompleteRef.current
+    onCompleteRef.current = null
+
     // Import analyzeSpeech dynamically to avoid circular deps
     import('@interview/config/speechMetrics')
       .then(({ analyzeSpeech }) => {
         const metrics = analyzeSpeech(text, durationMinutes)
-        onCompleteRef.current?.({ text, durationMinutes, metrics, words: turnWords })
+        onComplete?.({ text, durationMinutes, metrics, words: turnWords })
       })
       .catch(() => {
-        onCompleteRef.current?.({
+        onComplete?.({
           text,
           durationMinutes,
           metrics: {
@@ -590,7 +608,6 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
         })
       })
       .finally(() => {
-        onCompleteRef.current = null
         isFinishingRef.current = false
       })
   }

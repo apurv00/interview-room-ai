@@ -75,7 +75,7 @@ const DOMAIN_KEYWORDS: Record<string, string[]> = {
   business: ['strategy', 'revenue', 'client', 'deal', 'gtm', 'market', 'financial', 'p&l', 'growth', 'negotiation', 'forecast'],
 }
 
-const MAX_EXPERIENCES = 3
+const MAX_EXPERIENCES = 5
 const MAX_SKILLS = 10
 const MAX_PROJECTS = 3
 const MAX_BULLETS_PER_EXPERIENCE = 3

@@ -42,7 +42,7 @@ import {
 } from './interviewUtils'
 import { useAvatarSpeech } from './useAvatarSpeech'
 import { useInterviewAPI } from './useInterviewAPI'
-import { createDbSession, persistSession } from './interviewPersistence'
+import { createDbSession, persistSession, type CreateDbSessionResult } from './interviewPersistence'
 
 // ─── Hook options ─────────────────────────────────────────────────────────────
 
@@ -131,6 +131,10 @@ export function useInterview({
 
   // ── DB session id (hoisted above useInterviewAPI so the hook can read it) ──
   const sessionIdRef = useRef<string | null>(null)
+  /** Resolves when createDbSession completes. Awaited in start() before Q1
+   *  generation so the Document Intelligence Layer (structured resume/JD
+   *  parsing) has a sessionId to work with. See Issue #5. */
+  const sessionCreationPromiseRef = useRef<Promise<CreateDbSessionResult> | null>(null)
 
   // ── API calls (extracted to useInterviewAPI) ──
   // Pass a lazy getter for sessionId so the fetch body sends the latest value
@@ -285,7 +289,9 @@ export function useInterview({
       localStorage.removeItem(STORAGE_KEYS.PENDING_RETAKE_PARENT)
     } catch { /* ignore */ }
 
-    createDbSession(config, pendingRetakeParent).then((result) => {
+    const dbSessionPromise = createDbSession(config, pendingRetakeParent)
+    sessionCreationPromiseRef.current = dbSessionPromise
+    dbSessionPromise.then((result) => {
       if (result.limitReached) {
         usageLimitReachedRef.current = true
         interviewAbortRef.current?.abort()
@@ -1682,6 +1688,15 @@ export function useInterview({
       setCurrentQuestion(intro)
       addToTranscript('interviewer', intro, 0)
       checkAbort()
+
+      // Ensure sessionId is populated before generating Q1 so the
+      // Document Intelligence Layer (structured resume/JD parsing) can
+      // fire. Without this, sessionId is null for early questions and
+      // the AI falls back to raw .slice() text — losing structured
+      // company data needed for employer rotation. See Issue #5.
+      if (sessionCreationPromiseRef.current) {
+        await sessionCreationPromiseRef.current
+      }
 
       // Start prefetching Q1 + its TTS in parallel with intro speech
       // (intro takes 3-8 seconds — plenty of time for generation + TTS)

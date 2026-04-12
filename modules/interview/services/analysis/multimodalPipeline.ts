@@ -295,12 +295,16 @@ function synthesiseWhisperResultFromTranscript(
   return { segments, durationSeconds }
 }
 
-/** Step 3: Extract prosody + aggregate facial signals */
+/** Step 3: Extract prosody + aggregate facial signals.
+ *  @param skipTimeseries — when true, skip the per-second facial timeseries
+ *  generation (saves 3-5s). Used in inline mode where the 60s budget is tight.
+ *  The replay UI will show "Timeseries unavailable" but core analysis works. */
 export function stepProcessSignals(
   whisperSegments: Array<Record<string, unknown>>,
   facialFrames: FacialFrame[],
   questionBoundaries: number[],
-  totalDurationSec: number
+  totalDurationSec: number,
+  skipTimeseries: boolean = false
 ): ProcessedSignals {
   const prosodySegments = extractProsody(
     whisperSegments as unknown as Parameters<typeof extractProsody>[0],
@@ -308,13 +312,8 @@ export function stepProcessSignals(
     totalDurationSec
   )
 
-  // Two aggregator runs:
-  //   1. Per-question boundaries — compact output for the fusion prompt.
-  //      Always includes blendshape stats when available, since the dual-
-  //      pipeline experiment (#4) gates enhanced vs baseline on whether
-  //      those stats are visible to Claude in the prompt.
-  //   2. Fixed 1s windows — fine-grained timeseries for the replay UI and
-  //      the research dataset. Always emits blendshape stats.
+  // Per-question boundaries — compact output for the fusion prompt.
+  // Always includes blendshape stats when available.
   const facialSegments = aggregateFacialData(
     facialFrames,
     questionBoundaries,
@@ -322,12 +321,16 @@ export function stepProcessSignals(
     { includeBlendshapeStats: true }
   )
 
-  const facialTimeseries = aggregateFacialData(
-    facialFrames,
-    questionBoundaries,
-    totalDurationSec,
-    { windowSec: FACIAL_TIMESERIES_WINDOW_SEC, includeBlendshapeStats: true }
-  )
+  // Fixed 1s windows — fine-grained timeseries for the replay UI.
+  // Skipped in inline mode to save 3-5s of CPU time.
+  const facialTimeseries = skipTimeseries
+    ? []
+    : aggregateFacialData(
+        facialFrames,
+        questionBoundaries,
+        totalDurationSec,
+        { windowSec: FACIAL_TIMESERIES_WINDOW_SEC, includeBlendshapeStats: true }
+      )
 
   return {
     prosodySegments: prosodySegments as unknown as Array<Record<string, unknown>>,
@@ -472,9 +475,11 @@ export async function stepMarkFailed(
  */
 export async function runMultimodalPipeline(
   sessionId: string,
-  userId: string
+  userId: string,
+  options?: { inline?: boolean }
 ): Promise<void> {
   const startTime = Date.now()
+  const isInline = options?.inline === true
 
   try {
     const session = await stepFetchSession(sessionId)
@@ -489,7 +494,8 @@ export async function runMultimodalPipeline(
       whisper.segments,
       facialFrames,
       session.questionBoundaries,
-      whisper.durationSeconds
+      whisper.durationSeconds,
+      isInline // skip facial timeseries in inline mode to save 3-5s
     )
 
     // ─── Dual-pipeline gating (#4, Option B) ──────────────────────────
@@ -500,7 +506,12 @@ export async function runMultimodalPipeline(
     //   3. The aggregator actually produced blendshape stats (i.e. the
     //      session has post-April-2026 frames carrying blendshapes).
     // Otherwise run the enhanced variant once and persist it as usual.
-    const dualRun = await shouldRunDualPipeline(userId, signals.facialSegments)
+    //
+    // NEVER run dual-pipeline in inline mode — the 60s Vercel timeout
+    // cannot accommodate two sequential Claude calls.
+    const dualRun = isInline
+      ? false
+      : await shouldRunDualPipeline(userId, signals.facialSegments)
 
     // Enhanced variant (what the user sees)
     const enhanced = await stepRunFusion(

@@ -62,11 +62,27 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
         ? `\n\n<job_description_analysis>\n${jdCtx}\n</job_description_analysis>\nUse the structured analysis above to ask targeted questions that probe must-have requirements.`
         : `\n\n<job_description>\n${config.jobDescription.slice(0, 2500)}\n</job_description>\nUse the job description above to ask targeted questions that probe the candidate's fit for the specific requirements listed.`
     }
+    // Track employer names from structured resume for employer-rotation prompt (Issue #5)
+    let employerNames: string[] = []
     if (config.resumeText) {
       const resumeCtx = sessionId ? await getOrLoadResumeContext(sessionId, config.resumeText, config.role) : null
       contextBlock += resumeCtx
         ? `\n\n<candidate_resume_analysis>\n${resumeCtx}\n</candidate_resume_analysis>\nProbe the highlighted experiences. Ask for concrete details and metrics.`
         : `\n\n<candidate_resume>\n${config.resumeText.slice(0, 2500)}\n</candidate_resume>\nProbe specific experiences, projects, and claims from the resume above. Ask for concrete details.`
+
+      // Extract employer companies from the structured resume context string.
+      // The format is "Title @ Company (dates)" per buildParsedResumeContext.
+      // This avoids a duplicate Mongo query — getOrLoadResumeContext already
+      // hit the DB for parsedResume; we parse the output instead.
+      if (resumeCtx) {
+        // matchAll returns an iterator — use a while loop to avoid
+        // downlevelIteration issues with the TS target.
+        const companyRe = /^\s+-\s+.+?\s+@\s+(.+?)(?:\s+\(|$)/gm
+        let companyMatch: RegExpExecArray | null
+        while ((companyMatch = companyRe.exec(resumeCtx)) !== null) {
+          if (companyMatch[1]) employerNames.push(companyMatch[1].trim())
+        }
+      }
     }
     if (config.jobDescription && config.resumeText) {
       contextBlock += `\n\nCross-reference the resume against the JD requirements. Identify gaps or areas where the candidate's experience may not fully match, and explore those.`
@@ -327,6 +343,31 @@ Do NOT use generic transitions like "Great, next question..." or "Moving on...".
         ? `\nIMPORTANT: You have already covered ${topicCount} topics. Ensure your next question explores a DIFFERENT competency area (e.g., if past questions focused on leadership and stakeholder management, now ask about technical depth, failure handling, data-driven decisions, or innovation). Variety across competencies is critical for a thorough assessment.`
         : ''
       threadContext = `\n\nTOPICS ALREADY COVERED:\n${summaries}\n\nDo NOT repeat these topics.${diversityNote} You MAY occasionally reference a pattern across topics when a genuine link exists. Use cross-references sparingly.`
+
+      // Employer rotation — prevent fixating on a single company (Issue #5).
+      // When we have structured employer names, instruct the AI to distribute
+      // questions across the candidate's work history.
+      if (employerNames.length > 1) {
+        // Best-effort: check which companies appear in already-covered topics
+        const coveredCompanies = completedThreads
+          .map(t => {
+            // Check explicit company field first, fall back to text matching
+            if (t.company) return t.company
+            const lower = (t.topicQuestion + ' ' + t.summary).toLowerCase()
+            return employerNames.find(c => lower.includes(c.toLowerCase()))
+          })
+          .filter(Boolean) as string[]
+        const uniqueCovered = Array.from(new Set(coveredCompanies))
+        const uncovered = employerNames.filter(
+          c => !uniqueCovered.some(uc => uc.toLowerCase() === c.toLowerCase())
+        )
+
+        if (uncovered.length > 0) {
+          threadContext += `\n\nEMPLOYER DIVERSITY: The candidate has worked at: ${employerNames.join(', ')}. Previous questions covered: ${uniqueCovered.join(', ') || 'none specifically'}. You MUST ask about a DIFFERENT employer next. Focus your next question on the candidate's experience at ${uncovered.slice(0, 2).join(' or ')}. Do NOT ask another question about ${uniqueCovered[uniqueCovered.length - 1] || employerNames[0]}.`
+        } else {
+          threadContext += `\n\nEMPLOYER DIVERSITY: The candidate has worked at: ${employerNames.join(', ')}. Distribute questions across different employers — do not ask more than ${Math.ceil(totalQuestions / employerNames.length)} questions about the same company.`
+        }
+      }
     }
 
     // ── Explicit answer recall (C1) — cross-reference earlier answers ──
@@ -413,6 +454,7 @@ Return ONLY the question text. No preamble, no numbering, no quotation marks. Ju
         question: t.topicQuestion,
         avgScore: t.avgScore,
         probes: t.probeCount,
+        ...(t.company ? { company: t.company } : {}),
       }))
     }
 

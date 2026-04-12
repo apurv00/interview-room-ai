@@ -62,6 +62,26 @@ export function buildProbeQuestion(
 }
 
 /**
+ * Try to extract a company/employer name from thread text.
+ * Looks for patterns like "at CompanyName" or "Company Name" in both
+ * interviewer questions and candidate answers.
+ */
+function extractCompanyFromThread(thread: ThreadEntry[]): string | undefined {
+  const allText = thread.map(t => t.text).join(' ')
+  // Match "at <Company>" — common interviewer phrasing
+  const atMatch = allText.match(/\bat\s+([A-Z][A-Za-z0-9.&\- ]{1,30}?)(?:\s*[,?.!]|\s+(?:and|when|where|how|what|why|your|the|you|during|for|in|as|to)\b)/i)
+  if (atMatch?.[1]) {
+    const candidate = atMatch[1].trim()
+    // Filter out generic words that aren't company names
+    const generic = new Set(['the', 'a', 'an', 'your', 'this', 'that', 'one', 'some'])
+    if (!generic.has(candidate.toLowerCase()) && candidate.length > 1) {
+      return candidate
+    }
+  }
+  return undefined
+}
+
+/**
  * Build a summary for a completed conversation thread (topic + probes).
  */
 export function buildThreadSummary(
@@ -69,6 +89,7 @@ export function buildThreadSummary(
   topicQuestion: string,
   thread: ThreadEntry[],
   threadEvals: AnswerEvaluation[],
+  company?: string,
 ): ThreadSummary {
   const avgScore = threadEvals.length > 0
     ? threadEvals.reduce((s, e) => s + (e.relevance + e.structure + e.specificity + e.ownership) / 4, 0) / threadEvals.length
@@ -78,6 +99,9 @@ export function buildThreadSummary(
 
   const summary = `Discussed "${topicQuestion}". Avg score: ${Math.round(avgScore)}. ${probeEntries.length > 0 ? `Probed ${probeEntries.length} time(s) (${probeTypes.join(', ')}).` : 'No probing needed.'}`
 
+  // Best-effort company extraction: use explicit param, or try to extract from text
+  const resolvedCompany = company || extractCompanyFromThread(thread)
+
   return {
     topicIndex,
     topicQuestion,
@@ -85,6 +109,7 @@ export function buildThreadSummary(
     avgScore: Math.round(avgScore),
     probeCount: probeEntries.length,
     probeTypes,
+    ...(resolvedCompany ? { company: resolvedCompany } : {}),
   }
 }
 

@@ -9,6 +9,25 @@ import { aiLogger } from '@shared/logger'
 const TTS_CACHE_PREFIX = 'tts-cache/'
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000 // 30 days
 
+// Module-scoped S3Client — reused across requests to avoid cold-start
+// overhead of re-creating the client on every TTS cache lookup (Issue #1).
+// Lazy-initialized on first use so missing env vars don't crash at import time.
+let _s3Client: import('@aws-sdk/client-s3').S3Client | null = null
+async function getS3Client(): Promise<import('@aws-sdk/client-s3').S3Client | null> {
+  if (_s3Client) return _s3Client
+  const accountId = process.env.R2_ACCOUNT_ID
+  const accessKeyId = process.env.R2_ACCESS_KEY_ID
+  const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY
+  if (!accountId || !accessKeyId || !secretAccessKey) return null
+  const { S3Client } = await import('@aws-sdk/client-s3')
+  _s3Client = new S3Client({
+    region: 'auto',
+    endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+    credentials: { accessKeyId, secretAccessKey },
+  })
+  return _s3Client
+}
+
 /** Generate a deterministic cache key for a TTS text. */
 export function ttsCacheKey(text: string, encoding: string = 'mp3'): string {
   const hash = createHash('sha256').update(text).digest('hex').slice(0, 16)
@@ -21,16 +40,10 @@ export async function getCachedTTS(text: string, encoding: string = 'mp3'): Prom
     const { isR2Configured } = await import('@shared/storage/r2')
     if (!isR2Configured()) return null
 
-    const { S3Client, GetObjectCommand } = await import('@aws-sdk/client-s3')
-    const client = new S3Client({
-      region: 'auto',
-      endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-      credentials: {
-        accessKeyId: process.env.R2_ACCESS_KEY_ID!,
-        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
-      },
-    })
+    const client = await getS3Client()
+    if (!client) return null
 
+    const { GetObjectCommand } = await import('@aws-sdk/client-s3')
     const key = ttsCacheKey(text, encoding)
     const response = await client.send(new GetObjectCommand({
       Bucket: process.env.R2_BUCKET_NAME!,
@@ -63,16 +76,10 @@ export async function cacheTTS(text: string, audio: Buffer | Uint8Array, encodin
     const { isR2Configured } = await import('@shared/storage/r2')
     if (!isR2Configured()) return
 
-    const { S3Client, PutObjectCommand } = await import('@aws-sdk/client-s3')
-    const client = new S3Client({
-      region: 'auto',
-      endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-      credentials: {
-        accessKeyId: process.env.R2_ACCESS_KEY_ID!,
-        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
-      },
-    })
+    const client = await getS3Client()
+    if (!client) return
 
+    const { PutObjectCommand } = await import('@aws-sdk/client-s3')
     const key = ttsCacheKey(text, encoding)
     const contentType = encoding === 'opus' ? 'audio/opus' : 'audio/mpeg'
 
