@@ -43,9 +43,9 @@ export const AnswerEvaluationSchema = z.object({
   specificity: z.number().min(0).max(100),
   ownership: z.number().min(0).max(100),
   jdAlignment: z.number().min(0).max(100).nullish(),
-  needsFollowUp: z.boolean(),
+  needsFollowUp: z.boolean().optional(),
   followUpQuestion: z.string().max(2000).nullish(),
-  flags: z.array(z.string().max(500)).max(20),
+  flags: z.array(z.string().max(500)).max(20).optional(),
   probeDecision: ProbeDecisionSchema.nullish(),
   pushback: PushbackSchema.nullish(),
 })
