@@ -106,7 +106,7 @@ export function useInterview({
 
   // ── Avatar (extracted to useAvatarSpeech) ──
   const isMultimodalEnabled = process.env.NEXT_PUBLIC_FEATURE_MULTIMODAL === 'true'
-  const { avatarEmotion, isAvatarTalking, setAvatarEmotion, avatarSpeak: rawAvatarSpeak, prefetchTTS, cancelTTS, playAck, cancelAck } = useAvatarSpeech({
+  const { avatarEmotion, isAvatarTalking, setAvatarEmotion, avatarSpeak: rawAvatarSpeak, prefetchTTS, cancelTTS, softCancelTTS, playAck, cancelAck } = useAvatarSpeech({
     interviewType: config?.interviewType,
     isMultimodalEnabled,
   })
@@ -123,7 +123,7 @@ export function useInterview({
     text: string,
     emotion?: import('@shared/types').AvatarEmotion,
     onAudioStart?: () => void,
-  ) => {
+  ): Promise<{ interrupted: boolean; interruptContext: InterruptContext | null }> => {
     interruptedRef.current = false
     interruptContextRef.current = null
     // Suppress interrupt detection during TTS to prevent the AI's own
@@ -136,15 +136,17 @@ export function useInterview({
       // Capture interrupt context for downstream decision-making.
       // interruptSpeech comes from Deepgram's interruptAccumRef (the ≥3 words
       // that triggered this handler). spokenPortion is approximated as the full
-      // text for now — Phase 2 will add chunk-level TTS progress tracking.
+      // text for now — refined when chunk-level TTS progress tracking is added.
       interruptContextRef.current = {
         interruptedUtterance: text,
-        spokenPortion: text, // TODO(Phase 2): track actual TTS progress
+        spokenPortion: text,
         interruptSpeech: '',  // TODO(Phase 4): bridge from getAndClearInterruptAccum
         phase: phaseRef.current,
         questionIndex: questionIndexRef.current,
       }
-      cancelTTS()
+      // Soft-cancel: let the current audio buffer drain so the AI finishes
+      // its sentence naturally (~1-2s) instead of hard-cutting mid-word.
+      softCancelTTS()
       setSuppressInterrupt?.(false)
       // I6: Discard any pending coaching message on interrupt
       coachingAbortRef.current?.abort()
@@ -159,7 +161,11 @@ export function useInterview({
     })
     setOnInterrupt?.(null) // Clear interrupt handler after TTS finishes
     setSuppressInterrupt?.(false) // Ensure suppression is cleared
-  }, [rawAvatarSpeak, setOnInterrupt, setSuppressInterrupt, cancelTTS])
+    return {
+      interrupted: interruptedRef.current,
+      interruptContext: interruptContextRef.current,
+    }
+  }, [rawAvatarSpeak, setOnInterrupt, setSuppressInterrupt, softCancelTTS])
 
   // ── DB session id (hoisted above useInterviewAPI so the hook can read it) ──
   const sessionIdRef = useRef<string | null>(null)
