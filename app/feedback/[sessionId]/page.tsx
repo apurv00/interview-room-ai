@@ -510,10 +510,12 @@ function FeedbackPageInner() {
             }),
             signal,
           })
-          // Retry on 5xx server errors
-          if (res.status >= 500 && attempt < 2) {
+          // Retry on 5xx server errors and 429 rate limit
+          if ((res.status >= 500 || res.status === 429) && attempt < 2) {
             lastError = new Error(`Server error (status ${res.status})`)
-            await new Promise(r => setTimeout(r, 1500 * (attempt + 1)))
+            // Longer backoff for rate limiting (429) to let the window reset
+            const delay = res.status === 429 ? 5000 * (attempt + 1) : 1500 * (attempt + 1)
+            await new Promise(r => setTimeout(r, delay))
             continue
           }
           break

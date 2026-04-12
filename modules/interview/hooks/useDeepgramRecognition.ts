@@ -22,6 +22,9 @@ export interface UseDeepgramRecognitionReturn {
   warmUp: () => void
   /** Provide an existing audio stream to avoid redundant getUserMedia calls. */
   setExternalStream: (stream: MediaStream) => void
+  /** Suppress interrupt detection (e.g. during TTS playback to prevent
+   *  speaker-to-mic feedback from triggering false interrupts). */
+  setSuppressInterrupt: (suppress: boolean) => void
   /** Set a callback that fires when speech is detected while no active listening session.
    *  Used to detect candidate interrupting TTS playback. */
   setOnInterrupt: (cb: (() => void) | null) => void
@@ -64,6 +67,9 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   const onCaptureReadyRef = useRef<(() => void) | null>(null)
   /** Interrupt callback — fired when speech is detected while avatar is speaking. */
   const onInterruptRef = useRef<(() => void) | null>(null)
+  /** When true, suppress interrupt detection. Used during TTS playback to prevent
+   *  the AI's own speech (picked up by the mic) from triggering false interrupts. */
+  const suppressInterruptRef = useRef(false)
   /** Accumulated final-packet transcript for the current interrupt window.
    *  Deepgram can emit a single utterance as multiple `is_final: true`
    *  packets (e.g. "wait can" then "I clarify"). If we checked the
@@ -299,7 +305,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           // (e.g. "wait can" then "I clarify"), so checking per-packet misses
           // genuine multi-word interrupts. Accumulate across packets and check
           // the running total. See INTERVIEW_FLOW.md §8 (Codex P1).
-          if (isFinal && transcript && !onCompleteRef.current && onInterruptRef.current) {
+          if (isFinal && transcript && !onCompleteRef.current && onInterruptRef.current && !suppressInterruptRef.current) {
             interruptAccumRef.current = interruptAccumRef.current
               ? `${interruptAccumRef.current} ${transcript}`
               : transcript
@@ -618,6 +624,18 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   }, [])
 
   const setOnInterrupt = useCallback((cb: (() => void) | null) => { onInterruptRef.current = cb }, [])
+  const setSuppressInterrupt = useCallback((suppress: boolean) => {
+    suppressInterruptRef.current = suppress
+    // When suppressing, also clear any accumulated fragments so stale
+    // TTS-feedback words don't combine with real speech later.
+    if (suppress) {
+      interruptAccumRef.current = ''
+      if (interruptAccumTimerRef.current) {
+        clearTimeout(interruptAccumTimerRef.current)
+        interruptAccumTimerRef.current = null
+      }
+    }
+  }, [])
 
-  return { isListening, liveTranscript, startListening, stopListening, warmUp, setExternalStream, setOnInterrupt }
+  return { isListening, liveTranscript, startListening, stopListening, warmUp, setExternalStream, setOnInterrupt, setSuppressInterrupt }
 }

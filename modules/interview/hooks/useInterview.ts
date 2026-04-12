@@ -55,6 +55,8 @@ interface UseInterviewOptions {
   warmUpListening?: () => void
   /** Set interrupt callback for speech-during-TTS detection. */
   setOnInterrupt?: (cb: (() => void) | null) => void
+  /** Suppress interrupt detection during TTS to prevent self-interruption. */
+  setSuppressInterrupt?: (suppress: boolean) => void
   onRecordingStop?: () => void
   currentProblem?: { id: string; title: string; description: string } | null
   currentDesignProblem?: { id: string; title: string; description: string; requirements: string[] } | null
@@ -86,6 +88,7 @@ export function useInterview({
   stopListening,
   warmUpListening,
   setOnInterrupt,
+  setSuppressInterrupt,
   onRecordingStop,
   currentProblem,
   currentDesignProblem,
@@ -117,17 +120,29 @@ export function useInterview({
     onAudioStart?: () => void,
   ) => {
     interruptedRef.current = false
-    // Set interrupt detector — fires if Deepgram hears speech during TTS
+    // Suppress interrupt detection during TTS to prevent the AI's own
+    // speech (picked up by the mic via speaker feedback) from triggering
+    // false interrupts. Only enable interrupts after audio actually starts
+    // playing — that's when a real candidate interrupt would occur.
+    setSuppressInterrupt?.(true)
     setOnInterrupt?.(() => {
       interruptedRef.current = true
       cancelTTS()
+      setSuppressInterrupt?.(false)
       // I6: Discard any pending coaching message on interrupt
       coachingAbortRef.current?.abort()
       setCoachingTip(null)
     })
-    await rawAvatarSpeak(text, emotion, onAudioStart)
+    await rawAvatarSpeak(text, emotion, () => {
+      // Audio has started playing — now allow candidate interrupts.
+      // Before this point, any mic input is likely echo from the TTS
+      // audio playing through speakers, not the candidate speaking.
+      setSuppressInterrupt?.(false)
+      onAudioStart?.()
+    })
     setOnInterrupt?.(null) // Clear interrupt handler after TTS finishes
-  }, [rawAvatarSpeak, setOnInterrupt, cancelTTS])
+    setSuppressInterrupt?.(false) // Ensure suppression is cleared
+  }, [rawAvatarSpeak, setOnInterrupt, setSuppressInterrupt, cancelTTS])
 
   // ── DB session id (hoisted above useInterviewAPI so the hook can read it) ──
   const sessionIdRef = useRef<string | null>(null)
@@ -1689,23 +1704,28 @@ export function useInterview({
       addToTranscript('interviewer', intro, 0)
       checkAbort()
 
-      // Ensure sessionId is populated before generating Q1 so the
-      // Document Intelligence Layer (structured resume/JD parsing) can
-      // fire. Without this, sessionId is null for early questions and
-      // the AI falls back to raw .slice() text — losing structured
-      // company data needed for employer rotation. See Issue #5.
+      // Start intro speech IMMEDIATELY — do NOT block on session creation.
+      // The intro takes 3-8 seconds, which gives createDbSession (including
+      // the Document Intelligence Layer's LLM parsing) time to finish in
+      // the background. We await it AFTER starting speech but BEFORE Q1
+      // generation, so sessionId is available for structured resume context.
+      warmUpListening?.()
+      const introSpeechPromise = avatarSpeak(intro, 'friendly')
+
+      // While the intro plays, wait for session creation to complete.
+      // This ensures sessionId is available for the Document Intelligence
+      // Layer (structured resume/JD parsing) when Q1 fires. See Issue #5.
       if (sessionCreationPromiseRef.current) {
         await sessionCreationPromiseRef.current
       }
 
-      // Start prefetching Q1 + its TTS in parallel with intro speech
-      // (intro takes 3-8 seconds — plenty of time for generation + TTS)
+      // Start prefetching Q1 + its TTS in parallel with remaining intro speech
       const q1Promise = generateQuestion(1)
       q1Promise.then((q) => prefetchTTS(q)).catch(() => {})
       prefetchedQuestionRef.current = q1Promise
 
-      warmUpListening?.()
-      await avatarSpeak(intro, 'friendly')
+      // Wait for intro speech to finish before continuing
+      await introSpeechPromise
 
       // Listen for the candidate's response to the intro ("tell me about yourself")
       checkAbort()
