@@ -7,7 +7,7 @@ import { getPressureQuestionIndex, getQuestionCount, getDomainLabel } from '@int
 import { getSkillSections, selectSkillQuestions } from '@interview/services/core/skillLoader'
 import { findCompanyProfile, buildCompanyPromptContext } from '@interview/config/companyProfiles'
 import { connectDB } from '@shared/db/connection'
-import { User, InterviewDomain, InterviewDepth, InterviewSession } from '@shared/db/models'
+import { User, InterviewDomain, InterviewDepth } from '@shared/db/models'
 import { FALLBACK_DOMAINS, FALLBACK_DEPTHS } from '@shared/db/seed'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { generateSessionBrief, briefToPromptContext } from '@interview/services/persona/personalizationEngine'
@@ -70,15 +70,18 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
         ? `\n\n<candidate_resume_analysis>\n${resumeCtx}\n</candidate_resume_analysis>\nProbe the highlighted experiences. Ask for concrete details and metrics.`
         : `\n\n<candidate_resume>\n${config.resumeText.slice(0, 2500)}\n</candidate_resume>\nProbe specific experiences, projects, and claims from the resume above. Ask for concrete details.`
 
-      // Extract employer companies for rotation prompt
-      if (sessionId) {
-        try {
-          const sessionDoc = await InterviewSession.findById(sessionId).select('parsedResume').lean()
-          const parsed = sessionDoc?.parsedResume as { experience?: Array<{ company: string }> } | undefined
-          if (parsed?.experience?.length) {
-            employerNames = parsed.experience.map(e => e.company).filter(Boolean)
-          }
-        } catch { /* non-critical — employer rotation is best-effort */ }
+      // Extract employer companies from the structured resume context string.
+      // The format is "Title @ Company (dates)" per buildParsedResumeContext.
+      // This avoids a duplicate Mongo query — getOrLoadResumeContext already
+      // hit the DB for parsedResume; we parse the output instead.
+      if (resumeCtx) {
+        // matchAll returns an iterator — use a while loop to avoid
+        // downlevelIteration issues with the TS target.
+        const companyRe = /^\s+-\s+.+?\s+@\s+(.+?)(?:\s+\(|$)/gm
+        let companyMatch: RegExpExecArray | null
+        while ((companyMatch = companyRe.exec(resumeCtx)) !== null) {
+          if (companyMatch[1]) employerNames.push(companyMatch[1].trim())
+        }
       }
     }
     if (config.jobDescription && config.resumeText) {
