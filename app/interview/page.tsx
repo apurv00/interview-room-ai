@@ -100,7 +100,7 @@ export default function InterviewPage() {
   const [voicesReady, setVoicesReady] = useState(false)
 
   // ── Speech recognition ──
-  const { isListening, liveTranscript, startListening, stopListening, warmUp, setExternalStream, setOnInterrupt } = useSpeechRecognition()
+  const { isListening, liveTranscript, startListening, stopListening, warmUp, setExternalStream, setOnInterrupt, setSuppressInterrupt } = useSpeechRecognition()
 
   // ── Recording (camera track) ──
   const { isRecording, recordingDuration, startRecording, stopRecording } = useMediaRecorder()
@@ -236,6 +236,7 @@ export default function InterviewPage() {
     stopListening,
     warmUpListening: warmUp,
     setOnInterrupt,
+    setSuppressInterrupt,
     onRecordingStop: handleRecordingStop,
     currentProblem,
     currentDesignProblem,
@@ -407,7 +408,10 @@ export default function InterviewPage() {
     async function initCapture() {
       let stream: MediaStream
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        })
       } catch (err) {
         console.error(err)
         return
