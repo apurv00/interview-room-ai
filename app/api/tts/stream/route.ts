@@ -7,7 +7,7 @@ import { getCachedTTS, cacheTTS } from '@shared/services/ttsCache'
 export const dynamic = 'force-dynamic'
 
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY
-const TTS_MODEL = process.env.DEEPGRAM_TTS_MODEL || 'aura-2-zeus-en'
+const TTS_MODEL = process.env.DEEPGRAM_TTS_MODEL || 'aura-2-asteria-en'
 
 /**
  * Streaming TTS endpoint — checks R2 cache first, then falls back to
@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
     const contentType = encoding === 'opus' ? 'audio/opus' : 'audio/mpeg'
 
     // Check R2 cache first — serves cached audio without Deepgram call
-    const cached = await getCachedTTS(text, encoding)
+    const cached = await getCachedTTS(text, encoding, TTS_MODEL)
     if (cached) {
       return new Response(new Uint8Array(cached), {
         headers: {
@@ -97,7 +97,7 @@ export async function POST(req: NextRequest) {
           if (value) chunks.push(value)
         }
         if (chunks.length > 0) {
-          await cacheTTS(text, Buffer.concat(chunks), encoding)
+          await cacheTTS(text, Buffer.concat(chunks), encoding, TTS_MODEL)
         }
       } catch (err) {
         aiLogger.warn({ err }, 'TTS cache branch drain failed — non-fatal')
