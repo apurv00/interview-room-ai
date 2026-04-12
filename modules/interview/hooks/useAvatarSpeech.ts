@@ -25,6 +25,10 @@ export interface UseAvatarSpeechReturn {
   prefetchTTS: (text: string) => void
   /** Cancel any in-progress TTS playback (used for candidate interrupt). */
   cancelTTS: () => void
+  /** Soft-cancel: stop fetching new audio but let the current buffer drain.
+   *  The AI finishes its current sentence naturally. Used for graceful
+   *  interrupt handling where the AI completes its thought before yielding. */
+  softCancelTTS: () => void
   /**
    * Play a short thinking acknowledgment ("Got it", "Okay") on a
    * dedicated audio channel that is isolated from the main `avatarSpeak`
@@ -71,7 +75,7 @@ export function useAvatarSpeech({
   const currentAckUrlRef = useRef<string | null>(null)
   const currentAckFetchAbortRef = useRef<AbortController | null>(null)
   // Streaming audio playback (MediaSource API)
-  const { streamAndPlay, cancel: cancelStream, isSupported: isStreamingSupported } = useStreamingAudio()
+  const { streamAndPlay, cancel: cancelStream, softCancel: softCancelStream, isSupported: isStreamingSupported } = useStreamingAudio()
 
   /** Pre-fetch TTS audio for a question so it's ready when needed (buffered). */
   const prefetchTTS = useCallback(
@@ -328,6 +332,26 @@ export function useAvatarSpeech({
   }, [cancelStream, clearAckChannel])
 
   /**
+   * Soft-cancel TTS: stop fetching new audio from the server but let the
+   * currently-buffered audio finish playing (the AI completes its current
+   * sentence). For streaming audio this drains the SourceBuffer; for buffered
+   * audio the element continues to its natural end. Unlike cancelTTS(), this
+   * does NOT immediately silence the speaker — the promise from avatarSpeak
+   * resolves when the buffered audio finishes (~1-2s).
+   */
+  const softCancelTTS = useCallback(() => {
+    // 1. Abort any in-flight TTS fetch (no more chunks from server)
+    currentFetchAbortRef.current?.abort()
+    currentFetchAbortRef.current = null
+    // 2. Soft-stop the streaming pipeline (drain current buffer)
+    softCancelStream()
+    // 3. For buffered playback (playBlob), let the audio finish naturally —
+    //    don't pause or clear the element. The onended handler will fire.
+    // 4. Cancel browser speechSynthesis — no sentence-level control available
+    window.speechSynthesis?.cancel()
+  }, [softCancelStream])
+
+  /**
    * Thinking-ack channel: fire-and-forget short phrase ("Got it.", "Okay.")
    * via /api/tts (buffered, R2-cached). Isolated from avatarSpeak so a
    * subsequent main-channel speak does NOT cancel the ack. Cleared by
@@ -384,6 +408,7 @@ export function useAvatarSpeech({
     avatarSpeak,
     prefetchTTS,
     cancelTTS,
+    softCancelTTS,
     playAck,
     cancelAck,
   }
