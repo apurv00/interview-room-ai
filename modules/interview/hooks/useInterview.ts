@@ -1456,6 +1456,50 @@ export function useInterview({
         setAvatarEmotion(responseEmotion)
 
         qIdx++
+
+        // ── Surface a deferred topic if the candidate interrupted earlier ──
+        // Max 2 per interview, only when enough time remains.
+        if (deferredTopicsRef.current.length > 0 && timeRemainingRef.current > 90 && qIdx < maxQ) {
+          const deferredTopic = deferredTopicsRef.current.shift()!
+          const bridgeMsg = `Earlier you mentioned something interesting — "${deferredTopic}". I'd love to hear more about that.`
+          checkAbort()
+          addToTranscript('interviewer', bridgeMsg, qIdx)
+          setCurrentQuestion(bridgeMsg)
+          warmUpListening?.()
+          await avatarSpeak(bridgeMsg, 'curious')
+          if (isInterviewOver()) return
+
+          setLiveAnswer('')
+          const deferredAnswer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
+          if (isInterviewOver()) return
+          if (deferredAnswer) {
+            addToTranscript('candidate', deferredAnswer, qIdx)
+            await evaluateAndCoach(bridgeMsg, deferredAnswer, qIdx, undefined, 0)
+          }
+          qIdx++
+        }
+      }
+
+      // ── Surface remaining deferred topics during wrap-up ──
+      if (deferredTopicsRef.current.length > 0) {
+        checkAbort()
+        if (!isInterviewOver()) {
+          const remaining = deferredTopicsRef.current.splice(0, 2)
+          for (const topic of remaining) {
+            const followUp = `Before we wrap up — you raised an interesting point earlier about "${topic}". Can you tell me more?`
+            addToTranscript('interviewer', followUp)
+            warmUpListening?.()
+            await avatarSpeak(followUp, 'curious')
+            if (isInterviewOver()) break
+
+            setLiveAnswer('')
+            const topicAnswer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
+            if (isInterviewOver()) break
+            if (topicAnswer) {
+              addToTranscript('candidate', topicAnswer)
+            }
+          }
+        }
       }
 
       // Wrap-up — listen for user questions and respond
