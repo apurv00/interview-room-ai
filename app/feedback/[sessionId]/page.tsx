@@ -269,14 +269,13 @@ function FeedbackPageInner() {
         }
       } catch { /* continue polling */ }
 
-      // BUG 9 fix: bump cap to 180s (3 minutes) and surface a friendlier
-      // message that nudges the user to refresh rather than reporting a
-      // hard failure. The inline pipeline can legitimately take 60s on
-      // a long interview; the previous 90s cap caused false-positive
-      // timeouts when the server was still processing.
+      // Polling cap: 180s (3 minutes). The inline pipeline has a 50s
+      // soft timeout on the server side; if it hasn't completed by now
+      // the initial attempt likely timed out. Offer a retry option
+      // rather than leaving the user staring at a spinner.
       if (elapsed >= 180000) {
         clearInterval(interval)
-        setAnalysisError('Analysis is taking longer than expected — please refresh in a minute.')
+        setAnalysisError('Analysis is taking longer than expected. Click "Retry Analysis" to try again, or refresh in a minute.')
         setAnalysisLoading(false)
       }
     }, 2000)
@@ -479,19 +478,56 @@ function FeedbackPageInner() {
 
   async function generateFeedback(d: StoredInterviewData, sid?: string, signal?: AbortSignal) {
     setFeedbackError(null)
+
+    // Pre-flight: if no evaluations were captured (e.g. interview ended
+    // abruptly before any answer was evaluated), skip the API call and
+    // show a friendly message instead of an opaque server error.
+    if (!d.evaluations || d.evaluations.length === 0) {
+      setFeedbackError(
+        'No answers were evaluated during this interview — feedback cannot be generated. ' +
+        'This can happen if the interview ended before completing any questions.'
+      )
+      setLoading(false)
+      return
+    }
+
     try {
-      const res = await fetch('/api/generate-feedback', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          config: d.config,
-          transcript: d.transcript,
-          evaluations: d.evaluations,
-          speechMetrics: d.speechMetrics,
-          sessionId: sid,
-        }),
-        signal,
-      })
+      // Retry wrapper: retry up to 2 times on transient failures (network
+      // errors, 5xx, non-JSON responses). Covers Claude API timeouts.
+      let res: Response | null = null
+      let lastError: Error | null = null
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          res = await fetch('/api/generate-feedback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              config: d.config,
+              transcript: d.transcript,
+              evaluations: d.evaluations,
+              speechMetrics: d.speechMetrics,
+              sessionId: sid,
+            }),
+            signal,
+          })
+          // Retry on 5xx server errors
+          if (res.status >= 500 && attempt < 2) {
+            lastError = new Error(`Server error (status ${res.status})`)
+            await new Promise(r => setTimeout(r, 1500 * (attempt + 1)))
+            continue
+          }
+          break
+        } catch (e) {
+          lastError = e instanceof Error ? e : new Error('Network error')
+          if ((e as Error).name === 'AbortError') throw e
+          if (attempt < 2) {
+            await new Promise(r => setTimeout(r, 1500 * (attempt + 1)))
+            continue
+          }
+        }
+      }
+      if (!res) throw lastError || new Error('Feedback request failed after retries')
+
       let fb
       try {
         fb = await res.json()

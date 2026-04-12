@@ -90,6 +90,14 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
 
   const startListening = useCallback(
     (onComplete: (result: SpeechRecognitionResult) => void, options?: StartListeningOptions) => {
+      // Guard: if already listening (e.g. called twice in rapid succession),
+      // finish the current session before starting a new one. Without this,
+      // both sessions share the same WebSocket and the second call overwrites
+      // the first's callbacks, causing spurious interrupts. See Issue #2.
+      if (onCompleteRef.current && !isFinishingRef.current) {
+        finishRecognition()
+      }
+
       onCompleteRef.current = onComplete
       onCaptureReadyRef.current = options?.onCaptureReady ?? null
       finalTextRef.current = ''

@@ -127,6 +127,8 @@ export interface ThreadSummary {
   avgScore: number
   probeCount: number
   probeTypes: string[]
+  /** Company/employer this thread focused on (best-effort extraction). */
+  company?: string
 }
 
 // ─── Pushback tone (kept for toneToEmotion mapping in turn-router style) ─────
