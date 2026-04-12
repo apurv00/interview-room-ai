@@ -137,9 +137,24 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
       })
     )
 
-    const transcriptText = transcript
-      .map((e) => `${e.speaker === 'interviewer' ? 'Interviewer' : 'Candidate'}: ${e.text}`)
-      .join('\n')
+    // Build transcript text with smart truncation: keep first 2 + last 2 Q&A
+    // pairs in full, summarize the middle. The old approach (.slice(0, 4000))
+    // blindly cut later questions, leaving Claude with no evidence for them.
+    const transcriptLines = transcript.map(
+      (e) => `${e.speaker === 'interviewer' ? 'Interviewer' : 'Candidate'}: ${e.text}`
+    )
+    const fullTranscript = transcriptLines.join('\n')
+    let transcriptText: string
+    if (fullTranscript.length <= 6000) {
+      transcriptText = fullTranscript
+    } else {
+      // Keep first ~2000 chars (opening questions) and last ~2000 chars (final questions)
+      // with a "[...N lines omitted for brevity...]" marker in between
+      const head = fullTranscript.slice(0, 2500)
+      const tail = fullTranscript.slice(-2500)
+      const omittedLines = transcriptLines.length - (head.split('\n').length + tail.split('\n').length)
+      transcriptText = `${head}\n\n[...${Math.max(0, omittedLines)} lines omitted for brevity — evaluation scores for all questions are provided in contextData...]\n\n${tail}`
+    }
 
     let jdBlock = ''
     let jdSchemaBlock = ''
@@ -152,35 +167,52 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
   ]`
     }
 
-    // Inject competency and history context for enhanced feedback
+    // ── Context assembly — all three blocks are independent, run in parallel ──
+    // Before this was sequential (competency → profile → skill file), adding
+    // 500-1000ms of avoidable latency from DB round-trips.
+
+    const contextPromises = await Promise.allSettled([
+      // 1. Competency + history (feature-gated)
+      isFeatureEnabled('personalization_engine')
+        ? Promise.all([
+            getUserCompetencySummary(user.id, config.role),
+            buildHistorySummary(user.id, config.role),
+          ])
+        : Promise.resolve([null, null] as const),
+
+      // 2. User profile
+      (async () => {
+        await connectDB()
+        return User.findById(user.id).select(
+          'interviewGoal targetCompanyType weakAreas feedbackPreference ' +
+          'targetCompanies topSkills isCareerSwitcher switchingFrom practiceStats'
+        ).lean()
+      })(),
+
+      // 3. Domain skill file sections
+      getSkillSections(config.role, interviewType, ['scoring-emphasis', 'depth-meaning']),
+    ])
+
+    // Extract results — failures produce empty strings (same as before)
     let competencyBlock = ''
     let historyBlock = ''
-    if (isFeatureEnabled('personalization_engine')) {
-      try {
-        const [compSummary, histSummary] = await Promise.all([
-          getUserCompetencySummary(user.id, config.role),
-          buildHistorySummary(user.id, config.role),
-        ])
-        if (compSummary) {
-          const weakComps = compSummary.weakAreas.slice(0, 3)
-          if (weakComps.length > 0) {
-            competencyBlock = `\nCandidate's historically weak competencies: ${weakComps.join(', ')}. Address these specifically in feedback.`
-          }
-          competencyBlock += `\nOverall readiness score: ${compSummary.overallReadiness}/100.`
+    if (contextPromises[0].status === 'fulfilled') {
+      const [compSummary, histSummary] = contextPromises[0].value as [Awaited<ReturnType<typeof getUserCompetencySummary>>, string | null]
+      if (compSummary) {
+        const weakComps = compSummary.weakAreas.slice(0, 3)
+        if (weakComps.length > 0) {
+          competencyBlock = `\nCandidate's historically weak competencies: ${weakComps.join(', ')}. Address these specifically in feedback.`
         }
-        if (histSummary) {
-          historyBlock = `\n${histSummary}`
-        }
-      } catch { /* continue without enhanced context */ }
+        competencyBlock += `\nOverall readiness score: ${compSummary.overallReadiness}/100.`
+      }
+      if (histSummary) {
+        historyBlock = `\n${histSummary}`
+      }
     }
 
     let profileBlock = ''
-    try {
-      await connectDB()
-      const profile = await User.findById(user.id).select(
-        'interviewGoal targetCompanyType weakAreas feedbackPreference ' +
-        'targetCompanies topSkills isCareerSwitcher switchingFrom practiceStats'
-      ).lean()
+    if (contextPromises[1].status === 'fulfilled') {
+      const profile = contextPromises[1].value as Record<string, unknown> | null
       if (profile?.interviewGoal) {
         const goalLabels: Record<string, string> = {
           first_interview: 'preparing for their first interview',
@@ -189,16 +221,16 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
           promotion: 'preparing for a promotion',
           general_practice: 'general interview practice',
         }
-        profileBlock += `\nThe candidate's goal: ${goalLabels[profile.interviewGoal] || profile.interviewGoal}. Frame the top_3_improvements in a way that directly serves this goal.`
+        profileBlock += `\nThe candidate's goal: ${goalLabels[profile.interviewGoal as string] || profile.interviewGoal}. Frame the top_3_improvements in a way that directly serves this goal.`
       }
       if (profile?.targetCompanyType && profile.targetCompanyType !== 'any') {
         profileBlock += `\nThey are targeting ${profile.targetCompanyType} companies. Reference what those companies typically look for in the strengths/weaknesses analysis.`
       }
-      if (profile?.targetCompanies?.length) {
-        profileBlock += `\nSpecific target companies: ${profile.targetCompanies.join(', ')}. Reference these companies' known interview standards where relevant.`
+      if ((profile?.targetCompanies as string[] | undefined)?.length) {
+        profileBlock += `\nSpecific target companies: ${(profile!.targetCompanies as string[]).join(', ')}. Reference these companies' known interview standards where relevant.`
       }
-      if (profile?.weakAreas?.length) {
-        profileBlock += `\nThe candidate wanted to work on: ${profile.weakAreas.join(', ')}. In top_3_improvements, address at least one of these self-identified weak areas with a specific, actionable tip.`
+      if ((profile?.weakAreas as string[] | undefined)?.length) {
+        profileBlock += `\nThe candidate wanted to work on: ${(profile!.weakAreas as string[]).join(', ')}. In top_3_improvements, address at least one of these self-identified weak areas with a specific, actionable tip.`
       }
       if (profile?.feedbackPreference) {
         const prefGuide: Record<string, string> = {
@@ -206,33 +238,26 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
           balanced: 'Use a balanced tone — equal weight to strengths and improvements.',
           tough_love: 'Be direct, critical, and specific. The candidate wants brutal honesty.',
         }
-        profileBlock += `\nFeedback style preference: ${prefGuide[profile.feedbackPreference] || 'balanced'}`
+        profileBlock += `\nFeedback style preference: ${prefGuide[profile.feedbackPreference as string] || 'balanced'}`
       }
       if (profile?.isCareerSwitcher && profile?.switchingFrom) {
         profileBlock += `\nCareer switcher from ${profile.switchingFrom}. Acknowledge transferable skills and suggest how to better bridge the gap.`
       }
-      // Practice history context
       const practiceKey = `${config.role}:${interviewType}`
       const stats = (profile?.practiceStats as Record<string, { totalSessions?: number; avgScore?: number; lastScore?: number }> | undefined)?.[practiceKey]
       if (stats?.totalSessions && stats.totalSessions > 1) {
         profileBlock += `\nThis is session #${stats.totalSessions + 1} for this combination. Previous avg score: ${stats.avgScore}. Compare this session's performance to their historical average and note progress or regression.`
       }
-    } catch { /* continue without profile */ }
+    }
 
     const interviewTypeContext = interviewType !== 'screening'
       ? `\nThis was a "${interviewType}" interview. Tailor feedback to the interview format — e.g. for technical interviews focus on technical depth, for case studies focus on structured thinking.`
       : ''
 
-    // Domain x depth specialization for feedback from skill file
     let domainFeedbackContext = ''
-    try {
-      const feedbackSkillContent = await getSkillSections(config.role, interviewType, [
-        'scoring-emphasis', 'depth-meaning',
-      ])
-      if (feedbackSkillContent) {
-        domainFeedbackContext = `\nFEEDBACK CONTEXT:\n${feedbackSkillContent}`
-      }
-    } catch { /* skill file unavailable — continue without it */ }
+    if (contextPromises[2].status === 'fulfilled' && contextPromises[2].value) {
+      domainFeedbackContext = `\nFEEDBACK CONTEXT:\n${contextPromises[2].value}`
+    }
 
     // Company/industry context for calibrated feedback
     let companyFeedbackContext = ''
@@ -274,7 +299,7 @@ Speech metrics:
 ${perQSummary}${pressureContext}
 
 <interview_transcript>
-${transcriptText.slice(0, 4000)}
+${transcriptText}
 </interview_transcript>
 
 ${JSON_OUTPUT_RULE}
