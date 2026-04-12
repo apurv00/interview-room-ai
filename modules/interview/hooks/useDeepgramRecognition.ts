@@ -188,11 +188,16 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           .catch((err) => {
             console.error('Deepgram token fetch failed after retries:', err)
             setIsListening(false)
+            // Fire onCaptureReady so the UI transitions from "connecting" state
+            // instead of hanging silently. Resolve recognition after 5s (not 30s)
+            // so the conversation loop can nudge the user or retry.
+            onCaptureReadyRef.current?.()
+            onCaptureReadyRef.current = null
             fallbackFinishTimerRef.current = setTimeout(() => {
               if (onCompleteRef.current) {
                 finishRecognition()
               }
-            }, 30000)
+            }, 5000)
           })
       }
     },
@@ -526,6 +531,28 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
 
     source.connect(processor)
     processor.connect(audioContext.destination)
+
+    // Resume AudioContext when tab becomes visible again. Browsers suspend
+    // AudioContext when the tab is backgrounded — no audio flows to Deepgram,
+    // triggering UtteranceEnd and terminating the answer. This handler resumes
+    // the context and cancels any grace timer that fired during the suspension.
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && audioContext.state === 'suspended') {
+        audioContext.resume().catch(() => {})
+        // Cancel any grace timer that fired while the tab was hidden
+        if (graceTimerRef.current) {
+          clearTimeout(graceTimerRef.current)
+          graceTimerRef.current = null
+        }
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    // Clean up in finishRecognition — store ref for removal
+    const cleanupVisibility = () => document.removeEventListener('visibilitychange', handleVisibility)
+    // Attach to audioContext close so it's cleaned up with the rest of audio processing
+    audioContext.addEventListener('statechange', () => {
+      if (audioContext.state === 'closed') cleanupVisibility()
+    })
 
     // Audio is now flowing — notify the caller so UI can flip to LISTENING
     if (onCaptureReadyRef.current) {

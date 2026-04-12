@@ -345,8 +345,19 @@ export function useAvatarSpeech({
     currentFetchAbortRef.current = null
     // 2. Soft-stop the streaming pipeline (drain current buffer)
     softCancelStream()
-    // 3. For buffered playback (playBlob), let the audio finish naturally —
-    //    don't pause or clear the element. The onended handler will fire.
+    // 3. For buffered playback (playBlob), let the current sentence finish
+    //    (~1.5s) then pause. Without this, the entire cached clip plays to
+    //    the end (5-10s), making the AI feel unresponsive to interrupts.
+    if (currentAudioRef.current && !currentAudioRef.current.paused) {
+      const audio = currentAudioRef.current
+      setTimeout(() => {
+        if (currentAudioRef.current === audio && !audio.paused) {
+          audio.pause()
+          // Trigger onended so avatarSpeak's promise resolves
+          audio.dispatchEvent(new Event('ended'))
+        }
+      }, 1500)
+    }
     // 4. Cancel browser speechSynthesis — no sentence-level control available
     window.speechSynthesis?.cancel()
   }, [softCancelStream])

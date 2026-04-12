@@ -388,16 +388,26 @@ export function useInterview({
           setTimeout(() => setCoachingTip(prev => prev?.includes('Last 30') ? null : prev), 4000)
         }
 
-        // TM6: At time=0, give a 15s grace if user is mid-answer (LISTENING phase)
+        // TM6: At time=0, give grace for any active phase so the AI doesn't
+        // cut off mid-word (ASK_QUESTION) or lose an in-flight eval (PROCESSING).
+        // LISTENING gets 15s (user finishing answer), other active phases get 5s
+        // (AI finishing current sentence / eval completing).
         if (next === 0 && phaseRef.current !== 'SCORING' && phaseRef.current !== 'ENDED') {
-          if (phaseRef.current === 'LISTENING') {
-            // User is mid-answer — give 15s grace before finishing
+          const activePhase = phaseRef.current
+          if (activePhase === 'LISTENING') {
             setCoachingTip('Time is up, please finish your current thought.')
             setTimeout(() => {
               if (phaseRef.current !== 'SCORING' && phaseRef.current !== 'ENDED') {
                 finishInterview()
               }
             }, 15000)
+          } else if (activePhase === 'ASK_QUESTION' || activePhase === 'PROCESSING' || activePhase === 'COACHING') {
+            // Let AI finish speaking / eval settle before ending
+            setTimeout(() => {
+              if (phaseRef.current !== 'SCORING' && phaseRef.current !== 'ENDED') {
+                finishInterview()
+              }
+            }, 5000)
           } else {
             finishInterview()
           }
@@ -532,7 +542,9 @@ export function useInterview({
       // naturally with result.text. A 3-second safety timeout handles the edge
       // case where onComplete never fires (e.g. dynamic import hangs).
       if (timeoutMs > 0) {
-        let lastSeenLength = 0
+        // Start from the interrupt prefix length so the prefix alone
+        // doesn't count as "speech progress" and cause a false reschedule.
+        let lastSeenLength = interruptPrefix.length
         const scheduleInactivityTimeout = () => {
           timeoutTimer = setTimeout(() => {
             if (resolved) return
@@ -778,6 +790,8 @@ export function useInterview({
   // ─── Finish interview ──────────────────────────────────────────────────────
 
   const finishInterview = useCallback(async () => {
+    // Idempotency guard: timer=0 and End button can both fire this.
+    if (phaseRef.current === 'SCORING' || phaseRef.current === 'ENDED') return
     // CRITICAL: cancel everything BEFORE the state transition so any in-flight
     // avatarSpeak / question generation / coaching sleep is interrupted
     // synchronously. Without these the loop can fire one more question after
