@@ -46,9 +46,11 @@ export const POST = composeApiRoute<StartPayload>({
     await connectDB()
 
     // A stuck pending/processing record (e.g. server killed mid-pipeline)
-    // should not lock the user out forever. Anything older than 10 minutes
-    // still in pending/processing is considered abandoned.
-    const STALE_PENDING_CUTOFF_MS = 10 * 60 * 1000
+    // should not lock the user out forever. Anything older than 3 minutes
+    // still in pending/processing is considered abandoned. The pipeline
+    // completes in 7-15s (fast path) so 3 min is very generous. Aligned
+    // with the client's 2-min "stuck" warning in AnalysisTrigger.
+    const STALE_PENDING_CUTOFF_MS = 3 * 60 * 1000
     const staleCutoff = new Date(Date.now() - STALE_PENDING_CUTOFF_MS)
 
     // Check if analysis already exists
