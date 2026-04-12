@@ -28,14 +28,17 @@ async function getS3Client(): Promise<import('@aws-sdk/client-s3').S3Client | nu
   return _s3Client
 }
 
-/** Generate a deterministic cache key for a TTS text. */
-export function ttsCacheKey(text: string, encoding: string = 'mp3'): string {
+/** Generate a deterministic cache key for a TTS text.
+ *  Includes the model name so a voice change doesn't serve stale audio
+ *  from the previous voice's cache. */
+export function ttsCacheKey(text: string, encoding: string = 'mp3', model?: string): string {
+  const modelSuffix = model ? `-${model.replace(/[^a-z0-9-]/gi, '')}` : ''
   const hash = createHash('sha256').update(text).digest('hex').slice(0, 16)
-  return `${TTS_CACHE_PREFIX}${hash}.${encoding}`
+  return `${TTS_CACHE_PREFIX}${hash}${modelSuffix}.${encoding}`
 }
 
 /** Try to get cached TTS audio from R2. Returns null on miss or error. */
-export async function getCachedTTS(text: string, encoding: string = 'mp3'): Promise<Buffer | null> {
+export async function getCachedTTS(text: string, encoding: string = 'mp3', model?: string): Promise<Buffer | null> {
   try {
     const { isR2Configured } = await import('@shared/storage/r2')
     if (!isR2Configured()) return null
@@ -44,7 +47,7 @@ export async function getCachedTTS(text: string, encoding: string = 'mp3'): Prom
     if (!client) return null
 
     const { GetObjectCommand } = await import('@aws-sdk/client-s3')
-    const key = ttsCacheKey(text, encoding)
+    const key = ttsCacheKey(text, encoding, model)
     const response = await client.send(new GetObjectCommand({
       Bucket: process.env.R2_BUCKET_NAME!,
       Key: key,
@@ -71,7 +74,7 @@ export async function getCachedTTS(text: string, encoding: string = 'mp3'): Prom
 }
 
 /** Store TTS audio in R2 cache. Fire-and-forget — errors are logged but not thrown. */
-export async function cacheTTS(text: string, audio: Buffer | Uint8Array, encoding: string = 'mp3'): Promise<void> {
+export async function cacheTTS(text: string, audio: Buffer | Uint8Array, encoding: string = 'mp3', model?: string): Promise<void> {
   try {
     const { isR2Configured } = await import('@shared/storage/r2')
     if (!isR2Configured()) return
@@ -80,7 +83,7 @@ export async function cacheTTS(text: string, audio: Buffer | Uint8Array, encodin
     if (!client) return
 
     const { PutObjectCommand } = await import('@aws-sdk/client-s3')
-    const key = ttsCacheKey(text, encoding)
+    const key = ttsCacheKey(text, encoding, model)
     const contentType = encoding === 'opus' ? 'audio/opus' : 'audio/mpeg'
 
     await client.send(new PutObjectCommand({

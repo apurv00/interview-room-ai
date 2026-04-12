@@ -7,7 +7,7 @@ import { getCachedTTS, cacheTTS } from '@shared/services/ttsCache'
 export const dynamic = 'force-dynamic'
 
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY
-const TTS_MODEL = process.env.DEEPGRAM_TTS_MODEL || 'aura-2-zeus-en'
+const TTS_MODEL = process.env.DEEPGRAM_TTS_MODEL || 'aura-2-asteria-en'
 
 /**
  * Sanitize and add punctuation-based pauses for more natural TTS delivery.
@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Check R2 cache first
-    const cached = await getCachedTTS(text, 'mp3')
+    const cached = await getCachedTTS(text, 'mp3', TTS_MODEL)
     if (cached) {
       return new NextResponse(new Uint8Array(cached), {
         headers: {
@@ -82,7 +82,7 @@ export async function POST(req: NextRequest) {
     const audioBytes = Buffer.from(audioBuffer)
 
     // Cache in R2 (fire-and-forget)
-    cacheTTS(text, audioBytes, 'mp3').catch(() => {})
+    cacheTTS(text, audioBytes, 'mp3', TTS_MODEL).catch(() => {})
 
     return new NextResponse(audioBytes, {
       headers: {
