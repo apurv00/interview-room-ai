@@ -130,6 +130,21 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
           }),
         })
         clearTimeout(timeoutId)
+        if (!res.ok) {
+          // Non-200 responses (rate limit, validation error, server error) return
+          // error JSON like { error: "..." } which lacks required evaluation fields.
+          // Return a valid fallback to prevent corrupting evaluationsRef.
+          return {
+            questionIndex: qIdx,
+            question,
+            answer,
+            relevance: 60,
+            structure: 55,
+            specificity: 55,
+            ownership: 60,
+            probeDecision: { shouldProbe: false },
+          }
+        }
         return res.json()
       } catch (err) {
         clearTimeout(timeoutId)

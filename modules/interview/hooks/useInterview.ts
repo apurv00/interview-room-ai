@@ -165,6 +165,10 @@ export function useInterview({
   const questionIndexRef = useRef(0)
   const transcriptRef = useRef<TranscriptEntry[]>([])
   const evaluationsRef = useRef<AnswerEvaluation[]>([])
+  /** Tracks the in-flight background evaluation promise from evaluateMainAnswer
+   *  so finishInterview can await it before persisting — prevents a race where
+   *  evaluationsRef is read before the bg eval's .then/.catch can update it. */
+  const pendingBgEvalRef = useRef<Promise<void> | null>(null)
   const speechMetricsRef = useRef<SpeechMetrics[]>([])
   /** Audio-timeline-relative words captured live by Deepgram across
    *  every candidate turn. Fed into the multimodal analysis pipeline
@@ -686,7 +690,10 @@ export function useInterview({
 
     // Background: full evaluation (non-blocking from here on)
     // Updates evaluationsRef and shows coaching tip overlay when resolved.
-    void evaluateAnswer(question, answer, qIdx, probeDepth)
+    // Promise tracked via pendingBgEvalRef so finishInterview can await it
+    // before persisting — prevents the race where evaluationsRef is read
+    // before the bg eval settles (see Bug B in INTERVIEW_FLOW.md §8).
+    pendingBgEvalRef.current = evaluateAnswer(question, answer, qIdx, probeDepth)
       .then((evaluation) => {
         evaluationsRef.current = [...evaluationsRef.current, { ...evaluation, question, answer }]
         performanceSignalRef.current = computePerformanceSignal()
@@ -715,6 +722,7 @@ export function useInterview({
         ]
         performanceSignalRef.current = computePerformanceSignal()
       })
+      .finally(() => { pendingBgEvalRef.current = null })
 
     return { routerResult, prefetchedQ: prefetchedQ as string | null }
   }
@@ -733,6 +741,20 @@ export function useInterview({
     stopListening()
     onRecordingStop?.()
     setCoachingTip(null)
+
+    // Wait for any in-flight background evaluation to settle (max 3s)
+    // so evaluationsRef includes all results before persisting.
+    // The abort signal above causes the bg eval's fetch to reject → the
+    // .catch() handler pushes a fallback eval into evaluationsRef. Without
+    // this await, evaluationsRef is read before the catch handler runs,
+    // resulting in missing evaluations and feedback generation errors.
+    if (pendingBgEvalRef.current) {
+      await Promise.race([
+        pendingBgEvalRef.current,
+        new Promise(r => setTimeout(r, 3000)),
+      ])
+    }
+
     transitionTo('SCORING')
 
     const data = {
