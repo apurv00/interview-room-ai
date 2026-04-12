@@ -23,6 +23,7 @@ export type CandidateIntent =
   | 'redirect'
   | 'question'
   | 'thinking'
+  | 'skip'
   | 'distress'
   | 'correction'
   | 'repetition'
@@ -47,7 +48,7 @@ export function classifyIntent(text: string): CandidateIntent {
   // ── 1. Distress — emotional signals (short utterances only to avoid false positives)
   if (
     lower.length < 80 &&
-    /i('m| am) (blanking|drawing a blank|nervous|anxious|panicking|so nervous|really nervous|lost|stressed|freaking out)|i forgot everything|my mind (went|is going|just went) blank|i (can't|cannot) think|i need a (second|moment|minute)|i('m| am) sorry,? i/i.test(lower)
+    /i('m| am) (blanking|drawing a blank|nervous|anxious|panicking|so nervous|really nervous|lost|stressed|freaking out)|i forgot everything|my mind (went|is going|just went) blank|i (can't|cannot) think|i('m| am) sorry,? i/i.test(lower)
   ) {
     return 'distress'
   }
@@ -86,10 +87,18 @@ export function classifyIntent(text: string): CandidateIntent {
 
   // ── 6. Thinking starters — candidate buying time (only if short)
   if (
-    /^(hmm|um+|uh+|let me think|that's a (great|good|interesting|tough|hard) question|good question|okay let me)/i.test(lower) &&
-    lower.length < 50
+    lower.length < 80 &&
+    /(^|\b)(hmm|um+|uh+|let me think|that's a (great|good|interesting|tough|hard) question|good question|okay let me|give me a (moment|second|minute)|one (second|moment|minute)|hold on|bear with me|i need (a )?(moment|second|minute|some time)|can i (have|get|take) a (moment|minute|second)|i need (like )?\d+ minutes?)/i.test(lower)
   ) {
     return 'thinking'
+  }
+
+  // ── 6b. Skip — candidate wants to move to the next question
+  if (
+    lower.length < 60 &&
+    /can we (move on|skip|go to the next)|next question( please)?|i('d| would) (rather |like to )?(skip|pass|move on)|let('s| us) (skip|move on)|pass on this( one)?/i.test(lower)
+  ) {
+    return 'skip'
   }
 
   // ── 7. Clarification requests

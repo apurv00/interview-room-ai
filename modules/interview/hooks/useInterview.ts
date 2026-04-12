@@ -1229,6 +1229,14 @@ export function useInterview({
             continue
           }
 
+          if (intent === 'skip') {
+            // Candidate wants to skip this question — move on gracefully
+            const skipMsg = "No problem at all — let's move on to the next one."
+            addToTranscript('interviewer', skipMsg, qIdx)
+            await avatarSpeak(skipMsg, 'friendly')
+            break
+          }
+
           conversationTurns++
 
           if (intent === 'clarification') {
