@@ -22,6 +22,10 @@ import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSec
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
+// Feedback generation calls Claude Sonnet with a large prompt (transcript +
+// evaluations + profile context) and requests up to 4000 output tokens.
+// Without this, Vercel Hobby defaults to ~10s which is too short for Sonnet.
+export const maxDuration = 60
 
 type GenerateFeedbackBody = z.infer<typeof GenerateFeedbackSchema>
 

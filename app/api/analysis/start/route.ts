@@ -158,7 +158,7 @@ export const POST = composeApiRoute<StartPayload>({
     try {
       const { runMultimodalPipeline } = await import('@interview/services/analysis/multimodalPipeline')
       await Promise.race([
-        runMultimodalPipeline(sessionId, userId),
+        runMultimodalPipeline(sessionId, userId, { inline: true }),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('SOFT_TIMEOUT')), INLINE_SOFT_TIMEOUT_MS)
         ),
