@@ -58,6 +58,8 @@ interface UseInterviewOptions {
   setOnInterrupt?: (cb: (() => void) | null) => void
   /** Suppress interrupt detection during TTS to prevent self-interruption. */
   setSuppressInterrupt?: (suppress: boolean) => void
+  /** Return and clear accumulated interrupt speech for answer prepending. */
+  getAndClearInterruptAccum?: () => string
   onRecordingStop?: () => void
   currentProblem?: { id: string; title: string; description: string } | null
   currentDesignProblem?: { id: string; title: string; description: string; requirements: string[] } | null
@@ -90,6 +92,7 @@ export function useInterview({
   warmUpListening,
   setOnInterrupt,
   setSuppressInterrupt,
+  getAndClearInterruptAccum,
   onRecordingStop,
   currentProblem,
   currentDesignProblem,
@@ -140,7 +143,7 @@ export function useInterview({
       interruptContextRef.current = {
         interruptedUtterance: text,
         spokenPortion: text,
-        interruptSpeech: '',  // TODO(Phase 4): bridge from getAndClearInterruptAccum
+        interruptSpeech: getAndClearInterruptAccum?.() ?? '',
         phase: phaseRef.current,
         questionIndex: questionIndexRef.current,
       }
@@ -462,6 +465,15 @@ export function useInterview({
     timeoutMs: number = 30000,
     onCaptureReady?: () => void,
   ): Promise<string> {
+    // Bridge interrupt words: if the candidate interrupted AI speech, their
+    // interrupt words (≥3 words from Deepgram) are the start of their answer.
+    // Prepend them so the candidate doesn't have to repeat themselves.
+    const interruptPrefix = interruptContextRef.current?.interruptSpeech ?? ''
+    if (interruptPrefix) {
+      // Seed the live answer display so it shows immediately
+      setLiveAnswer(interruptPrefix)
+    }
+
     // Periodically update avatar emotion during listening based on answer growth
     let lastWordCount = 0
     const emotionInterval = setInterval(() => {
@@ -498,8 +510,11 @@ export function useInterview({
         if (result.words?.length) {
           liveWordsRef.current.push(...result.words)
         }
-        if (showLive) setLiveAnswer(result.text)
-        resolve(result.text)
+        const fullText = interruptPrefix
+          ? `${interruptPrefix} ${result.text}`.trim()
+          : result.text
+        if (showLive) setLiveAnswer(fullText)
+        resolve(fullText)
       }, { onCaptureReady: wrappedOnCaptureReady })
 
       // Speech-aware inactivity timeout.

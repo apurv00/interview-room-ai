@@ -28,6 +28,9 @@ export interface UseDeepgramRecognitionReturn {
   /** Set a callback that fires when speech is detected while no active listening session.
    *  Used to detect candidate interrupting TTS playback. */
   setOnInterrupt: (cb: (() => void) | null) => void
+  /** Return and clear the accumulated interrupt speech so it can be prepended to the
+   *  next listenForAnswer result. */
+  getAndClearInterruptAccum: () => string
 }
 
 /**
@@ -637,5 +640,18 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     }
   }, [])
 
-  return { isListening, liveTranscript, startListening, stopListening, warmUp, setExternalStream, setOnInterrupt, setSuppressInterrupt }
+  /** Return and clear the accumulated interrupt speech. Called by listenForAnswer
+   *  to prepend interrupt words to the next answer so the candidate doesn't have
+   *  to repeat what they said during the interrupt. */
+  const getAndClearInterruptAccum = useCallback(() => {
+    const text = interruptAccumRef.current.trim()
+    interruptAccumRef.current = ''
+    if (interruptAccumTimerRef.current) {
+      clearTimeout(interruptAccumTimerRef.current)
+      interruptAccumTimerRef.current = null
+    }
+    return text
+  }, [])
+
+  return { isListening, liveTranscript, startListening, stopListening, warmUp, setExternalStream, setOnInterrupt, setSuppressInterrupt, getAndClearInterruptAccum }
 }
