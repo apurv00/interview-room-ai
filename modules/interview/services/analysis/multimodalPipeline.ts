@@ -6,7 +6,6 @@ import { getDownloadPresignedUrl } from '@shared/storage/r2'
 import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
 import { isFeatureEnabled } from '@shared/featureFlags'
-import { transcribeRecording } from './whisperService'
 import { extractProsody } from './prosodyService'
 import { aggregateFacialData } from './facialAggregator'
 import { runFusionAnalysis } from './fusionService'
@@ -167,26 +166,15 @@ export async function stepTranscribeAndDownload(
     }
   }
 
-  // Path 3: Whisper API (slow path, 60-120s).
-  // Prefer the audio-only key — it's ~1–2MB vs 30–80MB for the camera webm,
-  // keeping us under Groq's 25MB upload limit.
-  const whisperKey = audioRecordingR2Key || recordingR2Key
-  if (!whisperKey) {
-    throw new Error('No audio source available for transcription')
-  }
-  const [whisperResult, facialFrames] = await Promise.all([
-    transcribeRecording(whisperKey),
-    downloadFacialFrames(facialLandmarksR2Key),
-  ])
-
-  return {
-    whisper: {
-      segments: whisperResult.segments as unknown as Array<Record<string, unknown>>,
-      durationSeconds: whisperResult.durationSeconds,
-      costUsd: whisperResult.costUsd,
-    },
-    facialFrames: facialFrames as unknown as FacialFrame[],
-  }
+  // No transcript data available — fail with a clear message.
+  // Every completed interview session has either liveTranscriptWords (Deepgram)
+  // or a transcript (always recorded). This only fires for sessions that were
+  // abandoned before any question was asked — analysis is meaningless for those.
+  throw new Error(
+    'No transcript data available for analysis. This session has no live ' +
+    'Deepgram words and no stored transcript — it may have been abandoned ' +
+    'before any questions were asked.'
+  )
 }
 
 /**
@@ -426,17 +414,6 @@ export async function stepPersistResults(
   )
 
   const mockUser: AuthUser = { id: userId, email: '', role: 'candidate', plan: 'free' }
-  await trackUsage({
-    user: mockUser,
-    type: 'api_call_whisper',
-    sessionId,
-    inputTokens: 0,
-    outputTokens: 0,
-    modelUsed: 'whisper-large-v3-turbo',
-    durationMs: processingDurationMs,
-    success: true,
-  }).catch(() => {})
-
   await trackUsage({
     user: mockUser,
     type: 'api_call_multimodal_fusion',

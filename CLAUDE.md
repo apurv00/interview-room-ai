@@ -157,7 +157,8 @@ here is a P0 that reaches users on the next deploy:
 
 Required: `ANTHROPIC_API_KEY`, `NEXTAUTH_SECRET`, `MONGODB_URI`, `REDIS_URL`
 Optional model routing: `OPENROUTER_API_KEY` — enables routing AI calls through OpenRouter (configure per-task in CMS)
-Multimodal: `GROQ_API_KEY`, `DEEPGRAM_API_KEY`, `FEATURE_FLAG_MULTIMODAL_ANALYSIS=true`, `NEXT_PUBLIC_FEATURE_MULTIMODAL=true`
+Multimodal: `DEEPGRAM_API_KEY`, `FEATURE_FLAG_MULTIMODAL_ANALYSIS=true`, `NEXT_PUBLIC_FEATURE_MULTIMODAL=true`
+Optional model routing: `GROQ_API_KEY` — enables routing AI calls through Groq (configure per-task in CMS)
 Inngest (production only): `INNGEST_EVENT_KEY`, `INNGEST_SIGNING_KEY` — not required in dev; the `npm run dev:inngest` dev server handles routing locally.
 Optional: `GOOGLE_CLIENT_ID/SECRET`, `GITHUB_CLIENT_ID/SECRET`, Stripe keys, `OPENAI_API_KEY`
 Full list: `.env.local.example`
