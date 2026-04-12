@@ -420,7 +420,7 @@ export async function stepPersistResults(
     sessionId,
     inputTokens: data.fusionInputTokens,
     outputTokens: data.fusionOutputTokens,
-    modelUsed: 'claude-haiku-4-5-20251001',
+    modelUsed: 'gpt-5.4-mini',
     durationMs: processingDurationMs,
     success: true,
   }).catch(() => {})

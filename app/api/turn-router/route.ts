@@ -112,7 +112,7 @@ Add "interruptResolution" to your JSON response.`
         type: 'api_call_question',
         inputTokens: result.inputTokens ?? 0,
         outputTokens: result.outputTokens ?? 0,
-        modelUsed: result.model ?? 'claude-haiku-4-5-20251001',
+        modelUsed: result.model ?? 'gpt-5.4-mini',
         durationMs,
         success: true,
       })
@@ -144,7 +144,7 @@ Add "interruptResolution" to your JSON response.`
         type: 'api_call_question',
         inputTokens: 0,
         outputTokens: 0,
-        modelUsed: 'claude-haiku-4-5-20251001',
+        modelUsed: 'gpt-5.4-mini',
         durationMs: Date.now() - startTime,
         success: false,
         errorMessage: err instanceof Error ? err.message : 'unknown',

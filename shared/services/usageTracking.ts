@@ -21,6 +21,7 @@ const PRICING: Record<string, { input: number; output: number }> = {
   'claude-opus-4-6': { input: 0.015, output: 0.075 },
   'claude-sonnet-4-20250514': { input: 0.003, output: 0.015 },
   'claude-haiku-4-5-20251001': { input: 0.001, output: 0.005 },
+  'gpt-5.4-mini': { input: 0.0003, output: 0.0012 },
   'whisper-large-v3-turbo': { input: 0.004, output: 0 }, // $0.004 per minute via Groq (tracked as inputTokens = durationSeconds)
 }
 

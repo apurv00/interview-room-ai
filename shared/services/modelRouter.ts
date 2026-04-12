@@ -207,14 +207,15 @@ export async function completion(opts: CompletionOptions): Promise<CompletionRes
     }
   }
 
-  // Attempt 3: hardcoded Anthropic default
+  // Attempt 3: task slot default (may be any provider — not always Anthropic)
   const defaults = TASK_SLOT_DEFAULTS[opts.taskSlot]
-  if (resolved.model === defaults.model && resolved.provider === 'anthropic') {
+  const defaultProvider = defaults.provider ?? 'anthropic'
+  if (resolved.model === defaults.model && resolved.provider === defaultProvider) {
     throw new Error(`ModelRouter: all attempts failed for ${opts.taskSlot}`)
   }
 
-  const result = await callProvider('anthropic', defaults.model, system, messages, defaults.maxTokens, temperature)
-  return { ...result, model: defaults.model, provider: 'anthropic', usedFallback: true }
+  const result = await callProvider(defaultProvider, defaults.model, system, messages, defaults.maxTokens, temperature)
+  return { ...result, model: defaults.model, provider: defaultProvider, usedFallback: true }
 }
 
 /**
