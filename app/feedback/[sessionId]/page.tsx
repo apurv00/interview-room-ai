@@ -413,6 +413,43 @@ function FeedbackPageInner() {
               return
             }
 
+            // Poll for pre-generated feedback before triggering our own call.
+            // finishInterview fires a fire-and-forget POST /api/generate-feedback
+            // that persists to session.feedback in the DB. If that call is still
+            // in flight (3-8s typical), polling avoids a duplicate LLM call that
+            // doubles cost and latency.
+            const POLL_INTERVAL_MS = 2000
+            const MAX_POLLS = 4 // up to 8s total wait
+            for (let poll = 0; poll < MAX_POLLS; poll++) {
+              if (signal?.aborted) return
+              await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
+              try {
+                const pollRes = await fetch(
+                  `/api/interviews/${sessionId}?excludeTranscript=true`,
+                  { signal }
+                )
+                if (pollRes.ok) {
+                  const pollData = await pollRes.json()
+                  if (pollData.feedback) {
+                    setFeedback(pollData.feedback as FeedbackData)
+                    setLoading(false)
+                    if (pollData.status !== 'completed') {
+                      fetchWithRetry(`/api/interviews/${sessionId}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ status: 'completed', completedAt: new Date().toISOString() }),
+                      }).catch(() => {})
+                    }
+                    return
+                  }
+                }
+              } catch (e) {
+                if ((e as Error).name === 'AbortError') return
+                // Poll failed — continue to next attempt or fall through to generate
+              }
+            }
+
+            // Pre-gen didn't complete within polling window — generate ourselves
             await generateFeedback(d, sessionId, signal)
             return
         }
