@@ -17,3 +17,25 @@ export const STORAGE_KEYS = {
 export function sessionScopedKey(base: string, sessionId: string): string {
   return `${base}:${sessionId}`
 }
+
+/**
+ * Clear ALL interview-related localStorage keys — both unscoped and scoped
+ * variants (e.g. "interviewConfig" AND "interviewConfig:userId123").
+ *
+ * Called on sign-out and before new OAuth flows to prevent cross-user data
+ * leakage. See Bug #1: user A's config (including resume text) could leak
+ * to user B if localStorage isn't fully scrubbed.
+ */
+export function clearAllInterviewStorage(): void {
+  try {
+    const baseKeys = Object.values(STORAGE_KEYS)
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i)
+      if (key && baseKeys.some(k => key === k || key.startsWith(`${k}:`))) {
+        localStorage.removeItem(key)
+      }
+    }
+  } catch {
+    // localStorage may be unavailable (SSR, private browsing quota, etc.)
+  }
+}

@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { signIn, signOut, useSession } from 'next-auth/react'
+import { clearAllInterviewStorage } from '@shared/storageKeys'
 
 interface Props {
   /** URL to return to after OAuth completes. Defaults to current page. */
@@ -26,12 +27,12 @@ export default function SignInForm({ callbackUrl, headline, subcopy, errorCode }
   async function handleOAuthSignIn(provider: 'google' | 'github') {
     setIsLoading(true)
     const target = callbackUrl ?? (typeof window !== 'undefined' ? window.location.href : '/')
-    // Force-clear any stale session cookie before starting a new OAuth flow.
+    // Clear localStorage + server session before starting a new OAuth flow.
+    // Note: document.cookie cannot clear httpOnly cookies — signOut() handles
+    // that server-side via Set-Cookie.
+    clearAllInterviewStorage()
     try {
       await signOut({ redirect: false })
-      document.cookie = 'next-auth.session-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
-      document.cookie = '__Secure-next-auth.session-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; secure'
-      document.cookie = `__Secure-next-auth.session-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; secure; domain=.interviewprep.guru`
     } catch { /* continue even if signout fails */ }
     await signIn(provider, { callbackUrl: target })
   }

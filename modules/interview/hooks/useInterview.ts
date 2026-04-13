@@ -437,14 +437,14 @@ export function useInterview({
   // ─── API wrappers (delegate to useInterviewAPI with local refs) ─────────────
 
   const generateQuestion = useCallback(
-    (qIdx: number): Promise<string> =>
+    (qIdx: number, completedThreadsOverride?: ThreadSummary[]): Promise<string> =>
       apiGenerateQuestion(
         qIdx,
         // Cap to last 8 transcript entries (~4 Q&A pairs) to keep prompt size bounded.
         // completedThreadsRef already carries older topic summaries for context diversity.
         transcriptRef.current.slice(-8),
         performanceSignalRef.current,
-        completedThreadsRef.current,
+        completedThreadsOverride ?? completedThreadsRef.current,
         getAbortSignal(),
       ),
     [apiGenerateQuestion]
@@ -1317,7 +1317,14 @@ export function useInterview({
         checkAbort()
         const nextQIdx = qIdx + 1
         const shouldPrefetch = nextQIdx < maxQ && timeRemainingRef.current > 60
-        const nextQuestionPromise = shouldPrefetch ? generateQuestion(nextQIdx) : undefined
+        // Build a snapshot that includes the current (not-yet-finalized) thread so
+        // the next question's deduplication prompt sees ALL topics including this one.
+        // Without this, completedThreadsRef is stale — missing the current topic —
+        // causing repeated questions (Bug #2).
+        const threadsSnapshot = shouldPrefetch
+          ? [...completedThreadsRef.current, buildThreadSummary(topicQuestion)]
+          : undefined
+        const nextQuestionPromise = shouldPrefetch ? generateQuestion(nextQIdx, threadsSnapshot) : undefined
         const { routerResult, prefetchedQ } = await evaluateMainAnswer(
           question, finalAnswer, qIdx, nextQuestionPromise, currentProbeDepthRef.current,
         )

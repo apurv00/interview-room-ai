@@ -427,13 +427,15 @@ export default function InterviewSetupForm() {
       ...(targetIndustry && { targetIndustry }),
     }
     // Always persist the config so it survives an OAuth round-trip.
+    // Stamp _ownerId so the interview page can reject configs from other users.
     const userId = authSession?.user?.id
+    const persistable = { ...config, ...(userId && { _ownerId: userId }) }
     try {
-      localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(config))
+      localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(persistable))
       if (userId) {
         localStorage.setItem(
           `${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`,
-          JSON.stringify(config)
+          JSON.stringify(persistable)
         )
       }
     } catch { /* quota */ }

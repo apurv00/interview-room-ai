@@ -230,7 +230,7 @@ You are an expert interview coach evaluating candidates for ${domainLabel} roles
     ).join(',\n')
 
     const jdAlignmentDimension = config.jobDescription
-      ? `\n- jdAlignment: How well does this answer demonstrate skills/experience relevant to the job description requirements? (integer 0-100)`
+      ? `\n- jdAlignment: How well does this answer demonstrate skills/experience relevant to the job description requirements? (integer 0-100) — When a job description is provided, this is the MOST IMPORTANT dimension. Weight it heavily.`
       : ''
 
     const jdAlignmentSchema = config.jobDescription
