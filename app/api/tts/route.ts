@@ -7,7 +7,7 @@ import { getCachedTTS, cacheTTS } from '@shared/services/ttsCache'
 export const dynamic = 'force-dynamic'
 
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY
-const TTS_MODEL = process.env.DEEPGRAM_TTS_MODEL || 'aura-2-asteria-en'
+const TTS_MODEL = process.env.DEEPGRAM_TTS_MODEL || 'aura-2-luna-en'
 
 /**
  * Sanitize and add punctuation-based pauses for more natural TTS delivery.
