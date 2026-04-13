@@ -59,8 +59,8 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     if (config.jobDescription) {
       const jdCtx = sessionId ? await getOrLoadJDContext(sessionId, config.jobDescription) : null
       contextBlock += jdCtx
-        ? `\n\n<job_description_analysis>\n${jdCtx}\n</job_description_analysis>\nUse the structured analysis above to ask targeted questions that probe must-have requirements.`
-        : `\n\n<job_description>\n${config.jobDescription.slice(0, 2500)}\n</job_description>\nUse the job description above to ask targeted questions that probe the candidate's fit for the specific requirements listed.`
+        ? `\n\n<job_description_analysis>\n${jdCtx}\n</job_description_analysis>\nPRIORITY: The job description above defines the requirements this interview MUST assess. At least 60% of your questions should directly probe must-have requirements from the JD. Ask about specific skills, experiences, and qualifications listed in the JD. Use the resume to find evidence for or against JD requirements — not as the primary source of question topics.`
+        : `\n\n<job_description>\n${config.jobDescription.slice(0, 2500)}\n</job_description>\nPRIORITY: The job description above defines the requirements this interview MUST assess. At least 60% of your questions should directly probe skills, qualifications, and responsibilities listed in the JD. Use the candidate's resume as evidence for or against JD requirements — not as the primary source of topics.`
     }
     // Track employer names from structured resume for employer-rotation prompt (Issue #5)
     let employerNames: string[] = []
@@ -85,7 +85,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
       }
     }
     if (config.jobDescription && config.resumeText) {
-      contextBlock += `\n\nCross-reference the resume against the JD requirements. Identify gaps or areas where the candidate's experience may not fully match, and explore those.`
+      contextBlock += `\n\nCROSS-REFERENCE STRATEGY: Map the candidate's resume experiences to JD requirements. Prioritize probing gaps — areas where the JD requires something the resume doesn't clearly demonstrate. When the resume DOES match a JD requirement, ask for specific evidence, metrics, and depth. Your questions should systematically cover JD requirements, using the resume as a lens to assess fit.`
     }
 
     // Pre-fetch session config (domain, depth, user profile) from Redis cache.
@@ -342,7 +342,10 @@ Do NOT use generic transitions like "Great, next question..." or "Moving on...".
       const diversityNote = topicCount >= 3
         ? `\nIMPORTANT: You have already covered ${topicCount} topics. Ensure your next question explores a DIFFERENT competency area (e.g., if past questions focused on leadership and stakeholder management, now ask about technical depth, failure handling, data-driven decisions, or innovation). Variety across competencies is critical for a thorough assessment.`
         : ''
-      threadContext = `\n\nTOPICS ALREADY COVERED:\n${summaries}\n\nDo NOT repeat these topics.${diversityNote} You MAY occasionally reference a pattern across topics when a genuine link exists. Use cross-references sparingly.`
+      const jdCoverageNote = config.jobDescription
+        ? `\n\nJD COVERAGE CHECK: Review the JD requirements above. Identify which requirements have NOT yet been assessed by the topics already covered. Your next question MUST target an uncovered JD requirement.`
+        : ''
+      threadContext = `\n\nTOPICS ALREADY COVERED:\n${summaries}\n\nDo NOT repeat these topics.${diversityNote}${jdCoverageNote} You MAY occasionally reference a pattern across topics when a genuine link exists. Use cross-references sparingly.`
 
       // Employer rotation — prevent fixating on a single company (Issue #5).
       // When we have structured employer names, instruct the AI to distribute

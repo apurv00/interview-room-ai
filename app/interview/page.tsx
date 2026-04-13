@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import Avatar from '@interview/components/Avatar'
@@ -76,6 +77,7 @@ const DEFAULT_PHASE_COLOR = { text: 'text-[#71767b]', bg: 'bg-[#f8fafc]', border
 
 export default function InterviewPage() {
   const router = useRouter()
+  const { data: authSession } = useSession()
 
   // ── Config ──
   const [config, setConfig] = useState<InterviewConfig | null>(null)
@@ -337,6 +339,16 @@ export default function InterviewPage() {
       return
     }
 
+    // Guard: reject config owned by a different user (prevents cross-user data leakage)
+    try {
+      const raw = JSON.parse(stored)
+      if (raw._ownerId && authSession?.user?.id && raw._ownerId !== authSession.user.id) {
+        localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
+        router.push('/')
+        return
+      }
+    } catch { /* malformed JSON — fall through to normal parsing below */ }
+
     // Guard: if there's already a completed session for this config, don't reuse it
     const activeSession = localStorage.getItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
     if (activeSession) {
@@ -398,7 +410,7 @@ export default function InterviewPage() {
     } else {
       setConfig(parsed)
     }
-  }, [router])
+  }, [router, authSession?.user?.id])
 
   // ─── Camera init + start recording (only after config is loaded) ───────────
   useEffect(() => {

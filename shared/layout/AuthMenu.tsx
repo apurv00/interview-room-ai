@@ -5,6 +5,7 @@ import { useSession, signOut } from 'next-auth/react'
 import Link from 'next/link'
 import Image from 'next/image'
 import { useAuthGate } from '@shared/providers/AuthGateProvider'
+import { clearAllInterviewStorage } from '@shared/storageKeys'
 
 const PLAN_BADGE: Record<string, { label: string; className: string }> = {
   free: { label: 'Free', className: 'bg-slate-100 text-slate-600' },
@@ -133,12 +134,7 @@ export default function AuthMenu() {
             <button
               onClick={() => {
                 setOpen(false)
-                // Clear interview localStorage to prevent cross-user data leakage
-                try {
-                  localStorage.removeItem('interviewConfig')
-                  localStorage.removeItem('interviewData')
-                  localStorage.removeItem('interviewActiveSession')
-                } catch { /* ignore */ }
+                clearAllInterviewStorage()
                 signOut({ callbackUrl: '/' })
               }}
               className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-slate-50 transition"
