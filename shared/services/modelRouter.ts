@@ -105,7 +105,7 @@ export async function resolveModel(taskSlot: TaskSlot): Promise<ResolvedModel> {
     }
   }
 
-  return { model: defaults.model, maxTokens: defaults.maxTokens, provider: 'anthropic', useToonInput: false }
+  return { model: defaults.model, maxTokens: defaults.maxTokens, provider: defaults.provider, useToonInput: false }
 }
 
 // ─── Public API ─────────────────────────────────────────────────────────────
