@@ -500,10 +500,15 @@ Return ONLY the question text. No preamble, no numbering, no quotation marks. Ju
         errorMessage: err instanceof Error ? err.message : 'Unknown error',
       }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
 
-      return NextResponse.json({
-        question:
-          'Tell me about a challenge you faced in your most recent role and how you overcame it.',
-      })
+      return NextResponse.json(
+        {
+          question:
+            'Tell me about a challenge you faced in your most recent role and how you overcame it.',
+          isFallback: true,
+          error: 'question_generation_failed',
+        },
+        { status: 503 },
+      )
     }
   },
 })
