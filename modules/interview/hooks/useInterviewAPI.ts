@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback } from 'react'
+import { useCallback, useRef } from 'react'
 import type {
   InterviewConfig,
   TranscriptEntry,
@@ -8,6 +8,7 @@ import type {
   PerformanceSignal,
   ThreadSummary,
 } from '@shared/types'
+import { getNextFallbackQuestion } from '../config/fallbackQuestions'
 
 interface UseInterviewAPIOptions {
   config: InterviewConfig | null
@@ -67,6 +68,8 @@ export interface UseInterviewAPIReturn {
  * Encapsulates API calls for question generation and answer evaluation.
  */
 export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions): UseInterviewAPIReturn {
+  const usedFallbackIndicesRef = useRef(new Set<number>())
+
   const generateQuestion = useCallback(
     async (
       qIdx: number,
@@ -100,12 +103,13 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
         })
         if (!res.ok) {
           console.error(`[generateQuestion] API returned ${res.status}`, await res.text().catch(() => ''))
+          return getNextFallbackQuestion(usedFallbackIndicesRef.current)
         }
         const data = await res.json()
         return data.question as string
       } catch (err) {
         console.error('[generateQuestion] fetch failed', err)
-        return 'Tell me about a challenge you faced recently and how you handled it.'
+        return getNextFallbackQuestion(usedFallbackIndicesRef.current)
       }
     },
     [config, getSessionId]
