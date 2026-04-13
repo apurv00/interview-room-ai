@@ -89,7 +89,7 @@ export async function resolveModel(taskSlot: TaskSlot): Promise<ResolvedModel> {
   const defaults = TASK_SLOT_DEFAULTS[taskSlot]
 
   if (!config.routingEnabled) {
-    return { model: defaults.model, maxTokens: defaults.maxTokens, provider: 'anthropic', useToonInput: false }
+    return { model: defaults.model, maxTokens: defaults.maxTokens, provider: defaults.provider, useToonInput: false }
   }
 
   const slotConfig = config.slots.get(taskSlot)

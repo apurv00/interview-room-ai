@@ -98,9 +98,13 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
             sessionId: getSessionId?.() ?? undefined,
           }),
         })
+        if (!res.ok) {
+          console.error(`[generateQuestion] API returned ${res.status}`, await res.text().catch(() => ''))
+        }
         const data = await res.json()
         return data.question as string
-      } catch {
+      } catch (err) {
+        console.error('[generateQuestion] fetch failed', err)
         return 'Tell me about a challenge you faced recently and how you handled it.'
       }
     },
