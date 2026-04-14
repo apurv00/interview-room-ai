@@ -37,6 +37,14 @@ export interface TurnRouterResult {
   interruptResolution?: import('@shared/types').InterruptResolution
 }
 
+/** Lightweight flow metadata returned by generate-question for client-side probe decisions. */
+export interface FlowHints {
+  maxProbes: number
+  phase: string
+  totalSlots: number
+  remainingMustSlots: number
+}
+
 export interface UseInterviewAPIReturn {
   generateQuestion: (
     qIdx: number,
@@ -45,6 +53,8 @@ export interface UseInterviewAPIReturn {
     completedThreads: ThreadSummary[],
     signal?: AbortSignal,
   ) => Promise<string>
+  /** Last flow hints received from generate-question. Updated on every successful call. */
+  flowHintsRef: React.RefObject<FlowHints | null>
   evaluateAnswer: (
     question: string,
     answer: string,
@@ -69,6 +79,7 @@ export interface UseInterviewAPIReturn {
  */
 export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions): UseInterviewAPIReturn {
   const usedFallbackIndicesRef = useRef(new Set<number>())
+  const flowHintsRef = useRef<FlowHints | null>(null)
 
   const generateQuestion = useCallback(
     async (
@@ -106,6 +117,7 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
           return getNextFallbackQuestion(usedFallbackIndicesRef.current)
         }
         const data = await res.json()
+        if (data.flowHints) flowHintsRef.current = data.flowHints as FlowHints
         return data.question as string
       } catch (err) {
         console.error('[generateQuestion] fetch failed', err)
@@ -230,5 +242,5 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
     [], // no deps — pure fetch
   )
 
-  return { generateQuestion, evaluateAnswer, callTurnRouter }
+  return { generateQuestion, evaluateAnswer, callTurnRouter, flowHintsRef }
 }

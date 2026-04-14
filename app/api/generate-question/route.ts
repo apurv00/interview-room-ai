@@ -517,7 +517,27 @@ Return ONLY the question text. No preamble, no numbering, no quotation marks. Ju
         success: true,
       }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
 
-      return NextResponse.json({ question: result.text })
+      // Build lightweight flow hints for client-side probe decisions.
+      // Keeps template data server-only — only sends the slot metadata the
+      // client needs to enforce per-slot maxProbes and phase-aware behavior.
+      const flowHints = resolvedFlow ? (() => {
+        const slotIdx = completedThreads?.length ?? 0
+        const slot = resolvedFlow.slots[slotIdx]
+        if (!slot) return undefined
+        return {
+          maxProbes: slot.maxProbes,
+          phase: slot.phase,
+          totalSlots: resolvedFlow.totalSlots,
+          remainingMustSlots: resolvedFlow.slots
+            .slice(slotIdx + 1)
+            .filter(s => s.priority === 'must').length,
+        }
+      })() : undefined
+
+      return NextResponse.json({
+        question: result.text,
+        ...(flowHints ? { flowHints } : {}),
+      })
     } catch (err) {
       aiLogger.error({ err }, 'LLM API error in generate-question')
 
