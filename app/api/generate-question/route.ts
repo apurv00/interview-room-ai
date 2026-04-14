@@ -17,8 +17,14 @@ import { getOrLoadSessionConfig } from '@interview/services/core/sessionConfigCa
 import { z } from 'zod'
 import { completion } from '@shared/services/modelRouter'
 import { DATA_BOUNDARY_RULE } from '@shared/services/promptSecurity'
-import { resolveFlow, buildFlowPromptContext } from '@interview/flow'
-import type { ResolvedFlow } from '@interview/flow'
+import {
+  resolveFlow,
+  buildFlowPromptContext,
+  buildJDOverlayWithObservability,
+  TEMPLATE_REGISTRY,
+  makeTemplateKey,
+} from '@interview/flow'
+import type { ResolvedFlow, JDOverlay } from '@interview/flow'
 
 export const dynamic = 'force-dynamic'
 
@@ -183,11 +189,55 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     let flowPromptBlock = ''
     if (isFeatureEnabled('interview_flow_templates')) {
       try {
+        // ── JD Overlay (Phase 4) ──────────────────────────────────────────
+        // When jd_flow_overlay is on AND a parsedJD was cached for this
+        // session (Phase 1 surfaces it on getOrLoadSessionConfig), project
+        // the parsed requirements into a JDOverlay and pass it to
+        // resolveFlow. The overlay promotes matching if-time slots to must,
+        // annotates them with JD context for the prompt, and splices
+        // unmatched must-haves in as new slots after the last warm-up
+        // (E.5's front-splice invariant). Flag off → byte-identical
+        // pre-Phase-4 behavior; overlay stays null. Any failure inside the
+        // computation degrades gracefully to the no-overlay path.
+        let jdOverlay: JDOverlay | null = null
+        if (
+          isFeatureEnabled('jd_flow_overlay')
+          && sessionId
+          && sessionCfg?.parsedJD
+        ) {
+          try {
+            const template = TEMPLATE_REGISTRY.get(
+              makeTemplateKey(config.role, interviewType, config.experience),
+            )
+            if (template) {
+              // E.5 requires the LAST warm-up slot id as the front-splice
+              // anchor. Templates may have multiple warm-up slots; only
+              // the first becomes the resolver's reserved anchor, so
+              // splicing after the LAST warm-up puts JD insertions at the
+              // front of the exploration run (see jdOverlayBuilder.ts:66-80).
+              const warmUpSlots = template.slots.filter(s => s.phase === 'warm-up')
+              const warmUpSlotId = warmUpSlots[warmUpSlots.length - 1]?.id
+              jdOverlay = buildJDOverlayWithObservability({
+                parsed: sessionCfg.parsedJD,
+                existingSlotIds: template.slots.map(s => s.id),
+                warmUpSlotId,
+                sessionId,
+              })
+            }
+          } catch (err) {
+            aiLogger.debug(
+              { err, sessionId },
+              'JD overlay computation failed — continuing without overlay',
+            )
+          }
+        }
+
         resolvedFlow = resolveFlow({
           domain: config.role,
           depth: interviewType,
           experience: config.experience,
           duration: config.duration,
+          jdOverlay,
         })
         if (resolvedFlow) {
           // Current slot index = number of completed threads (each thread = one slot)
