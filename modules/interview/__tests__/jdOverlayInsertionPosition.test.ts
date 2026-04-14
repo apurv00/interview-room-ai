@@ -8,37 +8,29 @@ import type { FlowTemplate } from '@interview/flow/types'
 import type { IParsedJobDescription, ParsedRequirement } from '@shared/db/models/SavedJobDescription'
 
 /**
- * Phase 2 audit: verify that JD overlay insertions produced by
- * buildJDOverlayFromParsedJD land in sensible positions after the
- * resolver runs — specifically, in the exploration interior between
- * warm-up and closing anchors — for every registered template at
- * every supported duration.
+ * Phase 2 audit + E.5 survival: verify that JD overlay insertions
+ * produced by buildJDOverlayFromParsedJD land in sensible positions
+ * after the resolver runs — specifically, in the exploration interior
+ * between warm-up and closing anchors — for every registered template
+ * at every supported duration, AND survive the resolver's budget fill.
  *
- * This test is a regression guard. The insertAfter position in
- * buildJDOverlay is a raw-index heuristic (~middle of existingSlotIds);
- * Work Item B's reserved warm-up/closing resolver changed the assumed
- * layout. Phase 4 will wire this function into production, so we want
- * the assumption locked in before the wiring.
+ * This test is a regression guard. Work Item B's reserved warm-up/closing
+ * resolver changed the assumed layout. Phase 4 will wire this function
+ * into production, so we want the assumption locked in before the wiring.
  *
- * For each (template, duration) the following invariants are asserted
- * and hold universally (audited across 306 combinations — see commit
- * message Root-cause):
+ * Invariants asserted universally across all 306 combinations:
  *   a. Every surviving JD insertion has phase === 'exploration'
  *   b. Every surviving JD insertion's slotIndex sits strictly between
  *      the last warm-up slotIndex and the first closing slotIndex
  *   c. totalSlots <= getQuestionCount(duration) - 1 (Work Item B budget)
  *   d. slotIndex values are sequential 0..N-1
  *
- * Survival: at least ONE JD insertion is expected to make it through
- * the resolver when the JD supplies 3 unmatched must-haves. This is
- * asserted only at 20min and 30min. At 10min the interior budget is
- * 3 slots, which is fully consumed by template must-slots in all 102
- * current templates before the resolver's iteration reaches the
- * spliced JD insertions (resolver.ts:119-123 iterates must-slots in
- * original template order). That behaviour is a product question for
- * Phase 3+ (should JD must-haves outrank template must-haves under
- * budget pressure?) — out of scope for this audit. Positioning and
- * phase/budget invariants are still asserted at 10min.
+ * Survival (post-E.5): BOTH JD insertions must survive the resolver
+ * at every duration when the JD supplies 3 unmatched must-haves
+ * (the 2-insertion cap in buildJDOverlay applies). E.5 achieves
+ * 10-min survival by front-splicing JD insertions right after the
+ * warm-up slot, so must-first interior fill picks them up before
+ * template must-slots positioned later in the raw order.
  */
 
 const DURATIONS: Duration[] = [10, 20, 30]
@@ -101,7 +93,14 @@ describe('jdOverlayInsertionPosition — audit across every template × duration
       it(label, () => {
         const parsed = makeParsedJD()
         const existingSlotIds = tmpl.slots.map(s => s.id)
-        const overlay = buildJDOverlayFromParsedJD(parsed, existingSlotIds)
+        // Compute the LAST warm-up slot id in template order. A template may
+        // have multiple warm-up slots; only the first becomes the resolver's
+        // reserved anchor, but the rest preserve phase='warm-up' in the
+        // interior. JD insertions must splice after ALL of them to satisfy
+        // the "slotIndex > lastWarmUpIdx" positional invariant.
+        const warmUpIds = tmpl.slots.filter(s => s.phase === 'warm-up').map(s => s.id)
+        const lastWarmUpId = warmUpIds[warmUpIds.length - 1]
+        const overlay = buildJDOverlayFromParsedJD(parsed, existingSlotIds, lastWarmUpId)
 
         expect(overlay, `${label}: buildJDOverlayFromParsedJD returned null`).not.toBeNull()
         expect(
@@ -148,19 +147,17 @@ describe('jdOverlayInsertionPosition — audit across every template × duration
         // Collect JD insertions that survived the resolver (by id prefix).
         const insertedSlots = f.slots.filter(s => /^jd-req-/.test(s.id))
 
-        // At least one JD insertion must survive the budget — only checked at
-        // durations whose interior budget can fit one. At 10min the interior
-        // budget is 3 slots and every registered template has >= 3 must-slots
-        // positioned before the JD splice point; under current resolver
-        // semantics (must-first iteration in original order) that fully
-        // consumes the budget. Whether to change that is a Phase 3+ question.
-        if (duration !== 10) {
-          expect(
-            insertedSlots.length,
-            `${label}: expected at least 1 JD insertion in resolved flow, got 0 ` +
-              `(template has ${tmpl.slots.length} raw slots, budget ${usableQuestions})`,
-          ).toBeGreaterThanOrEqual(1)
-        }
+        // E.5 survival invariant: BOTH JD insertions must survive the
+        // resolver's interior budget at every duration. The overlay always
+        // emits 2 insertions (cap) when given 3 unmatched must-haves; after
+        // the front-splice fix both land right after warm-up, so must-first
+        // iteration picks them up before template must-slots positioned
+        // later in the raw order.
+        expect(
+          insertedSlots.length,
+          `${label}: expected 2 surviving JD insertions, got ${insertedSlots.length} ` +
+            `(template has ${tmpl.slots.length} raw slots, budget ${usableQuestions})`,
+        ).toBe(2)
 
         // Per-insertion invariants — apply to every insertion that DID survive,
         // regardless of duration.

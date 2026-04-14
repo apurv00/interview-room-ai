@@ -76,3 +76,17 @@
 - **Root-cause:** Work Item B's reserved warm-up/closing resolver changed
 - **Tests-added: modules/interview/__tests__/jdOverlayInsertionPosition.test.ts**
 - **Verified-by:** npx vitest run modules/interview/__tests__/jdOverlayInsertionPosition.test.ts → 307/307 green (1 enumeration + 306 combinations, phase+position+budget+ordering invariants pass on every combo; surviv
+
+### 2026-04-14 18:44:11 +0000 · `ddb71a9` · Claude
+- **Subject:** test(flow): extend insertion audit to assert 10-min JD survival (RED)
+- **Files:** 1 changed, 1 test file(s)
+- **Root-cause:** Phase 2's permissive 10-min survival skip was a
+- **Tests-added: modules/interview/__tests__/jdOverlayInsertionPosition.test.ts (strengthened — survival at all 3 durations, "both survive" instead of "at least one")**
+- **Verified-by:** npx vitest run modules/interview/__tests__/jdOverlayInsertionPosition.test.ts → 205 passed | 102 failed (102/102 failures at duration=10, all "expected 2 surviving JD insertions, got 0"); exact fail
+
+### 2026-04-14 18:45:23 +0000 · `fed89c7` · Claude
+- **Subject:** fix(flow/jd-overlay): splice JD insertions after warm-up for interior priority
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** Before this fix, the overlay's insertAfter pointed at the
+- **Tests-added: modules/interview/__tests__/jdOverlayInsertionPosition.test.ts (call-site updated to compute and pass lastWarmUpId; no new test cases beyond the strengthened invariants in the previous co**
+- **Verified-by:** npx vitest run jdOverlayInsertionPosition.test.ts → 307/307 green (up from 205/307 pre-fix); jdOverlayFromParsedJD.test.ts → 6/6 green (Phase 1 unchanged); flowEngine.test.ts → 31/31 green (exis

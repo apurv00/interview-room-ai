@@ -62,10 +62,25 @@ interface ParsedJDRequirement {
  * - Matching slots get promoted from 'if-time' to 'must'
  * - Matching slots get annotated with JD-specific context
  * - Unmatched must-have requirements get inserted as new slots (max 2)
+ *
+ * The optional `warmUpSlotId` parameter targets the insertion anchor
+ * for unmatched must-haves. Callers SHOULD pass the LAST warm-up
+ * phase slot id from the template (a template may have multiple
+ * warm-up slots; only the first becomes the resolver's warm-up
+ * anchor and the rest live in the interior region preserving phase).
+ * Splicing after the last warm-up slot puts JD insertions at the
+ * front of the exploration-phase run so they survive must-first
+ * budget fill at short durations (see resolver.ts scaling step).
+ *
+ * When absent, falls back to the first template slot id — correct
+ * for single-warm-up templates, degraded for multi-warm-up ones. The
+ * legacy middle-index rule is kept as a last-resort fallback for
+ * empty inputs so the function is total.
  */
 export function buildJDOverlay(
   requirements: ParsedJDRequirement[],
   existingSlotIds: string[],
+  warmUpSlotId?: string,
 ): JDOverlay {
   const promotions: string[] = []
   const annotations: JDSlotAnnotation[] = []
@@ -109,8 +124,15 @@ export function buildJDOverlay(
           maxProbes: 1,
           priority: 'must',
         },
-        // Insert in the middle of exploration slots
-        insertAfter: existingSlotIds[Math.min(Math.floor(existingSlotIds.length / 2), existingSlotIds.length - 1)] || existingSlotIds[0],
+        // Front-splice: place immediately after warm-up so the resolver's
+        // must-first interior fill picks up JD insertions before template
+        // must-slots located deeper in the raw order. Falls back to the
+        // first template slot id (warm-up by template convention) and
+        // finally to the middle-index rule for degenerate inputs.
+        insertAfter:
+          warmUpSlotId
+          || existingSlotIds[0]
+          || existingSlotIds[Math.min(Math.floor(existingSlotIds.length / 2), existingSlotIds.length - 1)],
         jdRequirement: req.requirement,
       })
     }
@@ -135,6 +157,7 @@ export function buildJDOverlay(
 export function buildJDOverlayFromParsedJD(
   parsed: IParsedJobDescription | null,
   existingSlotIds: string[],
+  warmUpSlotId?: string,
 ): JDOverlay | null {
   if (!parsed || !Array.isArray(parsed.requirements) || parsed.requirements.length === 0) {
     return null
@@ -146,5 +169,5 @@ export function buildJDOverlayFromParsedJD(
   }))
   const mustHaveCount = adapted.filter(r => r.importance === 'must-have').length
   if (mustHaveCount === 0) return null
-  return buildJDOverlay(adapted, existingSlotIds)
+  return buildJDOverlay(adapted, existingSlotIds, warmUpSlotId)
 }
