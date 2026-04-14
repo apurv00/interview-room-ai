@@ -30,6 +30,7 @@ registerProvider({
       text,
       inputTokens: message.usage.input_tokens,
       outputTokens: message.usage.output_tokens,
+      truncated: message.stop_reason === 'max_tokens',
     }
   },
 })

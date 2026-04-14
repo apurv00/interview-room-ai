@@ -126,6 +126,14 @@ export interface CompletionResult {
   inputTokens: number
   outputTokens: number
   usedFallback: boolean
+  /**
+   * True when the underlying provider indicated max_tokens was hit
+   * mid-generation. Callers that care about complete output (e.g.
+   * interview question generation) should inspect this and decide
+   * whether to retry with a larger budget or fall back.
+   * Undefined/absent when the provider didn't report the signal.
+   */
+  truncated?: boolean
 }
 
 async function prepareMessages(
@@ -158,7 +166,7 @@ async function callProvider(
   messages: Array<{ role: 'user' | 'assistant'; content: string }>,
   maxTokens: number,
   temperature?: number,
-): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
+): Promise<{ text: string; inputTokens: number; outputTokens: number; truncated?: boolean }> {
   // Dynamic import to avoid pulling all provider SDKs into client bundles
   const { getProvider } = await import('./providers/index')
   const provider = getProvider(providerName)

@@ -20,3 +20,24 @@
 - **Root-cause:** post-commit-log.sh appends to .claude/audit/log.md on every
 - **No-tests-needed-because: the fix is a 3-line guard against a specific**
 - **Verified-by:** Will be visible in this session — if log.md does NOT get
+
+### 2026-04-14 16:31:20 +0000 · `a819c9f` · Claude
+- **Subject:** feat(providers): surface truncation signal from OpenAI + Anthropic adapters
+- **Files:** 4 changed, 1 test file(s)
+- **Root-cause:** OpenAI and Anthropic SDKs expose finish_reason/stop_reason,
+- **Tests-added: shared/__tests__/providers.test.ts**
+- **Verified-by:** ./node_modules/.bin/vitest run shared/__tests__/providers.test.ts (4/4 pass); modelRouter regression suite (21/21 pass)
+
+### 2026-04-14 16:32:13 +0000 · `3bfbe4e` · Claude
+- **Subject:** feat(modelRouter): propagate truncated flag through completion pipeline
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** without the flag on CompletionResult, route code that
+- **No-tests-needed-because: pure type-level propagation. The provider**
+- **Verified-by:** ./node_modules/.bin/vitest run shared/__tests__/modelRouter.test.ts shared/__tests__/providers.test.ts (25/25 pass)
+
+### 2026-04-14 16:38:04 +0000 · `9972323` · Claude
+- **Subject:** fix(generate-question): retry once on truncation, then fall back
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** interview.generate-question's 300-token output budget is
+- **Tests-added: modules/interview/__tests__/generateQuestionTruncation.test.ts**
+- **Verified-by:** ./node_modules/.bin/vitest run modules/interview/__tests__/generateQuestionTruncation (3/3 pass); full suite: 1041/1041 pass across 85 files

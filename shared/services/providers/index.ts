@@ -20,6 +20,14 @@ export interface CompletionResponse {
   text: string
   inputTokens: number
   outputTokens: number
+  /**
+   * True when the model hit max_tokens mid-generation (OpenAI
+   * finish_reason === 'length', Anthropic stop_reason === 'max_tokens').
+   * Callers should treat the text as potentially truncated and decide
+   * whether to retry with a larger budget or fall back.
+   * Undefined when the underlying provider doesn't surface the signal.
+   */
+  truncated?: boolean
 }
 
 export interface ProviderAdapter {
