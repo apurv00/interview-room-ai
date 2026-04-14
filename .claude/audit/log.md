@@ -20,3 +20,10 @@
 - **Root-cause:** post-commit-log.sh appends to .claude/audit/log.md on every
 - **No-tests-needed-because: the fix is a 3-line guard against a specific**
 - **Verified-by:** Will be visible in this session — if log.md does NOT get
+
+### 2026-04-14 16:00:23 +0000 · `072c4b0` · Claude
+- **Subject:** chore(gitnexus): refresh indexed-symbol counter strings
+- **Files:** 2 changed, 0 test file(s)
+- **Root-cause:** npx gitnexus analyze rewrites the "indexed by GitNexus as
+- **No-tests-needed-because: text-only counter refresh in documentation,**
+- **Verified-by:** git diff AGENTS.md CLAUDE.md shows only two single-line
