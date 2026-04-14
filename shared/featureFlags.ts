@@ -32,6 +32,7 @@ export type FeatureFlag =
   | 'research_comparison'
   | 'session_config_cache'
   | 'interview_flow_templates'
+  | 'jd_flow_overlay'
 
 const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   personalization_engine: true,
@@ -71,6 +72,11 @@ const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   // domain × depth × experience. Falls back to current behavior when no
   // template matches (e.g. CMS custom domains).
   interview_flow_templates: true,
+  // JD flow overlay — when true, the resolver receives a JDOverlay derived
+  // from the parsed job description (promotions + annotations + must-have
+  // insertions). Kill-switch scaffolding only; Phase 4 wires this into
+  // generate-question. Default off until the wiring lands + rollout staged.
+  jd_flow_overlay: false,
 }
 
 export function isFeatureEnabled(flag: FeatureFlag): boolean {

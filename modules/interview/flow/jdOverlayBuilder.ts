@@ -1,5 +1,6 @@
 import type { JDOverlay, JDSlotAnnotation, JDSlotInsertion, TopicSlot, ResolvedSlot } from './types'
 import type { IParsedJobDescription } from '@shared/db/models/SavedJobDescription'
+import { logger } from '@shared/logger'
 
 /**
  * Keyword-to-slot mapping for matching JD requirements to existing template slots.
@@ -170,4 +171,49 @@ export function buildJDOverlayFromParsedJD(
   const mustHaveCount = adapted.filter(r => r.importance === 'must-have').length
   if (mustHaveCount === 0) return null
   return buildJDOverlay(adapted, existingSlotIds, warmUpSlotId)
+}
+
+/**
+ * Wrapper around buildJDOverlayFromParsedJD that emits a structured
+ * log line capturing match/annotation/insertion/drop counts.
+ *
+ * Intended as the canonical entry point for Phase 4's production
+ * wiring — call sites get overlay + telemetry in one call. Returns
+ * null when no overlay is produced (same as the underlying
+ * projection), and in that case emits no log line.
+ *
+ * Synchronous — the underlying projection does no I/O, and
+ * logger.info is fire-and-forget.
+ *
+ * `droppedRequirements` is read defensively via structural cast so
+ * this helper keeps working once Work Item C surfaces the field on
+ * JDOverlay. Today the cap lives in buildJDOverlay (silent trim past
+ * 2 insertions); the logged count is 0 until the field lands.
+ */
+export function buildJDOverlayWithObservability(params: {
+  parsed: IParsedJobDescription | null
+  existingSlotIds: string[]
+  warmUpSlotId?: string
+  sessionId?: string
+}): JDOverlay | null {
+  const overlay = buildJDOverlayFromParsedJD(
+    params.parsed,
+    params.existingSlotIds,
+    params.warmUpSlotId,
+  )
+  if (!overlay) return null
+  const droppedLen =
+    (overlay as JDOverlay & { droppedRequirements?: unknown[] }).droppedRequirements?.length ?? 0
+  logger.info(
+    {
+      sessionId: params.sessionId,
+      event: 'jd_overlay.built',
+      promotions: overlay.promotions.length,
+      annotations: overlay.annotations.length,
+      insertions: overlay.insertions.length,
+      dropped: droppedLen,
+    },
+    'JD flow overlay built',
+  )
+  return overlay
 }
