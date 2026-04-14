@@ -90,3 +90,17 @@
 - **Root-cause:** Before this fix, the overlay's insertAfter pointed at the
 - **Tests-added: modules/interview/__tests__/jdOverlayInsertionPosition.test.ts (call-site updated to compute and pass lastWarmUpId; no new test cases beyond the strengthened invariants in the previous co**
 - **Verified-by:** npx vitest run jdOverlayInsertionPosition.test.ts → 307/307 green (up from 205/307 pre-fix); jdOverlayFromParsedJD.test.ts → 6/6 green (Phase 1 unchanged); flowEngine.test.ts → 31/31 green (exis
+
+### 2026-04-14 19:08:16 +0000 · `5711c60` · Claude
+- **Subject:** feat(flags): introduce jd_flow_overlay flag (default off)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** Phase 4 hot-path wiring of JD overlay requires a kill-
+- **No-tests-needed-because: additive enum value with default off;**
+- **Verified-by:** npx tsc --noEmit clean; shared/__tests__/featureFlags.test.ts
+
+### 2026-04-14 19:08:41 +0000 · `4c234be` · Claude
+- **Subject:** feat(flow): add buildJDOverlayWithObservability wrapper
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** Phase 4 will need structured telemetry to measure
+- **Tests-added: modules/interview/__tests__/jdOverlayObservability.test.ts**
+- **Verified-by:** npx vitest run modules/interview/__tests__/jdOverlayObservability.test.ts
