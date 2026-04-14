@@ -1,4 +1,5 @@
 import type { JDOverlay, JDSlotAnnotation, JDSlotInsertion, TopicSlot, ResolvedSlot } from './types'
+import type { IParsedJobDescription } from '@shared/db/models/SavedJobDescription'
 
 /**
  * Keyword-to-slot mapping for matching JD requirements to existing template slots.
@@ -116,4 +117,34 @@ export function buildJDOverlay(
   }
 
   return { promotions, annotations, insertions }
+}
+
+/**
+ * Build a JDOverlay directly from an already-parsed IParsedJobDescription
+ * and the list of slot ids in the template about to be resolved.
+ *
+ * Pure function — no I/O. The parsed JD is expected to be fetched by the
+ * caller (via getOrLoadSessionConfig.parsedJD), which means overlay building
+ * happens synchronously inside the flow-resolution path with no extra Mongo
+ * round trip.
+ *
+ * Returns null when there are no must-have requirements to process, so
+ * callers can skip invoking resolveFlow with an overlay when the JD
+ * contributes nothing actionable.
+ */
+export function buildJDOverlayFromParsedJD(
+  parsed: IParsedJobDescription | null,
+  existingSlotIds: string[],
+): JDOverlay | null {
+  if (!parsed || !Array.isArray(parsed.requirements) || parsed.requirements.length === 0) {
+    return null
+  }
+  const adapted: ParsedJDRequirement[] = parsed.requirements.map(r => ({
+    requirement: r.requirement,
+    importance: r.importance,
+    category: r.category,
+  }))
+  const mustHaveCount = adapted.filter(r => r.importance === 'must-have').length
+  if (mustHaveCount === 0) return null
+  return buildJDOverlay(adapted, existingSlotIds)
 }
