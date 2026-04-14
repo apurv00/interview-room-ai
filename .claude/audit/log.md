@@ -69,3 +69,10 @@
 - **Root-cause:** Preparing Phase 4 wiring of the JD overlay into resolveFlow.
 - **Tests-added: modules/interview/__tests__/jdOverlayFromParsedJD.test.ts (6 cases: null input; empty requirements; zero must-haves; matched keywords → promotions + annotations; unmatched must-haves pr**
 - **Verified-by:** npx vitest run modules/interview/__tests__/jdOverlayFromParsedJD.test.ts → 6/6 green; npx vitest run modules/interview/__tests__/flowEngine.test.ts → 31/31 green (existing buildJDOverlay behavior 
+
+### 2026-04-14 18:21:42 +0000 · `ae7fe90` · Claude
+- **Subject:** test(flow): audit JD overlay insertion positions across all templates
+- **Files:** 1 changed, 1 test file(s)
+- **Root-cause:** Work Item B's reserved warm-up/closing resolver changed
+- **Tests-added: modules/interview/__tests__/jdOverlayInsertionPosition.test.ts**
+- **Verified-by:** npx vitest run modules/interview/__tests__/jdOverlayInsertionPosition.test.ts → 307/307 green (1 enumeration + 306 combinations, phase+position+budget+ordering invariants pass on every combo; surviv
