@@ -48,3 +48,10 @@
 - **Root-cause:** resolver never expressed the -1 invariant anywhere; the
 - **Tests-added: modules/interview/__tests__/flowMatrix.test.ts**
 - **Verified-by:** npx vitest run modules/interview/__tests__/flowMatrix.test.ts
+
+### 2026-04-14 17:10:03 +0000 · `e24d3b1` · Claude
+- **Subject:** fix(flow/resolver): count warm-up/closing into usable budget
+- **Files:** 2 changed, 0 test file(s)
+- **Root-cause:** resolver used getQuestionCount(duration) as the slot budget
+- **No-tests-needed-because: the 306-combination matrix test was added in**
+- **Verified-by:** - matrix test: 307/307 passing (was 102 failed | 205 passed)
