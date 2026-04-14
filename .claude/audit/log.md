@@ -55,3 +55,17 @@
 - **Root-cause:** resolver used getQuestionCount(duration) as the slot budget
 - **No-tests-needed-because: the 306-combination matrix test was added in**
 - **Verified-by:** - matrix test: 307/307 passing (was 102 failed | 205 passed)
+
+### 2026-04-14 17:58:50 +0000 · `e510c6d` · Claude
+- **Subject:** feat(session-config): surface parsedJD on cached session config
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** JD overlay wiring (Phase 4) needs the structured parsed JD
+- **Tests-added: modules/interview/__tests__/sessionConfigCache.test.ts (5 new cases: flag-off returns null parsedJD; populated on Mongo hit; null when session has no JD; allSettled isolation on JD query **
+- **Verified-by:** npx vitest run modules/interview/__tests__/sessionConfigCache.test.ts → 12/12 green (7 existing + 5 new); full suite 1359/1359 passes (was 1348, +11 from this branch); npx tsc --noEmit clean
+
+### 2026-04-14 17:59:13 +0000 · `24e952c` · Claude
+- **Subject:** feat(flow): add pure projection buildJDOverlayFromParsedJD
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** Preparing Phase 4 wiring of the JD overlay into resolveFlow.
+- **Tests-added: modules/interview/__tests__/jdOverlayFromParsedJD.test.ts (6 cases: null input; empty requirements; zero must-haves; matched keywords → promotions + annotations; unmatched must-haves pr**
+- **Verified-by:** npx vitest run modules/interview/__tests__/jdOverlayFromParsedJD.test.ts → 6/6 green; npx vitest run modules/interview/__tests__/flowEngine.test.ts → 31/31 green (existing buildJDOverlay behavior 
