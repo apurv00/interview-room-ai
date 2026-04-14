@@ -499,7 +499,7 @@ Return ONLY the question text. No preamble, no numbering, no quotation marks. Ju
         ? `${staticSystemPrompt}\n\n${dynamicSystemPrompt}`
         : staticSystemPrompt
 
-      const result = await completion({
+      let result = await completion({
         taskSlot: 'interview.generate-question',
         system: fullSystem,
         messages: [{ role: 'user', content: userPrompt }],
@@ -516,6 +516,68 @@ Return ONLY the question text. No preamble, no numbering, no quotation marks. Ju
         durationMs: Date.now() - startTime,
         success: true,
       }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
+
+      // Truncation handling: the default max_tokens for this task slot is
+      // tuned for typical prompts, but at Q15+ the system prompt can exceed
+      // the model's budget and clip the question mid-sentence. Retry once
+      // with a larger ceiling, then fall through to the client-side fallback
+      // question if the retry is also truncated.
+      if (result.truncated) {
+        aiLogger.warn(
+          {
+            taskSlot: 'interview.generate-question',
+            questionIndex,
+            model: result.model,
+            provider: result.provider,
+            outputTokens: result.outputTokens,
+          },
+          'Question generation truncated; retrying with expanded maxTokens',
+        )
+
+        const retryStart = Date.now()
+        const retryResult = await completion({
+          taskSlot: 'interview.generate-question',
+          system: fullSystem,
+          messages: [{ role: 'user', content: userPrompt }],
+          contextData,
+          maxTokens: 500,
+        })
+
+        trackUsage({
+          user,
+          type: 'api_call_question',
+          sessionId: body.sessionId,
+          inputTokens: retryResult.inputTokens,
+          outputTokens: retryResult.outputTokens,
+          modelUsed: retryResult.model,
+          durationMs: Date.now() - retryStart,
+          success: true,
+        }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
+
+        if (retryResult.truncated) {
+          aiLogger.warn(
+            {
+              taskSlot: 'interview.generate-question',
+              questionIndex,
+              model: retryResult.model,
+              provider: retryResult.provider,
+              outputTokens: retryResult.outputTokens,
+            },
+            'Question generation truncated on retry; serving client fallback',
+          )
+          return NextResponse.json(
+            {
+              question:
+                'Tell me about a challenge you faced in your most recent role and how you overcame it.',
+              isFallback: true,
+              error: 'question_generation_truncated',
+            },
+            { status: 503 },
+          )
+        }
+
+        result = retryResult
+      }
 
       // Build lightweight flow hints for client-side probe decisions.
       // Keeps template data server-only — only sends the slot metadata the
