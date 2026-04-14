@@ -153,6 +153,52 @@ here is a P0 that reaches users on the next deploy:
    these files. The log is append-only and is the institutional memory
    of what has broken and why.
 
+## Commit Accountability — ENFORCED BY HOOKS
+
+Claude has historically shipped "fixes" that addressed symptoms without
+root causes, wasting user time. This repo runs harness hooks
+(`.claude/hooks/`, registered in `.claude/settings.json`) that
+**mechanically block** commits and edits that skip these rules. You cannot
+argue past the hooks — they run in the harness, not in the model.
+
+**Every Claude-authored commit message MUST contain these fields:**
+
+```
+Root-cause: <the actual mechanism — not "the test failed", but WHY>
+Symbols-modified: <comma-separated list, or "none — data-only">
+Tests-added: <path>  OR  No-tests-needed-because: <justified reason>
+Verified-by: <unit test / integration test / manual steps with expected output>
+```
+
+If a file listed in `.claude/hotpath.txt` is in the staged diff, the
+commit MUST also include a test file (under `__tests__/`, `*.test.ts`,
+or `*.spec.ts`) OR an explicit `No-tests-needed-because:` line.
+
+**Every edit to a hot-path file MUST be preceded by:**
+
+```
+./scripts/gitnexus-impact.sh <file>
+```
+
+This writes `.claude/audit/current/impact-<basename>.md`, listing every
+d=1 caller from `.gitnexus/csv/relations.csv`. The pre-edit hook blocks
+the edit until this file exists and is <24h old.
+
+**Permanent audit trail:** every commit is appended to
+`.claude/audit/log.md` with its root-cause, verification method, and
+test delta — giving the user an independent record of every claim
+Claude has made in this repo.
+
+**CI enforcement:** `.github/workflows/claude-accountability.yml`
+rejects any PR whose Claude-authored commits are missing the required
+fields. Bypassing requires rewriting history, which shows up in review.
+
+**If you find yourself about to say "this is a minor change, skip the
+process":** that's the exact failure mode the hooks exist to catch.
+Either the change is genuinely no-risk (write `No-tests-needed-because:
+pure whitespace` — the hook will accept it) or you're about to repeat a
+historical mistake.
+
 ## Environment Variables
 
 Required: `ANTHROPIC_API_KEY`, `NEXTAUTH_SECRET`, `MONGODB_URI`, `REDIS_URL`
