@@ -41,3 +41,10 @@
 - **Root-cause:** interview.generate-question's 300-token output budget is
 - **Tests-added: modules/interview/__tests__/generateQuestionTruncation.test.ts**
 - **Verified-by:** ./node_modules/.bin/vitest run modules/interview/__tests__/generateQuestionTruncation (3/3 pass); full suite: 1041/1041 pass across 85 files
+
+### 2026-04-14 17:06:52 +0000 · `159d22f` · Claude
+- **Subject:** test(flow): add 306-combination matrix asserting budget invariants
+- **Files:** 1 changed, 1 test file(s)
+- **Root-cause:** resolver never expressed the -1 invariant anywhere; the
+- **Tests-added: modules/interview/__tests__/flowMatrix.test.ts**
+- **Verified-by:** npx vitest run modules/interview/__tests__/flowMatrix.test.ts

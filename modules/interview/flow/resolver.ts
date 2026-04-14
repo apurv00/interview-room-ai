@@ -83,44 +83,56 @@ export function resolveFlow(params: {
     }
   }
 
-  // 4. Scale to duration — trim if-time slots when interview is short
+  // 4. Scale to duration — trim slots to fit the AI-question budget.
+  //
+  // getQuestionCount(duration) is the upper bound on the interview loop's
+  // qIdx counter (see interviewConfig.ts:98). The live loop at
+  // hooks/useInterview.ts:1043-1047 runs `qIdx in [1, maxQ)`, so the
+  // actual number of AI-driven topic slots consumed is
+  // getQuestionCount(duration) - 1. Trimming against the raw count
+  // overshoots by one; also re-adding warm-up/closing AFTER the trim
+  // (the old behavior) could overshoot by up to two more.
   const totalQuestions = getQuestionCount(duration)
+  const usableQuestions = Math.max(1, totalQuestions - 1)
 
-  // Count must slots per phase
-  const mustSlots = resolvedSlots.filter(s => s.priority === 'must')
-  const ifTimeSlots = resolvedSlots.filter(s => s.priority === 'if-time')
+  // Warm-up and closing anchors are counted INTO the budget (not added on
+  // top). We reserve the first warm-up and the first closing slot from the
+  // template so the opening and wrap-up remain sensible even when the
+  // interior gets aggressively trimmed.
+  const warmUpAnchor = resolvedSlots.find(s => s.phase === 'warm-up') ?? null
+  const closingAnchor = resolvedSlots.find(s => s.phase === 'closing') ?? null
+  const anchorIds = new Set<string>()
+  if (warmUpAnchor) anchorIds.add(warmUpAnchor.id)
+  if (closingAnchor) anchorIds.add(closingAnchor.id)
 
-  let finalSlots: ResolvedSlot[]
+  // Interior = everything else, preserving original template order so the
+  // JD-insertion ordering from step 3 is respected.
+  const interiorSlots = resolvedSlots.filter(s => !anchorIds.has(s.id))
 
-  if (mustSlots.length >= totalQuestions) {
-    // More must-slots than questions: take as many as fit, preserving phase order
-    finalSlots = mustSlots.slice(0, totalQuestions)
-  } else if (resolvedSlots.length <= totalQuestions) {
-    // All slots fit
-    finalSlots = resolvedSlots
-  } else {
-    // Include all must-slots, fill remaining capacity with if-time in order
-    const remainingCapacity = totalQuestions - mustSlots.length
-    const includedIfTime = ifTimeSlots.slice(0, remainingCapacity)
-    const includedIds = new Set([
-      ...mustSlots.map(s => s.id),
-      ...includedIfTime.map(s => s.id),
-    ])
-    // Maintain original order
-    finalSlots = resolvedSlots.filter(s => includedIds.has(s.id))
+  const reserved = (warmUpAnchor ? 1 : 0) + (closingAnchor ? 1 : 0)
+  const interiorBudget = Math.max(0, usableQuestions - reserved)
+
+  // Fill the interior with must-slots first (in original order), then
+  // if-time slots — this guarantees no must-slot is silently dropped
+  // while an if-time slot is kept.
+  const keptInteriorIds = new Set<string>()
+  for (const s of interiorSlots) {
+    if (s.priority !== 'must') continue
+    if (keptInteriorIds.size >= interiorBudget) break
+    keptInteriorIds.add(s.id)
   }
+  for (const s of interiorSlots) {
+    if (s.priority !== 'if-time') continue
+    if (keptInteriorIds.size >= interiorBudget) break
+    keptInteriorIds.add(s.id)
+  }
+  const keptInterior = interiorSlots.filter(s => keptInteriorIds.has(s.id))
 
-  // Guarantee at least 1 warm-up and 1 closing if they exist
-  const hasWarmUp = finalSlots.some(s => s.phase === 'warm-up')
-  const hasClosing = finalSlots.some(s => s.phase === 'closing')
-  if (!hasWarmUp) {
-    const warmUp = resolvedSlots.find(s => s.phase === 'warm-up')
-    if (warmUp) finalSlots.unshift(warmUp)
-  }
-  if (!hasClosing) {
-    const closing = resolvedSlots.find(s => s.phase === 'closing')
-    if (closing) finalSlots.push(closing)
-  }
+  // Assemble final sequence: [warm-up?, ...interior, closing?]
+  const finalSlots: ResolvedSlot[] = []
+  if (warmUpAnchor) finalSlots.push(warmUpAnchor)
+  finalSlots.push(...keptInterior)
+  if (closingAnchor) finalSlots.push(closingAnchor)
 
   // Reassign slot indices
   finalSlots.forEach((s, i) => { s.slotIndex = i })
