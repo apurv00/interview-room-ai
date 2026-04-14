@@ -20,5 +20,9 @@ export { makeTemplateKey, PHASE_WEIGHTS } from './types'
 export { resolveFlow } from './resolver'
 export { buildFlowPromptContext } from './promptBuilder'
 export { shouldProbeOrAdvanceWithFlow } from './coveragePressure'
-export { buildJDOverlay } from './jdOverlayBuilder'
+export {
+  buildJDOverlay,
+  buildJDOverlayFromParsedJD,
+  buildJDOverlayWithObservability,
+} from './jdOverlayBuilder'
 export { TEMPLATE_REGISTRY } from './templates'

@@ -104,3 +104,16 @@
 - **Root-cause:** Phase 4 will need structured telemetry to measure
 - **Tests-added: modules/interview/__tests__/jdOverlayObservability.test.ts**
 - **Verified-by:** npx vitest run modules/interview/__tests__/jdOverlayObservability.test.ts
+
+### 2026-04-14 19:32:50 +0000 · `5032288` · Claude
+- **Subject:** chore(flow): re-export JD overlay entry points from barrel
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** Phase 3 intentionally kept the barrel minimal since
+- **No-tests-needed-because: pure re-export addition; no runtime**
+- **Verified-by:** npx tsc --noEmit clean; no callers changed.
+
+### 2026-04-14 19:40:07 +0000 · `993a9cd` · Claude
+- **Subject:** feat(generate-question): apply JD overlay when jd_flow_overlay flag is on
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** Phase 1 surfaced parsedJD on the session config,
+- **Tests-added: modules/interview/__tests__/generateQuestionJDOverlay.test.ts**
