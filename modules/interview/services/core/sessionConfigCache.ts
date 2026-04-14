@@ -1,8 +1,9 @@
 import { redis } from '@shared/redis'
 import { logger } from '@shared/logger'
 import { connectDB } from '@shared/db/connection'
-import { User, InterviewDomain, InterviewDepth, EvaluationRubric } from '@shared/db/models'
+import { User, InterviewDomain, InterviewDepth, EvaluationRubric, InterviewSession } from '@shared/db/models'
 import { isFeatureEnabled } from '@shared/featureFlags'
+import type { IParsedJobDescription } from '@shared/db/models/SavedJobDescription'
 
 // ─── Cache Configuration ────────────────────────────────────────────────────
 
@@ -24,6 +25,17 @@ export interface CachedSessionConfig {
   /** null when rubric_registry feature flag is off or no matching rubric exists */
   rubric: Record<string, unknown> | null
   userProfile: Record<string, unknown> | null
+  /**
+   * Structured parsed job description for this session, if one has been
+   * parsed and persisted to InterviewSession.parsedJobDescription. Null when
+   * the session has no JD, or when the fire-and-forget parse (see
+   * documentContextCache.getOrLoadJDContext) is still in flight.
+   *
+   * Phase 1 of JD overlay wiring: exposes the field here so downstream
+   * callers (flow resolver — Phase 4) can project it into a JDOverlay
+   * without a second Mongo round trip. No reader yet.
+   */
+  parsedJD: IParsedJobDescription | null
 }
 
 const EMPTY_CONFIG: CachedSessionConfig = {
@@ -31,6 +43,7 @@ const EMPTY_CONFIG: CachedSessionConfig = {
   depth: null,
   rubric: null,
   userProfile: null,
+  parsedJD: null,
 }
 
 // ─── Cache-First Loader ─────────────────────────────────────────────────────
@@ -81,7 +94,7 @@ export async function getOrLoadSessionConfig(
           .lean()
       : Promise.resolve(null)
 
-    const [domainResult, depthResult, userResult, rubricResult] = await Promise.allSettled([
+    const [domainResult, depthResult, userResult, rubricResult, jdResult] = await Promise.allSettled([
       InterviewDomain.findOne({ slug: opts.role, isActive: true }).lean(),
       InterviewDepth.findOne({ slug: opts.interviewType, isActive: true }).lean(),
       User.findById(opts.userId)
@@ -92,6 +105,7 @@ export async function getOrLoadSessionConfig(
         )
         .lean(),
       rubricQuery,
+      InterviewSession.findById(sessionId).select('parsedJobDescription').lean(),
     ])
 
     const config: CachedSessionConfig = {
@@ -99,11 +113,21 @@ export async function getOrLoadSessionConfig(
       depth: depthResult.status === 'fulfilled' ? (depthResult.value as Record<string, unknown> | null) : null,
       rubric: rubricResult.status === 'fulfilled' ? (rubricResult.value as Record<string, unknown> | null) : null,
       userProfile: userResult.status === 'fulfilled' ? (userResult.value as Record<string, unknown> | null) : null,
+      // parsedJD is undefined on sessions whose JD hasn't been parsed yet
+      // (fire-and-forget still running) or whose session has no JD at all —
+      // coalesce both to null so the cache shape is stable.
+      parsedJD:
+        jdResult.status === 'fulfilled' && jdResult.value
+          ? (jdResult.value as { parsedJobDescription?: IParsedJobDescription }).parsedJobDescription ?? null
+          : null,
     }
 
-    // Only cache when at least one field was successfully populated.
+    // Only cache when at least one of the core fields was successfully populated.
     // An all-null result may reflect transient DB errors — avoid hiding them
-    // from retries for 30 minutes.
+    // from retries for 30 minutes. parsedJD is intentionally excluded from the
+    // hasData gate: a session with only a parsed JD is exceptional, and caching
+    // a config with all core fields null would hide transient DB errors for
+    // those fields behind the presence of a JD.
     const hasData = config.domain !== null || config.depth !== null || config.userProfile !== null
     if (hasData) {
       try {
