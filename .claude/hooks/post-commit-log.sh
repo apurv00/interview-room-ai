@@ -23,8 +23,11 @@ SHA=$(git rev-parse --short HEAD 2>/dev/null) || exit 0
 SUBJECT=$(git log -1 --pretty=%s 2>/dev/null)
 AUTHOR=$(git log -1 --pretty=%an 2>/dev/null)
 DATE=$(git log -1 --pretty=%ad --date=iso 2>/dev/null)
-FILES=$(git diff --name-only HEAD~1..HEAD 2>/dev/null | wc -l | tr -d ' ')
-TEST_CHG=$(git diff --name-only HEAD~1..HEAD 2>/dev/null | grep -cE '(__tests__|\.test\.|\.spec\.)' || echo 0)
+FILES=$(git diff --name-only HEAD~1..HEAD 2>/dev/null | grep -c . || true)
+TEST_CHG=$(git diff --name-only HEAD~1..HEAD 2>/dev/null | grep -cE '(__tests__|\.test\.|\.spec\.)' || true)
+# Defend against empty values from `|| true` in `set -euo pipefail` shells
+FILES=${FILES:-0}
+TEST_CHG=${TEST_CHG:-0}
 
 # Extract commit fields for the record
 BODY=$(git log -1 --pretty=%B 2>/dev/null)
