@@ -1,0 +1,3 @@
+# Audit log is append-only. Union-merge means concurrent appends from
+# different branches never produce conflicts — both sides' entries are kept.
+log.md merge=union

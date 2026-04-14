@@ -1,0 +1,43 @@
+# Files whose edits require impact analysis before modification.
+# Derived from CLAUDE.md "HOT PATH — DO NOT BREAK" + infrastructure whose
+# silent failures cascade across the interview pipeline.
+#
+# Format: one path per line (relative to repo root).
+# Lines starting with # are comments.
+
+# ── Live interview pipeline (CLAUDE.md HOT PATH) ──
+modules/interview/hooks/useInterview.ts
+modules/interview/hooks/useAvatarSpeech.ts
+modules/interview/hooks/useDeepgramRecognition.ts
+modules/interview/hooks/useStreamingAudio.ts
+modules/interview/audio/voiceMixer.ts
+app/api/tts/route.ts
+app/api/tts/stream/route.ts
+app/api/generate-question/route.ts
+app/api/evaluate-answer/route.ts
+modules/interview/jobs/analysisJob.ts
+
+# ── LLM routing infrastructure (affects every AI call) ──
+shared/services/modelRouter.ts
+shared/services/providers/openai.ts
+shared/services/providers/anthropic.ts
+shared/services/providers/groq.ts
+shared/services/providers/openrouter.ts
+shared/services/providers/google.ts
+
+# ── Silent-failure parsers (cascade into .slice() fallback across whole session) ──
+modules/interview/services/persona/jdParserService.ts
+modules/interview/services/persona/resumeContextService.ts
+modules/interview/services/persona/documentContextCache.ts
+
+# ── Flow engine (drives topic sequencing) ──
+modules/interview/flow/resolver.ts
+modules/interview/flow/promptBuilder.ts
+modules/interview/flow/coveragePressure.ts
+
+# ── Turn-router (probe/advance decision — one LLM call per answer) ──
+app/api/turn-router/route.ts
+
+# ── Feature flags (additive-only; still treat as hot for intentionality) ──
+shared/featureFlags.ts
+shared/services/taskSlots.ts

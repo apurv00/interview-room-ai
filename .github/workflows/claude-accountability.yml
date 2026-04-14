@@ -1,0 +1,99 @@
+name: Claude Accountability
+
+# Rejects any PR containing Claude-authored commits that are missing the
+# required accountability fields (Root-cause, Symbols-modified,
+# Tests-added|No-tests-needed-because, Verified-by).
+#
+# The in-harness hooks (.claude/hooks/pre-commit-verify.sh) should prevent
+# these commits from being made in the first place. This CI check is the
+# last line of defense — catching any commits that sneaked past the hooks
+# (e.g. manual commits, pushed from another environment).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  verify-commit-messages:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify Claude-authored commits have accountability fields
+        run: |
+          set -euo pipefail
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+
+          # If base is empty (first push to new branch), check all commits
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            COMMITS=$(git rev-list --reverse "$HEAD" | head -50)
+          else
+            COMMITS=$(git rev-list --reverse "$BASE..$HEAD")
+          fi
+
+          FAIL=0
+          HOTPATH_FILE=".claude/hotpath.txt"
+
+          for sha in $COMMITS; do
+            AUTHOR=$(git log -1 --pretty=%an "$sha")
+            EMAIL=$(git log -1 --pretty=%ae "$sha")
+
+            # Only enforce on Claude-authored commits
+            case "$AUTHOR$EMAIL" in
+              *Claude*|*claude*|*noreply@anthropic.com*) ;;
+              *) continue ;;
+            esac
+
+            MSG=$(git log -1 --pretty=%B "$sha")
+            SUBJECT=$(git log -1 --pretty=%s "$sha")
+            MISSING=""
+
+            echo "$MSG" | grep -qE '^Root-cause:' || MISSING="$MISSING\n  - Root-cause:"
+            echo "$MSG" | grep -qE '^(Symbols-modified|Symbols-touched):' || MISSING="$MISSING\n  - Symbols-modified:"
+            echo "$MSG" | grep -qE '^(Tests-added|Tests-updated|No-tests-needed-because):' \
+              || MISSING="$MISSING\n  - Tests-added: OR No-tests-needed-because:"
+            echo "$MSG" | grep -qE '^Verified-by:' || MISSING="$MISSING\n  - Verified-by:"
+
+            # Hot-path check
+            if [ -f "$HOTPATH_FILE" ]; then
+              CHANGED=$(git diff-tree --no-commit-id --name-only -r "$sha")
+              TOUCHED=""
+              while IFS= read -r pattern; do
+                [ -z "$pattern" ] && continue
+                case "$pattern" in \#*) continue ;; esac
+                if echo "$CHANGED" | grep -qxF "$pattern"; then
+                  TOUCHED="$pattern"
+                  break
+                fi
+              done < "$HOTPATH_FILE"
+
+              if [ -n "$TOUCHED" ]; then
+                if ! echo "$CHANGED" | grep -qE '(__tests__|\.test\.|\.spec\.)'; then
+                  if ! echo "$MSG" | grep -qE '^No-tests-needed-because:'; then
+                    MISSING="$MISSING\n  - Hot-path file touched ($TOUCHED) without test delta"
+                  fi
+                fi
+              fi
+            fi
+
+            if [ -n "$MISSING" ]; then
+              echo "::error title=Missing accountability fields in $sha::$SUBJECT"
+              printf "Commit %s by %s\nSubject: %s\nMissing fields:%b\n\n" \
+                "$sha" "$AUTHOR" "$SUBJECT" "$MISSING"
+              FAIL=1
+            fi
+          done
+
+          if [ $FAIL -eq 1 ]; then
+            echo ""
+            echo "::error::One or more Claude-authored commits are missing required fields."
+            echo "See CLAUDE.md 'Commit Accountability' section for the required format."
+            echo "Local hook: .claude/hooks/pre-commit-verify.sh (should have caught this)"
+            exit 1
+          fi
+
+          echo "✅ All Claude-authored commits have required accountability fields."
