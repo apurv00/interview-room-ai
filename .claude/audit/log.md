@@ -34,3 +34,10 @@
 - **Root-cause:** without the flag on CompletionResult, route code that
 - **No-tests-needed-because: pure type-level propagation. The provider**
 - **Verified-by:** ./node_modules/.bin/vitest run shared/__tests__/modelRouter.test.ts shared/__tests__/providers.test.ts (25/25 pass)
+
+### 2026-04-14 16:38:04 +0000 · `9972323` · Claude
+- **Subject:** fix(generate-question): retry once on truncation, then fall back
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** interview.generate-question's 300-token output budget is
+- **Tests-added: modules/interview/__tests__/generateQuestionTruncation.test.ts**
+- **Verified-by:** ./node_modules/.bin/vitest run modules/interview/__tests__/generateQuestionTruncation (3/3 pass); full suite: 1041/1041 pass across 85 files
