@@ -180,7 +180,7 @@ export function useInterview({
   // ── API calls (extracted to useInterviewAPI) ──
   // Pass a lazy getter for sessionId so the fetch body sends the latest value
   // once createDbSession resolves — without forcing a re-render of this hook.
-  const { generateQuestion: apiGenerateQuestion, evaluateAnswer: apiEvaluateAnswer, callTurnRouter: apiCallTurnRouter } = useInterviewAPI({
+  const { generateQuestion: apiGenerateQuestion, evaluateAnswer: apiEvaluateAnswer, callTurnRouter: apiCallTurnRouter, flowHintsRef } = useInterviewAPI({
     config,
     getSessionId: () => sessionIdRef.current,
   })
@@ -971,9 +971,39 @@ export function useInterview({
 
   // ─── Thread helpers ────────────────────────────────────────────────────────
 
-  /** Decide whether to probe deeper or advance to next topic. */
+  /** Decide whether to probe deeper or advance to next topic.
+   *  Uses flow-aware logic when flowHints are available from generate-question. */
   function shouldProbeOrAdvance(evaluation: AnswerEvaluation): 'probe' | 'advance' {
     if (!config) return 'advance'
+    const hints = flowHintsRef.current
+
+    // Flow-aware: enforce per-slot maxProbes and phase rules
+    if (hints) {
+      const probe = evaluation.probeDecision
+      if (!probe?.shouldProbe) return 'advance'
+      if (timeRemainingRef.current < 60) return 'advance'
+
+      // Per-slot maxProbes enforcement
+      if (currentProbeDepthRef.current >= hints.maxProbes) return 'advance'
+
+      // Warm-up phase: always advance (no probing)
+      if (hints.phase === 'warm-up') return 'advance'
+
+      // Coverage pressure: force advance when remaining must-slots are tight
+      const roughTimePerTopic = 90
+      const questionsRemainingByTime = Math.floor(timeRemainingRef.current / roughTimePerTopic)
+      if (hints.remainingMustSlots > 0 && hints.remainingMustSlots >= questionsRemainingByTime) {
+        return 'advance'
+      }
+
+      // Deep-dive phase: allow probing
+      if (hints.phase === 'deep-dive') return 'probe'
+
+      // Default: follow evaluator recommendation
+      return 'probe'
+    }
+
+    // Fallback: original logic when no flow hints
     return probeOrAdvance(
       evaluation,
       timeRemainingRef.current,
@@ -1406,7 +1436,9 @@ export function useInterview({
           behavioral: 2,
           screening: 2,
         }
-        const MAX_PROBES_PER_TOPIC = probeLimit[config?.interviewType || 'screening'] ?? 2
+        // Flow-aware: use per-slot maxProbes when available, fall back to type-based limit
+        const flowMaxProbes = flowHintsRef.current?.maxProbes
+        const MAX_PROBES_PER_TOPIC = flowMaxProbes ?? probeLimit[config?.interviewType || 'screening'] ?? 2
 
         // First-level probe: driven by turn-router (TTS can start as soon as router returns)
         let nextProbeAction: 'probe' | 'advance' = routerResult.nextAction
