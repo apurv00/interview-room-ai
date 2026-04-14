@@ -31,10 +31,12 @@ registerProvider({
       ...(params.temperature !== undefined && { temperature: params.temperature }),
     })
     const text = response.choices[0]?.message?.content?.trim() ?? ''
+    const finishReason = response.choices[0]?.finish_reason
     return {
       text,
       inputTokens: response.usage?.prompt_tokens ?? 0,
       outputTokens: response.usage?.completion_tokens ?? 0,
+      truncated: finishReason === 'length',
     }
   },
 })
