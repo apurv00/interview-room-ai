@@ -31,6 +31,7 @@ export type FeatureFlag =
   | 'monthly_plan'
   | 'research_comparison'
   | 'session_config_cache'
+  | 'interview_flow_templates'
 
 const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   personalization_engine: true,
@@ -65,6 +66,11 @@ const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   // persists both outputs for offline evaluation.
   research_comparison: false,
   session_config_cache: true,
+  // Research-backed interview flow templates. When enabled, generate-question
+  // injects structured topic guidance from pre-authored templates keyed by
+  // domain × depth × experience. Falls back to current behavior when no
+  // template matches (e.g. CMS custom domains).
+  interview_flow_templates: true,
 }
 
 export function isFeatureEnabled(flag: FeatureFlag): boolean {

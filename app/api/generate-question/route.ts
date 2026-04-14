@@ -17,6 +17,8 @@ import { getOrLoadSessionConfig } from '@interview/services/core/sessionConfigCa
 import { z } from 'zod'
 import { completion } from '@shared/services/modelRouter'
 import { DATA_BOUNDARY_RULE } from '@shared/services/promptSecurity'
+import { resolveFlow, buildFlowPromptContext } from '@interview/flow'
+import type { ResolvedFlow } from '@interview/flow'
 
 export const dynamic = 'force-dynamic'
 
@@ -171,6 +173,37 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
         }
       }
     } catch { /* skill file unavailable — continue with DB depth strategy */ }
+
+    // ── Flow Template Resolution ──────────────────────────────────────────
+    // Research-backed topic sequencing: resolves a structured flow plan for
+    // this domain × depth × experience combination. When available, injects
+    // per-slot guidance into the system prompt so the AI follows a specific
+    // topic playbook instead of relying solely on the generic diversity nudge.
+    let resolvedFlow: ResolvedFlow | null = null
+    let flowPromptBlock = ''
+    if (isFeatureEnabled('interview_flow_templates')) {
+      try {
+        resolvedFlow = resolveFlow({
+          domain: config.role,
+          depth: interviewType,
+          experience: config.experience,
+          duration: config.duration,
+        })
+        if (resolvedFlow) {
+          // Current slot index = number of completed threads (each thread = one slot)
+          const currentSlotIndex = completedThreads?.length ?? 0
+          const flowCtx = buildFlowPromptContext({
+            flow: resolvedFlow,
+            currentSlotIndex,
+            completedThreads: completedThreads ?? [],
+            performanceSignal: performanceSignal || 'calibrating',
+          })
+          flowPromptBlock = flowCtx.promptBlock ? `\n\n${flowCtx.promptBlock}` : ''
+        }
+      } catch (err) {
+        aiLogger.debug({ err }, 'Flow template resolution failed — continuing without flow')
+      }
+    }
 
     // Build company/industry context block
     let companyBlock = ''
@@ -417,7 +450,7 @@ Your interview style is warm but professional. You ask ONE focused question at a
 ${DATA_BOUNDARY_RULE}`
 
     // Dynamic context changes every turn — not cached
-    const dynamicSystemPrompt = `${difficultyBlock}${transitionBlock}${threadContext}${recallContext}`
+    const dynamicSystemPrompt = `${difficultyBlock}${transitionBlock}${threadContext}${recallContext}${flowPromptBlock}`
 
     // F5: Curveball injection — once per session after Q3
     // Uses a hash of session-unique data for deterministic slot selection.
