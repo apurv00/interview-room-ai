@@ -27,3 +27,10 @@
 - **Root-cause:** npx gitnexus analyze rewrites the "indexed by GitNexus as
 - **No-tests-needed-because: text-only counter refresh in documentation,**
 - **Verified-by:** git diff AGENTS.md CLAUDE.md shows only two single-line
+
+### 2026-04-14 16:17:15 +0000 · `e9fe10d` · Claude
+- **Subject:** test(flow): add 306-combo matrix verification + prompt-size simulator
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** none — verification-only instrumentation for the flow
+- **Tests-added: modules/interview/__tests__/flowMatrix.test.ts**
+- **Verified-by:** npx vitest run modules/interview/__tests__/flowMatrix
