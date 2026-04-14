@@ -93,7 +93,14 @@ describe('jdOverlayInsertionPosition — audit across every template × duration
       it(label, () => {
         const parsed = makeParsedJD()
         const existingSlotIds = tmpl.slots.map(s => s.id)
-        const overlay = buildJDOverlayFromParsedJD(parsed, existingSlotIds)
+        // Compute the LAST warm-up slot id in template order. A template may
+        // have multiple warm-up slots; only the first becomes the resolver's
+        // reserved anchor, but the rest preserve phase='warm-up' in the
+        // interior. JD insertions must splice after ALL of them to satisfy
+        // the "slotIndex > lastWarmUpIdx" positional invariant.
+        const warmUpIds = tmpl.slots.filter(s => s.phase === 'warm-up').map(s => s.id)
+        const lastWarmUpId = warmUpIds[warmUpIds.length - 1]
+        const overlay = buildJDOverlayFromParsedJD(parsed, existingSlotIds, lastWarmUpId)
 
         expect(overlay, `${label}: buildJDOverlayFromParsedJD returned null`).not.toBeNull()
         expect(
