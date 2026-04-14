@@ -117,3 +117,10 @@
 - **Files:** 2 changed, 1 test file(s)
 - **Root-cause:** Phase 1 surfaced parsedJD on the session config,
 - **Tests-added: modules/interview/__tests__/generateQuestionJDOverlay.test.ts**
+
+### 2026-04-14 20:10:50 +0000 · `7c84439` · Claude
+- **Subject:** docs(claude-md): log JD overlay keyword-map tech debt blocking PM/design/business rollout
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** Phase 4 wired JD overlay into /api/generate-question behind
+- **No-tests-needed-because: documentation change; no executable code**
+- **Verified-by:** file diff inspection; existing "Known Issues / TODO"
