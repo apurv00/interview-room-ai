@@ -23,9 +23,16 @@ SHA=$(git rev-parse --short HEAD 2>/dev/null) || exit 0
 SUBJECT=$(git log -1 --pretty=%s 2>/dev/null)
 AUTHOR=$(git log -1 --pretty=%an 2>/dev/null)
 DATE=$(git log -1 --pretty=%ad --date=iso 2>/dev/null)
-FILES=$(git diff --name-only HEAD~1..HEAD 2>/dev/null | grep -c . || true)
-TEST_CHG=$(git diff --name-only HEAD~1..HEAD 2>/dev/null | grep -cE '(__tests__|\.test\.|\.spec\.)' || true)
-# Defend against empty values from `|| true` in `set -euo pipefail` shells
+
+# Skip self-referential commits that ONLY modify the log itself, to
+# prevent an infinite "commit the log → log modified → commit again" loop.
+CHANGED_FILES=$(git diff --name-only HEAD~1..HEAD 2>/dev/null)
+if [ "$CHANGED_FILES" = ".claude/audit/log.md" ]; then
+  exit 0
+fi
+
+FILES=$(echo "$CHANGED_FILES" | grep -c . || true)
+TEST_CHG=$(echo "$CHANGED_FILES" | grep -cE '(__tests__|\.test\.|\.spec\.)' || true)
 FILES=${FILES:-0}
 TEST_CHG=${TEST_CHG:-0}
 
