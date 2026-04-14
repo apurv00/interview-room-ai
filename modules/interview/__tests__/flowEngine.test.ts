@@ -16,7 +16,7 @@ function makeThread(topicQuestion: string, avgScore: number, probeCount = 1): Th
     summary: `Discussed ${topicQuestion}`,
     avgScore,
     probeCount,
-    entries: [],
+    probeTypes: [],
   }
 }
 
@@ -29,10 +29,8 @@ function makeEvalWithProbe(shouldProbe: boolean): AnswerEvaluation {
     structure: 70,
     specificity: 70,
     ownership: 70,
-    needsFollowUp: false,
-    flags: [],
-    probeDecision: { shouldProbe, reason: 'test' },
-  }
+    probeDecision: { shouldProbe },
+  } as AnswerEvaluation
 }
 
 // ─── Template Registry ──────────────────────────────────────────────────────
