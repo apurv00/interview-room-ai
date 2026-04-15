@@ -215,3 +215,10 @@
 - **Root-cause:** app/api/generate-feedback/route.ts treats an abandoned
 - **Tests-added: modules/interview/__tests__/completionAdjustment.test.**
 - **Verified-by:** Unit tests — 24/24 new pass (5.83s). Regression:
+
+### 2026-04-15 17:53:44 +0000 · `ed13371` · Claude
+- **Subject:** feat(scoring-g11): loosen evaluate-answer score-ceiling prompt (flag-gated)
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** app/api/evaluate-answer/route.ts:265-272 contained the
+- **Tests-added: modules/interview/__tests__/**
+- **Verified-by:** Unit tests — 11/11 new pass. Regression: 173/173 pass
