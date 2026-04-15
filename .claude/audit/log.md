@@ -145,3 +145,10 @@
 - **Root-cause:** shared/services/modelRouter.ts:136,169 exposes
 - **Tests-added: modules/interview/__tests__/evaluateAnswerTruncation.**
 - **Verified-by:** Unit tests — 58/58 pass across 6 related files (7.10s):
+
+### 2026-04-15 13:53:16 +0000 · `632a611` · Claude
+- **Subject:** feat(scoring-g6a): redis idempotency lock on /api/generate-feedback
+- **Files:** 4 changed, 2 test file(s)
+- **Root-cause:** modules/interview/hooks/useInterview.ts:889 fires a
+- **Tests-added: shared/__tests__/feedbackLock.test.ts (9 tests:**
+- **Verified-by:** Unit tests — 14/14 pass in G.6 suites (5.60s).
