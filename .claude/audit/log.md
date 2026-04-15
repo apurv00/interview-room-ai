@@ -264,3 +264,10 @@
 - **Root-cause:** Chunks 1+2 covered complete-strong, short-form,
 - **No-tests-needed-because: this commit IS test coverage.**
 - **Verified-by:** 8/8 scenarios pass (5 from chunks 1+2 + 3 from
+
+### 2026-04-15 19:26:28 +0000 · `a16c133` · Claude
+- **Subject:** refactor(scoring-g15b-4): make G.8 overall_score blend unconditional
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** G.15 retires the scoring-V2 flag gates. G.8's
+- **Tests-added: no new tests — inverted existing coverage.**
+- **Verified-by:** Touched suites (generateFeedbackBlend +
