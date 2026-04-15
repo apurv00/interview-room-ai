@@ -313,3 +313,10 @@
 - **Root-cause:** modules/interview/hooks/useInterview.ts:897-920 was
 - **No-tests-needed-because: the modified code path is a**
 - **Verified-by:** `npx tsc --noEmit` clean (0 errors). `npm run build`
+
+### 2026-04-15 20:14:17 +0000 · `264c093` · Claude
+- **Subject:** docs(scoring-g15e-10): add scoring-rebalance entry to CLAUDE.md Recent Changes
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** G.15 concludes the 15-work-item scoring-rebalance audit
+- **No-tests-needed-because: documentation-only change. No executable**
+- **Verified-by:** Documentation entry matches the actual commit graph:
