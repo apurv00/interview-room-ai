@@ -27,6 +27,9 @@ export type { IOrganization } from './Organization'
 export { UsageRecord } from './UsageRecord'
 export type { IUsageRecord } from './UsageRecord'
 
+export { ScoreTelemetry } from './ScoreTelemetry'
+export type { IScoreTelemetry } from './ScoreTelemetry'
+
 export { WaitlistEntry } from './WaitlistEntry'
 export type { IWaitlistEntry } from './WaitlistEntry'
 

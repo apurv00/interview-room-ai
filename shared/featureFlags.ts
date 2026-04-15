@@ -33,6 +33,7 @@ export type FeatureFlag =
   | 'session_config_cache'
   | 'interview_flow_templates'
   | 'jd_flow_overlay'
+  | 'score_telemetry'
 
 const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   personalization_engine: true,
@@ -77,6 +78,12 @@ const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   // insertions). Kill-switch scaffolding only; Phase 4 wires this into
   // generate-question. Default off until the wiring lands + rollout staged.
   jd_flow_overlay: false,
+  // Score telemetry (Work Item G.1). When true, recordScoreDelta() persists
+  // a row per feedback/eval scoring call so we can compare Claude's raw
+  // overall_score against the deterministic formula. Read-only side effect,
+  // safe to leave on by default. Gates every subsequent scoring-rebalance
+  // work item (G.8/G.9/G.10/G.11) — they need this baseline to ship.
+  score_telemetry: true,
 }
 
 export function isFeatureEnabled(flag: FeatureFlag): boolean {
