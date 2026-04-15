@@ -257,3 +257,10 @@
 - **Root-cause:** Chunk 1 proved the extremes (complete-strong,
 - **No-tests-needed-because: this commit IS test coverage. Per CLAUDE.md**
 - **Verified-by:** 5/5 scenarios in the suite pass (2 from chunk 1 + 3
+
+### 2026-04-15 19:14:26 +0000 · `51bf944` · Claude
+- **Subject:** test(scoring-g15a-3): integration smoke suite — chunk 3 (+3 scenarios)
+- **Files:** 1 changed, 1 test file(s)
+- **Root-cause:** Chunks 1+2 covered complete-strong, short-form,
+- **No-tests-needed-because: this commit IS test coverage.**
+- **Verified-by:** 8/8 scenarios pass (5 from chunks 1+2 + 3 from
