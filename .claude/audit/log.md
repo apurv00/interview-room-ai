@@ -250,3 +250,10 @@
 - **Root-cause:** Phase 3+4 scoring changes (G.8/G.9/G.10/G.11/G.12/G.13/G.14)
 - **No-tests-needed-because: this commit IS the test — it's a**
 - **Verified-by:** 2/2 new scenarios pass. Regression: all 218
+
+### 2026-04-15 19:08:56 +0000 · `8139193` · Claude
+- **Subject:** test(scoring-g15a-2): integration smoke suite — chunk 2 (+3 scenarios)
+- **Files:** 1 changed, 1 test file(s)
+- **Root-cause:** Chunk 1 proved the extremes (complete-strong,
+- **No-tests-needed-because: this commit IS test coverage. Per CLAUDE.md**
+- **Verified-by:** 5/5 scenarios in the suite pass (2 from chunk 1 + 3
