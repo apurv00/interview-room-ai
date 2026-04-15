@@ -306,3 +306,10 @@
 - **Root-cause:** After G.15b (chunks 4-7) removed every `isFeatureEnabled`
 - **No-tests-needed-because: purely subtractive change to a string-literal**
 - **Verified-by:** `npx tsc --noEmit` clean (0 errors, 0 output). `npm
+
+### 2026-04-15 20:11:18 +0000 · `4d29e23` · Claude
+- **Subject:** refactor(scoring-g15d-9): remove legacy client-side XP fire-and-forget
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** modules/interview/hooks/useInterview.ts:897-920 was
+- **No-tests-needed-because: the modified code path is a**
+- **Verified-by:** `npx tsc --noEmit` clean (0 errors). `npm run build`
