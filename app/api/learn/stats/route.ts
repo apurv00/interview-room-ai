@@ -3,6 +3,8 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import { User } from '@shared/db/models'
+import { updatePracticeStats } from '@learn'
+import { isFeatureEnabled } from '@shared/featureFlags'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -21,6 +23,21 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  // G.14: when xp_from_feedback is ON, this endpoint no-ops and
+  // generate-feedback becomes the authoritative writer of practiceStats
+  // (using the deterministic feedback.overall_score rather than the
+  // client's pre-feedback ad-hoc mean). The client's fire-and-forget
+  // call at useInterview.ts:862 stays in place — it just hits a
+  // no-op endpoint when the flag is on; the 200 response keeps the
+  // `.catch(() => {})` at the call site from logging an error.
+  if (isFeatureEnabled('xp_from_feedback')) {
+    return NextResponse.json({
+      success: true,
+      skipped: 'xp_from_feedback',
+      message: 'practiceStats written server-side by generate-feedback',
+    })
+  }
+
   const body = await req.json()
   const parsed = UpdateStatsSchema.safeParse(body)
   if (!parsed.success) {
@@ -28,35 +45,17 @@ export async function POST(req: Request) {
   }
 
   const { domain, interviewType, score, strongDimensions, weakDimensions } = parsed.data
-  const key = `${domain}:${interviewType}`
-
-  await connectDB()
-  const user = await User.findById(session.user.id).select('practiceStats').lean()
-  if (!user) {
+  const result = await updatePracticeStats({
+    userId: session.user.id,
+    domain,
+    interviewType,
+    score,
+    strongDimensions,
+    weakDimensions,
+  })
+  if (!result.updated) {
     return NextResponse.json({ error: 'User not found' }, { status: 404 })
   }
-
-  const existing = user.practiceStats?.get?.(key) || (user.practiceStats as unknown as Record<string, unknown>)?.[key]
-  const prev = existing as { totalSessions?: number; avgScore?: number } | undefined
-
-  const totalSessions = (prev?.totalSessions || 0) + 1
-  const avgScore = prev?.avgScore
-    ? Math.round(((prev.avgScore * (totalSessions - 1)) + score) / totalSessions)
-    : score
-
-  await User.findByIdAndUpdate(session.user.id, {
-    $set: {
-      [`practiceStats.${key}`]: {
-        totalSessions,
-        avgScore,
-        lastScore: score,
-        lastPracticedAt: new Date(),
-        strongDimensions: strongDimensions || [],
-        weakDimensions: weakDimensions || [],
-      },
-    },
-  })
-
   return NextResponse.json({ success: true })
 }
 

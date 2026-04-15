@@ -15,6 +15,7 @@ import { isFeatureEnabled } from '@shared/featureFlags'
 import { updateCompetencyState, updateWeaknessClusters } from '@learn/services/competencyService'
 import { generateSessionSummary } from '@learn/services/sessionSummaryService'
 import { generatePathwayPlan } from '@learn/services/pathwayPlanner'
+import { updatePracticeStats, deriveStrongWeakDimensions } from '@learn/services/practiceStatsService'
 import { evaluateSession } from '@interview/services/eval/evaluationEngine'
 import { getUserCompetencySummary } from '@learn/services/competencyService'
 import { buildHistorySummary } from '@learn/services/sessionSummaryService'
@@ -864,6 +865,28 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       if (body.sessionId) {
         const sessionId = body.sessionId
         const typedEvaluations = evaluations as unknown as AnswerEvaluation[]
+
+        // G.14: flag-gated practiceStats write. When
+        // xp_from_feedback=true, this is the authoritative path —
+        // /api/learn/stats no-ops for duplicate writes (see
+        // app/api/learn/stats/route.ts). We use the deterministic
+        // `feedback.overall_score` (post-G.8 blend, post-G.10
+        // completion multiplier) so XP matches the number the user
+        // sees on their feedback page. Fire-and-forget; never blocks
+        // the response.
+        if (isFeatureEnabled('xp_from_feedback') && typeof feedback.overall_score === 'number') {
+          const { strongDimensions, weakDimensions } = deriveStrongWeakDimensions(
+            evaluations as unknown as Array<Record<string, unknown>>,
+          )
+          updatePracticeStats({
+            userId: user.id,
+            domain: config.role,
+            interviewType,
+            score: feedback.overall_score,
+            strongDimensions,
+            weakDimensions,
+          }).catch((err) => aiLogger.warn({ err }, 'G.14 practiceStats write failed'))
+        }
 
         // Update competency state
         updateCompetencyState({
