@@ -146,6 +146,15 @@ export const GenerateFeedbackSchema = z.object({
   evaluations: z.array(AnswerEvaluationSchema),
   speechMetrics: z.array(SpeechMetricsSchema),
   sessionId: z.string().optional(),
+  // G.10: optional completion-shape inputs. When omitted, the route
+  // falls back to deriving answeredCount from evaluations.length and
+  // plannedQuestionCount from getQuestionCount(config.duration). The
+  // client-populated path (populated by useInterview at finish time)
+  // is more accurate because it knows the real endReason.
+  plannedQuestionCount: z.number().int().min(0).max(100).optional(),
+  answeredCount: z.number().int().min(0).max(100).optional(),
+  endReason: z.enum(['normal', 'time_up', 'user_ended', 'usage_limit', 'abandoned']).optional(),
+  wasTruncatedByTimer: z.array(z.boolean()).max(100).optional(),
 })
 
 export const CreateSessionSchema = z.object({

@@ -36,6 +36,7 @@ export type FeatureFlag =
   | 'score_telemetry'
   | 'scoring_v2_overall'
   | 'scoring_v2_aq'
+  | 'scoring_v2_completion'
 
 const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   personalization_engine: true,
@@ -104,6 +105,16 @@ const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   // problem G.9 solves is present in prod). Independent of G.8; either
   // can be enabled without the other.
   scoring_v2_aq: false,
+  // Scoring V2 — partial-completion adjustment + short-form guard
+  // (Work Item G.10). When enabled, generate-feedback applies a
+  // completion multiplier to overall_score, clamps confidence_level
+  // based on answered/planned ratio, and refuses to emit a scored
+  // report when <3 answers were evaluated. Uses the G.7 session shape
+  // fields (plannedQuestionCount, answeredCount, endReason). Default
+  // OFF — flip on after G.7 backfill is complete so legacy sessions
+  // don't surface as anomalously-low due to missing planned counts.
+  // Independent of G.8/G.9.
+  scoring_v2_completion: false,
 }
 
 export function isFeatureEnabled(flag: FeatureFlag): boolean {
