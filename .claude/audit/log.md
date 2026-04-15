@@ -292,3 +292,10 @@
 - **Root-cause:** Final chunk of G.15b — removes the last two scoring-V2
 - **Tests-added: no new — inverted existing.**
 - **Verified-by:** 35/35 pass across 3 directly-touched suites
+
+### 2026-04-15 19:51:13 +0000 · `7cda38d` · Claude
+- **Subject:** test(scoring-g15b-7b): align legacy tests with always-on Phase 3 behavior
+- **Files:** 4 changed, 4 test file(s)
+- **Root-cause:** G.15b chunks 4-7 made all 8 scoring-V2 flag gates
+- **Tests-added: no new tests — fixture/assertion alignment.**
+- **Verified-by:** All 4 directly-touched suites — 9/9 pass after fix.
