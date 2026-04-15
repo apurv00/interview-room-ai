@@ -299,3 +299,24 @@
 - **Root-cause:** G.15b chunks 4-7 made all 8 scoring-V2 flag gates
 - **Tests-added: no new tests — fixture/assertion alignment.**
 - **Verified-by:** All 4 directly-touched suites — 9/9 pass after fix.
+
+### 2026-04-15 20:07:52 +0000 · `c91c64a` · Claude
+- **Subject:** refactor(scoring-g15c-8): strip retired scoring-V2 flag definitions
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** After G.15b (chunks 4-7) removed every `isFeatureEnabled`
+- **No-tests-needed-because: purely subtractive change to a string-literal**
+- **Verified-by:** `npx tsc --noEmit` clean (0 errors, 0 output). `npm
+
+### 2026-04-15 20:11:18 +0000 · `4d29e23` · Claude
+- **Subject:** refactor(scoring-g15d-9): remove legacy client-side XP fire-and-forget
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** modules/interview/hooks/useInterview.ts:897-920 was
+- **No-tests-needed-because: the modified code path is a**
+- **Verified-by:** `npx tsc --noEmit` clean (0 errors). `npm run build`
+
+### 2026-04-15 20:14:17 +0000 · `264c093` · Claude
+- **Subject:** docs(scoring-g15e-10): add scoring-rebalance entry to CLAUDE.md Recent Changes
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** G.15 concludes the 15-work-item scoring-rebalance audit
+- **No-tests-needed-because: documentation-only change. No executable**
+- **Verified-by:** Documentation entry matches the actual commit graph:

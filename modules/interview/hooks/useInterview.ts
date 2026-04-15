@@ -894,30 +894,14 @@ export function useInterview({
         new Promise((r) => setTimeout(r, 10000)),
       ])
 
-      // Update practice stats (fire-and-forget)
-      if (config) {
-        const evals = evaluationsRef.current
-        if (evals.length > 0) {
-          const dims = ['relevance', 'structure', 'specificity', 'ownership'] as const
-          const dimAvgs = dims.map(d => ({
-            name: d,
-            avg: evals.reduce((s, e) => s + (e[d] || 0), 0) / evals.length,
-          }))
-          const avgScore = Math.round(dimAvgs.reduce((s, d) => s + d.avg, 0) / dims.length)
-          const sorted = [...dimAvgs].sort((a, b) => b.avg - a.avg)
-          fetch('/api/learn/stats', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              domain: config.role,
-              interviewType: config.interviewType || 'behavioral',
-              score: avgScore,
-              strongDimensions: sorted.slice(0, 2).map(d => d.name),
-              weakDimensions: sorted.slice(-2).map(d => d.name),
-            }),
-          }).catch(() => {})
-        }
-      }
+      // G.15d: client-side XP write removed. /api/generate-feedback
+      // now owns practiceStats updates server-side using the
+      // deterministic post-blend feedback.overall_score (G.14, made
+      // unconditional in G.15b-5). The legacy pre-feedback ad-hoc
+      // mean is gone — XP on the /learn dashboard now matches the
+      // number users see on their feedback page. /api/learn/stats
+      // has been a permanent no-op since G.15b-5; removing this
+      // client call eliminates a dead fetch per session.
 
       // Auto-trigger AI analysis if recording exists (fire-and-forget).
       if (isMultimodalEnabled) {

@@ -34,12 +34,6 @@ export type FeatureFlag =
   | 'interview_flow_templates'
   | 'jd_flow_overlay'
   | 'score_telemetry'
-  | 'scoring_v2_overall'
-  | 'scoring_v2_aq'
-  | 'scoring_v2_completion'
-  | 'scoring_v2_ceiling'
-  | 'compact_transcript'
-  | 'xp_from_feedback'
 
 const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   personalization_engine: true,
@@ -85,74 +79,12 @@ const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   // generate-question. Default off until the wiring lands + rollout staged.
   jd_flow_overlay: false,
   // Score telemetry (Work Item G.1). When true, recordScoreDelta() persists
-  // a row per feedback/eval scoring call so we can compare Claude's raw
-  // overall_score against the deterministic formula. Read-only side effect,
-  // safe to leave on by default. Gates every subsequent scoring-rebalance
-  // work item (G.8/G.9/G.10/G.11) — they need this baseline to ship.
+  // a row per feedback/eval scoring call so we can capture metadata (input
+  // tokens, truncation flag, model used). Read-only side effect, safe to
+  // leave on by default. Retained post-G.15 as ongoing scoring observability
+  // — the Phase 3 flag-gated A/B is complete but this telemetry is useful
+  // permanently for regression detection.
   score_telemetry: true,
-  // Scoring V2 — Claude-vs-formula overall_score blend (Work Item G.8).
-  // When enabled, generate-feedback blends Claude's holistic overall_score
-  // with the deterministic aq*0.4 + comm*0.3 + eng*0.3 formula instead of
-  // discarding the Claude value. Default OFF — flip on per the rollout
-  // plan only after G.1 telemetry confirms the delta distribution looks
-  // sane (≥100-session baseline). Tunable weights via
-  // SCORING_V2_CLAUDE_WEIGHT / SCORING_V2_FORMULA_WEIGHT /
-  // SCORING_V2_DISAGREEMENT_THRESHOLD env vars.
-  scoring_v2_overall: false,
-  // Scoring V2 — dimension-aware answer_quality aggregate (Work Item G.9).
-  // When enabled, generate-feedback computes answer_quality.score as
-  //   0.4*mean + 0.3*top3Mean + 0.2*median + 0.1*bottom3Mean
-  // over per-question scores, preserving outlier signal. Default OFF —
-  // flip on after G.1 telemetry shows the answer_quality distribution
-  // has tightened around 65-75 on flat-mean (i.e. confirms the spread
-  // problem G.9 solves is present in prod). Independent of G.8; either
-  // can be enabled without the other.
-  scoring_v2_aq: false,
-  // Scoring V2 — partial-completion adjustment + short-form guard
-  // (Work Item G.10). When enabled, generate-feedback applies a
-  // completion multiplier to overall_score, clamps confidence_level
-  // based on answered/planned ratio, and refuses to emit a scored
-  // report when <3 answers were evaluated. Uses the G.7 session shape
-  // fields (plannedQuestionCount, answeredCount, endReason). Default
-  // OFF — flip on after G.7 backfill is complete so legacy sessions
-  // don't surface as anomalously-low due to missing planned counts.
-  // Independent of G.8/G.9.
-  scoring_v2_completion: false,
-  // XP / practiceStats write moved from pre-feedback client-side mean
-  // to post-feedback canonical overall_score (Work Item G.14). When
-  // enabled: /api/learn/stats no-ops (leaves the legacy client-side
-  // fire-and-forget fireable but inert), and generate-feedback writes
-  // practiceStats server-side after the final blended/clamped
-  // overall_score is set. Users' XP then matches the number displayed
-  // on their feedback page. Default OFF — flip on after G.8/G.9/G.10
-  // are live in prod, so the deterministic overall_score has
-  // stabilized. Independent of all other scoring_v2_* flags.
-  xp_from_feedback: false,
-  // Compact-transcript prompt builder (Work Item G.13). When enabled,
-  // generate-feedback replaces the head/tail transcript slice (pre-G.13
-  // kept first 2500 + last 2500 chars, erasing middle questions) with
-  // a per-question-summary block + full detail for the 2 weakest Qs.
-  // Gives Claude coverage of ALL questions so ideal_answers for middle
-  // Qs aren't synthesized blind. Default OFF — flip on after a staging
-  // soak since prompt-shape changes can shift model output subtly.
-  // Independent of all other scoring_v2_* flags.
-  compact_transcript: false,
-  // Scoring V2 — loosen evaluate-answer prompt score ceiling (Work
-  // Item G.11). When enabled, evaluate-answer swaps the legacy
-  // "Most real answers fall in 41-80 / only push above 80 when
-  // genuinely strong on every dimension" anchor block for a
-  // calibrated-distribution block that explicitly makes 81-100
-  // reachable when 3 of 4 dimensions are excellent. This is the
-  // single prompt-level cause of score compression — the "every
-  // dimension" clause makes 81+ statistically unreachable at
-  // ~P(strong)=0.6 per dim (0.6^4 ≈ 13%). Default OFF — flip on
-  // after G.1 telemetry shows the per-dim distribution is tight in
-  // the 55-75 band (confirming the compression problem is present
-  // in prod). Independent of G.8/G.9/G.10 — affects per-answer
-  // evaluate scoring, not the post-interview aggregates. Flip with
-  // care: this is a model-behavior change, A/B carefully against
-  // the 20-fixture harness at evaluate-answer before full rollout.
-  scoring_v2_ceiling: false,
 }
 
 export function isFeatureEnabled(flag: FeatureFlag): boolean {
