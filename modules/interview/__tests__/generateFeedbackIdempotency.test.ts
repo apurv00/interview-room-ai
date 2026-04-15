@@ -127,17 +127,29 @@ import { POST } from '@/app/api/generate-feedback/route'
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
 function makeRequest(opts: { sessionId?: string; withSession?: boolean } = { withSession: true }) {
+  // Post-G.15 G.10's short-form guard fires unconditionally when
+  // answeredCount < 3, returning short-form feedback BEFORE the
+  // pipeline runs — which would short-circuit these idempotency
+  // tests (no completion call → assertions about LLM invocation
+  // fail). Use 3 substantive evaluations + matching plannedCount
+  // so the route runs the full pipeline.
   const body: Record<string, unknown> = {
     config: { role: 'pm', experience: '0-2', duration: 30, interviewType: 'screening' },
     transcript: [],
     evaluations: [
-      {
-        questionIndex: 0, question: 'Q?', answer: 'A reasonably substantive answer.',
+      { questionIndex: 0, question: 'Q1?', answer: 'A reasonably substantive answer.',
         relevance: 70, structure: 65, specificity: 60, ownership: 75,
-        probeDecision: { shouldProbe: false },
-      },
+        probeDecision: { shouldProbe: false } },
+      { questionIndex: 1, question: 'Q2?', answer: 'Another substantive answer.',
+        relevance: 70, structure: 65, specificity: 60, ownership: 75,
+        probeDecision: { shouldProbe: false } },
+      { questionIndex: 2, question: 'Q3?', answer: 'And a third answer.',
+        relevance: 70, structure: 65, specificity: 60, ownership: 75,
+        probeDecision: { shouldProbe: false } },
     ],
     speechMetrics: [],
+    answeredCount: 3,
+    plannedQuestionCount: 3,
   }
   if (opts.withSession !== false) {
     body.sessionId = opts.sessionId ?? '507f1f77bcf86cd799439011'

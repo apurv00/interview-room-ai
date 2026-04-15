@@ -237,6 +237,16 @@ describe('POST /api/generate-feedback — G.12 red_flag surfaces truncated_by_ti
         config: { role: 'pm', experience: '0-2', duration: 30, interviewType: 'screening' },
         transcript: [], evaluations, speechMetrics: [],
         sessionId: '507f1f77bcf86cd799439011',
+        // Post-G.15 G.10's short-form guard fires unconditionally when
+        // answeredCount < 3, returning the no-LLM short-form feedback
+        // and skipping the route's per-question red_flag computation
+        // entirely. These tests need to exercise the timer-truncated
+        // red_flag wiring, so we explicitly set answeredCount to bypass
+        // the short-form guard. plannedQuestionCount is set high to
+        // avoid the G.10 completion-multiplier red_flag drowning out
+        // the timer-truncated assertion.
+        answeredCount: Math.max(evaluations.length, 3),
+        plannedQuestionCount: Math.max(evaluations.length, 3),
       }),
     })
   }

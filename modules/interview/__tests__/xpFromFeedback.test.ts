@@ -215,6 +215,13 @@ describe('POST /api/generate-feedback — G.14 server-side XP write', () => {
         config: { role: 'pm', experience: '0-2', duration: 30, interviewType: 'screening' },
         transcript: [], evaluations, speechMetrics: [],
         sessionId: '507f1f77bcf86cd799439011',
+        // Post-G.15 G.10 multiplier is unconditional; default
+        // plannedQuestionCount derives from getQuestionCount(30)=16
+        // which would penalize a 5-eval test as 5/16=31% completion.
+        // Set both fields equal to evaluations.length to neutralize
+        // G.10 for these XP-focused tests.
+        answeredCount: evaluations.length,
+        plannedQuestionCount: evaluations.length,
       }),
     })
   }
