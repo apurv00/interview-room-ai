@@ -236,3 +236,10 @@
 - **Root-cause:** app/api/generate-feedback/route.ts:275-286 (pre-G.13)
 - **Tests-added: modules/interview/__tests__/transcriptCompactor.test.**
 - **Verified-by:** Unit tests — 19/19 new pass. Regression: 201/201 pass
+
+### 2026-04-15 18:40:17 +0000 · `7362977` · Claude
+- **Subject:** feat(scoring-g14): align XP / practiceStats with feedback.overall_score
+- **Files:** 7 changed, 2 test file(s)
+- **Root-cause:** modules/interview/hooks/useInterview.ts:862-872 fires a
+- **Tests-added:**
+- **Verified-by:** Unit tests — 17/17 new pass (11 service + 6
