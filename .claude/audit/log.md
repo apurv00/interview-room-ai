@@ -173,3 +173,10 @@
 - **Root-cause:** neither InterviewSession nor FeedbackData carried any
 - **Tests-added: modules/interview/__tests__/sessionCompletionShape.**
 - **Verified-by:** Unit tests — 10/10 G.7 tests pass. Regression suites:
+
+### 2026-04-15 14:38:13 +0000 · `2e83c91` · Claude
+- **Subject:** feat(scoring-g8): blend Claude's overall_score with formula (flag-gated)
+- **Files:** 5 changed, 2 test file(s)
+- **Root-cause:** app/api/generate-feedback/route.ts:590 discarded Claude's
+- **Tests-added: modules/interview/__tests__/overallScoreBlend.test.ts**
+- **Verified-by:** Unit tests — 28/28 G.8 tests pass (overallScoreBlend
