@@ -1,6 +1,7 @@
 import { completion } from '@shared/services/modelRouter'
 import { JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 import { aiLogger } from '@shared/logger'
+import { FusionLlmSchema } from '@interview/validators/interview'
 import type {
   ProsodySegment,
   FacialSegment,
@@ -116,7 +117,21 @@ Guidelines:
     throw new Error('Fusion analysis returned no valid JSON')
   }
 
-  const raw = JSON.parse(jsonMatch[0]) as {
+  // G.2: Zod-validate the LLM payload. Failure is non-fatal — we log
+  // the drift and continue with the raw parsed object. `resolveEvents`
+  // below handles the per-field null/index variance.
+  const parsedRaw = JSON.parse(jsonMatch[0]) as Record<string, unknown>
+  const parsedLlm = FusionLlmSchema.safeParse(parsedRaw)
+  if (!parsedLlm.success) {
+    aiLogger.warn(
+      {
+        issues: parsedLlm.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+        rawPreview: text.slice(0, 300),
+      },
+      'fusion-analysis: LLM response failed Zod validation — continuing with raw object',
+    )
+  }
+  const raw = parsedRaw as unknown as {
     timeline: TimelineEvent[]
     fusionSummary: Omit<FusionSummary, 'topMoments' | 'improvementMoments'> & {
       topMoments: number[] | TimelineEvent[]

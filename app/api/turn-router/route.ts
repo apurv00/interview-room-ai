@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { completion } from '@shared/services/modelRouter'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { trackUsage } from '@shared/services/usageTracking'
+import { TurnRouterLlmSchema } from '@interview/validators/interview'
+import { aiLogger } from '@shared/logger'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -119,12 +121,28 @@ Add "interruptResolution" to your JSON response.`
 
       // Parse — strip markdown fences if model adds them
       const raw = result.text.trim().replace(/^```json?\s*/i, '').replace(/\s*```$/, '')
-      const parsed = JSON.parse(raw) as {
-        nextAction: 'probe' | 'advance'
+      // G.2: parse then Zod-validate. Parse failure falls through to the
+      // outer catch (fail-open advance). Zod failure is non-fatal — we log
+      // the drift and continue with the raw parsed object. The existing
+      // `?? 'advance'` / `?? 'neutral'` fallbacks below handle missing or
+      // unexpected field values.
+      const parsedRaw = JSON.parse(raw) as Record<string, unknown>
+      const parsedLlm = TurnRouterLlmSchema.safeParse(parsedRaw)
+      if (!parsedLlm.success) {
+        aiLogger.warn(
+          {
+            issues: parsedLlm.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+            raw: raw.slice(0, 300),
+          },
+          'turn-router: LLM response failed Zod validation — continuing with raw object',
+        )
+      }
+      const parsed = parsedRaw as {
+        nextAction?: 'probe' | 'advance'
         probeQuestion?: string
-        style: 'curious' | 'probing' | 'encouraging' | 'neutral'
-        isNonsensical: boolean
-        isPivot: boolean
+        style?: 'curious' | 'probing' | 'encouraging' | 'neutral'
+        isNonsensical?: boolean
+        isPivot?: boolean
         interruptResolution?: 'finish_then_address' | 'abort_and_pivot' | 'acknowledge_defer' | 'absorbed'
       }
 

@@ -190,3 +190,135 @@ export const UpdateSessionSchema = z.object({
     weight: z.number(),
   })).optional(),
 })
+
+// ─── LLM response schemas (Work Item G.2) ──────────────────────────────────
+//
+// These validate what Claude (or any routed provider) returns. They are
+// deliberately PERMISSIVE: `.passthrough()` so unknown fields don't reject
+// the whole payload, and dimension scores use `z.number()` only (no
+// range — we don't want a slightly-out-of-range value to force the
+// fallback). The goal is to catch STRUCTURAL drift (missing required
+// fields, wrong JSON shape) while tolerating the benign variation Claude
+// produces. If a prompt tweak legitimately adds a field, no schema
+// change is needed.
+
+/**
+ * What Claude returns from `interview.evaluate-answer`. Mirrors the
+ * JSON_OUTPUT_RULE block in app/api/evaluate-answer/route.ts. Dimension
+ * keys are dynamic (depend on CMS rubric), so we accept any string→
+ * number record and require only the four HR-screening defaults.
+ */
+export const EvaluateAnswerLlmSchema = z.object({
+  // Core 4 dimensions (always present for HR-screening default rubric)
+  relevance: z.number().optional(),
+  structure: z.number().optional(),
+  specificity: z.number().optional(),
+  ownership: z.number().optional(),
+  // Optional dimensions
+  jdAlignment: z.number().optional(),
+  // Metadata
+  primaryGap: z.string().max(200).optional(),
+  primaryStrength: z.string().max(200).optional(),
+  answerSummary: z.string().max(500).optional(),
+  // Probing decision
+  shouldProbe: z.boolean().optional(),
+  probeType: z.enum(['clarify', 'challenge', 'expand', 'quantify']).nullish(),
+  probeTarget: z.string().max(500).nullish(),
+  isPivot: z.boolean().optional(),
+}).passthrough()
+
+/** What Claude returns from `interview.turn-router`. */
+export const TurnRouterLlmSchema = z.object({
+  nextAction: z.enum(['probe', 'advance']),
+  probeQuestion: z.string().max(2000).optional(),
+  style: z.enum(['curious', 'probing', 'encouraging', 'neutral']).optional(),
+  isNonsensical: z.boolean().optional(),
+  isPivot: z.boolean().optional(),
+  interruptResolution: z.enum([
+    'finish_then_address',
+    'abort_and_pivot',
+    'acknowledge_defer',
+    'absorbed',
+  ]).optional(),
+}).passthrough()
+
+/**
+ * What Claude returns from `interview.generate-feedback`. Looser than
+ * the persistence-side `FeedbackDataSchema` above — we let `dimensions`
+ * use `.passthrough()` on each sub-score so a prompt tweak that renames
+ * an engagement sub-field doesn't reject the whole payload.
+ */
+export const FeedbackLlmSchema = z.object({
+  overall_score: z.number().optional(),
+  pass_probability: z.string().max(50).optional(),
+  confidence_level: z.string().max(50).optional(),
+  dimensions: z.object({
+    answer_quality: z.object({
+      score: z.number().optional(),
+      strengths: z.array(z.string()).optional(),
+      weaknesses: z.array(z.string()).optional(),
+    }).passthrough().optional(),
+    communication: z.object({
+      score: z.number().optional(),
+      wpm: z.number().optional(),
+      filler_rate: z.number().optional(),
+      pause_score: z.number().optional(),
+      rambling_index: z.number().optional(),
+    }).passthrough().optional(),
+    engagement_signals: z.object({
+      score: z.number().optional(),
+      engagement_score: z.number().optional(),
+      confidence_trend: z.string().max(50).optional(),
+      energy_consistency: z.number().optional(),
+      composure_under_pressure: z.number().optional(),
+    }).passthrough().optional(),
+  }).passthrough().optional(),
+  red_flags: z.array(z.string()).optional(),
+  top_3_improvements: z.array(z.string()).optional(),
+  ideal_answers: z.array(z.object({
+    questionIndex: z.number().optional(),
+    strongAnswer: z.string().optional(),
+    keyElements: z.array(z.string()).optional(),
+  }).passthrough()).optional(),
+  drill_recommendations: z.array(z.object({
+    skillArea: z.string().optional(),
+    description: z.string().optional(),
+    practiceQuestions: z.array(z.string()).optional(),
+  }).passthrough()).optional(),
+  jd_match_score: z.number().optional(),
+  jd_requirement_breakdown: z.array(z.object({
+    requirement: z.string().optional(),
+    matched: z.boolean().optional(),
+    evidence: z.string().nullish(),
+  }).passthrough()).optional(),
+}).passthrough()
+
+/**
+ * What Claude returns from `interview.fusion-analysis`. Parsed in
+ * modules/interview/services/analysis/fusionService.ts. `topMoments`
+ * and `improvementMoments` can be either an array of indices or an
+ * array of TimelineEvent objects — the caller resolves this shape in
+ * `resolveEvents`. We accept both via `z.union`.
+ */
+const TimelineEventSchema = z.object({
+  startSec: z.number().optional(),
+  endSec: z.number().optional(),
+  type: z.string().max(50).optional(),
+  signal: z.string().max(50).optional(),
+  title: z.string().max(500).optional(),
+  description: z.string().max(2000).optional(),
+  severity: z.string().max(50).optional(),
+  questionIndex: z.number().optional(),
+}).passthrough()
+
+export const FusionLlmSchema = z.object({
+  timeline: z.array(TimelineEventSchema),
+  fusionSummary: z.object({
+    overallBodyLanguageScore: z.number().optional(),
+    eyeContactScore: z.number().optional(),
+    confidenceProgression: z.string().max(2000).optional(),
+    topMoments: z.union([z.array(z.number()), z.array(TimelineEventSchema)]).optional(),
+    improvementMoments: z.union([z.array(z.number()), z.array(TimelineEventSchema)]).optional(),
+    coachingTips: z.array(z.string()).optional(),
+  }).passthrough(),
+}).passthrough()
