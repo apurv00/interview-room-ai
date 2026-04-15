@@ -208,3 +208,10 @@
 - **Root-cause:** app/api/generate-feedback/route.ts:540 (pre-G.9) set
 - **Tests-added: modules/interview/__tests__/answerQualityAggregate.**
 - **Verified-by:** Unit tests — 11/11 new pass (5.08s). Regression:
+
+### 2026-04-15 17:43:23 +0000 · `cb67691` · Claude
+- **Subject:** feat(scoring-g10): partial-completion multiplier + short-form guard (flag-gated)
+- **Files:** 5 changed, 1 test file(s)
+- **Root-cause:** app/api/generate-feedback/route.ts treats an abandoned
+- **Tests-added: modules/interview/__tests__/completionAdjustment.test.**
+- **Verified-by:** Unit tests — 24/24 new pass (5.83s). Regression:
