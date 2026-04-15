@@ -187,3 +187,10 @@
 - **Root-cause:** Next.js App Router rejects non-route exports from
 - **Tests-added: no new tests — the existing 10 unit tests in**
 - **Verified-by:** `npm run build` exit 0 (was exit 1 pre-fix — this
+
+### 2026-04-15 17:09:37 +0000 · `9c248fd` · Claude
+- **Subject:** fix(scoring-g6): client-side 202 handling to close idempotency-lock race
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** G.6 Phase A (commit 632a611) added a Redis idempotency
+- **Tests-added: modules/interview/__tests__/feedbackPage202Handling.**
+- **Verified-by:** Unit tests — 5/5 new pass. Regression suite: 127/127
