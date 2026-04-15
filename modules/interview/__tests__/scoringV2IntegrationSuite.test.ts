@@ -345,4 +345,97 @@ describe('G.15a scoring-V2 integration suite (all flags ON)', () => {
     // <50% completion → Low confidence.
     expect(json.confidence_level).toBe('Low')
   })
+
+  // ── Scenario 6 — Claude-vs-formula safety clamp engages ──
+  it('wildly-disagreeing Claude value pulls score toward formula (safety clamp)', async () => {
+    // Claude says 95, formula will compute ~74 (weighted AQ=60,
+    // commScore=75, engagement=90 → round(24 + 22.5 + 27) = 74).
+    // |Δ|=21 > 20 threshold → G.8 disagreement mode engages:
+    //   round(0.3*95 + 0.7*74) = round(80.3) = 80
+    // Without the clamp (agreement mode 0.6/0.4): round(0.6*95 +
+    // 0.4*74) = round(86.6) = 87. So the clamp shaved 7 points off
+    // what would otherwise have been a Claude-hallucinated inflation.
+    mockCompletion.mockResolvedValueOnce(
+      claudeFeedbackResponse({ overall_score: 95, answer_quality: 92, engagement_signals: 90 }),
+    )
+    const evaluations = Array.from({ length: 5 }, (_, i) => evalRow(i, 60))
+    const res = await POST(makeReq(evaluations, {
+      plannedQuestionCount: 5,
+      answeredCount: 5,
+      endReason: 'normal',
+    }))
+    const json = await res.json()
+
+    // Final lands well below Claude's 95 — safety clamp is doing work.
+    // Assert final < agreement-zone result (87) by a meaningful margin.
+    expect(json.overall_score).toBeLessThan(85)
+    // And above the formula-only result (74) — Claude's signal still
+    // contributes but at reduced weight.
+    expect(json.overall_score).toBeGreaterThan(74)
+    // Closer to formula (74) than to Claude (95): |final-74| < |final-95|.
+    const distToFormula = Math.abs(json.overall_score - 74)
+    const distToClaude = Math.abs(json.overall_score - 95)
+    expect(distToFormula).toBeLessThan(distToClaude)
+  })
+
+  // ── Scenario 7 — G.9 weighted AQ lifts top-moment signal ──
+  it('one strong answer + nine mediocre produces a spread-preserving AQ (not flat mean)', async () => {
+    // Classic regression scenario: 9 answers at 55 + 1 answer at 90.
+    // Flat mean = (55*9 + 90)/10 = 58.5 → 59 (pre-G.9).
+    // G.9 weighted: 0.4*58.5 + 0.3*top3 + 0.2*median + 0.1*bottom3
+    //   top3 = mean of [90, 55, 55] = 66.67
+    //   median = 55
+    //   bottom3 = 55
+    //   = 23.4 + 20 + 11 + 5.5 = 59.9 → 60
+    // Not a huge lift numerically but the SPREAD preservation is
+    // what matters — on a session with the opposite mix (9 strong
+    // + 1 weak) G.9 would protect the strong signal similarly.
+    mockCompletion.mockResolvedValueOnce(
+      claudeFeedbackResponse({ overall_score: 62, answer_quality: 70, engagement_signals: 60 }),
+    )
+    const evaluations = [
+      ...Array.from({ length: 9 }, (_, i) => evalRow(i, 55)),
+      evalRow(9, 90),
+    ]
+    const res = await POST(makeReq(evaluations, {
+      plannedQuestionCount: 10,
+      answeredCount: 10,
+      endReason: 'normal',
+    }))
+    const json = await res.json()
+
+    // Weighted AQ ≥ flat mean (G.9 preserves top moment).
+    expect(json.dimensions.answer_quality.score).toBeGreaterThanOrEqual(59)
+    // But not absurdly inflated — still bounded by the session reality.
+    expect(json.dimensions.answer_quality.score).toBeLessThanOrEqual(75)
+  })
+
+  // ── Scenario 8 — G.13 compact-transcript feeds Claude per-Q summaries ──
+  it('Claude receives per-question summaries (not head/tail slice) via the user prompt', async () => {
+    // Capture the user prompt sent to Claude; verify it's the G.13
+    // compact-transcript format (per-Q summary headers) and NOT
+    // the legacy head/tail slice ("lines omitted for brevity").
+    let capturedUserPrompt = ''
+    mockCompletion.mockImplementationOnce(async (opts: { messages: Array<{ content: string }> }) => {
+      capturedUserPrompt = opts.messages[0]?.content || ''
+      return claudeFeedbackResponse({ overall_score: 72, answer_quality: 70, engagement_signals: 70 })
+    })
+    // Long enough session that the pre-G.13 head/tail slice would
+    // have kicked in (>6000 chars in the joined transcript).
+    const evaluations = Array.from({ length: 12 }, (_, i) => evalRow(i, 70, {
+      answer: `Extended answer text for Q${i + 1} that includes enough words to push the full transcript past the 6000-char threshold where pre-G.13 head/tail slicing would engage. Word padding: lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.`,
+    }))
+    await POST(makeReq(evaluations, {
+      plannedQuestionCount: 16,
+      answeredCount: 12,
+      endReason: 'normal',
+    }))
+
+    // G.13 summary header present.
+    expect(capturedUserPrompt).toContain('=== Per-question summary')
+    // Legacy head/tail marker absent.
+    expect(capturedUserPrompt).not.toContain('lines omitted for brevity')
+    // Full detail for the 2 weakest questions present.
+    expect(capturedUserPrompt).toContain('=== Full detail for the 2 weakest answers')
+  })
 })
