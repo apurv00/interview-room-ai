@@ -22,7 +22,7 @@ import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSec
 import { recordScoreDelta } from '@shared/services/scoreTelemetry'
 import { acquireFeedbackLock, releaseFeedbackLock } from '@shared/services/feedbackLock'
 import { computeBlendedOverallScore, resolveBlendWeights } from '@interview/services/eval/overallScore'
-import { computePerQAverage } from '@interview/services/eval/perQAggregation'
+import { computePerQAverage, computeAnswerQualityAggregate } from '@interview/services/eval/perQAggregation'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -529,15 +529,25 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       // BUG 2 fix: derive answer_quality from the actual per-question evaluation
       // scores instead of trusting Claude's free-form summary value, which had
       // no rubric anchors and tended to inflate to 60-75.
-      // G.4: delegate to computePerQAverage so status='failed' rows
+      // G.4: delegate to a status-aware helper so status='failed' rows
       // (whose 60/55/55/60 shape is a placeholder, not real scores)
-      // are excluded from the average.
-      const perQ = computePerQAverage(evaluations as unknown as Array<Record<string, unknown>>)
+      // are excluded from the aggregate.
+      // G.9: compute the richer aggregate (mean + median + top3Mean +
+      // bottom3Mean + weighted) up front; select which field to use as
+      // answer_quality.score based on the scoring_v2_aq flag. `perQAvg`
+      // (the flat mean) remains the input to the existing overall-score
+      // formula/blend, regardless of flag — only the displayed
+      // answer_quality dimension changes here. This keeps the overall
+      // score ramp (G.8) independent of the AQ ramp (G.9).
+      const perQ = computeAnswerQualityAggregate(evaluations as unknown as Array<Record<string, unknown>>)
       const perQAvg = perQ.average
+      const aqDisplayScore = isFeatureEnabled('scoring_v2_aq')
+        ? perQ.weighted
+        : perQAvg
 
-      // Override Claude's answer_quality score with the deterministic average
+      // Override Claude's answer_quality score with the deterministic value.
       if (feedback.dimensions?.answer_quality) {
-        feedback.dimensions.answer_quality.score = perQAvg
+        feedback.dimensions.answer_quality.score = aqDisplayScore
       }
 
       // Deterministic formula overall score: weighted average of

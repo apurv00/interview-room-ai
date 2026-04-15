@@ -35,6 +35,7 @@ export type FeatureFlag =
   | 'jd_flow_overlay'
   | 'score_telemetry'
   | 'scoring_v2_overall'
+  | 'scoring_v2_aq'
 
 const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   personalization_engine: true,
@@ -94,6 +95,15 @@ const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   // SCORING_V2_CLAUDE_WEIGHT / SCORING_V2_FORMULA_WEIGHT /
   // SCORING_V2_DISAGREEMENT_THRESHOLD env vars.
   scoring_v2_overall: false,
+  // Scoring V2 — dimension-aware answer_quality aggregate (Work Item G.9).
+  // When enabled, generate-feedback computes answer_quality.score as
+  //   0.4*mean + 0.3*top3Mean + 0.2*median + 0.1*bottom3Mean
+  // over per-question scores, preserving outlier signal. Default OFF —
+  // flip on after G.1 telemetry shows the answer_quality distribution
+  // has tightened around 65-75 on flat-mean (i.e. confirms the spread
+  // problem G.9 solves is present in prod). Independent of G.8; either
+  // can be enabled without the other.
+  scoring_v2_aq: false,
 }
 
 export function isFeatureEnabled(flag: FeatureFlag): boolean {
