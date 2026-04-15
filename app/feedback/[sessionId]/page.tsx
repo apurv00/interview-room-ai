@@ -577,10 +577,12 @@ function FeedbackPageInner() {
         throw new Error(fb.error || `Feedback generation failed (status ${res.status})`)
       }
       // Apply client-side defaults if feedback is incomplete (truncated Claude response)
-      if (!fb.overall_score) fb.overall_score = 50
+      // G.5: `== null` / `??` — a legit overall_score of 0 (no-answer session,
+      // handled by the server's no-data early-exit) must not be stomped to 50.
+      if (fb.overall_score == null) fb.overall_score = 50
       if (!fb.dimensions) {
         fb.dimensions = {
-          answer_quality: { score: fb.overall_score || 50, strengths: [], weaknesses: [] },
+          answer_quality: { score: fb.overall_score ?? 50, strengths: [], weaknesses: [] },
           communication: { score: 50, wpm: 120, filler_rate: 0.05, pause_score: 60, rambling_index: 0.3 },
           engagement_signals: { score: 50, engagement_score: 50, confidence_trend: 'stable', energy_consistency: 0.6, composure_under_pressure: 50 },
         }

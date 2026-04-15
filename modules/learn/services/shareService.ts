@@ -85,11 +85,18 @@ export async function getPublicScorecard(
       domain: session.config?.role || 'General',
       interviewType: session.config?.interviewType || 'screening',
       experience: session.config?.experience || '0-2',
-      overallScore: fb.overall_score || 0,
+      // G.5: `??` to preserve a legit 0 (no-answer session) distinct
+      // from a missing field. Same rationale for the dimension scores.
+      overallScore: fb.overall_score ?? 0,
       dimensions: {
-        answerQuality: fb.dimensions?.answer_quality?.score || 0,
-        communication: fb.dimensions?.communication?.score || 0,
-        engagement: fb.dimensions?.engagement_signals?.score || fb.dimensions?.delivery_signals?.score || 0,
+        answerQuality: fb.dimensions?.answer_quality?.score ?? 0,
+        communication: fb.dimensions?.communication?.score ?? 0,
+        // Legacy `delivery_signals` fallback preserved; `??` respects
+        // 0 scores within each.
+        engagement:
+          fb.dimensions?.engagement_signals?.score
+          ?? fb.dimensions?.delivery_signals?.score
+          ?? 0,
       },
       strengths: (fb.dimensions?.answer_quality?.strengths || []).slice(0, 5),
       questionCount: (session.evaluations || []).length,

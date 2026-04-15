@@ -107,17 +107,30 @@ function computeEngagementContext(
     const pEval = evaluations[pressureIdx]
     const pMetrics = speechMetrics[pressureIdx]
     if (pEval && pMetrics) {
-      const avgNormalScore = evaluations
-        .filter((_, i) => i !== pressureIdx)
-        .reduce((s, e) => {
-          const rel = Number(e.relevance) || 0
-          const str = Number(e.structure) || 0
-          const spc = Number(e.specificity) || 0
-          const own = Number(e.ownership) || 0
-          return s + (rel + str + spc + own) / 4
-        }, 0) / (Math.max(1, evaluations.length - 1))
-      const pressureScore = ((Number(pEval.relevance) || 0) + (Number(pEval.structure) || 0) + (Number(pEval.specificity) || 0) + (Number(pEval.ownership) || 0)) / 4
-      pressureContext = `\nPressure question (Q${pressureIdx + 1}) avg score: ${pressureScore.toFixed(0)} vs normal avg: ${avgNormalScore.toFixed(0)}`
+      // G.5: skip status='failed' rows in the normal-avg denominator
+      // so the pressure-vs-normal delta isn't diluted by fabricated
+      // 60/55/55/60 placeholders. Mirrors the G.4 aggregation policy.
+      const normalRows = evaluations.filter((e, i) =>
+        i !== pressureIdx && (e as { status?: string }).status !== 'failed',
+      )
+      const avgNormalScore = normalRows.length > 0
+        ? normalRows.reduce((s, e) => {
+            const rel = Number(e.relevance) ?? 0
+            const str = Number(e.structure) ?? 0
+            const spc = Number(e.specificity) ?? 0
+            const own = Number(e.ownership) ?? 0
+            return s + (rel + str + spc + own) / 4
+          }, 0) / normalRows.length
+        : 0
+      // Don't report a pressure score for a failed pressure row — the
+      // number would be the placeholder, not the candidate's actual
+      // pressure performance. Drop the context instead.
+      if ((pEval as { status?: string }).status === 'failed') {
+        pressureContext = `\nPressure question (Q${pressureIdx + 1}) could not be scored — AI evaluation failed on that answer.`
+      } else {
+        const pressureScore = ((Number(pEval.relevance) ?? 0) + (Number(pEval.structure) ?? 0) + (Number(pEval.specificity) ?? 0) + (Number(pEval.ownership) ?? 0)) / 4
+        pressureContext = `\nPressure question (Q${pressureIdx + 1}) avg score: ${pressureScore.toFixed(0)} vs normal avg: ${avgNormalScore.toFixed(0)}`
+      }
     }
   }
 
@@ -537,7 +550,9 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         aiLogger.warn({ raw: raw.slice(0, 500) }, 'Incomplete feedback from Claude — applying defaults')
         // G.4: reuse the failed-row-aware helper here too.
         const preQ = computePerQAverage(evaluations as unknown as Array<Record<string, unknown>>)
-        feedback.overall_score = feedback.overall_score || preQ.average
+        // G.5: `??` — a legit 0 (no-answer session) must not be
+        // stomped to preQ.average. `||` did exactly that.
+        feedback.overall_score = feedback.overall_score ?? preQ.average
         feedback.dimensions = feedback.dimensions || {
           answer_quality: { score: feedback.overall_score, strengths: [], weaknesses: [] },
           communication: { score: commScore, wpm: aggMetrics.wpm, filler_rate: aggMetrics.fillerRate, pause_score: aggMetrics.pauseScore, rambling_index: aggMetrics.ramblingIndex },

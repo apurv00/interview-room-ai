@@ -72,7 +72,11 @@ export async function generateSessionSummary(input: GenerateSummaryInput): Promi
         domain,
         interviewType,
         experience,
-        overallScore: feedback.overall_score || 0,
+        // G.5: `??` preserves a legit 0 (abandoned session) distinctly
+        // from "field missing". Today both paths write 0, but a future
+        // analytics query will need to differentiate "abandoned" from
+        // "LLM returned no overall_score".
+        overallScore: feedback.overall_score ?? 0,
         passProb: feedback.pass_probability || 'Medium',
         competencyScores,
         strengths: feedback.dimensions?.answer_quality?.strengths?.slice(0, 3) || [],
