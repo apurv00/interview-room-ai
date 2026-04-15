@@ -263,35 +263,23 @@ describe('POST /api/generate-feedback — G.9 flag gate on answer_quality.score'
     mockIsFeatureEnabled.mockReset()
   })
 
-  it('flag OFF → answer_quality.score = flat mean (pre-G.9 behavior)', async () => {
+  it('answer_quality.score = weighted aggregate (post-G.15 unconditional)', async () => {
+    // G.15b-5 inverted this from a flag-OFF "expect flat mean" test.
+    // Post-G.15 the weighted aggregate is the only path. weighted
+    // (per the unit test above) = 60 vs flat mean = 59 — the
+    // single point of "spread preservation" survives the rebalance.
     mockIsFeatureEnabled.mockImplementation(() => false)
     mockCompletion.mockResolvedValueOnce(neutralFeedback)
 
     const res = await POST(makeReq(mediocreEvals()))
     const json = await res.json()
 
-    // Flat mean: (55*9 + 90) / 10 = 585 / 10 = 58.5 → 59
-    expect(json.dimensions.answer_quality.score).toBe(59)
-  })
-
-  it('flag ON → answer_quality.score = weighted aggregate (higher than flat mean)', async () => {
-    mockIsFeatureEnabled.mockImplementation((flag: string) => flag === 'scoring_v2_aq')
-    mockCompletion.mockResolvedValueOnce(neutralFeedback)
-
-    const res = await POST(makeReq(mediocreEvals()))
-    const json = await res.json()
-
-    // weighted = 60 (from the unit test above). Flat mean is 59.
     expect(json.dimensions.answer_quality.score).toBe(60)
-    expect(json.dimensions.answer_quality.score).toBeGreaterThan(59)
   })
 
-  it('flag ON does not affect the overall_score input (which still uses flat mean)', async () => {
-    // G.9 is scoped to the DISPLAY value of answer_quality. The
-    // overall-score formula should keep using the flat mean as its aq
-    // input so the G.8 ramp (if flipped later) still compares apples
-    // to apples against G.1 telemetry baselines. Verify by checking
-    // that flipping G.9 alone doesn't change overall_score.
+  it('weighted AQ with flags-mocked-ON produces the same value as flags-OFF', async () => {
+    // Post-G.15 the flag check is gone; the test now confirms that
+    // the route is genuinely flag-independent at the AQ site.
     mockIsFeatureEnabled.mockImplementation(() => false)
     mockCompletion.mockResolvedValueOnce(neutralFeedback)
     const resOff = await POST(makeReq(mediocreEvals()))
@@ -303,7 +291,6 @@ describe('POST /api/generate-feedback — G.9 flag gate on answer_quality.score'
     const jsonOn = await resOn.json()
 
     expect(jsonOff.overall_score).toBe(jsonOn.overall_score)
-    // But the displayed AQ differs:
-    expect(jsonOff.dimensions.answer_quality.score).not.toBe(jsonOn.dimensions.answer_quality.score)
+    expect(jsonOff.dimensions.answer_quality.score).toBe(jsonOn.dimensions.answer_quality.score)
   })
 })

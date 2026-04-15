@@ -62,6 +62,13 @@ export interface UseInterviewAPIReturn {
     probeDepth?: number,
     signal?: AbortSignal,
     previousSummaries?: PreviousAnswerSummary[],
+    /**
+     * G.12: true when the answer was cut off by the interview timer
+     * expiring. Route injects a "don't penalize incompleteness" hint
+     * into the user prompt and stamps 'truncated_by_timer' onto the
+     * evaluation's flags array.
+     */
+    wasTruncatedByTimer?: boolean,
   ) => Promise<AnswerEvaluation>
   callTurnRouter: (params: {
     question: string
@@ -135,6 +142,7 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
       probeDepth?: number,
       signal?: AbortSignal,
       previousSummaries?: PreviousAnswerSummary[],
+      wasTruncatedByTimer?: boolean,
     ): Promise<AnswerEvaluation> => {
       const timeoutController = new AbortController()
       const timeoutId = setTimeout(() => timeoutController.abort(), 5000)
@@ -154,6 +162,9 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
             probeDepth,
             previousAnswerSummaries: previousSummaries,
             sessionId: getSessionId?.() ?? undefined,
+            // G.12: only include when true — keeps the body minimal and
+            // the server's Zod schema treats absence = false.
+            ...(wasTruncatedByTimer && { wasTruncatedByTimer: true }),
           }),
         })
         clearTimeout(timeoutId)

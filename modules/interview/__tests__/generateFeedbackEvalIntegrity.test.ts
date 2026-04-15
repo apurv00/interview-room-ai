@@ -266,7 +266,10 @@ describe('POST /api/generate-feedback — G.4 excludes failed evals from aggrega
     const res = await POST(makeRequest(evals))
     const json = await res.json()
 
-    // All 4 included: (80*3 + 60)/4 = 75
-    expect(json.dimensions.answer_quality.score).toBe(75)
+    // All 4 included. G.9 weighted aggregate (post-G.15 unconditional):
+    //   mean=75, top3Mean=(80+80+80)/3=80, median=80,
+    //   bottom3Mean=(60+80+80)/3=73.33
+    //   weighted = 0.4*75 + 0.3*80 + 0.2*80 + 0.1*73.33 = 77.33 → 77
+    expect(json.dimensions.answer_quality.score).toBe(77)
   })
 })

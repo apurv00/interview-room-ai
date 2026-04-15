@@ -170,75 +170,59 @@ describe('POST /api/evaluate-answer — G.11 scoring ceiling prompt swap', () =>
     mockIsFeatureEnabled.mockReset()
   })
 
-  describe('flag OFF (legacy prompt)', () => {
-    it('includes the "Most real answers fall in 41–80" anchor', async () => {
+  // G.15b-7 inverted: pre-G.15 had separate "flag OFF (legacy)" and
+  // "flag ON (G.11)" describes; post-G.15 the legacy prompt is gone
+  // and the calibrated G.11 prompt is the only path. Tests now run
+  // with flag mocked OFF to PROVE the route is flag-independent.
+  describe('post-G.15 unconditional G.11 prompt', () => {
+    it('does NOT contain the legacy "Most real answers fall in 41–80" anchor', async () => {
       const prompt = await runAndCaptureUserPrompt(false)
-      expect(prompt).toContain('Most real answers fall in 41–80')
-    })
-
-    it('includes the "genuinely strong on every dimension" gate', async () => {
-      const prompt = await runAndCaptureUserPrompt(false)
-      expect(prompt).toContain('genuinely strong on every dimension')
-    })
-
-    it('does NOT contain the G.11 "3 of 4 dimensions" language', async () => {
-      const prompt = await runAndCaptureUserPrompt(false)
-      expect(prompt).not.toContain('3 of 4 dimensions')
-    })
-
-    it('does NOT contain the G.11 "do not cluster" language', async () => {
-      const prompt = await runAndCaptureUserPrompt(false)
-      expect(prompt).not.toContain('do not cluster')
-    })
-  })
-
-  describe('flag ON (G.11 prompt)', () => {
-    it('removes the "Most real answers fall in 41–80" anchor', async () => {
-      const prompt = await runAndCaptureUserPrompt(true)
       expect(prompt).not.toContain('Most real answers fall in 41–80')
     })
 
-    it('removes the "genuinely strong on every dimension" gate', async () => {
-      const prompt = await runAndCaptureUserPrompt(true)
+    it('does NOT contain the legacy "genuinely strong on every dimension" gate', async () => {
+      const prompt = await runAndCaptureUserPrompt(false)
       expect(prompt).not.toContain('genuinely strong on every dimension')
     })
 
-    it('includes the "3 of 4 dimensions" calibration', async () => {
-      const prompt = await runAndCaptureUserPrompt(true)
+    it('contains the "3 of 4 dimensions" calibration', async () => {
+      const prompt = await runAndCaptureUserPrompt(false)
       expect(prompt).toContain('3 of 4 dimensions are excellent')
     })
 
-    it('includes the "do not cluster answers in 55-75" instruction', async () => {
-      const prompt = await runAndCaptureUserPrompt(true)
+    it('contains the "do not cluster answers in 55-75" instruction', async () => {
+      const prompt = await runAndCaptureUserPrompt(false)
       expect(prompt).toContain('do not cluster answers in 55–75')
     })
 
-    it('includes the "85-92" calibration example', async () => {
-      const prompt = await runAndCaptureUserPrompt(true)
+    it('contains the "85-92" calibration example', async () => {
+      const prompt = await runAndCaptureUserPrompt(false)
       expect(prompt).toContain('85–92')
+    })
+
+    it('produces identical output regardless of isFeatureEnabled state', async () => {
+      // Flag-independence guarantee: the output for flag=false and
+      // flag=true is byte-identical post-G.15.
+      const off = await runAndCaptureUserPrompt(false)
+      const on = await runAndCaptureUserPrompt(true)
+      expect(off).toBe(on)
     })
   })
 
-  describe('invariants — both paths', () => {
-    it('both prompts document all 5 score bands', async () => {
-      for (const flagOn of [false, true]) {
-        const prompt = await runAndCaptureUserPrompt(flagOn)
-        expect(prompt).toContain('0–20')
-        expect(prompt).toContain('21–40')
-        expect(prompt).toContain('41–60')
-        expect(prompt).toContain('61–80')
-        expect(prompt).toContain('81–100')
-      }
+  describe('invariants — score bands + schema preserved', () => {
+    it('documents all 5 score bands', async () => {
+      const prompt = await runAndCaptureUserPrompt(false)
+      expect(prompt).toContain('0–20')
+      expect(prompt).toContain('21–40')
+      expect(prompt).toContain('41–60')
+      expect(prompt).toContain('61–80')
+      expect(prompt).toContain('81–100')
     })
 
-    it('both prompts still ask for the JSON output schema', async () => {
-      for (const flagOn of [false, true]) {
-        const prompt = await runAndCaptureUserPrompt(flagOn)
-        // JSON_OUTPUT_RULE is mocked to '' in this test harness but
-        // the dimension schema text still appears via dimensionSchema.
-        expect(prompt).toContain('relevance')
-        expect(prompt).toContain('structure')
-      }
+    it('still asks for the JSON output schema', async () => {
+      const prompt = await runAndCaptureUserPrompt(false)
+      expect(prompt).toContain('relevance')
+      expect(prompt).toContain('structure')
     })
   })
 })

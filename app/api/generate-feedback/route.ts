@@ -15,6 +15,7 @@ import { isFeatureEnabled } from '@shared/featureFlags'
 import { updateCompetencyState, updateWeaknessClusters } from '@learn/services/competencyService'
 import { generateSessionSummary } from '@learn/services/sessionSummaryService'
 import { generatePathwayPlan } from '@learn/services/pathwayPlanner'
+import { updatePracticeStats, deriveStrongWeakDimensions } from '@learn/services/practiceStatsService'
 import { evaluateSession } from '@interview/services/eval/evaluationEngine'
 import { getUserCompetencySummary } from '@learn/services/competencyService'
 import { buildHistorySummary } from '@learn/services/sessionSummaryService'
@@ -24,6 +25,7 @@ import { acquireFeedbackLock, releaseFeedbackLock } from '@shared/services/feedb
 import { computeBlendedOverallScore, resolveBlendWeights } from '@interview/services/eval/overallScore'
 import { computePerQAverage, computeAnswerQualityAggregate } from '@interview/services/eval/perQAggregation'
 import { computeCompletionAdjustment } from '@interview/services/eval/completionAdjustment'
+import { compactTranscript } from '@interview/services/eval/transcriptCompactor'
 import { getQuestionCount } from '@interview/config/interviewConfig'
 import type { Duration } from '@shared/types'
 import { z } from 'zod'
@@ -202,7 +204,11 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
     // in config. The resulting feedback object mirrors noDataFeedback
     // above but uses the G.10 red_flag copy so the user understands
     // WHY the score is withheld.
-    if (isFeatureEnabled('scoring_v2_completion') && g10Adjustment.shouldReturnShortForm) {
+    // G.10 short-form guard (always-on post-G.15): refuse to score
+    // <3 answers regardless of flag state. Pre-G.15 was gated on
+    // `scoring_v2_completion`; flag definition stays in
+    // featureFlags.ts as dead-reference until G.15c.
+    if (g10Adjustment.shouldReturnShortForm) {
       const shortFormFeedback: FeedbackData = {
         // overall_score 0 here matches the noDataFeedback shape so
         // downstream display doesn't need special handling for the
@@ -266,23 +272,32 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
       })
     )
 
-    // Build transcript text with smart truncation: keep first 2 + last 2 Q&A
-    // pairs in full, summarize the middle. The old approach (.slice(0, 4000))
-    // blindly cut later questions, leaving Claude with no evidence for them.
+    // Build transcript text. G.13 (always-on post-G.15): always use
+    // the per-question-summary builder so Claude sees coverage of
+    // ALL questions, with full detail for the 2 weakest. Pre-G.15
+    // was flag-gated on `compact_transcript`; the head/tail slice
+    // fallback is gone for good. When compactor returns empty
+    // (zero evaluations or empty transcript), fall back to the
+    // raw joined transcript so the downstream prompt still has a
+    // block to anchor on.
     const transcriptLines = transcript.map(
       (e) => `${e.speaker === 'interviewer' ? 'Interviewer' : 'Candidate'}: ${e.text}`
     )
     const fullTranscript = transcriptLines.join('\n')
-    let transcriptText: string
-    if (fullTranscript.length <= 6000) {
-      transcriptText = fullTranscript
-    } else {
-      // Keep first ~2000 chars (opening questions) and last ~2000 chars (final questions)
-      // with a "[...N lines omitted for brevity...]" marker in between
-      const head = fullTranscript.slice(0, 2500)
-      const tail = fullTranscript.slice(-2500)
-      const omittedLines = transcriptLines.length - (head.split('\n').length + tail.split('\n').length)
-      transcriptText = `${head}\n\n[...${Math.max(0, omittedLines)} lines omitted for brevity — evaluation scores for all questions are provided in contextData...]\n\n${tail}`
+    const compacted = compactTranscript({
+      transcript,
+      evaluations: evaluations as unknown as import('@shared/types').AnswerEvaluation[],
+    })
+    const transcriptText: string = compacted.text || fullTranscript
+    if (compacted.budgetHit) {
+      aiLogger.info(
+        {
+          sessionId: body.sessionId,
+          summarizedCount: compacted.summarizedCount,
+          fullDetailIndices: compacted.fullDetailIndices,
+        },
+        'G.13 compact-transcript hit budget — full detail partially omitted',
+      )
     }
 
     let jdBlock = ''
@@ -610,18 +625,17 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       // G.4: delegate to a status-aware helper so status='failed' rows
       // (whose 60/55/55/60 shape is a placeholder, not real scores)
       // are excluded from the aggregate.
-      // G.9: compute the richer aggregate (mean + median + top3Mean +
-      // bottom3Mean + weighted) up front; select which field to use as
-      // answer_quality.score based on the scoring_v2_aq flag. `perQAvg`
-      // (the flat mean) remains the input to the existing overall-score
-      // formula/blend, regardless of flag — only the displayed
-      // answer_quality dimension changes here. This keeps the overall
-      // score ramp (G.8) independent of the AQ ramp (G.9).
+      // G.9 (always-on post-G.15): use the dimension-aware weighted
+      // aggregate as the displayed answer_quality.score so outlier
+      // signal (top moments + bottom moments) survives the
+      // aggregation. Pre-G.15 this was flag-gated on `scoring_v2_aq`;
+      // the flag definition stays in featureFlags.ts as a dead-
+      // reference until G.15c. `perQAvg` (the flat mean) is still
+      // the input to the overall-score formula/blend — only the
+      // user-visible AQ dimension differs here.
       const perQ = computeAnswerQualityAggregate(evaluations as unknown as Array<Record<string, unknown>>)
       const perQAvg = perQ.average
-      const aqDisplayScore = isFeatureEnabled('scoring_v2_aq')
-        ? perQ.weighted
-        : perQAvg
+      const aqDisplayScore = perQ.weighted
 
       // Override Claude's answer_quality score with the deterministic value.
       if (feedback.dimensions?.answer_quality) {
@@ -644,18 +658,21 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       // scores escape the compressed 55–75 band — but a safety clamp
       // engages if Claude disagrees wildly (|Δ| > 20) to prevent a
       // hallucinated extreme from dominating the user-visible number.
-      let blendMode: 'agreement' | 'disagreement' | 'formula-only' | 'disabled' = 'disabled'
-      if (isFeatureEnabled('scoring_v2_overall')) {
-        const blend = computeBlendedOverallScore(
-          claudeRawOverall,
-          formulaOverall,
-          resolveBlendWeights(),
-        )
-        feedback.overall_score = blend.blended
-        blendMode = blend.mode
-      } else {
-        feedback.overall_score = formulaOverall
-      }
+      // G.8 (always-on post-G.15): blend Claude's holistic
+      // overall_score with the deterministic formula. Pre-G.15 this
+      // was flag-gated on `scoring_v2_overall`; the flag definition
+      // remains in shared/featureFlags.ts as a dead-reference until
+      // G.15c cleanup but the code path is now unconditional. Safety
+      // clamp engages if Claude disagrees wildly (|Δ| > 20) so a
+      // hallucinated Claude value can't dominate the user-visible
+      // number.
+      const blend = computeBlendedOverallScore(
+        claudeRawOverall,
+        formulaOverall,
+        resolveBlendWeights(),
+      )
+      feedback.overall_score = blend.blended
+      const blendMode: 'agreement' | 'disagreement' | 'formula-only' = blend.mode
       feedback.pass_probability = feedback.overall_score >= 75 ? 'High' : feedback.overall_score >= 50 ? 'Medium' : 'Low'
 
       aiLogger.info(
@@ -721,19 +738,38 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         }
       }
 
-      // G.10 — partial-completion adjustment. Runs AFTER G.8's blend
-      // computed the final overall_score AND after G.3's confidence
-      // clamp, so this is the last word on both fields. Flag-gated:
-      // scoring_v2_completion OFF → no multiplier, no clamp, no new
-      // red_flag; the handler behaves exactly as pre-G.10.
+      // G.12 — surface timer-truncated per-answer rows as a user-visible
+      // red_flag. The evaluate-answer route (also G.12) stamps
+      // 'truncated_by_timer' onto evaluation.flags when the client
+      // reported the answer was cut off by the interview timer. We count
+      // those here and, if any, add a single clarifying red_flag so the
+      // user understands WHY structure/specificity on those questions
+      // might look lower than expected (note: the route also tells
+      // Claude not to penalize, so typically they don't, but the red
+      // flag is still the right UX signal).
+      const timerTruncatedCount = evaluations.filter(
+        (e) => Array.isArray(e.flags) && e.flags.includes('truncated_by_timer'),
+      ).length
+      if (timerTruncatedCount > 0) {
+        feedback.red_flags = Array.isArray(feedback.red_flags) ? feedback.red_flags : []
+        feedback.red_flags.push(
+          `${timerTruncatedCount} answer${timerTruncatedCount === 1 ? ' was' : 's were'} cut off when the timer expired — scoring does not penalize those for incompleteness.`,
+        )
+      }
+
+      // G.10 — partial-completion adjustment (always-on post-G.15).
+      // Runs AFTER G.8's blend computed the final overall_score AND
+      // after G.3's confidence clamp, so this is the last word on both
+      // fields. Pre-G.15 was flag-gated on `scoring_v2_completion`;
+      // flag definition stays in featureFlags.ts as dead-reference
+      // until G.15c.
       //
-      // When ON:
       //   - Apply scoreMultiplier to overall_score (full credit ≥60%
       //     completion, linear taper below).
       //   - Clamp confidence_level to 'Low' when <50% completion.
       //   - Push the end-reason red_flag so the user understands.
       //   - Recompute pass_probability from the adjusted overall_score.
-      if (isFeatureEnabled('scoring_v2_completion') && feedback.overall_score != null) {
+      if (feedback.overall_score != null) {
         if (g10Adjustment.scoreMultiplier < 1) {
           feedback.overall_score = Math.round(feedback.overall_score * g10Adjustment.scoreMultiplier)
           feedback.pass_probability = feedback.overall_score >= 75 ? 'High' : feedback.overall_score >= 50 ? 'Medium' : 'Low'
@@ -822,6 +858,32 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       if (body.sessionId) {
         const sessionId = body.sessionId
         const typedEvaluations = evaluations as unknown as AnswerEvaluation[]
+
+        // G.14: flag-gated practiceStats write. When
+        // xp_from_feedback=true, this is the authoritative path —
+        // /api/learn/stats no-ops for duplicate writes (see
+        // app/api/learn/stats/route.ts). We use the deterministic
+        // `feedback.overall_score` (post-G.8 blend, post-G.10
+        // completion multiplier) so XP matches the number the user
+        // sees on their feedback page. Fire-and-forget; never blocks
+        // the response.
+        // G.14 (always-on post-G.15): server-side XP write is now
+        // unconditional. The legacy /api/learn/stats endpoint
+        // permanently no-ops in the same chunk so dual-write
+        // double-counting can't happen.
+        if (typeof feedback.overall_score === 'number') {
+          const { strongDimensions, weakDimensions } = deriveStrongWeakDimensions(
+            evaluations as unknown as Array<Record<string, unknown>>,
+          )
+          updatePracticeStats({
+            userId: user.id,
+            domain: config.role,
+            interviewType,
+            score: feedback.overall_score,
+            strongDimensions,
+            weakDimensions,
+          }).catch((err) => aiLogger.warn({ err }, 'G.14 practiceStats write failed'))
+        }
 
         // Update competency state
         updateCompetencyState({

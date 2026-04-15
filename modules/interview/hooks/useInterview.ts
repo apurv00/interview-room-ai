@@ -198,6 +198,15 @@ export function useInterview({
   const transcriptRef = useRef<TranscriptEntry[]>([])
   const evaluationsRef = useRef<AnswerEvaluation[]>([])
   const pendingEvalRef = useRef<Promise<void> | null>(null)
+  /**
+   * G.12: latched true when the interview timer hits 0 while the
+   * candidate is still in LISTENING. The next evaluateAnswer call (for
+   * the answer that was in progress) passes this through so the route
+   * injects a "don't penalize incompleteness" hint. Latch resets per
+   * question in evaluateAnswer itself so stale values don't bleed into
+   * subsequent (pivot/probe) evaluations.
+   */
+  const timerTruncatedCurrentAnswerRef = useRef<boolean>(false)
   const speechMetricsRef = useRef<SpeechMetrics[]>([])
   /** Audio-timeline-relative words captured live by Deepgram across
    *  every candidate turn. Fed into the multimodal analysis pipeline
@@ -400,6 +409,14 @@ export function useInterview({
         // (AI finishing current sentence / eval completing).
         if (next === 0 && phaseRef.current !== 'SCORING' && phaseRef.current !== 'ENDED') {
           const activePhase = phaseRef.current
+          // G.12: latch "current answer was cut by timer" when the
+          // candidate is still LISTENING. The subsequent evaluateAnswer
+          // call (either the one already in-flight resolving, or the
+          // one about to fire after the 15s grace) picks this up and
+          // tells the route to skip the incompleteness penalty.
+          if (activePhase === 'LISTENING') {
+            timerTruncatedCurrentAnswerRef.current = true
+          }
           if (activePhase === 'LISTENING') {
             setCoachingTip('Time is up, please finish your current thought.')
             setTimeout(() => {
@@ -459,13 +476,21 @@ export function useInterview({
   )
 
   const evaluateAnswer = useCallback(
-    (question: string, answer: string, qIdx: number, probeDepth?: number): Promise<AnswerEvaluation> =>
-      apiEvaluateAnswer(question, answer, qIdx, probeDepth, getAbortSignal(),
+    (question: string, answer: string, qIdx: number, probeDepth?: number): Promise<AnswerEvaluation> => {
+      // G.12: consume + reset the latch. The timer-hit-0 branch sets
+      // this true before finishInterview runs, so the in-flight or
+      // about-to-fire evaluateAnswer for the current answer carries the
+      // flag. Immediate reset prevents bleed into subsequent probes.
+      const truncatedByTimer = timerTruncatedCurrentAnswerRef.current
+      timerTruncatedCurrentAnswerRef.current = false
+      return apiEvaluateAnswer(question, answer, qIdx, probeDepth, getAbortSignal(),
         evaluationsRef.current.slice(-5).map(e => ({
           question: e.question?.slice(0, 80) || '',
           answerSummary: e.answerSummary || e.answer?.slice(0, 150) || '',
         })),
-      ),
+        truncatedByTimer,
+      )
+    },
     [apiEvaluateAnswer]
   )
 

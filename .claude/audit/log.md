@@ -222,3 +222,80 @@
 - **Root-cause:** app/api/evaluate-answer/route.ts:265-272 contained the
 - **Tests-added: modules/interview/__tests__/**
 - **Verified-by:** Unit tests — 11/11 new pass. Regression: 173/173 pass
+
+### 2026-04-15 18:14:05 +0000 · `559f19b` · Claude
+- **Subject:** feat(scoring-g12): mark timer-truncated answers so they aren't penalized
+- **Files:** 6 changed, 1 test file(s)
+- **Root-cause:** modules/interview/hooks/useInterview.ts:410-418 — when the
+- **Tests-added: modules/interview/__tests__/timerTruncation.test.ts**
+- **Verified-by:** Unit tests — 9/9 new pass. Regression: 206/206 pass
+
+### 2026-04-15 18:26:26 +0000 · `8d98d7a` · Claude
+- **Subject:** feat(scoring-g13): per-question compact-transcript prompt (flag-gated)
+- **Files:** 4 changed, 1 test file(s)
+- **Root-cause:** app/api/generate-feedback/route.ts:275-286 (pre-G.13)
+- **Tests-added: modules/interview/__tests__/transcriptCompactor.test.**
+- **Verified-by:** Unit tests — 19/19 new pass. Regression: 201/201 pass
+
+### 2026-04-15 18:40:17 +0000 · `7362977` · Claude
+- **Subject:** feat(scoring-g14): align XP / practiceStats with feedback.overall_score
+- **Files:** 7 changed, 2 test file(s)
+- **Root-cause:** modules/interview/hooks/useInterview.ts:862-872 fires a
+- **Tests-added:**
+- **Verified-by:** Unit tests — 17/17 new pass (11 service + 6
+
+### 2026-04-15 19:06:51 +0000 · `deeb1f8` · Claude
+- **Subject:** test(scoring-g15a-1): integration smoke suite — chunk 1 (2 scenarios)
+- **Files:** 1 changed, 1 test file(s)
+- **Root-cause:** Phase 3+4 scoring changes (G.8/G.9/G.10/G.11/G.12/G.13/G.14)
+- **No-tests-needed-because: this commit IS the test — it's a**
+- **Verified-by:** 2/2 new scenarios pass. Regression: all 218
+
+### 2026-04-15 19:08:56 +0000 · `8139193` · Claude
+- **Subject:** test(scoring-g15a-2): integration smoke suite — chunk 2 (+3 scenarios)
+- **Files:** 1 changed, 1 test file(s)
+- **Root-cause:** Chunk 1 proved the extremes (complete-strong,
+- **No-tests-needed-because: this commit IS test coverage. Per CLAUDE.md**
+- **Verified-by:** 5/5 scenarios in the suite pass (2 from chunk 1 + 3
+
+### 2026-04-15 19:14:26 +0000 · `51bf944` · Claude
+- **Subject:** test(scoring-g15a-3): integration smoke suite — chunk 3 (+3 scenarios)
+- **Files:** 1 changed, 1 test file(s)
+- **Root-cause:** Chunks 1+2 covered complete-strong, short-form,
+- **No-tests-needed-because: this commit IS test coverage.**
+- **Verified-by:** 8/8 scenarios pass (5 from chunks 1+2 + 3 from
+
+### 2026-04-15 19:26:28 +0000 · `a16c133` · Claude
+- **Subject:** refactor(scoring-g15b-4): make G.8 overall_score blend unconditional
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** G.15 retires the scoring-V2 flag gates. G.8's
+- **Tests-added: no new tests — inverted existing coverage.**
+- **Verified-by:** Touched suites (generateFeedbackBlend +
+
+### 2026-04-15 19:32:52 +0000 · `6705666` · Claude
+- **Subject:** refactor(scoring-g15b-5): make G.9 AQ + G.14 XP unconditional
+- **Files:** 4 changed, 2 test file(s)
+- **Root-cause:** G.15b removes the scoring-V2 flag gates so the
+- **Tests-added: no new tests — inverted existing.**
+- **Verified-by:** 27/27 pass across the 4 directly-touched suites
+
+### 2026-04-15 19:38:10 +0000 · `74c8216` · Claude
+- **Subject:** refactor(scoring-g15b-6): make G.10 completion adjustment unconditional
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** G.15b chunk 6 of 4 — removes the
+- **Tests-added: no new tests — inverted/restructured existing.**
+- **Verified-by:** 30/30 pass across the 2 directly-touched suites.
+
+### 2026-04-15 19:43:12 +0000 · `daa0f5f` · Claude
+- **Subject:** refactor(scoring-g15b-7): make G.11 ceiling prompt + G.13 compact transcript unconditional
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** Final chunk of G.15b — removes the last two scoring-V2
+- **Tests-added: no new — inverted existing.**
+- **Verified-by:** 35/35 pass across 3 directly-touched suites
+
+### 2026-04-15 19:51:13 +0000 · `7cda38d` · Claude
+- **Subject:** test(scoring-g15b-7b): align legacy tests with always-on Phase 3 behavior
+- **Files:** 4 changed, 4 test file(s)
+- **Root-cause:** G.15b chunks 4-7 made all 8 scoring-V2 flag gates
+- **Tests-added: no new tests — fixture/assertion alignment.**
+- **Verified-by:** All 4 directly-touched suites — 9/9 pass after fix.

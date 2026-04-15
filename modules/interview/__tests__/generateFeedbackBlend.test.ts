@@ -147,18 +147,23 @@ describe('POST /api/generate-feedback — G.8 blend integration', () => {
     mockIsFeatureEnabled.mockReset()
   })
 
-  describe('flag OFF (pre-G.8 behavior)', () => {
-    it('returns formula-only overall_score; Claude raw value is discarded', async () => {
+  describe('unconditional blend (post-G.15 — flag-gate removed)', () => {
+    // G.15b-4 inverted this test: pre-G.15, with the flag OFF, the
+    // route returned the formula-only value. Post-G.15 the blend is
+    // unconditional, so even with isFeatureEnabled returning false
+    // for everything, Claude's value is still blended in. This
+    // test now verifies the blend happens regardless of flag state —
+    // which is the permanent behavior.
+    it('blends Claude + formula regardless of isFeatureEnabled state', async () => {
       mockIsFeatureEnabled.mockImplementation(() => false)
-      // Claude returns overall=88 — way above what the formula would
-      // produce for an even 70-across-all-dims session.
+      // Claude=88, formula=70, |Δ|=18 (within agreement threshold 20):
+      // 0.6*88 + 0.4*70 = 52.8 + 28 = 80.8 → 81.
       mockCompletion.mockResolvedValueOnce(claudeFeedback(88, 70))
 
       const res = await POST(makeRequest(evals5at70()))
       const json = await res.json()
 
-      // Formula: aq=70*0.4 + comm=70*0.3 + eng=70*0.3 = 28+21+21 = 70
-      expect(json.overall_score).toBe(70)
+      expect(json.overall_score).toBe(81)
     })
   })
 
