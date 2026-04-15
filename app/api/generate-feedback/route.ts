@@ -668,18 +668,21 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       // scores escape the compressed 55–75 band — but a safety clamp
       // engages if Claude disagrees wildly (|Δ| > 20) to prevent a
       // hallucinated extreme from dominating the user-visible number.
-      let blendMode: 'agreement' | 'disagreement' | 'formula-only' | 'disabled' = 'disabled'
-      if (isFeatureEnabled('scoring_v2_overall')) {
-        const blend = computeBlendedOverallScore(
-          claudeRawOverall,
-          formulaOverall,
-          resolveBlendWeights(),
-        )
-        feedback.overall_score = blend.blended
-        blendMode = blend.mode
-      } else {
-        feedback.overall_score = formulaOverall
-      }
+      // G.8 (always-on post-G.15): blend Claude's holistic
+      // overall_score with the deterministic formula. Pre-G.15 this
+      // was flag-gated on `scoring_v2_overall`; the flag definition
+      // remains in shared/featureFlags.ts as a dead-reference until
+      // G.15c cleanup but the code path is now unconditional. Safety
+      // clamp engages if Claude disagrees wildly (|Δ| > 20) so a
+      // hallucinated Claude value can't dominate the user-visible
+      // number.
+      const blend = computeBlendedOverallScore(
+        claudeRawOverall,
+        formulaOverall,
+        resolveBlendWeights(),
+      )
+      feedback.overall_score = blend.blended
+      const blendMode: 'agreement' | 'disagreement' | 'formula-only' = blend.mode
       feedback.pass_probability = feedback.overall_score >= 75 ? 'High' : feedback.overall_score >= 50 ? 'Medium' : 'Low'
 
       aiLogger.info(
