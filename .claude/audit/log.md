@@ -159,3 +159,10 @@
 - **Root-cause:** app/api/evaluate-answer/route.ts:385-388 returns a
 - **Tests-added: modules/interview/__tests__/generateFeedbackEvalIntegrity.**
 - **Verified-by:** Unit tests — 10/10 new pass (5.37s). Regression suite:
+
+### 2026-04-15 14:07:58 +0000 · `bda5a71` · Claude
+- **Subject:** feat(scoring-g5): kill remaining falsy-zero stomps + pressure-Q status awareness
+- **Files:** 7 changed, 2 test file(s)
+- **Root-cause:** two silent-corruption families remained after G.4:
+- **Tests-added: modules/interview/__tests__/generateFeedbackSilent**
+- **Verified-by:** Unit tests — 6/6 G.5 tests pass (4.46s). Regression
