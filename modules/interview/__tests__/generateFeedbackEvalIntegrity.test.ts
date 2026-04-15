@@ -20,7 +20,7 @@ import { NextRequest } from 'next/server'
 
 // ─── Helper unit tests ─────────────────────────────────────────────────────
 
-import { computePerQAverage } from '@/app/api/generate-feedback/route'
+import { computePerQAverage } from '@interview/services/eval/perQAggregation'
 
 describe('computePerQAverage (G.4)', () => {
   it('averages all rows when none are failed', () => {

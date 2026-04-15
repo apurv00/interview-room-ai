@@ -22,6 +22,7 @@ import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSec
 import { recordScoreDelta } from '@shared/services/scoreTelemetry'
 import { acquireFeedbackLock, releaseFeedbackLock } from '@shared/services/feedbackLock'
 import { computeBlendedOverallScore, resolveBlendWeights } from '@interview/services/eval/overallScore'
+import { computePerQAverage } from '@interview/services/eval/perQAggregation'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -31,51 +32,6 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
 type GenerateFeedbackBody = z.infer<typeof GenerateFeedbackSchema>
-
-/**
- * G.4: true per-question answer-quality average, skipping evaluations that
- * evaluate-answer marked `status='failed'`. Those rows carry the
- * hard-coded 60/55/55/60 fallback shape so that legacy clients don't
- * crash, but the numbers are fabricated — averaging them in drags the
- * user's real score toward a fake mid-range.
- *
- * Policy (v1, intentionally conservative):
- *   - `status: 'failed'`    → fully excluded from the average
- *   - `status: 'truncated'` → still counted (the dims came from partial
- *                             LLM output and are best-effort but not
- *                             fabricated); the red_flag downgrades
- *                             confidence instead
- *   - `status: 'ok'` / absent → counted as today
- *
- * Returns both the average and the count actually used. Caller uses
- * `usedCount` to decide the overall-score weighting in the case that
- * too many rows are dropped.
- */
-export function computePerQAverage(
-  evaluations: Array<Record<string, unknown>>,
-): { average: number; usedCount: number; skippedFailedCount: number } {
-  const dims = ['relevance', 'structure', 'specificity', 'ownership'] as const
-  let sum = 0
-  let count = 0
-  let skippedFailed = 0
-  for (const e of evaluations) {
-    const status = (e as { status?: string }).status
-    if (status === 'failed') {
-      skippedFailed++
-      continue
-    }
-    const avg =
-      dims.reduce((acc, d) => acc + (Number((e as Record<string, unknown>)[d]) || 0), 0) /
-      dims.length
-    sum += avg
-    count++
-  }
-  return {
-    average: count > 0 ? Math.round(sum / count) : 0,
-    usedCount: count,
-    skippedFailedCount: skippedFailed,
-  }
-}
 
 function computeEngagementContext(
   speechMetrics: Record<string, unknown>[],

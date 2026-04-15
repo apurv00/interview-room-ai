@@ -21,7 +21,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { computePerQAverage } from '@/app/api/generate-feedback/route'
+import { computePerQAverage } from '@interview/services/eval/perQAggregation'
 
 // ─── Unit tests: helpers ─────────────────────────────────────────────
 
