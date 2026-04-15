@@ -138,6 +138,12 @@ export const EvaluateAnswerSchema = z.object({
   probeDepth: z.number().int().min(0).max(20).optional(),
   sessionId: z.string().optional(),
   previousAnswerSummaries: z.array(z.object({ question: z.string(), answerSummary: z.string() })).max(10).optional(),
+  // G.12: client sets this true when the answer was cut off by the
+  // interview timer expiring (useInterview's 15s LISTENING grace at
+  // :397-403). Route injects a "don't penalize incompleteness" hint
+  // into the user prompt and pushes `'truncated_by_timer'` into
+  // evaluation.flags so generate-feedback can surface it.
+  wasTruncatedByTimer: z.boolean().optional(),
 })
 
 export const GenerateFeedbackSchema = z.object({

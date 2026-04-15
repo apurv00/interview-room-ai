@@ -27,7 +27,7 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
   rateLimit: { windowMs: 60_000, maxRequests: 15, keyPrefix: 'rl:eval' },
 
   async handler(req, { user, body }) {
-    const { config, question, answer, questionIndex, probeDepth, sessionId } = body
+    const { config, question, answer, questionIndex, probeDepth, sessionId, wasTruncatedByTimer } = body
     const startTime = Date.now()
     const interviewType = config.interviewType || 'behavioral'
     const domainLabel = getDomainLabel(config.role)
@@ -299,7 +299,9 @@ Probing decision:
 - shouldProbe: true if the answer is vague, too short (<30 words), surface-level, evasive, missing key info, think-aloud rambling, or exceptionally interesting and worth exploring deeper
 - probeType: "clarify" (ambiguous/unclear), "challenge" (logical gaps or untested assumptions), "expand" (worth exploring deeper), or "quantify" (lacks metrics/impact)
 - probeTarget: a short phrase (3–8 words) naming what to probe — the specific gap, claim, or topic to follow up on (e.g. "the team's specific contribution", "the 20% improvement claim", "what you did after the pivot"). This is used to construct the follow-up question.
-- isPivot: true ONLY if the answer has essentially nothing to do with the question asked (not just weak or partial).${probeDepthContext}
+- isPivot: true ONLY if the answer has essentially nothing to do with the question asked (not just weak or partial).${probeDepthContext}${wasTruncatedByTimer ? `
+
+NOTE: This answer was cut off when the interview timer expired — the candidate did NOT choose to stop. Score what was actually said on its own merits; do NOT penalize structure, specificity, or completeness for the parts the candidate didn't get to finish. Use primaryGap / shouldProbe based on content quality only.` : ''}
 
 ${JSON_OUTPUT_RULE}
 {
@@ -411,6 +413,13 @@ ${dimensionSchema}${jdAlignmentSchema},
         ...(scores.primaryStrength && { primaryStrength: scores.primaryStrength }),
         ...(scores.answerSummary && { answerSummary: scores.answerSummary }),
         status: evalStatus,
+        // G.12: stamp the flag so generate-feedback's aggregation can
+        // surface "X answers were cut off by the timer" in the red_flags
+        // summary. Preserved alongside any content-quality flags Claude
+        // emitted.
+        ...(wasTruncatedByTimer && {
+          flags: [...(Array.isArray(scores.flags) ? scores.flags as string[] : []), 'truncated_by_timer'],
+        }),
         probeDecision: {
           shouldProbe: scores.shouldProbe ?? false,
           probeType: scores.probeType ?? null,

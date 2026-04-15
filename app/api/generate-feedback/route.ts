@@ -721,6 +721,25 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         }
       }
 
+      // G.12 — surface timer-truncated per-answer rows as a user-visible
+      // red_flag. The evaluate-answer route (also G.12) stamps
+      // 'truncated_by_timer' onto evaluation.flags when the client
+      // reported the answer was cut off by the interview timer. We count
+      // those here and, if any, add a single clarifying red_flag so the
+      // user understands WHY structure/specificity on those questions
+      // might look lower than expected (note: the route also tells
+      // Claude not to penalize, so typically they don't, but the red
+      // flag is still the right UX signal).
+      const timerTruncatedCount = evaluations.filter(
+        (e) => Array.isArray(e.flags) && e.flags.includes('truncated_by_timer'),
+      ).length
+      if (timerTruncatedCount > 0) {
+        feedback.red_flags = Array.isArray(feedback.red_flags) ? feedback.red_flags : []
+        feedback.red_flags.push(
+          `${timerTruncatedCount} answer${timerTruncatedCount === 1 ? ' was' : 's were'} cut off when the timer expired — scoring does not penalize those for incompleteness.`,
+        )
+      }
+
       // G.10 — partial-completion adjustment. Runs AFTER G.8's blend
       // computed the final overall_score AND after G.3's confidence
       // clamp, so this is the last word on both fields. Flag-gated:
