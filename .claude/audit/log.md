@@ -271,3 +271,10 @@
 - **Root-cause:** G.15 retires the scoring-V2 flag gates. G.8's
 - **Tests-added: no new tests — inverted existing coverage.**
 - **Verified-by:** Touched suites (generateFeedbackBlend +
+
+### 2026-04-15 19:32:52 +0000 · `6705666` · Claude
+- **Subject:** refactor(scoring-g15b-5): make G.9 AQ + G.14 XP unconditional
+- **Files:** 4 changed, 2 test file(s)
+- **Root-cause:** G.15b removes the scoring-V2 flag gates so the
+- **Tests-added: no new tests — inverted existing.**
+- **Verified-by:** 27/27 pass across the 4 directly-touched suites
