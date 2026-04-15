@@ -243,3 +243,10 @@
 - **Root-cause:** modules/interview/hooks/useInterview.ts:862-872 fires a
 - **Tests-added:**
 - **Verified-by:** Unit tests — 17/17 new pass (11 service + 6
+
+### 2026-04-15 19:06:51 +0000 · `deeb1f8` · Claude
+- **Subject:** test(scoring-g15a-1): integration smoke suite — chunk 1 (2 scenarios)
+- **Files:** 1 changed, 1 test file(s)
+- **Root-cause:** Phase 3+4 scoring changes (G.8/G.9/G.10/G.11/G.12/G.13/G.14)
+- **No-tests-needed-because: this commit IS the test — it's a**
+- **Verified-by:** 2/2 new scenarios pass. Regression: all 218
