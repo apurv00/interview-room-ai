@@ -278,3 +278,10 @@
 - **Root-cause:** G.15b removes the scoring-V2 flag gates so the
 - **Tests-added: no new tests — inverted existing.**
 - **Verified-by:** 27/27 pass across the 4 directly-touched suites
+
+### 2026-04-15 19:38:10 +0000 · `74c8216` · Claude
+- **Subject:** refactor(scoring-g15b-6): make G.10 completion adjustment unconditional
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** G.15b chunk 6 of 4 — removes the
+- **Tests-added: no new tests — inverted/restructured existing.**
+- **Verified-by:** 30/30 pass across the 2 directly-touched suites.
