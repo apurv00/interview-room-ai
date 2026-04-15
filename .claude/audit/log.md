@@ -285,3 +285,10 @@
 - **Root-cause:** G.15b chunk 6 of 4 — removes the
 - **Tests-added: no new tests — inverted/restructured existing.**
 - **Verified-by:** 30/30 pass across the 2 directly-touched suites.
+
+### 2026-04-15 19:43:12 +0000 · `daa0f5f` · Claude
+- **Subject:** refactor(scoring-g15b-7): make G.11 ceiling prompt + G.13 compact transcript unconditional
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** Final chunk of G.15b — removes the last two scoring-V2
+- **Tests-added: no new — inverted existing.**
+- **Verified-by:** 35/35 pass across 3 directly-touched suites
