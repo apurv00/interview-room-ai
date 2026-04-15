@@ -20,6 +20,7 @@ import { getUserCompetencySummary } from '@learn/services/competencyService'
 import { buildHistorySummary } from '@learn/services/sessionSummaryService'
 import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 import { recordScoreDelta } from '@shared/services/scoreTelemetry'
+import { acquireFeedbackLock, releaseFeedbackLock } from '@shared/services/feedbackLock'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -91,6 +92,40 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
     const interviewType = config.interviewType || 'screening'
     const domainLabel = getDomainLabel(config.role)
 
+    // G.6 Phase A — Idempotency lock. The client fires this endpoint
+    // twice for the same session: once fire-and-forget from
+    // useInterview.ts:889 on interview end, and once from
+    // app/feedback/[sessionId]/page.tsx:453 if the first call isn't
+    // visible within 8s. Since Sonnet feedback gen is routinely
+    // 8-20s, both run in parallel, double the LLM bill, race on
+    // InterviewSession.feedback, and double-fire every post-feedback
+    // side effect (competency, pathway, summary, weakness clusters,
+    // XP). The lock is only sessionId-scoped — the no-sessionId path
+    // (rare: local-only fallback) falls through unlocked.
+    let feedbackLock: Awaited<ReturnType<typeof acquireFeedbackLock>> | null = null
+    if (body.sessionId) {
+      feedbackLock = await acquireFeedbackLock(body.sessionId)
+      if (feedbackLock === null) {
+        // Another request holds the lock — the client's poll loop on
+        // session.feedback will pick up the winner's result.
+        aiLogger.info(
+          { sessionId: body.sessionId, userId: user.id },
+          'generate-feedback: duplicate request short-circuited by idempotency lock',
+        )
+        return NextResponse.json(
+          {
+            status: 'in_progress',
+            message: 'Feedback generation already in progress for this session — poll session.feedback.',
+          },
+          { status: 202 },
+        )
+      }
+    }
+
+    // G.6 Phase A — try/finally wrapper so the lock is released on
+    // every exit path (early-exit, happy path, outer catch). The
+    // try/catch nested below continues to handle LLM errors as today.
+    try {
     // ── Early exit: no evaluations means user ended without answering ──
     if (!evaluations || evaluations.length === 0) {
       const noDataFeedback: FeedbackData = {
@@ -739,6 +774,14 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         }).catch(() => {})
       }
       return NextResponse.json(fallback)
+    }
+    } finally {
+      // G.6 Phase A — always release so a concurrent retry isn't
+      // blocked for the full TTL. The release is a no-op when we
+      // didn't actually acquire (Redis error / no sessionId).
+      if (feedbackLock) {
+        await releaseFeedbackLock(feedbackLock)
+      }
     }
   },
 })
