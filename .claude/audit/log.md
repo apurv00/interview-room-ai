@@ -194,3 +194,10 @@
 - **Root-cause:** G.6 Phase A (commit 632a611) added a Redis idempotency
 - **Tests-added: modules/interview/__tests__/feedbackPage202Handling.**
 - **Verified-by:** Unit tests — 5/5 new pass. Regression suite: 127/127
+
+### 2026-04-15 17:23:55 +0000 · `29ff1c5` · Claude
+- **Subject:** chore(interview-page): fix react-hooks/exhaustive-deps warnings
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** app/interview/page.tsx:288 and :293 declared
+- **No-tests-needed-because: pure lint-cleanup refactor with no**
+- **Verified-by:** `npm run build` exit 0 with ZERO react-hooks/
