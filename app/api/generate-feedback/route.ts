@@ -21,6 +21,7 @@ import { buildHistorySummary } from '@learn/services/sessionSummaryService'
 import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 import { recordScoreDelta } from '@shared/services/scoreTelemetry'
 import { acquireFeedbackLock, releaseFeedbackLock } from '@shared/services/feedbackLock'
+import { computeBlendedOverallScore, resolveBlendWeights } from '@interview/services/eval/overallScore'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -583,11 +584,46 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         feedback.dimensions.answer_quality.score = perQAvg
       }
 
-      // Deterministic overall score: weighted average of dimensions (40% AQ, 30% Comm, 30% Engagement)
+      // Deterministic formula overall score: weighted average of
+      // dimensions (40% AQ, 30% Comm, 30% Engagement). Pre-G.8 this
+      // was the final user-facing number. With G.8 it's one INPUT to
+      // the blend — see below.
       const aqScore = perQAvg
       const engScore = feedback.dimensions?.engagement_signals?.score ?? 0
-      feedback.overall_score = Math.round(aqScore * 0.4 + commScore * 0.3 + engScore * 0.3)
+      const formulaOverall = Math.round(aqScore * 0.4 + commScore * 0.3 + engScore * 0.3)
+
+      // G.8: blend Claude's holistic overall_score with the
+      // deterministic formula. Flag-gated so we can ramp the rollout
+      // and A/B-compare against G.1 telemetry. When the flag is off,
+      // `overall_score` stays exactly what pre-G.8 produced. When on,
+      // Claude's value is factored in (defaulting to 0.6 weight) so
+      // scores escape the compressed 55–75 band — but a safety clamp
+      // engages if Claude disagrees wildly (|Δ| > 20) to prevent a
+      // hallucinated extreme from dominating the user-visible number.
+      let blendMode: 'agreement' | 'disagreement' | 'formula-only' | 'disabled' = 'disabled'
+      if (isFeatureEnabled('scoring_v2_overall')) {
+        const blend = computeBlendedOverallScore(
+          claudeRawOverall,
+          formulaOverall,
+          resolveBlendWeights(),
+        )
+        feedback.overall_score = blend.blended
+        blendMode = blend.mode
+      } else {
+        feedback.overall_score = formulaOverall
+      }
       feedback.pass_probability = feedback.overall_score >= 75 ? 'High' : feedback.overall_score >= 50 ? 'Medium' : 'Low'
+
+      aiLogger.info(
+        {
+          sessionId: body.sessionId,
+          formulaOverall,
+          claudeRawOverall,
+          finalOverall: feedback.overall_score,
+          blendMode,
+        },
+        'overall_score computed',
+      )
 
       // G.3: surface integrity problems to the user.
       //   - Feedback-level truncation (even after the retry in L366): mark
@@ -641,9 +677,14 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         }
       }
 
-      // G.1 telemetry — record the delta between Claude's raw overall_score
-      // (captured before the overrides above) and the deterministic value
-      // we are about to return. Fire-and-forget; never blocks the response.
+      // G.1 telemetry — record Claude's raw value vs the deterministic
+      // formula value. G.8 NOTE: we record `formulaOverall` here (not
+      // `feedback.overall_score`) so the A/B analysis keeps comparing
+      // the pre-G.8 "what-the-formula-alone-would-have-returned" value
+      // against Claude's raw value. The actually-shipped blended value
+      // is logged separately via aiLogger above and can be reconstructed
+      // from (claudeOverallScore, deterministicOverallScore, blend
+      // weights) if needed. Fire-and-forget; never blocks the response.
       if (body.sessionId) {
         recordScoreDelta({
           sessionId: body.sessionId,
@@ -652,7 +693,7 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
           taskSlot: 'interview.generate-feedback',
           modelUsed: result.model ?? 'unknown',
           claudeOverallScore: claudeRawOverall,
-          deterministicOverallScore: feedback.overall_score,
+          deterministicOverallScore: formulaOverall,
           claudeDimensions: claudeRawDimensions,
           deterministicDimensions: {
             answer_quality: aqScore,

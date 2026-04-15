@@ -34,6 +34,7 @@ export type FeatureFlag =
   | 'interview_flow_templates'
   | 'jd_flow_overlay'
   | 'score_telemetry'
+  | 'scoring_v2_overall'
 
 const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   personalization_engine: true,
@@ -84,6 +85,15 @@ const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   // safe to leave on by default. Gates every subsequent scoring-rebalance
   // work item (G.8/G.9/G.10/G.11) — they need this baseline to ship.
   score_telemetry: true,
+  // Scoring V2 — Claude-vs-formula overall_score blend (Work Item G.8).
+  // When enabled, generate-feedback blends Claude's holistic overall_score
+  // with the deterministic aq*0.4 + comm*0.3 + eng*0.3 formula instead of
+  // discarding the Claude value. Default OFF — flip on per the rollout
+  // plan only after G.1 telemetry confirms the delta distribution looks
+  // sane (≥100-session baseline). Tunable weights via
+  // SCORING_V2_CLAUDE_WEIGHT / SCORING_V2_FORMULA_WEIGHT /
+  // SCORING_V2_DISAGREEMENT_THRESHOLD env vars.
+  scoring_v2_overall: false,
 }
 
 export function isFeatureEnabled(flag: FeatureFlag): boolean {
