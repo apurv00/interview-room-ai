@@ -97,6 +97,55 @@ describe('OpenAI provider adapter', () => {
     expect(result.truncated).toBe(false)
     expect(result.text).toBe('complete answer.')
   })
+
+  // ── Token-parameter dispatch by model family ──
+  // Reasoning / GPT-5+ / o1+ / o3+ / o4+ models reject `max_tokens` and
+  // require `max_completion_tokens`. Legacy chat models (gpt-4, gpt-4o,
+  // gpt-3.5) still use `max_tokens`. Historical bug: the adapter hardcoded
+  // `max_tokens` for all models, producing 400 `unsupported_parameter` on
+  // every call to gpt-5.4-mini in production.
+
+  it.each([
+    ['gpt-5.4-mini'],
+    ['gpt-5-nano'],
+    ['gpt-5'],
+    ['o1-preview'],
+    ['o1-mini'],
+    ['o3'],
+    ['o3-mini'],
+    ['o4'],
+  ])('uses max_completion_tokens for reasoning model %s', async (model) => {
+    mockOpenAICreate.mockResolvedValue({
+      choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 5, completion_tokens: 5 },
+    })
+    const adapter = await getAdapter()
+    await adapter.complete({ ...baseParams, model, maxTokens: 777 })
+    const sentArgs = mockOpenAICreate.mock.calls[0][0]
+    expect(sentArgs.model).toBe(model)
+    expect(sentArgs.max_completion_tokens).toBe(777)
+    expect(sentArgs.max_tokens).toBeUndefined()
+  })
+
+  it.each([
+    ['gpt-4o-mini'],
+    ['gpt-4o'],
+    ['gpt-4.1'],
+    ['gpt-4-turbo'],
+    ['gpt-4'],
+    ['gpt-3.5-turbo'],
+  ])('uses max_tokens for legacy model %s', async (model) => {
+    mockOpenAICreate.mockResolvedValue({
+      choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 5, completion_tokens: 5 },
+    })
+    const adapter = await getAdapter()
+    await adapter.complete({ ...baseParams, model, maxTokens: 500 })
+    const sentArgs = mockOpenAICreate.mock.calls[0][0]
+    expect(sentArgs.model).toBe(model)
+    expect(sentArgs.max_tokens).toBe(500)
+    expect(sentArgs.max_completion_tokens).toBeUndefined()
+  })
 })
 
 describe('Anthropic provider adapter', () => {
