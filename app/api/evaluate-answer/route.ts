@@ -259,8 +259,12 @@ You are an expert interview coach evaluating candidates for ${domainLabel} roles
     // and gives an explicit calibration example for the 85-92 range.
     // Flag-gated so we can A/B it against the legacy prompt before
     // full rollout.
-    const scoringGuide = isFeatureEnabled('scoring_v2_ceiling')
-      ? `SCORING GUIDE — calibrate to the answer in front of you; do not anchor to the middle.
+    // G.11 (always-on post-G.15): the calibrated scoring guide is the
+    // only path. Pre-G.15 was flag-gated on `scoring_v2_ceiling`;
+    // flag definition stays in featureFlags.ts as dead-reference
+    // until G.15c. The 41-80 anchor and the "every dimension" gate
+    // that compressed scores into a 40-point band are gone for good.
+    const scoringGuide = `SCORING GUIDE — calibrate to the answer in front of you; do not anchor to the middle.
 - 0–20  : Off-topic, fabricated, or a non-answer.
 - 21–40 : Weak. Missing key elements, no specifics, no ownership.
 - 41–60 : Adequate but generic. Lacks depth, structure, or concrete detail.
@@ -268,14 +272,6 @@ You are an expert interview coach evaluating candidates for ${domainLabel} roles
 - 81–100: Excellent. STAR-structured, quantified outcomes, clear ownership, strong relevance.
 
 Score distribution is expected to SPREAD across all five bands across a session — do not cluster answers in 55–75. 81–100 is reachable when 3 of 4 dimensions are excellent AND no dimension is below 60. An answer with STAR structure, quantified outcomes, clear ownership, and strong relevance should score 85–92 even if specificity is only "good." Reserve 0–20 for off-topic, fabricated, or non-answers.`
-      : `SCORING GUIDE — be honest; do not default to the middle.
-- 0–20  : Off-topic, no real answer, or fabricated.
-- 21–40 : Weak. Missing key elements, no specifics, no ownership.
-- 41–60 : Adequate but generic. Lacks depth, structure, or concrete detail.
-- 61–80 : Good. Clear structure, specific examples, visible personal contribution.
-- 81–100: Excellent. Structured, specific, quantified outcomes, no red flags.
-
-Most real answers fall in 41–80. Only push above 80 when genuinely strong on every dimension.`
 
     const userPrompt = `Evaluate this interview answer:
 
