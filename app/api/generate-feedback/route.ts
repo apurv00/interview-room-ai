@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { completion } from '@shared/services/modelRouter'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
-import { GenerateFeedbackSchema } from '@interview/validators/interview'
+import { GenerateFeedbackSchema, FeedbackLlmSchema } from '@interview/validators/interview'
 import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
 import type { FeedbackData, AnswerEvaluation } from '@shared/types'
@@ -364,7 +364,23 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
       let feedback: FeedbackData
       try {
-        feedback = JSON.parse(cleaned)
+        const parsedRaw = JSON.parse(cleaned) as Record<string, unknown>
+        // G.2: Zod-validate the LLM payload. Failure is non-fatal — we
+        // log the drift and continue with the raw parsed object. Downstream
+        // null-checks + deterministic overrides handle missing/variant
+        // fields. This schema is `.passthrough()` so benign field additions
+        // don't reject the whole payload.
+        const parsedLlm = FeedbackLlmSchema.safeParse(parsedRaw)
+        if (!parsedLlm.success) {
+          aiLogger.warn(
+            {
+              issues: parsedLlm.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+              raw: raw.slice(0, 500),
+            },
+            'generate-feedback: LLM response failed Zod validation — continuing with raw object',
+          )
+        }
+        feedback = parsedRaw as unknown as FeedbackData
       } catch {
         aiLogger.error({ raw: raw.slice(0, 500) }, 'Feedback JSON parse failed')
         // G.1 telemetry — parse failure path. Capture whatever we know so we

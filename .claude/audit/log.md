@@ -131,3 +131,10 @@
 - **Root-cause:** app/api/generate-feedback/route.ts:419-422 discards Claude's
 - **Tests-added: shared/__tests__/scoreTelemetry.test.ts**
 - **Verified-by:** Unit tests — 13/13 pass (9.00s). Featureflags suite still
+
+### 2026-04-15 10:18:35 +0000 · `acb4c1e` · Claude
+- **Subject:** feat(scoring-g2): Zod-validate LLM responses at every feedback boundary
+- **Files:** 6 changed, 1 test file(s)
+- **Root-cause:** 4 routes parse LLM output with `JSON.parse` + `as T` cast and
+- **Tests-added: modules/interview/__tests__/llmResponseSchemas.test.ts**
+- **Verified-by:** Unit tests — 23/23 pass (7.10s). Touched-domain suite:

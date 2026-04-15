@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { completionStream } from '@shared/services/modelRouter'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
-import { EvaluateAnswerSchema } from '@interview/validators/interview'
+import { EvaluateAnswerSchema, EvaluateAnswerLlmSchema } from '@interview/validators/interview'
 import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
 import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
@@ -303,7 +303,34 @@ ${dimensionSchema}${jdAlignmentSchema},
 
       const raw = result.text || '{}'
       const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
-      const scores = JSON.parse(cleaned)
+      // G.2: parse first, then Zod-validate. A parse failure is structurally
+      // fatal (fall through to outer catch). A Zod failure is non-fatal —
+      // log the issues and continue with the raw parsed object using the
+      // existing per-field ?? fallbacks. This keeps us permissive in the
+      // face of prompt drift while still catching structural corruption.
+      // `scores` stays loose (any) to match the pre-G.2 behavior for the
+      // downstream spread/indexing logic — the schema adds the safety
+      // layer without narrowing the type surface.
+      let scores: any /* eslint-disable-line */
+      try {
+        scores = JSON.parse(cleaned)
+      } catch (parseErr) {
+        aiLogger.error(
+          { err: parseErr, raw: raw.slice(0, 500) },
+          'evaluate-answer: JSON.parse failed',
+        )
+        throw parseErr
+      }
+      const parsedLlm = EvaluateAnswerLlmSchema.safeParse(scores)
+      if (!parsedLlm.success) {
+        aiLogger.warn(
+          {
+            issues: parsedLlm.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+            raw: raw.slice(0, 500),
+          },
+          'evaluate-answer: LLM response failed Zod validation — continuing with raw object',
+        )
+      }
 
       const evaluation: AnswerEvaluation = {
         questionIndex,
