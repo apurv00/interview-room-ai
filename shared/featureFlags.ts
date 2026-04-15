@@ -37,6 +37,7 @@ export type FeatureFlag =
   | 'scoring_v2_overall'
   | 'scoring_v2_aq'
   | 'scoring_v2_completion'
+  | 'scoring_v2_ceiling'
 
 const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   personalization_engine: true,
@@ -115,6 +116,22 @@ const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   // don't surface as anomalously-low due to missing planned counts.
   // Independent of G.8/G.9.
   scoring_v2_completion: false,
+  // Scoring V2 — loosen evaluate-answer prompt score ceiling (Work
+  // Item G.11). When enabled, evaluate-answer swaps the legacy
+  // "Most real answers fall in 41-80 / only push above 80 when
+  // genuinely strong on every dimension" anchor block for a
+  // calibrated-distribution block that explicitly makes 81-100
+  // reachable when 3 of 4 dimensions are excellent. This is the
+  // single prompt-level cause of score compression — the "every
+  // dimension" clause makes 81+ statistically unreachable at
+  // ~P(strong)=0.6 per dim (0.6^4 ≈ 13%). Default OFF — flip on
+  // after G.1 telemetry shows the per-dim distribution is tight in
+  // the 55-75 band (confirming the compression problem is present
+  // in prod). Independent of G.8/G.9/G.10 — affects per-answer
+  // evaluate scoring, not the post-interview aggregates. Flip with
+  // care: this is a model-behavior change, A/B carefully against
+  // the 20-fixture harness at evaluate-answer before full rollout.
+  scoring_v2_ceiling: false,
 }
 
 export function isFeatureEnabled(flag: FeatureFlag): boolean {
