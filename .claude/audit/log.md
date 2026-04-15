@@ -138,3 +138,10 @@
 - **Root-cause:** 4 routes parse LLM output with `JSON.parse` + `as T` cast and
 - **Tests-added: modules/interview/__tests__/llmResponseSchemas.test.ts**
 - **Verified-by:** Unit tests — 23/23 pass (7.10s). Touched-domain suite:
+
+### 2026-04-15 12:43:04 +0000 · `e56cbdb` · Claude
+- **Subject:** feat(scoring-g3): truncation detection + retry + visible confidence flag
+- **Files:** 6 changed, 2 test file(s)
+- **Root-cause:** shared/services/modelRouter.ts:136,169 exposes
+- **Tests-added: modules/interview/__tests__/evaluateAnswerTruncation.**
+- **Verified-by:** Unit tests — 58/58 pass across 6 related files (7.10s):
