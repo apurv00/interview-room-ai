@@ -16,14 +16,22 @@ interface TrackUsageInput {
   errorMessage?: string
 }
 
-// Pricing per 1K tokens (approximate)
-const PRICING: Record<string, { input: number; output: number }> = {
+// Pricing per 1K tokens (approximate).
+// Keys must match the exact `model` strings referenced in
+// `shared/services/taskSlots.ts::TASK_SLOT_DEFAULTS` (and any values
+// written by CMS model-config). A missing key causes `buildUsageRecordData`
+// to fall through to the Opus-priced default, which silently inflates
+// recorded cost by ~15× for Haiku/Sonnet flows. The regression test in
+// `shared/__tests__/usagePricing.test.ts` guards against that drift.
+// Exported for that test only — not part of the public API.
+export const __PRICING: Record<string, { input: number; output: number }> = {
   'claude-opus-4-6': { input: 0.015, output: 0.075 },
-  'claude-sonnet-4-20250514': { input: 0.003, output: 0.015 },
-  'claude-haiku-4-5-20251001': { input: 0.001, output: 0.005 },
+  'claude-sonnet-4-6': { input: 0.003, output: 0.015 },
+  'claude-haiku-4-5': { input: 0.001, output: 0.005 },
   'gpt-5.4-mini': { input: 0.0003, output: 0.0012 },
   'whisper-large-v3-turbo': { input: 0.004, output: 0 }, // $0.004 per minute via Groq (tracked as inputTokens = durationSeconds)
 }
+const PRICING = __PRICING
 
 function buildUsageRecordData(input: TrackUsageInput): UsageRecordData {
   const pricing = PRICING[input.modelUsed] || { input: 0.015, output: 0.075 }

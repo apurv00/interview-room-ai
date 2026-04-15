@@ -35,7 +35,7 @@ const UsageRecordSchema = new Schema<IUsageRecord>(
 
     inputTokens: { type: Number, default: 0 },
     outputTokens: { type: Number, default: 0 },
-    modelUsed: { type: String, default: 'claude-sonnet-4-20250514' },
+    modelUsed: { type: String, default: 'claude-sonnet-4-6' },
     costUsd: { type: Number, default: 0 },
 
     durationMs: { type: Number, default: 0 },
