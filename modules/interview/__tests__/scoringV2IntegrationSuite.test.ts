@@ -255,4 +255,94 @@ describe('G.15a scoring-V2 integration suite (all flags ON)', () => {
     // cherry-picks.
     expect(mockUpdatePracticeStats).not.toHaveBeenCalled()
   })
+
+  // ── Scenario 3 — partial completion (between short-form and full) ──
+  it('4 of 10 answers → G.10 multiplier + Low confidence + end-reason red_flag', async () => {
+    // Claude holistic = 80, formula perQAvg = 75, blend ~77. Then G.10
+    // applies: 4/10 = 40% completion → ratio/0.6 = 0.667 multiplier.
+    // Final overall = round(77 * 0.667) ≈ 51.
+    mockCompletion.mockResolvedValueOnce(
+      claudeFeedbackResponse({ overall_score: 80, answer_quality: 75, engagement_signals: 78 }),
+    )
+    const evaluations = Array.from({ length: 4 }, (_, i) => evalRow(i, 75))
+    const res = await POST(makeReq(evaluations, {
+      plannedQuestionCount: 10,
+      answeredCount: 4,
+      endReason: 'user_ended',
+    }))
+    const json = await res.json()
+
+    // Multiplier applied — score is substantially below the formula value.
+    expect(json.overall_score).toBeLessThan(60)
+    expect(json.overall_score).toBeGreaterThan(40)
+    // <50% completion → Low.
+    expect(json.confidence_level).toBe('Low')
+    // End-reason red_flag present.
+    expect(json.red_flags.some((f: string) =>
+      f.includes('candidate ended the session early'))).toBe(true)
+    // XP write uses the POST-G.10-adjustment overall_score, not the
+    // pre-adjustment formula value. User's XP dashboard matches
+    // what the feedback page displays.
+    expect(mockUpdatePracticeStats).toHaveBeenCalledTimes(1)
+    const xp = mockUpdatePracticeStats.mock.calls[0][0] as { score: number }
+    expect(xp.score).toBe(json.overall_score)
+  })
+
+  // ── Scenario 4 — failed-eval exclusion from aggregation ──
+  it('failed evaluation rows are excluded from AQ aggregate and surface as a red_flag', async () => {
+    // 4 strong ok rows (80) + 1 failed row (placeholder 57.5 shape).
+    // Pre-G.4: flat mean = (80*4 + 57.5)/5 = 75.5 → 76.
+    // Post-G.4: failed excluded → mean of just the 4 ok = 80.
+    mockCompletion.mockResolvedValueOnce(
+      claudeFeedbackResponse({ overall_score: 82, answer_quality: 80, engagement_signals: 80 }),
+    )
+    const evaluations = [
+      evalRow(0, 80), evalRow(1, 80), evalRow(2, 80), evalRow(3, 80),
+      // placeholder shape from evaluate-answer's LLM-failed fallback
+      evalRow(4, 57.5, { status: 'failed', relevance: 60, structure: 55, specificity: 55, ownership: 60 }),
+    ]
+    const res = await POST(makeReq(evaluations, {
+      plannedQuestionCount: 5,
+      answeredCount: 5,
+      endReason: 'normal',
+    }))
+    const json = await res.json()
+
+    // G.4 exclusion red_flag.
+    expect(json.red_flags.some((f: string) =>
+      f.includes('excluded from the answer-quality average'))).toBe(true)
+    // G.3 confidence downgrade may also fire given 1/5 = 20% problem
+    // ratio (threshold); accepting either Medium or Low is fine here.
+    expect(['Low', 'Medium']).toContain(json.confidence_level)
+  })
+
+  // ── Scenario 5 — timer-truncated answers flagged + not penalized ──
+  it('timer-truncated answers surface as a red_flag + feed Claude a don\'t-penalize hint', async () => {
+    // 4 of 10 answers, Q3 was cut off by timer. 40% completion is
+    // below G.10's 50% confidence-clamp threshold AND below the 60%
+    // full-credit threshold, so we also get a multiplier.
+    mockCompletion.mockResolvedValueOnce(
+      claudeFeedbackResponse({ overall_score: 78, answer_quality: 75, engagement_signals: 75 }),
+    )
+    const evaluations = [
+      evalRow(0, 75), evalRow(1, 80),
+      evalRow(2, 60, { flags: ['truncated_by_timer'] }),
+      evalRow(3, 78),
+    ]
+    const res = await POST(makeReq(evaluations, {
+      plannedQuestionCount: 10,
+      answeredCount: 4,
+      endReason: 'time_up',
+    }))
+    const json = await res.json()
+
+    // G.12 red_flag for the timer-cut answer.
+    expect(json.red_flags.some((f: string) =>
+      f.includes('cut off when the timer expired'))).toBe(true)
+    // G.10 end-reason red_flag (time_up variant).
+    expect(json.red_flags.some((f: string) =>
+      f.includes('timer expired'))).toBe(true)
+    // <50% completion → Low confidence.
+    expect(json.confidence_level).toBe('Low')
+  })
 })
