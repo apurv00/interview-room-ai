@@ -124,3 +124,10 @@
 - **Root-cause:** Phase 4 wired JD overlay into /api/generate-question behind
 - **No-tests-needed-because: documentation change; no executable code**
 - **Verified-by:** file diff inspection; existing "Known Issues / TODO"
+
+### 2026-04-15 08:34:53 +0000 · `ced5f7f` · Claude
+- **Subject:** feat(scoring-g1): baseline telemetry for Claude-vs-formula overall_score
+- **Files:** 9 changed, 1 test file(s)
+- **Root-cause:** app/api/generate-feedback/route.ts:419-422 discards Claude's
+- **Tests-added: shared/__tests__/scoreTelemetry.test.ts**
+- **Verified-by:** Unit tests — 13/13 pass (9.00s). Featureflags suite still

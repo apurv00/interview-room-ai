@@ -19,6 +19,7 @@ import { evaluateSession } from '@interview/services/eval/evaluationEngine'
 import { getUserCompetencySummary } from '@learn/services/competencyService'
 import { buildHistorySummary } from '@learn/services/sessionSummaryService'
 import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
+import { recordScoreDelta } from '@shared/services/scoreTelemetry'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -366,7 +367,43 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         feedback = JSON.parse(cleaned)
       } catch {
         aiLogger.error({ raw: raw.slice(0, 500) }, 'Feedback JSON parse failed')
+        // G.1 telemetry — parse failure path. Capture whatever we know so we
+        // can correlate parse failures with model/prompt size.
+        if (body.sessionId) {
+          recordScoreDelta({
+            sessionId: body.sessionId,
+            userId: user.id,
+            source: 'generate-feedback',
+            taskSlot: 'interview.generate-feedback',
+            modelUsed: result.model ?? 'unknown',
+            inputTokens: result.inputTokens,
+            outputTokens: result.outputTokens,
+            truncated: result.truncated,
+            evaluationCount: evaluations.length,
+            recordReason: 'parse-failed',
+          }).catch(() => {})
+        }
         throw new Error('Feedback JSON parse failed')
+      }
+
+      // G.1 telemetry — snapshot Claude's raw values BEFORE any of the
+      // server-side deterministic overrides below. This is the only place
+      // we can still see what the LLM actually chose; the rest of the
+      // handler replaces these fields. Numbers are coerced safely — if
+      // Claude returned a string or null, `claudeRawOverall` becomes
+      // undefined and the delta calc skips.
+      const claudeRawOverall = typeof feedback.overall_score === 'number'
+        ? feedback.overall_score
+        : undefined
+      const claudeRawDimensions: Record<string, number> = {}
+      if (typeof feedback.dimensions?.answer_quality?.score === 'number') {
+        claudeRawDimensions.answer_quality = feedback.dimensions.answer_quality.score
+      }
+      if (typeof feedback.dimensions?.communication?.score === 'number') {
+        claudeRawDimensions.communication = feedback.dimensions.communication.score
+      }
+      if (typeof feedback.dimensions?.engagement_signals?.score === 'number') {
+        claudeRawDimensions.engagement_signals = feedback.dimensions.engagement_signals.score
       }
 
       // Validate required fields exist (Claude may truncate if hitting max_tokens)
@@ -421,6 +458,32 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       const engScore = feedback.dimensions?.engagement_signals?.score ?? 0
       feedback.overall_score = Math.round(aqScore * 0.4 + commScore * 0.3 + engScore * 0.3)
       feedback.pass_probability = feedback.overall_score >= 75 ? 'High' : feedback.overall_score >= 50 ? 'Medium' : 'Low'
+
+      // G.1 telemetry — record the delta between Claude's raw overall_score
+      // (captured before the overrides above) and the deterministic value
+      // we are about to return. Fire-and-forget; never blocks the response.
+      if (body.sessionId) {
+        recordScoreDelta({
+          sessionId: body.sessionId,
+          userId: user.id,
+          source: 'generate-feedback',
+          taskSlot: 'interview.generate-feedback',
+          modelUsed: result.model ?? 'unknown',
+          claudeOverallScore: claudeRawOverall,
+          deterministicOverallScore: feedback.overall_score,
+          claudeDimensions: claudeRawDimensions,
+          deterministicDimensions: {
+            answer_quality: aqScore,
+            communication: commScore,
+            engagement_signals: engScore,
+          },
+          evaluationCount: evaluations.length,
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+          truncated: result.truncated,
+          recordReason: claudeRawOverall === undefined ? 'claude-missing-overall' : 'ok',
+        }).catch(() => {})
+      }
 
       // Persist feedback to session document server-side so it survives page
       // reloads without relying on the client PATCH call (which can fail due
@@ -562,6 +625,25 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
           status: 'completed',
           completedAt: new Date(),
         }).catch((err) => aiLogger.warn({ err, sessionId: body.sessionId }, 'Failed to persist fallback feedback'))
+
+        // G.1 telemetry — the outer-catch path has no Claude value, but
+        // capturing the deterministic fallback still gives us visibility
+        // into how often this path is hit in production.
+        recordScoreDelta({
+          sessionId: body.sessionId,
+          userId: user.id,
+          source: 'generate-feedback',
+          taskSlot: 'interview.generate-feedback',
+          modelUsed: 'interview.generate-feedback',
+          deterministicOverallScore: fallback.overall_score,
+          deterministicDimensions: {
+            answer_quality: roughScore,
+            communication: fallbackCommScore,
+            engagement_signals: fallbackEngScore,
+          },
+          evaluationCount: evaluations?.length ?? 0,
+          recordReason: 'outer-catch',
+        }).catch(() => {})
       }
       return NextResponse.json(fallback)
     }
