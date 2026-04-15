@@ -138,3 +138,66 @@
 - **Root-cause:** 4 routes parse LLM output with `JSON.parse` + `as T` cast and
 - **Tests-added: modules/interview/__tests__/llmResponseSchemas.test.ts**
 - **Verified-by:** Unit tests — 23/23 pass (7.10s). Touched-domain suite:
+
+### 2026-04-15 12:43:04 +0000 · `e56cbdb` · Claude
+- **Subject:** feat(scoring-g3): truncation detection + retry + visible confidence flag
+- **Files:** 6 changed, 2 test file(s)
+- **Root-cause:** shared/services/modelRouter.ts:136,169 exposes
+- **Tests-added: modules/interview/__tests__/evaluateAnswerTruncation.**
+- **Verified-by:** Unit tests — 58/58 pass across 6 related files (7.10s):
+
+### 2026-04-15 13:53:16 +0000 · `632a611` · Claude
+- **Subject:** feat(scoring-g6a): redis idempotency lock on /api/generate-feedback
+- **Files:** 4 changed, 2 test file(s)
+- **Root-cause:** modules/interview/hooks/useInterview.ts:889 fires a
+- **Tests-added: shared/__tests__/feedbackLock.test.ts (9 tests:**
+- **Verified-by:** Unit tests — 14/14 pass in G.6 suites (5.60s).
+
+### 2026-04-15 14:00:27 +0000 · `eaaf697` · Claude
+- **Subject:** feat(scoring-g4): exclude failed evals from aggregation, not average them in
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** app/api/evaluate-answer/route.ts:385-388 returns a
+- **Tests-added: modules/interview/__tests__/generateFeedbackEvalIntegrity.**
+- **Verified-by:** Unit tests — 10/10 new pass (5.37s). Regression suite:
+
+### 2026-04-15 14:07:58 +0000 · `bda5a71` · Claude
+- **Subject:** feat(scoring-g5): kill remaining falsy-zero stomps + pressure-Q status awareness
+- **Files:** 7 changed, 2 test file(s)
+- **Root-cause:** two silent-corruption families remained after G.4:
+- **Tests-added: modules/interview/__tests__/generateFeedbackSilent**
+- **Verified-by:** Unit tests — 6/6 G.5 tests pass (4.46s). Regression
+
+### 2026-04-15 14:29:26 +0000 · `f9d1c14` · Claude
+- **Subject:** feat(scoring-g7): session completion shape (planned/answered/endReason)
+- **Files:** 6 changed, 1 test file(s)
+- **Root-cause:** neither InterviewSession nor FeedbackData carried any
+- **Tests-added: modules/interview/__tests__/sessionCompletionShape.**
+- **Verified-by:** Unit tests — 10/10 G.7 tests pass. Regression suites:
+
+### 2026-04-15 14:38:13 +0000 · `2e83c91` · Claude
+- **Subject:** feat(scoring-g8): blend Claude's overall_score with formula (flag-gated)
+- **Files:** 5 changed, 2 test file(s)
+- **Root-cause:** app/api/generate-feedback/route.ts:590 discarded Claude's
+- **Tests-added: modules/interview/__tests__/overallScoreBlend.test.ts**
+- **Verified-by:** Unit tests — 28/28 G.8 tests pass (overallScoreBlend
+
+### 2026-04-15 16:37:22 +0000 · `0472cb6` · Claude
+- **Subject:** fix(scoring-g4): extract computePerQAverage out of route.ts (Vercel build)
+- **Files:** 4 changed, 2 test file(s)
+- **Root-cause:** Next.js App Router rejects non-route exports from
+- **Tests-added: no new tests — the existing 10 unit tests in**
+- **Verified-by:** `npm run build` exit 0 (was exit 1 pre-fix — this
+
+### 2026-04-15 17:09:37 +0000 · `9c248fd` · Claude
+- **Subject:** fix(scoring-g6): client-side 202 handling to close idempotency-lock race
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** G.6 Phase A (commit 632a611) added a Redis idempotency
+- **Tests-added: modules/interview/__tests__/feedbackPage202Handling.**
+- **Verified-by:** Unit tests — 5/5 new pass. Regression suite: 127/127
+
+### 2026-04-15 17:23:55 +0000 · `29ff1c5` · Claude
+- **Subject:** chore(interview-page): fix react-hooks/exhaustive-deps warnings
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** app/interview/page.tsx:288 and :293 declared
+- **No-tests-needed-because: pure lint-cleanup refactor with no**
+- **Verified-by:** `npm run build` exit 0 with ZERO react-hooks/

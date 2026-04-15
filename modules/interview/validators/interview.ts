@@ -46,6 +46,8 @@ export const AnswerEvaluationSchema = z.object({
   needsFollowUp: z.boolean().optional(),
   followUpQuestion: z.string().max(2000).nullish(),
   flags: z.array(z.string().max(500)).max(20).optional(),
+  /** G.3: integrity marker — ok | truncated | failed. See shared/types.ts. */
+  status: z.enum(['ok', 'truncated', 'failed']).optional(),
   probeDecision: ProbeDecisionSchema.nullish(),
   pushback: PushbackSchema.nullish(),
 })
@@ -189,6 +191,13 @@ export const UpdateSessionSchema = z.object({
     label: z.string(),
     weight: z.number(),
   })).optional(),
+  // G.7: session completion shape. Populated by useInterview's
+  // finishInterview() when the session ends. Writing these is additive —
+  // legacy clients that don't send them continue to work unchanged.
+  plannedQuestionCount: z.number().int().min(0).max(100).optional(),
+  answeredCount: z.number().int().min(0).max(100).optional(),
+  endReason: z.enum(['normal', 'time_up', 'user_ended', 'usage_limit', 'abandoned']).optional(),
+  wasTruncatedByTimer: z.array(z.boolean()).max(100).optional(),
 })
 
 // ─── LLM response schemas (Work Item G.2) ──────────────────────────────────

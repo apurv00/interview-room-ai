@@ -20,6 +20,9 @@ import { getUserCompetencySummary } from '@learn/services/competencyService'
 import { buildHistorySummary } from '@learn/services/sessionSummaryService'
 import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 import { recordScoreDelta } from '@shared/services/scoreTelemetry'
+import { acquireFeedbackLock, releaseFeedbackLock } from '@shared/services/feedbackLock'
+import { computeBlendedOverallScore, resolveBlendWeights } from '@interview/services/eval/overallScore'
+import { computePerQAverage } from '@interview/services/eval/perQAggregation'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -61,17 +64,30 @@ function computeEngagementContext(
     const pEval = evaluations[pressureIdx]
     const pMetrics = speechMetrics[pressureIdx]
     if (pEval && pMetrics) {
-      const avgNormalScore = evaluations
-        .filter((_, i) => i !== pressureIdx)
-        .reduce((s, e) => {
-          const rel = Number(e.relevance) || 0
-          const str = Number(e.structure) || 0
-          const spc = Number(e.specificity) || 0
-          const own = Number(e.ownership) || 0
-          return s + (rel + str + spc + own) / 4
-        }, 0) / (Math.max(1, evaluations.length - 1))
-      const pressureScore = ((Number(pEval.relevance) || 0) + (Number(pEval.structure) || 0) + (Number(pEval.specificity) || 0) + (Number(pEval.ownership) || 0)) / 4
-      pressureContext = `\nPressure question (Q${pressureIdx + 1}) avg score: ${pressureScore.toFixed(0)} vs normal avg: ${avgNormalScore.toFixed(0)}`
+      // G.5: skip status='failed' rows in the normal-avg denominator
+      // so the pressure-vs-normal delta isn't diluted by fabricated
+      // 60/55/55/60 placeholders. Mirrors the G.4 aggregation policy.
+      const normalRows = evaluations.filter((e, i) =>
+        i !== pressureIdx && (e as { status?: string }).status !== 'failed',
+      )
+      const avgNormalScore = normalRows.length > 0
+        ? normalRows.reduce((s, e) => {
+            const rel = Number(e.relevance) ?? 0
+            const str = Number(e.structure) ?? 0
+            const spc = Number(e.specificity) ?? 0
+            const own = Number(e.ownership) ?? 0
+            return s + (rel + str + spc + own) / 4
+          }, 0) / normalRows.length
+        : 0
+      // Don't report a pressure score for a failed pressure row — the
+      // number would be the placeholder, not the candidate's actual
+      // pressure performance. Drop the context instead.
+      if ((pEval as { status?: string }).status === 'failed') {
+        pressureContext = `\nPressure question (Q${pressureIdx + 1}) could not be scored — AI evaluation failed on that answer.`
+      } else {
+        const pressureScore = ((Number(pEval.relevance) ?? 0) + (Number(pEval.structure) ?? 0) + (Number(pEval.specificity) ?? 0) + (Number(pEval.ownership) ?? 0)) / 4
+        pressureContext = `\nPressure question (Q${pressureIdx + 1}) avg score: ${pressureScore.toFixed(0)} vs normal avg: ${avgNormalScore.toFixed(0)}`
+      }
     }
   }
 
@@ -91,6 +107,40 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
     const interviewType = config.interviewType || 'screening'
     const domainLabel = getDomainLabel(config.role)
 
+    // G.6 Phase A — Idempotency lock. The client fires this endpoint
+    // twice for the same session: once fire-and-forget from
+    // useInterview.ts:889 on interview end, and once from
+    // app/feedback/[sessionId]/page.tsx:453 if the first call isn't
+    // visible within 8s. Since Sonnet feedback gen is routinely
+    // 8-20s, both run in parallel, double the LLM bill, race on
+    // InterviewSession.feedback, and double-fire every post-feedback
+    // side effect (competency, pathway, summary, weakness clusters,
+    // XP). The lock is only sessionId-scoped — the no-sessionId path
+    // (rare: local-only fallback) falls through unlocked.
+    let feedbackLock: Awaited<ReturnType<typeof acquireFeedbackLock>> | null = null
+    if (body.sessionId) {
+      feedbackLock = await acquireFeedbackLock(body.sessionId)
+      if (feedbackLock === null) {
+        // Another request holds the lock — the client's poll loop on
+        // session.feedback will pick up the winner's result.
+        aiLogger.info(
+          { sessionId: body.sessionId, userId: user.id },
+          'generate-feedback: duplicate request short-circuited by idempotency lock',
+        )
+        return NextResponse.json(
+          {
+            status: 'in_progress',
+            message: 'Feedback generation already in progress for this session — poll session.feedback.',
+          },
+          { status: 202 },
+        )
+      }
+    }
+
+    // G.6 Phase A — try/finally wrapper so the lock is released on
+    // every exit path (early-exit, happy path, outer catch). The
+    // try/catch nested below continues to handle LLM errors as today.
+    try {
     // ── Early exit: no evaluations means user ended without answering ──
     if (!evaluations || evaluations.length === 0) {
       const noDataFeedback: FeedbackData = {
@@ -353,12 +403,42 @@ For drill_recommendations: Generate 2-3 drills targeting the candidate's weakest
 Be honest. Use ${commScore} for communication.score exactly as provided.`
 
     try {
-      const result = await completion({
+      let result = await completion({
         taskSlot: 'interview.generate-feedback',
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
         contextData: { evaluationScores: evaluationData },
       })
+
+      // G.3: truncation detection + single retry with expanded budget.
+      // Feedback generation uses maxTokens=6000 by default (see
+      // shared/services/taskSlots.ts) — the largest ceiling in the app
+      // — but long interviews with JD + resume + per-question ideals +
+      // drill recs can still hit it. Truncated output parses as
+      // partial JSON and the downstream `|| 0` silent defaults then
+      // collapse overall_score. Retry once to 8000 tokens before
+      // surfacing the partial-scoring fact to the user via confidence.
+      let truncationRetried = false
+      if (result.truncated) {
+        truncationRetried = true
+        aiLogger.warn(
+          {
+            taskSlot: 'interview.generate-feedback',
+            model: result.model,
+            outputTokens: result.outputTokens,
+            evaluationCount: evaluations.length,
+          },
+          'generate-feedback truncated; retrying with expanded maxTokens',
+        )
+        result = await completion({
+          taskSlot: 'interview.generate-feedback',
+          system: systemPrompt,
+          messages: [{ role: 'user', content: userPrompt }],
+          contextData: { evaluationScores: evaluationData },
+          maxTokens: 8000,
+        })
+      }
+      const feedbackTruncated = result.truncated === true
 
       const raw = result.text || '{}'
       const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
@@ -425,12 +505,11 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       // Validate required fields exist (Claude may truncate if hitting max_tokens)
       if (feedback.overall_score == null || !feedback.dimensions) {
         aiLogger.warn({ raw: raw.slice(0, 500) }, 'Incomplete feedback from Claude — applying defaults')
-        feedback.overall_score = feedback.overall_score || Math.round(
-          evaluations.reduce((sum: number, e: Record<string, unknown>) =>
-            sum + (((e.relevance as number) || 0) + ((e.structure as number) || 0) +
-                   ((e.specificity as number) || 0) + ((e.ownership as number) || 0)) / 4, 0
-          ) / Math.max(evaluations.length, 1)
-        )
+        // G.4: reuse the failed-row-aware helper here too.
+        const preQ = computePerQAverage(evaluations as unknown as Array<Record<string, unknown>>)
+        // G.5: `??` — a legit 0 (no-answer session) must not be
+        // stomped to preQ.average. `||` did exactly that.
+        feedback.overall_score = feedback.overall_score ?? preQ.average
         feedback.dimensions = feedback.dimensions || {
           answer_quality: { score: feedback.overall_score, strengths: [], weaknesses: [] },
           communication: { score: commScore, wpm: aggMetrics.wpm, filler_rate: aggMetrics.fillerRate, pause_score: aggMetrics.pauseScore, rambling_index: aggMetrics.ramblingIndex },
@@ -450,34 +529,118 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       // BUG 2 fix: derive answer_quality from the actual per-question evaluation
       // scores instead of trusting Claude's free-form summary value, which had
       // no rubric anchors and tended to inflate to 60-75.
-      // True per-question average across (relevance + structure + specificity + ownership):
-      const perQAvg = evaluations.length > 0
-        ? Math.round(
-            evaluations.reduce((sum, e) => {
-              const ev = e as unknown as Record<string, number>
-              const r = Number(ev.relevance) || 0
-              const s = Number(ev.structure) || 0
-              const sp = Number(ev.specificity) || 0
-              const o = Number(ev.ownership) || 0
-              return sum + (r + s + sp + o) / 4
-            }, 0) / evaluations.length
-          )
-        : 0
+      // G.4: delegate to computePerQAverage so status='failed' rows
+      // (whose 60/55/55/60 shape is a placeholder, not real scores)
+      // are excluded from the average.
+      const perQ = computePerQAverage(evaluations as unknown as Array<Record<string, unknown>>)
+      const perQAvg = perQ.average
 
       // Override Claude's answer_quality score with the deterministic average
       if (feedback.dimensions?.answer_quality) {
         feedback.dimensions.answer_quality.score = perQAvg
       }
 
-      // Deterministic overall score: weighted average of dimensions (40% AQ, 30% Comm, 30% Engagement)
+      // Deterministic formula overall score: weighted average of
+      // dimensions (40% AQ, 30% Comm, 30% Engagement). Pre-G.8 this
+      // was the final user-facing number. With G.8 it's one INPUT to
+      // the blend — see below.
       const aqScore = perQAvg
       const engScore = feedback.dimensions?.engagement_signals?.score ?? 0
-      feedback.overall_score = Math.round(aqScore * 0.4 + commScore * 0.3 + engScore * 0.3)
+      const formulaOverall = Math.round(aqScore * 0.4 + commScore * 0.3 + engScore * 0.3)
+
+      // G.8: blend Claude's holistic overall_score with the
+      // deterministic formula. Flag-gated so we can ramp the rollout
+      // and A/B-compare against G.1 telemetry. When the flag is off,
+      // `overall_score` stays exactly what pre-G.8 produced. When on,
+      // Claude's value is factored in (defaulting to 0.6 weight) so
+      // scores escape the compressed 55–75 band — but a safety clamp
+      // engages if Claude disagrees wildly (|Δ| > 20) to prevent a
+      // hallucinated extreme from dominating the user-visible number.
+      let blendMode: 'agreement' | 'disagreement' | 'formula-only' | 'disabled' = 'disabled'
+      if (isFeatureEnabled('scoring_v2_overall')) {
+        const blend = computeBlendedOverallScore(
+          claudeRawOverall,
+          formulaOverall,
+          resolveBlendWeights(),
+        )
+        feedback.overall_score = blend.blended
+        blendMode = blend.mode
+      } else {
+        feedback.overall_score = formulaOverall
+      }
       feedback.pass_probability = feedback.overall_score >= 75 ? 'High' : feedback.overall_score >= 50 ? 'Medium' : 'Low'
 
-      // G.1 telemetry — record the delta between Claude's raw overall_score
-      // (captured before the overrides above) and the deterministic value
-      // we are about to return. Fire-and-forget; never blocks the response.
+      aiLogger.info(
+        {
+          sessionId: body.sessionId,
+          formulaOverall,
+          claudeRawOverall,
+          finalOverall: feedback.overall_score,
+          blendMode,
+        },
+        'overall_score computed',
+      )
+
+      // G.3: surface integrity problems to the user.
+      //   - Feedback-level truncation (even after the retry in L366): mark
+      //     confidence_level=Low and push a red_flag so the user understands
+      //     the report is built on partial data.
+      //   - Upstream eval integrity: count rows where evaluate-answer marked
+      //     status=truncated/failed (set in app/api/evaluate-answer/route.ts
+      //     by G.3). These came in via the request body and are visible on
+      //     each evaluation object. Surface as red_flags only — the
+      //     aggregation helpers in G.5 will later filter these out of
+      //     perQAvg; for now we keep the existing math but make the
+      //     integrity issue visible.
+      const truncatedEvalCount = evaluations.filter(
+        (e) => (e as { status?: string }).status === 'truncated',
+      ).length
+      const failedEvalCount = evaluations.filter(
+        (e) => (e as { status?: string }).status === 'failed',
+      ).length
+      if (feedbackTruncated) {
+        feedback.confidence_level = 'Low'
+        feedback.red_flags = Array.isArray(feedback.red_flags) ? feedback.red_flags : []
+        feedback.red_flags.push(
+          'AI feedback response was truncated — the report may be incomplete; scores are approximate.',
+        )
+      }
+      if (truncatedEvalCount > 0 || failedEvalCount > 0) {
+        feedback.red_flags = Array.isArray(feedback.red_flags) ? feedback.red_flags : []
+        if (truncatedEvalCount > 0) {
+          feedback.red_flags.push(
+            `${truncatedEvalCount} answer${truncatedEvalCount === 1 ? '' : 's'} could not be fully scored — AI evaluation was truncated.`,
+          )
+        }
+        if (failedEvalCount > 0) {
+          feedback.red_flags.push(
+            // G.4: we now EXCLUDE these from perQAvg rather than
+            // averaging in the 60/55/55/60 placeholder. Message
+            // reflects the new behavior so users know the reported
+            // answer_quality score is built only on the rows that
+            // actually got scored.
+            `${failedEvalCount} answer${failedEvalCount === 1 ? '' : 's'} could not be scored — AI evaluation failed and these were excluded from the answer-quality average.`,
+          )
+        }
+        // Down-rate confidence when ≥20% of evaluations had integrity
+        // issues. Preserves Claude's 'High' when the sample is mostly
+        // clean.
+        const problemRatio = (truncatedEvalCount + failedEvalCount) / Math.max(evaluations.length, 1)
+        if (problemRatio >= 0.2 && feedback.confidence_level !== 'Low') {
+          feedback.confidence_level = 'Low'
+        } else if (problemRatio > 0 && feedback.confidence_level === 'High') {
+          feedback.confidence_level = 'Medium'
+        }
+      }
+
+      // G.1 telemetry — record Claude's raw value vs the deterministic
+      // formula value. G.8 NOTE: we record `formulaOverall` here (not
+      // `feedback.overall_score`) so the A/B analysis keeps comparing
+      // the pre-G.8 "what-the-formula-alone-would-have-returned" value
+      // against Claude's raw value. The actually-shipped blended value
+      // is logged separately via aiLogger above and can be reconstructed
+      // from (claudeOverallScore, deterministicOverallScore, blend
+      // weights) if needed. Fire-and-forget; never blocks the response.
       if (body.sessionId) {
         recordScoreDelta({
           sessionId: body.sessionId,
@@ -486,7 +649,7 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
           taskSlot: 'interview.generate-feedback',
           modelUsed: result.model ?? 'unknown',
           claudeOverallScore: claudeRawOverall,
-          deterministicOverallScore: feedback.overall_score,
+          deterministicOverallScore: formulaOverall,
           claudeDimensions: claudeRawDimensions,
           deterministicDimensions: {
             answer_quality: aqScore,
@@ -608,11 +771,13 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         errorMessage: err instanceof Error ? err.message : 'Unknown error',
       }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
 
-      // Compute a rough score from evaluations if available, otherwise use minimal defaults
+      // Compute a rough score from evaluations if available, otherwise use minimal defaults.
+      // G.4: use the shared failed-row-aware helper so the outer catch
+      // path doesn't re-introduce the fabricated-fallback averaging bug
+      // that the main path now avoids.
       const hasEvals = evaluations && evaluations.length > 0
       const roughScore = hasEvals
-        ? Math.round((evaluations as any[]).reduce((sum: number, e: any) =>
-            sum + ((Number(e.relevance) || 0) + (Number(e.structure) || 0) + (Number(e.specificity) || 0) + (Number(e.ownership) || 0)) / 4, 0) / evaluations.length)
+        ? computePerQAverage(evaluations as unknown as Array<Record<string, unknown>>).average
         : 0
 
       const fallbackCommScore = commScore || 0
@@ -662,6 +827,14 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         }).catch(() => {})
       }
       return NextResponse.json(fallback)
+    }
+    } finally {
+      // G.6 Phase A — always release so a concurrent retry isn't
+      // blocked for the full TTL. The release is a no-op when we
+      // didn't actually acquire (Redis error / no sessionId).
+      if (feedbackLock) {
+        await releaseFeedbackLock(feedbackLock)
+      }
     }
   },
 })

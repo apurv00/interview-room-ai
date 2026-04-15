@@ -295,11 +295,40 @@ ${dimensionSchema}${jdAlignmentSchema},
 }`
 
     try {
-      const result = await completionStream({
+      let result = await completionStream({
         taskSlot: 'interview.evaluate-answer',
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
       })
+
+      // G.3: truncation detection + single retry with expanded budget.
+      // The default maxTokens for this slot is 250 (see taskSlots.ts) which
+      // is tight for rubrics with many dimensions or long probeTarget
+      // phrases. Truncated payloads parse as partial JSON and silently
+      // trip the `?? 50` fallbacks below — that's how we end up with
+      // fabricated midrange scores. Pattern mirrors
+      // app/api/generate-question/route.ts:575. The outer try/catch
+      // still backstops any exception.
+      let truncationRetried = false
+      if (result.truncated) {
+        truncationRetried = true
+        aiLogger.warn(
+          {
+            taskSlot: 'interview.evaluate-answer',
+            questionIndex,
+            model: result.model,
+            outputTokens: result.outputTokens,
+          },
+          'evaluate-answer truncated; retrying with expanded maxTokens',
+        )
+        const retry = await completionStream({
+          taskSlot: 'interview.evaluate-answer',
+          system: systemPrompt,
+          messages: [{ role: 'user', content: userPrompt }],
+          maxTokens: 500,
+        })
+        result = retry
+      }
 
       const raw = result.text || '{}'
       const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
@@ -332,6 +361,24 @@ ${dimensionSchema}${jdAlignmentSchema},
         )
       }
 
+      // G.3: mark the evaluation status so generate-feedback aggregation
+      // can skip/flag truncated rows rather than trusting fabricated
+      // midrange numbers. `truncated` means the retry also ran out of
+      // tokens — the dims below were extracted from partial JSON and
+      // should not be trusted as ground truth.
+      const evalStatus: 'ok' | 'truncated' = result.truncated ? 'truncated' : 'ok'
+      if (evalStatus === 'truncated') {
+        aiLogger.warn(
+          {
+            taskSlot: 'interview.evaluate-answer',
+            questionIndex,
+            retry: truncationRetried,
+            outputTokens: result.outputTokens,
+          },
+          'evaluate-answer truncated on retry; marking evaluation status=truncated',
+        )
+      }
+
       const evaluation: AnswerEvaluation = {
         questionIndex,
         question,
@@ -344,6 +391,7 @@ ${dimensionSchema}${jdAlignmentSchema},
         ...(scores.primaryGap && { primaryGap: scores.primaryGap }),
         ...(scores.primaryStrength && { primaryStrength: scores.primaryStrength }),
         ...(scores.answerSummary && { answerSummary: scores.answerSummary }),
+        status: evalStatus,
         probeDecision: {
           shouldProbe: scores.shouldProbe ?? false,
           probeType: scores.probeType ?? null,
@@ -379,6 +427,12 @@ ${dimensionSchema}${jdAlignmentSchema},
         errorMessage: err instanceof Error ? err.message : 'Unknown error',
       }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
 
+      // G.3: mark this evaluation as failed so generate-feedback can
+      // skip it in aggregation rather than trusting the placeholder
+      // 60/55/55/60 values. Those numbers exist only to keep the
+      // response shape backward-compatible for legacy clients that
+      // might not understand `status` — the status field is the
+      // authoritative signal.
       return NextResponse.json({
         questionIndex,
         question,
@@ -387,6 +441,7 @@ ${dimensionSchema}${jdAlignmentSchema},
         structure: 55,
         specificity: 55,
         ownership: 60,
+        status: 'failed',
         probeDecision: { shouldProbe: false },
       } as AnswerEvaluation)
     }

@@ -160,7 +160,9 @@ function calculateReadiness(
   competencySummary: Awaited<ReturnType<typeof getUserCompetencySummary>>,
   recentSummaries: Array<{ overallScore: number }>
 ): number {
-  let score = feedback.overall_score || 50
+  // G.5: `??` so a legit 0 (abandoned interview) isn't stomped to 50
+  // and then used as the readiness baseline.
+  let score = feedback.overall_score ?? 50
 
   // Factor in competency readiness
   if (competencySummary?.overallReadiness) {

@@ -576,11 +576,54 @@ function FeedbackPageInner() {
       if (!res.ok) {
         throw new Error(fb.error || `Feedback generation failed (status ${res.status})`)
       }
+
+      // G.6 Phase A follow-up: handle the idempotency-lock short-circuit.
+      // When the server returns 202 {status: 'in_progress'} it means another
+      // request is already generating feedback for this session. The
+      // winner will persist to `session.feedback` — we poll for it rather
+      // than applying the 50/50/50 defaults below (which would flash the
+      // wrong number to the user until they refresh). Matches the
+      // pattern used by the main poll loop at the top of loadData()
+      // (page.tsx:421-450) — same endpoint, same success condition.
+      if (res.status === 202 && fb?.status === 'in_progress' && sid && sid !== 'local') {
+        const POLL_INTERVAL_MS = 2000
+        const MAX_POLLS = 15 // up to 30s — covers typical Sonnet feedback latency
+        let resolved = false
+        for (let poll = 0; poll < MAX_POLLS; poll++) {
+          if (signal?.aborted) return
+          await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
+          try {
+            const pollRes = await fetch(
+              `/api/interviews/${sid}?excludeTranscript=true`,
+              { signal },
+            )
+            if (pollRes.ok) {
+              const pollData = await pollRes.json()
+              if (pollData.feedback) {
+                fb = pollData.feedback
+                resolved = true
+                break
+              }
+            }
+          } catch (e) {
+            if ((e as Error).name === 'AbortError') return
+            // continue polling — transient failure
+          }
+        }
+        if (!resolved) {
+          throw new Error(
+            'Feedback generation is taking longer than expected — please refresh in a moment.',
+          )
+        }
+      }
+
       // Apply client-side defaults if feedback is incomplete (truncated Claude response)
-      if (!fb.overall_score) fb.overall_score = 50
+      // G.5: `== null` / `??` — a legit overall_score of 0 (no-answer session,
+      // handled by the server's no-data early-exit) must not be stomped to 50.
+      if (fb.overall_score == null) fb.overall_score = 50
       if (!fb.dimensions) {
         fb.dimensions = {
-          answer_quality: { score: fb.overall_score || 50, strengths: [], weaknesses: [] },
+          answer_quality: { score: fb.overall_score ?? 50, strengths: [], weaknesses: [] },
           communication: { score: 50, wpm: 120, filler_rate: 0.05, pause_score: 60, rambling_index: 0.3 },
           engagement_signals: { score: 50, engagement_score: 50, confidence_trend: 'stable', energy_consistency: 0.6, composure_under_pressure: 50 },
         }

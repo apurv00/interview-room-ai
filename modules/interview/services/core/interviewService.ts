@@ -12,6 +12,8 @@ import { parseJobDescription, buildParsedJDContext } from '../persona/jdParserSe
 import { parseAndCacheResume, buildParsedResumeContext } from '../persona/resumeContextService'
 import { setCachedJDContext, setCachedResumeContext } from '../persona/documentContextCache'
 import { warmSessionConfigCache } from './sessionConfigCache'
+import { getQuestionCount } from '../../config/interviewConfig'
+import type { Duration } from '@shared/types'
 
 interface CreateSessionInput {
   userId: string
@@ -166,6 +168,18 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
     }
   }
 
+  // G.7: capture the planned question count at creation time so
+  // generate-feedback can later compute answered/planned completion
+  // ratio. getQuestionCount only accepts the canonical Duration values
+  // (10|20|30); fall back gracefully for other values so session
+  // creation never fails on an out-of-band duration.
+  let plannedQuestionCount: number | undefined
+  try {
+    plannedQuestionCount = getQuestionCount(input.config.duration as Duration)
+  } catch {
+    plannedQuestionCount = undefined
+  }
+
   let session: IInterviewSession
   try {
     session = await InterviewSession.create({
@@ -191,6 +205,7 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
       privacyMode: input.config.privacyMode === true ? true : undefined,
       parentSessionId: rootParentId,
       retakeNumber,
+      plannedQuestionCount,
     })
   } catch (err) {
     // Rollback the usage increment if session creation fails
