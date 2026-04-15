@@ -152,3 +152,10 @@
 - **Root-cause:** modules/interview/hooks/useInterview.ts:889 fires a
 - **Tests-added: shared/__tests__/feedbackLock.test.ts (9 tests:**
 - **Verified-by:** Unit tests — 14/14 pass in G.6 suites (5.60s).
+
+### 2026-04-15 14:00:27 +0000 · `eaaf697` · Claude
+- **Subject:** feat(scoring-g4): exclude failed evals from aggregation, not average them in
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** app/api/evaluate-answer/route.ts:385-388 returns a
+- **Tests-added: modules/interview/__tests__/generateFeedbackEvalIntegrity.**
+- **Verified-by:** Unit tests — 10/10 new pass (5.37s). Regression suite:
