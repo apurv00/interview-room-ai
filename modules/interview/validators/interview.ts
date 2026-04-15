@@ -46,6 +46,8 @@ export const AnswerEvaluationSchema = z.object({
   needsFollowUp: z.boolean().optional(),
   followUpQuestion: z.string().max(2000).nullish(),
   flags: z.array(z.string().max(500)).max(20).optional(),
+  /** G.3: integrity marker — ok | truncated | failed. See shared/types.ts. */
+  status: z.enum(['ok', 'truncated', 'failed']).optional(),
   probeDecision: ProbeDecisionSchema.nullish(),
   pushback: PushbackSchema.nullish(),
 })

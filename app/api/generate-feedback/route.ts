@@ -353,12 +353,42 @@ For drill_recommendations: Generate 2-3 drills targeting the candidate's weakest
 Be honest. Use ${commScore} for communication.score exactly as provided.`
 
     try {
-      const result = await completion({
+      let result = await completion({
         taskSlot: 'interview.generate-feedback',
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
         contextData: { evaluationScores: evaluationData },
       })
+
+      // G.3: truncation detection + single retry with expanded budget.
+      // Feedback generation uses maxTokens=6000 by default (see
+      // shared/services/taskSlots.ts) — the largest ceiling in the app
+      // — but long interviews with JD + resume + per-question ideals +
+      // drill recs can still hit it. Truncated output parses as
+      // partial JSON and the downstream `|| 0` silent defaults then
+      // collapse overall_score. Retry once to 8000 tokens before
+      // surfacing the partial-scoring fact to the user via confidence.
+      let truncationRetried = false
+      if (result.truncated) {
+        truncationRetried = true
+        aiLogger.warn(
+          {
+            taskSlot: 'interview.generate-feedback',
+            model: result.model,
+            outputTokens: result.outputTokens,
+            evaluationCount: evaluations.length,
+          },
+          'generate-feedback truncated; retrying with expanded maxTokens',
+        )
+        result = await completion({
+          taskSlot: 'interview.generate-feedback',
+          system: systemPrompt,
+          messages: [{ role: 'user', content: userPrompt }],
+          contextData: { evaluationScores: evaluationData },
+          maxTokens: 8000,
+        })
+      }
+      const feedbackTruncated = result.truncated === true
 
       const raw = result.text || '{}'
       const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
@@ -474,6 +504,53 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       const engScore = feedback.dimensions?.engagement_signals?.score ?? 0
       feedback.overall_score = Math.round(aqScore * 0.4 + commScore * 0.3 + engScore * 0.3)
       feedback.pass_probability = feedback.overall_score >= 75 ? 'High' : feedback.overall_score >= 50 ? 'Medium' : 'Low'
+
+      // G.3: surface integrity problems to the user.
+      //   - Feedback-level truncation (even after the retry in L366): mark
+      //     confidence_level=Low and push a red_flag so the user understands
+      //     the report is built on partial data.
+      //   - Upstream eval integrity: count rows where evaluate-answer marked
+      //     status=truncated/failed (set in app/api/evaluate-answer/route.ts
+      //     by G.3). These came in via the request body and are visible on
+      //     each evaluation object. Surface as red_flags only — the
+      //     aggregation helpers in G.5 will later filter these out of
+      //     perQAvg; for now we keep the existing math but make the
+      //     integrity issue visible.
+      const truncatedEvalCount = evaluations.filter(
+        (e) => (e as { status?: string }).status === 'truncated',
+      ).length
+      const failedEvalCount = evaluations.filter(
+        (e) => (e as { status?: string }).status === 'failed',
+      ).length
+      if (feedbackTruncated) {
+        feedback.confidence_level = 'Low'
+        feedback.red_flags = Array.isArray(feedback.red_flags) ? feedback.red_flags : []
+        feedback.red_flags.push(
+          'AI feedback response was truncated — the report may be incomplete; scores are approximate.',
+        )
+      }
+      if (truncatedEvalCount > 0 || failedEvalCount > 0) {
+        feedback.red_flags = Array.isArray(feedback.red_flags) ? feedback.red_flags : []
+        if (truncatedEvalCount > 0) {
+          feedback.red_flags.push(
+            `${truncatedEvalCount} answer${truncatedEvalCount === 1 ? '' : 's'} could not be fully scored — AI evaluation was truncated.`,
+          )
+        }
+        if (failedEvalCount > 0) {
+          feedback.red_flags.push(
+            `${failedEvalCount} answer${failedEvalCount === 1 ? '' : 's'} could not be scored — AI evaluation failed. Scores are approximate.`,
+          )
+        }
+        // Down-rate confidence when ≥20% of evaluations had integrity
+        // issues. Preserves Claude's 'High' when the sample is mostly
+        // clean.
+        const problemRatio = (truncatedEvalCount + failedEvalCount) / Math.max(evaluations.length, 1)
+        if (problemRatio >= 0.2 && feedback.confidence_level !== 'Low') {
+          feedback.confidence_level = 'Low'
+        } else if (problemRatio > 0 && feedback.confidence_level === 'High') {
+          feedback.confidence_level = 'Medium'
+        }
+      }
 
       // G.1 telemetry — record the delta between Claude's raw overall_score
       // (captured before the overrides above) and the deterministic value

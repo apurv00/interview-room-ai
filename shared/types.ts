@@ -168,6 +168,18 @@ export interface AnswerEvaluation {
   answerSummary?: string
   /** Red-flag strings — populated by offline/post-session evaluator, not live evaluator */
   flags?: string[]
+  /**
+   * Integrity marker for the scoring attempt (Work Item G.3).
+   * - `ok`          : LLM returned a complete, parseable response
+   * - `truncated`   : LLM hit max_tokens; partial response parsed
+   * - `failed`      : LLM threw / rate-limited / parse failed; dims are
+   *                    best-effort fallback values
+   *
+   * Undefined for legacy rows predating G.3 — treat as `'ok'`.
+   * Consumed by generate-feedback aggregation (skip failed, flag
+   * truncated in red_flags) and feedback UI rendering.
+   */
+  status?: 'ok' | 'truncated' | 'failed'
 }
 
 // ─── Interrupt context ──────────────────────────────────────────────────────
