@@ -258,6 +258,12 @@ export default function InterviewPage() {
     liveAnswer,
     coachingTip,
     finishInterview,
+    // Destructured so the useCallback deps at ~L286/L291 can reference
+    // stable function identities directly, instead of
+    // `interview.onCodeSubmit` which the exhaustive-deps rule rightly
+    // flags as a property access on a changing object.
+    onCodeSubmit: interviewOnCodeSubmit,
+    onDesignSubmit: interviewOnDesignSubmit,
   } = interview
 
   const displayAnswer = isListening ? liveTranscript : liveAnswer
@@ -284,13 +290,13 @@ export default function InterviewPage() {
   // ─── Code submission handler (coding mode) ─────────────────────────────────
   // Signals the useInterview hook to proceed from CODE_EDITING → PROCESSING
   const handleCodeSubmit = useCallback((code: string) => {
-    interview.onCodeSubmit(code, codingLanguage)
-  }, [interview.onCodeSubmit, codingLanguage])
+    interviewOnCodeSubmit(code, codingLanguage)
+  }, [interviewOnCodeSubmit, codingLanguage])
 
   // ─── Design submission handler (system design mode) ────────────────────────
   const handleDesignSubmit = useCallback((data: DesignSubmission) => {
-    interview.onDesignSubmit(data)
-  }, [interview.onDesignSubmit])
+    interviewOnDesignSubmit(data)
+  }, [interviewOnDesignSubmit])
 
   // ─── Keyboard shortcut (M to toggle mute) ──────────────────────────────────
   useEffect(() => {
