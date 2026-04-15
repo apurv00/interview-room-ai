@@ -634,18 +634,17 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       // G.4: delegate to a status-aware helper so status='failed' rows
       // (whose 60/55/55/60 shape is a placeholder, not real scores)
       // are excluded from the aggregate.
-      // G.9: compute the richer aggregate (mean + median + top3Mean +
-      // bottom3Mean + weighted) up front; select which field to use as
-      // answer_quality.score based on the scoring_v2_aq flag. `perQAvg`
-      // (the flat mean) remains the input to the existing overall-score
-      // formula/blend, regardless of flag — only the displayed
-      // answer_quality dimension changes here. This keeps the overall
-      // score ramp (G.8) independent of the AQ ramp (G.9).
+      // G.9 (always-on post-G.15): use the dimension-aware weighted
+      // aggregate as the displayed answer_quality.score so outlier
+      // signal (top moments + bottom moments) survives the
+      // aggregation. Pre-G.15 this was flag-gated on `scoring_v2_aq`;
+      // the flag definition stays in featureFlags.ts as a dead-
+      // reference until G.15c. `perQAvg` (the flat mean) is still
+      // the input to the overall-score formula/blend — only the
+      // user-visible AQ dimension differs here.
       const perQ = computeAnswerQualityAggregate(evaluations as unknown as Array<Record<string, unknown>>)
       const perQAvg = perQ.average
-      const aqDisplayScore = isFeatureEnabled('scoring_v2_aq')
-        ? perQ.weighted
-        : perQAvg
+      const aqDisplayScore = perQ.weighted
 
       // Override Claude's answer_quality score with the deterministic value.
       if (feedback.dimensions?.answer_quality) {
@@ -877,7 +876,11 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         // completion multiplier) so XP matches the number the user
         // sees on their feedback page. Fire-and-forget; never blocks
         // the response.
-        if (isFeatureEnabled('xp_from_feedback') && typeof feedback.overall_score === 'number') {
+        // G.14 (always-on post-G.15): server-side XP write is now
+        // unconditional. The legacy /api/learn/stats endpoint
+        // permanently no-ops in the same chunk so dual-write
+        // double-counting can't happen.
+        if (typeof feedback.overall_score === 'number') {
           const { strongDimensions, weakDimensions } = deriveStrongWeakDimensions(
             evaluations as unknown as Array<Record<string, unknown>>,
           )

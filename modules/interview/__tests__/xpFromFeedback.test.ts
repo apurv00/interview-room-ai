@@ -155,44 +155,38 @@ describe('POST /api/learn/stats — G.14 flag gate', () => {
     })
   }
 
-  it('flag OFF → delegates to updatePracticeStats', async () => {
+  // G.15b-5 inverted: pre-G.15 the route had a flag-gate that
+  // short-circuited when xp_from_feedback was ON. Post-G.15 the
+  // route is a permanent no-op (regardless of flag state) — XP
+  // is owned by /api/generate-feedback. These tests confirm the
+  // permanent no-op shape.
+  it('returns success+skipped marker without invoking updatePracticeStats', async () => {
     mockIsFeatureEnabled.mockImplementation(() => false)
-
-    const res = await LEARN_STATS_POST(makeReq(70))
-    const json = await res.json()
-
-    expect(mockUpdatePracticeStats).toHaveBeenCalledTimes(1)
-    expect(json.success).toBe(true)
-    expect(json.skipped).toBeUndefined()
-  })
-
-  it('flag ON → skips the write, returns skipped marker', async () => {
-    mockIsFeatureEnabled.mockImplementation((flag: string) => flag === 'xp_from_feedback')
 
     const res = await LEARN_STATS_POST(makeReq(70))
     const json = await res.json()
 
     expect(mockUpdatePracticeStats).not.toHaveBeenCalled()
     expect(json.success).toBe(true)
-    expect(json.skipped).toBe('xp_from_feedback')
+    expect(json.skipped).toBe('g15-noop')
   })
 
-  it('flag OFF + unauthorized session → 401, no write', async () => {
-    mockIsFeatureEnabled.mockImplementation(() => false)
+  it('returns same no-op shape regardless of isFeatureEnabled state', async () => {
+    mockIsFeatureEnabled.mockImplementation((flag: string) => flag === 'xp_from_feedback')
+
+    const res = await LEARN_STATS_POST(makeReq(70))
+    const json = await res.json()
+
+    expect(mockUpdatePracticeStats).not.toHaveBeenCalled()
+    expect(json.skipped).toBe('g15-noop')
+  })
+
+  it('unauthorized session → 401, no write (auth before no-op)', async () => {
     mockGetServerSession.mockResolvedValue(null)
 
     const res = await LEARN_STATS_POST(makeReq(70))
     expect(res.status).toBe(401)
     expect(mockUpdatePracticeStats).not.toHaveBeenCalled()
-  })
-
-  it('flag ON + unauthorized session → 401 (no short-circuit)', async () => {
-    // Defense-in-depth: even with the flag on, auth check comes first.
-    mockIsFeatureEnabled.mockImplementation((flag: string) => flag === 'xp_from_feedback')
-    mockGetServerSession.mockResolvedValue(null)
-
-    const res = await LEARN_STATS_POST(makeReq(70))
-    expect(res.status).toBe(401)
   })
 })
 
@@ -238,20 +232,10 @@ describe('POST /api/generate-feedback — G.14 server-side XP write', () => {
     model: 't', provider: 't', inputTokens: 1000, outputTokens: 500, usedFallback: false, truncated: false,
   }
 
-  it('flag OFF → does NOT call updatePracticeStats from the route', async () => {
-    mockIsFeatureEnabled.mockImplementation(() => false)
-    mockCompletion.mockResolvedValueOnce(happyFeedback)
-
-    await GENERATE_FEEDBACK_POST(makeReq(evals(5)))
-    // Post-feedback side effects fire-and-forget; give the microtask
-    // queue a turn to flush any promise-chained calls.
-    await new Promise((r) => setImmediate(r))
-
-    expect(mockUpdatePracticeStats).not.toHaveBeenCalled()
-  })
-
-  it('flag ON → calls updatePracticeStats once with feedback.overall_score', async () => {
-    mockIsFeatureEnabled.mockImplementation((flag: string) => flag === 'xp_from_feedback')
+  // G.15b-5 inverted: pre-G.15 the route flag-gated the XP write
+  // on `xp_from_feedback`. Post-G.15 the write is unconditional.
+  it('always calls updatePracticeStats once with the final blended overall_score', async () => {
+    mockIsFeatureEnabled.mockImplementation(() => false) // flag state irrelevant now
     mockCompletion.mockResolvedValueOnce(happyFeedback)
 
     await GENERATE_FEEDBACK_POST(makeReq(evals(5)))
@@ -261,12 +245,13 @@ describe('POST /api/generate-feedback — G.14 server-side XP write', () => {
     const call = mockUpdatePracticeStats.mock.calls[0][0] as Record<string, unknown>
     expect(call.domain).toBe('pm')
     expect(call.interviewType).toBe('screening')
-    // 5 evals each with dims 70/65/60/75 → per-row avg = (70+65+60+75)/4
-    // = 67.5, Math.round(67.5) = 68 (JS rounds .5 toward +Inf).
-    // formulaOverall = round(68*0.4 + 72*0.3 + 70*0.3)
-    //                = round(27.2 + 21.6 + 21.0)
-    //                = round(69.8) = 70
-    expect(call.score).toBe(70)
+    // 5 evals each with dims 70/65/60/75 → per-row avg = 67.5,
+    // Math.round(67.5) = 68. With G.9 (always-on post-G.15)
+    // weighted aggregate over identical rows = same mean = 68.
+    // formulaOverall = round(68*0.4 + 72*0.3 + 70*0.3) = 70.
+    // Claude=72, Δ=2 → G.8 agreement-zone blend (always-on
+    // post-G.15): round(0.6*72 + 0.4*70) = round(71.2) = 71.
+    expect(call.score).toBe(71)
     expect(call.strongDimensions).toEqual(['ownership', 'relevance'])
     expect(call.weakDimensions).toEqual(['structure', 'specificity'])
   })
