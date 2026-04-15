@@ -166,3 +166,10 @@
 - **Root-cause:** two silent-corruption families remained after G.4:
 - **Tests-added: modules/interview/__tests__/generateFeedbackSilent**
 - **Verified-by:** Unit tests — 6/6 G.5 tests pass (4.46s). Regression
+
+### 2026-04-15 14:29:26 +0000 · `f9d1c14` · Claude
+- **Subject:** feat(scoring-g7): session completion shape (planned/answered/endReason)
+- **Files:** 6 changed, 1 test file(s)
+- **Root-cause:** neither InterviewSession nor FeedbackData carried any
+- **Tests-added: modules/interview/__tests__/sessionCompletionShape.**
+- **Verified-by:** Unit tests — 10/10 G.7 tests pass. Regression suites:
