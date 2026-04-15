@@ -229,3 +229,10 @@
 - **Root-cause:** modules/interview/hooks/useInterview.ts:410-418 — when the
 - **Tests-added: modules/interview/__tests__/timerTruncation.test.ts**
 - **Verified-by:** Unit tests — 9/9 new pass. Regression: 206/206 pass
+
+### 2026-04-15 18:26:26 +0000 · `8d98d7a` · Claude
+- **Subject:** feat(scoring-g13): per-question compact-transcript prompt (flag-gated)
+- **Files:** 4 changed, 1 test file(s)
+- **Root-cause:** app/api/generate-feedback/route.ts:275-286 (pre-G.13)
+- **Tests-added: modules/interview/__tests__/transcriptCompactor.test.**
+- **Verified-by:** Unit tests — 19/19 new pass. Regression: 201/201 pass
