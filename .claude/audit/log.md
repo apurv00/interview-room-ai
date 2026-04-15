@@ -201,3 +201,10 @@
 - **Root-cause:** app/interview/page.tsx:288 and :293 declared
 - **No-tests-needed-because: pure lint-cleanup refactor with no**
 - **Verified-by:** `npm run build` exit 0 with ZERO react-hooks/
+
+### 2026-04-15 17:32:20 +0000 · `69f88b9` · Claude
+- **Subject:** feat(scoring-g9): dimension-aware answer_quality aggregate (flag-gated)
+- **Files:** 4 changed, 1 test file(s)
+- **Root-cause:** app/api/generate-feedback/route.ts:540 (pre-G.9) set
+- **Tests-added: modules/interview/__tests__/answerQualityAggregate.**
+- **Verified-by:** Unit tests — 11/11 new pass (5.08s). Regression:
