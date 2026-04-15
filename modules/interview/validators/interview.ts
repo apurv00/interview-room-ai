@@ -191,6 +191,13 @@ export const UpdateSessionSchema = z.object({
     label: z.string(),
     weight: z.number(),
   })).optional(),
+  // G.7: session completion shape. Populated by useInterview's
+  // finishInterview() when the session ends. Writing these is additive —
+  // legacy clients that don't send them continue to work unchanged.
+  plannedQuestionCount: z.number().int().min(0).max(100).optional(),
+  answeredCount: z.number().int().min(0).max(100).optional(),
+  endReason: z.enum(['normal', 'time_up', 'user_ended', 'usage_limit', 'abandoned']).optional(),
+  wasTruncatedByTimer: z.array(z.boolean()).max(100).optional(),
 })
 
 // ─── LLM response schemas (Work Item G.2) ──────────────────────────────────

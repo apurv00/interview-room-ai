@@ -779,7 +779,9 @@ export default function InterviewPage() {
       <InterviewControls
         muted={muted}
         onToggleMute={toggleMute}
-        onEndInterview={finishInterview}
+        // G.7: the End button explicitly tags the session as candidate-ended,
+        // distinct from time_up or a normal closing-line exit.
+        onEndInterview={() => finishInterview('user_ended')}
         isScoring={phase === 'SCORING'}
         darkMode={isCodingMode || isDesignMode}
       />

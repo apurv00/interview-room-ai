@@ -131,6 +131,25 @@ export interface IInterviewSession extends Document {
   parentSessionId?: mongoose.Types.ObjectId
   retakeNumber?: number
 
+  // ── G.7: session completion shape ─────────────────────────────────────
+  // Populated at session-create time (from getQuestionCount(config.duration))
+  // and at finishInterview time (from how the session ended). Consumed by
+  // G.10 (partial-completion scoring) — feedback generation uses these to
+  // apply a completion multiplier, clamp confidence_level on low-data
+  // sessions, and surface an explicit red_flag when answeredCount is
+  // below the planned count. All fields optional so legacy sessions remain
+  // valid; readers treat undefined as "unknown" rather than zero.
+  plannedQuestionCount?: number
+  answeredCount?: number
+  endReason?: 'normal' | 'time_up' | 'user_ended' | 'usage_limit' | 'abandoned'
+  /**
+   * Per-question flag — true when the candidate's answer to that question
+   * was cut off by the interview timer expiring (the 15s LISTENING grace
+   * at useInterview.ts:397-403). G.12 will populate this; G.7 just
+   * reserves the schema so later writes don't need a migration.
+   */
+  wasTruncatedByTimer?: boolean[]
+
   createdAt: Date
   updatedAt: Date
 }
@@ -233,6 +252,15 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
     // sessions (pre-change) remain valid without a migration.
     parentSessionId: { type: Schema.Types.ObjectId, ref: 'InterviewSession', index: true },
     retakeNumber: { type: Number, min: 1 },
+
+    // G.7: session completion shape. See interface comment.
+    plannedQuestionCount: { type: Number, min: 0 },
+    answeredCount: { type: Number, min: 0 },
+    endReason: {
+      type: String,
+      enum: ['normal', 'time_up', 'user_ended', 'usage_limit', 'abandoned'],
+    },
+    wasTruncatedByTimer: { type: [Boolean], default: undefined },
   },
   { timestamps: true }
 )

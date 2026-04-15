@@ -77,7 +77,13 @@ export interface UseInterviewReturn {
   liveAnswer: string
   sessionId: string | null
   coachingTip: string | null
-  finishInterview: () => void
+  /**
+   * G.7: optional endReason lets the caller mark *why* the interview ended
+   * (time_up, user_ended, normal, etc.) so generate-feedback can later
+   * penalize incomplete sessions honestly. Omitting the argument defaults
+   * to 'normal' — pre-G.7 callers remain source-compatible.
+   */
+  finishInterview: (endReason?: 'normal' | 'time_up' | 'user_ended' | 'usage_limit' | 'abandoned') => void
   onCodeSubmit: (code: string, language: string) => void
   onDesignSubmit: (data: import('@shared/types').DesignSubmission) => void
 }
@@ -398,18 +404,20 @@ export function useInterview({
             setCoachingTip('Time is up, please finish your current thought.')
             setTimeout(() => {
               if (phaseRef.current !== 'SCORING' && phaseRef.current !== 'ENDED') {
-                finishInterview()
+                // G.7: timer-expired exit — tag it so generate-feedback
+                // can differentiate "ran out of time" from "candidate quit".
+                finishInterview('time_up')
               }
             }, 15000)
           } else if (activePhase === 'ASK_QUESTION' || activePhase === 'PROCESSING' || activePhase === 'COACHING') {
             // Let AI finish speaking / eval settle before ending
             setTimeout(() => {
               if (phaseRef.current !== 'SCORING' && phaseRef.current !== 'ENDED') {
-                finishInterview()
+                finishInterview('time_up')
               }
             }, 5000)
           } else {
-            finishInterview()
+            finishInterview('time_up')
           }
         }
         return next
@@ -789,7 +797,13 @@ export function useInterview({
 
   // ─── Finish interview ──────────────────────────────────────────────────────
 
-  const finishInterview = useCallback(async () => {
+  // G.7: endReason lets each call site tell us WHY the interview ended so
+  // the session row gets a durable signal of completion vs abandonment.
+  // Default is 'normal' — the interview ran its course. Timer-based exits
+  // pass 'time_up'. The End button (external caller in app/interview/page)
+  // passes 'user_ended'. Field is additive and strictly informational; no
+  // existing caller breaks.
+  const finishInterview = useCallback(async (endReason: 'normal' | 'time_up' | 'user_ended' | 'usage_limit' | 'abandoned' = 'normal') => {
     // Idempotency guard: timer=0 and End button can both fire this.
     if (phaseRef.current === 'SCORING' || phaseRef.current === 'ENDED') return
     // CRITICAL: cancel everything BEFORE the state transition so any in-flight
@@ -844,6 +858,13 @@ export function useInterview({
           // so it can skip Whisper entirely. Empty array for Web Speech
           // API fallback users.
           liveTranscriptWords: liveWordsRef.current,
+          // G.7: completion shape. `answeredCount` denormalized from the
+          // evaluations array (generate-feedback could derive it, but the
+          // field enables analytic queries without joining). `endReason`
+          // comes from the caller so timer-based vs user-ended can be
+          // distinguished downstream.
+          answeredCount: evaluationsRef.current.length,
+          endReason,
         }),
         new Promise((r) => setTimeout(r, 10000)),
       ])
