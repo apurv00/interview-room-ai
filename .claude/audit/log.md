@@ -299,3 +299,10 @@
 - **Root-cause:** G.15b chunks 4-7 made all 8 scoring-V2 flag gates
 - **Tests-added: no new tests — fixture/assertion alignment.**
 - **Verified-by:** All 4 directly-touched suites — 9/9 pass after fix.
+
+### 2026-04-15 20:07:52 +0000 · `c91c64a` · Claude
+- **Subject:** refactor(scoring-g15c-8): strip retired scoring-V2 flag definitions
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** After G.15b (chunks 4-7) removed every `isFeatureEnabled`
+- **No-tests-needed-because: purely subtractive change to a string-literal**
+- **Verified-by:** `npx tsc --noEmit` clean (0 errors, 0 output). `npm
