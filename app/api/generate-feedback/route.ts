@@ -31,6 +31,51 @@ export const maxDuration = 60
 
 type GenerateFeedbackBody = z.infer<typeof GenerateFeedbackSchema>
 
+/**
+ * G.4: true per-question answer-quality average, skipping evaluations that
+ * evaluate-answer marked `status='failed'`. Those rows carry the
+ * hard-coded 60/55/55/60 fallback shape so that legacy clients don't
+ * crash, but the numbers are fabricated — averaging them in drags the
+ * user's real score toward a fake mid-range.
+ *
+ * Policy (v1, intentionally conservative):
+ *   - `status: 'failed'`    → fully excluded from the average
+ *   - `status: 'truncated'` → still counted (the dims came from partial
+ *                             LLM output and are best-effort but not
+ *                             fabricated); the red_flag downgrades
+ *                             confidence instead
+ *   - `status: 'ok'` / absent → counted as today
+ *
+ * Returns both the average and the count actually used. Caller uses
+ * `usedCount` to decide the overall-score weighting in the case that
+ * too many rows are dropped.
+ */
+export function computePerQAverage(
+  evaluations: Array<Record<string, unknown>>,
+): { average: number; usedCount: number; skippedFailedCount: number } {
+  const dims = ['relevance', 'structure', 'specificity', 'ownership'] as const
+  let sum = 0
+  let count = 0
+  let skippedFailed = 0
+  for (const e of evaluations) {
+    const status = (e as { status?: string }).status
+    if (status === 'failed') {
+      skippedFailed++
+      continue
+    }
+    const avg =
+      dims.reduce((acc, d) => acc + (Number((e as Record<string, unknown>)[d]) || 0), 0) /
+      dims.length
+    sum += avg
+    count++
+  }
+  return {
+    average: count > 0 ? Math.round(sum / count) : 0,
+    usedCount: count,
+    skippedFailedCount: skippedFailed,
+  }
+}
+
 function computeEngagementContext(
   speechMetrics: Record<string, unknown>[],
   evaluations: Record<string, unknown>[],
@@ -490,12 +535,9 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       // Validate required fields exist (Claude may truncate if hitting max_tokens)
       if (feedback.overall_score == null || !feedback.dimensions) {
         aiLogger.warn({ raw: raw.slice(0, 500) }, 'Incomplete feedback from Claude — applying defaults')
-        feedback.overall_score = feedback.overall_score || Math.round(
-          evaluations.reduce((sum: number, e: Record<string, unknown>) =>
-            sum + (((e.relevance as number) || 0) + ((e.structure as number) || 0) +
-                   ((e.specificity as number) || 0) + ((e.ownership as number) || 0)) / 4, 0
-          ) / Math.max(evaluations.length, 1)
-        )
+        // G.4: reuse the failed-row-aware helper here too.
+        const preQ = computePerQAverage(evaluations as unknown as Array<Record<string, unknown>>)
+        feedback.overall_score = feedback.overall_score || preQ.average
         feedback.dimensions = feedback.dimensions || {
           answer_quality: { score: feedback.overall_score, strengths: [], weaknesses: [] },
           communication: { score: commScore, wpm: aggMetrics.wpm, filler_rate: aggMetrics.fillerRate, pause_score: aggMetrics.pauseScore, rambling_index: aggMetrics.ramblingIndex },
@@ -515,19 +557,11 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       // BUG 2 fix: derive answer_quality from the actual per-question evaluation
       // scores instead of trusting Claude's free-form summary value, which had
       // no rubric anchors and tended to inflate to 60-75.
-      // True per-question average across (relevance + structure + specificity + ownership):
-      const perQAvg = evaluations.length > 0
-        ? Math.round(
-            evaluations.reduce((sum, e) => {
-              const ev = e as unknown as Record<string, number>
-              const r = Number(ev.relevance) || 0
-              const s = Number(ev.structure) || 0
-              const sp = Number(ev.specificity) || 0
-              const o = Number(ev.ownership) || 0
-              return sum + (r + s + sp + o) / 4
-            }, 0) / evaluations.length
-          )
-        : 0
+      // G.4: delegate to computePerQAverage so status='failed' rows
+      // (whose 60/55/55/60 shape is a placeholder, not real scores)
+      // are excluded from the average.
+      const perQ = computePerQAverage(evaluations as unknown as Array<Record<string, unknown>>)
+      const perQAvg = perQ.average
 
       // Override Claude's answer_quality score with the deterministic average
       if (feedback.dimensions?.answer_quality) {
@@ -573,7 +607,12 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         }
         if (failedEvalCount > 0) {
           feedback.red_flags.push(
-            `${failedEvalCount} answer${failedEvalCount === 1 ? '' : 's'} could not be scored — AI evaluation failed. Scores are approximate.`,
+            // G.4: we now EXCLUDE these from perQAvg rather than
+            // averaging in the 60/55/55/60 placeholder. Message
+            // reflects the new behavior so users know the reported
+            // answer_quality score is built only on the rows that
+            // actually got scored.
+            `${failedEvalCount} answer${failedEvalCount === 1 ? '' : 's'} could not be scored — AI evaluation failed and these were excluded from the answer-quality average.`,
           )
         }
         // Down-rate confidence when ≥20% of evaluations had integrity
@@ -720,11 +759,13 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         errorMessage: err instanceof Error ? err.message : 'Unknown error',
       }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
 
-      // Compute a rough score from evaluations if available, otherwise use minimal defaults
+      // Compute a rough score from evaluations if available, otherwise use minimal defaults.
+      // G.4: use the shared failed-row-aware helper so the outer catch
+      // path doesn't re-introduce the fabricated-fallback averaging bug
+      // that the main path now avoids.
       const hasEvals = evaluations && evaluations.length > 0
       const roughScore = hasEvals
-        ? Math.round((evaluations as any[]).reduce((sum: number, e: any) =>
-            sum + ((Number(e.relevance) || 0) + (Number(e.structure) || 0) + (Number(e.specificity) || 0) + (Number(e.ownership) || 0)) / 4, 0) / evaluations.length)
+        ? computePerQAverage(evaluations as unknown as Array<Record<string, unknown>>).average
         : 0
 
       const fallbackCommScore = commScore || 0
