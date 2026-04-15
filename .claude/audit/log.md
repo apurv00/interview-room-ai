@@ -222,3 +222,10 @@
 - **Root-cause:** app/api/evaluate-answer/route.ts:265-272 contained the
 - **Tests-added: modules/interview/__tests__/**
 - **Verified-by:** Unit tests — 11/11 new pass. Regression: 173/173 pass
+
+### 2026-04-15 18:14:05 +0000 · `559f19b` · Claude
+- **Subject:** feat(scoring-g12): mark timer-truncated answers so they aren't penalized
+- **Files:** 6 changed, 1 test file(s)
+- **Root-cause:** modules/interview/hooks/useInterview.ts:410-418 — when the
+- **Tests-added: modules/interview/__tests__/timerTruncation.test.ts**
+- **Verified-by:** Unit tests — 9/9 new pass. Regression: 206/206 pass
