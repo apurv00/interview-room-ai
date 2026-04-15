@@ -38,6 +38,7 @@ export type FeatureFlag =
   | 'scoring_v2_aq'
   | 'scoring_v2_completion'
   | 'scoring_v2_ceiling'
+  | 'compact_transcript'
 
 const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   personalization_engine: true,
@@ -116,6 +117,15 @@ const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   // don't surface as anomalously-low due to missing planned counts.
   // Independent of G.8/G.9.
   scoring_v2_completion: false,
+  // Compact-transcript prompt builder (Work Item G.13). When enabled,
+  // generate-feedback replaces the head/tail transcript slice (pre-G.13
+  // kept first 2500 + last 2500 chars, erasing middle questions) with
+  // a per-question-summary block + full detail for the 2 weakest Qs.
+  // Gives Claude coverage of ALL questions so ideal_answers for middle
+  // Qs aren't synthesized blind. Default OFF — flip on after a staging
+  // soak since prompt-shape changes can shift model output subtly.
+  // Independent of all other scoring_v2_* flags.
+  compact_transcript: false,
   // Scoring V2 — loosen evaluate-answer prompt score ceiling (Work
   // Item G.11). When enabled, evaluate-answer swaps the legacy
   // "Most real answers fall in 41-80 / only push above 80 when

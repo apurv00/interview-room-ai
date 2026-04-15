@@ -24,6 +24,7 @@ import { acquireFeedbackLock, releaseFeedbackLock } from '@shared/services/feedb
 import { computeBlendedOverallScore, resolveBlendWeights } from '@interview/services/eval/overallScore'
 import { computePerQAverage, computeAnswerQualityAggregate } from '@interview/services/eval/perQAggregation'
 import { computeCompletionAdjustment } from '@interview/services/eval/completionAdjustment'
+import { compactTranscript } from '@interview/services/eval/transcriptCompactor'
 import { getQuestionCount } from '@interview/config/interviewConfig'
 import type { Duration } from '@shared/types'
 import { z } from 'zod'
@@ -266,19 +267,41 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
       })
     )
 
-    // Build transcript text with smart truncation: keep first 2 + last 2 Q&A
-    // pairs in full, summarize the middle. The old approach (.slice(0, 4000))
-    // blindly cut later questions, leaving Claude with no evidence for them.
+    // Build transcript text. G.13: when compact_transcript flag is ON,
+    // use the per-question-summary builder so Claude sees coverage of
+    // ALL questions (not just the first 2500 + last 2500 chars that
+    // the legacy head/tail slice produced). The legacy path remains
+    // unchanged for flag-OFF so the prompt shape stays bit-identical
+    // to pre-G.13 until the flag is explicitly flipped.
     const transcriptLines = transcript.map(
       (e) => `${e.speaker === 'interviewer' ? 'Interviewer' : 'Candidate'}: ${e.text}`
     )
     const fullTranscript = transcriptLines.join('\n')
     let transcriptText: string
-    if (fullTranscript.length <= 6000) {
+    if (isFeatureEnabled('compact_transcript')) {
+      const compacted = compactTranscript({
+        transcript,
+        evaluations: evaluations as unknown as import('@shared/types').AnswerEvaluation[],
+      })
+      // When there's nothing to compact (0 evals / empty transcript),
+      // fall back to the legacy path so the downstream prompt still
+      // gets a transcript block to anchor on.
+      transcriptText = compacted.text || fullTranscript
+      if (compacted.budgetHit) {
+        aiLogger.info(
+          {
+            sessionId: body.sessionId,
+            summarizedCount: compacted.summarizedCount,
+            fullDetailIndices: compacted.fullDetailIndices,
+          },
+          'G.13 compact-transcript hit budget — full detail partially omitted',
+        )
+      }
+    } else if (fullTranscript.length <= 6000) {
       transcriptText = fullTranscript
     } else {
-      // Keep first ~2000 chars (opening questions) and last ~2000 chars (final questions)
-      // with a "[...N lines omitted for brevity...]" marker in between
+      // Legacy head/tail slice (pre-G.13 behavior). Kept for flag-OFF
+      // and as a safety fallback.
       const head = fullTranscript.slice(0, 2500)
       const tail = fullTranscript.slice(-2500)
       const omittedLines = transcriptLines.length - (head.split('\n').length + tail.split('\n').length)
