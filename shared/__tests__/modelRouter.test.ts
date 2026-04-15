@@ -40,19 +40,19 @@ describe('resolveModel', () => {
   it('returns provider: "anthropic" for resume.enhance-section', async () => {
     const result = await resolveModel('resume.enhance-section')
     expect(result.provider).toBe('anthropic')
-    expect(result.model).toBe('claude-sonnet-4-6-20250514')
+    expect(result.model).toBe('claude-sonnet-4-6')
   })
 
   it('returns provider: "anthropic" for learn.pathway-plan', async () => {
     const result = await resolveModel('learn.pathway-plan')
     expect(result.provider).toBe('anthropic')
-    expect(result.model).toBe('claude-sonnet-4-6-20250514')
+    expect(result.model).toBe('claude-sonnet-4-6')
   })
 
   it('returns provider: "anthropic" for b2b.scorecard', async () => {
     const result = await resolveModel('b2b.scorecard')
     expect(result.provider).toBe('anthropic')
-    expect(result.model).toBe('claude-haiku-4-5-20251001')
+    expect(result.model).toBe('claude-haiku-4-5')
   })
 
   // ── Verify all interview slots use their configured provider ─────────────
