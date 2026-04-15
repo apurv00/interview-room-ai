@@ -309,44 +309,17 @@ describe('POST /api/generate-feedback — G.10 flag gate', () => {
     mockIsFeatureEnabled.mockReset()
   })
 
-  describe('flag OFF', () => {
-    it('4 of 10 answers: no completion multiplier applied', async () => {
-      mockIsFeatureEnabled.mockImplementation(() => false)
-      mockCompletion.mockResolvedValueOnce(claudeFeedback)
-
-      const res = await POST(makeReq({
-        evals: evals(4),
-        plannedQuestionCount: 10,
-        answeredCount: 4,
-        endReason: 'user_ended',
-      }))
-      const json = await res.json()
-
-      // Formula-only overall: aq=75, comm=72, eng=80 → 75*0.4+72*0.3+80*0.3 = 30+21.6+24 = 75.6 → 76
-      expect(json.overall_score).toBe(76)
-      // Not clamped to Low
-      expect(json.confidence_level).not.toBe('Low')
-      // No end-reason red_flag
-      expect(json.red_flags.some((f: string) => f.includes('candidate ended'))).toBe(false)
-    })
-
-    it('2 answers: no short-form guard — processes normally', async () => {
-      mockIsFeatureEnabled.mockImplementation(() => false)
-      mockCompletion.mockResolvedValueOnce(claudeFeedback)
-
-      const res = await POST(makeReq({ evals: evals(2), plannedQuestionCount: 10, answeredCount: 2 }))
-      const json = await res.json()
-
-      // LLM was called (not short-form)
-      expect(mockCompletion).toHaveBeenCalledTimes(1)
-      // overall_score produced normally
-      expect(json.overall_score).toBeGreaterThan(0)
-    })
-  })
-
-  describe('flag ON', () => {
+  // G.15b-6 inverted: pre-G.15 these were split into "flag OFF
+  // (no multiplier)" and "flag ON (multiplier applied)" blocks.
+  // Post-G.15 the completion adjustment is unconditional.
+  // Expected `overall_score` numbers reflect G.8's now-unconditional
+  // blend too: Claude=80 + formula=76 → agreement-zone blend 78.
+  describe('post-G.15 unconditional behavior', () => {
     beforeEach(() => {
-      mockIsFeatureEnabled.mockImplementation((flag: string) => flag === 'scoring_v2_completion')
+      // mockIsFeatureEnabled retains its mock — kept to confirm the
+      // route doesn't actually consult the flag anymore (the
+      // assertions hold the same regardless of what the mock returns).
+      mockIsFeatureEnabled.mockImplementation(() => false)
     })
 
     it('<3 answers → short-form feedback, no LLM call', async () => {
@@ -355,14 +328,13 @@ describe('POST /api/generate-feedback — G.10 flag gate', () => {
       }))
       const json = await res.json()
 
-      // LLM never called — short-form bails out early
       expect(mockCompletion).not.toHaveBeenCalled()
       expect(json.overall_score).toBe(0)
       expect(json.confidence_level).toBe('Low')
       expect(json.red_flags.some((f: string) => f.includes('answers are required'))).toBe(true)
     })
 
-    it('4 of 10 answers: multiplier applied, confidence=Low, red_flag added', async () => {
+    it('4 of 10 answers: G.8 blend → 78, then G.10 multiplier 0.667 → 52', async () => {
       mockCompletion.mockResolvedValueOnce(claudeFeedback)
 
       const res = await POST(makeReq({
@@ -370,16 +342,15 @@ describe('POST /api/generate-feedback — G.10 flag gate', () => {
       }))
       const json = await res.json()
 
-      // Formula-only overall = 76 (pre-G.10). Multiplier = 4/(10*0.6) = 0.667
-      // Adjusted = round(76 * 0.667) = 51
-      expect(json.overall_score).toBe(51)
-      // <50% → Low
+      // G.8 blend (always-on): Claude=80, formula=76, |Δ|=4 →
+      //   round(0.6*80 + 0.4*76) = round(78.4) = 78.
+      // G.10 multiplier 4/(10*0.6) = 0.667 → round(78*0.667) = 52.
+      expect(json.overall_score).toBe(52)
       expect(json.confidence_level).toBe('Low')
-      // End-reason red_flag present
       expect(json.red_flags.some((f: string) => f.includes('candidate ended'))).toBe(true)
     })
 
-    it('6 of 10 answers: no multiplier (at full-credit threshold), no clamp', async () => {
+    it('6 of 10 answers: at full-credit threshold, no multiplier', async () => {
       mockCompletion.mockResolvedValueOnce(claudeFeedback)
 
       const res = await POST(makeReq({
@@ -387,15 +358,15 @@ describe('POST /api/generate-feedback — G.10 flag gate', () => {
       }))
       const json = await res.json()
 
-      // No multiplier at 60% exactly
-      expect(json.overall_score).toBe(76)
-      // 60% > 50% → not clamped
+      // G.8 blend = 78 (same input shape as 4-of-10 — perQAvg=75
+      // unchanged because all rows are identical 75s).
+      expect(json.overall_score).toBe(78)
       expect(json.confidence_level).not.toBe('Low')
-      // Still pushes red_flag since answered < planned
+      // Still pushes red_flag since answered < planned.
       expect(json.red_flags.some((f: string) => f.includes('timer expired'))).toBe(true)
     })
 
-    it('full interview: no adjustment, no red_flag', async () => {
+    it('full interview: no completion adjustment, no completion red_flag', async () => {
       mockCompletion.mockResolvedValueOnce(claudeFeedback)
 
       const res = await POST(makeReq({
@@ -403,7 +374,7 @@ describe('POST /api/generate-feedback — G.10 flag gate', () => {
       }))
       const json = await res.json()
 
-      expect(json.overall_score).toBe(76)
+      expect(json.overall_score).toBe(78) // G.8 blend
       expect(json.red_flags.length).toBe(0)
     })
 
@@ -416,8 +387,9 @@ describe('POST /api/generate-feedback — G.10 flag gate', () => {
       }))
       const json = await res.json()
 
-      // 10 / 16 = 62.5% → above threshold, no penalty, no clamp
-      expect(json.overall_score).toBe(76)
+      // 10 / 16 = 62.5% → above threshold, no penalty, no clamp.
+      // G.8 blend (always-on) = 78.
+      expect(json.overall_score).toBe(78)
       // answered < planned → red_flag still fires
       expect(json.red_flags.length).toBeGreaterThan(0)
     })

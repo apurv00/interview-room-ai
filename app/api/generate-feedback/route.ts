@@ -204,7 +204,11 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
     // in config. The resulting feedback object mirrors noDataFeedback
     // above but uses the G.10 red_flag copy so the user understands
     // WHY the score is withheld.
-    if (isFeatureEnabled('scoring_v2_completion') && g10Adjustment.shouldReturnShortForm) {
+    // G.10 short-form guard (always-on post-G.15): refuse to score
+    // <3 answers regardless of flag state. Pre-G.15 was gated on
+    // `scoring_v2_completion`; flag definition stays in
+    // featureFlags.ts as dead-reference until G.15c.
+    if (g10Adjustment.shouldReturnShortForm) {
       const shortFormFeedback: FeedbackData = {
         // overall_score 0 here matches the noDataFeedback shape so
         // downstream display doesn't need special handling for the
@@ -766,19 +770,19 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         )
       }
 
-      // G.10 — partial-completion adjustment. Runs AFTER G.8's blend
-      // computed the final overall_score AND after G.3's confidence
-      // clamp, so this is the last word on both fields. Flag-gated:
-      // scoring_v2_completion OFF → no multiplier, no clamp, no new
-      // red_flag; the handler behaves exactly as pre-G.10.
+      // G.10 — partial-completion adjustment (always-on post-G.15).
+      // Runs AFTER G.8's blend computed the final overall_score AND
+      // after G.3's confidence clamp, so this is the last word on both
+      // fields. Pre-G.15 was flag-gated on `scoring_v2_completion`;
+      // flag definition stays in featureFlags.ts as dead-reference
+      // until G.15c.
       //
-      // When ON:
       //   - Apply scoreMultiplier to overall_score (full credit ≥60%
       //     completion, linear taper below).
       //   - Clamp confidence_level to 'Low' when <50% completion.
       //   - Push the end-reason red_flag so the user understands.
       //   - Recompute pass_probability from the adjusted overall_score.
-      if (isFeatureEnabled('scoring_v2_completion') && feedback.overall_score != null) {
+      if (feedback.overall_score != null) {
         if (g10Adjustment.scoreMultiplier < 1) {
           feedback.overall_score = Math.round(feedback.overall_score * g10Adjustment.scoreMultiplier)
           feedback.pass_probability = feedback.overall_score >= 75 ? 'High' : feedback.overall_score >= 50 ? 'Medium' : 'Low'
