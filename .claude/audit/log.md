@@ -180,3 +180,10 @@
 - **Root-cause:** app/api/generate-feedback/route.ts:590 discarded Claude's
 - **Tests-added: modules/interview/__tests__/overallScoreBlend.test.ts**
 - **Verified-by:** Unit tests — 28/28 G.8 tests pass (overallScoreBlend
+
+### 2026-04-15 16:37:22 +0000 · `0472cb6` · Claude
+- **Subject:** fix(scoring-g4): extract computePerQAverage out of route.ts (Vercel build)
+- **Files:** 4 changed, 2 test file(s)
+- **Root-cause:** Next.js App Router rejects non-route exports from
+- **Tests-added: no new tests — the existing 10 unit tests in**
+- **Verified-by:** `npm run build` exit 0 (was exit 1 pre-fix — this
