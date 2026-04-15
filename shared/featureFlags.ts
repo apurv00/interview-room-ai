@@ -35,6 +35,9 @@ export type FeatureFlag =
   | 'jd_flow_overlay'
   | 'score_telemetry'
   | 'scoring_v2_overall'
+  | 'scoring_v2_aq'
+  | 'scoring_v2_completion'
+  | 'scoring_v2_ceiling'
 
 const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   personalization_engine: true,
@@ -94,6 +97,41 @@ const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   // SCORING_V2_CLAUDE_WEIGHT / SCORING_V2_FORMULA_WEIGHT /
   // SCORING_V2_DISAGREEMENT_THRESHOLD env vars.
   scoring_v2_overall: false,
+  // Scoring V2 — dimension-aware answer_quality aggregate (Work Item G.9).
+  // When enabled, generate-feedback computes answer_quality.score as
+  //   0.4*mean + 0.3*top3Mean + 0.2*median + 0.1*bottom3Mean
+  // over per-question scores, preserving outlier signal. Default OFF —
+  // flip on after G.1 telemetry shows the answer_quality distribution
+  // has tightened around 65-75 on flat-mean (i.e. confirms the spread
+  // problem G.9 solves is present in prod). Independent of G.8; either
+  // can be enabled without the other.
+  scoring_v2_aq: false,
+  // Scoring V2 — partial-completion adjustment + short-form guard
+  // (Work Item G.10). When enabled, generate-feedback applies a
+  // completion multiplier to overall_score, clamps confidence_level
+  // based on answered/planned ratio, and refuses to emit a scored
+  // report when <3 answers were evaluated. Uses the G.7 session shape
+  // fields (plannedQuestionCount, answeredCount, endReason). Default
+  // OFF — flip on after G.7 backfill is complete so legacy sessions
+  // don't surface as anomalously-low due to missing planned counts.
+  // Independent of G.8/G.9.
+  scoring_v2_completion: false,
+  // Scoring V2 — loosen evaluate-answer prompt score ceiling (Work
+  // Item G.11). When enabled, evaluate-answer swaps the legacy
+  // "Most real answers fall in 41-80 / only push above 80 when
+  // genuinely strong on every dimension" anchor block for a
+  // calibrated-distribution block that explicitly makes 81-100
+  // reachable when 3 of 4 dimensions are excellent. This is the
+  // single prompt-level cause of score compression — the "every
+  // dimension" clause makes 81+ statistically unreachable at
+  // ~P(strong)=0.6 per dim (0.6^4 ≈ 13%). Default OFF — flip on
+  // after G.1 telemetry shows the per-dim distribution is tight in
+  // the 55-75 band (confirming the compression problem is present
+  // in prod). Independent of G.8/G.9/G.10 — affects per-answer
+  // evaluate scoring, not the post-interview aggregates. Flip with
+  // care: this is a model-behavior change, A/B carefully against
+  // the 20-fixture harness at evaluate-answer before full rollout.
+  scoring_v2_ceiling: false,
 }
 
 export function isFeatureEnabled(flag: FeatureFlag): boolean {

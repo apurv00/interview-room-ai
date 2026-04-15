@@ -22,7 +22,10 @@ import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSec
 import { recordScoreDelta } from '@shared/services/scoreTelemetry'
 import { acquireFeedbackLock, releaseFeedbackLock } from '@shared/services/feedbackLock'
 import { computeBlendedOverallScore, resolveBlendWeights } from '@interview/services/eval/overallScore'
-import { computePerQAverage } from '@interview/services/eval/perQAggregation'
+import { computePerQAverage, computeAnswerQualityAggregate } from '@interview/services/eval/perQAggregation'
+import { computeCompletionAdjustment } from '@interview/services/eval/completionAdjustment'
+import { getQuestionCount } from '@interview/config/interviewConfig'
+import type { Duration } from '@shared/types'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -167,6 +170,81 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
         }).catch((err) => aiLogger.warn({ err, sessionId: body.sessionId }, 'Failed to persist no-data feedback'))
       }
       return NextResponse.json(noDataFeedback)
+    }
+
+    // G.10 — completion-shape inputs + short-form guard.
+    // Derive plannedQuestionCount and answeredCount from whatever the
+    // caller supplied (client-populated by G.7 in useInterview) with
+    // safe fallbacks: evaluations.length for answered count, and
+    // getQuestionCount(config.duration) for planned count. Legacy
+    // sessions (pre-G.7) hit the fallbacks; they still get sensible
+    // numbers and the flag-gated adjustment stays a no-op until
+    // scoring_v2_completion flips on.
+    const g10PlannedCount =
+      typeof body.plannedQuestionCount === 'number' && body.plannedQuestionCount > 0
+        ? body.plannedQuestionCount
+        : (() => {
+            try { return getQuestionCount(config.duration as Duration) } catch { return 0 }
+          })()
+    const g10AnsweredCount =
+      typeof body.answeredCount === 'number' && body.answeredCount >= 0
+        ? body.answeredCount
+        : evaluations.length
+    const g10EndReason = body.endReason ?? 'normal'
+    const g10Adjustment = computeCompletionAdjustment({
+      plannedQuestionCount: g10PlannedCount,
+      answeredCount: g10AnsweredCount,
+      endReason: g10EndReason,
+    })
+
+    // Short-form guard: refuse to emit a scored report for <3 answers.
+    // Flag-gated so turning the completion policy on is a single flip
+    // in config. The resulting feedback object mirrors noDataFeedback
+    // above but uses the G.10 red_flag copy so the user understands
+    // WHY the score is withheld.
+    if (isFeatureEnabled('scoring_v2_completion') && g10Adjustment.shouldReturnShortForm) {
+      const shortFormFeedback: FeedbackData = {
+        // overall_score 0 here matches the noDataFeedback shape so
+        // downstream display doesn't need special handling for the
+        // short-form branch. The red_flag copy is the real user
+        // signal.
+        overall_score: 0,
+        pass_probability: 'Low',
+        confidence_level: 'Low',
+        dimensions: {
+          answer_quality: {
+            score: 0,
+            strengths: [],
+            weaknesses: [`Answered ${g10AnsweredCount} of ${g10PlannedCount} planned — not enough to score.`],
+          },
+          communication: { score: 0, wpm: 0, filler_rate: 0, pause_score: 0, rambling_index: 0 },
+          engagement_signals: { score: 0, engagement_score: 0, confidence_trend: 'stable', energy_consistency: 0, composure_under_pressure: 0 },
+        },
+        red_flags: g10Adjustment.redFlags,
+        top_3_improvements: [
+          'Complete the full interview to receive a scored report.',
+          'Practice with a shorter 10-minute session first to build stamina.',
+          'Use the Coach Mode if the pacing feels fast — it slows the questions.',
+        ],
+      }
+      if (body.sessionId) {
+        InterviewSession.findByIdAndUpdate(body.sessionId, {
+          feedback: shortFormFeedback,
+          status: 'completed',
+          completedAt: new Date(),
+        }).catch((err) => aiLogger.warn({ err, sessionId: body.sessionId }, 'Failed to persist short-form feedback'))
+      }
+      aiLogger.info(
+        {
+          sessionId: body.sessionId,
+          userId: user.id,
+          answeredCount: g10AnsweredCount,
+          plannedQuestionCount: g10PlannedCount,
+          endReason: g10EndReason,
+        },
+        'G.10 short-form guard: refusing to score interview with <3 answers',
+      )
+      return NextResponse.json(shortFormFeedback)
     }
 
     const aggMetrics = aggregateMetrics(speechMetrics)
@@ -529,15 +607,25 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       // BUG 2 fix: derive answer_quality from the actual per-question evaluation
       // scores instead of trusting Claude's free-form summary value, which had
       // no rubric anchors and tended to inflate to 60-75.
-      // G.4: delegate to computePerQAverage so status='failed' rows
+      // G.4: delegate to a status-aware helper so status='failed' rows
       // (whose 60/55/55/60 shape is a placeholder, not real scores)
-      // are excluded from the average.
-      const perQ = computePerQAverage(evaluations as unknown as Array<Record<string, unknown>>)
+      // are excluded from the aggregate.
+      // G.9: compute the richer aggregate (mean + median + top3Mean +
+      // bottom3Mean + weighted) up front; select which field to use as
+      // answer_quality.score based on the scoring_v2_aq flag. `perQAvg`
+      // (the flat mean) remains the input to the existing overall-score
+      // formula/blend, regardless of flag — only the displayed
+      // answer_quality dimension changes here. This keeps the overall
+      // score ramp (G.8) independent of the AQ ramp (G.9).
+      const perQ = computeAnswerQualityAggregate(evaluations as unknown as Array<Record<string, unknown>>)
       const perQAvg = perQ.average
+      const aqDisplayScore = isFeatureEnabled('scoring_v2_aq')
+        ? perQ.weighted
+        : perQAvg
 
-      // Override Claude's answer_quality score with the deterministic average
+      // Override Claude's answer_quality score with the deterministic value.
       if (feedback.dimensions?.answer_quality) {
-        feedback.dimensions.answer_quality.score = perQAvg
+        feedback.dimensions.answer_quality.score = aqDisplayScore
       }
 
       // Deterministic formula overall score: weighted average of
@@ -631,6 +719,45 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         } else if (problemRatio > 0 && feedback.confidence_level === 'High') {
           feedback.confidence_level = 'Medium'
         }
+      }
+
+      // G.10 — partial-completion adjustment. Runs AFTER G.8's blend
+      // computed the final overall_score AND after G.3's confidence
+      // clamp, so this is the last word on both fields. Flag-gated:
+      // scoring_v2_completion OFF → no multiplier, no clamp, no new
+      // red_flag; the handler behaves exactly as pre-G.10.
+      //
+      // When ON:
+      //   - Apply scoreMultiplier to overall_score (full credit ≥60%
+      //     completion, linear taper below).
+      //   - Clamp confidence_level to 'Low' when <50% completion.
+      //   - Push the end-reason red_flag so the user understands.
+      //   - Recompute pass_probability from the adjusted overall_score.
+      if (isFeatureEnabled('scoring_v2_completion') && feedback.overall_score != null) {
+        if (g10Adjustment.scoreMultiplier < 1) {
+          feedback.overall_score = Math.round(feedback.overall_score * g10Adjustment.scoreMultiplier)
+          feedback.pass_probability = feedback.overall_score >= 75 ? 'High' : feedback.overall_score >= 50 ? 'Medium' : 'Low'
+        }
+        if (g10Adjustment.clampConfidenceTo === 'Low') {
+          feedback.confidence_level = 'Low'
+        }
+        if (g10Adjustment.redFlags.length > 0) {
+          feedback.red_flags = Array.isArray(feedback.red_flags) ? feedback.red_flags : []
+          for (const f of g10Adjustment.redFlags) {
+            feedback.red_flags.push(f)
+          }
+        }
+        aiLogger.info(
+          {
+            sessionId: body.sessionId,
+            answeredCount: g10AnsweredCount,
+            plannedQuestionCount: g10PlannedCount,
+            completionRatio: g10Adjustment.completionRatio,
+            scoreMultiplier: g10Adjustment.scoreMultiplier,
+            endReason: g10EndReason,
+          },
+          'G.10 completion adjustment applied',
+        )
       }
 
       // G.1 telemetry — record Claude's raw value vs the deterministic

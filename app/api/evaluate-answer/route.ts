@@ -251,6 +251,32 @@ You are an expert interview coach evaluating candidates for ${domainLabel} roles
       probeDepthContext = '\nIf probing, PREFERRED probe type for first probe: "expand" — ask the candidate to tell you more, elaborate, or walk you through their thought process.'
     }
 
+    // G.11 — scoring guide block. The legacy copy anchored Claude to a
+    // 41-80 band and gated 81+ on "every dimension" being strong, which
+    // at P(strong)~0.6 per dim makes top scores statistically
+    // unreachable (~13%). The new copy preserves the 5 bands but
+    // removes the 41-80 anchor, removes the "every dimension" gate,
+    // and gives an explicit calibration example for the 85-92 range.
+    // Flag-gated so we can A/B it against the legacy prompt before
+    // full rollout.
+    const scoringGuide = isFeatureEnabled('scoring_v2_ceiling')
+      ? `SCORING GUIDE — calibrate to the answer in front of you; do not anchor to the middle.
+- 0–20  : Off-topic, fabricated, or a non-answer.
+- 21–40 : Weak. Missing key elements, no specifics, no ownership.
+- 41–60 : Adequate but generic. Lacks depth, structure, or concrete detail.
+- 61–80 : Good. Clear structure, specific examples, visible personal contribution.
+- 81–100: Excellent. STAR-structured, quantified outcomes, clear ownership, strong relevance.
+
+Score distribution is expected to SPREAD across all five bands across a session — do not cluster answers in 55–75. 81–100 is reachable when 3 of 4 dimensions are excellent AND no dimension is below 60. An answer with STAR structure, quantified outcomes, clear ownership, and strong relevance should score 85–92 even if specificity is only "good." Reserve 0–20 for off-topic, fabricated, or non-answers.`
+      : `SCORING GUIDE — be honest; do not default to the middle.
+- 0–20  : Off-topic, no real answer, or fabricated.
+- 21–40 : Weak. Missing key elements, no specifics, no ownership.
+- 41–60 : Adequate but generic. Lacks depth, structure, or concrete detail.
+- 61–80 : Good. Clear structure, specific examples, visible personal contribution.
+- 81–100: Excellent. Structured, specific, quantified outcomes, no red flags.
+
+Most real answers fall in 41–80. Only push above 80 when genuinely strong on every dimension.`
+
     const userPrompt = `Evaluate this interview answer:
 
 Question: "${question}"
@@ -262,14 +288,7 @@ ${answer}
 Score on these dimensions (integer 0–100):
 ${dimensionPrompt}${jdAlignmentDimension}
 
-SCORING GUIDE — be honest; do not default to the middle.
-- 0–20  : Off-topic, no real answer, or fabricated.
-- 21–40 : Weak. Missing key elements, no specifics, no ownership.
-- 41–60 : Adequate but generic. Lacks depth, structure, or concrete detail.
-- 61–80 : Good. Clear structure, specific examples, visible personal contribution.
-- 81–100: Excellent. Structured, specific, quantified outcomes, no red flags.
-
-Most real answers fall in 41–80. Only push above 80 when genuinely strong on every dimension.
+${scoringGuide}
 
 Also determine:
 - primaryGap: the dimension name with the lowest score (one of the dimension names above)
