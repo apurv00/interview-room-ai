@@ -439,3 +439,24 @@
 - **Root-cause:** modules/learn/__tests__/engagementPerf.test.ts line 117
 - **No-tests-needed-because: this commit IS the test fix — the artifact**
 - **Verified-by:** npx vitest run
+
+### 2026-04-16 19:44:24 +0000 · `09636f3` · Claude
+- **Subject:** test(learn): delete hollow micro-benchmarks (XP_AMOUNTS, calculateLevel, getLevelTitle)
+- **Files:** 1 changed, 1 test file(s)
+- **Root-cause:** three of the eight benchmarks in engagementPerf.test.ts
+- **No-tests-needed-because: this commit IS a test deletion. The**
+- **Verified-by:** npx vitest run
+
+### 2026-04-16 19:48:11 +0000 · `fd13f0c` · Claude
+- **Subject:** fix(interview): catch HTTP 4xx/5xx on fire-and-forget fetches (F-2 follow-up)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the F-2 observability fix (PR #273 commit f34aa06) added
+- **No-tests-needed-because: this is observability-only. Existing**
+- **Verified-by:** npx tsc --noEmit (clean); npm run test:run (1930
+
+### 2026-04-16 19:48:28 +0000 · `20694ce` · Claude
+- **Subject:** test(learn): delete hollow micro-benchmarks (XP_AMOUNTS, calculateLevel, getLevelTitle)
+- **Files:** 1 changed, 1 test file(s)
+- **Root-cause:** PR #273 shipped a 10ms→50ms budget bump on the
+- **No-tests-needed-because: this commit IS a test deletion. The**
+- **Verified-by:** npx vitest run

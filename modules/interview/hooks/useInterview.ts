@@ -935,22 +935,36 @@ export function useInterview({
       // has been a permanent no-op since G.15b-5; removing this
       // client call eliminates a dead fetch per session.
 
+      // F-2: shared helper — `fetch` only rejects on network errors, so
+      // HTTP 4xx/5xx responses slip past a bare `.catch` and the whole
+      // point of this observability fix would be defeated (a server 500
+      // or the N1 per-user 429 rate limit would still fail silently).
+      // Thread both failure modes through the same logging path by
+      // throwing when `res.ok === false`, then logging in `.catch`.
+      const logFireAndForgetFailure = (label: string) => async (err: unknown) => {
+        console.warn(`[interview] ${label} fire-and-forget failed`, {
+          sessionId: sid,
+          err: err instanceof Error ? err.message : String(err),
+        })
+      }
+      const checkOk = async (res: Response) => {
+        if (!res.ok) {
+          // Grab a short body snippet for root-cause without blowing up
+          // the console if the body is huge or not readable.
+          const body = await res.text().catch(() => '')
+          throw new Error(`HTTP ${res.status}${body ? `: ${body.slice(0, 200)}` : ''}`)
+        }
+      }
+
       // Auto-trigger AI analysis if recording exists (fire-and-forget).
       if (isMultimodalEnabled) {
         fetch('/api/analysis/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessionId: sid }),
-        }).catch((err) => {
-          // F-2: log to the browser console so silent failures are at
-          // least visible in DevTools. The feedback/analysis flows handle
-          // a missing background job gracefully, so we don't block the
-          // navigation or surface a user-facing error.
-          console.warn('[interview] /api/analysis/start fire-and-forget failed', {
-            sessionId: sid,
-            err: err instanceof Error ? err.message : String(err),
-          })
         })
+          .then(checkOk)
+          .catch(logFireAndForgetFailure('/api/analysis/start'))
       }
 
       // Pre-generate feedback so it's ready when user opens feedback page.
@@ -968,18 +982,9 @@ export function useInterview({
             speechMetrics: speechMetricsRef.current,
             sessionId: sid,
           }),
-        }).catch((err) => {
-          // F-2: log to the browser console so a failed pre-gen doesn't
-          // disappear silently. If we don't log this, the user's 24-second
-          // feedback-page poll ends in a fallback POST that looks like a
-          // fresh call — we lose the signal that something broke earlier.
-          // Non-fatal: the feedback page will call /api/generate-feedback
-          // itself if session.feedback doesn't materialise in time.
-          console.warn('[interview] /api/generate-feedback pre-gen fire-and-forget failed', {
-            sessionId: sid,
-            err: err instanceof Error ? err.message : String(err),
-          })
         })
+          .then(checkOk)
+          .catch(logFireAndForgetFailure('/api/generate-feedback'))
       }
 
       // Clear session state — interview is complete
