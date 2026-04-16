@@ -261,12 +261,26 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
     // right before the expensive work. If another caller already landed
     // a result in the DB, reuse it; skip the duplicate Claude call and
     // all side effects. The try/catch keeps this check non-fatal: a
-    // transient DB blip or a mock with no findById falls through to
+    // transient DB blip or a mock with no findOne falls through to
     // the original pipeline (same behavior as pre-F-4).
+    //
+    // SECURITY: sessionId is client-supplied and not formatted-checked
+    // before this point, so the lookup MUST be owner-scoped. A bare
+    // findById would turn this endpoint into a cross-account feedback
+    // oracle — any authenticated user who learned another user's
+    // sessionId could fetch that user's overall_score, dimensions,
+    // red_flags, etc. Scoping on { _id, userId: user.id } ensures a
+    // mismatched owner gets null (same as "no cached feedback"),
+    // falling through to the normal generation path. The indexed
+    // { userId: 1, ... } compounds on InterviewSession keep this
+    // O(log n) — no measurable latency delta vs findById.
     if (body.sessionId) {
       try {
         await connectDB()
-        const existing = (await InterviewSession.findById(body.sessionId)
+        const existing = (await InterviewSession.findOne({
+          _id: body.sessionId,
+          userId: user.id,
+        })
           .select('feedback')
           .lean()) as { feedback?: FeedbackData } | null
         if (existing?.feedback) {

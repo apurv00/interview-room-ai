@@ -828,6 +828,19 @@ blip logs a warn and falls through to the original pipeline rather
 than blocking legitimate feedback generation. One ~50 ms DB read
 to save a ~10–20 s Claude call + five side-effect writes.
 
+**Security: owner-scoped lookup.** `sessionId` is client-supplied
+and only format-validated as a string. The pre-flight query MUST
+filter on `{ _id: body.sessionId, userId: user.id }` (not a bare
+`findById`) — otherwise this endpoint becomes a cross-account
+feedback oracle: any authenticated user who learns another user's
+sessionId could fetch that user's overall_score, dimensions,
+red_flags, and top_3_improvements. The owner filter ensures a
+mismatched caller gets `null` back (same as "no cached feedback"),
+falling through to the normal generation path. Caught during the
+Codex review of PR #273 before merge; regression test
+`F-4: pre-flight lookup is owner-scoped (no cross-account feedback
+leak)` asserts the filter shape includes `userId`.
+
 **Tests added (`generateFeedbackIdempotency.test.ts`):**
 - `F-4: returns cached feedback when session.feedback already
   populated (fail-open race)` — asserts no completion call, cached

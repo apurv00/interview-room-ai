@@ -18,7 +18,7 @@ import { NextRequest } from 'next/server'
 
 const {
   mockAcquire, mockRelease, mockCompletion, mockWarn, mockError, mockInfo,
-  mockSessionFindById,
+  mockSessionFindOne,
 } = vi.hoisted(() => ({
   mockAcquire: vi.fn(),
   mockRelease: vi.fn(),
@@ -27,9 +27,11 @@ const {
   mockError: vi.fn(),
   mockInfo: vi.fn(),
   // F-4: default returns null (no concurrent writer). Tests can
-  // override via mockSessionFindById.mockReturnValueOnce(...) to
-  // simulate "another caller already wrote session.feedback".
-  mockSessionFindById: vi.fn(() => ({
+  // override via mockSessionFindOne.mockReturnValueOnce(...) to
+  // simulate "another caller already wrote session.feedback" or a
+  // mismatched owner filter (findOne returns null when userId
+  // doesn't match — tested explicitly in the cross-account case).
+  mockSessionFindOne: vi.fn(() => ({
     select: () => ({ lean: () => Promise.resolve(null) }),
   })),
 }))
@@ -82,7 +84,7 @@ vi.mock('@shared/db/models', () => ({
   User: { findById: () => ({ select: () => ({ lean: () => Promise.resolve(null) }) }) },
   InterviewSession: {
     findByIdAndUpdate: vi.fn().mockResolvedValue(undefined),
-    findById: mockSessionFindById,
+    findOne: mockSessionFindOne,
   },
 }))
 
@@ -298,7 +300,7 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
       red_flags: [],
       top_3_improvements: ['already', 'written', 'to DB'],
     }
-    mockSessionFindById.mockReturnValueOnce({
+    mockSessionFindOne.mockReturnValueOnce({
       select: () => ({ lean: () => Promise.resolve({ feedback: cachedFeedback }) }),
     })
 
@@ -316,7 +318,7 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
   it('F-4: proceeds with generation when session.feedback is null (normal first run)', async () => {
     mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: true })
     mockCompletion.mockResolvedValue(happyCompletion)
-    // Default mockSessionFindById returns null → no concurrent writer.
+    // Default mockSessionFindOne returns null → no concurrent writer.
 
     const res = await POST(makeRequest())
 
@@ -330,7 +332,7 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
     mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: true })
     mockCompletion.mockResolvedValue(happyCompletion)
     // Simulate a Mongo outage on the pre-flight read.
-    mockSessionFindById.mockReturnValueOnce({
+    mockSessionFindOne.mockReturnValueOnce({
       select: () => ({ lean: () => Promise.reject(new Error('Mongo ECONNREFUSED')) }),
     })
 
@@ -344,6 +346,39 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
       expect.objectContaining({ sessionId: expect.any(String) }),
       expect.stringContaining('pre-flight session read failed'),
     )
+  })
+
+  it('F-4: pre-flight lookup is owner-scoped (no cross-account feedback leak)', async () => {
+    // Codex P1 finding on PR #273: without {_id, userId} scoping the
+    // pre-flight read would return any session's feedback by id, turning
+    // /api/generate-feedback into a read oracle for other users' scores.
+    // This test asserts the route calls findOne with a userId filter so
+    // a non-matching caller never receives the cached feedback even
+    // when the sessionId matches an existing row.
+    mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: false })
+    mockCompletion.mockResolvedValue(happyCompletion)
+
+    // Caller is user '...9099' (mock session above). The session in
+    // Mongo belongs to a DIFFERENT user, so findOne({_id, userId: 9099})
+    // must return null even though the row exists.
+    mockSessionFindOne.mockReturnValueOnce({
+      select: () => ({ lean: () => Promise.resolve(null) }),
+    })
+
+    await POST(makeRequest())
+
+    // The filter passed to findOne must include the caller's userId,
+    // not just the sessionId. Catching the filter shape here is the
+    // regression guard that would have caught the original leak.
+    expect(mockSessionFindOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: expect.any(String),
+        userId: '507f1f77bcf86cd799439099',
+      }),
+    )
+    // Pipeline continued normally — findOne returned null means no
+    // concurrent writer visible to this user, so we generate freshly.
+    expect(mockCompletion).toHaveBeenCalledTimes(1)
   })
 
   // ─── F-3: aggregate side-effect summary log ─────────────────────────────
