@@ -84,6 +84,7 @@ const fakeFusion = (suffix: string) => ({
   },
   inputTokens: 1000,
   outputTokens: 500,
+  model: 'claude-haiku-4-5',
   promptLength: 3000,
 })
 
@@ -232,6 +233,16 @@ describe('analysisJob', () => {
       )
       const persistArgs = mockPersistResults.mock.calls[0][2]
       expect(persistArgs.startTime).toBe(999_888)
+    })
+
+    it('passes fusionModel from the enhanced fusion result to stepPersistResults', async () => {
+      const { step } = buildMockStep()
+      await runAnalysisJobHandler(
+        { data: { sessionId: 'sess-1', userId: 'user-1', startTime: 1_000 } },
+        step
+      )
+      const persistArgs = mockPersistResults.mock.calls[0][2]
+      expect(persistArgs.fusionModel).toBe('claude-haiku-4-5')
     })
 
     it('calls enforceAnalysisCap with the userId after persist-results', async () => {

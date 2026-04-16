@@ -106,6 +106,7 @@ describe('fusionService', () => {
     expect(result.fusionSummary.coachingTips).toHaveLength(1)
     expect(result.inputTokens).toBe(500)
     expect(result.outputTokens).toBe(300)
+    expect(result.model).toBe('mock-model')
     expect(result.promptLength).toBeGreaterThan(0)
   })
 

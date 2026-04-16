@@ -39,6 +39,8 @@ interface FusionOutput {
   fusionSummary: FusionSummary
   inputTokens: number
   outputTokens: number
+  /** The actual model ID resolved by the model router (e.g. 'claude-haiku-4-5'). */
+  model: string
   /** Length of the rendered user prompt, for dual-pipeline audit logging. */
   promptLength: number
 }
@@ -188,6 +190,7 @@ Guidelines:
     fusionSummary: parsed.fusionSummary,
     inputTokens: response.inputTokens,
     outputTokens: response.outputTokens,
+    model: response.model,
     promptLength: userPrompt.length + JSON.stringify(contextData).length,
   }
 }

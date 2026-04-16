@@ -139,6 +139,7 @@ export async function runAnalysisJobHandler(
       whisperCostUsd: whisper.costUsd,
       fusionInputTokens: enhanced.inputTokens + (baseline?.inputTokens || 0),
       fusionOutputTokens: enhanced.outputTokens + (baseline?.outputTokens || 0),
+      fusionModel: enhanced.model,
       startTime,
     })
   )
