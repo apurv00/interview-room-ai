@@ -847,3 +847,51 @@ input) and acceptable for side effects (rare; logged). A proper
 `findOneAndUpdate({ _id, feedback: null })` conditional write is
 tracked as future hardening but unnecessary for the 99%+ scenario
 handled by the pre-flight read.
+
+### F-3 — Aggregate side-effect summary log (2026-04-16)
+
+_Also in `app/api/generate-feedback/route.ts`, post-feedback block._
+
+**Symptom:** The five fire-and-forget side effects that fan out after
+a feedback is generated (practiceStats / competency / sessionSummary
+/ weaknessClusters / pathwayPlan) each had their own `.catch(err ⇒
+aiLogger.warn(...))` with no `sessionId` in the context. If three of
+five silently failed on a given interview, there was no way to see
+it: the per-call warns had no correlation key, and there was no
+"how many of the N calls succeeded?" line at all. Users could land
+on a feedback page with a score but no XP update, no learning plan,
+no weakness signals — undetectable without combing server logs.
+
+**Root cause:** Observability gap. The calls were structurally
+correct but their outcomes weren't aggregated.
+
+**Fix:** Each side effect is now registered via a local
+`fireAndTrack(name, promise, errLabel)` helper that:
+1. Pushes the raw promise into a `sideEffects: Array<{ name, promise }>`
+   so `Promise.allSettled` can observe it (individual `.catch`
+   handlers are attached after pushing, keeping the raw promise's
+   rejection state intact for the aggregate).
+2. Emits the existing per-call warn WITH `sessionId`, `userId`, and a
+   `sideEffect: <name>` tag for correlation.
+
+After all side effects are registered, `Promise.allSettled(sideEffects
+.map(s => s.promise))` runs (non-blocking; the response has already
+returned). Its `.then` emits one `aiLogger.info` line with
+`totalSideEffects`, `succeeded`, `failedCount`, and — if failures
+exist — a `failed: [{ name, reason }]` array. One glance now tells
+ops "4/5 succeeded for session X, failed: [pathwayPlan]".
+
+The `evaluateSession → generatePathwayPlan` chain is registered as a
+single `pathwayPlan` side effect — a failure in either stage
+attributes to the same name, which is how users experience it
+(either they got a new learning plan or they didn't).
+
+**Tests added (`generateFeedbackIdempotency.test.ts`):**
+- `F-3: emits aggregate summary log with succeeded count when all
+  side effects pass` — asserts the info line includes
+  `totalSideEffects`, `succeeded`, `failedCount: 0`, and no `failed`
+  key when everything succeeds.
+- `F-3: aggregate summary lists failed side effects by name` —
+  overrides `updateCompetencyState` and `generatePathwayPlan` to
+  reject, asserts the aggregate log names both failures with their
+  reason strings.

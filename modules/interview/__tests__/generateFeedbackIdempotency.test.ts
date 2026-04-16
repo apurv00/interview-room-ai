@@ -345,4 +345,71 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
       expect.stringContaining('pre-flight session read failed'),
     )
   })
+
+  // ─── F-3: aggregate side-effect summary log ─────────────────────────────
+  //
+  // Five post-feedback side effects (practiceStats, competency,
+  // sessionSummary, weaknessClusters, pathwayPlan) are fire-and-forget.
+  // Before F-3, a failed side effect only logged a per-call warn with
+  // no sessionId, so ops couldn't correlate failures to an interview
+  // or see how many of the N calls succeeded. F-3 wraps them in
+  // Promise.allSettled and emits one aggregate info line per session.
+
+  it('F-3: emits aggregate summary log with succeeded count when all side effects pass', async () => {
+    mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: true })
+    mockCompletion.mockResolvedValue(happyCompletion)
+
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+
+    // Side effects are fire-and-forget; let their promises settle.
+    // Microtask flush + a short macrotask covers the allSettled chain.
+    await new Promise((r) => setTimeout(r, 0))
+
+    const summaryCall = mockInfo.mock.calls.find((c) =>
+      typeof c[1] === 'string' && c[1].includes('post-feedback side effects settled'),
+    )
+    expect(summaryCall).toBeTruthy()
+    const [context] = summaryCall as [Record<string, unknown>, string]
+    expect(context.totalSideEffects).toBe(4) // no weaknessClusters when no flags
+    expect(context.succeeded).toBe(4)
+    expect(context.failedCount).toBe(0)
+    expect(context.failed).toBeUndefined()
+    expect(context.sessionId).toBe('507f1f77bcf86cd799439011')
+  })
+
+  it('F-3: aggregate summary lists failed side effects by name', async () => {
+    mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: true })
+    mockCompletion.mockResolvedValue(happyCompletion)
+
+    // Reach into the mocked service modules — the factory returned
+    // real vi.fn() instances that are cached per module, so we can
+    // override the next call without rebuilding the mock.
+    const competencyModule = await import('@learn/services/competencyService')
+    vi.mocked(competencyModule.updateCompetencyState).mockRejectedValueOnce(
+      new Error('competency DB down'),
+    )
+    const pathwayModule = await import('@learn/services/pathwayPlanner')
+    vi.mocked(pathwayModule.generatePathwayPlan).mockRejectedValueOnce(
+      new Error('pathway OOM'),
+    )
+
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+
+    await new Promise((r) => setTimeout(r, 0))
+
+    const summaryCall = mockInfo.mock.calls.find((c) =>
+      typeof c[1] === 'string' && c[1].includes('post-feedback side effects settled'),
+    )
+    expect(summaryCall).toBeTruthy()
+    const [context] = summaryCall as [Record<string, unknown>, string]
+    expect(context.totalSideEffects).toBe(4)
+    expect(context.succeeded).toBe(2)
+    expect(context.failedCount).toBe(2)
+    const failed = context.failed as Array<{ name: string; reason: string }>
+    expect(failed.map((f) => f.name).sort()).toEqual(['competency', 'pathwayPlan'])
+    expect(failed.find((f) => f.name === 'competency')?.reason).toContain('competency DB down')
+    expect(failed.find((f) => f.name === 'pathwayPlan')?.reason).toContain('pathway OOM')
+  })
 })
