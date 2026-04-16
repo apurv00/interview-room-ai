@@ -418,3 +418,10 @@
 - **Root-cause:** finishInterview() fires two fire-and-forget POSTs when the
 - **No-tests-needed-because: the change is purely observability — replacing**
 - **Verified-by:** npm run test:run (full suite); npx tsc --noEmit (clean);
+
+### 2026-04-16 19:17:11 +0000 · `9f96541` · Claude
+- **Subject:** feat(feedback): aggregate summary log for post-feedback side effects (F-3)
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** the five fire-and-forget side effects in
+- **Tests-added: modules/interview/__tests__/generateFeedbackIdempotency.test.ts**
+- **Verified-by:** npm run test:run (1932 passed, +2 from F-3); npx tsc
