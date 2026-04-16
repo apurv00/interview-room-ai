@@ -253,6 +253,37 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
       return NextResponse.json(shortFormFeedback)
     }
 
+    // F-4: concurrent-writer short-circuit. The Redis lock fails open
+    // on connection errors (feedbackLock.ts:83-87), which lets both the
+    // finishInterview pre-gen + the feedback page's fallback call run
+    // the full Claude + side-effect pipeline in parallel — 2× LLM bill,
+    // double-fired XP, competency, pathway. Read session.feedback once
+    // right before the expensive work. If another caller already landed
+    // a result in the DB, reuse it; skip the duplicate Claude call and
+    // all side effects. The try/catch keeps this check non-fatal: a
+    // transient DB blip or a mock with no findById falls through to
+    // the original pipeline (same behavior as pre-F-4).
+    if (body.sessionId) {
+      try {
+        await connectDB()
+        const existing = (await InterviewSession.findById(body.sessionId)
+          .select('feedback')
+          .lean()) as { feedback?: FeedbackData } | null
+        if (existing?.feedback) {
+          aiLogger.info(
+            { sessionId: body.sessionId, userId: user.id, redisLockAcquired: feedbackLock?.acquired ?? null },
+            'generate-feedback: concurrent writer already produced feedback; returning cached (F-4)',
+          )
+          return NextResponse.json(existing.feedback)
+        }
+      } catch (err) {
+        aiLogger.warn(
+          { err, sessionId: body.sessionId },
+          'generate-feedback: pre-flight session read failed, proceeding without concurrent-writer check (F-4)',
+        )
+      }
+    }
+
     const aggMetrics = aggregateMetrics(speechMetrics)
     const commScore = communicationScore(aggMetrics)
 

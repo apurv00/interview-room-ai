@@ -18,6 +18,7 @@ import { NextRequest } from 'next/server'
 
 const {
   mockAcquire, mockRelease, mockCompletion, mockWarn, mockError, mockInfo,
+  mockSessionFindById,
 } = vi.hoisted(() => ({
   mockAcquire: vi.fn(),
   mockRelease: vi.fn(),
@@ -25,6 +26,12 @@ const {
   mockWarn: vi.fn(),
   mockError: vi.fn(),
   mockInfo: vi.fn(),
+  // F-4: default returns null (no concurrent writer). Tests can
+  // override via mockSessionFindById.mockReturnValueOnce(...) to
+  // simulate "another caller already wrote session.feedback".
+  mockSessionFindById: vi.fn(() => ({
+    select: () => ({ lean: () => Promise.resolve(null) }),
+  })),
 }))
 
 vi.mock('@shared/middleware/composeApiRoute', () => ({
@@ -73,7 +80,10 @@ vi.mock('@shared/db/connection', () => ({
 
 vi.mock('@shared/db/models', () => ({
   User: { findById: () => ({ select: () => ({ lean: () => Promise.resolve(null) }) }) },
-  InterviewSession: { findByIdAndUpdate: vi.fn().mockResolvedValue(undefined) },
+  InterviewSession: {
+    findByIdAndUpdate: vi.fn().mockResolvedValue(undefined),
+    findById: mockSessionFindById,
+  },
 }))
 
 vi.mock('@shared/featureFlags', () => ({
@@ -261,5 +271,78 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
     expect(mockAcquire).not.toHaveBeenCalled()
     expect(mockRelease).not.toHaveBeenCalled()
     expect(res.status).toBe(200)
+  })
+
+  // ─── F-4: concurrent-writer short-circuit ──────────────────────────────
+  //
+  // Validates that when Redis fails open (lock.acquired === false) OR a
+  // parallel caller has already written session.feedback to the DB, the
+  // pre-flight read hits and we skip the expensive Claude + side-effect
+  // pipeline entirely. Without this, a Redis blip doubles the LLM bill
+  // and double-fires every post-feedback side effect.
+
+  it('F-4: returns cached feedback when session.feedback already populated (fail-open race)', async () => {
+    // Redis is "down" — lock returns acquired: false (fail-open).
+    mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: false })
+
+    // Meanwhile, the parallel caller already finished and wrote to DB.
+    const cachedFeedback = {
+      overall_score: 88,
+      pass_probability: 'High',
+      confidence_level: 'High',
+      dimensions: {
+        answer_quality: { score: 86, strengths: ['clear'], weaknesses: [] },
+        communication: { score: 90, wpm: 140, filler_rate: 0.02, pause_score: 80, rambling_index: 0.1 },
+        engagement_signals: { score: 88, engagement_score: 85, confidence_trend: 'stable', energy_consistency: 0.85, composure_under_pressure: 80 },
+      },
+      red_flags: [],
+      top_3_improvements: ['already', 'written', 'to DB'],
+    }
+    mockSessionFindById.mockReturnValueOnce({
+      select: () => ({ lean: () => Promise.resolve({ feedback: cachedFeedback }) }),
+    })
+
+    const res = await POST(makeRequest())
+    const json = await res.json()
+
+    expect(res.status).toBe(200)
+    // The critical assertion — the LLM was NOT called again.
+    expect(mockCompletion).not.toHaveBeenCalled()
+    // Returned feedback matches the cached one, not a fresh generation.
+    expect(json.overall_score).toBe(88)
+    expect(json.top_3_improvements).toEqual(['already', 'written', 'to DB'])
+  })
+
+  it('F-4: proceeds with generation when session.feedback is null (normal first run)', async () => {
+    mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: true })
+    mockCompletion.mockResolvedValue(happyCompletion)
+    // Default mockSessionFindById returns null → no concurrent writer.
+
+    const res = await POST(makeRequest())
+
+    expect(res.status).toBe(200)
+    // LLM ran normally — the pre-flight check is non-intrusive on the
+    // cold path.
+    expect(mockCompletion).toHaveBeenCalledTimes(1)
+  })
+
+  it('F-4: pre-flight DB read failure is non-fatal (falls through to normal pipeline)', async () => {
+    mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: true })
+    mockCompletion.mockResolvedValue(happyCompletion)
+    // Simulate a Mongo outage on the pre-flight read.
+    mockSessionFindById.mockReturnValueOnce({
+      select: () => ({ lean: () => Promise.reject(new Error('Mongo ECONNREFUSED')) }),
+    })
+
+    const res = await POST(makeRequest())
+
+    expect(res.status).toBe(200)
+    // Pipeline still runs — pre-flight is best-effort, not a gate.
+    expect(mockCompletion).toHaveBeenCalledTimes(1)
+    // Warn was logged (but not error — non-fatal).
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: expect.any(String) }),
+      expect.stringContaining('pre-flight session read failed'),
+    )
   })
 })
