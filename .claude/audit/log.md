@@ -460,3 +460,9 @@
 - **Root-cause:** PR #273 shipped a 10ms→50ms budget bump on the
 - **No-tests-needed-because: this commit IS a test deletion. The**
 - **Verified-by:** npx vitest run
+### 2026-04-16 20:00:01 +0000 · `a9caee8` · Claude
+- **Subject:** chore(claude): elevate multimodal analysis pipeline services to hot path (A8)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** analysisJob.ts was already on .claude/hotpath.txt (the
+- **No-tests-needed-because: file is a plain-text registry consumed by**
+- **Verified-by:** manual diff review (4 paths added with a rationale

@@ -53,3 +53,13 @@ modules/interview/services/eval/completionAdjustment.ts
 modules/interview/services/eval/transcriptCompactor.ts
 shared/services/feedbackLock.ts
 modules/learn/services/practiceStatsService.ts
+
+# ── Multimodal analysis pipeline (post-interview; drives Interview Replay) ──
+# analysisJob.ts is already above (live-interview section); these are the
+# pipeline services it calls via step.run. A prompt change or fusion LLM
+# wrapper drift here produces wrong coaching signals or stuck 'processing'
+# rows on every analysis run.
+modules/interview/services/analysis/multimodalPipeline.ts
+modules/interview/services/analysis/fusionService.ts
+modules/interview/services/analysis/prosodyService.ts
+modules/interview/services/analysis/facialAggregator.ts
