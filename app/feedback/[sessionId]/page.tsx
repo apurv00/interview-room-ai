@@ -415,11 +415,15 @@ function FeedbackPageInner() {
 
             // Poll for pre-generated feedback before triggering our own call.
             // finishInterview fires a fire-and-forget POST /api/generate-feedback
-            // that persists to session.feedback in the DB. If that call is still
-            // in flight (3-8s typical), polling avoids a duplicate LLM call that
-            // doubles cost and latency.
+            // that persists to session.feedback in the DB. Observed Claude
+            // Sonnet latency for the feedback prompt is P50 ≈ 12 s, P95 ≈ 20 s,
+            // so an 8 s window (the previous value) almost always timed out
+            // and forced a redundant POST → 202 → inner-poll round trip.
+            // Poll for 24 s instead so the happy-path pre-gen is served
+            // directly from the DB; the 202 fallback still covers the
+            // slow-tail + outright-failure cases.
             const POLL_INTERVAL_MS = 2000
-            const MAX_POLLS = 4 // up to 8s total wait
+            const MAX_POLLS = 12 // up to 24s — covers Claude Sonnet P95 (~20s)
             for (let poll = 0; poll < MAX_POLLS; poll++) {
               if (signal?.aborted) return
               await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
