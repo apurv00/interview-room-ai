@@ -411,3 +411,10 @@
 - **Root-cause:** acquireFeedbackLock (shared/services/feedbackLock.ts:83-87)
 - **Tests-added: modules/interview/__tests__/generateFeedbackIdempotency.test.ts**
 - **Verified-by:** npx vitest run modules/interview/__tests__/generateFeedbackIdempotency.test.ts
+
+### 2026-04-16 19:07:04 +0000 · `f34aa06` · Claude
+- **Subject:** fix(interview): log failed fire-and-forget pre-gen + analysis starts (F-2)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** finishInterview() fires two fire-and-forget POSTs when the
+- **No-tests-needed-because: the change is purely observability — replacing**
+- **Verified-by:** npm run test:run (full suite); npx tsc --noEmit (clean);
