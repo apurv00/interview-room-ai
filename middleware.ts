@@ -124,6 +124,7 @@ export default withAuth(
           pathname.startsWith('/signup') ||
           pathname.startsWith('/api/auth') ||
           pathname.startsWith('/api/health') ||
+          pathname.startsWith('/api/inngest') ||
           pathname.startsWith('/api/domains') ||
           pathname.startsWith('/api/interview-types') ||
           // JD context extraction is regex-first and only invokes Claude Haiku
