@@ -525,3 +525,270 @@ main answers, probe answers, wrap-up, retry, and pivot flows. All share
 the same `timeoutMs=30000` default. The fix is internal to `listenForAnswer`
 and does not change its signature or return contract, so all callers
 benefit without modification.
+
+---
+
+### 2026-04-16 · Tab-backgrounded answer truncation (E-3.7)
+
+**Symptom:** Candidate backgrounded the browser tab mid-answer (checked
+email, notifications, another app) and returned to find the answer cut off,
+the interview advanced, and a fallback 60/55/55/60 evaluation recorded for
+the truncated text. Reported by EDGE_CASES.md Group 3 #7.
+
+**Root cause:** Two independent timers terminated the answer while the tab
+was hidden:
+
+1. **Deepgram grace timer.** Browsers suspend `AudioContext` when a tab is
+   backgrounded. The `ScriptProcessorNode` stops delivering audio frames,
+   Deepgram sees silence on the WebSocket, and fires `UtteranceEnd` after
+   its configured `utterance_end_ms=2500`. `attachMessageHandler` then
+   scheduled a 3500-4000 ms grace timer that called `finishRecognition()`,
+   closing the WS and resolving the answer with whatever partial text was
+   captured before the tab hid. An earlier half-fix in
+   `setupAudioProcessing` (per-session) installed a `visibilitychange`
+   listener that only tried to resume the AudioContext when the tab
+   returned — by which point `finishRecognition` had already run.
+
+2. **useInterview inactivity timer.** `listenForAnswer` at line 582
+   scheduled a `setTimeout(timeoutMs=30000)` that called `stopListening()`
+   when `liveAnswerRef.current` hadn't grown. While hidden, no audio was
+   flowing, so the ref never grew — the 30s timer fired (browser throttling
+   defers but doesn't cancel) and terminated the answer independently of
+   the Deepgram fix.
+
+**Fixes (this commit):**
+
+- `useDeepgramRecognition.ts` — replaced the per-session visibility
+  listener with a hook-level `useEffect` that tracks `isPageHiddenRef`.
+  UtteranceEnd handler now skips grace-timer scheduling while hidden
+  (`finalTextRef.current.trim().length > 0 && !isPageHiddenRef.current`).
+  Grace timer callback adds a defensive early-return when the ref is true
+  on fire (covers the case where the browser fires a scheduled timer
+  mid-throttle rather than deferring it). The hook-level visibility handler
+  cancels any in-flight grace timer on the visible event and resumes the
+  AudioContext if the browser suspended it.
+- `useInterview.ts` — `scheduleInactivityTimeout` adds a `document.hidden`
+  check: when hidden, the timer reschedules itself instead of calling
+  `stopListening`. Mirrors the Deepgram-layer fix so neither layer can
+  independently truncate the answer.
+
+**Tests added:**
+
+- `modules/interview/__tests__/deepgramRecognition.test.ts`:
+  - `does NOT schedule grace timer when UtteranceEnd arrives with page hidden`
+  - `cancels an in-flight grace timer when the tab becomes visible`
+
+The tests simulate `document.hidden` + `visibilitychange` events against
+the real hook and assert `onComplete` is not called prematurely.
+
+**Why existing tests didn't catch it:** The catalog (EDGE_CASES.md) named
+this issue explicitly but no test exercised the visibility lifecycle
+against the real hook. E-3.7 was documented but never instrumented.
+Adding the two tests closes that gap.
+
+_Follow-up considerations (not fixed in this commit):_ some browsers
+suspend `AudioContext` aggressively even for brief backgrounding; the
+fix assumes the WebSocket stays alive, which Chrome/Firefox honor but
+Safari may not. If Safari users report issues, we may need a reconnect
+flow tied to the visible event.
+
+---
+
+### 2026-04-16 · Closing-question AI cut mid-sentence when timer expires (E-5.2)
+
+**Symptom:** On the final seconds of an interview, if the timer hit 0
+while the AI was mid-question (`ASK_QUESTION` phase), the AI audio was
+truncated ~5 seconds in — typically mid-word for longer questions. The
+interview ended abruptly with the candidate never hearing the full final
+question. Reported by EDGE_CASES.md Group 5 #2.
+
+**Root cause:** `useInterview.ts` timer tick at line 410 gave `ASK_QUESTION`
+/ `PROCESSING` / `COACHING` phases a blanket 5-second grace when the
+timer hit 0. That covers most eval settles (~1-3s) and coaching-tip
+displays (2-6s), but TTS questions vary widely: short greetings take
+2-3s, typical behavioral prompts run 4-8s, and multi-clause framing
+("Walk me through a situation where… particularly when…") can hit
+10-12s. A 5s grace cut the last ~50% of the audio off on long
+questions. The candidate had no chance to answer because the interview
+ended before the question finished, and the feedback page showed a
+question with no corresponding candidate answer for the final slot.
+
+**Fix:** Split the `ASK_QUESTION` branch out of the combined 5s path:
+
+- `ASK_QUESTION` now gets **10 seconds** to let the AI finish speaking.
+  Covers ~99% of question lengths. Still bounded (no unbounded waits).
+- **Phase-transition detection within the grace window.** If the AI
+  finishes speaking and `useInterview`'s loop transitions the phase to
+  `LISTENING` (candidate started answering) before the 10s elapses, the
+  grace timer re-dispatches to the existing `LISTENING` handling:
+  raises the "Time is up, please finish your current thought" coaching
+  tip, sets `timerTruncatedCurrentAnswerRef` (G.12 — so the last eval
+  isn't penalized for incompleteness), and gives an additional 15s for
+  the candidate to wrap their answer. Worst-case total grace: 25s for
+  the edge case where a long question + a candidate answering just as
+  time expires align.
+- `PROCESSING` / `COACHING` keep the original 5s — they don't have the
+  same variability as TTS playback.
+- All other phases (INTERVIEW_START, CALIBRATION, WRAP_UP, etc.)
+  continue to hard-cut as before.
+
+Total code change: 17 lines in `useInterview.ts`'s 1s-tick callback.
+No signature changes, no new timers introduced at hook level.
+
+**Tests added:** None. The grace-timer code path is not reachable from
+the hook's public surface without driving the full interview loop
+(TTS mocks + phase transitions + `avatarSpeak` promise resolution).
+Existing regression tests (3 integration-style files under
+`__tests__/`) exercise the timer callback and will flag any structural
+regression. Manual verification: start a short interview (duration=1
+minute), let the timer run down during a long-framed question, confirm
+AI finishes its sentence AND you can answer afterward if you start
+speaking within 10s.
+
+**Why catalogued but not fixed until now:** EDGE_CASES.md Group 5
+correctly identified the issue, but the original 5s vs. 15s
+(ASK vs. LISTENING) asymmetry already looked like an intentional
+design decision — so prior eyes read the catalog and moved on. This
+audit surfaced it by walking TTS latency numbers (typical 4-8s) and
+noting they exceed the 5s grace regularly. Fix was 17 lines; cost of
+not fixing was a damaging UX bug on the closing seconds of every
+interview where the final question happened to be long.
+
+---
+
+### 2026-04-16 · TTS routes unrated — Deepgram cost exposure (N1)
+
+**Symptom (latent, not yet exploited):** `POST /api/tts/stream` and
+`POST /api/tts` were gated only by NextAuth — no per-user rate limit.
+A compromised session cookie or a scripted client could replay TTS
+calls against the Deepgram Aura backend faster than any human could
+trigger legitimately. Cost exposure: ~$0.015 per 1K chars × spam rate.
+Even with R2 caching, abuse would pick unique texts to force cache
+misses, driving sustained Deepgram-priced calls.
+
+**Root cause:** The two TTS routes were written as raw `POST(req)`
+handlers that called `fetch('https://api.deepgram.com/...')` directly.
+They never wired into `composeApiRoute` (which includes a rate-limit
+block) and no one added standalone `checkRateLimit` calls. Every other
+AI route in this repo (generate-question, evaluate-answer, turn-router,
+etc.) has a rate limit; the TTS pair was an oversight.
+
+**Fix:** Added a `checkRateLimit(session.user.id, {windowMs: 60_000,
+maxRequests: 30, keyPrefix: 'rl:tts-stream' | 'rl:tts-buffered'})` call
+immediately after the auth check on both routes. 30 requests/minute
+per user is ~10x peak legitimate usage (measured: intro + Q1 + thinking
+ack → 2-4 req/min burst at interview start, averaging <1 req/min over
+30 min) but hard-stops abuse at 1800 req/hour → $30-60/hour cost ceiling
+per compromised account instead of unbounded. Separate key prefixes so
+the streaming and buffered routes don't share a quota counter.
+
+`checkRateLimit` fails open on Redis errors (the catch inside
+`checkRateLimit.ts` logs and returns `null`) — a cache blip will not
+take TTS offline for legitimate users.
+
+**Tests added** at `modules/interview/__tests__/ttsStreamRoute.test.ts`:
+
+- `returns 429 when the per-user rate limit is exceeded` — mocks
+  `redis.incr` to return 31 (one over the cap); asserts 429 + the
+  `Retry-After: 60` header.
+- `keys rate limit per user (id is embedded in the redis key)` —
+  asserts the Redis key includes the user id (`rl:tts-stream:test-user-1`)
+  so the quota scopes per-user, not globally.
+- `redis failure fails open (request still served)` — mocks
+  `redis.incr` to reject; asserts 200 + body streams normally, so a
+  Redis outage doesn't take TTS offline.
+
+Plus a redis mock added to the test suite setup — makes the existing
+streaming-contract tests deterministic (no more dependency on a real
+Redis for the 4 legacy tests in the file).
+
+**Why existing tests didn't catch it:** None of the 1900+ existing
+tests exercised the TTS routes through `checkRateLimit` — the function
+didn't exist in those routes. This was a missing-feature bug, not a
+regression, so there was no prior failure mode to reference.
+
+_Follow-up considerations (not fixed in this commit):_ add similar
+rate limits to `/api/transcribe/token` if abuse patterns shift;
+consider a daily cap in addition to per-minute (30/min × 60 min ×
+24h = 43,200 req/day per user today, which is still uncomfortably
+high for a single actor — a `rl:tts-stream-daily:{userId}` key with
+maxRequests=2000 would add a ~$30/day ceiling).
+
+### E-6.4 — Deferred topic bridge not interrupt-aware (2026-04-16)
+
+**Symptom:** When the AI speaks a deferred-topic bridge ("Earlier you
+mentioned…"), the candidate can interrupt, but the code ignores the
+`interrupted` return from `avatarSpeak`. `listenForAnswer` then runs
+with the interrupt prefix, and the captured speech gets evaluated
+against the bridge question — a question the candidate never heard in
+full. Semantic mismatch: the eval scores an answer about topic X
+against a question about topic Y.
+
+**Root cause:** Both deferred-topic `avatarSpeak` calls (mid-interview
+bridge at ~line 1592 and wrap-up loop at ~line 1622) discarded the
+`{ interrupted }` return value, falling through to `listenForAnswer`
+and `evaluateAndCoach` unconditionally.
+
+**Fix (useInterview.ts):**
+1. Mid-interview bridge: capture `{ interrupted: bridgeInterrupted }`.
+   If interrupted, `unshift` the topic back into `deferredTopicsRef`
+   and skip `listenForAnswer` + `evaluateAndCoach` + `qIdx++`.
+2. Wrap-up loop: capture `{ interrupted: wrapUpInterrupted }`. If
+   interrupted, `break` out of the remaining-topics loop — the
+   candidate clearly wants to move on.
+
+**Why existing tests didn't catch it:** No tests exercise the deferred
+topic bridge path with simulated interrupts. The `useInterview` test
+suite mocks `avatarSpeak` as a no-op and doesn't trigger the interrupt
+callback mid-speech.
+
+### E-3.4 — WS disconnect with partial text no longer truncates answers (2026-04-16)
+
+**Symptom:** Network blip mid-answer → Deepgram WebSocket closes →
+`maybeReconnectOrFinish` saw `finalTextRef.current.trim().length > 0`
+and immediately called `finishRecognition()`. Result: candidate's
+answer was truncated to whatever they'd said before the blip, even
+though they were mid-sentence and the network recovered 200ms later.
+For a 30-minute interview this is a surprisingly common failure mode
+on flaky home Wi-Fi.
+
+**Root cause:** The early-bail check was a safety measure to avoid
+"losing" text on reconnect, but it predated the current
+`finalTextRef`-accumulating message handler. `finalTextRef` is only
+cleared at `startListening` entry — it persists across reconnects.
+So the shortcut was actively harmful: it discarded the *future* of
+the answer to "preserve" the past.
+
+**Fix (useDeepgramRecognition.ts):**
+1. `maybeReconnectOrFinish`: removed the partial-text→finish early
+   return. Now always reconnects up to `maxReconnectAttempts (2)`
+   before finishing, regardless of whether `finalTextRef` has content.
+2. Before scheduling the reconnect, tear down the stale audio
+   processor + source + AudioContext bound to the dead ws.
+   `setupAudioProcessing` on the next `onopen` creates fresh ones.
+   (Previously only `finishRecognition` tore these down, so
+   reconnects would have leaked — a latent bug exposed by the more
+   aggressive reconnect policy.)
+3. `connectWebSocket.onopen`: reset `reconnectAttemptsRef.current = 0`
+   on successful open so a second blip 20 minutes later doesn't fail
+   from a stale incremented counter. `startListening` also resets this
+   at session start; the onopen reset covers mid-session reconnects.
+
+**Tests added (deepgramRecognition.test.ts):**
+- `reconnects on WS close when partial text exists; preserves partial
+  text` — verifies a new WebSocket is created (not finished) and the
+  combined transcript after reconnect contains both halves.
+- `finishes once maxReconnectAttempts is exhausted even with partial
+  text` — three back-to-back closes (no successful onopen between)
+  eventually trigger `finishRecognition` with the captured partial.
+
+**Scope limit:** The `warmUp` fast path has its own
+`onclose` handler that only flips `isWarmedUpRef`; that path doesn't
+go through `maybeReconnectOrFinish`. Reconnect behavior on the warm
+WS is a separate existing-behavior limitation, untouched by this fix.
+
+**Why existing tests didn't catch it:** No existing test exercised
+the reconnect path at all. The `deepgramRecognition.test.ts` suite
+had 10 tests before E-3.7; all covered happy-path listening or
+interrupt accumulation. The reconnect code was deployed and never
+verified end-to-end.

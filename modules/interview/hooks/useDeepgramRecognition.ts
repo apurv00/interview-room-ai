@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { wallClockMsToAudioSeconds } from '@interview/audio/recordingClock'
 import type {
   SpeechRecognitionResult,
@@ -91,6 +91,41 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   // Whether warmUp() has been called and WebSocket is ready
   const isWarmedUpRef = useRef(false)
   const warmUpPromiseRef = useRef<Promise<void> | null>(null)
+  /** True when document.visibilityState === 'hidden'. Browsers throttle
+   *  setTimeout/setInterval and may suspend AudioContext when the tab is
+   *  backgrounded — Deepgram receives silence, fires UtteranceEnd, and the
+   *  grace timer terminates the answer before the user returns. We pause
+   *  the grace timer while hidden and resume normal flow on visibility. */
+  const isPageHiddenRef = useRef(false)
+
+  // Hook-level visibility listener. Mounted once per hook instance, replaces
+  // the per-session listener that used to live inside setupAudioProcessing
+  // (which couldn't prevent the grace timer from firing while hidden — only
+  // resume the audio context after the fact, by which point finishRecognition
+  // had already run). E-3.7 fix.
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const handleVisibility = () => {
+      const hidden = document.hidden
+      isPageHiddenRef.current = hidden
+      if (!hidden) {
+        // Tab visible again — resume audio context if browser suspended it
+        if (audioContextRef.current?.state === 'suspended') {
+          audioContextRef.current.resume().catch(() => {})
+        }
+        // Cancel any grace timer that may have been scheduled while hidden
+        // (browser throttling can defer its actual fire until tab returns).
+        // Letting it fire would terminate the answer the moment the user
+        // comes back, before they have a chance to continue speaking.
+        if (graceTimerRef.current) {
+          clearTimeout(graceTimerRef.current)
+          graceTimerRef.current = null
+        }
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => document.removeEventListener('visibilitychange', handleVisibility)
+  }, [])
 
   /** Provide an existing media stream (from page-level getUserMedia). */
   const setExternalStream = useCallback((stream: MediaStream) => {
@@ -411,7 +446,13 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
         // naturally while thinking. Short answers get a longer grace period
         // since the user likely isn't done yet.
         if (data.type === 'UtteranceEnd') {
-          if (finalTextRef.current.trim().length > 0) {
+          // E-3.7: skip grace-timer scheduling while the tab is hidden.
+          // Browsers suspend AudioContext when backgrounded, so Deepgram
+          // sees silence and fires UtteranceEnd even though the candidate
+          // didn't actually stop speaking. The visibility handler will
+          // also cancel any in-flight grace timer when the tab returns,
+          // letting the next is_final or UtteranceEnd resume normal flow.
+          if (finalTextRef.current.trim().length > 0 && !isPageHiddenRef.current) {
             // Clear any existing grace timer (e.g., from a previous UtteranceEnd)
             if (graceTimerRef.current) {
               clearTimeout(graceTimerRef.current)
@@ -426,6 +467,13 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             const graceMs = wordCount < 15 ? 4000 : 3500
             graceTimerRef.current = setTimeout(() => {
               graceTimerRef.current = null
+              // Double-guard: if the tab was hidden between scheduling and
+              // firing (e.g. browser didn't throttle us into the post-visible
+              // window), abort. The visibility handler also cancels this
+              // timer on the visible event, but we can't rely on one or the
+              // other alone — browser timer throttling is implementation-
+              // defined across Chrome/Firefox/Safari.
+              if (isPageHiddenRef.current) return
               finishRecognition()
             }, graceMs)
           }
@@ -458,6 +506,10 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
 
     ws.onopen = () => {
       console.log('[Deepgram] WebSocket connected')
+      // Refresh the reconnect budget on a successful open so a second
+      // network blip 30 minutes later doesn't fail from a stale counter
+      // (E-3.4). startListening also resets this at session start.
+      reconnectAttemptsRef.current = 0
       setIsListening(true)
       startAudioCapture(ws)
     }
@@ -484,10 +536,19 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       return
     }
 
-    if (finalTextRef.current.trim().length > 0) {
-      finishRecognition()
-      return
-    }
+    // E-3.4: previously we bailed early if finalTextRef had any content —
+    // that truncated the candidate's answer on a single network blip. Now
+    // we preserve partial text across reconnects (finalTextRef is only
+    // cleared at startListening time) and only finish once maxReconnect
+    // attempts are exhausted. The old audio processor is bound to the
+    // dead ws, so tear it down here — setupAudioProcessing rebuilds fresh
+    // on the next onopen.
+    processorRef.current?.disconnect()
+    sourceRef.current?.disconnect()
+    audioContextRef.current?.close().catch(() => {})
+    processorRef.current = null
+    sourceRef.current = null
+    audioContextRef.current = null
 
     const delay = 800 * reconnectAttemptsRef.current
     console.log(`[Deepgram] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current})`)
@@ -548,27 +609,11 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     source.connect(processor)
     processor.connect(audioContext.destination)
 
-    // Resume AudioContext when tab becomes visible again. Browsers suspend
-    // AudioContext when the tab is backgrounded — no audio flows to Deepgram,
-    // triggering UtteranceEnd and terminating the answer. This handler resumes
-    // the context and cancels any grace timer that fired during the suspension.
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible' && audioContext.state === 'suspended') {
-        audioContext.resume().catch(() => {})
-        // Cancel any grace timer that fired while the tab was hidden
-        if (graceTimerRef.current) {
-          clearTimeout(graceTimerRef.current)
-          graceTimerRef.current = null
-        }
-      }
-    }
-    document.addEventListener('visibilitychange', handleVisibility)
-    // Clean up in finishRecognition — store ref for removal
-    const cleanupVisibility = () => document.removeEventListener('visibilitychange', handleVisibility)
-    // Attach to audioContext close so it's cleaned up with the rest of audio processing
-    audioContext.addEventListener('statechange', () => {
-      if (audioContext.state === 'closed') cleanupVisibility()
-    })
+    // Visibility handling (resume AudioContext + suppress grace timer while
+    // hidden) is installed at the hook level — see the useEffect near the
+    // top of the hook. Installing a per-session listener here would leak a
+    // handler every listening session AND couldn't prevent the grace timer
+    // from firing while hidden, only resume the context after the fact.
 
     // Audio is now flowing — notify the caller so UI can flip to LISTENING
     if (onCaptureReadyRef.current) {

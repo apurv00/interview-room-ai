@@ -426,8 +426,31 @@ export function useInterview({
                 finishInterview('time_up')
               }
             }, 15000)
-          } else if (activePhase === 'ASK_QUESTION' || activePhase === 'PROCESSING' || activePhase === 'COACHING') {
-            // Let AI finish speaking / eval settle before ending
+          } else if (activePhase === 'ASK_QUESTION') {
+            // L3 (E-5.2): AI is mid-question. Give 10s (up from 5s) so the
+            // AI can finish its sentence — typical questions are 4-8s but
+            // longer framed ones hit 10-12s; 5s was cutting the closing
+            // question mid-word. If the phase transitions to LISTENING
+            // during the grace (user started answering), upgrade to the
+            // LISTENING branch's 15s grace so the candidate isn't cut off
+            // mid-answer either.
+            setTimeout(() => {
+              if (phaseRef.current === 'SCORING' || phaseRef.current === 'ENDED') return
+              if (phaseRef.current === 'LISTENING') {
+                timerTruncatedCurrentAnswerRef.current = true
+                setCoachingTip('Time is up, please finish your current thought.')
+                setTimeout(() => {
+                  if (phaseRef.current !== 'SCORING' && phaseRef.current !== 'ENDED') {
+                    finishInterview('time_up')
+                  }
+                }, 15000)
+              } else {
+                finishInterview('time_up')
+              }
+            }, 10000)
+          } else if (activePhase === 'PROCESSING' || activePhase === 'COACHING') {
+            // Let eval settle or coaching tip display before ending.
+            // 5s is sufficient: evals are ~1-3s p95, coaching tips 2-6s.
             setTimeout(() => {
               if (phaseRef.current !== 'SCORING' && phaseRef.current !== 'ENDED') {
                 finishInterview('time_up')
@@ -581,6 +604,15 @@ export function useInterview({
         const scheduleInactivityTimeout = () => {
           timeoutTimer = setTimeout(() => {
             if (resolved) return
+            // E-3.7: if the tab is hidden, browsers throttle timers and
+            // suspend the AudioContext, so liveAnswer cannot grow even if
+            // the candidate is still speaking. Reschedule instead of
+            // terminating — the Deepgram hook also suppresses its grace
+            // timer while hidden so no answer is lost.
+            if (typeof document !== 'undefined' && document.hidden) {
+              scheduleInactivityTimeout()
+              return
+            }
             const currentLength = (liveAnswerRef.current || '').length
             if (currentLength > lastSeenLength) {
               // User is still speaking — reset the inactivity clock
@@ -1557,17 +1589,24 @@ export function useInterview({
           addToTranscript('interviewer', bridgeMsg, qIdx)
           setCurrentQuestion(bridgeMsg)
           warmUpListening?.()
-          await avatarSpeak(bridgeMsg, 'curious')
+          const { interrupted: bridgeInterrupted } = await avatarSpeak(bridgeMsg, 'curious')
           if (isInterviewOver()) return
 
-          setLiveAnswer('')
-          const deferredAnswer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
-          if (isInterviewOver()) return
-          if (deferredAnswer) {
-            addToTranscript('candidate', deferredAnswer, qIdx)
-            await evaluateAndCoach(bridgeMsg, deferredAnswer, qIdx, undefined, 0)
+          if (bridgeInterrupted) {
+            // E-6.4: candidate interrupted before hearing the full bridge.
+            // Re-queue so it can be asked later; don't evaluate stale speech
+            // against a question the candidate never heard in full.
+            deferredTopicsRef.current.unshift(deferredTopic)
+          } else {
+            setLiveAnswer('')
+            const deferredAnswer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
+            if (isInterviewOver()) return
+            if (deferredAnswer) {
+              addToTranscript('candidate', deferredAnswer, qIdx)
+              await evaluateAndCoach(bridgeMsg, deferredAnswer, qIdx, undefined, 0)
+            }
+            qIdx++
           }
-          qIdx++
         }
       }
 
@@ -1580,8 +1619,9 @@ export function useInterview({
             const followUp = `Before we wrap up — you raised an interesting point earlier about "${topic}". Can you tell me more?`
             addToTranscript('interviewer', followUp)
             warmUpListening?.()
-            await avatarSpeak(followUp, 'curious')
+            const { interrupted: wrapUpInterrupted } = await avatarSpeak(followUp, 'curious')
             if (isInterviewOver()) break
+            if (wrapUpInterrupted) break
 
             setLiveAnswer('')
             const topicAnswer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))

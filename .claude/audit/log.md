@@ -355,3 +355,38 @@
 - **Root-cause:** A — single point of failure in a best-effort cleanup step
 - **Tests-added: modules/interview/__tests__/analysisJob.test.ts**
 - **Verified-by:** npx vitest run for changed files (19/19 pass),
+
+### 2026-04-16 17:59:14 +0000 · `44fe05f` · Claude
+- **Subject:** fix(interview): preserve answer when browser tab is backgrounded (E-3.7)
+- **Files:** 5 changed, 1 test file(s)
+- **Root-cause:** AudioContext suspension on hidden tab → Deepgram receives
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+- **Verified-by:** npx vitest run — 1922/1922 pass (+2 new), npx tsc --noEmit
+
+### 2026-04-16 18:07:52 +0000 · `ef1e96e` · Claude
+- **Subject:** fix(interview): extend ASK_QUESTION grace to 10s + upgrade to LISTENING if user starts answering (E-5.2)
+- **Files:** 3 changed, 0 test file(s)
+- **Root-cause:** fixed 5s grace in the timer tick was too short for TTS
+- **No-tests-needed-because: the grace-timer code path is not reachable**
+- **Verified-by:** npx vitest run modules/interview/__tests__/
+
+### 2026-04-16 18:16:16 +0000 · `7ce8e24` · Claude
+- **Subject:** fix(tts): add per-user rate limits to /api/tts and /api/tts/stream (N1)
+- **Files:** 4 changed, 1 test file(s)
+- **Root-cause:** every other AI route in this repo uses composeApiRoute
+- **Tests-added: modules/interview/__tests__/ttsStreamRoute.test.ts**
+- **Verified-by:** npx vitest run modules/interview/__tests__/
+
+### 2026-04-16 18:32:31 +0000 · `b6a7f99` · Claude
+- **Subject:** fix(interview): make deferred topic bridge interrupt-aware (E-6.4)
+- **Files:** 3 changed, 0 test file(s)
+- **Root-cause:** avatarSpeak return value was discarded in both deferred-topic
+- **No-tests-needed-because: the deferred topic bridge path requires a**
+- **Verified-by:** npx tsc --noEmit (clean), npm run test:run (1925 passed),
+
+### 2026-04-16 18:41:07 +0000 · `528e1f5` · Claude
+- **Subject:** fix(interview): reconnect on WS drop mid-answer instead of truncating (E-3.4)
+- **Files:** 4 changed, 1 test file(s)
+- **Root-cause:** maybeReconnectOrFinish bailed early with finishRecognition()
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+- **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts

@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { aiLogger } from '@shared/logger'
 import { getCachedTTS, cacheTTS } from '@shared/services/ttsCache'
+import { checkRateLimit } from '@shared/middleware/checkRateLimit'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,6 +37,16 @@ export async function POST(req: NextRequest) {
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    // Rate limit — see /api/tts/stream/route.ts for rationale.
+    // Same per-user 30/min cap; separate keyPrefix so the two routes'
+    // quotas don't interfere with each other's counters.
+    const limited = await checkRateLimit(session.user.id, {
+      windowMs: 60_000,
+      maxRequests: 30,
+      keyPrefix: 'rl:tts-buffered',
+    })
+    if (limited) return limited
 
     if (!DEEPGRAM_API_KEY) {
       return NextResponse.json({ error: 'TTS not configured' }, { status: 503 })

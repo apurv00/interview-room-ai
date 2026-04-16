@@ -466,6 +466,199 @@ describe('useDeepgramRecognition', () => {
     )
   })
 
+  // ─── E-3.7: Tab-backgrounded answer truncation ──────────────────────────
+
+  describe('E-3.7 — page hidden suppresses UtteranceEnd grace timer', () => {
+    function setPageHidden(hidden: boolean) {
+      Object.defineProperty(document, 'hidden', {
+        value: hidden,
+        configurable: true,
+      })
+      Object.defineProperty(document, 'visibilityState', {
+        value: hidden ? 'hidden' : 'visible',
+        configurable: true,
+      })
+      document.dispatchEvent(new Event('visibilitychange'))
+    }
+
+    afterEach(() => {
+      // Reset visibility for other tests
+      setPageHidden(false)
+    })
+
+    it('does NOT schedule grace timer when UtteranceEnd arrives with page hidden', async () => {
+      const { result } = renderHook(() => useDeepgramRecognition())
+      const onComplete = vi.fn()
+
+      act(() => { result.current.warmUp() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+      act(() => { mockWsInstance!.simulateOpen() })
+
+      await act(async () => {
+        result.current.startListening(onComplete)
+        await vi.advanceTimersByTimeAsync(10)
+      })
+
+      // Some speech captured
+      await act(async () => {
+        mockWsInstance!.simulateMessage(makeResult('I was just about to say', true))
+      })
+
+      // Tab goes to background → AudioContext would be suspended by the
+      // browser; Deepgram fires UtteranceEnd because no audio is flowing
+      act(() => setPageHidden(true))
+
+      await act(async () => {
+        mockWsInstance!.simulateMessage(makeUtteranceEnd())
+        // Advance past what WOULD be the grace period if the fix is absent
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+
+      // onComplete must NOT have fired — answer preserved for user's return
+      expect(onComplete).not.toHaveBeenCalled()
+
+      // Tab visible again → next speech packet or UtteranceEnd resumes flow
+      act(() => setPageHidden(false))
+      await act(async () => {
+        mockWsInstance!.simulateMessage(makeResult('that was really tough.', true))
+      })
+      await act(async () => {
+        mockWsInstance!.simulateMessage(makeUtteranceEnd())
+        await vi.advanceTimersByTimeAsync(4500)
+      })
+
+      expect(onComplete).toHaveBeenCalledWith(
+        expect.objectContaining({ text: expect.stringContaining('really tough') }),
+      )
+    })
+
+    it('cancels an in-flight grace timer when the tab becomes visible', async () => {
+      const { result } = renderHook(() => useDeepgramRecognition())
+      const onComplete = vi.fn()
+
+      act(() => { result.current.warmUp() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+      act(() => { mockWsInstance!.simulateOpen() })
+
+      await act(async () => {
+        result.current.startListening(onComplete)
+        await vi.advanceTimersByTimeAsync(10)
+      })
+
+      // Speech + UtteranceEnd while VISIBLE → grace timer scheduled (4000ms)
+      await act(async () => {
+        mockWsInstance!.simulateMessage(makeResult('short answer', true))
+        mockWsInstance!.simulateMessage(makeUtteranceEnd())
+      })
+
+      // Tab hides before grace fires → handler should cancel the timer
+      act(() => setPageHidden(true))
+
+      // Advance past the grace period; without the cancel, finishRecognition
+      // would run while hidden and terminate the answer
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+
+      expect(onComplete).not.toHaveBeenCalled()
+    })
+  })
+
+  // ─── E-3.4: WS disconnect mid-answer should reconnect, not truncate ──────
+
+  describe('E-3.4 — WS disconnect with partial text reconnects (does not finish)', () => {
+    // Uses the connectFresh path (no warmUp) so the ws.onclose handler
+    // is wired to maybeReconnectOrFinish. The warmUp fast path has its
+    // own onclose that only flips isWarmedUpRef — reconnect there is a
+    // separate existing-behavior limitation, out of scope for E-3.4.
+    it('reconnects on WS close when partial text exists; preserves partial text', async () => {
+      const { result } = renderHook(() => useDeepgramRecognition())
+      const onComplete = vi.fn()
+
+      // connectFresh path: skip warmUp, go straight to startListening
+      act(() => { result.current.startListening(onComplete) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+
+      // connectFresh has created the WS by now
+      expect(mockWsInstance).not.toBeNull()
+      act(() => { mockWsInstance!.simulateOpen() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+
+      // Candidate says something — finalText now has content
+      await act(async () => {
+        mockWsInstance!.simulateMessage(makeResult('In my previous role I led a team', true))
+      })
+
+      const firstWs = mockWsInstance!
+
+      // Network blip → WS closes with partial text captured
+      await act(async () => {
+        firstWs.close()
+        // Advance past the 800ms reconnect backoff (attempt 1 → 800ms)
+        await vi.advanceTimersByTimeAsync(1000)
+      })
+
+      // A NEW WebSocket should have been created (reconnect, not finish)
+      expect(mockWsInstance).not.toBe(firstWs)
+      // Recognition not finished — candidate can keep speaking
+      expect(onComplete).not.toHaveBeenCalled()
+
+      // Reconnect opens and candidate continues
+      act(() => { mockWsInstance!.simulateOpen() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+      await act(async () => {
+        mockWsInstance!.simulateMessage(makeResult('of five engineers.', true))
+      })
+      await act(async () => {
+        mockWsInstance!.simulateMessage(makeUtteranceEnd())
+        await vi.advanceTimersByTimeAsync(4500)
+      })
+
+      // Final text combines both halves — partial text was preserved across
+      // the reconnect via finalTextRef (not cleared except on startListening).
+      expect(onComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: 'In my previous role I led a team of five engineers.',
+        }),
+      )
+    })
+
+    it('finishes once maxReconnectAttempts is exhausted even with partial text', async () => {
+      const { result } = renderHook(() => useDeepgramRecognition())
+      const onComplete = vi.fn()
+
+      act(() => { result.current.startListening(onComplete) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+      act(() => { mockWsInstance!.simulateOpen() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+
+      await act(async () => {
+        mockWsInstance!.simulateMessage(makeResult('partial answer here', true))
+      })
+
+      // First disconnect — reconnect scheduled (attempt 1).
+      await act(async () => {
+        mockWsInstance!.close()
+        await vi.advanceTimersByTimeAsync(900)
+      })
+      // Second disconnect on the reconnected ws (without onopen so
+      // reconnectAttemptsRef stays at its incremented value and is NOT reset).
+      await act(async () => {
+        mockWsInstance!.close()
+        await vi.advanceTimersByTimeAsync(1700)
+      })
+      // Third disconnect — exceeds maxReconnectAttempts (2); finish fires.
+      await act(async () => {
+        mockWsInstance!.close()
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+
+      expect(onComplete).toHaveBeenCalledWith(
+        expect.objectContaining({ text: 'partial answer here' }),
+      )
+    })
+  })
+
   it('safety timeout fires onCaptureReady after 1500ms', async () => {
     const { result } = renderHook(() => useDeepgramRecognition())
     const onComplete = vi.fn()

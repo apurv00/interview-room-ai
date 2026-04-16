@@ -53,6 +53,21 @@ vi.mock('@shared/services/ttsCache', () => ({
   getCachedTTS: mockGetCachedTTS,
 }))
 
+// Rate limiting uses a Redis counter. Mock the shared redis client so the
+// existing streaming-contract tests don't depend on a real Redis instance
+// AND so the per-user 30/min quota doesn't tip over when multiple test
+// cases share the same mocked user id.
+const { mockRedisIncr, mockRedisPexpire } = vi.hoisted(() => ({
+  mockRedisIncr: vi.fn().mockResolvedValue(1),
+  mockRedisPexpire: vi.fn().mockResolvedValue(1),
+}))
+vi.mock('@shared/redis', () => ({
+  redis: {
+    incr: (...args: unknown[]) => mockRedisIncr(...args),
+    pexpire: (...args: unknown[]) => mockRedisPexpire(...args),
+  },
+}))
+
 // DEEPGRAM_API_KEY must be set at module load time since the route
 // captures it in a module-level const. `vi.hoisted` runs before any
 // imports resolve, so this assignment wins the race.
@@ -227,6 +242,42 @@ describe('POST /api/tts/stream — streaming contract', () => {
     releaseChunk2()
     await reader.read()
     await reader.read()
+  })
+
+  // ─── Rate limiting (N1) ──────────────────────────────────────────────────
+
+  it('returns 429 when the per-user rate limit is exceeded', async () => {
+    // Simulate 31st request in the current window — one over the 30/min cap.
+    mockRedisIncr.mockResolvedValueOnce(31)
+
+    const res = await POST(makeRequest({ text: 'over limit' }))
+    expect(res.status).toBe(429)
+    expect(res.headers.get('Retry-After')).toBe('60')
+  })
+
+  it('keys rate limit per user (id is embedded in the redis key)', async () => {
+    mockRedisIncr.mockResolvedValueOnce(1)
+
+    const { response, releaseChunk2 } = makeGatedDeepgramResponse()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
+
+    await POST(makeRequest({ text: 'hello' }))
+
+    expect(mockRedisIncr).toHaveBeenCalledWith('rl:tts-stream:test-user-1')
+    releaseChunk2()
+  })
+
+  it('redis failure fails open (request still served)', async () => {
+    // Redis throws → checkRateLimit catches the error and returns null,
+    // allowing the request. A cache blip must not take TTS offline.
+    mockRedisIncr.mockRejectedValueOnce(new Error('ECONNREFUSED'))
+
+    const { response, releaseChunk2 } = makeGatedDeepgramResponse()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
+
+    const res = await POST(makeRequest({ text: 'hello' }))
+    expect(res.status).toBe(200)
+    releaseChunk2()
   })
 })
 

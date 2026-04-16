@@ -85,7 +85,7 @@ Timing constants extracted from code. Mocked API latencies based on production o
 | 3.4 | Deepgram WS disconnects mid-answer (text captured) | WS close event → handleDisconnect → maybeReconnectOrFinish → finalText.length > 0 → finishRecognition() immediately | Text captured so far is returned. No reconnect attempted. | MEDIUM |
 | 3.5 | Deepgram WS disconnects mid-answer (no text yet) | WS close → handleDisconnect → finalText empty → reconnect attempt #1 (800ms) → connect → resume capture | Reconnects. User doesn't notice if <1s gap. | MEDIUM |
 | 3.6 | Deepgram WS disconnects twice (no text) | Attempt #1 (800ms) → fail → attempt #2 (1600ms) → fail → max reconnects → finishRecognition → empty text | Empty answer. Conversation loop nudges. 2.4s lost. | MEDIUM |
-| 3.7 | Browser tab backgrounded during answer | Browser may throttle timers. Deepgram WS stays open (not affected by tab throttle). Audio capture may pause if `AudioContext` is suspended. | **Risk**: `AudioContext.state='suspended'` → no audio sent to Deepgram → UtteranceEnd fires → answer terminated. User returns to foreground and sees answer was cut. | HIGH |
+| 3.7 | Browser tab backgrounded during answer | `AudioContext` suspended → Deepgram fires UtteranceEnd → hook-level visibility handler + grace-timer early-return + inactivity-timer reschedule suppress termination until visible again | Answer preserved; see INTERVIEW_FLOW.md §8 · 2026-04-16 | ✅ FIXED |
 
 ### Group 4: Interrupt Scenarios
 
@@ -105,7 +105,7 @@ Timing constants extracted from code. Mocked API latencies based on production o
 | # | Scenario | Timeline | Expected | Risk |
 |---|----------|----------|----------|------|
 | 5.1 | Timer=0 while user is in LISTENING phase | Timer tick → t=0 → phase=LISTENING → coaching tip → 15s grace setTimeout → if still not SCORING after 15s → finishInterview() | User gets 15s to finish thought. | LOW |
-| 5.2 | Timer=0 while AI is speaking (ASK_QUESTION phase) | Timer tick → t=0 → phase=ASK_QUESTION (≠LISTENING) → finishInterview() immediately | AI speech hard-cancelled. No grace period. User hears AI cut off mid-sentence. | MEDIUM |
+| 5.2 | Timer=0 while AI is speaking (ASK_QUESTION phase) | Timer tick → t=0 → phase=ASK_QUESTION → 10s grace for AI to finish; if phase transitions to LISTENING within grace, extend 15s so user can wrap answer | AI completes sentence, candidate can still respond to closing question. See INTERVIEW_FLOW.md §8 · 2026-04-16. | ✅ FIXED |
 | 5.3 | Timer=0 during PROCESSING phase | Timer tick → t=0 → phase=PROCESSING → finishInterview() immediately | Evaluation in progress. `pendingEvalRef.current` awaited (3s timeout). | LOW |
 | 5.4 | User clicks End during pendingEval await | finishInterview → abort → cancelTTS → stopListening → SCORING → await pendingEvalRef(3s) → abort signal causes eval fetch to fail → catch pushes fallback → pendingEval resolves → evaluationsRef has fallback scores | Fallback scores for last answer. Acceptable. | LOW |
 | 5.5 | **NEW** finishInterview called twice rapidly | First call: interviewAbortRef.abort() → SCORING. Second call: already in SCORING phase. BUT no guard at top of finishInterview! Both proceed. Double persistSession, double feedback generation, double navigation. | **ISSUE**: `finishInterview` has no idempotency guard. `isInterviewOver()` is checked at call sites in the loop, but the timer's `setTimeout` and the user's End button can both fire `finishInterview` independently. | HIGH |
@@ -137,14 +137,18 @@ Timing constants extracted from code. Mocked API latencies based on production o
 
 ## Issues Found — Priority
 
-| ID | Description | Severity | Group |
-|----|-------------|----------|-------|
-| **E-4.5** | `softCancelTTS` doesn't stop `playBlob` buffered audio — only affects MediaSource streaming | HIGH | 4 |
-| **E-5.5** | `finishInterview` has no idempotency guard — can be called twice by timer + End button | HIGH | 5 |
-| **E-1.3** | Token fetch double-failure → 30s silent wait with no user feedback | HIGH | 1 |
-| **E-3.7** | Browser tab backgrounded → AudioContext suspended → answer terminated | HIGH | 3 |
-| **E-2.8** | Interrupt prefix returned as full answer when user never continues speaking | MEDIUM | 2 |
-| **E-4.8** | Double interrupt overwrites interruptSpeech during buffer drain | MEDIUM | 4 |
-| **E-5.6** | Timer=0 fires during probe evaluation, interrupts mid-flow | MEDIUM | 5 |
-| **E-6.4** | Deferred topic bridge avatarSpeak not checked for interrupt | MEDIUM | 6 |
-| **E-5.2** | Timer=0 during ASK_QUESTION — no grace period, AI cut mid-sentence | MEDIUM | 5 |
+Status column reflects current code. Audit dated 2026-04-16 against commit
+`e60f167`; refresh after any hot-path commit.
+
+| ID | Description | Severity | Group | Status |
+|----|-------------|----------|-------|--------|
+| **E-4.5** | `softCancelTTS` doesn't stop `playBlob` buffered audio | HIGH | 4 | ✅ Fixed in `useAvatarSpeech.ts:351-359` |
+| **E-5.5** | `finishInterview` has no idempotency guard | HIGH | 5 | ✅ Fixed at `useInterview.ts:832-833` |
+| **E-1.3** | Token fetch double-failure → silent wait with no user feedback | HIGH | 1 | ✅ Mitigated — now 5s fallback, not 30s (`useDeepgramRecognition.ts:200`) |
+| **E-3.7** | Browser tab backgrounded → AudioContext suspended → answer terminated | HIGH | 3 | ✅ Fixed 2026-04-16 — see INTERVIEW_FLOW.md §8 |
+| **E-2.8** | Interrupt prefix returned as full answer when user never continues speaking | MEDIUM | 2 | ✅ Mitigated — `lastSeenLength = interruptPrefix.length` prevents false reschedule |
+| **E-5.6** | Timer=0 fires during probe evaluation, interrupts mid-flow | MEDIUM | 5 | ✅ Mitigated — `pendingEvalRef` 3s await in `finishInterview` |
+| **E-4.8** | Double interrupt overwrites interruptSpeech during buffer drain | MEDIUM | 4 | ⚠ Open |
+| **E-6.4** | Deferred topic bridge avatarSpeak not checked for interrupt | MEDIUM | 6 | ✅ Fixed 2026-04-16 — interrupt re-queues topic, skips eval (INTERVIEW_FLOW.md §8) |
+| **E-5.2** | Timer=0 during ASK_QUESTION — AI cut mid-sentence on long questions | MEDIUM | 5 | ✅ Fixed 2026-04-16 — 10s grace + LISTENING-transition upgrade (INTERVIEW_FLOW.md §8) |
+| **E-3.4** | WS disconnect with partial text → immediate finishRecognition instead of reconnect | MEDIUM | 3 | ✅ Fixed 2026-04-16 — reconnect preserves partial text, only finishes after maxAttempts (INTERVIEW_FLOW.md §8) |
