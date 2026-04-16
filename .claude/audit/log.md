@@ -341,3 +341,10 @@
 - **Root-cause:** FusionOutput interface never included the model field from
 - **Tests-added: modules/interview/__tests__/analysisJob.test.ts (fusionModel**
 - **Verified-by:** npx vitest run (23/23 pass for changed files),
+
+### 2026-04-16 16:59:41 +0000 · `98310ca` · Claude
+- **Subject:** fix(analysis): P2 cleanup — remove dead coach notes, raise token limit, add data boundary
+- **Files:** 5 changed, 1 test file(s)
+- **Root-cause:** P2-1/P2-2 coachNotesService was scaffolded during the
+- **Tests-added: No new tests — removed 3 tests for deleted dead code.**
+- **Verified-by:** npx vitest run (43/43 pass for changed files),
