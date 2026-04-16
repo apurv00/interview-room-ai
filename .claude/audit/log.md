@@ -383,3 +383,10 @@
 - **Root-cause:** avatarSpeak return value was discarded in both deferred-topic
 - **No-tests-needed-because: the deferred topic bridge path requires a**
 - **Verified-by:** npx tsc --noEmit (clean), npm run test:run (1925 passed),
+
+### 2026-04-16 18:41:07 +0000 · `528e1f5` · Claude
+- **Subject:** fix(interview): reconnect on WS drop mid-answer instead of truncating (E-3.4)
+- **Files:** 4 changed, 1 test file(s)
+- **Root-cause:** maybeReconnectOrFinish bailed early with finishRecognition()
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+- **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts
