@@ -506,6 +506,10 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
 
     ws.onopen = () => {
       console.log('[Deepgram] WebSocket connected')
+      // Refresh the reconnect budget on a successful open so a second
+      // network blip 30 minutes later doesn't fail from a stale counter
+      // (E-3.4). startListening also resets this at session start.
+      reconnectAttemptsRef.current = 0
       setIsListening(true)
       startAudioCapture(ws)
     }
@@ -532,10 +536,19 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       return
     }
 
-    if (finalTextRef.current.trim().length > 0) {
-      finishRecognition()
-      return
-    }
+    // E-3.4: previously we bailed early if finalTextRef had any content —
+    // that truncated the candidate's answer on a single network blip. Now
+    // we preserve partial text across reconnects (finalTextRef is only
+    // cleared at startListening time) and only finish once maxReconnect
+    // attempts are exhausted. The old audio processor is bound to the
+    // dead ws, so tear it down here — setupAudioProcessing rebuilds fresh
+    // on the next onopen.
+    processorRef.current?.disconnect()
+    sourceRef.current?.disconnect()
+    audioContextRef.current?.close().catch(() => {})
+    processorRef.current = null
+    sourceRef.current = null
+    audioContextRef.current = null
 
     const delay = 800 * reconnectAttemptsRef.current
     console.log(`[Deepgram] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current})`)

@@ -741,3 +741,54 @@ and `evaluateAndCoach` unconditionally.
 topic bridge path with simulated interrupts. The `useInterview` test
 suite mocks `avatarSpeak` as a no-op and doesn't trigger the interrupt
 callback mid-speech.
+
+### E-3.4 — WS disconnect with partial text no longer truncates answers (2026-04-16)
+
+**Symptom:** Network blip mid-answer → Deepgram WebSocket closes →
+`maybeReconnectOrFinish` saw `finalTextRef.current.trim().length > 0`
+and immediately called `finishRecognition()`. Result: candidate's
+answer was truncated to whatever they'd said before the blip, even
+though they were mid-sentence and the network recovered 200ms later.
+For a 30-minute interview this is a surprisingly common failure mode
+on flaky home Wi-Fi.
+
+**Root cause:** The early-bail check was a safety measure to avoid
+"losing" text on reconnect, but it predated the current
+`finalTextRef`-accumulating message handler. `finalTextRef` is only
+cleared at `startListening` entry — it persists across reconnects.
+So the shortcut was actively harmful: it discarded the *future* of
+the answer to "preserve" the past.
+
+**Fix (useDeepgramRecognition.ts):**
+1. `maybeReconnectOrFinish`: removed the partial-text→finish early
+   return. Now always reconnects up to `maxReconnectAttempts (2)`
+   before finishing, regardless of whether `finalTextRef` has content.
+2. Before scheduling the reconnect, tear down the stale audio
+   processor + source + AudioContext bound to the dead ws.
+   `setupAudioProcessing` on the next `onopen` creates fresh ones.
+   (Previously only `finishRecognition` tore these down, so
+   reconnects would have leaked — a latent bug exposed by the more
+   aggressive reconnect policy.)
+3. `connectWebSocket.onopen`: reset `reconnectAttemptsRef.current = 0`
+   on successful open so a second blip 20 minutes later doesn't fail
+   from a stale incremented counter. `startListening` also resets this
+   at session start; the onopen reset covers mid-session reconnects.
+
+**Tests added (deepgramRecognition.test.ts):**
+- `reconnects on WS close when partial text exists; preserves partial
+  text` — verifies a new WebSocket is created (not finished) and the
+  combined transcript after reconnect contains both halves.
+- `finishes once maxReconnectAttempts is exhausted even with partial
+  text` — three back-to-back closes (no successful onopen between)
+  eventually trigger `finishRecognition` with the captured partial.
+
+**Scope limit:** The `warmUp` fast path has its own
+`onclose` handler that only flips `isWarmedUpRef`; that path doesn't
+go through `maybeReconnectOrFinish`. Reconnect behavior on the warm
+WS is a separate existing-behavior limitation, untouched by this fix.
+
+**Why existing tests didn't catch it:** No existing test exercised
+the reconnect path at all. The `deepgramRecognition.test.ts` suite
+had 10 tests before E-3.7; all covered happy-path listening or
+interrupt accumulation. The reconnect code was deployed and never
+verified end-to-end.

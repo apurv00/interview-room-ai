@@ -151,4 +151,4 @@ Status column reflects current code. Audit dated 2026-04-16 against commit
 | **E-4.8** | Double interrupt overwrites interruptSpeech during buffer drain | MEDIUM | 4 | ⚠ Open |
 | **E-6.4** | Deferred topic bridge avatarSpeak not checked for interrupt | MEDIUM | 6 | ✅ Fixed 2026-04-16 — interrupt re-queues topic, skips eval (INTERVIEW_FLOW.md §8) |
 | **E-5.2** | Timer=0 during ASK_QUESTION — AI cut mid-sentence on long questions | MEDIUM | 5 | ✅ Fixed 2026-04-16 — 10s grace + LISTENING-transition upgrade (INTERVIEW_FLOW.md §8) |
-| **E-3.4** | WS disconnect with partial text → immediate finishRecognition instead of reconnect | MEDIUM | 3 | ⚠ Open |
+| **E-3.4** | WS disconnect with partial text → immediate finishRecognition instead of reconnect | MEDIUM | 3 | ✅ Fixed 2026-04-16 — reconnect preserves partial text, only finishes after maxAttempts (INTERVIEW_FLOW.md §8) |
