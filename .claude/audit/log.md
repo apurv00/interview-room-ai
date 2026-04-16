@@ -432,3 +432,10 @@
 - **Root-cause:** the F-4 pre-flight read (commit a575bf3) used
 - **Tests-added: modules/interview/__tests__/generateFeedbackIdempotency.test.ts**
 - **Verified-by:** npx vitest run
+
+### 2026-04-16 19:39:05 +0000 · `483368b` · Claude
+- **Subject:** test(learn): raise XP_AMOUNTS micro-benchmark budget from 10ms to 50ms (CI flake)
+- **Files:** 1 changed, 1 test file(s)
+- **Root-cause:** modules/learn/__tests__/engagementPerf.test.ts line 117
+- **No-tests-needed-because: this commit IS the test fix — the artifact**
+- **Verified-by:** npx vitest run
