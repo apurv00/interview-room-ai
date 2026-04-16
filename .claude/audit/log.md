@@ -425,3 +425,10 @@
 - **Root-cause:** the five fire-and-forget side effects in
 - **Tests-added: modules/interview/__tests__/generateFeedbackIdempotency.test.ts**
 - **Verified-by:** npm run test:run (1932 passed, +2 from F-3); npx tsc
+
+### 2026-04-16 19:27:00 +0000 · `9a18a7f` · Claude
+- **Subject:** fix(feedback): scope F-4 pre-flight lookup by userId (PR #273 review)
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** the F-4 pre-flight read (commit a575bf3) used
+- **Tests-added: modules/interview/__tests__/generateFeedbackIdempotency.test.ts**
+- **Verified-by:** npx vitest run
