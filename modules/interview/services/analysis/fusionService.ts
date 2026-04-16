@@ -1,5 +1,5 @@
 import { completion } from '@shared/services/modelRouter'
-import { JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
+import { JSON_OUTPUT_RULE, DATA_BOUNDARY_RULE } from '@shared/services/promptSecurity'
 import { aiLogger } from '@shared/logger'
 import { FusionLlmSchema } from '@interview/validators/interview'
 import type {
@@ -52,6 +52,8 @@ export async function runFusionAnalysis(input: FusionInput): Promise<FusionOutpu
   const systemPrompt = `You are an expert interview coach analyzing multimodal signals from a recorded mock interview. The candidate was interviewing for a ${config.role} position (${config.experience} years experience, ${config.interviewType || 'screening'} interview).
 
 Your job is to stitch together audio, visual, and content signals into a unified coaching timeline. Focus on specific, actionable moments — not generic advice.
+
+${DATA_BOUNDARY_RULE}
 
 ${JSON_OUTPUT_RULE}
 {
