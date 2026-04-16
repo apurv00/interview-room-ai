@@ -237,6 +237,57 @@ describe('fusionService', () => {
       expect(capturedPrompts[0]).not.toContain('topBlendshapes')
     })
 
+    it('sentinel facial segments (avgEyeContact === -1) are excluded from the prompt', async () => {
+      const sentinelSegment = {
+        startSec: 30,
+        endSec: 60,
+        avgEyeContact: -1,  // sentinel: no data in this window
+        dominantExpression: 'neutral',
+        headStability: -1,  // sentinel: no data
+        gestureLevel: 'minimal' as const,
+        questionIndex: 1,
+      }
+
+      await runFusionAnalysis({
+        ...baseInput,
+        facialSegments: [enrichedFacialSegment, sentinelSegment],
+        includeBlendshapes: false,
+      })
+
+      expect(capturedContextData).toHaveLength(1)
+      const ctx = capturedContextData[0]
+      expect(ctx).toBeDefined()
+      const facialSignals = ctx!.facialSignals as Array<Record<string, unknown>>
+      // Only the real segment should appear — sentinel filtered out
+      expect(facialSignals).toHaveLength(1)
+      expect(facialSignals[0].eyeContact).toBe(78) // Math.round(0.78 * 100)
+      // Sentinel values (-100) should never appear
+      expect(facialSignals.some((s) => (s.eyeContact as number) < 0)).toBe(false)
+    })
+
+    it('all-sentinel facial data produces no facialSignals in context', async () => {
+      const sentinelOnly = {
+        startSec: 0,
+        endSec: 60,
+        avgEyeContact: -1,
+        dominantExpression: 'neutral',
+        headStability: -1,
+        gestureLevel: 'minimal' as const,
+        questionIndex: 0,
+      }
+
+      await runFusionAnalysis({
+        ...baseInput,
+        facialSegments: [sentinelOnly],
+        includeBlendshapes: false,
+      })
+
+      expect(capturedContextData).toHaveLength(1)
+      const ctx = capturedContextData[0]
+      // When all segments are sentinel, no facialSignals key should exist
+      expect(ctx!.facialSignals).toBeUndefined()
+    })
+
     it('filters out near-zero blendshapes from the top list', async () => {
       const noisySegment = {
         ...enrichedFacialSegment,
@@ -259,6 +310,56 @@ describe('fusionService', () => {
       expect(prompt).toContain('browDownLeft')
       expect(prompt).not.toContain('noiseA')
       expect(prompt).not.toContain('noiseB')
+    })
+  })
+
+  describe('JSON parse resilience', () => {
+    it('throws a clear error when LLM returns truncated/malformed JSON', async () => {
+      const { completion } = await import('@shared/services/modelRouter')
+      const mockCompletion = vi.mocked(completion)
+      // Simulate truncated output where the regex matches braces but
+      // the interior JSON is malformed (e.g. array bracket missing)
+      mockCompletion.mockResolvedValueOnce({
+        text: '{"timeline":[{"startSec":10,"endSec":30,"type":"stre}',
+        model: 'mock-model',
+        provider: 'anthropic' as const,
+        inputTokens: 500,
+        outputTokens: 300,
+        usedFallback: false,
+      })
+
+      await expect(
+        runFusionAnalysis({
+          prosodySegments: [],
+          facialSegments: [],
+          evaluations: [],
+          transcript: [],
+          config: { role: 'SWE', experience: '3-6', duration: 10 },
+        })
+      ).rejects.toThrow('malformed JSON')
+    })
+
+    it('throws when LLM returns no JSON at all', async () => {
+      const { completion } = await import('@shared/services/modelRouter')
+      const mockCompletion = vi.mocked(completion)
+      mockCompletion.mockResolvedValueOnce({
+        text: 'I cannot generate the analysis due to content filters.',
+        model: 'mock-model',
+        provider: 'anthropic' as const,
+        inputTokens: 200,
+        outputTokens: 50,
+        usedFallback: false,
+      })
+
+      await expect(
+        runFusionAnalysis({
+          prosodySegments: [],
+          facialSegments: [],
+          evaluations: [],
+          transcript: [],
+          config: { role: 'SWE', experience: '3-6', duration: 10 },
+        })
+      ).rejects.toThrow('no valid JSON')
     })
   })
 })

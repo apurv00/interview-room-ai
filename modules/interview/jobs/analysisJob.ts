@@ -1,5 +1,6 @@
 import { inngest } from '@shared/services/inngest'
 import { aiLogger } from '@shared/logger'
+import { enforceAnalysisCap } from '@shared/services/analysisCleanup'
 import {
   stepFetchSession,
   stepTranscribeAndDownload,
@@ -141,6 +142,12 @@ export async function runAnalysisJobHandler(
       startTime,
     })
   )
+
+  // Step 6: enforce per-user analysis cap — delete oldest analyses (and their
+  // R2 recordings) beyond the 10-analysis rolling limit. The inline fallback
+  // path in /api/analysis/start already calls this, but the Inngest path was
+  // missing it — meaning background-job analyses were never capped.
+  await step.run('enforce-analysis-cap', () => enforceAnalysisCap(userId))
 
   return { sessionId, status: 'completed' }
 }
