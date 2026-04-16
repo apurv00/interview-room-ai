@@ -85,7 +85,7 @@ Timing constants extracted from code. Mocked API latencies based on production o
 | 3.4 | Deepgram WS disconnects mid-answer (text captured) | WS close event → handleDisconnect → maybeReconnectOrFinish → finalText.length > 0 → finishRecognition() immediately | Text captured so far is returned. No reconnect attempted. | MEDIUM |
 | 3.5 | Deepgram WS disconnects mid-answer (no text yet) | WS close → handleDisconnect → finalText empty → reconnect attempt #1 (800ms) → connect → resume capture | Reconnects. User doesn't notice if <1s gap. | MEDIUM |
 | 3.6 | Deepgram WS disconnects twice (no text) | Attempt #1 (800ms) → fail → attempt #2 (1600ms) → fail → max reconnects → finishRecognition → empty text | Empty answer. Conversation loop nudges. 2.4s lost. | MEDIUM |
-| 3.7 | Browser tab backgrounded during answer | Browser may throttle timers. Deepgram WS stays open (not affected by tab throttle). Audio capture may pause if `AudioContext` is suspended. | **Risk**: `AudioContext.state='suspended'` → no audio sent to Deepgram → UtteranceEnd fires → answer terminated. User returns to foreground and sees answer was cut. | HIGH |
+| 3.7 | Browser tab backgrounded during answer | `AudioContext` suspended → Deepgram fires UtteranceEnd → hook-level visibility handler + grace-timer early-return + inactivity-timer reschedule suppress termination until visible again | Answer preserved; see INTERVIEW_FLOW.md §8 · 2026-04-16 | ✅ FIXED |
 
 ### Group 4: Interrupt Scenarios
 
@@ -137,14 +137,18 @@ Timing constants extracted from code. Mocked API latencies based on production o
 
 ## Issues Found — Priority
 
-| ID | Description | Severity | Group |
-|----|-------------|----------|-------|
-| **E-4.5** | `softCancelTTS` doesn't stop `playBlob` buffered audio — only affects MediaSource streaming | HIGH | 4 |
-| **E-5.5** | `finishInterview` has no idempotency guard — can be called twice by timer + End button | HIGH | 5 |
-| **E-1.3** | Token fetch double-failure → 30s silent wait with no user feedback | HIGH | 1 |
-| **E-3.7** | Browser tab backgrounded → AudioContext suspended → answer terminated | HIGH | 3 |
-| **E-2.8** | Interrupt prefix returned as full answer when user never continues speaking | MEDIUM | 2 |
-| **E-4.8** | Double interrupt overwrites interruptSpeech during buffer drain | MEDIUM | 4 |
-| **E-5.6** | Timer=0 fires during probe evaluation, interrupts mid-flow | MEDIUM | 5 |
-| **E-6.4** | Deferred topic bridge avatarSpeak not checked for interrupt | MEDIUM | 6 |
-| **E-5.2** | Timer=0 during ASK_QUESTION — no grace period, AI cut mid-sentence | MEDIUM | 5 |
+Status column reflects current code. Audit dated 2026-04-16 against commit
+`e60f167`; refresh after any hot-path commit.
+
+| ID | Description | Severity | Group | Status |
+|----|-------------|----------|-------|--------|
+| **E-4.5** | `softCancelTTS` doesn't stop `playBlob` buffered audio | HIGH | 4 | ✅ Fixed in `useAvatarSpeech.ts:351-359` |
+| **E-5.5** | `finishInterview` has no idempotency guard | HIGH | 5 | ✅ Fixed at `useInterview.ts:832-833` |
+| **E-1.3** | Token fetch double-failure → silent wait with no user feedback | HIGH | 1 | ✅ Mitigated — now 5s fallback, not 30s (`useDeepgramRecognition.ts:200`) |
+| **E-3.7** | Browser tab backgrounded → AudioContext suspended → answer terminated | HIGH | 3 | ✅ Fixed 2026-04-16 — see INTERVIEW_FLOW.md §8 |
+| **E-2.8** | Interrupt prefix returned as full answer when user never continues speaking | MEDIUM | 2 | ✅ Mitigated — `lastSeenLength = interruptPrefix.length` prevents false reschedule |
+| **E-5.6** | Timer=0 fires during probe evaluation, interrupts mid-flow | MEDIUM | 5 | ✅ Mitigated — `pendingEvalRef` 3s await in `finishInterview` |
+| **E-4.8** | Double interrupt overwrites interruptSpeech during buffer drain | MEDIUM | 4 | ⚠ Open |
+| **E-6.4** | Deferred topic bridge avatarSpeak not checked for interrupt | MEDIUM | 6 | ⚠ Open |
+| **E-5.2** | Timer=0 during ASK_QUESTION — no grace period, AI cut mid-sentence | MEDIUM | 5 | ⚠ Open |
+| **E-3.4** | WS disconnect with partial text → immediate finishRecognition instead of reconnect | MEDIUM | 3 | ⚠ Open |

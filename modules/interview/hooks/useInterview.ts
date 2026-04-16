@@ -581,6 +581,15 @@ export function useInterview({
         const scheduleInactivityTimeout = () => {
           timeoutTimer = setTimeout(() => {
             if (resolved) return
+            // E-3.7: if the tab is hidden, browsers throttle timers and
+            // suspend the AudioContext, so liveAnswer cannot grow even if
+            // the candidate is still speaking. Reschedule instead of
+            // terminating — the Deepgram hook also suppresses its grace
+            // timer while hidden so no answer is lost.
+            if (typeof document !== 'undefined' && document.hidden) {
+              scheduleInactivityTimeout()
+              return
+            }
             const currentLength = (liveAnswerRef.current || '').length
             if (currentLength > lastSeenLength) {
               // User is still speaking — reset the inactivity clock

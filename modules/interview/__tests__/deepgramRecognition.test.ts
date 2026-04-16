@@ -466,6 +466,104 @@ describe('useDeepgramRecognition', () => {
     )
   })
 
+  // ─── E-3.7: Tab-backgrounded answer truncation ──────────────────────────
+
+  describe('E-3.7 — page hidden suppresses UtteranceEnd grace timer', () => {
+    function setPageHidden(hidden: boolean) {
+      Object.defineProperty(document, 'hidden', {
+        value: hidden,
+        configurable: true,
+      })
+      Object.defineProperty(document, 'visibilityState', {
+        value: hidden ? 'hidden' : 'visible',
+        configurable: true,
+      })
+      document.dispatchEvent(new Event('visibilitychange'))
+    }
+
+    afterEach(() => {
+      // Reset visibility for other tests
+      setPageHidden(false)
+    })
+
+    it('does NOT schedule grace timer when UtteranceEnd arrives with page hidden', async () => {
+      const { result } = renderHook(() => useDeepgramRecognition())
+      const onComplete = vi.fn()
+
+      act(() => { result.current.warmUp() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+      act(() => { mockWsInstance!.simulateOpen() })
+
+      await act(async () => {
+        result.current.startListening(onComplete)
+        await vi.advanceTimersByTimeAsync(10)
+      })
+
+      // Some speech captured
+      await act(async () => {
+        mockWsInstance!.simulateMessage(makeResult('I was just about to say', true))
+      })
+
+      // Tab goes to background → AudioContext would be suspended by the
+      // browser; Deepgram fires UtteranceEnd because no audio is flowing
+      act(() => setPageHidden(true))
+
+      await act(async () => {
+        mockWsInstance!.simulateMessage(makeUtteranceEnd())
+        // Advance past what WOULD be the grace period if the fix is absent
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+
+      // onComplete must NOT have fired — answer preserved for user's return
+      expect(onComplete).not.toHaveBeenCalled()
+
+      // Tab visible again → next speech packet or UtteranceEnd resumes flow
+      act(() => setPageHidden(false))
+      await act(async () => {
+        mockWsInstance!.simulateMessage(makeResult('that was really tough.', true))
+      })
+      await act(async () => {
+        mockWsInstance!.simulateMessage(makeUtteranceEnd())
+        await vi.advanceTimersByTimeAsync(4500)
+      })
+
+      expect(onComplete).toHaveBeenCalledWith(
+        expect.objectContaining({ text: expect.stringContaining('really tough') }),
+      )
+    })
+
+    it('cancels an in-flight grace timer when the tab becomes visible', async () => {
+      const { result } = renderHook(() => useDeepgramRecognition())
+      const onComplete = vi.fn()
+
+      act(() => { result.current.warmUp() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+      act(() => { mockWsInstance!.simulateOpen() })
+
+      await act(async () => {
+        result.current.startListening(onComplete)
+        await vi.advanceTimersByTimeAsync(10)
+      })
+
+      // Speech + UtteranceEnd while VISIBLE → grace timer scheduled (4000ms)
+      await act(async () => {
+        mockWsInstance!.simulateMessage(makeResult('short answer', true))
+        mockWsInstance!.simulateMessage(makeUtteranceEnd())
+      })
+
+      // Tab hides before grace fires → handler should cancel the timer
+      act(() => setPageHidden(true))
+
+      // Advance past the grace period; without the cancel, finishRecognition
+      // would run while hidden and terminate the answer
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+
+      expect(onComplete).not.toHaveBeenCalled()
+    })
+  })
+
   it('safety timeout fires onCaptureReady after 1500ms', async () => {
     const { result } = renderHook(() => useDeepgramRecognition())
     const onComplete = vi.fn()

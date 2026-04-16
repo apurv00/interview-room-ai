@@ -525,3 +525,69 @@ main answers, probe answers, wrap-up, retry, and pivot flows. All share
 the same `timeoutMs=30000` default. The fix is internal to `listenForAnswer`
 and does not change its signature or return contract, so all callers
 benefit without modification.
+
+---
+
+### 2026-04-16 · Tab-backgrounded answer truncation (E-3.7)
+
+**Symptom:** Candidate backgrounded the browser tab mid-answer (checked
+email, notifications, another app) and returned to find the answer cut off,
+the interview advanced, and a fallback 60/55/55/60 evaluation recorded for
+the truncated text. Reported by EDGE_CASES.md Group 3 #7.
+
+**Root cause:** Two independent timers terminated the answer while the tab
+was hidden:
+
+1. **Deepgram grace timer.** Browsers suspend `AudioContext` when a tab is
+   backgrounded. The `ScriptProcessorNode` stops delivering audio frames,
+   Deepgram sees silence on the WebSocket, and fires `UtteranceEnd` after
+   its configured `utterance_end_ms=2500`. `attachMessageHandler` then
+   scheduled a 3500-4000 ms grace timer that called `finishRecognition()`,
+   closing the WS and resolving the answer with whatever partial text was
+   captured before the tab hid. An earlier half-fix in
+   `setupAudioProcessing` (per-session) installed a `visibilitychange`
+   listener that only tried to resume the AudioContext when the tab
+   returned — by which point `finishRecognition` had already run.
+
+2. **useInterview inactivity timer.** `listenForAnswer` at line 582
+   scheduled a `setTimeout(timeoutMs=30000)` that called `stopListening()`
+   when `liveAnswerRef.current` hadn't grown. While hidden, no audio was
+   flowing, so the ref never grew — the 30s timer fired (browser throttling
+   defers but doesn't cancel) and terminated the answer independently of
+   the Deepgram fix.
+
+**Fixes (this commit):**
+
+- `useDeepgramRecognition.ts` — replaced the per-session visibility
+  listener with a hook-level `useEffect` that tracks `isPageHiddenRef`.
+  UtteranceEnd handler now skips grace-timer scheduling while hidden
+  (`finalTextRef.current.trim().length > 0 && !isPageHiddenRef.current`).
+  Grace timer callback adds a defensive early-return when the ref is true
+  on fire (covers the case where the browser fires a scheduled timer
+  mid-throttle rather than deferring it). The hook-level visibility handler
+  cancels any in-flight grace timer on the visible event and resumes the
+  AudioContext if the browser suspended it.
+- `useInterview.ts` — `scheduleInactivityTimeout` adds a `document.hidden`
+  check: when hidden, the timer reschedules itself instead of calling
+  `stopListening`. Mirrors the Deepgram-layer fix so neither layer can
+  independently truncate the answer.
+
+**Tests added:**
+
+- `modules/interview/__tests__/deepgramRecognition.test.ts`:
+  - `does NOT schedule grace timer when UtteranceEnd arrives with page hidden`
+  - `cancels an in-flight grace timer when the tab becomes visible`
+
+The tests simulate `document.hidden` + `visibilitychange` events against
+the real hook and assert `onComplete` is not called prematurely.
+
+**Why existing tests didn't catch it:** The catalog (EDGE_CASES.md) named
+this issue explicitly but no test exercised the visibility lifecycle
+against the real hook. E-3.7 was documented but never instrumented.
+Adding the two tests closes that gap.
+
+_Follow-up considerations (not fixed in this commit):_ some browsers
+suspend `AudioContext` aggressively even for brief backgrounding; the
+fix assumes the WebSocket stays alive, which Chrome/Firefox honor but
+Safari may not. If Safari users report issues, we may need a reconnect
+flow tied to the visible event.
