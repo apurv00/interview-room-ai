@@ -18,6 +18,7 @@ import { NextRequest } from 'next/server'
 
 const {
   mockAcquire, mockRelease, mockCompletion, mockWarn, mockError, mockInfo,
+  mockSessionFindOne,
 } = vi.hoisted(() => ({
   mockAcquire: vi.fn(),
   mockRelease: vi.fn(),
@@ -25,6 +26,14 @@ const {
   mockWarn: vi.fn(),
   mockError: vi.fn(),
   mockInfo: vi.fn(),
+  // F-4: default returns null (no concurrent writer). Tests can
+  // override via mockSessionFindOne.mockReturnValueOnce(...) to
+  // simulate "another caller already wrote session.feedback" or a
+  // mismatched owner filter (findOne returns null when userId
+  // doesn't match — tested explicitly in the cross-account case).
+  mockSessionFindOne: vi.fn(() => ({
+    select: () => ({ lean: () => Promise.resolve(null) }),
+  })),
 }))
 
 vi.mock('@shared/middleware/composeApiRoute', () => ({
@@ -73,7 +82,10 @@ vi.mock('@shared/db/connection', () => ({
 
 vi.mock('@shared/db/models', () => ({
   User: { findById: () => ({ select: () => ({ lean: () => Promise.resolve(null) }) }) },
-  InterviewSession: { findByIdAndUpdate: vi.fn().mockResolvedValue(undefined) },
+  InterviewSession: {
+    findByIdAndUpdate: vi.fn().mockResolvedValue(undefined),
+    findOne: mockSessionFindOne,
+  },
 }))
 
 vi.mock('@shared/featureFlags', () => ({
@@ -261,5 +273,178 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
     expect(mockAcquire).not.toHaveBeenCalled()
     expect(mockRelease).not.toHaveBeenCalled()
     expect(res.status).toBe(200)
+  })
+
+  // ─── F-4: concurrent-writer short-circuit ──────────────────────────────
+  //
+  // Validates that when Redis fails open (lock.acquired === false) OR a
+  // parallel caller has already written session.feedback to the DB, the
+  // pre-flight read hits and we skip the expensive Claude + side-effect
+  // pipeline entirely. Without this, a Redis blip doubles the LLM bill
+  // and double-fires every post-feedback side effect.
+
+  it('F-4: returns cached feedback when session.feedback already populated (fail-open race)', async () => {
+    // Redis is "down" — lock returns acquired: false (fail-open).
+    mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: false })
+
+    // Meanwhile, the parallel caller already finished and wrote to DB.
+    const cachedFeedback = {
+      overall_score: 88,
+      pass_probability: 'High',
+      confidence_level: 'High',
+      dimensions: {
+        answer_quality: { score: 86, strengths: ['clear'], weaknesses: [] },
+        communication: { score: 90, wpm: 140, filler_rate: 0.02, pause_score: 80, rambling_index: 0.1 },
+        engagement_signals: { score: 88, engagement_score: 85, confidence_trend: 'stable', energy_consistency: 0.85, composure_under_pressure: 80 },
+      },
+      red_flags: [],
+      top_3_improvements: ['already', 'written', 'to DB'],
+    }
+    mockSessionFindOne.mockReturnValueOnce({
+      select: () => ({ lean: () => Promise.resolve({ feedback: cachedFeedback }) }),
+    })
+
+    const res = await POST(makeRequest())
+    const json = await res.json()
+
+    expect(res.status).toBe(200)
+    // The critical assertion — the LLM was NOT called again.
+    expect(mockCompletion).not.toHaveBeenCalled()
+    // Returned feedback matches the cached one, not a fresh generation.
+    expect(json.overall_score).toBe(88)
+    expect(json.top_3_improvements).toEqual(['already', 'written', 'to DB'])
+  })
+
+  it('F-4: proceeds with generation when session.feedback is null (normal first run)', async () => {
+    mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: true })
+    mockCompletion.mockResolvedValue(happyCompletion)
+    // Default mockSessionFindOne returns null → no concurrent writer.
+
+    const res = await POST(makeRequest())
+
+    expect(res.status).toBe(200)
+    // LLM ran normally — the pre-flight check is non-intrusive on the
+    // cold path.
+    expect(mockCompletion).toHaveBeenCalledTimes(1)
+  })
+
+  it('F-4: pre-flight DB read failure is non-fatal (falls through to normal pipeline)', async () => {
+    mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: true })
+    mockCompletion.mockResolvedValue(happyCompletion)
+    // Simulate a Mongo outage on the pre-flight read.
+    mockSessionFindOne.mockReturnValueOnce({
+      select: () => ({ lean: () => Promise.reject(new Error('Mongo ECONNREFUSED')) }),
+    })
+
+    const res = await POST(makeRequest())
+
+    expect(res.status).toBe(200)
+    // Pipeline still runs — pre-flight is best-effort, not a gate.
+    expect(mockCompletion).toHaveBeenCalledTimes(1)
+    // Warn was logged (but not error — non-fatal).
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: expect.any(String) }),
+      expect.stringContaining('pre-flight session read failed'),
+    )
+  })
+
+  it('F-4: pre-flight lookup is owner-scoped (no cross-account feedback leak)', async () => {
+    // Codex P1 finding on PR #273: without {_id, userId} scoping the
+    // pre-flight read would return any session's feedback by id, turning
+    // /api/generate-feedback into a read oracle for other users' scores.
+    // This test asserts the route calls findOne with a userId filter so
+    // a non-matching caller never receives the cached feedback even
+    // when the sessionId matches an existing row.
+    mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: false })
+    mockCompletion.mockResolvedValue(happyCompletion)
+
+    // Caller is user '...9099' (mock session above). The session in
+    // Mongo belongs to a DIFFERENT user, so findOne({_id, userId: 9099})
+    // must return null even though the row exists.
+    mockSessionFindOne.mockReturnValueOnce({
+      select: () => ({ lean: () => Promise.resolve(null) }),
+    })
+
+    await POST(makeRequest())
+
+    // The filter passed to findOne must include the caller's userId,
+    // not just the sessionId. Catching the filter shape here is the
+    // regression guard that would have caught the original leak.
+    expect(mockSessionFindOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: expect.any(String),
+        userId: '507f1f77bcf86cd799439099',
+      }),
+    )
+    // Pipeline continued normally — findOne returned null means no
+    // concurrent writer visible to this user, so we generate freshly.
+    expect(mockCompletion).toHaveBeenCalledTimes(1)
+  })
+
+  // ─── F-3: aggregate side-effect summary log ─────────────────────────────
+  //
+  // Five post-feedback side effects (practiceStats, competency,
+  // sessionSummary, weaknessClusters, pathwayPlan) are fire-and-forget.
+  // Before F-3, a failed side effect only logged a per-call warn with
+  // no sessionId, so ops couldn't correlate failures to an interview
+  // or see how many of the N calls succeeded. F-3 wraps them in
+  // Promise.allSettled and emits one aggregate info line per session.
+
+  it('F-3: emits aggregate summary log with succeeded count when all side effects pass', async () => {
+    mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: true })
+    mockCompletion.mockResolvedValue(happyCompletion)
+
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+
+    // Side effects are fire-and-forget; let their promises settle.
+    // Microtask flush + a short macrotask covers the allSettled chain.
+    await new Promise((r) => setTimeout(r, 0))
+
+    const summaryCall = mockInfo.mock.calls.find((c) =>
+      typeof c[1] === 'string' && c[1].includes('post-feedback side effects settled'),
+    )
+    expect(summaryCall).toBeTruthy()
+    const [context] = summaryCall as [Record<string, unknown>, string]
+    expect(context.totalSideEffects).toBe(4) // no weaknessClusters when no flags
+    expect(context.succeeded).toBe(4)
+    expect(context.failedCount).toBe(0)
+    expect(context.failed).toBeUndefined()
+    expect(context.sessionId).toBe('507f1f77bcf86cd799439011')
+  })
+
+  it('F-3: aggregate summary lists failed side effects by name', async () => {
+    mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: true })
+    mockCompletion.mockResolvedValue(happyCompletion)
+
+    // Reach into the mocked service modules — the factory returned
+    // real vi.fn() instances that are cached per module, so we can
+    // override the next call without rebuilding the mock.
+    const competencyModule = await import('@learn/services/competencyService')
+    vi.mocked(competencyModule.updateCompetencyState).mockRejectedValueOnce(
+      new Error('competency DB down'),
+    )
+    const pathwayModule = await import('@learn/services/pathwayPlanner')
+    vi.mocked(pathwayModule.generatePathwayPlan).mockRejectedValueOnce(
+      new Error('pathway OOM'),
+    )
+
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+
+    await new Promise((r) => setTimeout(r, 0))
+
+    const summaryCall = mockInfo.mock.calls.find((c) =>
+      typeof c[1] === 'string' && c[1].includes('post-feedback side effects settled'),
+    )
+    expect(summaryCall).toBeTruthy()
+    const [context] = summaryCall as [Record<string, unknown>, string]
+    expect(context.totalSideEffects).toBe(4)
+    expect(context.succeeded).toBe(2)
+    expect(context.failedCount).toBe(2)
+    const failed = context.failed as Array<{ name: string; reason: string }>
+    expect(failed.map((f) => f.name).sort()).toEqual(['competency', 'pathwayPlan'])
+    expect(failed.find((f) => f.name === 'competency')?.reason).toContain('competency DB down')
+    expect(failed.find((f) => f.name === 'pathwayPlan')?.reason).toContain('pathway OOM')
   })
 })

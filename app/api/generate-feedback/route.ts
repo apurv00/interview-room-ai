@@ -253,6 +253,51 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
       return NextResponse.json(shortFormFeedback)
     }
 
+    // F-4: concurrent-writer short-circuit. The Redis lock fails open
+    // on connection errors (feedbackLock.ts:83-87), which lets both the
+    // finishInterview pre-gen + the feedback page's fallback call run
+    // the full Claude + side-effect pipeline in parallel — 2× LLM bill,
+    // double-fired XP, competency, pathway. Read session.feedback once
+    // right before the expensive work. If another caller already landed
+    // a result in the DB, reuse it; skip the duplicate Claude call and
+    // all side effects. The try/catch keeps this check non-fatal: a
+    // transient DB blip or a mock with no findOne falls through to
+    // the original pipeline (same behavior as pre-F-4).
+    //
+    // SECURITY: sessionId is client-supplied and not formatted-checked
+    // before this point, so the lookup MUST be owner-scoped. A bare
+    // findById would turn this endpoint into a cross-account feedback
+    // oracle — any authenticated user who learned another user's
+    // sessionId could fetch that user's overall_score, dimensions,
+    // red_flags, etc. Scoping on { _id, userId: user.id } ensures a
+    // mismatched owner gets null (same as "no cached feedback"),
+    // falling through to the normal generation path. The indexed
+    // { userId: 1, ... } compounds on InterviewSession keep this
+    // O(log n) — no measurable latency delta vs findById.
+    if (body.sessionId) {
+      try {
+        await connectDB()
+        const existing = (await InterviewSession.findOne({
+          _id: body.sessionId,
+          userId: user.id,
+        })
+          .select('feedback')
+          .lean()) as { feedback?: FeedbackData } | null
+        if (existing?.feedback) {
+          aiLogger.info(
+            { sessionId: body.sessionId, userId: user.id, redisLockAcquired: feedbackLock?.acquired ?? null },
+            'generate-feedback: concurrent writer already produced feedback; returning cached (F-4)',
+          )
+          return NextResponse.json(existing.feedback)
+        }
+      } catch (err) {
+        aiLogger.warn(
+          { err, sessionId: body.sessionId },
+          'generate-feedback: pre-flight session read failed, proceeding without concurrent-writer check (F-4)',
+        )
+      }
+    }
+
     const aggMetrics = aggregateMetrics(speechMetrics)
     const commScore = communicationScore(aggMetrics)
 
@@ -854,10 +899,33 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
 
       // Post-feedback processing: update competency state, session summary, weakness clusters, and pathway plan
-      // All fire-and-forget to not block the response
+      // All fire-and-forget to not block the response.
+      //
+      // F-3: each side effect is pushed to a `sideEffects` list so a
+      // single aggregate log line at the end of the handler reports
+      // how many of the N calls succeeded/failed. Individual `.catch`
+      // handlers still emit their specific context; the aggregate is a
+      // single at-a-glance line for ops ("5/5 succeeded" vs "3/5, failed:
+      // [pathwayPlan, practiceStats]"), which was impossible before
+      // because the per-call warns had no sessionId and couldn't be
+      // correlated across a session.
       if (body.sessionId) {
         const sessionId = body.sessionId
         const typedEvaluations = evaluations as unknown as AnswerEvaluation[]
+
+        const sideEffects: Array<{ name: string; promise: Promise<unknown> }> = []
+        const fireAndTrack = (
+          name: string,
+          promise: Promise<unknown>,
+          errLabel: string,
+        ) => {
+          sideEffects.push({ name, promise })
+          // Attach the per-call warn separately so the raw promise
+          // retains its rejected state for allSettled below.
+          promise.catch((err) =>
+            aiLogger.warn({ err, sessionId, userId: user.id, sideEffect: name }, errLabel),
+          )
+        }
 
         // G.14: flag-gated practiceStats write. When
         // xp_from_feedback=true, this is the authoritative path —
@@ -875,37 +943,49 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
           const { strongDimensions, weakDimensions } = deriveStrongWeakDimensions(
             evaluations as unknown as Array<Record<string, unknown>>,
           )
-          updatePracticeStats({
-            userId: user.id,
-            domain: config.role,
-            interviewType,
-            score: feedback.overall_score,
-            strongDimensions,
-            weakDimensions,
-          }).catch((err) => aiLogger.warn({ err }, 'G.14 practiceStats write failed'))
+          fireAndTrack(
+            'practiceStats',
+            updatePracticeStats({
+              userId: user.id,
+              domain: config.role,
+              interviewType,
+              score: feedback.overall_score,
+              strongDimensions,
+              weakDimensions,
+            }),
+            'G.14 practiceStats write failed',
+          )
         }
 
         // Update competency state
-        updateCompetencyState({
-          userId: user.id,
-          sessionId,
-          domain: config.role,
-          evaluations: typedEvaluations,
-        }).catch((err) => aiLogger.warn({ err }, 'Competency state update failed'))
+        fireAndTrack(
+          'competency',
+          updateCompetencyState({
+            userId: user.id,
+            sessionId,
+            domain: config.role,
+            evaluations: typedEvaluations,
+          }),
+          'Competency state update failed',
+        )
 
         // Generate session summary
-        generateSessionSummary({
-          userId: user.id,
-          sessionId,
-          domain: config.role,
-          interviewType,
-          experience: config.experience,
-          evaluations: typedEvaluations,
-          speechMetrics,
-          feedback,
-          transcript,
-          durationMinutes: config.duration,
-        }).catch((err) => aiLogger.warn({ err }, 'Session summary generation failed'))
+        fireAndTrack(
+          'sessionSummary',
+          generateSessionSummary({
+            userId: user.id,
+            sessionId,
+            domain: config.role,
+            interviewType,
+            experience: config.experience,
+            evaluations: typedEvaluations,
+            speechMetrics,
+            feedback,
+            transcript,
+            durationMinutes: config.duration,
+          }),
+          'Session summary generation failed',
+        )
 
         // Update weakness clusters from flags
         const weaknessInputs = typedEvaluations
@@ -918,30 +998,73 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
             observation: `Q${e.questionIndex + 1}: ${flag}`,
           })))
         if (weaknessInputs.length > 0) {
-          updateWeaknessClusters({
-            userId: user.id,
-            sessionId,
-            weaknesses: weaknessInputs,
-          }).catch((err) => aiLogger.warn({ err }, 'Weakness cluster update failed'))
+          fireAndTrack(
+            'weaknessClusters',
+            updateWeaknessClusters({
+              userId: user.id,
+              sessionId,
+              weaknesses: weaknessInputs,
+            }),
+            'Weakness cluster update failed',
+          )
         }
 
-        // Generate session-level evaluation and pathway plan
-        evaluateSession({
-          domain: config.role,
-          interviewType,
-          seniorityBand: config.experience,
-          evaluations: typedEvaluations,
-        }).then(sessionEval => {
-          generatePathwayPlan({
-            userId: user.id,
-            sessionId,
+        // Generate session-level evaluation and pathway plan.
+        // Chain both into a single tracked side effect so the aggregate
+        // count reflects "pathway ready" as one unit — a failed
+        // evaluateSession still flows through as a single rejection
+        // attributed to `pathwayPlan`.
+        fireAndTrack(
+          'pathwayPlan',
+          evaluateSession({
             domain: config.role,
             interviewType,
-            experience: config.experience,
-            feedback,
-            sessionEvaluation: sessionEval,
-          }).catch((err) => aiLogger.warn({ err }, 'Pathway plan generation failed'))
-        }).catch((err) => aiLogger.warn({ err }, 'Session evaluation failed'))
+            seniorityBand: config.experience,
+            evaluations: typedEvaluations,
+          }).then(sessionEval =>
+            generatePathwayPlan({
+              userId: user.id,
+              sessionId,
+              domain: config.role,
+              interviewType,
+              experience: config.experience,
+              feedback,
+              sessionEvaluation: sessionEval,
+            }),
+          ),
+          'Pathway plan (via session evaluation) failed',
+        )
+
+        // F-3 aggregate summary: runs after the response is returned
+        // (the `return` below fires first). Uses Promise.allSettled so
+        // one failing side effect doesn't poison the others. One log
+        // line per interview with the exact count + names of failures
+        // gives ops a tractable signal; the individual warns above
+        // provide root cause.
+        Promise.allSettled(sideEffects.map(s => s.promise)).then((results) => {
+          const failed = results
+            .map((r, i) => ({
+              name: sideEffects[i].name,
+              reason:
+                r.status === 'rejected'
+                  ? r.reason instanceof Error
+                    ? r.reason.message
+                    : String(r.reason)
+                  : null,
+            }))
+            .filter((r) => r.reason !== null)
+          aiLogger.info(
+            {
+              sessionId,
+              userId: user.id,
+              totalSideEffects: sideEffects.length,
+              succeeded: sideEffects.length - failed.length,
+              failedCount: failed.length,
+              ...(failed.length > 0 && { failed }),
+            },
+            'generate-feedback: post-feedback side effects settled',
+          )
+        })
       }
 
       return NextResponse.json(feedback)

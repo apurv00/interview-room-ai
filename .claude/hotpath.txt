@@ -41,3 +41,15 @@ app/api/turn-router/route.ts
 # ── Feature flags (additive-only; still treat as hot for intentionality) ──
 shared/featureFlags.ts
 shared/services/taskSlots.ts
+
+# ── Feedback scoring pipeline (post-interview; drives every user-visible score) ──
+# A single math error here mis-scores every interview. Silent failures in the
+# lock or practiceStats cascade into wrong XP + duplicate LLM billing.
+app/api/generate-feedback/route.ts
+modules/interview/services/eval/evaluationEngine.ts
+modules/interview/services/eval/overallScore.ts
+modules/interview/services/eval/perQAggregation.ts
+modules/interview/services/eval/completionAdjustment.ts
+modules/interview/services/eval/transcriptCompactor.ts
+shared/services/feedbackLock.ts
+modules/learn/services/practiceStatsService.ts

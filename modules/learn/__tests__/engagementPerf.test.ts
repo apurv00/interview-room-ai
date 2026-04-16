@@ -104,7 +104,15 @@ describe('Engagement Performance Tests', () => {
   })
 
   describe('XP_AMOUNTS access performance', () => {
-    it('100,000 constant accesses complete within 10ms', () => {
+    // Budget raised from 10 → 50 ms after the test was observed flaking
+    // on CI (GitHub Actions shared runner; see run 24529675063 where it
+    // measured 17.44 ms). 50 ms aligns with every other benchmark in
+    // this file (all other toBeLessThan values are 50 or 100) and still
+    // catches any gross regression — 100,000 constant accesses should
+    // never take more than a few ms on real hardware. The old 10 ms
+    // value relied on assumptions about CI CPU consistency that don't
+    // hold on free-tier shared runners.
+    it('100,000 constant accesses complete within 50ms', () => {
       const keys = Object.keys(XP_AMOUNTS) as (keyof typeof XP_AMOUNTS)[]
       let sum = 0
 
@@ -114,7 +122,7 @@ describe('Engagement Performance Tests', () => {
       }
       const elapsed = performance.now() - start
 
-      expect(elapsed).toBeLessThan(10)
+      expect(elapsed).toBeLessThan(50)
       expect(sum).toBeGreaterThan(0)
     })
   })

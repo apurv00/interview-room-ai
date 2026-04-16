@@ -792,3 +792,119 @@ the reconnect path at all. The `deepgramRecognition.test.ts` suite
 had 10 tests before E-3.7; all covered happy-path listening or
 interrupt accumulation. The reconnect code was deployed and never
 verified end-to-end.
+
+### F-4 — Redis fail-open no longer doubles Claude bill (2026-04-16)
+
+_Lives in the feedback scoring flow (`app/api/generate-feedback/route.ts`)
+— logged here because §8 is the repo's institutional "what has broken
+and why" registry, and no dedicated FEEDBACK_SCORING.md exists yet._
+
+**Symptom:** When Redis was unreachable the idempotency lock (G.6)
+failed open (`acquireFeedbackLock` returns `{ acquired: false }` on a
+caught error, see `shared/services/feedbackLock.ts:83-87`). Both the
+`finishInterview` pre-gen fire-and-forget AND the feedback page's
+8-second-poll-miss fallback then ran the full Claude pipeline in
+parallel: 2× the LLM bill, racing `findByIdAndUpdate` on
+`InterviewSession.feedback`, and double-firing every post-feedback
+side effect (competency / pathway / summary / weakness clusters /
+XP). End-users could also flash-see one `overall_score` before the
+later write landed and replaced it.
+
+**Root cause:** The lock was the only duplicate-work guard in the
+pipeline. With the lock effectively absent, nothing else checked
+whether another caller was already mid-flight.
+
+**Fix (`app/api/generate-feedback/route.ts`):** Added a pre-flight
+DB read right after the short-form guard, before any context
+assembly or Claude call. If `InterviewSession.feedback` is already
+populated, return that as the response and skip the rest of the
+pipeline entirely. Runs regardless of the Redis lock state, so it
+also catches two related edge cases the lock missed:
+(a) lock TTL expiry mid-generation, (b) a race between
+`acquireFeedbackLock` returning and the winner's DB write landing.
+
+The pre-flight read is wrapped in try/catch — a transient Mongo
+blip logs a warn and falls through to the original pipeline rather
+than blocking legitimate feedback generation. One ~50 ms DB read
+to save a ~10–20 s Claude call + five side-effect writes.
+
+**Security: owner-scoped lookup.** `sessionId` is client-supplied
+and only format-validated as a string. The pre-flight query MUST
+filter on `{ _id: body.sessionId, userId: user.id }` (not a bare
+`findById`) — otherwise this endpoint becomes a cross-account
+feedback oracle: any authenticated user who learns another user's
+sessionId could fetch that user's overall_score, dimensions,
+red_flags, and top_3_improvements. The owner filter ensures a
+mismatched caller gets `null` back (same as "no cached feedback"),
+falling through to the normal generation path. Caught during the
+Codex review of PR #273 before merge; regression test
+`F-4: pre-flight lookup is owner-scoped (no cross-account feedback
+leak)` asserts the filter shape includes `userId`.
+
+**Tests added (`generateFeedbackIdempotency.test.ts`):**
+- `F-4: returns cached feedback when session.feedback already
+  populated (fail-open race)` — asserts no completion call, cached
+  feedback in response.
+- `F-4: proceeds with generation when session.feedback is null
+  (normal first run)` — asserts the check is non-intrusive on cold.
+- `F-4: pre-flight DB read failure is non-fatal (falls through to
+  normal pipeline)` — asserts Mongo outage still allows generation.
+
+**Scope limit:** This fix defends against duplicate Claude calls +
+duplicate side effects. It does NOT make the final DB write atomic
+— two callers can still race `findByIdAndUpdate` if both pass the
+pre-flight check (e.g., both queries land before either writes).
+The last-writer-wins race is harmless for the `feedback` field
+(the overall_score converges on identical values from the same
+input) and acceptable for side effects (rare; logged). A proper
+`findOneAndUpdate({ _id, feedback: null })` conditional write is
+tracked as future hardening but unnecessary for the 99%+ scenario
+handled by the pre-flight read.
+
+### F-3 — Aggregate side-effect summary log (2026-04-16)
+
+_Also in `app/api/generate-feedback/route.ts`, post-feedback block._
+
+**Symptom:** The five fire-and-forget side effects that fan out after
+a feedback is generated (practiceStats / competency / sessionSummary
+/ weaknessClusters / pathwayPlan) each had their own `.catch(err ⇒
+aiLogger.warn(...))` with no `sessionId` in the context. If three of
+five silently failed on a given interview, there was no way to see
+it: the per-call warns had no correlation key, and there was no
+"how many of the N calls succeeded?" line at all. Users could land
+on a feedback page with a score but no XP update, no learning plan,
+no weakness signals — undetectable without combing server logs.
+
+**Root cause:** Observability gap. The calls were structurally
+correct but their outcomes weren't aggregated.
+
+**Fix:** Each side effect is now registered via a local
+`fireAndTrack(name, promise, errLabel)` helper that:
+1. Pushes the raw promise into a `sideEffects: Array<{ name, promise }>`
+   so `Promise.allSettled` can observe it (individual `.catch`
+   handlers are attached after pushing, keeping the raw promise's
+   rejection state intact for the aggregate).
+2. Emits the existing per-call warn WITH `sessionId`, `userId`, and a
+   `sideEffect: <name>` tag for correlation.
+
+After all side effects are registered, `Promise.allSettled(sideEffects
+.map(s => s.promise))` runs (non-blocking; the response has already
+returned). Its `.then` emits one `aiLogger.info` line with
+`totalSideEffects`, `succeeded`, `failedCount`, and — if failures
+exist — a `failed: [{ name, reason }]` array. One glance now tells
+ops "4/5 succeeded for session X, failed: [pathwayPlan]".
+
+The `evaluateSession → generatePathwayPlan` chain is registered as a
+single `pathwayPlan` side effect — a failure in either stage
+attributes to the same name, which is how users experience it
+(either they got a new learning plan or they didn't).
+
+**Tests added (`generateFeedbackIdempotency.test.ts`):**
+- `F-3: emits aggregate summary log with succeeded count when all
+  side effects pass` — asserts the info line includes
+  `totalSideEffects`, `succeeded`, `failedCount: 0`, and no `failed`
+  key when everything succeeds.
+- `F-3: aggregate summary lists failed side effects by name` —
+  overrides `updateCompetencyState` and `generatePathwayPlan` to
+  reject, asserts the aggregate log names both failures with their
+  reason strings.

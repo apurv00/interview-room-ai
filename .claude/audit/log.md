@@ -390,3 +390,52 @@
 - **Root-cause:** maybeReconnectOrFinish bailed early with finishRecognition()
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
 - **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts
+
+### 2026-04-16 18:56:52 +0000 · `6c6ab4f` · Claude
+- **Subject:** fix(feedback): widen pre-gen poll window to cover Claude Sonnet P95 (F-1)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the feedback page's top-level poll was capped at 2s × 4 =
+- **No-tests-needed-because: pure constant-bump on a client-side polling**
+- **Verified-by:** npx tsc --noEmit (clean); npx vitest run
+
+### 2026-04-16 18:57:07 +0000 · `e39016b` · Claude
+- **Subject:** chore(claude): elevate feedback scoring pipeline to hot path (F-5)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** eight files that drive every user-visible post-interview
+- **No-tests-needed-because: file is a plain-text registry consumed by**
+- **Verified-by:** manual diff review of the file against the audit report
+
+### 2026-04-16 19:04:59 +0000 · `a575bf3` · Claude
+- **Subject:** fix(feedback): pre-flight DB read guards against double-Claude when Redis fails open (F-4)
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** acquireFeedbackLock (shared/services/feedbackLock.ts:83-87)
+- **Tests-added: modules/interview/__tests__/generateFeedbackIdempotency.test.ts**
+- **Verified-by:** npx vitest run modules/interview/__tests__/generateFeedbackIdempotency.test.ts
+
+### 2026-04-16 19:07:04 +0000 · `f34aa06` · Claude
+- **Subject:** fix(interview): log failed fire-and-forget pre-gen + analysis starts (F-2)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** finishInterview() fires two fire-and-forget POSTs when the
+- **No-tests-needed-because: the change is purely observability — replacing**
+- **Verified-by:** npm run test:run (full suite); npx tsc --noEmit (clean);
+
+### 2026-04-16 19:17:11 +0000 · `9f96541` · Claude
+- **Subject:** feat(feedback): aggregate summary log for post-feedback side effects (F-3)
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** the five fire-and-forget side effects in
+- **Tests-added: modules/interview/__tests__/generateFeedbackIdempotency.test.ts**
+- **Verified-by:** npm run test:run (1932 passed, +2 from F-3); npx tsc
+
+### 2026-04-16 19:27:00 +0000 · `9a18a7f` · Claude
+- **Subject:** fix(feedback): scope F-4 pre-flight lookup by userId (PR #273 review)
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** the F-4 pre-flight read (commit a575bf3) used
+- **Tests-added: modules/interview/__tests__/generateFeedbackIdempotency.test.ts**
+- **Verified-by:** npx vitest run
+
+### 2026-04-16 19:39:05 +0000 · `483368b` · Claude
+- **Subject:** test(learn): raise XP_AMOUNTS micro-benchmark budget from 10ms to 50ms (CI flake)
+- **Files:** 1 changed, 1 test file(s)
+- **Root-cause:** modules/learn/__tests__/engagementPerf.test.ts line 117
+- **No-tests-needed-because: this commit IS the test fix — the artifact**
+- **Verified-by:** npx vitest run
