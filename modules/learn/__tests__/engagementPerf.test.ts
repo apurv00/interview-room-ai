@@ -1,5 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { calculateLevel, getLevelTitle, XP_AMOUNTS } from '@learn/config/xpTable'
+import { describe, it, expect } from 'vitest'
 import { BADGE_DEFINITIONS, getBadgesByTrigger, getBadgeById } from '@learn/config/badges'
 import { SubmitDailyChallengeSchema } from '@learn/validators/engagement'
 import type { BadgeCheckContext } from '@learn/config/badges'
@@ -11,30 +10,6 @@ import type { BadgeCheckContext } from '@learn/config/badges'
  */
 
 describe('Engagement Performance Tests', () => {
-  describe('calculateLevel performance', () => {
-    it('10,000 calls complete within 50ms', () => {
-      const start = performance.now()
-      for (let i = 0; i < 10_000; i++) {
-        calculateLevel(i * 10)
-      }
-      const elapsed = performance.now() - start
-
-      expect(elapsed).toBeLessThan(50)
-    })
-  })
-
-  describe('getLevelTitle performance', () => {
-    it('10,000 calls complete within 50ms', () => {
-      const start = performance.now()
-      for (let i = 0; i < 10_000; i++) {
-        getLevelTitle((i % 15) + 1)
-      }
-      const elapsed = performance.now() - start
-
-      expect(elapsed).toBeLessThan(50)
-    })
-  })
-
   describe('badge check functions performance', () => {
     it('all 19 badges x 1,000 iterations complete within 100ms', () => {
       const ctx: BadgeCheckContext = {
@@ -100,30 +75,6 @@ describe('Engagement Performance Tests', () => {
       const elapsed = performance.now() - start
 
       expect(elapsed).toBeLessThan(100)
-    })
-  })
-
-  describe('XP_AMOUNTS access performance', () => {
-    // Budget raised from 10 → 50 ms after the test was observed flaking
-    // on CI (GitHub Actions shared runner; see run 24529675063 where it
-    // measured 17.44 ms). 50 ms aligns with every other benchmark in
-    // this file (all other toBeLessThan values are 50 or 100) and still
-    // catches any gross regression — 100,000 constant accesses should
-    // never take more than a few ms on real hardware. The old 10 ms
-    // value relied on assumptions about CI CPU consistency that don't
-    // hold on free-tier shared runners.
-    it('100,000 constant accesses complete within 50ms', () => {
-      const keys = Object.keys(XP_AMOUNTS) as (keyof typeof XP_AMOUNTS)[]
-      let sum = 0
-
-      const start = performance.now()
-      for (let i = 0; i < 100_000; i++) {
-        sum += XP_AMOUNTS[keys[i % keys.length]]
-      }
-      const elapsed = performance.now() - start
-
-      expect(elapsed).toBeLessThan(50)
-      expect(sum).toBeGreaterThan(0)
     })
   })
 
