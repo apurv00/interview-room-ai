@@ -148,7 +148,22 @@ export async function runAnalysisJobHandler(
   // R2 recordings) beyond the 10-analysis rolling limit. The inline fallback
   // path in /api/analysis/start already calls this, but the Inngest path was
   // missing it — meaning background-job analyses were never capped.
-  await step.run('enforce-analysis-cap', () => enforceAnalysisCap(userId))
+  //
+  // Defensive: cap enforcement is best-effort cleanup. If it throws (e.g. DB
+  // connection blip), DO NOT let Inngest retry → onFailure overwrite the
+  // already-completed analysis row's status with 'failed'. Log the error and
+  // return — the analysis is persisted and the user should see 'completed'.
+  await step.run('enforce-analysis-cap', async () => {
+    try {
+      return await enforceAnalysisCap(userId)
+    } catch (err) {
+      aiLogger.warn(
+        { err, userId, sessionId },
+        'Cap enforcement failed — analysis already persisted, continuing without cleanup'
+      )
+      return { deleted: 0 }
+    }
+  })
 
   return { sessionId, status: 'completed' }
 }

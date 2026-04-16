@@ -255,6 +255,19 @@ describe('analysisJob', () => {
       expect(mockEnforceAnalysisCap).toHaveBeenCalledWith('user-42')
     })
 
+    it('swallows enforceAnalysisCap errors to prevent Inngest onFailure overwriting completed status', async () => {
+      mockEnforceAnalysisCap.mockRejectedValueOnce(new Error('Mongo connection lost'))
+      const { step } = buildMockStep()
+      // Job MUST still complete — cap failure is best-effort cleanup, the
+      // analysis row is already persisted as 'completed'.
+      const result = await runAnalysisJobHandler(
+        { data: { sessionId: 'sess-1', userId: 'user-1', startTime: 1_000 } },
+        step
+      )
+      expect(result).toEqual({ sessionId: 'sess-1', status: 'completed' })
+      expect(mockMarkFailed).not.toHaveBeenCalled()
+    })
+
     it('propagates errors from any step to the caller (so Inngest retries)', async () => {
       mockRunFusion.mockRejectedValueOnce(new Error('Claude timed out'))
       const { step } = buildMockStep()
