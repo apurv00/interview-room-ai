@@ -334,3 +334,10 @@
 - **Root-cause:** P0-2 sentinel values introduced when facialAggregator added
 - **Tests-added: modules/interview/services/analysis/__tests__/fusionService.test.ts**
 - **Verified-by:** npx vitest run — 1917/1918 pass (1 pre-existing timeout),
+
+### 2026-04-16 16:54:34 +0000 · `71e8409` · Claude
+- **Subject:** fix(analysis): use actual model for cost tracking instead of hardcoded gpt-5.4-mini
+- **Files:** 5 changed, 2 test file(s)
+- **Root-cause:** FusionOutput interface never included the model field from
+- **Tests-added: modules/interview/__tests__/analysisJob.test.ts (fusionModel**
+- **Verified-by:** npx vitest run (23/23 pass for changed files),
