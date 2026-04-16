@@ -426,8 +426,31 @@ export function useInterview({
                 finishInterview('time_up')
               }
             }, 15000)
-          } else if (activePhase === 'ASK_QUESTION' || activePhase === 'PROCESSING' || activePhase === 'COACHING') {
-            // Let AI finish speaking / eval settle before ending
+          } else if (activePhase === 'ASK_QUESTION') {
+            // L3 (E-5.2): AI is mid-question. Give 10s (up from 5s) so the
+            // AI can finish its sentence — typical questions are 4-8s but
+            // longer framed ones hit 10-12s; 5s was cutting the closing
+            // question mid-word. If the phase transitions to LISTENING
+            // during the grace (user started answering), upgrade to the
+            // LISTENING branch's 15s grace so the candidate isn't cut off
+            // mid-answer either.
+            setTimeout(() => {
+              if (phaseRef.current === 'SCORING' || phaseRef.current === 'ENDED') return
+              if (phaseRef.current === 'LISTENING') {
+                timerTruncatedCurrentAnswerRef.current = true
+                setCoachingTip('Time is up, please finish your current thought.')
+                setTimeout(() => {
+                  if (phaseRef.current !== 'SCORING' && phaseRef.current !== 'ENDED') {
+                    finishInterview('time_up')
+                  }
+                }, 15000)
+              } else {
+                finishInterview('time_up')
+              }
+            }, 10000)
+          } else if (activePhase === 'PROCESSING' || activePhase === 'COACHING') {
+            // Let eval settle or coaching tip display before ending.
+            // 5s is sufficient: evals are ~1-3s p95, coaching tips 2-6s.
             setTimeout(() => {
               if (phaseRef.current !== 'SCORING' && phaseRef.current !== 'ENDED') {
                 finishInterview('time_up')

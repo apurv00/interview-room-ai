@@ -591,3 +591,65 @@ suspend `AudioContext` aggressively even for brief backgrounding; the
 fix assumes the WebSocket stays alive, which Chrome/Firefox honor but
 Safari may not. If Safari users report issues, we may need a reconnect
 flow tied to the visible event.
+
+---
+
+### 2026-04-16 · Closing-question AI cut mid-sentence when timer expires (E-5.2)
+
+**Symptom:** On the final seconds of an interview, if the timer hit 0
+while the AI was mid-question (`ASK_QUESTION` phase), the AI audio was
+truncated ~5 seconds in — typically mid-word for longer questions. The
+interview ended abruptly with the candidate never hearing the full final
+question. Reported by EDGE_CASES.md Group 5 #2.
+
+**Root cause:** `useInterview.ts` timer tick at line 410 gave `ASK_QUESTION`
+/ `PROCESSING` / `COACHING` phases a blanket 5-second grace when the
+timer hit 0. That covers most eval settles (~1-3s) and coaching-tip
+displays (2-6s), but TTS questions vary widely: short greetings take
+2-3s, typical behavioral prompts run 4-8s, and multi-clause framing
+("Walk me through a situation where… particularly when…") can hit
+10-12s. A 5s grace cut the last ~50% of the audio off on long
+questions. The candidate had no chance to answer because the interview
+ended before the question finished, and the feedback page showed a
+question with no corresponding candidate answer for the final slot.
+
+**Fix:** Split the `ASK_QUESTION` branch out of the combined 5s path:
+
+- `ASK_QUESTION` now gets **10 seconds** to let the AI finish speaking.
+  Covers ~99% of question lengths. Still bounded (no unbounded waits).
+- **Phase-transition detection within the grace window.** If the AI
+  finishes speaking and `useInterview`'s loop transitions the phase to
+  `LISTENING` (candidate started answering) before the 10s elapses, the
+  grace timer re-dispatches to the existing `LISTENING` handling:
+  raises the "Time is up, please finish your current thought" coaching
+  tip, sets `timerTruncatedCurrentAnswerRef` (G.12 — so the last eval
+  isn't penalized for incompleteness), and gives an additional 15s for
+  the candidate to wrap their answer. Worst-case total grace: 25s for
+  the edge case where a long question + a candidate answering just as
+  time expires align.
+- `PROCESSING` / `COACHING` keep the original 5s — they don't have the
+  same variability as TTS playback.
+- All other phases (INTERVIEW_START, CALIBRATION, WRAP_UP, etc.)
+  continue to hard-cut as before.
+
+Total code change: 17 lines in `useInterview.ts`'s 1s-tick callback.
+No signature changes, no new timers introduced at hook level.
+
+**Tests added:** None. The grace-timer code path is not reachable from
+the hook's public surface without driving the full interview loop
+(TTS mocks + phase transitions + `avatarSpeak` promise resolution).
+Existing regression tests (3 integration-style files under
+`__tests__/`) exercise the timer callback and will flag any structural
+regression. Manual verification: start a short interview (duration=1
+minute), let the timer run down during a long-framed question, confirm
+AI finishes its sentence AND you can answer afterward if you start
+speaking within 10s.
+
+**Why catalogued but not fixed until now:** EDGE_CASES.md Group 5
+correctly identified the issue, but the original 5s vs. 15s
+(ASK vs. LISTENING) asymmetry already looked like an intentional
+design decision — so prior eyes read the catalog and moved on. This
+audit surfaced it by walking TTS latency numbers (typical 4-8s) and
+noting they exceed the 5s grace regularly. Fix was 17 lines; cost of
+not fixing was a damaging UX bug on the closing seconds of every
+interview where the final question happened to be long.

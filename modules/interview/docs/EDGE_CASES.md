@@ -105,7 +105,7 @@ Timing constants extracted from code. Mocked API latencies based on production o
 | # | Scenario | Timeline | Expected | Risk |
 |---|----------|----------|----------|------|
 | 5.1 | Timer=0 while user is in LISTENING phase | Timer tick → t=0 → phase=LISTENING → coaching tip → 15s grace setTimeout → if still not SCORING after 15s → finishInterview() | User gets 15s to finish thought. | LOW |
-| 5.2 | Timer=0 while AI is speaking (ASK_QUESTION phase) | Timer tick → t=0 → phase=ASK_QUESTION (≠LISTENING) → finishInterview() immediately | AI speech hard-cancelled. No grace period. User hears AI cut off mid-sentence. | MEDIUM |
+| 5.2 | Timer=0 while AI is speaking (ASK_QUESTION phase) | Timer tick → t=0 → phase=ASK_QUESTION → 10s grace for AI to finish; if phase transitions to LISTENING within grace, extend 15s so user can wrap answer | AI completes sentence, candidate can still respond to closing question. See INTERVIEW_FLOW.md §8 · 2026-04-16. | ✅ FIXED |
 | 5.3 | Timer=0 during PROCESSING phase | Timer tick → t=0 → phase=PROCESSING → finishInterview() immediately | Evaluation in progress. `pendingEvalRef.current` awaited (3s timeout). | LOW |
 | 5.4 | User clicks End during pendingEval await | finishInterview → abort → cancelTTS → stopListening → SCORING → await pendingEvalRef(3s) → abort signal causes eval fetch to fail → catch pushes fallback → pendingEval resolves → evaluationsRef has fallback scores | Fallback scores for last answer. Acceptable. | LOW |
 | 5.5 | **NEW** finishInterview called twice rapidly | First call: interviewAbortRef.abort() → SCORING. Second call: already in SCORING phase. BUT no guard at top of finishInterview! Both proceed. Double persistSession, double feedback generation, double navigation. | **ISSUE**: `finishInterview` has no idempotency guard. `isInterviewOver()` is checked at call sites in the loop, but the timer's `setTimeout` and the user's End button can both fire `finishInterview` independently. | HIGH |
@@ -150,5 +150,5 @@ Status column reflects current code. Audit dated 2026-04-16 against commit
 | **E-5.6** | Timer=0 fires during probe evaluation, interrupts mid-flow | MEDIUM | 5 | ✅ Mitigated — `pendingEvalRef` 3s await in `finishInterview` |
 | **E-4.8** | Double interrupt overwrites interruptSpeech during buffer drain | MEDIUM | 4 | ⚠ Open |
 | **E-6.4** | Deferred topic bridge avatarSpeak not checked for interrupt | MEDIUM | 6 | ⚠ Open |
-| **E-5.2** | Timer=0 during ASK_QUESTION — no grace period, AI cut mid-sentence | MEDIUM | 5 | ⚠ Open |
+| **E-5.2** | Timer=0 during ASK_QUESTION — AI cut mid-sentence on long questions | MEDIUM | 5 | ✅ Fixed 2026-04-16 — 10s grace + LISTENING-transition upgrade (INTERVIEW_FLOW.md §8) |
 | **E-3.4** | WS disconnect with partial text → immediate finishRecognition instead of reconnect | MEDIUM | 3 | ⚠ Open |
