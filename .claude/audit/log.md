@@ -404,3 +404,10 @@
 - **Root-cause:** eight files that drive every user-visible post-interview
 - **No-tests-needed-because: file is a plain-text registry consumed by**
 - **Verified-by:** manual diff review of the file against the audit report
+
+### 2026-04-16 19:04:59 +0000 · `a575bf3` · Claude
+- **Subject:** fix(feedback): pre-flight DB read guards against double-Claude when Redis fails open (F-4)
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** acquireFeedbackLock (shared/services/feedbackLock.ts:83-87)
+- **Tests-added: modules/interview/__tests__/generateFeedbackIdempotency.test.ts**
+- **Verified-by:** npx vitest run modules/interview/__tests__/generateFeedbackIdempotency.test.ts
