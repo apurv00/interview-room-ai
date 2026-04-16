@@ -369,3 +369,10 @@
 - **Root-cause:** fixed 5s grace in the timer tick was too short for TTS
 - **No-tests-needed-because: the grace-timer code path is not reachable**
 - **Verified-by:** npx vitest run modules/interview/__tests__/
+
+### 2026-04-16 18:16:16 +0000 · `7ce8e24` · Claude
+- **Subject:** fix(tts): add per-user rate limits to /api/tts and /api/tts/stream (N1)
+- **Files:** 4 changed, 1 test file(s)
+- **Root-cause:** every other AI route in this repo uses composeApiRoute
+- **Tests-added: modules/interview/__tests__/ttsStreamRoute.test.ts**
+- **Verified-by:** npx vitest run modules/interview/__tests__/
