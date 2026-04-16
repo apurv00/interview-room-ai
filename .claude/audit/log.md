@@ -376,3 +376,10 @@
 - **Root-cause:** every other AI route in this repo uses composeApiRoute
 - **Tests-added: modules/interview/__tests__/ttsStreamRoute.test.ts**
 - **Verified-by:** npx vitest run modules/interview/__tests__/
+
+### 2026-04-16 18:32:31 +0000 · `b6a7f99` · Claude
+- **Subject:** fix(interview): make deferred topic bridge interrupt-aware (E-6.4)
+- **Files:** 3 changed, 0 test file(s)
+- **Root-cause:** avatarSpeak return value was discarded in both deferred-topic
+- **No-tests-needed-because: the deferred topic bridge path requires a**
+- **Verified-by:** npx tsc --noEmit (clean), npm run test:run (1925 passed),
