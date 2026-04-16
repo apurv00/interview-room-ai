@@ -713,3 +713,31 @@ consider a daily cap in addition to per-minute (30/min × 60 min ×
 24h = 43,200 req/day per user today, which is still uncomfortably
 high for a single actor — a `rl:tts-stream-daily:{userId}` key with
 maxRequests=2000 would add a ~$30/day ceiling).
+
+### E-6.4 — Deferred topic bridge not interrupt-aware (2026-04-16)
+
+**Symptom:** When the AI speaks a deferred-topic bridge ("Earlier you
+mentioned…"), the candidate can interrupt, but the code ignores the
+`interrupted` return from `avatarSpeak`. `listenForAnswer` then runs
+with the interrupt prefix, and the captured speech gets evaluated
+against the bridge question — a question the candidate never heard in
+full. Semantic mismatch: the eval scores an answer about topic X
+against a question about topic Y.
+
+**Root cause:** Both deferred-topic `avatarSpeak` calls (mid-interview
+bridge at ~line 1592 and wrap-up loop at ~line 1622) discarded the
+`{ interrupted }` return value, falling through to `listenForAnswer`
+and `evaluateAndCoach` unconditionally.
+
+**Fix (useInterview.ts):**
+1. Mid-interview bridge: capture `{ interrupted: bridgeInterrupted }`.
+   If interrupted, `unshift` the topic back into `deferredTopicsRef`
+   and skip `listenForAnswer` + `evaluateAndCoach` + `qIdx++`.
+2. Wrap-up loop: capture `{ interrupted: wrapUpInterrupted }`. If
+   interrupted, `break` out of the remaining-topics loop — the
+   candidate clearly wants to move on.
+
+**Why existing tests didn't catch it:** No tests exercise the deferred
+topic bridge path with simulated interrupts. The `useInterview` test
+suite mocks `avatarSpeak` as a no-op and doesn't trigger the interrupt
+callback mid-speech.

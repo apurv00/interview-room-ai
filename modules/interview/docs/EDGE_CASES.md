@@ -149,6 +149,6 @@ Status column reflects current code. Audit dated 2026-04-16 against commit
 | **E-2.8** | Interrupt prefix returned as full answer when user never continues speaking | MEDIUM | 2 | ✅ Mitigated — `lastSeenLength = interruptPrefix.length` prevents false reschedule |
 | **E-5.6** | Timer=0 fires during probe evaluation, interrupts mid-flow | MEDIUM | 5 | ✅ Mitigated — `pendingEvalRef` 3s await in `finishInterview` |
 | **E-4.8** | Double interrupt overwrites interruptSpeech during buffer drain | MEDIUM | 4 | ⚠ Open |
-| **E-6.4** | Deferred topic bridge avatarSpeak not checked for interrupt | MEDIUM | 6 | ⚠ Open |
+| **E-6.4** | Deferred topic bridge avatarSpeak not checked for interrupt | MEDIUM | 6 | ✅ Fixed 2026-04-16 — interrupt re-queues topic, skips eval (INTERVIEW_FLOW.md §8) |
 | **E-5.2** | Timer=0 during ASK_QUESTION — AI cut mid-sentence on long questions | MEDIUM | 5 | ✅ Fixed 2026-04-16 — 10s grace + LISTENING-transition upgrade (INTERVIEW_FLOW.md §8) |
 | **E-3.4** | WS disconnect with partial text → immediate finishRecognition instead of reconnect | MEDIUM | 3 | ⚠ Open |

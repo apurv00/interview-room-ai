@@ -1589,17 +1589,24 @@ export function useInterview({
           addToTranscript('interviewer', bridgeMsg, qIdx)
           setCurrentQuestion(bridgeMsg)
           warmUpListening?.()
-          await avatarSpeak(bridgeMsg, 'curious')
+          const { interrupted: bridgeInterrupted } = await avatarSpeak(bridgeMsg, 'curious')
           if (isInterviewOver()) return
 
-          setLiveAnswer('')
-          const deferredAnswer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
-          if (isInterviewOver()) return
-          if (deferredAnswer) {
-            addToTranscript('candidate', deferredAnswer, qIdx)
-            await evaluateAndCoach(bridgeMsg, deferredAnswer, qIdx, undefined, 0)
+          if (bridgeInterrupted) {
+            // E-6.4: candidate interrupted before hearing the full bridge.
+            // Re-queue so it can be asked later; don't evaluate stale speech
+            // against a question the candidate never heard in full.
+            deferredTopicsRef.current.unshift(deferredTopic)
+          } else {
+            setLiveAnswer('')
+            const deferredAnswer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
+            if (isInterviewOver()) return
+            if (deferredAnswer) {
+              addToTranscript('candidate', deferredAnswer, qIdx)
+              await evaluateAndCoach(bridgeMsg, deferredAnswer, qIdx, undefined, 0)
+            }
+            qIdx++
           }
-          qIdx++
         }
       }
 
@@ -1612,8 +1619,9 @@ export function useInterview({
             const followUp = `Before we wrap up — you raised an interesting point earlier about "${topic}". Can you tell me more?`
             addToTranscript('interviewer', followUp)
             warmUpListening?.()
-            await avatarSpeak(followUp, 'curious')
+            const { interrupted: wrapUpInterrupted } = await avatarSpeak(followUp, 'curious')
             if (isInterviewOver()) break
+            if (wrapUpInterrupted) break
 
             setLiveAnswer('')
             const topicAnswer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
