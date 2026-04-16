@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { aiLogger } from '@shared/logger'
 import { getCachedTTS, cacheTTS } from '@shared/services/ttsCache'
+import { checkRateLimit } from '@shared/middleware/checkRateLimit'
 
 export const dynamic = 'force-dynamic'
 
@@ -28,6 +29,20 @@ export async function POST(req: NextRequest) {
     if (!session?.user?.id) {
       return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
     }
+
+    // Rate limit to cap Deepgram cost exposure from a compromised or
+    // scripted session. Normal interview peak is 2-4 req/min (intro +
+    // Q1 + thinking ack) and averages ~1 req/min over a 30-min session;
+    // 30/min gives ~10x headroom for retries/prefetches while hard-
+    // stopping abuse. Fail-open on redis error so a cache blip doesn't
+    // block legitimate interviews. Redis keying on user id — anonymous
+    // requests are already blocked by the auth check above.
+    const limited = await checkRateLimit(session.user.id, {
+      windowMs: 60_000,
+      maxRequests: 30,
+      keyPrefix: 'rl:tts-stream',
+    })
+    if (limited) return limited
 
     if (!DEEPGRAM_API_KEY) {
       return new Response(JSON.stringify({ error: 'TTS not configured' }), { status: 503 })

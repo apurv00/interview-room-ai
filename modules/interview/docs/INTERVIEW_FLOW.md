@@ -653,3 +653,63 @@ audit surfaced it by walking TTS latency numbers (typical 4-8s) and
 noting they exceed the 5s grace regularly. Fix was 17 lines; cost of
 not fixing was a damaging UX bug on the closing seconds of every
 interview where the final question happened to be long.
+
+---
+
+### 2026-04-16 · TTS routes unrated — Deepgram cost exposure (N1)
+
+**Symptom (latent, not yet exploited):** `POST /api/tts/stream` and
+`POST /api/tts` were gated only by NextAuth — no per-user rate limit.
+A compromised session cookie or a scripted client could replay TTS
+calls against the Deepgram Aura backend faster than any human could
+trigger legitimately. Cost exposure: ~$0.015 per 1K chars × spam rate.
+Even with R2 caching, abuse would pick unique texts to force cache
+misses, driving sustained Deepgram-priced calls.
+
+**Root cause:** The two TTS routes were written as raw `POST(req)`
+handlers that called `fetch('https://api.deepgram.com/...')` directly.
+They never wired into `composeApiRoute` (which includes a rate-limit
+block) and no one added standalone `checkRateLimit` calls. Every other
+AI route in this repo (generate-question, evaluate-answer, turn-router,
+etc.) has a rate limit; the TTS pair was an oversight.
+
+**Fix:** Added a `checkRateLimit(session.user.id, {windowMs: 60_000,
+maxRequests: 30, keyPrefix: 'rl:tts-stream' | 'rl:tts-buffered'})` call
+immediately after the auth check on both routes. 30 requests/minute
+per user is ~10x peak legitimate usage (measured: intro + Q1 + thinking
+ack → 2-4 req/min burst at interview start, averaging <1 req/min over
+30 min) but hard-stops abuse at 1800 req/hour → $30-60/hour cost ceiling
+per compromised account instead of unbounded. Separate key prefixes so
+the streaming and buffered routes don't share a quota counter.
+
+`checkRateLimit` fails open on Redis errors (the catch inside
+`checkRateLimit.ts` logs and returns `null`) — a cache blip will not
+take TTS offline for legitimate users.
+
+**Tests added** at `modules/interview/__tests__/ttsStreamRoute.test.ts`:
+
+- `returns 429 when the per-user rate limit is exceeded` — mocks
+  `redis.incr` to return 31 (one over the cap); asserts 429 + the
+  `Retry-After: 60` header.
+- `keys rate limit per user (id is embedded in the redis key)` —
+  asserts the Redis key includes the user id (`rl:tts-stream:test-user-1`)
+  so the quota scopes per-user, not globally.
+- `redis failure fails open (request still served)` — mocks
+  `redis.incr` to reject; asserts 200 + body streams normally, so a
+  Redis outage doesn't take TTS offline.
+
+Plus a redis mock added to the test suite setup — makes the existing
+streaming-contract tests deterministic (no more dependency on a real
+Redis for the 4 legacy tests in the file).
+
+**Why existing tests didn't catch it:** None of the 1900+ existing
+tests exercised the TTS routes through `checkRateLimit` — the function
+didn't exist in those routes. This was a missing-feature bug, not a
+regression, so there was no prior failure mode to reference.
+
+_Follow-up considerations (not fixed in this commit):_ add similar
+rate limits to `/api/transcribe/token` if abuse patterns shift;
+consider a daily cap in addition to per-minute (30/min × 60 min ×
+24h = 43,200 req/day per user today, which is still uncomfortably
+high for a single actor — a `rl:tts-stream-daily:{userId}` key with
+maxRequests=2000 would add a ~$30/day ceiling).
