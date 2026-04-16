@@ -320,3 +320,10 @@
 - **Root-cause:** G.15 concludes the 15-work-item scoring-rebalance audit
 - **No-tests-needed-because: documentation-only change. No executable**
 - **Verified-by:** Documentation entry matches the actual commit graph:
+
+### 2026-04-16 10:04:49 +0000 · `57c22f8` · Claude
+- **Subject:** fix(middleware): allow /api/inngest through auth — unblock Inngest Cloud sync
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** middleware.ts withAuth callback requires NextAuth token for all
+- **No-tests-needed-because: single-line addition to a static path list; the**
+- **Verified-by:** manual fetch of https://www.interviewprep.guru/api/inngest
