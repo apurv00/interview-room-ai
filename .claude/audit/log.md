@@ -362,3 +362,10 @@
 - **Root-cause:** AudioContext suspension on hidden tab → Deepgram receives
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
 - **Verified-by:** npx vitest run — 1922/1922 pass (+2 new), npx tsc --noEmit
+
+### 2026-04-16 18:07:52 +0000 · `ef1e96e` · Claude
+- **Subject:** fix(interview): extend ASK_QUESTION grace to 10s + upgrade to LISTENING if user starts answering (E-5.2)
+- **Files:** 3 changed, 0 test file(s)
+- **Root-cause:** fixed 5s grace in the timer tick was too short for TTS
+- **No-tests-needed-because: the grace-timer code path is not reachable**
+- **Verified-by:** npx vitest run modules/interview/__tests__/
