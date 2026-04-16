@@ -941,12 +941,22 @@ export function useInterview({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessionId: sid }),
-        }).catch(() => {})
+        }).catch((err) => {
+          // F-2: log to the browser console so silent failures are at
+          // least visible in DevTools. The feedback/analysis flows handle
+          // a missing background job gracefully, so we don't block the
+          // navigation or surface a user-facing error.
+          console.warn('[interview] /api/analysis/start fire-and-forget failed', {
+            sessionId: sid,
+            err: err instanceof Error ? err.message : String(err),
+          })
+        })
       }
 
       // Pre-generate feedback so it's ready when user opens feedback page.
       // Fire-and-forget — persists to session.feedback in DB. The feedback
-      // page checks session.feedback on load and skips re-generation if present.
+      // page checks session.feedback on load and skips re-generation if
+      // present (or polls for 24s, then falls back to its own call).
       if (config) {
         fetch('/api/generate-feedback', {
           method: 'POST',
@@ -958,7 +968,18 @@ export function useInterview({
             speechMetrics: speechMetricsRef.current,
             sessionId: sid,
           }),
-        }).catch(() => {}) // Don't block navigation — feedback page handles missing feedback gracefully
+        }).catch((err) => {
+          // F-2: log to the browser console so a failed pre-gen doesn't
+          // disappear silently. If we don't log this, the user's 24-second
+          // feedback-page poll ends in a fallback POST that looks like a
+          // fresh call — we lose the signal that something broke earlier.
+          // Non-fatal: the feedback page will call /api/generate-feedback
+          // itself if session.feedback doesn't materialise in time.
+          console.warn('[interview] /api/generate-feedback pre-gen fire-and-forget failed', {
+            sessionId: sid,
+            err: err instanceof Error ? err.message : String(err),
+          })
+        })
       }
 
       // Clear session state — interview is complete
