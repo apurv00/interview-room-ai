@@ -348,3 +348,10 @@
 - **Root-cause:** P2-1/P2-2 coachNotesService was scaffolded during the
 - **Tests-added: No new tests — removed 3 tests for deleted dead code.**
 - **Verified-by:** npx vitest run (43/43 pass for changed files),
+
+### 2026-04-16 17:16:48 +0000 · `ef918ad` · Claude
+- **Subject:** fix(analysis): defensive cap-enforce + close test gaps surfaced by end-to-end review
+- **Files:** 3 changed, 2 test file(s)
+- **Root-cause:** A — single point of failure in a best-effort cleanup step
+- **Tests-added: modules/interview/__tests__/analysisJob.test.ts**
+- **Verified-by:** npx vitest run for changed files (19/19 pass),
