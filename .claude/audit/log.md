@@ -355,3 +355,10 @@
 - **Root-cause:** A — single point of failure in a best-effort cleanup step
 - **Tests-added: modules/interview/__tests__/analysisJob.test.ts**
 - **Verified-by:** npx vitest run for changed files (19/19 pass),
+
+### 2026-04-16 17:59:14 +0000 · `44fe05f` · Claude
+- **Subject:** fix(interview): preserve answer when browser tab is backgrounded (E-3.7)
+- **Files:** 5 changed, 1 test file(s)
+- **Root-cause:** AudioContext suspension on hidden tab → Deepgram receives
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+- **Verified-by:** npx vitest run — 1922/1922 pass (+2 new), npx tsc --noEmit
