@@ -1,5 +1,6 @@
 import { inngest } from '@shared/services/inngest'
 import { aiLogger } from '@shared/logger'
+import { enforceAnalysisCap } from '@shared/services/analysisCleanup'
 import {
   stepFetchSession,
   stepTranscribeAndDownload,
@@ -138,9 +139,31 @@ export async function runAnalysisJobHandler(
       whisperCostUsd: whisper.costUsd,
       fusionInputTokens: enhanced.inputTokens + (baseline?.inputTokens || 0),
       fusionOutputTokens: enhanced.outputTokens + (baseline?.outputTokens || 0),
+      fusionModel: enhanced.model,
       startTime,
     })
   )
+
+  // Step 6: enforce per-user analysis cap — delete oldest analyses (and their
+  // R2 recordings) beyond the 10-analysis rolling limit. The inline fallback
+  // path in /api/analysis/start already calls this, but the Inngest path was
+  // missing it — meaning background-job analyses were never capped.
+  //
+  // Defensive: cap enforcement is best-effort cleanup. If it throws (e.g. DB
+  // connection blip), DO NOT let Inngest retry → onFailure overwrite the
+  // already-completed analysis row's status with 'failed'. Log the error and
+  // return — the analysis is persisted and the user should see 'completed'.
+  await step.run('enforce-analysis-cap', async () => {
+    try {
+      return await enforceAnalysisCap(userId)
+    } catch (err) {
+      aiLogger.warn(
+        { err, userId, sessionId },
+        'Cap enforcement failed — analysis already persisted, continuing without cleanup'
+      )
+      return { deleted: 0 }
+    }
+  })
 
   return { sessionId, status: 'completed' }
 }

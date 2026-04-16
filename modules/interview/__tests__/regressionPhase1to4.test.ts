@@ -88,30 +88,6 @@ describe('P1 Regression — Feature Flags', () => {
   })
 })
 
-// ─── Phase 3: Coach Notes ───────────────────────────────────────────────────
-
-describe('Phase 3 Regression — Coach Notes Service', () => {
-  it('generateCoachNotes returns empty array for empty input', async () => {
-    const { generateCoachNotes } = await import('@interview/services/analysis/coachNotesService')
-    const result = await generateCoachNotes({
-      transcript: [],
-      evaluations: [],
-      improvementMoments: [],
-    })
-    expect(result).toEqual([])
-  })
-
-  it('generateCoachNotes returns empty for missing transcript', async () => {
-    const { generateCoachNotes } = await import('@interview/services/analysis/coachNotesService')
-    const result = await generateCoachNotes({
-      transcript: [],
-      evaluations: [],
-      improvementMoments: [{ startSec: 10, endSec: 20, title: 'Test', description: 'Test' }],
-    })
-    expect(result).toEqual([])
-  })
-})
-
 // ─── Phase 3: STAR Stories ──────────────────────────────────────────────────
 
 describe('Phase 3 Regression — STAR Stories', () => {
@@ -214,16 +190,6 @@ describe('Schema Regression — User', () => {
     expect(schema.path('privacyConsent.recordingConsent')).toBeDefined()
     expect(schema.path('privacyConsent.analysisConsent')).toBeDefined()
     expect(schema.path('privacyConsent.marketingOptIn')).toBeDefined()
-  })
-})
-
-// ─── Schema Regression: MultimodalAnalysis ──────────────────────────────────
-
-describe('Schema Regression — MultimodalAnalysis', () => {
-  it('MultimodalAnalysis has coachNotes field', async () => {
-    const { MultimodalAnalysis } = await import('@shared/db/models')
-    const schema = MultimodalAnalysis.schema
-    expect(schema.path('coachNotes')).toBeDefined()
   })
 })
 

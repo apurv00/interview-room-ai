@@ -327,3 +327,31 @@
 - **Root-cause:** middleware.ts withAuth callback requires NextAuth token for all
 - **No-tests-needed-because: single-line addition to a static path list; the**
 - **Verified-by:** manual fetch of https://www.interviewprep.guru/api/inngest
+
+### 2026-04-16 10:52:16 +0000 · `b91233b` · Claude
+- **Subject:** fix(analysis): 4 audit findings — sentinel -100, GDPR orphan, JSON crash, cap enforcement
+- **Files:** 6 changed, 3 test file(s)
+- **Root-cause:** P0-2 sentinel values introduced when facialAggregator added
+- **Tests-added: modules/interview/services/analysis/__tests__/fusionService.test.ts**
+- **Verified-by:** npx vitest run — 1917/1918 pass (1 pre-existing timeout),
+
+### 2026-04-16 16:54:34 +0000 · `71e8409` · Claude
+- **Subject:** fix(analysis): use actual model for cost tracking instead of hardcoded gpt-5.4-mini
+- **Files:** 5 changed, 2 test file(s)
+- **Root-cause:** FusionOutput interface never included the model field from
+- **Tests-added: modules/interview/__tests__/analysisJob.test.ts (fusionModel**
+- **Verified-by:** npx vitest run (23/23 pass for changed files),
+
+### 2026-04-16 16:59:41 +0000 · `98310ca` · Claude
+- **Subject:** fix(analysis): P2 cleanup — remove dead coach notes, raise token limit, add data boundary
+- **Files:** 5 changed, 1 test file(s)
+- **Root-cause:** P2-1/P2-2 coachNotesService was scaffolded during the
+- **Tests-added: No new tests — removed 3 tests for deleted dead code.**
+- **Verified-by:** npx vitest run (43/43 pass for changed files),
+
+### 2026-04-16 17:16:48 +0000 · `ef918ad` · Claude
+- **Subject:** fix(analysis): defensive cap-enforce + close test gaps surfaced by end-to-end review
+- **Files:** 3 changed, 2 test file(s)
+- **Root-cause:** A — single point of failure in a best-effort cleanup step
+- **Tests-added: modules/interview/__tests__/analysisJob.test.ts**
+- **Verified-by:** npx vitest run for changed files (19/19 pass),

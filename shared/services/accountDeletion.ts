@@ -77,6 +77,8 @@ export async function deleteInterviewSession(
   // Best-effort R2 cleanup. Failures are logged but never block the DB delete.
   const r2Keys: string[] = []
   if (session.recordingR2Key) r2Keys.push(session.recordingR2Key)
+  if (session.audioRecordingR2Key) r2Keys.push(session.audioRecordingR2Key)
+  if (session.screenRecordingR2Key) r2Keys.push(session.screenRecordingR2Key)
   if (session.facialLandmarksR2Key) r2Keys.push(session.facialLandmarksR2Key)
   if (session.resumeR2Key) r2Keys.push(session.resumeR2Key)
   if (session.jdR2Key) r2Keys.push(session.jdR2Key)
@@ -143,6 +145,8 @@ export async function deleteUserAccount(
     { userId: userObjectId },
     {
       recordingR2Key: 1,
+      audioRecordingR2Key: 1,
+      screenRecordingR2Key: 1,
       facialLandmarksR2Key: 1,
       resumeR2Key: 1,
       jdR2Key: 1,
@@ -152,6 +156,8 @@ export async function deleteUserAccount(
   const r2Keys: string[] = []
   for (const s of sessions) {
     if (s.recordingR2Key) r2Keys.push(s.recordingR2Key)
+    if (s.audioRecordingR2Key) r2Keys.push(s.audioRecordingR2Key)
+    if (s.screenRecordingR2Key) r2Keys.push(s.screenRecordingR2Key)
     if (s.facialLandmarksR2Key) r2Keys.push(s.facialLandmarksR2Key)
     if (s.resumeR2Key) r2Keys.push(s.resumeR2Key)
     if (s.jdR2Key) r2Keys.push(s.jdR2Key)

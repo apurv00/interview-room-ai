@@ -18,9 +18,9 @@ vi.mock('@shared/services/inngest', () => ({
   },
 }))
 
-// Mock all 5 pipeline steps + shouldRunDualPipeline. The handler's only job
-// is orchestration — we verify the order, arguments, and dual-pipeline
-// branching.
+// Mock all 5 pipeline steps + shouldRunDualPipeline + enforceAnalysisCap.
+// The handler's only job is orchestration — we verify the order, arguments,
+// and dual-pipeline branching.
 const mockFetchSession = vi.fn()
 const mockTranscribe = vi.fn()
 const mockProcessSignals = vi.fn()
@@ -28,6 +28,7 @@ const mockRunFusion = vi.fn()
 const mockPersistResults = vi.fn()
 const mockMarkFailed = vi.fn()
 const mockShouldRunDual = vi.fn()
+const mockEnforceAnalysisCap = vi.fn()
 
 vi.mock('../services/analysis/multimodalPipeline', () => ({
   stepFetchSession: (...args: unknown[]) => mockFetchSession(...args),
@@ -37,6 +38,10 @@ vi.mock('../services/analysis/multimodalPipeline', () => ({
   stepPersistResults: (...args: unknown[]) => mockPersistResults(...args),
   stepMarkFailed: (...args: unknown[]) => mockMarkFailed(...args),
   shouldRunDualPipeline: (...args: unknown[]) => mockShouldRunDual(...args),
+}))
+
+vi.mock('@shared/services/analysisCleanup', () => ({
+  enforceAnalysisCap: (...args: unknown[]) => mockEnforceAnalysisCap(...args),
 }))
 
 import { runAnalysisJobHandler, analysisJob } from '@interview/jobs/analysisJob'
@@ -79,6 +84,7 @@ const fakeFusion = (suffix: string) => ({
   },
   inputTokens: 1000,
   outputTokens: 500,
+  model: 'claude-haiku-4-5',
   promptLength: 3000,
 })
 
@@ -107,6 +113,7 @@ describe('analysisJob', () => {
       Promise.resolve(fakeFusion(opts?.includeBlendshapes ? 'enhanced' : 'baseline'))
     )
     mockPersistResults.mockResolvedValue(undefined)
+    mockEnforceAnalysisCap.mockResolvedValue({ deleted: 0 })
     mockShouldRunDual.mockResolvedValue(false)
   })
 
@@ -126,6 +133,7 @@ describe('analysisJob', () => {
         'run-fusion-enhanced',
         'should-run-dual',
         'persist-results',
+        'enforce-analysis-cap',
       ])
     })
 
@@ -225,6 +233,39 @@ describe('analysisJob', () => {
       )
       const persistArgs = mockPersistResults.mock.calls[0][2]
       expect(persistArgs.startTime).toBe(999_888)
+    })
+
+    it('passes fusionModel from the enhanced fusion result to stepPersistResults', async () => {
+      const { step } = buildMockStep()
+      await runAnalysisJobHandler(
+        { data: { sessionId: 'sess-1', userId: 'user-1', startTime: 1_000 } },
+        step
+      )
+      const persistArgs = mockPersistResults.mock.calls[0][2]
+      expect(persistArgs.fusionModel).toBe('claude-haiku-4-5')
+    })
+
+    it('calls enforceAnalysisCap with the userId after persist-results', async () => {
+      const { step } = buildMockStep()
+      await runAnalysisJobHandler(
+        { data: { sessionId: 'sess-1', userId: 'user-42', startTime: 1_000 } },
+        step
+      )
+      expect(mockEnforceAnalysisCap).toHaveBeenCalledTimes(1)
+      expect(mockEnforceAnalysisCap).toHaveBeenCalledWith('user-42')
+    })
+
+    it('swallows enforceAnalysisCap errors to prevent Inngest onFailure overwriting completed status', async () => {
+      mockEnforceAnalysisCap.mockRejectedValueOnce(new Error('Mongo connection lost'))
+      const { step } = buildMockStep()
+      // Job MUST still complete — cap failure is best-effort cleanup, the
+      // analysis row is already persisted as 'completed'.
+      const result = await runAnalysisJobHandler(
+        { data: { sessionId: 'sess-1', userId: 'user-1', startTime: 1_000 } },
+        step
+      )
+      expect(result).toEqual({ sessionId: 'sess-1', status: 'completed' })
+      expect(mockMarkFailed).not.toHaveBeenCalled()
     })
 
     it('propagates errors from any step to the caller (so Inngest retries)', async () => {

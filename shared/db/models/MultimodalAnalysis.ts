@@ -51,16 +51,6 @@ export interface IMultimodalAnalysis extends Document {
   totalCostUsd?: number
   processingDurationMs?: number
 
-  // Coach notes (per-moment rewrite suggestions)
-  coachNotes?: Array<{
-    momentSec: number
-    questionIndex: number
-    originalText: string
-    suggestion: string
-    rewriteExample: string
-    dimension: string
-  }>
-
   error?: string
   completedAt?: Date
 
@@ -114,16 +104,6 @@ const MultimodalAnalysisSchema = new Schema<IMultimodalAnalysis>(
     claudeCostUsd: { type: Number },
     totalCostUsd: { type: Number },
     processingDurationMs: { type: Number },
-
-    // Coach notes
-    coachNotes: [{
-      momentSec: { type: Number, required: true },
-      questionIndex: { type: Number },
-      originalText: { type: String },
-      suggestion: { type: String, required: true },
-      rewriteExample: { type: String },
-      dimension: { type: String },
-    }],
 
     error: { type: String },
     completedAt: { type: Date },

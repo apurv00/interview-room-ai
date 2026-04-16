@@ -3,7 +3,7 @@ import { InterviewSession } from '@shared/db/models/InterviewSession'
 import { MultimodalAnalysis } from '@shared/db/models/MultimodalAnalysis'
 import { User } from '@shared/db/models/User'
 import { getDownloadPresignedUrl } from '@shared/storage/r2'
-import { trackUsage } from '@shared/services/usageTracking'
+import { trackUsage, __PRICING } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { extractProsody } from './prosodyService'
@@ -381,13 +381,16 @@ export async function stepPersistResults(
     whisperCostUsd: number
     fusionInputTokens: number
     fusionOutputTokens: number
+    fusionModel?: string
     startTime: number
   }
 ): Promise<void> {
   await connectDB()
 
+  const model = data.fusionModel || 'unknown'
+  const pricing = __PRICING[model] || __PRICING['claude-haiku-4-5'] || { input: 0.001, output: 0.005 }
   const claudeCostUsd = parseFloat(
-    ((data.fusionInputTokens / 1000) * 0.001 + (data.fusionOutputTokens / 1000) * 0.005).toFixed(4)
+    ((data.fusionInputTokens / 1000) * pricing.input + (data.fusionOutputTokens / 1000) * pricing.output).toFixed(4)
   )
   const totalCostUsd = parseFloat((data.whisperCostUsd + claudeCostUsd).toFixed(4))
   const processingDurationMs = Date.now() - data.startTime
@@ -420,7 +423,7 @@ export async function stepPersistResults(
     sessionId,
     inputTokens: data.fusionInputTokens,
     outputTokens: data.fusionOutputTokens,
-    modelUsed: 'gpt-5.4-mini',
+    modelUsed: model,
     durationMs: processingDurationMs,
     success: true,
   }).catch(() => {})
@@ -547,6 +550,7 @@ export async function runMultimodalPipeline(
       // tracking reflects the actual Claude spend.
       fusionInputTokens: enhanced.inputTokens + (baseline?.inputTokens || 0),
       fusionOutputTokens: enhanced.outputTokens + (baseline?.outputTokens || 0),
+      fusionModel: enhanced.model,
       startTime,
     })
   } catch (err) {

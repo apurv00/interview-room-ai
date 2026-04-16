@@ -1,5 +1,5 @@
 import { completion } from '@shared/services/modelRouter'
-import { JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
+import { JSON_OUTPUT_RULE, DATA_BOUNDARY_RULE } from '@shared/services/promptSecurity'
 import { aiLogger } from '@shared/logger'
 import { FusionLlmSchema } from '@interview/validators/interview'
 import type {
@@ -39,6 +39,8 @@ interface FusionOutput {
   fusionSummary: FusionSummary
   inputTokens: number
   outputTokens: number
+  /** The actual model ID resolved by the model router (e.g. 'claude-haiku-4-5'). */
+  model: string
   /** Length of the rendered user prompt, for dual-pipeline audit logging. */
   promptLength: number
 }
@@ -50,6 +52,8 @@ export async function runFusionAnalysis(input: FusionInput): Promise<FusionOutpu
   const systemPrompt = `You are an expert interview coach analyzing multimodal signals from a recorded mock interview. The candidate was interviewing for a ${config.role} position (${config.experience} years experience, ${config.interviewType || 'screening'} interview).
 
 Your job is to stitch together audio, visual, and content signals into a unified coaching timeline. Focus on specific, actionable moments — not generic advice.
+
+${DATA_BOUNDARY_RULE}
 
 ${JSON_OUTPUT_RULE}
 {
@@ -120,7 +124,18 @@ Guidelines:
   // G.2: Zod-validate the LLM payload. Failure is non-fatal — we log
   // the drift and continue with the raw parsed object. `resolveEvents`
   // below handles the per-field null/index variance.
-  const parsedRaw = JSON.parse(jsonMatch[0]) as Record<string, unknown>
+  let parsedRaw: Record<string, unknown>
+  try {
+    parsedRaw = JSON.parse(jsonMatch[0]) as Record<string, unknown>
+  } catch (parseErr) {
+    // Truncated LLM output (hit max_tokens) can produce valid-looking
+    // JSON brackets that are actually incomplete — e.g. `{"timeline":[{...`
+    // with a missing closing `}]}`. Surface a clear error so the caller
+    // can retry or mark the analysis as failed.
+    throw new Error(
+      `Fusion analysis returned malformed JSON (possible token-limit truncation): ${parseErr instanceof Error ? parseErr.message : 'parse error'}`
+    )
+  }
   const parsedLlm = FusionLlmSchema.safeParse(parsedRaw)
   if (!parsedLlm.success) {
     aiLogger.warn(
@@ -177,6 +192,7 @@ Guidelines:
     fusionSummary: parsed.fusionSummary,
     inputTokens: response.inputTokens,
     outputTokens: response.outputTokens,
+    model: response.model,
     promptLength: userPrompt.length + JSON.stringify(contextData).length,
   }
 }
@@ -209,9 +225,14 @@ function buildUserPromptWithContext(
     }))
   }
 
-  // Facial signals — uniform array, TOON-friendly
-  if (facial.length > 0) {
-    contextData.facialSignals = facial.map((f) => {
+  // Facial signals — uniform array, TOON-friendly.
+  // Filter out sentinel segments (avgEyeContact === -1) where the aggregator
+  // had no frames in the window. Without this filter, Math.round(-1 * 100)
+  // sends eyeContact: -100 and headStability: -100 to the LLM, corrupting
+  // the analysis with nonsensical negative percentages.
+  const facialWithData = facial.filter((f) => f.avgEyeContact !== -1)
+  if (facialWithData.length > 0) {
+    contextData.facialSignals = facialWithData.map((f) => {
       const base: Record<string, unknown> = {
         questionIndex: f.questionIndex,
         timeRange: `${f.startSec.toFixed(0)}s-${f.endSec.toFixed(0)}s`,
