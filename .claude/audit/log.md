@@ -327,3 +327,10 @@
 - **Root-cause:** middleware.ts withAuth callback requires NextAuth token for all
 - **No-tests-needed-because: single-line addition to a static path list; the**
 - **Verified-by:** manual fetch of https://www.interviewprep.guru/api/inngest
+
+### 2026-04-16 10:52:16 +0000 · `b91233b` · Claude
+- **Subject:** fix(analysis): 4 audit findings — sentinel -100, GDPR orphan, JSON crash, cap enforcement
+- **Files:** 6 changed, 3 test file(s)
+- **Root-cause:** P0-2 sentinel values introduced when facialAggregator added
+- **Tests-added: modules/interview/services/analysis/__tests__/fusionService.test.ts**
+- **Verified-by:** npx vitest run — 1917/1918 pass (1 pre-existing timeout),
