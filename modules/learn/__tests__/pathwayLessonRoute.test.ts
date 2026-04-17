@@ -152,7 +152,24 @@ describe('/api/learn/pathway/lesson/[lessonId]', () => {
     })
   })
 
-  it('uses default domain/depth when plan has no domain/depth', async () => {
+  it('falls back to query-string domain/depth for legacy plans without fields', async () => {
+    mockGetUniversalPlan.mockResolvedValue({
+      lessons: [{ lessonId: 'L1', competency: 'ownership', completed: false }],
+    })
+    mockGetOrGenerateLesson.mockResolvedValue({
+      _id: new mongoose.Types.ObjectId(),
+      title: 't', conceptSummary: 's', conceptDeepDive: '', example: { question: '', goodAnswer: '', annotations: [] }, keyTakeaways: [],
+    })
+    const req = new NextRequest('http://localhost/api/learn/pathway/lesson/L1?domain=ds&depth=technical')
+    await GET(req, { params: { lessonId: 'L1' } })
+    expect(mockGetOrGenerateLesson).toHaveBeenCalledWith({
+      competency: 'ownership',
+      domain: 'ds',
+      depth: 'technical',
+    })
+  })
+
+  it('uses hard defaults when neither plan nor query params provide domain/depth', async () => {
     mockGetUniversalPlan.mockResolvedValue({
       lessons: [{ lessonId: 'L1', competency: 'ownership', completed: false }],
     })

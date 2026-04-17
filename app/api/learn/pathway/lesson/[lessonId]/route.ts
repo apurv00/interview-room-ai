@@ -27,8 +27,9 @@ export const GET = composeApiRoute({
       return NextResponse.json({ error: 'Lesson not in plan' }, { status: 404 })
     }
 
-    const domain = plan.domain ?? 'general'
-    const depth = plan.depth ?? 'behavioral'
+    const url = new URL(req.url)
+    const domain = plan.domain ?? url.searchParams.get('domain') ?? 'general'
+    const depth = plan.depth ?? url.searchParams.get('depth') ?? 'behavioral'
 
     const lesson = await getOrGenerateLesson({
       competency: entry.competency,
