@@ -487,3 +487,10 @@
 - **Root-cause:** /learn/pathway had no surface for the universal phased
 - **Tests-added: modules/learn/__tests__/PhaseProgressCard.test.tsx,**
 - **Verified-by:** 30 new unit + integration tests (see above), full learn
+
+### 2026-04-17 08:30:14 +0000 · `ceff86b` · Claude
+- **Subject:** feat(learn): wire mastery tracking + universal plan advance into post-interview pipeline (PR4)
+- **Files:** 4 changed, 2 test file(s)
+- **Root-cause:** the PR2 services (updateMasteryBatch, advanceUniversalPlan,
+- **Tests-added: modules/interview/__tests__/feedbackMasteryAdvance.test.ts**
+- **Verified-by:** 6 new tests + 246/246 passing across learn + relevant
