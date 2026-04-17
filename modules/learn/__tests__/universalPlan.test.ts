@@ -159,6 +159,38 @@ describe('universalPlan', () => {
       expect(mockEmit.mock.calls[1][0].payload.phase).toBe('building')
     })
 
+    it('emits extra phase_graduated(review) when entering review phase', async () => {
+      const save = vi.fn().mockResolvedValue(undefined)
+      // At 27 sessions, crossing to 28 graduates mastery (threshold 28) → enters review
+      const plan = { sessionsCompleted: 27, currentPhase: 'mastery', phaseHistory: [], save }
+      mockFindOne.mockReturnValue(plan)
+
+      await advanceUniversalPlan('507f1f77bcf86cd799439011')
+
+      expect(plan.sessionsCompleted).toBe(28)
+      expect(plan.currentPhase).toBe('review')
+      expect(mockEmit).toHaveBeenCalledTimes(3)
+      expect(mockEmit.mock.calls[0][0].type).toBe('phase_graduated')
+      expect(mockEmit.mock.calls[0][0].payload.graduatedPhase).toBe('mastery')
+      expect(mockEmit.mock.calls[1][0].type).toBe('phase_entered')
+      expect(mockEmit.mock.calls[1][0].payload.phase).toBe('review')
+      expect(mockEmit.mock.calls[2][0].type).toBe('phase_graduated')
+      expect(mockEmit.mock.calls[2][0].payload.graduatedPhase).toBe('review')
+    })
+
+    it('does NOT emit review graduation for non-review transitions', async () => {
+      const save = vi.fn().mockResolvedValue(undefined)
+      // foundation → building (not review)
+      const plan = { sessionsCompleted: 5, currentPhase: 'foundation', phaseHistory: [], save }
+      mockFindOne.mockReturnValue(plan)
+
+      await advanceUniversalPlan('507f1f77bcf86cd799439011')
+
+      expect(mockEmit).toHaveBeenCalledTimes(2)
+      const eventTypes = mockEmit.mock.calls.map((c: unknown[]) => (c[0] as { type: string }).type)
+      expect(eventTypes).toEqual(['phase_graduated', 'phase_entered'])
+    })
+
     it('does NOT emit events when staying in same phase', async () => {
       const save = vi.fn().mockResolvedValue(undefined)
       const plan = { sessionsCompleted: 3, currentPhase: 'foundation', phaseHistory: [], save }

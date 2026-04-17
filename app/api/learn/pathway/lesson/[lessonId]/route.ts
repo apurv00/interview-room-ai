@@ -28,8 +28,8 @@ export const GET = composeApiRoute({
     }
 
     const url = new URL(req.url)
-    const domain = url.searchParams.get('domain') ?? 'general'
-    const depth = url.searchParams.get('depth') ?? 'behavioral'
+    const domain = plan.domain ?? url.searchParams.get('domain') ?? 'general'
+    const depth = plan.depth ?? url.searchParams.get('depth') ?? 'behavioral'
 
     const lesson = await getOrGenerateLesson({
       competency: entry.competency,

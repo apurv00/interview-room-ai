@@ -487,6 +487,8 @@ export async function generateUniversalPlan(
         $set: {
           userId: uid,
           planType: 'universal',
+          domain,
+          depth,
           sessionsCompleted,
           phaseThresholds: thresholds,
           currentPhase,
@@ -564,6 +566,16 @@ export async function advanceUniversalPlan(
         timestamp: new Date(),
         payload: { phase: newPhase, sessionsCompleted: newSessions },
       })
+
+      // Entering review = completing the full curriculum → graduate review too
+      if (newPhase === 'review') {
+        await emitPathwayEvent({
+          type: 'phase_graduated',
+          userId,
+          timestamp: new Date(),
+          payload: { graduatedPhase: 'review', sessionsCompleted: newSessions },
+        })
+      }
     }
 
     return plan
