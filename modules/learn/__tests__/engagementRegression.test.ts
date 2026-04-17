@@ -233,7 +233,7 @@ describe('Engagement Regression Tests', () => {
   describe('badge definitions integrity', () => {
     it('badge definitions count has not changed unexpectedly', () => {
       // Regression guard: if someone adds/removes badges, this test surfaces it
-      expect(BADGE_DEFINITIONS).toHaveLength(19)
+      expect(BADGE_DEFINITIONS).toHaveLength(27)
     })
 
     it('all expected badge IDs exist', () => {
@@ -263,7 +263,7 @@ describe('Engagement Regression Tests', () => {
       const result = await getUserBadges(USER_ID)
 
       expect(result.earned).toHaveLength(0)
-      expect(result.available).toHaveLength(19)
+      expect(result.available).toHaveLength(27)
     })
   })
 

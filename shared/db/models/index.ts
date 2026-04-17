@@ -103,6 +103,12 @@ export type { IDailyChallengeAttempt } from './DailyChallengeAttempt'
 export { BenchmarkCase } from './BenchmarkCase'
 export type { IBenchmarkCase } from './BenchmarkCase'
 
+export { GeneratedLesson } from './GeneratedLesson'
+export type { IGeneratedLesson } from './GeneratedLesson'
+
+export { LessonEngagement } from './LessonEngagement'
+export type { ILessonEngagement } from './LessonEngagement'
+
 // ── Resume ──
 
 export { WizardConfig } from './WizardConfig'

@@ -18,6 +18,10 @@ export interface IUserCompetencyState extends Document {
     timestamp: Date
   }>
 
+  // Mastery tracking (pathway-driven)
+  consecutiveAtTarget: number
+  masteredAt?: Date
+
   // Spaced repetition fields
   srLastPracticedAt?: Date
   srNextReviewAt?: Date
@@ -45,6 +49,10 @@ const UserCompetencyStateSchema = new Schema<IUserCompetencyState>(
       sessionId: { type: Schema.Types.ObjectId, ref: 'InterviewSession' },
       timestamp: { type: Date, default: Date.now },
     }],
+
+    // Mastery tracking (pathway-driven)
+    consecutiveAtTarget: { type: Number, default: 0, min: 0 },
+    masteredAt: { type: Date },
 
     // Spaced repetition
     srLastPracticedAt: { type: Date },

@@ -10,6 +10,8 @@ export type BadgeTriggerType =
   | 'daily_challenge'
   | 'share'
   | 'domain_practice'
+  | 'phase_graduated'
+  | 'competency_mastered'
 
 export interface BadgeCheckContext {
   userId: string
@@ -22,6 +24,10 @@ export interface BadgeCheckContext {
   domainCount?: number
   depthCount?: number
   dailyChallengeCount?: number
+  // Pathway context
+  graduatedPhase?: string
+  consecutiveAtTarget?: number
+  masteredCompetency?: string
 }
 
 export interface BadgeDef {
@@ -257,6 +263,96 @@ export const BADGE_DEFINITIONS: BadgeDef[] = [
     rarity: 'common',
     triggerTypes: ['share'],
     check: () => true, // Triggered by share action itself
+  },
+
+  // ─── Pathway ──────────────────────────────────────────────────────────────
+  {
+    id: 'phase_assessment',
+    name: 'Baseline Set',
+    description: 'Complete the Assessment phase',
+    icon: '📋',
+    category: 'milestone',
+    xpReward: BADGE_XP.common,
+    rarity: 'common',
+    triggerTypes: ['phase_graduated'],
+    check: (ctx) => ctx.graduatedPhase === 'assessment',
+  },
+  {
+    id: 'phase_foundation',
+    name: 'Foundation Built',
+    description: 'Complete the Foundation phase',
+    icon: '🧱',
+    category: 'milestone',
+    xpReward: BADGE_XP.common,
+    rarity: 'common',
+    triggerTypes: ['phase_graduated'],
+    check: (ctx) => ctx.graduatedPhase === 'foundation',
+  },
+  {
+    id: 'phase_building',
+    name: 'Building Momentum',
+    description: 'Complete the Building phase',
+    icon: '🏗️',
+    category: 'milestone',
+    xpReward: BADGE_XP.rare,
+    rarity: 'rare',
+    triggerTypes: ['phase_graduated'],
+    check: (ctx) => ctx.graduatedPhase === 'building',
+  },
+  {
+    id: 'phase_intensity',
+    name: 'Intensity Survived',
+    description: 'Complete the Intensity phase',
+    icon: '🔥',
+    category: 'milestone',
+    xpReward: BADGE_XP.rare,
+    rarity: 'rare',
+    triggerTypes: ['phase_graduated'],
+    check: (ctx) => ctx.graduatedPhase === 'intensity',
+  },
+  {
+    id: 'phase_mastery',
+    name: 'Mastery Achieved',
+    description: 'Complete the Mastery phase',
+    icon: '🎓',
+    category: 'milestone',
+    xpReward: BADGE_XP.epic,
+    rarity: 'epic',
+    triggerTypes: ['phase_graduated'],
+    check: (ctx) => ctx.graduatedPhase === 'mastery',
+  },
+  {
+    id: 'phase_review',
+    name: 'Full Graduate',
+    description: 'Complete all pathway phases',
+    icon: '🏅',
+    category: 'milestone',
+    xpReward: BADGE_XP.legendary,
+    rarity: 'legendary',
+    triggerTypes: ['phase_graduated'],
+    check: (ctx) => ctx.graduatedPhase === 'review',
+  },
+  {
+    id: 'competency_master',
+    name: 'Skill Master',
+    description: 'Score at target on a competency 5 times consecutively',
+    icon: '⭐',
+    category: 'score',
+    xpReward: BADGE_XP.epic,
+    rarity: 'epic',
+    triggerTypes: ['competency_mastered'],
+    check: (ctx) => (ctx.consecutiveAtTarget ?? 0) >= 5,
+  },
+  {
+    id: 'first_drill_done',
+    name: 'Path Started',
+    description: 'Complete your first pathway drill',
+    icon: '🚶',
+    category: 'milestone',
+    xpReward: BADGE_XP.common,
+    rarity: 'common',
+    triggerTypes: ['drill_complete'],
+    check: (ctx) => (ctx.interviewCount ?? 0) >= 1,
   },
 ]
 

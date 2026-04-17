@@ -24,6 +24,9 @@ export interface BadgeTrigger {
   score?: number
   previousScore?: number
   currentStreak?: number
+  graduatedPhase?: string
+  consecutiveAtTarget?: number
+  masteredCompetency?: string
 }
 
 /**
@@ -115,6 +118,9 @@ async function buildBadgeContext(userId: string, trigger: BadgeTrigger): Promise
     domainCount: domainStats.length,
     depthCount: depthLevels.length,
     dailyChallengeCount: challengeCount,
+    graduatedPhase: trigger.graduatedPhase,
+    consecutiveAtTarget: trigger.consecutiveAtTarget,
+    masteredCompetency: trigger.masteredCompetency,
   }
 }
 

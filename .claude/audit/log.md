@@ -466,3 +466,31 @@
 - **Root-cause:** analysisJob.ts was already on .claude/hotpath.txt (the
 - **No-tests-needed-because: file is a plain-text registry consumed by**
 - **Verified-by:** manual diff review (4 paths added with a rationale
+
+### 2026-04-17 02:59:09 +0000 · `ba9abe3` · Claude
+- **Subject:** feat(learn): pathway infrastructure — schemas, models, events, badges (PR1)
+- **Files:** 15 changed, 6 test file(s)
+- **Root-cause:** pathway flow is generic and doesn't close the interview loop — needs
+- **Tests-added: modules/learn/__tests__/pathwayEvents.test.ts,**
+- **Verified-by:** 252/252 learn module tests passing, tsc --noEmit clean, badge count
+
+### 2026-04-17 04:07:28 +0000 · `604c8ca` · Claude
+- **Subject:** feat(learn): universal phased pathway core services (PR2)
+- **Files:** 11 changed, 5 test file(s)
+- **Root-cause:** PR1 laid schemas + events + badge defs but nothing writes to them
+- **Tests-added: modules/learn/__tests__/phaseAdvancement.test.ts (25 tests),**
+- **Verified-by:** 317/317 learn module tests passing (was 252 after PR1),
+
+### 2026-04-17 04:20:03 +0000 · `322ae64` · Claude
+- **Subject:** feat(learn): universal pathway UI — PhaseProgressCard, LessonCard, route wiring (PR3)
+- **Files:** 12 changed, 5 test file(s)
+- **Root-cause:** /learn/pathway had no surface for the universal phased
+- **Tests-added: modules/learn/__tests__/PhaseProgressCard.test.tsx,**
+- **Verified-by:** 30 new unit + integration tests (see above), full learn
+
+### 2026-04-17 08:30:14 +0000 · `ceff86b` · Claude
+- **Subject:** feat(learn): wire mastery tracking + universal plan advance into post-interview pipeline (PR4)
+- **Files:** 4 changed, 2 test file(s)
+- **Root-cause:** the PR2 services (updateMasteryBatch, advanceUniversalPlan,
+- **Tests-added: modules/interview/__tests__/feedbackMasteryAdvance.test.ts**
+- **Verified-by:** 6 new tests + 246/246 passing across learn + relevant

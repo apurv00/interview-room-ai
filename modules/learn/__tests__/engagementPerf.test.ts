@@ -11,7 +11,7 @@ import type { BadgeCheckContext } from '@learn/config/badges'
 
 describe('Engagement Performance Tests', () => {
   describe('badge check functions performance', () => {
-    it('all 19 badges x 1,000 iterations complete within 100ms', () => {
+    it('all 27 badges x 1,000 iterations complete within 100ms', () => {
       const ctx: BadgeCheckContext = {
         userId: 'test',
         triggerType: 'interview_complete',

@@ -10,6 +10,15 @@ import { getRecentSummaries } from './sessionSummaryService'
 import type { SessionEvaluationSummary } from '@interview'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { logger } from '@shared/logger'
+import {
+  resolveCurrentPhase,
+  detectPhaseGraduation,
+  phaseFocusCompetencies,
+  DEFAULT_PHASE_THRESHOLDS,
+  type PathwayPhase,
+} from './phaseAdvancement'
+import { emitPathwayEvent } from './pathwayEvents'
+import { buildLessonCacheKey } from './lessonGenerator'
 
 // ─── Generate Pathway Plan ──────────────────────────────────────────────────
 
@@ -429,3 +438,182 @@ async function generateAIPlan(
     return null
   }
 }
+
+// ─── Universal Phased Plan ──────────────────────────────────────────────────
+
+interface GenerateUniversalPlanInput {
+  userId: string
+  domain: string
+  depth: string
+  targetRole?: string
+  thresholds?: Record<string, number>
+}
+
+/**
+ * Create (or refresh) a universal phased pathway plan for a user.
+ * This plan tracks session-count pacing across 6 phases and pre-selects
+ * lessons for the current phase's focus competencies.
+ */
+export async function generateUniversalPlan(
+  input: GenerateUniversalPlanInput,
+): Promise<IPathwayPlan | null> {
+  if (!isFeatureEnabled('pathway_planner')) return null
+
+  try {
+    await connectDB()
+    const { userId, domain, depth, targetRole } = input
+    const thresholds = input.thresholds ?? DEFAULT_PHASE_THRESHOLDS
+
+    const uid = new mongoose.Types.ObjectId(userId)
+    const existing = await PathwayPlan.findOne({ userId: uid, planType: 'universal' })
+    const sessionsCompleted = existing?.sessionsCompleted ?? 0
+    const currentPhase = resolveCurrentPhase(sessionsCompleted, thresholds)
+
+    const competencySummary = await getUserCompetencySummary(userId, domain)
+    const weakAreas = competencySummary?.weakAreas ?? []
+    const strongAreas = competencySummary?.strongAreas ?? []
+    const focus = phaseFocusCompetencies(currentPhase, weakAreas, strongAreas)
+
+    const lessons = focus.map((competency) => ({
+      lessonId: buildLessonCacheKey(competency, domain, depth),
+      competency,
+      completed: false,
+    }))
+
+    const isNew = !existing
+    const plan = await PathwayPlan.findOneAndUpdate(
+      { userId: uid, planType: 'universal' },
+      {
+        $set: {
+          userId: uid,
+          planType: 'universal',
+          sessionsCompleted,
+          phaseThresholds: thresholds,
+          currentPhase,
+          lessons,
+          targetRole: targetRole ?? domain,
+          generatedAt: new Date(),
+        },
+      },
+      { upsert: true, new: true },
+    )
+
+    if (isNew) {
+      await emitPathwayEvent({
+        type: 'pathway_created',
+        userId,
+        timestamp: new Date(),
+        payload: { planId: String(plan._id), currentPhase, domain, depth },
+      })
+    }
+
+    return plan
+  } catch (err) {
+    logger.error({ err }, 'Failed to generate universal plan')
+    return null
+  }
+}
+
+/**
+ * Called after each session. Bumps sessionsCompleted, detects phase graduation,
+ * emits events, and returns the refreshed plan.
+ */
+export async function advanceUniversalPlan(
+  userId: string,
+): Promise<IPathwayPlan | null> {
+  if (!isFeatureEnabled('pathway_planner')) return null
+
+  try {
+    await connectDB()
+    const uid = new mongoose.Types.ObjectId(userId)
+    const plan = await PathwayPlan.findOne({ userId: uid, planType: 'universal' })
+    if (!plan) return null
+
+    const prevSessions = plan.sessionsCompleted ?? 0
+    const newSessions = prevSessions + 1
+    const thresholds = plan.phaseThresholds ?? DEFAULT_PHASE_THRESHOLDS
+
+    const graduated = detectPhaseGraduation(prevSessions, newSessions, thresholds)
+    const newPhase = resolveCurrentPhase(newSessions, thresholds)
+
+    plan.sessionsCompleted = newSessions
+    plan.currentPhase = newPhase
+
+    if (graduated) {
+      plan.phaseHistory = plan.phaseHistory ?? []
+      plan.phaseHistory.push({
+        phase: graduated,
+        enteredAt: plan.generatedAt ?? new Date(),
+        exitedAt: new Date(),
+        avgScore: 0,
+      })
+    }
+
+    await plan.save()
+
+    if (graduated) {
+      await emitPathwayEvent({
+        type: 'phase_graduated',
+        userId,
+        timestamp: new Date(),
+        payload: { graduatedPhase: graduated, enteredPhase: newPhase, sessionsCompleted: newSessions },
+      })
+      await emitPathwayEvent({
+        type: 'phase_entered',
+        userId,
+        timestamp: new Date(),
+        payload: { phase: newPhase, sessionsCompleted: newSessions },
+      })
+    }
+
+    return plan
+  } catch (err) {
+    logger.error({ err, userId }, 'Failed to advance universal plan')
+    return null
+  }
+}
+
+/**
+ * Fetch the current universal plan for a user, or null if none exists.
+ */
+export async function getUniversalPlan(userId: string): Promise<IPathwayPlan | null> {
+  if (!isFeatureEnabled('pathway_planner')) return null
+  try {
+    await connectDB()
+    return (await PathwayPlan.findOne({
+      userId: new mongoose.Types.ObjectId(userId),
+      planType: 'universal',
+    }).lean()) as IPathwayPlan | null
+  } catch (err) {
+    logger.error({ err, userId }, 'Failed to get universal plan')
+    return null
+  }
+}
+
+/**
+ * Mark a lesson within the universal plan as complete. Returns true if the plan was modified.
+ */
+export async function markLessonComplete(
+  userId: string,
+  lessonId: string,
+): Promise<boolean> {
+  try {
+    await connectDB()
+    const uid = new mongoose.Types.ObjectId(userId)
+    const result = await PathwayPlan.updateOne(
+      { userId: uid, planType: 'universal', 'lessons.lessonId': lessonId },
+      {
+        $set: {
+          'lessons.$.completed': true,
+          'lessons.$.completedAt': new Date(),
+        },
+      },
+    )
+    return result.modifiedCount > 0
+  } catch (err) {
+    logger.error({ err, userId, lessonId }, 'Failed to mark lesson complete')
+    return false
+  }
+}
+
+export type { PathwayPhase }

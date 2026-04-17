@@ -16,6 +16,9 @@ import { updateCompetencyState, updateWeaknessClusters } from '@learn/services/c
 import { generateSessionSummary } from '@learn/services/sessionSummaryService'
 import { generatePathwayPlan } from '@learn/services/pathwayPlanner'
 import { updatePracticeStats, deriveStrongWeakDimensions } from '@learn/services/practiceStatsService'
+import { updateMasteryBatch } from '@learn/services/masteryTracker'
+import { advanceUniversalPlan } from '@learn/services/pathwayPlanner'
+import { registerPathwayBadgeWiring } from '@learn/services/pathwayBadgeWiring'
 import { evaluateSession } from '@interview/services/eval/evaluationEngine'
 import { getUserCompetencySummary } from '@learn/services/competencyService'
 import { buildHistorySummary } from '@learn/services/sessionSummaryService'
@@ -29,6 +32,8 @@ import { compactTranscript } from '@interview/services/eval/transcriptCompactor'
 import { getQuestionCount } from '@interview/config/interviewConfig'
 import type { Duration } from '@shared/types'
 import { z } from 'zod'
+
+registerPathwayBadgeWiring()
 
 export const dynamic = 'force-dynamic'
 // Feedback generation calls Claude Sonnet with a large prompt (transcript +
@@ -1033,6 +1038,33 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
             }),
           ),
           'Pathway plan (via session evaluation) failed',
+        )
+
+        // Mastery tracking: compute per-dimension averages from evaluations
+        // and update the consecutive-at-target streak for each competency.
+        const MASTERY_DIMS = ['relevance', 'structure', 'specificity', 'ownership'] as const
+        const realEvals = typedEvaluations.filter((e) => (e as { status?: string }).status !== 'failed')
+        if (realEvals.length > 0) {
+          const dimScores: Record<string, number> = {}
+          for (const dim of MASTERY_DIMS) {
+            const avg = realEvals.reduce(
+              (sum, e) => sum + (Number((e as unknown as Record<string, unknown>)[dim]) || 0),
+              0,
+            ) / realEvals.length
+            dimScores[dim] = Math.round(avg)
+          }
+          fireAndTrack(
+            'masteryTracking',
+            Promise.resolve().then(() => updateMasteryBatch(user.id, dimScores, config.role)),
+            'Mastery tracking batch update failed',
+          )
+        }
+
+        // Advance universal plan: bump sessionsCompleted, detect phase graduation
+        fireAndTrack(
+          'universalPlanAdvance',
+          Promise.resolve().then(() => advanceUniversalPlan(user.id)),
+          'Universal plan advancement failed',
         )
 
         // F-3 aggregate summary: runs after the response is returned

@@ -25,6 +25,7 @@ export const TASK_SLOTS = [
   'resume.wizard-enrich',
   // Learn
   'learn.pathway-plan',
+  'learn.pathway-lesson',
   'learn.daily-challenge-gen',
   'learn.daily-challenge-score',
   'learn.drill-evaluate',
@@ -63,6 +64,7 @@ export const TASK_SLOT_DEFAULTS: Record<TaskSlot, { model: string; maxTokens: nu
   'resume.wizard-followup':         { model: 'claude-haiku-4-5', maxTokens: 500, provider: 'anthropic' },
   'resume.wizard-enrich':           { model: 'claude-opus-4-6', maxTokens: 4000, provider: 'anthropic' },
   'learn.pathway-plan':             { model: 'claude-sonnet-4-6', maxTokens: 3000, provider: 'anthropic' },
+  'learn.pathway-lesson':           { model: 'claude-haiku-4-5', maxTokens: 900, provider: 'anthropic' },
   'learn.daily-challenge-gen':      { model: 'claude-haiku-4-5', maxTokens: 500, provider: 'anthropic' },
   'learn.daily-challenge-score':    { model: 'claude-sonnet-4-6', maxTokens: 1000, provider: 'anthropic' },
   'learn.drill-evaluate':           { model: 'claude-sonnet-4-6', maxTokens: 1500, provider: 'anthropic' },

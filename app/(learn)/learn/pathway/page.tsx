@@ -8,6 +8,7 @@ import SignedOutEmptyState from '@shared/ui/SignedOutEmptyState'
 import { useAuthGate } from '@shared/providers/AuthGateProvider'
 import NextStepHero from '@learn/components/pathway/NextStepHero'
 import RecentSessionsStrip from '@learn/components/pathway/RecentSessionsStrip'
+import UniversalPathwayView from '@learn/components/pathway/UniversalPathwayView'
 
 interface PracticeTask {
   taskId: string
@@ -163,16 +164,21 @@ export default function PathwayPage() {
 
   if (!pathway) {
     return (
-      <main className="max-w-4xl mx-auto px-4 py-8 text-center py-16">
-        <h1 className="text-2xl font-bold text-[#0f1419] mb-4">Learning Pathway</h1>
-        <p className="text-[#71767b] mb-6">Complete your first interview to generate a personalized learning pathway.</p>
-        <button
-          type="button"
-          onClick={startInterview}
-          className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors"
-        >
-          Start an Interview
-        </button>
+      <main className="max-w-4xl mx-auto px-4 py-8 space-y-8">
+        <h1 className="text-2xl font-bold text-[#0f1419]">Learning Pathway</h1>
+        <UniversalPathwayView domain="general" depth="behavioral" />
+        <div className="surface-card-bordered p-5 sm:p-6 text-center">
+          <p className="text-sm text-[#71767b] mb-3">
+            Prefer to start with an interview? Complete one to generate a personalised plan of practice tasks and milestones.
+          </p>
+          <button
+            type="button"
+            onClick={startInterview}
+            className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors"
+          >
+            Start an Interview
+          </button>
+        </div>
       </main>
     )
   }
@@ -202,6 +208,12 @@ export default function PathwayPage() {
 
       {/* Recent Sessions Strip — closes the habit loop with inline Retake */}
       <RecentSessionsStrip />
+
+      {/* Universal phased pathway — 6-phase guided curriculum paced to sessions */}
+      <UniversalPathwayView
+        domain={pathway.nextSessionRecommendation?.domain || 'general'}
+        depth={pathway.nextSessionRecommendation?.interviewType || 'behavioral'}
+      />
 
       {/* Readiness Gauge */}
       <motion.section
