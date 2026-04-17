@@ -473,3 +473,10 @@
 - **Root-cause:** pathway flow is generic and doesn't close the interview loop — needs
 - **Tests-added: modules/learn/__tests__/pathwayEvents.test.ts,**
 - **Verified-by:** 252/252 learn module tests passing, tsc --noEmit clean, badge count
+
+### 2026-04-17 04:07:28 +0000 · `604c8ca` · Claude
+- **Subject:** feat(learn): universal phased pathway core services (PR2)
+- **Files:** 11 changed, 5 test file(s)
+- **Root-cause:** PR1 laid schemas + events + badge defs but nothing writes to them
+- **Tests-added: modules/learn/__tests__/phaseAdvancement.test.ts (25 tests),**
+- **Verified-by:** 317/317 learn module tests passing (was 252 after PR1),
