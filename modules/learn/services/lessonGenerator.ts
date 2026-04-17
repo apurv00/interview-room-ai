@@ -7,6 +7,8 @@ import type { IGeneratedLesson } from '@shared/db/models/GeneratedLesson'
 import { logger } from '@shared/logger'
 import { getLessonBudget } from '@learn/config/lessonBudgets'
 
+const _inFlight = new Map<string, Promise<IGeneratedLesson | null>>()
+
 export interface GenerateLessonInput {
   competency: string
   domain: string
@@ -52,34 +54,51 @@ export async function getOrGenerateLesson(
       return cached
     }
 
-    const budget = getLessonBudget(input.competency)
-    const lesson = await generateLessonContent(input, budget.maxTokens)
-    if (!lesson) return cached ?? null
+    const existing = _inFlight.get(cacheKey)
+    if (existing) return await existing
 
-    const doc = await GeneratedLesson.findOneAndUpdate(
-      { cacheKey },
-      {
-        cacheKey,
-        competency: input.competency,
-        domain: input.domain,
-        depth: input.depth,
-        title: lesson.title,
-        conceptSummary: lesson.conceptSummary,
-        conceptDeepDive: lesson.conceptDeepDive,
-        example: lesson.example,
-        keyTakeaways: lesson.keyTakeaways,
-        tokenBudgetUsed: budget.maxTokens,
-        generatedByModel: 'learn.pathway-lesson',
-        reviewStatus: 'pending',
-      },
-      { upsert: true, new: true },
-    )
-
-    return doc
+    const promise = generateAndCache(cacheKey, input, cached)
+    _inFlight.set(cacheKey, promise)
+    try {
+      return await promise
+    } finally {
+      _inFlight.delete(cacheKey)
+    }
   } catch (err) {
     logger.error({ err, input }, 'Lesson generation failed')
     return null
   }
+}
+
+async function generateAndCache(
+  cacheKey: string,
+  input: GenerateLessonInput,
+  staleDoc: IGeneratedLesson | null,
+): Promise<IGeneratedLesson | null> {
+  const budget = getLessonBudget(input.competency)
+  const lesson = await generateLessonContent(input, budget.maxTokens)
+  if (!lesson) return staleDoc ?? null
+
+  const doc = await GeneratedLesson.findOneAndUpdate(
+    { cacheKey },
+    {
+      cacheKey,
+      competency: input.competency,
+      domain: input.domain,
+      depth: input.depth,
+      title: lesson.title,
+      conceptSummary: lesson.conceptSummary,
+      conceptDeepDive: lesson.conceptDeepDive,
+      example: lesson.example,
+      keyTakeaways: lesson.keyTakeaways,
+      tokenBudgetUsed: budget.maxTokens,
+      generatedByModel: 'learn.pathway-lesson',
+      reviewStatus: 'pending',
+    },
+    { upsert: true, new: true },
+  )
+
+  return doc
 }
 
 async function generateLessonContent(

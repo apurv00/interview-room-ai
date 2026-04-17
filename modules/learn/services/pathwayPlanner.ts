@@ -18,7 +18,7 @@ import {
   type PathwayPhase,
 } from './phaseAdvancement'
 import { emitPathwayEvent } from './pathwayEvents'
-import { buildLessonCacheKey } from './lessonGenerator'
+import { buildLessonCacheKey, getOrGenerateLesson } from './lessonGenerator'
 
 // ─── Generate Pathway Plan ──────────────────────────────────────────────────
 
@@ -575,6 +575,28 @@ export async function advanceUniversalPlan(
           timestamp: new Date(),
           payload: { graduatedPhase: 'review', sessionsCompleted: newSessions },
         })
+      }
+
+      // Pre-generate lessons for the new phase so they're cached when users click
+      if (plan.domain && plan.depth) {
+        const domain = plan.domain
+        const depth = plan.depth
+        getUserCompetencySummary(userId, domain)
+          .then((summary) => {
+            const focus = phaseFocusCompetencies(
+              newPhase,
+              summary?.weakAreas ?? [],
+              summary?.strongAreas ?? [],
+            )
+            return Promise.allSettled(
+              focus.map((competency) =>
+                getOrGenerateLesson({ competency, domain, depth }),
+              ),
+            )
+          })
+          .catch((err) => {
+            logger.warn({ err, userId, newPhase }, 'Lesson pre-generation failed')
+          })
       }
     }
 

@@ -675,7 +675,7 @@ export default function InterviewPage() {
           <div className="px-4 pb-1 flex flex-col gap-1.5">
             {isCoachMode && <CoachOverlay state={coachModeState} />}
             <CoachingNudge nudge={activeNudge} />
-            <CoachingTip tip={coachingTip} />
+            <CoachingTip tip={coachingTip} coachMode={isCoachMode} />
           </div>
         </CodingLayout>
       ) : isDesignMode ? (
@@ -695,7 +695,7 @@ export default function InterviewPage() {
           <div className="px-4 pb-1 flex flex-col gap-1.5">
             {isCoachMode && <CoachOverlay state={coachModeState} />}
             <CoachingNudge nudge={activeNudge} />
-            <CoachingTip tip={coachingTip} />
+            <CoachingTip tip={coachingTip} coachMode={isCoachMode} />
           </div>
         </DesignLayout>
       ) : (
@@ -776,7 +776,7 @@ export default function InterviewPage() {
       <div className="px-4 pb-1 flex flex-col gap-1.5">
         {isCoachMode && <CoachOverlay state={coachModeState} />}
         <CoachingNudge nudge={activeNudge} />
-        <CoachingTip tip={coachingTip} />
+        <CoachingTip tip={coachingTip} coachMode={isCoachMode} />
       </div>
       </>
       )}

@@ -6,6 +6,7 @@ import type { Adapter } from 'next-auth/adapters'
 import { connectDB } from '@shared/db/connection'
 import { User } from '@shared/db/models'
 import clientPromise from '@shared/db/mongoClient'
+import { authLogger } from '@shared/logger'
 
 // Fail fast if NEXTAUTH_SECRET is missing or too short in production.
 // Without a proper secret, JWTs can be forged and sessions hijacked.
@@ -94,8 +95,8 @@ export const authOptions: NextAuthOptions = {
               token.onboardingCompleted = dbUser.onboardingCompleted ?? false
             }
             token.lastRefreshedAt = Date.now()
-          } catch {
-            // Silently fail — keep existing token values
+          } catch (err) {
+            authLogger.error({ err, userId: token.userId }, 'JWT periodic refresh failed — keeping stale token')
           }
         }
       }
@@ -114,8 +115,8 @@ export const authOptions: NextAuthOptions = {
             token.onboardingCompleted = dbUser.onboardingCompleted ?? false
             token.lastRefreshedAt = Date.now()
           }
-        } catch {
-          // Keep existing token values on DB failure
+        } catch (err) {
+          authLogger.error({ err, userId: token.userId }, 'JWT session-update refresh failed — keeping stale token')
         }
       }
       return token

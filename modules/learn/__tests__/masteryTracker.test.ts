@@ -8,10 +8,10 @@ vi.mock('@shared/logger', () => ({
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }))
 
-const mockFindOne = vi.fn()
+const mockFindOneAndUpdate = vi.fn()
 vi.mock('@shared/db/models', () => ({
   UserCompetencyState: {
-    findOne: (...args: unknown[]) => mockFindOne(...args),
+    findOneAndUpdate: (...args: unknown[]) => mockFindOneAndUpdate(...args),
   },
 }))
 
@@ -28,26 +28,18 @@ describe('masteryTracker', () => {
     vi.clearAllMocks()
   })
 
-  const makeState = (overrides: Record<string, unknown> = {}) => {
-    const save = vi.fn().mockResolvedValue(undefined)
-    return {
-      consecutiveAtTarget: 0,
-      masteredAt: undefined,
-      save,
-      ...overrides,
-    }
-  }
-
   describe('updateMasteryTracking', () => {
     it('returns null if no state exists for competency', async () => {
-      mockFindOne.mockResolvedValue(null)
+      mockFindOneAndUpdate.mockResolvedValue(null)
       const result = await updateMasteryTracking('507f1f77bcf86cd799439011', 'specificity', 80)
       expect(result).toBeNull()
     })
 
-    it('increments streak when score meets target', async () => {
-      const state = makeState({ consecutiveAtTarget: 2 })
-      mockFindOne.mockResolvedValue(state)
+    it('increments streak atomically when score meets target', async () => {
+      mockFindOneAndUpdate.mockResolvedValueOnce({
+        consecutiveAtTarget: 2,
+        masteredAt: undefined,
+      })
 
       const result = await updateMasteryTracking('507f1f77bcf86cd799439011', 'specificity', MASTERY_SCORE_TARGET)
 
@@ -57,28 +49,36 @@ describe('masteryTracker', () => {
         newStreak: 3,
         newlyMastered: false,
       })
-      expect(state.consecutiveAtTarget).toBe(3)
-      expect(state.save).toHaveBeenCalledOnce()
+      expect(mockFindOneAndUpdate).toHaveBeenCalledOnce()
+      const [, update] = mockFindOneAndUpdate.mock.calls[0]
+      expect(update).toEqual({ $inc: { consecutiveAtTarget: 1 } })
     })
 
-    it('resets streak to 0 when score drops below target', async () => {
-      const state = makeState({ consecutiveAtTarget: 4 })
-      mockFindOne.mockResolvedValue(state)
+    it('resets streak to 0 atomically when score drops below target', async () => {
+      mockFindOneAndUpdate.mockResolvedValueOnce({
+        consecutiveAtTarget: 4,
+        masteredAt: undefined,
+      })
 
       const result = await updateMasteryTracking('507f1f77bcf86cd799439011', 'ownership', MASTERY_SCORE_TARGET - 5)
 
       expect(result?.newStreak).toBe(0)
-      expect(state.consecutiveAtTarget).toBe(0)
+      const [, update] = mockFindOneAndUpdate.mock.calls[0]
+      expect(update).toEqual({ $set: { consecutiveAtTarget: 0 } })
     })
 
     it('emits competency_mastered when crossing threshold', async () => {
-      const state = makeState({ consecutiveAtTarget: MASTERY_CONSECUTIVE_THRESHOLD - 1 })
-      mockFindOne.mockResolvedValue(state)
+      // First call: atomic $inc, returns previous doc with streak at threshold - 1
+      mockFindOneAndUpdate.mockResolvedValueOnce({
+        consecutiveAtTarget: MASTERY_CONSECUTIVE_THRESHOLD - 1,
+        masteredAt: undefined,
+      })
+      // Second call: conditional masteredAt set succeeds (returns doc)
+      mockFindOneAndUpdate.mockResolvedValueOnce({ masteredAt: new Date() })
 
       const result = await updateMasteryTracking('507f1f77bcf86cd799439011', 'structure', 90)
 
       expect(result?.newlyMastered).toBe(true)
-      expect(state.masteredAt).toBeInstanceOf(Date)
       expect(mockEmit).toHaveBeenCalledOnce()
       const [event] = mockEmit.mock.calls[0]
       expect(event.type).toBe('competency_mastered')
@@ -88,28 +88,45 @@ describe('masteryTracker', () => {
     })
 
     it('does NOT re-emit when already mastered', async () => {
-      const state = makeState({
+      mockFindOneAndUpdate.mockResolvedValueOnce({
         consecutiveAtTarget: MASTERY_CONSECUTIVE_THRESHOLD + 2,
         masteredAt: new Date('2026-01-01'),
       })
-      mockFindOne.mockResolvedValue(state)
 
       await updateMasteryTracking('507f1f77bcf86cd799439011', 'relevance', 85)
 
+      expect(mockFindOneAndUpdate).toHaveBeenCalledOnce()
       expect(mockEmit).not.toHaveBeenCalled()
     })
 
     it('does NOT emit on non-crossing increments', async () => {
-      const state = makeState({ consecutiveAtTarget: 2 })
-      mockFindOne.mockResolvedValue(state)
+      mockFindOneAndUpdate.mockResolvedValueOnce({
+        consecutiveAtTarget: 2,
+        masteredAt: undefined,
+      })
 
       await updateMasteryTracking('507f1f77bcf86cd799439011', 'specificity', 80)
 
       expect(mockEmit).not.toHaveBeenCalled()
     })
 
+    it('prevents duplicate mastery events via conditional update', async () => {
+      // Streak at threshold - 1, first thread increments
+      mockFindOneAndUpdate.mockResolvedValueOnce({
+        consecutiveAtTarget: MASTERY_CONSECUTIVE_THRESHOLD - 1,
+        masteredAt: undefined,
+      })
+      // Conditional masteredAt set fails (another thread already set it)
+      mockFindOneAndUpdate.mockResolvedValueOnce(null)
+
+      const result = await updateMasteryTracking('507f1f77bcf86cd799439011', 'structure', 90)
+
+      expect(result?.newlyMastered).toBe(false)
+      expect(mockEmit).not.toHaveBeenCalled()
+    })
+
     it('handles errors gracefully (returns null)', async () => {
-      mockFindOne.mockRejectedValue(new Error('db exploded'))
+      mockFindOneAndUpdate.mockRejectedValue(new Error('db exploded'))
       const result = await updateMasteryTracking('507f1f77bcf86cd799439011', 'specificity', 80)
       expect(result).toBeNull()
     })
@@ -117,11 +134,16 @@ describe('masteryTracker', () => {
 
   describe('updateMasteryBatch', () => {
     it('updates multiple competencies and returns results', async () => {
-      const state1 = makeState({ consecutiveAtTarget: 0 })
-      const state2 = makeState({ consecutiveAtTarget: 1 })
-      mockFindOne
-        .mockResolvedValueOnce(state1)
-        .mockResolvedValueOnce(state2)
+      // specificity: score 80 >= 75, increment
+      mockFindOneAndUpdate.mockResolvedValueOnce({
+        consecutiveAtTarget: 0,
+        masteredAt: undefined,
+      })
+      // ownership: score 60 < 75, reset
+      mockFindOneAndUpdate.mockResolvedValueOnce({
+        consecutiveAtTarget: 1,
+        masteredAt: undefined,
+      })
 
       const results = await updateMasteryBatch('507f1f77bcf86cd799439011', {
         specificity: 80,
@@ -129,12 +151,12 @@ describe('masteryTracker', () => {
       })
 
       expect(results).toHaveLength(2)
-      expect(results[0].newStreak).toBe(1) // hit target
-      expect(results[1].newStreak).toBe(0) // reset
+      expect(results[0].newStreak).toBe(1)
+      expect(results[1].newStreak).toBe(0)
     })
 
     it('skips missing competency states', async () => {
-      mockFindOne.mockResolvedValue(null)
+      mockFindOneAndUpdate.mockResolvedValue(null)
       const results = await updateMasteryBatch('507f1f77bcf86cd799439011', { unknown: 80 })
       expect(results).toHaveLength(0)
     })
