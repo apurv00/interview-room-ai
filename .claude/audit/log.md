@@ -466,3 +466,10 @@
 - **Root-cause:** analysisJob.ts was already on .claude/hotpath.txt (the
 - **No-tests-needed-because: file is a plain-text registry consumed by**
 - **Verified-by:** manual diff review (4 paths added with a rationale
+
+### 2026-04-17 02:59:09 +0000 · `ba9abe3` · Claude
+- **Subject:** feat(learn): pathway infrastructure — schemas, models, events, badges (PR1)
+- **Files:** 15 changed, 6 test file(s)
+- **Root-cause:** pathway flow is generic and doesn't close the interview loop — needs
+- **Tests-added: modules/learn/__tests__/pathwayEvents.test.ts,**
+- **Verified-by:** 252/252 learn module tests passing, tsc --noEmit clean, badge count
