@@ -522,3 +522,10 @@
 - **Root-cause:** `return promise` in an async function does not enter the
 - **Tests-added: modules/learn/__tests__/lessonGenerator.test.ts**
 - **Verified-by:** npx vitest run modules/learn/__tests__/lessonGenerator.test.ts
+
+### 2026-04-17 15:01:59 +0000 · `ddb73c8` · Claude
+- **Subject:** fix(auth,feedback): P1 audit fixes — signIn validation, createUser error handling, Redis lock fail-closed
+- **Files:** 5 changed, 3 test file(s)
+- **Root-cause:** signIn returned true unconditionally (no email validation);
+- **Tests-added: shared/__tests__/authCallbacks.test.ts (14 tests),**
+- **Verified-by:** npx vitest run — 2078 tests passing across 126 files, npx tsc --noEmit clean
