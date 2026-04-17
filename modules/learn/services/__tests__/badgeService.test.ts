@@ -196,7 +196,7 @@ describe('badgeService', () => {
       expect(result.earned).toHaveLength(1)
       expect(result.earned[0].id).toBe('first_interview')
       expect(result.earned[0].earnedAt).toEqual(earnedAt)
-      expect(result.available.length).toBe(18) // 19 total - 1 earned
+      expect(result.available.length).toBe(26) // 27 total - 1 earned
     })
 
     it('returns all badges as available when none earned', async () => {
@@ -209,7 +209,7 @@ describe('badgeService', () => {
       const result = await getUserBadges(VALID_USER_ID)
 
       expect(result.earned).toHaveLength(0)
-      expect(result.available).toHaveLength(19)
+      expect(result.available).toHaveLength(27)
     })
 
     it('handles DB error gracefully', async () => {
@@ -222,7 +222,7 @@ describe('badgeService', () => {
       const result = await getUserBadges(VALID_USER_ID)
 
       expect(result.earned).toEqual([])
-      expect(result.available).toHaveLength(19)
+      expect(result.available).toHaveLength(27)
     })
   })
 

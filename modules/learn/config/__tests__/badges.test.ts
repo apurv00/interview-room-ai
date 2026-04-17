@@ -8,8 +8,8 @@ import {
 
 describe('badges config', () => {
   describe('BADGE_DEFINITIONS structure', () => {
-    it('has exactly 19 badge definitions', () => {
-      expect(BADGE_DEFINITIONS).toHaveLength(19)
+    it('has exactly 27 badge definitions', () => {
+      expect(BADGE_DEFINITIONS).toHaveLength(27)
     })
 
     it('all badges have required fields', () => {
@@ -46,7 +46,7 @@ describe('badges config', () => {
     })
 
     it('all trigger types are valid', () => {
-      const validTriggers = ['interview_complete', 'drill_complete', 'streak_update', 'daily_challenge', 'share', 'domain_practice']
+      const validTriggers = ['interview_complete', 'drill_complete', 'streak_update', 'daily_challenge', 'share', 'domain_practice', 'phase_graduated', 'competency_mastered']
       for (const badge of BADGE_DEFINITIONS) {
         for (const trigger of badge.triggerTypes) {
           expect(validTriggers).toContain(trigger)
@@ -88,10 +88,28 @@ describe('badges config', () => {
       expect(ids).toContain('depth_explorer')
     })
 
-    it('returns empty array for drill_complete (no badges assigned)', () => {
+    it('returns first_drill_done badge for drill_complete', () => {
       const badges = getBadgesByTrigger('drill_complete')
-      // drill_complete may have no badges — depends on config
-      expect(Array.isArray(badges)).toBe(true)
+      expect(badges.length).toBeGreaterThanOrEqual(1)
+      expect(badges.map(b => b.id)).toContain('first_drill_done')
+    })
+
+    it('returns phase graduation badges for phase_graduated', () => {
+      const badges = getBadgesByTrigger('phase_graduated')
+      expect(badges).toHaveLength(6)
+      const ids = badges.map(b => b.id)
+      expect(ids).toContain('phase_assessment')
+      expect(ids).toContain('phase_foundation')
+      expect(ids).toContain('phase_building')
+      expect(ids).toContain('phase_intensity')
+      expect(ids).toContain('phase_mastery')
+      expect(ids).toContain('phase_review')
+    })
+
+    it('returns competency_master badge for competency_mastered', () => {
+      const badges = getBadgesByTrigger('competency_mastered')
+      expect(badges).toHaveLength(1)
+      expect(badges[0].id).toBe('competency_master')
     })
   })
 
@@ -114,6 +132,9 @@ describe('badges config', () => {
         'score_70', 'score_80', 'score_90', 'score_100', 'comeback',
         'explorer_3_domains', 'depth_explorer', 'daily_challenger', 'daily_challenge_10',
         'shared_scorecard',
+        'phase_assessment', 'phase_foundation', 'phase_building',
+        'phase_intensity', 'phase_mastery', 'phase_review',
+        'competency_master', 'first_drill_done',
       ]
       for (const id of knownIds) {
         expect(getBadgeById(id)).toBeDefined()
@@ -257,6 +278,59 @@ describe('badges config', () => {
         const badge = getBadgeById('shared_scorecard')!
         const ctx = { ...baseCtx, triggerType: 'share' as const }
         expect(badge.check(ctx)).toBe(true)
+      })
+    })
+
+    describe('pathway badges', () => {
+      const phaseCtx = { ...baseCtx, triggerType: 'phase_graduated' as const }
+
+      it('phase_assessment: passes when graduatedPhase is assessment', () => {
+        const badge = getBadgeById('phase_assessment')!
+        expect(badge.check({ ...phaseCtx, graduatedPhase: 'assessment' })).toBe(true)
+        expect(badge.check({ ...phaseCtx, graduatedPhase: 'foundation' })).toBe(false)
+        expect(badge.check({ ...phaseCtx })).toBe(false)
+      })
+
+      it('phase_foundation: passes when graduatedPhase is foundation', () => {
+        const badge = getBadgeById('phase_foundation')!
+        expect(badge.check({ ...phaseCtx, graduatedPhase: 'foundation' })).toBe(true)
+        expect(badge.check({ ...phaseCtx, graduatedPhase: 'assessment' })).toBe(false)
+      })
+
+      it('phase_building: passes when graduatedPhase is building', () => {
+        const badge = getBadgeById('phase_building')!
+        expect(badge.check({ ...phaseCtx, graduatedPhase: 'building' })).toBe(true)
+        expect(badge.check({ ...phaseCtx, graduatedPhase: 'foundation' })).toBe(false)
+      })
+
+      it('phase_intensity: passes when graduatedPhase is intensity', () => {
+        const badge = getBadgeById('phase_intensity')!
+        expect(badge.check({ ...phaseCtx, graduatedPhase: 'intensity' })).toBe(true)
+      })
+
+      it('phase_mastery: passes when graduatedPhase is mastery', () => {
+        const badge = getBadgeById('phase_mastery')!
+        expect(badge.check({ ...phaseCtx, graduatedPhase: 'mastery' })).toBe(true)
+      })
+
+      it('phase_review: passes when graduatedPhase is review', () => {
+        const badge = getBadgeById('phase_review')!
+        expect(badge.check({ ...phaseCtx, graduatedPhase: 'review' })).toBe(true)
+      })
+
+      it('competency_master: passes at consecutiveAtTarget >= 5', () => {
+        const badge = getBadgeById('competency_master')!
+        const ctx = { ...baseCtx, triggerType: 'competency_mastered' as const }
+        expect(badge.check({ ...ctx, consecutiveAtTarget: 5 })).toBe(true)
+        expect(badge.check({ ...ctx, consecutiveAtTarget: 4 })).toBe(false)
+        expect(badge.check({ ...ctx })).toBe(false)
+      })
+
+      it('first_drill_done: passes at interviewCount >= 1', () => {
+        const badge = getBadgeById('first_drill_done')!
+        const ctx = { ...baseCtx, triggerType: 'drill_complete' as const }
+        expect(badge.check({ ...ctx, interviewCount: 1 })).toBe(true)
+        expect(badge.check({ ...ctx, interviewCount: 0 })).toBe(false)
       })
     })
   })
