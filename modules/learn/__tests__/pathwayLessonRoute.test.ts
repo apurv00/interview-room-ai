@@ -99,8 +99,10 @@ describe('/api/learn/pathway/lesson/[lessonId]', () => {
     expect(res.status).toBe(502)
   })
 
-  it('returns lesson data and records engagement on success', async () => {
+  it('returns lesson data using plan-owned domain/depth', async () => {
     mockGetUniversalPlan.mockResolvedValue({
+      domain: 'pm',
+      depth: 'behavioral',
       lessons: [{ lessonId: 'L1', competency: 'structure', completed: true }],
     })
     const objectId = new mongoose.Types.ObjectId()
@@ -113,7 +115,7 @@ describe('/api/learn/pathway/lesson/[lessonId]', () => {
       keyTakeaways: ['Always close with Result'],
     })
 
-    const req = new NextRequest('http://localhost/api/learn/pathway/lesson/L1?domain=pm&depth=behavioral')
+    const req = new NextRequest('http://localhost/api/learn/pathway/lesson/L1')
     const res = await GET(req, { params: { lessonId: 'L1' } })
     expect(res.status).toBe(200)
     const json = await res.json()
@@ -131,7 +133,26 @@ describe('/api/learn/pathway/lesson/[lessonId]', () => {
     expect(mockEngagementCreate).toHaveBeenCalledOnce()
   })
 
-  it('uses default domain/depth when not provided', async () => {
+  it('ignores query-string domain/depth in favor of plan values', async () => {
+    mockGetUniversalPlan.mockResolvedValue({
+      domain: 'swe',
+      depth: 'technical',
+      lessons: [{ lessonId: 'L1', competency: 'ownership', completed: false }],
+    })
+    mockGetOrGenerateLesson.mockResolvedValue({
+      _id: new mongoose.Types.ObjectId(),
+      title: 't', conceptSummary: 's', conceptDeepDive: '', example: { question: '', goodAnswer: '', annotations: [] }, keyTakeaways: [],
+    })
+    const req = new NextRequest('http://localhost/api/learn/pathway/lesson/L1?domain=pm&depth=behavioral')
+    await GET(req, { params: { lessonId: 'L1' } })
+    expect(mockGetOrGenerateLesson).toHaveBeenCalledWith({
+      competency: 'ownership',
+      domain: 'swe',
+      depth: 'technical',
+    })
+  })
+
+  it('uses default domain/depth when plan has no domain/depth', async () => {
     mockGetUniversalPlan.mockResolvedValue({
       lessons: [{ lessonId: 'L1', competency: 'ownership', completed: false }],
     })
