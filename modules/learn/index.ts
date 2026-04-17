@@ -41,6 +41,9 @@ export { default as BadgeUnlockChecker } from './components/BadgeUnlockChecker'
 export { default as PathwayStatusBanner } from './components/PathwayStatusBanner'
 export { default as NextStepHero } from './components/pathway/NextStepHero'
 export { default as RecentSessionsStrip } from './components/pathway/RecentSessionsStrip'
+export { default as PhaseProgressCard } from './components/pathway/PhaseProgressCard'
+export { default as LessonCard } from './components/pathway/LessonCard'
+export { default as UniversalPathwayView } from './components/pathway/UniversalPathwayView'
 
 // ── XP ──
 export { awardXp, getXpSummary, getXpHistory } from './services/xpService'
