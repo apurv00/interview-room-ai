@@ -292,11 +292,21 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
   // pipeline entirely. Without this, a Redis blip doubles the LLM bill
   // and double-fires every post-feedback side effect.
 
-  it('F-4: returns cached feedback when session.feedback already populated (fail-open race)', async () => {
-    // Redis is "down" — lock returns acquired: false (fail-open).
+  it('returns 503 when Redis is unavailable (fail-closed)', async () => {
     mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: false })
 
-    // Meanwhile, the parallel caller already finished and wrote to DB.
+    const res = await POST(makeRequest())
+    const json = await res.json()
+
+    expect(res.status).toBe(503)
+    expect(json.error).toContain('temporarily unavailable')
+    expect(mockCompletion).not.toHaveBeenCalled()
+    expect(mockRelease).not.toHaveBeenCalled()
+  })
+
+  it('F-4: returns cached feedback when session.feedback already populated (lock-expired race)', async () => {
+    mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: true })
+
     const cachedFeedback = {
       overall_score: 88,
       pass_probability: 'High',
@@ -317,9 +327,7 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
     const json = await res.json()
 
     expect(res.status).toBe(200)
-    // The critical assertion — the LLM was NOT called again.
     expect(mockCompletion).not.toHaveBeenCalled()
-    // Returned feedback matches the cached one, not a fresh generation.
     expect(json.overall_score).toBe(88)
     expect(json.top_3_improvements).toEqual(['already', 'written', 'to DB'])
   })
@@ -358,13 +366,7 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
   })
 
   it('F-4: pre-flight lookup is owner-scoped (no cross-account feedback leak)', async () => {
-    // Codex P1 finding on PR #273: without {_id, userId} scoping the
-    // pre-flight read would return any session's feedback by id, turning
-    // /api/generate-feedback into a read oracle for other users' scores.
-    // This test asserts the route calls findOne with a userId filter so
-    // a non-matching caller never receives the cached feedback even
-    // when the sessionId matches an existing row.
-    mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: false })
+    mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: true })
     mockCompletion.mockResolvedValue(happyCompletion)
 
     // Caller is user '...9099' (mock session above). The session in

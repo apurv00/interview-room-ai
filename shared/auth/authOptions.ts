@@ -55,12 +55,29 @@ export const authOptions: NextAuthOptions = {
 
   callbacks: {
     async signIn({ user, account }) {
-      // Audit log every sign-in attempt for debugging identity issues
-      console.log('[AUTH] Sign-in attempt', {
+      authLogger.info({
         provider: account?.provider,
         email: user.email,
         userId: user.id,
-      })
+      }, 'Sign-in attempt')
+
+      if (!user.email || typeof user.email !== 'string') {
+        authLogger.warn(
+          { provider: account?.provider, userId: user.id },
+          'Sign-in blocked: no email on account (GitHub private email?)',
+        )
+        return false
+      }
+
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+      if (!emailRegex.test(user.email)) {
+        authLogger.warn(
+          { provider: account?.provider, email: user.email },
+          'Sign-in blocked: malformed email',
+        )
+        return false
+      }
+
       return true
     },
 
@@ -157,19 +174,34 @@ export const authOptions: NextAuthOptions = {
 
   events: {
     async createUser({ user }) {
-      await connectDB()
-      const existing = await User.findOne({ email: user.email ?? undefined })
-      if (!existing) {
-        await User.create({
-          email: user.email ?? '',
-          name: user.name || user.email?.split('@')[0] || 'User',
-          image: user.image ?? undefined,
-          emailVerified: new Date(),
-          role: 'candidate',
-          plan: 'free',
-          monthlyInterviewLimit: 999999,
-          onboardingCompleted: false,
-        })
+      try {
+        if (!user.email) {
+          authLogger.error(
+            { userId: user.id, name: user.name },
+            'createUser event: no email — cannot create Mongoose User record',
+          )
+          return
+        }
+
+        await connectDB()
+        const existing = await User.findOne({ email: user.email })
+        if (!existing) {
+          await User.create({
+            email: user.email,
+            name: user.name || user.email.split('@')[0] || 'User',
+            image: user.image ?? undefined,
+            emailVerified: new Date(),
+            role: 'candidate',
+            plan: 'free',
+            monthlyInterviewLimit: 999999,
+            onboardingCompleted: false,
+          })
+        }
+      } catch (err) {
+        authLogger.error(
+          { err, email: user.email, userId: user.id },
+          'createUser event failed — user session may lack app-level data until next sign-in',
+        )
       }
     },
   },
