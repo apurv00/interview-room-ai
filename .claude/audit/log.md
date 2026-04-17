@@ -515,3 +515,10 @@
 - **Root-cause:** multiple independent reliability gaps found during end-to-end
 - **Tests-added: modules/learn/__tests__/lessonGenerator.test.ts (dedup),**
 - **Verified-by:** npx vitest run (2061/2062 pass, 1 pre-existing flaky timeout),
+
+### 2026-04-17 13:28:17 +0000 · `3ae7453` · Claude
+- **Subject:** fix(learn): await shared in-flight promise to prevent uncaught rejection
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** `return promise` in an async function does not enter the
+- **Tests-added: modules/learn/__tests__/lessonGenerator.test.ts**
+- **Verified-by:** npx vitest run modules/learn/__tests__/lessonGenerator.test.ts
