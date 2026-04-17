@@ -480,3 +480,10 @@
 - **Root-cause:** PR1 laid schemas + events + badge defs but nothing writes to them
 - **Tests-added: modules/learn/__tests__/phaseAdvancement.test.ts (25 tests),**
 - **Verified-by:** 317/317 learn module tests passing (was 252 after PR1),
+
+### 2026-04-17 04:20:03 +0000 · `322ae64` · Claude
+- **Subject:** feat(learn): universal pathway UI — PhaseProgressCard, LessonCard, route wiring (PR3)
+- **Files:** 12 changed, 5 test file(s)
+- **Root-cause:** /learn/pathway had no surface for the universal phased
+- **Tests-added: modules/learn/__tests__/PhaseProgressCard.test.tsx,**
+- **Verified-by:** 30 new unit + integration tests (see above), full learn
