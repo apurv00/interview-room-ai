@@ -55,7 +55,7 @@ export async function getOrGenerateLesson(
     }
 
     const existing = _inFlight.get(cacheKey)
-    if (existing) return existing
+    if (existing) return await existing
 
     const promise = generateAndCache(cacheKey, input, cached)
     _inFlight.set(cacheKey, promise)

@@ -191,6 +191,20 @@ describe('lessonGenerator', () => {
       expect(mockCompletion).toHaveBeenCalledOnce()
       expect(r1).toBe(r2)
     })
+
+    it('returns null (not unhandled rejection) when shared in-flight promise rejects', async () => {
+      mockFindOne.mockResolvedValue(null)
+      mockCompletion.mockRejectedValue(new Error('LLM down'))
+
+      const input = { competency: 'specificity', domain: 'pm', depth: 'behavioral' }
+      const p1 = getOrGenerateLesson(input)
+      const p2 = getOrGenerateLesson(input)
+
+      const [r1, r2] = await Promise.all([p1, p2])
+
+      expect(r1).toBeNull()
+      expect(r2).toBeNull()
+    })
   })
 
   describe('flagLesson', () => {
