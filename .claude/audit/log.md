@@ -501,3 +501,10 @@
 - **Root-cause:** P1 — review is the terminal phase so no phase transition
 - **Tests-added: modules/learn/__tests__/universalPlan.test.ts,**
 - **Verified-by:** 2057 tests passing across 125 files (npx vitest run)
+
+### 2026-04-17 09:15:13 +0000 · `0beb54a` · Claude
+- **Subject:** fix(learn): legacy plan fallback for domain/depth in lesson route
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** previous commit removed query-string fallback entirely,
+- **Tests-added: modules/learn/__tests__/pathwayLessonRoute.test.ts**
+- **Verified-by:** 8/8 lesson route tests passing
