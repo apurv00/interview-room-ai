@@ -51,6 +51,12 @@ vi.mock('@shared/services/modelRouter', () => ({
   completion: vi.fn(),
 }))
 
+const mockGetOrGenerateLesson = vi.fn().mockResolvedValue(null)
+vi.mock('@learn/services/lessonGenerator', () => ({
+  buildLessonCacheKey: (c: string, d: string, dp: string) => `${c}|${d}|${dp}`,
+  getOrGenerateLesson: (...args: unknown[]) => mockGetOrGenerateLesson(...args),
+}))
+
 vi.mock('@shared/services/promptSecurity', () => ({
   JSON_OUTPUT_RULE: '',
 }))
@@ -210,6 +216,40 @@ describe('universalPlan', () => {
 
       expect(plan.phaseHistory).toHaveLength(1)
       expect(plan.phaseHistory[0].phase).toBe('assessment')
+    })
+
+    it('pre-generates lessons for new phase after graduation', async () => {
+      const save = vi.fn().mockResolvedValue(undefined)
+      const plan = {
+        sessionsCompleted: 5,
+        currentPhase: 'foundation',
+        domain: 'pm',
+        depth: 'behavioral',
+        phaseHistory: [],
+        save,
+      }
+      mockFindOne.mockReturnValue(plan)
+
+      await advanceUniversalPlan('507f1f77bcf86cd799439011')
+      await new Promise((r) => setTimeout(r, 50))
+
+      expect(mockGetOrGenerateLesson).toHaveBeenCalled()
+      const calls = mockGetOrGenerateLesson.mock.calls
+      for (const [arg] of calls) {
+        expect(arg.domain).toBe('pm')
+        expect(arg.depth).toBe('behavioral')
+      }
+    })
+
+    it('skips pre-generation when plan has no domain/depth', async () => {
+      const save = vi.fn().mockResolvedValue(undefined)
+      const plan = { sessionsCompleted: 5, currentPhase: 'foundation', phaseHistory: [], save }
+      mockFindOne.mockReturnValue(plan)
+
+      await advanceUniversalPlan('507f1f77bcf86cd799439011')
+      await new Promise((r) => setTimeout(r, 50))
+
+      expect(mockGetOrGenerateLesson).not.toHaveBeenCalled()
     })
   })
 

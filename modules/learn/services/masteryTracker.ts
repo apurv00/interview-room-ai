@@ -34,25 +34,35 @@ export async function updateMasteryTracking(
   try {
     await connectDB()
     const uid = new mongoose.Types.ObjectId(userId)
+    const filter = { userId: uid, competencyName, domain }
 
-    const state = await UserCompetencyState.findOne({
-      userId: uid,
-      competencyName,
-      domain,
-    })
-    if (!state) return null
-
-    const previousStreak = state.consecutiveAtTarget ?? 0
     const atTarget = latestScore >= MASTERY_SCORE_TARGET
+
+    const previous = await UserCompetencyState.findOneAndUpdate(
+      filter,
+      atTarget
+        ? { $inc: { consecutiveAtTarget: 1 } }
+        : { $set: { consecutiveAtTarget: 0 } },
+      { new: false },
+    )
+    if (!previous) return null
+
+    const previousStreak = previous.consecutiveAtTarget ?? 0
     const newStreak = atTarget ? previousStreak + 1 : 0
 
-    const alreadyMastered = !!state.masteredAt
-    const crossedThreshold =
-      !alreadyMastered && isCompetencyMastered(newStreak, MASTERY_CONSECUTIVE_THRESHOLD)
-
-    state.consecutiveAtTarget = newStreak
-    if (crossedThreshold) state.masteredAt = new Date()
-    await state.save()
+    let crossedThreshold = false
+    if (
+      atTarget &&
+      !previous.masteredAt &&
+      isCompetencyMastered(newStreak, MASTERY_CONSECUTIVE_THRESHOLD)
+    ) {
+      const mastered = await UserCompetencyState.findOneAndUpdate(
+        { ...filter, masteredAt: { $exists: false } },
+        { $set: { masteredAt: new Date() } },
+        { new: true },
+      )
+      crossedThreshold = !!mastered
+    }
 
     if (crossedThreshold) {
       await emitPathwayEvent({

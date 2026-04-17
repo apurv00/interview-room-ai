@@ -171,6 +171,26 @@ describe('lessonGenerator', () => {
 
       expect(result).toBeNull()
     })
+
+    it('deduplicates concurrent cache-miss requests for the same lesson', async () => {
+      mockFindOne.mockResolvedValue(null)
+      let resolveCompletion: (v: unknown) => void
+      const completionPromise = new Promise((r) => { resolveCompletion = r })
+      mockCompletion.mockReturnValue(completionPromise)
+      const stored = { title: 'Deduped', cacheKey: 'x' }
+      mockFindOneAndUpdate.mockResolvedValue(stored)
+
+      const input = { competency: 'specificity', domain: 'pm', depth: 'behavioral' }
+      const p1 = getOrGenerateLesson(input)
+      const p2 = getOrGenerateLesson(input)
+
+      resolveCompletion!({ text: validLessonJson, inputTokens: 50, outputTokens: 200 })
+
+      const [r1, r2] = await Promise.all([p1, p2])
+
+      expect(mockCompletion).toHaveBeenCalledOnce()
+      expect(r1).toBe(r2)
+    })
   })
 
   describe('flagLesson', () => {
