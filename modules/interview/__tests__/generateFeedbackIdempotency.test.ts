@@ -132,6 +132,15 @@ vi.mock('@learn/services/sessionSummaryService', () => ({
 
 vi.mock('@learn/services/pathwayPlanner', () => ({
   generatePathwayPlan: vi.fn().mockResolvedValue(undefined),
+  advanceUniversalPlan: vi.fn().mockResolvedValue(null),
+}))
+
+vi.mock('@learn/services/masteryTracker', () => ({
+  updateMasteryBatch: vi.fn().mockResolvedValue([]),
+}))
+
+vi.mock('@learn/services/pathwayBadgeWiring', () => ({
+  registerPathwayBadgeWiring: vi.fn(),
 }))
 
 import { POST } from '@/app/api/generate-feedback/route'
@@ -406,8 +415,8 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
     )
     expect(summaryCall).toBeTruthy()
     const [context] = summaryCall as [Record<string, unknown>, string]
-    expect(context.totalSideEffects).toBe(4) // no weaknessClusters when no flags
-    expect(context.succeeded).toBe(4)
+    expect(context.totalSideEffects).toBe(6) // no weaknessClusters when no flags; +masteryTracking, +universalPlanAdvance
+    expect(context.succeeded).toBe(6)
     expect(context.failedCount).toBe(0)
     expect(context.failed).toBeUndefined()
     expect(context.sessionId).toBe('507f1f77bcf86cd799439011')
@@ -439,8 +448,8 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
     )
     expect(summaryCall).toBeTruthy()
     const [context] = summaryCall as [Record<string, unknown>, string]
-    expect(context.totalSideEffects).toBe(4)
-    expect(context.succeeded).toBe(2)
+    expect(context.totalSideEffects).toBe(6)
+    expect(context.succeeded).toBe(4)
     expect(context.failedCount).toBe(2)
     const failed = context.failed as Array<{ name: string; reason: string }>
     expect(failed.map((f) => f.name).sort()).toEqual(['competency', 'pathwayPlan'])
