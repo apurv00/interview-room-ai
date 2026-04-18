@@ -536,3 +536,9 @@
 - **Root-cause:** blast radius review of P1-1 (signIn validation) revealed that
 - **No-tests-needed-because: pure UI string change in a React component; the**
 - **Verified-by:** code review of errorMessage conditional chain; grep confirms
+
+### 2026-04-18 06:13:02 +0000 · `e6b7426` · Claude
+- **Subject:** feat(b2b): candidate invite OTP auth flow + fix invite email XSS
+- **Files:** 15 changed, 4 test file(s)
+- **Root-cause:** createInvite generated a token and wrote its hash to the
+- **Tests-added:**
