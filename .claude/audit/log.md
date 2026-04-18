@@ -577,3 +577,10 @@
 - **Root-cause:** deferred tools require proactive ToolSearch calls the
 - **Tests-added: none.**
 - **Verified-by:** `bash -n .claude/hooks/session-start.sh` → OK; dry
+
+### 2026-04-18 13:36:33 +0000 · `c646160` · Claude
+- **Subject:** hook(session-start): document known "finding relations.csv" hang
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the prior instruction didn't warn about the specific
+- **Tests-added: none.**
+- **Verified-by:** bash -n .claude/hooks/session-start.sh → OK.
