@@ -216,11 +216,26 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           .then(() => {
             if (wsRef.current?.readyState === WebSocket.OPEN) {
               setIsListening(true)
+              // Same handoff cleanup as the fast path above: audio PCM
+              // will keep the socket alive on its own, so the KeepAlive
+              // interval started in warmUp's onopen must be cleared.
+              // Without this, KeepAlive pings keep firing every 5s for
+              // the entire answer alongside live audio frames — wasted
+              // protocol traffic plus a small risk of interleaved frame
+              // ordering on Deepgram's side. Codex review on PR #283.
+              if (keepAliveTimerRef.current) {
+                clearInterval(keepAliveTimerRef.current)
+                keepAliveTimerRef.current = null
+              }
               attachMessageHandler(wsRef.current)
               startAudioCapture(wsRef.current)
               isWarmedUpRef.current = false
             } else {
-              // Warm-up WebSocket failed, fall back to full connection
+              // Warm-up WebSocket failed, fall back to full connection.
+              // warmUp's onclose/onerror handlers already clear
+              // keepAliveTimerRef when the socket dies, so no extra
+              // cleanup is needed on this branch — the timer is already
+              // cleared by the time we reach here.
               connectFresh()
             }
           })
