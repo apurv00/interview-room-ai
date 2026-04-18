@@ -158,11 +158,26 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   // had already run). E-3.7 fix.
   // Diagnostic window exposure: lets operators grab the packet log +
   // audio-frame counter from DevTools after one real interview turn.
-  // No behavior effect on the hook — purely read-side. Guarded so the
-  // global is never touched during SSR or tests.
+  // Purely read-side, no effect on hook behavior.
+  //
+  // SECURITY: `packetLogRef` contains full transcript snippets (candidate
+  // interview answers) plus word timings. Attaching this to `window`
+  // unconditionally would let any script on the page — analytics tags,
+  // third-party dependencies, or a compromised package — exfiltrate
+  // interview content. Codex P1 on PR #286. Gate by BOTH:
+  //   1. Build-time env flag `NEXT_PUBLIC_DEBUG_DEEPGRAM_PACKETS=true`
+  //      — deploys with the surface default-off unless explicitly opted in
+  //   2. Run-time URL query `?debugDeepgram=1` — per-session operator
+  //      opt-in, so even a debug-enabled build requires an explicit URL
+  //      to expose the surface
+  // Both must match for the surface to attach. Tests and SSR skip entirely.
   useEffect(() => {
     if (typeof window === 'undefined') return
     if (process.env.NODE_ENV === 'test') return
+    const envEnabled = process.env.NEXT_PUBLIC_DEBUG_DEEPGRAM_PACKETS === 'true'
+    const urlEnabled = typeof window.location !== 'undefined'
+      && new URLSearchParams(window.location.search).get('debugDeepgram') === '1'
+    if (!envEnabled || !urlEnabled) return
     const debugApi = {
       packets: () => packetLogRef.current.slice(),
       frames: () => audioFrameCountRef.current,
