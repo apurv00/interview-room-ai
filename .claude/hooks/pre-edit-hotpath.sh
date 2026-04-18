@@ -70,6 +70,40 @@ SAFE_BASENAME="$(echo "$REL_PATH" | tr '/[]' '___')"
 AUDIT_DIR="$REPO_ROOT/.claude/audit/current"
 IMPACT_FILE="$AUDIT_DIR/impact-$SAFE_BASENAME.md"
 
+if [ -f "$IMPACT_FILE" ]; then
+  # Reject manually-written waiver stubs. A real gitnexus artifact contains
+  # either "## d=1" / "## Symbols-modified" sections OR a tool-generated
+  # summary header. Files whose body is dominated by "waived" / "waiver"
+  # language with no caller data are the loophole we closed.
+  if head -c 4096 "$IMPACT_FILE" | grep -qiE '^# Impact:[[:space:]]*waived'; then
+    cat >&2 <<EOF
+╔════════════════════════════════════════════════════════════════╗
+║  BLOCKED — Waiver stub is no longer accepted                  ║
+╚════════════════════════════════════════════════════════════════╝
+
+File: $REL_PATH
+Artifact: $IMPACT_FILE
+
+The artifact starts with "# Impact: waived" — that's the hand-written
+stub the old hook let through. We closed that loophole because it
+was used to skip analysis entirely.
+
+Regenerate a real artifact with one of:
+
+  ./scripts/gitnexus-impact.sh "$REL_PATH"
+
+  # or via the MCP server:
+  ToolSearch({ query: "select:mcp__gitnexus__impact", max_results: 2 })
+  mcp__gitnexus__impact({ target: "<symbol or relative file path>",
+                          direction: "upstream" })
+
+If gitnexus truly cannot analyze this file, STOP and ask the user.
+Do not edit around this block.
+EOF
+    exit 2
+  fi
+fi
+
 if [ ! -f "$IMPACT_FILE" ]; then
   SCOPE_LABEL="source file"
   [ $IS_HOTPATH -eq 1 ] && SCOPE_LABEL="HOT-PATH file"
@@ -85,25 +119,37 @@ consulting the GitNexus knowledge graph for callers/callees.
 Grep cannot see dynamic dispatch, barrel re-exports, or transitive
 calls — the graph can.
 
-Run:
-
-  ./scripts/gitnexus-impact.sh "$REL_PATH"
-
-That queries .gitnexus/lbug for every symbol in this file, writes
-their d=1 callers and callees to:
+Run EITHER of these — both write the artifact to:
 
   $IMPACT_FILE
 
-Then retry the edit.
+1. CLI:
+     ./scripts/gitnexus-impact.sh "$REL_PATH"
 
-If the file is out of scope (e.g. pure data, new file with no
-references yet) and you're certain no callers exist, create the
-artifact manually with a justification:
+2. MCP (gitnexus tools). These are deferred by default — load first:
+     ToolSearch({ query: "select:mcp__gitnexus__impact,mcp__gitnexus__context,mcp__gitnexus__list_repos,mcp__gitnexus__detect_changes", max_results: 5 })
+   then:
+     mcp__gitnexus__impact({ target: "<symbol or relative file path>", direction: "upstream" })
+   and write the returned blast-radius into the artifact file yourself.
 
-  mkdir -p "$AUDIT_DIR"
-  cat > "$IMPACT_FILE" <<'MARKER'
-# Impact: waived — <concrete reason, e.g. "new file, no importers yet">
-MARKER
+If the CLI hangs or the index is missing (.gitnexus/ absent):
+
+  • pkill -f 'gitnexus analyze'    # kill any hung run
+  • rm -rf .gitnexus/.lock          # if a stale lock exists
+  • npx gitnexus analyze 2>&1 | tee /tmp/gitnexus-analyze.log
+    → if it hangs, check the log for the file it was parsing when
+      stuck; that file is the probable culprit.
+
+MANUALLY-WRITTEN WAIVERS ARE NO LONGER ACCEPTED. Earlier versions
+of this hook documented a fallback where the agent could write an
+"# Impact: waived — <reason>" stub file to bypass the check. That
+loophole was abused to skip analysis entirely. An artifact must now
+contain a real d=1 caller list produced by gitnexus (CLI or MCP).
+
+If gitnexus genuinely cannot analyze this file (e.g. index not yet
+built for a first-ever commit and the CLI won't run), the correct
+action is to FIX gitnexus, not to bypass. Ask the user before
+proceeding any further — do not edit.
 
 The hook runs in the harness; the model cannot bypass it.
 EOF
