@@ -563,3 +563,10 @@
 - **Root-cause:** lifecycle handler only ran in one of two warm-up handoff
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
 - **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts
+
+### 2026-04-18 12:37:24 +0000 · `c4b680d` · Claude
+- **Subject:** fix(interview): dedupe overlapping Deepgram is_final transcripts (R2)
+- **Files:** 4 changed, 2 test file(s)
+- **Root-cause:** Deepgram's streaming endpointer emits successive is_final
+- **Tests-added: modules/interview/__tests__/transcriptAppend.test.ts**
+- **Verified-by:** `npm run test:run` → 2140/2140 passing (38 in the two
