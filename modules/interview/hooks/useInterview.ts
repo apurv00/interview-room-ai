@@ -323,31 +323,6 @@ export function useInterview({
   // passed to the API hook. Declared here would cause a duplicate-identifier error.
   const usageLimitReachedRef = useRef(false)
 
-  // ─── Early Deepgram warm-up on page mount ────────────────────────────
-  // Fires warmUpListening() as soon as the hook mounts AND config is
-  // ready. Gated on config because `/interview` may redirect when
-  // INTERVIEW_CONFIG is missing or stale — firing warmUp on that
-  // aborted path would open a Deepgram WebSocket + keepalive interval
-  // that never gets torn down (Codex P2 on PR #290, no stopListening
-  // reached before unmount → background Deepgram traffic leaks until
-  // server timeout). Gating on config follows the same pattern as the
-  // existing init-timer/DB useEffect below — both run only when an
-  // interview is actually starting.
-  //
-  // Effect: when config IS ready, Deepgram token fetch + WS open + mic
-  // acquire + AudioContext setup run IN PARALLEL with createDbSession,
-  // saving 2–5s of sequential setup time vs waiting for line ~2041.
-  //
-  // Safe at mount: warmUp() is idempotent (guards via isWarmedUpRef and
-  // warmUpPromiseRef), config-independent at the hook level (Deepgram
-  // URL is static), and fails gracefully (ws.onerror resolves the
-  // promise so startListening can fall back to the cold path). See
-  // useDeepgramRecognition.ts:365-429.
-  useEffect(() => {
-    if (!config) return
-    warmUpListening?.()
-  }, [config, warmUpListening])
-
   // ─── Init timer + DB session ────────────────────────────────────────────────
 
   useEffect(() => {
