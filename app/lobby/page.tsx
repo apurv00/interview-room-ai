@@ -1,7 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { InterviewConfig } from '@shared/types'
@@ -63,8 +63,12 @@ const itemVariants = {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function LobbyPage() {
+// Wrapped in Suspense at the default export. useSearchParams() forces
+// client-side bailout during Next.js static export, and Next requires a
+// Suspense boundary around any component that calls it.
+function LobbyPageInner() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const { status: authStatus } = useSession()
   const { requireAuth } = useAuthGate()
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -73,6 +77,7 @@ export default function LobbyPage() {
   const animFrameRef = useRef<number>(0)
 
   const [config, setConfig] = useState<InterviewConfig | null>(null)
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null)
   const [lobbyCompany, setLobbyCompany] = useState('')
   const [showSuggestions, setShowSuggestions] = useState(false)
   // Privacy mode — per-interview opt-out of video storage. Gated behind
@@ -92,20 +97,81 @@ export default function LobbyPage() {
   const [audioLevel, setAudioLevel] = useState(0)
   const [joinCountdown, setJoinCountdown] = useState(0)
 
-  // Load config (clear stale session state if present)
+  // Load config.
+  //
+  // Two entry paths:
+  //   1. Normal (self-serve) — config lives in localStorage, populated by
+  //      InterviewSetupForm before the user arrives here.
+  //   2. B2B invite — candidate just signed in via the /invite OTP flow
+  //      and was redirected to `/lobby?sessionId=X` with empty
+  //      localStorage. We hydrate config from the server-authoritative
+  //      InterviewSession doc. Server wins — we overwrite localStorage.
   useEffect(() => {
-    // If user navigated back from an in-progress interview, clean up
-    const activeSession = localStorage.getItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
-    if (activeSession) {
-      localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
-      localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
-      router.push('/')
-      return
+    // If user navigated back from an in-progress interview, clean up.
+    // (Skip for the invite-bootstrap path — the candidate has never
+    // started; any active-session key would be stale cross-user state.)
+    const sessionIdParam = searchParams?.get('sessionId')
+    if (!sessionIdParam) {
+      const activeSession = localStorage.getItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
+      if (activeSession) {
+        localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
+        localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
+        router.push('/')
+        return
+      }
     }
+
+    if (sessionIdParam) {
+      // Invite-bootstrap path. Always re-hydrate from server so recruiter
+      // edits to the session doc take effect even if the candidate has a
+      // stale localStorage from a previous self-serve run.
+      let cancelled = false
+      ;(async () => {
+        try {
+          const res = await fetch(
+            `/api/interviews/${encodeURIComponent(sessionIdParam)}/bootstrap`,
+            { cache: 'no-store' },
+          )
+          if (cancelled) return
+          if (!res.ok) {
+            // 401 means the OTP signIn hasn't landed yet — bounce to sign-in.
+            // 403/404/410 means the link is no longer valid for this user.
+            if (res.status === 401) {
+              router.push('/')
+              return
+            }
+            setBootstrapError(
+              "We couldn't load this interview. Please contact your recruiter for a new invite link.",
+            )
+            return
+          }
+          const { config: serverConfig } = (await res.json()) as {
+            config: InterviewConfig
+          }
+          localStorage.setItem(
+            STORAGE_KEYS.INTERVIEW_CONFIG,
+            JSON.stringify(serverConfig),
+          )
+          // Clear any cross-user active-session artefact from a prior
+          // localStorage, then set the hydrated config.
+          localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
+          setConfig(serverConfig)
+        } catch {
+          if (cancelled) return
+          setBootstrapError(
+            'Could not reach the server. Please check your connection and try again.',
+          )
+        }
+      })()
+      return () => {
+        cancelled = true
+      }
+    }
+
     const stored = localStorage.getItem(STORAGE_KEYS.INTERVIEW_CONFIG)
     if (!stored) { router.push('/'); return }
     setConfig(JSON.parse(stored))
-  }, [router])
+  }, [router, searchParams])
 
   // Auto-generate JD from company+role if no JD text was provided
   useEffect(() => {
@@ -372,6 +438,20 @@ export default function LobbyPage() {
     ? 'rgb(16,185,129)'
     : 'rgb(100,116,139)'
 
+  // Bootstrap failure — surface a clear, non-technical message instead of
+  // silently bouncing the candidate somewhere unexpected. The invite link
+  // is their only entry point; if it fails we owe them an honest explanation.
+  if (bootstrapError) {
+    return (
+      <main className="min-h-screen flex items-center justify-center px-4">
+        <div className="max-w-md w-full bg-white border border-[#e1e8ed] rounded-2xl p-8 text-center space-y-4">
+          <h1 className="text-xl font-bold text-[#0f1419]">Invite link unavailable</h1>
+          <p className="text-sm text-[#536471]">{bootstrapError}</p>
+        </div>
+      </main>
+    )
+  }
+
   return (
     <main className="min-h-screen flex items-center justify-center px-3 sm:px-4 py-8 sm:py-12">
       <motion.div
@@ -631,5 +711,13 @@ export default function LobbyPage() {
         </motion.div>
       </motion.div>
     </main>
+  )
+}
+
+export default function LobbyPage() {
+  return (
+    <Suspense fallback={null}>
+      <LobbyPageInner />
+    </Suspense>
   )
 }
