@@ -660,3 +660,10 @@
 - **Root-cause:** useInterview bootstrap serialized work that had no data
 - **Tests-added: none.**
 - **Verified-by:** (1) npx tsc --noEmit clean, (2) npx vitest run on
+
+### 2026-04-18 17:03:24 +0000 · `475b9bc` · Claude
+- **Subject:** revert(interview): remove wasted Q0 prefetch (Codex #290 P1)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** misread of runInterviewLoop's starting index. Line 2088
+- **Tests-added: none.**
+- **Verified-by:** (1) npx tsc --noEmit clean, (2) vitest run on the
