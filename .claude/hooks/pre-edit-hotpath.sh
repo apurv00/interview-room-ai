@@ -70,6 +70,106 @@ SAFE_BASENAME="$(echo "$REL_PATH" | tr '/[]' '___')"
 AUDIT_DIR="$REPO_ROOT/.claude/audit/current"
 IMPACT_FILE="$AUDIT_DIR/impact-$SAFE_BASENAME.md"
 
+if [ -f "$IMPACT_FILE" ]; then
+  # Require a real gitnexus-produced artifact.
+  #
+  # Previous attempt only rejected "^# Impact:\s*waived" (Codex P1 on PR
+  # #287): trivially bypassed with "# Impact: pending", leading whitespace,
+  # BOM, or any other hand-rolled header.
+  #
+  # Switched to a POSITIVE fingerprint: the artifact MUST contain BOTH
+  # markers that scripts/gitnexus-impact.sh always writes:
+  #   1. First non-empty line starts with "# Impact Analysis — "
+  #   2. Body contains a "**Source:** GitNexus knowledge graph" line
+  # A hand-written stub would have to fake both, at which point they're
+  # copying real output — which is the point.
+  #
+  # MCP-path users (who produce artifacts via mcp__gitnexus__impact) must
+  # prepend these two lines verbatim; trivial one-time cost, documented in
+  # the missing-artifact error path below.
+  FIRST_NONEMPTY="$(grep -m1 -E '[^[:space:]]' "$IMPACT_FILE" 2>/dev/null || echo "")"
+  HAS_HEADER=0
+  HAS_SOURCE=0
+  HAS_PAYLOAD=0
+  if echo "$FIRST_NONEMPTY" | grep -qE '^# Impact Analysis — '; then
+    HAS_HEADER=1
+  fi
+  if head -c 16384 "$IMPACT_FILE" | grep -qE '^\*\*Source:\*\* GitNexus knowledge graph'; then
+    HAS_SOURCE=1
+  fi
+  # Payload check — the header markers alone can be forged by a 2-line
+  # hand-written stub, and a bare ```json fence can be forged with
+  # "```json\n{}\n```" (Codex P1 #3 on PR #287). A real artifact from
+  # scripts/gitnexus-impact.sh always contains EITHER:
+  #   (a) the literal "no indexed symbols for this file" phrase from
+  #       the empty-graph branch (lines 113-117 of the script), OR
+  #   (b) a fenced ```json block from the context() output for at
+  #       least one symbol (lines 138-140), AND that block must
+  #       contain BOTH "incoming" and "outgoing" JSON keys — these
+  #       are always present in real gitnexus context output (even
+  #       when arrays are empty).
+  # Both are hard to fake convincingly without copying the script's
+  # output. (a) covers legit new files with no graph entries; (b)
+  # covers files that gitnexus can actually analyze. An "empty JSON
+  # block" bypass fails (b) because `{}` has neither key.
+  BODY_SCAN="$(head -c 65536 "$IMPACT_FILE")"
+  if echo "$BODY_SCAN" | grep -qF '(no indexed symbols for this file'; then
+    HAS_PAYLOAD=1
+  elif echo "$BODY_SCAN" | grep -qE '^```json$' \
+      && echo "$BODY_SCAN" | grep -qF '"incoming"' \
+      && echo "$BODY_SCAN" | grep -qF '"outgoing"'; then
+    HAS_PAYLOAD=1
+  fi
+
+  if [ $HAS_HEADER -eq 0 ] || [ $HAS_SOURCE -eq 0 ] || [ $HAS_PAYLOAD -eq 0 ]; then
+    cat >&2 <<EOF
+╔════════════════════════════════════════════════════════════════╗
+║  BLOCKED — Artifact is not a real gitnexus output             ║
+╚════════════════════════════════════════════════════════════════╝
+
+File: $REL_PATH
+Artifact: $IMPACT_FILE
+
+The artifact does not match the fingerprint of a real gitnexus-
+produced analysis. ALL THREE must be present, verbatim:
+
+  1. First non-empty line:   # Impact Analysis — <rel-path>
+  2. Somewhere in the body:  **Source:** GitNexus knowledge graph (\`.gitnexus/lbug\`)
+  3. A caller/callee payload — ONE of:
+        • Literal phrase:   (no indexed symbols for this file
+          (only when the file has no graph entries yet)
+        • A fenced block:   \`\`\`json ... \`\`\` containing BOTH
+          "incoming" and "outgoing" JSON keys (always present in
+          real gitnexus context() output, even when arrays are empty)
+
+What your artifact shows:
+  Header marker present:   $( [ $HAS_HEADER -eq 1 ] && echo yes || echo NO )
+  Source marker present:   $( [ $HAS_SOURCE -eq 1 ] && echo yes || echo NO )
+  Payload section present: $( [ $HAS_PAYLOAD -eq 1 ] && echo yes || echo NO )
+
+Hand-written stubs — including "# Impact: waived", "# Impact: pending",
+2-line header+source forgeries, empty files, or any other ad-hoc
+content lacking a caller/callee payload — are rejected because they
+provide zero d=1 blast-radius data. This was the loophole that
+wasted session 01RUySybLLDdv36aXXFbuRsr.
+
+Generate a real artifact with one of:
+
+  ./scripts/gitnexus-impact.sh "$REL_PATH"
+
+  # or via the MCP server (you must write the full real format,
+  # including the payload section, not just the two header lines):
+  ToolSearch({ query: "select:mcp__gitnexus__impact", max_results: 2 })
+  mcp__gitnexus__impact({ target: "<symbol or relative file path>",
+                          direction: "upstream" })
+
+If gitnexus truly cannot analyze this file, STOP and ask the user.
+Do not edit around this block.
+EOF
+    exit 2
+  fi
+fi
+
 if [ ! -f "$IMPACT_FILE" ]; then
   SCOPE_LABEL="source file"
   [ $IS_HOTPATH -eq 1 ] && SCOPE_LABEL="HOT-PATH file"
@@ -85,25 +185,37 @@ consulting the GitNexus knowledge graph for callers/callees.
 Grep cannot see dynamic dispatch, barrel re-exports, or transitive
 calls — the graph can.
 
-Run:
-
-  ./scripts/gitnexus-impact.sh "$REL_PATH"
-
-That queries .gitnexus/lbug for every symbol in this file, writes
-their d=1 callers and callees to:
+Run EITHER of these — both write the artifact to:
 
   $IMPACT_FILE
 
-Then retry the edit.
+1. CLI:
+     ./scripts/gitnexus-impact.sh "$REL_PATH"
 
-If the file is out of scope (e.g. pure data, new file with no
-references yet) and you're certain no callers exist, create the
-artifact manually with a justification:
+2. MCP (gitnexus tools). These are deferred by default — load first:
+     ToolSearch({ query: "select:mcp__gitnexus__impact,mcp__gitnexus__context,mcp__gitnexus__list_repos,mcp__gitnexus__detect_changes", max_results: 5 })
+   then:
+     mcp__gitnexus__impact({ target: "<symbol or relative file path>", direction: "upstream" })
+   and write the returned blast-radius into the artifact file yourself.
 
-  mkdir -p "$AUDIT_DIR"
-  cat > "$IMPACT_FILE" <<'MARKER'
-# Impact: waived — <concrete reason, e.g. "new file, no importers yet">
-MARKER
+If the CLI hangs or the index is missing (.gitnexus/ absent):
+
+  • pkill -f 'gitnexus analyze'    # kill any hung run
+  • rm -rf .gitnexus/.lock          # if a stale lock exists
+  • npx gitnexus analyze 2>&1 | tee /tmp/gitnexus-analyze.log
+    → if it hangs, check the log for the file it was parsing when
+      stuck; that file is the probable culprit.
+
+MANUALLY-WRITTEN WAIVERS ARE NO LONGER ACCEPTED. Earlier versions
+of this hook documented a fallback where the agent could write an
+"# Impact: waived — <reason>" stub file to bypass the check. That
+loophole was abused to skip analysis entirely. An artifact must now
+contain a real d=1 caller list produced by gitnexus (CLI or MCP).
+
+If gitnexus genuinely cannot analyze this file (e.g. index not yet
+built for a first-ever commit and the CLI won't run), the correct
+action is to FIX gitnexus, not to bypass. Ask the user before
+proceeding any further — do not edit.
 
 The hook runs in the harness; the model cannot bypass it.
 EOF

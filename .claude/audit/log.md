@@ -563,3 +563,45 @@
 - **Root-cause:** lifecycle handler only ran in one of two warm-up handoff
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
 - **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts
+
+### 2026-04-18 13:22:23 +0000 · `0cc0b15` · Claude
+- **Subject:** hook(pre-edit): close manual-waiver loophole; require real gitnexus artifact
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the hook advertised its own bypass, lowering the effort
+- **Tests-added: none.**
+- **Verified-by:** (1) bash -n .claude/hooks/pre-edit-hotpath.sh → OK,
+
+### 2026-04-18 13:26:16 +0000 · `ebdbc6c` · Claude
+- **Subject:** hook(session-start): force-load gitnexus MCP tools on every session
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** deferred tools require proactive ToolSearch calls the
+- **Tests-added: none.**
+- **Verified-by:** `bash -n .claude/hooks/session-start.sh` → OK; dry
+
+### 2026-04-18 13:36:33 +0000 · `c646160` · Claude
+- **Subject:** hook(session-start): document known "finding relations.csv" hang
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the prior instruction didn't warn about the specific
+- **Tests-added: none.**
+- **Verified-by:** bash -n .claude/hooks/session-start.sh → OK.
+
+### 2026-04-18 14:04:16 +0000 · `1901395` · Claude
+- **Subject:** hook(pre-edit): require real gitnexus fingerprint, not just reject "waived" (Codex #287)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the v1 check conflated "waiver" with "stub". The real
+- **Tests-added: none (shell).**
+- **Verified-by:** bash -n .claude/hooks/pre-edit-hotpath.sh → OK;
+
+### 2026-04-18 14:11:34 +0000 · `2e18323` · Claude
+- **Subject:** hook(pre-edit): require caller/callee payload, not just header markers (Codex #287 P1-2)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** v2 check was necessary-but-not-sufficient. The header
+- **Tests-added: none (shell).**
+- **Verified-by:** (1) bash -n .claude/hooks/pre-edit-hotpath.sh → OK,
+
+### 2026-04-18 14:16:04 +0000 · `a34969f` · Claude
+- **Subject:** hook(pre-edit): require both "incoming" + "outgoing" keys in JSON payload (Codex #287 P1-3)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the v3 JSON-fence check was necessary-but-not-sufficient.
+- **Tests-added: none (shell).**
+- **Verified-by:** (1) bash -n .claude/hooks/pre-edit-hotpath.sh → OK,
