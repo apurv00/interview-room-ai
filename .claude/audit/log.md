@@ -549,3 +549,10 @@
 - **Root-cause:** /lobby page read INTERVIEW_CONFIG from localStorage and
 - **Tests-added: app/api/interviews/[id]/bootstrap/__tests__/route.test.ts**
 - **Verified-by:** npx vitest run app/api/interviews/[id]/bootstrap (8/8
+
+### 2026-04-18 07:25:25 +0000 · `024e2f1` · Claude
+- **Subject:** build(audit): replace grep-based impact hook with graph-backed gate
+- **Files:** 5 changed, 0 test file(s)
+- **Root-cause:** the audit/accountability layer was theatre. Three concrete
+- **Tests-added: No-tests-needed-because: the enforcement layer is shell**
+- **Verified-by:** Manual harness simulation documented above plus live run
