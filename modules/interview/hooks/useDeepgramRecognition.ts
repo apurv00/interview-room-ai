@@ -13,6 +13,35 @@ export interface StartListeningOptions {
   onCaptureReady?: () => void
 }
 
+/** Diagnostic packet summary captured into the hook's ring buffer.
+ *  Exposed via `window.__deepgramDebug` for root-cause investigation
+ *  of overlapping `is_final` transcripts. */
+export interface DeepgramPacketLog {
+  /** Wall-clock ms when the packet was received. */
+  t: number
+  /** Deepgram message type: 'Results', 'UtteranceEnd', 'Metadata', etc. */
+  type: string
+  /** Present for Results packets — true for finalized segments. */
+  isFinal?: boolean
+  /** Present for Results packets — true for end-of-utterance boundary. */
+  speechFinal?: boolean
+  /** Deepgram's session-relative audio time (seconds) where this
+   *  segment begins. Overlapping segments share `start` ranges. */
+  start?: number
+  /** Duration (seconds) of the transcribed audio segment. */
+  duration?: number
+  /** Primary transcript text; empty for non-Results packets. */
+  transcript?: string
+  /** Word-level timings from Deepgram. Truncated to first 8 entries
+   *  to keep the ring buffer bounded in size. */
+  words?: Array<{ word: string; start: number; end: number }>
+  /** Snapshot of `audioFrameCountRef` at the moment this packet was
+   *  received. Lets us correlate transcript segments to the count of
+   *  PCM frames we sent — a double-send would show an unexpected 2×
+   *  delta between consecutive packets. */
+  framesSentAtRx: number
+}
+
 export interface UseDeepgramRecognitionReturn {
   isListening: boolean
   liveTranscript: string
@@ -104,12 +133,54 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
    *  grace timer terminates the answer before the user returns. We pause
    *  the grace timer while hidden and resume normal flow on visibility. */
   const isPageHiddenRef = useRef(false)
+  /** Diagnostic ring buffer for Deepgram message shapes. Populated by
+   *  `attachMessageHandler` on every Results/UtteranceEnd/Metadata
+   *  packet so operators can inspect the raw stream from DevTools
+   *  (via `window.__deepgramDebug`) after a real interview turn.
+   *
+   *  Purpose: root-cause investigation of the overlapping `is_final`
+   *  transcripts observed in production session
+   *  `69e36b369c13dfe7e7ea90a3`. We need `start`/`duration`/
+   *  `speech_final` to distinguish (a) Deepgram re-emitting the same
+   *  audio window (timings overlap) from (b) natural boundary-word
+   *  reuse (timings disjoint). See AI_ANALYSIS.md §8. */
+  const packetLogRef = useRef<Array<DeepgramPacketLog>>([])
+  /** Counter of PCM frames sent to Deepgram via `processor.onaudioprocess`.
+   *  Snapshotted on each inbound packet into `packetLogRef` to detect a
+   *  potential double-send (frame count jumping by 2× expected between
+   *  two consecutive packets would indicate duplicated audio). */
+  const audioFrameCountRef = useRef(0)
 
   // Hook-level visibility listener. Mounted once per hook instance, replaces
   // the per-session listener that used to live inside setupAudioProcessing
   // (which couldn't prevent the grace timer from firing while hidden — only
   // resume the audio context after the fact, by which point finishRecognition
   // had already run). E-3.7 fix.
+  // Diagnostic window exposure: lets operators grab the packet log +
+  // audio-frame counter from DevTools after one real interview turn.
+  // No behavior effect on the hook — purely read-side. Guarded so the
+  // global is never touched during SSR or tests.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (process.env.NODE_ENV === 'test') return
+    const debugApi = {
+      packets: () => packetLogRef.current.slice(),
+      frames: () => audioFrameCountRef.current,
+      clear: () => {
+        packetLogRef.current = []
+        audioFrameCountRef.current = 0
+      },
+      dump: () => JSON.stringify({
+        packets: packetLogRef.current,
+        frames: audioFrameCountRef.current,
+      }, null, 2),
+    }
+    ;(window as unknown as { __deepgramDebug?: typeof debugApi }).__deepgramDebug = debugApi
+    return () => {
+      delete (window as unknown as { __deepgramDebug?: typeof debugApi }).__deepgramDebug
+    }
+  }, [])
+
   useEffect(() => {
     if (typeof document === 'undefined') return
     const handleVisibility = () => {
@@ -154,6 +225,9 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       onCompleteRef.current = onComplete
       onCaptureReadyRef.current = options?.onCaptureReady ?? null
       finalTextRef.current = ''
+      // Reset diagnostic counters per turn so each answer's log starts
+      // at frame 0. Ring buffer keeps prior turns' packets until capped.
+      audioFrameCountRef.current = 0
       wordsRef.current = []
       lastTranscriptRef.current = ''
       reconnectAttemptsRef.current = 0
@@ -376,6 +450,29 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     return data.token
   }
 
+  /** Push a bounded summary of one Deepgram message onto the diagnostic
+   *  ring buffer. Side-effect-free — does not inspect or touch transcript
+   *  state. See `DeepgramPacketLog` for field meanings. */
+  function recordPacket(data: Record<string, unknown>) {
+    const MAX_PACKETS = 500
+    const alt = (data.channel as { alternatives?: Array<{ transcript?: string; words?: Array<{ word: string; start: number; end: number }> }> })
+      ?.alternatives?.[0]
+    const entry: DeepgramPacketLog = {
+      t: Date.now(),
+      type: typeof data.type === 'string' ? data.type : 'unknown',
+      isFinal: typeof data.is_final === 'boolean' ? data.is_final : undefined,
+      speechFinal: typeof data.speech_final === 'boolean' ? data.speech_final : undefined,
+      start: typeof data.start === 'number' ? data.start : undefined,
+      duration: typeof data.duration === 'number' ? data.duration : undefined,
+      transcript: typeof alt?.transcript === 'string' ? alt.transcript : undefined,
+      words: alt?.words?.slice(0, 8).map(w => ({ word: w.word, start: w.start, end: w.end })),
+      framesSentAtRx: audioFrameCountRef.current,
+    }
+    const buf = packetLogRef.current
+    buf.push(entry)
+    if (buf.length > MAX_PACKETS) buf.splice(0, buf.length - MAX_PACKETS)
+  }
+
   /** Attach the Deepgram message handler to a WebSocket.
    *  Called from both connectWebSocket (cold path) and the fast warmUp path.
    *  Without this, the warmed-up WS has no onmessage → transcripts are never received. */
@@ -383,6 +480,12 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data)
+
+        // ── Diagnostic capture (no behavior effect) ──
+        // Snapshot every packet's shape for root-cause investigation of
+        // overlapping is_final transcripts seen in prod. Bounded ring
+        // buffer — cap at 500 so session memory stays tiny (~100KB).
+        recordPacket(data)
 
         if (data.type === 'Results') {
           const transcript = data.channel?.alternatives?.[0]?.transcript || ''
@@ -665,6 +768,11 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
         pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff
       }
       ws.send(pcm.buffer)
+      // Diagnostic: count every frame we send. Snapshotted into
+      // packetLogRef on each inbound Deepgram message so we can
+      // detect a potential double-send by looking for an unexpected
+      // 2× frame delta between consecutive packets.
+      audioFrameCountRef.current++
     }
 
     source.connect(processor)
