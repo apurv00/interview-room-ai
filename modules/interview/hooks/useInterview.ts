@@ -531,6 +531,16 @@ export function useInterview({
     timeoutMs: number = 30000,
     onCaptureReady?: () => void,
   ): Promise<string> {
+    // Flip phase to LISTENING eagerly — the moment the caller is ready to
+    // receive speech. Previously this was deferred to the onCaptureReady
+    // callback, which only fires after the audio pipeline (WebSocket
+    // handshake, AudioContext creation, ScriptProcessor wiring) is fully
+    // ready. On a cold path that can be 500-1500ms, during which the UI
+    // still shows "Question" — the exact symptom reported in the audit.
+    // Decoupling state from pipeline readiness gives immediate feedback;
+    // the pipeline catches up within one frame in the warm/healthy case.
+    transitionTo('LISTENING')
+
     // Bridge interrupt words: if the candidate interrupted AI speech, their
     // interrupt words (≥3 words from Deepgram) are the start of their answer.
     // Prepend them so the candidate doesn't have to repeat themselves.
