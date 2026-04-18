@@ -542,3 +542,10 @@
 - **Files:** 15 changed, 4 test file(s)
 - **Root-cause:** createInvite generated a token and wrote its hash to the
 - **Tests-added:**
+
+### 2026-04-18 07:17:18 +0000 · `3b23a52` · Claude
+- **Subject:** chore(db): silence Mongoose deprecation warnings in production logs
+- **Files:** 22 changed, 2 test file(s)
+- **Root-cause:** Two distinct Mongoose deprecation emissions were surfacing in Vercel logs as level:error on every cold start and every mutating request:
+- **Tests-added: No-tests-needed-because: this is a pure option-name rename with identical runtime semantics (Mongoose maps `new: true` → `returnDocument: 'after'` internally — proven by the two exist**
+- **Verified-by:** `npx tsc --noEmit` clean; `npm run test:run` → 129 files / 2104 tests passing; grep `new:\s*true` across `**/*.ts` returns zero matches post-change.
