@@ -653,3 +653,38 @@
 - **Root-cause:** post-commit audit hook appended commit metadata; post-
 - **No-tests-needed-because: doc + audit log append only.**
 - **Verified-by:** git diff shows 2-line delta per doc + one log append.
+
+### 2026-04-18 16:51:06 +0000 · `1bb5178` · Claude
+- **Subject:** perf(interview): parallelize bootstrap + keep Mongo warm (finishes the 25s delay fix)
+- **Files:** 4 changed, 0 test file(s)
+- **Root-cause:** useInterview bootstrap serialized work that had no data
+- **Tests-added: none.**
+- **Verified-by:** (1) npx tsc --noEmit clean, (2) npx vitest run on
+
+### 2026-04-18 17:03:24 +0000 · `475b9bc` · Claude
+- **Subject:** revert(interview): remove wasted Q0 prefetch (Codex #290 P1)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** misread of runInterviewLoop's starting index. Line 2088
+- **Tests-added: none.**
+- **Verified-by:** (1) npx tsc --noEmit clean, (2) vitest run on the
+
+### 2026-04-18 17:08:09 +0000 · `d7989bb` · Claude
+- **Subject:** hook(pre-edit): fail closed when cypher/jq parse yields no rows (Codex #290 P1-2)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** `END { print total+0 }` conflates "zero rows parsed"
+- **Tests-added: none (shell).**
+- **Verified-by:** (1) bash -n .claude/hooks/pre-edit-hotpath.sh → OK,
+
+### 2026-04-18 17:14:56 +0000 · `fe070b3` · Claude
+- **Subject:** fix(interview): gate mount warm-up on config presence (Codex #290 P2)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the original mount useEffect optimized for the happy
+- **Tests-added: none.**
+- **Verified-by:** (1) npx tsc --noEmit clean, (2) vitest run on the
+
+### 2026-04-18 17:21:25 +0000 · `6ff8850` · Claude
+- **Subject:** revert(interview): remove mount-time warmUpListening useEffect (Codex #290 P2)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** I traded a ~200ms cosmetic optimization for a real
+- **Tests-added: none.**
+- **Verified-by:** (1) `git diff main --stat` shows 0 lines changed in
