@@ -284,13 +284,20 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       // If warmed up and WebSocket is already connected, start capture immediately
       if (isWarmedUpRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
         setIsListening(true)
-        // Audio is about to flow — KeepAlive is no longer needed (PCM
-        // frames keep the socket alive). Clear the timer so we don't
-        // race a late KeepAlive with real audio data.
-        if (keepAliveTimerRef.current) {
-          clearInterval(keepAliveTimerRef.current)
-          keepAliveTimerRef.current = null
-        }
+        // Do NOT clear the KeepAlive interval here. Previous revisions
+        // assumed PCM audio frames would keep the socket alive on their
+        // own — but Deepgram confirmed (support thread, 2026-04-18) that
+        // /v1/listen idle-closes after ~12s of no data with close code
+        // 1011 + "NET-0001" reason, and the recommended mitigation is to
+        // send `{"type":"KeepAlive"}` every 3–5s regardless of audio
+        // flow. ScriptProcessorNode (deprecated) can throttle on tab
+        // backgrounding or main-thread pressure, which stalls audio long
+        // enough to trigger the idle close. KeepAlive pings are free
+        // insurance — Deepgram ignores them when audio is flowing.
+        // See R3 investigation on session 01RUySybLLDdv36aXXFbuRsr.
+        // The warmUp's onopen already started a 5s KeepAlive interval;
+        // we simply let it continue through the listening session. It
+        // will be cleared by ws.onclose / stopListening / teardown.
         // The warmUp WebSocket was created without an onmessage handler —
         // attach it now so Deepgram results are actually received.
         attachMessageHandler(wsRef.current)
@@ -305,17 +312,15 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           .then(() => {
             if (wsRef.current?.readyState === WebSocket.OPEN) {
               setIsListening(true)
-              // Same handoff cleanup as the fast path above: audio PCM
-              // will keep the socket alive on its own, so the KeepAlive
-              // interval started in warmUp's onopen must be cleared.
-              // Without this, KeepAlive pings keep firing every 5s for
-              // the entire answer alongside live audio frames — wasted
-              // protocol traffic plus a small risk of interleaved frame
-              // ordering on Deepgram's side. Codex review on PR #283.
-              if (keepAliveTimerRef.current) {
-                clearInterval(keepAliveTimerRef.current)
-                keepAliveTimerRef.current = null
-              }
+              // Same rationale as the fast path: do NOT clear KeepAlive
+              // here. Deepgram idle-closes /v1/listen after ~12s of no
+              // data (confirmed via Deepgram support 2026-04-18, close
+              // code 1011 + NET-0001). ScriptProcessorNode throttling
+              // under main-thread pressure can stall audio long enough
+              // to trigger the idle close. Let the 5s KeepAlive started
+              // by warmUp continue throughout listening — it's ignored
+              // by Deepgram when audio flows normally, and saves the
+              // connection when audio stalls.
               attachMessageHandler(wsRef.current)
               startAudioCapture(wsRef.current)
               isWarmedUpRef.current = false
@@ -684,6 +689,18 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       // (E-3.4). startListening also resets this at session start.
       reconnectAttemptsRef.current = 0
       setIsListening(true)
+      // Start KeepAlive pings against Deepgram's /v1/listen idle close
+      // (12s no-data → close 1011 + NET-0001, confirmed via Deepgram
+      // support 2026-04-18). The cold path previously had NO KeepAlive
+      // start, leaving every cold reconnect vulnerable to idle close if
+      // ScriptProcessorNode throttled even briefly. Clear any prior
+      // interval first — on reconnect this replaces a stale ref.
+      if (keepAliveTimerRef.current) clearInterval(keepAliveTimerRef.current)
+      keepAliveTimerRef.current = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          try { ws.send(JSON.stringify({ type: 'KeepAlive' })) } catch { /* ignore */ }
+        }
+      }, 5000)
       startAudioCapture(ws)
     }
 
@@ -695,6 +712,16 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     }
 
     ws.onclose = () => {
+      // Clear the KeepAlive interval tied to THIS ws. Without this,
+      // on reconnect the old interval keeps firing against a dead
+      // socket (caught by the try/catch inside setInterval but wasteful)
+      // AND ws.onopen would stack a new interval on top. finishRecognition
+      // / stopListening / unmount already clear this too — this is belt
+      // and suspenders for the reconnect case.
+      if (keepAliveTimerRef.current) {
+        clearInterval(keepAliveTimerRef.current)
+        keepAliveTimerRef.current = null
+      }
       handleDisconnect()
     }
   }
