@@ -97,19 +97,27 @@ if [ -f "$IMPACT_FILE" ]; then
   if head -c 16384 "$IMPACT_FILE" | grep -qE '^\*\*Source:\*\* GitNexus knowledge graph'; then
     HAS_SOURCE=1
   fi
-  # Payload check — the two required markers above can be forged by a
-  # 2-line hand-written stub (Codex P1 #2 on PR #287). A real artifact
-  # from scripts/gitnexus-impact.sh always contains EITHER:
+  # Payload check — the header markers alone can be forged by a 2-line
+  # hand-written stub, and a bare ```json fence can be forged with
+  # "```json\n{}\n```" (Codex P1 #3 on PR #287). A real artifact from
+  # scripts/gitnexus-impact.sh always contains EITHER:
   #   (a) the literal "no indexed symbols for this file" phrase from
   #       the empty-graph branch (lines 113-117 of the script), OR
   #   (b) a fenced ```json block from the context() output for at
-  #       least one symbol (lines 138-140 of the script).
+  #       least one symbol (lines 138-140), AND that block must
+  #       contain BOTH "incoming" and "outgoing" JSON keys — these
+  #       are always present in real gitnexus context output (even
+  #       when arrays are empty).
   # Both are hard to fake convincingly without copying the script's
-  # output, and together they cover all legitimate cases (new files
-  # with no graph entries still produce (a)).
-  if head -c 65536 "$IMPACT_FILE" | grep -qF '(no indexed symbols for this file'; then
+  # output. (a) covers legit new files with no graph entries; (b)
+  # covers files that gitnexus can actually analyze. An "empty JSON
+  # block" bypass fails (b) because `{}` has neither key.
+  BODY_SCAN="$(head -c 65536 "$IMPACT_FILE")"
+  if echo "$BODY_SCAN" | grep -qF '(no indexed symbols for this file'; then
     HAS_PAYLOAD=1
-  elif head -c 65536 "$IMPACT_FILE" | grep -qE '^```json$'; then
+  elif echo "$BODY_SCAN" | grep -qE '^```json$' \
+      && echo "$BODY_SCAN" | grep -qF '"incoming"' \
+      && echo "$BODY_SCAN" | grep -qF '"outgoing"'; then
     HAS_PAYLOAD=1
   fi
 
@@ -130,8 +138,9 @@ produced analysis. ALL THREE must be present, verbatim:
   3. A caller/callee payload — ONE of:
         • Literal phrase:   (no indexed symbols for this file
           (only when the file has no graph entries yet)
-        • A fenced block:   \`\`\`json ... \`\`\`
-          (contains the context() output per symbol)
+        • A fenced block:   \`\`\`json ... \`\`\` containing BOTH
+          "incoming" and "outgoing" JSON keys (always present in
+          real gitnexus context() output, even when arrays are empty)
 
 What your artifact shows:
   Header marker present:   $( [ $HAS_HEADER -eq 1 ] && echo yes || echo NO )
