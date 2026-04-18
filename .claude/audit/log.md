@@ -591,3 +591,10 @@
 - **Root-cause:** the v1 check conflated "waiver" with "stub". The real
 - **Tests-added: none (shell).**
 - **Verified-by:** bash -n .claude/hooks/pre-edit-hotpath.sh → OK;
+
+### 2026-04-18 14:11:34 +0000 · `2e18323` · Claude
+- **Subject:** hook(pre-edit): require caller/callee payload, not just header markers (Codex #287 P1-2)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** v2 check was necessary-but-not-sufficient. The header
+- **Tests-added: none (shell).**
+- **Verified-by:** (1) bash -n .claude/hooks/pre-edit-hotpath.sh → OK,
