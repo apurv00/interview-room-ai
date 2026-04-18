@@ -605,3 +605,10 @@
 - **Root-cause:** the v3 JSON-fence check was necessary-but-not-sufficient.
 - **Tests-added: none (shell).**
 - **Verified-by:** (1) bash -n .claude/hooks/pre-edit-hotpath.sh → OK,
+
+### 2026-04-18 14:26:42 +0000 · `a86c2ec` · Claude
+- **Subject:** hook(pre-edit): drop forgeable "no indexed symbols" phrase branch (Codex #287 P1-4)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the phrase-match branch was an attempt to handle the
+- **Tests-added: none (shell).**
+- **Verified-by:** (1) bash -n .claude/hooks/pre-edit-hotpath.sh → OK,
