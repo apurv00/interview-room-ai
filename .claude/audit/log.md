@@ -584,3 +584,10 @@
 - **Root-cause:** the prior instruction didn't warn about the specific
 - **Tests-added: none.**
 - **Verified-by:** bash -n .claude/hooks/session-start.sh → OK.
+
+### 2026-04-18 14:04:16 +0000 · `1901395` · Claude
+- **Subject:** hook(pre-edit): require real gitnexus fingerprint, not just reject "waived" (Codex #287)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the v1 check conflated "waiver" with "stub". The real
+- **Tests-added: none (shell).**
+- **Verified-by:** bash -n .claude/hooks/pre-edit-hotpath.sh → OK;
