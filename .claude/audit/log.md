@@ -542,3 +542,10 @@
 - **Files:** 15 changed, 4 test file(s)
 - **Root-cause:** createInvite generated a token and wrote its hash to the
 - **Tests-added:**
+
+### 2026-04-18 08:08:19 +0000 · `6450736` · Claude
+- **Subject:** fix(interview): first-answer capture failure + post-answer silence latency
+- **Files:** 5 changed, 2 test file(s)
+- **Root-cause:** three cooperating bugs across the STT hot path.
+- **Tests-added: modules/interview/__tests__/realtimeProsody.test.ts (new),**
+- **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts
