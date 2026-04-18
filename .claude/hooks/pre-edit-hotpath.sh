@@ -157,9 +157,17 @@ if [ -f "$IMPACT_FILE" ]; then
       # non-header rows to get total Function+Method+Class count. If all
       # three are zero, UNION gives one row of "0"; sum = 0. If counts
       # differ, UNION gives up to three rows; sum is the correct total.
+      #
+      # Fail-closed semantics (Codex P1 #2 on PR #290): awk MUST emit
+      # nothing when no numeric rows were parsed (cypher failure, jq
+      # parse error, malformed markdown). The `seen` flag tracks whether
+      # at least one integer row was observed; END only prints if seen.
+      # Empty SYMBOL_COUNT → `[ "$SYMBOL_COUNT" = "0" ]` is false →
+      # HAS_PAYLOAD stays 0 → artifact rejected. This prevents a forged
+      # phrase artifact from passing just because gitnexus is down.
       SYMBOL_COUNT="$(echo "$CYPHER_JSON" \
         | jq -r '.markdown // ""' 2>/dev/null \
-        | awk -F '|' 'NR>2 {gsub(/^ +| +$/, "", $2); if ($2 ~ /^[0-9]+$/) total += $2} END { print total+0 }' \
+        | awk -F '|' 'NR>2 {gsub(/^ +| +$/, "", $2); if ($2 ~ /^[0-9]+$/) {total += $2; seen = 1}} END { if (seen) print total+0 }' \
         2>/dev/null \
         || echo "")"
       # Accept only if the graph confirms zero indexed symbols for
