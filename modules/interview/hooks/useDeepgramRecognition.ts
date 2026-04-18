@@ -284,13 +284,20 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       // If warmed up and WebSocket is already connected, start capture immediately
       if (isWarmedUpRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
         setIsListening(true)
-        // Audio is about to flow — KeepAlive is no longer needed (PCM
-        // frames keep the socket alive). Clear the timer so we don't
-        // race a late KeepAlive with real audio data.
-        if (keepAliveTimerRef.current) {
-          clearInterval(keepAliveTimerRef.current)
-          keepAliveTimerRef.current = null
-        }
+        // Do NOT clear the KeepAlive interval here. Previous revisions
+        // assumed PCM audio frames would keep the socket alive on their
+        // own — but Deepgram confirmed (support thread, 2026-04-18) that
+        // /v1/listen idle-closes after ~12s of no data with close code
+        // 1011 + "NET-0001" reason, and the recommended mitigation is to
+        // send `{"type":"KeepAlive"}` every 3–5s regardless of audio
+        // flow. ScriptProcessorNode (deprecated) can throttle on tab
+        // backgrounding or main-thread pressure, which stalls audio long
+        // enough to trigger the idle close. KeepAlive pings are free
+        // insurance — Deepgram ignores them when audio is flowing.
+        // See R3 investigation on session 01RUySybLLDdv36aXXFbuRsr.
+        // The warmUp's onopen already started a 5s KeepAlive interval;
+        // we simply let it continue through the listening session. It
+        // will be cleared by ws.onclose / stopListening / teardown.
         // The warmUp WebSocket was created without an onmessage handler —
         // attach it now so Deepgram results are actually received.
         attachMessageHandler(wsRef.current)
@@ -305,17 +312,15 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           .then(() => {
             if (wsRef.current?.readyState === WebSocket.OPEN) {
               setIsListening(true)
-              // Same handoff cleanup as the fast path above: audio PCM
-              // will keep the socket alive on its own, so the KeepAlive
-              // interval started in warmUp's onopen must be cleared.
-              // Without this, KeepAlive pings keep firing every 5s for
-              // the entire answer alongside live audio frames — wasted
-              // protocol traffic plus a small risk of interleaved frame
-              // ordering on Deepgram's side. Codex review on PR #283.
-              if (keepAliveTimerRef.current) {
-                clearInterval(keepAliveTimerRef.current)
-                keepAliveTimerRef.current = null
-              }
+              // Same rationale as the fast path: do NOT clear KeepAlive
+              // here. Deepgram idle-closes /v1/listen after ~12s of no
+              // data (confirmed via Deepgram support 2026-04-18, close
+              // code 1011 + NET-0001). ScriptProcessorNode throttling
+              // under main-thread pressure can stall audio long enough
+              // to trigger the idle close. Let the 5s KeepAlive started
+              // by warmUp continue throughout listening — it's ignored
+              // by Deepgram when audio flows normally, and saves the
+              // connection when audio stalls.
               attachMessageHandler(wsRef.current)
               startAudioCapture(wsRef.current)
               isWarmedUpRef.current = false
@@ -373,37 +378,56 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           const wsUrl = 'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&filler_words=true&utterance_end_ms=2500&interim_results=true&language=en&encoding=linear16&sample_rate=16000'
           const ws = new WebSocket(wsUrl, ['token', token])
 
+          // Per-socket KeepAlive timer handle. See connectWebSocket for
+          // the full rationale — Codex P1 #2 on PR #291 pointed out the
+          // same race applies here: a delayed warmUp socket close can
+          // arrive AFTER a subsequent connectWebSocket has opened a new
+          // cold socket and installed its own timer. If warmUp's close
+          // handlers clear `keepAliveTimerRef.current` unconditionally,
+          // they wipe the new cold socket's active timer → idle-close
+          // reconnect loop returns. Closure-local handle + identity
+          // check prevents that.
+          let myKeepAliveTimer: ReturnType<typeof setInterval> | null = null
+          const clearMyKeepAlive = () => {
+            if (myKeepAliveTimer !== null) {
+              clearInterval(myKeepAliveTimer)
+              // Only null-out the shared ref if it still points at OUR
+              // timer. If a connectWebSocket reconnect already overwrote
+              // it, leave alone — we must not kill the active session.
+              if (keepAliveTimerRef.current === myKeepAliveTimer) {
+                keepAliveTimerRef.current = null
+              }
+              myKeepAliveTimer = null
+            }
+          }
+
           ws.onopen = () => {
             wsRef.current = ws
             isWarmedUpRef.current = true
             warmUpPromiseRef.current = null
             // Keep the idle socket alive. Deepgram closes /v1/listen after
-            // ~10s of no inbound data; intro TTS runs 12s+ so without this
-            // ping the warm socket dies before startListening can use it.
+            // ~12s of no inbound data (confirmed via support 2026-04-18);
+            // intro TTS runs 12s+ so without this ping the warm socket
+            // dies before startListening can use it.
             if (keepAliveTimerRef.current) clearInterval(keepAliveTimerRef.current)
-            keepAliveTimerRef.current = setInterval(() => {
+            myKeepAliveTimer = setInterval(() => {
               if (ws.readyState === WebSocket.OPEN) {
                 try { ws.send(JSON.stringify({ type: 'KeepAlive' })) } catch { /* ignore */ }
               }
             }, 5000)
+            keepAliveTimerRef.current = myKeepAliveTimer
             resolve()
           }
           ws.onerror = () => {
             warmUpPromiseRef.current = null
-            if (keepAliveTimerRef.current) {
-              clearInterval(keepAliveTimerRef.current)
-              keepAliveTimerRef.current = null
-            }
+            clearMyKeepAlive()
             resolve() // Don't reject — startListening will fall back
           }
           ws.onclose = () => {
             if (isWarmedUpRef.current) {
               isWarmedUpRef.current = false
             }
-            if (keepAliveTimerRef.current) {
-              clearInterval(keepAliveTimerRef.current)
-              keepAliveTimerRef.current = null
-            }
+            clearMyKeepAlive()
           }
 
           // Timeout: if WebSocket doesn't connect within 5s, give up
@@ -411,10 +435,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             if (ws.readyState !== WebSocket.OPEN) {
               ws.close()
               warmUpPromiseRef.current = null
-              if (keepAliveTimerRef.current) {
-                clearInterval(keepAliveTimerRef.current)
-                keepAliveTimerRef.current = null
-              }
+              clearMyKeepAlive()
               resolve()
             }
           }, 5000)
@@ -677,6 +698,19 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       maybeReconnectOrFinish(token)
     }
 
+    // Per-socket KeepAlive timer handle, captured in the ws's closure.
+    // Using a local (not `keepAliveTimerRef.current` directly) so that a
+    // late ws.onclose from the OLD socket after reconnect doesn't wipe
+    // the NEW socket's active timer. Codex P1 on PR #291. If we only
+    // scoped via the shared ref, the following race breaks the fix:
+    //   1. old ws fires onerror → handleDisconnect → reconnect → new ws
+    //   2. new ws.onopen sets keepAliveTimerRef.current = newTimer
+    //   3. old ws.onclose arrives LATE, sees keepAliveTimerRef.current,
+    //      clears it — silently killing the new socket's pings
+    //   4. new socket then idle-closes again, reintroducing R3
+    // Closure-local `myKeepAliveTimer` pins cleanup to THIS ws.
+    let myKeepAliveTimer: ReturnType<typeof setInterval> | null = null
+
     ws.onopen = () => {
       console.log('[Deepgram] WebSocket connected')
       // Refresh the reconnect budget on a successful open so a second
@@ -684,6 +718,19 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       // (E-3.4). startListening also resets this at session start.
       reconnectAttemptsRef.current = 0
       setIsListening(true)
+      // Start KeepAlive pings against Deepgram's /v1/listen idle close
+      // (12s no-data → close 1011 + NET-0001, confirmed via Deepgram
+      // support 2026-04-18). The cold path previously had NO KeepAlive
+      // start, leaving every cold reconnect vulnerable to idle close if
+      // ScriptProcessorNode throttled even briefly. Clear any prior
+      // interval first — on reconnect this replaces a stale ref.
+      if (keepAliveTimerRef.current) clearInterval(keepAliveTimerRef.current)
+      myKeepAliveTimer = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          try { ws.send(JSON.stringify({ type: 'KeepAlive' })) } catch { /* ignore */ }
+        }
+      }, 5000)
+      keepAliveTimerRef.current = myKeepAliveTimer
       startAudioCapture(ws)
     }
 
@@ -695,6 +742,19 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     }
 
     ws.onclose = () => {
+      // Clear THIS ws's KeepAlive interval. Uses the closure-local
+      // handle, not the shared ref, so a late-arriving close from a
+      // stale socket after reconnect cannot wipe the new socket's
+      // active timer (Codex race). Only null-out the shared ref when
+      // it still points at OUR timer — if a reconnect has already
+      // overwritten it, leave it alone.
+      if (myKeepAliveTimer !== null) {
+        clearInterval(myKeepAliveTimer)
+        if (keepAliveTimerRef.current === myKeepAliveTimer) {
+          keepAliveTimerRef.current = null
+        }
+        myKeepAliveTimer = null
+      }
       handleDisconnect()
     }
   }

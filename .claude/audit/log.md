@@ -688,3 +688,24 @@
 - **Root-cause:** I traded a ~200ms cosmetic optimization for a real
 - **Tests-added: none.**
 - **Verified-by:** (1) `git diff main --stat` shows 0 lines changed in
+
+### 2026-04-18 18:14:10 +0000 · `53c9f38` · Claude
+- **Subject:** fix(interview): keep Deepgram KeepAlive running during listening (R3 reconnect fix)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** Deepgram /v1/listen idle-closes after ~12s no-data;
+- **Tests-added: two existing tests ("KeepAlive stops once startListening**
+- **Verified-by:** (1) npx tsc --noEmit clean, (2) npx vitest run on the
+
+### 2026-04-18 18:18:34 +0000 · `43d7989` · Claude
+- **Subject:** fix(interview): scope KeepAlive cleanup to the closing socket (Codex #291 P1)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the original PR #291 fix shared the timer handle via
+- **Tests-added: none.**
+- **Verified-by:** (1) npx tsc --noEmit clean, (2) npx vitest run on
+
+### 2026-04-18 18:23:50 +0000 · `57d0a27` · Claude
+- **Subject:** fix(interview): scope warm-up KeepAlive cleanup to its own socket (Codex #291 P1-2)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the closure-local scoping fix I applied in the prior
+- **Tests-added: none.**
+- **Verified-by:** (1) npx tsc --noEmit clean, (2) npx vitest run on

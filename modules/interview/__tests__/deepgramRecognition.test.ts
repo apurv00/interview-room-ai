@@ -685,7 +685,18 @@ describe('useDeepgramRecognition', () => {
     expect(mockWsInstance!.send).toHaveBeenCalledTimes(3)
   })
 
-  it('KeepAlive stops once startListening takes over the warm socket', async () => {
+  it('KeepAlive continues through the fast-path listening handoff', async () => {
+    // Per Deepgram support (2026-04-18): /v1/listen idle-closes after
+    // ~12s of no data with close code 1011 + NET-0001, and the
+    // recommended mitigation is to send `{"type":"KeepAlive"}` every
+    // 3-5s regardless of audio flow. ScriptProcessorNode (deprecated)
+    // can throttle on tab backgrounding or main-thread pressure, which
+    // stalls audio long enough to trigger the idle close — exactly the
+    // R3 reconnect pattern observed in session 01RUySybLLDdv36aXXFbuRsr.
+    //
+    // Replaces the PR #283 test which asserted the OPPOSITE behavior
+    // (KeepAlive cleared once audio takes over). That optimization was
+    // premature — Deepgram explicitly recommends KeepAlive during audio.
     const { result } = renderHook(() => useDeepgramRecognition())
     const onComplete = vi.fn()
 
@@ -697,26 +708,31 @@ describe('useDeepgramRecognition', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
     expect(mockWsInstance!.send).toHaveBeenCalledTimes(1)
 
-    // startListening takes over — audio will keep the socket alive now
+    // startListening takes over via the fast path
     await act(async () => {
       result.current.startListening(onComplete)
       await vi.advanceTimersByTimeAsync(10)
     })
 
-    // Advance another 10s; no new KeepAlive pings should fire.
-    // (mockWsInstance.send is also used for audio PCM, but the MockAudioContext
-    // never triggers onaudioprocess in tests, so any send() call here would
-    // be a KeepAlive leak.)
     const beforeCount = mockWsInstance!.send.mock.calls.length
+
+    // Advance 10s — we expect TWO more KeepAlive pings (at t+5s and
+    // t+10s from the listening-start timestamp). Test mic is mocked so
+    // onaudioprocess never fires — any send() calls here are KeepAlive.
     await act(async () => { await vi.advanceTimersByTimeAsync(10000) })
-    expect(mockWsInstance!.send.mock.calls.length).toBe(beforeCount)
+
+    const afterCount = mockWsInstance!.send.mock.calls.length
+    // ≥1 new ping in the 10s window (exact count depends on timer
+    // alignment relative to the handoff; 1-2 new pings is correct).
+    expect(afterCount).toBeGreaterThan(beforeCount)
   })
 
-  it('KeepAlive stops when startListening takes over via the slow warm-up handoff', async () => {
-    // Regression for Codex review on PR #283: the fast path (isWarmedUp &&
-    // readyState=OPEN) cleared keepAliveTimerRef, but the slow path that
-    // awaits warmUpPromiseRef did not. KeepAlive pings leaked through
-    // the entire listening session alongside real audio frames.
+  it('KeepAlive continues through the slow warm-up handoff path', async () => {
+    // Companion to the fast-path test above. The slow path (startListening
+    // called BEFORE ws.onopen fires) awaits warmUpPromiseRef. Previous
+    // PR #283 revision cleared KeepAlive on this path too; Deepgram's
+    // support confirmation (2026-04-18) inverts that decision — keep
+    // pings flowing through listening to defeat the 12s idle-close.
     const { result } = renderHook(() => useDeepgramRecognition())
     const onComplete = vi.fn()
 
@@ -729,20 +745,18 @@ describe('useDeepgramRecognition', () => {
     // startListening called BEFORE the WS opens → slow-path handoff
     act(() => { result.current.startListening(onComplete) })
 
-    // NOW the WS opens — triggers the warmUpPromise resolution,
-    // which should also clear the KeepAlive interval.
+    // NOW the WS opens — triggers the warmUpPromise resolution which
+    // should NOT clear the KeepAlive interval (new post-fix behavior).
     act(() => { mockWsInstance!.simulateOpen() })
     await act(async () => { await vi.advanceTimersByTimeAsync(10) })
 
-    // Capture send() count right after handoff (there may have been
-    // one KeepAlive fired between onopen and the promise callback).
     const beforeCount = mockWsInstance!.send.mock.calls.length
 
-    // Advance 10s — well past the 5s KeepAlive interval. If the timer
-    // leaked (pre-fix behavior), we'd see 2+ new send() calls here.
+    // Advance 10s — expect at least 1 KeepAlive ping to fire through
+    // the handoff. Previous revision (cleared interval) would see 0.
     await act(async () => { await vi.advanceTimersByTimeAsync(10000) })
 
-    expect(mockWsInstance!.send.mock.calls.length).toBe(beforeCount)
+    expect(mockWsInstance!.send.mock.calls.length).toBeGreaterThan(beforeCount)
   })
 
   it('UtteranceEnd grace is 3000ms for short answers (was 4000ms)', async () => {
