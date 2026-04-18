@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { wallClockMsToAudioSeconds } from '@interview/audio/recordingClock'
+import { appendTranscriptWithoutDuplicates } from '@interview/audio/transcriptAppend'
 import type {
   SpeechRecognitionResult,
   LiveTranscriptWord,
@@ -449,9 +450,16 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
 
           if (isFinal && transcript) {
 
-            finalTextRef.current = finalTextRef.current
-              ? `${finalTextRef.current} ${transcript}`
-              : transcript
+            // Deepgram's endpointer occasionally emits two successive
+            // is_final packets whose transcripts overlap at the seam
+            // (final1="Oh," then final2="Oh, So NorthStar was"). Raw
+            // concatenation produced the word-doubling seen in session
+            // 69e36b369c13dfe7e7ea90a3. Non-overlapping appends are
+            // byte-identical to the previous `${a} ${b}` form.
+            finalTextRef.current = appendTranscriptWithoutDuplicates(
+              finalTextRef.current,
+              transcript,
+            )
 
             const rawWords = data.channel?.alternatives?.[0]?.words as
               | Array<{ word: string; start: number; end: number; confidence?: number }>

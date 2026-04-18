@@ -1,0 +1,71 @@
+/**
+ * Append an incoming Deepgram `is_final` transcript to an accumulating
+ * buffer, stripping any word-aligned prefix overlap with the existing
+ * tail.
+ *
+ * Deepgram's streaming endpointer occasionally emits two successive
+ * `is_final: true` packets whose transcripts overlap at the seam. E.g.:
+ *
+ *   final 1 transcript: "Oh,"
+ *   final 2 transcript: "Oh, So NorthStar was"
+ *   final 3 transcript: "NorthStar was the user."
+ *
+ * Naive concatenation with a single space produced
+ *   "Oh, Oh, So NorthStar was NorthStar was the user."
+ * — the doubled-word pattern seen in production session
+ * 69e36b369c13dfe7e7ea90a3. This helper finds the longest word-aligned
+ * suffix of `existing` that matches the prefix of `incoming` (case-
+ * and trailing-punctuation-insensitive), drops that prefix from
+ * `incoming`, and appends what remains.
+ *
+ * Non-overlapping calls are byte-identical to the previous
+ * `${existing} ${incoming}` concatenation — the helper only modifies
+ * behavior when an overlap actually exists.
+ */
+export function appendTranscriptWithoutDuplicates(
+  existing: string,
+  incoming: string,
+): string {
+  const existingTrimmed = existing.trim()
+  const incomingTrimmed = incoming.trim()
+  if (!existingTrimmed) return incomingTrimmed
+  if (!incomingTrimmed) return existingTrimmed
+
+  const existingWords = existingTrimmed.split(/\s+/)
+  const incomingWords = incomingTrimmed.split(/\s+/)
+  const maxOverlap = Math.min(existingWords.length, incomingWords.length)
+
+  let overlapLen = 0
+  for (let k = maxOverlap; k > 0; k--) {
+    const tailStart = existingWords.length - k
+    let matches = true
+    for (let i = 0; i < k; i++) {
+      if (normalizeWord(existingWords[tailStart + i]) !== normalizeWord(incomingWords[i])) {
+        matches = false
+        break
+      }
+    }
+    if (matches) {
+      overlapLen = k
+      break
+    }
+  }
+
+  if (overlapLen === 0) {
+    return `${existingTrimmed} ${incomingTrimmed}`
+  }
+
+  const remaining = incomingWords.slice(overlapLen)
+  if (remaining.length === 0) return existingTrimmed
+  return `${existingTrimmed} ${remaining.join(' ')}`
+}
+
+/**
+ * Tolerant of the two variations Deepgram commonly produces across
+ * overlapping finals: case differences ("Oh" vs "oh") and trailing
+ * punctuation ("was" vs "was,"). Internal punctuation (apostrophes)
+ * is preserved — "don't" ≠ "dont".
+ */
+function normalizeWord(word: string): string {
+  return word.toLowerCase().replace(/[.,!?;:]+$/, '')
+}

@@ -839,4 +839,43 @@ describe('useDeepgramRecognition', () => {
 
     expect(onCaptureReady).toHaveBeenCalledTimes(1)
   })
+
+  it('de-duplicates overlapping is_final transcripts from Deepgram (prod session 69e36b369c13dfe7e7ea90a3)', async () => {
+    // Regression for the "Oh, Oh, So So NorthStar was NorthStar was..."
+    // word-doubling reported in production. Deepgram occasionally emits
+    // two successive is_final packets whose transcripts overlap at the
+    // seam. Raw concatenation doubled the overlapping words; the new
+    // appendTranscriptWithoutDuplicates helper strips word-aligned
+    // prefix overlap before concat. See transcriptAppend.ts.
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    act(() => { mockWsInstance!.simulateOpen() })
+
+    await act(async () => {
+      result.current.startListening(onComplete)
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    // Exact overlapping-final sequence captured from the production log.
+    await act(async () => {
+      mockWsInstance!.simulateMessage(makeResult('Oh,', true))
+      mockWsInstance!.simulateMessage(makeResult('Oh, So NorthStar was', true))
+      mockWsInstance!.simulateMessage(makeResult('NorthStar was the user.', true))
+    })
+
+    await act(async () => {
+      mockWsInstance!.simulateMessage(makeUtteranceEnd())
+      await vi.advanceTimersByTimeAsync(3500)
+    })
+
+    expect(onComplete).toHaveBeenCalledTimes(1)
+    const completedText = onComplete.mock.calls[0][0].text as string
+    expect(completedText).toBe('Oh, So NorthStar was the user.')
+    // Negative assertions — the bug signatures must NOT appear.
+    expect(completedText).not.toMatch(/\bOh, Oh,/)
+    expect(completedText).not.toMatch(/\bNorthStar was NorthStar was\b/)
+  })
 })
