@@ -169,7 +169,11 @@ export default withAuth(
           pathname.startsWith('/resources') ||
           // Public scorecard pages
           pathname.startsWith('/scorecard') ||
-          pathname.startsWith('/api/public')
+          pathname.startsWith('/api/public') ||
+          // Candidate invite OTP flow is auth-entry-point (user is not
+          // signed in yet). Token + OTP are the gates — not NextAuth.
+          pathname.startsWith('/invite/') ||
+          pathname.startsWith('/api/invite/')
         ) {
           return true
         }

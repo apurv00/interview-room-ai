@@ -1,12 +1,14 @@
 import type { NextAuthOptions } from 'next-auth'
 import GoogleProvider from 'next-auth/providers/google'
 import GitHubProvider from 'next-auth/providers/github'
+import CredentialsProvider from 'next-auth/providers/credentials'
 import { MongoDBAdapter } from '@auth/mongodb-adapter'
 import type { Adapter } from 'next-auth/adapters'
 import { connectDB } from '@shared/db/connection'
 import { User } from '@shared/db/models'
 import clientPromise from '@shared/db/mongoClient'
 import { authLogger } from '@shared/logger'
+import { redeemAuthTicket } from '@b2b/services/inviteTicketService'
 
 // Fail fast if NEXTAUTH_SECRET is missing or too short in production.
 // Without a proper secret, JWTs can be forged and sessions hijacked.
@@ -51,6 +53,50 @@ export const authOptions: NextAuthOptions = {
           }),
         ]
       : []),
+    // Candidate invite OTP. The `ticket` credential is minted by
+    // /api/invite/[sessionId]/verify-otp after a successful OTP check; this
+    // provider's only job is to redeem the ticket and hand NextAuth a user
+    // record so the session cookie gets issued. No passwords, no form fields.
+    CredentialsProvider({
+      id: 'invite-otp',
+      name: 'Interview invite',
+      credentials: {
+        ticket: { label: 'Ticket', type: 'text' },
+      },
+      async authorize(credentials) {
+        const ticket = credentials?.ticket
+        if (!ticket || typeof ticket !== 'string') return null
+
+        const payload = await redeemAuthTicket(ticket)
+        if (!payload) {
+          authLogger.warn('invite-otp: ticket redemption failed')
+          return null
+        }
+
+        try {
+          await connectDB()
+          const dbUser = await User.findById(payload.userId).select(
+            '_id email name image',
+          )
+          if (!dbUser) {
+            authLogger.error(
+              { userId: payload.userId },
+              'invite-otp: user vanished between ticket issue and redemption',
+            )
+            return null
+          }
+          return {
+            id: dbUser._id.toString(),
+            email: dbUser.email,
+            name: dbUser.name ?? dbUser.email,
+            image: dbUser.image ?? undefined,
+          }
+        } catch (err) {
+          authLogger.error({ err }, 'invite-otp: user lookup failed')
+          return null
+        }
+      },
+    }),
   ],
 
   callbacks: {
