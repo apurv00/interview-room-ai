@@ -702,3 +702,10 @@
 - **Root-cause:** the original PR #291 fix shared the timer handle via
 - **Tests-added: none.**
 - **Verified-by:** (1) npx tsc --noEmit clean, (2) npx vitest run on
+
+### 2026-04-18 18:23:50 +0000 · `57d0a27` · Claude
+- **Subject:** fix(interview): scope warm-up KeepAlive cleanup to its own socket (Codex #291 P1-2)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the closure-local scoping fix I applied in the prior
+- **Tests-added: none.**
+- **Verified-by:** (1) npx tsc --noEmit clean, (2) npx vitest run on
