@@ -563,3 +563,10 @@
 - **Root-cause:** lifecycle handler only ran in one of two warm-up handoff
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
 - **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts
+
+### 2026-04-18 13:22:23 +0000 · `0cc0b15` · Claude
+- **Subject:** hook(pre-edit): close manual-waiver loophole; require real gitnexus artifact
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the hook advertised its own bypass, lowering the effort
+- **Tests-added: none.**
+- **Verified-by:** (1) bash -n .claude/hooks/pre-edit-hotpath.sh → OK,
