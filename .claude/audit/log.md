@@ -556,3 +556,10 @@
 - **Root-cause:** the audit/accountability layer was theatre. Three concrete
 - **Tests-added: No-tests-needed-because: the enforcement layer is shell**
 - **Verified-by:** Manual harness simulation documented above plus live run
+
+### 2026-04-18 07:34:53 +0000 · `c6ede3b` · Claude
+- **Subject:** chore: update gitnexus index stats after re-analyze
+- **Files:** 2 changed, 0 test file(s)
+- **Root-cause:** `gitnexus analyze` auto-updates the symbol/edge counts
+- **No-tests-needed-because: auto-generated stat line, no logic change.**
+- **Verified-by:** git diff confirms only the count string changed in both files.
