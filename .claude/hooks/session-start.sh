@@ -76,12 +76,47 @@ cat <<EOF
 │  • Commits must include: Root-cause, Symbols-modified,         │
 │    Tests-added|No-tests-needed-because, Verified-by.           │
 │                                                                │
-│  • gitnexus MCP server is registered in .mcp.json so the       │
-│    gitnexus_impact / gitnexus_context tools are callable       │
-│    every session without manual setup.                         │
+│  • MANUAL WAIVER STUBS (# Impact: waived ...) ARE BLOCKED      │
+│    by the pre-edit hook. No bypass.                            │
 │                                                                │
 │  Rules: CLAUDE.md — HOT PATH + Commit Accountability           │
 ╰────────────────────────────────────────────────────────────────╯
+
+────────────────────────────────────────────────────────────────────
+🔧 MANDATORY FIRST ACTION — LOAD GITNEXUS MCP TOOLS
+────────────────────────────────────────────────────────────────────
+The gitnexus_* MCP tools are deferred (not pre-loaded with schemas)
+to keep the initial tool list small. Before ANY code exploration or
+edit, load their schemas via ToolSearch. Paste this exact call:
+
+  ToolSearch({
+    query: "select:mcp__gitnexus__impact,mcp__gitnexus__context,mcp__gitnexus__query,mcp__gitnexus__detect_changes,mcp__gitnexus__list_repos,mcp__gitnexus__cypher",
+    max_results: 6
+  })
+
+Then, as a smoke test before your first edit, call:
+
+  mcp__gitnexus__list_repos()
+
+If it returns []: the graph index is missing. STOP and run
+  npx gitnexus analyze 2>&1 | tee /tmp/gitnexus-analyze.log
+
+KNOWN HANG: the CLI is reported to hang while "finding relations.csv"
+on this repo. If /tmp/gitnexus-analyze.log shows it parked on that
+step for >2 minutes:
+  1. pkill -f 'gitnexus analyze'
+  2. ls -la .gitnexus/csv/      # inspect partial state
+  3. rm -rf .gitnexus/           # clean slate
+  4. ASK THE USER before retrying — do not loop on restart alone.
+     They have context on what triggers this hang that you don't.
+
+Do NOT edit code while the index is absent — the pre-edit hook will
+block you and manually-written waiver stubs (# Impact: waived ...)
+are now rejected.
+
+Skipping this step is the failure mode that wasted an entire session
+on 2026-04-18 (session 01RUySybLLDdv36aXXFbuRsr). Do not repeat it.
+────────────────────────────────────────────────────────────────────
 EOF
 
 for w in "${WARNS[@]:-}"; do
