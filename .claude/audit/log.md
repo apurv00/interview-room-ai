@@ -688,3 +688,10 @@
 - **Root-cause:** I traded a ~200ms cosmetic optimization for a real
 - **Tests-added: none.**
 - **Verified-by:** (1) `git diff main --stat` shows 0 lines changed in
+
+### 2026-04-18 18:14:10 +0000 · `53c9f38` · Claude
+- **Subject:** fix(interview): keep Deepgram KeepAlive running during listening (R3 reconnect fix)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** Deepgram /v1/listen idle-closes after ~12s no-data;
+- **Tests-added: two existing tests ("KeepAlive stops once startListening**
+- **Verified-by:** (1) npx tsc --noEmit clean, (2) npx vitest run on the
