@@ -674,3 +674,10 @@
 - **Root-cause:** `END { print total+0 }` conflates "zero rows parsed"
 - **Tests-added: none (shell).**
 - **Verified-by:** (1) bash -n .claude/hooks/pre-edit-hotpath.sh → OK,
+
+### 2026-04-18 17:14:56 +0000 · `fe070b3` · Claude
+- **Subject:** fix(interview): gate mount warm-up on config presence (Codex #290 P2)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the original mount useEffect optimized for the happy
+- **Tests-added: none.**
+- **Verified-by:** (1) npx tsc --noEmit clean, (2) vitest run on the
