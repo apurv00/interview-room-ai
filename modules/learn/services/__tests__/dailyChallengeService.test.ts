@@ -364,7 +364,7 @@ describe('dailyChallengeService', () => {
       expect(mockDailyChallengeFindOneAndUpdate).toHaveBeenCalledWith(
         { date: '2026-03-16' },
         { $inc: { participantCount: 1 } },
-        { new: true },
+        { returnDocument: 'after' },
       )
     })
 
