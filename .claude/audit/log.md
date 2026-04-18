@@ -639,3 +639,10 @@
 - **Root-cause:** merge needed because two unrelated PRs (#287, #288) landed
 - **Tests-added: none — already covered by the merged-in branches'**
 - **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts
+
+### 2026-04-18 15:33:41 +0000 · `cd73666` · Claude
+- **Subject:** perf(db): remove per-cold-start user migrations + bump Mongo timeout (fixes 25s interview start)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the `runMigrations` function added in b275c11 was
+- **Tests-added: none.**
+- **Verified-by:** (1) `npx tsc --noEmit` clean, (2) `npx vitest run
