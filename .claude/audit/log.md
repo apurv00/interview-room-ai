@@ -564,6 +564,19 @@
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
 - **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts
 
+### 2026-04-18 12:54:19 +0000 · `030d346` · Claude
+- **Subject:** instr(interview): capture Deepgram packet shapes for root-cause investigation
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** #285's dedupe was shipped without confirming what
+- **Tests-added: one new integration test in deepgramRecognition.test.ts**
+- **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts
+
+### 2026-04-18 13:03:35 +0000 · `0610a8c` · Claude
+- **Subject:** fix(interview): gate __deepgramDebug behind env+URL flag (Codex #286)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the original effect gated only on NODE_ENV !== 'test',
+- **Tests-added: existing 18 tests pass unchanged (NODE_ENV === 'test'**
+- **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts
 ### 2026-04-18 13:22:23 +0000 · `0cc0b15` · Claude
 - **Subject:** hook(pre-edit): close manual-waiver loophole; require real gitnexus artifact
 - **Files:** 1 changed, 0 test file(s)
@@ -619,3 +632,10 @@
 - **Root-cause:** PR #288 v1 conflated "phrase is forgeable in isolation"
 - **Tests-added: none (shell).**
 - **Verified-by:** (1) bash -n .claude/hooks/pre-edit-hotpath.sh → OK,
+
+### 2026-04-18 14:41:31 +0000 · `e10bc22` · Claude
+- **Subject:** Merge branch 'main' into claude/deepgram-packet-instrumentation
+- **Files:** 3 changed, 0 test file(s)
+- **Root-cause:** merge needed because two unrelated PRs (#287, #288) landed
+- **Tests-added: none — already covered by the merged-in branches'**
+- **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts
