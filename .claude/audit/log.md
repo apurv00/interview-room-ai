@@ -632,3 +632,10 @@
 - **Root-cause:** PR #288 v1 conflated "phrase is forgeable in isolation"
 - **Tests-added: none (shell).**
 - **Verified-by:** (1) bash -n .claude/hooks/pre-edit-hotpath.sh → OK,
+
+### 2026-04-18 14:41:31 +0000 · `e10bc22` · Claude
+- **Subject:** Merge branch 'main' into claude/deepgram-packet-instrumentation
+- **Files:** 3 changed, 0 test file(s)
+- **Root-cause:** merge needed because two unrelated PRs (#287, #288) landed
+- **Tests-added: none — already covered by the merged-in branches'**
+- **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts
