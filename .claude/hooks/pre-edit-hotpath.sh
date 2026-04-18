@@ -90,14 +90,30 @@ if [ -f "$IMPACT_FILE" ]; then
   FIRST_NONEMPTY="$(grep -m1 -E '[^[:space:]]' "$IMPACT_FILE" 2>/dev/null || echo "")"
   HAS_HEADER=0
   HAS_SOURCE=0
+  HAS_PAYLOAD=0
   if echo "$FIRST_NONEMPTY" | grep -qE '^# Impact Analysis — '; then
     HAS_HEADER=1
   fi
-  if head -c 8192 "$IMPACT_FILE" | grep -qE '^\*\*Source:\*\* GitNexus knowledge graph'; then
+  if head -c 16384 "$IMPACT_FILE" | grep -qE '^\*\*Source:\*\* GitNexus knowledge graph'; then
     HAS_SOURCE=1
   fi
+  # Payload check — the two required markers above can be forged by a
+  # 2-line hand-written stub (Codex P1 #2 on PR #287). A real artifact
+  # from scripts/gitnexus-impact.sh always contains EITHER:
+  #   (a) the literal "no indexed symbols for this file" phrase from
+  #       the empty-graph branch (lines 113-117 of the script), OR
+  #   (b) a fenced ```json block from the context() output for at
+  #       least one symbol (lines 138-140 of the script).
+  # Both are hard to fake convincingly without copying the script's
+  # output, and together they cover all legitimate cases (new files
+  # with no graph entries still produce (a)).
+  if head -c 65536 "$IMPACT_FILE" | grep -qF '(no indexed symbols for this file'; then
+    HAS_PAYLOAD=1
+  elif head -c 65536 "$IMPACT_FILE" | grep -qE '^```json$'; then
+    HAS_PAYLOAD=1
+  fi
 
-  if [ $HAS_HEADER -eq 0 ] || [ $HAS_SOURCE -eq 0 ]; then
+  if [ $HAS_HEADER -eq 0 ] || [ $HAS_SOURCE -eq 0 ] || [ $HAS_PAYLOAD -eq 0 ]; then
     cat >&2 <<EOF
 ╔════════════════════════════════════════════════════════════════╗
 ║  BLOCKED — Artifact is not a real gitnexus output             ║
@@ -107,26 +123,33 @@ File: $REL_PATH
 Artifact: $IMPACT_FILE
 
 The artifact does not match the fingerprint of a real gitnexus-
-produced analysis. Required, verbatim, in this file:
+produced analysis. ALL THREE must be present, verbatim:
 
-  1. First non-empty line:  # Impact Analysis — <rel-path>
-  2. Somewhere in the body: **Source:** GitNexus knowledge graph (\`.gitnexus/lbug\`)
+  1. First non-empty line:   # Impact Analysis — <rel-path>
+  2. Somewhere in the body:  **Source:** GitNexus knowledge graph (\`.gitnexus/lbug\`)
+  3. A caller/callee payload — ONE of:
+        • Literal phrase:   (no indexed symbols for this file
+          (only when the file has no graph entries yet)
+        • A fenced block:   \`\`\`json ... \`\`\`
+          (contains the context() output per symbol)
 
 What your artifact shows:
-  Header marker present:  $( [ $HAS_HEADER -eq 1 ] && echo yes || echo NO )
-  Source marker present:  $( [ $HAS_SOURCE -eq 1 ] && echo yes || echo NO )
+  Header marker present:   $( [ $HAS_HEADER -eq 1 ] && echo yes || echo NO )
+  Source marker present:   $( [ $HAS_SOURCE -eq 1 ] && echo yes || echo NO )
+  Payload section present: $( [ $HAS_PAYLOAD -eq 1 ] && echo yes || echo NO )
 
 Hand-written stubs — including "# Impact: waived", "# Impact: pending",
-empty files, blank-line-prefixed headers, or any other ad-hoc text —
-are rejected because they have no caller data. This was the loophole
-that wasted session 01RUySybLLDdv36aXXFbuRsr.
+2-line header+source forgeries, empty files, or any other ad-hoc
+content lacking a caller/callee payload — are rejected because they
+provide zero d=1 blast-radius data. This was the loophole that
+wasted session 01RUySybLLDdv36aXXFbuRsr.
 
 Generate a real artifact with one of:
 
   ./scripts/gitnexus-impact.sh "$REL_PATH"
 
-  # or via the MCP server (prepend the two required marker lines
-  # above to whatever content you paste in):
+  # or via the MCP server (you must write the full real format,
+  # including the payload section, not just the two header lines):
   ToolSearch({ query: "select:mcp__gitnexus__impact", max_results: 2 })
   mcp__gitnexus__impact({ target: "<symbol or relative file path>",
                           direction: "upstream" })
