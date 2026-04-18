@@ -570,3 +570,10 @@
 - **Root-cause:** #285's dedupe was shipped without confirming what
 - **Tests-added: one new integration test in deepgramRecognition.test.ts**
 - **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts
+
+### 2026-04-18 13:03:35 +0000 · `0610a8c` · Claude
+- **Subject:** fix(interview): gate __deepgramDebug behind env+URL flag (Codex #286)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the original effect gated only on NODE_ENV !== 'test',
+- **Tests-added: existing 18 tests pass unchanged (NODE_ENV === 'test'**
+- **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts
