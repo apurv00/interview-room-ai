@@ -667,3 +667,10 @@
 - **Root-cause:** misread of runInterviewLoop's starting index. Line 2088
 - **Tests-added: none.**
 - **Verified-by:** (1) npx tsc --noEmit clean, (2) vitest run on the
+
+### 2026-04-18 17:08:09 +0000 · `d7989bb` · Claude
+- **Subject:** hook(pre-edit): fail closed when cypher/jq parse yields no rows (Codex #290 P1-2)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** `END { print total+0 }` conflates "zero rows parsed"
+- **Tests-added: none (shell).**
+- **Verified-by:** (1) bash -n .claude/hooks/pre-edit-hotpath.sh → OK,
