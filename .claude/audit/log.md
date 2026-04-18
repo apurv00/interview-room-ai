@@ -653,3 +653,10 @@
 - **Root-cause:** post-commit audit hook appended commit metadata; post-
 - **No-tests-needed-because: doc + audit log append only.**
 - **Verified-by:** git diff shows 2-line delta per doc + one log append.
+
+### 2026-04-18 16:51:06 +0000 · `1bb5178` · Claude
+- **Subject:** perf(interview): parallelize bootstrap + keep Mongo warm (finishes the 25s delay fix)
+- **Files:** 4 changed, 0 test file(s)
+- **Root-cause:** useInterview bootstrap serialized work that had no data
+- **Tests-added: none.**
+- **Verified-by:** (1) npx tsc --noEmit clean, (2) npx vitest run on
