@@ -570,3 +570,10 @@
 - **Root-cause:** Deepgram's streaming endpointer emits successive is_final
 - **Tests-added: modules/interview/__tests__/transcriptAppend.test.ts**
 - **Verified-by:** `npm run test:run` → 2140/2140 passing (38 in the two
+
+### 2026-04-18 12:44:08 +0000 · `158567e` · Claude
+- **Subject:** fix(interview): preserve "?" + casing on full-match overlap (Codex #285)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** `remaining.length === 0` was treated as a single
+- **Tests-added: modules/interview/__tests__/transcriptAppend.test.ts**
+- **Verified-by:** npx vitest run modules/interview/__tests__/transcriptAppend.test.ts
