@@ -3,7 +3,6 @@ import mongoose from 'mongoose'
 interface CachedConnection {
   conn: typeof mongoose | null
   promise: Promise<typeof mongoose> | null
-  migrated?: boolean
 }
 
 const globalWithMongoose = global as typeof globalThis & {
@@ -15,37 +14,6 @@ if (!globalWithMongoose.mongoose) {
 }
 
 const cached = globalWithMongoose.mongoose
-
-async function runMigrations(): Promise<void> {
-  if (cached.migrated) return
-  cached.migrated = true
-
-  try {
-    const db = mongoose.connection.db
-    if (!db) return
-    // Ensure all users have unlimited interviews — handles:
-    // - Old users with limit <= 3 (original free plan)
-    // - Users whose documents predate the field (field missing)
-    // - Any user with a limit below the uncapped default
-    await db.collection('users').updateMany(
-      {
-        $or: [
-          { monthlyInterviewLimit: { $exists: false } },
-          { monthlyInterviewLimit: null },
-          { monthlyInterviewLimit: { $lt: 999999 } },
-        ],
-      },
-      { $set: { monthlyInterviewLimit: 999999 } }
-    )
-    // Also ensure monthlyInterviewsUsed exists
-    await db.collection('users').updateMany(
-      { monthlyInterviewsUsed: { $exists: false } },
-      { $set: { monthlyInterviewsUsed: 0 } }
-    )
-  } catch {
-    // Non-fatal: migration failure shouldn't block the app
-  }
-}
 
 /** Mongoose's readyState values:
  *  0 = disconnected, 1 = connected, 2 = connecting, 3 = disconnecting */
@@ -74,7 +42,11 @@ export async function connectDB(): Promise<typeof mongoose> {
     const pending = mongoose.connect(MONGODB_URI, {
       bufferCommands: false,
       maxPoolSize: 10,
-      serverSelectionTimeoutMS: 5000,
+      // Bumped from 5000 to 15000 because Atlas M0 (shared free tier) can
+      // take 10-15s to wake up from idle on cold serverless invocations.
+      // The old 5s caused `MongoServerSelectionError` outright; 15s lets
+      // the M0 cluster respond before the driver gives up.
+      serverSelectionTimeoutMS: 15000,
       socketTimeoutMS: 45000,
     })
     // Attach a no-op `.catch` so that if the caller is delayed or a
@@ -93,7 +65,6 @@ export async function connectDB(): Promise<typeof mongoose> {
     throw e
   }
 
-  await runMigrations()
-
   return cached.conn
 }
+
