@@ -646,3 +646,10 @@
 - **Root-cause:** the `runMigrations` function added in b275c11 was
 - **Tests-added: none.**
 - **Verified-by:** (1) `npx tsc --noEmit` clean, (2) `npx vitest run
+
+### 2026-04-18 15:34:11 +0000 · `ba7652b` · Claude
+- **Subject:** chore(audit): append commit cd73666 + refresh gitnexus stats in CLAUDE.md/AGENTS.md
+- **Files:** 3 changed, 0 test file(s)
+- **Root-cause:** post-commit audit hook appended commit metadata; post-
+- **No-tests-needed-because: doc + audit log append only.**
+- **Verified-by:** git diff shows 2-line delta per doc + one log append.
