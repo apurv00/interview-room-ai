@@ -59,6 +59,11 @@ vi.mock('@shared/services/scoreTelemetry', () => ({
   recordScoreDelta: vi.fn().mockResolvedValue(null),
 }))
 
+vi.mock('@shared/services/feedbackLock', () => ({
+  acquireFeedbackLock: vi.fn().mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: true }),
+  releaseFeedbackLock: vi.fn().mockResolvedValue(undefined),
+}))
+
 vi.mock('@shared/db/connection', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
 }))

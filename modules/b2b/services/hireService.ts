@@ -2,6 +2,7 @@ import mongoose from 'mongoose'
 import { connectDB } from '@shared/db/connection'
 import { User, Organization, InterviewSession, InterviewTemplate } from '@shared/db/models'
 import { sendEmail } from '@shared/services/emailService'
+import { escapeHtml } from '@shared/services/emailTemplates/htmlEscape'
 import type { Duration } from '@shared/types'
 import crypto from 'crypto'
 
@@ -253,7 +254,24 @@ export async function createInvite(
   })
 
   const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://interviewprep.guru'
-  const inviteLink = `${baseUrl}/interview?invite=${interviewSession._id}&token=${token}`
+  // Invite URL lands on the candidate-facing OTP flow. Token lives in the
+  // query string; the OTP verification step re-validates it before issuing
+  // a NextAuth session.
+  const inviteLink = `${baseUrl}/invite/${interviewSession._id}?token=${token}`
+
+  // All recruiter-controlled strings (candidateName, role, interviewType,
+  // experience) are HTML-escaped before interpolation. Without this, a
+  // recruiter could inject `<script>` via any of these fields and execute
+  // it in the candidate's email client (stored XSS — B2B audit A3).
+  const safeCandidateName = candidateName ? escapeHtml(candidateName) : null
+  const safeRole = escapeHtml(role)
+  const safeInterviewType = escapeHtml(interviewType)
+  const safeExperience = experience ? escapeHtml(experience) : ''
+  const safeDuration = escapeHtml(String(duration))
+  // inviteLink is built from our baseUrl + a crypto-random token + an
+  // ObjectId — all safe — but escape anyway in case baseUrl is ever
+  // set to an attacker-influenced value.
+  const safeInviteLink = escapeHtml(inviteLink)
 
   // Send invite email to the candidate (fire-and-forget — don't block on email failure)
   const emailSent = await sendEmail({
@@ -262,13 +280,13 @@ export async function createInvite(
     html: `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 560px; margin: 0 auto; padding: 32px 24px;">
         <h2 style="color: #0f1419; margin: 0 0 16px;">You're Invited to Interview</h2>
-        ${candidateName ? `<p style="color: #536471; margin: 0 0 12px;">Hi ${candidateName},</p>` : ''}
+        ${safeCandidateName ? `<p style="color: #536471; margin: 0 0 12px;">Hi ${safeCandidateName},</p>` : ''}
         <p style="color: #536471; margin: 0 0 24px;">
-          You've been invited to complete a <strong>${interviewType}</strong> interview for the
-          <strong>${role}</strong> role${experience ? ` (${experience} years experience)` : ''}.
-          The interview will take approximately <strong>${duration} minutes</strong>.
+          You've been invited to complete a <strong>${safeInterviewType}</strong> interview for the
+          <strong>${safeRole}</strong> role${safeExperience ? ` (${safeExperience} years experience)` : ''}.
+          The interview will take approximately <strong>${safeDuration} minutes</strong>.
         </p>
-        <a href="${inviteLink}" style="display: inline-block; background: #6366f1; color: #fff; padding: 12px 28px; border-radius: 8px; text-decoration: none; font-weight: 600;">
+        <a href="${safeInviteLink}" style="display: inline-block; background: #6366f1; color: #fff; padding: 12px 28px; border-radius: 8px; text-decoration: none; font-weight: 600;">
           Start Interview
         </a>
         <p style="color: #8b98a5; font-size: 13px; margin: 24px 0 0;">

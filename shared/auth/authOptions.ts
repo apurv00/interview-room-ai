@@ -1,12 +1,14 @@
 import type { NextAuthOptions } from 'next-auth'
 import GoogleProvider from 'next-auth/providers/google'
 import GitHubProvider from 'next-auth/providers/github'
+import CredentialsProvider from 'next-auth/providers/credentials'
 import { MongoDBAdapter } from '@auth/mongodb-adapter'
 import type { Adapter } from 'next-auth/adapters'
 import { connectDB } from '@shared/db/connection'
 import { User } from '@shared/db/models'
 import clientPromise from '@shared/db/mongoClient'
 import { authLogger } from '@shared/logger'
+import { redeemAuthTicket } from '@b2b/services/inviteTicketService'
 
 // Fail fast if NEXTAUTH_SECRET is missing or too short in production.
 // Without a proper secret, JWTs can be forged and sessions hijacked.
@@ -51,16 +53,77 @@ export const authOptions: NextAuthOptions = {
           }),
         ]
       : []),
+    // Candidate invite OTP. The `ticket` credential is minted by
+    // /api/invite/[sessionId]/verify-otp after a successful OTP check; this
+    // provider's only job is to redeem the ticket and hand NextAuth a user
+    // record so the session cookie gets issued. No passwords, no form fields.
+    CredentialsProvider({
+      id: 'invite-otp',
+      name: 'Interview invite',
+      credentials: {
+        ticket: { label: 'Ticket', type: 'text' },
+      },
+      async authorize(credentials) {
+        const ticket = credentials?.ticket
+        if (!ticket || typeof ticket !== 'string') return null
+
+        const payload = await redeemAuthTicket(ticket)
+        if (!payload) {
+          authLogger.warn('invite-otp: ticket redemption failed')
+          return null
+        }
+
+        try {
+          await connectDB()
+          const dbUser = await User.findById(payload.userId).select(
+            '_id email name image',
+          )
+          if (!dbUser) {
+            authLogger.error(
+              { userId: payload.userId },
+              'invite-otp: user vanished between ticket issue and redemption',
+            )
+            return null
+          }
+          return {
+            id: dbUser._id.toString(),
+            email: dbUser.email,
+            name: dbUser.name ?? dbUser.email,
+            image: dbUser.image ?? undefined,
+          }
+        } catch (err) {
+          authLogger.error({ err }, 'invite-otp: user lookup failed')
+          return null
+        }
+      },
+    }),
   ],
 
   callbacks: {
     async signIn({ user, account }) {
-      // Audit log every sign-in attempt for debugging identity issues
-      console.log('[AUTH] Sign-in attempt', {
+      authLogger.info({
         provider: account?.provider,
         email: user.email,
         userId: user.id,
-      })
+      }, 'Sign-in attempt')
+
+      if (!user.email || typeof user.email !== 'string') {
+        authLogger.warn(
+          { provider: account?.provider, userId: user.id },
+          'Sign-in blocked: no email on account (GitHub private email?)',
+        )
+        return false
+      }
+
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+      if (!emailRegex.test(user.email)) {
+        authLogger.warn(
+          { provider: account?.provider, email: user.email },
+          'Sign-in blocked: malformed email',
+        )
+        return false
+      }
+
       return true
     },
 
@@ -157,19 +220,34 @@ export const authOptions: NextAuthOptions = {
 
   events: {
     async createUser({ user }) {
-      await connectDB()
-      const existing = await User.findOne({ email: user.email ?? undefined })
-      if (!existing) {
-        await User.create({
-          email: user.email ?? '',
-          name: user.name || user.email?.split('@')[0] || 'User',
-          image: user.image ?? undefined,
-          emailVerified: new Date(),
-          role: 'candidate',
-          plan: 'free',
-          monthlyInterviewLimit: 999999,
-          onboardingCompleted: false,
-        })
+      try {
+        if (!user.email) {
+          authLogger.error(
+            { userId: user.id, name: user.name },
+            'createUser event: no email — cannot create Mongoose User record',
+          )
+          return
+        }
+
+        await connectDB()
+        const existing = await User.findOne({ email: user.email })
+        if (!existing) {
+          await User.create({
+            email: user.email,
+            name: user.name || user.email.split('@')[0] || 'User',
+            image: user.image ?? undefined,
+            emailVerified: new Date(),
+            role: 'candidate',
+            plan: 'free',
+            monthlyInterviewLimit: 999999,
+            onboardingCompleted: false,
+          })
+        }
+      } catch (err) {
+        authLogger.error(
+          { err, email: user.email, userId: user.id },
+          'createUser event failed — user session may lack app-level data until next sign-in',
+        )
       }
     },
   },

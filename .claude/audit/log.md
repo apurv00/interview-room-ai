@@ -522,3 +522,23 @@
 - **Root-cause:** `return promise` in an async function does not enter the
 - **Tests-added: modules/learn/__tests__/lessonGenerator.test.ts**
 - **Verified-by:** npx vitest run modules/learn/__tests__/lessonGenerator.test.ts
+
+### 2026-04-17 15:01:59 +0000 · `ddb73c8` · Claude
+- **Subject:** fix(auth,feedback): P1 audit fixes — signIn validation, createUser error handling, Redis lock fail-closed
+- **Files:** 5 changed, 3 test file(s)
+- **Root-cause:** signIn returned true unconditionally (no email validation);
+- **Tests-added: shared/__tests__/authCallbacks.test.ts (14 tests),**
+- **Verified-by:** npx vitest run — 2078 tests passing across 126 files, npx tsc --noEmit clean
+
+### 2026-04-17 16:45:30 +0000 · `10ec423` · Claude
+- **Subject:** fix(auth): add user-friendly error message for blocked sign-in on SignInForm
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** blast radius review of P1-1 (signIn validation) revealed that
+- **No-tests-needed-because: pure UI string change in a React component; the**
+- **Verified-by:** code review of errorMessage conditional chain; grep confirms
+
+### 2026-04-18 06:13:02 +0000 · `e6b7426` · Claude
+- **Subject:** feat(b2b): candidate invite OTP auth flow + fix invite email XSS
+- **Files:** 15 changed, 4 test file(s)
+- **Root-cause:** createInvite generated a token and wrote its hash to the
+- **Tests-added:**

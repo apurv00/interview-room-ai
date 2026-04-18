@@ -131,8 +131,6 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
     if (body.sessionId) {
       feedbackLock = await acquireFeedbackLock(body.sessionId)
       if (feedbackLock === null) {
-        // Another request holds the lock — the client's poll loop on
-        // session.feedback will pick up the winner's result.
         aiLogger.info(
           { sessionId: body.sessionId, userId: user.id },
           'generate-feedback: duplicate request short-circuited by idempotency lock',
@@ -143,6 +141,18 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
             message: 'Feedback generation already in progress for this session — poll session.feedback.',
           },
           { status: 202 },
+        )
+      }
+      if (!feedbackLock.acquired) {
+        aiLogger.error(
+          { sessionId: body.sessionId, userId: user.id },
+          'generate-feedback: Redis unavailable — refusing to proceed without idempotency guarantee',
+        )
+        return NextResponse.json(
+          {
+            error: 'Service temporarily unavailable — please retry in a few seconds.',
+          },
+          { status: 503 },
         )
       }
     }

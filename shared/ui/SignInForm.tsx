@@ -41,7 +41,9 @@ export default function SignInForm({ callbackUrl, headline, subcopy, errorCode }
     ? 'An account with this email already exists. Please sign in with the same provider you used originally, or try a different one.'
     : errorCode === 'CredentialsSignin'
       ? 'Email/password login has been removed. Please sign in with Google or GitHub below.'
-      : errorCode || ''
+      : errorCode === 'AccessDenied' || errorCode === 'Callback'
+        ? 'Sign-in was blocked because your account has no public email. If using GitHub, go to Settings > Emails and uncheck "Keep my email address private", then try again.'
+        : errorCode || ''
 
   return (
     <div>

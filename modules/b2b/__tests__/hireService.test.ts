@@ -297,7 +297,7 @@ describe('hireService', () => {
         candidateEmail: 'CAND@X.co',
         emailSent: true,
       })
-      expect((result as { inviteLink: string }).inviteLink).toContain('/interview?invite=sess-new&token=')
+      expect((result as { inviteLink: string }).inviteLink).toContain('/invite/sess-new?token=')
 
       // Session was created with lowercased email and a token hash
       const createArg = mockSessionCreate.mock.calls[0][0]
@@ -318,6 +318,27 @@ describe('hireService', () => {
       const result = await createInvite('u1', 'org1', inviteData)
       expect((result as { success: boolean }).success).toBe(true)
       expect((result as { emailSent: boolean }).emailSent).toBe(false)
+    })
+
+    it('HTML-escapes candidateName, role, and interviewType in the email body (B2B-A3 XSS)', async () => {
+      mockOrgFindOneAndUpdate.mockResolvedValue({ _id: 'org1' })
+      mockSessionCreate.mockResolvedValue({ _id: { toString: () => 'sess-xss' } })
+      const xssData = {
+        ...inviteData,
+        candidateName: '<script>alert(1)</script>',
+        role: '</a><img src=x onerror=alert(2)>',
+        interviewType: 'scr"ee"ning',
+      }
+      await createInvite('u1', 'org1', xssData)
+      const emailArg = mockSendEmail.mock.calls[0][0]
+      const html = emailArg.html as string
+      // None of the raw injection fragments should survive.
+      expect(html).not.toContain('<script>')
+      expect(html).not.toContain('<img src=x')
+      // The escaped forms should appear instead.
+      expect(html).toContain('&lt;script&gt;')
+      expect(html).toContain('&lt;/a&gt;')
+      expect(html).toContain('&quot;')
     })
   })
 
