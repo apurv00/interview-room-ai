@@ -71,28 +71,62 @@ AUDIT_DIR="$REPO_ROOT/.claude/audit/current"
 IMPACT_FILE="$AUDIT_DIR/impact-$SAFE_BASENAME.md"
 
 if [ -f "$IMPACT_FILE" ]; then
-  # Reject manually-written waiver stubs. A real gitnexus artifact contains
-  # either "## d=1" / "## Symbols-modified" sections OR a tool-generated
-  # summary header. Files whose body is dominated by "waived" / "waiver"
-  # language with no caller data are the loophole we closed.
-  if head -c 4096 "$IMPACT_FILE" | grep -qiE '^# Impact:[[:space:]]*waived'; then
+  # Require a real gitnexus-produced artifact.
+  #
+  # Previous attempt only rejected "^# Impact:\s*waived" (Codex P1 on PR
+  # #287): trivially bypassed with "# Impact: pending", leading whitespace,
+  # BOM, or any other hand-rolled header.
+  #
+  # Switched to a POSITIVE fingerprint: the artifact MUST contain BOTH
+  # markers that scripts/gitnexus-impact.sh always writes:
+  #   1. First non-empty line starts with "# Impact Analysis — "
+  #   2. Body contains a "**Source:** GitNexus knowledge graph" line
+  # A hand-written stub would have to fake both, at which point they're
+  # copying real output — which is the point.
+  #
+  # MCP-path users (who produce artifacts via mcp__gitnexus__impact) must
+  # prepend these two lines verbatim; trivial one-time cost, documented in
+  # the missing-artifact error path below.
+  FIRST_NONEMPTY="$(grep -m1 -E '[^[:space:]]' "$IMPACT_FILE" 2>/dev/null || echo "")"
+  HAS_HEADER=0
+  HAS_SOURCE=0
+  if echo "$FIRST_NONEMPTY" | grep -qE '^# Impact Analysis — '; then
+    HAS_HEADER=1
+  fi
+  if head -c 8192 "$IMPACT_FILE" | grep -qE '^\*\*Source:\*\* GitNexus knowledge graph'; then
+    HAS_SOURCE=1
+  fi
+
+  if [ $HAS_HEADER -eq 0 ] || [ $HAS_SOURCE -eq 0 ]; then
     cat >&2 <<EOF
 ╔════════════════════════════════════════════════════════════════╗
-║  BLOCKED — Waiver stub is no longer accepted                  ║
+║  BLOCKED — Artifact is not a real gitnexus output             ║
 ╚════════════════════════════════════════════════════════════════╝
 
 File: $REL_PATH
 Artifact: $IMPACT_FILE
 
-The artifact starts with "# Impact: waived" — that's the hand-written
-stub the old hook let through. We closed that loophole because it
-was used to skip analysis entirely.
+The artifact does not match the fingerprint of a real gitnexus-
+produced analysis. Required, verbatim, in this file:
 
-Regenerate a real artifact with one of:
+  1. First non-empty line:  # Impact Analysis — <rel-path>
+  2. Somewhere in the body: **Source:** GitNexus knowledge graph (\`.gitnexus/lbug\`)
+
+What your artifact shows:
+  Header marker present:  $( [ $HAS_HEADER -eq 1 ] && echo yes || echo NO )
+  Source marker present:  $( [ $HAS_SOURCE -eq 1 ] && echo yes || echo NO )
+
+Hand-written stubs — including "# Impact: waived", "# Impact: pending",
+empty files, blank-line-prefixed headers, or any other ad-hoc text —
+are rejected because they have no caller data. This was the loophole
+that wasted session 01RUySybLLDdv36aXXFbuRsr.
+
+Generate a real artifact with one of:
 
   ./scripts/gitnexus-impact.sh "$REL_PATH"
 
-  # or via the MCP server:
+  # or via the MCP server (prepend the two required marker lines
+  # above to whatever content you paste in):
   ToolSearch({ query: "select:mcp__gitnexus__impact", max_results: 2 })
   mcp__gitnexus__impact({ target: "<symbol or relative file path>",
                           direction: "upstream" })
