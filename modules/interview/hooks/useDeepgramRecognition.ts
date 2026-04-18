@@ -378,37 +378,56 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           const wsUrl = 'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&filler_words=true&utterance_end_ms=2500&interim_results=true&language=en&encoding=linear16&sample_rate=16000'
           const ws = new WebSocket(wsUrl, ['token', token])
 
+          // Per-socket KeepAlive timer handle. See connectWebSocket for
+          // the full rationale — Codex P1 #2 on PR #291 pointed out the
+          // same race applies here: a delayed warmUp socket close can
+          // arrive AFTER a subsequent connectWebSocket has opened a new
+          // cold socket and installed its own timer. If warmUp's close
+          // handlers clear `keepAliveTimerRef.current` unconditionally,
+          // they wipe the new cold socket's active timer → idle-close
+          // reconnect loop returns. Closure-local handle + identity
+          // check prevents that.
+          let myKeepAliveTimer: ReturnType<typeof setInterval> | null = null
+          const clearMyKeepAlive = () => {
+            if (myKeepAliveTimer !== null) {
+              clearInterval(myKeepAliveTimer)
+              // Only null-out the shared ref if it still points at OUR
+              // timer. If a connectWebSocket reconnect already overwrote
+              // it, leave alone — we must not kill the active session.
+              if (keepAliveTimerRef.current === myKeepAliveTimer) {
+                keepAliveTimerRef.current = null
+              }
+              myKeepAliveTimer = null
+            }
+          }
+
           ws.onopen = () => {
             wsRef.current = ws
             isWarmedUpRef.current = true
             warmUpPromiseRef.current = null
             // Keep the idle socket alive. Deepgram closes /v1/listen after
-            // ~10s of no inbound data; intro TTS runs 12s+ so without this
-            // ping the warm socket dies before startListening can use it.
+            // ~12s of no inbound data (confirmed via support 2026-04-18);
+            // intro TTS runs 12s+ so without this ping the warm socket
+            // dies before startListening can use it.
             if (keepAliveTimerRef.current) clearInterval(keepAliveTimerRef.current)
-            keepAliveTimerRef.current = setInterval(() => {
+            myKeepAliveTimer = setInterval(() => {
               if (ws.readyState === WebSocket.OPEN) {
                 try { ws.send(JSON.stringify({ type: 'KeepAlive' })) } catch { /* ignore */ }
               }
             }, 5000)
+            keepAliveTimerRef.current = myKeepAliveTimer
             resolve()
           }
           ws.onerror = () => {
             warmUpPromiseRef.current = null
-            if (keepAliveTimerRef.current) {
-              clearInterval(keepAliveTimerRef.current)
-              keepAliveTimerRef.current = null
-            }
+            clearMyKeepAlive()
             resolve() // Don't reject — startListening will fall back
           }
           ws.onclose = () => {
             if (isWarmedUpRef.current) {
               isWarmedUpRef.current = false
             }
-            if (keepAliveTimerRef.current) {
-              clearInterval(keepAliveTimerRef.current)
-              keepAliveTimerRef.current = null
-            }
+            clearMyKeepAlive()
           }
 
           // Timeout: if WebSocket doesn't connect within 5s, give up
@@ -416,10 +435,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             if (ws.readyState !== WebSocket.OPEN) {
               ws.close()
               warmUpPromiseRef.current = null
-              if (keepAliveTimerRef.current) {
-                clearInterval(keepAliveTimerRef.current)
-                keepAliveTimerRef.current = null
-              }
+              clearMyKeepAlive()
               resolve()
             }
           }, 5000)
