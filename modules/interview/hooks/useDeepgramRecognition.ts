@@ -682,6 +682,19 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       maybeReconnectOrFinish(token)
     }
 
+    // Per-socket KeepAlive timer handle, captured in the ws's closure.
+    // Using a local (not `keepAliveTimerRef.current` directly) so that a
+    // late ws.onclose from the OLD socket after reconnect doesn't wipe
+    // the NEW socket's active timer. Codex P1 on PR #291. If we only
+    // scoped via the shared ref, the following race breaks the fix:
+    //   1. old ws fires onerror → handleDisconnect → reconnect → new ws
+    //   2. new ws.onopen sets keepAliveTimerRef.current = newTimer
+    //   3. old ws.onclose arrives LATE, sees keepAliveTimerRef.current,
+    //      clears it — silently killing the new socket's pings
+    //   4. new socket then idle-closes again, reintroducing R3
+    // Closure-local `myKeepAliveTimer` pins cleanup to THIS ws.
+    let myKeepAliveTimer: ReturnType<typeof setInterval> | null = null
+
     ws.onopen = () => {
       console.log('[Deepgram] WebSocket connected')
       // Refresh the reconnect budget on a successful open so a second
@@ -696,11 +709,12 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       // ScriptProcessorNode throttled even briefly. Clear any prior
       // interval first — on reconnect this replaces a stale ref.
       if (keepAliveTimerRef.current) clearInterval(keepAliveTimerRef.current)
-      keepAliveTimerRef.current = setInterval(() => {
+      myKeepAliveTimer = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           try { ws.send(JSON.stringify({ type: 'KeepAlive' })) } catch { /* ignore */ }
         }
       }, 5000)
+      keepAliveTimerRef.current = myKeepAliveTimer
       startAudioCapture(ws)
     }
 
@@ -712,15 +726,18 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     }
 
     ws.onclose = () => {
-      // Clear the KeepAlive interval tied to THIS ws. Without this,
-      // on reconnect the old interval keeps firing against a dead
-      // socket (caught by the try/catch inside setInterval but wasteful)
-      // AND ws.onopen would stack a new interval on top. finishRecognition
-      // / stopListening / unmount already clear this too — this is belt
-      // and suspenders for the reconnect case.
-      if (keepAliveTimerRef.current) {
-        clearInterval(keepAliveTimerRef.current)
-        keepAliveTimerRef.current = null
+      // Clear THIS ws's KeepAlive interval. Uses the closure-local
+      // handle, not the shared ref, so a late-arriving close from a
+      // stale socket after reconnect cannot wipe the new socket's
+      // active timer (Codex race). Only null-out the shared ref when
+      // it still points at OUR timer — if a reconnect has already
+      // overwritten it, leave it alone.
+      if (myKeepAliveTimer !== null) {
+        clearInterval(myKeepAliveTimer)
+        if (keepAliveTimerRef.current === myKeepAliveTimer) {
+          keepAliveTimerRef.current = null
+        }
+        myKeepAliveTimer = null
       }
       handleDisconnect()
     }
