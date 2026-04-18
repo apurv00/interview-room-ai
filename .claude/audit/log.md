@@ -556,3 +556,10 @@
 - **Root-cause:** grace-period tuning trade-off. 2000/1200 was aggressive;
 - **Tests-added: none new — two existing tests updated in place to assert**
 - **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts
+
+### 2026-04-18 11:12:08 +0000 · `859f924` · Claude
+- **Subject:** fix(interview): clear KeepAlive on slow warm-up handoff (Codex #283)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** lifecycle handler only ran in one of two warm-up handoff
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+- **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts

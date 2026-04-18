@@ -712,6 +712,39 @@ describe('useDeepgramRecognition', () => {
     expect(mockWsInstance!.send.mock.calls.length).toBe(beforeCount)
   })
 
+  it('KeepAlive stops when startListening takes over via the slow warm-up handoff', async () => {
+    // Regression for Codex review on PR #283: the fast path (isWarmedUp &&
+    // readyState=OPEN) cleared keepAliveTimerRef, but the slow path that
+    // awaits warmUpPromiseRef did not. KeepAlive pings leaked through
+    // the entire listening session alongside real audio frames.
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+
+    // Start warm-up but do NOT simulate onopen yet — keeps
+    // warmUpPromiseRef.current alive.
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    expect(mockWsInstance).not.toBeNull()
+
+    // startListening called BEFORE the WS opens → slow-path handoff
+    act(() => { result.current.startListening(onComplete) })
+
+    // NOW the WS opens — triggers the warmUpPromise resolution,
+    // which should also clear the KeepAlive interval.
+    act(() => { mockWsInstance!.simulateOpen() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+
+    // Capture send() count right after handoff (there may have been
+    // one KeepAlive fired between onopen and the promise callback).
+    const beforeCount = mockWsInstance!.send.mock.calls.length
+
+    // Advance 10s — well past the 5s KeepAlive interval. If the timer
+    // leaked (pre-fix behavior), we'd see 2+ new send() calls here.
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000) })
+
+    expect(mockWsInstance!.send.mock.calls.length).toBe(beforeCount)
+  })
+
   it('UtteranceEnd grace is 3000ms for short answers (was 4000ms)', async () => {
     const { result } = renderHook(() => useDeepgramRecognition())
     const onComplete = vi.fn()
