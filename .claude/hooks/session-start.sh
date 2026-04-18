@@ -100,10 +100,19 @@ Then, as a smoke test before your first edit, call:
 
 If it returns []: the graph index is missing. STOP and run
   npx gitnexus analyze 2>&1 | tee /tmp/gitnexus-analyze.log
-If the CLI hangs (>5 min no progress), pkill it, inspect the log to
-identify the file it was stuck on, and ASK THE USER for guidance.
-Do NOT edit code while the index is absent — the hook will block you
-and manual waivers are rejected.
+
+KNOWN HANG: the CLI is reported to hang while "finding relations.csv"
+on this repo. If /tmp/gitnexus-analyze.log shows it parked on that
+step for >2 minutes:
+  1. pkill -f 'gitnexus analyze'
+  2. ls -la .gitnexus/csv/      # inspect partial state
+  3. rm -rf .gitnexus/           # clean slate
+  4. ASK THE USER before retrying — do not loop on restart alone.
+     They have context on what triggers this hang that you don't.
+
+Do NOT edit code while the index is absent — the pre-edit hook will
+block you and manually-written waiver stubs (# Impact: waived ...)
+are now rejected.
 
 Skipping this step is the failure mode that wasted an entire session
 on 2026-04-18 (session 01RUySybLLDdv36aXXFbuRsr). Do not repeat it.
