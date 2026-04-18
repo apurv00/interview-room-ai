@@ -612,3 +612,10 @@
 - **Root-cause:** the phrase-match branch was an attempt to handle the
 - **Tests-added: none (shell).**
 - **Verified-by:** (1) bash -n .claude/hooks/pre-edit-hotpath.sh → OK,
+
+### 2026-04-18 14:32:05 +0000 · `d590281` · Claude
+- **Subject:** hook(pre-edit): verify "no indexed symbols" phrase via live graph, restore legit artifacts (Codex #288 P1)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** PR #288 v1 conflated "phrase is forgeable in isolation"
+- **Tests-added: none (shell).**
+- **Verified-by:** (1) bash -n .claude/hooks/pre-edit-hotpath.sh → OK,
