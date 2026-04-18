@@ -79,8 +79,37 @@ describe('appendTranscriptWithoutDuplicates', () => {
     expect(append('Hello beautiful world', 'beautiful world')).toBe('Hello beautiful world')
   })
 
-  it('returns existing unchanged when incoming equals the full existing', () => {
+  it('returns incoming when it matches the full existing (same content, same formatting)', () => {
+    // Full overlap + no new words — prefer incoming (later Deepgram
+    // emission, typically better formatting). Same text here so result
+    // is byte-identical either way.
     expect(append('Hello world', 'Hello world')).toBe('Hello world')
+  })
+
+  // ── Codex PR #285 P1 regression: preserve improved formatting on full match ─
+
+  it('prefers incoming casing when Deepgram re-emits with smart_format capitalization', () => {
+    expect(append('can you repeat that', 'Can you repeat that')).toBe('Can you repeat that')
+  })
+
+  it('preserves "?" when Deepgram re-emits a question with added punctuation', () => {
+    // Critical: useDeepgramRecognition.ts:475 fast-path fires on
+    // `accumulated.endsWith('?')`. If we dropped the `?` here, short
+    // questions would wait ~3s for UtteranceEnd + grace instead of
+    // finishing immediately.
+    const result = append('can you repeat that', 'Can you repeat that?')
+    expect(result).toBe('Can you repeat that?')
+    expect(result.endsWith('?')).toBe(true)
+  })
+
+  it('preserves "." when Deepgram re-emits with terminal punctuation', () => {
+    expect(append('I was working', 'I was working.')).toBe('I was working.')
+  })
+
+  it('still returns existing (not incoming) when incoming matches only a tail', () => {
+    // Not full-match, so incoming doesn't replace existing even if it
+    // has different casing. Existing holds more content.
+    expect(append('I was working at google', 'At Google')).toBe('I was working at google')
   })
 
   // ── Case + punctuation tolerance ──────────────────────────────────────

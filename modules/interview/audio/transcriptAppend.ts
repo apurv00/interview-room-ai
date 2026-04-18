@@ -56,7 +56,24 @@ export function appendTranscriptWithoutDuplicates(
   }
 
   const remaining = incomingWords.slice(overlapLen)
-  if (remaining.length === 0) return existingTrimmed
+  if (remaining.length === 0) {
+    // Incoming is fully absorbed by the overlap. Two sub-cases:
+    //  (A) Incoming matches only a TAIL of existing → existing already
+    //      holds the full content, return existing unchanged.
+    //  (B) Incoming matches ALL of existing → same utterance, but
+    //      Deepgram's later emission typically carries improved casing
+    //      and smart_format punctuation ("can you repeat that" →
+    //      "Can you repeat that?"). Return incoming so the `?` and
+    //      capitalization are preserved. Critical because the hook's
+    //      early-question detection (useDeepgramRecognition.ts:475)
+    //      fires on `accumulated.endsWith('?')` — dropping the `?` here
+    //      would add ~3 s of grace-timer latency to every short
+    //      question. Codex review on PR #285.
+    if (overlapLen === existingWords.length) {
+      return incomingTrimmed
+    }
+    return existingTrimmed
+  }
   return `${existingTrimmed} ${remaining.join(' ')}`
 }
 
