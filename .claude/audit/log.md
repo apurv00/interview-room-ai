@@ -570,3 +570,10 @@
 - **Root-cause:** the hook advertised its own bypass, lowering the effort
 - **Tests-added: none.**
 - **Verified-by:** (1) bash -n .claude/hooks/pre-edit-hotpath.sh → OK,
+
+### 2026-04-18 13:26:16 +0000 · `ebdbc6c` · Claude
+- **Subject:** hook(session-start): force-load gitnexus MCP tools on every session
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** deferred tools require proactive ToolSearch calls the
+- **Tests-added: none.**
+- **Verified-by:** `bash -n .claude/hooks/session-start.sh` → OK; dry
