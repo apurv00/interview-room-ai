@@ -182,16 +182,6 @@ export function useInterview({
    *  generation so the Document Intelligence Layer (structured resume/JD
    *  parsing) has a sessionId to work with. See Issue #5. */
   const sessionCreationPromiseRef = useRef<Promise<CreateDbSessionResult> | null>(null)
-  /** Prefetched first-question promise. Fires inside createDbSession.then()
-   *  once sessionId is available, so /api/generate-question uses the
-   *  structured JD/resume context (not the raw 2500-char slice fallback).
-   *  Interview loop awaits this promise on qIdx=0, falls back to a fresh
-   *  generateQuestion(0) if prefetch rejected. Saves 1–15s of cold-start
-   *  LLM latency that was previously on the critical path between TTS end
-   *  and listening start. Null value = prefetch failed, caller will retry.
-   *  Never throws — .catch returns null so the component-level unhandled
-   *  rejection logger doesn't fire. */
-  const firstQuestionPromiseRef = useRef<Promise<string | null> | null>(null)
 
   // ── API calls (extracted to useInterviewAPI) ──
   // Pass a lazy getter for sessionId so the fetch body sends the latest value
@@ -403,22 +393,6 @@ export function useInterview({
           ...(currentProblemRef.current ? { codingProblemId: currentProblemRef.current.id } : {}),
           ...(currentDesignProblemRef.current ? { designProblemId: currentDesignProblemRef.current.id } : {}),
         })
-
-        // Prefetch Q0 once sessionId is available. Runs in parallel with TTS
-        // generation that starts later, so by the time the interview loop
-        // awaits the question, the LLM call has typically already completed
-        // (saves 1–15s of cold-path latency at the TTS→listen seam). Chained
-        // *inside* createDbSession.then() instead of firing at page mount
-        // because the route's Document Intelligence Layer needs sessionId for
-        // the JD/resume context cache — without it the route falls back to a
-        // raw 2500-char slice and first-question quality degrades. Fallback
-        // on failure: swallow to null, loop will call generateQuestion(qIdx)
-        // fresh on the normal path. Never throws.
-        firstQuestionPromiseRef.current = generateQuestion(0)
-          .catch((err): string | null => {
-            console.warn('[interview] first-question prefetch failed; loop will retry', err)
-            return null
-          })
       }
     })
   }, [config]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -1195,16 +1169,7 @@ export function useInterview({
         // ── Generate new topic question (use prefetched if available) ──
         transitionTo('ASK_QUESTION')
         let question: string
-        if (qIdx === 0 && firstQuestionPromiseRef.current) {
-          // Q0 prefetch: fired inside createDbSession.then() so sessionId
-          // was available to /api/generate-question (structured JD/resume
-          // context path). By the time the loop gets here, the promise has
-          // usually already resolved. null result = prefetch rejected →
-          // fall back to fresh call on the normal path.
-          const prefetched = await firstQuestionPromiseRef.current
-          firstQuestionPromiseRef.current = null
-          question = prefetched ?? (await generateQuestion(qIdx))
-        } else if (prefetchedQuestionRef.current) {
+        if (prefetchedQuestionRef.current) {
           question = await prefetchedQuestionRef.current
           prefetchedQuestionRef.current = null
         } else {
