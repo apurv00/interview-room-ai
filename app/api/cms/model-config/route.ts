@@ -74,7 +74,7 @@ export async function PUT(req: NextRequest) {
           updatedBy: auth.session!.user.id,
         },
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     )
 
     // Directly populate L1/L2 with the just-saved config instead of

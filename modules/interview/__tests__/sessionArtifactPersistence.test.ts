@@ -83,7 +83,7 @@ describe('updateSession — recording artifact persistence', () => {
         answeredCount: 3,
         endReason: 'normal',
       }),
-      { new: true }
+      { returnDocument: 'after' }
     )
   })
 })

@@ -131,7 +131,7 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
       $inc: { monthlyInterviewsUsed: 1, interviewCount: 1 },
       $set: { lastInterviewAt: now },
     },
-    { new: true }
+    { returnDocument: 'after' }
   )
 
   if (!updatedUser) {
@@ -355,7 +355,7 @@ export async function updateSession(
   if (input.endReason) updateFields.endReason = input.endReason
   if (input.wasTruncatedByTimer) updateFields.wasTruncatedByTimer = input.wasTruncatedByTimer
 
-  const updated = await InterviewSession.findByIdAndUpdate(sessionId, updateFields, { new: true })
+  const updated = await InterviewSession.findByIdAndUpdate(sessionId, updateFields, { returnDocument: 'after' })
   if (!updated) throw new NotFoundError('Interview session')
 
   logger.info({ sessionId, status: input.status }, 'Interview session updated')

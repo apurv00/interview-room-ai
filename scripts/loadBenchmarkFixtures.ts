@@ -36,7 +36,7 @@ async function main() {
     await BenchmarkCase.findOneAndUpdate(
       { caseId: data.caseId },
       { $set: data },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     )
     console.log(`  ✓ ${data.caseId}`)
     upserted++

@@ -32,7 +32,5 @@ const DailyChallengeSchema = new Schema<IDailyChallenge>(
   { timestamps: { createdAt: true, updatedAt: false } }
 )
 
-DailyChallengeSchema.index({ date: 1 }, { unique: true })
-
 export const DailyChallenge: Model<IDailyChallenge> =
   mongoose.models.DailyChallenge || mongoose.model<IDailyChallenge>('DailyChallenge', DailyChallengeSchema)

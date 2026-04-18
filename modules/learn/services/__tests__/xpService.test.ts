@@ -64,7 +64,7 @@ describe('xpService', () => {
       expect(mockUserFindByIdAndUpdate).toHaveBeenCalledWith(
         expect.anything(),
         { $inc: { xp: 50, xpThisWeek: 50 } },
-        { new: true, select: 'xp level' },
+        { returnDocument: 'after', select: 'xp level' },
       )
       expect(result.newXp).toBe(50)
     })

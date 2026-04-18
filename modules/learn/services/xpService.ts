@@ -54,7 +54,7 @@ export async function awardXp(
     const updatedUser = await User.findByIdAndUpdate(
       uid,
       { $inc: { xp: amount, xpThisWeek: amount } },
-      { new: true, select: 'xp level' },
+      { returnDocument: 'after', select: 'xp level' },
     )
 
     if (!updatedUser) {
