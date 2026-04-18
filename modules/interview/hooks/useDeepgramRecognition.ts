@@ -502,9 +502,9 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             // The 4000/3500 numbers compounded with Deepgram's 2500ms
             // utterance_end_ms to give 6+ seconds of silence after the
             // candidate stopped talking before the AI acknowledged the
-            // answer. 2000/1200 keeps short-answer headroom (user might
-            // still be thinking) while cutting long-answer wait ~2s.
-            const graceMs = wordCount < 15 ? 2000 : 1200
+            // answer. 3000/2500 keeps conservative headroom for natural
+            // thinking pauses while cutting ~1s of dead air per answer.
+            const graceMs = wordCount < 15 ? 3000 : 2500
             graceTimerRef.current = setTimeout(() => {
               graceTimerRef.current = null
               // Double-guard: if the tab was hidden between scheduling and

@@ -191,9 +191,9 @@ describe('useDeepgramRecognition', () => {
 
     await act(async () => {
       mockWsInstance!.simulateMessage(makeUtteranceEnd())
-      // Advance past the grace period (2000ms for short answers <15 words)
+      // Advance past the grace period (3000ms for short answers <15 words)
       // + allow dynamic import of speechMetrics to resolve
-      await vi.advanceTimersByTimeAsync(2500)
+      await vi.advanceTimersByTimeAsync(3500)
     })
 
     expect(onComplete).toHaveBeenCalledWith(
@@ -712,7 +712,7 @@ describe('useDeepgramRecognition', () => {
     expect(mockWsInstance!.send.mock.calls.length).toBe(beforeCount)
   })
 
-  it('UtteranceEnd grace is 2000ms for short answers (was 4000ms)', async () => {
+  it('UtteranceEnd grace is 3000ms for short answers (was 4000ms)', async () => {
     const { result } = renderHook(() => useDeepgramRecognition())
     const onComplete = vi.fn()
 
@@ -730,18 +730,18 @@ describe('useDeepgramRecognition', () => {
       mockWsInstance!.simulateMessage(makeUtteranceEnd())
     })
 
-    // At 1500ms (below new 2000ms grace) onComplete should NOT have fired yet
-    await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
+    // At 2500ms (below new 3000ms grace) onComplete should NOT have fired yet
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500) })
     expect(onComplete).not.toHaveBeenCalled()
 
-    // At 2100ms (past new 2000ms grace) onComplete should have fired
+    // At 3100ms (past new 3000ms grace) onComplete should have fired
     await act(async () => { await vi.advanceTimersByTimeAsync(600) })
     expect(onComplete).toHaveBeenCalledWith(
       expect.objectContaining({ text: 'Hi there' }),
     )
   })
 
-  it('UtteranceEnd grace is 1200ms for long answers (was 3500ms)', async () => {
+  it('UtteranceEnd grace is 2500ms for long answers (was 3500ms)', async () => {
     const { result } = renderHook(() => useDeepgramRecognition())
     const onComplete = vi.fn()
 
@@ -761,12 +761,12 @@ describe('useDeepgramRecognition', () => {
       mockWsInstance!.simulateMessage(makeUtteranceEnd())
     })
 
-    // Not fired at 1000ms
-    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    // Not fired at 2000ms
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
     expect(onComplete).not.toHaveBeenCalled()
 
-    // Fired by 1300ms
-    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    // Fired by 2600ms
+    await act(async () => { await vi.advanceTimersByTimeAsync(600) })
     expect(onComplete).toHaveBeenCalled()
   })
 
