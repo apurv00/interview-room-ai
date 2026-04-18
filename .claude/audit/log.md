@@ -681,3 +681,10 @@
 - **Root-cause:** the original mount useEffect optimized for the happy
 - **Tests-added: none.**
 - **Verified-by:** (1) npx tsc --noEmit clean, (2) vitest run on the
+
+### 2026-04-18 17:21:25 +0000 · `6ff8850` · Claude
+- **Subject:** revert(interview): remove mount-time warmUpListening useEffect (Codex #290 P2)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** I traded a ~200ms cosmetic optimization for a real
+- **Tests-added: none.**
+- **Verified-by:** (1) `git diff main --stat` shows 0 lines changed in
