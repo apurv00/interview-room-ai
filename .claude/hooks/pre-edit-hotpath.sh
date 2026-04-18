@@ -97,32 +97,67 @@ if [ -f "$IMPACT_FILE" ]; then
   if head -c 16384 "$IMPACT_FILE" | grep -qE '^\*\*Source:\*\* GitNexus knowledge graph'; then
     HAS_SOURCE=1
   fi
-  # Payload check — Codex P1 #4 on PR #287 showed that the literal
-  # phrase "(no indexed symbols for this file" is static and can be
-  # hand-written for files that DO have indexed symbols. That bypass
-  # is impossible to close without an expensive live-graph verification
-  # round-trip from the hook.
+  # Payload check — two accepted shapes, both tied to actual graph state:
   #
-  # Decision (this PR): DROP the "no indexed symbols" branch entirely.
-  # The only accepted payload shape is a fenced ```json block that
-  # contains BOTH "incoming" and "outgoing" JSON keys — the keys
-  # gitnexus context() always emits, even when both arrays are empty.
-  # That payload can only be produced by running gitnexus; a forged
-  # JSON would need to include content matching the graph's actual
-  # output for the file, which is effectively the same work as running
-  # the script.
+  #   (a) Fenced ```json block containing BOTH "incoming" and "outgoing"
+  #       keys. Emitted by scripts/gitnexus-impact.sh for files that
+  #       HAVE indexed Function/Method/Class symbols (one block per
+  #       symbol). Forging this requires producing JSON that matches
+  #       the graph's output — effectively the same work as running
+  #       the script.
   #
-  # Consequence: genuinely-orphan new files (which gitnexus-impact.sh
-  # handles with "(no indexed symbols ...)") no longer pass the hook
-  # automatically. For those, the agent must STOP and ask the user
-  # (already the documented escape path when gitnexus output is
-  # insufficient). This is consistent with the script's own advice
-  # for the empty-graph case ("run gitnexus analyze before proceeding").
+  #   (b) Literal phrase "(no indexed symbols for this file" — emitted
+  #       by the script (lines 112-117) for files with no indexed
+  #       symbols (const/type-only modules, pure data, genuinely new
+  #       files). Codex P1 #4 on PR #287 showed this phrase is
+  #       forgeable in isolation because it's static text.
+  #
+  #       We CLOSE that forgery by verifying the phrase against the
+  #       live graph: if the artifact claims "no symbols" but a cypher
+  #       count on the file's Function/Method/Class nodes returns > 0,
+  #       the claim is a forgery and the artifact is rejected.
+  #
+  #       Fails closed: if gitnexus binary or graph is unavailable,
+  #       the verification can't run, HAS_PAYLOAD stays 0, and the
+  #       agent must take the "ask user" escape — same policy as the
+  #       rest of the hook. The script itself couldn't have produced
+  #       output either, so rejecting stale/can't-verify artifacts
+  #       is correct.
   BODY_SCAN="$(head -c 65536 "$IMPACT_FILE")"
+  PHRASE_PRESENT=0
+  JSON_VALID=0
+  if echo "$BODY_SCAN" | grep -qF '(no indexed symbols for this file'; then
+    PHRASE_PRESENT=1
+  fi
   if echo "$BODY_SCAN" | grep -qE '^```json$' \
       && echo "$BODY_SCAN" | grep -qF '"incoming"' \
       && echo "$BODY_SCAN" | grep -qF '"outgoing"'; then
+    JSON_VALID=1
+  fi
+
+  if [ $JSON_VALID -eq 1 ]; then
     HAS_PAYLOAD=1
+  elif [ $PHRASE_PRESENT -eq 1 ]; then
+    # Verify the "no symbols" claim against the live graph.
+    BIN_SCRIPT="$REPO_ROOT/scripts/gitnexus-bin.sh"
+    if [ -x "$BIN_SCRIPT" ] && [ -e "$REPO_ROOT/.gitnexus/lbug" ] \
+        && command -v jq >/dev/null 2>&1; then
+      CYPHER_PATH="${REL_PATH//\"/\\\"}"
+      CYPHER_JSON="$("$BIN_SCRIPT" cypher \
+        "MATCH (s) WHERE (s:Function OR s:Method OR s:Class) AND s.filePath = \"$CYPHER_PATH\" RETURN count(s) AS n" \
+        2>/dev/null || echo '')"
+      SYMBOL_COUNT="$(echo "$CYPHER_JSON" \
+        | jq -r '.markdown // ""' 2>/dev/null \
+        | awk -F '|' 'NR>2 {gsub(/^ +| +$/, "", $2); print $2; exit}' \
+        2>/dev/null \
+        || echo "")"
+      # Accept only if the graph confirms zero indexed symbols for
+      # this file. Empty string, non-numeric, or >0 → claim unverified
+      # or forged → reject (HAS_PAYLOAD stays 0).
+      if [ "$SYMBOL_COUNT" = "0" ]; then
+        HAS_PAYLOAD=1
+      fi
+    fi
   fi
 
   if [ $HAS_HEADER -eq 0 ] || [ $HAS_SOURCE -eq 0 ] || [ $HAS_PAYLOAD -eq 0 ]; then
@@ -139,17 +174,15 @@ produced analysis. ALL THREE must be present, verbatim:
 
   1. First non-empty line:   # Impact Analysis — <rel-path>
   2. Somewhere in the body:  **Source:** GitNexus knowledge graph (\`.gitnexus/lbug\`)
-  3. A caller/callee payload: a fenced \`\`\`json ... \`\`\` block
-     containing BOTH "incoming" and "outgoing" JSON keys (always
-     present in real gitnexus context() output, even when arrays
-     are empty).
-
-     NOTE: a previous version of this hook also accepted the literal
-     phrase "(no indexed symbols for this file" as a fallback for
-     new/orphan files. That phrase is static and was being forged
-     (Codex P1 #4 on PR #287). For genuinely-orphan new files where
-     gitnexus cannot produce a real context() payload, STOP and ask
-     the user — do not hand-write the phrase.
+  3. A caller/callee payload — ONE of:
+        • A fenced \`\`\`json ... \`\`\` block containing BOTH
+          "incoming" and "outgoing" JSON keys (emitted when the
+          file has indexed symbols).
+        • The literal phrase "(no indexed symbols for this file"
+          AND the live graph confirms zero Function/Method/Class
+          symbols for this file via a cypher count. If gitnexus
+          is unavailable or the count is >0, the phrase is treated
+          as unverified/forged and rejected.
 
 What your artifact shows:
   Header marker present:   $( [ $HAS_HEADER -eq 1 ] && echo yes || echo NO )
