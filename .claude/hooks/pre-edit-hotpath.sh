@@ -143,12 +143,23 @@ if [ -f "$IMPACT_FILE" ]; then
     if [ -x "$BIN_SCRIPT" ] && [ -e "$REPO_ROOT/.gitnexus/lbug" ] \
         && command -v jq >/dev/null 2>&1; then
       CYPHER_PATH="${REL_PATH//\"/\\\"}"
+      # Three queries unioned because openCypher does not accept
+      # `WHERE (s:Function OR s:Method OR s:Class)` — the label-disjunction
+      # must be expressed as separate MATCH/RETURN pairs joined by UNION.
+      # Prior form emitted a parser exception, causing all phrase-branch
+      # verifications to silently fail closed. Returns 3 rows of counts;
+      # sum them to get the file's total Function+Method+Class symbol count.
       CYPHER_JSON="$("$BIN_SCRIPT" cypher \
-        "MATCH (s) WHERE (s:Function OR s:Method OR s:Class) AND s.filePath = \"$CYPHER_PATH\" RETURN count(s) AS n" \
+        "MATCH (s:Function) WHERE s.filePath = \"$CYPHER_PATH\" RETURN count(s) AS n UNION MATCH (s:Method) WHERE s.filePath = \"$CYPHER_PATH\" RETURN count(s) AS n UNION MATCH (s:Class) WHERE s.filePath = \"$CYPHER_PATH\" RETURN count(s) AS n" \
         2>/dev/null || echo '')"
+      # UNION across three label queries returns one row per distinct
+      # count value (cypher dedupes identical rows). Sum $2 across all
+      # non-header rows to get total Function+Method+Class count. If all
+      # three are zero, UNION gives one row of "0"; sum = 0. If counts
+      # differ, UNION gives up to three rows; sum is the correct total.
       SYMBOL_COUNT="$(echo "$CYPHER_JSON" \
         | jq -r '.markdown // ""' 2>/dev/null \
-        | awk -F '|' 'NR>2 {gsub(/^ +| +$/, "", $2); print $2; exit}' \
+        | awk -F '|' 'NR>2 {gsub(/^ +| +$/, "", $2); if ($2 ~ /^[0-9]+$/) total += $2} END { print total+0 }' \
         2>/dev/null \
         || echo "")"
       # Accept only if the graph confirms zero indexed symbols for
