@@ -542,3 +542,10 @@
 - **Files:** 15 changed, 4 test file(s)
 - **Root-cause:** createInvite generated a token and wrote its hash to the
 - **Tests-added:**
+
+### 2026-04-18 06:47:45 +0000 · `c459297` · Claude
+- **Subject:** feat(b2b): hydrate invited-candidate interview config from server
+- **Files:** 4 changed, 1 test file(s)
+- **Root-cause:** /lobby page read INTERVIEW_CONFIG from localStorage and
+- **Tests-added: app/api/interviews/[id]/bootstrap/__tests__/route.test.ts**
+- **Verified-by:** npx vitest run app/api/interviews/[id]/bootstrap (8/8
