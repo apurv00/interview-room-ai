@@ -563,3 +563,10 @@
 - **Root-cause:** lifecycle handler only ran in one of two warm-up handoff
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
 - **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts
+
+### 2026-04-18 12:54:19 +0000 · `030d346` · Claude
+- **Subject:** instr(interview): capture Deepgram packet shapes for root-cause investigation
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** #285's dedupe was shipped without confirming what
+- **Tests-added: one new integration test in deepgramRecognition.test.ts**
+- **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts
