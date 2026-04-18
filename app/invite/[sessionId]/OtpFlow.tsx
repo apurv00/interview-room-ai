@@ -100,12 +100,14 @@ export default function OtpFlow({ sessionId, token, expectedEmailHint }: Props) 
 
       setStep('signing-in')
       // Hand the ticket to NextAuth. callbackUrl routes the authenticated
-      // candidate straight into the interview flow. `redirect: true` lets
-      // NextAuth own the navigation so session cookies are committed
-      // before the page changes.
+      // candidate into the pre-interview lobby, which hydrates the
+      // interview config from the server-authoritative session doc
+      // (the candidate has no self-serve localStorage to fall back to).
+      // `redirect: true` lets NextAuth own the navigation so session
+      // cookies are committed before the page changes.
       await signIn('invite-otp', {
         ticket: data.ticket,
-        callbackUrl: `/interview?sessionId=${encodeURIComponent(sessionId)}`,
+        callbackUrl: `/lobby?sessionId=${encodeURIComponent(sessionId)}`,
       })
     } catch {
       setError('Something went wrong. Please try again.')
