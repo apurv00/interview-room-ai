@@ -598,3 +598,10 @@
 - **Root-cause:** v2 check was necessary-but-not-sufficient. The header
 - **Tests-added: none (shell).**
 - **Verified-by:** (1) bash -n .claude/hooks/pre-edit-hotpath.sh → OK,
+
+### 2026-04-18 14:16:04 +0000 · `a34969f` · Claude
+- **Subject:** hook(pre-edit): require both "incoming" + "outgoing" keys in JSON payload (Codex #287 P1-3)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the v3 JSON-fence check was necessary-but-not-sufficient.
+- **Tests-added: none (shell).**
+- **Verified-by:** (1) bash -n .claude/hooks/pre-edit-hotpath.sh → OK,
