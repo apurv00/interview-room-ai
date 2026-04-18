@@ -191,9 +191,9 @@ describe('useDeepgramRecognition', () => {
 
     await act(async () => {
       mockWsInstance!.simulateMessage(makeUtteranceEnd())
-      // Advance past the grace period (4000ms for short answers <15 words)
+      // Advance past the grace period (2000ms for short answers <15 words)
       // + allow dynamic import of speechMetrics to resolve
-      await vi.advanceTimersByTimeAsync(4500)
+      await vi.advanceTimersByTimeAsync(2500)
     })
 
     expect(onComplete).toHaveBeenCalledWith(
@@ -657,6 +657,117 @@ describe('useDeepgramRecognition', () => {
         expect.objectContaining({ text: 'partial answer here' }),
       )
     })
+  })
+
+  it('warmUp sends KeepAlive pings every 5s while idle', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    act(() => { mockWsInstance!.simulateOpen() })
+
+    // No pings yet
+    expect(mockWsInstance!.send).not.toHaveBeenCalled()
+
+    // t=5s → first KeepAlive
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+    expect(mockWsInstance!.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'KeepAlive' }),
+    )
+
+    // t=10s → second KeepAlive
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+    expect(mockWsInstance!.send).toHaveBeenCalledTimes(2)
+
+    // t=15s → third KeepAlive. The warm socket survives past Deepgram's
+    // documented ~10s idle timeout, which is the whole point of this fix.
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+    expect(mockWsInstance!.send).toHaveBeenCalledTimes(3)
+  })
+
+  it('KeepAlive stops once startListening takes over the warm socket', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    act(() => { mockWsInstance!.simulateOpen() })
+
+    // One KeepAlive ping at t=5s
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+    expect(mockWsInstance!.send).toHaveBeenCalledTimes(1)
+
+    // startListening takes over — audio will keep the socket alive now
+    await act(async () => {
+      result.current.startListening(onComplete)
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    // Advance another 10s; no new KeepAlive pings should fire.
+    // (mockWsInstance.send is also used for audio PCM, but the MockAudioContext
+    // never triggers onaudioprocess in tests, so any send() call here would
+    // be a KeepAlive leak.)
+    const beforeCount = mockWsInstance!.send.mock.calls.length
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000) })
+    expect(mockWsInstance!.send.mock.calls.length).toBe(beforeCount)
+  })
+
+  it('UtteranceEnd grace is 2000ms for short answers (was 4000ms)', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    act(() => { mockWsInstance!.simulateOpen() })
+
+    await act(async () => {
+      result.current.startListening(onComplete)
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    await act(async () => {
+      mockWsInstance!.simulateMessage(makeResult('Hi there', true))
+      mockWsInstance!.simulateMessage(makeUtteranceEnd())
+    })
+
+    // At 1500ms (below new 2000ms grace) onComplete should NOT have fired yet
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
+    expect(onComplete).not.toHaveBeenCalled()
+
+    // At 2100ms (past new 2000ms grace) onComplete should have fired
+    await act(async () => { await vi.advanceTimersByTimeAsync(600) })
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Hi there' }),
+    )
+  })
+
+  it('UtteranceEnd grace is 1200ms for long answers (was 3500ms)', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    act(() => { mockWsInstance!.simulateOpen() })
+
+    await act(async () => {
+      result.current.startListening(onComplete)
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    // 16-word transcript triggers long-answer branch
+    const longText = 'one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen'
+    await act(async () => {
+      mockWsInstance!.simulateMessage(makeResult(longText, true))
+      mockWsInstance!.simulateMessage(makeUtteranceEnd())
+    })
+
+    // Not fired at 1000ms
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    expect(onComplete).not.toHaveBeenCalled()
+
+    // Fired by 1300ms
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    expect(onComplete).toHaveBeenCalled()
   })
 
   it('safety timeout fires onCaptureReady after 1500ms', async () => {

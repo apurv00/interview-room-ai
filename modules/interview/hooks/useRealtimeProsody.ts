@@ -125,7 +125,13 @@ function deriveProsodyNudge(
   }
 
   // Stall detection: no word growth for 4+ seconds
+  // Only fires when the candidate has actually started speaking (wordCount>0).
+  // Without this guard, a silent mic (dead Deepgram WS, suspended AudioContext,
+  // or genuine thinking pause before speaking) misleads the candidate into
+  // believing they paused mid-answer when the real issue is that the system
+  // isn't hearing them.
   const lastSample = samples[samples.length - 1]
+  if (lastSample.wordCount === 0) return null
   const fourSecondsAgo = samples.find((s) => s.time > now - 5000 && s.time < now - 3000)
   if (fourSecondsAgo && lastSample.wordCount === fourSecondsAgo.wordCount && canShow('long-pause')) {
     return {

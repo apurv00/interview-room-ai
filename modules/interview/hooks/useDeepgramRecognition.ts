@@ -91,6 +91,13 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   // Whether warmUp() has been called and WebSocket is ready
   const isWarmedUpRef = useRef(false)
   const warmUpPromiseRef = useRef<Promise<void> | null>(null)
+  /** KeepAlive interval for the warm WS. Deepgram closes idle /v1/listen
+   *  sockets after ~10s of no traffic. During a long intro TTS (12s+)
+   *  the warm socket would die server-side while the client still saw
+   *  readyState=OPEN, producing phase=LISTENING with zero transcripts.
+   *  We send {"type":"KeepAlive"} every 5s from onopen until audio
+   *  actually starts flowing (which keeps the socket alive on its own). */
+  const keepAliveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   /** True when document.visibilityState === 'hidden'. Browsers throttle
    *  setTimeout/setInterval and may suspend AudioContext when the tab is
    *  backgrounded — Deepgram receives silence, fires UtteranceEnd, and the
@@ -188,6 +195,13 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       // If warmed up and WebSocket is already connected, start capture immediately
       if (isWarmedUpRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
         setIsListening(true)
+        // Audio is about to flow — KeepAlive is no longer needed (PCM
+        // frames keep the socket alive). Clear the timer so we don't
+        // race a late KeepAlive with real audio data.
+        if (keepAliveTimerRef.current) {
+          clearInterval(keepAliveTimerRef.current)
+          keepAliveTimerRef.current = null
+        }
         // The warmUp WebSocket was created without an onmessage handler —
         // attach it now so Deepgram results are actually received.
         attachMessageHandler(wsRef.current)
@@ -259,15 +273,32 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             wsRef.current = ws
             isWarmedUpRef.current = true
             warmUpPromiseRef.current = null
+            // Keep the idle socket alive. Deepgram closes /v1/listen after
+            // ~10s of no inbound data; intro TTS runs 12s+ so without this
+            // ping the warm socket dies before startListening can use it.
+            if (keepAliveTimerRef.current) clearInterval(keepAliveTimerRef.current)
+            keepAliveTimerRef.current = setInterval(() => {
+              if (ws.readyState === WebSocket.OPEN) {
+                try { ws.send(JSON.stringify({ type: 'KeepAlive' })) } catch { /* ignore */ }
+              }
+            }, 5000)
             resolve()
           }
           ws.onerror = () => {
             warmUpPromiseRef.current = null
+            if (keepAliveTimerRef.current) {
+              clearInterval(keepAliveTimerRef.current)
+              keepAliveTimerRef.current = null
+            }
             resolve() // Don't reject — startListening will fall back
           }
           ws.onclose = () => {
             if (isWarmedUpRef.current) {
               isWarmedUpRef.current = false
+            }
+            if (keepAliveTimerRef.current) {
+              clearInterval(keepAliveTimerRef.current)
+              keepAliveTimerRef.current = null
             }
           }
 
@@ -276,6 +307,10 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             if (ws.readyState !== WebSocket.OPEN) {
               ws.close()
               warmUpPromiseRef.current = null
+              if (keepAliveTimerRef.current) {
+                clearInterval(keepAliveTimerRef.current)
+                keepAliveTimerRef.current = null
+              }
               resolve()
             }
           }, 5000)
@@ -460,11 +495,16 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             const wordCount = finalTextRef.current.trim().split(/\s+/).length
             // Grace period must exceed the time for Deepgram to produce an
             // is_final or interim result after the user resumes speaking
-            // (~200-800ms). Previous values (2500/1500) were too tight —
-            // users with natural 2.5-3s sentence pauses got cut off because
-            // the is_final arrived after the grace expired on high-latency
-            // connections. Doubling gives comfortable headroom.
-            const graceMs = wordCount < 15 ? 4000 : 3500
+            // (~200-800ms). Commit 900839b raised this to 4000/3500 to
+            // defend against mid-sentence cutoffs, but that commit also
+            // wired interim-results to cancel the grace timer (lines
+            // 390-398) — which now protects resumed speech within ~500ms.
+            // The 4000/3500 numbers compounded with Deepgram's 2500ms
+            // utterance_end_ms to give 6+ seconds of silence after the
+            // candidate stopped talking before the AI acknowledged the
+            // answer. 2000/1200 keeps short-answer headroom (user might
+            // still be thinking) while cutting long-answer wait ~2s.
+            const graceMs = wordCount < 15 ? 2000 : 1200
             graceTimerRef.current = setTimeout(() => {
               graceTimerRef.current = null
               // Double-guard: if the tab was hidden between scheduling and
@@ -586,6 +626,12 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     }
     const audioContext = new AudioContext({ sampleRate: 16000 })
     audioContextRef.current = audioContext
+    // Chrome's autoplay policy can create AudioContext in 'suspended' state
+    // after multiple create/close cycles across questions. A suspended
+    // context does not fire onaudioprocess → no PCM → no transcripts, which
+    // is indistinguishable from a dead WS at the UI level. resume() is
+    // idempotent on a running context and cheap on a suspended one.
+    audioContext.resume().catch(() => { /* best-effort */ })
 
     const source = audioContext.createMediaStreamSource(stream)
     sourceRef.current = source
@@ -640,6 +686,10 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     if (graceTimerRef.current) {
       clearTimeout(graceTimerRef.current)
       graceTimerRef.current = null
+    }
+    if (keepAliveTimerRef.current) {
+      clearInterval(keepAliveTimerRef.current)
+      keepAliveTimerRef.current = null
     }
 
     // Cleanup audio processing
