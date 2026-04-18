@@ -376,7 +376,6 @@ const UserSchema = new Schema<IUser>(
   { timestamps: true }
 )
 
-UserSchema.index({ email: 1 })
 UserSchema.index({ organizationId: 1, role: 1 })
 UserSchema.index({ stripeCustomerId: 1 }, { sparse: true })
 

@@ -95,7 +95,7 @@ async function generateAndCache(
       generatedByModel: 'learn.pathway-lesson',
       reviewStatus: 'pending',
     },
-    { upsert: true, new: true },
+    { upsert: true, returnDocument: 'after' },
   )
 
   return doc

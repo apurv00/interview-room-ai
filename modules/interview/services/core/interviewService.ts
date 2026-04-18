@@ -114,7 +114,7 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
       $inc: { monthlyInterviewsUsed: 1, interviewCount: 1 },
       $set: { lastInterviewAt: now },
     },
-    { new: true }
+    { returnDocument: 'after' }
   )
 
   if (!updatedUser) {
@@ -304,7 +304,7 @@ export async function updateSession(
   if (input.recordingR2Key) updateFields.recordingR2Key = input.recordingR2Key
   if (input.recordingSizeBytes !== undefined) updateFields.recordingSizeBytes = input.recordingSizeBytes
 
-  const updated = await InterviewSession.findByIdAndUpdate(sessionId, updateFields, { new: true })
+  const updated = await InterviewSession.findByIdAndUpdate(sessionId, updateFields, { returnDocument: 'after' })
   if (!updated) throw new NotFoundError('Interview session')
 
   logger.info({ sessionId, status: input.status }, 'Interview session updated')

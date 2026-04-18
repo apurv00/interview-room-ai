@@ -377,7 +377,7 @@ export async function seedRubrics() {
     await EvaluationRubric.findOneAndUpdate(
       { rubricId: rubric.rubricId },
       { ...rubric, isActive: true },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     )
   }
   return { rubrics: BUILT_IN_RUBRICS.length }
@@ -389,7 +389,7 @@ export async function seedQuestionBank() {
     await QuestionBank.findOneAndUpdate(
       { domain: q.domain, question: q.question },
       { ...q, isActive: true },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     )
   }
   return { questions: BUILT_IN_QUESTIONS.length }
@@ -401,7 +401,7 @@ export async function seedCompanyPatterns() {
     await CompanyPattern.findOneAndUpdate(
       { companyName: p.companyName },
       { ...p, isActive: true },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     )
   }
   return { companies: BUILT_IN_COMPANY_PATTERNS.length }
@@ -413,7 +413,7 @@ export async function seedBenchmarks() {
     await BenchmarkCase.findOneAndUpdate(
       { caseId: b.caseId },
       { ...b, isActive: true },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     )
   }
   return { benchmarks: BUILT_IN_BENCHMARKS.length }

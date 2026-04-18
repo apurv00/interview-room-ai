@@ -60,7 +60,7 @@ export async function PUT(
     const interviewType = await InterviewDepth.findOneAndUpdate(
       { slug: params.slug },
       { $set: parsed.data },
-      { new: true, runValidators: true }
+      { returnDocument: 'after', runValidators: true }
     ).lean()
 
     if (!interviewType) {

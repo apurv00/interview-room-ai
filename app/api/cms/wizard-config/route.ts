@@ -57,7 +57,7 @@ export async function PUT(req: NextRequest) {
           updatedBy: auth.session!.user.id,
         },
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     )
 
     return NextResponse.json({ config })

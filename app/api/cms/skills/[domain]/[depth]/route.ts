@@ -89,7 +89,7 @@ export async function PUT(
     const skill = await InterviewSkill.findOneAndUpdate(
       { domain, depth },
       { $set: { content: update.content, lastEditedBy: update.lastEditedBy, lastEditedAt: update.lastEditedAt, ...(parsed.data.isActive !== undefined && { isActive: parsed.data.isActive }) }, $inc: { version: 1 } },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
+      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
     )
 
     // Invalidate cache so changes take effect immediately

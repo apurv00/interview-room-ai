@@ -91,7 +91,7 @@ export async function PATCH(req: Request) {
   }
 
   await connectDB()
-  const user = await User.findByIdAndUpdate(session.user.id, { $set: update }, { new: true })
+  const user = await User.findByIdAndUpdate(session.user.id, { $set: update }, { returnDocument: 'after' })
   if (!user) {
     return NextResponse.json({ error: 'User not found' }, { status: 404 })
   }
