@@ -549,3 +549,10 @@
 - **Root-cause:** three cooperating bugs across the STT hot path.
 - **Tests-added: modules/interview/__tests__/realtimeProsody.test.ts (new),**
 - **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts
+
+### 2026-04-18 08:18:35 +0000 · `b9fcb4d` · Claude
+- **Subject:** fix(interview): raise grace to 3000/2500 (from 2000/1200)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** grace-period tuning trade-off. 2000/1200 was aggressive;
+- **Tests-added: none new — two existing tests updated in place to assert**
+- **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts
