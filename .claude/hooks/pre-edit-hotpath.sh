@@ -97,25 +97,29 @@ if [ -f "$IMPACT_FILE" ]; then
   if head -c 16384 "$IMPACT_FILE" | grep -qE '^\*\*Source:\*\* GitNexus knowledge graph'; then
     HAS_SOURCE=1
   fi
-  # Payload check — the header markers alone can be forged by a 2-line
-  # hand-written stub, and a bare ```json fence can be forged with
-  # "```json\n{}\n```" (Codex P1 #3 on PR #287). A real artifact from
-  # scripts/gitnexus-impact.sh always contains EITHER:
-  #   (a) the literal "no indexed symbols for this file" phrase from
-  #       the empty-graph branch (lines 113-117 of the script), OR
-  #   (b) a fenced ```json block from the context() output for at
-  #       least one symbol (lines 138-140), AND that block must
-  #       contain BOTH "incoming" and "outgoing" JSON keys — these
-  #       are always present in real gitnexus context output (even
-  #       when arrays are empty).
-  # Both are hard to fake convincingly without copying the script's
-  # output. (a) covers legit new files with no graph entries; (b)
-  # covers files that gitnexus can actually analyze. An "empty JSON
-  # block" bypass fails (b) because `{}` has neither key.
+  # Payload check — Codex P1 #4 on PR #287 showed that the literal
+  # phrase "(no indexed symbols for this file" is static and can be
+  # hand-written for files that DO have indexed symbols. That bypass
+  # is impossible to close without an expensive live-graph verification
+  # round-trip from the hook.
+  #
+  # Decision (this PR): DROP the "no indexed symbols" branch entirely.
+  # The only accepted payload shape is a fenced ```json block that
+  # contains BOTH "incoming" and "outgoing" JSON keys — the keys
+  # gitnexus context() always emits, even when both arrays are empty.
+  # That payload can only be produced by running gitnexus; a forged
+  # JSON would need to include content matching the graph's actual
+  # output for the file, which is effectively the same work as running
+  # the script.
+  #
+  # Consequence: genuinely-orphan new files (which gitnexus-impact.sh
+  # handles with "(no indexed symbols ...)") no longer pass the hook
+  # automatically. For those, the agent must STOP and ask the user
+  # (already the documented escape path when gitnexus output is
+  # insufficient). This is consistent with the script's own advice
+  # for the empty-graph case ("run gitnexus analyze before proceeding").
   BODY_SCAN="$(head -c 65536 "$IMPACT_FILE")"
-  if echo "$BODY_SCAN" | grep -qF '(no indexed symbols for this file'; then
-    HAS_PAYLOAD=1
-  elif echo "$BODY_SCAN" | grep -qE '^```json$' \
+  if echo "$BODY_SCAN" | grep -qE '^```json$' \
       && echo "$BODY_SCAN" | grep -qF '"incoming"' \
       && echo "$BODY_SCAN" | grep -qF '"outgoing"'; then
     HAS_PAYLOAD=1
@@ -135,12 +139,17 @@ produced analysis. ALL THREE must be present, verbatim:
 
   1. First non-empty line:   # Impact Analysis — <rel-path>
   2. Somewhere in the body:  **Source:** GitNexus knowledge graph (\`.gitnexus/lbug\`)
-  3. A caller/callee payload — ONE of:
-        • Literal phrase:   (no indexed symbols for this file
-          (only when the file has no graph entries yet)
-        • A fenced block:   \`\`\`json ... \`\`\` containing BOTH
-          "incoming" and "outgoing" JSON keys (always present in
-          real gitnexus context() output, even when arrays are empty)
+  3. A caller/callee payload: a fenced \`\`\`json ... \`\`\` block
+     containing BOTH "incoming" and "outgoing" JSON keys (always
+     present in real gitnexus context() output, even when arrays
+     are empty).
+
+     NOTE: a previous version of this hook also accepted the literal
+     phrase "(no indexed symbols for this file" as a fallback for
+     new/orphan files. That phrase is static and was being forged
+     (Codex P1 #4 on PR #287). For genuinely-orphan new files where
+     gitnexus cannot produce a real context() payload, STOP and ask
+     the user — do not hand-write the phrase.
 
 What your artifact shows:
   Header marker present:   $( [ $HAS_HEADER -eq 1 ] && echo yes || echo NO )
