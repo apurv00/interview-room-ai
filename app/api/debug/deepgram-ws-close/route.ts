@@ -39,6 +39,15 @@ const DeepgramWsCloseSchema = z.object({
   wasClean: z.boolean(),
   /** Which connection path closed — client enum, no user content. */
   context: z.enum(['warmUp', 'connectWebSocket']),
+  /** Named trigger the client recorded right before calling ws.close
+   *  (e.g. 'graceTimer', 'earlyQuestion', 'reconnectExhausted',
+   *  'stopListeningExternal'). Null when the close was initiated by the
+   *  remote (Deepgram or network) rather than our own code — the onclose
+   *  handler reads the ref unconditionally, so remote-initiated closes
+   *  arrive here with trigger:null, which is itself diagnostic. We use
+   *  a free-form string (not an enum) so the server accepts triggers
+   *  added client-side without requiring a matching server deploy. */
+  trigger: z.string().max(50).nullable().optional(),
 })
 
 type DeepgramWsClosePayload = z.infer<typeof DeepgramWsCloseSchema>
@@ -64,8 +73,9 @@ export const POST = composeApiRoute<DeepgramWsClosePayload>({
         reason: body.reason || '(empty)',
         wasClean: body.wasClean,
         context: body.context,
+        trigger: body.trigger ?? null,
       },
-      `Deepgram WS close — code=${body.code} context=${body.context} wasClean=${body.wasClean}`
+      `Deepgram WS close — code=${body.code} context=${body.context} trigger=${body.trigger ?? 'remote'} wasClean=${body.wasClean}`
     )
 
     return NextResponse.json({ received: true })

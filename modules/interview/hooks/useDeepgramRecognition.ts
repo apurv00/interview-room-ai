@@ -42,6 +42,35 @@ export interface DeepgramPacketLog {
   framesSentAtRx: number
 }
 
+/** Named reasons we might terminate a Deepgram WebSocket session. Each
+ *  maps to a distinct 4xxx close code so the debug-log endpoint can show
+ *  us in Vercel logs exactly which trigger fired — essential for
+ *  diagnosing mid-speech cutoffs where `ws.close()` with no args
+ *  produces the ambiguous code 1005. Codes are in the application-
+ *  defined 4000–4999 range (RFC 6455 §7.4.2). */
+type FinishTrigger =
+  | 'startListenReentry'
+  | 'tokenFetchFailed'
+  | 'earlyQuestion'
+  | 'graceTimer'
+  | 'offline'
+  | 'reconnectExhausted'
+  | 'getUserMediaFailed'
+  | 'stopListeningExternal'
+  | 'warmUpTimeout'
+
+const FINISH_TRIGGER_CODES: Record<FinishTrigger, number> = {
+  startListenReentry: 4000,
+  graceTimer: 4001,
+  earlyQuestion: 4002,
+  stopListeningExternal: 4003,
+  warmUpTimeout: 4004,
+  reconnectExhausted: 4005,
+  tokenFetchFailed: 4006,
+  offline: 4007,
+  getUserMediaFailed: 4008,
+}
+
 export interface UseDeepgramRecognitionReturn {
   isListening: boolean
   liveTranscript: string
@@ -61,6 +90,15 @@ export interface UseDeepgramRecognitionReturn {
    *  next listenForAnswer result. */
   getAndClearInterruptAccum: () => string
 }
+
+/** A WebSocket instance tagged with the trigger name that initiated
+ *  its (upcoming) close. We attach the trigger directly to the socket
+ *  rather than storing it on a hook-level ref so reconnect flows can
+ *  safely have multiple sockets in various states of teardown without
+ *  their onclose handlers reading each other's state. Each onclose
+ *  reads the tag from ITS OWN `ws` closure variable — the instances
+ *  never share the tag. Codex P2 on PR #293. */
+type TaggedWebSocket = WebSocket & { __finishTrigger?: FinishTrigger | null }
 
 /**
  * Deepgram Nova-2 streaming speech recognition via WebSocket.
@@ -234,7 +272,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       // finishRecognition snapshots onCompleteRef synchronously, so the old
       // session's async callback won't alias with the new one set below.
       if (onCompleteRef.current && !isFinishingRef.current) {
-        finishRecognition()
+        finishRecognition('startListenReentry')
       }
 
       onCompleteRef.current = onComplete
@@ -353,7 +391,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             onCaptureReadyRef.current = null
             fallbackFinishTimerRef.current = setTimeout(() => {
               if (onCompleteRef.current) {
-                finishRecognition()
+                finishRecognition('tokenFetchFailed')
               }
             }, 5000)
           })
@@ -434,6 +472,14 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             // failure here must not affect the interview. Mid-answer
             // cutoff diagnosis depends on seeing which close codes
             // (1006 network, 1011 idle, 4xxx Deepgram-specific) fire.
+            // `trigger` identifies which code path initiated the close
+            // (e.g. `warmUpTimeout`, `stopListeningExternal`). Needed
+            // because client-initiated `ws.close()` collapses to code
+            // 1005 in onclose — useless for root-cause analysis without
+            // a label. The tag lives on THIS socket instance so a late
+            // onclose from a stale reconnect peer cannot consume the
+            // tag set for a currently-active socket. Codex P2 on PR #293.
+            const triggerForLog = (ws as TaggedWebSocket).__finishTrigger ?? null
             fetch('/api/debug/deepgram-ws-close', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -442,19 +488,32 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
                 reason: ev.reason ?? '',
                 wasClean: ev.wasClean,
                 context: 'warmUp',
+                trigger: triggerForLog,
               }),
             }).catch(() => { /* ignore */ })
             clearMyKeepAlive()
           }
 
-          // Timeout: if WebSocket doesn't connect within 5s, give up
+          // Timeout: if WebSocket hasn't opened within 5s, give up.
+          // Only the CONNECTING state can be aborted cleanly — close
+          // there fires an onclose that will read the tag. On
+          // CLOSING/CLOSED the close is a no-op and no onclose would
+          // follow to consume the tag, which would corrupt the NEXT
+          // session's debug POST (Codex P1 on PR #293). On OPEN the
+          // connection succeeded and the timeout is a no-op —
+          // preserving the pre-fix behavior where this branch left
+          // healthy warm sockets (and their KeepAlive) untouched.
           setTimeout(() => {
-            if (ws.readyState !== WebSocket.OPEN) {
-              ws.close()
-              warmUpPromiseRef.current = null
-              clearMyKeepAlive()
-              resolve()
+            const s = ws.readyState
+            if (s === WebSocket.OPEN) return
+            if (s === WebSocket.CONNECTING) {
+              ;(ws as TaggedWebSocket).__finishTrigger = 'warmUpTimeout'
+              ws.close(FINISH_TRIGGER_CODES.warmUpTimeout, 'warmUpTimeout')
             }
+            // CONNECTING → close-and-unwind; CLOSING/CLOSED → unwind only
+            warmUpPromiseRef.current = null
+            clearMyKeepAlive()
+            resolve()
           }, 5000)
         })
       })
@@ -629,7 +688,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             const accumulated = finalTextRef.current.trim()
             const wordCount = accumulated.split(/\s+/).length
             if (accumulated.endsWith('?') && wordCount < 20) {
-              finishRecognition()
+              finishRecognition('earlyQuestion')
               return
             }
           }
@@ -685,7 +744,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
               // other alone — browser timer throttling is implementation-
               // defined across Chrome/Firefox/Safari.
               if (isPageHiddenRef.current) return
-              finishRecognition()
+              finishRecognition('graceTimer')
             }, graceMs)
           }
         }
@@ -698,7 +757,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   function connectWebSocket(token: string) {
     if (!navigator.onLine) {
       console.warn('[Deepgram] Browser is offline, skipping WebSocket connect')
-      finishRecognition()
+      finishRecognition('offline')
       return
     }
 
@@ -766,6 +825,14 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       // here must not affect the interview. Mid-answer cutoff
       // diagnosis depends on seeing which close codes (1006 network,
       // 1011 idle, 4xxx Deepgram-specific) actually fire.
+      // `trigger` identifies which code path initiated the close (e.g.
+      // `graceTimer`, `earlyQuestion`, `reconnectExhausted`). Needed
+      // because client-initiated `ws.close()` collapses to code 1005
+      // in onclose — useless for root-cause analysis without a label.
+      // The tag lives on THIS socket instance so a late onclose from
+      // a stale reconnect peer cannot consume the tag set for a
+      // currently-active socket. Codex P2 on PR #293.
+      const triggerForLog = (ws as TaggedWebSocket).__finishTrigger ?? null
       fetch('/api/debug/deepgram-ws-close', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -774,6 +841,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           reason: ev.reason ?? '',
           wasClean: ev.wasClean,
           context: 'connectWebSocket',
+          trigger: triggerForLog,
         }),
       }).catch(() => { /* ignore */ })
 
@@ -800,7 +868,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
 
     if (reconnectAttemptsRef.current > maxReconnectAttempts) {
       console.warn('[Deepgram] Max reconnect attempts reached, finishing')
-      finishRecognition()
+      finishRecognition('reconnectExhausted')
       return
     }
 
@@ -844,7 +912,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       })
       .catch((err) => {
         console.error('Audio capture failed:', err)
-        finishRecognition()
+        finishRecognition('getUserMediaFailed')
       })
   }
 
@@ -901,10 +969,10 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     }
   }
 
-  function finishRecognition() {
+  function finishRecognition(trigger: FinishTrigger = 'stopListeningExternal') {
     if (isFinishingRef.current) return
     isFinishingRef.current = true
-    console.log('[Deepgram] finishRecognition called, text:', finalTextRef.current.slice(0, 100))
+    console.log(`[Deepgram] finishRecognition called (trigger=${trigger}), text:`, finalTextRef.current.slice(0, 100))
     setIsListening(false)
     isWarmedUpRef.current = false
 
@@ -939,9 +1007,25 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       audioStreamRef.current = null
     }
 
-    // Close WebSocket
+    // Close WebSocket with a labelled code so the onclose handler's
+    // debug POST can tell Vercel which trigger terminated the session.
+    // Application-defined 4xxx range per RFC 6455 §7.4.2. The `reason`
+    // string is intentionally the trigger name itself — redundant with
+    // the code, but browsers sometimes swallow codes, and a short
+    // reason string is our diagnostic belt-and-suspenders.
+    //
+    // The trigger is attached directly to the socket (TaggedWebSocket)
+    // so reconnect flows can have multiple sockets tearing down
+    // concurrently without their onclose handlers consuming each
+    // other's state — each onclose reads from its own `ws` closure.
+    // The guard also skips CLOSED/CLOSING states where ws.close is a
+    // no-op: tagging would leak onto a socket whose onclose already
+    // fired. Codex P1 + P2 on PR #293. The console.log at the top of
+    // this function still preserves the trigger in browser logs for
+    // the no-ws paths (offline / tokenFetchFailed / reconnectExhausted).
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.close()
+      ;(wsRef.current as TaggedWebSocket).__finishTrigger = trigger
+      wsRef.current.close(FINISH_TRIGGER_CODES[trigger], trigger)
     }
     wsRef.current = null
 
@@ -993,7 +1077,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   }
 
   const stopListening = useCallback(() => {
-    finishRecognition()
+    finishRecognition('stopListeningExternal')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

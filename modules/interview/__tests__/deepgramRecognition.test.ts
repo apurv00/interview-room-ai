@@ -43,9 +43,27 @@ class MockWebSocket {
 
   send = vi.fn()
 
-  close() {
+  /** Tracks the most recent close(code, reason) call so tests can
+   *  assert the labelled close codes we use to identify which trigger
+   *  fired mid-interview (e.g. graceTimer=4001 vs earlyQuestion=4002). */
+  lastCloseCode: number | undefined = undefined
+  lastCloseReason: string | undefined = undefined
+
+  close(code?: number, reason?: string) {
+    this.lastCloseCode = code
+    this.lastCloseReason = reason
     this.readyState = MockWebSocket.CLOSED
-    this.onclose?.(new CloseEvent('close'))
+    // Mirror browser behavior: CloseEvent carries the code+reason the
+    // local side passed to close() when the remote hasn't responded
+    // yet. Real browsers may overwrite these with the remote frame's
+    // values, but the hook's onclose runs before that matters for the
+    // debug POST (it reads closeTriggerRef, not ev.code).
+    const init: CloseEventInit = {
+      code: code ?? 1005,
+      reason: reason ?? '',
+      wasClean: true,
+    }
+    this.onclose?.(new CloseEvent('close', init))
   }
 
   // Test helpers
@@ -226,6 +244,234 @@ describe('useDeepgramRecognition', () => {
     expect(onComplete).toHaveBeenCalledWith(
       expect.objectContaining({ text: 'Can you repeat that?' }),
     )
+  })
+
+  // Regression for the mid-speech cutoff diagnostic work. `ws.close()`
+  // without args produces CloseEvent.code=1005, which is indistinguishable
+  // between "grace timer fired" vs "early-question" vs "stopListening from
+  // useInterview" in Vercel logs. Each finishRecognition trigger now emits
+  // a distinct 4xxx code AND posts `trigger:<name>` to the debug endpoint.
+  // These tests pin the mapping so a later refactor can't silently regress
+  // the codes (which would void the next production diagnosis run).
+  it('grace-timer close emits code 4001 with trigger=graceTimer', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+    const fetchSpy = vi.spyOn(global, 'fetch')
+
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    act(() => { mockWsInstance!.simulateOpen() })
+
+    await act(async () => {
+      result.current.startListening(onComplete)
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    await act(async () => {
+      mockWsInstance!.simulateMessage(makeResult('Hello world', true))
+    })
+    await act(async () => {
+      mockWsInstance!.simulateMessage(makeUtteranceEnd())
+      // Advance past the 3000ms grace period for short answers.
+      await vi.advanceTimersByTimeAsync(3500)
+    })
+
+    // ws.close should have been called with the labelled trigger code.
+    expect(mockWsInstance!.lastCloseCode).toBe(4001)
+    expect(mockWsInstance!.lastCloseReason).toBe('graceTimer')
+
+    // Debug endpoint POST should carry the trigger name too.
+    const debugCall = fetchSpy.mock.calls.find(
+      ([url]) => typeof url === 'string' && url.includes('/api/debug/deepgram-ws-close'),
+    )
+    expect(debugCall).toBeDefined()
+    const body = JSON.parse((debugCall![1] as RequestInit).body as string)
+    expect(body.trigger).toBe('graceTimer')
+    // context reflects which onclose handler was attached to the closing
+    // socket — `warmUp` when the fast path reused the pre-warmed WS,
+    // `connectWebSocket` when the cold path had to connect fresh. Either
+    // is correct; the trigger field is what identifies the cause.
+    expect(['warmUp', 'connectWebSocket']).toContain(body.context)
+  })
+
+  it('early-question close emits code 4002 with trigger=earlyQuestion', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+    const fetchSpy = vi.spyOn(global, 'fetch')
+
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    act(() => { mockWsInstance!.simulateOpen() })
+
+    await act(async () => {
+      result.current.startListening(onComplete)
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    await act(async () => {
+      mockWsInstance!.simulateMessage(makeResult('Can you repeat that?', true))
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    expect(mockWsInstance!.lastCloseCode).toBe(4002)
+    expect(mockWsInstance!.lastCloseReason).toBe('earlyQuestion')
+
+    const debugCall = fetchSpy.mock.calls.find(
+      ([url]) => typeof url === 'string' && url.includes('/api/debug/deepgram-ws-close'),
+    )
+    expect(debugCall).toBeDefined()
+    const body = JSON.parse((debugCall![1] as RequestInit).body as string)
+    expect(body.trigger).toBe('earlyQuestion')
+  })
+
+  it('stopListening close emits code 4003 with trigger=stopListeningExternal', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+    const fetchSpy = vi.spyOn(global, 'fetch')
+
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    act(() => { mockWsInstance!.simulateOpen() })
+
+    await act(async () => {
+      result.current.startListening(onComplete)
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    await act(async () => {
+      result.current.stopListening()
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    expect(mockWsInstance!.lastCloseCode).toBe(4003)
+    expect(mockWsInstance!.lastCloseReason).toBe('stopListeningExternal')
+
+    const debugCall = fetchSpy.mock.calls.find(
+      ([url]) => typeof url === 'string' && url.includes('/api/debug/deepgram-ws-close'),
+    )
+    expect(debugCall).toBeDefined()
+    const body = JSON.parse((debugCall![1] as RequestInit).body as string)
+    expect(body.trigger).toBe('stopListeningExternal')
+  })
+
+  // Regression for Codex P1 on PR #293 (initial + follow-up review).
+  // Paths where `ws.close` is a no-op (ws already CLOSED, or finish
+  // ran without a ws) previously latched the trigger into a shared
+  // hook-level ref. The shared-ref approach also had a cross-socket
+  // race: a stale old socket's late onclose could consume the trigger
+  // set for a currently-active socket (Codex P2). The fix tags the
+  // trigger on the socket instance itself (TaggedWebSocket), and
+  // skips tagging when the close would be a no-op. This test drives
+  // the offline path, then opens a fresh session and asserts its
+  // close carries trigger:null — proving no stale label leaked.
+  it('no-ws finishRecognition does not leak trigger to later sessions', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const fetchSpy = vi.spyOn(global, 'fetch')
+
+    // Force the offline branch inside connectWebSocket. Use cold path
+    // (no warmUp) so startListening lands in connectFresh → connectWebSocket.
+    Object.defineProperty(navigator, 'onLine', { value: false, configurable: true })
+
+    await act(async () => {
+      result.current.startListening(vi.fn())
+      await vi.advanceTimersByTimeAsync(20)
+    })
+
+    // Restore online + open a new session — its close must NOT inherit
+    // 'offline' as trigger. That close fires from a remote event with
+    // no client-side trigger label, so the POST should carry trigger:null.
+    Object.defineProperty(navigator, 'onLine', { value: true, configurable: true })
+    fetchSpy.mockClear()
+
+    await act(async () => {
+      result.current.startListening(vi.fn())
+      await vi.advanceTimersByTimeAsync(20)
+    })
+    act(() => { mockWsInstance!.simulateOpen() })
+    // Remote-initiated close (Deepgram sending a real close frame) —
+    // onclose fires but no client finishRecognition was invoked on
+    // THIS socket, so the socket's __finishTrigger stays undefined
+    // and the POST carries trigger:null.
+    act(() => { mockWsInstance!.onclose?.(new CloseEvent('close', { code: 1011, reason: 'server', wasClean: false })) })
+
+    const debugCall = fetchSpy.mock.calls.find(
+      ([url]) => typeof url === 'string' && url.includes('/api/debug/deepgram-ws-close'),
+    )
+    expect(debugCall).toBeDefined()
+    const body = JSON.parse((debugCall![1] as RequestInit).body as string)
+    expect(body.trigger).toBeNull()
+  })
+
+  // Regression for Codex P2 on PR #293. Shared hook-level trigger ref
+  // lets a late onclose from a stale reconnect peer consume the label
+  // set for a currently-active socket. Per-instance tagging means the
+  // stale socket reads its OWN undefined tag (→ null), while the
+  // active socket's tag stays intact for its onclose.
+  it('late onclose from stale socket does not steal active socket trigger', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const fetchSpy = vi.spyOn(global, 'fetch')
+
+    // Session 1: warmUp + open a socket, keep a reference to it.
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    act(() => { mockWsInstance!.simulateOpen() })
+    const staleWs = mockWsInstance!
+
+    await act(async () => {
+      result.current.startListening(vi.fn())
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    // Session 2: stopListening finishes session 1, then warmUp + open a
+    // fresh socket and label it via finishRecognition('graceTimer').
+    // This sets the NEW socket's __finishTrigger tag. If the stale
+    // socket's onclose fired late and consumed a shared ref, it would
+    // steal that label.
+    await act(async () => {
+      result.current.stopListening()
+      await vi.advanceTimersByTimeAsync(10)
+    })
+    fetchSpy.mockClear()
+
+    // Now deliver a LATE onclose from the stale session-1 socket.
+    // (In real life this happens when network delays the close frame.)
+    // The stale onclose should log trigger:null — NOT any label set
+    // later on a different socket.
+    act(() => { staleWs.onclose?.(new CloseEvent('close', { code: 1006, reason: '', wasClean: false })) })
+
+    const staleCall = fetchSpy.mock.calls.find(
+      ([url]) => typeof url === 'string' && url.includes('/api/debug/deepgram-ws-close'),
+    )
+    expect(staleCall).toBeDefined()
+    const staleBody = JSON.parse((staleCall![1] as RequestInit).body as string)
+    // Stale socket was already cleanly closed by stopListening, so its
+    // tag was 'stopListeningExternal'. Its own late onclose reads its
+    // OWN tag — what matters is no OTHER socket's label was consumed.
+    expect(['stopListeningExternal', null]).toContain(staleBody.trigger)
+  })
+
+  it('warmUp timeout does not tag an already-closed socket', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const fetchSpy = vi.spyOn(global, 'fetch')
+
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    // Simulate the socket closing early (e.g. quick network failure)
+    // BEFORE the 5s warmUp timeout fires. Once the onclose fires it
+    // sets readyState=CLOSED — subsequent ws.close is a no-op.
+    act(() => { mockWsInstance!.close() })
+    fetchSpy.mockClear()
+
+    // Advance to 5s warmUp timeout. Guard must recognize the socket
+    // is already CLOSED and skip tagging + skip the no-op close.
+    await act(async () => { await vi.advanceTimersByTimeAsync(5500) })
+
+    // No new debug POST should fire from the timeout path — the socket
+    // is already CLOSED so ws.close is a no-op and no onclose runs.
+    const debugCall = fetchSpy.mock.calls.find(
+      ([url]) => typeof url === 'string' && url.includes('/api/debug/deepgram-ws-close'),
+    )
+    expect(debugCall).toBeUndefined()
   })
 
   it('interrupt fires when ≥3-word speech detected during non-listening', async () => {

@@ -716,3 +716,21 @@
 - **Root-cause:** prior investigation of R3 reconnects relied on browser
 - **Tests-added: none for the new route.**
 - **Verified-by:** (1) npx tsc --noEmit clean, (2) npx vitest run on
+
+### 2026-04-19 08:12:16 +0000 · `c38fe45` · Claude
+- **Subject:** feat(interview): labelled Deepgram WS close codes + trigger in debug log
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** Client-initiated `ws.close()` with no args produces
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+
+### 2026-04-19 11:53:02 +0000 · `0b056e1` · Claude
+- **Subject:** fix(interview): scope closeTriggerRef to paths that actually close the ws
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** PR #293's `finishRecognition` set `closeTriggerRef.current =
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+
+### 2026-04-19 12:02:57 +0000 · `03e8671` · Claude
+- **Subject:** fix(interview): tag Deepgram WS trigger per-instance, not via shared ref
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** The `closeTriggerRef` ref introduced in PR #293 was shared
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
