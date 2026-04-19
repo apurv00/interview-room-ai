@@ -354,6 +354,51 @@ describe('useDeepgramRecognition', () => {
     expect(body.trigger).toBe('stopListeningExternal')
   })
 
+  // Regression for Codex P1 on PR #293. Paths where finishRecognition
+  // runs WITHOUT an open socket (offline / tokenFetchFailed /
+  // reconnectExhausted-after-close) previously latched the trigger
+  // into `closeTriggerRef` with no onclose to clear it — corrupting
+  // the next unrelated session's debug POST. The fix sets the ref
+  // only inside the ws-is-open branch. This test drives the offline
+  // path, then opens a fresh session and asserts its close carries
+  // trigger:null (remote-initiated semantics), not the stale 'offline'.
+  it('no-ws finishRecognition does not leak trigger to later sessions', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const fetchSpy = vi.spyOn(global, 'fetch')
+
+    // Force the offline branch inside connectWebSocket. Use cold path
+    // (no warmUp) so startListening lands in connectFresh → connectWebSocket.
+    Object.defineProperty(navigator, 'onLine', { value: false, configurable: true })
+
+    await act(async () => {
+      result.current.startListening(vi.fn())
+      await vi.advanceTimersByTimeAsync(20)
+    })
+
+    // Restore online + open a new session — its close must NOT inherit
+    // 'offline' as trigger. That close fires from a remote event with
+    // no client-side trigger label, so the POST should carry trigger:null.
+    Object.defineProperty(navigator, 'onLine', { value: true, configurable: true })
+    fetchSpy.mockClear()
+
+    await act(async () => {
+      result.current.startListening(vi.fn())
+      await vi.advanceTimersByTimeAsync(20)
+    })
+    act(() => { mockWsInstance!.simulateOpen() })
+    // Remote-initiated close (Deepgram sending a real close frame) —
+    // onclose fires but no client finishRecognition was invoked, so
+    // closeTriggerRef should still be null.
+    act(() => { mockWsInstance!.onclose?.(new CloseEvent('close', { code: 1011, reason: 'server', wasClean: false })) })
+
+    const debugCall = fetchSpy.mock.calls.find(
+      ([url]) => typeof url === 'string' && url.includes('/api/debug/deepgram-ws-close'),
+    )
+    expect(debugCall).toBeDefined()
+    const body = JSON.parse((debugCall![1] as RequestInit).body as string)
+    expect(body.trigger).toBeNull()
+  })
+
   it('interrupt fires when ≥3-word speech detected during non-listening', async () => {
     const { result } = renderHook(() => useDeepgramRecognition())
     const onInterrupt = vi.fn()

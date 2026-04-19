@@ -962,7 +962,6 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     if (isFinishingRef.current) return
     isFinishingRef.current = true
     console.log(`[Deepgram] finishRecognition called (trigger=${trigger}), text:`, finalTextRef.current.slice(0, 100))
-    closeTriggerRef.current = trigger
     setIsListening(false)
     isWarmedUpRef.current = false
 
@@ -1003,7 +1002,15 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     // string is intentionally the trigger name itself — redundant with
     // the code, but browsers sometimes swallow codes, and a short
     // reason string is our diagnostic belt-and-suspenders.
+    //
+    // closeTriggerRef is set ONLY when we will actually fire ws.close
+    // so that `offline`, `tokenFetchFailed`, and `reconnectExhausted`
+    // (paths where the socket is already gone) don't leave a stale
+    // trigger label attached to the next unrelated onclose POST.
+    // Codex P1 on PR #293. The console.log at the top of this function
+    // still preserves the trigger in browser logs for those no-ws paths.
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      closeTriggerRef.current = trigger
       wsRef.current.close(FINISH_TRIGGER_CODES[trigger], trigger)
     }
     wsRef.current = null
