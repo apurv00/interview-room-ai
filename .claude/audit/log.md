@@ -709,3 +709,10 @@
 - **Root-cause:** the closure-local scoping fix I applied in the prior
 - **Tests-added: none.**
 - **Verified-by:** (1) npx tsc --noEmit clean, (2) npx vitest run on
+
+### 2026-04-19 07:10:58 +0000 · `162225b` · Claude
+- **Subject:** feat(debug): log Deepgram WS close codes to server so they land in Vercel level:error
+- **Files:** 2 changed, 0 test file(s)
+- **Root-cause:** prior investigation of R3 reconnects relied on browser
+- **Tests-added: none for the new route.**
+- **Verified-by:** (1) npx tsc --noEmit clean, (2) npx vitest run on

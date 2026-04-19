@@ -423,10 +423,27 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             clearMyKeepAlive()
             resolve() // Don't reject — startListening will fall back
           }
-          ws.onclose = () => {
+          ws.onclose = (ev) => {
             if (isWarmedUpRef.current) {
               isWarmedUpRef.current = false
             }
+            // Pipe close event to server so it shows up in Vercel
+            // `level:error` logs. The STT WebSocket runs browser ↔
+            // deepgram.com directly so close codes never hit our server
+            // unless we explicitly forward them. Fire-and-forget —
+            // failure here must not affect the interview. Mid-answer
+            // cutoff diagnosis depends on seeing which close codes
+            // (1006 network, 1011 idle, 4xxx Deepgram-specific) fire.
+            fetch('/api/debug/deepgram-ws-close', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                code: ev.code,
+                reason: ev.reason ?? '',
+                wasClean: ev.wasClean,
+                context: 'warmUp',
+              }),
+            }).catch(() => { /* ignore */ })
             clearMyKeepAlive()
           }
 
@@ -741,7 +758,25 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       handleDisconnect()
     }
 
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
+      // Pipe close event to server so it surfaces in Vercel
+      // `level:error` logs. The STT WebSocket runs browser ↔
+      // deepgram.com directly so close codes never hit our server
+      // unless we explicitly forward them. Fire-and-forget — failure
+      // here must not affect the interview. Mid-answer cutoff
+      // diagnosis depends on seeing which close codes (1006 network,
+      // 1011 idle, 4xxx Deepgram-specific) actually fire.
+      fetch('/api/debug/deepgram-ws-close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: ev.code,
+          reason: ev.reason ?? '',
+          wasClean: ev.wasClean,
+          context: 'connectWebSocket',
+        }),
+      }).catch(() => { /* ignore */ })
+
       // Clear THIS ws's KeepAlive interval. Uses the closure-local
       // handle, not the shared ref, so a late-arriving close from a
       // stale socket after reconnect cannot wipe the new socket's
