@@ -91,6 +91,15 @@ export interface UseDeepgramRecognitionReturn {
   getAndClearInterruptAccum: () => string
 }
 
+/** A WebSocket instance tagged with the trigger name that initiated
+ *  its (upcoming) close. We attach the trigger directly to the socket
+ *  rather than storing it on a hook-level ref so reconnect flows can
+ *  safely have multiple sockets in various states of teardown without
+ *  their onclose handlers reading each other's state. Each onclose
+ *  reads the tag from ITS OWN `ws` closure variable — the instances
+ *  never share the tag. Codex P2 on PR #293. */
+type TaggedWebSocket = WebSocket & { __finishTrigger?: FinishTrigger | null }
+
 /**
  * Deepgram Nova-2 streaming speech recognition via WebSocket.
  * Same interface as useSpeechRecognition for drop-in replacement.
@@ -179,14 +188,6 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
    *  potential double-send (frame count jumping by 2× expected between
    *  two consecutive packets would indicate duplicated audio). */
   const audioFrameCountRef = useRef(0)
-  /** Label for the most recent ws.close() call. The ws.onclose handler
-   *  reads this to forward the trigger to the debug-log endpoint so
-   *  operators can tell which code path produced the close (e.g. grace
-   *  timer vs inactivity vs reconnect exhaustion). Without this, every
-   *  client-initiated close surfaces as code 1005 in Vercel logs —
-   *  diagnostically useless. Cleared by the onclose handler so stale
-   *  labels don't contaminate unrelated later closes. */
-  const closeTriggerRef = useRef<FinishTrigger | null>(null)
 
   // Hook-level visibility listener. Mounted once per hook instance, replaces
   // the per-session listener that used to live inside setupAudioProcessing
@@ -475,11 +476,10 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             // (e.g. `warmUpTimeout`, `stopListeningExternal`). Needed
             // because client-initiated `ws.close()` collapses to code
             // 1005 in onclose — useless for root-cause analysis without
-            // a label. The ref is cleared after read so stale labels
-            // don't leak across unrelated later closes (e.g. the next
-            // interview's socket).
-            const triggerForLog = closeTriggerRef.current
-            closeTriggerRef.current = null
+            // a label. The tag lives on THIS socket instance so a late
+            // onclose from a stale reconnect peer cannot consume the
+            // tag set for a currently-active socket. Codex P2 on PR #293.
+            const triggerForLog = (ws as TaggedWebSocket).__finishTrigger ?? null
             fetch('/api/debug/deepgram-ws-close', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -494,15 +494,26 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             clearMyKeepAlive()
           }
 
-          // Timeout: if WebSocket doesn't connect within 5s, give up
+          // Timeout: if WebSocket hasn't opened within 5s, give up.
+          // Only the CONNECTING state can be aborted cleanly — close
+          // there fires an onclose that will read the tag. On
+          // CLOSING/CLOSED the close is a no-op and no onclose would
+          // follow to consume the tag, which would corrupt the NEXT
+          // session's debug POST (Codex P1 on PR #293). On OPEN the
+          // connection succeeded and the timeout is a no-op —
+          // preserving the pre-fix behavior where this branch left
+          // healthy warm sockets (and their KeepAlive) untouched.
           setTimeout(() => {
-            if (ws.readyState !== WebSocket.OPEN) {
-              closeTriggerRef.current = 'warmUpTimeout'
+            const s = ws.readyState
+            if (s === WebSocket.OPEN) return
+            if (s === WebSocket.CONNECTING) {
+              ;(ws as TaggedWebSocket).__finishTrigger = 'warmUpTimeout'
               ws.close(FINISH_TRIGGER_CODES.warmUpTimeout, 'warmUpTimeout')
-              warmUpPromiseRef.current = null
-              clearMyKeepAlive()
-              resolve()
             }
+            // CONNECTING → close-and-unwind; CLOSING/CLOSED → unwind only
+            warmUpPromiseRef.current = null
+            clearMyKeepAlive()
+            resolve()
           }, 5000)
         })
       })
@@ -818,10 +829,10 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       // `graceTimer`, `earlyQuestion`, `reconnectExhausted`). Needed
       // because client-initiated `ws.close()` collapses to code 1005
       // in onclose — useless for root-cause analysis without a label.
-      // The ref is cleared after read so stale labels don't leak
-      // across unrelated later closes (e.g. the next answer's socket).
-      const triggerForLog = closeTriggerRef.current
-      closeTriggerRef.current = null
+      // The tag lives on THIS socket instance so a late onclose from
+      // a stale reconnect peer cannot consume the tag set for a
+      // currently-active socket. Codex P2 on PR #293.
+      const triggerForLog = (ws as TaggedWebSocket).__finishTrigger ?? null
       fetch('/api/debug/deepgram-ws-close', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1003,14 +1014,17 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     // the code, but browsers sometimes swallow codes, and a short
     // reason string is our diagnostic belt-and-suspenders.
     //
-    // closeTriggerRef is set ONLY when we will actually fire ws.close
-    // so that `offline`, `tokenFetchFailed`, and `reconnectExhausted`
-    // (paths where the socket is already gone) don't leave a stale
-    // trigger label attached to the next unrelated onclose POST.
-    // Codex P1 on PR #293. The console.log at the top of this function
-    // still preserves the trigger in browser logs for those no-ws paths.
+    // The trigger is attached directly to the socket (TaggedWebSocket)
+    // so reconnect flows can have multiple sockets tearing down
+    // concurrently without their onclose handlers consuming each
+    // other's state — each onclose reads from its own `ws` closure.
+    // The guard also skips CLOSED/CLOSING states where ws.close is a
+    // no-op: tagging would leak onto a socket whose onclose already
+    // fired. Codex P1 + P2 on PR #293. The console.log at the top of
+    // this function still preserves the trigger in browser logs for
+    // the no-ws paths (offline / tokenFetchFailed / reconnectExhausted).
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      closeTriggerRef.current = trigger
+      ;(wsRef.current as TaggedWebSocket).__finishTrigger = trigger
       wsRef.current.close(FINISH_TRIGGER_CODES[trigger], trigger)
     }
     wsRef.current = null
