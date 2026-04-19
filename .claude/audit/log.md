@@ -752,3 +752,17 @@
 - **Files:** 2 changed, 1 test file(s)
 - **Root-cause:** PR #294's setTimeout-based inactivity scheduler only
 - **Tests-added: modules/interview/__tests__/edgecase-group2-answer-timeouts.test.ts**
+
+### 2026-04-19 15:32:43 +0000 · `352ce14` · Claude
+- **Subject:** fix(auth): stop periodic Mongo JWT refresh stalling TTS hot path
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** authOptions.jwt() callback did an `await connectDB() +
+- **Tests-added: shared/__tests__/authCallbacks.test.ts — 4 new cases**
+- **Verified-by:** vitest run shared/__tests__/authCallbacks.test.ts →
+
+### 2026-04-19 15:33:10 +0000 · `aaf4993` · Claude
+- **Subject:** fix(stt): skip reconnect on client-initiated Deepgram WS close
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** connectWebSocket's ws.onclose handler called
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+- **Verified-by:** vitest run modules/interview/__tests__/deepgramRecognition.test.ts

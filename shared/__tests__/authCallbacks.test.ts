@@ -24,7 +24,13 @@ vi.mock('@shared/db/models', () => ({
   User: {
     findOne: (...args: unknown[]) => mockUserFindOne(...args),
     create: (...args: unknown[]) => mockUserCreate(...args),
-    findById: () => ({ select: () => ({ lean: () => Promise.resolve(null) }) }),
+    findById: (id: string) => {
+      const chain = {
+        select: (_fields: string) => mockUserFindById(id),
+        lean: () => mockUserFindById(id),
+      }
+      return chain
+    },
   },
 }))
 
@@ -214,6 +220,90 @@ describe('authOptions callbacks', () => {
 
       expect(mockUserCreate).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'alice' }),
+      )
+    })
+  })
+
+  describe('jwt callback', () => {
+    const jwt = authOptions.callbacks!.jwt!
+
+    it('populates plan/role/onboarding from DB on initial sign-in (user present)', async () => {
+      mockUserFindOne.mockResolvedValue({
+        _id: { toString: () => 'user-1' },
+        role: 'recruiter',
+        organizationId: { toString: () => 'org-A' },
+        plan: 'pro',
+        onboardingCompleted: true,
+      })
+
+      const result = await jwt({
+        token: {},
+        user: { id: '1', email: 'alice@example.com' },
+        account: { provider: 'google', providerAccountId: '1', type: 'oauth' },
+      } as Parameters<typeof jwt>[0])
+
+      expect(result.userId).toBe('user-1')
+      expect(result.role).toBe('recruiter')
+      expect(result.plan).toBe('pro')
+      expect(result.organizationId).toBe('org-A')
+      expect(result.onboardingCompleted).toBe(true)
+    })
+
+    it('does NOT periodically refresh plan/role from DB between sign-ins (hot-path stall guard)', async () => {
+      // 6 minutes since last refresh — the deleted block would have fired a Mongo read here
+      const staleToken = {
+        userId: 'user-1',
+        role: 'candidate',
+        plan: 'free',
+        lastRefreshedAt: Date.now() - 6 * 60 * 1000,
+      }
+
+      mockUserFindById.mockClear()
+      const result = await jwt({
+        token: staleToken,
+        user: undefined,
+      } as unknown as Parameters<typeof jwt>[0])
+
+      expect(mockUserFindById).not.toHaveBeenCalled()
+      expect(result.role).toBe('candidate')
+      expect(result.plan).toBe('free')
+    })
+
+    it('refreshes plan/role from DB when trigger === "update" is explicit', async () => {
+      mockUserFindById.mockResolvedValue({
+        role: 'org_admin',
+        plan: 'enterprise',
+        organizationId: { toString: () => 'org-B' },
+        onboardingCompleted: true,
+      })
+
+      const result = await jwt({
+        token: { userId: 'user-1', role: 'candidate', plan: 'free' },
+        user: undefined,
+        trigger: 'update',
+      } as unknown as Parameters<typeof jwt>[0])
+
+      expect(mockUserFindById).toHaveBeenCalledWith('user-1')
+      expect(result.role).toBe('org_admin')
+      expect(result.plan).toBe('enterprise')
+      expect(result.organizationId).toBe('org-B')
+      expect(result.onboardingCompleted).toBe(true)
+    })
+
+    it('keeps stale token values when trigger==="update" DB read fails', async () => {
+      mockUserFindById.mockRejectedValue(new Error('Mongo down'))
+
+      const result = await jwt({
+        token: { userId: 'user-1', role: 'recruiter', plan: 'pro' },
+        user: undefined,
+        trigger: 'update',
+      } as unknown as Parameters<typeof jwt>[0])
+
+      expect(result.role).toBe('recruiter')
+      expect(result.plan).toBe('pro')
+      expect(mockAuthLoggerError).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-1' }),
+        expect.stringContaining('session-update refresh failed'),
       )
     })
   })
