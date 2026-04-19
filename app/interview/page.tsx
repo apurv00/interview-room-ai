@@ -236,6 +236,11 @@ export default function InterviewPage() {
     voicesReady,
     startListening,
     stopListening,
+    // Forward the live transcript so the inactivity safety-net timer can
+    // correctly detect whether speech is growing during the turn. Without
+    // this, the timer's growth-check always failed and fired at the 30s
+    // mark regardless of active speech (PR #293 production logs).
+    liveTranscript,
     warmUpListening: warmUp,
     setOnInterrupt,
     setSuppressInterrupt,

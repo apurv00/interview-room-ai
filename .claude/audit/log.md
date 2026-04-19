@@ -734,3 +734,21 @@
 - **Files:** 2 changed, 1 test file(s)
 - **Root-cause:** The `closeTriggerRef` ref introduced in PR #293 was shared
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+
+### 2026-04-19 13:32:48 +0000 · `d459ae3` · Claude
+- **Subject:** fix(interview): repair dead inactivity timer + intent-tiered grace + split sub-triggers
+- **Files:** 5 changed, 1 test file(s)
+- **Root-cause:** PR #293 production logs showed 74% of Deepgram WS closes
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+
+### 2026-04-19 13:44:50 +0000 · `2184454` · Claude
+- **Subject:** fix(interview): skip pre-speech window when turn seeded by interrupt prefix
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** PR #294's repaired inactivity timer split into pre-speech
+- **Tests-added: modules/interview/__tests__/edgecase-group2-answer-timeouts.test.ts**
+
+### 2026-04-19 14:00:57 +0000 · `ed51737` · Claude
+- **Subject:** fix(interview): arm post-speech inactivity deadline on first growth, not on pre-speech fire
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** PR #294's setTimeout-based inactivity scheduler only
+- **Tests-added: modules/interview/__tests__/edgecase-group2-answer-timeouts.test.ts**

@@ -23,7 +23,7 @@ import {
 import { deriveCoachingTip } from '@interview/config/coachingTips'
 import { STORAGE_KEYS, sessionScopedKey } from '@shared/storageKeys'
 import type { SpeechRecognitionResult } from './useSpeechRecognition'
-import type { StartListeningOptions } from './useDeepgramRecognition'
+import type { StartListeningOptions, StopListeningReason } from './useDeepgramRecognition'
 import type { TurnRouterResult } from './useInterviewAPI'
 import {
   classifyIntent,
@@ -51,7 +51,20 @@ interface UseInterviewOptions {
   config: InterviewConfig | null
   voicesReady: boolean
   startListening: (onComplete: (result: SpeechRecognitionResult) => void, options?: StartListeningOptions) => void
-  stopListening: () => void
+  /** Terminate the active listening session. `reason` identifies the
+   *  useInterview code path that triggered the stop so Deepgram-level
+   *  logs can distinguish inactivity-pre-speech vs post-speech vs
+   *  max-answer vs intentional-silence probe vs end-of-interview.
+   *  Omit for legacy/external callers — maps to the generic 'external'
+   *  trigger at the Deepgram level. */
+  stopListening: (reason?: StopListeningReason) => void
+  /** Current live transcript from the STT hook. Grows continuously as
+   *  the candidate speaks. Used by the inactivity-timer to detect
+   *  whether speech is actively progressing (pre-PR #293 the inactivity
+   *  timer read liveAnswerRef, which is only populated at end-of-turn,
+   *  so the timer always fired at 30s regardless of whether the user
+   *  was speaking — production log evidence from 2026-04-19 run). */
+  liveTranscript?: string
   /** Pre-warm STT WebSocket so startListening is instant. */
   warmUpListening?: () => void
   /** Set interrupt callback for speech-during-TTS detection. */
@@ -95,6 +108,7 @@ export function useInterview({
   voicesReady,
   startListening,
   stopListening,
+  liveTranscript,
   warmUpListening,
   setOnInterrupt,
   setSuppressInterrupt,
@@ -104,6 +118,18 @@ export function useInterview({
   currentDesignProblem,
 }: UseInterviewOptions): UseInterviewReturn {
   const router = useRouter()
+
+  /** Mirror of the Deepgram hook's `liveTranscript` into a ref. The
+   *  inactivity timer below reads this synchronously from its setTimeout
+   *  callback — React state via closure would stale across timer ticks.
+   *  Empty string when STT hook hasn't started or caller didn't wire the
+   *  prop (e.g. Web Speech API fallback adapter), in which case the
+   *  inactivity timer falls back to its legacy liveAnswerRef check
+   *  which is a safe no-op. */
+  const liveTranscriptRef = useRef<string>('')
+  useEffect(() => {
+    liveTranscriptRef.current = liveTranscript ?? ''
+  }, [liveTranscript])
 
   // ── State machine ──
   const [phase, setPhase] = useState<InterviewState>('INTERVIEW_START')
@@ -353,7 +379,7 @@ export function useInterview({
         usageLimitReachedRef.current = true
         interviewAbortRef.current?.abort()
         coachingAbortRef.current?.abort()
-        stopListening()
+        stopListening('usageLimit')
         onRecordingStop?.()
         setCurrentQuestion('Monthly interview limit reached. Please upgrade your plan to continue.')
         setCoachingTip('You have reached your monthly interview limit. Visit Pricing to upgrade and keep practicing.')
@@ -569,7 +595,17 @@ export function useInterview({
 
     return new Promise((resolve) => {
       let resolved = false
-      let timeoutTimer: ReturnType<typeof setTimeout> | undefined
+      /** Inactivity watchdog — polls liveTranscriptRef at 1s intervals to
+       *  detect speech transitions and re-arm the post-speech deadline in
+       *  real time. Previously a single setTimeout, but that fired only
+       *  at the pre-speech deadline, meaning a user who spoke at T=5s
+       *  and then the grace path stalled would wait until T=60s for the
+       *  timer to notice growth and reschedule to T=90s — when the
+       *  intended fire time was T=35s (5s + 30s post-speech). Codex P2
+       *  on PR #294. setInterval handle is stored in this variable
+       *  (named timeoutTimer for historical reasons) and cleared with
+       *  clearInterval below. */
+      let inactivityWatchdog: ReturnType<typeof setInterval> | undefined
       let maxTimer: ReturnType<typeof setTimeout> | undefined
 
       const wrappedOnCaptureReady = onCaptureReady
@@ -577,7 +613,7 @@ export function useInterview({
       startListening((result) => {
         if (resolved) return
         resolved = true
-        clearTimeout(timeoutTimer)
+        if (inactivityWatchdog !== undefined) clearInterval(inactivityWatchdog)
         clearTimeout(maxTimer)
         clearInterval(emotionInterval)
         if (result.metrics) {
@@ -593,66 +629,137 @@ export function useInterview({
         resolve(fullText)
       }, { onCaptureReady: wrappedOnCaptureReady })
 
-      // Speech-aware inactivity timeout.
-      // Fires after timeoutMs of NO speech progress. If the user is actively
-      // speaking (liveAnswerRef growing), the timer reschedules itself so the
-      // candidate is never cut off mid-answer. Only fires when the user hasn't
-      // started speaking or has gone silent for timeoutMs.
+      // Speech-aware inactivity safety-net timer.
+      // ───────────────────────────────────────────────────────────
+      // Purpose: catch abandoned sessions (user left mid-interview,
+      // mic failed, etc.) so we don't wait the full MAX_ANSWER_MS
+      // (180s) before moving on.
       //
-      // IMPORTANT: do NOT set resolved=true or call resolve('') here — doing so
-      // creates a race with finishRecognition's async onComplete callback (which
-      // fires after a dynamic import). If resolved=true is set first, the
-      // startListening callback guard discards the actual captured text and the
-      // promise resolves with '' even when finalTextRef had a full answer.
-      // Instead, let stopListening() → finishRecognition() → onComplete fire
-      // naturally with result.text. A 3-second safety timeout handles the edge
-      // case where onComplete never fires (e.g. dynamic import hangs).
+      // This is a SAFETY NET, not the primary end-of-answer detector.
+      // The primary is the intent-tiered grace timer in
+      // useDeepgramRecognition (3s/8s/30s based on classifyUtteranceIntent).
+      // By the time this timer would fire on a healthy session, grace
+      // has already resolved the promise (`resolved=true`) and the
+      // `if (resolved) return` guard makes us a no-op.
+      //
+      // PR #293 log evidence (74% stopListeningExternal): the previous
+      // implementation read `liveAnswerRef.current.length`, but
+      // liveAnswerRef is only populated in the onComplete callback at
+      // END of the turn — so the growth-check ALWAYS failed during
+      // active speech, and the timer fired at the 30s mark on every
+      // long answer. Now we read `liveTranscriptRef.current.length`,
+      // which is mirrored from the Deepgram hook's liveTranscript state
+      // via useEffect and actually grows during speech.
+      //
+      // Windowing: caller's `timeoutMs` is preserved as the POST-speech
+      // window (so wrap-ups still get their 15s). Pre-speech gets an
+      // extra 30s on top — legitimate "thinking before answering" budget.
+      // Normal 30s caller → 60s pre-speech / 30s post-speech.
+      // Wrap-up 15s caller → 45s pre-speech / 15s post-speech.
+      //
+      // If the turn started with an `interruptPrefix` (speech captured
+      // while the AI was still speaking, carried over as the seed of
+      // this turn's answer), treat it as "speech has already happened"
+      // — skip the pre-speech window entirely. Otherwise the candidate
+      // who interrupted and then paused would sit through an extra 30s
+      // before the safety net fires. Codex P2 on PR #294.
+      //
+      // IMPORTANT: do NOT set resolved=true or call resolve('') here —
+      // doing so races finishRecognition's async onComplete (which fires
+      // after a dynamic import) and can lose captured text. Instead
+      // let stopListening(reason) → finishRecognition → onComplete fire
+      // naturally. A 3-second safety settle handles the edge case
+      // where onComplete never fires.
+      const POST_SPEECH_INACTIVITY_MS = timeoutMs
+      const PRE_SPEECH_INACTIVITY_MS = timeoutMs + 30_000
+      const hadInterruptPrefix = interruptPrefix.length > 0
       if (timeoutMs > 0) {
-        // Start from the interrupt prefix length so the prefix alone
-        // doesn't count as "speech progress" and cause a false reschedule.
-        let lastSeenLength = interruptPrefix.length
-        const scheduleInactivityTimeout = () => {
-          timeoutTimer = setTimeout(() => {
-            if (resolved) return
-            // E-3.7: if the tab is hidden, browsers throttle timers and
-            // suspend the AudioContext, so liveAnswer cannot grow even if
-            // the candidate is still speaking. Reschedule instead of
-            // terminating — the Deepgram hook also suppresses its grace
-            // timer while hidden so no answer is lost.
-            if (typeof document !== 'undefined' && document.hidden) {
-              scheduleInactivityTimeout()
-              return
+        const turnStartedAt = Date.now()
+        let lastSeenLength = 0
+        // `postSpeechArmedAt` is non-null once ANY speech has been
+        // observed this turn. While null we're in the pre-speech
+        // window (PRE_SPEECH_INACTIVITY_MS from turnStartedAt). Once
+        // armed, the deadline is `postSpeechArmedAt + POST_SPEECH_INACTIVITY_MS`
+        // and resets forward on each growth tick. An interrupt-seeded
+        // turn starts ALREADY armed (speech has effectively happened).
+        let postSpeechArmedAt: number | null = hadInterruptPrefix ? turnStartedAt : null
+        // Hidden-tab timestamp tracking: when the tab is hidden, we
+        // neither fire nor update armed state. We record the hidden-
+        // enter time and subtract it from elapsed clocks on return so
+        // the safety net doesn't fire an answered-session during the
+        // brief post-visible window. In practice this is a small
+        // correction — the Deepgram hook's grace timer is the primary
+        // guard; the inactivity timer is a last-resort net.
+        const fireStop = (reason: 'inactivityPreSpeech' | 'inactivityPostSpeech') => {
+          if (inactivityWatchdog !== undefined) clearInterval(inactivityWatchdog)
+          clearTimeout(maxTimer)
+          clearInterval(emotionInterval)
+          stopListening(reason)
+          // Safety settle: if onComplete doesn't fire within 3s, resolve empty
+          setTimeout(() => {
+            if (!resolved) {
+              resolved = true
+              resolve('')
             }
-            const currentLength = (liveAnswerRef.current || '').length
-            if (currentLength > lastSeenLength) {
-              // User is still speaking — reset the inactivity clock
-              lastSeenLength = currentLength
-              scheduleInactivityTimeout()
-            } else {
-              // No new speech for timeoutMs — stop listening
-              clearTimeout(maxTimer)
-              clearInterval(emotionInterval)
-              stopListening()
-              // Safety net: if onComplete doesn't fire within 3s, resolve empty
-              setTimeout(() => {
-                if (!resolved) {
-                  resolved = true
-                  resolve('')
-                }
-              }, 3000)
-            }
-          }, timeoutMs)
+          }, 3000)
         }
-        scheduleInactivityTimeout()
+        inactivityWatchdog = setInterval(() => {
+          if (resolved) {
+            if (inactivityWatchdog !== undefined) clearInterval(inactivityWatchdog)
+            return
+          }
+          // E-3.7: if the tab is hidden, browsers throttle timers and
+          // suspend the AudioContext, so liveTranscript cannot grow
+          // even if the candidate is still speaking. Skip the tick —
+          // the Deepgram hook also suppresses its grace timer while
+          // hidden so no answer is lost. When we return, the deadline
+          // comparison below runs against current wall-clock; in the
+          // worst case an extra second of dead air after the tab becomes
+          // visible before the safety net fires — acceptable given
+          // this whole path is the last-resort net and the primary
+          // (grace timer) is functional.
+          if (typeof document !== 'undefined' && document.hidden) return
+
+          const now = Date.now()
+          const currentLength = (liveTranscriptRef.current || '').length
+
+          if (currentLength > lastSeenLength) {
+            // Growth detected this tick. Arm (or re-arm) the post-speech
+            // deadline from NOW, not from a scheduled callback. This is
+            // the core fix for Codex P2 on the d3d4922 revision: the
+            // prior implementation only switched to post-speech when
+            // the pre-speech timer actually fired, letting a user who
+            // spoke 5s into a 60s pre-speech timer sit through T=90s
+            // of dead air instead of the intended T=35s.
+            lastSeenLength = currentLength
+            postSpeechArmedAt = now
+            return
+          }
+
+          // No growth this tick. Check the applicable deadline.
+          if (postSpeechArmedAt !== null) {
+            if (now - postSpeechArmedAt >= POST_SPEECH_INACTIVITY_MS) {
+              // Speech stopped growing for POST_SPEECH_INACTIVITY_MS.
+              // Grace timer should have fired long before this — we're
+              // a safety net for edge cases (Deepgram protocol stall,
+              // audio stream death, etc.).
+              fireStop('inactivityPostSpeech')
+            }
+          } else if (now - turnStartedAt >= PRE_SPEECH_INACTIVITY_MS) {
+            // PRE_SPEECH_INACTIVITY_MS elapsed with no speech ever.
+            // User abandoned the session before answering.
+            fireStop('inactivityPreSpeech')
+          }
+        }, 1000)
       }
 
       // Hard cap: stop listening after MAX_ANSWER_MS regardless of speech
       maxTimer = setTimeout(() => {
         if (!resolved) {
           resolved = true
-          clearTimeout(timeoutTimer)
+          if (inactivityWatchdog !== undefined) clearInterval(inactivityWatchdog)
           clearInterval(emotionInterval)
-          stopListening()
+          stopListening('maxAnswer')
           // Resolve with whatever was captured so far
           resolve(liveAnswerRef.current || '')
         }
@@ -881,7 +988,7 @@ export function useInterview({
     coachingAbortRef.current?.abort()
     cancelTTS() // stops streaming + buffered audio + in-flight TTS fetches
     window.speechSynthesis.cancel()
-    stopListening()
+    stopListening('finishInterview')
     onRecordingStop?.()
     setCoachingTip(null)
     transitionTo('SCORING')
@@ -1053,7 +1160,7 @@ export function useInterview({
 
     return new Promise<string | null>((resolve) => {
       const silenceTimer = setTimeout(() => {
-        stopListening()
+        stopListening('intentionalSilence')
         resolve(null)
       }, silenceMs)
 

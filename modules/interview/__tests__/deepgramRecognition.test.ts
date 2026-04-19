@@ -130,7 +130,7 @@ Object.defineProperty(navigator, 'mediaDevices', {
 vi.stubGlobal('requestAnimationFrame', (cb: () => void) => { cb(); return 1 })
 vi.stubGlobal('cancelAnimationFrame', vi.fn())
 
-import { useDeepgramRecognition } from '../hooks/useDeepgramRecognition'
+import { useDeepgramRecognition, classifyUtteranceIntent } from '../hooks/useDeepgramRecognition'
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -161,6 +161,75 @@ function makeUtteranceEnd() {
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────────────
+
+describe('classifyUtteranceIntent', () => {
+  describe('thinkingRequest', () => {
+    it.each([
+      'Let me think.',
+      'Let me think about this.',
+      'let me think through this.',
+      'Give me a moment.',
+      'Give me a second.',
+      'give me a minute',
+      'One sec.',
+      'I need a moment.',
+      'I need some time to think.',
+      'I need time',
+      'Let me collect my thoughts.',
+      'Let me gather my thoughts.',
+      'Hold on.',
+      'Bear with me.',
+      'Ek second.',
+      'Ruko.',
+      'Sochne do.',
+      'Soch raha hun.',
+    ])('detects "%s" as thinkingRequest', (text) => {
+      expect(classifyUtteranceIntent(text)).toBe('thinkingRequest')
+    })
+
+    it('detects thinking phrase at end of longer utterance', () => {
+      // Candidate started answering, then realized they need time
+      expect(classifyUtteranceIntent("Okay, so the first thing I'd do is... actually, let me think.")).toBe('thinkingRequest')
+    })
+  })
+
+  describe('incomplete', () => {
+    it.each([
+      'I would start with the user flow and',
+      'The main issue is the latency, so',
+      'We need to consider the trade-offs because',
+      'The next step is to',
+      'I would look at the',
+      'The customer is a',
+      'We need to think about,',
+      'My approach would be...',
+      'Then we measure…',
+    ])('detects "%s" as incomplete (trails off)', (text) => {
+      expect(classifyUtteranceIntent(text)).toBe('incomplete')
+    })
+  })
+
+  describe('complete', () => {
+    it.each([
+      "That's my answer.",
+      'I would prioritize engagement over reach.',
+      'Does that make sense?',
+      'The trade-off is clear: we accept higher latency for stronger consistency.',
+    ])('detects "%s" as complete', (text) => {
+      expect(classifyUtteranceIntent(text)).toBe('complete')
+    })
+
+    it('does NOT flag mid-sentence thinking phrases as thinkingRequest', () => {
+      // Phrase "need to think" appears but answer continues and ends cleanly
+      expect(classifyUtteranceIntent("I'd need to think about the trade-offs carefully, then I'd prioritize option A.")).toBe('complete')
+    })
+
+    it('returns complete for empty input', () => {
+      expect(classifyUtteranceIntent('')).toBe('complete')
+      expect(classifyUtteranceIntent('   ')).toBe('complete')
+    })
+  })
+})
 
 describe('useDeepgramRecognition', () => {
   beforeEach(() => {
@@ -219,37 +288,10 @@ describe('useDeepgramRecognition', () => {
     )
   })
 
-  it('early question detection finishes without UtteranceEnd', async () => {
-    const { result } = renderHook(() => useDeepgramRecognition())
-    const onComplete = vi.fn()
-
-    // warmUp
-    act(() => { result.current.warmUp() })
-    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
-    act(() => { mockWsInstance!.simulateOpen() })
-
-    // startListening on fast path
-    await act(async () => {
-      result.current.startListening(onComplete)
-      await vi.advanceTimersByTimeAsync(10)
-    })
-
-    // Send a short question (ends with ?) — should trigger immediate finish
-    await act(async () => {
-      mockWsInstance!.simulateMessage(makeResult('Can you repeat that?', true))
-      await vi.advanceTimersByTimeAsync(10)
-    })
-
-    // onComplete fires immediately without needing UtteranceEnd
-    expect(onComplete).toHaveBeenCalledWith(
-      expect.objectContaining({ text: 'Can you repeat that?' }),
-    )
-  })
-
   // Regression for the mid-speech cutoff diagnostic work. `ws.close()`
   // without args produces CloseEvent.code=1005, which is indistinguishable
-  // between "grace timer fired" vs "early-question" vs "stopListening from
-  // useInterview" in Vercel logs. Each finishRecognition trigger now emits
+  // between "grace timer fired" vs stopListening-sub-triggers in Vercel logs.
+  // Each finishRecognition trigger now emits
   // a distinct 4xxx code AND posts `trigger:<name>` to the debug endpoint.
   // These tests pin the mapping so a later refactor can't silently regress
   // the codes (which would void the next production diagnosis run).
@@ -294,10 +336,14 @@ describe('useDeepgramRecognition', () => {
     expect(['warmUp', 'connectWebSocket']).toContain(body.context)
   })
 
-  it('early-question close emits code 4002 with trigger=earlyQuestion', async () => {
+  // Regression: the earlyQuestion trigger was retired because production
+  // logs showed it cutting candidates mid-rhetorical-flow (e.g. "say
+  // option a, the faster one?" as part of an example). Short utterances
+  // ending with "?" now wait for the normal UtteranceEnd → grace path.
+  // Code 4002 is intentionally skipped in FINISH_TRIGGER_CODES.
+  it('short utterance ending with "?" no longer early-finishes', async () => {
     const { result } = renderHook(() => useDeepgramRecognition())
     const onComplete = vi.fn()
-    const fetchSpy = vi.spyOn(global, 'fetch')
 
     act(() => { result.current.warmUp() })
     await act(async () => { await vi.advanceTimersByTimeAsync(10) })
@@ -313,18 +359,63 @@ describe('useDeepgramRecognition', () => {
       await vi.advanceTimersByTimeAsync(10)
     })
 
-    expect(mockWsInstance!.lastCloseCode).toBe(4002)
-    expect(mockWsInstance!.lastCloseReason).toBe('earlyQuestion')
+    // No immediate finish — onComplete should NOT have fired yet.
+    expect(onComplete).not.toHaveBeenCalled()
+  })
+
+  it('stopListening("finishInterview") emits code 4014', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+    const fetchSpy = vi.spyOn(global, 'fetch')
+
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    act(() => { mockWsInstance!.simulateOpen() })
+
+    await act(async () => {
+      result.current.startListening(onComplete)
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    await act(async () => {
+      result.current.stopListening('finishInterview')
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    expect(mockWsInstance!.lastCloseCode).toBe(4014)
+    expect(mockWsInstance!.lastCloseReason).toBe('stopListeningFinishInterview')
 
     const debugCall = fetchSpy.mock.calls.find(
       ([url]) => typeof url === 'string' && url.includes('/api/debug/deepgram-ws-close'),
     )
     expect(debugCall).toBeDefined()
     const body = JSON.parse((debugCall![1] as RequestInit).body as string)
-    expect(body.trigger).toBe('earlyQuestion')
+    expect(body.trigger).toBe('stopListeningFinishInterview')
   })
 
-  it('stopListening close emits code 4003 with trigger=stopListeningExternal', async () => {
+  it('stopListening("inactivityPreSpeech") emits code 4010', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    act(() => { mockWsInstance!.simulateOpen() })
+
+    await act(async () => {
+      result.current.startListening(onComplete)
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    await act(async () => {
+      result.current.stopListening('inactivityPreSpeech')
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    expect(mockWsInstance!.lastCloseCode).toBe(4010)
+    expect(mockWsInstance!.lastCloseReason).toBe('stopListeningInactivityPreSpeech')
+  })
+
+  it('stopListening (no reason) emits code 4003 with trigger=stopListeningExternal', async () => {
     const { result } = renderHook(() => useDeepgramRecognition())
     const onComplete = vi.fn()
     const fetchSpy = vi.spyOn(global, 'fetch')
@@ -1034,7 +1125,12 @@ describe('useDeepgramRecognition', () => {
     )
   })
 
-  it('UtteranceEnd grace is 2500ms for long answers (was 3500ms)', async () => {
+  // After classifyUtteranceIntent was introduced the grace window is
+  // intent-based, not word-count-based. A long answer with no thinking
+  // phrase and no trailing conjunction classifies as 'complete' → 3000ms,
+  // same as short answers. This test pins the uniform complete-intent
+  // grace so future refactors don't silently regress.
+  it('complete-intent utterance (long, no trailing conjunction) gets 3000ms grace', async () => {
     const { result } = renderHook(() => useDeepgramRecognition())
     const onComplete = vi.fn()
 
@@ -1047,19 +1143,76 @@ describe('useDeepgramRecognition', () => {
       await vi.advanceTimersByTimeAsync(10)
     })
 
-    // 16-word transcript triggers long-answer branch
+    // 16-word transcript ending cleanly (no trailing "and"/"or"/etc.)
     const longText = 'one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen'
     await act(async () => {
       mockWsInstance!.simulateMessage(makeResult(longText, true))
       mockWsInstance!.simulateMessage(makeUtteranceEnd())
     })
 
-    // Not fired at 2000ms
-    await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+    // Not fired at 2500ms (below new 3000ms grace)
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500) })
     expect(onComplete).not.toHaveBeenCalled()
 
-    // Fired by 2600ms
+    // Fired by 3100ms
     await act(async () => { await vi.advanceTimersByTimeAsync(600) })
+    expect(onComplete).toHaveBeenCalled()
+  })
+
+  // thinkingRequest grace is 30000ms — verify we DON'T prematurely cut
+  // when the candidate says "let me think for a moment".
+  it('thinkingRequest utterance extends grace to 30s', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    act(() => { mockWsInstance!.simulateOpen() })
+
+    await act(async () => {
+      result.current.startListening(onComplete)
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    await act(async () => {
+      mockWsInstance!.simulateMessage(makeResult('Let me think.', true))
+      mockWsInstance!.simulateMessage(makeUtteranceEnd())
+    })
+
+    // Old (complete) grace would have fired at 3s — verify we're past it and still listening
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+    expect(onComplete).not.toHaveBeenCalled()
+
+    // Past 30s → fired
+    await act(async () => { await vi.advanceTimersByTimeAsync(26000) })
+    expect(onComplete).toHaveBeenCalled()
+  })
+
+  // incomplete intent (trailing conjunction/preposition) gets 8s grace.
+  it('incomplete utterance ("...and so on,") gets 8s grace', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    act(() => { mockWsInstance!.simulateOpen() })
+
+    await act(async () => {
+      result.current.startListening(onComplete)
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    await act(async () => {
+      mockWsInstance!.simulateMessage(makeResult('The first thing I would do is look at the', true))
+      mockWsInstance!.simulateMessage(makeUtteranceEnd())
+    })
+
+    // Past old 3s grace but within new 8s incomplete grace
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+    expect(onComplete).not.toHaveBeenCalled()
+
+    // Past 8s grace → fired
+    await act(async () => { await vi.advanceTimersByTimeAsync(3500) })
     expect(onComplete).toHaveBeenCalled()
   })
 

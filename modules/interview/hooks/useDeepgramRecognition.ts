@@ -47,35 +47,71 @@ export interface DeepgramPacketLog {
  *  us in Vercel logs exactly which trigger fired — essential for
  *  diagnosing mid-speech cutoffs where `ws.close()` with no args
  *  produces the ambiguous code 1005. Codes are in the application-
- *  defined 4000–4999 range (RFC 6455 §7.4.2). */
+ *  defined 4000–4999 range (RFC 6455 §7.4.2).
+ *
+ *  `stopListeningExternal*` variants identify which useInterview call
+ *  site tripped the stopListening() public API — needed because PR #293
+ *  logs showed ~74% of closes collapsing into one label, making it
+ *  impossible to distinguish the legitimate inactivity timer from the
+ *  intentional-silence probe from the user-initiated end.
+ *
+ *  Code 4002 is intentionally skipped: it was the retired `earlyQuestion`
+ *  trigger removed because it cut users mid-rhetorical-flow (e.g.
+ *  "say option a, the faster one?" in the middle of an example). */
 type FinishTrigger =
   | 'startListenReentry'
   | 'tokenFetchFailed'
-  | 'earlyQuestion'
   | 'graceTimer'
   | 'offline'
   | 'reconnectExhausted'
   | 'getUserMediaFailed'
-  | 'stopListeningExternal'
   | 'warmUpTimeout'
+  // stopListening() public-API sub-triggers — set via stopListening(reason)
+  | 'stopListeningInactivityPreSpeech'
+  | 'stopListeningInactivityPostSpeech'
+  | 'stopListeningMaxAnswer'
+  | 'stopListeningIntentionalSilence'
+  | 'stopListeningFinishInterview'
+  | 'stopListeningUsageLimit'
+  | 'stopListeningExternal' // fallback when caller didn't specify
 
 const FINISH_TRIGGER_CODES: Record<FinishTrigger, number> = {
   startListenReentry: 4000,
   graceTimer: 4001,
-  earlyQuestion: 4002,
+  // 4002 reserved (retired earlyQuestion trigger)
   stopListeningExternal: 4003,
   warmUpTimeout: 4004,
   reconnectExhausted: 4005,
   tokenFetchFailed: 4006,
   offline: 4007,
   getUserMediaFailed: 4008,
+  // stopListening sub-triggers
+  stopListeningInactivityPreSpeech: 4010,
+  stopListeningInactivityPostSpeech: 4011,
+  stopListeningMaxAnswer: 4012,
+  stopListeningIntentionalSilence: 4013,
+  stopListeningFinishInterview: 4014,
+  stopListeningUsageLimit: 4015,
 }
+
+/** Caller-supplied reason for ending a listening session. Each value
+ *  maps internally to a distinct 4xxx close code (via FINISH_TRIGGER_CODES)
+ *  so Vercel logs can tell which useInterview call site ended the turn.
+ *  Omit the argument and the default `'external'` (4003) fires — still
+ *  meaningful, just less specific. */
+export type StopListeningReason =
+  | 'inactivityPreSpeech'
+  | 'inactivityPostSpeech'
+  | 'maxAnswer'
+  | 'intentionalSilence'
+  | 'finishInterview'
+  | 'usageLimit'
 
 export interface UseDeepgramRecognitionReturn {
   isListening: boolean
   liveTranscript: string
   startListening: (onComplete: (result: SpeechRecognitionResult) => void, options?: StartListeningOptions) => void
-  stopListening: () => void
+  stopListening: (reason?: StopListeningReason) => void
   /** Pre-warm: fetch token + connect WebSocket so startListening is instant. */
   warmUp: () => void
   /** Provide an existing audio stream to avoid redundant getUserMedia calls. */
@@ -99,6 +135,98 @@ export interface UseDeepgramRecognitionReturn {
  *  reads the tag from ITS OWN `ws` closure variable — the instances
  *  never share the tag. Codex P2 on PR #293. */
 type TaggedWebSocket = WebSocket & { __finishTrigger?: FinishTrigger | null }
+
+/** Classification of the candidate's utterance as of the most recent
+ *  UtteranceEnd. Drives how long we wait before finalizing the answer.
+ *  See `classifyUtteranceIntent` for the rules. */
+export type UtteranceIntent = 'complete' | 'incomplete' | 'thinkingRequest'
+
+/** Grace windows per intent — the budget we give the candidate to
+ *  resume speaking after Deepgram detects silence. Any interim or
+ *  `is_final` result cancels the pending grace (see lines ~687-699),
+ *  so "resume" can be as short as one more word. These are only the
+ *  MAX wait in the worst case where silence truly continues.
+ *
+ *  Tuning note: current grace is 2500/3000ms (wordCount-based). This
+ *  replaces that with an intent-based tier. `complete` stays near the
+ *  old floor so clean answers don't introduce extra dead air after
+ *  natural end-of-sentence. `thinkingRequest` honors explicit signals
+ *  like "let me think" / "give me a moment" without TTS confirmation
+ *  (which would open its own WS drop + reconnect race — Codex-style
+ *  analysis on this branch before implementing). */
+const GRACE_MS_BY_INTENT: Record<UtteranceIntent, number> = {
+  complete: 3000,
+  incomplete: 8000,
+  thinkingRequest: 30000,
+}
+
+/** Regex patterns that signal the candidate is explicitly asking for
+ *  more thinking time. Anchored to end-of-utterance so phrases buried
+ *  mid-sentence ("I'd need to think about trade-offs, then I'd...")
+ *  don't false-fire. Trailing punctuation/whitespace tolerated.
+ *
+ *  False-positive protection: if the candidate says a thinking phrase
+ *  but then immediately continues speaking, the grace timer gets
+ *  cancelled by the next interim/is_final (existing behavior). So
+ *  worst-case cost of a wrong match is 27s of extra dead air when
+ *  they genuinely stopped — not a cutoff. */
+const THINKING_PHRASE_PATTERNS: readonly RegExp[] = [
+  /\blet me think(?:\s+(?:about|on|through)\s+\w+)?[.!?…]*\s*$/i,
+  /\bgive me (?:a|one) (?:moment|second|minute|sec|bit)[.!?…]*\s*$/i,
+  /\bone (?:sec|second|moment|minute)[.!?…]*\s*$/i,
+  /\bhmm[,]?\s+(?:let me|i)\b[\s\S]{0,20}$/i,
+  /\bi need\b[\s\S]{0,20}\b(?:time|moment|minute|think|sec)[.!?…]*\s*$/i,
+  /\blet me (?:collect|gather) my thoughts[.!?…]*\s*$/i,
+  /\bhold on[.!?…]*\s*$/i,
+  /\bbear with me[.!?…]*\s*$/i,
+  /\b(?:wait|lemme)[,]?\s+(?:let me|i)\b[\s\S]{0,20}$/i,
+  /\bek (?:second|minute|sec)[.!?…]*\s*$/i,
+  /\bruk(?:o)?[.!?…]*\s*$/i,
+  /\bsochne do[.!?…]*\s*$/i,
+  /\bsoch(?:ne)? lo[.!?…]*\s*$/i,
+  /\bsoch raha hu(?:n)?[.!?…]*\s*$/i,
+]
+
+/** Conjunctions/prepositions at end-of-text suggesting the candidate
+ *  trailed off mid-thought (not yet done). */
+const INCOMPLETE_ENDING_PATTERNS: readonly RegExp[] = [
+  /\b(?:and|or|but|so|because|since|while|when|if|then|also|plus|however|therefore|moreover|furthermore)\s*$/i,
+  /\b(?:the|a|an|to|for|in|at|on|of|with|by|as|about|from|into|over|under|around)\s*$/i,
+  /,\s*$/,
+  /\.\.\.\s*$/,
+  /…\s*$/,
+]
+
+/** Classify the candidate's utterance intent as of this UtteranceEnd.
+ *
+ *  @param text The full accumulated `finalTextRef.current` for the turn.
+ *  @returns 'thinkingRequest' if an explicit request-for-time phrase
+ *           ends the text; 'incomplete' if the text trails off with a
+ *           conjunction/preposition or ellipsis; 'complete' otherwise.
+ *
+ *  Only the END of the text is inspected — phrase matches buried
+ *  mid-sentence don't fire. This mirrors the real-world distinction
+ *  between "let me think for a moment" (said then stopped) vs "I'd
+ *  need to think about the trade-offs carefully, then I'd..." (said
+ *  as part of continuing answer). Continuous speech doesn't trigger
+ *  UtteranceEnd mid-sentence, so classifications only run on the true
+ *  tail of a natural-silence boundary.
+ *
+ *  Exported for unit testing. No side effects — pure function.  */
+export function classifyUtteranceIntent(text: string): UtteranceIntent {
+  const trimmed = text.trim()
+  if (!trimmed) return 'complete'
+
+  for (const pattern of THINKING_PHRASE_PATTERNS) {
+    if (pattern.test(trimmed)) return 'thinkingRequest'
+  }
+
+  for (const pattern of INCOMPLETE_ENDING_PATTERNS) {
+    if (pattern.test(trimmed)) return 'incomplete'
+  }
+
+  return 'complete'
+}
 
 /**
  * Deepgram Nova-2 streaming speech recognition via WebSocket.
@@ -682,15 +810,6 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
                 })
               }
             }
-
-            // Early question detection: short utterances ending with "?" →
-            // respond immediately instead of waiting for UtteranceEnd
-            const accumulated = finalTextRef.current.trim()
-            const wordCount = accumulated.split(/\s+/).length
-            if (accumulated.endsWith('?') && wordCount < 20) {
-              finishRecognition('earlyQuestion')
-              return
-            }
           }
 
           // Update live transcript (RAF-throttled)
@@ -722,19 +841,24 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             if (graceTimerRef.current) {
               clearTimeout(graceTimerRef.current)
             }
-            const wordCount = finalTextRef.current.trim().split(/\s+/).length
-            // Grace period must exceed the time for Deepgram to produce an
-            // is_final or interim result after the user resumes speaking
-            // (~200-800ms). Commit 900839b raised this to 4000/3500 to
-            // defend against mid-sentence cutoffs, but that commit also
-            // wired interim-results to cancel the grace timer (lines
-            // 390-398) — which now protects resumed speech within ~500ms.
-            // The 4000/3500 numbers compounded with Deepgram's 2500ms
-            // utterance_end_ms to give 6+ seconds of silence after the
-            // candidate stopped talking before the AI acknowledged the
-            // answer. 3000/2500 keeps conservative headroom for natural
-            // thinking pauses while cutting ~1s of dead air per answer.
-            const graceMs = wordCount < 15 ? 3000 : 2500
+            // Classify the candidate's utterance-end signal so grace
+            // window matches intent. 'complete' gets a short 3s window
+            // (don't add dead air after a clean natural end), 'incomplete'
+            // 8s (trailing off with a conjunction — might resume), and
+            // 'thinkingRequest' 30s (explicit "let me think" / "give me
+            // a moment"). The next interim/is_final cancels the pending
+            // grace regardless of window size, so the window is only the
+            // UPPER BOUND on silence tolerance.
+            //
+            // PR #293 production logs showed 74% of closes collapsing
+            // into stopListeningExternal — the inactivity timer was
+            // firing at the 30s mark because liveAnswerRef was never
+            // wired. This intent-based grace fixes the "user takes a
+            // breath" failure mode upstream, so most legitimate
+            // continuations are caught by grace-cancellation without
+            // the useInterview-level inactivity net having to fire.
+            const intent = classifyUtteranceIntent(finalTextRef.current)
+            const graceMs = GRACE_MS_BY_INTENT[intent]
             graceTimerRef.current = setTimeout(() => {
               graceTimerRef.current = null
               // Double-guard: if the tab was hidden between scheduling and
@@ -1076,8 +1200,19 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       })
   }
 
-  const stopListening = useCallback(() => {
-    finishRecognition('stopListeningExternal')
+  /** Map the caller-facing StopListeningReason to the internal
+   *  FinishTrigger enum. Kept as a local constant (not top-level) so
+   *  TypeScript enforces exhaustiveness with FinishTrigger directly. */
+  const stopListening = useCallback((reason?: StopListeningReason) => {
+    const trigger: FinishTrigger =
+      reason === 'inactivityPreSpeech'   ? 'stopListeningInactivityPreSpeech'
+      : reason === 'inactivityPostSpeech' ? 'stopListeningInactivityPostSpeech'
+      : reason === 'maxAnswer'            ? 'stopListeningMaxAnswer'
+      : reason === 'intentionalSilence'   ? 'stopListeningIntentionalSilence'
+      : reason === 'finishInterview'      ? 'stopListeningFinishInterview'
+      : reason === 'usageLimit'           ? 'stopListeningUsageLimit'
+      : 'stopListeningExternal'
+    finishRecognition(trigger)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
