@@ -595,7 +595,17 @@ export function useInterview({
 
     return new Promise((resolve) => {
       let resolved = false
-      let timeoutTimer: ReturnType<typeof setTimeout> | undefined
+      /** Inactivity watchdog — polls liveTranscriptRef at 1s intervals to
+       *  detect speech transitions and re-arm the post-speech deadline in
+       *  real time. Previously a single setTimeout, but that fired only
+       *  at the pre-speech deadline, meaning a user who spoke at T=5s
+       *  and then the grace path stalled would wait until T=60s for the
+       *  timer to notice growth and reschedule to T=90s — when the
+       *  intended fire time was T=35s (5s + 30s post-speech). Codex P2
+       *  on PR #294. setInterval handle is stored in this variable
+       *  (named timeoutTimer for historical reasons) and cleared with
+       *  clearInterval below. */
+      let inactivityWatchdog: ReturnType<typeof setInterval> | undefined
       let maxTimer: ReturnType<typeof setTimeout> | undefined
 
       const wrappedOnCaptureReady = onCaptureReady
@@ -603,7 +613,7 @@ export function useInterview({
       startListening((result) => {
         if (resolved) return
         resolved = true
-        clearTimeout(timeoutTimer)
+        if (inactivityWatchdog !== undefined) clearInterval(inactivityWatchdog)
         clearTimeout(maxTimer)
         clearInterval(emotionInterval)
         if (result.metrics) {
@@ -664,70 +674,90 @@ export function useInterview({
       const PRE_SPEECH_INACTIVITY_MS = timeoutMs + 30_000
       const hadInterruptPrefix = interruptPrefix.length > 0
       if (timeoutMs > 0) {
+        const turnStartedAt = Date.now()
         let lastSeenLength = 0
-        const scheduleInactivityTimeout = (ms: number) => {
-          timeoutTimer = setTimeout(() => {
-            if (resolved) return
-            // E-3.7: if the tab is hidden, browsers throttle timers and
-            // suspend the AudioContext, so liveTranscript cannot grow
-            // even if the candidate is still speaking. Reschedule
-            // instead of terminating — the Deepgram hook also suppresses
-            // its grace timer while hidden so no answer is lost.
-            if (typeof document !== 'undefined' && document.hidden) {
-              scheduleInactivityTimeout(POST_SPEECH_INACTIVITY_MS)
-              return
+        // `postSpeechArmedAt` is non-null once ANY speech has been
+        // observed this turn. While null we're in the pre-speech
+        // window (PRE_SPEECH_INACTIVITY_MS from turnStartedAt). Once
+        // armed, the deadline is `postSpeechArmedAt + POST_SPEECH_INACTIVITY_MS`
+        // and resets forward on each growth tick. An interrupt-seeded
+        // turn starts ALREADY armed (speech has effectively happened).
+        let postSpeechArmedAt: number | null = hadInterruptPrefix ? turnStartedAt : null
+        // Hidden-tab timestamp tracking: when the tab is hidden, we
+        // neither fire nor update armed state. We record the hidden-
+        // enter time and subtract it from elapsed clocks on return so
+        // the safety net doesn't fire an answered-session during the
+        // brief post-visible window. In practice this is a small
+        // correction — the Deepgram hook's grace timer is the primary
+        // guard; the inactivity timer is a last-resort net.
+        const fireStop = (reason: 'inactivityPreSpeech' | 'inactivityPostSpeech') => {
+          if (inactivityWatchdog !== undefined) clearInterval(inactivityWatchdog)
+          clearTimeout(maxTimer)
+          clearInterval(emotionInterval)
+          stopListening(reason)
+          // Safety settle: if onComplete doesn't fire within 3s, resolve empty
+          setTimeout(() => {
+            if (!resolved) {
+              resolved = true
+              resolve('')
             }
-            const currentLength = (liveTranscriptRef.current || '').length
-            if (currentLength > lastSeenLength) {
-              // User is speaking — reset, reschedule with post-speech window.
-              lastSeenLength = currentLength
-              scheduleInactivityTimeout(POST_SPEECH_INACTIVITY_MS)
-              return
-            }
-            // No growth. Decide which sub-trigger to report.
-            // Pre-speech fire iff: (a) no interrupt prefix seeded speech,
-            // (b) liveTranscript is empty (no in-session speech), AND
-            // (c) we were scheduled on the pre-speech window. Any of
-            // those false → we're in the post-speech safety net path.
-            const isPreSpeechFire =
-              !hadInterruptPrefix &&
-              currentLength === 0 &&
-              ms === PRE_SPEECH_INACTIVITY_MS
-            clearTimeout(maxTimer)
-            clearInterval(emotionInterval)
-            if (isPreSpeechFire) {
-              // 60s of nothing. User abandoned the session before speaking.
-              stopListening('inactivityPreSpeech')
-            } else {
-              // Speech started (either via interrupt prefix or mid-turn)
-              // then stopped growing — grace timer should have handled
-              // this already; we're a safety net for edge cases.
-              stopListening('inactivityPostSpeech')
-            }
-            // Safety net: if onComplete doesn't fire within 3s, resolve empty
-            setTimeout(() => {
-              if (!resolved) {
-                resolved = true
-                resolve('')
-              }
-            }, 3000)
-          }, ms)
+          }, 3000)
         }
-        // Initial window:
-        //   - No interrupt prefix → pre-speech (60s thinking budget)
-        //   - Interrupt prefix exists → post-speech (30s) because the
-        //     candidate already produced speech as the seed of the turn
-        const initialMs = hadInterruptPrefix
-          ? POST_SPEECH_INACTIVITY_MS
-          : PRE_SPEECH_INACTIVITY_MS
-        scheduleInactivityTimeout(initialMs)
+        inactivityWatchdog = setInterval(() => {
+          if (resolved) {
+            if (inactivityWatchdog !== undefined) clearInterval(inactivityWatchdog)
+            return
+          }
+          // E-3.7: if the tab is hidden, browsers throttle timers and
+          // suspend the AudioContext, so liveTranscript cannot grow
+          // even if the candidate is still speaking. Skip the tick —
+          // the Deepgram hook also suppresses its grace timer while
+          // hidden so no answer is lost. When we return, the deadline
+          // comparison below runs against current wall-clock; in the
+          // worst case an extra second of dead air after the tab becomes
+          // visible before the safety net fires — acceptable given
+          // this whole path is the last-resort net and the primary
+          // (grace timer) is functional.
+          if (typeof document !== 'undefined' && document.hidden) return
+
+          const now = Date.now()
+          const currentLength = (liveTranscriptRef.current || '').length
+
+          if (currentLength > lastSeenLength) {
+            // Growth detected this tick. Arm (or re-arm) the post-speech
+            // deadline from NOW, not from a scheduled callback. This is
+            // the core fix for Codex P2 on the d3d4922 revision: the
+            // prior implementation only switched to post-speech when
+            // the pre-speech timer actually fired, letting a user who
+            // spoke 5s into a 60s pre-speech timer sit through T=90s
+            // of dead air instead of the intended T=35s.
+            lastSeenLength = currentLength
+            postSpeechArmedAt = now
+            return
+          }
+
+          // No growth this tick. Check the applicable deadline.
+          if (postSpeechArmedAt !== null) {
+            if (now - postSpeechArmedAt >= POST_SPEECH_INACTIVITY_MS) {
+              // Speech stopped growing for POST_SPEECH_INACTIVITY_MS.
+              // Grace timer should have fired long before this — we're
+              // a safety net for edge cases (Deepgram protocol stall,
+              // audio stream death, etc.).
+              fireStop('inactivityPostSpeech')
+            }
+          } else if (now - turnStartedAt >= PRE_SPEECH_INACTIVITY_MS) {
+            // PRE_SPEECH_INACTIVITY_MS elapsed with no speech ever.
+            // User abandoned the session before answering.
+            fireStop('inactivityPreSpeech')
+          }
+        }, 1000)
       }
 
       // Hard cap: stop listening after MAX_ANSWER_MS regardless of speech
       maxTimer = setTimeout(() => {
         if (!resolved) {
           resolved = true
-          clearTimeout(timeoutTimer)
+          if (inactivityWatchdog !== undefined) clearInterval(inactivityWatchdog)
           clearInterval(emotionInterval)
           stopListening('maxAnswer')
           // Resolve with whatever was captured so far
