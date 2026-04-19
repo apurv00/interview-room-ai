@@ -994,6 +994,47 @@ describe('useDeepgramRecognition', () => {
         expect.objectContaining({ text: 'partial answer here' }),
       )
     })
+
+    // Reconnect-guard: client-initiated close (tagged with __finishTrigger
+    // by finishRecognition / stopListening / warmUpTimeout) must NOT
+    // schedule a reconnect. Pre-fix, ws.onclose called handleDisconnect
+    // unconditionally, producing ~5 spurious `Reconnecting in 800ms`
+    // attempts per session on top of legitimately-ended turns. The
+    // 800ms guard in maybeReconnectOrFinish usually aborted them but
+    // the race leaked reconnect attempts into fresh sessions at
+    // session boundaries.
+    it('does NOT reconnect after a client-initiated (tagged) close', async () => {
+      const { result } = renderHook(() => useDeepgramRecognition())
+      const onComplete = vi.fn()
+
+      act(() => { result.current.startListening(onComplete) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+      act(() => { mockWsInstance!.simulateOpen() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+
+      const firstWs = mockWsInstance!
+
+      // Candidate finishes a clean answer; Deepgram sends UtteranceEnd;
+      // the grace timer fires finishRecognition('graceTimer') which tags
+      // the ws with __finishTrigger and then calls ws.close().
+      await act(async () => {
+        mockWsInstance!.simulateMessage(makeResult('a complete answer.', true))
+        mockWsInstance!.simulateMessage(makeUtteranceEnd())
+        await vi.advanceTimersByTimeAsync(4500) // past longest grace (3000ms)
+      })
+
+      // finishRecognition fired — onComplete called.
+      expect(onComplete).toHaveBeenCalled()
+
+      // Advance past what WOULD have been the reconnect backoff window
+      // (800ms attempt-1). Before the guard, a new ws would have been
+      // spawned here.
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+
+      // No new WebSocket — the guard skipped handleDisconnect because
+      // __finishTrigger was set to 'graceTimer' before ws.close().
+      expect(mockWsInstance).toBe(firstWs)
+    })
   })
 
   it('warmUp sends KeepAlive pings every 5s while idle', async () => {

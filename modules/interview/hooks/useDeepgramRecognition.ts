@@ -982,7 +982,18 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
         }
         myKeepAliveTimer = null
       }
-      handleDisconnect()
+      // Skip reconnect when WE initiated the close. A non-null
+      // __finishTrigger means some finishRecognition / stopListening
+      // / warmUpTimeout path already tagged this socket before calling
+      // ws.close(). Running handleDisconnect here would schedule a
+      // spurious reconnect (`Reconnecting in 800ms`) on top of a
+      // legitimately-ended turn — the 800ms guard in maybeReconnectOrFinish
+      // usually aborts the attempt but races at session boundaries can
+      // leak reconnects into a fresh session. Untagged closes (Deepgram
+      // 1011 idle timeout, browser 1006 network drop) still fall through.
+      if (triggerForLog === null) {
+        handleDisconnect()
+      }
     }
   }
 
