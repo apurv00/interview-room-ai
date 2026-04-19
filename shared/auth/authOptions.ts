@@ -143,26 +143,17 @@ export const authOptions: NextAuthOptions = {
           token.provider = account.provider
         }
       }
-      // Refresh plan from DB periodically (catches external plan changes).
-      // Throttled to at most once every 5 minutes to avoid DB load.
-      if (!user && token.userId) {
-        const REFRESH_INTERVAL_MS = 5 * 60 * 1000
-        const lastRefreshed = (token.lastRefreshedAt as number) || 0
-        if (Date.now() - lastRefreshed > REFRESH_INTERVAL_MS) {
-          try {
-            await connectDB()
-            const dbUser = await User.findById(token.userId).select('plan role onboardingCompleted')
-            if (dbUser) {
-              token.plan = dbUser.plan
-              token.role = dbUser.role
-              token.onboardingCompleted = dbUser.onboardingCompleted ?? false
-            }
-            token.lastRefreshedAt = Date.now()
-          } catch (err) {
-            authLogger.error({ err, userId: token.userId }, 'JWT periodic refresh failed — keeping stale token')
-          }
-        }
-      }
+      // Plan/role/onboarding are snapshot at sign-in and only re-read on
+      // explicit `useSession().update()` (handled below). The periodic 5-min
+      // Mongo refresh that used to live here was removed because it
+      // blocked every authed request — including /api/tts/stream — on
+      // Mongo cold-start for up to 5s, producing mid-interview dead-air
+      // at Q4/Q6 (first requests after the 5-min throttle boundary).
+      // Consequence: external plan/role mutations (admin demotion,
+      // Stripe upgrade when wired) only propagate on next sign-in or an
+      // explicit client-side update() call. Acceptable today: Stripe is
+      // not integrated, role revocations are rare, and interview-limit
+      // enforcement uses an atomic DB check, not the JWT plan field.
       // When session update is triggered (e.g. after plan change, onboarding),
       // always re-read authoritative fields from the database instead of trusting
       // client-supplied values. This prevents privilege escalation via
