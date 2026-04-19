@@ -716,3 +716,9 @@
 - **Root-cause:** prior investigation of R3 reconnects relied on browser
 - **Tests-added: none for the new route.**
 - **Verified-by:** (1) npx tsc --noEmit clean, (2) npx vitest run on
+
+### 2026-04-19 08:12:16 +0000 · `c38fe45` · Claude
+- **Subject:** feat(interview): labelled Deepgram WS close codes + trigger in debug log
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** Client-initiated `ws.close()` with no args produces
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
