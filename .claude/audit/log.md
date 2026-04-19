@@ -722,3 +722,9 @@
 - **Files:** 3 changed, 1 test file(s)
 - **Root-cause:** Client-initiated `ws.close()` with no args produces
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+
+### 2026-04-19 11:53:02 +0000 · `0b056e1` · Claude
+- **Subject:** fix(interview): scope closeTriggerRef to paths that actually close the ws
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** PR #293's `finishRecognition` set `closeTriggerRef.current =
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
