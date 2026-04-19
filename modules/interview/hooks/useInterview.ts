@@ -73,7 +73,12 @@ interface UseInterviewOptions {
   setSuppressInterrupt?: (suppress: boolean) => void
   /** Return and clear accumulated interrupt speech for answer prepending. */
   getAndClearInterruptAccum?: () => string
-  onRecordingStop?: () => void
+  /** Fired at interview end so the page can flush MediaRecorder blobs
+   *  and upload them to R2. May be sync or async — `finishInterview`
+   *  captures the returned value as a Promise so downstream triggers
+   *  (e.g. `/api/analysis/start`) can gate on the R2 PATCH completing.
+   *  See `finishInterview` + the `/api/analysis/start` 400 race fix. */
+  onRecordingStop?: () => void | Promise<void>
   currentProblem?: { id: string; title: string; description: string } | null
   currentDesignProblem?: { id: string; title: string; description: string; requirements: string[] } | null
 }
@@ -989,7 +994,14 @@ export function useInterview({
     cancelTTS() // stops streaming + buffered audio + in-flight TTS fetches
     window.speechSynthesis.cancel()
     stopListening('finishInterview')
-    onRecordingStop?.()
+    // Kick off the recording flush-and-upload. The callback in page.tsx
+    // stops MediaRecorder, presigns R2, PUTs blobs, and PATCHes
+    // audioRecordingR2Key onto the session. Capture the returned promise
+    // so `/api/analysis/start` below can gate on it — firing that fetch
+    // before the PATCH lands returns 400 ("Session has no audio to
+    // transcribe"). `Promise.resolve()` wraps both sync- and async-
+    // returning implementations.
+    const recordingStopPromise = Promise.resolve(onRecordingStop?.())
     setCoachingTip(null)
     transitionTo('SCORING')
 
@@ -1073,13 +1085,23 @@ export function useInterview({
         }
       }
 
-      // Auto-trigger AI analysis if recording exists (fire-and-forget).
+      // Auto-trigger AI analysis once the recording upload has persisted
+      // audioRecordingR2Key on the session. Firing before the PATCH
+      // lands returned 400 ("Session has no audio to transcribe") —
+      // observed in prod 2026-04-19, because the ~3s pendingEvalRef
+      // guard above is shorter than the presign → R2 PUT → PATCH
+      // round-trip. Fire-and-forget from the user's perspective: router
+      // still pushes to /feedback/{sid} instantly below; the feedback
+      // page polls for job status regardless of when this fires.
       if (isMultimodalEnabled) {
-        fetch('/api/analysis/start', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId: sid }),
-        })
+        recordingStopPromise
+          .then(() =>
+            fetch('/api/analysis/start', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sessionId: sid }),
+            })
+          )
           .then(checkOk)
           .catch(logFireAndForgetFailure('/api/analysis/start'))
       }
