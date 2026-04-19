@@ -746,3 +746,9 @@
 - **Files:** 2 changed, 1 test file(s)
 - **Root-cause:** PR #294's repaired inactivity timer split into pre-speech
 - **Tests-added: modules/interview/__tests__/edgecase-group2-answer-timeouts.test.ts**
+
+### 2026-04-19 14:00:57 +0000 · `ed51737` · Claude
+- **Subject:** fix(interview): arm post-speech inactivity deadline on first growth, not on pre-speech fire
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** PR #294's setTimeout-based inactivity scheduler only
+- **Tests-added: modules/interview/__tests__/edgecase-group2-answer-timeouts.test.ts**
