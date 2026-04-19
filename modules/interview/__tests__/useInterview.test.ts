@@ -288,6 +288,67 @@ describe('useInterview', () => {
     expect(onRecordingStop).toHaveBeenCalled()
   })
 
+  // Race regression: /api/analysis/start fired before the recording
+  // upload PATCHed audioRecordingR2Key onto the session, so the server
+  // returned 400 ("Session has no audio to transcribe"). Multimodal
+  // analysis never started. The fix captures onRecordingStop()'s
+  // returned promise and gates the analysis fetch on it resolving.
+  it('does not fire /api/analysis/start until onRecordingStop promise resolves', async () => {
+    const originalFlag = process.env.NEXT_PUBLIC_FEATURE_MULTIMODAL
+    process.env.NEXT_PUBLIC_FEATURE_MULTIMODAL = 'true'
+
+    try {
+      let resolveRecording: () => void = () => {}
+      const recordingStopPromise = new Promise<void>((res) => {
+        resolveRecording = res
+      })
+      const onRecordingStop = vi.fn(() => recordingStopPromise)
+
+      const { result } = renderHook(() =>
+        useInterview(makeOptions({ onRecordingStop })),
+      )
+
+      // Wait for initial session creation
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(100)
+      })
+
+      // finishInterview + drain the ~3s pendingEvalRef race and the
+      // localStorage path. The onRecordingStop promise is still
+      // unresolved, so analysis/start must NOT have fired.
+      await act(async () => {
+        result.current.finishInterview()
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+
+      const fetchMock = global.fetch as ReturnType<typeof vi.fn>
+      const analysisStartBefore = fetchMock.mock.calls.some(
+        (call) => call[0] === '/api/analysis/start',
+      )
+      expect(analysisStartBefore).toBe(false)
+
+      // generate-feedback does NOT depend on the recording upload —
+      // it should have fired already (transcript-only payload).
+      const feedbackBefore = fetchMock.mock.calls.some(
+        (call) => call[0] === '/api/generate-feedback',
+      )
+      expect(feedbackBefore).toBe(true)
+
+      // Now resolve the recording upload — analysis/start must fire.
+      await act(async () => {
+        resolveRecording()
+        await vi.advanceTimersByTimeAsync(50)
+      })
+
+      const analysisStartAfter = fetchMock.mock.calls.some(
+        (call) => call[0] === '/api/analysis/start',
+      )
+      expect(analysisStartAfter).toBe(true)
+    } finally {
+      process.env.NEXT_PUBLIC_FEATURE_MULTIMODAL = originalFlag
+    }
+  })
+
   it('persists data to localStorage on finish', async () => {
     const { result } = renderHook(() => useInterview(makeOptions()))
 

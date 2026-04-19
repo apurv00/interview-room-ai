@@ -766,3 +766,10 @@
 - **Root-cause:** connectWebSocket's ws.onclose handler called
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
 - **Verified-by:** vitest run modules/interview/__tests__/deepgramRecognition.test.ts
+
+### 2026-04-19 18:52:29 +0000 · `bc0e04d` · Claude
+- **Subject:** fix(interview): gate /api/analysis/start on recording upload completing
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** finishInterview called onRecordingStop?.() fire-and-forget
+- **Tests-added: modules/interview/__tests__/useInterview.test.ts — 1 new**
+- **Verified-by:** vitest run modules/interview/__tests__/useInterview.test.ts
