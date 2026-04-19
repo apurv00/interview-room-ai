@@ -647,6 +647,13 @@ export function useInterview({
       // Normal 30s caller → 60s pre-speech / 30s post-speech.
       // Wrap-up 15s caller → 45s pre-speech / 15s post-speech.
       //
+      // If the turn started with an `interruptPrefix` (speech captured
+      // while the AI was still speaking, carried over as the seed of
+      // this turn's answer), treat it as "speech has already happened"
+      // — skip the pre-speech window entirely. Otherwise the candidate
+      // who interrupted and then paused would sit through an extra 30s
+      // before the safety net fires. Codex P2 on PR #294.
+      //
       // IMPORTANT: do NOT set resolved=true or call resolve('') here —
       // doing so races finishRecognition's async onComplete (which fires
       // after a dynamic import) and can lose captured text. Instead
@@ -655,6 +662,7 @@ export function useInterview({
       // where onComplete never fires.
       const POST_SPEECH_INACTIVITY_MS = timeoutMs
       const PRE_SPEECH_INACTIVITY_MS = timeoutMs + 30_000
+      const hadInterruptPrefix = interruptPrefix.length > 0
       if (timeoutMs > 0) {
         let lastSeenLength = 0
         const scheduleInactivityTimeout = (ms: number) => {
@@ -676,16 +684,24 @@ export function useInterview({
               scheduleInactivityTimeout(POST_SPEECH_INACTIVITY_MS)
               return
             }
-            if (currentLength === 0 && ms === PRE_SPEECH_INACTIVITY_MS) {
+            // No growth. Decide which sub-trigger to report.
+            // Pre-speech fire iff: (a) no interrupt prefix seeded speech,
+            // (b) liveTranscript is empty (no in-session speech), AND
+            // (c) we were scheduled on the pre-speech window. Any of
+            // those false → we're in the post-speech safety net path.
+            const isPreSpeechFire =
+              !hadInterruptPrefix &&
+              currentLength === 0 &&
+              ms === PRE_SPEECH_INACTIVITY_MS
+            clearTimeout(maxTimer)
+            clearInterval(emotionInterval)
+            if (isPreSpeechFire) {
               // 60s of nothing. User abandoned the session before speaking.
-              clearTimeout(maxTimer)
-              clearInterval(emotionInterval)
               stopListening('inactivityPreSpeech')
             } else {
-              // Speech started then stopped growing for POST_SPEECH_INACTIVITY_MS.
-              // Grace timer should have handled this already — we're a safety net.
-              clearTimeout(maxTimer)
-              clearInterval(emotionInterval)
+              // Speech started (either via interrupt prefix or mid-turn)
+              // then stopped growing — grace timer should have handled
+              // this already; we're a safety net for edge cases.
               stopListening('inactivityPostSpeech')
             }
             // Safety net: if onComplete doesn't fire within 3s, resolve empty
@@ -697,9 +713,14 @@ export function useInterview({
             }, 3000)
           }, ms)
         }
-        // Start with the pre-speech window. First fire upgrades us to the
-        // post-speech window (or cuts early on abandonment).
-        scheduleInactivityTimeout(PRE_SPEECH_INACTIVITY_MS)
+        // Initial window:
+        //   - No interrupt prefix → pre-speech (60s thinking budget)
+        //   - Interrupt prefix exists → post-speech (30s) because the
+        //     candidate already produced speech as the seed of the turn
+        const initialMs = hadInterruptPrefix
+          ? POST_SPEECH_INACTIVITY_MS
+          : PRE_SPEECH_INACTIVITY_MS
+        scheduleInactivityTimeout(initialMs)
       }
 
       // Hard cap: stop listening after MAX_ANSWER_MS regardless of speech

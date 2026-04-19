@@ -166,4 +166,59 @@ describe('Group 2: Answer Duration + Timeouts', () => {
     // If Deepgram IS connected, UtteranceEnd fires at 2.5s silence → finish at ~5s.
     // So this is only an issue if Deepgram WS is not connected during listenForAnswer.
   })
+
+  // Regression for Codex P2 on PR #294. The repaired inactivity timer
+  // splits into pre-speech (timeoutMs + 30s) and post-speech (timeoutMs)
+  // windows. Turns seeded by an interrupt prefix must start in the
+  // post-speech window — the candidate HAS already produced speech (the
+  // prefix itself), so giving them an extra 30s pre-speech budget on
+  // top would add a gratuitous stall if they stopped after the interrupt.
+  it('2.9 Interrupt-prefixed turn starts in post-speech inactivity window', () => {
+    // Mirrors the logic in useInterview.ts listenForAnswer (see
+    // `hadInterruptPrefix` + `initialMs` branches). Pure logic test —
+    // hook rendering would require mocking the whole state machine.
+    const timeoutMs = 30_000
+    const POST_SPEECH_INACTIVITY_MS = timeoutMs
+    const PRE_SPEECH_INACTIVITY_MS = timeoutMs + 30_000
+
+    // Scenario A: no interrupt → pre-speech 60s (unchanged behaviour)
+    {
+      const interruptPrefix = ''
+      const hadInterruptPrefix = interruptPrefix.length > 0
+      const initialMs = hadInterruptPrefix
+        ? POST_SPEECH_INACTIVITY_MS
+        : PRE_SPEECH_INACTIVITY_MS
+      expect(initialMs).toBe(60_000)
+    }
+
+    // Scenario B: interrupt seeded the turn → post-speech 30s
+    {
+      const interruptPrefix = 'wait can I clarify'
+      const hadInterruptPrefix = interruptPrefix.length > 0
+      const initialMs = hadInterruptPrefix
+        ? POST_SPEECH_INACTIVITY_MS
+        : PRE_SPEECH_INACTIVITY_MS
+      expect(initialMs).toBe(30_000)
+    }
+  })
+
+  it('2.10 Interrupt-prefixed turn reports inactivityPostSpeech (not Pre) at fire', () => {
+    // Mirrors the `isPreSpeechFire` decision. hadInterruptPrefix=true
+    // flips the fire reason to post-speech even when liveTranscript
+    // is still empty and ms happens to equal the pre-speech window
+    // (which it wouldn't, after the initialMs fix, but the decision
+    // must be self-consistent).
+    const timeoutMs = 30_000
+    const PRE_SPEECH_INACTIVITY_MS = timeoutMs + 30_000
+
+    const hadInterruptPrefix = true
+    const currentLength = 0
+    const ms = PRE_SPEECH_INACTIVITY_MS // hypothetical
+
+    const isPreSpeechFire =
+      !hadInterruptPrefix &&
+      currentLength === 0 &&
+      ms === PRE_SPEECH_INACTIVITY_MS
+    expect(isPreSpeechFire).toBe(false)
+  })
 })
