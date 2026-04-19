@@ -728,3 +728,9 @@
 - **Files:** 2 changed, 1 test file(s)
 - **Root-cause:** PR #293's `finishRecognition` set `closeTriggerRef.current =
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+
+### 2026-04-19 12:02:57 +0000 · `03e8671` · Claude
+- **Subject:** fix(interview): tag Deepgram WS trigger per-instance, not via shared ref
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** The `closeTriggerRef` ref introduced in PR #293 was shared
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
