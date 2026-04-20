@@ -919,3 +919,9 @@
 - **Files:** 1 changed, 0 test file(s)
 - **Root-cause:** The AudioWorklet migration shipped in commit a45ba48
 - **Tests-added: No-tests-needed-because: track() is a fire-and-forget**
+
+### 2026-04-20 17:24:40 +0000 · `0d5302d` · Claude
+- **Subject:** fix(stt): preserve mono downmix in AudioWorkletNode (Codex P1 #300)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** Codex review on PR #300 (P1) flagged that the AudioWorklet
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
