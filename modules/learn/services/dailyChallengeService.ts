@@ -268,34 +268,3 @@ export async function hasUserCompletedToday(userId: string): Promise<boolean> {
   }
 }
 
-/**
- * Get a user's past challenge attempts.
- */
-export async function getUserChallengeHistory(userId: string, limit = 20): Promise<Array<{
-  challengeDate: string
-  score: number
-  breakdown: { relevance: number; structure: number; specificity: number; ownership: number }
-  percentile?: number
-}>> {
-  try {
-    await connectDB()
-    const attempts = await DailyChallengeAttempt.find({
-      userId: new mongoose.Types.ObjectId(userId),
-    })
-      .sort({ challengeDate: -1 })
-      .limit(limit)
-      .select('challengeDate score breakdown percentile')
-      .lean()
-
-    return attempts.map(a => ({
-      challengeDate: a.challengeDate,
-      score: a.score,
-      breakdown: a.breakdown,
-      percentile: a.percentile,
-    }))
-  } catch (err) {
-    logger.error({ err, userId }, 'Failed to get challenge history')
-    return []
-  }
-}
-
