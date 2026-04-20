@@ -1103,7 +1103,26 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       })
       throw err
     }
-    const worklet = new AudioWorkletNode(audioContext, 'pcm-processor')
+    // Preserve the mono-input semantics of the retired
+    // `createScriptProcessor(4096, 1, 1)` call. The old ScriptProcessor
+    // took `numberOfInputChannels=1` which forced the browser to
+    // downmix any multi-channel input to mono (spec rule: stereo → mono
+    // is `(L + R) / 2`) BEFORE the node received it. AudioWorkletNode
+    // defaults to `channelCount=2, channelCountMode='max'`, which would
+    // deliver stereo input to the worklet; since pcm-processor.js reads
+    // only `inputs[0][0]` (the left channel), a stereo-emitting mic —
+    // some Bluetooth headsets, USB arrays, asymmetric laptop built-ins
+    // — would ship near-silent left-channel PCM to Deepgram on devices
+    // where the speech signal lands on the right channel. Explicit
+    // channelCount+channelCountMode replays the old downmix rule
+    // deterministically, independent of device channel layout.
+    const worklet = new AudioWorkletNode(audioContext, 'pcm-processor', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      channelCount: 1,
+      channelCountMode: 'explicit',
+      channelInterpretation: 'speakers',
+    })
     processorRef.current = worklet
 
     worklet.port.onmessage = (e) => {

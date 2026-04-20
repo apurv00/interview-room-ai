@@ -101,6 +101,12 @@ const mockSource = {
 // tests that need to simulate inbound PCM chunks can assign and call the
 // handler directly. `connect` / `disconnect` share the mock fns used by
 // MediaStreamAudioSourceNode so disconnect assertions stay simple.
+// Capture constructor args globally so tests can assert on them (the
+// mono-downmix regression fix relies on passing channelCount+channel-
+// CountMode options; without a capture hook a future refactor could
+// silently drop them and we'd re-introduce the stereo-mic bug).
+const audioWorkletNodeCalls: Array<{ context: unknown; name: string; options: unknown }> = []
+
 class MockAudioWorkletNode {
   port: { onmessage: ((e: unknown) => void) | null; postMessage: ReturnType<typeof vi.fn> } = {
     onmessage: null,
@@ -108,6 +114,9 @@ class MockAudioWorkletNode {
   }
   connect = mockConnect
   disconnect = mockDisconnect
+  constructor(context: unknown, name: string, options?: unknown) {
+    audioWorkletNodeCalls.push({ context, name, options })
+  }
 }
 
 vi.stubGlobal('AudioWorkletNode', MockAudioWorkletNode)
@@ -1281,6 +1290,39 @@ describe('useDeepgramRecognition', () => {
     // Past 4.5s grace → fired
     await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
     expect(onComplete).toHaveBeenCalled()
+  })
+
+  // Regression guard for the stereo-mic bug: the retired
+  // `createScriptProcessor(4096, 1, 1)` call forced a 1-channel input
+  // (browser-level downmix of any multi-channel source to mono).
+  // AudioWorkletNode defaults to `channelCount=2, channelCountMode='max'`
+  // which would deliver stereo to the worklet; since pcm-processor.js
+  // reads only `inputs[0][0]`, a stereo-emitting mic with speech on the
+  // right channel would produce near-silent PCM for Deepgram. We must
+  // pass `channelCount: 1` + `channelCountMode: 'explicit'` at node
+  // construction to replay the old downmix semantics.
+  it('AudioWorkletNode is constructed with explicit mono downmix options', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+    audioWorkletNodeCalls.length = 0
+
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    act(() => { mockWsInstance!.simulateOpen() })
+
+    await act(async () => {
+      result.current.startListening(vi.fn())
+      await vi.advanceTimersByTimeAsync(20)
+    })
+
+    expect(audioWorkletNodeCalls.length).toBeGreaterThanOrEqual(1)
+    const { name, options } = audioWorkletNodeCalls[audioWorkletNodeCalls.length - 1]
+    expect(name).toBe('pcm-processor')
+    expect(options).toMatchObject({
+      channelCount: 1,
+      channelCountMode: 'explicit',
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+    })
   })
 
   it('safety timeout fires onCaptureReady after 1500ms', async () => {
