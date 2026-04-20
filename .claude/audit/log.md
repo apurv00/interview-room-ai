@@ -787,3 +787,8 @@
 - **Root-cause:** ff1cb6b's wrapUpActiveRef latch suppresses ALL timer-0
 - **No-tests-needed-because: same justification as 32e0712 + ff1cb6b —**
 - **Verified-by:** vitest run modules/interview/__tests__/useInterview.test.ts
+### 2026-04-20 12:49:52 +0000 · `2b94778` · Claude
+- **Subject:** chore(learn): remove orphan DailyChallengeLeaderboard feature
+- **Files:** 5 changed, 1 test file(s)
+- **Root-cause:** Leaderboard UI built but never wired into any page.
+- **Tests-added: No-tests-needed-because: pure deletion of orphan code**

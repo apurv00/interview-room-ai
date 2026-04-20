@@ -141,33 +141,6 @@ export async function getStreakCalendar(userId: string, days = 90): Promise<Arra
 }
 
 /**
- * Get streak leaderboard (top streakers).
- */
-export async function getStreakLeaderboard(limit = 20): Promise<Array<{
-  name: string
-  currentStreak: number
-  level: number
-}>> {
-  try {
-    await connectDB()
-    const users = await User.find({ currentStreak: { $gt: 0 } })
-      .sort({ currentStreak: -1 })
-      .limit(limit)
-      .select('name currentStreak level')
-      .lean()
-
-    return users.map(u => ({
-      name: u.name,
-      currentStreak: u.currentStreak || 0,
-      level: u.level || 1,
-    }))
-  } catch (err) {
-    logger.error({ err }, 'Failed to get streak leaderboard')
-    return []
-  }
-}
-
-/**
  * Refresh weekly freeze for a user (1 freeze per week for all users).
  */
 export async function refreshWeeklyFreeze(userId: string): Promise<void> {

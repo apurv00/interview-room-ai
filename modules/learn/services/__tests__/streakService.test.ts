@@ -28,17 +28,15 @@ vi.mock('@shared/db/models/StreakDay', () => ({
 
 const mockUserFindById = vi.fn()
 const mockUserUpdateOne = vi.fn()
-const mockUserFind = vi.fn()
 
 vi.mock('@shared/db/models/User', () => ({
   User: {
     findById: (...args: unknown[]) => mockUserFindById(...args),
     updateOne: (...args: unknown[]) => mockUserUpdateOne(...args),
-    find: (...args: unknown[]) => mockUserFind(...args),
   },
 }))
 
-import { recordActivity, updateStreak, getStreakCalendar, getStreakLeaderboard, refreshWeeklyFreeze } from '../streakService'
+import { recordActivity, updateStreak, getStreakCalendar, refreshWeeklyFreeze } from '../streakService'
 import { isFeatureEnabled } from '@shared/featureFlags'
 
 const VALID_USER_ID = '507f1f77bcf86cd799439011'
@@ -249,44 +247,6 @@ describe('streakService', () => {
       })
 
       const result = await getStreakCalendar(VALID_USER_ID)
-      expect(result).toEqual([])
-    })
-  })
-
-  describe('getStreakLeaderboard', () => {
-    it('returns top users by current streak', async () => {
-      mockUserFind.mockReturnValue({
-        sort: vi.fn().mockReturnValue({
-          limit: vi.fn().mockReturnValue({
-            select: vi.fn().mockReturnValue({
-              lean: vi.fn().mockResolvedValue([
-                { name: 'Alice', currentStreak: 15, level: 5 },
-                { name: 'Bob', currentStreak: 10, level: 3 },
-              ]),
-            }),
-          }),
-        }),
-      })
-
-      const result = await getStreakLeaderboard(20)
-
-      expect(result).toHaveLength(2)
-      expect(result[0].name).toBe('Alice')
-      expect(result[0].currentStreak).toBe(15)
-    })
-
-    it('returns empty array on error', async () => {
-      mockUserFind.mockReturnValue({
-        sort: vi.fn().mockReturnValue({
-          limit: vi.fn().mockReturnValue({
-            select: vi.fn().mockReturnValue({
-              lean: vi.fn().mockRejectedValue(new Error('DB error')),
-            }),
-          }),
-        }),
-      })
-
-      const result = await getStreakLeaderboard()
       expect(result).toEqual([])
     })
   })
