@@ -925,3 +925,9 @@
 - **Files:** 2 changed, 1 test file(s)
 - **Root-cause:** Codex review on PR #300 (P1) flagged that the AudioWorklet
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+
+### 2026-04-20 17:35:33 +0000 · `7ca7f6e` · Claude
+- **Subject:** fix(stt): guard setupAudioProcessing against stale-ws promise race (Codex P1 #300)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** Codex review on PR #300 (P1) flagged that the async-ified
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
