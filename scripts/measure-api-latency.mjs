@@ -133,7 +133,13 @@ async function main() {
 
       const byModel = {}
       for (const d of docs) {
-        if (d.success && typeof d.durationMs === 'number') {
+        // Apply the same `durationMs > 0` filter the top-level latency
+        // arrays use. Without it, schema-default zeros and same-
+        // millisecond timings pollute per-model percentiles and make
+        // cross-model comparisons misleading (a model with many 0ms
+        // entries would look artificially fast next to one with
+        // real-world timings).
+        if (d.success && typeof d.durationMs === 'number' && d.durationMs > 0) {
           byModel[d.modelUsed] = byModel[d.modelUsed] || []
           byModel[d.modelUsed].push(d.durationMs)
         }
