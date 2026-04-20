@@ -348,6 +348,22 @@ export function useInterview({
   // Note: sessionIdRef is declared above (near useInterviewAPI) so it can be
   // passed to the API hook. Declared here would cause a duplicate-identifier error.
   const usageLimitReachedRef = useRef(false)
+  // Latches true at every transitionTo('WRAP_UP') site and stays true
+  // until the wrap-up sequence's own finishInterview() at line ~1816
+  // transitions to SCORING. The timer-0 handler reads this to suppress
+  // ALL phase-based aborts during wrap-up — necessary because wrap-up
+  // internally calls listenForAnswer (line 580 -> transitionTo('LISTENING'))
+  // for the candidate's closing question, and the LISTENING branch of
+  // the timer-0 dispatch would otherwise schedule a 15s setTimeout that
+  // fires during the closing courtesy TTS (Codex P1 on PR #297).
+  const wrapUpActiveRef = useRef(false)
+  // Set to true when the timer-0 latch suppresses an abort during
+  // wrap-up. Preserves the "timer expired" signal for the wrap-up's
+  // own terminal finishInterview() so completionAdjustment.ts can
+  // still emit "the timer expired" in the feedback rationale instead
+  // of mislabeling timer-expired sessions as 'normal' (Codex P2 on
+  // PR #297).
+  const timerExpiredDuringWrapUpRef = useRef(false)
 
   // ─── Init timer + DB session ────────────────────────────────────────────────
 
@@ -434,6 +450,25 @@ export function useInterview({
         // LISTENING gets 15s (user finishing answer), other active phases get 5s
         // (AI finishing current sentence / eval completing).
         if (next === 0 && phaseRef.current !== 'SCORING' && phaseRef.current !== 'ENDED') {
+          // Wrap-up sequence is self-bounded (TTS + listenForAnswer(15s)
+          // + closing TTS + finishInterview at line ~1816). The setInterval
+          // re-fires this branch every second while timeRemaining stays at
+          // 0, and listenForAnswer transitions phase to LISTENING for the
+          // candidate's closing question — without this latch, the
+          // LISTENING branch below would schedule a 15s setTimeout that
+          // cancels the closing courtesy TTS mid-sentence (Codex P1 on
+          // PR #297). The latch is set at every transitionTo('WRAP_UP')
+          // site and naturally retired when wrap-up's own finishInterview
+          // transitions phase to SCORING (caught by the outer guard).
+          if (wrapUpActiveRef.current) {
+            // Preserve the timer-expired signal — wrap-up's terminal
+            // finishInterview() reads this to pass endReason='time_up'
+            // so completionAdjustment.ts emits "the timer expired" in
+            // the feedback rationale instead of treating it as normal
+            // completion (Codex P2).
+            timerExpiredDuringWrapUpRef.current = true
+            return next
+          }
           const activePhase = phaseRef.current
           // G.12: latch "current answer was cut by timer" when the
           // candidate is still LISTENING. The subsequent evaluateAnswer
@@ -1779,6 +1814,7 @@ export function useInterview({
       // Wrap-up — listen for user questions and respond
       checkAbort()
       if (isInterviewOver()) return
+      wrapUpActiveRef.current = true
       transitionTo('WRAP_UP')
       addToTranscript('interviewer', WRAP_UP_LINE)
       await avatarSpeak(WRAP_UP_LINE, 'friendly')
@@ -1801,7 +1837,7 @@ export function useInterview({
         await avatarSpeak(noQuestionsClose, 'friendly')
       }
 
-      finishInterview()
+      finishInterview(timerExpiredDuringWrapUpRef.current ? 'time_up' : 'normal')
       } catch (err) {
         // Silently catch abort errors — interview was intentionally ended
         if (err instanceof InterviewAbortError || (err instanceof DOMException && err.name === 'AbortError')) return
@@ -1915,6 +1951,7 @@ export function useInterview({
 
         // Wrap up — listen for user questions
         if (!isInterviewOver()) {
+          wrapUpActiveRef.current = true
           transitionTo('WRAP_UP')
           addToTranscript('interviewer', WRAP_UP_LINE)
           await avatarSpeak(WRAP_UP_LINE, 'friendly')
@@ -1933,7 +1970,7 @@ export function useInterview({
             await avatarSpeak(noQuestionsClose, 'friendly')
           }
 
-          finishInterview()
+          finishInterview(timerExpiredDuringWrapUpRef.current ? 'time_up' : 'normal')
         }
         return
       }
@@ -2059,6 +2096,7 @@ export function useInterview({
 
         // Wrap up — listen for user questions
         if (!isInterviewOver()) {
+          wrapUpActiveRef.current = true
           transitionTo('WRAP_UP')
           addToTranscript('interviewer', WRAP_UP_LINE)
           await avatarSpeak(WRAP_UP_LINE, 'friendly')
@@ -2077,7 +2115,7 @@ export function useInterview({
             await avatarSpeak(noQuestionsClose, 'friendly')
           }
 
-          finishInterview()
+          finishInterview(timerExpiredDuringWrapUpRef.current ? 'time_up' : 'normal')
         }
         return
       }
