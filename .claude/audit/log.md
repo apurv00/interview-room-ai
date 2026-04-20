@@ -913,3 +913,9 @@
 - **Files:** 5 changed, 1 test file(s)
 - **Root-cause:** A live interview on 2026-04-20 reproduced a cluster of
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+
+### 2026-04-20 17:15:51 +0000 · `055d81d` · Claude
+- **Subject:** chore(stt): add PostHog telemetry for AudioWorklet load success/failure
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** The AudioWorklet migration shipped in commit a45ba48
+- **Tests-added: No-tests-needed-because: track() is a fire-and-forget**
