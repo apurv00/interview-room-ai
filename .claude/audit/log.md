@@ -848,3 +848,9 @@
 - **Files:** 1 changed, 0 test file(s)
 - **Root-cause:** The 2026-04-20 interview pipeline audit flagged that
 - **No-tests-needed-because: one-off measurement script following the**
+
+### 2026-04-20 15:03:58 +0000 · `4572a33` · Claude
+- **Subject:** chore(interview): remove dead completion() call from clarifying-question intent
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** useInterview.ts:1542 called modelRouter's completion() directly
+- **Tests-added: No-tests-needed-because: there were no existing tests**
