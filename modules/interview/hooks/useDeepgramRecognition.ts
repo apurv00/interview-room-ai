@@ -241,7 +241,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
 
   const wsRef = useRef<WebSocket | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
-  const processorRef = useRef<ScriptProcessorNode | null>(null)
+  const processorRef = useRef<AudioWorkletNode | null>(null)
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const audioStreamRef = useRef<MediaStream | null>(null)
   const externalStreamRef = useRef<MediaStream | null>(null)
@@ -1035,23 +1035,24 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     // Reuse external stream (from page-level getUserMedia) if available
     const existingStream = externalStreamRef.current
     if (existingStream) {
-      setupAudioProcessing(existingStream, ws, false)
+      setupAudioProcessing(existingStream, ws, false).catch((err) => {
+        console.error('Audio worklet setup failed:', err)
+        finishRecognition('getUserMediaFailed')
+      })
       return
     }
 
     // Fallback: request audio-only stream
     navigator.mediaDevices
       .getUserMedia({ audio: true, video: false })
-      .then((stream) => {
-        setupAudioProcessing(stream, ws, true)
-      })
+      .then((stream) => setupAudioProcessing(stream, ws, true))
       .catch((err) => {
         console.error('Audio capture failed:', err)
         finishRecognition('getUserMediaFailed')
       })
   }
 
-  function setupAudioProcessing(stream: MediaStream, ws: WebSocket, ownStream: boolean) {
+  async function setupAudioProcessing(stream: MediaStream, ws: WebSocket, ownStream: boolean) {
     if (ownStream) {
       audioStreamRef.current = stream
     }
@@ -1059,37 +1060,41 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     audioContextRef.current = audioContext
     // Chrome's autoplay policy can create AudioContext in 'suspended' state
     // after multiple create/close cycles across questions. A suspended
-    // context does not fire onaudioprocess → no PCM → no transcripts, which
-    // is indistinguishable from a dead WS at the UI level. resume() is
-    // idempotent on a running context and cheap on a suspended one.
+    // context does not fire the AudioWorklet `process()` callback → no
+    // PCM → no transcripts, which is indistinguishable from a dead WS at
+    // the UI level. resume() is idempotent on a running context and cheap
+    // on a suspended one.
     audioContext.resume().catch(() => { /* best-effort */ })
 
     const source = audioContext.createMediaStreamSource(stream)
     sourceRef.current = source
 
-    // Use ScriptProcessorNode (deprecated but widely supported)
-    const processor = audioContext.createScriptProcessor(4096, 1, 1)
-    processorRef.current = processor
+    // AudioWorkletNode runs on the audio rendering thread and is
+    // immune to main-thread throttling (MediaPipe, React, GC, tab
+    // backgrounding). See public/pcm-processor.js for the Float32 →
+    // Int16 conversion + 32-render-quantum buffering that preserves
+    // the 4096-sample / 256ms packet cadence Deepgram was calibrated
+    // against. `addModule()` is async; if it fails (ancient browser,
+    // CSP block, 404 on the static asset) the rejection bubbles to
+    // startAudioCapture which routes to finishRecognition.
+    await audioContext.audioWorklet.addModule('/pcm-processor.js')
+    const worklet = new AudioWorkletNode(audioContext, 'pcm-processor')
+    processorRef.current = worklet
 
-    processor.onaudioprocess = (e) => {
+    worklet.port.onmessage = (e) => {
       if (ws.readyState !== WebSocket.OPEN) return
-      const inputData = e.inputBuffer.getChannelData(0)
-      // Convert Float32 to Int16 PCM
-      const pcm = new Int16Array(inputData.length)
-      for (let i = 0; i < inputData.length; i++) {
-        const s = Math.max(-1, Math.min(1, inputData[i]))
-        pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff
-      }
-      ws.send(pcm.buffer)
+      // e.data is the transferred ArrayBuffer — 4096 Int16 samples =
+      // 8192 bytes. Same wire format Deepgram saw under ScriptProcessor.
+      ws.send(e.data)
       // Diagnostic: count every frame we send. Snapshotted into
-      // packetLogRef on each inbound Deepgram message so we can
-      // detect a potential double-send by looking for an unexpected
-      // 2× frame delta between consecutive packets.
+      // packetLogRef on each inbound Deepgram message so we can detect
+      // a potential double-send by looking for an unexpected 2× frame
+      // delta between consecutive packets.
       audioFrameCountRef.current++
     }
 
-    source.connect(processor)
-    processor.connect(audioContext.destination)
+    source.connect(worklet)
+    worklet.connect(audioContext.destination)
 
     // Visibility handling (resume AudioContext + suppress grace timer while
     // hidden) is installed at the hook level — see the useEffect near the

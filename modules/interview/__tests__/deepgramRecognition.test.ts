@@ -90,22 +90,39 @@ global.fetch = vi.fn().mockResolvedValue({
 
 const mockConnect = vi.fn()
 const mockDisconnect = vi.fn()
-const mockProcessor = {
-  connect: mockConnect,
-  disconnect: mockDisconnect,
-  onaudioprocess: null as ((e: unknown) => void) | null,
-}
 
 const mockSource = {
   connect: mockConnect,
   disconnect: mockDisconnect,
 }
 
+// AudioWorkletNode mock — stands in for the `new AudioWorkletNode(ctx, 'pcm-processor')`
+// call in setupAudioProcessing. The hook writes to `worklet.port.onmessage`;
+// tests that need to simulate inbound PCM chunks can assign and call the
+// handler directly. `connect` / `disconnect` share the mock fns used by
+// MediaStreamAudioSourceNode so disconnect assertions stay simple.
+class MockAudioWorkletNode {
+  port: { onmessage: ((e: unknown) => void) | null; postMessage: ReturnType<typeof vi.fn> } = {
+    onmessage: null,
+    postMessage: vi.fn(),
+  }
+  connect = mockConnect
+  disconnect = mockDisconnect
+}
+
+vi.stubGlobal('AudioWorkletNode', MockAudioWorkletNode)
+
 class MockAudioContext {
   sampleRate = 16000
   state = 'running'
   createMediaStreamSource = vi.fn(() => mockSource)
-  createScriptProcessor = vi.fn(() => mockProcessor)
+  // Replaces createScriptProcessor. setupAudioProcessing awaits
+  // addModule() before constructing the worklet; returning an already-
+  // resolved promise lets vi.advanceTimersByTimeAsync pump the
+  // continuation without needing to mock `fetch` for /pcm-processor.js.
+  audioWorklet = {
+    addModule: vi.fn().mockResolvedValue(undefined),
+  }
   destination = {}
   close = vi.fn().mockResolvedValue(undefined)
   resume = vi.fn().mockResolvedValue(undefined)
