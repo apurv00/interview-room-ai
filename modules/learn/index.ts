@@ -20,10 +20,6 @@ export type { Resource, UserProfile } from './lib/resources'
 export { getWeakQuestions, saveDrillAttempt, getDrillHistory } from './services/drillService'
 export type { WeakQuestion, DrillResult, DrillHistoryEntry } from './services/drillService'
 
-// ── Analytics ──
-export { getAnalyticsData } from './services/analyticsService'
-export type { AnalyticsData } from './services/analyticsService'
-
 // ── Benchmarking ──
 export { getPeerBenchmark } from './services/benchmarkService'
 export type { BenchmarkResult } from './services/benchmarkService'
