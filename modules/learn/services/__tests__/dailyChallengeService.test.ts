@@ -58,7 +58,6 @@ import {
   getTodaysChallenge,
   submitChallengeAnswer,
   hasUserCompletedToday,
-  getUserChallengeHistory,
 } from '../dailyChallengeService'
 import { isFeatureEnabled } from '@shared/featureFlags'
 
@@ -396,60 +395,6 @@ describe('dailyChallengeService', () => {
 
       const result = await hasUserCompletedToday(VALID_USER_ID)
       expect(result).toBe(false)
-    })
-  })
-
-  describe('getUserChallengeHistory', () => {
-    it('returns past attempts sorted by date', async () => {
-      const attempts = [
-        { challengeDate: '2026-03-16', score: 85, breakdown: { relevance: 90, structure: 80, specificity: 85, ownership: 85 }, percentile: 70 },
-        { challengeDate: '2026-03-15', score: 72, breakdown: { relevance: 75, structure: 70, specificity: 70, ownership: 73 }, percentile: 50 },
-      ]
-      mockAttemptFind.mockReturnValue({
-        sort: vi.fn().mockReturnValue({
-          limit: vi.fn().mockReturnValue({
-            select: vi.fn().mockReturnValue({
-              lean: vi.fn().mockResolvedValue(attempts),
-            }),
-          }),
-        }),
-      })
-
-      const result = await getUserChallengeHistory(VALID_USER_ID)
-
-      expect(result).toHaveLength(2)
-      expect(result[0].challengeDate).toBe('2026-03-16')
-      expect(result[0].score).toBe(85)
-    })
-
-    it('returns empty array when no history', async () => {
-      mockAttemptFind.mockReturnValue({
-        sort: vi.fn().mockReturnValue({
-          limit: vi.fn().mockReturnValue({
-            select: vi.fn().mockReturnValue({
-              lean: vi.fn().mockResolvedValue([]),
-            }),
-          }),
-        }),
-      })
-
-      const result = await getUserChallengeHistory(VALID_USER_ID)
-      expect(result).toEqual([])
-    })
-
-    it('returns empty array on error', async () => {
-      mockAttemptFind.mockReturnValue({
-        sort: vi.fn().mockReturnValue({
-          limit: vi.fn().mockReturnValue({
-            select: vi.fn().mockReturnValue({
-              lean: vi.fn().mockRejectedValue(new Error('DB error')),
-            }),
-          }),
-        }),
-      })
-
-      const result = await getUserChallengeHistory(VALID_USER_ID)
-      expect(result).toEqual([])
     })
   })
 

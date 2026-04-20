@@ -772,3 +772,9 @@
 - **Files:** 5 changed, 1 test file(s)
 - **Root-cause:** Leaderboard UI built but never wired into any page.
 - **Tests-added: No-tests-needed-because: pure deletion of orphan code**
+
+### 2026-04-20 12:52:38 +0000 · `7fe9c41` · Claude
+- **Subject:** chore(learn): remove orphan StreakLeaderboard feature
+- **Files:** 6 changed, 1 test file(s)
+- **Root-cause:** Sibling orphan to DailyChallengeLeaderboard (commit
+- **Tests-added: No-tests-needed-because: pure deletion of orphan code**
