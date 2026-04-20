@@ -866,3 +866,9 @@
 - **Files:** 1 changed, 0 test file(s)
 - **Root-cause:** Codex review on PR #299 (P2) flagged that successCount /
 - **Tests-added: No-tests-needed-because: this is an ad-hoc**
+
+### 2026-04-20 16:07:25 +0000 · `5de5145` · Claude
+- **Subject:** fix(scripts): nearest-rank percentile (was off-by-one high)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** Codex review on PR #299 (P2) flagged that the percentile
+- **Tests-added: No-tests-needed-because: ad-hoc measurement script**
