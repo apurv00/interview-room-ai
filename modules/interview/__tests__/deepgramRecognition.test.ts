@@ -199,8 +199,6 @@ describe('classifyUtteranceIntent', () => {
       'The main issue is the latency, so',
       'We need to consider the trade-offs because',
       'The next step is to',
-      'I would look at the',
-      'The customer is a',
       'We need to think about,',
       'My approach would be...',
       'Then we measure…',
@@ -215,6 +213,14 @@ describe('classifyUtteranceIntent', () => {
       'I would prioritize engagement over reach.',
       'Does that make sense?',
       'The trade-off is clear: we accept higher latency for stronger consistency.',
+      // The/a/an endings used to be classified incomplete, causing 4.5-8s
+      // grace-timer dead air on natural pauses like "I would look at the <pause>
+      // data" or "the customer is a <pause> senior PM". These are far too
+      // common at natural speech pauses to warrant the long grace, so they
+      // now classify as complete and fall into the 3s grace bucket.
+      'I would look at the',
+      'The customer is a',
+      'We explored an',
     ])('detects "%s" as complete', (text) => {
       expect(classifyUtteranceIntent(text)).toBe('complete')
     })
@@ -1229,8 +1235,11 @@ describe('useDeepgramRecognition', () => {
     expect(onComplete).toHaveBeenCalled()
   })
 
-  // incomplete intent (trailing conjunction/preposition) gets 8s grace.
-  it('incomplete utterance ("...and so on,") gets 8s grace', async () => {
+  // incomplete intent (trailing conjunction/preposition) gets 4.5s grace
+  // (reduced from 8s on 2026-04-20 — 8s was producing user-noticeable
+  // dead air on natural incomplete pauses; 4.5s still covers the common
+  // "and <pause> ..." continuation without being painful).
+  it('incomplete utterance ("...and so on,") gets 4.5s grace', async () => {
     const { result } = renderHook(() => useDeepgramRecognition())
     const onComplete = vi.fn()
 
@@ -1244,16 +1253,16 @@ describe('useDeepgramRecognition', () => {
     })
 
     await act(async () => {
-      mockWsInstance!.simulateMessage(makeResult('The first thing I would do is look at the', true))
+      mockWsInstance!.simulateMessage(makeResult('The first thing I would do is analyze the data and', true))
       mockWsInstance!.simulateMessage(makeUtteranceEnd())
     })
 
-    // Past old 3s grace but within new 8s incomplete grace
-    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+    // Past 3s complete grace but within 4.5s incomplete grace
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000) })
     expect(onComplete).not.toHaveBeenCalled()
 
-    // Past 8s grace → fired
-    await act(async () => { await vi.advanceTimersByTimeAsync(3500) })
+    // Past 4.5s grace → fired
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
     expect(onComplete).toHaveBeenCalled()
   })
 

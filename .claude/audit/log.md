@@ -816,9 +816,94 @@
 - **Root-cause:** ff1cb6b's wrapUpActiveRef latch suppresses ALL timer-0
 - **No-tests-needed-because: same justification as 32e0712 + ff1cb6b —**
 - **Verified-by:** vitest run modules/interview/__tests__/useInterview.test.ts
+### 2026-04-20 12:49:52 +0000 · `2b94778` · Claude
+- **Subject:** chore(learn): remove orphan DailyChallengeLeaderboard feature
+- **Files:** 5 changed, 1 test file(s)
+- **Root-cause:** Leaderboard UI built but never wired into any page.
+- **Tests-added: No-tests-needed-because: pure deletion of orphan code**
+
+### 2026-04-20 12:52:38 +0000 · `7fe9c41` · Claude
+- **Subject:** chore(learn): remove orphan StreakLeaderboard feature
+- **Files:** 6 changed, 1 test file(s)
+- **Root-cause:** Sibling orphan to DailyChallengeLeaderboard (commit
+- **Tests-added: No-tests-needed-because: pure deletion of orphan code**
+
+### 2026-04-20 12:54:44 +0000 · `ac6ccd5` · Claude
+- **Subject:** chore(learn): remove orphan Daily Challenge History API
+- **Files:** 5 changed, 1 test file(s)
+- **Root-cause:** Third in the orphan-leaderboard/history cluster.
+- **Tests-added: No-tests-needed-because: pure deletion of orphan code**
+
+### 2026-04-20 12:56:36 +0000 · `2ce0119` · Claude
+- **Subject:** docs: remove aspirational /learn/leaderboard references
+- **Files:** 3 changed, 0 test file(s)
+- **Root-cause:** docs/customer-journeys/03-*.md and 04-*.md described
+- **Tests-added: No-tests-needed-because: docs-only change, no**
+
+### 2026-04-20 13:04:42 +0000 · `fa455fa` · Claude
+- **Subject:** chore(learn): remove dead /dashboard analytics page + route chain
+- **Files:** 7 changed, 0 test file(s)
+- **Root-cause:** User confirmed /dashboard (route from app/(learn)/
+- **Tests-added: No-tests-needed-because: pure deletion of a chain**
+### 2026-04-20 09:46:44 +0000 · `32e0712` · Claude
+- **Subject:** fix(interview): exempt WRAP_UP from timer-0 finishInterview abort
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the timer-reaches-0 handler in useInterview.ts (lines
+- **No-tests-needed-because: the change is a defensive empty-branch**
+- **Verified-by:** vitest run modules/interview/__tests__/useInterview.
+
+### 2026-04-20 10:16:36 +0000 · `ff1cb6b` · Claude
+- **Subject:** fix(interview): gate timer-0 on wrap-up latch (Codex P1 #297)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** 32e0712 added an `else if (activePhase === 'WRAP_UP')`
+- **No-tests-needed-because: same justification as 32e0712 — driving a**
+- **Verified-by:** vitest run modules/interview/__tests__/useInterview.test.ts
+
+### 2026-04-20 10:24:36 +0000 · `abe5872` · Claude
+- **Subject:** fix(interview): preserve time_up endReason during wrap-up (Codex P2 #297)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** ff1cb6b's wrapUpActiveRef latch suppresses ALL timer-0
+- **No-tests-needed-because: same justification as 32e0712 + ff1cb6b —**
+- **Verified-by:** vitest run modules/interview/__tests__/useInterview.test.ts
 
 ### 2026-04-20 13:41:15 +0000 · `91f0b53` · Claude
 - **Subject:** Merge remote-tracking branch 'origin/main' into claude/recruitment-interview-flow-oWgGJ
 - **Files:** 2 changed, 0 test file(s)
 - **Root-cause:** main advanced by 6 commits from PR #297 (wrap-up
 - **No-tests-needed-because: merge commit with zero code conflicts**
+
+### 2026-04-20 14:09:53 +0000 · `eff03ef` · Claude
+- **Subject:** chore(scripts): add API latency measurement script
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** The 2026-04-20 interview pipeline audit flagged that
+- **No-tests-needed-because: one-off measurement script following the**
+
+### 2026-04-20 15:03:58 +0000 · `4572a33` · Claude
+- **Subject:** chore(interview): remove dead completion() call from clarifying-question intent
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** useInterview.ts:1542 called modelRouter's completion() directly
+- **Tests-added: No-tests-needed-because: there were no existing tests**
+
+### 2026-04-20 15:50:16 +0000 · `be957fb` · Claude
+- **Subject:** fix(stt): drop the/a/an from incomplete-intent pattern + shrink grace 8s→4.5s
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** On 2026-04-20 a real interview (6 questions) produced
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+
+### 2026-04-20 16:02:26 +0000 · `a770259` · Claude
+- **Subject:** fix(scripts): count success from raw flag, not latency-filtered arrays
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** Codex review on PR #299 (P2) flagged that successCount /
+- **Tests-added: No-tests-needed-because: this is an ad-hoc**
+
+### 2026-04-20 16:07:25 +0000 · `5de5145` · Claude
+- **Subject:** fix(scripts): nearest-rank percentile (was off-by-one high)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** Codex review on PR #299 (P2) flagged that the percentile
+- **Tests-added: No-tests-needed-because: ad-hoc measurement script**
+
+### 2026-04-20 16:16:20 +0000 · `6eceec3` · Claude
+- **Subject:** fix(scripts): apply >0 filter to per-model latency buckets
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** Codex review on PR #299 (P2) flagged that the byModel
+- **Tests-added: No-tests-needed-because: ad-hoc measurement script**
