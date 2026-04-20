@@ -1092,16 +1092,24 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     try {
       await audioContext.audioWorklet.addModule('/pcm-processor.js')
     } catch (err) {
-      // Stale-setup guard (error path): if the ws this setup was spun
-      // up for is no longer the active one, a reconnect happened mid-
-      // await (`maybeReconnectOrFinish` closed the old AudioContext
-      // and kicked a new startAudioCapture with a fresh ws). Propagating
-      // this rejection would call finishRecognition('getUserMediaFailed')
-      // in startAudioCapture's .catch and kill the brand-new session.
-      // Swallow silently; still emit telemetry with stale=true so we
-      // don't lose the observability signal and can monitor the
-      // frequency of reconnect-during-addModule events in the field.
-      const stale = wsRef.current !== ws
+      // Stale-setup guard (error path): if the audioContext this setup
+      // was spun up for is no longer the active one, a reconnect or stop
+      // happened mid-await. Both `maybeReconnectOrFinish` and
+      // `finishRecognition` synchronously null `audioContextRef.current`
+      // (and `maybeReconnectOrFinish` additionally calls
+      // `audioContext.close()`), so the identity check catches both.
+      //
+      // We intentionally do NOT key off `wsRef.current !== ws` here:
+      // during the 800–1600ms reconnect *delay* window,
+      // `maybeReconnectOrFinish` has already torn down the AudioContext
+      // but has not yet replaced `wsRef.current` (the new ws is created
+      // by the delayed `connectWebSocket` call). A ws-identity guard
+      // would therefore treat the superseded setup as current, let the
+      // rejection propagate into startAudioCapture's `.catch` →
+      // `finishRecognition('getUserMediaFailed')` → truncate the in-
+      // progress answer and abort the pending reconnect. Codex P1 on
+      // PR #300.
+      const stale = audioContextRef.current !== audioContext
       track('audio_worklet_loaded', {
         success: false,
         durationMs: Date.now() - workletStart,
@@ -1112,13 +1120,16 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       throw err
     }
     // Stale-setup guard (success path): even if addModule resolved,
-    // the audioContext / ws we resolved for may have been superseded
-    // during the await. Constructing an AudioWorkletNode against a
-    // closed context below would either throw (latent error path) or
-    // succeed and then overwrite the active session's processorRef +
-    // connect source→worklet→destination on a dead context. Either
-    // way: a ghost setup would poison the active session. Bail.
-    if (wsRef.current !== ws) {
+    // the audioContext we resolved for may have been superseded during
+    // the await (reconnect closed it, or finishRecognition stopped us).
+    // Constructing an AudioWorkletNode against a closed context below
+    // would either throw (latent error path) or succeed and then over-
+    // write the active session's processorRef + connect source→worklet
+    // →destination on a dead context. Either way: a ghost setup would
+    // poison the active session. Bail. See error-path comment above
+    // for why context identity is more reliable than ws identity during
+    // the reconnect delay window.
+    if (audioContextRef.current !== audioContext) {
       track('audio_worklet_loaded', {
         success: true,
         durationMs: Date.now() - workletStart,

@@ -1395,6 +1395,75 @@ describe('useDeepgramRecognition', () => {
     expect(onComplete.mock.calls.length).toBeLessThanOrEqual(1)
   })
 
+  // Regression for Codex P1 #2 (follow-up) on PR #300. The prior guard
+  // keyed off `wsRef.current !== ws` — but during the 800ms reconnect
+  // *delay* window, `maybeReconnectOrFinish` has already synchronously
+  // closed + nulled the AudioContext, yet `wsRef.current` still points
+  // at the now-dead ws (the new ws is only created by the delayed
+  // connectWebSocket call). If addModule resolves in that window, a
+  // ws-identity check would treat the setup as current, construct the
+  // worklet against a closed context → throw → finishRecognition
+  // ('getUserMediaFailed') → truncate the in-flight answer.
+  // Context-identity is the correct key: maybeReconnectOrFinish nulls
+  // `audioContextRef.current` synchronously.
+  it('setupAudioProcessing bails when reconnect cleared context during addModule await', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+
+    // Control the first addModule so we can park setup mid-await.
+    let resolveAdd: () => void = () => {}
+    mockAddModule.mockImplementationOnce(
+      () => new Promise<void>((res) => { resolveAdd = res }),
+    )
+
+    // connectFresh path (no warmUp) — only this path wires the ws.onclose
+    // handler to maybeReconnectOrFinish (warmUp's onclose is a no-op for
+    // reconnect). See E-3.4 describe block header for the same rationale.
+    await act(async () => {
+      result.current.startListening(onComplete)
+      await vi.advanceTimersByTimeAsync(20) // let token fetch + ws create
+    })
+
+    act(() => { mockWsInstance!.simulateOpen() })
+    audioWorkletNodeCalls.length = 0
+
+    // Let setupAudioProcessing begin — addModule is pending inside the
+    // hook. audioContextRef.current is now populated; worklet NOT yet
+    // constructed.
+    await act(async () => { await vi.advanceTimersByTimeAsync(5) })
+    expect(audioWorkletNodeCalls.length).toBe(0)
+
+    const midAwaitWs = mockWsInstance!
+
+    // Untagged remote close (1006 network drop / 1011 Deepgram idle).
+    // onclose reads a null __finishTrigger → handleDisconnect →
+    // maybeReconnectOrFinish synchronously closes the AudioContext and
+    // nulls audioContextRef. Crucially this does NOT touch wsRef.current
+    // — the new ws is only created after the 800ms reconnect delay. A
+    // ws-identity guard in setupAudioProcessing would still match here,
+    // which is the exact bug Codex flagged. Context-identity catches it.
+    await act(async () => {
+      midAwaitWs.onclose?.(new CloseEvent('close', { code: 1006, reason: '', wasClean: false }))
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    // DO NOT advance past the 800ms reconnect delay — we need the test
+    // to exercise the vulnerable window where wsRef.current is still the
+    // stale ws.
+    await act(async () => {
+      resolveAdd()
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    // Bug signature: AudioWorkletNode constructed against the closed
+    // context. Context-identity guard must catch the reconnect-delay
+    // window and bail before construction.
+    expect(audioWorkletNodeCalls.length).toBe(0)
+    // No truncation-by-error: getUserMediaFailed would fire onComplete
+    // prematurely. A spurious finishRecognition would also fire it.
+    expect(onComplete).not.toHaveBeenCalled()
+  })
+
   it('safety timeout fires onCaptureReady after 1500ms', async () => {
     const { result } = renderHook(() => useDeepgramRecognition())
     const onComplete = vi.fn()
