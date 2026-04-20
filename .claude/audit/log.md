@@ -860,3 +860,9 @@
 - **Files:** 2 changed, 1 test file(s)
 - **Root-cause:** On 2026-04-20 a real interview (6 questions) produced
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+
+### 2026-04-20 16:02:26 +0000 · `a770259` · Claude
+- **Subject:** fix(scripts): count success from raw flag, not latency-filtered arrays
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** Codex review on PR #299 (P2) flagged that successCount /
+- **Tests-added: No-tests-needed-because: this is an ad-hoc**
