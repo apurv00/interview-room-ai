@@ -784,3 +784,9 @@
 - **Files:** 5 changed, 1 test file(s)
 - **Root-cause:** Third in the orphan-leaderboard/history cluster.
 - **Tests-added: No-tests-needed-because: pure deletion of orphan code**
+
+### 2026-04-20 12:56:36 +0000 · `2ce0119` · Claude
+- **Subject:** docs: remove aspirational /learn/leaderboard references
+- **Files:** 3 changed, 0 test file(s)
+- **Root-cause:** docs/customer-journeys/03-*.md and 04-*.md described
+- **Tests-added: No-tests-needed-because: docs-only change, no**
