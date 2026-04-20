@@ -109,9 +109,19 @@ async function main() {
         .limit(PER_TYPE_LIMIT)
         .toArray()
 
+      const successDocs = docs.filter((d) => d.success)
+      const failDocs = docs.filter((d) => !d.success)
+
+      // Keep latency arrays filtered to durationMs > 0 so percentile math
+      // isn't skewed by same-millisecond / missing timings. Count-oriented
+      // fields below (successCount / failCount / successRate) must be
+      // derived from the raw `success` flag on docs, NOT from these arrays
+      // — durationMs can legitimately be 0 (UsageRecord schema default,
+      // same-millisecond timing) and excluding those under-reports the
+      // success rate.
       const all = docs.map((d) => d.durationMs).filter((x) => typeof x === 'number' && x > 0)
-      const ok = docs.filter((d) => d.success).map((d) => d.durationMs).filter((x) => typeof x === 'number' && x > 0)
-      const fail = docs.filter((d) => !d.success).map((d) => d.durationMs).filter((x) => typeof x === 'number' && x > 0)
+      const ok = successDocs.map((d) => d.durationMs).filter((x) => typeof x === 'number' && x > 0)
+      const fail = failDocs.map((d) => d.durationMs).filter((x) => typeof x === 'number' && x > 0)
 
       const byModel = {}
       for (const d of docs) {
@@ -124,9 +134,9 @@ async function main() {
       results.push({
         type,
         total: docs.length,
-        successCount: ok.length,
-        failCount: fail.length,
-        successRate: docs.length ? (ok.length / docs.length) * 100 : 0,
+        successCount: successDocs.length,
+        failCount: failDocs.length,
+        successRate: docs.length ? (successDocs.length / docs.length) * 100 : 0,
         overall: summarize('all', all),
         successOnly: summarize('success', ok),
         failOnly: summarize('fail', fail),
