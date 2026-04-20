@@ -816,3 +816,29 @@
 - **Files:** 7 changed, 0 test file(s)
 - **Root-cause:** User confirmed /dashboard (route from app/(learn)/
 - **Tests-added: No-tests-needed-because: pure deletion of a chain**
+### 2026-04-20 09:46:44 +0000 · `32e0712` · Claude
+- **Subject:** fix(interview): exempt WRAP_UP from timer-0 finishInterview abort
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the timer-reaches-0 handler in useInterview.ts (lines
+- **No-tests-needed-because: the change is a defensive empty-branch**
+- **Verified-by:** vitest run modules/interview/__tests__/useInterview.
+
+### 2026-04-20 10:16:36 +0000 · `ff1cb6b` · Claude
+- **Subject:** fix(interview): gate timer-0 on wrap-up latch (Codex P1 #297)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** 32e0712 added an `else if (activePhase === 'WRAP_UP')`
+- **No-tests-needed-because: same justification as 32e0712 — driving a**
+- **Verified-by:** vitest run modules/interview/__tests__/useInterview.test.ts
+
+### 2026-04-20 10:24:36 +0000 · `abe5872` · Claude
+- **Subject:** fix(interview): preserve time_up endReason during wrap-up (Codex P2 #297)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** ff1cb6b's wrapUpActiveRef latch suppresses ALL timer-0
+- **No-tests-needed-because: same justification as 32e0712 + ff1cb6b —**
+- **Verified-by:** vitest run modules/interview/__tests__/useInterview.test.ts
+
+### 2026-04-20 13:41:15 +0000 · `91f0b53` · Claude
+- **Subject:** Merge remote-tracking branch 'origin/main' into claude/recruitment-interview-flow-oWgGJ
+- **Files:** 2 changed, 0 test file(s)
+- **Root-cause:** main advanced by 6 commits from PR #297 (wrap-up
+- **No-tests-needed-because: merge commit with zero code conflicts**
