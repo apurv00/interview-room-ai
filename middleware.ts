@@ -149,10 +149,8 @@ export default withAuth(
           pathname === '/interview/setup' ||
           pathname.startsWith('/lobby') ||
           pathname === '/history' ||
-          pathname === '/dashboard' ||
           pathname.startsWith('/learn/progress') ||
           pathname.startsWith('/learn/pathway') ||
-          pathname.startsWith('/learn/dashboard') ||
           pathname.startsWith('/_next') ||
           pathname === '/favicon.ico' ||
           pathname === '/sitemap.xml' ||

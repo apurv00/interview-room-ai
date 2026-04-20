@@ -18,7 +18,6 @@ export default function robots(): MetadataRoute.Robots {
           '/lobby',
           '/feedback/',
           '/history',
-          '/dashboard',
           '/learn/progress',
           '/learn/pathway',
           '/learn/badges',

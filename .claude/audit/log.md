@@ -767,6 +767,35 @@
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
 - **Verified-by:** vitest run modules/interview/__tests__/deepgramRecognition.test.ts
 
+### 2026-04-20 12:49:52 +0000 · `2b94778` · Claude
+- **Subject:** chore(learn): remove orphan DailyChallengeLeaderboard feature
+- **Files:** 5 changed, 1 test file(s)
+- **Root-cause:** Leaderboard UI built but never wired into any page.
+- **Tests-added: No-tests-needed-because: pure deletion of orphan code**
+
+### 2026-04-20 12:52:38 +0000 · `7fe9c41` · Claude
+- **Subject:** chore(learn): remove orphan StreakLeaderboard feature
+- **Files:** 6 changed, 1 test file(s)
+- **Root-cause:** Sibling orphan to DailyChallengeLeaderboard (commit
+- **Tests-added: No-tests-needed-because: pure deletion of orphan code**
+
+### 2026-04-20 12:54:44 +0000 · `ac6ccd5` · Claude
+- **Subject:** chore(learn): remove orphan Daily Challenge History API
+- **Files:** 5 changed, 1 test file(s)
+- **Root-cause:** Third in the orphan-leaderboard/history cluster.
+- **Tests-added: No-tests-needed-because: pure deletion of orphan code**
+
+### 2026-04-20 12:56:36 +0000 · `2ce0119` · Claude
+- **Subject:** docs: remove aspirational /learn/leaderboard references
+- **Files:** 3 changed, 0 test file(s)
+- **Root-cause:** docs/customer-journeys/03-*.md and 04-*.md described
+- **Tests-added: No-tests-needed-because: docs-only change, no**
+
+### 2026-04-20 13:04:42 +0000 · `fa455fa` · Claude
+- **Subject:** chore(learn): remove dead /dashboard analytics page + route chain
+- **Files:** 7 changed, 0 test file(s)
+- **Root-cause:** User confirmed /dashboard (route from app/(learn)/
+- **Tests-added: No-tests-needed-because: pure deletion of a chain**
 ### 2026-04-20 09:46:44 +0000 · `32e0712` · Claude
 - **Subject:** fix(interview): exempt WRAP_UP from timer-0 finishInterview abort
 - **Files:** 1 changed, 0 test file(s)
@@ -787,3 +816,9 @@
 - **Root-cause:** ff1cb6b's wrapUpActiveRef latch suppresses ALL timer-0
 - **No-tests-needed-because: same justification as 32e0712 + ff1cb6b —**
 - **Verified-by:** vitest run modules/interview/__tests__/useInterview.test.ts
+
+### 2026-04-20 13:41:15 +0000 · `91f0b53` · Claude
+- **Subject:** Merge remote-tracking branch 'origin/main' into claude/recruitment-interview-flow-oWgGJ
+- **Files:** 2 changed, 0 test file(s)
+- **Root-cause:** main advanced by 6 commits from PR #297 (wrap-up
+- **No-tests-needed-because: merge commit with zero code conflicts**

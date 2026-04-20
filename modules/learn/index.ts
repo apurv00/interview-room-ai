@@ -20,10 +20,6 @@ export type { Resource, UserProfile } from './lib/resources'
 export { getWeakQuestions, saveDrillAttempt, getDrillHistory } from './services/drillService'
 export type { WeakQuestion, DrillResult, DrillHistoryEntry } from './services/drillService'
 
-// ── Analytics ──
-export { getAnalyticsData } from './services/analyticsService'
-export type { AnalyticsData } from './services/analyticsService'
-
 // ── Benchmarking ──
 export { getPeerBenchmark } from './services/benchmarkService'
 export type { BenchmarkResult } from './services/benchmarkService'
@@ -59,10 +55,10 @@ export type { AwardedBadge, BadgeTrigger } from './services/badgeService'
 export { BADGE_DEFINITIONS, getBadgesByTrigger, getBadgeById } from './config/badges'
 
 // ── Streak v2 ──
-export { recordActivity, updateStreak, getStreakCalendar, getStreakLeaderboard, refreshWeeklyFreeze } from './services/streakService'
+export { recordActivity, updateStreak, getStreakCalendar, refreshWeeklyFreeze } from './services/streakService'
 
 // ── Daily Challenge ──
-export { getTodaysChallenge, submitChallengeAnswer, getUserChallengeHistory, getChallengeLeaderboard, hasUserCompletedToday } from './services/dailyChallengeService'
+export { getTodaysChallenge, submitChallengeAnswer, hasUserCompletedToday } from './services/dailyChallengeService'
 
 // ── Share ──
 export { generateShareToken, getPublicScorecard, revokeShareToken } from './services/shareService'
