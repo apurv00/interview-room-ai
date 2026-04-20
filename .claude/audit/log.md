@@ -907,3 +907,9 @@
 - **Files:** 1 changed, 0 test file(s)
 - **Root-cause:** Codex review on PR #299 (P2) flagged that the byModel
 - **Tests-added: No-tests-needed-because: ad-hoc measurement script**
+
+### 2026-04-20 17:10:04 +0000 · `a45ba48` · Claude
+- **Subject:** fix(stt): migrate mic capture from ScriptProcessorNode to AudioWorkletNode (A-1)
+- **Files:** 5 changed, 1 test file(s)
+- **Root-cause:** A live interview on 2026-04-20 reproduced a cluster of
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
