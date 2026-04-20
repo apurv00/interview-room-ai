@@ -357,6 +357,13 @@ export function useInterview({
   // the timer-0 dispatch would otherwise schedule a 15s setTimeout that
   // fires during the closing courtesy TTS (Codex P1 on PR #297).
   const wrapUpActiveRef = useRef(false)
+  // Set to true when the timer-0 latch suppresses an abort during
+  // wrap-up. Preserves the "timer expired" signal for the wrap-up's
+  // own terminal finishInterview() so completionAdjustment.ts can
+  // still emit "the timer expired" in the feedback rationale instead
+  // of mislabeling timer-expired sessions as 'normal' (Codex P2 on
+  // PR #297).
+  const timerExpiredDuringWrapUpRef = useRef(false)
 
   // ─── Init timer + DB session ────────────────────────────────────────────────
 
@@ -454,6 +461,12 @@ export function useInterview({
           // site and naturally retired when wrap-up's own finishInterview
           // transitions phase to SCORING (caught by the outer guard).
           if (wrapUpActiveRef.current) {
+            // Preserve the timer-expired signal — wrap-up's terminal
+            // finishInterview() reads this to pass endReason='time_up'
+            // so completionAdjustment.ts emits "the timer expired" in
+            // the feedback rationale instead of treating it as normal
+            // completion (Codex P2).
+            timerExpiredDuringWrapUpRef.current = true
             return next
           }
           const activePhase = phaseRef.current
@@ -1824,7 +1837,7 @@ export function useInterview({
         await avatarSpeak(noQuestionsClose, 'friendly')
       }
 
-      finishInterview()
+      finishInterview(timerExpiredDuringWrapUpRef.current ? 'time_up' : 'normal')
       } catch (err) {
         // Silently catch abort errors — interview was intentionally ended
         if (err instanceof InterviewAbortError || (err instanceof DOMException && err.name === 'AbortError')) return
@@ -1957,7 +1970,7 @@ export function useInterview({
             await avatarSpeak(noQuestionsClose, 'friendly')
           }
 
-          finishInterview()
+          finishInterview(timerExpiredDuringWrapUpRef.current ? 'time_up' : 'normal')
         }
         return
       }
@@ -2102,7 +2115,7 @@ export function useInterview({
             await avatarSpeak(noQuestionsClose, 'friendly')
           }
 
-          finishInterview()
+          finishInterview(timerExpiredDuringWrapUpRef.current ? 'time_up' : 'normal')
         }
         return
       }
