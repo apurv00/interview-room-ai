@@ -816,3 +816,9 @@
 - **Root-cause:** ff1cb6b's wrapUpActiveRef latch suppresses ALL timer-0
 - **No-tests-needed-because: same justification as 32e0712 + ff1cb6b —**
 - **Verified-by:** vitest run modules/interview/__tests__/useInterview.test.ts
+
+### 2026-04-20 13:41:15 +0000 · `91f0b53` · Claude
+- **Subject:** Merge remote-tracking branch 'origin/main' into claude/recruitment-interview-flow-oWgGJ
+- **Files:** 2 changed, 0 test file(s)
+- **Root-cause:** main advanced by 6 commits from PR #297 (wrap-up
+- **No-tests-needed-because: merge commit with zero code conflicts**
