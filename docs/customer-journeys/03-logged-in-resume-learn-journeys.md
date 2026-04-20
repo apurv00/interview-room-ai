@@ -139,7 +139,7 @@ Skip any step → defaults from profile. Each step has **"Back"** / **"Next"**.
 
 ## Part B — Learn Module
 
-The Learn module includes the **dashboard**, **progress tracking**, **guides**, **practice sets**, **pathway**, **badges**, **daily challenge**, **leaderboards**, and **streaks**.
+The Learn module includes the **dashboard**, **progress tracking**, **guides**, **practice sets**, **pathway**, **badges**, **daily challenge**, and **streaks**.
 
 ### B1. Dashboard (`/dashboard`)
 
@@ -231,18 +231,9 @@ One curated question per day.
 - **"Record answer"** → same STT flow as drill (60 s).
 - **"Submit"** → `POST /api/learn/challenge/submit` → score + XP (2x if streak ≥ 3 days).
 - Completion: confetti animation + streak badge update.
-- **"See leaderboard"** → `/learn/leaderboard`.
 - Missed days break streak; a "Freeze streak" button uses 1 freeze token (Pro perk).
 
-### B8. Leaderboard (`/learn/leaderboard`)
-
-- Weekly / monthly / all-time toggle.
-- Anonymized username + score + rank.
-- Your row highlighted.
-- Filter: global / same domain / friends (if invited).
-- **"Share my rank"** → social card.
-
-### B9. Learn Guides (authenticated view)
+### B8. Learn Guides (authenticated view)
 
 Same pages as `/learn/guides` and `/learn/guides/[slug]` from the logged-out flows (§6 of `01-*.md`), plus:
 
@@ -252,7 +243,7 @@ Same pages as `/learn/guides` and `/learn/guides/[slug]` from the logged-out flo
 - Progress indicator on each guide card (unread / reading / completed).
 - `/learn/saved` — bookmarked guides list.
 
-### B10. XP / Levels / Streaks (cross-cutting)
+### B9. XP / Levels / Streaks (cross-cutting)
 
 - XP is awarded for: completing interviews, finishing drills, reading guides, daily challenge, earning badges.
 - Level up toasts fire on threshold crossings.
@@ -260,9 +251,8 @@ Same pages as `/learn/guides` and `/learn/guides/[slug]` from the logged-out flo
 - `BadgeUnlockChecker` runs silently post-nav; on unlock, opens `BadgeUnlockToast` with **"See badge"** → `/learn/badges`.
 - Streak freeze tokens: Pro gets 2/month, Free gets 0.
 
-### B11. Errors in the Learn module
+### B10. Errors in the Learn module
 
 - Pathway regeneration rate-limited: "Next regen available in X days".
-- Leaderboard cached — stale data toast if > 10 min old.
 - Badge unlock race (double-fire) → idempotent via `User.earnedBadges[].id`.
 - XP sync failure → retries in background, no user-facing error.

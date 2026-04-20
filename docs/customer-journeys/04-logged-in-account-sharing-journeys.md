@@ -252,7 +252,7 @@ Same routes as anonymous (see `01-*.md §5`):
 
 Daily email digest (`emailDigestJob`, Inngest 9 AM UTC):
 - Sent only to users with `notifications.weeklyDigest = true`.
-- Contents: streak status, pathway next step, leaderboard rank change, new guides, upgrade CTA.
+- Contents: streak status, pathway next step, new guides, upgrade CTA.
 - Each email link carries a signed token → lands user on `/dashboard` already signed in (magic-link-lite).
 
 Product emails (marketing launches) gated by `notifications.productEmails`.
