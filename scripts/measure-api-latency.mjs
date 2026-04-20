@@ -59,8 +59,16 @@ const PER_TYPE_LIMIT = argInt('--limit', 10000)
 const since = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000)
 
 function percentile(sorted, p) {
+  // Nearest-rank method: smallest value such that at least p% of data is
+  // ≤ it. For n=100 and p=99 this returns sorted[98] (the 99th value),
+  // NOT sorted[99] (the max). The previous `Math.floor((p/100)*n)` form
+  // was off-by-one high: it mapped p=99,n=100 → idx 99 = max, which
+  // inflated every reported percentile by one rank and could push the
+  // decision-guide thresholds (p99 < 2000ms / 2000-5000 / > 5000ms)
+  // the wrong side of a boundary. Clamp both ends for 0/100 edge cases.
   if (sorted.length === 0) return 0
-  const idx = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))
+  const n = sorted.length
+  const idx = Math.max(0, Math.min(n - 1, Math.ceil((p / 100) * n) - 1))
   return sorted[idx]
 }
 
