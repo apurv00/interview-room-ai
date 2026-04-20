@@ -854,3 +854,9 @@
 - **Files:** 1 changed, 0 test file(s)
 - **Root-cause:** useInterview.ts:1542 called modelRouter's completion() directly
 - **Tests-added: No-tests-needed-because: there were no existing tests**
+
+### 2026-04-20 15:50:16 +0000 · `be957fb` · Claude
+- **Subject:** fix(stt): drop the/a/an from incomplete-intent pattern + shrink grace 8s→4.5s
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** On 2026-04-20 a real interview (6 questions) produced
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
