@@ -33,7 +33,6 @@ import {
   simplifyQuestion,
   pickRandom,
 } from '@interview/config/conversationalResponses'
-import { completion } from '@shared/services/modelRouter'
 import {
   computePerformanceSignal as computeSignal,
   shouldProbeOrAdvance as probeOrAdvance,
@@ -1536,24 +1535,24 @@ export function useInterview({
           }
 
           if (intent === 'question') {
-            // Proactive candidate question — AI answers in character
+            // Proactive candidate question — canned response.
+            // The previous implementation called completion() directly from
+            // this client hook, but completion() routes to Anthropic's SDK
+            // which throws in the browser without dangerouslyAllowBrowser
+            // (and we don't set that because ANTHROPIC_API_KEY is server-
+            // only). The catch block was the only path users ever reached
+            // — confirmed by ".next/static/chunks/app/interview/page-*.js"
+            // shipping the Anthropic SDK + fallback string but no user ever
+            // reporting a real AI answer here. If product wants real AI
+            // answers for this flow later, add a dedicated
+            // /api/interview/answer-candidate-question server route and
+            // fetch() it from here — do NOT reintroduce completion()
+            // imports in a client hook.
             clarifyingQCountRef.current++
-            try {
-              const aiAnswer = await completion({
-                taskSlot: 'interview.answer-candidate-question',
-                system: 'You are Alex Chen, an interviewer. The candidate asked a clarifying question. Give a brief, helpful answer (1-2 sentences). Stay in character. Then naturally guide back to the original question.',
-                messages: [{ role: 'user', content: `Interview question: "${question}"\nCandidate asks: "${speech}"` }],
-              })
-              addToTranscript('interviewer', aiAnswer.text, qIdx)
-              warmUpListening?.()
-              await avatarSpeak(aiAnswer.text, 'friendly')
-            } catch {
-              // Fallback if LLM call fails
-              const fallback = "Great question! For the purposes of this interview, let's assume a standard scenario. Now, back to my question —"
-              addToTranscript('interviewer', fallback, qIdx)
-              warmUpListening?.()
-              await avatarSpeak(fallback, 'friendly')
-            }
+            const fallback = "Great question! For the purposes of this interview, let's assume a standard scenario. Now, back to my question —"
+            addToTranscript('interviewer', fallback, qIdx)
+            warmUpListening?.()
+            await avatarSpeak(fallback, 'friendly')
             continue
           }
         }
