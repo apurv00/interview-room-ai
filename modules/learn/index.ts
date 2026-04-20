@@ -62,7 +62,7 @@ export { BADGE_DEFINITIONS, getBadgesByTrigger, getBadgeById } from './config/ba
 export { recordActivity, updateStreak, getStreakCalendar, getStreakLeaderboard, refreshWeeklyFreeze } from './services/streakService'
 
 // ── Daily Challenge ──
-export { getTodaysChallenge, submitChallengeAnswer, getUserChallengeHistory, getChallengeLeaderboard, hasUserCompletedToday } from './services/dailyChallengeService'
+export { getTodaysChallenge, submitChallengeAnswer, getUserChallengeHistory, hasUserCompletedToday } from './services/dailyChallengeService'
 
 // ── Share ──
 export { generateShareToken, getPublicScorecard, revokeShareToken } from './services/shareService'

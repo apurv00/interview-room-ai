@@ -3,7 +3,6 @@ import { connectDB } from '@shared/db/connection'
 import { DailyChallenge } from '@shared/db/models/DailyChallenge'
 import { DailyChallengeAttempt } from '@shared/db/models/DailyChallengeAttempt'
 import { QuestionBank } from '@shared/db/models/QuestionBank'
-import { User } from '@shared/db/models/User'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { aiLogger as logger } from '@shared/logger'
 import { completion } from '@shared/services/modelRouter'
@@ -300,39 +299,3 @@ export async function getUserChallengeHistory(userId: string, limit = 20): Promi
   }
 }
 
-/**
- * Get today's challenge leaderboard.
- */
-export async function getChallengeLeaderboard(date?: string, limit = 20): Promise<Array<{
-  name: string
-  score: number
-  rank: number
-}>> {
-  try {
-    await connectDB()
-    const targetDate = date || getTodayUTC()
-
-    const attempts = await DailyChallengeAttempt.find({ challengeDate: targetDate })
-      .sort({ score: -1 })
-      .limit(limit)
-      .select('userId score')
-      .lean()
-
-    if (attempts.length === 0) return []
-
-    const userIds = attempts.map(a => a.userId)
-    const users = await User.find({ _id: { $in: userIds } })
-      .select('name')
-      .lean()
-    const nameMap = new Map(users.map(u => [u._id.toString(), u.name]))
-
-    return attempts.map((a, i) => ({
-      name: nameMap.get(a.userId.toString()) || 'Anonymous',
-      score: a.score,
-      rank: i + 1,
-    }))
-  } catch (err) {
-    logger.error({ err }, 'Failed to get challenge leaderboard')
-    return []
-  }
-}
