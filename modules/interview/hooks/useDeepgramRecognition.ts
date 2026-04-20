@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { track } from '@shared/analytics/track'
 import { wallClockMsToAudioSeconds } from '@interview/audio/recordingClock'
 import type {
   SpeechRecognitionResult,
@@ -241,7 +242,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
 
   const wsRef = useRef<WebSocket | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
-  const processorRef = useRef<ScriptProcessorNode | null>(null)
+  const processorRef = useRef<AudioWorkletNode | null>(null)
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const audioStreamRef = useRef<MediaStream | null>(null)
   const externalStreamRef = useRef<MediaStream | null>(null)
@@ -1035,23 +1036,24 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     // Reuse external stream (from page-level getUserMedia) if available
     const existingStream = externalStreamRef.current
     if (existingStream) {
-      setupAudioProcessing(existingStream, ws, false)
+      setupAudioProcessing(existingStream, ws, false).catch((err) => {
+        console.error('Audio worklet setup failed:', err)
+        finishRecognition('getUserMediaFailed')
+      })
       return
     }
 
     // Fallback: request audio-only stream
     navigator.mediaDevices
       .getUserMedia({ audio: true, video: false })
-      .then((stream) => {
-        setupAudioProcessing(stream, ws, true)
-      })
+      .then((stream) => setupAudioProcessing(stream, ws, true))
       .catch((err) => {
         console.error('Audio capture failed:', err)
         finishRecognition('getUserMediaFailed')
       })
   }
 
-  function setupAudioProcessing(stream: MediaStream, ws: WebSocket, ownStream: boolean) {
+  async function setupAudioProcessing(stream: MediaStream, ws: WebSocket, ownStream: boolean) {
     if (ownStream) {
       audioStreamRef.current = stream
     }
@@ -1059,37 +1061,122 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     audioContextRef.current = audioContext
     // Chrome's autoplay policy can create AudioContext in 'suspended' state
     // after multiple create/close cycles across questions. A suspended
-    // context does not fire onaudioprocess → no PCM → no transcripts, which
-    // is indistinguishable from a dead WS at the UI level. resume() is
-    // idempotent on a running context and cheap on a suspended one.
+    // context does not fire the AudioWorklet `process()` callback → no
+    // PCM → no transcripts, which is indistinguishable from a dead WS at
+    // the UI level. resume() is idempotent on a running context and cheap
+    // on a suspended one.
     audioContext.resume().catch(() => { /* best-effort */ })
 
     const source = audioContext.createMediaStreamSource(stream)
     sourceRef.current = source
 
-    // Use ScriptProcessorNode (deprecated but widely supported)
-    const processor = audioContext.createScriptProcessor(4096, 1, 1)
-    processorRef.current = processor
+    // AudioWorkletNode runs on the audio rendering thread and is
+    // immune to main-thread throttling (MediaPipe, React, GC, tab
+    // backgrounding). See public/pcm-processor.js for the Float32 →
+    // Int16 conversion + 32-render-quantum buffering that preserves
+    // the 4096-sample / 256ms packet cadence Deepgram was calibrated
+    // against. `addModule()` is async; if it fails (ancient browser,
+    // CSP block, 404 on the static asset) the rejection bubbles to
+    // startAudioCapture which routes to finishRecognition.
+    //
+    // Telemetry: we can't run browser QA from the harness, so every
+    // load (success or fail) is captured by the shared PostHog track()
+    // helper. track() is a no-op when NEXT_PUBLIC_POSTHOG_KEY is unset,
+    // so this has zero runtime cost in dev / test / preview-without-
+    // PostHog; it only emits an event in prod where the key is wired
+    // up. The event carries durationMs (so we can measure cache-hit vs
+    // cold-fetch cost in the field) and, on failure, a truncated error
+    // string (AudioWorklet rejections tend to be short and known —
+    // CSP blocks, SecurityError, unsupported browser).
+    const workletStart = Date.now()
+    try {
+      await audioContext.audioWorklet.addModule('/pcm-processor.js')
+    } catch (err) {
+      // Stale-setup guard (error path): if the audioContext this setup
+      // was spun up for is no longer the active one, a reconnect or stop
+      // happened mid-await. Both `maybeReconnectOrFinish` and
+      // `finishRecognition` synchronously null `audioContextRef.current`
+      // (and `maybeReconnectOrFinish` additionally calls
+      // `audioContext.close()`), so the identity check catches both.
+      //
+      // We intentionally do NOT key off `wsRef.current !== ws` here:
+      // during the 800–1600ms reconnect *delay* window,
+      // `maybeReconnectOrFinish` has already torn down the AudioContext
+      // but has not yet replaced `wsRef.current` (the new ws is created
+      // by the delayed `connectWebSocket` call). A ws-identity guard
+      // would therefore treat the superseded setup as current, let the
+      // rejection propagate into startAudioCapture's `.catch` →
+      // `finishRecognition('getUserMediaFailed')` → truncate the in-
+      // progress answer and abort the pending reconnect. Codex P1 on
+      // PR #300.
+      const stale = audioContextRef.current !== audioContext
+      track('audio_worklet_loaded', {
+        success: false,
+        durationMs: Date.now() - workletStart,
+        error: String(err instanceof Error ? err.message : err).slice(0, 200),
+        stale,
+      })
+      if (stale) return
+      throw err
+    }
+    // Stale-setup guard (success path): even if addModule resolved,
+    // the audioContext we resolved for may have been superseded during
+    // the await (reconnect closed it, or finishRecognition stopped us).
+    // Constructing an AudioWorkletNode against a closed context below
+    // would either throw (latent error path) or succeed and then over-
+    // write the active session's processorRef + connect source→worklet
+    // →destination on a dead context. Either way: a ghost setup would
+    // poison the active session. Bail. See error-path comment above
+    // for why context identity is more reliable than ws identity during
+    // the reconnect delay window.
+    if (audioContextRef.current !== audioContext) {
+      track('audio_worklet_loaded', {
+        success: true,
+        durationMs: Date.now() - workletStart,
+        stale: true,
+      })
+      return
+    }
+    track('audio_worklet_loaded', {
+      success: true,
+      durationMs: Date.now() - workletStart,
+    })
+    // Preserve the mono-input semantics of the retired
+    // `createScriptProcessor(4096, 1, 1)` call. The old ScriptProcessor
+    // took `numberOfInputChannels=1` which forced the browser to
+    // downmix any multi-channel input to mono (spec rule: stereo → mono
+    // is `(L + R) / 2`) BEFORE the node received it. AudioWorkletNode
+    // defaults to `channelCount=2, channelCountMode='max'`, which would
+    // deliver stereo input to the worklet; since pcm-processor.js reads
+    // only `inputs[0][0]` (the left channel), a stereo-emitting mic —
+    // some Bluetooth headsets, USB arrays, asymmetric laptop built-ins
+    // — would ship near-silent left-channel PCM to Deepgram on devices
+    // where the speech signal lands on the right channel. Explicit
+    // channelCount+channelCountMode replays the old downmix rule
+    // deterministically, independent of device channel layout.
+    const worklet = new AudioWorkletNode(audioContext, 'pcm-processor', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      channelCount: 1,
+      channelCountMode: 'explicit',
+      channelInterpretation: 'speakers',
+    })
+    processorRef.current = worklet
 
-    processor.onaudioprocess = (e) => {
+    worklet.port.onmessage = (e) => {
       if (ws.readyState !== WebSocket.OPEN) return
-      const inputData = e.inputBuffer.getChannelData(0)
-      // Convert Float32 to Int16 PCM
-      const pcm = new Int16Array(inputData.length)
-      for (let i = 0; i < inputData.length; i++) {
-        const s = Math.max(-1, Math.min(1, inputData[i]))
-        pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff
-      }
-      ws.send(pcm.buffer)
+      // e.data is the transferred ArrayBuffer — 4096 Int16 samples =
+      // 8192 bytes. Same wire format Deepgram saw under ScriptProcessor.
+      ws.send(e.data)
       // Diagnostic: count every frame we send. Snapshotted into
-      // packetLogRef on each inbound Deepgram message so we can
-      // detect a potential double-send by looking for an unexpected
-      // 2× frame delta between consecutive packets.
+      // packetLogRef on each inbound Deepgram message so we can detect
+      // a potential double-send by looking for an unexpected 2× frame
+      // delta between consecutive packets.
       audioFrameCountRef.current++
     }
 
-    source.connect(processor)
-    processor.connect(audioContext.destination)
+    source.connect(worklet)
+    worklet.connect(audioContext.destination)
 
     // Visibility handling (resume AudioContext + suppress grace timer while
     // hidden) is installed at the hook level — see the useEffect near the

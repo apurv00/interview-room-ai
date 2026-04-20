@@ -907,3 +907,34 @@
 - **Files:** 1 changed, 0 test file(s)
 - **Root-cause:** Codex review on PR #299 (P2) flagged that the byModel
 - **Tests-added: No-tests-needed-because: ad-hoc measurement script**
+
+### 2026-04-20 17:10:04 +0000 · `a45ba48` · Claude
+- **Subject:** fix(stt): migrate mic capture from ScriptProcessorNode to AudioWorkletNode (A-1)
+- **Files:** 5 changed, 1 test file(s)
+- **Root-cause:** A live interview on 2026-04-20 reproduced a cluster of
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+
+### 2026-04-20 17:15:51 +0000 · `055d81d` · Claude
+- **Subject:** chore(stt): add PostHog telemetry for AudioWorklet load success/failure
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** The AudioWorklet migration shipped in commit a45ba48
+- **Tests-added: No-tests-needed-because: track() is a fire-and-forget**
+
+### 2026-04-20 17:24:40 +0000 · `0d5302d` · Claude
+- **Subject:** fix(stt): preserve mono downmix in AudioWorkletNode (Codex P1 #300)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** Codex review on PR #300 (P1) flagged that the AudioWorklet
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+
+### 2026-04-20 17:35:33 +0000 · `7ca7f6e` · Claude
+- **Subject:** fix(stt): guard setupAudioProcessing against stale-ws promise race (Codex P1 #300)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** Codex review on PR #300 (P1) flagged that the async-ified
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+
+### 2026-04-20 17:51:34 +0000 · `176016d` · Claude
+- **Subject:** fix(stt): guard setupAudioProcessing by context identity, not ws identity (Codex P1 #300 follow-up)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** The earlier stale-setup guard keyed off wsRef.current !== ws. During the 800–1600ms reconnect *delay* window, maybeReconnectOrFinish has already synchronously closed the AudioContext and nulled audi
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts (new regression: "setupAudioProcessing bails when reconnect cleared context during addModule await" — uses the connectFresh path **
+- **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts → 66/66 pass (was 65). npm run build succeeds. Impact analysis: ./scripts/gitnexus-impact.sh modules/interview/hooks/useDeepgra

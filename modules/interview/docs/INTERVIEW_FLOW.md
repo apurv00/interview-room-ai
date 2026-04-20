@@ -908,3 +908,94 @@ attributes to the same name, which is how users experience it
   overrides `updateCompetencyState` and `generatePathwayPlan` to
   reject, asserts the aggregate log names both failures with their
   reason strings.
+
+### 2026-04-20 · Mic capture moved from ScriptProcessorNode → AudioWorkletNode (A-1)
+
+**Symptom:** A live interview on 2026-04-20 showed mid-answer Deepgram
+WebSocket reconnects (`[Deepgram] WebSocket connected` appeared 3× in
+the client console during a 6-question session), duplicate
+`finishRecognition` fires for the same Q4 text, and `ScriptProcessorNode
+is deprecated` warnings repeated 6× — once per question, matching the
+per-question `setupAudioProcessing` recreation. Earlier entries E-3.4
+(2026-04-16, WS drop mid-answer → truncation) and E-3.7 (2026-04-16,
+tab-backgrounded answer truncation) had already documented the same
+root cause from different triggers; the fix for each was a bandaid
+(reconnect-not-truncate, KeepAlive-during-listening, visibility
+handler).
+
+**Root cause:** `ScriptProcessorNode.onaudioprocess` runs on the main
+thread. Anything heavy on the main thread — MediaPipe face-landmark
+inference (`vision_wasm_internal.js` running concurrently during
+interviews), React reconciler, Deepgram message parsing, coaching-
+nudge timers, WebGL avatar animations, V8 GC pauses — can throttle or
+drop those callbacks. Missed callbacks = no PCM bytes sent to Deepgram
+= server sees silence = server fires UtteranceEnd or closes the
+socket with 1011 idle-timeout = the observed reconnect/duplicate
+behavior. The 9 bandaid commits spanning 2026-03 through 2026-04
+(`528e1f5`, `44fe05f`, `53c9f38`, `aaf4993`, `0b056e1`, `03e8671`,
+`57d0a27`, `43d7989`, `859f924`) were each addressing one downstream
+symptom of this single upstream cause.
+
+**Fix (commit in this PR):** Replace the main-thread
+`createScriptProcessor(4096, 1, 1)` with an `AudioWorkletNode` whose
+processor lives in `public/pcm-processor.js` and runs on the audio
+rendering thread. The audio thread is unaffected by main-thread work
+— Chrome/Firefox/Safari all guarantee `AudioWorkletProcessor.process()`
+is called on the audio thread at a deterministic 128-frame render
+quantum. Internal buffering inside the worklet (32 render quanta =
+4096 samples = 256ms) preserves the exact packet cadence Deepgram's
+server-side VAD was calibrated against, so `utterance_end_ms=2500` and
+all client-side grace timers (`GRACE_MS_BY_INTENT`) continue to work
+without retuning. Bytes on the WebSocket wire are bit-identical to the
+ScriptProcessor implementation (linear16 Int16 PCM, 4096 samples per
+frame, 16kHz), verified by the same Float32→Int16 clamp + scale
+formula running in the worklet instead of the main thread.
+
+**Why a single migration instead of continuing to patch symptoms:**
+Per-symptom bandaids had already introduced significant hook
+complexity (the KeepAlive / close-trigger-tagging / reconnect-scoping
+plumbing). Each new symptom surfaced a new bandaid. Removing the
+root cause removes the need for future bandaids of this family.
+
+**Tests added (`deepgramRecognition.test.ts` mock surface):** Replaced
+`createScriptProcessor` mock on `MockAudioContext` with
+`audioWorklet.addModule` (resolves immediately) plus a global
+`MockAudioWorkletNode` stub that exposes `port.onmessage` (so tests
+that need to simulate inbound PCM chunks can assign + call the
+handler directly). All 63 existing Deepgram tests continue to pass
+without logic changes — the mock swap is the only test-side diff.
+
+**Deliberately kept as-is (not rolled back):** KeepAlive pings, close-
+trigger tagging (`aaf49937`), visibility resume listener, and the
+reconnect-not-truncate path. Those are defensive, cheap, and still
+protect against legitimate network blips (router renegotiation, ISP
+brown-outs, Safari aggressive AudioContext suspension). Worklet fixes
+the main-thread-throttle failure mode; network-level failures still
+need their own handling.
+
+**Backlog (intentionally deferred to a separate PR):** Tune the
+worklet's internal buffer size from 32 render quanta to 8 or 16 for
+potentially faster interim-transcript updates. Requires measuring
+p95 time-from-last-word-to-final-transcript at each setting and
+cross-checking Deepgram server-side VAD behavior. Tracked in
+CLAUDE.md Known Issues.
+
+**What will change in the client footprint:**
+- `.next/static/chunks/app/interview/page-*.js` loses
+  `createScriptProcessor` / `ScriptProcessorNode` references
+- New static asset served at `/pcm-processor.js` (~3.7 KB, one-time
+  fetch cached by the browser)
+- First-answer startup cost: +1 fetch for `pcm-processor.js` if the
+  browser cache is cold (single-digit ms on HTTP/2 + gzip); subsequent
+  questions / interviews are free (cache hit)
+
+**What to verify manually post-deploy** (cannot unit-test these):
+1. Chrome desktop DevTools console: no `ScriptProcessorNode is
+   deprecated` warning during a full interview.
+2. Background the tab mid-answer for ≥10s, return: answer should NOT
+   be truncated (E-3.7 remains fixed).
+3. Network panel filter `ws`: Deepgram frame sizes should be 8192 B
+   at ~256ms cadence — exactly as they were before the migration.
+4. Safari 17 (if available): complete one full interview. AudioWorklet
+   is supported since Safari 14.1 but has had quirks; confirm audio
+   flows end-to-end.
