@@ -931,3 +931,10 @@
 - **Files:** 2 changed, 1 test file(s)
 - **Root-cause:** Codex review on PR #300 (P1) flagged that the async-ified
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+
+### 2026-04-20 17:51:34 +0000 · `176016d` · Claude
+- **Subject:** fix(stt): guard setupAudioProcessing by context identity, not ws identity (Codex P1 #300 follow-up)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** The earlier stale-setup guard keyed off wsRef.current !== ws. During the 800–1600ms reconnect *delay* window, maybeReconnectOrFinish has already synchronously closed the AudioContext and nulled audi
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts (new regression: "setupAudioProcessing bails when reconnect cleared context during addModule await" — uses the connectFresh path **
+- **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts → 66/66 pass (was 65). npm run build succeeds. Impact analysis: ./scripts/gitnexus-impact.sh modules/interview/hooks/useDeepgra
