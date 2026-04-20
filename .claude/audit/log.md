@@ -778,3 +778,9 @@
 - **Files:** 6 changed, 1 test file(s)
 - **Root-cause:** Sibling orphan to DailyChallengeLeaderboard (commit
 - **Tests-added: No-tests-needed-because: pure deletion of orphan code**
+
+### 2026-04-20 12:54:44 +0000 · `ac6ccd5` · Claude
+- **Subject:** chore(learn): remove orphan Daily Challenge History API
+- **Files:** 5 changed, 1 test file(s)
+- **Root-cause:** Third in the orphan-leaderboard/history cluster.
+- **Tests-added: No-tests-needed-because: pure deletion of orphan code**
