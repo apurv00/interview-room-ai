@@ -766,3 +766,10 @@
 - **Root-cause:** connectWebSocket's ws.onclose handler called
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
 - **Verified-by:** vitest run modules/interview/__tests__/deepgramRecognition.test.ts
+
+### 2026-04-20 09:46:44 +0000 · `32e0712` · Claude
+- **Subject:** fix(interview): exempt WRAP_UP from timer-0 finishInterview abort
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the timer-reaches-0 handler in useInterview.ts (lines
+- **No-tests-needed-because: the change is a defensive empty-branch**
+- **Verified-by:** vitest run modules/interview/__tests__/useInterview.
