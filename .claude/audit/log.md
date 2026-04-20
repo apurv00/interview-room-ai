@@ -773,3 +773,10 @@
 - **Root-cause:** the timer-reaches-0 handler in useInterview.ts (lines
 - **No-tests-needed-because: the change is a defensive empty-branch**
 - **Verified-by:** vitest run modules/interview/__tests__/useInterview.
+
+### 2026-04-20 10:16:36 +0000 · `ff1cb6b` · Claude
+- **Subject:** fix(interview): gate timer-0 on wrap-up latch (Codex P1 #297)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** 32e0712 added an `else if (activePhase === 'WRAP_UP')`
+- **No-tests-needed-because: same justification as 32e0712 — driving a**
+- **Verified-by:** vitest run modules/interview/__tests__/useInterview.test.ts
