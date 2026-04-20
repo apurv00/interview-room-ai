@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { track } from '@shared/analytics/track'
 import { wallClockMsToAudioSeconds } from '@interview/audio/recordingClock'
 import type {
   SpeechRecognitionResult,
@@ -1077,7 +1078,31 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     // against. `addModule()` is async; if it fails (ancient browser,
     // CSP block, 404 on the static asset) the rejection bubbles to
     // startAudioCapture which routes to finishRecognition.
-    await audioContext.audioWorklet.addModule('/pcm-processor.js')
+    //
+    // Telemetry: we can't run browser QA from the harness, so every
+    // load (success or fail) is captured by the shared PostHog track()
+    // helper. track() is a no-op when NEXT_PUBLIC_POSTHOG_KEY is unset,
+    // so this has zero runtime cost in dev / test / preview-without-
+    // PostHog; it only emits an event in prod where the key is wired
+    // up. The event carries durationMs (so we can measure cache-hit vs
+    // cold-fetch cost in the field) and, on failure, a truncated error
+    // string (AudioWorklet rejections tend to be short and known —
+    // CSP blocks, SecurityError, unsupported browser).
+    const workletStart = Date.now()
+    try {
+      await audioContext.audioWorklet.addModule('/pcm-processor.js')
+      track('audio_worklet_loaded', {
+        success: true,
+        durationMs: Date.now() - workletStart,
+      })
+    } catch (err) {
+      track('audio_worklet_loaded', {
+        success: false,
+        durationMs: Date.now() - workletStart,
+        error: String(err instanceof Error ? err.message : err).slice(0, 200),
+      })
+      throw err
+    }
     const worklet = new AudioWorkletNode(audioContext, 'pcm-processor')
     processorRef.current = worklet
 
