@@ -49,13 +49,6 @@ vi.mock('@shared/db/models/QuestionBank', () => ({
   },
 }))
 
-const mockUserFind = vi.fn()
-vi.mock('@shared/db/models/User', () => ({
-  User: {
-    find: (...args: unknown[]) => mockUserFind(...args),
-  },
-}))
-
 const mockCompletion = vi.fn()
 vi.mock('@shared/services/modelRouter', () => ({
   completion: (...args: unknown[]) => mockCompletion(...args),
@@ -66,7 +59,6 @@ import {
   submitChallengeAnswer,
   hasUserCompletedToday,
   getUserChallengeHistory,
-  getChallengeLeaderboard,
 } from '../dailyChallengeService'
 import { isFeatureEnabled } from '@shared/featureFlags'
 
@@ -461,87 +453,4 @@ describe('dailyChallengeService', () => {
     })
   })
 
-  describe('getChallengeLeaderboard', () => {
-    it('returns top scorers with user names', async () => {
-      mockAttemptFind.mockReturnValue({
-        sort: vi.fn().mockReturnValue({
-          limit: vi.fn().mockReturnValue({
-            select: vi.fn().mockReturnValue({
-              lean: vi.fn().mockResolvedValue([
-                { userId: '507f1f77bcf86cd799439011', score: 95 },
-                { userId: '507f1f77bcf86cd799439012', score: 88 },
-              ]),
-            }),
-          }),
-        }),
-      })
-      mockUserFind.mockReturnValue({
-        select: vi.fn().mockReturnValue({
-          lean: vi.fn().mockResolvedValue([
-            { _id: { toString: () => '507f1f77bcf86cd799439011' }, name: 'Alice' },
-            { _id: { toString: () => '507f1f77bcf86cd799439012' }, name: 'Bob' },
-          ]),
-        }),
-      })
-
-      const result = await getChallengeLeaderboard('2026-03-16')
-
-      expect(result).toHaveLength(2)
-      expect(result[0]).toEqual({ name: 'Alice', score: 95, rank: 1 })
-      expect(result[1]).toEqual({ name: 'Bob', score: 88, rank: 2 })
-    })
-
-    it('falls back to Anonymous for missing user names', async () => {
-      mockAttemptFind.mockReturnValue({
-        sort: vi.fn().mockReturnValue({
-          limit: vi.fn().mockReturnValue({
-            select: vi.fn().mockReturnValue({
-              lean: vi.fn().mockResolvedValue([
-                { userId: '507f1f77bcf86cd799439099', score: 80 },
-              ]),
-            }),
-          }),
-        }),
-      })
-      mockUserFind.mockReturnValue({
-        select: vi.fn().mockReturnValue({
-          lean: vi.fn().mockResolvedValue([]),
-        }),
-      })
-
-      const result = await getChallengeLeaderboard('2026-03-16')
-
-      expect(result[0].name).toBe('Anonymous')
-    })
-
-    it('returns empty array when no attempts', async () => {
-      mockAttemptFind.mockReturnValue({
-        sort: vi.fn().mockReturnValue({
-          limit: vi.fn().mockReturnValue({
-            select: vi.fn().mockReturnValue({
-              lean: vi.fn().mockResolvedValue([]),
-            }),
-          }),
-        }),
-      })
-
-      const result = await getChallengeLeaderboard()
-      expect(result).toEqual([])
-    })
-
-    it('returns empty array on error', async () => {
-      mockAttemptFind.mockReturnValue({
-        sort: vi.fn().mockReturnValue({
-          limit: vi.fn().mockReturnValue({
-            select: vi.fn().mockReturnValue({
-              lean: vi.fn().mockRejectedValue(new Error('DB error')),
-            }),
-          }),
-        }),
-      })
-
-      const result = await getChallengeLeaderboard()
-      expect(result).toEqual([])
-    })
-  })
 })
