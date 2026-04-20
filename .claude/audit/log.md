@@ -766,3 +766,9 @@
 - **Root-cause:** connectWebSocket's ws.onclose handler called
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
 - **Verified-by:** vitest run modules/interview/__tests__/deepgramRecognition.test.ts
+
+### 2026-04-20 12:49:52 +0000 · `2b94778` · Claude
+- **Subject:** chore(learn): remove orphan DailyChallengeLeaderboard feature
+- **Files:** 5 changed, 1 test file(s)
+- **Root-cause:** Leaderboard UI built but never wired into any page.
+- **Tests-added: No-tests-needed-because: pure deletion of orphan code**
