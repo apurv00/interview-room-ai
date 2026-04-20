@@ -1091,18 +1091,45 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     const workletStart = Date.now()
     try {
       await audioContext.audioWorklet.addModule('/pcm-processor.js')
-      track('audio_worklet_loaded', {
-        success: true,
-        durationMs: Date.now() - workletStart,
-      })
     } catch (err) {
+      // Stale-setup guard (error path): if the ws this setup was spun
+      // up for is no longer the active one, a reconnect happened mid-
+      // await (`maybeReconnectOrFinish` closed the old AudioContext
+      // and kicked a new startAudioCapture with a fresh ws). Propagating
+      // this rejection would call finishRecognition('getUserMediaFailed')
+      // in startAudioCapture's .catch and kill the brand-new session.
+      // Swallow silently; still emit telemetry with stale=true so we
+      // don't lose the observability signal and can monitor the
+      // frequency of reconnect-during-addModule events in the field.
+      const stale = wsRef.current !== ws
       track('audio_worklet_loaded', {
         success: false,
         durationMs: Date.now() - workletStart,
         error: String(err instanceof Error ? err.message : err).slice(0, 200),
+        stale,
       })
+      if (stale) return
       throw err
     }
+    // Stale-setup guard (success path): even if addModule resolved,
+    // the audioContext / ws we resolved for may have been superseded
+    // during the await. Constructing an AudioWorkletNode against a
+    // closed context below would either throw (latent error path) or
+    // succeed and then overwrite the active session's processorRef +
+    // connect source→worklet→destination on a dead context. Either
+    // way: a ghost setup would poison the active session. Bail.
+    if (wsRef.current !== ws) {
+      track('audio_worklet_loaded', {
+        success: true,
+        durationMs: Date.now() - workletStart,
+        stale: true,
+      })
+      return
+    }
+    track('audio_worklet_loaded', {
+      success: true,
+      durationMs: Date.now() - workletStart,
+    })
     // Preserve the mono-input semantics of the retired
     // `createScriptProcessor(4096, 1, 1)` call. The old ScriptProcessor
     // took `numberOfInputChannels=1` which forced the browser to

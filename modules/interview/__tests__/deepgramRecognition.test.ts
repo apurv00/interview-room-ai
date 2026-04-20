@@ -121,16 +121,22 @@ class MockAudioWorkletNode {
 
 vi.stubGlobal('AudioWorkletNode', MockAudioWorkletNode)
 
+// Module-scoped so tests can override per-case with
+// `mockAddModule.mockImplementationOnce(...)` to simulate slow fetches,
+// rejections, or stale-setup races. Default: resolved immediately.
+const mockAddModule = vi.fn().mockResolvedValue(undefined)
+
 class MockAudioContext {
   sampleRate = 16000
   state = 'running'
   createMediaStreamSource = vi.fn(() => mockSource)
   // Replaces createScriptProcessor. setupAudioProcessing awaits
-  // addModule() before constructing the worklet; returning an already-
-  // resolved promise lets vi.advanceTimersByTimeAsync pump the
-  // continuation without needing to mock `fetch` for /pcm-processor.js.
+  // addModule() before constructing the worklet; the shared mock (see
+  // mockAddModule above) returns Promise.resolve() by default so
+  // vi.advanceTimersByTimeAsync can pump the continuation without
+  // needing to mock `fetch` for /pcm-processor.js.
   audioWorklet = {
-    addModule: vi.fn().mockResolvedValue(undefined),
+    addModule: mockAddModule,
   }
   destination = {}
   close = vi.fn().mockResolvedValue(undefined)
@@ -1323,6 +1329,70 @@ describe('useDeepgramRecognition', () => {
       numberOfInputs: 1,
       numberOfOutputs: 1,
     })
+  })
+
+  // Regression guard for the stale-setup race Codex P1 flagged on PR #300:
+  // if addModule() is still pending when stopListening() / a reconnect
+  // nulls wsRef.current out from under it, the old setup's catch path
+  // used to unconditionally call finishRecognition('getUserMediaFailed')
+  // — which, in a reconnect scenario, would kill the brand-new session
+  // the reconnect had just spun up. Fix is a wsRef.current !== ws guard
+  // after the addModule await; this test asserts no new AudioWorkletNode
+  // is constructed AND no onComplete fires when the old setup finally
+  // resolves against a superseded ws.
+  it('stale setupAudioProcessing does NOT terminate a superseded session', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+
+    // Control the NEXT addModule resolution so we can interleave a
+    // stopListening() (which nulls wsRef.current) before it resolves.
+    let resolveAdd: () => void = () => {}
+    mockAddModule.mockImplementationOnce(
+      () => new Promise<void>((res) => { resolveAdd = res }),
+    )
+
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    act(() => { mockWsInstance!.simulateOpen() })
+
+    audioWorkletNodeCalls.length = 0
+
+    await act(async () => {
+      result.current.startListening(onComplete)
+      // Let the async setup begin (createMediaStreamSource, etc.) but
+      // DON'T resolve addModule yet — it stays pending inside the
+      // hook's setupAudioProcessing await.
+      await vi.advanceTimersByTimeAsync(5)
+    })
+
+    // Nothing has been constructed yet — we're still awaiting addModule.
+    expect(audioWorkletNodeCalls.length).toBe(0)
+
+    // Supersede the session. stopListening() nulls wsRef.current via
+    // the close+null sequence in finishRecognition (line ~1214). After
+    // this point, the stale setupAudioProcessing closure's `ws` no
+    // longer matches wsRef.current.
+    await act(async () => {
+      result.current.stopListening('intentionalSilence')
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    // NOW resolve the stale addModule promise. The post-await guard
+    // should detect wsRef.current !== ws and bail before constructing
+    // the worklet.
+    await act(async () => {
+      resolveAdd()
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    // Bug would show up as an AudioWorkletNode being constructed (the
+    // stale setup ran to completion) AND/OR a second onComplete from
+    // the hypothetical finishRecognition in the error path. Neither
+    // should happen.
+    expect(audioWorkletNodeCalls.length).toBe(0)
+    // onComplete may have fired exactly once from the stopListening
+    // call above; the stale path must not add a second invocation.
+    expect(onComplete.mock.calls.length).toBeLessThanOrEqual(1)
   })
 
   it('safety timeout fires onCaptureReady after 1500ms', async () => {
