@@ -156,7 +156,7 @@ export type UtteranceIntent = 'complete' | 'incomplete' | 'thinkingRequest'
  *  analysis on this branch before implementing). */
 const GRACE_MS_BY_INTENT: Record<UtteranceIntent, number> = {
   complete: 3000,
-  incomplete: 8000,
+  incomplete: 4500,
   thinkingRequest: 30000,
 }
 
@@ -191,7 +191,7 @@ const THINKING_PHRASE_PATTERNS: readonly RegExp[] = [
  *  trailed off mid-thought (not yet done). */
 const INCOMPLETE_ENDING_PATTERNS: readonly RegExp[] = [
   /\b(?:and|or|but|so|because|since|while|when|if|then|also|plus|however|therefore|moreover|furthermore)\s*$/i,
-  /\b(?:the|a|an|to|for|in|at|on|of|with|by|as|about|from|into|over|under|around)\s*$/i,
+  /\b(?:to|for|in|at|on|of|with|by|as|about|from|into|over|under|around)\s*$/i,
   /,\s*$/,
   /\.\.\.\s*$/,
   /…\s*$/,
