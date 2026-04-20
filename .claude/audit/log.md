@@ -790,3 +790,9 @@
 - **Files:** 3 changed, 0 test file(s)
 - **Root-cause:** docs/customer-journeys/03-*.md and 04-*.md described
 - **Tests-added: No-tests-needed-because: docs-only change, no**
+
+### 2026-04-20 13:04:42 +0000 · `fa455fa` · Claude
+- **Subject:** chore(learn): remove dead /dashboard analytics page + route chain
+- **Files:** 7 changed, 0 test file(s)
+- **Root-cause:** User confirmed /dashboard (route from app/(learn)/
+- **Tests-added: No-tests-needed-because: pure deletion of a chain**
