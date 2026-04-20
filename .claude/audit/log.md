@@ -901,3 +901,9 @@
 - **Files:** 1 changed, 0 test file(s)
 - **Root-cause:** Codex review on PR #299 (P2) flagged that the percentile
 - **Tests-added: No-tests-needed-because: ad-hoc measurement script**
+
+### 2026-04-20 16:16:20 +0000 · `6eceec3` · Claude
+- **Subject:** fix(scripts): apply >0 filter to per-model latency buckets
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** Codex review on PR #299 (P2) flagged that the byModel
+- **Tests-added: No-tests-needed-because: ad-hoc measurement script**
