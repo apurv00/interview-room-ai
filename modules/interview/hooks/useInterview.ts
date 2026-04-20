@@ -482,6 +482,18 @@ export function useInterview({
                 finishInterview('time_up')
               }
             }, 5000)
+          } else if (activePhase === 'WRAP_UP') {
+            // Wrap-up is bounded by its own internal sequence: TTS closing
+            // line (~5s) → listenForAnswer(15s) → optional response TTS
+            // (~5-8s) → finishInterview() at useInterview.ts:1826. Calling
+            // finishInterview('time_up') here cancelTTS()'s the in-flight
+            // closing courtesy mid-sentence and router.push()'s the user to
+            // /feedback before the wrap-up has a chance to complete — the
+            // symptom the user reported as "wrap-up question isn't heard
+            // and it moved to next page" plus the TranscriptPanel never
+            // getting a visible WRAP_UP render (still showing "Q6").
+            // The wrap-up itself always terminates the interview on its
+            // own so letting it run is safe — no runaway risk.
           } else {
             finishInterview('time_up')
           }
