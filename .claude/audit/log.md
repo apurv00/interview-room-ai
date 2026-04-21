@@ -1015,3 +1015,10 @@
 - **Root-cause:** sessionConfigCache had two production gaps. (1) 30-min TTL with NO refresh on access — interviews running longer than 30 min would silently expire their cache mid-flow, forcing a 4-parallel-Mongo-qu
 - **Tests-added: 9 PR-B regressions in modules/interview/__tests__/sessionConfigCache.test.ts. TTL refresh: (1) EXPIRE fires with (sessionKey, 1800) on cache hit, (2) EXPIRE does NOT fire on miss (SETEX s**
 - **Verified-by:** npx vitest run modules/interview/__tests__/sessionConfigCache.test.ts → 21/21 pass. npm run build succeeds. npx eslint on both touched files clean. Impact analysis refreshed pre-edit. Post-deploy va
+
+### 2026-04-21 10:48:02 +0000 · `57d0cef` · Claude
+- **Subject:** fix(session-cache): log redis-hit only after successful JSON parse (Codex P2 #304)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** getOrLoadSessionConfig logged `source:redis-hit` (and fired the fire-and-forget EXPIRE TTL refresh) BEFORE JSON.parse ran on the cached value. If the cached value was corrupted JSON (schema drift, par
+- **Tests-added: modules/interview/__tests__/sessionConfigCache.test.ts — 1 regression "corrupted cache value: emits source=redis-error ONLY, NOT redis-hit". Uses mockRedisGet returning malformed JSON w**
+- **Verified-by:** npx vitest run modules/interview/__tests__/sessionConfigCache.test.ts → 22/22 pass (was 21, +1 regression). npm run build succeeds. npx eslint on both touched files clean. Impact analysis refreshed 
