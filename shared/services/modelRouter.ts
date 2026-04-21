@@ -439,39 +439,65 @@ async function loadConfig(): Promise<void> {
 
 async function ensureConfig(): Promise<CachedConfig> {
   const now = Date.now()
+  const startMs = now
 
   // L1 fresh hit — return immediately. Steady-state path.
   if (_cache && now - _cache.loadedAt < CACHE_TTL_MS) {
     return _cache
   }
 
-  // Kick off a background refresh if none is already in flight. We do
-  // NOT await it. Any user request must return on the defaults path
-  // below instead of waiting for L2/L3 — that wait is what caused the
-  // 2026-04-21 regression.
+  // 2026-04-21 non-blocking refactor, Codex P2 follow-up on PR #308.
   //
-  // Pre-fix: this function awaited `loadConfig()`, which on a cold
-  // Lambda with an empty production Redis (PR A's L2 had just shipped,
-  // no keys written yet) did:
-  //   1. tryLoadFromRedis → ioredis lazyConnect + mget, routinely
-  //      exceeding the 500ms withTimeout cap because cold TCP+TLS+AUTH
-  //      to Upstash takes >200ms by itself.
-  //   2. connectDB() → TLS+SCRAM against Atlas, ~600ms-2s on cold
-  //      Lambdas.
-  //   3. ModelConfig.getConfig() → Mongo round-trip, 50-300ms.
-  // Total pre-LLM overhead: ~1-2.5 s. On /api/evaluate-answer where
-  // useInterviewAPI.ts:148 aborts at 5 s, this overhead pushed real
-  // requests past the budget — the client then silently wrote fake
-  // 50/50/50/50 scores into the evaluations array, which made
-  // interviews dead-end at Q2 or Q3. Session DB records on 2026-04-21
-  // show 5 of 8 sessions that day failed in this exact pattern.
+  // The rule: NEVER block the user request on the connectDB + Mongo
+  // round-trip (that's what caused the original 1-2.5s cold-path
+  // regression documented below). BUT we still attempt L2 Redis
+  // synchronously, because:
+  //   a) tryLoadFromRedis is already bounded by withTimeout at
+  //      REDIS_READ_TIMEOUT_MS (500ms), so the worst-case wait is
+  //      safely inside the 5s client abort on /api/evaluate-answer.
+  //   b) An L2 hit means Redis has the REAL CMS config — serving
+  //      defaults instead would silently use the wrong model for any
+  //      slot where CMS diverges from TASK_SLOT_DEFAULTS (e.g. after
+  //      an operator swaps gpt-5.4-mini for claude-sonnet-4-6 in the
+  //      CMS admin, or toggles routingEnabled). The initial version of
+  //      this refactor skipped L2 on the user thread entirely and
+  //      always returned TASK_SLOT_DEFAULTS on any cache miss — Codex
+  //      flagged that as a correctness regression for the first call
+  //      after invalidateModelConfigCache(), which is exactly when a
+  //      fresh CMS save must take effect.
   //
-  // New behavior: never block a user request on CMS lookup. The cache
-  // is warmed opportunistically; a cold user gets TASK_SLOT_DEFAULTS
-  // (which, per taskSlots.ts, match production CMS for this
-  // deployment anyway).
+  // So: try L2 synchronously (fast + correct). Fall through to a
+  // background Mongo refresh + defaults ONLY when L2 misses / errors
+  // / times out. The expensive path (connectDB TLS+SCRAM + Mongo read)
+  // is never on the user thread.
+  //
+  // Historical context (original regression): pre-2026-04-21 this
+  // function awaited `loadConfig()`, which on cold Lambdas with empty
+  // Redis did tryLoadFromRedis + connectDB (~600ms-2s) + ModelConfig
+  // .getConfig, adding ~1-2.5s of overhead before the LLM call. That
+  // overhead reliably pushed /api/evaluate-answer past its 5s client
+  // abort (useInterviewAPI.ts:148) — the client silently wrote fake
+  // 50/50/50/50 scores into the evaluations array, and interviews
+  // dead-ended at Q2/Q3. Session DB records on 2026-04-21 show 5 of
+  // 8 sessions that day failed in exactly this pattern.
+  const redisResult = await tryLoadFromRedis()
+  if (redisResult.hit && _cache) {
+    _lastLoadSource = 'L2-Redis'
+    aiLogger.info(
+      {
+        event: 'model_config_load',
+        source: _lastLoadSource,
+        durationMs: Date.now() - startMs,
+      },
+      'ModelRouter: config loaded',
+    )
+    return _cache
+  }
+
+  // L2 miss (empty, bad shape, error, or timeout). Kick off a Mongo
+  // refresh if none is already in flight — off the user thread.
   if (!_loadPromise) {
-    const refreshStart = now
+    const refreshStart = Date.now()
     _loadPromise = loadConfig()
       .then(() => {
         aiLogger.info(
@@ -483,35 +509,29 @@ async function ensureConfig(): Promise<CachedConfig> {
           'ModelRouter: background config refresh complete',
         )
       })
-      // loadConfig has internal try/catch so it should never throw,
-      // but keep an outer .catch to ensure an unhandled rejection
-      // can never surface if that invariant ever breaks.
       .catch((err) => {
         aiLogger.warn({ err }, 'ModelRouter: background config refresh threw unexpectedly')
       })
       .finally(() => { _loadPromise = null })
   }
 
-  // Stale L1 is still usable — the background refresh above replaces
-  // it for the next expiry window. Better to serve slightly-stale
-  // config than to pay the L2/L3 latency on the user's thread.
+  // Stale L1 (if any) is still usable while the refresh runs.
   if (_cache) return _cache
 
-  // Genuine cold Lambda, no cache at all. Return a synthetic disabled-
-  // routing snapshot so `resolveModel()` falls through to
-  // TASK_SLOT_DEFAULTS natively (see the !config.routingEnabled branch
-  // in resolveModel). For a deployment whose CMS values equal the
-  // defaults (today: every `interview.*` slot is gpt-5.4-mini in both
-  // CMS and TASK_SLOT_DEFAULTS), this produces the same resolved model
-  // as an L3 success — but with zero wait on the user's thread.
+  // Genuine cold with empty L2. Return a synthetic disabled-routing
+  // snapshot so `resolveModel()` falls through to TASK_SLOT_DEFAULTS
+  // natively. This path is now narrow: only fires when _cache is null
+  // AND L2 produced no data AND no L1-stale was available. Under
+  // normal operation (post-deploy, once any one Lambda has populated
+  // Redis), subsequent cold Lambdas hit the L2 branch above.
   _lastLoadSource = 'cold-defaults-synthetic'
   aiLogger.info(
     {
       event: 'model_config_load',
       source: _lastLoadSource,
-      durationMs: 0,
+      durationMs: Date.now() - startMs,
     },
-    'ModelRouter: cold Lambda, serving TASK_SLOT_DEFAULTS while background refresh loads',
+    'ModelRouter: cold Lambda with empty L2, serving TASK_SLOT_DEFAULTS while background Mongo refresh loads',
   )
   return { routingEnabled: false, slots: new Map(), loadedAt: now }
 }
