@@ -1071,3 +1071,10 @@
 - **Root-cause:** after FEATURE_FLAG_SKIP_CONNECTDB_WHEN_CACHED=true was
 - **Tests-added: shared/db/__tests__/connection.test.ts — 3 new cases**
 - **Verified-by:** 7/7 unit tests pass; tsc --noEmit clean. Production
+
+### 2026-04-21 13:47:10 +0000 · `591ce25` · Claude
+- **Subject:** Update deepgramRecognition tests for socket-preservation contract
+- **Files:** 1 changed, 1 test file(s)
+- **Root-cause:** PR at e7bb36d (PRESERVE_SOCKET_TRIGGERS) changed
+- **Tests-added: +1 new positive "next-question warmUp is a no-op after**
+- **Verified-by:** full test suite — 2213/2213 pass across 134 files;
