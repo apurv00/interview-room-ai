@@ -1022,3 +1022,10 @@
 - **Root-cause:** getOrLoadSessionConfig logged `source:redis-hit` (and fired the fire-and-forget EXPIRE TTL refresh) BEFORE JSON.parse ran on the cached value. If the cached value was corrupted JSON (schema drift, par
 - **Tests-added: modules/interview/__tests__/sessionConfigCache.test.ts — 1 regression "corrupted cache value: emits source=redis-error ONLY, NOT redis-hit". Uses mockRedisGet returning malformed JSON w**
 - **Verified-by:** npx vitest run modules/interview/__tests__/sessionConfigCache.test.ts → 22/22 pass (was 21, +1 regression). npm run build succeeds. npx eslint on both touched files clean. Impact analysis refreshed 
+
+### 2026-04-21 10:55:22 +0000 · `4db0227` · Claude
+- **Subject:** fix(session-cache): report non-empty Mongo fallback as mongo-hit even when only rubric or parsedJD returned (Codex P2 #304)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** The `source` classification on the Mongo fallback log reused the same `hasData` predicate that gated the cache-write decision. But `hasData` intentionally excluded `rubric` and `parsedJD` (so all-null
+- **Tests-added: modules/interview/__tests__/sessionConfigCache.test.ts — 2 regressions. (1) Rubric-only Mongo return: core fields null, rubric_registry flag on, EvaluationRubric returns a wildcard-matc**
+- **Verified-by:** npx vitest run modules/interview/__tests__/sessionConfigCache.test.ts → 24/24 pass (was 22, +2 regressions). npm run build succeeds. Lint clean. Impact analysis refreshed pre-edit. Post-deploy valid
