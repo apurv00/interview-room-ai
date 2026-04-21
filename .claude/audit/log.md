@@ -952,3 +952,10 @@
 - **Root-cause:** Every cold Vercel Lambda paid ~1-2s for Mongoose TLS + SCRAM auth on its first `completion()` call because ModelConfig was only cached in-process (60s L1 TTL). keepMongoWarm keeps the Atlas cluster aw
 - **Tests-added: shared/__tests__/modelRouter.test.ts — 6 new cases for the L2 path (Redis hit hydrates from Redis, miss falls through to Mongo path, Redis read error returns defaults silently, Redis ma**
 - **Verified-by:** npx vitest run shared/__tests__/modelRouter.test.ts → 27/27 pass. npm run build succeeds (earlier static import attempt broke the client bundle via codingProblemGenerator → modelRouter → @shared
+
+### 2026-04-21 08:10:14 +0000 · `9affb4e` · Claude
+- **Subject:** feat(modelRouter): add per-layer timing telemetry for L2 cache validation
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** PR A (ef41d49) added a Redis L2 cache claiming ~1.5s → ~5ms cold-Lambda improvement, but the claim was only verified against mocks. No production signal existed to confirm the L2 was actually servin
+- **Tests-added: shared/__tests__/modelRouter.test.ts — 3 new cases pinning the log contract: (1) L2 hit emits event=model_config_load with source=L2-Redis and durationMs number <100ms, (2) L3 Mongo-err**
+- **Verified-by:** npx vitest run shared/__tests__/modelRouter.test.ts → 30/30 pass (was 27, +3 telemetry tests). npm run build succeeds. Lint clean. Post-deploy validation plan: search Vercel logs for `event:model_co
