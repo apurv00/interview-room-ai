@@ -1078,3 +1078,10 @@
 - **Root-cause:** PR at e7bb36d (PRESERVE_SOCKET_TRIGGERS) changed
 - **Tests-added: +1 new positive "next-question warmUp is a no-op after**
 - **Verified-by:** full test suite — 2213/2213 pass across 134 files;
+
+### 2026-04-21 14:06:46 +0000 · `bb98be1` · Claude
+- **Subject:** Clear isWarmedUpRef when preserved ws dies (Codex P2 on #307)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** after e7bb36d made graceTimer preserve the socket, the
+- **Tests-added: new "preserved ws dying between turns clears**
+- **Verified-by:** 68/68 deepgramRecognition tests pass (was 67, +1 new);
