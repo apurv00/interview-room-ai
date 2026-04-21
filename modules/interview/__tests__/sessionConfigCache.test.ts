@@ -4,16 +4,29 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mockRedisGet = vi.fn()
 const mockRedisSetex = vi.fn()
+// PR B: EXPIRE is called fire-and-forget on every Redis hit to extend
+// the TTL — keeps long-running interviews warm past the default 30-min
+// window. Mock returns 1 (success) by default; tests that need to
+// simulate an EXPIRE failure override per-call.
+const mockRedisExpire = vi.fn().mockResolvedValue(1)
 
 vi.mock('@shared/redis', () => ({
   redis: {
     get: (...args: unknown[]) => mockRedisGet(...args),
     setex: (...args: unknown[]) => mockRedisSetex(...args),
+    expire: (...args: unknown[]) => mockRedisExpire(...args),
   },
 }))
 
+const mockLoggerInfo = vi.fn()
+const mockLoggerWarn = vi.fn()
+
 vi.mock('@shared/logger', () => ({
-  logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
+  logger: {
+    error: vi.fn(),
+    warn: (...args: unknown[]) => mockLoggerWarn(...args),
+    info: (...args: unknown[]) => mockLoggerInfo(...args),
+  },
 }))
 
 vi.mock('@shared/db/connection', () => ({
@@ -90,7 +103,16 @@ describe('sessionConfigCache', () => {
     // Default: InterviewSession.findById returns no JD. Tests that need a
     // parsed JD (or a rejection) override this before calling.
     mockInterviewSessionFindById.mockReturnValue(makeLeanQuery(null))
+    // Default EXPIRE returns 1 (success); `vi.clearAllMocks` reset the
+    // per-instance impl so restore the default success path explicitly.
+    mockRedisExpire.mockResolvedValue(1)
   })
+
+  function findSessionConfigLoadLog() {
+    return mockLoggerInfo.mock.calls
+      .map(([payload]) => payload as { event?: string })
+      .find((p) => p?.event === 'session_config_load')
+  }
 
   describe('getOrLoadSessionConfig', () => {
     it('returns empty config when session_config_cache flag is off', async () => {
@@ -218,6 +240,257 @@ describe('sessionConfigCache', () => {
       expect(result.domain).toEqual(DOMAIN_DOC)
       expect(result.depth).toBeNull()
       expect(result.userProfile).toBeNull()
+    })
+  })
+
+  // ── PR B: TTL refresh + miss observability ────────────────────────────────
+  //
+  // Problem PR B solves: session config cache had a 30-min TTL but NO
+  // refresh on access. An interview running >30 min would see its cache
+  // expire mid-flow, forcing a Mongo fallthrough on every subsequent Q.
+  // Additionally, the hit/miss path was silent — no log, no way to tell
+  // from Vercel whether the cache was actually serving traffic or being
+  // circumvented.
+  //
+  // These tests pin the two contracts ops will depend on.
+
+  describe('PR B — TTL refresh', () => {
+    it('refreshes Redis TTL on cache hit (fire-and-forget EXPIRE)', async () => {
+      // Cache hit → EXPIRE must fire with 1800s so a long interview
+      // resets the 30-min window on every Q-turn access. Without this,
+      // interviews past the initial TTL start paying Mongo cost again.
+      const cached = {
+        domain: DOMAIN_DOC,
+        depth: DEPTH_DOC,
+        rubric: null,
+        userProfile: PROFILE_DOC,
+        parsedJD: null,
+      }
+      mockRedisGet.mockResolvedValue(JSON.stringify(cached))
+
+      await getOrLoadSessionConfig('sess-ttl-hit', OPTS)
+
+      expect(mockRedisExpire).toHaveBeenCalledWith('session:cfg:sess-ttl-hit', 1800)
+    })
+
+    it('does NOT call EXPIRE on cache miss (SETEX sets the fresh TTL)', async () => {
+      // On miss, setex() writes the fresh key WITH its own TTL — calling
+      // EXPIRE on top would be redundant. The hit path is where EXPIRE
+      // earns its keep.
+      mockRedisGet.mockResolvedValue(null)
+      mockInterviewDomainFindOne.mockReturnValue(makeLeanQuery(DOMAIN_DOC))
+      mockInterviewDepthFindOne.mockReturnValue(makeLeanQuery(DEPTH_DOC))
+      mockUserFindById.mockReturnValue(makeLeanQuery(PROFILE_DOC))
+
+      await getOrLoadSessionConfig('sess-ttl-miss', OPTS)
+
+      expect(mockRedisExpire).not.toHaveBeenCalled()
+      expect(mockRedisSetex).toHaveBeenCalled()
+    })
+
+    it('TTL refresh EXPIRE failure does NOT propagate to caller', async () => {
+      // Redis EXPIRE is fire-and-forget. A failure must never surface —
+      // the candidate's answer gets scored regardless of cache health.
+      const cached = {
+        domain: DOMAIN_DOC,
+        depth: DEPTH_DOC,
+        rubric: null,
+        userProfile: PROFILE_DOC,
+        parsedJD: null,
+      }
+      mockRedisGet.mockResolvedValue(JSON.stringify(cached))
+      mockRedisExpire.mockRejectedValueOnce(new Error('redis down'))
+
+      const result = await getOrLoadSessionConfig('sess-ttl-fail', OPTS)
+
+      // Caller sees the cached value unchanged despite EXPIRE failure.
+      expect(result.domain).toEqual(DOMAIN_DOC)
+      // Drain any pending promise rejections so the test doesn't leak.
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+  })
+
+  describe('PR B — session_config_load telemetry', () => {
+    // These tests pin the EXACT shape Vercel log searches will pivot on
+    // to answer "is the session cache actually serving my traffic?".
+    // If a future refactor silently drops source/durationMs/event, the
+    // dashboard breaks and we lose observability.
+
+    it('logs source=redis-hit on cache hit', async () => {
+      const cached = {
+        domain: DOMAIN_DOC,
+        depth: DEPTH_DOC,
+        rubric: null,
+        userProfile: PROFILE_DOC,
+        parsedJD: null,
+      }
+      mockRedisGet.mockResolvedValue(JSON.stringify(cached))
+
+      await getOrLoadSessionConfig('sess-log-hit', OPTS)
+
+      const log = findSessionConfigLoadLog() as {
+        event: string
+        sessionId: string
+        source: string
+        durationMs: number
+        ttlExtended: boolean
+      }
+      expect(log).toBeDefined()
+      expect(log.event).toBe('session_config_load')
+      expect(log.source).toBe('redis-hit')
+      expect(log.sessionId).toBe('sess-log-hit')
+      expect(log.ttlExtended).toBe(true)
+      expect(typeof log.durationMs).toBe('number')
+      expect(log.durationMs).toBeGreaterThanOrEqual(0)
+    })
+
+    it('logs source=mongo-hit on Redis miss + successful Mongo fetch', async () => {
+      mockRedisGet.mockResolvedValue(null)
+      mockInterviewDomainFindOne.mockReturnValue(makeLeanQuery(DOMAIN_DOC))
+      mockInterviewDepthFindOne.mockReturnValue(makeLeanQuery(DEPTH_DOC))
+      mockUserFindById.mockReturnValue(makeLeanQuery(PROFILE_DOC))
+
+      await getOrLoadSessionConfig('sess-log-mongo', OPTS)
+
+      const log = findSessionConfigLoadLog() as { source: string; sessionId: string }
+      expect(log).toBeDefined()
+      expect(log.source).toBe('mongo-hit')
+      expect(log.sessionId).toBe('sess-log-mongo')
+    })
+
+    it('logs source=empty when Redis misses AND all 4 Mongo fetches return null', async () => {
+      // Edge case: sessionId / role / userId combo that exists but has
+      // no corresponding records. Distinct from mongo-error because
+      // Mongo was reachable — we just got nothing back.
+      mockRedisGet.mockResolvedValue(null)
+      mockInterviewDomainFindOne.mockReturnValue(makeLeanQuery(null))
+      mockInterviewDepthFindOne.mockReturnValue(makeLeanQuery(null))
+      mockUserFindById.mockReturnValue(makeLeanQuery(null))
+
+      await getOrLoadSessionConfig('sess-log-empty', OPTS)
+
+      const log = findSessionConfigLoadLog() as { source: string }
+      expect(log.source).toBe('empty')
+    })
+
+    it('logs source=redis-error when Redis read throws but Mongo succeeds', async () => {
+      // Redis outage degrades the route to always-Mongo for this
+      // request. Ops need to distinguish this from a clean first-Q
+      // cache miss.
+      mockRedisGet.mockRejectedValueOnce(new Error('ECONNREFUSED'))
+      mockInterviewDomainFindOne.mockReturnValue(makeLeanQuery(DOMAIN_DOC))
+      mockInterviewDepthFindOne.mockReturnValue(makeLeanQuery(DEPTH_DOC))
+      mockUserFindById.mockReturnValue(makeLeanQuery(PROFILE_DOC))
+
+      await getOrLoadSessionConfig('sess-log-redis-err', OPTS)
+
+      const log = findSessionConfigLoadLog() as { source: string }
+      expect(log.source).toBe('redis-error')
+    })
+
+    it('logs source=mongo-error when Redis misses AND connectDB throws', async () => {
+      mockRedisGet.mockResolvedValue(null)
+      // connectDB is mocked to resolve by default — override to reject.
+      const mod = await import('@shared/db/connection')
+      vi.mocked(mod.connectDB).mockRejectedValueOnce(new Error('mongo unreachable'))
+
+      await getOrLoadSessionConfig('sess-log-mongo-err', OPTS)
+
+      const log = findSessionConfigLoadLog() as { source: string }
+      expect(log.source).toBe('mongo-error')
+    })
+
+    it('logs source=feature-off when session_config_cache flag is disabled', async () => {
+      vi.mocked(isFeatureEnabled).mockReturnValue(false)
+
+      await getOrLoadSessionConfig('sess-log-off', OPTS)
+
+      const log = findSessionConfigLoadLog() as { source: string }
+      expect(log.source).toBe('feature-off')
+    })
+
+    it('logs source=mongo-hit when ONLY rubric returns from Mongo (core fields null) (Codex P2 #304)', async () => {
+      // Rubric supports wildcard matches (domain:'*', interviewType:'*'),
+      // so it can legitimately return data even when the specific
+      // domain/depth lookups miss for this session's slug/type. Codex
+      // flagged: the old classifier used `hasData` which excluded
+      // rubric AND parsedJD — this combo would log `empty` even though
+      // Mongo DID return a usable rubric.
+      vi.mocked(isFeatureEnabled).mockImplementation(
+        (flag: string) => flag === 'session_config_cache' || flag === 'rubric_registry',
+      )
+      mockRedisGet.mockResolvedValue(null)
+      // Core fields all null
+      mockInterviewDomainFindOne.mockReturnValue(makeLeanQuery(null))
+      mockInterviewDepthFindOne.mockReturnValue(makeLeanQuery(null))
+      mockUserFindById.mockReturnValue(makeLeanQuery(null))
+      // Rubric returns via wildcard
+      mockEvaluationRubricFindOne.mockReturnValue(
+        makeLeanQuery({ dimensions: [{ name: 'relevance', label: 'Relevance', weight: 0.25 }] }),
+      )
+
+      await getOrLoadSessionConfig('sess-rubric-only', OPTS)
+
+      const log = findSessionConfigLoadLog() as { source: string }
+      expect(log.source).toBe('mongo-hit')
+      expect(log.source).not.toBe('empty')
+    })
+
+    it('logs source=mongo-hit when ONLY parsedJD returns from Mongo (core fields null) (Codex P2 #304)', async () => {
+      // Same bug class as the rubric-only case: a session with a JD
+      // but no matching domain/depth/user lookups would log `empty`.
+      mockRedisGet.mockResolvedValue(null)
+      mockInterviewDomainFindOne.mockReturnValue(makeLeanQuery(null))
+      mockInterviewDepthFindOne.mockReturnValue(makeLeanQuery(null))
+      mockUserFindById.mockReturnValue(makeLeanQuery(null))
+      mockInterviewSessionFindById.mockReturnValue(
+        makeLeanQuery({
+          parsedJobDescription: {
+            rawText: 'PM at Acme',
+            company: 'Acme',
+            role: 'PM',
+            inferredDomain: 'pm',
+            requirements: [],
+            keyThemes: [],
+          },
+        }),
+      )
+
+      await getOrLoadSessionConfig('sess-jd-only', OPTS)
+
+      const log = findSessionConfigLoadLog() as { source: string }
+      expect(log.source).toBe('mongo-hit')
+      expect(log.source).not.toBe('empty')
+    })
+
+    it('corrupted cache value: emits source=redis-error ONLY, NOT redis-hit (Codex P2 on PR #304)', async () => {
+      // A malformed cached JSON must NOT produce a `redis-hit` log.
+      // Earlier impl logged redis-hit BEFORE JSON.parse — so a corrupt
+      // value would emit redis-hit + then fall through and also emit
+      // the Mongo-fallback log, producing contradictory telemetry that
+      // breaks the dashboard during the exact failure mode we need to
+      // diagnose. Fix: parse first; log only on successful parse.
+      mockRedisGet.mockResolvedValue('{ this is not valid json')
+      // Mongo fallback path succeeds (so the subsequent log fires).
+      mockInterviewDomainFindOne.mockReturnValue(makeLeanQuery(DOMAIN_DOC))
+      mockInterviewDepthFindOne.mockReturnValue(makeLeanQuery(DEPTH_DOC))
+      mockUserFindById.mockReturnValue(makeLeanQuery(PROFILE_DOC))
+
+      await getOrLoadSessionConfig('sess-log-corrupt', OPTS)
+
+      // Collect all session_config_load logs produced by this call.
+      const loadLogs = mockLoggerInfo.mock.calls
+        .map(([payload]) => payload as { event?: string; source?: string })
+        .filter((p) => p?.event === 'session_config_load')
+
+      // Exactly one log per call — that's the contract. Multiple logs
+      // for one call was the bug.
+      expect(loadLogs).toHaveLength(1)
+      // The sole log must NOT be redis-hit (which would falsely claim
+      // the cache served this request). It should be redis-error —
+      // the corrupted value is semantically a Redis read failure.
+      expect(loadLogs[0].source).not.toBe('redis-hit')
+      expect(loadLogs[0].source).toBe('redis-error')
     })
   })
 

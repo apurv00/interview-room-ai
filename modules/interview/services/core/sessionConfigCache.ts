@@ -11,6 +11,26 @@ const TTL_SECONDS = 1800 // 30 min — matches the default session duration cap.
 
 const cfgKey = (sessionId: string) => `session:cfg:${sessionId}`
 
+/**
+ * Which layer served the most recent `getOrLoadSessionConfig` call.
+ * Surfaced in the `event:session_config_load` telemetry log so ops can
+ * answer "are long interviews hitting redis continuously, or thrashing
+ * through the Mongo fallback because the TTL expired mid-flow?"
+ *
+ * PR B (follow-up to PR #303 ModelConfig parity): session cache was
+ * already Redis-first but had NO observability and NO TTL refresh,
+ * so interviews running longer than 30 minutes silently fell through
+ * to Mongo on every Q-turn after the cache expired. Both problems
+ * fixed in this module.
+ */
+type ConfigLoadSource =
+  | 'redis-hit'    // cache hit on Redis; TTL refreshed in fire-and-forget. The happy path.
+  | 'mongo-hit'    // Redis miss, Mongo read succeeded, wrote to Redis. Expected on Q1 of a session.
+  | 'mongo-error'  // Mongo read failed — empty config returned. Alert-worthy.
+  | 'feature-off'  // session_config_cache flag disabled — never touched Redis or Mongo.
+  | 'empty'        // Redis miss + all 4 parallel Mongo fetches returned null. Bad sessionId?
+  | 'redis-error'  // Redis outage on the read. Degraded gracefully; not cached.
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 /**
@@ -67,13 +87,54 @@ export async function getOrLoadSessionConfig(
   sessionId: string,
   opts: { role: string; interviewType: string; userId: string; experience: string },
 ): Promise<CachedSessionConfig> {
-  if (!isFeatureEnabled('session_config_cache')) return EMPTY_CONFIG
+  const startMs = Date.now()
+
+  if (!isFeatureEnabled('session_config_cache')) {
+    logger.info(
+      { event: 'session_config_load', sessionId, source: 'feature-off', durationMs: Date.now() - startMs },
+      'SessionConfig: feature flag off',
+    )
+    return EMPTY_CONFIG
+  }
 
   // 1. Redis
+  let redisErrored = false
   try {
     const cached = await redis.get(cfgKey(sessionId))
-    if (cached) return JSON.parse(cached) as CachedSessionConfig
+    if (cached) {
+      // Parse FIRST, then log + refresh TTL. If the cached value is
+      // corrupted JSON (schema drift, partial write, garbage) we must
+      // NOT emit `redis-hit` — that would produce contradictory
+      // telemetry (one request logging both redis-hit AND the eventual
+      // mongo-hit/redis-error fallback). The JSON.parse throw is
+      // caught by the outer handler which sets redisErrored=true so
+      // the Mongo-path log below correctly reports source=redis-error.
+      // Codex P2 on PR #304.
+      const parsed = JSON.parse(cached) as CachedSessionConfig
+      // Refresh TTL on every hit so interviews running longer than the
+      // initial 30-min window don't silently fall through to Mongo
+      // mid-flow when the candidate hits Q4/Q5 past the 30-min mark.
+      // Fire-and-forget: an EXPIRE failure shouldn't delay the response,
+      // and worst case the cache expires normally on TTL later.
+      void redis
+        .expire(cfgKey(sessionId), TTL_SECONDS)
+        .catch((err) =>
+          logger.warn({ err, sessionId }, 'getOrLoadSessionConfig: TTL refresh failed (non-fatal)'),
+        )
+      logger.info(
+        {
+          event: 'session_config_load',
+          sessionId,
+          source: 'redis-hit',
+          durationMs: Date.now() - startMs,
+          ttlExtended: true,
+        },
+        'SessionConfig: redis hit',
+      )
+      return parsed
+    }
   } catch (err) {
+    redisErrored = true
     logger.warn({ err, sessionId }, 'getOrLoadSessionConfig: redis read failed')
   }
 
@@ -125,11 +186,11 @@ export async function getOrLoadSessionConfig(
     // Only cache when at least one of the core fields was successfully populated.
     // An all-null result may reflect transient DB errors — avoid hiding them
     // from retries for 30 minutes. parsedJD is intentionally excluded from the
-    // hasData gate: a session with only a parsed JD is exceptional, and caching
-    // a config with all core fields null would hide transient DB errors for
-    // those fields behind the presence of a JD.
-    const hasData = config.domain !== null || config.depth !== null || config.userProfile !== null
-    if (hasData) {
+    // hasCoreData gate: a session with only a parsed JD is exceptional, and
+    // caching a config with all core fields null would hide transient DB
+    // errors for those fields behind the presence of a JD.
+    const hasCoreData = config.domain !== null || config.depth !== null || config.userProfile !== null
+    if (hasCoreData) {
       try {
         await redis.setex(cfgKey(sessionId), TTL_SECONDS, JSON.stringify(config))
       } catch (err) {
@@ -137,9 +198,41 @@ export async function getOrLoadSessionConfig(
       }
     }
 
+    // Telemetry classification — separate from the cache-write gate
+    // above. `empty` must reserve for "Mongo returned nothing usable
+    // at all" — if rubric XOR parsedJD came back even while core
+    // fields were all null, Mongo DID return data and dashboards
+    // should see `mongo-hit`, not a false "bad session" signal.
+    // Codex P2 on PR #304.
+    const hasAnyData =
+      hasCoreData || config.rubric !== null || config.parsedJD !== null
+
+    logger.info(
+      {
+        event: 'session_config_load',
+        sessionId,
+        // `redis-error` path takes precedence over `mongo-hit`/`empty`
+        // in the log so ops can tell whether the fallthrough was from a
+        // clean cache miss (first Q of session) or a Redis outage that
+        // degraded the route to always-Mongo for this request.
+        source: redisErrored ? 'redis-error' : hasAnyData ? 'mongo-hit' : 'empty',
+        durationMs: Date.now() - startMs,
+      },
+      'SessionConfig: mongo fallback',
+    )
+
     return config
   } catch (err) {
     logger.warn({ err, sessionId }, 'getOrLoadSessionConfig: Mongo fetch failed')
+    logger.info(
+      {
+        event: 'session_config_load',
+        sessionId,
+        source: 'mongo-error',
+        durationMs: Date.now() - startMs,
+      },
+      'SessionConfig: mongo fetch threw',
+    )
     return EMPTY_CONFIG
   }
 }
