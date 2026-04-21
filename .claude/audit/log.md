@@ -1098,3 +1098,9 @@
 - **Files:** 2 changed, 1 test file(s)
 - **Root-cause:** The initial non-blocking fix in 15f3b16 served
 - **Tests-added: shared/__tests__/modelRouter.test.ts (rewrote 6 tests in**
+
+### 2026-04-21 17:20:28 +0000 · `9ec49b1` · Claude
+- **Subject:** Close empty-L2 window on CMS save via replaceModelConfigCache (Codex P2 #308)
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** invalidateModelConfigCache() DEL'd L2 and INCR'd epoch,
+- **Tests-added: shared/__tests__/modelRouter.test.ts — 9 new tests in a**
