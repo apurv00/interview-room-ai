@@ -660,9 +660,19 @@ export async function replaceModelConfigCache(doc: {
       REDIS_TTL_SECONDS,
     )
     if (result === 0) {
+      // A concurrent admin save on another Lambda INCR'd the epoch
+      // past ours before our eval landed — Redis now holds THEIR
+      // newer config, and our L1 `_cache` (just set above) is stale.
+      // Without this clear, `ensureConfig()`'s L1 fast-path would
+      // serve our stale doc for up to CACHE_TTL_MS (60s), silently
+      // using the wrong model/provider on THIS Lambda while Redis
+      // and other Lambdas have the correct newer config. Clearing
+      // _cache forces the next ensureConfig to MGET Redis and pick
+      // up the winner. Codex P2 follow-up on PR #308.
+      _cache = null
       aiLogger.info(
         { event: 'model_config_replace_skip_stale', newEpoch },
-        'ModelRouter: skipped Redis write — concurrent admin save bumped epoch',
+        'ModelRouter: skipped Redis write — concurrent admin save bumped epoch; L1 cleared to force L2 re-read',
       )
     }
   } catch (err) {

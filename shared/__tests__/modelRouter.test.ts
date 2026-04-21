@@ -906,6 +906,59 @@ describe('resolveModel', () => {
       expect(skipLogs).toHaveLength(1)
     })
 
+    it('Lua CAS returning 0 clears L1 so next call re-reads L2 winner (Codex P2 follow-up)', async () => {
+      // The specific correctness gap Codex flagged: if the CAS race is
+      // lost, our local _cache is set to our stale doc — which
+      // ensureConfig's L1 fast-path would serve for up to 60s, while
+      // Redis and other Lambdas correctly hold the winner's newer doc.
+      // The fix: clear _cache when CAS returns 0 so the next call
+      // MGETs Redis and picks up the winner synchronously.
+      mockRedisIncr.mockResolvedValueOnce(9)
+      mockRedisEval.mockResolvedValueOnce(0) // our CAS lost to a concurrent save
+
+      // "Our" (losing) save.
+      await replaceModelConfigCache({
+        routingEnabled: true,
+        slots: [
+          {
+            taskSlot: 'interview.generate-question',
+            model: 'our-losing-model',
+            provider: 'openai',
+            maxTokens: 200,
+            isActive: true,
+          },
+        ],
+      })
+
+      // Redis now contains the winner's config (simulated via MGET
+      // returning their payload). If L1 wasn't cleared, the next call
+      // would L1-hit 'our-losing-model' instead of MGET'ing for the
+      // winner.
+      const winnerPayload = {
+        routingEnabled: true,
+        slotEntries: [
+          [
+            'interview.generate-question',
+            {
+              taskSlot: 'interview.generate-question',
+              model: 'winner-model',
+              provider: 'openai',
+              maxTokens: 200,
+              isActive: true,
+            },
+          ],
+        ],
+      }
+      mockRedisMget.mockResolvedValueOnce([JSON.stringify(winnerPayload), '10'])
+
+      const result = await resolveModel('interview.generate-question')
+
+      // Next call did hit MGET (L1 was cleared) and returned the
+      // winner's value.
+      expect(mockRedisMget).toHaveBeenCalled()
+      expect(result.model).toBe('winner-model')
+    })
+
     it('resolves the Codex P2 scenario: cold Lambda after save gets fresh config, not defaults', async () => {
       // End-to-end proof of the fix. Sequence:
       //   1. Admin saves CMS (routingEnabled: true, custom model for
