@@ -22,9 +22,30 @@ interface CachedConnection {
  *
  * @param needsMongo Does the code immediately after this call fire a Mongo query?
  * @param context Short identifier (route name) surfaced in the bypass log.
+ * @param needReason Optional field-level reason for needsMongo=true. When the
+ *   flag is ON but we still had to connect, this is logged as
+ *   `event:connectdb_needed` so operators can identify which cached field was
+ *   null (e.g. `userProfile-null`, `domain-null`). Silent on flag-off runs —
+ *   the flag-off case is "rollout not started", not a data problem.
  */
-export async function connectDBIfNeeded(needsMongo: boolean, context: string): Promise<void> {
-  if (needsMongo || !isFeatureEnabled('skip_connectdb_when_cached')) {
+export async function connectDBIfNeeded(
+  needsMongo: boolean,
+  context: string,
+  needReason?: string,
+): Promise<void> {
+  const flagOn = isFeatureEnabled('skip_connectdb_when_cached')
+  if (needsMongo || !flagOn) {
+    if (flagOn && needsMongo) {
+      // Flag is ON and we STILL had to connect — exposes which cached
+      // field was null so we can debug why PR C bypass isn't firing
+      // in production. Added 2026-04-21 after the flag was flipped on
+      // and no `event:connectdb_bypass` appeared in logs — we couldn't
+      // tell whether the cache was under-populated or over-reporting.
+      aiLogger.info(
+        { event: 'connectdb_needed', context, reason: needReason ?? 'unspecified' },
+        'connectDB called despite skip flag — cache did not cover all required fields',
+      )
+    }
     await connectDB()
     return
   }

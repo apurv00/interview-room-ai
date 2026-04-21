@@ -102,4 +102,49 @@ describe('connectDBIfNeeded (Phase 1 PR C)', () => {
     await connectDBIfNeeded(false, 'test-ctx')
     expect(mockIsFeatureEnabled).toHaveBeenCalledWith('skip_connectdb_when_cached')
   })
+
+  it('emits connectdb_needed diagnostic when flag ON + needsMongo=true (telemetry 2026-04-21)', async () => {
+    // The case the diagnostic was built for: flag flipped ON in prod
+    // but no `event:connectdb_bypass` appearing in logs. This event
+    // answers "which field was null — why did we still need Mongo?"
+    mockIsFeatureEnabled.mockReturnValue(true)
+    await connectDBIfNeeded(true, 'generate-question:user-profile', 'userProfile-null')
+    expect(mongoose.connect).toHaveBeenCalledTimes(1)
+    const needed = mockAiLoggerInfo.mock.calls.find(
+      ([p]) => (p as { event?: string }).event === 'connectdb_needed',
+    )
+    expect(needed).toBeDefined()
+    const [payload, msg] = needed as [
+      { event: string; context: string; reason: string },
+      string,
+    ]
+    expect(payload.context).toBe('generate-question:user-profile')
+    expect(payload.reason).toBe('userProfile-null')
+    expect(msg).toContain('connectDB called despite skip flag')
+  })
+
+  it('defaults needReason to "unspecified" when caller omits it', async () => {
+    // Back-compat: old call sites that pass only two args still work.
+    mockIsFeatureEnabled.mockReturnValue(true)
+    await connectDBIfNeeded(true, 'legacy-caller')
+    const needed = mockAiLoggerInfo.mock.calls.find(
+      ([p]) => (p as { event?: string }).event === 'connectdb_needed',
+    )
+    expect(needed).toBeDefined()
+    const [payload] = needed as [{ reason: string }, string]
+    expect(payload.reason).toBe('unspecified')
+  })
+
+  it('does NOT emit connectdb_needed when flag is OFF — that case is not a data problem', async () => {
+    // The flag-off case means "rollout not started yet", not "cache
+    // misconfigured". Logging every connect would flood pino with
+    // useless lines during gradual rollout.
+    mockIsFeatureEnabled.mockReturnValue(false)
+    await connectDBIfNeeded(true, 'pre-rollout-caller', 'whatever-null')
+    expect(mongoose.connect).toHaveBeenCalledTimes(1)
+    const needed = mockAiLoggerInfo.mock.calls.find(
+      ([p]) => (p as { event?: string }).event === 'connectdb_needed',
+    )
+    expect(needed).toBeUndefined()
+  })
 })
