@@ -333,7 +333,13 @@ describe('useDeepgramRecognition', () => {
   // a distinct 4xxx code AND posts `trigger:<name>` to the debug endpoint.
   // These tests pin the mapping so a later refactor can't silently regress
   // the codes (which would void the next production diagnosis run).
-  it('grace-timer close emits code 4001 with trigger=graceTimer', async () => {
+  it('grace-timer preserves the ws for the next question turn (2026-04-21 per-Q latency fix)', async () => {
+    // Prior contract (pre-PRESERVE_SOCKET_TRIGGERS): graceTimer immediately
+    // fired ws.close(4001). That forced the next question to pay the full
+    // TLS+auth handshake via warmUp(). This test now pins the new contract:
+    // the socket stays OPEN across question turns so the next startListening
+    // can reuse it. A later terminal trigger (finishInterview) still closes
+    // it — covered by the separate "stopListening('finishInterview')" test.
     const { result } = renderHook(() => useDeepgramRecognition())
     const onComplete = vi.fn()
     const fetchSpy = vi.spyOn(global, 'fetch')
@@ -356,22 +362,70 @@ describe('useDeepgramRecognition', () => {
       await vi.advanceTimersByTimeAsync(3500)
     })
 
-    // ws.close should have been called with the labelled trigger code.
-    expect(mockWsInstance!.lastCloseCode).toBe(4001)
-    expect(mockWsInstance!.lastCloseReason).toBe('graceTimer')
+    // Preserve contract: the ws was NOT closed. lastCloseCode stays undefined
+    // because the mock only records an actual close() call.
+    expect(mockWsInstance!.lastCloseCode).toBeUndefined()
+    expect(mockWsInstance!.lastCloseReason).toBeUndefined()
 
-    // Debug endpoint POST should carry the trigger name too.
-    const debugCall = fetchSpy.mock.calls.find(
+    // No debug POST should have been emitted — /api/debug/deepgram-ws-close
+    // only fires on ws.onclose which can't fire on a socket we didn't close.
+    const closeDebugCall = fetchSpy.mock.calls.find(
       ([url]) => typeof url === 'string' && url.includes('/api/debug/deepgram-ws-close'),
     )
-    expect(debugCall).toBeDefined()
-    const body = JSON.parse((debugCall![1] as RequestInit).body as string)
-    expect(body.trigger).toBe('graceTimer')
-    // context reflects which onclose handler was attached to the closing
-    // socket — `warmUp` when the fast path reused the pre-warmed WS,
-    // `connectWebSocket` when the cold path had to connect fresh. Either
-    // is correct; the trigger field is what identifies the cause.
-    expect(['warmUp', 'connectWebSocket']).toContain(body.context)
+    expect(closeDebugCall).toBeUndefined()
+
+    // onComplete still fires — the candidate's answer is finalized, only
+    // the socket lifecycle changed. This is what lets the useInterview
+    // state machine advance to the next question.
+    expect(onComplete).toHaveBeenCalledTimes(1)
+
+    // isListening must be false — preserve doesn't mean "still listening",
+    // it means "ws ready for the NEXT listenForAnswer call".
+    expect(result.current.isListening).toBe(false)
+  })
+
+  it('next-question warmUp is a no-op after preserve-trigger — no second WS is created', async () => {
+    // End-to-end verification of the per-Q latency fix: the whole point
+    // of preserving on graceTimer is that warmUp() on Q2 does NOT pay
+    // the TLS+auth handshake again. Prior to 2026-04-21 each question
+    // rebuilt a fresh WebSocket (3.1s cold, 1.1-1.6s subsequent ×6Q).
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onCompleteQ1 = vi.fn()
+
+    // Q1: warmUp + listen + complete via graceTimer
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    act(() => { mockWsInstance!.simulateOpen() })
+    const q1Ws = mockWsInstance
+
+    await act(async () => {
+      result.current.startListening(onCompleteQ1)
+      await vi.advanceTimersByTimeAsync(10)
+    })
+    await act(async () => {
+      mockWsInstance!.simulateMessage(makeResult('Q1 answer', true))
+    })
+    await act(async () => {
+      mockWsInstance!.simulateMessage(makeUtteranceEnd())
+      await vi.advanceTimersByTimeAsync(3500)
+    })
+
+    // ws NOT closed, ready for Q2.
+    expect(q1Ws!.lastCloseCode).toBeUndefined()
+    expect(q1Ws!.readyState).toBe(MockWebSocket.OPEN)
+
+    // Q2: warmUp must be a no-op because isWarmedUpRef is still true.
+    // Capture the mock's constructor-instance pointer before + after.
+    const beforeQ2 = mockWsInstance
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    const afterQ2Warmup = mockWsInstance
+
+    // If warmUp created a fresh WebSocket, mockWsInstance would point at
+    // the new one (the MockWebSocket constructor reassigns it). Same
+    // reference = zero new sockets = the fix held.
+    expect(afterQ2Warmup).toBe(beforeQ2)
+    expect(afterQ2Warmup).toBe(q1Ws)
   })
 
   // Regression: the earlyQuestion trigger was retired because production
@@ -453,7 +507,13 @@ describe('useDeepgramRecognition', () => {
     expect(mockWsInstance!.lastCloseReason).toBe('stopListeningInactivityPreSpeech')
   })
 
-  it('stopListening (no reason) emits code 4003 with trigger=stopListeningExternal', async () => {
+  it('stopListening (no reason) preserves the ws — default is a mid-session end-of-turn', async () => {
+    // Bare stopListening() is used by ambiguous callers (mute toggle,
+    // legacy adapter) that may or may not be at session end. Treating
+    // it as "preserve" lines up with the common case (mute mid-session,
+    // user unmutes and the next question reuses the warm ws). Genuine
+    // session-end paths pass an explicit reason (finishInterview, etc.)
+    // which is NOT in PRESERVE_SOCKET_TRIGGERS and still closes the ws.
     const { result } = renderHook(() => useDeepgramRecognition())
     const onComplete = vi.fn()
     const fetchSpy = vi.spyOn(global, 'fetch')
@@ -472,15 +532,17 @@ describe('useDeepgramRecognition', () => {
       await vi.advanceTimersByTimeAsync(10)
     })
 
-    expect(mockWsInstance!.lastCloseCode).toBe(4003)
-    expect(mockWsInstance!.lastCloseReason).toBe('stopListeningExternal')
-
-    const debugCall = fetchSpy.mock.calls.find(
+    // ws stayed open — no close code recorded, no debug POST.
+    expect(mockWsInstance!.lastCloseCode).toBeUndefined()
+    expect(mockWsInstance!.lastCloseReason).toBeUndefined()
+    const closeDebugCall = fetchSpy.mock.calls.find(
       ([url]) => typeof url === 'string' && url.includes('/api/debug/deepgram-ws-close'),
     )
-    expect(debugCall).toBeDefined()
-    const body = JSON.parse((debugCall![1] as RequestInit).body as string)
-    expect(body.trigger).toBe('stopListeningExternal')
+    expect(closeDebugCall).toBeUndefined()
+
+    // onComplete still fires with whatever transcript was accumulated.
+    expect(onComplete).toHaveBeenCalledTimes(1)
+    expect(result.current.isListening).toBe(false)
   })
 
   // Regression for Codex P1 on PR #293 (initial + follow-up review).
@@ -1368,10 +1430,13 @@ describe('useDeepgramRecognition', () => {
     // Nothing has been constructed yet — we're still awaiting addModule.
     expect(audioWorkletNodeCalls.length).toBe(0)
 
-    // Supersede the session. stopListening() nulls wsRef.current via
-    // the close+null sequence in finishRecognition (line ~1214). After
-    // this point, the stale setupAudioProcessing closure's `ws` no
-    // longer matches wsRef.current.
+    // Supersede the session. stopListening('intentionalSilence') is a
+    // PRESERVE-trigger (2026-04-21 fix), so wsRef.current stays live,
+    // BUT audioContextRef.current is nulled synchronously by
+    // finishRecognition's audio-teardown branch regardless of preserve
+    // state — and the stale-setup guard at setupAudioProcessing keys
+    // off audioContext identity, not ws identity. So the stale closure
+    // still bails when addModule resolves below.
     await act(async () => {
       result.current.stopListening('intentionalSilence')
       await vi.advanceTimersByTimeAsync(10)
