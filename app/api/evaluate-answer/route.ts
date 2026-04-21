@@ -74,8 +74,21 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
       if (depthDoc) {
         evalCriteria = depthDoc.evaluationCriteria || ''
         scoringDims = depthDoc.scoringDimensions || []
+      } else {
+        // Observability: same rationale as generate-question — silent fallback
+        // on a missing/inactive CMS depth doc hides admin misconfiguration.
+        // warn-level so it's distinguishable from the catch-level error below.
+        aiLogger.warn(
+          { slug: interviewType, source: 'InterviewDepth.findOne', fallback: 'FALLBACK_DEPTHS' },
+          'CMS depth not found — using seeded fallback',
+        )
       }
-    } catch { /* continue with defaults */ }
+    } catch (err) {
+      aiLogger.error(
+        { err, interviewType, fallback: 'FALLBACK_DEPTHS' },
+        'CMS depth fetch threw — using seeded fallback',
+      )
+    }
 
     if (!scoringDims.length) {
       const fallback = FALLBACK_DEPTHS.find(d => d.slug === interviewType)
