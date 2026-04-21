@@ -945,3 +945,10 @@
 - **Root-cause:** CMS audit flagged silent fallbacks at two hot-path routes — generate-question and evaluate-answer. When an admin mistypes a domain/depth slug or the CMS lookup fails, the code silently swaps in seed
 - **No-tests-needed-because: observability-only — four logger.warn/error calls added to existing fallback branches. No branch logic, return values, error handling, or control flow changed. Route-level h**
 - **Verified-by:** npm run build succeeds (hot-path routes compile). npx eslint on both files is clean. Impact analysis artifacts written to .claude/audit/current/impact-app_api_generate-question_route.ts.md and impact-
+
+### 2026-04-21 08:00:14 +0000 · `ef41d49` · Claude
+- **Subject:** feat(modelRouter): add Redis L2 cache for ModelConfig (Phase 1 PR A)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** Every cold Vercel Lambda paid ~1-2s for Mongoose TLS + SCRAM auth on its first `completion()` call because ModelConfig was only cached in-process (60s L1 TTL). keepMongoWarm keeps the Atlas cluster aw
+- **Tests-added: shared/__tests__/modelRouter.test.ts — 6 new cases for the L2 path (Redis hit hydrates from Redis, miss falls through to Mongo path, Redis read error returns defaults silently, Redis ma**
+- **Verified-by:** npx vitest run shared/__tests__/modelRouter.test.ts → 27/27 pass. npm run build succeeds (earlier static import attempt broke the client bundle via codingProblemGenerator → modelRouter → @shared
