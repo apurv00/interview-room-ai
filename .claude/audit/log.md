@@ -994,3 +994,17 @@
 - **Root-cause:** The previous cross-Lambda guard had writeToRedis do GET(epoch) then SETEX(cache) as two separate Redis commands. If invalidateModelConfigCache() interleaved between them (INCR+DEL after the GET but be
 - **Tests-added: 2 Codex-follow-up regressions. (1) Pins the contract that the write path goes through eval, NEVER a bare SETEX (regression guard for anyone re-introducing a non-atomic write). (2) Lua EVA**
 - **Verified-by:** npx vitest run shared/__tests__/modelRouter.test.ts → 40/40 pass (was 39, +1 atomic-contract test, +1 race-without-throw test; -1 old GET+SETEX race test that's now redundant under atomic semantics)
+
+### 2026-04-21 09:54:20 +0000 · `8936be5` · Claude
+- **Subject:** fix(modelRouter): replace broken eval('require') with static imports — restores CMS-driven routing
+- **Files:** 3 changed, 0 test file(s)
+- **Root-cause:** Production telemetry (added in PR #302) revealed that EVERY cold Lambda was logging "Cannot find module '@shared/db/connection'" with code MODULE_NOT_FOUND from inside loadConfig's catch block. Same f
+- **Tests-added: None — the existing 40 modelRouter tests continue to pass unchanged because the public surface (resolveModel, completion, completionStream, invalidateModelConfigCache, __setRedisClientF**
+- **Verified-by:** npm run build succeeds (the very build that previously failed when I tried static `import { redis }` now passes — proving the codingProblemGenerator client-leak is gone). npx vitest run shared/__tes
+
+### 2026-04-21 10:10:53 +0000 · `8c8e74b` · Claude
+- **Subject:** fix(code-gen): rate-limit + bound solvedProblemIds string length on generate-problem route (Codex P1 + P2 #303)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** The new POST /api/code/generate-problem route invoked generateCodingProblem (which calls Claude via completion) without rate limiting and without a per-item string-length cap on solvedProblemIds. Two 
+- **No-tests-needed-because: composeApiRoute is already covered by its own unit tests in shared/middleware/__tests__/; the rate-limit + auth chain it provides is the tested surface, not this thin handler.**
+- **Verified-by:** npm run build succeeds. npx vitest run shared/__tests__/modelRouter.test.ts → 40/40 pass (unaffected). npx eslint on the route file clean. Impact analysis refreshed pre-edit. Rate limit tuning: gene

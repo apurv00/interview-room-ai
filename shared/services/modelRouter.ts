@@ -1,44 +1,52 @@
 import { TASK_SLOT_DEFAULTS, type TaskSlot } from '@shared/services/taskSlots'
 import { aiLogger } from '@shared/logger'
+import { connectDB } from '@shared/db/connection'
+import { ModelConfig } from '@shared/db/models/ModelConfig'
+import { redis } from '@shared/redis'
 
-// Redis (PR A) is loaded via `eval('require')` inside the helpers below
-// — same pattern mongoose uses. A static `import { redis }` from
-// @shared/redis pulled ioredis into the client bundle via the dynamic
-// import chain `app/interview/page.tsx → codingProblemGenerator.ts →
-// modelRouter.ts → @shared/redis`, breaking `next build` (ioredis needs
-// node's net/tls/dns). eval-require is invisible to webpack, so the
-// import stays server-only at runtime.
+// HISTORY: This module previously used `eval('require')('@shared/redis')`
+// and `eval('require')('@shared/db/connection')` to dodge webpack
+// bundling, because client code (app/interview/page.tsx) dynamically
+// imported codingProblemGenerator → modelRouter, which pulled ioredis
+// into the client chunk and broke `next build` (ioredis needs node's
+// net/tls/dns). The eval pattern hid the import from webpack — but it
+// ALSO failed at runtime in Vercel's serverless build because Node's
+// native require doesn't resolve TypeScript path aliases (`@shared/*`).
+// Result: loadConfig silently fell back to TASK_SLOT_DEFAULTS forever,
+// CMS-driven model config was never read in production, and PR A's L2
+// cache had nothing to cache. Discovered via the telemetry log added in
+// PR A: every cold Lambda fired `MODULE_NOT_FOUND: '@shared/db/connection'`
+// in production logs.
+//
+// FIX: codingProblemGenerator's call site moved behind a fetch boundary
+// (`/api/code/generate-problem`), so client code no longer imports
+// modelRouter — webpack's client builder never sees this file. Static
+// imports below are now safe.
 //
 // Minimal subset of ioredis methods we need — matches the real client
-// so tests and runtime see the same contract.
+// so tests and runtime see the same contract. Kept as a typed interface
+// (instead of `typeof redis`) so the test override below can satisfy it
+// without pulling ioredis into vitest.
 interface RedisLike {
   get(key: string): Promise<string | null>
   setex(key: string, ttl: number, value: string): Promise<unknown>
   del(key: string): Promise<unknown>
   incr(key: string): Promise<number>
   mget(...keys: string[]): Promise<Array<string | null>>
-  // `eval` runs a Lua script server-side as a single atomic op. Used
-  // to fuse epoch-check + SETEX so invalidate cannot interleave. The
-  // ioredis signature is `eval(script, numKeys, ...keysAndArgs)`.
   eval(script: string, numKeys: number, ...keysAndArgs: Array<string | number>): Promise<unknown>
 }
 
 // Test override hatch — see `__setRedisClientForTesting` below.
-// Kept module-scoped so production code paths never observe it. Set
-// only from test setup; production always resolves the real client via
-// `eval('require')('@shared/redis')`.
 let _redisOverride: RedisLike | null = null
 
 function getRedisClient(): RedisLike | null {
   if (_redisOverride) return _redisOverride
+  // Short-circuit on the client side. Static imports above are tree-
+  // shaken out of client bundles because nothing client-side imports
+  // this module after the codingProblemGenerator fetch refactor — but
+  // this guard remains as a defensive belt-and-suspenders.
   if (typeof window !== 'undefined') return null
-  try {
-    const _require = eval('require') as NodeRequire
-    const { redis } = _require('@shared/redis') as typeof import('@shared/redis')
-    return redis as unknown as RedisLike
-  } catch {
-    return null
-  }
+  return redis as unknown as RedisLike
 }
 
 /**
@@ -370,9 +378,6 @@ async function loadConfig(): Promise<void> {
   const capturedRedisEpoch = redisResult.capturedEpoch
 
   try {
-    const _require = eval('require') as NodeRequire
-    const { connectDB } = _require('@shared/db/connection') as typeof import('@shared/db/connection')
-    const { ModelConfig } = _require('@shared/db/models/ModelConfig') as typeof import('@shared/db/models/ModelConfig')
     await connectDB()
     const doc = await ModelConfig.getConfig()
     if (doc) {
