@@ -945,3 +945,52 @@
 - **Root-cause:** CMS audit flagged silent fallbacks at two hot-path routes — generate-question and evaluate-answer. When an admin mistypes a domain/depth slug or the CMS lookup fails, the code silently swaps in seed
 - **No-tests-needed-because: observability-only — four logger.warn/error calls added to existing fallback branches. No branch logic, return values, error handling, or control flow changed. Route-level h**
 - **Verified-by:** npm run build succeeds (hot-path routes compile). npx eslint on both files is clean. Impact analysis artifacts written to .claude/audit/current/impact-app_api_generate-question_route.ts.md and impact-
+
+### 2026-04-21 08:00:14 +0000 · `ef41d49` · Claude
+- **Subject:** feat(modelRouter): add Redis L2 cache for ModelConfig (Phase 1 PR A)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** Every cold Vercel Lambda paid ~1-2s for Mongoose TLS + SCRAM auth on its first `completion()` call because ModelConfig was only cached in-process (60s L1 TTL). keepMongoWarm keeps the Atlas cluster aw
+- **Tests-added: shared/__tests__/modelRouter.test.ts — 6 new cases for the L2 path (Redis hit hydrates from Redis, miss falls through to Mongo path, Redis read error returns defaults silently, Redis ma**
+- **Verified-by:** npx vitest run shared/__tests__/modelRouter.test.ts → 27/27 pass. npm run build succeeds (earlier static import attempt broke the client bundle via codingProblemGenerator → modelRouter → @shared
+
+### 2026-04-21 08:10:14 +0000 · `9affb4e` · Claude
+- **Subject:** feat(modelRouter): add per-layer timing telemetry for L2 cache validation
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** PR A (ef41d49) added a Redis L2 cache claiming ~1.5s → ~5ms cold-Lambda improvement, but the claim was only verified against mocks. No production signal existed to confirm the L2 was actually servin
+- **Tests-added: shared/__tests__/modelRouter.test.ts — 3 new cases pinning the log contract: (1) L2 hit emits event=model_config_load with source=L2-Redis and durationMs number <100ms, (2) L3 Mongo-err**
+- **Verified-by:** npx vitest run shared/__tests__/modelRouter.test.ts → 30/30 pass (was 27, +3 telemetry tests). npm run build succeeds. Lint clean. Post-deploy validation plan: search Vercel logs for `event:model_co
+
+### 2026-04-21 08:22:15 +0000 · `c2c6f74` · Claude
+- **Subject:** fix(modelRouter): bound Redis read latency + validate payload shape (Codex P2 #1 + #2 on PR #302)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** Two correctness issues surfaced by Codex automated review. (1) `await client.get(...)` blocked on ioredis's default retry behavior (`maxRetriesPerRequest: 3` with exponential backoff per shared/redis.
+- **Tests-added: shared/__tests__/modelRouter.test.ts — 4 Codex-P2 regression cases. (1) Redis-never-responds (mockImplementationOnce + fake timers + advance 500ms) → resolveModel returns defaults wit**
+- **Verified-by:** npx vitest run shared/__tests__/modelRouter.test.ts → 34/34 pass (was 30, +4 regressions). npm run build succeeds. Lint clean. Impact analysis refreshed pre-edit. Timeout of 200ms chosen as 20× Ups
+
+### 2026-04-21 08:30:16 +0000 · `1680ad6` · Claude
+- **Subject:** fix(modelRouter): validate required fields inside each cached slot entry (Codex P2 follow-up on PR #302)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** isValidSerializedConfig at line 167 only verified the outer shape [slot: string, value: object] of every slotEntries pair; it didn't assert the inner SlotConfig had its required fields populated and t
+- **Tests-added: shared/__tests__/modelRouter.test.ts — 2 Codex-follow-up regressions. (1) Slot value is empty object `{}` → guard rejects, resolveModel returns defaults (model/provider/maxTokens neve**
+- **Verified-by:** npx vitest run shared/__tests__/modelRouter.test.ts → 36/36 pass (was 34, +2 regressions). npm run build succeeds. Lint clean. Existing "Redis L2 hit" + "source:L2-Redis telemetry" tests still pass 
+
+### 2026-04-21 08:41:12 +0000 · `7a52f7b` · Claude
+- **Subject:** fix(modelRouter): epoch-guard Redis writes against invalidate-during-load race (Codex P2 #302)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** If `loadConfig()` started just before a CMS admin saved new config, its in-flight Mongo read might return pre-edit data; `invalidateModelConfigCache()` would then DEL the Redis key; loadConfig's fire-
+- **Tests-added: shared/__tests__/modelRouter.test.ts — 1 regression case: start a loadConfig → call invalidate DURING the load → await → assert mockRedisSetex was NEVER called for that load AND t**
+- **Verified-by:** npx vitest run shared/__tests__/modelRouter.test.ts → 37/37 pass (was 36, +1 regression). npm run build succeeds. Lint clean. Impact analysis refreshed pre-edit. Scope limitation documented in code:
+
+### 2026-04-21 08:56:45 +0000 · `6e1b544` · Claude
+- **Subject:** fix(modelRouter): cross-Lambda stale-write guard via Redis-shared epoch (Codex P2 follow-up on PR #302)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** The previous fix added an in-process epoch counter that guarded same-Lambda races, but Codex correctly flagged that cross-Lambda races were still unprotected — Lambda A's in-flight loadConfig has no
+- **Tests-added: 2 cross-Lambda regressions. (1) `invalidateModelConfigCache() INCRs the Redis-shared epoch` pins the CAS signal that other Lambdas depend on. (2) `skips Redis write when shared epoch chan**
+- **Verified-by:** npx vitest run shared/__tests__/modelRouter.test.ts → 39/39 pass (was 37, +2 cross-Lambda regressions). npm run build succeeds. Lint clean. Impact analysis refreshed pre-edit. Performance: +0 round-
+
+### 2026-04-21 09:05:57 +0000 · `737836e` · Claude
+- **Subject:** fix(modelRouter): atomic Lua CAS for Redis write (Codex P2 atomic-write on PR #302)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** The previous cross-Lambda guard had writeToRedis do GET(epoch) then SETEX(cache) as two separate Redis commands. If invalidateModelConfigCache() interleaved between them (INCR+DEL after the GET but be
+- **Tests-added: 2 Codex-follow-up regressions. (1) Pins the contract that the write path goes through eval, NEVER a bare SETEX (regression guard for anyone re-introducing a non-atomic write). (2) Lua EVA**
+- **Verified-by:** npx vitest run shared/__tests__/modelRouter.test.ts → 40/40 pass (was 39, +1 atomic-contract test, +1 race-without-throw test; -1 old GET+SETEX race test that's now redundant under atomic semantics)
