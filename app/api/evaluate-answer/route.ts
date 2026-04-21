@@ -66,7 +66,11 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
     try {
       // PR C Phase 1: skip connectDB when session cache populated the depth
       // — InterviewDepth.findOne below is the only Mongo read in this block.
-      await connectDBIfNeeded(sessionCfg?.depth == null, 'evaluate-answer:depth')
+      await connectDBIfNeeded(
+        sessionCfg?.depth == null,
+        'evaluate-answer:depth',
+        sessionCfg == null ? 'sessionCfg-null' : 'depth-null',
+      )
       const depthDoc = (sessionCfg?.depth != null
         ? sessionCfg.depth
         : await InterviewDepth.findOne({ slug: interviewType, isActive: true }).lean()) as {

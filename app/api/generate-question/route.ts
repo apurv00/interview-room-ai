@@ -121,7 +121,20 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
       // ~1.5s TLS+SCRAM cost on cold Lambdas.
       const domainNeedsMongo = sessionCfg?.domain == null
       const depthNeedsMongo = sessionCfg?.depth == null
-      await connectDBIfNeeded(domainNeedsMongo || depthNeedsMongo, 'generate-question:domain-depth')
+      const needsMongo = domainNeedsMongo || depthNeedsMongo
+      // Field-level reason surfaces in `event:connectdb_needed` when the
+      // skip flag is ON and we still connected — tells us which cached
+      // field was null without adding a separate debug round-trip.
+      const needReason = !needsMongo
+        ? undefined
+        : sessionCfg == null
+          ? 'sessionCfg-null'
+          : domainNeedsMongo && depthNeedsMongo
+            ? 'domain+depth-null'
+            : domainNeedsMongo
+              ? 'domain-null'
+              : 'depth-null'
+      await connectDBIfNeeded(needsMongo, 'generate-question:domain-depth', needReason)
 
       const [domainDoc, depthDoc] = await Promise.all([
         sessionCfg?.domain != null
@@ -304,7 +317,11 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
       // PR C Phase 1: skip connectDB when the session cache populated the
       // user profile — User.findById below is the only Mongo read in this
       // block, and it short-circuits on cache hit.
-      await connectDBIfNeeded(sessionCfg?.userProfile == null, 'generate-question:user-profile')
+      await connectDBIfNeeded(
+        sessionCfg?.userProfile == null,
+        'generate-question:user-profile',
+        sessionCfg == null ? 'sessionCfg-null' : 'userProfile-null',
+      )
       // Use cached user profile when available; fall back to Mongo.
       const profile = (sessionCfg?.userProfile != null
         ? sessionCfg.userProfile

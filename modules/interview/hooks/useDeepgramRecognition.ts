@@ -95,6 +95,24 @@ const FINISH_TRIGGER_CODES: Record<FinishTrigger, number> = {
   stopListeningUsageLimit: 4015,
 }
 
+/** Triggers that end the CURRENT turn but leave the Deepgram WebSocket
+ *  open so the NEXT turn can reuse it. Diagnostic run 2026-04-21
+ *  confirmed `graceTimer` / `stopListeningIntentionalSilence` were
+ *  closing the warmUp ws after every question, forcing the next
+ *  `warmUp()` to pay the full TLS+auth handshake (1.1–1.6s per Q ×
+ *  6 questions in a typical interview). The socket's 5s KeepAlive
+ *  ping keeps it open across the 12s-idle-close threshold while the
+ *  AI speaks the next question. Terminal triggers (token fail, offline,
+ *  warmUpTimeout, session-end) still close — this only covers the
+ *  "user finished THIS answer, another question is coming" paths. */
+export const PRESERVE_SOCKET_TRIGGERS = new Set<FinishTrigger>([
+  'graceTimer',
+  'stopListeningExternal',
+  'stopListeningIntentionalSilence',
+  'stopListeningInactivityPostSpeech',
+  'stopListeningMaxAnswer',
+])
+
 /** Caller-supplied reason for ending a listening session. Each value
  *  maps internally to a distinct 4xxx close code (via FINISH_TRIGGER_CODES)
  *  so Vercel logs can tell which useInterview call site ended the turn.
@@ -541,15 +559,17 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
    * Call this during avatar speech so recognition starts instantly.
    */
   const warmUp = useCallback(() => {
+    // Skip if already warmed up or connecting. Placed BEFORE the
+    // diagnostic console.time so preserved-socket reuse paths don't
+    // create orphan "Timer already exists" console warnings every Q.
+    if (isWarmedUpRef.current || warmUpPromiseRef.current) return
+    if (wsRef.current?.readyState === WebSocket.OPEN) return
     // [DIAGNOSTIC] Temporary Q1-latency perf marker — see matching
     // console.timeEnd in ws.onopen below. Measures how long the warmUp
     // WebSocket takes to reach OPEN state. Remove once Q1 listening
     // delay is diagnosed.
     // eslint-disable-next-line no-console
     console.time('[perf:stt] warmUp→wsOpen')
-    // Skip if already warmed up or connecting
-    if (isWarmedUpRef.current || warmUpPromiseRef.current) return
-    if (wsRef.current?.readyState === WebSocket.OPEN) return
 
     const promise = fetchTokenCached()
       .then((token) => {
@@ -606,7 +626,12 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             resolve() // Don't reject — startListening will fall back
           }
           ws.onclose = (ev) => {
-            if (isWarmedUpRef.current) {
+            // Clear the reusable-socket flag only when THIS ws is still
+            // the active one. A late onclose from a stale ws (e.g. Q1's
+            // warmUp socket dying AFTER Q2 already opened a fresh ws2
+            // and set wsRef.current = ws2) would otherwise wipe the
+            // healthy ws2's warmed-up state. Codex P2 on PR #307.
+            if (wsRef.current === ws && isWarmedUpRef.current) {
               isWarmedUpRef.current = false
             }
             // Pipe close event to server so it shows up in Vercel
@@ -998,6 +1023,18 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
         }
         myKeepAliveTimer = null
       }
+      // Clear isWarmedUpRef when THIS cold-path ws dies while it's
+      // still the active socket. Without this, a connectWebSocket-
+      // created ws that finishRecognition preserved (isWarmedUpRef=true)
+      // and that then died between turns would leave the flag stuck
+      // true; the next warmUp() would early-return and startListening
+      // would fall through to a cold reconnect — silently regressing
+      // the per-question latency fix. Codex P2 on PR #307. The identity
+      // guard matches warmUp's onclose: a late onclose from a superseded
+      // ws must not wipe the active ws's state.
+      if (wsRef.current === ws && isWarmedUpRef.current) {
+        isWarmedUpRef.current = false
+      }
       // Skip reconnect when WE initiated the close. A non-null
       // __finishTrigger means some finishRecognition / stopListening
       // / warmUpTimeout path already tagged this socket before calling
@@ -1214,7 +1251,16 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     isFinishingRef.current = true
     console.log(`[Deepgram] finishRecognition called (trigger=${trigger}), text:`, finalTextRef.current.slice(0, 100))
     setIsListening(false)
-    isWarmedUpRef.current = false
+
+    // Socket preservation: on question-end triggers (PRESERVE_SOCKET_TRIGGERS)
+    // and while the ws is OPEN, keep the WebSocket + its KeepAlive interval
+    // alive for the next turn. `isWarmedUpRef` then signals the reuse path
+    // in startListening. Anything else (errors, session-end) falls through
+    // to the original full-teardown path.
+    const preserveSocket =
+      PRESERVE_SOCKET_TRIGGERS.has(trigger) &&
+      wsRef.current?.readyState === WebSocket.OPEN
+    isWarmedUpRef.current = preserveSocket
 
     if (fallbackFinishTimerRef.current) {
       clearTimeout(fallbackFinishTimerRef.current)
@@ -1228,12 +1274,17 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       clearTimeout(graceTimerRef.current)
       graceTimerRef.current = null
     }
-    if (keepAliveTimerRef.current) {
+    // KeepAlive is what keeps the idle ws alive between questions (Deepgram
+    // idle-closes /v1/listen at ~12s of no inbound data). Only clear it
+    // when we're actually tearing down the socket.
+    if (!preserveSocket && keepAliveTimerRef.current) {
       clearInterval(keepAliveTimerRef.current)
       keepAliveTimerRef.current = null
     }
 
-    // Cleanup audio processing
+    // Cleanup audio processing — same regardless of preserve state.
+    // We always stop capturing audio after a turn; only the ws lifecycle
+    // branches below.
     processorRef.current?.disconnect()
     sourceRef.current?.disconnect()
     audioContextRef.current?.close().catch(() => {})
@@ -1247,27 +1298,39 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       audioStreamRef.current = null
     }
 
-    // Close WebSocket with a labelled code so the onclose handler's
-    // debug POST can tell Vercel which trigger terminated the session.
-    // Application-defined 4xxx range per RFC 6455 §7.4.2. The `reason`
-    // string is intentionally the trigger name itself — redundant with
-    // the code, but browsers sometimes swallow codes, and a short
-    // reason string is our diagnostic belt-and-suspenders.
-    //
-    // The trigger is attached directly to the socket (TaggedWebSocket)
-    // so reconnect flows can have multiple sockets tearing down
-    // concurrently without their onclose handlers consuming each
-    // other's state — each onclose reads from its own `ws` closure.
-    // The guard also skips CLOSED/CLOSING states where ws.close is a
-    // no-op: tagging would leak onto a socket whose onclose already
-    // fired. Codex P1 + P2 on PR #293. The console.log at the top of
-    // this function still preserves the trigger in browser logs for
-    // the no-ws paths (offline / tokenFetchFailed / reconnectExhausted).
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      ;(wsRef.current as TaggedWebSocket).__finishTrigger = trigger
-      wsRef.current.close(FINISH_TRIGGER_CODES[trigger], trigger)
+    if (preserveSocket && wsRef.current) {
+      // Detach the message handler so any in-flight Deepgram packets that
+      // arrive AFTER we stopped sending audio don't leak into the next
+      // turn's finalTextRef. startListening's reuse path re-attaches a
+      // fresh handler via attachMessageHandler(). onclose/onerror stay
+      // attached so a later ws death still flips isWarmedUpRef=false and
+      // logs to /api/debug/deepgram-ws-close for diagnostics.
+      wsRef.current.onmessage = null
+      // Leave wsRef.current pointing at the live ws — next startListening
+      // takes the fast path (isWarmedUpRef + OPEN check).
+    } else {
+      // Close WebSocket with a labelled code so the onclose handler's
+      // debug POST can tell Vercel which trigger terminated the session.
+      // Application-defined 4xxx range per RFC 6455 §7.4.2. The `reason`
+      // string is intentionally the trigger name itself — redundant with
+      // the code, but browsers sometimes swallow codes, and a short
+      // reason string is our diagnostic belt-and-suspenders.
+      //
+      // The trigger is attached directly to the socket (TaggedWebSocket)
+      // so reconnect flows can have multiple sockets tearing down
+      // concurrently without their onclose handlers consuming each
+      // other's state — each onclose reads from its own `ws` closure.
+      // The guard also skips CLOSED/CLOSING states where ws.close is a
+      // no-op: tagging would leak onto a socket whose onclose already
+      // fired. Codex P1 + P2 on PR #293. The console.log at the top of
+      // this function still preserves the trigger in browser logs for
+      // the no-ws paths (offline / tokenFetchFailed / reconnectExhausted).
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        ;(wsRef.current as TaggedWebSocket).__finishTrigger = trigger
+        wsRef.current.close(FINISH_TRIGGER_CODES[trigger], trigger)
+      }
+      wsRef.current = null
     }
-    wsRef.current = null
 
     // Build result.
     // Fall back to lastTranscriptRef (FINAL + INTERIM combined) when finalTextRef

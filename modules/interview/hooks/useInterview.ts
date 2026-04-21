@@ -21,6 +21,7 @@ import {
   getQuestionCount,
 } from '@interview/config/interviewConfig'
 import { deriveCoachingTip } from '@interview/config/coachingTips'
+import { isThinkingHeavyDepth, SILENCE_WINDOW_BONUS_MS } from '@interview/config/silenceWindow'
 import { STORAGE_KEYS, sessionScopedKey } from '@shared/storageKeys'
 import type { SpeechRecognitionResult } from './useSpeechRecognition'
 import type { StartListeningOptions, StopListeningReason } from './useDeepgramRecognition'
@@ -1173,6 +1174,12 @@ export function useInterview({
    *  - Medium (15-30 words): 35% chance, 2.0s window
    *  - Long (30+ words): always listens, 1.5s window (brief catch for trailing thoughts)
    *
+   * Depth-aware multiplier: thinking-heavy depths (technical, case-study,
+   * system-design, coding) extend the window by +1500ms so candidates
+   * collecting their thoughts mid-elaboration aren't cut off. Diagnostic
+   * run 2026-04-21 caught two technical-depth misfires on Q3 and Q6 where
+   * the 1500–2500ms window expired while the candidate was mid-thought.
+   *
    * Returns additional text if the candidate spoke, or null if silence held.
    */
   function maybeIntentionalSilence(answer: string, isProbe: boolean): Promise<string | null> {
@@ -1200,6 +1207,13 @@ export function useInterview({
       // Long answers — always check with a brief window to catch trailing speech
       silenceMs = 1500
     }
+
+    // Depth-aware extension for think-heavy interview types. Candidates
+    // routinely pause mid-elaboration on technical / case-study / system-
+    // design / coding answers (diagramming mentally, weighing tradeoffs)
+    // so the base 1500-2500ms window cuts off real continuation. See
+    // `silenceWindow.ts` for the depth allowlist.
+    if (isThinkingHeavyDepth(config?.interviewType)) silenceMs += SILENCE_WINDOW_BONUS_MS
 
     // Set avatar to "curious" (waiting look)
     setAvatarEmotion('curious')

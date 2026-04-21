@@ -1043,3 +1043,45 @@
 - **Root-cause:** User reports Q1 listening status delay — first question audio capture has a perceivable lag between the AI finishing its question and the pipeline actually receiving PCM. UI-state flip to LISTENING 
 - **No-tests-needed-because: diagnostic-only browser console output; no runtime branch logic, no state change, no new exported surface. Existing 66 Deepgram regression tests continue to pass (tests emit v**
 - **Verified-by:** npm run build succeeds. npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts → 66/66 pass. Impact analysis refreshed for both hot-path files pre-edit.
+
+### 2026-04-21 13:18:02 +0000 · `e7bb36d` · Claude
+- **Subject:** Preserve Deepgram WS across question turns
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** finishRecognition unconditionally closed wsRef.current (and
+- **Tests-added: modules/interview/hooks/__tests__/useDeepgramRecognition-preserve.test.ts**
+- **Verified-by:** unit test (PRESERVE_SOCKET_TRIGGERS membership); tsc --noEmit
+
+### 2026-04-21 13:24:11 +0000 · `aa81ef3` · Claude
+- **Subject:** Extend intentional-silence window on thinking-heavy depths
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** the post-answer silence probe (`maybeIntentionalSilence`)
+- **Tests-added: modules/interview/__tests__/silenceWindow.test.ts**
+- **Verified-by:** unit tests (5 cases — allowlist membership, non-members,
+
+### 2026-04-21 13:26:07 +0000 · `5d57ee0` · Claude
+- **Subject:** Raise modelRouter Redis L2 read timeout 200→500ms
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** the 200ms withTimeout cap added in PR #302 (Codex P2 #1)
+- **Tests-added: No new test — existing "bounds Redis read latency" test**
+- **Verified-by:** all 40 modelRouter tests pass; tsc --noEmit clean.
+
+### 2026-04-21 13:29:49 +0000 · `daf3d87` · Claude
+- **Subject:** Add connectdb_needed diagnostic for PR C bypass investigation
+- **Files:** 4 changed, 1 test file(s)
+- **Root-cause:** after FEATURE_FLAG_SKIP_CONNECTDB_WHEN_CACHED=true was
+- **Tests-added: shared/db/__tests__/connection.test.ts — 3 new cases**
+- **Verified-by:** 7/7 unit tests pass; tsc --noEmit clean. Production
+
+### 2026-04-21 13:47:10 +0000 · `591ce25` · Claude
+- **Subject:** Update deepgramRecognition tests for socket-preservation contract
+- **Files:** 1 changed, 1 test file(s)
+- **Root-cause:** PR at e7bb36d (PRESERVE_SOCKET_TRIGGERS) changed
+- **Tests-added: +1 new positive "next-question warmUp is a no-op after**
+- **Verified-by:** full test suite — 2213/2213 pass across 134 files;
+
+### 2026-04-21 14:06:46 +0000 · `bb98be1` · Claude
+- **Subject:** Clear isWarmedUpRef when preserved ws dies (Codex P2 on #307)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** after e7bb36d made graceTimer preserve the socket, the
+- **Tests-added: new "preserved ws dying between turns clears**
+- **Verified-by:** 68/68 deepgramRecognition tests pass (was 67, +1 new);
