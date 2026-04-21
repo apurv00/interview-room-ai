@@ -102,6 +102,15 @@ export async function getOrLoadSessionConfig(
   try {
     const cached = await redis.get(cfgKey(sessionId))
     if (cached) {
+      // Parse FIRST, then log + refresh TTL. If the cached value is
+      // corrupted JSON (schema drift, partial write, garbage) we must
+      // NOT emit `redis-hit` — that would produce contradictory
+      // telemetry (one request logging both redis-hit AND the eventual
+      // mongo-hit/redis-error fallback). The JSON.parse throw is
+      // caught by the outer handler which sets redisErrored=true so
+      // the Mongo-path log below correctly reports source=redis-error.
+      // Codex P2 on PR #304.
+      const parsed = JSON.parse(cached) as CachedSessionConfig
       // Refresh TTL on every hit so interviews running longer than the
       // initial 30-min window don't silently fall through to Mongo
       // mid-flow when the candidate hits Q4/Q5 past the 30-min mark.
@@ -122,7 +131,7 @@ export async function getOrLoadSessionConfig(
         },
         'SessionConfig: redis hit',
       )
-      return JSON.parse(cached) as CachedSessionConfig
+      return parsed
     }
   } catch (err) {
     redisErrored = true

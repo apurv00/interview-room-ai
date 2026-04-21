@@ -408,6 +408,36 @@ describe('sessionConfigCache', () => {
       const log = findSessionConfigLoadLog() as { source: string }
       expect(log.source).toBe('feature-off')
     })
+
+    it('corrupted cache value: emits source=redis-error ONLY, NOT redis-hit (Codex P2 on PR #304)', async () => {
+      // A malformed cached JSON must NOT produce a `redis-hit` log.
+      // Earlier impl logged redis-hit BEFORE JSON.parse — so a corrupt
+      // value would emit redis-hit + then fall through and also emit
+      // the Mongo-fallback log, producing contradictory telemetry that
+      // breaks the dashboard during the exact failure mode we need to
+      // diagnose. Fix: parse first; log only on successful parse.
+      mockRedisGet.mockResolvedValue('{ this is not valid json')
+      // Mongo fallback path succeeds (so the subsequent log fires).
+      mockInterviewDomainFindOne.mockReturnValue(makeLeanQuery(DOMAIN_DOC))
+      mockInterviewDepthFindOne.mockReturnValue(makeLeanQuery(DEPTH_DOC))
+      mockUserFindById.mockReturnValue(makeLeanQuery(PROFILE_DOC))
+
+      await getOrLoadSessionConfig('sess-log-corrupt', OPTS)
+
+      // Collect all session_config_load logs produced by this call.
+      const loadLogs = mockLoggerInfo.mock.calls
+        .map(([payload]) => payload as { event?: string; source?: string })
+        .filter((p) => p?.event === 'session_config_load')
+
+      // Exactly one log per call — that's the contract. Multiple logs
+      // for one call was the bug.
+      expect(loadLogs).toHaveLength(1)
+      // The sole log must NOT be redis-hit (which would falsely claim
+      // the cache served this request). It should be redis-error —
+      // the corrupted value is semantically a Redis read failure.
+      expect(loadLogs[0].source).not.toBe('redis-hit')
+      expect(loadLogs[0].source).toBe('redis-error')
+    })
   })
 
   describe('parsedJD surfacing (Phase 1 of JD overlay wiring)', () => {
