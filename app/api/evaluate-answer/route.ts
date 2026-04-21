@@ -8,7 +8,7 @@ import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSec
 import { getDomainLabel } from '@interview/config/interviewConfig'
 import { getSkillSections } from '@interview/services/core/skillLoader'
 import { findCompanyProfile } from '@interview/config/companyProfiles'
-import { connectDB } from '@shared/db/connection'
+import { connectDB, connectDBIfNeeded } from '@shared/db/connection'
 import { User, InterviewDepth } from '@shared/db/models'
 import { FALLBACK_DEPTHS } from '@shared/db/seed'
 import { isFeatureEnabled } from '@shared/featureFlags'
@@ -64,7 +64,9 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
     let scoringDims: { name: string; label: string; weight: number }[] = []
 
     try {
-      await connectDB()
+      // PR C Phase 1: skip connectDB when session cache populated the depth
+      // — InterviewDepth.findOne below is the only Mongo read in this block.
+      await connectDBIfNeeded(sessionCfg?.depth == null, 'evaluate-answer:depth')
       const depthDoc = (sessionCfg?.depth != null
         ? sessionCfg.depth
         : await InterviewDepth.findOne({ slug: interviewType, isActive: true }).lean()) as {
