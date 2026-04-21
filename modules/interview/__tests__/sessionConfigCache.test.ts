@@ -409,6 +409,60 @@ describe('sessionConfigCache', () => {
       expect(log.source).toBe('feature-off')
     })
 
+    it('logs source=mongo-hit when ONLY rubric returns from Mongo (core fields null) (Codex P2 #304)', async () => {
+      // Rubric supports wildcard matches (domain:'*', interviewType:'*'),
+      // so it can legitimately return data even when the specific
+      // domain/depth lookups miss for this session's slug/type. Codex
+      // flagged: the old classifier used `hasData` which excluded
+      // rubric AND parsedJD — this combo would log `empty` even though
+      // Mongo DID return a usable rubric.
+      vi.mocked(isFeatureEnabled).mockImplementation(
+        (flag: string) => flag === 'session_config_cache' || flag === 'rubric_registry',
+      )
+      mockRedisGet.mockResolvedValue(null)
+      // Core fields all null
+      mockInterviewDomainFindOne.mockReturnValue(makeLeanQuery(null))
+      mockInterviewDepthFindOne.mockReturnValue(makeLeanQuery(null))
+      mockUserFindById.mockReturnValue(makeLeanQuery(null))
+      // Rubric returns via wildcard
+      mockEvaluationRubricFindOne.mockReturnValue(
+        makeLeanQuery({ dimensions: [{ name: 'relevance', label: 'Relevance', weight: 0.25 }] }),
+      )
+
+      await getOrLoadSessionConfig('sess-rubric-only', OPTS)
+
+      const log = findSessionConfigLoadLog() as { source: string }
+      expect(log.source).toBe('mongo-hit')
+      expect(log.source).not.toBe('empty')
+    })
+
+    it('logs source=mongo-hit when ONLY parsedJD returns from Mongo (core fields null) (Codex P2 #304)', async () => {
+      // Same bug class as the rubric-only case: a session with a JD
+      // but no matching domain/depth/user lookups would log `empty`.
+      mockRedisGet.mockResolvedValue(null)
+      mockInterviewDomainFindOne.mockReturnValue(makeLeanQuery(null))
+      mockInterviewDepthFindOne.mockReturnValue(makeLeanQuery(null))
+      mockUserFindById.mockReturnValue(makeLeanQuery(null))
+      mockInterviewSessionFindById.mockReturnValue(
+        makeLeanQuery({
+          parsedJobDescription: {
+            rawText: 'PM at Acme',
+            company: 'Acme',
+            role: 'PM',
+            inferredDomain: 'pm',
+            requirements: [],
+            keyThemes: [],
+          },
+        }),
+      )
+
+      await getOrLoadSessionConfig('sess-jd-only', OPTS)
+
+      const log = findSessionConfigLoadLog() as { source: string }
+      expect(log.source).toBe('mongo-hit')
+      expect(log.source).not.toBe('empty')
+    })
+
     it('corrupted cache value: emits source=redis-error ONLY, NOT redis-hit (Codex P2 on PR #304)', async () => {
       // A malformed cached JSON must NOT produce a `redis-hit` log.
       // Earlier impl logged redis-hit BEFORE JSON.parse — so a corrupt

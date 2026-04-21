@@ -186,17 +186,26 @@ export async function getOrLoadSessionConfig(
     // Only cache when at least one of the core fields was successfully populated.
     // An all-null result may reflect transient DB errors — avoid hiding them
     // from retries for 30 minutes. parsedJD is intentionally excluded from the
-    // hasData gate: a session with only a parsed JD is exceptional, and caching
-    // a config with all core fields null would hide transient DB errors for
-    // those fields behind the presence of a JD.
-    const hasData = config.domain !== null || config.depth !== null || config.userProfile !== null
-    if (hasData) {
+    // hasCoreData gate: a session with only a parsed JD is exceptional, and
+    // caching a config with all core fields null would hide transient DB
+    // errors for those fields behind the presence of a JD.
+    const hasCoreData = config.domain !== null || config.depth !== null || config.userProfile !== null
+    if (hasCoreData) {
       try {
         await redis.setex(cfgKey(sessionId), TTL_SECONDS, JSON.stringify(config))
       } catch (err) {
         logger.warn({ err, sessionId }, 'getOrLoadSessionConfig: redis write failed')
       }
     }
+
+    // Telemetry classification — separate from the cache-write gate
+    // above. `empty` must reserve for "Mongo returned nothing usable
+    // at all" — if rubric XOR parsedJD came back even while core
+    // fields were all null, Mongo DID return data and dashboards
+    // should see `mongo-hit`, not a false "bad session" signal.
+    // Codex P2 on PR #304.
+    const hasAnyData =
+      hasCoreData || config.rubric !== null || config.parsedJD !== null
 
     logger.info(
       {
@@ -206,7 +215,7 @@ export async function getOrLoadSessionConfig(
         // in the log so ops can tell whether the fallthrough was from a
         // clean cache miss (first Q of session) or a Redis outage that
         // degraded the route to always-Mongo for this request.
-        source: redisErrored ? 'redis-error' : hasData ? 'mongo-hit' : 'empty',
+        source: redisErrored ? 'redis-error' : hasAnyData ? 'mongo-hit' : 'empty',
         durationMs: Date.now() - startMs,
       },
       'SessionConfig: mongo fallback',
