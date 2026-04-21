@@ -1,6 +1,50 @@
 import { TASK_SLOT_DEFAULTS, type TaskSlot } from '@shared/services/taskSlots'
 import { aiLogger } from '@shared/logger'
 
+// Redis (PR A) is loaded via `eval('require')` inside the helpers below
+// — same pattern mongoose uses. A static `import { redis }` from
+// @shared/redis pulled ioredis into the client bundle via the dynamic
+// import chain `app/interview/page.tsx → codingProblemGenerator.ts →
+// modelRouter.ts → @shared/redis`, breaking `next build` (ioredis needs
+// node's net/tls/dns). eval-require is invisible to webpack, so the
+// import stays server-only at runtime.
+//
+// Minimal subset of ioredis methods we need — matches the real client
+// so tests and runtime see the same contract.
+interface RedisLike {
+  get(key: string): Promise<string | null>
+  setex(key: string, ttl: number, value: string): Promise<unknown>
+  del(key: string): Promise<unknown>
+}
+
+// Test override hatch — see `__setRedisClientForTesting` below.
+// Kept module-scoped so production code paths never observe it. Set
+// only from test setup; production always resolves the real client via
+// `eval('require')('@shared/redis')`.
+let _redisOverride: RedisLike | null = null
+
+function getRedisClient(): RedisLike | null {
+  if (_redisOverride) return _redisOverride
+  if (typeof window !== 'undefined') return null
+  try {
+    const _require = eval('require') as NodeRequire
+    const { redis } = _require('@shared/redis') as typeof import('@shared/redis')
+    return redis as unknown as RedisLike
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Test-only: inject a fake Redis client so modelRouter unit tests can
+ * exercise the L2 cache paths without pulling real ioredis (which
+ * requires node's net/tls and would hang against localhost:6379 in
+ * CI). Production code never calls this. Pass `null` to reset.
+ */
+export function __setRedisClientForTesting(client: RedisLike | null): void {
+  _redisOverride = client
+}
+
 // ─── Slot config (inlined to avoid pulling mongoose into client bundles) ────
 
 interface SlotConfig {
@@ -15,7 +59,7 @@ interface SlotConfig {
   useToonInput?: boolean
 }
 
-// ─── In-memory cache ────────────────────────────────────────────────────────
+// ─── In-memory cache (L1) + Redis cache (L2) + Mongo (L3) ─────────────────
 
 interface CachedConfig {
   routingEnabled: boolean
@@ -24,14 +68,84 @@ interface CachedConfig {
 }
 
 const CACHE_TTL_MS = 60_000
+const REDIS_CACHE_KEY = 'model-config:v1'
+const REDIS_TTL_SECONDS = 60
 let _cache: CachedConfig | null = null
 let _loadPromise: Promise<void> | null = null
+
+/**
+ * Serialisable shape of the config as stored in Redis.
+ * Map is not JSON-serialisable so we flatten to an array of entries.
+ */
+interface SerializedConfig {
+  routingEnabled: boolean
+  slotEntries: Array<[TaskSlot, SlotConfig]>
+}
+
+function hydrateFromSerialized(data: SerializedConfig): CachedConfig {
+  return {
+    routingEnabled: data.routingEnabled,
+    slots: new Map(data.slotEntries),
+    loadedAt: Date.now(),
+  }
+}
+
+function serializeForRedis(cache: CachedConfig): SerializedConfig {
+  return {
+    routingEnabled: cache.routingEnabled,
+    slotEntries: Array.from(cache.slots.entries()),
+  }
+}
+
+/**
+ * Try to hydrate `_cache` from Redis. Returns true on hit, false on miss
+ * or any failure. Never throws — Redis outages must not break LLM routing.
+ */
+async function tryLoadFromRedis(): Promise<boolean> {
+  const client = getRedisClient()
+  if (!client) return false
+  try {
+    const raw = await client.get(REDIS_CACHE_KEY)
+    if (!raw) return false
+    const parsed = JSON.parse(raw) as SerializedConfig
+    _cache = hydrateFromSerialized(parsed)
+    return true
+  } catch (err) {
+    aiLogger.warn({ err }, 'ModelRouter: Redis L2 cache read failed, falling through to Mongo')
+    return false
+  }
+}
+
+/**
+ * Write the successfully-loaded cache to Redis. Never throws — a Redis
+ * write failure must not fail the request that just succeeded against
+ * Mongo. The in-memory cache is still populated, so this Lambda keeps
+ * working; only other Lambdas miss out on the cross-container share.
+ */
+async function writeToRedis(cache: CachedConfig): Promise<void> {
+  const client = getRedisClient()
+  if (!client) return
+  try {
+    await client.setex(REDIS_CACHE_KEY, REDIS_TTL_SECONDS, JSON.stringify(serializeForRedis(cache)))
+  } catch (err) {
+    aiLogger.warn({ err }, 'ModelRouter: Redis L2 cache write failed (L1 still populated)')
+  }
+}
 
 async function loadConfig(): Promise<void> {
   if (typeof window !== 'undefined') {
     _cache = { routingEnabled: false, slots: new Map(), loadedAt: Date.now() }
     return
   }
+
+  // L2: Redis. Cross-Lambda-container cache — avoids paying Mongo cost
+  // every time a cold Lambda's in-memory L1 is empty. 60s TTL matches
+  // L1 so expiration feels consistent to callers; invalidation on CMS
+  // save DELs the key so updates propagate in ≤1 request.
+  if (await tryLoadFromRedis()) {
+    return
+  }
+
   try {
     const _require = eval('require') as NodeRequire
     const { connectDB } = _require('@shared/db/connection') as typeof import('@shared/db/connection')
@@ -46,7 +160,15 @@ async function loadConfig(): Promise<void> {
         }
       }
       _cache = { routingEnabled: doc.routingEnabled, slots: slotMap, loadedAt: Date.now() }
+      // Fire-and-forget Redis write. Don't await — a cache-write delay
+      // should never extend the response latency of the request that
+      // just forced the Mongo read.
+      void writeToRedis(_cache)
     } else {
+      // No ModelConfig doc in Mongo — routing disabled. Intentionally
+      // NOT written to Redis: caching "no config" would mask a genuine
+      // operator misconfiguration and prevent the next ping from
+      // re-checking Mongo.
       _cache = { routingEnabled: false, slots: new Map(), loadedAt: Date.now() }
     }
   } catch (err) {
@@ -68,8 +190,26 @@ async function ensureConfig(): Promise<CachedConfig> {
   return _cache!
 }
 
+/**
+ * Invalidate both the in-memory L1 cache (this process) and the Redis L2
+ * cache (all processes). Called from the CMS /api/cms/model-config PUT
+ * handler so a config change propagates to every Lambda on the next
+ * `ensureConfig()` call — no 60s TTL wait across the cluster.
+ *
+ * Redis DEL is fire-and-forget: a DEL failure would leave stale data in
+ * Redis for up to 60s (TTL floor) — acceptable degradation, since L1 on
+ * the PUT-handling Lambda is invalidated synchronously and users hitting
+ * other Lambdas experience at most a 60-second stale window.
+ */
 export function invalidateModelConfigCache(): void {
   _cache = null
+  const client = getRedisClient()
+  if (!client) return
+  // Don't await — callers (CMS PUT handler) should return 200 regardless
+  // of Redis health. A fire-and-forget DEL still propagates on happy path.
+  void client.del(REDIS_CACHE_KEY).catch((err: unknown) => {
+    aiLogger.warn({ err }, 'ModelRouter: Redis L2 cache invalidation failed')
+  })
 }
 
 // ─── Resolve model for a task slot ──────────────────────────────────────────
