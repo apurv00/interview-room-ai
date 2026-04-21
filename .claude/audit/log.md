@@ -1036,3 +1036,10 @@
 - **Root-cause:** /api/generate-question and /api/evaluate-answer call `await connectDB()` unconditionally even when the PR B session cache returns populated domain/depth/userProfile fields. In that cache-full-hit case
 - **Tests-added: shared/db/__tests__/connection.test.ts — 4 new tests covering the wrapper contract. (1) needsMongo=true → always calls connectDB regardless of flag; (2) flag OFF + needsMongo=false �**
 - **Verified-by:** npx vitest run shared/db/__tests__/connection.test.ts → 4/4 pass. npm run build succeeds. Lint clean on all 5 touched files. `gitnexus detect_changes` confirms connectDB/isConnected themselves are u
+
+### 2026-04-21 12:38:45 +0000 · `06e839b` · Claude
+- **Subject:** diag(q1-listening): add browser perf markers for warmUp + capture-ready latency
+- **Files:** 2 changed, 0 test file(s)
+- **Root-cause:** User reports Q1 listening status delay — first question audio capture has a perceivable lag between the AI finishing its question and the pipeline actually receiving PCM. UI-state flip to LISTENING 
+- **No-tests-needed-because: diagnostic-only browser console output; no runtime branch logic, no state change, no new exported surface. Existing 66 Deepgram regression tests continue to pass (tests emit v**
+- **Verified-by:** npm run build succeeds. npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts → 66/66 pass. Impact analysis refreshed for both hot-path files pre-edit.
