@@ -966,3 +966,10 @@
 - **Root-cause:** Two correctness issues surfaced by Codex automated review. (1) `await client.get(...)` blocked on ioredis's default retry behavior (`maxRetriesPerRequest: 3` with exponential backoff per shared/redis.
 - **Tests-added: shared/__tests__/modelRouter.test.ts — 4 Codex-P2 regression cases. (1) Redis-never-responds (mockImplementationOnce + fake timers + advance 500ms) → resolveModel returns defaults wit**
 - **Verified-by:** npx vitest run shared/__tests__/modelRouter.test.ts → 34/34 pass (was 30, +4 regressions). npm run build succeeds. Lint clean. Impact analysis refreshed pre-edit. Timeout of 200ms chosen as 20× Ups
+
+### 2026-04-21 08:30:16 +0000 · `1680ad6` · Claude
+- **Subject:** fix(modelRouter): validate required fields inside each cached slot entry (Codex P2 follow-up on PR #302)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** isValidSerializedConfig at line 167 only verified the outer shape [slot: string, value: object] of every slotEntries pair; it didn't assert the inner SlotConfig had its required fields populated and t
+- **Tests-added: shared/__tests__/modelRouter.test.ts — 2 Codex-follow-up regressions. (1) Slot value is empty object `{}` → guard rejects, resolveModel returns defaults (model/provider/maxTokens neve**
+- **Verified-by:** npx vitest run shared/__tests__/modelRouter.test.ts → 36/36 pass (was 34, +2 regressions). npm run build succeeds. Lint clean. Existing "Redis L2 hit" + "source:L2-Redis telemetry" tests still pass 
