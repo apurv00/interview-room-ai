@@ -626,7 +626,12 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             resolve() // Don't reject — startListening will fall back
           }
           ws.onclose = (ev) => {
-            if (isWarmedUpRef.current) {
+            // Clear the reusable-socket flag only when THIS ws is still
+            // the active one. A late onclose from a stale ws (e.g. Q1's
+            // warmUp socket dying AFTER Q2 already opened a fresh ws2
+            // and set wsRef.current = ws2) would otherwise wipe the
+            // healthy ws2's warmed-up state. Codex P2 on PR #307.
+            if (wsRef.current === ws && isWarmedUpRef.current) {
               isWarmedUpRef.current = false
             }
             // Pipe close event to server so it shows up in Vercel
@@ -1017,6 +1022,18 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           keepAliveTimerRef.current = null
         }
         myKeepAliveTimer = null
+      }
+      // Clear isWarmedUpRef when THIS cold-path ws dies while it's
+      // still the active socket. Without this, a connectWebSocket-
+      // created ws that finishRecognition preserved (isWarmedUpRef=true)
+      // and that then died between turns would leave the flag stuck
+      // true; the next warmUp() would early-return and startListening
+      // would fall through to a cold reconnect — silently regressing
+      // the per-question latency fix. Codex P2 on PR #307. The identity
+      // guard matches warmUp's onclose: a late onclose from a superseded
+      // ws must not wipe the active ws's state.
+      if (wsRef.current === ws && isWarmedUpRef.current) {
+        isWarmedUpRef.current = false
       }
       // Skip reconnect when WE initiated the close. A non-null
       // __finishTrigger means some finishRecognition / stopListening

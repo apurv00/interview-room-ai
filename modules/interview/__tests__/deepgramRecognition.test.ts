@@ -428,6 +428,61 @@ describe('useDeepgramRecognition', () => {
     expect(afterQ2Warmup).toBe(q1Ws)
   })
 
+  it('preserved ws dying between turns clears isWarmedUpRef (Codex P2 on #307)', async () => {
+    // If a preserved socket dies during avatar speech or a network blip,
+    // its onclose MUST clear isWarmedUpRef so the next warmUp() reconnects
+    // instead of silently sitting on a dead flag. Without the fix, the
+    // next question's warmUp early-returns on isWarmedUpRef===true even
+    // though wsRef.current is no longer OPEN — then startListening falls
+    // through to a cold reconnect, regressing the per-Q latency fix for
+    // that turn.
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onCompleteQ1 = vi.fn()
+
+    // Q1 cold path — no warmUp() before startListening, so the socket
+    // is born inside connectWebSocket (which has its own onclose handler,
+    // distinct from warmUp's). THIS is the path Codex flagged as the
+    // one that never cleared isWarmedUpRef.
+    await act(async () => {
+      result.current.startListening(onCompleteQ1)
+      await vi.advanceTimersByTimeAsync(10)
+    })
+    act(() => { mockWsInstance!.simulateOpen() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    const q1Ws = mockWsInstance
+
+    // Q1 answer + graceTimer preserve.
+    await act(async () => {
+      mockWsInstance!.simulateMessage(makeResult('Q1 answer', true))
+    })
+    await act(async () => {
+      mockWsInstance!.simulateMessage(makeUtteranceEnd())
+      await vi.advanceTimersByTimeAsync(3500)
+    })
+    expect(q1Ws!.lastCloseCode).toBeUndefined() // preserve held
+    expect(q1Ws!.readyState).toBe(MockWebSocket.OPEN)
+
+    // Simulate a network blip killing the preserved socket.
+    await act(async () => {
+      q1Ws!.close(1006, 'network drop')
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    // Q2: warmUp() must NOT early-return. If the onclose cleanup didn't
+    // clear isWarmedUpRef, this call would be a no-op and mockWsInstance
+    // would still point at q1Ws.
+    const beforeQ2 = mockWsInstance
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    const afterQ2Warmup = mockWsInstance
+
+    // A NEW WebSocket was created (mockWsInstance reassigned by the
+    // MockWebSocket constructor) — the flag was cleared and warmUp
+    // did its job.
+    expect(afterQ2Warmup).not.toBe(beforeQ2)
+    expect(afterQ2Warmup).not.toBe(q1Ws)
+  })
+
   // Regression: the earlyQuestion trigger was retired because production
   // logs showed it cutting candidates mid-rhetorical-flow (e.g. "say
   // option a, the faster one?" as part of an example). Short utterances
