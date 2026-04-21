@@ -184,12 +184,16 @@ let _invalidationEpoch = 0
  * down/unreachable Redis would stall `await client.get(...)` for roughly
  * 200ms + 400ms + 800ms = ~1.4s before the driver rejects. That defeats
  * the whole point of failing open fast — cold Lambdas would end up
- * paying BOTH the Redis timeout AND the Mongo round-trip. 200ms is
- * generous for a same-region Redis p99 (typically <10ms in Upstash /
- * Vercel KV) but still decisively faster than the Mongo baseline, so a
- * timeout never hides a healthy-Redis hit.
+ * paying BOTH the Redis timeout AND the Mongo round-trip.
+ *
+ * Raised 200→500ms on 2026-04-21 after Vercel logs showed the 200ms cap
+ * tripping on every cold Lambda: actual Upstash p50 from us-east-1 →
+ * global replica was ~216ms over the measured window (Deepgram session
+ * diagnostic run, logs tagged `event:model_config_load`). 500ms keeps
+ * us well below the Mongo baseline (~1000ms cold) while no longer
+ * hiding healthy L2 hits behind timeout-triggered Mongo reads.
  */
-const REDIS_READ_TIMEOUT_MS = 200
+const REDIS_READ_TIMEOUT_MS = 500
 
 /**
  * Race a promise against a timeout. On timeout, the returned promise

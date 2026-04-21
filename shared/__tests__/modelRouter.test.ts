@@ -319,10 +319,11 @@ describe('resolveModel', () => {
       mockRedisMget.mockImplementationOnce(() => new Promise(() => { /* never resolves */ }))
 
       const resolvePromise = resolveModel('interview.generate-question')
-      // Advance past the 200ms read timeout. Anything ≥300ms guarantees
-      // the timeout fires; we use 500ms for generous headroom so this
-      // isn't flaky on slow CI.
-      await vi.advanceTimersByTimeAsync(500)
+      // Advance past the 500ms read timeout. Anything >500ms guarantees
+      // the timeout fires regardless of fencepost ordering; we use 800ms
+      // for generous headroom so this isn't flaky on slow CI. Raised
+      // from 500ms on 2026-04-21 alongside REDIS_READ_TIMEOUT_MS 200→500.
+      await vi.advanceTimersByTimeAsync(800)
       const result = await resolvePromise
 
       // Fell through to defaults — timeout triggered, Mongo path tried
