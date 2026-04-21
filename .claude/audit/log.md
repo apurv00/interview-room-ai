@@ -980,3 +980,10 @@
 - **Root-cause:** If `loadConfig()` started just before a CMS admin saved new config, its in-flight Mongo read might return pre-edit data; `invalidateModelConfigCache()` would then DEL the Redis key; loadConfig's fire-
 - **Tests-added: shared/__tests__/modelRouter.test.ts — 1 regression case: start a loadConfig → call invalidate DURING the load → await → assert mockRedisSetex was NEVER called for that load AND t**
 - **Verified-by:** npx vitest run shared/__tests__/modelRouter.test.ts → 37/37 pass (was 36, +1 regression). npm run build succeeds. Lint clean. Impact analysis refreshed pre-edit. Scope limitation documented in code:
+
+### 2026-04-21 08:56:45 +0000 · `6e1b544` · Claude
+- **Subject:** fix(modelRouter): cross-Lambda stale-write guard via Redis-shared epoch (Codex P2 follow-up on PR #302)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** The previous fix added an in-process epoch counter that guarded same-Lambda races, but Codex correctly flagged that cross-Lambda races were still unprotected — Lambda A's in-flight loadConfig has no
+- **Tests-added: 2 cross-Lambda regressions. (1) `invalidateModelConfigCache() INCRs the Redis-shared epoch` pins the CAS signal that other Lambdas depend on. (2) `skips Redis write when shared epoch chan**
+- **Verified-by:** npx vitest run shared/__tests__/modelRouter.test.ts → 39/39 pass (was 37, +2 cross-Lambda regressions). npm run build succeeds. Lint clean. Impact analysis refreshed pre-edit. Performance: +0 round-
