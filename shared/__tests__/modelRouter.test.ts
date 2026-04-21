@@ -287,6 +287,85 @@ describe('resolveModel', () => {
     expect(typeof payload.durationMs).toBe('number')
   })
 
+  // ── Codex P2 regressions (PR #302) ─────────────────────────────────────
+
+  it('bounds Redis read latency — falls through to Mongo if Redis stalls past timeout (Codex P2 #1)', async () => {
+    // Simulate a Redis that never responds — mirrors the Redis-outage
+    // case where ioredis would retry 3× with backoff before rejecting
+    // (~1.4s). The timeout in tryLoadFromRedis must abort BEFORE the
+    // client finishes retrying so fallthrough stays fast.
+    vi.useFakeTimers()
+    try {
+      mockRedisGet.mockImplementationOnce(() => new Promise(() => { /* never resolves */ }))
+
+      const resolvePromise = resolveModel('interview.generate-question')
+      // Advance past the 200ms read timeout. Anything ≥300ms guarantees
+      // the timeout fires; we use 500ms for generous headroom so this
+      // isn't flaky on slow CI.
+      await vi.advanceTimersByTimeAsync(500)
+      const result = await resolvePromise
+
+      // Fell through to defaults — timeout triggered, Mongo path tried
+      // (fails in tests → defaults). Assertion proves the stall did NOT
+      // propagate into resolveModel's return value.
+      expect(result.provider).toBe('openai')
+      expect(result.model).toBe('gpt-5.4-mini')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('rejects Redis payloads with missing fields — does NOT hydrate broken cache (Codex P2 #2)', async () => {
+    // Valid JSON but wrong shape — a schema-version skew or a partial
+    // write would produce this. Without the guard, hydrateFromSerialized
+    // produces a CachedConfig with undefined fields, tryLoadFromRedis
+    // returns true, and routing is poisoned for 60s.
+    mockRedisGet.mockResolvedValueOnce(JSON.stringify({ routingEnabled: 'yes', slotEntries: 'nope' }))
+
+    const result = await resolveModel('interview.generate-question')
+
+    // Should fall through to defaults, not silently accept the bogus
+    // cache. A log line at warn-level surfaces the rejection so we can
+    // detect payload drift in production.
+    expect(result.provider).toBe('openai')
+    expect(result.model).toBe('gpt-5.4-mini')
+    // Also: the telemetry log must show the Redis path failed and
+    // fell through (source !== 'L2-Redis').
+    const loadLogs = mockAiLoggerInfo.mock.calls.filter(
+      ([payload]) => (payload as { event?: string }).event === 'model_config_load',
+    )
+    expect(loadLogs).toHaveLength(1)
+    const [payload] = loadLogs[0] as [{ source: string }, string]
+    expect(payload.source).not.toBe('L2-Redis')
+  })
+
+  it('rejects Redis payload missing routingEnabled — falls through (Codex P2 #2)', async () => {
+    // Specific shape-guard case: slotEntries present as empty array but
+    // routingEnabled missing entirely. Without the guard, boolean coerces
+    // to undefined, hydration would succeed, downstream code would treat
+    // as routingEnabled=false.
+    mockRedisGet.mockResolvedValueOnce(JSON.stringify({ slotEntries: [] }))
+
+    const result = await resolveModel('interview.generate-question')
+
+    expect(result.provider).toBe('openai')
+    expect(result.model).toBe('gpt-5.4-mini')
+  })
+
+  it('rejects Redis payload with malformed slotEntries — falls through (Codex P2 #2)', async () => {
+    // slotEntries present but entries aren't [string, object] tuples.
+    // Without the per-entry check, new Map() would succeed but with
+    // garbage contents.
+    mockRedisGet.mockResolvedValueOnce(
+      JSON.stringify({ routingEnabled: true, slotEntries: [['key', null], 'not-a-tuple'] }),
+    )
+
+    const result = await resolveModel('interview.generate-question')
+
+    expect(result.provider).toBe('openai')
+    expect(result.model).toBe('gpt-5.4-mini')
+  })
+
   it('does NOT log model_config_load on L1 (in-memory) cache hits', async () => {
     // First call populates L1 via L2 hit. Reset logger spy before second
     // call to confirm L1 path is silent — noise-free cold-path signal.

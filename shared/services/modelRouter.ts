@@ -118,6 +118,60 @@ function serializeForRedis(cache: CachedConfig): SerializedConfig {
 }
 
 /**
+ * Hard cap on how long we'll block on a Redis read before giving up and
+ * falling through to Mongo. Codex P2 #1 on PR #302: the shared ioredis
+ * client uses `maxRetriesPerRequest: 3` with exponential backoff, so a
+ * down/unreachable Redis would stall `await client.get(...)` for roughly
+ * 200ms + 400ms + 800ms = ~1.4s before the driver rejects. That defeats
+ * the whole point of failing open fast — cold Lambdas would end up
+ * paying BOTH the Redis timeout AND the Mongo round-trip. 200ms is
+ * generous for a same-region Redis p99 (typically <10ms in Upstash /
+ * Vercel KV) but still decisively faster than the Mongo baseline, so a
+ * timeout never hides a healthy-Redis hit.
+ */
+const REDIS_READ_TIMEOUT_MS = 200
+
+/**
+ * Race a promise against a timeout. On timeout, the returned promise
+ * rejects; the caller's try/catch handles fall-through. We clear the
+ * timer on either outcome so we don't leak handles when the primary
+ * promise wins.
+ */
+function withTimeout<T>(primary: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+  })
+  return Promise.race([primary, timeout]).finally(() => {
+    if (timer) clearTimeout(timer)
+  })
+}
+
+/**
+ * Structural guard for the JSON blob stored in Redis. `JSON.parse`
+ * succeeds on any syntactically-valid JSON — including payloads from a
+ * different schema version or a partial/garbled write. Without this
+ * guard, `_cache = hydrateFromSerialized(badData)` would produce a
+ * CachedConfig with `undefined` fields, `tryLoadFromRedis` would return
+ * true, and routing would silently fall back to defaults for a full
+ * 60-second TTL even when Mongo has a correct config. Codex P2 #2 on
+ * PR #302. Narrow type guard (not Zod) to avoid adding a dep + keep the
+ * hot path allocation-free.
+ */
+function isValidSerializedConfig(data: unknown): data is SerializedConfig {
+  if (!data || typeof data !== 'object') return false
+  const obj = data as Record<string, unknown>
+  if (typeof obj.routingEnabled !== 'boolean') return false
+  if (!Array.isArray(obj.slotEntries)) return false
+  for (const entry of obj.slotEntries) {
+    if (!Array.isArray(entry) || entry.length !== 2) return false
+    if (typeof entry[0] !== 'string') return false
+    if (!entry[1] || typeof entry[1] !== 'object') return false
+  }
+  return true
+}
+
+/**
  * Try to hydrate `_cache` from Redis. Returns true on hit, false on miss
  * or any failure. Never throws — Redis outages must not break LLM routing.
  */
@@ -125,9 +179,21 @@ async function tryLoadFromRedis(): Promise<boolean> {
   const client = getRedisClient()
   if (!client) return false
   try {
-    const raw = await client.get(REDIS_CACHE_KEY)
+    const raw = await withTimeout(client.get(REDIS_CACHE_KEY), REDIS_READ_TIMEOUT_MS, 'Redis L2 read')
     if (!raw) return false
-    const parsed = JSON.parse(raw) as SerializedConfig
+    const parsed: unknown = JSON.parse(raw)
+    if (!isValidSerializedConfig(parsed)) {
+      // Payload shape mismatch — likely schema-version skew or a garbled
+      // write. Treat as a cache miss so the next call rebuilds from
+      // Mongo. NOT writing to Redis here on purpose: invalidating on
+      // detected corruption risks a DEL-race between multiple Lambdas.
+      // The corrupted key will age out at its TTL (≤60s).
+      aiLogger.warn(
+        { preview: raw.slice(0, 200) },
+        'ModelRouter: Redis L2 payload failed shape validation, falling through to Mongo',
+      )
+      return false
+    }
     _cache = hydrateFromSerialized(parsed)
     return true
   } catch (err) {
