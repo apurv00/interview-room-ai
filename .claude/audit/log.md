@@ -1092,3 +1092,9 @@
 - **Root-cause:** ensureConfig() awaited the full L1 → L2 → L3 cascade on
 - **Tests-added: shared/__tests__/modelRouter.test.ts — 4 new cases in a**
 - **Verified-by:** 44/44 modelRouter tests pass; full suite 2217/2218 (1
+
+### 2026-04-21 17:02:30 +0000 · `d3b03c8` · Claude
+- **Subject:** Restore synchronous L2 on user thread; keep Mongo off-thread (Codex P2 #308)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** The initial non-blocking fix in 15f3b16 served
+- **Tests-added: shared/__tests__/modelRouter.test.ts (rewrote 6 tests in**
