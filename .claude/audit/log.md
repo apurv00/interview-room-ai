@@ -1008,3 +1008,10 @@
 - **Root-cause:** The new POST /api/code/generate-problem route invoked generateCodingProblem (which calls Claude via completion) without rate limiting and without a per-item string-length cap on solvedProblemIds. Two 
 - **No-tests-needed-because: composeApiRoute is already covered by its own unit tests in shared/middleware/__tests__/; the rate-limit + auth chain it provides is the tested surface, not this thin handler.**
 - **Verified-by:** npm run build succeeds. npx vitest run shared/__tests__/modelRouter.test.ts → 40/40 pass (unaffected). npx eslint on the route file clean. Impact analysis refreshed pre-edit. Rate limit tuning: gene
+
+### 2026-04-21 10:40:14 +0000 · `25e7549` · Claude
+- **Subject:** feat(session-cache): TTL refresh on hit + structured source/durationMs telemetry (Phase 1 PR B)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** sessionConfigCache had two production gaps. (1) 30-min TTL with NO refresh on access — interviews running longer than 30 min would silently expire their cache mid-flow, forcing a 4-parallel-Mongo-qu
+- **Tests-added: 9 PR-B regressions in modules/interview/__tests__/sessionConfigCache.test.ts. TTL refresh: (1) EXPIRE fires with (sessionKey, 1800) on cache hit, (2) EXPIRE does NOT fire on miss (SETEX s**
+- **Verified-by:** npx vitest run modules/interview/__tests__/sessionConfigCache.test.ts → 21/21 pass. npm run build succeeds. npx eslint on both touched files clean. Impact analysis refreshed pre-edit. Post-deploy va
