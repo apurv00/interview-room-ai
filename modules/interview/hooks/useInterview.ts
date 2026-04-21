@@ -591,6 +591,13 @@ export function useInterview({
     timeoutMs: number = 30000,
     onCaptureReady?: () => void,
   ): Promise<string> {
+    // [DIAGNOSTIC] Temporary Q1-latency perf marker — paired with the
+    // wrappedOnCaptureReady console.timeEnd below. Measures the
+    // user-perceived "listenForAnswer called → audio capture actually
+    // ready" delay. This is the HIGHEST-SIGNAL timer for the reported
+    // Q1 listening status lag (first question audio lost).
+    // eslint-disable-next-line no-console
+    console.time('[perf:ui] listenForAnswer→captureReady')
     // Flip phase to LISTENING eagerly — the moment the caller is ready to
     // receive speech. Previously this was deferred to the onCaptureReady
     // callback, which only fires after the audio pipeline (WebSocket
@@ -642,7 +649,12 @@ export function useInterview({
       let inactivityWatchdog: ReturnType<typeof setInterval> | undefined
       let maxTimer: ReturnType<typeof setTimeout> | undefined
 
-      const wrappedOnCaptureReady = onCaptureReady
+      const wrappedOnCaptureReady = () => {
+        // [DIAGNOSTIC] Paired with listenForAnswer→captureReady timer above.
+        // eslint-disable-next-line no-console
+        console.timeEnd('[perf:ui] listenForAnswer→captureReady')
+        onCaptureReady?.()
+      }
 
       startListening((result) => {
         if (resolved) return

@@ -394,6 +394,12 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
 
   const startListening = useCallback(
     (onComplete: (result: SpeechRecognitionResult) => void, options?: StartListeningOptions) => {
+      // [DIAGNOSTIC] Temporary Q1-latency perf marker — paired with the
+      // console.timeEnd at the bottom of setupAudioProcessing when the
+      // audio pipeline signals it's ready. Measures the full user-
+      // perceived "startListening → actually capturing audio" delay.
+      // eslint-disable-next-line no-console
+      console.time('[perf:stt] startListening→captureReady')
       // Guard: if already listening (e.g. called twice in rapid succession),
       // finish the current session before starting a new one. Without this,
       // both sessions share the same WebSocket and the second call overwrites
@@ -535,6 +541,12 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
    * Call this during avatar speech so recognition starts instantly.
    */
   const warmUp = useCallback(() => {
+    // [DIAGNOSTIC] Temporary Q1-latency perf marker — see matching
+    // console.timeEnd in ws.onopen below. Measures how long the warmUp
+    // WebSocket takes to reach OPEN state. Remove once Q1 listening
+    // delay is diagnosed.
+    // eslint-disable-next-line no-console
+    console.time('[perf:stt] warmUp→wsOpen')
     // Skip if already warmed up or connecting
     if (isWarmedUpRef.current || warmUpPromiseRef.current) return
     if (wsRef.current?.readyState === WebSocket.OPEN) return
@@ -569,6 +581,9 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           }
 
           ws.onopen = () => {
+            // [DIAGNOSTIC] Paired with warmUp→wsOpen timer above.
+            // eslint-disable-next-line no-console
+            console.timeEnd('[perf:stt] warmUp→wsOpen')
             wsRef.current = ws
             isWarmedUpRef.current = true
             warmUpPromiseRef.current = null
@@ -1185,6 +1200,9 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     // from firing while hidden, only resume the context after the fact.
 
     // Audio is now flowing — notify the caller so UI can flip to LISTENING
+    // [DIAGNOSTIC] Paired with startListening→captureReady timer above.
+    // eslint-disable-next-line no-console
+    console.timeEnd('[perf:stt] startListening→captureReady')
     if (onCaptureReadyRef.current) {
       onCaptureReadyRef.current()
       onCaptureReadyRef.current = null
