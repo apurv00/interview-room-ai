@@ -383,12 +383,32 @@ export default function InterviewPage() {
           // Try pool first (excluding solved problems)
           let problem = selectProblem(parsed.role, parsed.experience, solvedProblemIds)
 
-          // If pool exhausted, generate a fresh problem via AI
+          // If pool exhausted, generate a fresh problem via AI through the
+          // server route. Previously this dynamically imported the generator
+          // directly, which dragged modelRouter (and its mongoose+ioredis
+          // deps) into the client bundle — forcing modelRouter to use a
+          // broken `eval('require')` workaround that silently failed in
+          // production. The fetch boundary keeps modelRouter server-only
+          // and lets it use plain static imports.
           if (!problem) {
             try {
-              const { generateCodingProblem } = await import('@interview/services/core/codingProblemGenerator')
-              problem = await generateCodingProblem(parsed.role, parsed.experience, solvedProblemIds)
+              const res = await fetch('/api/code/generate-problem', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  domain: parsed.role,
+                  experience: parsed.experience,
+                  solvedProblemIds,
+                }),
+              })
+              if (res.ok) {
+                const data = (await res.json()) as { problem: typeof problem }
+                problem = data.problem
+              }
             } catch {
+              // network blip / route 500 → fall through to pool repeat below
+            }
+            if (!problem) {
               // Fall back to any problem from pool (allow repeats as last resort)
               problem = selectProblem(parsed.role, parsed.experience)
             }
