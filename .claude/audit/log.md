@@ -1085,3 +1085,10 @@
 - **Root-cause:** after e7bb36d made graceTimer preserve the socket, the
 - **Tests-added: new "preserved ws dying between turns clears**
 - **Verified-by:** 68/68 deepgramRecognition tests pass (was 67, +1 new);
+
+### 2026-04-21 16:38:10 +0000 · `15f3b16` · Claude
+- **Subject:** Serve TASK_SLOT_DEFAULTS on cold path, refresh in background
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** ensureConfig() awaited the full L1 → L2 → L3 cascade on
+- **Tests-added: shared/__tests__/modelRouter.test.ts — 4 new cases in a**
+- **Verified-by:** 44/44 modelRouter tests pass; full suite 2217/2218 (1
