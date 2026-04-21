@@ -17,6 +17,10 @@ interface RedisLike {
   del(key: string): Promise<unknown>
   incr(key: string): Promise<number>
   mget(...keys: string[]): Promise<Array<string | null>>
+  // `eval` runs a Lua script server-side as a single atomic op. Used
+  // to fuse epoch-check + SETEX so invalidate cannot interleave. The
+  // ioredis signature is `eval(script, numKeys, ...keysAndArgs)`.
+  eval(script: string, numKeys: number, ...keysAndArgs: Array<string | number>): Promise<unknown>
 }
 
 // Test override hatch — see `__setRedisClientForTesting` below.
@@ -85,6 +89,31 @@ const REDIS_TTL_SECONDS = 60
  * conservatively aborts, both safe.
  */
 const REDIS_EPOCH_KEY = 'model-config:epoch:v1'
+
+/**
+ * Atomic compare-and-set Lua script: SETEX the cache key ONLY if the
+ * current epoch matches the captured one. Runs server-side as a single
+ * operation — an invalidate INCR between "GET epoch" and "SETEX cache"
+ * (the gap Codex flagged) is not possible because Redis executes the
+ * whole script atomically with no interleaving. Returns 1 on write,
+ * 0 on skip (epoch changed).
+ *
+ * KEYS[1] = cache key         (model-config:v1)
+ * KEYS[2] = epoch key         (model-config:epoch:v1)
+ * ARGV[1] = captured epoch    (string — may be the literal "nil" sentinel if the epoch didn't exist at load-start)
+ * ARGV[2] = serialized value
+ * ARGV[3] = TTL seconds
+ */
+const CAS_WRITE_LUA = `
+local current = redis.call('get', KEYS[2])
+local captured = ARGV[1]
+if captured == 'nil' then captured = false end
+if current == captured or (current == false and captured == false) then
+  redis.call('setex', KEYS[1], ARGV[3], ARGV[2])
+  return 1
+end
+return 0
+`.trim()
 let _cache: CachedConfig | null = null
 let _loadPromise: Promise<void> | null = null
 
@@ -265,40 +294,48 @@ async function tryLoadFromRedis(): Promise<{ hit: boolean; capturedEpoch: string
 }
 
 /**
- * Write the successfully-loaded cache to Redis with a cross-Lambda
- * stale-write guard. Before SETEX, we re-read the shared epoch from
- * Redis; if it differs from `capturedEpoch` (captured at load-start
- * inside `tryLoadFromRedis` via MGET), an invalidation happened on
- * some Lambda during our Mongo read and our data may be pre-edit.
- * We skip the write; the next load sees a Redis miss (the invalidate
- * DEL'd the key) and rebuilds.
+ * Write the successfully-loaded cache to Redis with an atomic
+ * compare-and-set epoch guard. Uses a Lua script so the epoch-check
+ * and the SETEX happen as ONE operation on the Redis server — no
+ * interleaving is possible, even under a concurrent invalidate
+ * INCR+DEL on another Lambda.
  *
- * Cost: 1 extra Redis GET per L3-Mongo success path. The capture side
- * is free (piggybacks on the MGET we already do). Never throws — a
- * Redis write failure must not fail the request that just succeeded
- * against Mongo. Codex P2 follow-up on PR #302.
+ * Earlier version had separate GET+SETEX commands with a racy window
+ * between them (Codex re-flagged: "writeToRedis() now does an epoch
+ * GET before a later SETEX, but those are separate Redis commands. If
+ * invalidateModelConfigCache() interleaves between them, the stale
+ * writer can still repopulate the cache"). Lua closes that window.
+ *
+ * Cost: 1 Redis EVAL per L3-Mongo success path (same round-trip count
+ * as the previous GET+SETEX but atomic). Never throws — a Redis write
+ * failure must not fail the request that just succeeded against Mongo.
  */
 async function writeToRedis(cache: CachedConfig, capturedEpoch: string | null): Promise<void> {
   const client = getRedisClient()
   if (!client) return
   try {
-    const currentEpoch = await withTimeout(
-      client.get(REDIS_EPOCH_KEY),
-      REDIS_READ_TIMEOUT_MS,
-      'Redis epoch re-check',
+    // `eval` KEYS: cache + epoch; ARGS: captured epoch, payload, TTL.
+    // Lua treats `null` as absence; we pass the literal string 'nil'
+    // as a sentinel so the script can distinguish "no captured epoch"
+    // from "captured empty string". See CAS_WRITE_LUA for details.
+    const result = await client.eval(
+      CAS_WRITE_LUA,
+      2,
+      REDIS_CACHE_KEY,
+      REDIS_EPOCH_KEY,
+      capturedEpoch ?? 'nil',
+      JSON.stringify(serializeForRedis(cache)),
+      REDIS_TTL_SECONDS,
     )
-    if (capturedEpoch !== currentEpoch) {
+    if (result === 0) {
       aiLogger.info(
         {
           event: 'model_config_write_skip_stale_cross_lambda',
           capturedEpoch,
-          currentEpoch,
         },
-        'ModelRouter: skipped Redis write — cross-Lambda invalidation during load',
+        'ModelRouter: skipped Redis write — cross-Lambda invalidation during load (atomic CAS)',
       )
-      return
     }
-    await client.setex(REDIS_CACHE_KEY, REDIS_TTL_SECONDS, JSON.stringify(serializeForRedis(cache)))
   } catch (err) {
     aiLogger.warn({ err }, 'ModelRouter: Redis L2 cache write failed (L1 still populated)')
   }
