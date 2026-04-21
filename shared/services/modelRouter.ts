@@ -15,6 +15,8 @@ interface RedisLike {
   get(key: string): Promise<string | null>
   setex(key: string, ttl: number, value: string): Promise<unknown>
   del(key: string): Promise<unknown>
+  incr(key: string): Promise<number>
+  mget(...keys: string[]): Promise<Array<string | null>>
 }
 
 // Test override hatch — see `__setRedisClientForTesting` below.
@@ -70,6 +72,19 @@ interface CachedConfig {
 const CACHE_TTL_MS = 60_000
 const REDIS_CACHE_KEY = 'model-config:v1'
 const REDIS_TTL_SECONDS = 60
+/**
+ * Monotonic counter, shared across ALL Lambda containers via Redis.
+ * Incremented on every `invalidateModelConfigCache()`. Every
+ * `loadConfig()` captures its value at start and re-checks it before
+ * `writeToRedis` — a mismatch means an invalidate happened (on ANY
+ * container) during our load, so we refuse to repopulate Redis with
+ * potentially-stale Mongo-read data. Codex P2 follow-up on PR #302.
+ * No TTL: the counter is long-lived by design; losing it (Redis flush)
+ * just re-resets to 0 and behaves like a fresh install — in-flight
+ * writers either see matching values or a natural mismatch that
+ * conservatively aborts, both safe.
+ */
+const REDIS_EPOCH_KEY = 'model-config:epoch:v1'
 let _cache: CachedConfig | null = null
 let _loadPromise: Promise<void> | null = null
 
@@ -118,23 +133,10 @@ function serializeForRedis(cache: CachedConfig): SerializedConfig {
 }
 
 /**
- * In-process invalidation counter. Every `invalidateModelConfigCache()`
- * bumps this; every `loadConfig()` captures its value at start and
- * checks it again before firing `writeToRedis`. If the counter changed
- * mid-load, we abort the write — the Mongo read we just completed may
- * have returned pre-edit data (if our read started before the CMS PUT
- * committed) and writing it to Redis would resurrect the deleted key
- * for a full TTL. Codex P2 on PR #302.
- *
- * Scope: this is a per-container counter. It fixes the most common
- * race: CMS PUT handler runs invalidate on the SAME Lambda that has an
- * in-flight `loadConfig()`, OR a subsequent request on that Lambda
- * starts loadConfig during a later invalidate. Cross-Lambda races
- * (invalidate on Lambda B while Lambda A is mid-load) are NOT caught
- * by this counter — Lambda A has no signal the key was just deleted.
- * A cross-Lambda fix would need a shared epoch in Redis (3rd round
- * trip on every load) — deferred as disproportionate for a TTL-bounded
- * (60s) staleness window. Logged on skip so ops can see the rate.
+ * In-process invalidation counter. Catches the same-Lambda race: a
+ * CMS PUT on this container bumps the counter, any in-flight loadConfig
+ * on this container captured the old value, and writeToRedis skips.
+ * See also the Redis-shared epoch below for cross-Lambda coverage.
  */
 let _invalidationEpoch = 0
 
@@ -217,16 +219,31 @@ function isValidSerializedConfig(data: unknown): data is SerializedConfig {
 }
 
 /**
- * Try to hydrate `_cache` from Redis. Returns true on hit, false on miss
- * or any failure. Never throws — Redis outages must not break LLM routing.
+ * Try to hydrate `_cache` from Redis. Uses MGET so we capture the
+ * shared epoch in the SAME round-trip as the cache read — zero added
+ * latency on the L2-hit happy path. The returned `capturedEpoch` is
+ * handed to `writeToRedis` on the L3 fallback so the eventual write
+ * can detect "did an invalidation happen on ANY Lambda during our
+ * load?" (Codex P2 follow-up on PR #302).
+ *
+ * `hit=true` means _cache was successfully hydrated from Redis.
+ * `hit=false` with non-null `capturedEpoch` means Redis was reached
+ * but had no/bad cache data — the epoch is still usable for the
+ * subsequent write's CAS check. `hit=false` with null epoch means
+ * Redis was unreachable; the write path will skip entirely in that
+ * case (fail-safe).
  */
-async function tryLoadFromRedis(): Promise<boolean> {
+async function tryLoadFromRedis(): Promise<{ hit: boolean; capturedEpoch: string | null }> {
   const client = getRedisClient()
-  if (!client) return false
+  if (!client) return { hit: false, capturedEpoch: null }
   try {
-    const raw = await withTimeout(client.get(REDIS_CACHE_KEY), REDIS_READ_TIMEOUT_MS, 'Redis L2 read')
-    if (!raw) return false
-    const parsed: unknown = JSON.parse(raw)
+    const [rawConfig, rawEpoch] = await withTimeout(
+      client.mget(REDIS_CACHE_KEY, REDIS_EPOCH_KEY),
+      REDIS_READ_TIMEOUT_MS,
+      'Redis L2 read',
+    )
+    if (!rawConfig) return { hit: false, capturedEpoch: rawEpoch ?? null }
+    const parsed: unknown = JSON.parse(rawConfig)
     if (!isValidSerializedConfig(parsed)) {
       // Payload shape mismatch — likely schema-version skew or a garbled
       // write. Treat as a cache miss so the next call rebuilds from
@@ -234,29 +251,53 @@ async function tryLoadFromRedis(): Promise<boolean> {
       // detected corruption risks a DEL-race between multiple Lambdas.
       // The corrupted key will age out at its TTL (≤60s).
       aiLogger.warn(
-        { preview: raw.slice(0, 200) },
+        { preview: rawConfig.slice(0, 200) },
         'ModelRouter: Redis L2 payload failed shape validation, falling through to Mongo',
       )
-      return false
+      return { hit: false, capturedEpoch: rawEpoch ?? null }
     }
     _cache = hydrateFromSerialized(parsed)
-    return true
+    return { hit: true, capturedEpoch: rawEpoch ?? null }
   } catch (err) {
     aiLogger.warn({ err }, 'ModelRouter: Redis L2 cache read failed, falling through to Mongo')
-    return false
+    return { hit: false, capturedEpoch: null }
   }
 }
 
 /**
- * Write the successfully-loaded cache to Redis. Never throws — a Redis
- * write failure must not fail the request that just succeeded against
- * Mongo. The in-memory cache is still populated, so this Lambda keeps
- * working; only other Lambdas miss out on the cross-container share.
+ * Write the successfully-loaded cache to Redis with a cross-Lambda
+ * stale-write guard. Before SETEX, we re-read the shared epoch from
+ * Redis; if it differs from `capturedEpoch` (captured at load-start
+ * inside `tryLoadFromRedis` via MGET), an invalidation happened on
+ * some Lambda during our Mongo read and our data may be pre-edit.
+ * We skip the write; the next load sees a Redis miss (the invalidate
+ * DEL'd the key) and rebuilds.
+ *
+ * Cost: 1 extra Redis GET per L3-Mongo success path. The capture side
+ * is free (piggybacks on the MGET we already do). Never throws — a
+ * Redis write failure must not fail the request that just succeeded
+ * against Mongo. Codex P2 follow-up on PR #302.
  */
-async function writeToRedis(cache: CachedConfig): Promise<void> {
+async function writeToRedis(cache: CachedConfig, capturedEpoch: string | null): Promise<void> {
   const client = getRedisClient()
   if (!client) return
   try {
+    const currentEpoch = await withTimeout(
+      client.get(REDIS_EPOCH_KEY),
+      REDIS_READ_TIMEOUT_MS,
+      'Redis epoch re-check',
+    )
+    if (capturedEpoch !== currentEpoch) {
+      aiLogger.info(
+        {
+          event: 'model_config_write_skip_stale_cross_lambda',
+          capturedEpoch,
+          currentEpoch,
+        },
+        'ModelRouter: skipped Redis write — cross-Lambda invalidation during load',
+      )
+      return
+    }
     await client.setex(REDIS_CACHE_KEY, REDIS_TTL_SECONDS, JSON.stringify(serializeForRedis(cache)))
   } catch (err) {
     aiLogger.warn({ err }, 'ModelRouter: Redis L2 cache write failed (L1 still populated)')
@@ -270,21 +311,26 @@ async function loadConfig(): Promise<void> {
     return
   }
 
-  // Capture the invalidation epoch BEFORE any async work. If
-  // `invalidateModelConfigCache` fires while our Mongo read is in
-  // flight, the counter advances; the check at writeToRedis-time sees
-  // the mismatch and refuses to rewrite stale data. See the epoch
-  // declaration for scope + cross-Lambda caveats.
+  // Capture the in-process invalidation counter BEFORE any async work
+  // — guards the SAME-Lambda race (invalidate fires between here and
+  // the writeToRedis below). The cross-Lambda race is guarded
+  // separately by the Redis-shared epoch that tryLoadFromRedis
+  // captures via MGET in its return value.
   const loadStartEpoch = _invalidationEpoch
 
   // L2: Redis. Cross-Lambda-container cache — avoids paying Mongo cost
   // every time a cold Lambda's in-memory L1 is empty. 60s TTL matches
   // L1 so expiration feels consistent to callers; invalidation on CMS
   // save DELs the key so updates propagate in ≤1 request.
-  if (await tryLoadFromRedis()) {
+  const redisResult = await tryLoadFromRedis()
+  if (redisResult.hit) {
     _lastLoadSource = 'L2-Redis'
     return
   }
+  // Epoch captured from Redis in the SAME round-trip as the cache read
+  // (MGET). Threaded into writeToRedis so it can CAS-check before
+  // committing a potentially-stale Mongo read.
+  const capturedRedisEpoch = redisResult.capturedEpoch
 
   try {
     const _require = eval('require') as NodeRequire
@@ -300,18 +346,18 @@ async function loadConfig(): Promise<void> {
         }
       }
       _cache = { routingEnabled: doc.routingEnabled, slots: slotMap, loadedAt: Date.now() }
-      // Fire-and-forget Redis write. Don't await — a cache-write delay
-      // should never extend the response latency of the request that
-      // just forced the Mongo read. Epoch check guards against the
-      // race where invalidate ran during our Mongo read: if the counter
-      // advanced, we refuse to write; the next load will see the DEL'd
-      // key (Redis miss) and rebuild from fresh Mongo.
+      // Fire-and-forget Redis write guarded by TWO epoch checks:
+      //   (1) in-process: same-Lambda invalidate mid-load
+      //   (2) Redis-shared: cross-Lambda invalidate mid-load (CAS
+      //       against the epoch we captured at load-start)
+      // Don't await — a cache-write delay should never extend the
+      // response latency of the request that just forced Mongo.
       if (_invalidationEpoch === loadStartEpoch) {
-        void writeToRedis(_cache)
+        void writeToRedis(_cache, capturedRedisEpoch)
       } else {
         aiLogger.info(
           { event: 'model_config_write_skip_stale', loadStartEpoch, currentEpoch: _invalidationEpoch },
-          'ModelRouter: skipped Redis write — invalidation during load (Codex P2 #302)',
+          'ModelRouter: skipped Redis write — same-Lambda invalidation during load',
         )
       }
     } else {
@@ -373,15 +419,19 @@ async function ensureConfig(): Promise<CachedConfig> {
  */
 export function invalidateModelConfigCache(): void {
   _cache = null
-  // Bump BEFORE the Redis DEL. Any in-flight loadConfig captured the
-  // old value at start; the loadConfig.writeToRedis check will see the
-  // mismatch and skip. Doing this after the DEL would leave a small
-  // window where the stale in-flight writer could race the DEL.
+  // Bump BEFORE any async Redis ops. Any in-flight loadConfig on THIS
+  // container captured the old in-process value at start; its write
+  // check will see the mismatch and skip.
   _invalidationEpoch++
   const client = getRedisClient()
   if (!client) return
-  // Don't await — callers (CMS PUT handler) should return 200 regardless
-  // of Redis health. A fire-and-forget DEL still propagates on happy path.
+  // INCR the Redis-shared epoch BEFORE DEL'ing the cache — so in-flight
+  // writers on OTHER Lambdas see the new epoch when they re-check even
+  // if the DEL hasn't propagated yet. Both ops are fire-and-forget:
+  // the CMS PUT handler must return 200 regardless of Redis health.
+  void client.incr(REDIS_EPOCH_KEY).catch((err: unknown) => {
+    aiLogger.warn({ err }, 'ModelRouter: Redis shared-epoch INCR failed')
+  })
   void client.del(REDIS_CACHE_KEY).catch((err: unknown) => {
     aiLogger.warn({ err }, 'ModelRouter: Redis L2 cache invalidation failed')
   })
