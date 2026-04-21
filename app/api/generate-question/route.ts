@@ -6,7 +6,7 @@ import { aiLogger } from '@shared/logger'
 import { getPressureQuestionIndex, getQuestionCount, getDomainLabel } from '@interview/config/interviewConfig'
 import { getSkillSections, selectSkillQuestions } from '@interview/services/core/skillLoader'
 import { findCompanyProfile, buildCompanyPromptContext } from '@interview/config/companyProfiles'
-import { connectDB } from '@shared/db/connection'
+import { connectDB, connectDBIfNeeded } from '@shared/db/connection'
 import { User, InterviewDomain, InterviewDepth } from '@shared/db/models'
 import { FALLBACK_DOMAINS, FALLBACK_DEPTHS } from '@shared/db/seed'
 import { isFeatureEnabled } from '@shared/featureFlags'
@@ -114,7 +114,14 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     let domainLabel = getDomainLabel(config.role)
 
     try {
-      await connectDB()
+      // PR C Phase 1: only pay the Mongoose connect handshake when at
+      // least one of the two fields below would actually hit Mongo.
+      // On a warm session cache (the expected steady-state after PR B
+      // lands), both fields are populated from Redis and we save the
+      // ~1.5s TLS+SCRAM cost on cold Lambdas.
+      const domainNeedsMongo = sessionCfg?.domain == null
+      const depthNeedsMongo = sessionCfg?.depth == null
+      await connectDBIfNeeded(domainNeedsMongo || depthNeedsMongo, 'generate-question:domain-depth')
 
       const [domainDoc, depthDoc] = await Promise.all([
         sessionCfg?.domain != null
@@ -294,7 +301,10 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     // Build profile context from onboarding data + extended profile
     let profileBlock = ''
     try {
-      await connectDB()
+      // PR C Phase 1: skip connectDB when the session cache populated the
+      // user profile — User.findById below is the only Mongo read in this
+      // block, and it short-circuits on cache hit.
+      await connectDBIfNeeded(sessionCfg?.userProfile == null, 'generate-question:user-profile')
       // Use cached user profile when available; fall back to Mongo.
       const profile = (sessionCfg?.userProfile != null
         ? sessionCfg.userProfile

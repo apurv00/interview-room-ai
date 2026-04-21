@@ -34,6 +34,7 @@ export type FeatureFlag =
   | 'interview_flow_templates'
   | 'jd_flow_overlay'
   | 'score_telemetry'
+  | 'skip_connectdb_when_cached'
 
 const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   personalization_engine: true,
@@ -85,6 +86,16 @@ const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   // — the Phase 3 flag-gated A/B is complete but this telemetry is useful
   // permanently for regression detection.
   score_telemetry: true,
+  // Phase 1 PR C — skip `await connectDB()` on the generate-question and
+  // evaluate-answer hot paths when the session config cache (PR B) already
+  // populated all the fields that block would have hit Mongo for. Saves
+  // ~1.5s of Mongoose TLS+SCRAM handshake on every cold Lambda where the
+  // cache is warm (most cold Lambdas after the first one per sessionId
+  // within the 30-min TTL). Default OFF for conservative rollout — flip
+  // to true in Vercel env AFTER observing `event:session_config_load`
+  // with source:redis-hit is the common case (PR B's telemetry confirms
+  // that). Each bypass emits `event:connectdb_bypass` for observability.
+  skip_connectdb_when_cached: false,
 }
 
 export function isFeatureEnabled(flag: FeatureFlag): boolean {

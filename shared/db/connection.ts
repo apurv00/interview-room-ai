@@ -1,8 +1,37 @@
 import mongoose from 'mongoose'
+import { isFeatureEnabled } from '@shared/featureFlags'
+import { aiLogger } from '@shared/logger'
 
 interface CachedConnection {
   conn: typeof mongoose | null
   promise: Promise<typeof mongoose> | null
+}
+
+/**
+ * Conditional connectDB wrapper for hot-path routes (PR C Phase 1).
+ *
+ * Callers pass `needsMongo = true` when the code path AFTER this call
+ * is going to hit Mongo, or `false` when all required data was already
+ * served from caches (session config, ModelConfig L1/L2). When the
+ * `skip_connectdb_when_cached` feature flag is ON and needsMongo is
+ * false, skips the TLS+SCRAM handshake entirely and emits
+ * `event:connectdb_bypass` for observability.
+ *
+ * Defaults to the old behavior (always connect) when flag is OFF, so
+ * the rollout is zero-risk until the flag is flipped in Vercel env.
+ *
+ * @param needsMongo Does the code immediately after this call fire a Mongo query?
+ * @param context Short identifier (route name) surfaced in the bypass log.
+ */
+export async function connectDBIfNeeded(needsMongo: boolean, context: string): Promise<void> {
+  if (needsMongo || !isFeatureEnabled('skip_connectdb_when_cached')) {
+    await connectDB()
+    return
+  }
+  aiLogger.info(
+    { event: 'connectdb_bypass', context },
+    'connectDB skipped — cache populated all required fields',
+  )
 }
 
 const globalWithMongoose = global as typeof globalThis & {
