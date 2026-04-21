@@ -74,6 +74,26 @@ let _cache: CachedConfig | null = null
 let _loadPromise: Promise<void> | null = null
 
 /**
+ * Which layer served the most recent `loadConfig()` call. Surfaced in the
+ * `ensureConfig` structured log so Vercel can answer two questions at a
+ * glance:
+ *   1. Are cold Lambdas hitting the Redis L2 cache (claimed ~5ms) or
+ *      falling through to Mongo L3 (observed ~1.5s connectDB + read)?
+ *   2. When they fall through, why? (empty key → cold Redis key,
+ *      error → Redis outage, skipped → running in browser/unreachable)
+ *
+ * L1 hits do NOT log — every `completion()` call checks L1 first, and
+ * logging every call would drown out the cold-path events we actually
+ * care about.
+ */
+type ConfigLoadSource =
+  | 'L2-Redis'          // Redis cache hit — the happy path this PR was scoped for
+  | 'L3-Mongo'          // Redis miss + Mongo read succeeded — expected on first cold Lambda after cache bust / deploy
+  | 'L3-Mongo-error'    // Mongo read failed — defaults used, alert-worthy
+  | 'defaults-client'   // typeof window !== 'undefined' branch — should never show in server logs
+let _lastLoadSource: ConfigLoadSource = 'defaults-client'
+
+/**
  * Serialisable shape of the config as stored in Redis.
  * Map is not JSON-serialisable so we flatten to an array of entries.
  */
@@ -135,6 +155,7 @@ async function writeToRedis(cache: CachedConfig): Promise<void> {
 async function loadConfig(): Promise<void> {
   if (typeof window !== 'undefined') {
     _cache = { routingEnabled: false, slots: new Map(), loadedAt: Date.now() }
+    _lastLoadSource = 'defaults-client'
     return
   }
 
@@ -143,6 +164,7 @@ async function loadConfig(): Promise<void> {
   // L1 so expiration feels consistent to callers; invalidation on CMS
   // save DELs the key so updates propagate in ≤1 request.
   if (await tryLoadFromRedis()) {
+    _lastLoadSource = 'L2-Redis'
     return
   }
 
@@ -171,11 +193,13 @@ async function loadConfig(): Promise<void> {
       // re-checking Mongo.
       _cache = { routingEnabled: false, slots: new Map(), loadedAt: Date.now() }
     }
+    _lastLoadSource = 'L3-Mongo'
   } catch (err) {
     aiLogger.warn({ err }, 'ModelRouter: failed to load config from DB, using hardcoded defaults')
     if (!_cache) {
       _cache = { routingEnabled: false, slots: new Map(), loadedAt: Date.now() }
     }
+    _lastLoadSource = 'L3-Mongo-error'
   }
 }
 
@@ -183,10 +207,28 @@ async function ensureConfig(): Promise<CachedConfig> {
   if (_cache && Date.now() - _cache.loadedAt < CACHE_TTL_MS) {
     return _cache
   }
+  // Measure total time to populate `_cache` — everything from this line
+  // onwards is either an L2 hit (~few ms) or an L3 round-trip (hundreds
+  // of ms for Mongo read + connectDB setup on cold Lambda). The log
+  // below is THE validation signal for PR A: Vercel `level:info` log
+  // searches can pivot on `event:model_config_load` and confirm whether
+  // cold Lambdas are actually hitting Redis (source:L2-Redis,
+  // durationMs<50) vs. falling through to Mongo (source:L3-Mongo,
+  // durationMs>500). Logged at info because it's cold-path only — L1
+  // hits short-circuit above and never emit this line.
+  const startMs = Date.now()
   if (!_loadPromise) {
     _loadPromise = loadConfig().finally(() => { _loadPromise = null })
   }
   await _loadPromise
+  aiLogger.info(
+    {
+      event: 'model_config_load',
+      source: _lastLoadSource,
+      durationMs: Date.now() - startMs,
+    },
+    'ModelRouter: config loaded',
+  )
   return _cache!
 }
 
