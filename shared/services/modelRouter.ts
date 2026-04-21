@@ -538,9 +538,15 @@ async function ensureConfig(): Promise<CachedConfig> {
 
 /**
  * Invalidate both the in-memory L1 cache (this process) and the Redis L2
- * cache (all processes). Called from the CMS /api/cms/model-config PUT
- * handler so a config change propagates to every Lambda on the next
- * `ensureConfig()` call — no 60s TTL wait across the cluster.
+ * cache (all processes). Retained for tests and any non-CMS caller that
+ * wants to force a cold reload.
+ *
+ * Production code path (CMS PUT) should prefer `replaceModelConfigCache`
+ * below — it populates L1/L2 directly with the fresh doc instead of
+ * clearing L2 and waiting for a background Mongo refresh. That closes
+ * the window flagged by Codex P2 on PR #308 where cold Lambdas would
+ * see L2 empty and serve TASK_SLOT_DEFAULTS between the DEL and the
+ * next request's Mongo fetch.
  *
  * Redis DEL is fire-and-forget: a DEL failure would leave stale data in
  * Redis for up to 60s (TTL floor) — acceptable degradation, since L1 on
@@ -565,6 +571,103 @@ export function invalidateModelConfigCache(): void {
   void client.del(REDIS_CACHE_KEY).catch((err: unknown) => {
     aiLogger.warn({ err }, 'ModelRouter: Redis L2 cache invalidation failed')
   })
+}
+
+/**
+ * Replace the cache with a known-fresh config doc (the one just saved
+ * by the CMS PUT handler). Closes the window Codex P2 flagged on PR
+ * #308: the prior `invalidateModelConfigCache()` DEL'd L2, leaving
+ * cold Lambdas in the gap between DEL and the next request's Mongo
+ * refresh. During that gap, `ensureConfig()` saw L2 empty and served
+ * `TASK_SLOT_DEFAULTS` while background Mongo loaded — so any CMS
+ * change that diverged from defaults (routing toggle, provider swap,
+ * non-default model) was silently ignored on the first request post-
+ * save. This function writes L1/L2 directly, never leaving L2 empty.
+ *
+ * Atomicity:
+ *   1. L1 update in-process: synchronous, no failure mode.
+ *   2. Bump `_invalidationEpoch` so any in-flight `loadConfig()` that
+ *      finishes after us refuses to overwrite L2 (its CAS check
+ *      against `loadStartEpoch` now fails).
+ *   3. `INCR` the Redis shared epoch — signals other Lambdas that
+ *      their L1 is stale and must re-read L2 on next ensureConfig.
+ *   4. `EVAL CAS_WRITE_LUA` with the post-INCR epoch as the captured
+ *      value — atomically writes L2 iff the current Redis epoch still
+ *      matches. A racing admin save would INCR past us; the CAS fails
+ *      and the newer save wins. "Last save wins" is the correct
+ *      semantic for concurrent admin edits.
+ *
+ * Failure mode: if Redis is unreachable, we still update L1 — the
+ * admin's own Lambda sees the new config. Other Lambdas fall back to
+ * the pre-fix behavior (cold → defaults briefly). That's strictly
+ * better than the old code which ALSO failed the DEL silently AND had
+ * the empty-L2 window. Admin caller should await to get best-effort
+ * sync propagation but tolerate an eventual-consistency window.
+ */
+export async function replaceModelConfigCache(doc: {
+  routingEnabled: boolean
+  slots: Array<{
+    taskSlot: string
+    model: string
+    provider: string
+    fallbackModel?: string
+    fallbackProvider?: string
+    maxTokens: number
+    temperature?: number
+    isActive: boolean
+    useToonInput?: boolean
+  }>
+}): Promise<void> {
+  const slotMap = new Map<TaskSlot, SlotConfig>()
+  for (const slot of doc.slots) {
+    if (slot.isActive) {
+      // Hydrate to the internal SlotConfig shape — useToonInput is
+      // optional on the input (Zod/Mongoose may omit it) but required
+      // on the internal SlotConfig. Default to false to match schema.
+      slotMap.set(slot.taskSlot as TaskSlot, {
+        taskSlot: slot.taskSlot,
+        model: slot.model,
+        provider: slot.provider,
+        fallbackModel: slot.fallbackModel,
+        fallbackProvider: slot.fallbackProvider,
+        maxTokens: slot.maxTokens,
+        temperature: slot.temperature,
+        isActive: slot.isActive,
+        useToonInput: slot.useToonInput ?? false,
+      })
+    }
+  }
+  const cache: CachedConfig = {
+    routingEnabled: doc.routingEnabled,
+    slots: slotMap,
+    loadedAt: Date.now(),
+  }
+  _cache = cache
+  _invalidationEpoch++
+  _lastLoadSource = 'L3-Mongo'
+
+  const client = getRedisClient()
+  if (!client) return
+  try {
+    const newEpoch = await client.incr(REDIS_EPOCH_KEY)
+    const result = await client.eval(
+      CAS_WRITE_LUA,
+      2,
+      REDIS_CACHE_KEY,
+      REDIS_EPOCH_KEY,
+      String(newEpoch),
+      JSON.stringify(serializeForRedis(cache)),
+      REDIS_TTL_SECONDS,
+    )
+    if (result === 0) {
+      aiLogger.info(
+        { event: 'model_config_replace_skip_stale', newEpoch },
+        'ModelRouter: skipped Redis write — concurrent admin save bumped epoch',
+      )
+    }
+  } catch (err) {
+    aiLogger.warn({ err }, 'ModelRouter: replaceModelConfigCache Redis write failed')
+  }
 }
 
 // ─── Resolve model for a task slot ──────────────────────────────────────────

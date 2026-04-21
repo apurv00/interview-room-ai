@@ -39,6 +39,7 @@ vi.mock('@shared/logger', () => ({
 import {
   resolveModel,
   invalidateModelConfigCache,
+  replaceModelConfigCache,
   __setRedisClientForTesting,
   __awaitBackgroundLoadForTesting,
 } from '@shared/services/modelRouter'
@@ -699,4 +700,268 @@ describe('resolveModel', () => {
       expect(bgCalls).toHaveLength(1)
     })
   })
+
+  // ── replaceModelConfigCache (Codex P2 follow-up on PR #308) ─────────────
+  //
+  // The window this closes: `invalidateModelConfigCache()` DEL'd L2 and let
+  // the next request's background Mongo refresh repopulate it. Between the
+  // DEL and the repopulate, cold Lambdas hit `ensureConfig()` and served
+  // `TASK_SLOT_DEFAULTS` instead of the freshly-saved CMS config. For any
+  // CMS change that diverges from defaults (routing toggle, provider swap,
+  // non-default model), that meant the first post-save request used the
+  // WRONG config. `replaceModelConfigCache` populates L1/L2 directly with
+  // the known-fresh doc — L2 is never empty between saves.
+
+  describe('replaceModelConfigCache', () => {
+    it('writes the fresh doc to L1 synchronously — next resolveModel hits L1', async () => {
+      const doc = {
+        routingEnabled: true,
+        slots: [
+          {
+            taskSlot: 'interview.generate-question',
+            model: 'freshly-saved-model',
+            provider: 'openrouter',
+            maxTokens: 555,
+            isActive: true,
+          },
+        ],
+      }
+
+      await replaceModelConfigCache(doc)
+
+      // resolveModel reads L1 without an MGET — the cache is populated
+      // before any async MGET/eval lands.
+      const before = mockRedisMget.mock.calls.length
+      const result = await resolveModel('interview.generate-question')
+      const after = mockRedisMget.mock.calls.length
+      expect(after).toBe(before) // no MGET, L1 hit
+      expect(result.model).toBe('freshly-saved-model')
+      expect(result.provider).toBe('openrouter')
+      expect(result.maxTokens).toBe(555)
+    })
+
+    it('does NOT DEL the Redis cache (the whole point: no empty-L2 window)', async () => {
+      const doc = {
+        routingEnabled: true,
+        slots: [],
+      }
+
+      await replaceModelConfigCache(doc)
+
+      // DEL would reintroduce the window. `invalidateModelConfigCache`
+      // still exists for tests/other callers, but the CMS save path
+      // must NEVER hit DEL anymore.
+      expect(mockRedisDel).not.toHaveBeenCalled()
+    })
+
+    it('INCRs the Redis shared epoch to signal other Lambdas', async () => {
+      mockRedisIncr.mockResolvedValueOnce(7) // post-INCR epoch value
+
+      await replaceModelConfigCache({ routingEnabled: true, slots: [] })
+
+      expect(mockRedisIncr).toHaveBeenCalledWith('model-config:epoch:v1')
+    })
+
+    it('writes L2 via atomic Lua CAS — never a bare SETEX', async () => {
+      // The write must go through eval(CAS_WRITE_LUA, ...) so a racing
+      // admin save's INCR would deterministically invalidate ours. A
+      // plain SETEX would lose the "last save wins" contract.
+      mockRedisIncr.mockResolvedValueOnce(3)
+
+      await replaceModelConfigCache({
+        routingEnabled: true,
+        slots: [
+          {
+            taskSlot: 'interview.generate-question',
+            model: 'model-x',
+            provider: 'openai',
+            maxTokens: 200,
+            isActive: true,
+          },
+        ],
+      })
+
+      expect(mockRedisEval).toHaveBeenCalledTimes(1)
+      expect(mockRedisSetex).not.toHaveBeenCalled()
+      const [script, numKeys, cacheKey, epochKey, capturedEpoch] =
+        mockRedisEval.mock.calls[0] as [string, number, string, string, string]
+      expect(script).toContain('setex') // the Lua script contains SETEX
+      expect(numKeys).toBe(2)
+      expect(cacheKey).toBe('model-config:v1')
+      expect(epochKey).toBe('model-config:epoch:v1')
+      // Captured epoch passed to Lua = post-INCR value from our own
+      // INCR. Matches current Redis epoch → CAS succeeds in the
+      // uncontested case.
+      expect(capturedEpoch).toBe('3')
+    })
+
+    it('inactive slots are excluded from the cache (matches loadConfig semantics)', async () => {
+      await replaceModelConfigCache({
+        routingEnabled: true,
+        slots: [
+          {
+            taskSlot: 'interview.generate-question',
+            model: 'active-model',
+            provider: 'openai',
+            maxTokens: 200,
+            isActive: true,
+          },
+          {
+            taskSlot: 'interview.evaluate-answer',
+            model: 'inactive-model',
+            provider: 'openai',
+            maxTokens: 200,
+            isActive: false,
+          },
+        ],
+      })
+
+      const active = await resolveModel('interview.generate-question')
+      expect(active.model).toBe('active-model')
+
+      // Inactive slot falls back to TASK_SLOT_DEFAULTS because resolveModel
+      // only returns a custom ResolvedModel when the slot is in the map.
+      const inactive = await resolveModel('interview.evaluate-answer')
+      expect(inactive.model).toBe(TASK_SLOT_DEFAULTS['interview.evaluate-answer'].model)
+    })
+
+    it('bumps the in-process epoch so an in-flight loadConfig skips its write', async () => {
+      // Same-Lambda race: a user request on THIS container started a
+      // loadConfig (captured epoch=N) → it's awaiting Mongo →
+      // admin save fires replaceModelConfigCache (bumps epoch to N+1,
+      // writes fresh config) → Mongo finally returns → loadConfig's
+      // `if (_invalidationEpoch === loadStartEpoch)` check fails and
+      // skips the Redis write. Our fresh config is preserved.
+      //
+      // We can't directly observe _invalidationEpoch, so we assert on
+      // the same behavioral invariant used elsewhere in this file: a
+      // concurrent-invalidate flow must not SETEX stale data over a
+      // fresh replaceModelConfigCache.
+      const loadPromise = resolveModel('interview.generate-question')
+      await replaceModelConfigCache({
+        routingEnabled: true,
+        slots: [
+          {
+            taskSlot: 'interview.generate-question',
+            model: 'winner-model',
+            provider: 'openai',
+            maxTokens: 200,
+            isActive: true,
+          },
+        ],
+      })
+      await loadPromise
+      await __awaitBackgroundLoadForTesting()
+
+      // The background load (from the first resolveModel) must NOT have
+      // overwritten our fresh cache. Next read returns the fresh value.
+      const after = await resolveModel('interview.generate-question')
+      expect(after.model).toBe('winner-model')
+    })
+
+    it('Redis write failure does NOT throw — L1 is still updated', async () => {
+      // If Redis is down during CMS save, the admin response must still
+      // succeed. Their own Lambda's L1 has the fresh config (so their
+      // subsequent admin actions route correctly); other Lambdas degrade
+      // gracefully to their existing caching behavior.
+      mockRedisIncr.mockRejectedValueOnce(new Error('ECONNREFUSED'))
+
+      await expect(
+        replaceModelConfigCache({
+          routingEnabled: true,
+          slots: [
+            {
+              taskSlot: 'interview.generate-question',
+              model: 'redis-down-model',
+              provider: 'openai',
+              maxTokens: 200,
+              isActive: true,
+            },
+          ],
+        }),
+      ).resolves.not.toThrow()
+
+      // L1 still has the fresh config.
+      const result = await resolveModel('interview.generate-question')
+      expect(result.model).toBe('redis-down-model')
+    })
+
+    it('Lua CAS returning 0 (concurrent save raced us) does NOT throw', async () => {
+      // Concurrent admin saves: Admin A INCRs epoch to N+1, Admin B
+      // INCRs to N+2 before Admin A's eval fires. Admin A's eval sees
+      // current=N+2, captured=N+1, returns 0. Must log + not throw —
+      // Admin B's save wins, which is the correct outcome.
+      mockRedisIncr.mockResolvedValueOnce(5)
+      mockRedisEval.mockResolvedValueOnce(0)
+
+      await expect(
+        replaceModelConfigCache({ routingEnabled: true, slots: [] }),
+      ).resolves.not.toThrow()
+
+      // Verify the structured log for observability.
+      const skipLogs = mockAiLoggerInfo.mock.calls.filter(
+        ([payload]) =>
+          (payload as { event?: string }).event === 'model_config_replace_skip_stale',
+      )
+      expect(skipLogs).toHaveLength(1)
+    })
+
+    it('resolves the Codex P2 scenario: cold Lambda after save gets fresh config, not defaults', async () => {
+      // End-to-end proof of the fix. Sequence:
+      //   1. Admin saves CMS (routingEnabled: true, custom model for
+      //      interview.evaluate-answer) → CMS PUT calls
+      //      replaceModelConfigCache.
+      //   2. Simulate another Lambda cold-starting: invalidate THIS
+      //      Lambda's L1 (as would happen on a fresh container), but
+      //      the Redis L2 that replaceModelConfigCache wrote should
+      //      still be there.
+      //   3. The cold Lambda's first request hits L2 via MGET and
+      //      returns the fresh custom model — NOT TASK_SLOT_DEFAULTS.
+      const customConfig = {
+        routingEnabled: true,
+        slots: [
+          {
+            taskSlot: 'interview.evaluate-answer',
+            model: 'custom-post-save-model',
+            provider: 'anthropic',
+            maxTokens: 333,
+            isActive: true,
+          },
+        ],
+      }
+
+      // Admin Lambda: save the config.
+      await replaceModelConfigCache(customConfig)
+
+      // Simulate cross-Lambda: another container has empty L1 but
+      // reads from the same Redis L2. The mock MGET returns the value
+      // that replaceModelConfigCache wrote. We capture the SETEX
+      // payload from the eval mock's call args — the JSON in arg[4].
+      const evalCall = mockRedisEval.mock.calls[0] as [string, number, string, string, string, string, number]
+      const writtenPayload = evalCall[5]
+      expect(writtenPayload).toContain('custom-post-save-model')
+
+      // Clear the other Lambda's L1 (cold start), set MGET to return
+      // what replaceModelConfigCache wrote.
+      _clearLocalCacheForCrossLambdaSim()
+      mockRedisMget.mockResolvedValueOnce([writtenPayload, '1'])
+
+      const coldResult = await resolveModel('interview.evaluate-answer')
+      expect(coldResult.model).toBe('custom-post-save-model')
+      expect(coldResult.provider).toBe('anthropic')
+      expect(coldResult.maxTokens).toBe(333)
+    })
+  })
 })
+
+// Test-only helper: clear _cache without triggering the full invalidate
+// path (which DELs Redis). Used to simulate a different Lambda container
+// that has a fresh L1 but shares the same Redis L2 that replaceModelConfigCache
+// wrote. Invalidate would clobber Redis; that's not what we want here.
+function _clearLocalCacheForCrossLambdaSim(): void {
+  // We intentionally re-use invalidateModelConfigCache because its ONLY
+  // job in test env is to null _cache; the Redis DEL is noop against our
+  // mock (we don't assert on it in the next step). The cross-Lambda
+  // simulation just needs an empty L1.
+  invalidateModelConfigCache()
+}
