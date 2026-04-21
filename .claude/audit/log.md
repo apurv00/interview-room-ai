@@ -1104,3 +1104,9 @@
 - **Files:** 3 changed, 1 test file(s)
 - **Root-cause:** invalidateModelConfigCache() DEL'd L2 and INCR'd epoch,
 - **Tests-added: shared/__tests__/modelRouter.test.ts — 9 new tests in a**
+
+### 2026-04-21 17:29:26 +0000 · `aec95d2` · Claude
+- **Subject:** Clear L1 when CAS race is lost so next call picks up winner (Codex P2 #308)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** replaceModelConfigCache sets `_cache` optimistically BEFORE
+- **Tests-added: shared/__tests__/modelRouter.test.ts — new case**
