@@ -959,3 +959,10 @@
 - **Root-cause:** PR A (ef41d49) added a Redis L2 cache claiming ~1.5s → ~5ms cold-Lambda improvement, but the claim was only verified against mocks. No production signal existed to confirm the L2 was actually servin
 - **Tests-added: shared/__tests__/modelRouter.test.ts — 3 new cases pinning the log contract: (1) L2 hit emits event=model_config_load with source=L2-Redis and durationMs number <100ms, (2) L3 Mongo-err**
 - **Verified-by:** npx vitest run shared/__tests__/modelRouter.test.ts → 30/30 pass (was 27, +3 telemetry tests). npm run build succeeds. Lint clean. Post-deploy validation plan: search Vercel logs for `event:model_co
+
+### 2026-04-21 08:22:15 +0000 · `c2c6f74` · Claude
+- **Subject:** fix(modelRouter): bound Redis read latency + validate payload shape (Codex P2 #1 + #2 on PR #302)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** Two correctness issues surfaced by Codex automated review. (1) `await client.get(...)` blocked on ioredis's default retry behavior (`maxRetriesPerRequest: 3` with exponential backoff per shared/redis.
+- **Tests-added: shared/__tests__/modelRouter.test.ts — 4 Codex-P2 regression cases. (1) Redis-never-responds (mockImplementationOnce + fake timers + advance 500ms) → resolveModel returns defaults wit**
+- **Verified-by:** npx vitest run shared/__tests__/modelRouter.test.ts → 34/34 pass (was 30, +4 regressions). npm run build succeeds. Lint clean. Impact analysis refreshed pre-edit. Timeout of 200ms chosen as 20× Ups
