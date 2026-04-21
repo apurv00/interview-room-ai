@@ -938,3 +938,10 @@
 - **Root-cause:** The earlier stale-setup guard keyed off wsRef.current !== ws. During the 800–1600ms reconnect *delay* window, maybeReconnectOrFinish has already synchronously closed the AudioContext and nulled audi
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts (new regression: "setupAudioProcessing bails when reconnect cleared context during addModule await" — uses the connectFresh path **
 - **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts → 66/66 pass (was 65). npm run build succeeds. Impact analysis: ./scripts/gitnexus-impact.sh modules/interview/hooks/useDeepgra
+
+### 2026-04-21 06:25:29 +0000 · `6d40e82` · Claude
+- **Subject:** feat(cms): surface CMS domain/depth fallback via warn/error logs (Phase 0)
+- **Files:** 2 changed, 0 test file(s)
+- **Root-cause:** CMS audit flagged silent fallbacks at two hot-path routes — generate-question and evaluate-answer. When an admin mistypes a domain/depth slug or the CMS lookup fails, the code silently swaps in seed
+- **No-tests-needed-because: observability-only — four logger.warn/error calls added to existing fallback branches. No branch logic, return values, error handling, or control flow changed. Route-level h**
+- **Verified-by:** npm run build succeeds (hot-path routes compile). npx eslint on both files is clean. Impact analysis artifacts written to .claude/audit/current/impact-app_api_generate-question_route.ts.md and impact-

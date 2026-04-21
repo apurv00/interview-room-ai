@@ -132,6 +132,16 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
         domainLabel = domainDoc.label ?? domainLabel
         domainContext = domainDoc.systemPromptContext ? `\n\nDOMAIN CONTEXT: ${domainDoc.systemPromptContext}` : ''
       } else {
+        // Observability: when CMS lookup returns null (slug missing / inactive)
+        // we silently swap in the seeded FALLBACK_DOMAINS. Without this log
+        // an admin can mistype a domain slug, see generic questions, and
+        // have zero signal to correlate cause to effect. warn-level so the
+        // line surfaces in Vercel `level:error,fatal` is not flooded, but
+        // ops dashboards that tail `level:warn` will catch it.
+        aiLogger.warn(
+          { slug: config.role, source: 'InterviewDomain.findOne', fallback: 'FALLBACK_DOMAINS' },
+          'CMS domain not found — using seeded fallback',
+        )
         const fallback = FALLBACK_DOMAINS.find(d => d.slug === config.role)
         if (fallback) {
           domainLabel = fallback.label
@@ -143,13 +153,24 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
 
         depthStrategy = depthDoc.questionStrategy ? `\n\nQUESTION STRATEGY: ${depthDoc.questionStrategy}` : ''
       } else {
+        aiLogger.warn(
+          { slug: interviewType, source: 'InterviewDepth.findOne', fallback: 'FALLBACK_DEPTHS' },
+          'CMS depth not found — using seeded fallback',
+        )
         const fallback = FALLBACK_DEPTHS.find(d => d.slug === interviewType)
         if (fallback) {
 
           depthStrategy = fallback.questionStrategy ? `\n\nQUESTION STRATEGY: ${fallback.questionStrategy}` : ''
         }
       }
-    } catch {
+    } catch (err) {
+      // Hard failure (DB unreachable, schema drift, etc.) — different signal
+      // than a missing slug. error-level because this means the CMS couldn't
+      // even be consulted, which should page ops if the pattern repeats.
+      aiLogger.error(
+        { err, role: config.role, interviewType, fallback: 'FALLBACK_DOMAINS+FALLBACK_DEPTHS' },
+        'CMS domain/depth fetch threw — using seeded fallback',
+      )
       const fallbackDomain = FALLBACK_DOMAINS.find(d => d.slug === config.role)
       const fallbackDepth = FALLBACK_DEPTHS.find(d => d.slug === interviewType)
       if (fallbackDomain) {
