@@ -366,6 +366,49 @@ describe('resolveModel', () => {
     expect(result.model).toBe('gpt-5.4-mini')
   })
 
+  it('rejects Redis payload where slot value is an empty object — falls through (Codex P2 follow-up)', async () => {
+    // Exact scenario Codex flagged: `[[slot, {}]]` passed the outer
+    // tuple check but hydrated with undefined model/provider/maxTokens.
+    // The deeper SlotConfig guard (isValidSlotConfig) must now reject
+    // these. Without the fix, resolveModel would return a ResolvedModel
+    // with model=undefined, provider=undefined — and callers of
+    // completion() would pass undefined to the provider SDK.
+    mockRedisGet.mockResolvedValueOnce(
+      JSON.stringify({
+        routingEnabled: true,
+        slotEntries: [['interview.generate-question', {}]],
+      }),
+    )
+
+    const result = await resolveModel('interview.generate-question')
+
+    // Fell through to Mongo-error path → defaults, NOT undefined.
+    expect(result.provider).toBe('openai')
+    expect(result.model).toBe('gpt-5.4-mini')
+    expect(result.maxTokens).toBeGreaterThan(0)
+  })
+
+  it('rejects Redis payload where slot is missing required fields — falls through (Codex P2 follow-up)', async () => {
+    // Slot has some fields but missing others (schema-version skew).
+    // Partial objects must fail the SlotConfig guard entirely.
+    mockRedisGet.mockResolvedValueOnce(
+      JSON.stringify({
+        routingEnabled: true,
+        slotEntries: [
+          [
+            'interview.generate-question',
+            { taskSlot: 'interview.generate-question', model: 'some-model' /* provider missing */ },
+          ],
+        ],
+      }),
+    )
+
+    const result = await resolveModel('interview.generate-question')
+
+    expect(result.provider).toBe('openai')
+    expect(result.model).toBe('gpt-5.4-mini')
+  })
+
   it('does NOT log model_config_load on L1 (in-memory) cache hits', async () => {
     // First call populates L1 via L2 hit. Reset logger spy before second
     // call to confirm L1 path is silent — noise-free cold-path signal.

@@ -148,6 +148,30 @@ function withTimeout<T>(primary: Promise<T>, ms: number, label: string): Promise
 }
 
 /**
+ * Per-slot guard — checks that every required SlotConfig field is
+ * present AND correctly typed. Initial version only asserted the slot
+ * value was "some object", which let payloads like `[[slot, {}]]`
+ * through; resolveModel then read `undefined` for model/provider/
+ * maxTokens and silently degraded to error-fallback behavior for the
+ * full TTL. Codex P2 follow-up on PR #302: each entry must pass THIS
+ * check, not just the outer tuple shape. Optional fields
+ * (fallbackModel, fallbackProvider, temperature, useToonInput) are
+ * intentionally NOT validated here — they're optional in the
+ * SlotConfig type and a missing optional is correct behavior.
+ */
+function isValidSlotConfig(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const s = value as Record<string, unknown>
+  return (
+    typeof s.taskSlot === 'string' &&
+    typeof s.model === 'string' &&
+    typeof s.provider === 'string' &&
+    typeof s.maxTokens === 'number' &&
+    typeof s.isActive === 'boolean'
+  )
+}
+
+/**
  * Structural guard for the JSON blob stored in Redis. `JSON.parse`
  * succeeds on any syntactically-valid JSON — including payloads from a
  * different schema version or a partial/garbled write. Without this
@@ -166,7 +190,7 @@ function isValidSerializedConfig(data: unknown): data is SerializedConfig {
   for (const entry of obj.slotEntries) {
     if (!Array.isArray(entry) || entry.length !== 2) return false
     if (typeof entry[0] !== 'string') return false
-    if (!entry[1] || typeof entry[1] !== 'object') return false
+    if (!isValidSlotConfig(entry[1])) return false
   }
   return true
 }
