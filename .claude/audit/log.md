@@ -973,3 +973,10 @@
 - **Root-cause:** isValidSerializedConfig at line 167 only verified the outer shape [slot: string, value: object] of every slotEntries pair; it didn't assert the inner SlotConfig had its required fields populated and t
 - **Tests-added: shared/__tests__/modelRouter.test.ts — 2 Codex-follow-up regressions. (1) Slot value is empty object `{}` → guard rejects, resolveModel returns defaults (model/provider/maxTokens neve**
 - **Verified-by:** npx vitest run shared/__tests__/modelRouter.test.ts → 36/36 pass (was 34, +2 regressions). npm run build succeeds. Lint clean. Existing "Redis L2 hit" + "source:L2-Redis telemetry" tests still pass 
+
+### 2026-04-21 08:41:12 +0000 · `7a52f7b` · Claude
+- **Subject:** fix(modelRouter): epoch-guard Redis writes against invalidate-during-load race (Codex P2 #302)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** If `loadConfig()` started just before a CMS admin saved new config, its in-flight Mongo read might return pre-edit data; `invalidateModelConfigCache()` would then DEL the Redis key; loadConfig's fire-
+- **Tests-added: shared/__tests__/modelRouter.test.ts — 1 regression case: start a loadConfig → call invalidate DURING the load → await → assert mockRedisSetex was NEVER called for that load AND t**
+- **Verified-by:** npx vitest run shared/__tests__/modelRouter.test.ts → 37/37 pass (was 36, +1 regression). npm run build succeeds. Lint clean. Impact analysis refreshed pre-edit. Scope limitation documented in code:
