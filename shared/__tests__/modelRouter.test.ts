@@ -36,7 +36,12 @@ vi.mock('@shared/logger', () => ({
 // the hatch's JSDoc for rationale. The spy fns below are assigned per
 // test in beforeEach; the override is always reset in afterEach so no
 // Redis state survives across test files.
-import { resolveModel, invalidateModelConfigCache, __setRedisClientForTesting } from '@shared/services/modelRouter'
+import {
+  resolveModel,
+  invalidateModelConfigCache,
+  __setRedisClientForTesting,
+  __awaitBackgroundLoadForTesting,
+} from '@shared/services/modelRouter'
 import { TASK_SLOT_DEFAULTS } from '@shared/services/taskSlots'
 
 const mockRedisGet = vi.fn<(key: string) => Promise<string | null>>()
@@ -47,7 +52,14 @@ const mockRedisMget = vi.fn<(...keys: string[]) => Promise<Array<string | null>>
 const mockRedisEval = vi.fn<(script: string, numKeys: number, ...args: Array<string | number>) => Promise<unknown>>()
 
 describe('resolveModel', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    // 2026-04-21 non-blocking refactor: ensureConfig now kicks off a
+    // fire-and-forget loadConfig on every cold path. Any previous
+    // test's background refresh could still be in flight when this
+    // test starts, which would leak state into our mocks. Drain it
+    // BEFORE calling invalidateModelConfigCache() so the leftover
+    // refresh can't populate _cache after we've reset it.
+    await __awaitBackgroundLoadForTesting()
     invalidateModelConfigCache()
     mockRedisGet.mockReset()
     mockRedisGet.mockResolvedValue(null)
@@ -158,10 +170,14 @@ describe('resolveModel', () => {
   // trip entirely. This is why Phase 1 was scoped — ~1.5s saved on the
   // first /api/generate-question call after a cold container starts.
 
-  it('Redis L2 hit hydrates cache without consulting Mongo', async () => {
+  it('Redis L2 hit hydrates cache and serves custom config on subsequent calls', async () => {
     // Seed Redis with a valid serialized config that overrides the default
-    // slot routing. If L2 hits correctly, resolveModel returns the CACHED
-    // value (custom-model) instead of the task-slot default (gpt-5.4-mini).
+    // slot routing. The first call on a cold Lambda serves synthetic
+    // defaults synchronously (2026-04-21 non-blocking refactor — see
+    // ensureConfig for the rationale). The background refresh then
+    // hydrates _cache from Redis, so the SECOND call returns the custom
+    // value. The L2 round-trip is still happening — just off the user's
+    // thread.
     const cachedConfig = {
       routingEnabled: true,
       slotEntries: [
@@ -179,14 +195,20 @@ describe('resolveModel', () => {
     }
     // MGET returns [cache, epoch] in a single round-trip — the epoch
     // capture is free on the hit path.
-    mockRedisMget.mockResolvedValueOnce([JSON.stringify(cachedConfig), '1'])
+    mockRedisMget.mockResolvedValue([JSON.stringify(cachedConfig), '1'])
 
-    const result = await resolveModel('interview.generate-question')
+    const firstCall = await resolveModel('interview.generate-question')
+    expect(firstCall.model).toBe('gpt-5.4-mini') // TASK_SLOT_DEFAULTS on cold
+    expect(firstCall.provider).toBe('openai')
 
+    // Wait for background refresh to hydrate _cache from Redis.
+    await __awaitBackgroundLoadForTesting()
+
+    const secondCall = await resolveModel('interview.generate-question')
     expect(mockRedisMget).toHaveBeenCalledWith('model-config:v1', 'model-config:epoch:v1')
-    expect(result.model).toBe('custom-cached-model')
-    expect(result.provider).toBe('anthropic')
-    expect(result.maxTokens).toBe(777)
+    expect(secondCall.model).toBe('custom-cached-model')
+    expect(secondCall.provider).toBe('anthropic')
+    expect(secondCall.maxTokens).toBe(777)
   })
 
   it('Redis L2 miss falls through to Mongo path (defaults when Mongo unavailable)', async () => {
@@ -254,7 +276,7 @@ describe('resolveModel', () => {
   // refactor silently drops the source/durationMs fields, the validation
   // dashboard breaks and we lose observability. Keep these tight.
 
-  it('logs event=model_config_load with source=L2-Redis on cache hit', async () => {
+  it('logs event=model_config_load with source=L2-Redis when background refresh hits the L2 cache', async () => {
     const cachedConfig = {
       routingEnabled: true,
       slotEntries: [
@@ -273,37 +295,61 @@ describe('resolveModel', () => {
     mockRedisMget.mockResolvedValueOnce([JSON.stringify(cachedConfig), '1'])
 
     await resolveModel('interview.generate-question')
+    // 2026-04-21 refactor: user request returns synchronously on the
+    // cold path (source: cold-defaults-synthetic). The L2 lookup
+    // happens off-thread; await it so we can assert on its telemetry.
+    await __awaitBackgroundLoadForTesting()
 
-    // Exactly one `model_config_load` info log per loadConfig call. This
-    // is the line Vercel log searches will pivot on to answer "how often
-    // do cold Lambdas hit Redis?"
+    // We expect TWO `model_config_load` entries now:
+    //   1. cold-defaults-synthetic (emitted synchronously from the
+    //      user-facing ensureConfig call to explain why defaults were
+    //      served), durationMs:0
+    //   2. L2-Redis (emitted when the background refresh completes,
+    //      this is the real "how long did the cache fetch take" log)
     const calls = mockAiLoggerInfo.mock.calls.filter(
       ([payload]) => (payload as { event?: string }).event === 'model_config_load',
     )
-    expect(calls).toHaveLength(1)
-    const [payload] = calls[0] as [{ event: string; source: string; durationMs: number }, string]
-    expect(payload.source).toBe('L2-Redis')
-    expect(payload.event).toBe('model_config_load')
-    expect(typeof payload.durationMs).toBe('number')
-    expect(payload.durationMs).toBeGreaterThanOrEqual(0)
+    expect(calls).toHaveLength(2)
+    const coldPayload = calls[0]?.[0] as { source: string; durationMs: number }
+    expect(coldPayload.source).toBe('cold-defaults-synthetic')
+    expect(coldPayload.durationMs).toBe(0)
+
+    const backgroundPayload = calls[1]?.[0] as {
+      event: string
+      source: string
+      durationMs: number
+    }
+    expect(backgroundPayload.source).toBe('L2-Redis')
+    expect(backgroundPayload.event).toBe('model_config_load')
+    expect(typeof backgroundPayload.durationMs).toBe('number')
+    expect(backgroundPayload.durationMs).toBeGreaterThanOrEqual(0)
     // Sanity: a mocked in-memory Redis hit should be fast. Lenient upper
     // bound (100ms) accounts for CI machines with variable scheduling
     // latency; a 100ms hit is still 10× faster than the Mongo baseline.
-    expect(payload.durationMs).toBeLessThan(100)
+    expect(backgroundPayload.durationMs).toBeLessThan(100)
   })
 
-  it('logs source=L3-Mongo-error when Redis misses AND Mongo require fails', async () => {
+  it('logs source=L3-Mongo-error when Redis misses AND Mongo require fails (emitted from the background refresh)', async () => {
     // Default mockRedisGet returns null (miss). Mongo require fails
-    // in tests (no mongoose available) → `L3-Mongo-error`.
+    // in tests (no mongoose available) → `L3-Mongo-error`. That outcome
+    // still reports accurately in the log stream, but it now fires from
+    // the background refresh rather than blocking the user request
+    // (see the 2026-04-21 non-blocking refactor in ensureConfig).
     await resolveModel('interview.generate-question')
+    await __awaitBackgroundLoadForTesting()
 
     const calls = mockAiLoggerInfo.mock.calls.filter(
       ([payload]) => (payload as { event?: string }).event === 'model_config_load',
     )
-    expect(calls).toHaveLength(1)
-    const [payload] = calls[0] as [{ source: string; durationMs: number }, string]
-    expect(payload.source).toBe('L3-Mongo-error')
-    expect(typeof payload.durationMs).toBe('number')
+    // Two logs now:
+    //   1. cold-defaults-synthetic (synchronous, explains what the user saw)
+    //   2. L3-Mongo-error (from the background refresh)
+    expect(calls).toHaveLength(2)
+    const cold = calls[0]?.[0] as { source: string; durationMs: number }
+    expect(cold.source).toBe('cold-defaults-synthetic')
+    const bg = calls[1]?.[0] as { source: string; durationMs: number }
+    expect(bg.source).toBe('L3-Mongo-error')
+    expect(typeof bg.durationMs).toBe('number')
   })
 
   // ── Codex P2 regressions (PR #302) ─────────────────────────────────────
@@ -519,14 +565,20 @@ describe('resolveModel', () => {
   })
 
   it('does NOT log model_config_load on L1 (in-memory) cache hits', async () => {
-    // First call populates L1 via L2 hit. Reset logger spy before second
-    // call to confirm L1 path is silent — noise-free cold-path signal.
+    // Cold first call serves synthetic defaults and logs `cold-defaults-
+    // synthetic`. The background refresh hits L2 and populates _cache.
+    // After we await that completion + reset the logger spy, a THIRD
+    // resolveModel call must hit L1 cleanly with zero telemetry —
+    // otherwise steady-state traffic would spam `model_config_load` logs
+    // and lose the cold-path signal ops depends on.
     const cachedConfig = {
       routingEnabled: true,
       slotEntries: [],
     }
     mockRedisMget.mockResolvedValueOnce([JSON.stringify(cachedConfig), '1'])
+
     await resolveModel('interview.generate-question')
+    await __awaitBackgroundLoadForTesting()
 
     mockAiLoggerInfo.mockReset()
     await resolveModel('interview.generate-question')
@@ -535,5 +587,123 @@ describe('resolveModel', () => {
       ([payload]) => (payload as { event?: string }).event === 'model_config_load',
     )
     expect(calls).toHaveLength(0)
+  })
+
+  // ── 2026-04-21 non-blocking refactor ─────────────────────────────────────
+  //
+  // The bug this refactor fixes: before 2026-04-21, `ensureConfig` awaited
+  // the full L2 → L3 cascade on every cache miss. On cold Lambdas with an
+  // empty production Redis (the exact state after PR A's first deploy) this
+  // added ~1-2.5s of ioredis connect + TLS+SCRAM + Mongo round-trip BEFORE
+  // the actual LLM call. On `/api/evaluate-answer` where the client aborts
+  // at 5s (useInterviewAPI.ts:148), this overhead reliably pushed real
+  // requests past the abort threshold. The client then silently wrote
+  // fake 50/50/50/50 scores into the evaluations array, killing interviews
+  // at Q2/Q3. Session DB records on 2026-04-21 show 5 of 8 sessions failed
+  // in exactly this pattern.
+  //
+  // The fix: serve TASK_SLOT_DEFAULTS synchronously while a background
+  // refresh loads the real config. These tests pin that contract so a
+  // future refactor cannot silently re-introduce the blocking behavior.
+
+  describe('2026-04-21 non-blocking cold path', () => {
+    it('cold resolveModel returns TASK_SLOT_DEFAULTS without waiting on Redis', async () => {
+      // Simulate a Redis that would hang forever. Before the refactor
+      // this would cause resolveModel to wait for the withTimeout cap
+      // (500ms) before falling through. After the refactor, the user
+      // request returns synchronously with TASK_SLOT_DEFAULTS — Redis
+      // is touched only in the background.
+      mockRedisMget.mockImplementationOnce(() => new Promise(() => { /* never resolves */ }))
+
+      const start = Date.now()
+      const result = await resolveModel('interview.evaluate-answer')
+      const elapsed = Date.now() - start
+
+      // The real latency budget here is "essentially 0" — the call
+      // returns as soon as resolveModel reads TASK_SLOT_DEFAULTS. 100ms
+      // bound absorbs CI scheduling noise without accepting the 500ms
+      // Redis-timeout regression.
+      expect(elapsed).toBeLessThan(100)
+      expect(result.provider).toBe('openai')
+      expect(result.model).toBe('gpt-5.4-mini')
+      expect(result.maxTokens).toBe(250)
+    })
+
+    it('cold resolveModel emits source=cold-defaults-synthetic telemetry', async () => {
+      // The synchronous log is intentional — ops needs to see when a
+      // request was served defaults because the cache was cold. If this
+      // log disappears we can no longer correlate "slow LLM call" with
+      // "was L3 even tried for this request."
+      await resolveModel('interview.evaluate-answer')
+
+      const calls = mockAiLoggerInfo.mock.calls.filter(
+        ([payload]) => (payload as { event?: string }).event === 'model_config_load',
+      )
+      // At least one entry (cold-defaults-synthetic, emitted synchronously).
+      // The background load may or may not have completed yet; either way
+      // the cold log MUST be first.
+      expect(calls.length).toBeGreaterThanOrEqual(1)
+      const coldPayload = calls[0]?.[0] as { source: string; durationMs: number }
+      expect(coldPayload.source).toBe('cold-defaults-synthetic')
+      expect(coldPayload.durationMs).toBe(0)
+    })
+
+    it('background refresh populates _cache so the next call hits L1', async () => {
+      // End-to-end proof that the refactor preserves L2 usefulness: the
+      // L2 payload lands in _cache even though the user request didn't
+      // wait for it. Future calls benefit.
+      const cachedConfig = {
+        routingEnabled: true,
+        slotEntries: [
+          [
+            'interview.evaluate-answer',
+            {
+              taskSlot: 'interview.evaluate-answer',
+              model: 'bg-loaded-model',
+              provider: 'anthropic',
+              maxTokens: 111,
+              isActive: true,
+            },
+          ],
+        ],
+      }
+      mockRedisMget.mockResolvedValueOnce([JSON.stringify(cachedConfig), '1'])
+
+      // First call: synchronous defaults, background load kicks off.
+      const cold = await resolveModel('interview.evaluate-answer')
+      expect(cold.model).toBe('gpt-5.4-mini') // defaults
+
+      // Let the background refresh populate _cache.
+      await __awaitBackgroundLoadForTesting()
+
+      // Second call: L1 hit with the cached custom model.
+      const warm = await resolveModel('interview.evaluate-answer')
+      expect(warm.model).toBe('bg-loaded-model')
+      expect(warm.maxTokens).toBe(111)
+    })
+
+    it('concurrent cold calls share one background refresh (no thundering herd)', async () => {
+      // A burst of requests must not fan out into N parallel Mongo
+      // loads. The `_loadPromise` guard in ensureConfig dedupes them —
+      // critical when a Lambda cold starts and takes the first wave of
+      // traffic. Regression here would resurrect the 1-2s L3 cascade,
+      // multiplied.
+      mockRedisMget.mockResolvedValueOnce([null, null])
+
+      await Promise.all([
+        resolveModel('interview.evaluate-answer'),
+        resolveModel('interview.evaluate-answer'),
+        resolveModel('interview.evaluate-answer'),
+      ])
+      await __awaitBackgroundLoadForTesting()
+
+      // The mocked MGET was set to a single response (`Once`). If the
+      // dedup fails, subsequent loads would call MGET again and the mock
+      // would produce undefined entries. We assert the max call count
+      // instead of strict equality to tolerate race windows where a
+      // second loadConfig is kicked off after the first completes (which
+      // is correct and expected once _loadPromise resets to null).
+      expect(mockRedisMget.mock.calls.length).toBeLessThanOrEqual(1)
+    })
   })
 })

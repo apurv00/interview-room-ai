@@ -59,6 +59,19 @@ export function __setRedisClientForTesting(client: RedisLike | null): void {
   _redisOverride = client
 }
 
+/**
+ * Test-only: await the in-flight background config refresh (if any).
+ * `ensureConfig()` used to `await _loadPromise` on every call, which
+ * made it trivial for tests to assert on the telemetry log or the
+ * resolved cache right after `await resolveModel(...)`. The 2026-04-21
+ * refactor made that refresh fire-and-forget so user requests never
+ * block on L2/L3 — tests that need to observe the background load
+ * completing now call this helper.
+ */
+export async function __awaitBackgroundLoadForTesting(): Promise<void> {
+  if (_loadPromise) await _loadPromise
+}
+
 // ─── Slot config (inlined to avoid pulling mongoose into client bundles) ────
 
 interface SlotConfig {
@@ -139,10 +152,11 @@ let _loadPromise: Promise<void> | null = null
  * care about.
  */
 type ConfigLoadSource =
-  | 'L2-Redis'          // Redis cache hit — the happy path this PR was scoped for
-  | 'L3-Mongo'          // Redis miss + Mongo read succeeded — expected on first cold Lambda after cache bust / deploy
-  | 'L3-Mongo-error'    // Mongo read failed — defaults used, alert-worthy
-  | 'defaults-client'   // typeof window !== 'undefined' branch — should never show in server logs
+  | 'L2-Redis'                 // Redis cache hit — the happy path this PR was scoped for
+  | 'L3-Mongo'                 // Redis miss + Mongo read succeeded — expected on first cold Lambda after cache bust / deploy
+  | 'L3-Mongo-error'           // Mongo read failed — defaults used, alert-worthy
+  | 'cold-defaults-synthetic'  // 2026-04-21: cold Lambda served TASK_SLOT_DEFAULTS synchronously while background refresh loads (see ensureConfig)
+  | 'defaults-client'          // typeof window !== 'undefined' branch — should never show in server logs
 let _lastLoadSource: ConfigLoadSource = 'defaults-client'
 
 /**
@@ -424,32 +438,82 @@ async function loadConfig(): Promise<void> {
 }
 
 async function ensureConfig(): Promise<CachedConfig> {
-  if (_cache && Date.now() - _cache.loadedAt < CACHE_TTL_MS) {
+  const now = Date.now()
+
+  // L1 fresh hit — return immediately. Steady-state path.
+  if (_cache && now - _cache.loadedAt < CACHE_TTL_MS) {
     return _cache
   }
-  // Measure total time to populate `_cache` — everything from this line
-  // onwards is either an L2 hit (~few ms) or an L3 round-trip (hundreds
-  // of ms for Mongo read + connectDB setup on cold Lambda). The log
-  // below is THE validation signal for PR A: Vercel `level:info` log
-  // searches can pivot on `event:model_config_load` and confirm whether
-  // cold Lambdas are actually hitting Redis (source:L2-Redis,
-  // durationMs<50) vs. falling through to Mongo (source:L3-Mongo,
-  // durationMs>500). Logged at info because it's cold-path only — L1
-  // hits short-circuit above and never emit this line.
-  const startMs = Date.now()
+
+  // Kick off a background refresh if none is already in flight. We do
+  // NOT await it. Any user request must return on the defaults path
+  // below instead of waiting for L2/L3 — that wait is what caused the
+  // 2026-04-21 regression.
+  //
+  // Pre-fix: this function awaited `loadConfig()`, which on a cold
+  // Lambda with an empty production Redis (PR A's L2 had just shipped,
+  // no keys written yet) did:
+  //   1. tryLoadFromRedis → ioredis lazyConnect + mget, routinely
+  //      exceeding the 500ms withTimeout cap because cold TCP+TLS+AUTH
+  //      to Upstash takes >200ms by itself.
+  //   2. connectDB() → TLS+SCRAM against Atlas, ~600ms-2s on cold
+  //      Lambdas.
+  //   3. ModelConfig.getConfig() → Mongo round-trip, 50-300ms.
+  // Total pre-LLM overhead: ~1-2.5 s. On /api/evaluate-answer where
+  // useInterviewAPI.ts:148 aborts at 5 s, this overhead pushed real
+  // requests past the budget — the client then silently wrote fake
+  // 50/50/50/50 scores into the evaluations array, which made
+  // interviews dead-end at Q2 or Q3. Session DB records on 2026-04-21
+  // show 5 of 8 sessions that day failed in this exact pattern.
+  //
+  // New behavior: never block a user request on CMS lookup. The cache
+  // is warmed opportunistically; a cold user gets TASK_SLOT_DEFAULTS
+  // (which, per taskSlots.ts, match production CMS for this
+  // deployment anyway).
   if (!_loadPromise) {
-    _loadPromise = loadConfig().finally(() => { _loadPromise = null })
+    const refreshStart = now
+    _loadPromise = loadConfig()
+      .then(() => {
+        aiLogger.info(
+          {
+            event: 'model_config_load',
+            source: _lastLoadSource,
+            durationMs: Date.now() - refreshStart,
+          },
+          'ModelRouter: background config refresh complete',
+        )
+      })
+      // loadConfig has internal try/catch so it should never throw,
+      // but keep an outer .catch to ensure an unhandled rejection
+      // can never surface if that invariant ever breaks.
+      .catch((err) => {
+        aiLogger.warn({ err }, 'ModelRouter: background config refresh threw unexpectedly')
+      })
+      .finally(() => { _loadPromise = null })
   }
-  await _loadPromise
+
+  // Stale L1 is still usable — the background refresh above replaces
+  // it for the next expiry window. Better to serve slightly-stale
+  // config than to pay the L2/L3 latency on the user's thread.
+  if (_cache) return _cache
+
+  // Genuine cold Lambda, no cache at all. Return a synthetic disabled-
+  // routing snapshot so `resolveModel()` falls through to
+  // TASK_SLOT_DEFAULTS natively (see the !config.routingEnabled branch
+  // in resolveModel). For a deployment whose CMS values equal the
+  // defaults (today: every `interview.*` slot is gpt-5.4-mini in both
+  // CMS and TASK_SLOT_DEFAULTS), this produces the same resolved model
+  // as an L3 success — but with zero wait on the user's thread.
+  _lastLoadSource = 'cold-defaults-synthetic'
   aiLogger.info(
     {
       event: 'model_config_load',
       source: _lastLoadSource,
-      durationMs: Date.now() - startMs,
+      durationMs: 0,
     },
-    'ModelRouter: config loaded',
+    'ModelRouter: cold Lambda, serving TASK_SLOT_DEFAULTS while background refresh loads',
   )
-  return _cache!
+  return { routingEnabled: false, slots: new Map(), loadedAt: now }
 }
 
 /**
