@@ -1122,3 +1122,9 @@
 - **Files:** 2 changed, 1 test file(s)
 - **Root-cause:** on session 69e8c2f3 (2026-04-22) every `model_config_load`
 - **Tests-added: shared/__tests__/modelRouter.test.ts — 6 new cases in**
+
+### 2026-04-22 15:21:29 +0000 · `916b4f7` · Claude
+- **Subject:** Stamp writeEpoch in cache payload, reject stale on read (Codex P1 #310)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** PR #310's hit-side EXPIRE refresh removed the TTL-based
+- **Tests-added: shared/__tests__/modelRouter.test.ts — 5 new cases in**
