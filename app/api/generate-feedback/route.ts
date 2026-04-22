@@ -1164,18 +1164,40 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       const fallbackEngScore = Math.round(roughScore * 0.9)
       const fallbackOverall = Math.round(roughScore * 0.4 + fallbackCommScore * 0.3 + fallbackEngScore * 0.3)
 
-      // P0 fix (2026-04-22): set `degraded: true` so the UI can distinguish
-      // this synthetic fallback from a real LLM-generated feedback object.
-      // Pre-fix, the candidate saw a plausible-looking score (e.g. 30/100)
-      // with hardcoded "use the STAR framework" advice even though the LLM
-      // failed. The `degraded` flag lets the feedback page render a clear
-      // banner + retry CTA while keeping the numeric fields populated for
-      // analytics/telemetry paths that already consume them.
+      // 2026-04-22 follow-up on P0 (option B): the outer-catch synthetic
+      // score is returned to the in-flight client but is NEVER persisted
+      // to `InterviewSession.feedback`. The `degraded: true` flag on the
+      // response lets the feedback page render a banner + Retry CTA for
+      // this request only.
       //
-      // Kept all existing fields populated (rather than nulling the score)
-      // so downstream consumers (InterviewSession.feedback in Mongo,
-      // ScoreTelemetry, practiceStats derivation) are unaffected. The flag
-      // is additive and optional; legacy sessions remain undefined.
+      // The first iteration of the P0 fix (PR #311) DID persist the
+      // fallback with `degraded: true` and relied on every reader to
+      // gate on the flag. A gitNexus-backed audit (see
+      // `.claude/audit/current/impact-app_api_generate-feedback_route.ts.md`)
+      // identified ~10 reader sites — dashboard "last score" tile,
+      // history pass-badge, score-trend chart, recruiter scorecard,
+      // pathway planner LLM prompt, session summary LLM prompt, GDPR
+      // data export, peer-comparison `$avg` aggregation, print/PDF
+      // builder, shareable-link renderer — and none of them gated on
+      // `degraded`. Persisting the synthetic payload leaked a fabricated
+      // 30/100 with "use the STAR framework" hardcoded advice into all
+      // of those surfaces without the banner, and corrupted the
+      // peer-cohort baseline for every other user via the `$avg`
+      // aggregation.
+      //
+      // By not persisting, downstream readers see `feedback === undefined`
+      // and hit their existing no-feedback code paths ("not generated
+      // yet"). A reload/retry re-enters this route; on success a real
+      // feedback lands in Mongo, on re-failure nothing lands. Session
+      // status is already stamped `'completed'` at interview end by
+      // `useInterview.ts` so we don't strand the session by skipping the
+      // status write here.
+      //
+      // The cache-bypass-on-degraded branch earlier in this handler
+      // (Codex P1 on #311) is KEPT because production sessions persisted
+      // before this change may still carry `feedback.degraded === true`
+      // in Mongo; their user-triggered retries must still escape the
+      // cache hit.
       const fallback: FeedbackData = {
         overall_score: fallbackOverall,
         pass_probability: fallbackOverall >= 75 ? 'High' : fallbackOverall >= 50 ? 'Medium' : 'Low',
@@ -1194,15 +1216,9 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         degraded: true,
       }
       if (body.sessionId) {
-        InterviewSession.findByIdAndUpdate(body.sessionId, {
-          feedback: fallback,
-          status: 'completed',
-          completedAt: new Date(),
-        }).catch((err) => aiLogger.warn({ err, sessionId: body.sessionId }, 'Failed to persist fallback feedback'))
-
-        // G.1 telemetry — the outer-catch path has no Claude value, but
-        // capturing the deterministic fallback still gives us visibility
-        // into how often this path is hit in production.
+        // G.1 telemetry — still captured so production visibility into
+        // how often the outer-catch path fires is preserved. Telemetry
+        // lives in its own collection, not on `InterviewSession.feedback`.
         recordScoreDelta({
           sessionId: body.sessionId,
           userId: user.id,
