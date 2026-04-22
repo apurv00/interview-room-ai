@@ -1152,3 +1152,9 @@
 - **Files:** 2 changed, 1 test file(s)
 - **Root-cause:** PR #311's cache-bypass check used strict-equality `!== true`
 - **Tests-added: 3 new cases in feedbackDegradedFlag.test.ts:**
+
+### 2026-04-22 18:26:37 +0000 · `e5c0dbb` · Claude
+- **Subject:** Align Mongo driver timeouts across both clients (P0)
+- **Files:** 4 changed, 1 test file(s)
+- **Root-cause:** two Mongo clients in the codebase talk to the same Atlas
+- **Tests-added: shared/__tests__/mongoConfig.test.ts — 8 cases:**
