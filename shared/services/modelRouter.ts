@@ -786,6 +786,33 @@ export async function replaceModelConfigCache(doc: {
     }
   } catch (err) {
     aiLogger.warn({ err }, 'ModelRouter: replaceModelConfigCache Redis write failed')
+    // Codex P1 (round 2) on PR #310: when INCR itself throws, the epoch
+    // key stays at its OLD value AND the cache key stays at its OLD
+    // payload. A reader's writeEpoch check sees `payload.writeEpoch ==
+    // liveEpoch` (both still the old value), hits, refreshes TTL — and
+    // stale config is served indefinitely under traffic. The writeEpoch
+    // staleness check can't detect this because nothing about the Redis
+    // state changed.
+    //
+    // Fallback: DEL the cache key so readers miss and re-fetch from
+    // Mongo. The admin has already successfully written their new
+    // config to Mongo (CMS PUT handler did that before calling us), so
+    // a miss → Mongo fetch produces the correct fresh config. This
+    // also correctly handles the narrower case where INCR succeeded
+    // but eval threw (payload unchanged, epoch bumped → writeEpoch
+    // mismatch would ALSO catch it on read; DEL is just belt-and-
+    // suspenders cleanup).
+    //
+    // Fire-and-forget: DEL in the same Redis outage will also fail,
+    // in which case the stale key ages out at its natural TTL
+    // (REDIS_TTL_SECONDS) — matching the pre-fix failure window
+    // bounds, not worse. Logged so ops can correlate.
+    void client.del(REDIS_CACHE_KEY).catch((delErr: unknown) => {
+      aiLogger.warn(
+        { err: delErr },
+        'ModelRouter: replaceModelConfigCache DEL fallback also failed — stale key will age out at TTL',
+      )
+    })
   }
 }
 

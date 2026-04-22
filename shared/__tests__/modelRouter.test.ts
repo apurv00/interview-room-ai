@@ -1256,6 +1256,134 @@ describe('resolveModel', () => {
       expect(mockRedisExpire).not.toHaveBeenCalled()
     })
 
+    it('falls back to DEL when INCR itself throws (Codex P1 round 2 on PR #310)', async () => {
+      // Scenario Codex flagged in round 2: replaceModelConfigCache
+      // calls client.incr(REDIS_EPOCH_KEY) and it throws (Redis brief
+      // outage, network glitch). The try/catch swallows the error, but
+      // WITHOUT the DEL fallback the cache key + epoch key are BOTH
+      // unchanged — a reader sees writeEpoch == liveEpoch (both still
+      // oldEpoch) → hit → TTL refresh → stale config served
+      // indefinitely under traffic. The writeEpoch staleness check
+      // can't detect this because Redis state didn't change.
+      //
+      // Fix: on INCR failure, DEL the cache key so readers miss and
+      // re-fetch from Mongo (which has the admin's just-written
+      // correct config).
+      mockRedisIncr.mockRejectedValueOnce(new Error('ECONNRESET'))
+
+      await replaceModelConfigCache({
+        routingEnabled: true,
+        slots: [
+          {
+            taskSlot: 'interview.generate-question',
+            model: 'new-model',
+            provider: 'openai',
+            maxTokens: 200,
+            isActive: true,
+          },
+        ],
+      })
+
+      // Allow one microtask flush for the fire-and-forget DEL.
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(mockRedisDel).toHaveBeenCalledWith('model-config:v1')
+    })
+
+    it('does NOT throw when INCR fails — admin HTTP 200 must still succeed', async () => {
+      // The CMS PUT handler awaits replaceModelConfigCache. A thrown
+      // error would bubble up and fail the admin's HTTP response even
+      // though the Mongo write already succeeded. Swallowing errors is
+      // the contract; the DEL fallback preserves it.
+      mockRedisIncr.mockRejectedValueOnce(new Error('ECONNRESET'))
+
+      await expect(
+        replaceModelConfigCache({ routingEnabled: true, slots: [] }),
+      ).resolves.not.toThrow()
+    })
+
+    it('DEL-fallback failure does NOT surface — logs warn, cache ages out at TTL', async () => {
+      // Worst case: Redis is fully down, both INCR and DEL throw. We
+      // can't invalidate the cache remotely; the stale key ages out at
+      // REDIS_TTL_SECONDS (the pre-fix failure bound, unchanged). Must
+      // not throw an unhandled rejection.
+      mockRedisIncr.mockRejectedValueOnce(new Error('ECONNRESET'))
+      mockRedisDel.mockRejectedValueOnce(new Error('ECONNRESET'))
+
+      await expect(
+        replaceModelConfigCache({ routingEnabled: true, slots: [] }),
+      ).resolves.not.toThrow()
+
+      await new Promise((r) => setTimeout(r, 0))
+      // No assertion on throw — the test passes if no unhandled rejection surfaces.
+    })
+
+    it('falls back to DEL when eval throws AFTER successful INCR', async () => {
+      // Narrower failure mode: INCR succeeded (epoch bumped), but the
+      // Lua CAS eval then threw mid-write (Redis restart between the
+      // two calls, for instance). writeEpoch mismatch would catch this
+      // on read (live epoch advanced past stale payload's writeEpoch),
+      // but DEL as belt-and-suspenders is cheaper than relying on every
+      // reader to notice.
+      mockRedisIncr.mockResolvedValueOnce(42)
+      mockRedisEval.mockRejectedValueOnce(new Error('ECONNRESET during eval'))
+
+      await replaceModelConfigCache({
+        routingEnabled: true,
+        slots: [],
+      })
+
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(mockRedisDel).toHaveBeenCalledWith('model-config:v1')
+    })
+
+    it('does NOT fire DEL on a successful replace (happy path unchanged)', async () => {
+      // Regression guard: the successful path must not spuriously DEL
+      // the key it just wrote. DEL is the FAILURE fallback only.
+      mockRedisIncr.mockResolvedValueOnce(7)
+      mockRedisEval.mockResolvedValueOnce(1) // CAS succeeded
+
+      await replaceModelConfigCache({
+        routingEnabled: true,
+        slots: [
+          {
+            taskSlot: 'interview.generate-question',
+            model: 'new-model',
+            provider: 'openai',
+            maxTokens: 200,
+            isActive: true,
+          },
+        ],
+      })
+
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(mockRedisDel).not.toHaveBeenCalled()
+    })
+
+    it('does NOT fire DEL on CAS-race-lost (result === 0; peer already wrote correctly)', async () => {
+      // Scenario: two admins save concurrently. Our INCR bumped to N+1.
+      // Their INCR bumped to N+2 before our eval landed. Our Lua CAS
+      // returns 0 — they wrote the correct newer payload. DEL'ing now
+      // would clobber their valid save. Must stay no-op for the race-
+      // lost case.
+      mockRedisIncr.mockResolvedValueOnce(5)
+      mockRedisEval.mockResolvedValueOnce(0) // CAS race lost
+
+      await replaceModelConfigCache({ routingEnabled: true, slots: [] })
+
+      await Promise.resolve()
+      await Promise.resolve()
+
+      // eval returned 0, didn't throw — went through the `if (result === 0)`
+      // branch that clears L1 and logs, not the catch.
+      expect(mockRedisDel).not.toHaveBeenCalled()
+    })
+
     it('accepts a matched writeEpoch === liveEpoch as a valid hit (healthy path)', async () => {
       // Regression guard: the happy path must still work. writeEpoch
       // stamped with the same value the MGET returns as rawEpoch.
