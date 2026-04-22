@@ -30,18 +30,45 @@ const entry: CompactSlot[] = [
     'Surface — not deep architecture, just structured thinking.'],
 ]
 
+// Mid-level (3-6 yrs) slots.
+//
+// 2026-04-22 Bug C rebalance: the prior definition made all four mandatory
+// exploration slots data/metrics-themed (metrics-framework, experiment-
+// design, ambiguous-data, funnel-at-scale). Candidates running multiple
+// sessions reported that questions felt like variations of the same
+// north-star/cohort/AB-test discussion — seven sessions on 2026-04-21 →
+// 2026-04-22 all converged on metric diagnosis as Q2-Q5. The LLM wasn't
+// drifting on its own; it was following template guidance that told it
+// to ask four consecutive metric questions.
+//
+// The rebalance keeps the two canonical signature slots (metrics-framework
+// as warm-up, ambiguous-data as the "ship or not" tradeoff) and replaces
+// experiment-design / funnel-at-scale as mandatory with two new
+// non-metric mandatory slots (prioritization under constraints, scoping
+// an ambiguous problem). The replaced slots remain available as `if-time`
+// so sessions with bandwidth still cover them. Net: a mid-level session
+// now reliably covers two metric questions, one prioritization, one
+// scoping — a mix closer to what real PM interviews feel like.
 const mid: CompactSlot[] = [
   ['metrics-framework', 'Metrics framework design', 'data-driven', 'warm-up', 'must', 0,
     'Ask "You own Instagram Reels. Design the metrics framework." North star → input → guardrails.',
     'Surface — calibrate metrics sophistication.', 'Shift from knowing A/B to running messy ones.'],
-  ['experiment-design', 'Rigorous experiment design', 'experimentation', 'exploration', 'must', 2,
-    'Ask to design an A/B test. Expect statistical significance, MDE, randomization, duration, interaction effects.',
-    'Probe "Experiment ran 2 weeks. Long enough? Why?" and novelty effects.'],
+  ['prioritization-tradeoffs', 'Prioritization under constraints', 'product-sense', 'exploration', 'must', 2,
+    'Present 3 competing product requests (tech-debt paydown, large customer feature, internal tooling) against a single quarterly goal and limited eng capacity. Ask how the candidate would sequence them and defend the order. Look for an explicit framework (RICE, effort/impact, strategic fit) AND a stated tradeoff — what they are deliberately deprioritizing.',
+    'Probe "What if the lowest-priority one came from the CEO — does your order change?" and "How would you communicate the deprioritization to the team that lost?"',
+    'Mid-level PMs are expected to defend priorities without waiting for approval and communicate tradeoffs upward.'],
   ['ambiguous-data', 'Interpreting ambiguous data', 'data-driven', 'exploration', 'must', 2,
     'Present conflicting metrics: "+2% conversion but -5% revenue per user. Ship?" THE signature question.',
     'Probe lurking variables, conviction, and guardrail awareness.',
     'The canonical mid-level PM technical question.'],
-  ['funnel-at-scale', 'Funnel decomposition at scale', 'analytical', 'exploration', 'must', 2,
+  ['scoping-under-uncertainty', 'Scoping an ambiguous problem', 'problem-solving', 'exploration', 'must', 2,
+    'Present a vague user complaint, e.g. "Power users say the app feels slow." Ask how they would scope the problem — what they would measure, who they would talk to first, what hypotheses they would rule out before committing to a fix. Look for a structured approach that separates discovery from solutioning.',
+    'Probe "What if the instrumentation to measure this doesn\'t exist yet — what do you do in week one?" and "You have two weeks, not two months — what changes about your scope?"',
+    'Mid-level PMs own scoping end-to-end; seniors delegate it — this question calibrates where the candidate actually sits.'],
+  ['experiment-design', 'Rigorous experiment design', 'experimentation', 'exploration', 'if-time', 2,
+    'Ask to design an A/B test. Expect statistical significance, MDE, randomization, duration, interaction effects.',
+    'Probe "Experiment ran 2 weeks. Long enough? Why?" and novelty effects.'],
+  ['funnel-at-scale', 'Funnel decomposition at scale', 'analytical', 'exploration', 'if-time', 2,
     'Present MAU drop. Expect segmentation (new vs returning, geo, platform, cohort).',
     'Probe mix-shift analysis and Simpson\'s paradox awareness.'],
   ['engineering-tradeoffs', 'Engineering tradeoff conversations', 'technical-literacy', 'exploration', 'if-time', 2,
