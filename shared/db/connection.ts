@@ -1,6 +1,11 @@
 import mongoose from 'mongoose'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { aiLogger } from '@shared/logger'
+import {
+  MONGO_MAX_POOL_SIZE,
+  MONGO_SERVER_SELECTION_TIMEOUT_MS,
+  MONGO_SOCKET_TIMEOUT_MS,
+} from './mongoConfig'
 
 interface CachedConnection {
   conn: typeof mongoose | null
@@ -89,15 +94,16 @@ export async function connectDB(): Promise<typeof mongoose> {
   }
 
   if (!cached.promise) {
+    // Timeouts + pool size come from the shared constants module so this
+    // Mongoose client stays in lock-step with the raw-driver
+    // `mongoClient.ts` used by NextAuth. Pre-2026-04-22 the two were
+    // hardcoded separately and had drifted; see shared/db/mongoConfig.ts
+    // for the incident context.
     const pending = mongoose.connect(MONGODB_URI, {
       bufferCommands: false,
-      maxPoolSize: 10,
-      // Bumped from 5000 to 15000 because Atlas M0 (shared free tier) can
-      // take 10-15s to wake up from idle on cold serverless invocations.
-      // The old 5s caused `MongoServerSelectionError` outright; 15s lets
-      // the M0 cluster respond before the driver gives up.
-      serverSelectionTimeoutMS: 15000,
-      socketTimeoutMS: 45000,
+      maxPoolSize: MONGO_MAX_POOL_SIZE,
+      serverSelectionTimeoutMS: MONGO_SERVER_SELECTION_TIMEOUT_MS,
+      socketTimeoutMS: MONGO_SOCKET_TIMEOUT_MS,
     })
     // Attach a no-op `.catch` so that if the caller is delayed or a
     // parallel invocation doesn't await this promise, Node never logs an
