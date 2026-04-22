@@ -21,7 +21,7 @@ import {
   getQuestionCount,
 } from '@interview/config/interviewConfig'
 import { deriveCoachingTip } from '@interview/config/coachingTips'
-import { isThinkingHeavyDepth, SILENCE_WINDOW_BONUS_MS } from '@interview/config/silenceWindow'
+import { isThinkingHeavyDepth, computeIntentionalSilenceWindow } from '@interview/config/silenceWindow'
 import { STORAGE_KEYS, sessionScopedKey } from '@shared/storageKeys'
 import type { SpeechRecognitionResult } from './useSpeechRecognition'
 import type { StartListeningOptions, StopListeningReason } from './useDeepgramRecognition'
@@ -1192,28 +1192,15 @@ export function useInterview({
     // Skip if candidate is struggling — don't add pressure
     if (performanceSignalRef.current === 'struggling') return Promise.resolve(null)
 
-    const wordCount = answer.trim().split(/\s+/).length
-
-    // Determine timeout and whether to apply silence check
-    let silenceMs: number
-    if (wordCount < 15) {
-      // Short answers — always check, longer window
-      silenceMs = 2500
-    } else if (wordCount < 30) {
-      // Medium answers — probabilistic (35% chance)
-      if (Math.random() >= 0.35) return Promise.resolve(null)
-      silenceMs = 2000
-    } else {
-      // Long answers — always check with a brief window to catch trailing speech
-      silenceMs = 1500
-    }
-
-    // Depth-aware extension for think-heavy interview types. Candidates
-    // routinely pause mid-elaboration on technical / case-study / system-
-    // design / coding answers (diagramming mentally, weighing tradeoffs)
-    // so the base 1500-2500ms window cuts off real continuation. See
-    // `silenceWindow.ts` for the depth allowlist.
-    if (isThinkingHeavyDepth(config?.interviewType)) silenceMs += SILENCE_WINDOW_BONUS_MS
+    // Length-aware silence decision. See computeIntentionalSilenceWindow
+    // in silenceWindow.ts for the policy and the Bug B (2026-04-22) fix
+    // that skips the check entirely on long answers.
+    const decision = computeIntentionalSilenceWindow(
+      answer,
+      isThinkingHeavyDepth(config?.interviewType),
+    )
+    if (!decision.shouldCheck) return Promise.resolve(null)
+    const silenceMs = decision.silenceMs
 
     // Set avatar to "curious" (waiting look)
     setAvatarEmotion('curious')

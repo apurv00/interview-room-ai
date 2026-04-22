@@ -77,10 +77,40 @@ export function useAvatarSpeech({
   // Streaming audio playback (MediaSource API)
   const { streamAndPlay, cancel: cancelStream, softCancel: softCancelStream, isSupported: isStreamingSupported } = useStreamingAudio()
 
-  /** Pre-fetch TTS audio for a question so it's ready when needed (buffered). */
+  /**
+   * Pre-fetch TTS audio for a question so it's ready when needed (buffered).
+   *
+   * Skipped when streaming is supported — the /api/tts/stream path reaches
+   * first audio in <500ms (per INTERVIEW_FLOW.md §3), so prefetch no longer
+   * earns its cost AND causes a duplicate-synthesis bug in production:
+   *
+   *   - useInterview.ts:1628 calls prefetchTTS(question) at end of turn N
+   *     → fires /api/tts for bare `question` text, caches under that key.
+   *   - useInterview.ts:1356-1359 prepends a random filler (40% chance,
+   *     qIdx>=2) to produce `spokenQuestion = filler + question`.
+   *   - avatarSpeak(spokenQuestion) on turn N+1 looks up the cache by the
+   *     NEW key and misses (cached under `question`, lookup under
+   *     `filler + question`). Falls through to /api/tts/stream.
+   *   - Net result: both /api/tts AND /api/tts/stream fire for the same
+   *     turn. Vercel logs on 2026-04-22 session 69e8c2f3 confirmed parallel
+   *     calls with same-millisecond timestamps on Q2/Q4/Q5 transitions.
+   *
+   * The duplicate /api/tts download also lands ~1-3s later than the stream,
+   * so when avatarSpeak ever does pick the blob path (cache hit on a
+   * fillerless turn), the user sees question TEXT render at line 1338 of
+   * useInterview.ts but hears audio only after the blob finishes
+   * downloading — "text appeared first, spoken later" user report.
+   *
+   * Streaming path already resolves avatarSpeak's promise on audio.onended
+   * (useStreamingAudio.ts:90) — no latency benefit from prefetch. When
+   * streaming is NOT supported (Safari mobile, degraded browsers) prefetch
+   * still runs to warm the blob-fallback path.
+   */
   const prefetchTTS = useCallback(
     (text: string) => {
       if (!isMultimodalEnabled || ttsCacheRef.current.has(text)) return
+      // Streaming path doesn't consume the blob cache — skip the fetch.
+      if (isStreamingSupported) return
       // Evict oldest entry if cache exceeds 5 items
       if (ttsCacheRef.current.size >= 5) {
         const firstKey = ttsCacheRef.current.keys().next().value
@@ -95,7 +125,7 @@ export function useAvatarSpeech({
         .catch(() => null)
       ttsCacheRef.current.set(text, promise)
     },
-    [isMultimodalEnabled]
+    [isMultimodalEnabled, isStreamingSupported]
   )
 
   /** Play a blob via Audio element (used for cached/prefetched audio). */
