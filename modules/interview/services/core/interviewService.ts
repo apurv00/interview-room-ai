@@ -273,13 +273,31 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
   return session
 }
 
+/**
+ * Return shape for {@link updateSession}.
+ *
+ * `priorStatus` is the session's `status` before this update ran. The
+ * PATCH handler uses it to fire `interview_complete` XP/streak/badge
+ * rewards only on the first transition into `'completed'` so that
+ * repeated completion PATCHes (degraded-reload F5, double-submits,
+ * retries) don't duplicate engagement side effects. Returning it from
+ * here instead of having the route pre-read the session avoids a
+ * duplicate `findById` that would otherwise run before `connectDB()`,
+ * which Mongoose's `bufferCommands: false` setting makes unsafe on
+ * cold serverless invocations (Codex P1 on PR #313).
+ */
+export interface UpdateSessionResult {
+  updated: IInterviewSession
+  priorStatus?: string
+}
+
 export async function updateSession(
   sessionId: string,
   userId: string,
   role: string,
   organizationId: string | undefined,
   input: UpdateSessionInput
-): Promise<IInterviewSession> {
+): Promise<UpdateSessionResult> {
   await connectDB()
 
   const session = await InterviewSession.findById(sessionId)
@@ -291,6 +309,10 @@ export async function updateSession(
   )) {
     throw new ForbiddenError('You do not have permission to edit this session')
   }
+
+  // Capture pre-update status so the caller can detect state transitions
+  // without issuing a redundant pre-read. See UpdateSessionResult.
+  const priorStatus = typeof session.status === 'string' ? session.status : undefined
 
   const updateFields: Record<string, unknown> = {}
   if (input.status) updateFields.status = input.status
@@ -309,7 +331,7 @@ export async function updateSession(
 
   logger.info({ sessionId, status: input.status }, 'Interview session updated')
 
-  return updated
+  return { updated, priorStatus }
 }
 
 export async function getSession(

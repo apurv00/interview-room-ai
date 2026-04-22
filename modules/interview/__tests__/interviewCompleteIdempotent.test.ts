@@ -33,8 +33,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextRequest } from 'next/server'
 
-const { mockFindById, mockUpdateSession, mockAwardXp, mockRecordActivity, mockUpdateStreak, mockCheckBadges, mockFlushUsageBuffer } = vi.hoisted(() => ({
-  mockFindById: vi.fn(),
+const { mockUpdateSession, mockAwardXp, mockRecordActivity, mockUpdateStreak, mockCheckBadges, mockFlushUsageBuffer } = vi.hoisted(() => ({
   mockUpdateSession: vi.fn(),
   mockAwardXp: vi.fn(),
   mockRecordActivity: vi.fn(),
@@ -64,15 +63,6 @@ vi.mock('@interview/services/core/interviewService', () => ({
   updateSession: (...args: unknown[]) => mockUpdateSession(...args),
 }))
 
-vi.mock('@shared/db/models', () => ({
-  InterviewSession: {
-    findById: (id: string) => ({
-      select: () => ({
-        lean: () => Promise.resolve(mockFindById(id)),
-      }),
-    }),
-  },
-}))
 vi.mock('@learn/services/xpService', () => ({ awardXp: mockAwardXp }))
 vi.mock('@learn/services/streakService', () => ({
   recordActivity: mockRecordActivity,
@@ -100,19 +90,30 @@ function makeReq(body: Record<string, unknown>) {
 
 describe('PATCH /api/interviews/[id] — interview_complete rewards idempotency', () => {
   beforeEach(() => {
-    mockFindById.mockReset()
     mockUpdateSession.mockReset()
     mockAwardXp.mockReset().mockResolvedValue({ newXp: 50, newLevel: 1, leveledUp: false, title: 'Novice' })
     mockRecordActivity.mockReset().mockResolvedValue(undefined)
     mockUpdateStreak.mockReset().mockResolvedValue({ currentStreak: 1 })
     mockCheckBadges.mockReset().mockResolvedValue([])
     mockFlushUsageBuffer.mockReset().mockResolvedValue(undefined)
-    mockUpdateSession.mockResolvedValue({ _id: { toString: () => VALID_ID } })
   })
+
+  /**
+   * Helper: stage the next `updateSession` call to resolve with the given
+   * `priorStatus`. Mirrors the real service's {@link UpdateSessionResult}
+   * shape so the route's destructuring sees both `updated` and
+   * `priorStatus`.
+   */
+  function mockNextUpdateSession(priorStatus: string | undefined) {
+    mockUpdateSession.mockResolvedValueOnce({
+      updated: { _id: { toString: () => VALID_ID } },
+      priorStatus,
+    })
+  }
 
   it('fires rewards exactly once on the transition into completed', async () => {
     // Session was 'in_progress' before this PATCH — rewards should fire.
-    mockFindById.mockResolvedValueOnce({ status: 'in_progress' })
+    mockNextUpdateSession('in_progress')
 
     const res = await PATCH(makeReq({ status: 'completed', completedAt: new Date().toISOString() }), { params: { id: VALID_ID } })
 
@@ -130,10 +131,10 @@ describe('PATCH /api/interviews/[id] — interview_complete rewards idempotency'
   })
 
   it('does NOT fire rewards when the session is already completed (degraded reload scenario)', async () => {
-    // Session was already 'completed' — this is a re-PATCH (degraded
+    // priorStatus === 'completed' means this is a re-PATCH (degraded
     // reload, Retry Save, double-submit). Rewards must NOT re-fire.
     // This is the exact F5-XP-farm scenario Codex flagged on PR #313.
-    mockFindById.mockResolvedValueOnce({ status: 'completed' })
+    mockNextUpdateSession('completed')
 
     const res = await PATCH(makeReq({ status: 'completed', completedAt: new Date().toISOString() }), { params: { id: VALID_ID } })
 
@@ -148,14 +149,16 @@ describe('PATCH /api/interviews/[id] — interview_complete rewards idempotency'
     expect(mockFlushUsageBuffer).toHaveBeenCalledTimes(1)
   })
 
-  it('does NOT query existing status or fire rewards on a non-completion PATCH', async () => {
+  it('does NOT fire rewards on a non-completion PATCH', async () => {
     // A PATCH that doesn't flip status to 'completed' (e.g. adding a
     // durationActualSeconds update, or an in-flight 'in_progress' refresh)
-    // must skip the findById roundtrip AND the rewards block entirely.
+    // must skip the rewards block entirely. The service still runs (it
+    // has to apply the update), but priorStatus is irrelevant — the
+    // rewards block is gated on `validated.status === 'completed'`.
+    mockNextUpdateSession('in_progress')
     const res = await PATCH(makeReq({ durationActualSeconds: 1200 }), { params: { id: VALID_ID } })
 
     expect(res.status).toBe(200)
-    expect(mockFindById).not.toHaveBeenCalled()
     expect(mockAwardXp).not.toHaveBeenCalled()
     expect(mockFlushUsageBuffer).not.toHaveBeenCalled()
   })
@@ -164,10 +167,9 @@ describe('PATCH /api/interviews/[id] — interview_complete rewards idempotency'
     // End-to-end regression guard for the exact F5 scenario: first load
     // transitions to completed and awards XP; every subsequent reload
     // sees already-completed and must be a no-op on rewards.
-    mockFindById
-      .mockResolvedValueOnce({ status: 'in_progress' }) // first PATCH
-      .mockResolvedValueOnce({ status: 'completed' })   // second PATCH (reload)
-      .mockResolvedValueOnce({ status: 'completed' })   // third PATCH (another reload)
+    mockNextUpdateSession('in_progress') // first PATCH
+    mockNextUpdateSession('completed')   // second PATCH (reload)
+    mockNextUpdateSession('completed')   // third PATCH (another reload)
 
     await PATCH(makeReq({ status: 'completed', completedAt: new Date().toISOString() }), { params: { id: VALID_ID } })
     await PATCH(makeReq({ status: 'completed', completedAt: new Date().toISOString() }), { params: { id: VALID_ID } })
@@ -177,5 +179,25 @@ describe('PATCH /api/interviews/[id] — interview_complete rewards idempotency'
     expect(mockRecordActivity).toHaveBeenCalledTimes(1)
     expect(mockUpdateStreak).toHaveBeenCalledTimes(1)
     expect(mockCheckBadges).toHaveBeenCalledTimes(1)
+  })
+
+  it('surfaces `priorStatus` from updateSession (connectDB ordering contract)', async () => {
+    // This test pins Codex's P1 concern on PR #313: the route must NOT
+    // pre-read the session before `connectDB()` runs. The contract is
+    // that `updateSession` owns the connectDB call AND returns the
+    // pre-update status, so the route handler never touches Mongo before
+    // the service. If a future refactor moves the priorStatus read back
+    // to the route, this test keeps passing only as long as that pre-read
+    // also goes through connectDB — but the cleaner invariant is simply
+    // that `updateSession` is the single source of priorStatus.
+    //
+    // We assert this by checking that the route does NOT call any Mongo
+    // mock directly (there is no mock for InterviewSession.findById in
+    // this suite) — if the route re-introduced its own pre-read, the
+    // test would fail with "Cannot read .select of undefined" or similar.
+    mockNextUpdateSession('in_progress')
+    const res = await PATCH(makeReq({ status: 'completed', completedAt: new Date().toISOString() }), { params: { id: VALID_ID } })
+    expect(res.status).toBe(200)
+    expect(mockUpdateSession).toHaveBeenCalledTimes(1)
   })
 })
