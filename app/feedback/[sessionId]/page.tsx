@@ -690,30 +690,53 @@ function FeedbackPageInner() {
       }
       setFeedback(fb as FeedbackData)
 
-      // Persist feedback + ensure session is marked completed (recovers from stuck in_progress)
+      // Persist feedback + ensure session is marked completed (recovers from stuck in_progress).
+      //
+      // 2026-04-22 — when `fb.degraded === true` the payload is the server's
+      // outer-catch synthetic fallback (LLM threw). PR #313 stopped the
+      // server from persisting that payload so it doesn't leak into the ~10
+      // downstream readers that don't gate on `degraded` (dashboard
+      // last-score, history badge, score-trend chart, recruiter scorecard,
+      // pathway-planner LLM prompt, session-summary LLM prompt, GDPR
+      // export, peer-comparison `$avg`, PDF, shareable-link). But the
+      // feedback page itself PATCHes `feedback: fb` right here — which
+      // re-introduces the leak via the client path. So: skip the `feedback`
+      // field in the PATCH body (and the sessionStorage mirror) when the
+      // payload is degraded. The `status` + `completedAt` writes stay so
+      // the session isn't stranded in `in_progress` when a Claude error
+      // hits (defense-in-depth against a dropped `useInterview` persist).
       if (sid && sid !== 'local') {
+        const isDegradedFb = Boolean((fb as FeedbackData).degraded)
+        const patchBody: Record<string, unknown> = {
+          status: 'completed',
+          completedAt: new Date().toISOString(),
+        }
+        if (!isDegradedFb) patchBody.feedback = fb
         const saved = await fetchWithRetry(`/api/interviews/${sid}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            feedback: fb,
-            status: 'completed',
-            completedAt: new Date().toISOString(),
-          }),
+          body: JSON.stringify(patchBody),
         })
         if (!saved) {
           setSaveWarning('Feedback generated but could not be saved. It may not appear in history.')
         }
-        // Update sessionStorage cache so back-navigation doesn't re-generate
+        // Update sessionStorage cache so back-navigation doesn't re-generate.
+        // Mirror the no-persist rule: do NOT write degraded payloads into
+        // the cache either — back-navigation on a degraded session should
+        // re-enter the generation path (either succeeds fresh or returns
+        // degraded directly) rather than rehydrating a stale synthetic
+        // score.
         try {
           const cacheKey = `${SESSION_CACHE_PREFIX}${sid}`
           const raw = sessionStorage.getItem(cacheKey)
           if (raw) {
             const cached = JSON.parse(raw)
             if (cached.data) {
-              cached.data.session.feedback = fb
+              if (!isDegradedFb) {
+                cached.data.session.feedback = fb
+                if (cached.data.d) cached.data.d.feedback = fb
+              }
               cached.data.session.status = 'completed'
-              if (cached.data.d) cached.data.d.feedback = fb
               sessionStorage.setItem(cacheKey, JSON.stringify(cached))
             }
           }
@@ -752,14 +775,22 @@ function FeedbackPageInner() {
         fb.confidence_level = fb.confidence_level?.toLowerCase?.().includes('high') ? 'High'
           : fb.confidence_level?.toLowerCase?.().includes('low') ? 'Low' : 'Medium'
       }
+      // Mirror the no-persist-on-degraded rule from generateFeedback's
+      // tail: handleRetrySave can fire against a `feedback` state that was
+      // set from a degraded response (user clicked Retry Save before
+      // clicking Retry Feedback). Skip the feedback field in that case so
+      // we don't re-introduce the leak the server-side no-persist change
+      // was meant to eliminate.
+      const isDegradedFb = Boolean((fb as FeedbackData).degraded)
+      const patchBody: Record<string, unknown> = {
+        status: 'completed',
+        completedAt: new Date().toISOString(),
+      }
+      if (!isDegradedFb) patchBody.feedback = fb
       const saved = await fetchWithRetry(`/api/interviews/${sessionId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          feedback: fb,
-          status: 'completed',
-          completedAt: new Date().toISOString(),
-        }),
+        body: JSON.stringify(patchBody),
       })
       if (!saved) {
         setSaveWarning('Save failed again. The feedback is visible now but may not appear in history.')
