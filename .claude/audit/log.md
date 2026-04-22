@@ -1128,3 +1128,9 @@
 - **Files:** 2 changed, 1 test file(s)
 - **Root-cause:** PR #310's hit-side EXPIRE refresh removed the TTL-based
 - **Tests-added: shared/__tests__/modelRouter.test.ts — 5 new cases in**
+
+### 2026-04-22 15:32:21 +0000 · `f199068` · Claude
+- **Subject:** DEL cache key on Redis-op failure (Codex P1 round 2 #310)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** the previous writeEpoch staleness fix catches failure
+- **Tests-added: shared/__tests__/modelRouter.test.ts — 6 new cases in**
