@@ -318,6 +318,111 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
     expect(json.overall_score).toBe(75)
   })
 
+  // ── Codex P2 follow-up on PR #311 — normalise degraded to boolean ──
+  //
+  // The UI's banner renders on `{feedback.degraded && ...}` (truthy
+  // check). The server-side cache-bypass MUST use the same semantics,
+  // otherwise a non-boolean truthy value ever surviving persistence
+  // (schema drift, legacy payloads) produces a split-brain: UI shows
+  // the banner but server returns cached payload → retry becomes a
+  // no-op. These tests pin the truthy contract.
+
+  it('bypasses cache on truthy non-boolean degraded values (string "true")', async () => {
+    // Defensive: a payload where degraded survived persistence as a
+    // string must still trigger cache bypass. Without Boolean()
+    // coercion the strict `=== true` check would miss this and the
+    // user would be stuck on the degraded payload.
+    const previousWithStringDegraded = {
+      overall_score: 30,
+      pass_probability: 'Low',
+      confidence_level: 'Low',
+      dimensions: {
+        answer_quality: { score: 0, strengths: [], weaknesses: ['err'] },
+        communication: { score: 99, wpm: 87, filler_rate: 0.009, pause_score: 53, rambling_index: 0 },
+        engagement_signals: { score: 0, engagement_score: 0, confidence_trend: 'stable', energy_consistency: 0.5, composure_under_pressure: 0 },
+      },
+      red_flags: [],
+      top_3_improvements: ['A', 'B', 'C'],
+      // Non-boolean truthy — e.g. schema drift or JSON coercion
+      degraded: 'true' as unknown as boolean,
+    }
+    mockSessionFindOne.mockResolvedValueOnce({ feedback: previousWithStringDegraded })
+    mockCompletion.mockResolvedValueOnce(healthyClaudeResponse)
+
+    const res = await POST(makeReq({
+      evals: evals(5),
+      plannedQuestionCount: 6,
+      answeredCount: 5,
+      endReason: 'normal',
+    }))
+    const json = await res.json()
+
+    // Cache bypassed → LLM was called.
+    expect(mockCompletion).toHaveBeenCalledTimes(1)
+    // Fresh response, not the string-degraded cached one.
+    expect(json.overall_score).toBeGreaterThan(30)
+  })
+
+  it('bypasses cache on truthy number degraded (1)', async () => {
+    const previousWithNumericDegraded = {
+      overall_score: 30,
+      pass_probability: 'Low',
+      confidence_level: 'Low',
+      dimensions: {
+        answer_quality: { score: 0, strengths: [], weaknesses: ['err'] },
+        communication: { score: 99, wpm: 87, filler_rate: 0.009, pause_score: 53, rambling_index: 0 },
+        engagement_signals: { score: 0, engagement_score: 0, confidence_trend: 'stable', energy_consistency: 0.5, composure_under_pressure: 0 },
+      },
+      red_flags: [],
+      top_3_improvements: ['A', 'B', 'C'],
+      degraded: 1 as unknown as boolean,
+    }
+    mockSessionFindOne.mockResolvedValueOnce({ feedback: previousWithNumericDegraded })
+    mockCompletion.mockResolvedValueOnce(healthyClaudeResponse)
+
+    const res = await POST(makeReq({
+      evals: evals(5),
+      plannedQuestionCount: 6,
+      answeredCount: 5,
+      endReason: 'normal',
+    }))
+
+    expect(mockCompletion).toHaveBeenCalledTimes(1)
+  })
+
+  it('still USES cache when degraded is a falsy non-boolean (0, "", null)', async () => {
+    // Symmetric test: falsy values (0, empty string, null) must be
+    // treated as "not degraded" — same as `false` or `undefined` —
+    // to match the UI's truthy gate. Prevents unnecessary LLM
+    // regeneration on malformed-but-healthy sessions.
+    const previousWithNullDegraded = {
+      overall_score: 75,
+      pass_probability: 'High',
+      confidence_level: 'High',
+      dimensions: {
+        answer_quality: { score: 75, strengths: [], weaknesses: [] },
+        communication: { score: 72, wpm: 140, filler_rate: 0.04, pause_score: 70, rambling_index: 0.2 },
+        engagement_signals: { score: 75, engagement_score: 70, confidence_trend: 'stable', energy_consistency: 0.7, composure_under_pressure: 70 },
+      },
+      red_flags: [],
+      top_3_improvements: ['A', 'B', 'C'],
+      degraded: null as unknown as boolean,
+    }
+    mockSessionFindOne.mockResolvedValueOnce({ feedback: previousWithNullDegraded })
+
+    const res = await POST(makeReq({
+      evals: evals(5),
+      plannedQuestionCount: 6,
+      answeredCount: 5,
+      endReason: 'normal',
+    }))
+    const json = await res.json()
+
+    // LLM NOT called — null is falsy, cache short-circuit still fires.
+    expect(mockCompletion).not.toHaveBeenCalled()
+    expect(json.overall_score).toBe(75)
+  })
+
   it('treats degraded:false (explicitly set) the same as a cached healthy feedback', async () => {
     // Defensive test for payloads that explicitly set degraded:false.
     // The check in the route is `!== true`, so false is treated as

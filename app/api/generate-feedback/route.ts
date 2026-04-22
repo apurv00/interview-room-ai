@@ -302,19 +302,32 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
         // fallback (outer-catch path), the UI shows a Retry button that
         // re-POSTs to this route. Pre-fix, this preflight short-circuit
         // returned the SAME degraded payload the user is trying to escape
-        // — retry was a no-op. Treat `degraded: true` as "no valid feedback
-        // yet" so regeneration proceeds. The feedbackLock acquired above
-        // still prevents concurrent writers from racing to the LLM.
-        if (existing?.feedback && existing.feedback.degraded !== true) {
+        // — retry was a no-op. Treat any truthy `degraded` as "no valid
+        // feedback yet" so regeneration proceeds. The feedbackLock
+        // acquired above still prevents concurrent writers from racing
+        // to the LLM.
+        //
+        // Codex P2 follow-up on PR #311: use `Boolean(...)` rather than
+        // strict-equality `=== true`. The UI at feedback page.tsx:996
+        // does a truthy check (`{feedback.degraded && ...}`), so if a
+        // non-boolean value ever survives persistence (e.g.
+        // `"true"` via a future legacy payload or a schema-drift edge
+        // case), server + UI MUST agree on what counts as degraded.
+        // Without normalisation the UI would show the retry banner
+        // (truthy), but the server would hit the cache-return branch
+        // (strict `!== true`), and retry becomes a no-op again — the
+        // exact regression this P2 guards against.
+        const isDegraded = Boolean(existing?.feedback?.degraded)
+        if (existing?.feedback && !isDegraded) {
           aiLogger.info(
             { sessionId: body.sessionId, userId: user.id, redisLockAcquired: feedbackLock?.acquired ?? null },
             'generate-feedback: concurrent writer already produced feedback; returning cached (F-4)',
           )
           return NextResponse.json(existing.feedback)
         }
-        if (existing?.feedback?.degraded === true) {
+        if (isDegraded) {
           aiLogger.info(
-            { sessionId: body.sessionId, userId: user.id },
+            { sessionId: body.sessionId, userId: user.id, rawDegraded: existing?.feedback?.degraded },
             'generate-feedback: persisted feedback is degraded; bypassing cache to allow user-triggered retry (Codex P1 on #311)',
           )
         }
