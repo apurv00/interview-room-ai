@@ -1110,3 +1110,9 @@
 - **Files:** 2 changed, 1 test file(s)
 - **Root-cause:** replaceModelConfigCache sets `_cache` optimistically BEFORE
 - **Tests-added: shared/__tests__/modelRouter.test.ts — new case**
+
+### 2026-04-22 14:18:55 +0000 · `7164225` · Claude
+- **Subject:** Fix three Q2-Q5 UX regressions: TTS dup, silence stall, topic convergence
+- **Files:** 9 changed, 3 test file(s)
+- **Root-cause:** useInterview.ts:1356-1359 prepends a random filler to the
+- **Tests-added:**
