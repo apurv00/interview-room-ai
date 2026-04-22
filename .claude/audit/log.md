@@ -1165,3 +1165,10 @@
 - **Root-cause:** the 202-waiter poll loop in the feedback page
 - **No-tests-needed-because: the 202 waiter exercises a concurrent-tab**
 - **Verified-by:** npx tsc --noEmit → clean.
+
+### 2026-04-22 20:19:25 +0000 · `c12ed0a` · Claude
+- **Subject:** Strip feedback from client PATCH when payload is degraded
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** PR #313 removed the server-side persist of the outer-catch
+- **No-tests-needed-because: the PATCH-after-degraded behavior is a**
+- **Verified-by:** npx tsc --noEmit → clean. Manual review of all three
