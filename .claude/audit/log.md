@@ -1178,3 +1178,9 @@
 - **Files:** 2 changed, 1 test file(s)
 - **Root-cause:** PATCH /api/interviews/[id] awarded `interview_complete` XP
 - **Tests-added: modules/interview/__tests__/interviewCompleteIdempotent.test.ts**
+
+### 2026-04-22 20:38:32 +0000 · `94437e8` · Claude
+- **Subject:** Move priorStatus read into updateSession (fix cold-connect hazard)
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** commit 897a276 added an idempotency guard to the PATCH
+- **Tests-added: updated 4 existing tests in**
