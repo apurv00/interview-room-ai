@@ -1146,3 +1146,9 @@
 - **Files:** 2 changed, 1 test file(s)
 - **Root-cause:** PR #311 added a user-facing "Retry feedback" button for
 - **Tests-added: modules/interview/__tests__/feedbackDegradedFlag.test.ts**
+
+### 2026-04-22 18:04:39 +0000 · `9c6a205` · Claude
+- **Subject:** Normalise degraded to truthy-boolean before cache bypass (Codex P2 #311)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** PR #311's cache-bypass check used strict-equality `!== true`
+- **Tests-added: 3 new cases in feedbackDegradedFlag.test.ts:**
