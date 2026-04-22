@@ -51,6 +51,21 @@ const mockRedisDel = vi.fn<(key: string) => Promise<unknown>>()
 const mockRedisIncr = vi.fn<(key: string) => Promise<number>>()
 const mockRedisMget = vi.fn<(...keys: string[]) => Promise<Array<string | null>>>()
 const mockRedisEval = vi.fn<(script: string, numKeys: number, ...args: Array<string | number>) => Promise<unknown>>()
+const mockRedisExpire = vi.fn<(key: string, ttl: number) => Promise<number>>()
+
+/** Test helper — build a SerializedConfig JSON string with the required
+ *  `writeEpoch` stamp (Codex P1 on PR #310). A valid hit requires
+ *  `parsed.writeEpoch === liveEpoch` (the `rawEpoch` element from the
+ *  same MGET tuple). `epoch` must match what the test seeds as the
+ *  second element of the MGET response, or the reader treats the entry
+ *  as stale and skips the hit.
+ */
+function stampedPayload(
+  body: { routingEnabled: boolean; slotEntries: unknown[] },
+  epoch: string | null,
+): string {
+  return JSON.stringify({ ...body, writeEpoch: epoch ?? 'nil' })
+}
 
 describe('resolveModel', () => {
   beforeEach(async () => {
@@ -80,6 +95,11 @@ describe('resolveModel', () => {
     // to Redis. Tests that want to simulate a failed CAS (race with
     // invalidate) override with mockResolvedValueOnce(0).
     mockRedisEval.mockResolvedValue(1)
+    mockRedisExpire.mockReset()
+    // Default EXPIRE response: 1 (key existed, TTL refreshed). Tests
+    // that want to assert on refresh-on-hit can inspect
+    // mockRedisExpire.mock.calls.
+    mockRedisExpire.mockResolvedValue(1)
     mockAiLoggerInfo.mockReset()
     mockAiLoggerWarn.mockReset()
     __setRedisClientForTesting({
@@ -89,6 +109,7 @@ describe('resolveModel', () => {
       incr: mockRedisIncr,
       mget: mockRedisMget,
       eval: mockRedisEval,
+      expire: mockRedisExpire,
     })
   })
 
@@ -191,7 +212,7 @@ describe('resolveModel', () => {
         ],
       ],
     }
-    mockRedisMget.mockResolvedValueOnce([JSON.stringify(cachedConfig), '1'])
+    mockRedisMget.mockResolvedValueOnce([stampedPayload(cachedConfig, '1'), '1'])
 
     const result = await resolveModel('interview.generate-question')
 
@@ -287,7 +308,7 @@ describe('resolveModel', () => {
         ],
       ],
     }
-    mockRedisMget.mockResolvedValueOnce([JSON.stringify(cachedConfig), '1'])
+    mockRedisMget.mockResolvedValueOnce([stampedPayload(cachedConfig, '1'), '1'])
 
     await resolveModel('interview.generate-question')
 
@@ -550,7 +571,7 @@ describe('resolveModel', () => {
       routingEnabled: true,
       slotEntries: [],
     }
-    mockRedisMget.mockResolvedValueOnce([JSON.stringify(cachedConfig), '1'])
+    mockRedisMget.mockResolvedValueOnce([stampedPayload(cachedConfig, '1'), '1'])
 
     await resolveModel('interview.generate-question')
 
@@ -653,7 +674,7 @@ describe('resolveModel', () => {
           ],
         ],
       }
-      mockRedisMget.mockResolvedValueOnce([JSON.stringify(cachedConfig), '1'])
+      mockRedisMget.mockResolvedValueOnce([stampedPayload(cachedConfig, '1'), '1'])
 
       // First call — L2 hit on the user thread. Must return the CMS
       // config immediately, NOT defaults.
@@ -949,7 +970,7 @@ describe('resolveModel', () => {
           ],
         ],
       }
-      mockRedisMget.mockResolvedValueOnce([JSON.stringify(winnerPayload), '10'])
+      mockRedisMget.mockResolvedValueOnce([stampedPayload(winnerPayload, '10'), '10'])
 
       const result = await resolveModel('interview.generate-question')
 
@@ -1003,6 +1024,391 @@ describe('resolveModel', () => {
       expect(coldResult.model).toBe('custom-post-save-model')
       expect(coldResult.provider).toBe('anthropic')
       expect(coldResult.maxTokens).toBe(333)
+    })
+  })
+
+  // ── L2 TTL refresh-on-hit (Bug "L2-miss-every-turn" — 2026-04-22) ────
+  //
+  // Context: session 69e8c2f3 showed 0 L2-Redis hits across a full
+  // interview because inter-turn gaps (75–195s measured) exceeded the
+  // prior 60s REDIS_TTL_SECONDS. Every user's own cold Lambda saw L2
+  // miss and paid the background-Mongo cost. Fix: raise TTL to 1800s
+  // AND refresh TTL on every hit so warmed entries stay warm under
+  // sustained traffic. Mirrors the pattern in
+  // sessionConfigCache.ts:119-123.
+
+  describe('L2 TTL refresh-on-hit', () => {
+    it('fires EXPIRE with REDIS_TTL_SECONDS=1800 on every L2 hit', async () => {
+      // Seed a valid cached payload so tryLoadFromRedis takes the hit
+      // branch. The hit branch must emit a fire-and-forget EXPIRE with
+      // the configured TTL to keep the key from timing out mid-session.
+      const cachedConfig = {
+        routingEnabled: true,
+        slotEntries: [],
+      }
+      mockRedisMget.mockResolvedValueOnce([stampedPayload(cachedConfig, '1'), '1'])
+
+      await resolveModel('interview.generate-question')
+      // EXPIRE is fire-and-forget — flush one microtask for the call to register.
+      await Promise.resolve()
+
+      expect(mockRedisExpire).toHaveBeenCalledTimes(1)
+      const [key, ttl] = mockRedisExpire.mock.calls[0] as [string, number]
+      expect(key).toBe('model-config:v1')
+      expect(ttl).toBe(1800)
+    })
+
+    it('writes L2 with TTL=1800 on Mongo fallback (SETEX via Lua CAS)', async () => {
+      // Mongo path errors in test env (no mongoose), so we can't directly
+      // assert on SETEX firing — but we CAN assert on the TTL constant
+      // that the Lua CAS would pass. The TTL is ARGV[3] (7th positional
+      // arg to eval). Capture it via an intentional Mongo-success
+      // simulation: here we just check that if eval were called, it
+      // would receive 1800 by inspecting the Lua script argument order
+      // in a trivial invocation.
+      //
+      // The cleanest proof is via replaceModelConfigCache (direct
+      // save path) which fires eval and we own the signature.
+      mockRedisIncr.mockResolvedValueOnce(5)
+
+      await replaceModelConfigCache({ routingEnabled: true, slots: [] })
+
+      // eval args: [script, numKeys=2, cacheKey, epochKey, capturedEpoch, payload, TTL]
+      const evalArgs = mockRedisEval.mock.calls[0] as unknown as [
+        string, number, string, string, string, string, number
+      ]
+      expect(evalArgs[6]).toBe(1800) // TTL, the Bug fix pins it
+    })
+
+    it('does NOT fail resolveModel when EXPIRE rejects', async () => {
+      // A rejected EXPIRE must not surface as an unhandled rejection
+      // or propagate into the user-facing resolveModel return value.
+      mockRedisExpire.mockRejectedValueOnce(new Error('ECONNRESET'))
+      const cachedConfig = {
+        routingEnabled: true,
+        slotEntries: [
+          [
+            'interview.generate-question',
+            {
+              taskSlot: 'interview.generate-question',
+              model: 'cached-model',
+              provider: 'openai',
+              maxTokens: 200,
+              isActive: true,
+            },
+          ],
+        ],
+      }
+      mockRedisMget.mockResolvedValueOnce([stampedPayload(cachedConfig, '1'), '1'])
+
+      const result = await resolveModel('interview.generate-question')
+
+      expect(result.model).toBe('cached-model')
+      // Allow one tick for the rejected promise to propagate through
+      // the .catch handler.
+      await new Promise((r) => setTimeout(r, 0))
+      // A warn log is emitted but the caller never sees the failure.
+    })
+
+    it('does NOT fire EXPIRE on L2 miss (nothing to refresh)', async () => {
+      // Default mockRedisMget returns [null, null] → miss. The miss
+      // path does not hit the EXPIRE branch because there's no key to
+      // refresh. Pairs with the cold-defaults-synthetic path.
+      await resolveModel('interview.generate-question')
+      await __awaitBackgroundLoadForTesting()
+
+      expect(mockRedisExpire).not.toHaveBeenCalled()
+    })
+
+    it('does NOT fire EXPIRE when the cached payload fails shape validation', async () => {
+      // A garbled payload returns to the miss path — we must not refresh
+      // the TTL of a corrupt entry (that would prolong the stale window).
+      // The key will age out at its own TTL instead.
+      mockRedisMget.mockResolvedValueOnce(['{not json', '1'])
+
+      await resolveModel('interview.generate-question')
+      await Promise.resolve()
+
+      expect(mockRedisExpire).not.toHaveBeenCalled()
+    })
+
+    it('fires EXPIRE on EVERY hit (keeps the cache warm under sustained traffic)', async () => {
+      // The whole point: warm entries should stay warm as long as
+      // there's any traffic. Two separate L2 hits (simulating two
+      // cold Lambdas on the same session) → two EXPIRE refreshes.
+      const cachedConfig = {
+        routingEnabled: true,
+        slotEntries: [],
+      }
+      mockRedisMget.mockResolvedValueOnce([stampedPayload(cachedConfig, '1'), '1'])
+      await resolveModel('interview.generate-question')
+      await Promise.resolve()
+
+      // Clear the in-memory L1 to simulate a second cold Lambda that
+      // still finds the L2 entry present.
+      _clearLocalCacheForCrossLambdaSim()
+      mockRedisMget.mockResolvedValueOnce([stampedPayload(cachedConfig, '2'), '2'])
+      await resolveModel('interview.generate-question')
+      await Promise.resolve()
+
+      expect(mockRedisExpire).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  // ── Stale-cache self-heal via writeEpoch (Codex P1 on PR #310) ──────
+  //
+  // Codex flagged that hit-side TTL refresh removes the implicit TTL
+  // self-heal when an invalidation's DEL fails silently: the pre-fix
+  // stale cache would age out in ≤TTL, but with refresh-on-hit every
+  // read extends the life of a stale entry indefinitely under traffic.
+  //
+  // The fix stamps `writeEpoch` into the payload and compares it to the
+  // live Redis epoch on read. Mismatch = stale → skip hit, skip
+  // refresh, let the key age out naturally.
+  describe('stale-cache self-heal (Codex P1)', () => {
+    it('returns MISS when payload writeEpoch < live Redis epoch (failed-invalidation scenario)', async () => {
+      // Simulate the exact scenario Codex described:
+      //   1. invalidateModelConfigCache() fires INCR (live epoch → 2)
+      //      but DEL fails silently, so the cache still holds the
+      //      previous writer's payload with writeEpoch=1.
+      //   2. A reader MGETs [staleCache, '2'].
+      //   3. Without writeEpoch check: hit, TTL refreshed, stale config
+      //      served indefinitely under traffic.
+      //   4. With the fix: staleness detected → miss.
+      const staleCache = {
+        routingEnabled: true,
+        slotEntries: [
+          [
+            'interview.generate-question',
+            {
+              taskSlot: 'interview.generate-question',
+              model: 'stale-model',
+              provider: 'anthropic',
+              maxTokens: 200,
+              isActive: true,
+            },
+          ],
+        ],
+      }
+      // writeEpoch=1 in payload, but live Redis epoch=2 → mismatch.
+      mockRedisMget.mockResolvedValueOnce([stampedPayload(staleCache, '1'), '2'])
+
+      const result = await resolveModel('interview.generate-question')
+
+      // Reader treats it as a miss → resolveModel uses TASK_SLOT_DEFAULTS
+      // (Mongo path fails in test env), NOT the stale model.
+      expect(result.model).toBe('gpt-5.4-mini')
+      expect(result.model).not.toBe('stale-model')
+    })
+
+    it('does NOT refresh TTL on stale-writeEpoch read (the whole point — let it age out)', async () => {
+      const staleCache = {
+        routingEnabled: true,
+        slotEntries: [],
+      }
+      mockRedisMget.mockResolvedValueOnce([stampedPayload(staleCache, '1'), '2'])
+
+      await resolveModel('interview.generate-question')
+      await Promise.resolve()
+
+      // TTL refresh would prolong the stale entry indefinitely under
+      // traffic — the exact regression Codex flagged. Pinned OFF.
+      expect(mockRedisExpire).not.toHaveBeenCalled()
+    })
+
+    it('emits a structured warn log when writeEpoch mismatches (observability)', async () => {
+      const staleCache = {
+        routingEnabled: true,
+        slotEntries: [],
+      }
+      mockRedisMget.mockResolvedValueOnce([stampedPayload(staleCache, '3'), '7'])
+
+      await resolveModel('interview.generate-question')
+
+      const warns = mockAiLoggerWarn.mock.calls.filter(
+        ([payload]) => (payload as { event?: string }).event === 'model_config_l2_stale_skip',
+      )
+      expect(warns.length).toBeGreaterThanOrEqual(1)
+      const payload = warns[0]?.[0] as { writeEpoch: string; liveEpoch: string }
+      expect(payload.writeEpoch).toBe('3')
+      expect(payload.liveEpoch).toBe('7')
+    })
+
+    it('rejects pre-deploy payloads missing writeEpoch entirely (forced single Mongo refresh)', async () => {
+      // A payload written by the previous deploy (no writeEpoch field)
+      // fails isValidSerializedConfig and is treated as shape-invalid,
+      // which is ALSO a miss path with no TTL refresh. One Mongo fetch
+      // per Lambda after deploy, then the cache self-heals with the
+      // stamped-epoch format.
+      const preDeployCache = {
+        routingEnabled: true,
+        slotEntries: [],
+        // writeEpoch intentionally omitted
+      }
+      mockRedisMget.mockResolvedValueOnce([JSON.stringify(preDeployCache), '1'])
+
+      const result = await resolveModel('interview.generate-question')
+      await Promise.resolve()
+
+      // Falls through to defaults (Mongo fails in test env), no refresh
+      // extended the life of the untyped payload.
+      expect(result.model).toBe('gpt-5.4-mini')
+      expect(mockRedisExpire).not.toHaveBeenCalled()
+    })
+
+    it('falls back to DEL when INCR itself throws (Codex P1 round 2 on PR #310)', async () => {
+      // Scenario Codex flagged in round 2: replaceModelConfigCache
+      // calls client.incr(REDIS_EPOCH_KEY) and it throws (Redis brief
+      // outage, network glitch). The try/catch swallows the error, but
+      // WITHOUT the DEL fallback the cache key + epoch key are BOTH
+      // unchanged — a reader sees writeEpoch == liveEpoch (both still
+      // oldEpoch) → hit → TTL refresh → stale config served
+      // indefinitely under traffic. The writeEpoch staleness check
+      // can't detect this because Redis state didn't change.
+      //
+      // Fix: on INCR failure, DEL the cache key so readers miss and
+      // re-fetch from Mongo (which has the admin's just-written
+      // correct config).
+      mockRedisIncr.mockRejectedValueOnce(new Error('ECONNRESET'))
+
+      await replaceModelConfigCache({
+        routingEnabled: true,
+        slots: [
+          {
+            taskSlot: 'interview.generate-question',
+            model: 'new-model',
+            provider: 'openai',
+            maxTokens: 200,
+            isActive: true,
+          },
+        ],
+      })
+
+      // Allow one microtask flush for the fire-and-forget DEL.
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(mockRedisDel).toHaveBeenCalledWith('model-config:v1')
+    })
+
+    it('does NOT throw when INCR fails — admin HTTP 200 must still succeed', async () => {
+      // The CMS PUT handler awaits replaceModelConfigCache. A thrown
+      // error would bubble up and fail the admin's HTTP response even
+      // though the Mongo write already succeeded. Swallowing errors is
+      // the contract; the DEL fallback preserves it.
+      mockRedisIncr.mockRejectedValueOnce(new Error('ECONNRESET'))
+
+      await expect(
+        replaceModelConfigCache({ routingEnabled: true, slots: [] }),
+      ).resolves.not.toThrow()
+    })
+
+    it('DEL-fallback failure does NOT surface — logs warn, cache ages out at TTL', async () => {
+      // Worst case: Redis is fully down, both INCR and DEL throw. We
+      // can't invalidate the cache remotely; the stale key ages out at
+      // REDIS_TTL_SECONDS (the pre-fix failure bound, unchanged). Must
+      // not throw an unhandled rejection.
+      mockRedisIncr.mockRejectedValueOnce(new Error('ECONNRESET'))
+      mockRedisDel.mockRejectedValueOnce(new Error('ECONNRESET'))
+
+      await expect(
+        replaceModelConfigCache({ routingEnabled: true, slots: [] }),
+      ).resolves.not.toThrow()
+
+      await new Promise((r) => setTimeout(r, 0))
+      // No assertion on throw — the test passes if no unhandled rejection surfaces.
+    })
+
+    it('falls back to DEL when eval throws AFTER successful INCR', async () => {
+      // Narrower failure mode: INCR succeeded (epoch bumped), but the
+      // Lua CAS eval then threw mid-write (Redis restart between the
+      // two calls, for instance). writeEpoch mismatch would catch this
+      // on read (live epoch advanced past stale payload's writeEpoch),
+      // but DEL as belt-and-suspenders is cheaper than relying on every
+      // reader to notice.
+      mockRedisIncr.mockResolvedValueOnce(42)
+      mockRedisEval.mockRejectedValueOnce(new Error('ECONNRESET during eval'))
+
+      await replaceModelConfigCache({
+        routingEnabled: true,
+        slots: [],
+      })
+
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(mockRedisDel).toHaveBeenCalledWith('model-config:v1')
+    })
+
+    it('does NOT fire DEL on a successful replace (happy path unchanged)', async () => {
+      // Regression guard: the successful path must not spuriously DEL
+      // the key it just wrote. DEL is the FAILURE fallback only.
+      mockRedisIncr.mockResolvedValueOnce(7)
+      mockRedisEval.mockResolvedValueOnce(1) // CAS succeeded
+
+      await replaceModelConfigCache({
+        routingEnabled: true,
+        slots: [
+          {
+            taskSlot: 'interview.generate-question',
+            model: 'new-model',
+            provider: 'openai',
+            maxTokens: 200,
+            isActive: true,
+          },
+        ],
+      })
+
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(mockRedisDel).not.toHaveBeenCalled()
+    })
+
+    it('does NOT fire DEL on CAS-race-lost (result === 0; peer already wrote correctly)', async () => {
+      // Scenario: two admins save concurrently. Our INCR bumped to N+1.
+      // Their INCR bumped to N+2 before our eval landed. Our Lua CAS
+      // returns 0 — they wrote the correct newer payload. DEL'ing now
+      // would clobber their valid save. Must stay no-op for the race-
+      // lost case.
+      mockRedisIncr.mockResolvedValueOnce(5)
+      mockRedisEval.mockResolvedValueOnce(0) // CAS race lost
+
+      await replaceModelConfigCache({ routingEnabled: true, slots: [] })
+
+      await Promise.resolve()
+      await Promise.resolve()
+
+      // eval returned 0, didn't throw — went through the `if (result === 0)`
+      // branch that clears L1 and logs, not the catch.
+      expect(mockRedisDel).not.toHaveBeenCalled()
+    })
+
+    it('accepts a matched writeEpoch === liveEpoch as a valid hit (healthy path)', async () => {
+      // Regression guard: the happy path must still work. writeEpoch
+      // stamped with the same value the MGET returns as rawEpoch.
+      const freshCache = {
+        routingEnabled: true,
+        slotEntries: [
+          [
+            'interview.generate-question',
+            {
+              taskSlot: 'interview.generate-question',
+              model: 'fresh-model',
+              provider: 'anthropic',
+              maxTokens: 200,
+              isActive: true,
+            },
+          ],
+        ],
+      }
+      mockRedisMget.mockResolvedValueOnce([stampedPayload(freshCache, '5'), '5'])
+
+      const result = await resolveModel('interview.generate-question')
+      await Promise.resolve()
+
+      expect(result.model).toBe('fresh-model')
+      expect(mockRedisExpire).toHaveBeenCalledTimes(1)
     })
   })
 })

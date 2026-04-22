@@ -1116,3 +1116,21 @@
 - **Files:** 9 changed, 3 test file(s)
 - **Root-cause:** useInterview.ts:1356-1359 prepends a random filler to the
 - **Tests-added:**
+
+### 2026-04-22 15:04:59 +0000 · `2f9ebb4` · Claude
+- **Subject:** Fix L2-miss-every-turn: raise TTL 60→1800s + refresh on hit
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** on session 69e8c2f3 (2026-04-22) every `model_config_load`
+- **Tests-added: shared/__tests__/modelRouter.test.ts — 6 new cases in**
+
+### 2026-04-22 15:21:29 +0000 · `916b4f7` · Claude
+- **Subject:** Stamp writeEpoch in cache payload, reject stale on read (Codex P1 #310)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** PR #310's hit-side EXPIRE refresh removed the TTL-based
+- **Tests-added: shared/__tests__/modelRouter.test.ts — 5 new cases in**
+
+### 2026-04-22 15:32:21 +0000 · `f199068` · Claude
+- **Subject:** DEL cache key on Redis-op failure (Codex P1 round 2 #310)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** the previous writeEpoch staleness fix catches failure
+- **Tests-added: shared/__tests__/modelRouter.test.ts — 6 new cases in**

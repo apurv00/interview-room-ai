@@ -34,6 +34,15 @@ interface RedisLike {
   incr(key: string): Promise<number>
   mget(...keys: string[]): Promise<Array<string | null>>
   eval(script: string, numKeys: number, ...keysAndArgs: Array<string | number>): Promise<unknown>
+  /**
+   * Refresh a key's TTL. Used by `tryLoadFromRedis` to keep active
+   * model-config entries warm across user requests — the inter-request
+   * gap inside one interview turn is routinely 75–195s (measured on
+   * session 69e8c2f3, 2026-04-22). Without hit-side refresh the 60s
+   * TTL expired between every user's own requests, guaranteeing L2
+   * miss on every cold Lambda.
+   */
+  expire(key: string, ttl: number): Promise<number>
 }
 
 // Test override hatch — see `__setRedisClientForTesting` below.
@@ -96,7 +105,24 @@ interface CachedConfig {
 
 const CACHE_TTL_MS = 60_000
 const REDIS_CACHE_KEY = 'model-config:v1'
-const REDIS_TTL_SECONDS = 60
+/**
+ * Redis L2 TTL — raised 60 → 1800 (30 min) on 2026-04-22 after
+ * session 69e8c2f3 diagnostics showed 0 L2 hits across a full
+ * interview. The inter-request gap inside one interview turn is
+ * 75–195s (TTS playback + user answer + STT grace + eval +
+ * generate-question), longer than the prior 60s TTL, so every
+ * user's own cold Lambda saw an L2 miss even though the previous
+ * turn's Lambda had just written.
+ *
+ * Invalidation is still immediate via `invalidateModelConfigCache`
+ * (DEL on PUT) and `replaceModelConfigCache` (atomic overwrite on
+ * CMS save), so TTL is purely a safety fallback for "forgot to
+ * invalidate" cases. 30 min matches `sessionConfigCache.TTL_SECONDS`
+ * for consistency. Paired with hit-side `expire` refresh in
+ * `tryLoadFromRedis` — warmed entries stay warm under continuous
+ * traffic, invalidation still works instantly.
+ */
+const REDIS_TTL_SECONDS = 1800
 /**
  * Monotonic counter, shared across ALL Lambda containers via Redis.
  * Incremented on every `invalidateModelConfigCache()`. Every
@@ -162,10 +188,33 @@ let _lastLoadSource: ConfigLoadSource = 'defaults-client'
 /**
  * Serialisable shape of the config as stored in Redis.
  * Map is not JSON-serialisable so we flatten to an array of entries.
+ *
+ * `writeEpoch` is the value of the Redis shared epoch at the moment
+ * this payload was committed. Readers compare it against the live
+ * `rawEpoch` from the same MGET round-trip — a mismatch means
+ * `invalidateModelConfigCache` (or a concurrent `replaceModelConfigCache`)
+ * INCR'd the epoch AFTER this payload was written, and the paired DEL
+ * either hasn't landed or failed silently. In that state the payload
+ * is stale even though Redis still holds it. Before `writeEpoch` was
+ * introduced the stale payload would be served (and TTL-refreshed) until
+ * an explicit DEL landed or the key aged out; Codex P1 on PR #310.
+ *
+ * Encoded as string (may be `"nil"` for the sentinel-initial-install
+ * case) so we can compare to `rawEpoch` from MGET byte-for-byte without
+ * normalisation headaches.
  */
 interface SerializedConfig {
   routingEnabled: boolean
   slotEntries: Array<[TaskSlot, SlotConfig]>
+  writeEpoch: string
+}
+
+/** Normalise a captured/live epoch to the string form embedded in
+ *  `SerializedConfig.writeEpoch`. `null`/`undefined` (the pre-
+ *  initialisation state where the epoch key doesn't exist in Redis
+ *  yet) maps to the `"nil"` sentinel used by `CAS_WRITE_LUA`. */
+function normaliseEpoch(epoch: string | null | undefined): string {
+  return epoch ?? 'nil'
 }
 
 function hydrateFromSerialized(data: SerializedConfig): CachedConfig {
@@ -176,10 +225,11 @@ function hydrateFromSerialized(data: SerializedConfig): CachedConfig {
   }
 }
 
-function serializeForRedis(cache: CachedConfig): SerializedConfig {
+function serializeForRedis(cache: CachedConfig, writeEpoch: string | null): SerializedConfig {
   return {
     routingEnabled: cache.routingEnabled,
     slotEntries: Array.from(cache.slots.entries()),
+    writeEpoch: normaliseEpoch(writeEpoch),
   }
 }
 
@@ -265,6 +315,12 @@ function isValidSerializedConfig(data: unknown): data is SerializedConfig {
   const obj = data as Record<string, unknown>
   if (typeof obj.routingEnabled !== 'boolean') return false
   if (!Array.isArray(obj.slotEntries)) return false
+  // `writeEpoch` missing = payload from a pre-epoch-stamped deploy.
+  // Rejecting it forces one Mongo refresh per Lambda post-deploy and
+  // then the cache self-heals with the stamped-epoch format. Much
+  // better than accepting a payload that can't be staleness-checked
+  // (Codex P1 on PR #310).
+  if (typeof obj.writeEpoch !== 'string') return false
   for (const entry of obj.slotEntries) {
     if (!Array.isArray(entry) || entry.length !== 2) return false
     if (typeof entry[0] !== 'string') return false
@@ -304,14 +360,58 @@ async function tryLoadFromRedis(): Promise<{ hit: boolean; capturedEpoch: string
       // write. Treat as a cache miss so the next call rebuilds from
       // Mongo. NOT writing to Redis here on purpose: invalidating on
       // detected corruption risks a DEL-race between multiple Lambdas.
-      // The corrupted key will age out at its TTL (≤60s).
+      // The corrupted key will age out at its TTL (≤REDIS_TTL_SECONDS)
+      // — an operator-visible stale window, but bounded.
       aiLogger.warn(
         { preview: rawConfig.slice(0, 200) },
         'ModelRouter: Redis L2 payload failed shape validation, falling through to Mongo',
       )
       return { hit: false, capturedEpoch: rawEpoch ?? null }
     }
+    // Staleness check — Codex P1 on PR #310.
+    //
+    // The Lua CAS guarantees that a write only lands when the captured
+    // epoch matches Redis's current epoch at write time, so the payload
+    // is implicitly bound to `parsed.writeEpoch`. If the live `rawEpoch`
+    // from this same MGET diverges, `invalidateModelConfigCache` (or a
+    // concurrent `replaceModelConfigCache`) bumped the epoch after our
+    // payload was written — and the paired DEL either hasn't landed or
+    // failed silently. Under the pre-fix behavior the stale payload
+    // would still be served AND have its TTL refreshed on every hit,
+    // making it effectively immortal under traffic. Now we treat the
+    // mismatch as a miss: no hydration, NO TTL refresh, so the key
+    // ages out at its natural TTL and the next Mongo refresh restores
+    // correct routing.
+    const liveEpoch = normaliseEpoch(rawEpoch)
+    if (parsed.writeEpoch !== liveEpoch) {
+      aiLogger.warn(
+        {
+          event: 'model_config_l2_stale_skip',
+          writeEpoch: parsed.writeEpoch,
+          liveEpoch,
+        },
+        'ModelRouter: Redis L2 entry has stale writeEpoch, skipping hit + TTL refresh so it can age out',
+      )
+      return { hit: false, capturedEpoch: rawEpoch ?? null }
+    }
     _cache = hydrateFromSerialized(parsed)
+    // Fire-and-forget TTL refresh on hit. Without this, a warm L2 entry
+    // dies exactly REDIS_TTL_SECONDS after its last write, regardless
+    // of how many requests hit it — the same miss-every-turn symptom
+    // that the TTL increase alone doesn't fully solve under sustained
+    // traffic. Matches the pattern in sessionConfigCache.ts:119-123.
+    //
+    // Only fires after the epoch-staleness check above passes, so we
+    // never prolong the life of a stale entry.
+    //
+    // Never awaited — an EXPIRE failure should not delay the response,
+    // and worst case the cache expires normally at TTL. Caught so a
+    // rejected promise doesn't surface as an unhandled rejection.
+    void client
+      .expire(REDIS_CACHE_KEY, REDIS_TTL_SECONDS)
+      .catch((err: unknown) =>
+        aiLogger.warn({ err }, 'ModelRouter: L2 TTL refresh failed (non-fatal)'),
+      )
     return { hit: true, capturedEpoch: rawEpoch ?? null }
   } catch (err) {
     aiLogger.warn({ err }, 'ModelRouter: Redis L2 cache read failed, falling through to Mongo')
@@ -344,13 +444,18 @@ async function writeToRedis(cache: CachedConfig, capturedEpoch: string | null): 
     // Lua treats `null` as absence; we pass the literal string 'nil'
     // as a sentinel so the script can distinguish "no captured epoch"
     // from "captured empty string". See CAS_WRITE_LUA for details.
+    // `eval` KEYS: cache + epoch; ARGS: captured epoch, payload, TTL.
+    // The captured epoch is embedded in the payload AS WELL so readers
+    // can detect "epoch bumped after we wrote" (stale-under-failed-
+    // invalidation) — see Codex P1 on PR #310 and the hit-side check
+    // in tryLoadFromRedis.
     const result = await client.eval(
       CAS_WRITE_LUA,
       2,
       REDIS_CACHE_KEY,
       REDIS_EPOCH_KEY,
       capturedEpoch ?? 'nil',
-      JSON.stringify(serializeForRedis(cache)),
+      JSON.stringify(serializeForRedis(cache, capturedEpoch)),
       REDIS_TTL_SECONDS,
     )
     if (result === 0) {
@@ -650,13 +755,17 @@ export async function replaceModelConfigCache(doc: {
   if (!client) return
   try {
     const newEpoch = await client.incr(REDIS_EPOCH_KEY)
+    const newEpochStr = String(newEpoch)
     const result = await client.eval(
       CAS_WRITE_LUA,
       2,
       REDIS_CACHE_KEY,
       REDIS_EPOCH_KEY,
-      String(newEpoch),
-      JSON.stringify(serializeForRedis(cache)),
+      newEpochStr,
+      // Stamp the payload with the epoch at write time so readers can
+      // detect stale-after-invalidation on their next MGET (Codex P1
+      // on PR #310).
+      JSON.stringify(serializeForRedis(cache, newEpochStr)),
       REDIS_TTL_SECONDS,
     )
     if (result === 0) {
@@ -677,6 +786,33 @@ export async function replaceModelConfigCache(doc: {
     }
   } catch (err) {
     aiLogger.warn({ err }, 'ModelRouter: replaceModelConfigCache Redis write failed')
+    // Codex P1 (round 2) on PR #310: when INCR itself throws, the epoch
+    // key stays at its OLD value AND the cache key stays at its OLD
+    // payload. A reader's writeEpoch check sees `payload.writeEpoch ==
+    // liveEpoch` (both still the old value), hits, refreshes TTL — and
+    // stale config is served indefinitely under traffic. The writeEpoch
+    // staleness check can't detect this because nothing about the Redis
+    // state changed.
+    //
+    // Fallback: DEL the cache key so readers miss and re-fetch from
+    // Mongo. The admin has already successfully written their new
+    // config to Mongo (CMS PUT handler did that before calling us), so
+    // a miss → Mongo fetch produces the correct fresh config. This
+    // also correctly handles the narrower case where INCR succeeded
+    // but eval threw (payload unchanged, epoch bumped → writeEpoch
+    // mismatch would ALSO catch it on read; DEL is just belt-and-
+    // suspenders cleanup).
+    //
+    // Fire-and-forget: DEL in the same Redis outage will also fail,
+    // in which case the stale key ages out at its natural TTL
+    // (REDIS_TTL_SECONDS) — matching the pre-fix failure window
+    // bounds, not worse. Logged so ops can correlate.
+    void client.del(REDIS_CACHE_KEY).catch((delErr: unknown) => {
+      aiLogger.warn(
+        { err: delErr },
+        'ModelRouter: replaceModelConfigCache DEL fallback also failed — stale key will age out at TTL',
+      )
+    })
   }
 }
 
