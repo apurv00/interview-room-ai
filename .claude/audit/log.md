@@ -1158,3 +1158,10 @@
 - **Files:** 2 changed, 1 test file(s)
 - **Root-cause:** PR #311 added `degraded: true` to the outer-catch synthetic
 - **Tests-added: modules/interview/__tests__/feedbackDegradedFlag.test.ts**
+
+### 2026-04-22 20:12:25 +0000 · `27a2197` · Claude
+- **Subject:** Re-POST on 202-waiter poll timeout to unblock degraded-banner UX
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the 202-waiter poll loop in the feedback page
+- **No-tests-needed-because: the 202 waiter exercises a concurrent-tab**
+- **Verified-by:** npx tsc --noEmit → clean.
