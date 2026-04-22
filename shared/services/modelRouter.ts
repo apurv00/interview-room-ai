@@ -34,6 +34,15 @@ interface RedisLike {
   incr(key: string): Promise<number>
   mget(...keys: string[]): Promise<Array<string | null>>
   eval(script: string, numKeys: number, ...keysAndArgs: Array<string | number>): Promise<unknown>
+  /**
+   * Refresh a key's TTL. Used by `tryLoadFromRedis` to keep active
+   * model-config entries warm across user requests — the inter-request
+   * gap inside one interview turn is routinely 75–195s (measured on
+   * session 69e8c2f3, 2026-04-22). Without hit-side refresh the 60s
+   * TTL expired between every user's own requests, guaranteeing L2
+   * miss on every cold Lambda.
+   */
+  expire(key: string, ttl: number): Promise<number>
 }
 
 // Test override hatch — see `__setRedisClientForTesting` below.
@@ -96,7 +105,24 @@ interface CachedConfig {
 
 const CACHE_TTL_MS = 60_000
 const REDIS_CACHE_KEY = 'model-config:v1'
-const REDIS_TTL_SECONDS = 60
+/**
+ * Redis L2 TTL — raised 60 → 1800 (30 min) on 2026-04-22 after
+ * session 69e8c2f3 diagnostics showed 0 L2 hits across a full
+ * interview. The inter-request gap inside one interview turn is
+ * 75–195s (TTS playback + user answer + STT grace + eval +
+ * generate-question), longer than the prior 60s TTL, so every
+ * user's own cold Lambda saw an L2 miss even though the previous
+ * turn's Lambda had just written.
+ *
+ * Invalidation is still immediate via `invalidateModelConfigCache`
+ * (DEL on PUT) and `replaceModelConfigCache` (atomic overwrite on
+ * CMS save), so TTL is purely a safety fallback for "forgot to
+ * invalidate" cases. 30 min matches `sessionConfigCache.TTL_SECONDS`
+ * for consistency. Paired with hit-side `expire` refresh in
+ * `tryLoadFromRedis` — warmed entries stay warm under continuous
+ * traffic, invalidation still works instantly.
+ */
+const REDIS_TTL_SECONDS = 1800
 /**
  * Monotonic counter, shared across ALL Lambda containers via Redis.
  * Incremented on every `invalidateModelConfigCache()`. Every
@@ -304,7 +330,8 @@ async function tryLoadFromRedis(): Promise<{ hit: boolean; capturedEpoch: string
       // write. Treat as a cache miss so the next call rebuilds from
       // Mongo. NOT writing to Redis here on purpose: invalidating on
       // detected corruption risks a DEL-race between multiple Lambdas.
-      // The corrupted key will age out at its TTL (≤60s).
+      // The corrupted key will age out at its TTL (≤REDIS_TTL_SECONDS)
+      // — an operator-visible stale window, but bounded.
       aiLogger.warn(
         { preview: rawConfig.slice(0, 200) },
         'ModelRouter: Redis L2 payload failed shape validation, falling through to Mongo',
@@ -312,6 +339,20 @@ async function tryLoadFromRedis(): Promise<{ hit: boolean; capturedEpoch: string
       return { hit: false, capturedEpoch: rawEpoch ?? null }
     }
     _cache = hydrateFromSerialized(parsed)
+    // Fire-and-forget TTL refresh on hit. Without this, a warm L2 entry
+    // dies exactly REDIS_TTL_SECONDS after its last write, regardless
+    // of how many requests hit it — the same miss-every-turn symptom
+    // that the TTL increase alone doesn't fully solve under sustained
+    // traffic. Matches the pattern in sessionConfigCache.ts:119-123.
+    //
+    // Never awaited — an EXPIRE failure should not delay the response,
+    // and worst case the cache expires normally at TTL. Caught so a
+    // rejected promise doesn't surface as an unhandled rejection.
+    void client
+      .expire(REDIS_CACHE_KEY, REDIS_TTL_SECONDS)
+      .catch((err: unknown) =>
+        aiLogger.warn({ err }, 'ModelRouter: L2 TTL refresh failed (non-fatal)'),
+      )
     return { hit: true, capturedEpoch: rawEpoch ?? null }
   } catch (err) {
     aiLogger.warn({ err }, 'ModelRouter: Redis L2 cache read failed, falling through to Mongo')

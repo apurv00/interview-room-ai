@@ -51,6 +51,7 @@ const mockRedisDel = vi.fn<(key: string) => Promise<unknown>>()
 const mockRedisIncr = vi.fn<(key: string) => Promise<number>>()
 const mockRedisMget = vi.fn<(...keys: string[]) => Promise<Array<string | null>>>()
 const mockRedisEval = vi.fn<(script: string, numKeys: number, ...args: Array<string | number>) => Promise<unknown>>()
+const mockRedisExpire = vi.fn<(key: string, ttl: number) => Promise<number>>()
 
 describe('resolveModel', () => {
   beforeEach(async () => {
@@ -80,6 +81,11 @@ describe('resolveModel', () => {
     // to Redis. Tests that want to simulate a failed CAS (race with
     // invalidate) override with mockResolvedValueOnce(0).
     mockRedisEval.mockResolvedValue(1)
+    mockRedisExpire.mockReset()
+    // Default EXPIRE response: 1 (key existed, TTL refreshed). Tests
+    // that want to assert on refresh-on-hit can inspect
+    // mockRedisExpire.mock.calls.
+    mockRedisExpire.mockResolvedValue(1)
     mockAiLoggerInfo.mockReset()
     mockAiLoggerWarn.mockReset()
     __setRedisClientForTesting({
@@ -89,6 +95,7 @@ describe('resolveModel', () => {
       incr: mockRedisIncr,
       mget: mockRedisMget,
       eval: mockRedisEval,
+      expire: mockRedisExpire,
     })
   })
 
@@ -1003,6 +1010,134 @@ describe('resolveModel', () => {
       expect(coldResult.model).toBe('custom-post-save-model')
       expect(coldResult.provider).toBe('anthropic')
       expect(coldResult.maxTokens).toBe(333)
+    })
+  })
+
+  // ── L2 TTL refresh-on-hit (Bug "L2-miss-every-turn" — 2026-04-22) ────
+  //
+  // Context: session 69e8c2f3 showed 0 L2-Redis hits across a full
+  // interview because inter-turn gaps (75–195s measured) exceeded the
+  // prior 60s REDIS_TTL_SECONDS. Every user's own cold Lambda saw L2
+  // miss and paid the background-Mongo cost. Fix: raise TTL to 1800s
+  // AND refresh TTL on every hit so warmed entries stay warm under
+  // sustained traffic. Mirrors the pattern in
+  // sessionConfigCache.ts:119-123.
+
+  describe('L2 TTL refresh-on-hit', () => {
+    it('fires EXPIRE with REDIS_TTL_SECONDS=1800 on every L2 hit', async () => {
+      // Seed a valid cached payload so tryLoadFromRedis takes the hit
+      // branch. The hit branch must emit a fire-and-forget EXPIRE with
+      // the configured TTL to keep the key from timing out mid-session.
+      const cachedConfig = {
+        routingEnabled: true,
+        slotEntries: [],
+      }
+      mockRedisMget.mockResolvedValueOnce([JSON.stringify(cachedConfig), '1'])
+
+      await resolveModel('interview.generate-question')
+      // EXPIRE is fire-and-forget — flush one microtask for the call to register.
+      await Promise.resolve()
+
+      expect(mockRedisExpire).toHaveBeenCalledTimes(1)
+      const [key, ttl] = mockRedisExpire.mock.calls[0] as [string, number]
+      expect(key).toBe('model-config:v1')
+      expect(ttl).toBe(1800)
+    })
+
+    it('writes L2 with TTL=1800 on Mongo fallback (SETEX via Lua CAS)', async () => {
+      // Mongo path errors in test env (no mongoose), so we can't directly
+      // assert on SETEX firing — but we CAN assert on the TTL constant
+      // that the Lua CAS would pass. The TTL is ARGV[3] (7th positional
+      // arg to eval). Capture it via an intentional Mongo-success
+      // simulation: here we just check that if eval were called, it
+      // would receive 1800 by inspecting the Lua script argument order
+      // in a trivial invocation.
+      //
+      // The cleanest proof is via replaceModelConfigCache (direct
+      // save path) which fires eval and we own the signature.
+      mockRedisIncr.mockResolvedValueOnce(5)
+
+      await replaceModelConfigCache({ routingEnabled: true, slots: [] })
+
+      // eval args: [script, numKeys=2, cacheKey, epochKey, capturedEpoch, payload, TTL]
+      const evalArgs = mockRedisEval.mock.calls[0] as unknown as [
+        string, number, string, string, string, string, number
+      ]
+      expect(evalArgs[6]).toBe(1800) // TTL, the Bug fix pins it
+    })
+
+    it('does NOT fail resolveModel when EXPIRE rejects', async () => {
+      // A rejected EXPIRE must not surface as an unhandled rejection
+      // or propagate into the user-facing resolveModel return value.
+      mockRedisExpire.mockRejectedValueOnce(new Error('ECONNRESET'))
+      const cachedConfig = {
+        routingEnabled: true,
+        slotEntries: [
+          [
+            'interview.generate-question',
+            {
+              taskSlot: 'interview.generate-question',
+              model: 'cached-model',
+              provider: 'openai',
+              maxTokens: 200,
+              isActive: true,
+            },
+          ],
+        ],
+      }
+      mockRedisMget.mockResolvedValueOnce([JSON.stringify(cachedConfig), '1'])
+
+      const result = await resolveModel('interview.generate-question')
+
+      expect(result.model).toBe('cached-model')
+      // Allow one tick for the rejected promise to propagate through
+      // the .catch handler.
+      await new Promise((r) => setTimeout(r, 0))
+      // A warn log is emitted but the caller never sees the failure.
+    })
+
+    it('does NOT fire EXPIRE on L2 miss (nothing to refresh)', async () => {
+      // Default mockRedisMget returns [null, null] → miss. The miss
+      // path does not hit the EXPIRE branch because there's no key to
+      // refresh. Pairs with the cold-defaults-synthetic path.
+      await resolveModel('interview.generate-question')
+      await __awaitBackgroundLoadForTesting()
+
+      expect(mockRedisExpire).not.toHaveBeenCalled()
+    })
+
+    it('does NOT fire EXPIRE when the cached payload fails shape validation', async () => {
+      // A garbled payload returns to the miss path — we must not refresh
+      // the TTL of a corrupt entry (that would prolong the stale window).
+      // The key will age out at its own TTL instead.
+      mockRedisMget.mockResolvedValueOnce(['{not json', '1'])
+
+      await resolveModel('interview.generate-question')
+      await Promise.resolve()
+
+      expect(mockRedisExpire).not.toHaveBeenCalled()
+    })
+
+    it('fires EXPIRE on EVERY hit (keeps the cache warm under sustained traffic)', async () => {
+      // The whole point: warm entries should stay warm as long as
+      // there's any traffic. Two separate L2 hits (simulating two
+      // cold Lambdas on the same session) → two EXPIRE refreshes.
+      const cachedConfig = {
+        routingEnabled: true,
+        slotEntries: [],
+      }
+      mockRedisMget.mockResolvedValueOnce([JSON.stringify(cachedConfig), '1'])
+      await resolveModel('interview.generate-question')
+      await Promise.resolve()
+
+      // Clear the in-memory L1 to simulate a second cold Lambda that
+      // still finds the L2 entry present.
+      _clearLocalCacheForCrossLambdaSim()
+      mockRedisMget.mockResolvedValueOnce([JSON.stringify(cachedConfig), '2'])
+      await resolveModel('interview.generate-question')
+      await Promise.resolve()
+
+      expect(mockRedisExpire).toHaveBeenCalledTimes(2)
     })
   })
 })
