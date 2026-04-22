@@ -1152,3 +1152,9 @@
 - **Files:** 2 changed, 1 test file(s)
 - **Root-cause:** PR #311's cache-bypass check used strict-equality `!== true`
 - **Tests-added: 3 new cases in feedbackDegradedFlag.test.ts:**
+
+### 2026-04-22 19:08:06 +0000 · `fb69ef6` · Claude
+- **Subject:** Stop persisting degraded feedback fallback to Mongo (P0 follow-up)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** PR #311 added `degraded: true` to the outer-catch synthetic
+- **Tests-added: modules/interview/__tests__/feedbackDegradedFlag.test.ts**
