@@ -1189,3 +1189,9 @@
 - **Files:** 3 changed, 1 test file(s)
 - **Root-cause:** commit 897a276 added an idempotency guard to the PATCH
 - **Tests-added: updated 4 existing tests in**
+
+### 2026-04-22 20:47:46 +0000 · `1b1793e` · Claude
+- **Subject:** Merge main into claude/mongo-timeout-align
+- **Files:** 7 changed, 2 test file(s)
+- **Root-cause:** PR #312 (mongo timeout alignment) diverged from main after
+- **No-tests-needed-because: merge commit with no functional change — all**
