@@ -1172,3 +1172,9 @@
 - **Root-cause:** PR #313 removed the server-side persist of the outer-catch
 - **No-tests-needed-because: the PATCH-after-degraded behavior is a**
 - **Verified-by:** npx tsc --noEmit → clean. Manual review of all three
+
+### 2026-04-22 20:28:42 +0000 · `897a276` · Claude
+- **Subject:** Make interview_complete rewards idempotent per session
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** PATCH /api/interviews/[id] awarded `interview_complete` XP
+- **Tests-added: modules/interview/__tests__/interviewCompleteIdempotent.test.ts**
