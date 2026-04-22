@@ -85,34 +85,57 @@ export async function PATCH(
     const body = await req.json()
     const validated = UpdateSessionSchema.parse(body) as Parameters<typeof updateSession>[4]
 
-    const updated = await updateSession(
+    // `updateSession` returns both the updated document AND the session's
+    // `priorStatus` (status BEFORE this PATCH applied). We use priorStatus
+    // to fire the `interview_complete` engagement rewards below only on
+    // the first transition into `'completed'` — subsequent re-PATCHes
+    // (degraded-reload F5 after PR #313 stopped persisting the outer-catch
+    // fallback, double-submits, retries) are no-ops on rewards. Pulling
+    // the prior status from here instead of pre-reading in the route
+    // matters because Mongoose is configured with `bufferCommands: false`
+    // (shared/db/connection.ts) and `updateSession` is the first caller
+    // in this handler that runs `await connectDB()`. A pre-read before
+    // that call would throw on cold serverless invocations
+    // (Codex P1 on PR #313).
+    const { updated, priorStatus } = await updateSession(
       params.id,
       session.user.id,
       session.user.role,
       session.user.organizationId,
       validated
     )
+    const wasAlreadyCompleted = priorStatus === 'completed'
 
-    // Award XP and update streak when interview is completed
+    // Award XP and update streak when interview is completed — ONLY on the
+    // first transition. Non-reward side effects (usage buffer flush) stay
+    // unconditional — they are idempotent by nature (buffer drains on
+    // first call; subsequent calls are no-ops).
     if (validated.status === 'completed') {
       // Flush buffered usage records to Mongo (fire-and-forget, non-fatal)
       void flushUsageBuffer(params.id).catch((err) =>
         logger.warn({ err, sessionId: params.id }, 'Failed to flush usage buffer (non-fatal)'),
       )
 
-      const overallScore = validated.feedback?.overall_score
-      try {
-        await awardXp(session.user.id, 'interview_complete', XP_AMOUNTS.interview_complete, { sessionId: params.id })
-        await recordActivity(session.user.id)
-        const streakResult = await updateStreak(session.user.id)
-        await checkAndAwardBadges(session.user.id, {
-          type: 'interview_complete',
-          score: overallScore,
-          currentStreak: streakResult.currentStreak,
-        })
-      } catch (engErr) {
-        // Don't fail the interview save if engagement tracking fails
-        logger.error({ err: engErr }, 'Engagement tracking failed')
+      if (!wasAlreadyCompleted) {
+        const overallScore = validated.feedback?.overall_score
+        try {
+          await awardXp(session.user.id, 'interview_complete', XP_AMOUNTS.interview_complete, { sessionId: params.id })
+          await recordActivity(session.user.id)
+          const streakResult = await updateStreak(session.user.id)
+          await checkAndAwardBadges(session.user.id, {
+            type: 'interview_complete',
+            score: overallScore,
+            currentStreak: streakResult.currentStreak,
+          })
+        } catch (engErr) {
+          // Don't fail the interview save if engagement tracking fails
+          logger.error({ err: engErr }, 'Engagement tracking failed')
+        }
+      } else {
+        logger.info(
+          { sessionId: params.id, userId: session.user.id, event: 'interview_complete_rewards_skipped' },
+          'PATCH status=completed on already-completed session; skipping duplicate engagement rewards',
+        )
       }
     }
 

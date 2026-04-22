@@ -1152,3 +1152,35 @@
 - **Files:** 2 changed, 1 test file(s)
 - **Root-cause:** PR #311's cache-bypass check used strict-equality `!== true`
 - **Tests-added: 3 new cases in feedbackDegradedFlag.test.ts:**
+
+### 2026-04-22 19:08:06 +0000 · `fb69ef6` · Claude
+- **Subject:** Stop persisting degraded feedback fallback to Mongo (P0 follow-up)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** PR #311 added `degraded: true` to the outer-catch synthetic
+- **Tests-added: modules/interview/__tests__/feedbackDegradedFlag.test.ts**
+
+### 2026-04-22 20:12:25 +0000 · `27a2197` · Claude
+- **Subject:** Re-POST on 202-waiter poll timeout to unblock degraded-banner UX
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the 202-waiter poll loop in the feedback page
+- **No-tests-needed-because: the 202 waiter exercises a concurrent-tab**
+- **Verified-by:** npx tsc --noEmit → clean.
+
+### 2026-04-22 20:19:25 +0000 · `c12ed0a` · Claude
+- **Subject:** Strip feedback from client PATCH when payload is degraded
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** PR #313 removed the server-side persist of the outer-catch
+- **No-tests-needed-because: the PATCH-after-degraded behavior is a**
+- **Verified-by:** npx tsc --noEmit → clean. Manual review of all three
+
+### 2026-04-22 20:28:42 +0000 · `897a276` · Claude
+- **Subject:** Make interview_complete rewards idempotent per session
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** PATCH /api/interviews/[id] awarded `interview_complete` XP
+- **Tests-added: modules/interview/__tests__/interviewCompleteIdempotent.test.ts**
+
+### 2026-04-22 20:38:32 +0000 · `94437e8` · Claude
+- **Subject:** Move priorStatus read into updateSession (fix cold-connect hazard)
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** commit 897a276 added an idempotency guard to the PATCH
+- **Tests-added: updated 4 existing tests in**

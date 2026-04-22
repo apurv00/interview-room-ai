@@ -2,25 +2,44 @@
  * P0 fix (2026-04-22 session 69e8f4eb): pins the `degraded: true` flag
  * contract on /api/generate-feedback.
  *
- * Before this fix: when the Claude `completion` call threw, the outer
- * catch returned a fallback object with a synthesised `overall_score`
- * (e.g. 30), hardcoded generic `top_3_improvements` ("Use the STAR
+ * Before PR #311: when the Claude `completion` call threw, the outer
+ * catch persisted a fallback with a synthesised `overall_score` (e.g.
+ * 30), hardcoded generic `top_3_improvements` ("Use the STAR
  * framework..."), and `confidence_level: 'Low'`. The UI rendered it
- * indistinguishably from a real success — user saw a plausible score
- * and generic advice without any signal that scoring had failed.
+ * indistinguishably from a real success.
  *
- * The fix marks the outer-catch fallback with `degraded: true` so the
- * UI (app/feedback/[sessionId]/page.tsx) can show a clear degraded-mode
- * banner + Retry button. This test pins three invariants:
+ * PR #311 added `degraded: true` to the in-flight response so the page
+ * could show a banner. After-merge audit (gitNexus impact analysis on
+ * `FeedbackData` + file-scoped reads of `feedback.overall_score`) found
+ * ~10 downstream reader sites that did NOT gate on the flag — dashboard
+ * "last score" tile, history pass-badge, score-trend chart, recruiter
+ * scorecard, pathway planner prompt, session summary prompt, GDPR data
+ * export, peer-comparison `$avg` aggregation, print/PDF builder,
+ * shareable-link renderer. Persisting the synthetic payload kept
+ * leaking the 30/100 + STAR advice into all of those surfaces, and
+ * corrupted the peer-cohort baseline for other users via `$avg`.
+ *
+ * Follow-up (option B): the outer-catch fallback is NEVER persisted
+ * to Mongo. The in-flight response still carries `degraded: true` for
+ * the page-level banner, but `InterviewSession.feedback` stays
+ * `undefined` after a failure — which all downstream readers already
+ * handle as "not generated yet".
+ *
+ * This test pins five invariants:
  *
  *   1. Outer-catch fallback (Claude threw) → response has `degraded: true`
- *   2. Legitimate low-signal paths (no evals, short-form <3) → NO
+ *   2. Outer-catch fallback is NOT persisted — no `findByIdAndUpdate`
+ *      call carries a `feedback` field.
+ *   3. Legitimate low-signal paths (no evals, short-form <3) → NO
  *      `degraded` flag (those 0 scores are real, red_flags explains them)
- *   3. Normal successful path (Claude returned valid JSON) → NO
+ *   4. Normal successful path (Claude returned valid JSON) → NO
  *      `degraded` flag
+ *   5. Cache-bypass on legacy degraded rows (Codex P1 on #311) still
+ *      fires for production sessions persisted before the no-persist
+ *      change.
  *
- * If a future refactor silently drops the flag or sets it on the wrong
- * path, this test fails and the UI will be back to misleading users.
+ * If a future refactor re-introduces persistence of the synthetic
+ * fallback, test #2 fails and the downstream leaks come back.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -69,14 +88,15 @@ vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(u
  * cached hit and regenerates. Default: return no cached feedback
  * (happy path).
  */
-const { mockSessionFindOne } = vi.hoisted(() => ({
+const { mockSessionFindOne, mockFindByIdAndUpdate } = vi.hoisted(() => ({
   mockSessionFindOne: vi.fn(),
+  mockFindByIdAndUpdate: vi.fn(),
 }))
 
 vi.mock('@shared/db/models', () => ({
   User: { findById: () => ({ select: () => ({ lean: () => Promise.resolve(null) }) }) },
   InterviewSession: {
-    findByIdAndUpdate: vi.fn().mockResolvedValue(undefined),
+    findByIdAndUpdate: mockFindByIdAndUpdate,
     findOne: (query: unknown) => ({
       select: () => ({
         lean: () => Promise.resolve(mockSessionFindOne(query)),
@@ -168,6 +188,8 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
     mockIsFeatureEnabled.mockReset()
     mockIsFeatureEnabled.mockImplementation(() => false)
     mockSessionFindOne.mockReset()
+    mockFindByIdAndUpdate.mockReset()
+    mockFindByIdAndUpdate.mockResolvedValue(undefined)
     // Default: no persisted feedback → preflight cache is a miss,
     // route proceeds to LLM call.
     mockSessionFindOne.mockResolvedValue(null)
@@ -193,10 +215,40 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
     expect(typeof json.overall_score).toBe('number')
     expect(json.confidence_level).toBe('Low')
     expect(Array.isArray(json.top_3_improvements)).toBe(true)
-    // Marker copy that ops can grep on in the Mongo-persisted feedback.
+    // Marker copy that appears in the in-flight response (not persisted).
     expect(json.dimensions.answer_quality.weaknesses).toContain(
       'Feedback generation encountered an error — scores are approximate',
     )
+  })
+
+  it('outer-catch fallback is NOT persisted to InterviewSession.feedback', async () => {
+    // Option-B contract (2026-04-22 follow-up): the synthetic fallback
+    // may only be returned in the in-flight response — it must never
+    // land in Mongo. Audit trail for WHY this invariant matters lives
+    // in the header docblock.
+    //
+    // Invariant: the ONLY InterviewSession.findByIdAndUpdate calls
+    // from the outer-catch path are allowed to update status /
+    // completedAt / telemetry-adjacent fields, but NONE of them may
+    // carry a `feedback` key. The safest assertion is "no
+    // findByIdAndUpdate was called carrying a `feedback` key at all",
+    // because a future refactor that re-introduces the persistence
+    // will either (a) call findByIdAndUpdate with a feedback field,
+    // or (b) add a different writer — both of which are caught here
+    // if we also assert no writer is called with a feedback key.
+    mockCompletion.mockRejectedValueOnce(new Error('Claude API timeout'))
+
+    await POST(makeReq({
+      evals: evals(5),
+      plannedQuestionCount: 6,
+      answeredCount: 5,
+      endReason: 'normal',
+    }))
+
+    const callsCarryingFeedback = mockFindByIdAndUpdate.mock.calls.filter(([, update]) => {
+      return update && typeof update === 'object' && 'feedback' in update
+    })
+    expect(callsCarryingFeedback).toHaveLength(0)
   })
 
   it('does NOT set degraded on the no-data path (0 evaluations)', async () => {
