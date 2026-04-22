@@ -298,12 +298,25 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
         })
           .select('feedback')
           .lean()) as { feedback?: FeedbackData } | null
-        if (existing?.feedback) {
+        // Codex P1 on PR #311: when the persisted feedback is a degraded
+        // fallback (outer-catch path), the UI shows a Retry button that
+        // re-POSTs to this route. Pre-fix, this preflight short-circuit
+        // returned the SAME degraded payload the user is trying to escape
+        // — retry was a no-op. Treat `degraded: true` as "no valid feedback
+        // yet" so regeneration proceeds. The feedbackLock acquired above
+        // still prevents concurrent writers from racing to the LLM.
+        if (existing?.feedback && existing.feedback.degraded !== true) {
           aiLogger.info(
             { sessionId: body.sessionId, userId: user.id, redisLockAcquired: feedbackLock?.acquired ?? null },
             'generate-feedback: concurrent writer already produced feedback; returning cached (F-4)',
           )
           return NextResponse.json(existing.feedback)
+        }
+        if (existing?.feedback?.degraded === true) {
+          aiLogger.info(
+            { sessionId: body.sessionId, userId: user.id },
+            'generate-feedback: persisted feedback is degraded; bypassing cache to allow user-triggered retry (Codex P1 on #311)',
+          )
         }
       } catch (err) {
         aiLogger.warn(

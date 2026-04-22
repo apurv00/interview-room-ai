@@ -61,9 +61,28 @@ vi.mock('@shared/services/feedbackLock', () => ({
 vi.mock('@shared/services/usageTracking', () => ({ trackUsage: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@shared/services/scoreTelemetry', () => ({ recordScoreDelta: vi.fn().mockResolvedValue(null) }))
 vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(undefined) }))
+/**
+ * F-4 preflight cache-hit check in route.ts:292-318 queries
+ * InterviewSession.findOne(...).select('feedback').lean(). The cache-
+ * bypass test (Codex P1 on PR #311) needs this mock to return a
+ * degraded feedback payload so we can confirm the route skips the
+ * cached hit and regenerates. Default: return no cached feedback
+ * (happy path).
+ */
+const { mockSessionFindOne } = vi.hoisted(() => ({
+  mockSessionFindOne: vi.fn(),
+}))
+
 vi.mock('@shared/db/models', () => ({
   User: { findById: () => ({ select: () => ({ lean: () => Promise.resolve(null) }) }) },
-  InterviewSession: { findByIdAndUpdate: vi.fn().mockResolvedValue(undefined) },
+  InterviewSession: {
+    findByIdAndUpdate: vi.fn().mockResolvedValue(undefined),
+    findOne: (query: unknown) => ({
+      select: () => ({
+        lean: () => Promise.resolve(mockSessionFindOne(query)),
+      }),
+    }),
+  },
 }))
 vi.mock('@shared/featureFlags', () => ({
   isFeatureEnabled: (flag: string) => mockIsFeatureEnabled(flag),
@@ -148,6 +167,10 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
     mockCompletion.mockReset()
     mockIsFeatureEnabled.mockReset()
     mockIsFeatureEnabled.mockImplementation(() => false)
+    mockSessionFindOne.mockReset()
+    // Default: no persisted feedback → preflight cache is a miss,
+    // route proceeds to LLM call.
+    mockSessionFindOne.mockResolvedValue(null)
   })
 
   it('sets degraded=true on the outer-catch fallback when Claude throws', async () => {
@@ -210,6 +233,120 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
     expect(json.degraded).toBeUndefined()
     expect(json.overall_score).toBe(0)
     expect(mockCompletion).not.toHaveBeenCalled()
+  })
+
+  // ── Codex P1 follow-up on PR #311 — retry must bypass degraded cache ──
+  //
+  // The UI's "Retry feedback" button re-POSTs to this route with the same
+  // sessionId. Before this fix, the F-4 preflight cache-hit check at
+  // route.ts:301 returned the persisted degraded payload immediately,
+  // making retry a no-op. Contract: when persisted feedback has
+  // `degraded: true`, the cache check is bypassed and the LLM is called
+  // again. The feedbackLock (acquired upstream) prevents concurrent
+  // regeneration races.
+
+  it('retry BYPASSES cache when persisted feedback has degraded:true (Codex P1 on #311)', async () => {
+    // Simulate the retry scenario: session already has a degraded
+    // fallback written from a previous failed run. User clicks Retry.
+    const previousDegraded = {
+      overall_score: 30,
+      pass_probability: 'Low',
+      confidence_level: 'Low',
+      dimensions: {
+        answer_quality: { score: 0, strengths: [], weaknesses: ['Feedback generation encountered an error — scores are approximate'] },
+        communication: { score: 99, wpm: 87, filler_rate: 0.009, pause_score: 53, rambling_index: 0 },
+        engagement_signals: { score: 0, engagement_score: 0, confidence_trend: 'stable', energy_consistency: 0.5, composure_under_pressure: 0 },
+      },
+      red_flags: [],
+      top_3_improvements: ['Use the STAR framework...', 'Include specific metrics...', 'Reduce filler words...'],
+      degraded: true,
+    }
+    mockSessionFindOne.mockResolvedValueOnce({ feedback: previousDegraded })
+    // Retry should reach the LLM and succeed this time.
+    mockCompletion.mockResolvedValueOnce(healthyClaudeResponse)
+
+    const res = await POST(makeReq({
+      evals: evals(5),
+      plannedQuestionCount: 6,
+      answeredCount: 5,
+      endReason: 'normal',
+    }))
+    const json = await res.json()
+
+    // The cache was bypassed — LLM was called.
+    expect(mockCompletion).toHaveBeenCalledTimes(1)
+    // Fresh LLM output replaced the degraded payload.
+    expect(json.overall_score).toBeGreaterThan(0)
+    expect(json.degraded).toBeUndefined()
+    // The hardcoded fallback copy must NOT appear in the fresh response.
+    expect(json.top_3_improvements).not.toContain(
+      'Use the STAR framework explicitly for every behavioral question',
+    )
+  })
+
+  it('still USES cache when persisted feedback is NOT degraded (happy-path regression guard)', async () => {
+    // Regression guard for the F-4 concurrent-writer optimisation.
+    // When a real (non-degraded) feedback is already persisted, the
+    // preflight short-circuit must still return it without re-calling
+    // the LLM — no unnecessary cost.
+    const previousHealthy = {
+      overall_score: 75,
+      pass_probability: 'High',
+      confidence_level: 'High',
+      dimensions: {
+        answer_quality: { score: 75, strengths: [], weaknesses: [] },
+        communication: { score: 72, wpm: 140, filler_rate: 0.04, pause_score: 70, rambling_index: 0.2 },
+        engagement_signals: { score: 75, engagement_score: 70, confidence_trend: 'stable', energy_consistency: 0.7, composure_under_pressure: 70 },
+      },
+      red_flags: [],
+      top_3_improvements: ['A', 'B', 'C'],
+      // degraded intentionally absent
+    }
+    mockSessionFindOne.mockResolvedValueOnce({ feedback: previousHealthy })
+
+    const res = await POST(makeReq({
+      evals: evals(5),
+      plannedQuestionCount: 6,
+      answeredCount: 5,
+      endReason: 'normal',
+    }))
+    const json = await res.json()
+
+    // LLM was NOT called — cache short-circuit preserved.
+    expect(mockCompletion).not.toHaveBeenCalled()
+    // Returned payload is the cached one verbatim.
+    expect(json.overall_score).toBe(75)
+  })
+
+  it('treats degraded:false (explicitly set) the same as a cached healthy feedback', async () => {
+    // Defensive test for payloads that explicitly set degraded:false.
+    // The check in the route is `!== true`, so false is treated as
+    // "valid" — which is correct and matches how undefined is handled.
+    const previousWithExplicitFalse = {
+      overall_score: 60,
+      pass_probability: 'Medium',
+      confidence_level: 'Medium',
+      dimensions: {
+        answer_quality: { score: 60, strengths: [], weaknesses: [] },
+        communication: { score: 60, wpm: 120, filler_rate: 0.05, pause_score: 60, rambling_index: 0.1 },
+        engagement_signals: { score: 60, engagement_score: 60, confidence_trend: 'stable', energy_consistency: 0.6, composure_under_pressure: 60 },
+      },
+      red_flags: [],
+      top_3_improvements: ['X', 'Y', 'Z'],
+      degraded: false,
+    }
+    mockSessionFindOne.mockResolvedValueOnce({ feedback: previousWithExplicitFalse })
+
+    const res = await POST(makeReq({
+      evals: evals(5),
+      plannedQuestionCount: 6,
+      answeredCount: 5,
+      endReason: 'normal',
+    }))
+    const json = await res.json()
+
+    expect(mockCompletion).not.toHaveBeenCalled()
+    expect(json.overall_score).toBe(60)
   })
 
   it('does NOT set degraded on a normal successful Claude response', async () => {
