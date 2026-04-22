@@ -1140,3 +1140,9 @@
 - **Files:** 5 changed, 1 test file(s)
 - **Root-cause:** when /api/generate-feedback's outer catch fires (LLM
 - **Tests-added: modules/interview/__tests__/feedbackDegradedFlag.test.ts**
+
+### 2026-04-22 17:54:01 +0000 · `754c8b4` · Claude
+- **Subject:** Bypass preflight cache when persisted feedback is degraded (Codex P1 #311)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** PR #311 added a user-facing "Retry feedback" button for
+- **Tests-added: modules/interview/__tests__/feedbackDegradedFlag.test.ts**
