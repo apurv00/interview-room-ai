@@ -1134,3 +1134,9 @@
 - **Files:** 2 changed, 1 test file(s)
 - **Root-cause:** the previous writeEpoch staleness fix catches failure
 - **Tests-added: shared/__tests__/modelRouter.test.ts — 6 new cases in**
+
+### 2026-04-22 17:43:06 +0000 · `3e425cc` · Claude
+- **Subject:** Mark feedback fallback as degraded; surface retry banner to user (P0)
+- **Files:** 5 changed, 1 test file(s)
+- **Root-cause:** when /api/generate-feedback's outer catch fires (LLM
+- **Tests-added: modules/interview/__tests__/feedbackDegradedFlag.test.ts**
