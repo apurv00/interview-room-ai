@@ -1138,6 +1138,18 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       const fallbackEngScore = Math.round(roughScore * 0.9)
       const fallbackOverall = Math.round(roughScore * 0.4 + fallbackCommScore * 0.3 + fallbackEngScore * 0.3)
 
+      // P0 fix (2026-04-22): set `degraded: true` so the UI can distinguish
+      // this synthetic fallback from a real LLM-generated feedback object.
+      // Pre-fix, the candidate saw a plausible-looking score (e.g. 30/100)
+      // with hardcoded "use the STAR framework" advice even though the LLM
+      // failed. The `degraded` flag lets the feedback page render a clear
+      // banner + retry CTA while keeping the numeric fields populated for
+      // analytics/telemetry paths that already consume them.
+      //
+      // Kept all existing fields populated (rather than nulling the score)
+      // so downstream consumers (InterviewSession.feedback in Mongo,
+      // ScoreTelemetry, practiceStats derivation) are unaffected. The flag
+      // is additive and optional; legacy sessions remain undefined.
       const fallback: FeedbackData = {
         overall_score: fallbackOverall,
         pass_probability: fallbackOverall >= 75 ? 'High' : fallbackOverall >= 50 ? 'Medium' : 'Low',
@@ -1153,6 +1165,7 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
           'Include specific metrics and outcomes to strengthen specificity',
           'Reduce filler words — pause instead of using "um" or "like"',
         ],
+        degraded: true,
       }
       if (body.sessionId) {
         InterviewSession.findByIdAndUpdate(body.sessionId, {

@@ -97,6 +97,10 @@ const FeedbackDataSchema = z.object({
   })).optional(),
   red_flags: z.array(z.string()).max(30),
   top_3_improvements: z.array(z.string()).max(10),
+  // Outer-catch fallback marker — see `FeedbackData.degraded` JSDoc in
+  // shared/types.ts. Optional for backwards compatibility; older
+  // persisted sessions have no such field.
+  degraded: z.boolean().optional(),
   ideal_answers: z.array(z.object({
     questionIndex: z.number(),
     strongAnswer: z.string(),

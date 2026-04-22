@@ -271,6 +271,27 @@ export interface FeedbackData {
   jd_requirement_breakdown?: JdRequirementMatch[]
   red_flags: string[]
   top_3_improvements: string[]
+  /**
+   * Signals that the feedback was produced by the server-side fallback
+   * path instead of by a successful LLM run. Set to `true` only on the
+   * outer-catch path in `/api/generate-feedback` (LLM error, timeout,
+   * schema validation failure). The other "low-signal" feedback paths
+   * (no-answers, short-form <3 answers) leave this unset because their
+   * 0 scores are legitimate — the user genuinely didn't produce scorable
+   * content, and the `red_flags` array explains why.
+   *
+   * UI responsibilities when `degraded === true`:
+   *   - Show a clear degraded-mode banner
+   *   - Offer a "Retry" affordance (see `handleRetry`)
+   *   - Label any numeric values as "approximate" so candidates don't
+   *     interpret the synthetic `overall_score` as a real verdict
+   *
+   * Optional for backwards compatibility — sessions persisted before
+   * this field existed will have `degraded === undefined`, which the UI
+   * treats as "feedback generated normally" (falsy check). No migration
+   * is required.
+   */
+  degraded?: boolean
   /** FB1: Per-question ideal answer outlines for comparison */
   ideal_answers?: Array<{
     questionIndex: number

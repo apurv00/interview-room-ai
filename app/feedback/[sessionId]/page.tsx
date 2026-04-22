@@ -988,6 +988,40 @@ function FeedbackPageInner() {
         </div>
       )}
 
+      {/* Degraded-mode banner — feedback was produced by the server's
+          outer-catch fallback (LLM error / timeout / schema failure)
+          instead of a real Claude run. The numeric values still render
+          below (so the layout doesn't change and analytics paths keep
+          working) but we warn the candidate that the score is
+          approximate and offer a direct retry. See the
+          `FeedbackData.degraded` JSDoc in shared/types.ts. P0 fix
+          2026-04-22. */}
+      {feedback.degraded && (
+        <div className="max-w-5xl mx-auto px-4 mt-4">
+          <div
+            role="alert"
+            aria-live="polite"
+            className="bg-amber-500/10 border border-amber-500/30 rounded-[var(--radius-md)] px-5 py-3 text-sm text-amber-600 flex items-start sm:items-center justify-between gap-3 flex-col sm:flex-row"
+          >
+            <div className="flex items-start sm:items-center gap-2">
+              <svg className="w-4 h-4 shrink-0 mt-0.5 sm:mt-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span>
+                We couldn&apos;t fully generate your feedback this time. The scores below
+                are approximate — please retry for a proper analysis.
+              </span>
+            </div>
+            <button
+              onClick={handleRetry}
+              className="shrink-0 px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-md text-xs font-medium transition"
+            >
+              Retry feedback
+            </button>
+          </div>
+        </div>
+      )}
+
       <main className="max-w-5xl mx-auto px-4 py-6 space-y-6">
         {/* Hero: overall score — compact horizontal layout */}
         <section className="flex flex-col sm:flex-row items-center gap-5 sm:gap-8 py-4 border-b border-[#e1e8ed] animate-fade-in">
@@ -1014,6 +1048,14 @@ function FeedbackPageInner() {
               <div className="px-3 py-1 rounded-full border border-[#e1e8ed] text-[#536471] text-sm">
                 {s(feedback.confidence_level)} confidence
               </div>
+              {/* Inline "approximate" pill shown in addition to the top-level
+                  degraded banner — keeps the signal attached to the score
+                  itself for users who scroll past the banner. */}
+              {feedback.degraded && (
+                <div className="px-3 py-1 rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-600 text-sm font-medium">
+                  Approximate — feedback retry recommended
+                </div>
+              )}
             </div>
           </div>
         </section>

@@ -1,0 +1,238 @@
+/**
+ * P0 fix (2026-04-22 session 69e8f4eb): pins the `degraded: true` flag
+ * contract on /api/generate-feedback.
+ *
+ * Before this fix: when the Claude `completion` call threw, the outer
+ * catch returned a fallback object with a synthesised `overall_score`
+ * (e.g. 30), hardcoded generic `top_3_improvements` ("Use the STAR
+ * framework..."), and `confidence_level: 'Low'`. The UI rendered it
+ * indistinguishably from a real success — user saw a plausible score
+ * and generic advice without any signal that scoring had failed.
+ *
+ * The fix marks the outer-catch fallback with `degraded: true` so the
+ * UI (app/feedback/[sessionId]/page.tsx) can show a clear degraded-mode
+ * banner + Retry button. This test pins three invariants:
+ *
+ *   1. Outer-catch fallback (Claude threw) → response has `degraded: true`
+ *   2. Legitimate low-signal paths (no evals, short-form <3) → NO
+ *      `degraded` flag (those 0 scores are real, red_flags explains them)
+ *   3. Normal successful path (Claude returned valid JSON) → NO
+ *      `degraded` flag
+ *
+ * If a future refactor silently drops the flag or sets it on the wrong
+ * path, this test fails and the UI will be back to misleading users.
+ */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { NextRequest } from 'next/server'
+
+const { mockCompletion, mockIsFeatureEnabled } = vi.hoisted(() => ({
+  mockCompletion: vi.fn(),
+  mockIsFeatureEnabled: vi.fn(),
+}))
+
+vi.mock('@shared/middleware/composeApiRoute', () => ({
+  composeApiRoute: (opts: {
+    schema?: { parse: (x: unknown) => unknown }
+    handler: (
+      req: NextRequest,
+      ctx: { user: unknown; body: unknown; params: Record<string, string> },
+    ) => Promise<Response>
+  }) => async (req: NextRequest) => {
+    const raw = await req.json()
+    const body = opts.schema ? opts.schema.parse(raw) : raw
+    return opts.handler(req, {
+      user: { id: '507f1f77bcf86cd799439099', role: 'candidate', plan: 'free', email: 't@example.com' },
+      body,
+      params: {},
+    })
+  },
+}))
+
+vi.mock('@shared/logger', () => ({
+  aiLogger: { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() },
+  logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() },
+}))
+vi.mock('@shared/services/modelRouter', () => ({ completion: mockCompletion }))
+vi.mock('@shared/services/feedbackLock', () => ({
+  acquireFeedbackLock: vi.fn().mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: true }),
+  releaseFeedbackLock: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('@shared/services/usageTracking', () => ({ trackUsage: vi.fn().mockResolvedValue(undefined) }))
+vi.mock('@shared/services/scoreTelemetry', () => ({ recordScoreDelta: vi.fn().mockResolvedValue(null) }))
+vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(undefined) }))
+vi.mock('@shared/db/models', () => ({
+  User: { findById: () => ({ select: () => ({ lean: () => Promise.resolve(null) }) }) },
+  InterviewSession: { findByIdAndUpdate: vi.fn().mockResolvedValue(undefined) },
+}))
+vi.mock('@shared/featureFlags', () => ({
+  isFeatureEnabled: (flag: string) => mockIsFeatureEnabled(flag),
+}))
+vi.mock('@shared/services/promptSecurity', () => ({ DATA_BOUNDARY_RULE: '', JSON_OUTPUT_RULE: '' }))
+vi.mock('@interview/config/interviewConfig', () => ({
+  getDomainLabel: () => 'Product Manager',
+  getPressureQuestionIndex: () => 99,
+  getQuestionCount: (duration: number) => duration === 30 ? 16 : duration === 20 ? 11 : 6,
+}))
+vi.mock('@interview/config/speechMetrics', () => ({
+  aggregateMetrics: () => ({ wpm: 140, fillerRate: 0.04, pauseScore: 70, ramblingIndex: 0.2 }),
+  communicationScore: () => 72,
+}))
+vi.mock('@interview/services/core/skillLoader', () => ({ getSkillSections: vi.fn().mockResolvedValue(null) }))
+vi.mock('@interview/config/companyProfiles', () => ({ findCompanyProfile: () => null }))
+vi.mock('@interview/services/eval/evaluationEngine', () => ({ evaluateSession: vi.fn().mockResolvedValue({}) }))
+vi.mock('@learn/services/competencyService', () => ({
+  updateCompetencyState: vi.fn().mockResolvedValue(undefined),
+  updateWeaknessClusters: vi.fn().mockResolvedValue(undefined),
+  getUserCompetencySummary: vi.fn().mockResolvedValue(null),
+}))
+vi.mock('@learn/services/sessionSummaryService', () => ({
+  generateSessionSummary: vi.fn().mockResolvedValue(undefined),
+  buildHistorySummary: vi.fn().mockResolvedValue(null),
+}))
+vi.mock('@learn/services/pathwayPlanner', () => ({
+  generatePathwayPlan: vi.fn().mockResolvedValue(undefined),
+}))
+
+import { POST } from '@/app/api/generate-feedback/route'
+
+function evals(count: number) {
+  return Array.from({ length: count }, (_, i) => ({
+    questionIndex: i, question: `Q${i + 1}?`, answer: 'A',
+    relevance: 75, structure: 75, specificity: 75, ownership: 75,
+    probeDecision: { shouldProbe: false },
+  }))
+}
+
+function makeReq(opts: {
+  evals: unknown[]
+  plannedQuestionCount?: number
+  answeredCount?: number
+  endReason?: 'normal' | 'time_up' | 'user_ended' | 'usage_limit' | 'abandoned'
+}) {
+  const body: Record<string, unknown> = {
+    config: { role: 'pm', experience: '0-2', duration: 30, interviewType: 'screening' },
+    transcript: [],
+    evaluations: opts.evals,
+    speechMetrics: [],
+    sessionId: '507f1f77bcf86cd799439011',
+  }
+  if (opts.plannedQuestionCount != null) body.plannedQuestionCount = opts.plannedQuestionCount
+  if (opts.answeredCount != null) body.answeredCount = opts.answeredCount
+  if (opts.endReason) body.endReason = opts.endReason
+  return new NextRequest('http://localhost:3000/api/generate-feedback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+const healthyClaudeResponse = {
+  text: JSON.stringify({
+    overall_score: 80,
+    pass_probability: 'High',
+    confidence_level: 'High',
+    dimensions: {
+      answer_quality: { score: 80, strengths: ['clarity'], weaknesses: [] },
+      communication: { score: 72, wpm: 140, filler_rate: 0.04, pause_score: 70, rambling_index: 0.2 },
+      engagement_signals: { score: 80, engagement_score: 78, confidence_trend: 'stable', energy_consistency: 0.7, composure_under_pressure: 75 },
+    },
+    red_flags: [],
+    top_3_improvements: ['Specific to the session A', 'Specific B', 'Specific C'],
+  }),
+  model: 't', provider: 't', inputTokens: 1000, outputTokens: 500, usedFallback: false, truncated: false,
+}
+
+describe('POST /api/generate-feedback — degraded flag contract', () => {
+  beforeEach(() => {
+    mockCompletion.mockReset()
+    mockIsFeatureEnabled.mockReset()
+    mockIsFeatureEnabled.mockImplementation(() => false)
+  })
+
+  it('sets degraded=true on the outer-catch fallback when Claude throws', async () => {
+    // Simulate the exact failure mode from the 2026-04-22 session
+    // (LLM/timeout error). Outer catch builds the synthetic fallback.
+    mockCompletion.mockRejectedValueOnce(new Error('Claude API timeout'))
+
+    const res = await POST(makeReq({
+      evals: evals(5),
+      plannedQuestionCount: 6,
+      answeredCount: 5,
+      endReason: 'normal',
+    }))
+    const json = await res.json()
+
+    expect(json.degraded).toBe(true)
+    // Existing fields must still be populated — downstream consumers
+    // (InterviewSession.feedback in Mongo, practiceStats) rely on them
+    // being present. The flag is additive.
+    expect(typeof json.overall_score).toBe('number')
+    expect(json.confidence_level).toBe('Low')
+    expect(Array.isArray(json.top_3_improvements)).toBe(true)
+    // Marker copy that ops can grep on in the Mongo-persisted feedback.
+    expect(json.dimensions.answer_quality.weaknesses).toContain(
+      'Feedback generation encountered an error — scores are approximate',
+    )
+  })
+
+  it('does NOT set degraded on the no-data path (0 evaluations)', async () => {
+    // The "no answers were provided" path returns a legitimate 0 score
+    // with explanatory red_flags. This isn't a degraded run — it's an
+    // honest reflection that nothing was scorable. UI should NOT show
+    // a "feedback retry recommended" banner here.
+    const res = await POST(makeReq({
+      evals: [],
+      plannedQuestionCount: 6,
+      answeredCount: 0,
+      endReason: 'user_ended',
+    }))
+    const json = await res.json()
+
+    expect(json.degraded).toBeUndefined()
+    expect(json.overall_score).toBe(0)
+    expect(json.red_flags).toEqual(expect.arrayContaining([expect.stringMatching(/without any responses/i)]))
+    expect(mockCompletion).not.toHaveBeenCalled()
+  })
+
+  it('does NOT set degraded on the short-form path (<3 evaluations)', async () => {
+    // Similar to no-data: <3 answers is a policy-driven refusal to
+    // score, not an LLM failure. The 0 score is intentional and the
+    // red_flag copy explains it. No retry banner needed.
+    const res = await POST(makeReq({
+      evals: evals(2),
+      plannedQuestionCount: 10,
+      answeredCount: 2,
+      endReason: 'user_ended',
+    }))
+    const json = await res.json()
+
+    expect(json.degraded).toBeUndefined()
+    expect(json.overall_score).toBe(0)
+    expect(mockCompletion).not.toHaveBeenCalled()
+  })
+
+  it('does NOT set degraded on a normal successful Claude response', async () => {
+    // The happy path. Flag must only appear on actual failures.
+    // Regression guard — if someone accidentally sets degraded=true
+    // in the healthy-path response builder, every real session would
+    // show the "feedback retry recommended" banner.
+    mockCompletion.mockResolvedValueOnce(healthyClaudeResponse)
+
+    const res = await POST(makeReq({
+      evals: evals(5),
+      plannedQuestionCount: 6,
+      answeredCount: 5,
+      endReason: 'normal',
+    }))
+    const json = await res.json()
+
+    expect(json.degraded).toBeUndefined()
+    expect(json.overall_score).toBeGreaterThan(0)
+    // The Claude-provided top_3 should flow through verbatim — NOT the
+    // hardcoded STAR/metrics/filler defaults the fallback uses.
+    expect(json.top_3_improvements).not.toContain(
+      'Use the STAR framework explicitly for every behavioral question',
+    )
+  })
+})
