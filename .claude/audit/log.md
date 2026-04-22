@@ -1116,3 +1116,9 @@
 - **Files:** 9 changed, 3 test file(s)
 - **Root-cause:** useInterview.ts:1356-1359 prepends a random filler to the
 - **Tests-added:**
+
+### 2026-04-22 15:04:59 +0000 · `2f9ebb4` · Claude
+- **Subject:** Fix L2-miss-every-turn: raise TTL 60→1800s + refresh on hit
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** on session 69e8c2f3 (2026-04-22) every `model_config_load`
+- **Tests-added: shared/__tests__/modelRouter.test.ts — 6 new cases in**
