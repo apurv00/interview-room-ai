@@ -13,6 +13,7 @@ import { logger } from '@shared/logger'
 import { AppError } from '@shared/errors'
 import { deleteInterviewSession } from '@shared/services/accountDeletion'
 import { flushUsageBuffer } from '@shared/services/usageBuffer'
+import { InterviewSession } from '@shared/db/models'
 
 export const dynamic = 'force-dynamic'
 
@@ -85,6 +86,23 @@ export async function PATCH(
     const body = await req.json()
     const validated = UpdateSessionSchema.parse(body) as Parameters<typeof updateSession>[4]
 
+    // 2026-04-22 — capture the pre-update status so the engagement rewards
+    // block below can fire only on the TRANSITION into `completed`, not on
+    // every re-PATCH. Pre-PR #313 the feedback page's PATCH ran once per
+    // session because the persisted `session.feedback` short-circuited
+    // re-entry; post-#313 degraded payloads are no longer persisted, so
+    // reloading a session whose feedback generation hit the server
+    // outer-catch re-enters `generateFeedback()` and re-sends this PATCH
+    // on every refresh. Without this guard an LLM outage becomes an XP
+    // farm: each F5 re-awards `interview_complete` XP + streak + badges.
+    // Lean + status-only projection keeps the extra roundtrip negligible,
+    // and the check only runs on completion PATCHes (not on every update).
+    let wasAlreadyCompleted = false
+    if (validated.status === 'completed') {
+      const existing = await InterviewSession.findById(params.id).select('status').lean() as { status?: string } | null
+      wasAlreadyCompleted = existing?.status === 'completed'
+    }
+
     const updated = await updateSession(
       params.id,
       session.user.id,
@@ -93,26 +111,37 @@ export async function PATCH(
       validated
     )
 
-    // Award XP and update streak when interview is completed
+    // Award XP and update streak when interview is completed — ONLY on the
+    // first transition. Subsequent re-PATCHes (degraded-path reloads,
+    // double-submits, retries) must be idempotent with respect to user
+    // engagement rewards. Non-reward side effects (usage buffer flush)
+    // remain unconditional — they are idempotent by nature.
     if (validated.status === 'completed') {
       // Flush buffered usage records to Mongo (fire-and-forget, non-fatal)
       void flushUsageBuffer(params.id).catch((err) =>
         logger.warn({ err, sessionId: params.id }, 'Failed to flush usage buffer (non-fatal)'),
       )
 
-      const overallScore = validated.feedback?.overall_score
-      try {
-        await awardXp(session.user.id, 'interview_complete', XP_AMOUNTS.interview_complete, { sessionId: params.id })
-        await recordActivity(session.user.id)
-        const streakResult = await updateStreak(session.user.id)
-        await checkAndAwardBadges(session.user.id, {
-          type: 'interview_complete',
-          score: overallScore,
-          currentStreak: streakResult.currentStreak,
-        })
-      } catch (engErr) {
-        // Don't fail the interview save if engagement tracking fails
-        logger.error({ err: engErr }, 'Engagement tracking failed')
+      if (!wasAlreadyCompleted) {
+        const overallScore = validated.feedback?.overall_score
+        try {
+          await awardXp(session.user.id, 'interview_complete', XP_AMOUNTS.interview_complete, { sessionId: params.id })
+          await recordActivity(session.user.id)
+          const streakResult = await updateStreak(session.user.id)
+          await checkAndAwardBadges(session.user.id, {
+            type: 'interview_complete',
+            score: overallScore,
+            currentStreak: streakResult.currentStreak,
+          })
+        } catch (engErr) {
+          // Don't fail the interview save if engagement tracking fails
+          logger.error({ err: engErr }, 'Engagement tracking failed')
+        }
+      } else {
+        logger.info(
+          { sessionId: params.id, userId: session.user.id, event: 'interview_complete_rewards_skipped' },
+          'PATCH status=completed on already-completed session; skipping duplicate engagement rewards',
+        )
       }
     }
 
