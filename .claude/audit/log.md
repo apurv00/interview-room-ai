@@ -1085,3 +1085,28 @@
 - **Root-cause:** after e7bb36d made graceTimer preserve the socket, the
 - **Tests-added: new "preserved ws dying between turns clears**
 - **Verified-by:** 68/68 deepgramRecognition tests pass (was 67, +1 new);
+
+### 2026-04-21 16:38:10 +0000 · `15f3b16` · Claude
+- **Subject:** Serve TASK_SLOT_DEFAULTS on cold path, refresh in background
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** ensureConfig() awaited the full L1 → L2 → L3 cascade on
+- **Tests-added: shared/__tests__/modelRouter.test.ts — 4 new cases in a**
+- **Verified-by:** 44/44 modelRouter tests pass; full suite 2217/2218 (1
+
+### 2026-04-21 17:02:30 +0000 · `d3b03c8` · Claude
+- **Subject:** Restore synchronous L2 on user thread; keep Mongo off-thread (Codex P2 #308)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** The initial non-blocking fix in 15f3b16 served
+- **Tests-added: shared/__tests__/modelRouter.test.ts (rewrote 6 tests in**
+
+### 2026-04-21 17:20:28 +0000 · `9ec49b1` · Claude
+- **Subject:** Close empty-L2 window on CMS save via replaceModelConfigCache (Codex P2 #308)
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** invalidateModelConfigCache() DEL'd L2 and INCR'd epoch,
+- **Tests-added: shared/__tests__/modelRouter.test.ts — 9 new tests in a**
+
+### 2026-04-21 17:29:26 +0000 · `aec95d2` · Claude
+- **Subject:** Clear L1 when CAS race is lost so next call picks up winner (Codex P2 #308)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** replaceModelConfigCache sets `_cache` optimistically BEFORE
+- **Tests-added: shared/__tests__/modelRouter.test.ts — new case**

@@ -59,6 +59,19 @@ export function __setRedisClientForTesting(client: RedisLike | null): void {
   _redisOverride = client
 }
 
+/**
+ * Test-only: await the in-flight background config refresh (if any).
+ * `ensureConfig()` used to `await _loadPromise` on every call, which
+ * made it trivial for tests to assert on the telemetry log or the
+ * resolved cache right after `await resolveModel(...)`. The 2026-04-21
+ * refactor made that refresh fire-and-forget so user requests never
+ * block on L2/L3 — tests that need to observe the background load
+ * completing now call this helper.
+ */
+export async function __awaitBackgroundLoadForTesting(): Promise<void> {
+  if (_loadPromise) await _loadPromise
+}
+
 // ─── Slot config (inlined to avoid pulling mongoose into client bundles) ────
 
 interface SlotConfig {
@@ -139,10 +152,11 @@ let _loadPromise: Promise<void> | null = null
  * care about.
  */
 type ConfigLoadSource =
-  | 'L2-Redis'          // Redis cache hit — the happy path this PR was scoped for
-  | 'L3-Mongo'          // Redis miss + Mongo read succeeded — expected on first cold Lambda after cache bust / deploy
-  | 'L3-Mongo-error'    // Mongo read failed — defaults used, alert-worthy
-  | 'defaults-client'   // typeof window !== 'undefined' branch — should never show in server logs
+  | 'L2-Redis'                 // Redis cache hit — the happy path this PR was scoped for
+  | 'L3-Mongo'                 // Redis miss + Mongo read succeeded — expected on first cold Lambda after cache bust / deploy
+  | 'L3-Mongo-error'           // Mongo read failed — defaults used, alert-worthy
+  | 'cold-defaults-synthetic'  // 2026-04-21: cold Lambda served TASK_SLOT_DEFAULTS synchronously while background refresh loads (see ensureConfig)
+  | 'defaults-client'          // typeof window !== 'undefined' branch — should never show in server logs
 let _lastLoadSource: ConfigLoadSource = 'defaults-client'
 
 /**
@@ -424,39 +438,115 @@ async function loadConfig(): Promise<void> {
 }
 
 async function ensureConfig(): Promise<CachedConfig> {
-  if (_cache && Date.now() - _cache.loadedAt < CACHE_TTL_MS) {
+  const now = Date.now()
+  const startMs = now
+
+  // L1 fresh hit — return immediately. Steady-state path.
+  if (_cache && now - _cache.loadedAt < CACHE_TTL_MS) {
     return _cache
   }
-  // Measure total time to populate `_cache` — everything from this line
-  // onwards is either an L2 hit (~few ms) or an L3 round-trip (hundreds
-  // of ms for Mongo read + connectDB setup on cold Lambda). The log
-  // below is THE validation signal for PR A: Vercel `level:info` log
-  // searches can pivot on `event:model_config_load` and confirm whether
-  // cold Lambdas are actually hitting Redis (source:L2-Redis,
-  // durationMs<50) vs. falling through to Mongo (source:L3-Mongo,
-  // durationMs>500). Logged at info because it's cold-path only — L1
-  // hits short-circuit above and never emit this line.
-  const startMs = Date.now()
-  if (!_loadPromise) {
-    _loadPromise = loadConfig().finally(() => { _loadPromise = null })
+
+  // 2026-04-21 non-blocking refactor, Codex P2 follow-up on PR #308.
+  //
+  // The rule: NEVER block the user request on the connectDB + Mongo
+  // round-trip (that's what caused the original 1-2.5s cold-path
+  // regression documented below). BUT we still attempt L2 Redis
+  // synchronously, because:
+  //   a) tryLoadFromRedis is already bounded by withTimeout at
+  //      REDIS_READ_TIMEOUT_MS (500ms), so the worst-case wait is
+  //      safely inside the 5s client abort on /api/evaluate-answer.
+  //   b) An L2 hit means Redis has the REAL CMS config — serving
+  //      defaults instead would silently use the wrong model for any
+  //      slot where CMS diverges from TASK_SLOT_DEFAULTS (e.g. after
+  //      an operator swaps gpt-5.4-mini for claude-sonnet-4-6 in the
+  //      CMS admin, or toggles routingEnabled). The initial version of
+  //      this refactor skipped L2 on the user thread entirely and
+  //      always returned TASK_SLOT_DEFAULTS on any cache miss — Codex
+  //      flagged that as a correctness regression for the first call
+  //      after invalidateModelConfigCache(), which is exactly when a
+  //      fresh CMS save must take effect.
+  //
+  // So: try L2 synchronously (fast + correct). Fall through to a
+  // background Mongo refresh + defaults ONLY when L2 misses / errors
+  // / times out. The expensive path (connectDB TLS+SCRAM + Mongo read)
+  // is never on the user thread.
+  //
+  // Historical context (original regression): pre-2026-04-21 this
+  // function awaited `loadConfig()`, which on cold Lambdas with empty
+  // Redis did tryLoadFromRedis + connectDB (~600ms-2s) + ModelConfig
+  // .getConfig, adding ~1-2.5s of overhead before the LLM call. That
+  // overhead reliably pushed /api/evaluate-answer past its 5s client
+  // abort (useInterviewAPI.ts:148) — the client silently wrote fake
+  // 50/50/50/50 scores into the evaluations array, and interviews
+  // dead-ended at Q2/Q3. Session DB records on 2026-04-21 show 5 of
+  // 8 sessions that day failed in exactly this pattern.
+  const redisResult = await tryLoadFromRedis()
+  if (redisResult.hit && _cache) {
+    _lastLoadSource = 'L2-Redis'
+    aiLogger.info(
+      {
+        event: 'model_config_load',
+        source: _lastLoadSource,
+        durationMs: Date.now() - startMs,
+      },
+      'ModelRouter: config loaded',
+    )
+    return _cache
   }
-  await _loadPromise
+
+  // L2 miss (empty, bad shape, error, or timeout). Kick off a Mongo
+  // refresh if none is already in flight — off the user thread.
+  if (!_loadPromise) {
+    const refreshStart = Date.now()
+    _loadPromise = loadConfig()
+      .then(() => {
+        aiLogger.info(
+          {
+            event: 'model_config_load',
+            source: _lastLoadSource,
+            durationMs: Date.now() - refreshStart,
+          },
+          'ModelRouter: background config refresh complete',
+        )
+      })
+      .catch((err) => {
+        aiLogger.warn({ err }, 'ModelRouter: background config refresh threw unexpectedly')
+      })
+      .finally(() => { _loadPromise = null })
+  }
+
+  // Stale L1 (if any) is still usable while the refresh runs.
+  if (_cache) return _cache
+
+  // Genuine cold with empty L2. Return a synthetic disabled-routing
+  // snapshot so `resolveModel()` falls through to TASK_SLOT_DEFAULTS
+  // natively. This path is now narrow: only fires when _cache is null
+  // AND L2 produced no data AND no L1-stale was available. Under
+  // normal operation (post-deploy, once any one Lambda has populated
+  // Redis), subsequent cold Lambdas hit the L2 branch above.
+  _lastLoadSource = 'cold-defaults-synthetic'
   aiLogger.info(
     {
       event: 'model_config_load',
       source: _lastLoadSource,
       durationMs: Date.now() - startMs,
     },
-    'ModelRouter: config loaded',
+    'ModelRouter: cold Lambda with empty L2, serving TASK_SLOT_DEFAULTS while background Mongo refresh loads',
   )
-  return _cache!
+  return { routingEnabled: false, slots: new Map(), loadedAt: now }
 }
 
 /**
  * Invalidate both the in-memory L1 cache (this process) and the Redis L2
- * cache (all processes). Called from the CMS /api/cms/model-config PUT
- * handler so a config change propagates to every Lambda on the next
- * `ensureConfig()` call — no 60s TTL wait across the cluster.
+ * cache (all processes). Retained for tests and any non-CMS caller that
+ * wants to force a cold reload.
+ *
+ * Production code path (CMS PUT) should prefer `replaceModelConfigCache`
+ * below — it populates L1/L2 directly with the fresh doc instead of
+ * clearing L2 and waiting for a background Mongo refresh. That closes
+ * the window flagged by Codex P2 on PR #308 where cold Lambdas would
+ * see L2 empty and serve TASK_SLOT_DEFAULTS between the DEL and the
+ * next request's Mongo fetch.
  *
  * Redis DEL is fire-and-forget: a DEL failure would leave stale data in
  * Redis for up to 60s (TTL floor) — acceptable degradation, since L1 on
@@ -481,6 +571,113 @@ export function invalidateModelConfigCache(): void {
   void client.del(REDIS_CACHE_KEY).catch((err: unknown) => {
     aiLogger.warn({ err }, 'ModelRouter: Redis L2 cache invalidation failed')
   })
+}
+
+/**
+ * Replace the cache with a known-fresh config doc (the one just saved
+ * by the CMS PUT handler). Closes the window Codex P2 flagged on PR
+ * #308: the prior `invalidateModelConfigCache()` DEL'd L2, leaving
+ * cold Lambdas in the gap between DEL and the next request's Mongo
+ * refresh. During that gap, `ensureConfig()` saw L2 empty and served
+ * `TASK_SLOT_DEFAULTS` while background Mongo loaded — so any CMS
+ * change that diverged from defaults (routing toggle, provider swap,
+ * non-default model) was silently ignored on the first request post-
+ * save. This function writes L1/L2 directly, never leaving L2 empty.
+ *
+ * Atomicity:
+ *   1. L1 update in-process: synchronous, no failure mode.
+ *   2. Bump `_invalidationEpoch` so any in-flight `loadConfig()` that
+ *      finishes after us refuses to overwrite L2 (its CAS check
+ *      against `loadStartEpoch` now fails).
+ *   3. `INCR` the Redis shared epoch — signals other Lambdas that
+ *      their L1 is stale and must re-read L2 on next ensureConfig.
+ *   4. `EVAL CAS_WRITE_LUA` with the post-INCR epoch as the captured
+ *      value — atomically writes L2 iff the current Redis epoch still
+ *      matches. A racing admin save would INCR past us; the CAS fails
+ *      and the newer save wins. "Last save wins" is the correct
+ *      semantic for concurrent admin edits.
+ *
+ * Failure mode: if Redis is unreachable, we still update L1 — the
+ * admin's own Lambda sees the new config. Other Lambdas fall back to
+ * the pre-fix behavior (cold → defaults briefly). That's strictly
+ * better than the old code which ALSO failed the DEL silently AND had
+ * the empty-L2 window. Admin caller should await to get best-effort
+ * sync propagation but tolerate an eventual-consistency window.
+ */
+export async function replaceModelConfigCache(doc: {
+  routingEnabled: boolean
+  slots: Array<{
+    taskSlot: string
+    model: string
+    provider: string
+    fallbackModel?: string
+    fallbackProvider?: string
+    maxTokens: number
+    temperature?: number
+    isActive: boolean
+    useToonInput?: boolean
+  }>
+}): Promise<void> {
+  const slotMap = new Map<TaskSlot, SlotConfig>()
+  for (const slot of doc.slots) {
+    if (slot.isActive) {
+      // Hydrate to the internal SlotConfig shape — useToonInput is
+      // optional on the input (Zod/Mongoose may omit it) but required
+      // on the internal SlotConfig. Default to false to match schema.
+      slotMap.set(slot.taskSlot as TaskSlot, {
+        taskSlot: slot.taskSlot,
+        model: slot.model,
+        provider: slot.provider,
+        fallbackModel: slot.fallbackModel,
+        fallbackProvider: slot.fallbackProvider,
+        maxTokens: slot.maxTokens,
+        temperature: slot.temperature,
+        isActive: slot.isActive,
+        useToonInput: slot.useToonInput ?? false,
+      })
+    }
+  }
+  const cache: CachedConfig = {
+    routingEnabled: doc.routingEnabled,
+    slots: slotMap,
+    loadedAt: Date.now(),
+  }
+  _cache = cache
+  _invalidationEpoch++
+  _lastLoadSource = 'L3-Mongo'
+
+  const client = getRedisClient()
+  if (!client) return
+  try {
+    const newEpoch = await client.incr(REDIS_EPOCH_KEY)
+    const result = await client.eval(
+      CAS_WRITE_LUA,
+      2,
+      REDIS_CACHE_KEY,
+      REDIS_EPOCH_KEY,
+      String(newEpoch),
+      JSON.stringify(serializeForRedis(cache)),
+      REDIS_TTL_SECONDS,
+    )
+    if (result === 0) {
+      // A concurrent admin save on another Lambda INCR'd the epoch
+      // past ours before our eval landed — Redis now holds THEIR
+      // newer config, and our L1 `_cache` (just set above) is stale.
+      // Without this clear, `ensureConfig()`'s L1 fast-path would
+      // serve our stale doc for up to CACHE_TTL_MS (60s), silently
+      // using the wrong model/provider on THIS Lambda while Redis
+      // and other Lambdas have the correct newer config. Clearing
+      // _cache forces the next ensureConfig to MGET Redis and pick
+      // up the winner. Codex P2 follow-up on PR #308.
+      _cache = null
+      aiLogger.info(
+        { event: 'model_config_replace_skip_stale', newEpoch },
+        'ModelRouter: skipped Redis write — concurrent admin save bumped epoch; L1 cleared to force L2 re-read',
+      )
+    }
+  } catch (err) {
+    aiLogger.warn({ err }, 'ModelRouter: replaceModelConfigCache Redis write failed')
+  }
 }
 
 // ─── Resolve model for a task slot ──────────────────────────────────────────
