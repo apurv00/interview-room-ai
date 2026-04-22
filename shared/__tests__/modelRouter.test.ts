@@ -53,6 +53,20 @@ const mockRedisMget = vi.fn<(...keys: string[]) => Promise<Array<string | null>>
 const mockRedisEval = vi.fn<(script: string, numKeys: number, ...args: Array<string | number>) => Promise<unknown>>()
 const mockRedisExpire = vi.fn<(key: string, ttl: number) => Promise<number>>()
 
+/** Test helper — build a SerializedConfig JSON string with the required
+ *  `writeEpoch` stamp (Codex P1 on PR #310). A valid hit requires
+ *  `parsed.writeEpoch === liveEpoch` (the `rawEpoch` element from the
+ *  same MGET tuple). `epoch` must match what the test seeds as the
+ *  second element of the MGET response, or the reader treats the entry
+ *  as stale and skips the hit.
+ */
+function stampedPayload(
+  body: { routingEnabled: boolean; slotEntries: unknown[] },
+  epoch: string | null,
+): string {
+  return JSON.stringify({ ...body, writeEpoch: epoch ?? 'nil' })
+}
+
 describe('resolveModel', () => {
   beforeEach(async () => {
     // 2026-04-21 non-blocking refactor: ensureConfig now kicks off a
@@ -198,7 +212,7 @@ describe('resolveModel', () => {
         ],
       ],
     }
-    mockRedisMget.mockResolvedValueOnce([JSON.stringify(cachedConfig), '1'])
+    mockRedisMget.mockResolvedValueOnce([stampedPayload(cachedConfig, '1'), '1'])
 
     const result = await resolveModel('interview.generate-question')
 
@@ -294,7 +308,7 @@ describe('resolveModel', () => {
         ],
       ],
     }
-    mockRedisMget.mockResolvedValueOnce([JSON.stringify(cachedConfig), '1'])
+    mockRedisMget.mockResolvedValueOnce([stampedPayload(cachedConfig, '1'), '1'])
 
     await resolveModel('interview.generate-question')
 
@@ -557,7 +571,7 @@ describe('resolveModel', () => {
       routingEnabled: true,
       slotEntries: [],
     }
-    mockRedisMget.mockResolvedValueOnce([JSON.stringify(cachedConfig), '1'])
+    mockRedisMget.mockResolvedValueOnce([stampedPayload(cachedConfig, '1'), '1'])
 
     await resolveModel('interview.generate-question')
 
@@ -660,7 +674,7 @@ describe('resolveModel', () => {
           ],
         ],
       }
-      mockRedisMget.mockResolvedValueOnce([JSON.stringify(cachedConfig), '1'])
+      mockRedisMget.mockResolvedValueOnce([stampedPayload(cachedConfig, '1'), '1'])
 
       // First call — L2 hit on the user thread. Must return the CMS
       // config immediately, NOT defaults.
@@ -956,7 +970,7 @@ describe('resolveModel', () => {
           ],
         ],
       }
-      mockRedisMget.mockResolvedValueOnce([JSON.stringify(winnerPayload), '10'])
+      mockRedisMget.mockResolvedValueOnce([stampedPayload(winnerPayload, '10'), '10'])
 
       const result = await resolveModel('interview.generate-question')
 
@@ -1032,7 +1046,7 @@ describe('resolveModel', () => {
         routingEnabled: true,
         slotEntries: [],
       }
-      mockRedisMget.mockResolvedValueOnce([JSON.stringify(cachedConfig), '1'])
+      mockRedisMget.mockResolvedValueOnce([stampedPayload(cachedConfig, '1'), '1'])
 
       await resolveModel('interview.generate-question')
       // EXPIRE is fire-and-forget — flush one microtask for the call to register.
@@ -1085,7 +1099,7 @@ describe('resolveModel', () => {
           ],
         ],
       }
-      mockRedisMget.mockResolvedValueOnce([JSON.stringify(cachedConfig), '1'])
+      mockRedisMget.mockResolvedValueOnce([stampedPayload(cachedConfig, '1'), '1'])
 
       const result = await resolveModel('interview.generate-question')
 
@@ -1126,18 +1140,147 @@ describe('resolveModel', () => {
         routingEnabled: true,
         slotEntries: [],
       }
-      mockRedisMget.mockResolvedValueOnce([JSON.stringify(cachedConfig), '1'])
+      mockRedisMget.mockResolvedValueOnce([stampedPayload(cachedConfig, '1'), '1'])
       await resolveModel('interview.generate-question')
       await Promise.resolve()
 
       // Clear the in-memory L1 to simulate a second cold Lambda that
       // still finds the L2 entry present.
       _clearLocalCacheForCrossLambdaSim()
-      mockRedisMget.mockResolvedValueOnce([JSON.stringify(cachedConfig), '2'])
+      mockRedisMget.mockResolvedValueOnce([stampedPayload(cachedConfig, '2'), '2'])
       await resolveModel('interview.generate-question')
       await Promise.resolve()
 
       expect(mockRedisExpire).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  // ── Stale-cache self-heal via writeEpoch (Codex P1 on PR #310) ──────
+  //
+  // Codex flagged that hit-side TTL refresh removes the implicit TTL
+  // self-heal when an invalidation's DEL fails silently: the pre-fix
+  // stale cache would age out in ≤TTL, but with refresh-on-hit every
+  // read extends the life of a stale entry indefinitely under traffic.
+  //
+  // The fix stamps `writeEpoch` into the payload and compares it to the
+  // live Redis epoch on read. Mismatch = stale → skip hit, skip
+  // refresh, let the key age out naturally.
+  describe('stale-cache self-heal (Codex P1)', () => {
+    it('returns MISS when payload writeEpoch < live Redis epoch (failed-invalidation scenario)', async () => {
+      // Simulate the exact scenario Codex described:
+      //   1. invalidateModelConfigCache() fires INCR (live epoch → 2)
+      //      but DEL fails silently, so the cache still holds the
+      //      previous writer's payload with writeEpoch=1.
+      //   2. A reader MGETs [staleCache, '2'].
+      //   3. Without writeEpoch check: hit, TTL refreshed, stale config
+      //      served indefinitely under traffic.
+      //   4. With the fix: staleness detected → miss.
+      const staleCache = {
+        routingEnabled: true,
+        slotEntries: [
+          [
+            'interview.generate-question',
+            {
+              taskSlot: 'interview.generate-question',
+              model: 'stale-model',
+              provider: 'anthropic',
+              maxTokens: 200,
+              isActive: true,
+            },
+          ],
+        ],
+      }
+      // writeEpoch=1 in payload, but live Redis epoch=2 → mismatch.
+      mockRedisMget.mockResolvedValueOnce([stampedPayload(staleCache, '1'), '2'])
+
+      const result = await resolveModel('interview.generate-question')
+
+      // Reader treats it as a miss → resolveModel uses TASK_SLOT_DEFAULTS
+      // (Mongo path fails in test env), NOT the stale model.
+      expect(result.model).toBe('gpt-5.4-mini')
+      expect(result.model).not.toBe('stale-model')
+    })
+
+    it('does NOT refresh TTL on stale-writeEpoch read (the whole point — let it age out)', async () => {
+      const staleCache = {
+        routingEnabled: true,
+        slotEntries: [],
+      }
+      mockRedisMget.mockResolvedValueOnce([stampedPayload(staleCache, '1'), '2'])
+
+      await resolveModel('interview.generate-question')
+      await Promise.resolve()
+
+      // TTL refresh would prolong the stale entry indefinitely under
+      // traffic — the exact regression Codex flagged. Pinned OFF.
+      expect(mockRedisExpire).not.toHaveBeenCalled()
+    })
+
+    it('emits a structured warn log when writeEpoch mismatches (observability)', async () => {
+      const staleCache = {
+        routingEnabled: true,
+        slotEntries: [],
+      }
+      mockRedisMget.mockResolvedValueOnce([stampedPayload(staleCache, '3'), '7'])
+
+      await resolveModel('interview.generate-question')
+
+      const warns = mockAiLoggerWarn.mock.calls.filter(
+        ([payload]) => (payload as { event?: string }).event === 'model_config_l2_stale_skip',
+      )
+      expect(warns.length).toBeGreaterThanOrEqual(1)
+      const payload = warns[0]?.[0] as { writeEpoch: string; liveEpoch: string }
+      expect(payload.writeEpoch).toBe('3')
+      expect(payload.liveEpoch).toBe('7')
+    })
+
+    it('rejects pre-deploy payloads missing writeEpoch entirely (forced single Mongo refresh)', async () => {
+      // A payload written by the previous deploy (no writeEpoch field)
+      // fails isValidSerializedConfig and is treated as shape-invalid,
+      // which is ALSO a miss path with no TTL refresh. One Mongo fetch
+      // per Lambda after deploy, then the cache self-heals with the
+      // stamped-epoch format.
+      const preDeployCache = {
+        routingEnabled: true,
+        slotEntries: [],
+        // writeEpoch intentionally omitted
+      }
+      mockRedisMget.mockResolvedValueOnce([JSON.stringify(preDeployCache), '1'])
+
+      const result = await resolveModel('interview.generate-question')
+      await Promise.resolve()
+
+      // Falls through to defaults (Mongo fails in test env), no refresh
+      // extended the life of the untyped payload.
+      expect(result.model).toBe('gpt-5.4-mini')
+      expect(mockRedisExpire).not.toHaveBeenCalled()
+    })
+
+    it('accepts a matched writeEpoch === liveEpoch as a valid hit (healthy path)', async () => {
+      // Regression guard: the happy path must still work. writeEpoch
+      // stamped with the same value the MGET returns as rawEpoch.
+      const freshCache = {
+        routingEnabled: true,
+        slotEntries: [
+          [
+            'interview.generate-question',
+            {
+              taskSlot: 'interview.generate-question',
+              model: 'fresh-model',
+              provider: 'anthropic',
+              maxTokens: 200,
+              isActive: true,
+            },
+          ],
+        ],
+      }
+      mockRedisMget.mockResolvedValueOnce([stampedPayload(freshCache, '5'), '5'])
+
+      const result = await resolveModel('interview.generate-question')
+      await Promise.resolve()
+
+      expect(result.model).toBe('fresh-model')
+      expect(mockRedisExpire).toHaveBeenCalledTimes(1)
     })
   })
 })
