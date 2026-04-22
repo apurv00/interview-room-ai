@@ -615,6 +615,45 @@ function FeedbackPageInner() {
           }
         }
         if (!resolved) {
+          // 2026-04-22 — the poll loop assumes the lock-holder will
+          // persist `session.feedback` (real or degraded fallback).
+          // After the P0 follow-up that stops persisting the outer-catch
+          // fallback (PR #313), a failing lock-holder leaves
+          // `session.feedback` undefined, so the poll above always
+          // exhausts its 30s budget when the primary request hit the
+          // outer catch. Re-POST once: the lock-holder has long since
+          // released (its `finally` block fires on error), so a fresh
+          // POST either succeeds with real feedback OR hits the same
+          // outer catch and returns the degraded payload directly in
+          // the response — which is exactly what we need for the
+          // banner + Retry UI that the single-tab flow already uses.
+          //
+          // If this retry also returns 202 (another concurrent attempt
+          // grabbed the lock in the narrow window), fall through to the
+          // original generic error rather than looping forever.
+          try {
+            const retryRes = await fetch('/api/generate-feedback', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                config: d.config,
+                transcript: d.transcript,
+                evaluations: d.evaluations,
+                speechMetrics: d.speechMetrics,
+                sessionId: sid,
+              }),
+              signal,
+            })
+            if (retryRes.ok && retryRes.status !== 202) {
+              fb = await retryRes.json()
+              resolved = true
+            }
+          } catch (e) {
+            if ((e as Error).name === 'AbortError') return
+            // fall through to the original generic error below
+          }
+        }
+        if (!resolved) {
           throw new Error(
             'Feedback generation is taking longer than expected — please refresh in a moment.',
           )
