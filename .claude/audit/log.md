@@ -1134,3 +1134,21 @@
 - **Files:** 2 changed, 1 test file(s)
 - **Root-cause:** the previous writeEpoch staleness fix catches failure
 - **Tests-added: shared/__tests__/modelRouter.test.ts — 6 new cases in**
+
+### 2026-04-22 17:43:06 +0000 · `3e425cc` · Claude
+- **Subject:** Mark feedback fallback as degraded; surface retry banner to user (P0)
+- **Files:** 5 changed, 1 test file(s)
+- **Root-cause:** when /api/generate-feedback's outer catch fires (LLM
+- **Tests-added: modules/interview/__tests__/feedbackDegradedFlag.test.ts**
+
+### 2026-04-22 17:54:01 +0000 · `754c8b4` · Claude
+- **Subject:** Bypass preflight cache when persisted feedback is degraded (Codex P1 #311)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** PR #311 added a user-facing "Retry feedback" button for
+- **Tests-added: modules/interview/__tests__/feedbackDegradedFlag.test.ts**
+
+### 2026-04-22 18:04:39 +0000 · `9c6a205` · Claude
+- **Subject:** Normalise degraded to truthy-boolean before cache bypass (Codex P2 #311)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** PR #311's cache-bypass check used strict-equality `!== true`
+- **Tests-added: 3 new cases in feedbackDegradedFlag.test.ts:**

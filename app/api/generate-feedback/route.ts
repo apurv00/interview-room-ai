@@ -298,12 +298,38 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
         })
           .select('feedback')
           .lean()) as { feedback?: FeedbackData } | null
-        if (existing?.feedback) {
+        // Codex P1 on PR #311: when the persisted feedback is a degraded
+        // fallback (outer-catch path), the UI shows a Retry button that
+        // re-POSTs to this route. Pre-fix, this preflight short-circuit
+        // returned the SAME degraded payload the user is trying to escape
+        // — retry was a no-op. Treat any truthy `degraded` as "no valid
+        // feedback yet" so regeneration proceeds. The feedbackLock
+        // acquired above still prevents concurrent writers from racing
+        // to the LLM.
+        //
+        // Codex P2 follow-up on PR #311: use `Boolean(...)` rather than
+        // strict-equality `=== true`. The UI at feedback page.tsx:996
+        // does a truthy check (`{feedback.degraded && ...}`), so if a
+        // non-boolean value ever survives persistence (e.g.
+        // `"true"` via a future legacy payload or a schema-drift edge
+        // case), server + UI MUST agree on what counts as degraded.
+        // Without normalisation the UI would show the retry banner
+        // (truthy), but the server would hit the cache-return branch
+        // (strict `!== true`), and retry becomes a no-op again — the
+        // exact regression this P2 guards against.
+        const isDegraded = Boolean(existing?.feedback?.degraded)
+        if (existing?.feedback && !isDegraded) {
           aiLogger.info(
             { sessionId: body.sessionId, userId: user.id, redisLockAcquired: feedbackLock?.acquired ?? null },
             'generate-feedback: concurrent writer already produced feedback; returning cached (F-4)',
           )
           return NextResponse.json(existing.feedback)
+        }
+        if (isDegraded) {
+          aiLogger.info(
+            { sessionId: body.sessionId, userId: user.id, rawDegraded: existing?.feedback?.degraded },
+            'generate-feedback: persisted feedback is degraded; bypassing cache to allow user-triggered retry (Codex P1 on #311)',
+          )
         }
       } catch (err) {
         aiLogger.warn(
@@ -1138,6 +1164,18 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       const fallbackEngScore = Math.round(roughScore * 0.9)
       const fallbackOverall = Math.round(roughScore * 0.4 + fallbackCommScore * 0.3 + fallbackEngScore * 0.3)
 
+      // P0 fix (2026-04-22): set `degraded: true` so the UI can distinguish
+      // this synthetic fallback from a real LLM-generated feedback object.
+      // Pre-fix, the candidate saw a plausible-looking score (e.g. 30/100)
+      // with hardcoded "use the STAR framework" advice even though the LLM
+      // failed. The `degraded` flag lets the feedback page render a clear
+      // banner + retry CTA while keeping the numeric fields populated for
+      // analytics/telemetry paths that already consume them.
+      //
+      // Kept all existing fields populated (rather than nulling the score)
+      // so downstream consumers (InterviewSession.feedback in Mongo,
+      // ScoreTelemetry, practiceStats derivation) are unaffected. The flag
+      // is additive and optional; legacy sessions remain undefined.
       const fallback: FeedbackData = {
         overall_score: fallbackOverall,
         pass_probability: fallbackOverall >= 75 ? 'High' : fallbackOverall >= 50 ? 'Medium' : 'Low',
@@ -1153,6 +1191,7 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
           'Include specific metrics and outcomes to strengthen specificity',
           'Reduce filler words — pause instead of using "um" or "like"',
         ],
+        degraded: true,
       }
       if (body.sessionId) {
         InterviewSession.findByIdAndUpdate(body.sessionId, {
