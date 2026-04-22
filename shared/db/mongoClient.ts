@@ -1,8 +1,15 @@
 import { MongoClient } from 'mongodb'
+import { MONGO_MAX_POOL_SIZE, MONGO_SERVER_SELECTION_TIMEOUT_MS } from './mongoConfig'
 
+// Timeouts + pool size come from the shared constants module so this
+// NextAuth-adapter client cannot drift from Mongoose's `connection.ts`.
+// Pre-2026-04-22 this file hardcoded a 5 s selection timeout which
+// produced the `MongoServerSelectionError: Server selection timed out`
+// failures on /api/auth/session when Atlas was slow. See
+// shared/db/mongoConfig.ts for the full incident context.
 const options = {
-  maxPoolSize: 10,
-  serverSelectionTimeoutMS: 5000,
+  maxPoolSize: MONGO_MAX_POOL_SIZE,
+  serverSelectionTimeoutMS: MONGO_SERVER_SELECTION_TIMEOUT_MS,
 }
 
 const globalWithMongo = global as typeof globalThis & {

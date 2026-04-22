@@ -1153,6 +1153,11 @@
 - **Root-cause:** PR #311's cache-bypass check used strict-equality `!== true`
 - **Tests-added: 3 new cases in feedbackDegradedFlag.test.ts:**
 
+### 2026-04-22 18:26:37 +0000 · `e5c0dbb` · Claude
+- **Subject:** Align Mongo driver timeouts across both clients (P0)
+- **Files:** 4 changed, 1 test file(s)
+- **Root-cause:** two Mongo clients in the codebase talk to the same Atlas
+- **Tests-added: shared/__tests__/mongoConfig.test.ts — 8 cases:**
 ### 2026-04-22 19:08:06 +0000 · `fb69ef6` · Claude
 - **Subject:** Stop persisting degraded feedback fallback to Mongo (P0 follow-up)
 - **Files:** 2 changed, 1 test file(s)
@@ -1184,3 +1189,9 @@
 - **Files:** 3 changed, 1 test file(s)
 - **Root-cause:** commit 897a276 added an idempotency guard to the PATCH
 - **Tests-added: updated 4 existing tests in**
+
+### 2026-04-22 20:47:46 +0000 · `1b1793e` · Claude
+- **Subject:** Merge main into claude/mongo-timeout-align
+- **Files:** 7 changed, 2 test file(s)
+- **Root-cause:** PR #312 (mongo timeout alignment) diverged from main after
+- **No-tests-needed-because: merge commit with no functional change — all**
