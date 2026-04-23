@@ -2,6 +2,7 @@ import mongoose from 'mongoose'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { aiLogger } from '@shared/logger'
 import {
+  MONGO_CONNECT_TIMEOUT_MS,
   MONGO_MAX_POOL_SIZE,
   MONGO_SERVER_SELECTION_TIMEOUT_MS,
   MONGO_SOCKET_TIMEOUT_MS,
@@ -104,6 +105,7 @@ export async function connectDB(): Promise<typeof mongoose> {
       maxPoolSize: MONGO_MAX_POOL_SIZE,
       serverSelectionTimeoutMS: MONGO_SERVER_SELECTION_TIMEOUT_MS,
       socketTimeoutMS: MONGO_SOCKET_TIMEOUT_MS,
+      connectTimeoutMS: MONGO_CONNECT_TIMEOUT_MS,
     })
     // Attach a no-op `.catch` so that if the caller is delayed or a
     // parallel invocation doesn't await this promise, Node never logs an

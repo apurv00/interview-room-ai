@@ -26,6 +26,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import {
+  MONGO_CONNECT_TIMEOUT_MS,
   MONGO_MAX_POOL_SIZE,
   MONGO_SERVER_SELECTION_TIMEOUT_MS,
   MONGO_SOCKET_TIMEOUT_MS,
@@ -61,6 +62,26 @@ describe('MONGO_MAX_POOL_SIZE', () => {
   })
 })
 
+describe('MONGO_CONNECT_TIMEOUT_MS', () => {
+  it('is at least 5s — below this, legitimate warm-Atlas handshakes risk timing out', () => {
+    // Warm-Atlas TLS handshakes typically complete in 100-500 ms;
+    // 5 s gives 10-50× headroom for network jitter.
+    expect(MONGO_CONNECT_TIMEOUT_MS).toBeGreaterThanOrEqual(5_000)
+  })
+
+  it('is strictly less than MONGO_SERVER_SELECTION_TIMEOUT_MS', () => {
+    // If connect timeout ≥ selection timeout, the outer loop ends
+    // before the inner can fire, so the inner value is effectively
+    // dead code. The whole point of having the inner is to let
+    // server selection retry a sibling replica within its budget.
+    expect(MONGO_CONNECT_TIMEOUT_MS).toBeLessThan(MONGO_SERVER_SELECTION_TIMEOUT_MS)
+  })
+
+  it('is exactly 10_000 (current agreed value)', () => {
+    expect(MONGO_CONNECT_TIMEOUT_MS).toBe(10_000)
+  })
+})
+
 describe('driver-config centralisation', () => {
   // These lexical checks catch the exact regression the refactor
   // prevents: a future edit copy-pasting a literal timeout into either
@@ -73,8 +94,12 @@ describe('driver-config centralisation', () => {
       'utf8',
     )
     expect(src).toContain('MONGO_SERVER_SELECTION_TIMEOUT_MS')
-    // No hardcoded literal on a `serverSelectionTimeoutMS: <number>` line.
+    expect(src).toContain('MONGO_SOCKET_TIMEOUT_MS')
+    expect(src).toContain('MONGO_CONNECT_TIMEOUT_MS')
+    // No hardcoded literal on any of the three timeout lines.
     expect(src).not.toMatch(/serverSelectionTimeoutMS\s*:\s*\d/)
+    expect(src).not.toMatch(/socketTimeoutMS\s*:\s*\d/)
+    expect(src).not.toMatch(/connectTimeoutMS\s*:\s*\d/)
   })
 
   it('connection.ts imports MONGO_SERVER_SELECTION_TIMEOUT_MS (no literal)', () => {
@@ -83,7 +108,9 @@ describe('driver-config centralisation', () => {
       'utf8',
     )
     expect(src).toContain('MONGO_SERVER_SELECTION_TIMEOUT_MS')
+    expect(src).toContain('MONGO_CONNECT_TIMEOUT_MS')
     expect(src).not.toMatch(/serverSelectionTimeoutMS\s*:\s*\d/)
+    expect(src).not.toMatch(/connectTimeoutMS\s*:\s*\d/)
   })
 
   it('mongoClient.ts imports MONGO_MAX_POOL_SIZE (no literal)', () => {
