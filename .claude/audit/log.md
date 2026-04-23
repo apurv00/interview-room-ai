@@ -1209,3 +1209,10 @@
 - **Root-cause:** taskSlots.ts:55 set maxTokens=800 on 'interview.jd-extract'.
 - **Tests-added: modules/interview/__tests__/documentContextCache.test.ts**
 - **Verified-by:** unit tests (documentContextCache suite, 4 existing + 6 new,
+
+### 2026-04-23 10:00:44 +0000 · `c561807` · Claude
+- **Subject:** fix(interview): use SET NX for JD parse failure sentinel
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** documentContextCache.ts:setCachedJDParseFailure used
+- **Tests-added: modules/interview/__tests__/documentContextCache.test.ts**
+- **Verified-by:** unit tests (documentContextCache suite, all 16 pass); the
