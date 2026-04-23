@@ -65,7 +65,12 @@ export async function setCachedJDContext(sessionId: string, ctx: string): Promis
 
 async function setCachedJDParseFailure(sessionId: string): Promise<void> {
   try {
-    await redis.setex(jdKey(sessionId), FAILURE_TTL_SECONDS, FAILURE_SENTINEL)
+    // SET NX — only write sentinel when the key is absent. Prevents a
+    // concurrent Lambda instance's successful parse from being clobbered
+    // in a multi-instance race (inflightJDParses is per-process, so two
+    // instances can run parses for the same sessionId; one failure must
+    // not overwrite another's valid context).
+    await redis.set(jdKey(sessionId), FAILURE_SENTINEL, 'EX', FAILURE_TTL_SECONDS, 'NX')
   } catch (err) {
     logger.warn({ err, sessionId }, 'setCachedJDParseFailure: redis write failed')
   }

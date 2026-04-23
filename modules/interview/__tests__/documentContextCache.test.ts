@@ -3,11 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
 const mockRedisGet = vi.fn()
+const mockRedisSet = vi.fn()
 const mockRedisSetex = vi.fn()
 
 vi.mock('@shared/redis', () => ({
   redis: {
     get: (...args: unknown[]) => mockRedisGet(...args),
+    set: (...args: unknown[]) => mockRedisSet(...args),
     setex: (...args: unknown[]) => mockRedisSetex(...args),
   },
 }))
@@ -246,7 +248,7 @@ describe('documentContextCache', () => {
       expect(mockParseJobDescription).not.toHaveBeenCalled()
     })
 
-    it('writes failure sentinel with 120s TTL when parse returns empty requirements', async () => {
+    it('writes failure sentinel with 120s TTL + NX when parse returns empty requirements', async () => {
       mockRedisGet.mockResolvedValue(null)
       mockFindById.mockReturnValue(makeLeanQuery({ parsedJobDescription: null }))
       mockParseJobDescription.mockResolvedValue({
@@ -259,17 +261,36 @@ describe('documentContextCache', () => {
 
       await getOrLoadJDContext('sess-empty', 'raw JD text')
       await flushMicrotasks()
-      expect(mockRedisSetex).toHaveBeenCalledWith('jd:ctx:sess-empty', 120, '__jd_parse_failed__')
+      // NX ensures a concurrent instance's valid context is never clobbered.
+      expect(mockRedisSet).toHaveBeenCalledWith(
+        'jd:ctx:sess-empty',
+        '__jd_parse_failed__',
+        'EX',
+        120,
+        'NX',
+      )
+      // Must not also write via setex (which would be unconditional).
+      expect(mockRedisSetex).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        '__jd_parse_failed__',
+      )
     })
 
-    it('writes failure sentinel when parse throws', async () => {
+    it('writes failure sentinel (NX) when parse throws', async () => {
       mockRedisGet.mockResolvedValue(null)
       mockFindById.mockReturnValue(makeLeanQuery({ parsedJobDescription: null }))
       mockParseJobDescription.mockRejectedValue(new Error('parse exploded'))
 
       await getOrLoadJDContext('sess-throw', 'raw JD text')
       await flushMicrotasks()
-      expect(mockRedisSetex).toHaveBeenCalledWith('jd:ctx:sess-throw', 120, '__jd_parse_failed__')
+      expect(mockRedisSet).toHaveBeenCalledWith(
+        'jd:ctx:sess-throw',
+        '__jd_parse_failed__',
+        'EX',
+        120,
+        'NX',
+      )
     })
 
     it('getCachedJDContext hides sentinel from external callers', async () => {
