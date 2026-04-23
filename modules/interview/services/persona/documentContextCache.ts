@@ -14,6 +14,13 @@ import type { IParsedJobDescription } from '@shared/db/models/SavedJobDescriptio
 
 const TTL_SECONDS = 1800 // 30 min — matches the default session duration cap.
 
+// Short-TTL negative cache for failed JD parses. Without this, a parse that
+// returns empty requirements (truncation / malformed JSON / empty JD) isn't
+// cached at all, so every subsequent route call in the session re-fires the
+// parse. 120s covers a typical session, self-heals after it ends.
+const FAILURE_TTL_SECONDS = 120
+const FAILURE_SENTINEL = '__jd_parse_failed__'
+
 const jdKey = (sessionId: string) => `jd:ctx:${sessionId}`
 const resumeKey = (sessionId: string) => `resume:ctx:${sessionId}`
 
@@ -26,22 +33,46 @@ const inflightResumeParses = new Set<string>()
 // All Redis calls are wrapped in try/catch. Redis failure must never break
 // the request path — callers should treat failures as cache misses.
 
-export async function getCachedJDContext(sessionId: string): Promise<string | null> {
+type JDCacheState = 'hit' | 'miss' | 'failed'
+
+async function readJDCacheState(
+  sessionId: string,
+): Promise<{ state: JDCacheState; ctx: string | null }> {
   try {
     const val = await redis.get(jdKey(sessionId))
-    return val || null
+    if (!val) return { state: 'miss', ctx: null }
+    if (val === FAILURE_SENTINEL) return { state: 'failed', ctx: null }
+    return { state: 'hit', ctx: val }
   } catch (err) {
-    logger.warn({ err, sessionId }, 'getCachedJDContext: redis read failed')
-    return null
+    logger.warn({ err, sessionId }, 'readJDCacheState: redis read failed')
+    return { state: 'miss', ctx: null }
   }
 }
 
+export async function getCachedJDContext(sessionId: string): Promise<string | null> {
+  const res = await readJDCacheState(sessionId)
+  return res.state === 'hit' ? res.ctx : null
+}
+
 export async function setCachedJDContext(sessionId: string, ctx: string): Promise<void> {
-  if (!ctx) return
+  if (!ctx || ctx === FAILURE_SENTINEL) return
   try {
     await redis.setex(jdKey(sessionId), TTL_SECONDS, ctx)
   } catch (err) {
     logger.warn({ err, sessionId }, 'setCachedJDContext: redis write failed')
+  }
+}
+
+async function setCachedJDParseFailure(sessionId: string): Promise<void> {
+  try {
+    // SET NX — only write sentinel when the key is absent. Prevents a
+    // concurrent Lambda instance's successful parse from being clobbered
+    // in a multi-instance race (inflightJDParses is per-process, so two
+    // instances can run parses for the same sessionId; one failure must
+    // not overwrite another's valid context).
+    await redis.set(jdKey(sessionId), FAILURE_SENTINEL, 'EX', FAILURE_TTL_SECONDS, 'NX')
+  } catch (err) {
+    logger.warn({ err, sessionId }, 'setCachedJDParseFailure: redis write failed')
   }
 }
 
@@ -70,9 +101,15 @@ export async function setCachedResumeContext(sessionId: string, ctx: string): Pr
  * Returns the compact JD context block for a session.
  *
  * Resolution order:
- *   1. Redis hit → return
- *   2. Mongo `InterviewSession.parsedJobDescription` → build context, warm Redis, return
- *   3. Fire-and-forget parse of rawText → store back into Mongo + Redis for next call
+ *   1. Redis hit (valid ctx) → return
+ *   2. Mongo `InterviewSession.parsedJobDescription` → build context, warm Redis, return.
+ *      Runs even when Redis holds a failure sentinel, so an externally-written
+ *      parsedJobDescription doc can still hydrate the session.
+ *   3. Redis held a recent failure sentinel → return null (don't re-trigger parse)
+ *   4. Fire-and-forget parse of rawText → on success, store into Mongo + Redis;
+ *      on empty result or thrown error, write a short-TTL failure sentinel so
+ *      the next call in the same session skips re-parsing and falls straight
+ *      through to the raw-JD prompt fallback.
  *      → return null so the CURRENT call falls back to raw .slice()
  */
 export async function getOrLoadJDContext(
@@ -80,10 +117,10 @@ export async function getOrLoadJDContext(
   rawText: string,
 ): Promise<string | null> {
   // 1. Redis
-  const cached = await getCachedJDContext(sessionId)
-  if (cached) return cached
+  const cached = await readJDCacheState(sessionId)
+  if (cached.state === 'hit') return cached.ctx
 
-  // 2. Mongo
+  // 2. Mongo — always checked, even if Redis held a sentinel.
   try {
     await connectDB()
     const doc = await InterviewSession.findById(sessionId).select('parsedJobDescription').lean()
@@ -91,7 +128,7 @@ export async function getOrLoadJDContext(
     if (parsed && Array.isArray(parsed.requirements) && parsed.requirements.length > 0) {
       const ctx = buildParsedJDContext(parsed)
       if (ctx) {
-        await setCachedJDContext(sessionId, ctx)
+        await setCachedJDContext(sessionId, ctx) // overwrites any sentinel
         return ctx
       }
     }
@@ -99,7 +136,10 @@ export async function getOrLoadJDContext(
     logger.warn({ err, sessionId }, 'getOrLoadJDContext: Mongo read failed')
   }
 
-  // 3. Fire-and-forget parse — populates cache for NEXT call.
+  // 3. Recent parse attempt already failed — skip re-parse.
+  if (cached.state === 'failed') return null
+
+  // 4. Fire-and-forget parse — populates cache for NEXT call.
   if (rawText && !inflightJDParses.has(sessionId)) {
     inflightJDParses.add(sessionId)
     void (async () => {
@@ -113,9 +153,12 @@ export async function getOrLoadJDContext(
             }),
             setCachedJDContext(sessionId, ctx),
           ])
+        } else {
+          await setCachedJDParseFailure(sessionId)
         }
       } catch (err) {
         logger.warn({ err, sessionId }, 'getOrLoadJDContext: background parse failed')
+        await setCachedJDParseFailure(sessionId)
       } finally {
         inflightJDParses.delete(sessionId)
       }

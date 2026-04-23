@@ -3,11 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
 const mockRedisGet = vi.fn()
+const mockRedisSet = vi.fn()
 const mockRedisSetex = vi.fn()
 
 vi.mock('@shared/redis', () => ({
   redis: {
     get: (...args: unknown[]) => mockRedisGet(...args),
+    set: (...args: unknown[]) => mockRedisSet(...args),
     setex: (...args: unknown[]) => mockRedisSetex(...args),
   },
 }))
@@ -49,6 +51,7 @@ vi.mock('@interview/services/persona/resumeContextService', () => ({
 // ─── Imports (after mocks) ──────────────────────────────────────────────────
 
 import {
+  getCachedJDContext,
   getOrLoadJDContext,
   getOrLoadResumeContext,
   setCachedJDContext,
@@ -205,6 +208,100 @@ describe('documentContextCache', () => {
     it('swallows Redis errors', async () => {
       mockRedisSetex.mockRejectedValueOnce(new Error('redis down'))
       await expect(setCachedJDContext('sess-j', 'hello')).resolves.toBeUndefined()
+    })
+  })
+
+  describe('getOrLoadJDContext — negative cache', () => {
+    it('returns null and skips re-parse when a recent failure is cached', async () => {
+      mockRedisGet.mockResolvedValue('__jd_parse_failed__')
+      mockFindById.mockReturnValue(makeLeanQuery({ parsedJobDescription: null }))
+
+      const result = await getOrLoadJDContext('sess-fail', 'raw JD text')
+      expect(result).toBeNull()
+      await flushMicrotasks()
+      expect(mockParseJobDescription).not.toHaveBeenCalled()
+    })
+
+    it('prefers a valid Mongo doc even when Redis has a failure sentinel', async () => {
+      mockRedisGet.mockResolvedValue('__jd_parse_failed__')
+      mockFindById.mockReturnValue(
+        makeLeanQuery({
+          parsedJobDescription: {
+            requirements: [
+              {
+                id: 'r1',
+                requirement: 'PM',
+                importance: 'must-have',
+                category: 'experience',
+                targetCompetencies: [],
+              },
+            ],
+          },
+        }),
+      )
+      mockBuildParsedJDContext.mockReturnValue('FROM_MONGO')
+
+      const result = await getOrLoadJDContext('sess-mongo-wins', 'raw JD text')
+      expect(result).toBe('FROM_MONGO')
+      expect(mockRedisSetex).toHaveBeenCalledWith('jd:ctx:sess-mongo-wins', 1800, 'FROM_MONGO')
+      await flushMicrotasks()
+      expect(mockParseJobDescription).not.toHaveBeenCalled()
+    })
+
+    it('writes failure sentinel with 120s TTL + NX when parse returns empty requirements', async () => {
+      mockRedisGet.mockResolvedValue(null)
+      mockFindById.mockReturnValue(makeLeanQuery({ parsedJobDescription: null }))
+      mockParseJobDescription.mockResolvedValue({
+        requirements: [],
+        company: '',
+        role: '',
+        inferredDomain: '',
+        keyThemes: [],
+      })
+
+      await getOrLoadJDContext('sess-empty', 'raw JD text')
+      await flushMicrotasks()
+      // NX ensures a concurrent instance's valid context is never clobbered.
+      expect(mockRedisSet).toHaveBeenCalledWith(
+        'jd:ctx:sess-empty',
+        '__jd_parse_failed__',
+        'EX',
+        120,
+        'NX',
+      )
+      // Must not also write via setex (which would be unconditional).
+      expect(mockRedisSetex).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        '__jd_parse_failed__',
+      )
+    })
+
+    it('writes failure sentinel (NX) when parse throws', async () => {
+      mockRedisGet.mockResolvedValue(null)
+      mockFindById.mockReturnValue(makeLeanQuery({ parsedJobDescription: null }))
+      mockParseJobDescription.mockRejectedValue(new Error('parse exploded'))
+
+      await getOrLoadJDContext('sess-throw', 'raw JD text')
+      await flushMicrotasks()
+      expect(mockRedisSet).toHaveBeenCalledWith(
+        'jd:ctx:sess-throw',
+        '__jd_parse_failed__',
+        'EX',
+        120,
+        'NX',
+      )
+    })
+
+    it('getCachedJDContext hides sentinel from external callers', async () => {
+      mockRedisGet.mockResolvedValue('__jd_parse_failed__')
+      const result = await getCachedJDContext('sess-hidden')
+      expect(result).toBeNull()
+    })
+
+    it('setCachedJDContext refuses to write the sentinel as content', async () => {
+      await setCachedJDContext('sess-defense', '__jd_parse_failed__')
+      expect(mockRedisSetex).not.toHaveBeenCalled()
     })
   })
 })

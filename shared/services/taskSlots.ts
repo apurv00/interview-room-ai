@@ -52,7 +52,7 @@ export const TASK_SLOT_DEFAULTS: Record<TaskSlot, { model: string; maxTokens: nu
   'interview.clarify-coding':       { model: 'gpt-5.4-mini', maxTokens: 500, provider: 'openai' },
   'interview.coding-problem-gen':   { model: 'gpt-5.4-mini', maxTokens: 1000, provider: 'openai' },
   'interview.coach-notes':          { model: 'gpt-5.4-mini', maxTokens: 500, provider: 'openai' },
-  'interview.jd-extract':           { model: 'gpt-5.4-mini', maxTokens: 800, provider: 'openai' },
+  'interview.jd-extract':           { model: 'gpt-5.4-mini', maxTokens: 2500, provider: 'openai' },
   'interview.fusion-analysis':      { model: 'gpt-5.4-mini', maxTokens: 3000, provider: 'openai' },
   'resume.enhance-section':         { model: 'claude-sonnet-4-6', maxTokens: 1000, provider: 'anthropic' },
   'resume.enhance-bullets':         { model: 'claude-sonnet-4-6', maxTokens: 1000, provider: 'anthropic' },
