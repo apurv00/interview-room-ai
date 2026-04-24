@@ -1237,3 +1237,10 @@
 - **Root-cause:** multimodalPipeline.ts:110-113 (post-PR#316-commit-1) treated
 - **Tests-added: modules/interview/__tests__/multimodalPipelineNormalisation.test.ts**
 - **Verified-by:** unit tests (29/29 on target files — up from 27/27 pre-fix,
+
+### 2026-04-24 07:02:24 +0000 · `e460eba` · Claude
+- **Subject:** fix(analysis): remove evaluations-length cap on qIdx-deduped boundaries
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** multimodalPipeline.ts:143 capped the deduped byQIdx list
+- **Tests-added: modules/interview/__tests__/multimodalPipelineNormalisation.test.ts**
+- **Verified-by:** unit tests (30/30 on target files — previously 29/29; one
