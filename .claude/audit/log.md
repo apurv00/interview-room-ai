@@ -1230,3 +1230,10 @@
 - **Root-cause:** multimodalPipeline.ts:94-96 mapped interviewer-turn
 - **Tests-added: modules/interview/__tests__/multimodalPipelineNormalisation.test.ts**
 - **Verified-by:** unit tests (27/27 on target files); full interview suite
+
+### 2026-04-24 06:49:26 +0000 · `ce6a4f8` · Claude
+- **Subject:** fix(analysis): dedupe question boundaries by questionIndex
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** multimodalPipeline.ts:110-113 (post-PR#316-commit-1) treated
+- **Tests-added: modules/interview/__tests__/multimodalPipelineNormalisation.test.ts**
+- **Verified-by:** unit tests (29/29 on target files — up from 27/27 pre-fix,
