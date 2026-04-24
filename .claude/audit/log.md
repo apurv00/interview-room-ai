@@ -1328,3 +1328,10 @@
 - **Root-cause:** production interview session 69eb6689c6cbd204bd2b8266
 - **Tests-added:**
 - **Verified-by:** 9/9 new pcmRingBuffer tests pass, 68/68 existing
+
+### 2026-04-24 15:19:01 +0000 · `b45e470` · Claude
+- **Subject:** fix(stt): Codex P1 on PR #320 — slow-path race + warmUp fallback dupes
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** two interlocking bugs in useDeepgramRecognition's slow-path
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+- **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts
