@@ -9,6 +9,31 @@
  * during Atlas cold-connect windows while the other survives.
  *
  * ─────────────────────────────────────────────────────────────────
+ * 2026-04-23 observation — Lambda cold-start vs Atlas cold-wake
+ * ─────────────────────────────────────────────────────────────────
+ *
+ * Session 69e9a51b5a8426e4f81b1203 (2026-04-23) produced three
+ * `/api/auth/*` failures pre-session:
+ *   - 2× `MongoServerSelectionError` at exactly 15000ms
+ *   - 1× `MongoNetworkTimeoutError: Socket 'secureConnect' timed out
+ *     after 40698ms (connectTimeoutMS: 30000)`
+ *
+ * The `keepMongoWarmJob` (`modules/learn/jobs/keepMongoWarm.ts`) was
+ * running — Atlas was warm. These failures were Vercel Lambda
+ * cold-starts, not Atlas cold-wakes:
+ *
+ *   New Vercel Lambda spins up → fresh Node process → empty
+ *   `_mongoClientPromise` global → first request triggers
+ *   `client.connect()` → TCP + TLS handshake to a specific replica
+ *   node. If that node is briefly slow, the driver's default
+ *   `connectTimeoutMS: 30000` let the handshake hang + retry up to
+ *   ~40 s before bubbling up.
+ *
+ * Keeping Atlas warm is necessary but not sufficient — the per-
+ * connect timeout also has to be bounded. Hence `MONGO_CONNECT_TIMEOUT_MS`
+ * below, wired into both clients.
+ *
+ * ─────────────────────────────────────────────────────────────────
  * 2026-04-22 P0 fix — context for the shared constant
  * ─────────────────────────────────────────────────────────────────
  *
@@ -46,11 +71,31 @@ export const MONGO_SERVER_SELECTION_TIMEOUT_MS = 15_000
 
 /**
  * How long an individual socket is allowed to be idle before the
- * driver tears it down. Matches `connection.ts`'s existing setting
- * (unchanged — surfaced here only for future-proofing if we ever
- * wire the raw-driver `mongoClient.ts` to use it too).
+ * driver tears it down. Matches `connection.ts`'s existing setting.
+ * Wired into `mongoClient.ts` from 2026-04-23 onward (previously
+ * missing there — the raw driver used its implicit default).
  */
 export const MONGO_SOCKET_TIMEOUT_MS = 45_000
+
+/**
+ * How long the driver waits for a single TCP + TLS handshake to a
+ * specific replica node before tearing down the attempt.
+ *
+ * Why 10 s:
+ *   - MUST be < `MONGO_SERVER_SELECTION_TIMEOUT_MS` (15 s). Otherwise
+ *     server selection times out first and this value never has
+ *     effect. 10 s gives the outer loop at least one retry on a
+ *     sibling replica within its 15 s budget.
+ *   - MUST be > warm-Atlas TLS handshake latency (100-500 ms with
+ *     10-20× headroom for jitter).
+ *   - Replaces the driver's implicit default of 30 s which produced
+ *     the 40.7 s secureConnect observation on 2026-04-23 (see header).
+ *
+ * Applies to both `connection.ts` (Mongoose) and `mongoClient.ts`
+ * (NextAuth raw driver). Kept tight on purpose: a failure here is
+ * a specific-node problem, server selection should retry a sibling.
+ */
+export const MONGO_CONNECT_TIMEOUT_MS = 10_000
 
 /**
  * Connection pool cap. Both clients use the same value today; surfaced

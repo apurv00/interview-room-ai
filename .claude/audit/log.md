@@ -1216,3 +1216,10 @@
 - **Root-cause:** documentContextCache.ts:setCachedJDParseFailure used
 - **Tests-added: modules/interview/__tests__/documentContextCache.test.ts**
 - **Verified-by:** unit tests (documentContextCache suite, all 16 pass); the
+
+### 2026-04-23 14:32:13 +0000 · `378c149` · Claude
+- **Subject:** fix(db): bound Mongo per-connect timeout to 10s in both clients
+- **Files:** 4 changed, 1 test file(s)
+- **Root-cause:** shared/db/mongoClient.ts (raw driver used by NextAuth via
+- **Tests-added: shared/__tests__/mongoConfig.test.ts**
+- **Verified-by:** unit tests (shared/__tests__/mongoConfig.test.ts and
