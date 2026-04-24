@@ -1251,3 +1251,10 @@
 - **Root-cause:** session.startedAt is persisted via an async Mongoose write on
 - **Tests-added: modules/interview/__tests__/multimodalPipelineNormalisation.test.ts**
 - **Verified-by:** 20/20 multimodalPipelineNormalisation tests pass,
+
+### 2026-04-24 07:41:42 +0000 · `3d628c1` · Claude
+- **Subject:** fix(analysis): anchor sessionT0 to earliest transcript, not startedAt
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** session.startedAt is written at session CREATE time
+- **Tests-added: modules/interview/__tests__/multimodalPipelineNormalisation.test.ts**
+- **Verified-by:** 20/20 normalisation + 15/15 analysisJob tests pass,
