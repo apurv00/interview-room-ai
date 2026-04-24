@@ -278,7 +278,7 @@ describe('G.5 — pressure-Q context respects status="failed"', () => {
 // skip nulls from both numerator and denominator and return null
 // when every entry is missing.
 
-import { computeEngagementContext } from '@/app/api/generate-feedback/route'
+import { computeEngagementContext } from '@interview/services/eval/engagementContext'
 
 describe('computeEngagementContext — audit P2 null-aware speech metrics', () => {
   it('renders "not available" for a missing WPM on a single question', async () => {

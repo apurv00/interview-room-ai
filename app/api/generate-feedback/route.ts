@@ -29,6 +29,7 @@ import { computeBlendedOverallScore, resolveBlendWeights } from '@interview/serv
 import { computePerQAverage, computeAnswerQualityAggregate } from '@interview/services/eval/perQAggregation'
 import { computeCompletionAdjustment } from '@interview/services/eval/completionAdjustment'
 import { compactTranscript } from '@interview/services/eval/transcriptCompactor'
+import { computeEngagementContext } from '@interview/services/eval/engagementContext'
 import { getQuestionCount } from '@interview/config/interviewConfig'
 import type { Duration } from '@shared/types'
 import { z } from 'zod'
@@ -43,130 +44,14 @@ export const maxDuration = 60
 
 type GenerateFeedbackBody = z.infer<typeof GenerateFeedbackSchema>
 
-/**
- * Runtime coercion of a speech metric to `number | null`.
- *
- * Audit P2 (2026-04-24): `Number(m.wpm) || 0` silently turned
- * `undefined` / `null` / `NaN` into `0`, which was then rendered into
- * the prompt as "WPM=0" — a factual claim the candidate spoke at zero
- * words per minute. The model then scored Communication against a
- * fabricated "0 WPM" baseline instead of acknowledging the data was
- * unavailable. `SpeechMetrics` is typed as strict `number` in
- * shared/types.ts, but the `Record<string, unknown>[]` param on the
- * handler allows older clients / missing-metric rows through — so
- * defense is still warranted.
- *
- * Contract: `null` means "we don't know"; downstream formatters must
- * render it as "not available" rather than "0". Callers exist in
- * perQ per-question lines and the first-half / second-half trend
- * computation.
- */
-function coerceMetric(v: unknown): number | null {
-  if (v === null || v === undefined) return null
-  const n = Number(v)
-  if (!Number.isFinite(n)) return null
-  return n
-}
-
-/**
- * Average across defined values only. Excludes `null` entries from
- * BOTH the numerator and denominator. Returns `null` when every
- * entry is null (all-missing half) so the caller emits "not
- * available" instead of a biased 0 / bogus NaN.
- */
-function averageDefined(values: (number | null)[]): number | null {
-  const nums = values.filter((v): v is number => v !== null)
-  if (nums.length === 0) return null
-  return nums.reduce((a, b) => a + b, 0) / nums.length
-}
-
-/**
- * Exported for unit testing — see
- * modules/interview/__tests__/generateFeedbackSilentZeros.test.ts.
- * The docblock in that test predicted "direct inspection of the
- * `computeEngagementContext` helper export" — the export didn't
- * actually exist until this PR's audit fix.
- */
-export function computeEngagementContext(
-  speechMetrics: Record<string, unknown>[],
-  evaluations: Record<string, unknown>[],
-  pressureIdx: number
-) {
-  if (!speechMetrics.length) {
-    return { perQSummary: 'No per-question speech metrics available.', pressureContext: '' }
-  }
-
-  const perQ = speechMetrics.map((m, i) => {
-    const wpm = coerceMetric(m.wpm)
-    const fillerRate = coerceMetric(m.fillerRate)
-    const totalWords = coerceMetric(m.totalWords)
-    const durationMinutes = coerceMetric(m.durationMinutes)
-    // Missing fields render as "not available" — NOT "0". The prompt
-    // is fed to Claude as ground-truth evidence; a fake "0 WPM" used
-    // to drag the Communication score down on a candidate whose
-    // audio pipeline just hadn't reported metrics.
-    const wpmStr = wpm === null ? 'not available' : String(Math.round(wpm))
-    const fillerStr = fillerRate === null ? 'not available' : `${(fillerRate * 100).toFixed(1)}%`
-    const wordsStr = totalWords === null ? 'not available' : String(Math.round(totalWords))
-    const durationStr = durationMinutes === null ? 'not available' : `${durationMinutes.toFixed(1)}min`
-    return `  Q${i + 1}: WPM=${wpmStr}, filler_rate=${fillerStr}, words=${wordsStr}, duration=${durationStr}`
-  })
-
-  const halfIdx = Math.ceil(speechMetrics.length / 2)
-  const firstHalf = speechMetrics.slice(0, halfIdx)
-  const secondHalf = speechMetrics.slice(halfIdx)
-
-  // Half-averages also skip missing entries from both numerator and
-  // denominator. `averageDefined` returns `null` when every entry is
-  // missing for that half, which propagates into the trend string
-  // below as "n/a".
-  const avgFillerFirst = averageDefined(firstHalf.map((m) => coerceMetric(m.fillerRate)))
-  const avgFillerSecond = averageDefined(secondHalf.map((m) => coerceMetric(m.fillerRate)))
-  const avgWordsFirst = averageDefined(firstHalf.map((m) => coerceMetric(m.totalWords)))
-  const avgWordsSecond = averageDefined(secondHalf.map((m) => coerceMetric(m.totalWords)))
-
-  const fmtFiller = (v: number | null) => (v === null ? 'n/a' : `${(v * 100).toFixed(1)}%`)
-  const fmtWords = (v: number | null) => (v === null ? 'n/a' : v.toFixed(0))
-  const fillerTrend = `${fmtFiller(avgFillerFirst)} → ${fmtFiller(avgFillerSecond)}`
-  const wordsTrend = `${fmtWords(avgWordsFirst)} → ${fmtWords(avgWordsSecond)}`
-
-  let pressureContext = ''
-  if (pressureIdx < evaluations.length) {
-    const pEval = evaluations[pressureIdx]
-    const pMetrics = speechMetrics[pressureIdx]
-    if (pEval && pMetrics) {
-      // G.5: skip status='failed' rows in the normal-avg denominator
-      // so the pressure-vs-normal delta isn't diluted by fabricated
-      // 60/55/55/60 placeholders. Mirrors the G.4 aggregation policy.
-      const normalRows = evaluations.filter((e, i) =>
-        i !== pressureIdx && (e as { status?: string }).status !== 'failed',
-      )
-      const avgNormalScore = normalRows.length > 0
-        ? normalRows.reduce((s, e) => {
-            const rel = Number(e.relevance) ?? 0
-            const str = Number(e.structure) ?? 0
-            const spc = Number(e.specificity) ?? 0
-            const own = Number(e.ownership) ?? 0
-            return s + (rel + str + spc + own) / 4
-          }, 0) / normalRows.length
-        : 0
-      // Don't report a pressure score for a failed pressure row — the
-      // number would be the placeholder, not the candidate's actual
-      // pressure performance. Drop the context instead.
-      if ((pEval as { status?: string }).status === 'failed') {
-        pressureContext = `\nPressure question (Q${pressureIdx + 1}) could not be scored — AI evaluation failed on that answer.`
-      } else {
-        const pressureScore = ((Number(pEval.relevance) ?? 0) + (Number(pEval.structure) ?? 0) + (Number(pEval.specificity) ?? 0) + (Number(pEval.ownership) ?? 0)) / 4
-        pressureContext = `\nPressure question (Q${pressureIdx + 1}) avg score: ${pressureScore.toFixed(0)} vs normal avg: ${avgNormalScore.toFixed(0)}`
-      }
-    }
-  }
-
-  return {
-    perQSummary: `Per-question speech patterns:\n${perQ.join('\n')}\n\nTrends (first-half → second-half):\n  Filler rate: ${fillerTrend}\n  Avg answer length: ${wordsTrend} words`,
-    pressureContext,
-  }
-}
+// `computeEngagementContext` used to live here as an inline helper.
+// It moved to `modules/interview/services/eval/engagementContext.ts`
+// on 2026-04-24 because Next.js App Router route files only permit
+// HTTP method handlers + route-config exports — a named helper export
+// triggers `"computeEngagementContext" is not a valid Route export
+// field` during `next build`. Codex P0 + Vercel deploy on PR #319.
+// `tsc --noEmit` does NOT catch this; the validation runs only inside
+// the Next.js builder. Tests still import from the module path.
 
 export const POST = composeApiRoute<GenerateFeedbackBody>({
   schema: GenerateFeedbackSchema,
