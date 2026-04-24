@@ -1307,3 +1307,10 @@
 - **Root-cause:** Codex P2 (third round) on PR #318. My previous guard was
 - **No-tests-needed-because: offline analysis script (scripts/ not in**
 - **Verified-by:** npx tsc --noEmit clean.
+
+### 2026-04-24 12:17:15 +0000 · `89407db` · Claude
+- **Subject:** fix(feedback): null-through speech metrics instead of fabricating 0
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** audit P2 (2026-04-24) on computeEngagementContext. The
+- **Tests-added: modules/interview/__tests__/generateFeedbackSilentZeros.test.ts**
+- **Verified-by:** 14/14 generateFeedbackSilentZeros (6 existing + 8 new) +
