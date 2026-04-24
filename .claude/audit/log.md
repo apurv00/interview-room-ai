@@ -1293,3 +1293,10 @@
 - **Root-cause:** Codex P2 on PR #318. After introducing null-skipping in
 - **No-tests-needed-because: this is a script-only utility (scripts/ is**
 - **Verified-by:** npx tsc --noEmit clean. Manual trace: for empty input,
+
+### 2026-04-24 11:54:54 +0000 · `3062c87` · Claude
+- **Subject:** fix(analyse-script): explicit no-comparable-sessions branch for NaN means
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** Codex P2 (second round) on PR #318. When every session had
+- **No-tests-needed-because: offline analysis script (scripts/ not in vitest**
+- **Verified-by:** npx tsc --noEmit clean.
