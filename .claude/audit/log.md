@@ -1244,3 +1244,10 @@
 - **Root-cause:** multimodalPipeline.ts:143 capped the deduped byQIdx list
 - **Tests-added: modules/interview/__tests__/multimodalPipelineNormalisation.test.ts**
 - **Verified-by:** unit tests (30/30 on target files — previously 29/29; one
+
+### 2026-04-24 07:26:40 +0000 · `5fd3bcf` · Claude
+- **Subject:** fix(analysis): compute sessionT0 as min of startedAt and earliest transcript ts
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** session.startedAt is persisted via an async Mongoose write on
+- **Tests-added: modules/interview/__tests__/multimodalPipelineNormalisation.test.ts**
+- **Verified-by:** 20/20 multimodalPipelineNormalisation tests pass,
