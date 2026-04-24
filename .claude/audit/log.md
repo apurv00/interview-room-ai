@@ -1272,3 +1272,10 @@
 - **Root-cause:** prior commit (f706260) added the `degraded` flag on the
 - **Tests-added: modules/interview/__tests__/feedbackDegradedFlag.test.ts**
 - **Verified-by:** 14/14 feedbackDegradedFlag + 6/6 feedbackMasteryAdvance
+
+### 2026-04-24 11:10:46 +0000 · `f4177ca` · Claude
+- **Subject:** fix(feedback): widen degraded gate + server-own the degraded flag (Codex P1/P2)
+- **Files:** 3 changed, 2 test file(s)
+- **Root-cause:** two defects in PR #317's inner-fallback degraded gating.
+- **Tests-added: modules/interview/__tests__/feedbackDegradedFlag.test.ts**
+- **Verified-by:** 21/21 feedbackDegradedFlag + feedbackMasteryAdvance pass,
