@@ -29,6 +29,7 @@ import { computeBlendedOverallScore, resolveBlendWeights } from '@interview/serv
 import { computePerQAverage, computeAnswerQualityAggregate } from '@interview/services/eval/perQAggregation'
 import { computeCompletionAdjustment } from '@interview/services/eval/completionAdjustment'
 import { compactTranscript } from '@interview/services/eval/transcriptCompactor'
+import { computeEngagementContext } from '@interview/services/eval/engagementContext'
 import { getQuestionCount } from '@interview/config/interviewConfig'
 import type { Duration } from '@shared/types'
 import { z } from 'zod'
@@ -43,69 +44,14 @@ export const maxDuration = 60
 
 type GenerateFeedbackBody = z.infer<typeof GenerateFeedbackSchema>
 
-function computeEngagementContext(
-  speechMetrics: Record<string, unknown>[],
-  evaluations: Record<string, unknown>[],
-  pressureIdx: number
-) {
-  if (!speechMetrics.length) {
-    return { perQSummary: 'No per-question speech metrics available.', pressureContext: '' }
-  }
-
-  const perQ = speechMetrics.map((m, i) => {
-    const wpm = Number(m.wpm) || 0
-    const fillerRate = Number(m.fillerRate) || 0
-    const totalWords = Number(m.totalWords) || 0
-    const durationMinutes = Number(m.durationMinutes) || 0
-    return `  Q${i + 1}: WPM=${wpm}, filler_rate=${(fillerRate * 100).toFixed(1)}%, words=${totalWords}, duration=${durationMinutes.toFixed(1)}min`
-  })
-
-  const halfIdx = Math.ceil(speechMetrics.length / 2)
-  const firstHalf = speechMetrics.slice(0, halfIdx)
-  const secondHalf = speechMetrics.slice(halfIdx)
-
-  const avgFillerFirst = firstHalf.reduce((s, m) => s + (Number(m.fillerRate) || 0), 0) / (firstHalf.length || 1)
-  const avgFillerSecond = secondHalf.reduce((s, m) => s + (Number(m.fillerRate) || 0), 0) / (secondHalf.length || 1)
-  const avgWordsFirst = firstHalf.reduce((s, m) => s + (Number(m.totalWords) || 0), 0) / (firstHalf.length || 1)
-  const avgWordsSecond = secondHalf.reduce((s, m) => s + (Number(m.totalWords) || 0), 0) / (secondHalf.length || 1)
-
-  let pressureContext = ''
-  if (pressureIdx < evaluations.length) {
-    const pEval = evaluations[pressureIdx]
-    const pMetrics = speechMetrics[pressureIdx]
-    if (pEval && pMetrics) {
-      // G.5: skip status='failed' rows in the normal-avg denominator
-      // so the pressure-vs-normal delta isn't diluted by fabricated
-      // 60/55/55/60 placeholders. Mirrors the G.4 aggregation policy.
-      const normalRows = evaluations.filter((e, i) =>
-        i !== pressureIdx && (e as { status?: string }).status !== 'failed',
-      )
-      const avgNormalScore = normalRows.length > 0
-        ? normalRows.reduce((s, e) => {
-            const rel = Number(e.relevance) ?? 0
-            const str = Number(e.structure) ?? 0
-            const spc = Number(e.specificity) ?? 0
-            const own = Number(e.ownership) ?? 0
-            return s + (rel + str + spc + own) / 4
-          }, 0) / normalRows.length
-        : 0
-      // Don't report a pressure score for a failed pressure row — the
-      // number would be the placeholder, not the candidate's actual
-      // pressure performance. Drop the context instead.
-      if ((pEval as { status?: string }).status === 'failed') {
-        pressureContext = `\nPressure question (Q${pressureIdx + 1}) could not be scored — AI evaluation failed on that answer.`
-      } else {
-        const pressureScore = ((Number(pEval.relevance) ?? 0) + (Number(pEval.structure) ?? 0) + (Number(pEval.specificity) ?? 0) + (Number(pEval.ownership) ?? 0)) / 4
-        pressureContext = `\nPressure question (Q${pressureIdx + 1}) avg score: ${pressureScore.toFixed(0)} vs normal avg: ${avgNormalScore.toFixed(0)}`
-      }
-    }
-  }
-
-  return {
-    perQSummary: `Per-question speech patterns:\n${perQ.join('\n')}\n\nTrends (first-half → second-half):\n  Filler rate: ${(avgFillerFirst * 100).toFixed(1)}% → ${(avgFillerSecond * 100).toFixed(1)}%\n  Avg answer length: ${avgWordsFirst.toFixed(0)} → ${avgWordsSecond.toFixed(0)} words`,
-    pressureContext,
-  }
-}
+// `computeEngagementContext` used to live here as an inline helper.
+// It moved to `modules/interview/services/eval/engagementContext.ts`
+// on 2026-04-24 because Next.js App Router route files only permit
+// HTTP method handlers + route-config exports — a named helper export
+// triggers `"computeEngagementContext" is not a valid Route export
+// field` during `next build`. Codex P0 + Vercel deploy on PR #319.
+// `tsc --noEmit` does NOT catch this; the validation runs only inside
+// the Next.js builder. Tests still import from the module path.
 
 export const POST = composeApiRoute<GenerateFeedbackBody>({
   schema: GenerateFeedbackSchema,
