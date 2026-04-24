@@ -99,12 +99,48 @@ describe('computeSessionT0', () => {
     expect(t0).toBe(startedAt.getTime())
   })
 
-  it('falls back to first candidate timestamp when startedAt is absent', () => {
+  it('falls back to earliest transcript timestamp when startedAt is absent', () => {
     const t0 = computeSessionT0(undefined, [
       { speaker: 'interviewer', timestamp: 1776957100000 },
       { speaker: 'candidate', timestamp: 1776957120000 },
     ])
-    expect(t0).toBe(1776957120000)
+    expect(t0).toBe(1776957100000)
+  })
+
+  it('finds earliest transcript timestamp regardless of array order', () => {
+    // Out-of-order entries (e.g. merged from multiple sources) should not
+    // change the result — the reducer inspects every entry.
+    const t0 = computeSessionT0(undefined, [
+      { speaker: 'candidate', timestamp: 1776957200000 },
+      { speaker: 'interviewer', timestamp: 1776957100000 }, // earliest, but not first
+      { speaker: 'candidate', timestamp: 1776957150000 },
+    ])
+    expect(t0).toBe(1776957100000)
+  })
+
+  // PR #316 Codex P2 regression guard: startedAt is persisted via an async
+  // Mongoose write on finish; early client-side transcript timestamps can
+  // precede it. If we trusted startedAt alone, those entries would become
+  // negative deltas clamped to 0, collapsing the first question window.
+  // Taking the minimum of both sources guarantees monotonic non-negative
+  // deltas through secondsSinceT0.
+  it('uses earliest transcript timestamp when startedAt lags behind early entries', () => {
+    const startedAt = new Date(1776957100000)
+    // Interviewer greeting captured 200ms before the persisted startedAt.
+    const t0 = computeSessionT0(startedAt, [
+      { speaker: 'interviewer', timestamp: 1776957099800 },
+      { speaker: 'candidate', timestamp: 1776957120000 },
+    ])
+    expect(t0).toBe(1776957099800)
+  })
+
+  it('uses startedAt when all transcript timestamps are after it', () => {
+    const startedAt = new Date(1776957100000)
+    const t0 = computeSessionT0(startedAt, [
+      { speaker: 'interviewer', timestamp: 1776957100500 },
+      { speaker: 'candidate', timestamp: 1776957120000 },
+    ])
+    expect(t0).toBe(1776957100000)
   })
 
   it('falls back to first transcript entry when no candidate turn exists', () => {
@@ -264,7 +300,7 @@ describe('stepFetchSession — time normalisation contract', () => {
     expect(result.questionBoundaries).toEqual([0])
   })
 
-  it('uses first candidate timestamp when startedAt is missing', async () => {
+  it('uses earliest transcript timestamp when startedAt is missing', async () => {
     const doc = makeSessionDoc({
       interviewerCount: 2,
       evaluationsCount: 2,
@@ -273,10 +309,38 @@ describe('stepFetchSession — time normalisation contract', () => {
     })
     mockFindById.mockResolvedValue(doc)
     const result = await stepFetchSession('sess-test')
-    // First candidate is at t0+10_000 ms (makeSessionDoc helper)
-    expect(result.sessionT0).toBe(1776957110000)
-    // The first interviewer turn (t0) is now 10s BEFORE the candidate t0 — clamped to 0
+    // Earliest transcript entry is the first interviewer turn at t0 (makeSessionDoc
+    // places interviewer turns at t0, t0+60_000; candidates at t0+10_000, t0+70_000).
+    // Post-P2 fix: sessionT0 = min(no startedAt, earliest transcript) = t0.
+    expect(result.sessionT0).toBe(1776957100000)
+    // Two questionIndex boundaries at t0 and t0+60_000 → normalised to [0, 60].
+    expect(result.questionBoundaries).toEqual([0, 60])
+  })
+
+  // PR #316 Codex P2 regression guard (integration side): startedAt persisted
+  // 200ms AFTER the first transcript timestamp must not produce a negative
+  // delta. Boundaries derived from the interviewer turns should stay ≥ 0.
+  it('startedAt lagging behind earliest transcript entry yields non-negative boundaries', async () => {
+    const earliestTs = 1776957099800
+    const startedAtMs = 1776957100000 // 200ms later
+    mockFindById.mockResolvedValue({
+      _id: 'sess-lag',
+      startedAt: new Date(startedAtMs),
+      recordingR2Key: 'r/sess-lag.webm',
+      transcript: [
+        { speaker: 'interviewer', text: 'Hi', timestamp: earliestTs, questionIndex: 0 },
+        { speaker: 'candidate', text: 'A1', timestamp: startedAtMs + 30_000, questionIndex: 0 },
+        { speaker: 'interviewer', text: 'Q2', timestamp: startedAtMs + 60_000, questionIndex: 1 },
+      ],
+      evaluations: [{ questionIndex: 0 }, { questionIndex: 1 }],
+      config: { role: 'pm' },
+    })
+    const result = await stepFetchSession('sess-lag')
+    expect(result.sessionT0).toBe(earliestTs)
+    // Pre-fix: first boundary was startedAtMs - earliestTs = -200ms → clamped to 0,
+    // collapsing the first ASK window. Post-fix: first boundary = 0, second = 60.2s.
     expect(result.questionBoundaries[0]).toBe(0)
+    expect(result.questionBoundaries[1]).toBeCloseTo(60.2, 3)
   })
 
   it('never returns ms-epoch values in questionBoundaries', async () => {

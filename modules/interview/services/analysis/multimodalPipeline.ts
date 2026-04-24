@@ -29,21 +29,37 @@ interface LiveTranscriptWord {
  * Resolve the canonical t0 (ms) for a session's time axis. All downstream
  * per-segment timestamps are normalised to seconds since this t0.
  *
- * Fallback chain:
- *   1. session.startedAt — authoritative, always set on completed sessions.
- *   2. First candidate utterance timestamp — for legacy sessions pre-startedAt.
- *   3. First transcript entry timestamp — last-resort for never-spoken sessions.
- *   4. 0 — degrades to the pre-fix state; analysis still runs.
+ * Selection rule:
+ *   t0 = min(startedAt, earliest transcript timestamp)
+ *
+ * Why min and not just startedAt: `startedAt` is persisted via an async
+ * Mongoose write on session finish, while transcript entries carry client-
+ * side `Date.now()` stamps captured as the interview unfolded. On races
+ * (retried writes, clock skew, pre-finish crashes re-hydrated later) an
+ * interviewer turn can have a `timestamp` a few ms *before* the persisted
+ * `startedAt`. Using `startedAt` alone would then yield negative deltas
+ * that `secondsSinceT0` clamps to 0, collapsing the first question's
+ * window. Taking the minimum guarantees monotonic non-negative deltas
+ * regardless of which source wrote first.
+ *
+ * Fallback order when both sources are absent:
+ *   - no startedAt + empty transcript → 0 (degrades to pre-fix state).
  */
 export function computeSessionT0(
   startedAt: Date | undefined,
   transcript: Array<{ speaker: string; timestamp: number }>,
 ): number {
-  if (startedAt) return startedAt.getTime()
-  const firstCandidate = transcript.find((t) => t.speaker === 'candidate' || t.speaker === 'user')
-  if (firstCandidate) return firstCandidate.timestamp
-  if (transcript.length > 0) return transcript[0].timestamp
-  return 0
+  const candidates: number[] = []
+  if (startedAt) candidates.push(startedAt.getTime())
+  if (transcript.length > 0) {
+    let earliest = transcript[0].timestamp
+    for (let i = 1; i < transcript.length; i++) {
+      if (transcript[i].timestamp < earliest) earliest = transcript[i].timestamp
+    }
+    candidates.push(earliest)
+  }
+  if (candidates.length === 0) return 0
+  return candidates.reduce((min, v) => (v < min ? v : min), candidates[0])
 }
 
 /** Clamped ms→seconds normaliser; negative results (entry predates t0) become 0. */
