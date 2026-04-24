@@ -1370,3 +1370,10 @@
 - **Root-cause:** two additional defects Codex caught after the round-1
 - **Tests-added: two new regression cases in**
 - **Verified-by:** npx vitest run
+
+### 2026-04-24 18:49:49 +0000 · `fe46538` · Claude
+- **Subject:** fix(feedback): Codex P1 round-3 on PR #321 — await persist before response
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** the round-2 fix folded persist into fireAndTrack's fire-
+- **Tests-added: new reproducer in**
+- **Verified-by:** npx vitest run
