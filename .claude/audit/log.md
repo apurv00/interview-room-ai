@@ -1342,3 +1342,10 @@
 - **Root-cause:** two more races Codex flagged on the round-1 fix.
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
 - **Verified-by:** npx vitest run modules/interview → 1590/1590 pass
+
+### 2026-04-24 16:57:58 +0000 · `d0357bc` · Claude
+- **Subject:** fix(stt): Codex P1+P2 round-3 on PR #320 — live-ws check + pcm clear
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** two more races Codex flagged on the round-2 commit, both
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+- **Verified-by:** npx vitest run modules/interview → 1592/1592 pass
