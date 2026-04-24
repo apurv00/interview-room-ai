@@ -1223,3 +1223,10 @@
 - **Root-cause:** shared/db/mongoClient.ts (raw driver used by NextAuth via
 - **Tests-added: shared/__tests__/mongoConfig.test.ts**
 - **Verified-by:** unit tests (shared/__tests__/mongoConfig.test.ts and
+
+### 2026-04-24 06:32:36 +0000 · `f5f1d56` · Claude
+- **Subject:** fix(analysis): normalise Replay timeline against session t0
+- **Files:** 4 changed, 2 test file(s)
+- **Root-cause:** multimodalPipeline.ts:94-96 mapped interviewer-turn
+- **Tests-added: modules/interview/__tests__/multimodalPipelineNormalisation.test.ts**
+- **Verified-by:** unit tests (27/27 on target files); full interview suite
