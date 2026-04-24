@@ -544,6 +544,14 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       // 5.8s warmUp→wsOpen window): previously the worklet wouldn't start
       // until AFTER warmUp resolved, so any speech during the gap was
       // silently discarded by the mic pipeline never instantiating.
+      //
+      // Race window: warmUp is in TWO stages — (1) fetchTokenCached()
+      // then (2) `new WebSocket()`. Between stages wsRef.current is
+      // still null (warmUp sets wsRef.current at ws creation, inside the
+      // .then(token => ...) callback). If startListening fires during
+      // stage (1), the eager branch below skips startAudioCapture and
+      // the .then-fallback at line ~564 catches it up once ws is OPEN.
+      // Codex P1 on PR #320.
       if (warmUpPromiseRef.current) {
         if (wsRef.current) {
           setIsListening(true)
@@ -563,24 +571,45 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
               // CONNECTING→OPEN handoff.
               attachMessageHandler(wsRef.current)
               isWarmedUpRef.current = false
-              // startAudioCapture was already called above in parallel
-              // with warmUp, so the worklet is running and its output
-              // is either already flushed (onopen drained the buffer)
-              // or now routing live via the OPEN branch of onmessage.
-              // No second startAudioCapture call needed here.
+              // Safety: if startListening raced the token fetch (stage 1
+              // of warmUp), wsRef.current was null at the eager check
+              // above and the worklet never started. Catch up now that
+              // the ws is OPEN — processorRef.current is the signal for
+              // "startAudioCapture has already run" since it's the
+              // worklet handle the helper stores on success. Without
+              // this guard the session reaches OPEN with no mic pipeline
+              // → zero transcripts → UI stuck. Codex P1 on PR #320.
+              if (!processorRef.current) {
+                setIsListening(true)
+                startAudioCapture(wsRef.current)
+              }
             } else {
-              // Warm-up WebSocket failed, fall back to full connection.
-              // warmUp's onclose/onerror handlers already clear
-              // keepAliveTimerRef when the socket dies, so no extra
-              // cleanup is needed on this branch — the timer is already
-              // cleared by the time we reach here. Any PCM frames
-              // accumulated in pcmBufferRef during the failed warmUp
-              // will drain when connectFresh's new ws reaches OPEN and
-              // its ws.onopen calls flushPendingPcm.
+              // Warm-up WebSocket failed. If the eager branch above had
+              // already started a worklet (wsRef.current was non-null
+              // at the time, but the ws later errored/timed out), we
+              // MUST tear it down before connectFresh() — otherwise
+              // connectWebSocket.onopen will run startAudioCapture
+              // again and we'll have TWO worklets racing to send PCM
+              // to the same socket (duplicate audio → duplicate
+              // transcripts). Codex P1 on PR #320. teardown is
+              // idempotent, so if the eager branch didn't start a
+              // worklet (raced token fetch), this is a no-op.
+              //
+              // Buffered PCM in pcmBufferRef stays intact — teardown
+              // touches only the audio pipeline, and connectFresh's
+              // new ws.onopen will flush the buffer normally.
+              teardownAudioPipeline()
               connectFresh()
             }
           })
-          .catch(() => connectFresh())
+          .catch(() => {
+            // Same duplicate-worklet concern as the else branch above.
+            // A .catch here means either the token fetch threw or a
+            // handler in warmUp's promise chain threw; either way the
+            // eager worklet (if any) must go before connectFresh.
+            teardownAudioPipeline()
+            connectFresh()
+          })
         return
       }
 
@@ -847,6 +876,32 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   /** Attach the Deepgram message handler to a WebSocket.
    *  Called from both connectWebSocket (cold path) and the fast warmUp path.
    *  Without this, the warmed-up WS has no onmessage → transcripts are never received. */
+  /** Tear down the current audio capture pipeline (worklet, source,
+   *  AudioContext, owned mic stream). Idempotent: null refs stay null.
+   *
+   *  Used by (a) finishRecognition's normal cleanup and (b) the slow-path
+   *  warmUp-fallback in startListening — when warmUp fails after the
+   *  eager startAudioCapture has already instantiated a worklet, we
+   *  MUST tear it down before `connectFresh()` spawns a new pipeline via
+   *  connectWebSocket.onopen → startAudioCapture, otherwise both
+   *  worklets would coexist and double-send PCM frames to Deepgram
+   *  (duplicate audio → duplicate transcripts). Codex P1 on PR #320.
+   *
+   *  Does NOT touch externalStreamRef — that's a page-level stream owned
+   *  by the caller (see setExternalStream), never stopped from here. */
+  function teardownAudioPipeline(): void {
+    processorRef.current?.disconnect()
+    sourceRef.current?.disconnect()
+    audioContextRef.current?.close().catch(() => {})
+    processorRef.current = null
+    sourceRef.current = null
+    audioContextRef.current = null
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach((t) => t.stop())
+      audioStreamRef.current = null
+    }
+  }
+
   /** Drain the pre-open PCM buffer into the now-open WebSocket. Called from
    *  both ws.onopen handlers (warmUp and connectWebSocket) — whichever path
    *  reaches OPEN state first flushes whatever was queued during the gap.

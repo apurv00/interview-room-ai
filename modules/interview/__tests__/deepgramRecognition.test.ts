@@ -274,6 +274,15 @@ describe('useDeepgramRecognition', () => {
     vi.useFakeTimers()
     vi.clearAllMocks()
     mockWsInstance = null
+    // Re-establish the default fetch impl so per-test overrides
+    // (notably mockImplementationOnce + mockRestore on the token
+    // endpoint) cannot leak a "no default" fetch into the next test,
+    // which would silently trigger fetchDeepgramTokenWithRetry's 1500ms
+    // backoff and hang warmUp past advanceTimersByTimeAsync(10).
+    ;(global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ token: 'test-deepgram-token' }),
+    })
   })
 
   afterEach(() => {
@@ -1306,6 +1315,150 @@ describe('useDeepgramRecognition', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(10000) })
 
     expect(mockWsInstance!.send.mock.calls.length).toBeGreaterThan(beforeCount)
+  })
+
+  // ── Codex P1 on PR #320 — race between startListening and token fetch ──
+  //
+  // warmUp is a two-stage async: (1) fetchTokenCached, then
+  // (2) new WebSocket(...). During stage 1, `wsRef.current` is null. If
+  // startListening fires in that window, the eager branch in startListening's
+  // slow path can't call startAudioCapture (no ws yet). Before the P1 fix,
+  // the slow path's .then assumed startAudioCapture had already run and
+  // skipped it — session reaches OPEN with no mic pipeline, zero
+  // transcripts, UI stuck.
+  it('catches up startAudioCapture when startListening races the token fetch', async () => {
+    // Hold the token promise open so we can control the timing.
+    let resolveToken: (r: { ok: true; json: () => Promise<{ token: string }> }) => void = () => {}
+    const fetchSpy = vi
+      .spyOn(global, 'fetch')
+      .mockImplementationOnce(
+        () =>
+          new Promise((r) => {
+            resolveToken = r
+          }),
+      )
+
+    // Snapshot baseline so we can assert exactly ONE worklet is created
+    // by the catch-up path (not two from duplicate calls).
+    const worketsBefore = audioWorkletNodeCalls.length
+
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+
+    act(() => {
+      result.current.warmUp()
+    })
+    // Token fetch is parked. Let microtasks flush but keep fetch pending.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    // WebSocket must not exist yet — this is the race window the P1
+    // described. wsRef.current is null from the hook's perspective.
+    expect(mockWsInstance).toBeNull()
+
+    // startListening fires during the race. Eager slow-path branch
+    // should skip startAudioCapture (no ws), .then will catch up.
+    act(() => {
+      result.current.startListening(onComplete)
+    })
+
+    // Still no worklet — the eager branch correctly skipped.
+    expect(audioWorkletNodeCalls.length - worketsBefore).toBe(0)
+
+    // Resolve token → warmUp creates WebSocket → we simulate onopen.
+    await act(async () => {
+      resolveToken({
+        ok: true,
+        json: () => Promise.resolve({ token: 'test-deepgram-token' }),
+      })
+      await vi.advanceTimersByTimeAsync(10)
+    })
+    expect(mockWsInstance).not.toBeNull()
+
+    act(() => {
+      mockWsInstance!.simulateOpen()
+    })
+    // Let the ws.onopen → resolve(warmUp) → .then callback run.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    // The whole point: .then must have called startAudioCapture when it
+    // saw processorRef.current was null (eager branch skipped). Exactly
+    // ONE worklet should have been created — not zero (session would be
+    // deaf) and not two (duplicate worklets double-send audio).
+    expect(audioWorkletNodeCalls.length - worketsBefore).toBe(1)
+
+    fetchSpy.mockRestore()
+  })
+
+  // ── Codex P1 on PR #320 — duplicate worklet on warmUp fallback ──
+  //
+  // If warmUp eventually fails (token fetch throws OR ws never reaches
+  // OPEN within the 5s warmUpTimeout) AFTER the eager slow-path has
+  // already started a worklet, the fallback `connectFresh()` creates a
+  // NEW ws whose onopen runs startAudioCapture again. Before the P1 fix
+  // both worklets coexisted → duplicate PCM frames to the new socket →
+  // duplicate transcripts and resource waste.
+  it('tears down pre-open capture before connectFresh() on warmUp fallback', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+
+    act(() => {
+      result.current.warmUp()
+    })
+    // Let token resolve and WebSocket get created — but do NOT
+    // simulateOpen. wsRef.current is now set (CONNECTING state).
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10)
+    })
+    expect(mockWsInstance).not.toBeNull()
+
+    const worketsBefore = audioWorkletNodeCalls.length
+
+    // startListening in slow-path mode. Eager branch DOES run since
+    // wsRef.current is set (CONNECTING, not OPEN). Worklet #1 created.
+    act(() => {
+      result.current.startListening(onComplete)
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10)
+    })
+    expect(audioWorkletNodeCalls.length - worketsBefore).toBe(1)
+
+    const disconnectsBeforeTimeout = mockDisconnect.mock.calls.length
+
+    // warmUp has a 5s timeout for reaching OPEN. Advance past it so
+    // the timeout branch fires `ws.close(warmUpTimeout)` and the
+    // warmUpPromiseRef resolves. The .then then sees ws not OPEN,
+    // calls teardownAudioPipeline + connectFresh.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5100)
+    })
+
+    // Teardown must have disconnected the old worklet before the new
+    // connection attempt. mockDisconnect count must have increased.
+    expect(mockDisconnect.mock.calls.length).toBeGreaterThan(
+      disconnectsBeforeTimeout,
+    )
+
+    // connectFresh called fetchTokenCached again → new WebSocket → let
+    // microtasks settle and simulate its onopen.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10)
+    })
+    // mockWsInstance now points at the NEW socket (constructor reassigned).
+    act(() => {
+      mockWsInstance!.simulateOpen()
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    // Exactly ONE new worklet from connectFresh (total = 2 created,
+    // first one already torn down). Critically NOT 3 — that would mean
+    // .then ALSO created one on top of connectFresh's work.
+    expect(audioWorkletNodeCalls.length - worketsBefore).toBe(2)
   })
 
   it('UtteranceEnd grace is 3000ms for short answers (was 4000ms)', async () => {
