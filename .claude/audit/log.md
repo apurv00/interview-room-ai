@@ -1363,3 +1363,10 @@
 - **Root-cause:** the PR #321 initial commit scheduled
 - **Tests-added: new case in**
 - **Verified-by:** npx vitest run
+
+### 2026-04-24 18:42:13 +0000 · `85a678e` · Claude
+- **Subject:** fix(feedback): Codex P1 + P2 round-2 on PR #321 — Mongoose Query + red_flags normalize
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** two additional defects Codex caught after the round-1
+- **Tests-added: two new regression cases in**
+- **Verified-by:** npx vitest run
