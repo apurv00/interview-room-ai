@@ -1356,3 +1356,10 @@
 - **Root-cause:** two real gaps in the generate-feedback pipeline surfaced
 - **Tests-added:**
 - **Verified-by:** npx vitest run modules/interview/__tests__/generateFeedback
+
+### 2026-04-24 18:34:16 +0000 · `3b78670` · Claude
+- **Subject:** fix(feedback): reorder pathway red_flag push before persist (Codex P2)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** the PR #321 initial commit scheduled
+- **Tests-added: new case in**
+- **Verified-by:** npx vitest run
