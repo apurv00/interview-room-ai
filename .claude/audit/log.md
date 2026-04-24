@@ -1286,3 +1286,10 @@
 - **Root-cause:** two silent-garbage modes in the fusion pipeline.
 - **Tests-added: modules/interview/__tests__/fusionScoreBounds.test.ts (11 tests)**
 - **Verified-by:** 11/11 fusionScoreBounds + 35/35 multimodalPipelineNormalisation
+
+### 2026-04-24 11:47:29 +0000 · `fa80983` · Claude
+- **Subject:** fix(analyse-script): median([]) returns NaN so empty-input prints n/a
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** Codex P2 on PR #318. After introducing null-skipping in
+- **No-tests-needed-because: this is a script-only utility (scripts/ is**
+- **Verified-by:** npx tsc --noEmit clean. Manual trace: for empty input,
