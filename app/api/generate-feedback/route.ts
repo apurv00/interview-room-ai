@@ -43,7 +43,51 @@ export const maxDuration = 60
 
 type GenerateFeedbackBody = z.infer<typeof GenerateFeedbackSchema>
 
-function computeEngagementContext(
+/**
+ * Runtime coercion of a speech metric to `number | null`.
+ *
+ * Audit P2 (2026-04-24): `Number(m.wpm) || 0` silently turned
+ * `undefined` / `null` / `NaN` into `0`, which was then rendered into
+ * the prompt as "WPM=0" — a factual claim the candidate spoke at zero
+ * words per minute. The model then scored Communication against a
+ * fabricated "0 WPM" baseline instead of acknowledging the data was
+ * unavailable. `SpeechMetrics` is typed as strict `number` in
+ * shared/types.ts, but the `Record<string, unknown>[]` param on the
+ * handler allows older clients / missing-metric rows through — so
+ * defense is still warranted.
+ *
+ * Contract: `null` means "we don't know"; downstream formatters must
+ * render it as "not available" rather than "0". Callers exist in
+ * perQ per-question lines and the first-half / second-half trend
+ * computation.
+ */
+function coerceMetric(v: unknown): number | null {
+  if (v === null || v === undefined) return null
+  const n = Number(v)
+  if (!Number.isFinite(n)) return null
+  return n
+}
+
+/**
+ * Average across defined values only. Excludes `null` entries from
+ * BOTH the numerator and denominator. Returns `null` when every
+ * entry is null (all-missing half) so the caller emits "not
+ * available" instead of a biased 0 / bogus NaN.
+ */
+function averageDefined(values: (number | null)[]): number | null {
+  const nums = values.filter((v): v is number => v !== null)
+  if (nums.length === 0) return null
+  return nums.reduce((a, b) => a + b, 0) / nums.length
+}
+
+/**
+ * Exported for unit testing — see
+ * modules/interview/__tests__/generateFeedbackSilentZeros.test.ts.
+ * The docblock in that test predicted "direct inspection of the
+ * `computeEngagementContext` helper export" — the export didn't
+ * actually exist until this PR's audit fix.
+ */
+export function computeEngagementContext(
   speechMetrics: Record<string, unknown>[],
   evaluations: Record<string, unknown>[],
   pressureIdx: number
@@ -53,21 +97,38 @@ function computeEngagementContext(
   }
 
   const perQ = speechMetrics.map((m, i) => {
-    const wpm = Number(m.wpm) || 0
-    const fillerRate = Number(m.fillerRate) || 0
-    const totalWords = Number(m.totalWords) || 0
-    const durationMinutes = Number(m.durationMinutes) || 0
-    return `  Q${i + 1}: WPM=${wpm}, filler_rate=${(fillerRate * 100).toFixed(1)}%, words=${totalWords}, duration=${durationMinutes.toFixed(1)}min`
+    const wpm = coerceMetric(m.wpm)
+    const fillerRate = coerceMetric(m.fillerRate)
+    const totalWords = coerceMetric(m.totalWords)
+    const durationMinutes = coerceMetric(m.durationMinutes)
+    // Missing fields render as "not available" — NOT "0". The prompt
+    // is fed to Claude as ground-truth evidence; a fake "0 WPM" used
+    // to drag the Communication score down on a candidate whose
+    // audio pipeline just hadn't reported metrics.
+    const wpmStr = wpm === null ? 'not available' : String(Math.round(wpm))
+    const fillerStr = fillerRate === null ? 'not available' : `${(fillerRate * 100).toFixed(1)}%`
+    const wordsStr = totalWords === null ? 'not available' : String(Math.round(totalWords))
+    const durationStr = durationMinutes === null ? 'not available' : `${durationMinutes.toFixed(1)}min`
+    return `  Q${i + 1}: WPM=${wpmStr}, filler_rate=${fillerStr}, words=${wordsStr}, duration=${durationStr}`
   })
 
   const halfIdx = Math.ceil(speechMetrics.length / 2)
   const firstHalf = speechMetrics.slice(0, halfIdx)
   const secondHalf = speechMetrics.slice(halfIdx)
 
-  const avgFillerFirst = firstHalf.reduce((s, m) => s + (Number(m.fillerRate) || 0), 0) / (firstHalf.length || 1)
-  const avgFillerSecond = secondHalf.reduce((s, m) => s + (Number(m.fillerRate) || 0), 0) / (secondHalf.length || 1)
-  const avgWordsFirst = firstHalf.reduce((s, m) => s + (Number(m.totalWords) || 0), 0) / (firstHalf.length || 1)
-  const avgWordsSecond = secondHalf.reduce((s, m) => s + (Number(m.totalWords) || 0), 0) / (secondHalf.length || 1)
+  // Half-averages also skip missing entries from both numerator and
+  // denominator. `averageDefined` returns `null` when every entry is
+  // missing for that half, which propagates into the trend string
+  // below as "n/a".
+  const avgFillerFirst = averageDefined(firstHalf.map((m) => coerceMetric(m.fillerRate)))
+  const avgFillerSecond = averageDefined(secondHalf.map((m) => coerceMetric(m.fillerRate)))
+  const avgWordsFirst = averageDefined(firstHalf.map((m) => coerceMetric(m.totalWords)))
+  const avgWordsSecond = averageDefined(secondHalf.map((m) => coerceMetric(m.totalWords)))
+
+  const fmtFiller = (v: number | null) => (v === null ? 'n/a' : `${(v * 100).toFixed(1)}%`)
+  const fmtWords = (v: number | null) => (v === null ? 'n/a' : v.toFixed(0))
+  const fillerTrend = `${fmtFiller(avgFillerFirst)} → ${fmtFiller(avgFillerSecond)}`
+  const wordsTrend = `${fmtWords(avgWordsFirst)} → ${fmtWords(avgWordsSecond)}`
 
   let pressureContext = ''
   if (pressureIdx < evaluations.length) {
@@ -102,7 +163,7 @@ function computeEngagementContext(
   }
 
   return {
-    perQSummary: `Per-question speech patterns:\n${perQ.join('\n')}\n\nTrends (first-half → second-half):\n  Filler rate: ${(avgFillerFirst * 100).toFixed(1)}% → ${(avgFillerSecond * 100).toFixed(1)}%\n  Avg answer length: ${avgWordsFirst.toFixed(0)} → ${avgWordsSecond.toFixed(0)} words`,
+    perQSummary: `Per-question speech patterns:\n${perQ.join('\n')}\n\nTrends (first-half → second-half):\n  Filler rate: ${fillerTrend}\n  Avg answer length: ${wordsTrend} words`,
     pressureContext,
   }
 }

@@ -260,3 +260,134 @@ describe('G.5 — pressure-Q context respects status="failed"', () => {
     expect(capturedUserPrompt).toContain('normal avg: 60')
   })
 })
+
+// ─── Audit P2 (2026-04-24) — speech metrics `|| 0` → `?? null` ──────
+//
+// The `computeEngagementContext` helper used `Number(m.x) || 0` for
+// wpm, fillerRate, totalWords, durationMinutes. When a metric was
+// missing (older client, Deepgram unavailable mid-interview, network
+// drop during upload), `Number(undefined) || 0` silently became 0 —
+// and the prompt rendered "WPM=0" as if the candidate had spoken at
+// zero words per minute. Claude then scored Communication against
+// that fabricated baseline. The same `|| 0` in the half-average
+// reducers biased the Trends line toward 0 whenever any session
+// half had all-missing data.
+//
+// Fix: null-through everywhere. Missing fields render as "not
+// available" (per-Q lines) or "n/a" (trend deltas); half-averages
+// skip nulls from both numerator and denominator and return null
+// when every entry is missing.
+
+import { computeEngagementContext } from '@/app/api/generate-feedback/route'
+
+describe('computeEngagementContext — audit P2 null-aware speech metrics', () => {
+  it('renders "not available" for a missing WPM on a single question', async () => {
+    const { perQSummary } = computeEngagementContext(
+      [
+        { wpm: 140, fillerRate: 0.04, totalWords: 120, durationMinutes: 0.9 },
+        // wpm missing — the bug
+        { fillerRate: 0.05, totalWords: 100, durationMinutes: 0.8 },
+      ],
+      [],
+      99,
+    )
+    // Per-Q line for Q2 shows "not available", not "WPM=0".
+    expect(perQSummary).toMatch(/Q2:\s*WPM=not available/)
+    expect(perQSummary).not.toMatch(/Q2:\s*WPM=0[^0-9.]/)
+  })
+
+  it('renders "not available" for every missing field on a question', async () => {
+    const { perQSummary } = computeEngagementContext(
+      [
+        { wpm: 140, fillerRate: 0.04, totalWords: 120, durationMinutes: 0.9 },
+        // All four metrics missing (complete metric failure for Q2).
+        {},
+      ],
+      [],
+      99,
+    )
+    expect(perQSummary).toMatch(/Q2:\s*WPM=not available, filler_rate=not available, words=not available, duration=not available/)
+  })
+
+  it('renders "not available" when a metric is null or NaN (not just undefined)', async () => {
+    const { perQSummary } = computeEngagementContext(
+      [
+        { wpm: null, fillerRate: NaN, totalWords: undefined, durationMinutes: 'bad' },
+      ],
+      [],
+      99,
+    )
+    expect(perQSummary).toMatch(/Q1:\s*WPM=not available, filler_rate=not available, words=not available, duration=not available/)
+  })
+
+  it('half-averages exclude missing entries (numerator AND denominator)', async () => {
+    // 4 questions, Q3 missing everything. The second-half average
+    // should be computed from Q4 only, NOT (Q3 + Q4) / 2 with Q3 as 0.
+    const { perQSummary } = computeEngagementContext(
+      [
+        { wpm: 100, fillerRate: 0.04, totalWords: 100, durationMinutes: 1.0 },
+        { wpm: 100, fillerRate: 0.04, totalWords: 100, durationMinutes: 1.0 },
+        {}, // missing
+        { wpm: 120, fillerRate: 0.10, totalWords: 200, durationMinutes: 2.0 },
+      ],
+      [],
+      99,
+    )
+    // halfIdx = ceil(4/2) = 2 → firstHalf = Q1+Q2, secondHalf = Q3+Q4.
+    // Pre-fix: secondHalf avgWords = (0 + 200)/2 = 100 — the bug.
+    // Post-fix: secondHalf avgWords = 200/1 = 200 — Q3's null skipped.
+    expect(perQSummary).toMatch(/Avg answer length: 100 → 200 words/)
+    // Filler rate: firstHalf (4+4)/2=4%, secondHalf 10/1=10%.
+    expect(perQSummary).toMatch(/Filler rate: 4\.0% → 10\.0%/)
+  })
+
+  it('emits "n/a" in the trend when every entry in a half is missing', async () => {
+    // First half completely missing, second half present → the pre-fix
+    // would render "0.0% → 5.0%" (first half = 0 via || 0 over 2
+    // missing entries), making it look like a huge improvement from
+    // zero when the truth is we had no data for the first half.
+    const { perQSummary } = computeEngagementContext(
+      [
+        {},
+        {},
+        { wpm: 120, fillerRate: 0.05, totalWords: 100, durationMinutes: 1.0 },
+        { wpm: 120, fillerRate: 0.05, totalWords: 100, durationMinutes: 1.0 },
+      ],
+      [],
+      99,
+    )
+    expect(perQSummary).toMatch(/Filler rate: n\/a → 5\.0%/)
+    expect(perQSummary).toMatch(/Avg answer length: n\/a → 100 words/)
+  })
+
+  it('empty speechMetrics array falls through to the "no metrics" branch', async () => {
+    const { perQSummary, pressureContext } = computeEngagementContext([], [], 99)
+    expect(perQSummary).toBe('No per-question speech metrics available.')
+    expect(pressureContext).toBe('')
+  })
+
+  it('preserves genuinely zero metrics (not treated as missing)', async () => {
+    // A legit 0 — candidate literally spoke zero filler words — must
+    // survive as "0.0%", NOT be rewritten to "not available". The
+    // null-aware coercion distinguishes `0` (a real number) from
+    // `null`/`undefined` (missing).
+    const { perQSummary } = computeEngagementContext(
+      [{ wpm: 140, fillerRate: 0, totalWords: 100, durationMinutes: 1.0 }],
+      [],
+      99,
+    )
+    expect(perQSummary).toMatch(/filler_rate=0\.0%/)
+    expect(perQSummary).not.toMatch(/filler_rate=not available/)
+  })
+
+  it('renders a happy path with all metrics present verbatim', async () => {
+    const { perQSummary } = computeEngagementContext(
+      [
+        { wpm: 140, fillerRate: 0.04, totalWords: 100, durationMinutes: 0.8 },
+      ],
+      [],
+      99,
+    )
+    expect(perQSummary).toMatch(/Q1:\s*WPM=140, filler_rate=4\.0%, words=100, duration=0\.8min/)
+  })
+})
