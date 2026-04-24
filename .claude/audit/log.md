@@ -1335,3 +1335,10 @@
 - **Root-cause:** two interlocking bugs in useDeepgramRecognition's slow-path
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
 - **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts
+
+### 2026-04-24 16:27:23 +0000 · `7f2f28a` · Claude
+- **Subject:** fix(stt): Codex P1 round-2 on PR #320 — eagerFired + superseded ws
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** two more races Codex flagged on the round-1 fix.
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+- **Verified-by:** npx vitest run modules/interview → 1590/1590 pass
