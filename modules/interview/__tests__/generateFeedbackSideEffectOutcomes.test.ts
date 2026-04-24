@@ -333,6 +333,35 @@ describe('POST /api/generate-feedback — side-effect outcome observability (PR 
     expect(failed?.some((f) => f.name === 'persist')).toBe(true)
   })
 
+  // ── Codex P2 on PR #321 — persist captures post-mutation feedback ──
+  //
+  // The pathway_planner-off branch mutates `feedback.red_flags` via
+  // `.push(PATHWAY_UNAVAILABLE_FLAG)`. `findByIdAndUpdate` captures
+  // the `feedback` reference synchronously when the update object is
+  // built, so the red_flag push MUST happen before the persist
+  // side-effect is scheduled — otherwise reload/poll flows reading
+  // `session.feedback` from Mongo would still see the stale pre-flag
+  // version, and the pathway page would keep rendering the wrong
+  // "Complete an interview to generate a plan" CTA.
+  it('persists the pathway-unavailable red_flag when pathway_planner is off', async () => {
+    mockIsFeatureEnabled.mockImplementation((flag: string) => flag !== 'pathway_planner')
+
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+
+    // findByIdAndUpdate was called with the post-mutation feedback.
+    // Inspect the arguments directly — the second argument (update op)
+    // carries the feedback field whose red_flags must contain the new
+    // pathway-unavailable flag.
+    expect(mockFindByIdAndUpdate).toHaveBeenCalled()
+    const updateOp = mockFindByIdAndUpdate.mock.calls[0][1] as {
+      feedback?: { red_flags?: string[] }
+    }
+    const persistedRedFlags = updateOp.feedback?.red_flags
+    expect(persistedRedFlags).toBeDefined()
+    expect(persistedRedFlags?.some((f: string) => /pathway/i.test(f))).toBe(true)
+  })
+
   // ── Backward compatibility: response shape remains valid ──
   it('still returns a valid FeedbackData shape with the new field', async () => {
     mockIsFeatureEnabled.mockReturnValue(true)

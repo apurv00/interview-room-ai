@@ -981,6 +981,55 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
           )
         }
 
+        // Pathway-planner preflight MUST run before persist is
+        // scheduled — the skip-branch mutates `feedback.red_flags`,
+        // and `findByIdAndUpdate` captures the feedback reference at
+        // call time. Mongoose's update query is built synchronously
+        // in the enclosing tick, so a later `.push()` on the array
+        // could land between "fireAndTrack schedules" and "Mongo
+        // serializes to BSON" — non-deterministic, and on reload flows
+        // the DB-persisted feedback would miss the pathway-unavailable
+        // red_flag that the in-tab response contains. Codex P2 on PR
+        // #321. Scheduling order within sideEffects[] is unchanged for
+        // aggregate-log purposes; only the mutation ordering matters.
+        if (isFeatureEnabled('pathway_planner')) {
+          // Chain evaluateSession + generatePathwayPlan into a single
+          // tracked side effect so the aggregate count reflects
+          // "pathway ready" as one unit — a failed evaluateSession
+          // still flows through as a single rejection attributed to
+          // `pathwayPlan`.
+          fireAndTrack(
+            'pathwayPlan',
+            evaluateSession({
+              domain: config.role,
+              interviewType,
+              seniorityBand: config.experience,
+              evaluations: typedEvaluations,
+            }).then(sessionEval =>
+              generatePathwayPlan({
+                userId: user.id,
+                sessionId,
+                domain: config.role,
+                interviewType,
+                experience: config.experience,
+                feedback,
+                sessionEvaluation: sessionEval,
+              }),
+            ),
+            'Pathway plan (via session evaluation) failed',
+          )
+        } else {
+          markSkipped('pathwayPlan')
+          // Red_flag is bounded by FeedbackDataSchema's max(30) — we
+          // only push when not already present so repeated generations
+          // don't accumulate duplicate copies.
+          const PATHWAY_UNAVAILABLE_FLAG =
+            'Your learning pathway plan is temporarily unavailable. Refresh the pathway page in a minute, or contact support if it stays empty.'
+          if (!feedback.red_flags.includes(PATHWAY_UNAVAILABLE_FLAG)) {
+            feedback.red_flags.push(PATHWAY_UNAVAILABLE_FLAG)
+          }
+        }
+
         // Persist the feedback to the session document. Folded into
         // sideEffects[] in PR #321 so the aggregate `post-feedback
         // side effects settled` log line covers persist failures too
@@ -991,6 +1040,10 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         // block the response: the promise's rejection is logged and
         // the client still receives the feedback body for the current
         // tab; only the reload path pays the second Claude call.
+        //
+        // MUST run after the pathway_planner preflight above so any
+        // red_flag mutation for the flag-off case is captured in the
+        // DB write (Codex P2).
         fireAndTrack(
           'persist',
           InterviewSession.findByIdAndUpdate(sessionId, {
@@ -1087,53 +1140,11 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
           markSkipped('weaknessClusters')
         }
 
-        // Generate session-level evaluation and pathway plan.
-        // PR #321: preflight the feature flag so we can mark the
-        // outcome 'skipped' at response-build time (vs leaving the
-        // promise to resolve with null silently — which made the
-        // aggregate log show 0 failures while the user stared at an
-        // empty pathway). When skipped, also push a user-visible
-        // red_flag so the feedback UI can surface the reason instead
-        // of routing the user to /learn/pathway where they hit the
-        // wrong "Complete an interview to generate a plan" empty-
-        // state CTA (prod session 69eb6689c6cbd204bd2b8266).
-        if (isFeatureEnabled('pathway_planner')) {
-          // Chain evaluateSession + generatePathwayPlan into a single
-          // tracked side effect so the aggregate count reflects
-          // "pathway ready" as one unit — a failed evaluateSession
-          // still flows through as a single rejection attributed to
-          // `pathwayPlan`.
-          fireAndTrack(
-            'pathwayPlan',
-            evaluateSession({
-              domain: config.role,
-              interviewType,
-              seniorityBand: config.experience,
-              evaluations: typedEvaluations,
-            }).then(sessionEval =>
-              generatePathwayPlan({
-                userId: user.id,
-                sessionId,
-                domain: config.role,
-                interviewType,
-                experience: config.experience,
-                feedback,
-                sessionEvaluation: sessionEval,
-              }),
-            ),
-            'Pathway plan (via session evaluation) failed',
-          )
-        } else {
-          markSkipped('pathwayPlan')
-          // Red_flag is bounded by FeedbackDataSchema's max(30) — we
-          // only push when not already present so repeated generations
-          // don't accumulate duplicate copies.
-          const PATHWAY_UNAVAILABLE_FLAG =
-            'Your learning pathway plan is temporarily unavailable. Refresh the pathway page in a minute, or contact support if it stays empty.'
-          if (!feedback.red_flags.includes(PATHWAY_UNAVAILABLE_FLAG)) {
-            feedback.red_flags.push(PATHWAY_UNAVAILABLE_FLAG)
-          }
-        }
+        // (Session-level evaluation + pathway plan side effect is
+        // scheduled above — relocated to run BEFORE the persist call
+        // so the red_flag mutation lands on `feedback` before
+        // Mongoose captures the update object. See the pathway block
+        // above for rationale. Codex P2 on PR #321.)
 
         // Mastery tracking: compute per-dimension averages from evaluations
         // and update the consecutive-at-target streak for each competency.
