@@ -45,9 +45,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextRequest } from 'next/server'
 
-const { mockCompletion, mockIsFeatureEnabled } = vi.hoisted(() => ({
+const {
+  mockCompletion, mockIsFeatureEnabled,
+  mockGenerateSessionSummary, mockGeneratePathwayPlan, mockUpdatePracticeStats,
+} = vi.hoisted(() => ({
   mockCompletion: vi.fn(),
   mockIsFeatureEnabled: vi.fn(),
+  // Hoisted so the inner-fallback side-effect-gating tests can assert
+  // these are NOT called when feedback.degraded is true.
+  mockGenerateSessionSummary: vi.fn().mockResolvedValue(undefined),
+  mockGeneratePathwayPlan: vi.fn().mockResolvedValue(undefined),
+  mockUpdatePracticeStats: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('@shared/middleware/composeApiRoute', () => ({
@@ -126,11 +134,19 @@ vi.mock('@learn/services/competencyService', () => ({
   getUserCompetencySummary: vi.fn().mockResolvedValue(null),
 }))
 vi.mock('@learn/services/sessionSummaryService', () => ({
-  generateSessionSummary: vi.fn().mockResolvedValue(undefined),
+  generateSessionSummary: mockGenerateSessionSummary,
   buildHistorySummary: vi.fn().mockResolvedValue(null),
 }))
 vi.mock('@learn/services/pathwayPlanner', () => ({
-  generatePathwayPlan: vi.fn().mockResolvedValue(undefined),
+  generatePathwayPlan: mockGeneratePathwayPlan,
+  // advanceUniversalPlan is imported from the same module at route.ts:20
+  // but is feedback-independent and intentionally stays unconditional —
+  // mock it here so the fire-and-forget call doesn't warn in test output.
+  advanceUniversalPlan: vi.fn().mockResolvedValue(null),
+}))
+vi.mock('@learn/services/practiceStatsService', () => ({
+  updatePracticeStats: mockUpdatePracticeStats,
+  deriveStrongWeakDimensions: () => ({ strongDimensions: [], weakDimensions: [] }),
 }))
 
 import { POST } from '@/app/api/generate-feedback/route'
@@ -190,6 +206,9 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
     mockSessionFindOne.mockReset()
     mockFindByIdAndUpdate.mockReset()
     mockFindByIdAndUpdate.mockResolvedValue(undefined)
+    mockGenerateSessionSummary.mockClear()
+    mockGeneratePathwayPlan.mockClear()
+    mockUpdatePracticeStats.mockClear()
     // Default: no persisted feedback → preflight cache is a miss,
     // route proceeds to LLM call.
     mockSessionFindOne.mockResolvedValue(null)
@@ -547,6 +566,22 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
     expect(json.confidence_level).toBe('Low')
     expect(Array.isArray(json.red_flags)).toBe(true)
     expect(json.red_flags.some((f: string) => f.includes('approximate'))).toBe(true)
+
+    // Blast-radius gate contract: when the inner fallback fires, NONE of
+    // the feedback-dependent side effects may run. Each of these either
+    // persists the fabricated dimensions (findByIdAndUpdate, practiceStats)
+    // or spends tokens on a second LLM call whose prompt embeds the
+    // fabricated fields (sessionSummary, pathwayPlan). The feedback-
+    // independent side effects (competency, weaknessClusters, mastery,
+    // advanceUniversalPlan) run on raw evaluations and are NOT gated —
+    // asserting non-call on them would be a false positive.
+    const persistCalls = mockFindByIdAndUpdate.mock.calls.filter(([, update]) => {
+      return update && typeof update === 'object' && 'feedback' in update
+    })
+    expect(persistCalls).toHaveLength(0)
+    expect(mockUpdatePracticeStats).not.toHaveBeenCalled()
+    expect(mockGenerateSessionSummary).not.toHaveBeenCalled()
+    expect(mockGeneratePathwayPlan).not.toHaveBeenCalled()
   })
 
   it('sets degraded=true on inner fallback when Claude returns missing dimensions', async () => {
@@ -575,6 +610,14 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
     // full-shaped report), but the flags above tell the UI to gate it.
     expect(json.dimensions).toBeDefined()
     expect(json.dimensions.engagement_signals).toBeDefined()
+
+    // Same gate contract as the missing-overall_score test: case 2 also
+    // ships literal-fabricated engagement_signals (composure_under_pressure:
+    // 65, energy_consistency: 0.7, confidence_trend: 'stable') — skip the
+    // feedback-dependent side effects until retry.
+    expect(mockUpdatePracticeStats).not.toHaveBeenCalled()
+    expect(mockGenerateSessionSummary).not.toHaveBeenCalled()
+    expect(mockGeneratePathwayPlan).not.toHaveBeenCalled()
   })
 
   it('does NOT duplicate the approximate red_flag when Claude already included one', async () => {
@@ -624,5 +667,18 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
     expect(json.top_3_improvements).not.toContain(
       'Use the STAR framework explicitly for every behavioral question',
     )
+
+    // Positive regression guard on the gating contract: on a healthy
+    // response, all feedback-dependent side effects MUST still fire.
+    // Catches an over-broad gate (e.g. `if (feedback.overall_score == null)`
+    // instead of `if (!feedback.degraded)`) that would silently stop
+    // XP writes / session summaries / pathway plans for every real user.
+    const persistCalls = mockFindByIdAndUpdate.mock.calls.filter(([, update]) => {
+      return update && typeof update === 'object' && 'feedback' in update
+    })
+    expect(persistCalls.length).toBeGreaterThan(0)
+    expect(mockUpdatePracticeStats).toHaveBeenCalled()
+    expect(mockGenerateSessionSummary).toHaveBeenCalled()
+    expect(mockGeneratePathwayPlan).toHaveBeenCalled()
   })
 })

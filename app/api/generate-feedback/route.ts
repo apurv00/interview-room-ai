@@ -931,7 +931,16 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       // Persist feedback to session document server-side so it survives page
       // reloads without relying on the client PATCH call (which can fail due
       // to Zod validation mismatches or network issues).
-      if (body.sessionId) {
+      //
+      // Degraded-guard (2026-04-24 inner-fallback extension): when the
+      // inner fallback at route.ts:685 fires because Claude's JSON was
+      // incomplete, `feedback.degraded` is set. Matching the outer-catch
+      // contract (PR #311 fb69ef6 — "Stop persisting degraded feedback
+      // fallback to Mongo"), we skip the write here too. The cache-
+      // bypass branch at :331 still protects LEGACY sessions that were
+      // persisted before this fix, but NEW degraded runs never land in
+      // Mongo — retries just see a cache miss and re-invoke the LLM.
+      if (body.sessionId && !feedback.degraded) {
         try {
           await InterviewSession.findByIdAndUpdate(body.sessionId, {
             feedback,
@@ -995,7 +1004,14 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         // unconditional. The legacy /api/learn/stats endpoint
         // permanently no-ops in the same chunk so dual-write
         // double-counting can't happen.
-        if (typeof feedback.overall_score === 'number') {
+        // Degraded-guard: skip XP write when the inner fallback fabricated
+        // the dimensions. overall_score itself is either Claude-real or
+        // preQ.average (deterministic) — defensible in isolation — but
+        // pairing it with a degraded banner on the feedback page while
+        // silently crediting XP confuses the "why is my XP higher than
+        // my displayed score?" UX. The user's retry will re-run this
+        // write on a healthy response.
+        if (typeof feedback.overall_score === 'number' && !feedback.degraded) {
           const { strongDimensions, weakDimensions } = deriveStrongWeakDimensions(
             evaluations as unknown as Array<Record<string, unknown>>,
           )
@@ -1025,23 +1041,31 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
           'Competency state update failed',
         )
 
-        // Generate session summary
-        fireAndTrack(
-          'sessionSummary',
-          generateSessionSummary({
-            userId: user.id,
-            sessionId,
-            domain: config.role,
-            interviewType,
-            experience: config.experience,
-            evaluations: typedEvaluations,
-            speechMetrics,
-            feedback,
-            transcript,
-            durationMinutes: config.duration,
-          }),
-          'Session summary generation failed',
-        )
+        // Degraded-guard: generateSessionSummary makes its own LLM call
+        // with the whole `feedback` object as prompt context. Under the
+        // inner fallback, feedback.dimensions.engagement_signals is
+        // literal-constant-fabricated (confidence_trend: 'stable',
+        // composure_under_pressure: 65). Passing those to the summary
+        // LLM produces narrative that describes fake stability. Skip
+        // the call; retry re-generates on a healthy response.
+        if (!feedback.degraded) {
+          fireAndTrack(
+            'sessionSummary',
+            generateSessionSummary({
+              userId: user.id,
+              sessionId,
+              domain: config.role,
+              interviewType,
+              experience: config.experience,
+              evaluations: typedEvaluations,
+              speechMetrics,
+              feedback,
+              transcript,
+              durationMinutes: config.duration,
+            }),
+            'Session summary generation failed',
+          )
+        }
 
         // Update weakness clusters from flags
         const weaknessInputs = typedEvaluations
@@ -1070,26 +1094,39 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         // count reflects "pathway ready" as one unit — a failed
         // evaluateSession still flows through as a single rejection
         // attributed to `pathwayPlan`.
-        fireAndTrack(
-          'pathwayPlan',
-          evaluateSession({
-            domain: config.role,
-            interviewType,
-            seniorityBand: config.experience,
-            evaluations: typedEvaluations,
-          }).then(sessionEval =>
-            generatePathwayPlan({
-              userId: user.id,
-              sessionId,
+        //
+        // Degraded-guard: pathwayPlanner uses `feedback` heavily —
+        // `overall_score` for readiness + difficulty calibration +
+        // interview-type auto-advancement (pathwayPlanner.ts:276-279),
+        // `dimensions.communication.filler_rate` for practice task
+        // selection, `top_3_improvements` + `pass_probability` in the
+        // AI-plan LLM prompt. Even though overall_score itself is
+        // synthesized from the deterministic formula in the inner
+        // fallback (not fabricated), the combination of "show user a
+        // degraded banner" and "also quietly generate a full multi-
+        // task learning plan" is the wrong UX. Wait for the retry.
+        if (!feedback.degraded) {
+          fireAndTrack(
+            'pathwayPlan',
+            evaluateSession({
               domain: config.role,
               interviewType,
-              experience: config.experience,
-              feedback,
-              sessionEvaluation: sessionEval,
-            }),
-          ),
-          'Pathway plan (via session evaluation) failed',
-        )
+              seniorityBand: config.experience,
+              evaluations: typedEvaluations,
+            }).then(sessionEval =>
+              generatePathwayPlan({
+                userId: user.id,
+                sessionId,
+                domain: config.role,
+                interviewType,
+                experience: config.experience,
+                feedback,
+                sessionEvaluation: sessionEval,
+              }),
+            ),
+            'Pathway plan (via session evaluation) failed',
+          )
+        }
 
         // Mastery tracking: compute per-dimension averages from evaluations
         // and update the consecutive-at-target streak for each competency.
