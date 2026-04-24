@@ -132,14 +132,43 @@ export async function stepFetchSession(sessionId: string): Promise<SessionData> 
   // meta-block) are normalised to seconds-since-t0 against this anchor.
   const sessionT0 = computeSessionT0(session.startedAt, transcript)
 
-  // Question boundaries in seconds-since-t0, clipped at 0 (defensive against
-  // interviewer turns that predate t0), and CAPPED to evaluations.length + 1
-  // so greeting / closing interviewer turns don't generate phantom analysis
-  // windows with questionIndex past the actual evaluated questions.
-  const questionBoundaries = transcript
-    .filter((t) => t.speaker === 'interviewer')
-    .map((t) => secondsSinceT0(t.timestamp, sessionT0))
-    .slice(0, evaluations.length + 1)
+  // Question boundaries in seconds-since-t0. Dedupe by `questionIndex` so
+  // extra interviewer turns PER QUESTION (acks, probes, retries, hints,
+  // reframes, rephrases — all tagged with the same qIdx in useInterview.ts)
+  // don't each generate their own boundary and push later question starts
+  // past the cap. Skip entries without a questionIndex (greeting, wrap-up,
+  // closing line — addToTranscript called without qIdx in those paths).
+  //
+  // Fallback: legacy sessions where no interviewer entry carries a
+  // questionIndex fall through to the ordered-timestamp + cap approach so
+  // analysis still produces per-question windows; capping by
+  // evaluations.length + 1 keeps greeting/closing from generating phantom
+  // indices in that path too.
+  const byQIdx: Array<{ qIdx: number; t: number }> = []
+  const seenQIdx = new Set<number>()
+  for (const entry of transcript) {
+    if (entry.speaker !== 'interviewer') continue
+    if (entry.questionIndex == null) continue
+    if (seenQIdx.has(entry.questionIndex)) continue
+    seenQIdx.add(entry.questionIndex)
+    byQIdx.push({
+      qIdx: entry.questionIndex,
+      t: secondsSinceT0(entry.timestamp, sessionT0),
+    })
+  }
+
+  let questionBoundaries: number[]
+  if (byQIdx.length > 0) {
+    byQIdx.sort((a, b) => a.qIdx - b.qIdx)
+    // Cap still applied as defense-in-depth; under normal operation the
+    // unique qIdx count never exceeds evaluations.length anyway.
+    questionBoundaries = byQIdx.map((x) => x.t).slice(0, evaluations.length + 1)
+  } else {
+    questionBoundaries = transcript
+      .filter((t) => t.speaker === 'interviewer')
+      .map((t) => secondsSinceT0(t.timestamp, sessionT0))
+      .slice(0, evaluations.length + 1)
+  }
 
   return {
     sessionId,

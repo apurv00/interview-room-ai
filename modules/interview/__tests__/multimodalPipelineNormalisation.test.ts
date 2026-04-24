@@ -55,16 +55,25 @@ function makeSessionDoc(opts: {
   evaluationsCount: number
   t0Ms: number
   includeStartedAt?: boolean
+  /** When false, interviewer transcript entries omit questionIndex (legacy fallback path). */
+  withQIdx?: boolean
 }) {
-  const transcript: Array<{ speaker: string; text: string; timestamp: number }> = []
+  const transcript: Array<{ speaker: string; text: string; timestamp: number; questionIndex?: number | null }> = []
   for (let i = 0; i < opts.interviewerCount; i++) {
-    transcript.push({ speaker: 'interviewer', text: `Q${i}`, timestamp: opts.t0Ms + i * 60_000 })
+    const entry: { speaker: string; text: string; timestamp: number; questionIndex?: number | null } = {
+      speaker: 'interviewer',
+      text: `Q${i}`,
+      timestamp: opts.t0Ms + i * 60_000,
+    }
+    if (opts.withQIdx !== false) entry.questionIndex = i
+    transcript.push(entry)
   }
   for (let i = 0; i < Math.min(opts.evaluationsCount, opts.interviewerCount); i++) {
     transcript.push({
       speaker: 'candidate',
       text: `A${i}`,
       timestamp: opts.t0Ms + i * 60_000 + 10_000,
+      questionIndex: i,
     })
   }
   const doc: Record<string, unknown> = {
@@ -156,6 +165,66 @@ describe('stepFetchSession — time normalisation contract', () => {
     )
     const result = await stepFetchSession('sess-test')
     expect(result.questionBoundaries).toHaveLength(7)
+  })
+
+  // PR #316 Codex P1 regression guard: with multiple interviewer turns per
+  // questionIndex (acks, probes, retries, hints), the boundary list must
+  // anchor to the first ASK time per qIdx — NOT emit one boundary per raw
+  // interviewer turn. Before this fix the slice() could strip later
+  // question starts entirely and collapse multiple answers into one window.
+  it('dedupes by questionIndex — multiple interviewer entries per question collapse to first ASK', async () => {
+    const t0 = 1776957100000
+    mockFindById.mockResolvedValue({
+      _id: 'sess-dedup',
+      startedAt: new Date(t0),
+      recordingR2Key: 'r/sess-dedup.webm',
+      transcript: [
+        // Greeting — no qIdx, must be skipped
+        { speaker: 'interviewer', text: 'Hi', timestamp: t0 + 0 },
+        // Q1 ask (qIdx=0, t=10s), Q1 ack (qIdx=0, t=50s — must NOT become a boundary)
+        { speaker: 'interviewer', text: 'Q1 ask', timestamp: t0 + 10_000, questionIndex: 0 },
+        { speaker: 'candidate', text: 'A1', timestamp: t0 + 30_000, questionIndex: 0 },
+        { speaker: 'interviewer', text: 'Got it', timestamp: t0 + 50_000, questionIndex: 0 },
+        // Q2 ask (qIdx=1, t=70s), Q2 probe (qIdx=1, t=110s — must NOT become a boundary)
+        { speaker: 'interviewer', text: 'Q2 ask', timestamp: t0 + 70_000, questionIndex: 1 },
+        { speaker: 'candidate', text: 'A2', timestamp: t0 + 90_000, questionIndex: 1 },
+        { speaker: 'interviewer', text: 'Probe?', timestamp: t0 + 110_000, questionIndex: 1 },
+        // Q3 ask (qIdx=2, t=130s) — without the dedup fix, slice(0, 4) cuts HERE
+        // and Q3 boundary is lost entirely.
+        { speaker: 'interviewer', text: 'Q3 ask', timestamp: t0 + 130_000, questionIndex: 2 },
+        { speaker: 'candidate', text: 'A3', timestamp: t0 + 150_000, questionIndex: 2 },
+        // Closing — no qIdx, must be skipped
+        { speaker: 'interviewer', text: 'Wrap up', timestamp: t0 + 170_000 },
+      ],
+      evaluations: [
+        { questionIndex: 0 },
+        { questionIndex: 1 },
+        { questionIndex: 2 },
+      ],
+      config: { role: 'pm' },
+    })
+    const result = await stepFetchSession('sess-dedup')
+    // Three unique questions, anchored to each ASK time (not ack/probe times).
+    // Regression: before the dedup fix this returned 4 boundaries
+    // [0, 10, 50, 70] and Q3's 130s boundary was silently dropped.
+    expect(result.questionBoundaries).toEqual([10, 70, 130])
+  })
+
+  it('falls back to ordered-timestamp + cap when no interviewer entry has questionIndex', async () => {
+    // Legacy session shape — withQIdx: false strips questionIndex from every
+    // interviewer entry. Fallback path takes over and produces a sensible
+    // result (not an empty array).
+    mockFindById.mockResolvedValue(
+      makeSessionDoc({
+        interviewerCount: 8,
+        evaluationsCount: 6,
+        t0Ms: 1776957100000,
+        withQIdx: false,
+      }),
+    )
+    const result = await stepFetchSession('sess-test')
+    expect(result.questionBoundaries).toHaveLength(7) // capped at evaluations.length + 1
+    expect(result.questionBoundaries[0]).toBe(0) // still normalised to seconds-since-t0
   })
 
   it('clamps boundaries that predate sessionT0 to 0', async () => {
