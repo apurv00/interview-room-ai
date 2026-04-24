@@ -553,9 +553,22 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       // the .then-fallback at line ~564 catches it up once ws is OPEN.
       // Codex P1 on PR #320.
       if (warmUpPromiseRef.current) {
-        if (wsRef.current) {
+        // Capture whether the eager branch actually fired, synchronously,
+        // so the `.then` catch-up below has a timing-independent signal.
+        // Previous revision used `!processorRef.current` — that ref is
+        // assigned only AFTER `await audioWorklet.addModule(...)` resolves
+        // inside setupAudioProcessing, which can lose a race against a
+        // fast ws.onopen (~100-500ms window on older CPUs / cold
+        // AudioWorklet addModule). Codex P1 on PR #320 (round 2): when
+        // that race fired, the catch-up branch launched a SECOND
+        // setupAudioProcessing while the eager one was still awaiting
+        // addModule — the eager setup later hit its stale-guard and
+        // returned without closing its AudioContext / stopping its
+        // ownStream mic track, leaking both.
+        const eagerFired = Boolean(wsRef.current)
+        if (eagerFired) {
           setIsListening(true)
-          startAudioCapture(wsRef.current)
+          startAudioCapture(wsRef.current!)
         }
         warmUpPromiseRef.current
           .then(() => {
@@ -571,15 +584,18 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
               // CONNECTING→OPEN handoff.
               attachMessageHandler(wsRef.current)
               isWarmedUpRef.current = false
-              // Safety: if startListening raced the token fetch (stage 1
-              // of warmUp), wsRef.current was null at the eager check
-              // above and the worklet never started. Catch up now that
-              // the ws is OPEN — processorRef.current is the signal for
-              // "startAudioCapture has already run" since it's the
-              // worklet handle the helper stores on success. Without
-              // this guard the session reaches OPEN with no mic pipeline
-              // → zero transcripts → UI stuck. Codex P1 on PR #320.
-              if (!processorRef.current) {
+              // Catch-up path: if the eager branch skipped because
+              // wsRef.current was null at the eager check (startListening
+              // raced the token fetch — stage 1 of warmUp), startAudioCapture
+              // never ran. Launch it now that the ws is OPEN. Gated on
+              // `eagerFired` (captured synchronously above), not on
+              // processorRef.current — the latter races against the
+              // eager setup's in-flight addModule await. Without this
+              // guard one of two bugs fires: (a) eager=false + no catch-up
+              // → session OPEN with no mic pipeline, zero transcripts;
+              // (b) eager=true + racy catch-up → second setupAudioProcessing
+              // runs concurrently, first one leaks AudioContext + stream.
+              if (!eagerFired) {
                 setIsListening(true)
                 startAudioCapture(wsRef.current)
               }
@@ -701,9 +717,28 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             // [DIAGNOSTIC] Paired with warmUp→wsOpen timer above.
             // eslint-disable-next-line no-console
             console.timeEnd('[perf:stt] warmUp→wsOpen')
-            // wsRef.current was already set at socket creation time above
-            // so the worklet could enqueue into pcmBufferRef during the
-            // CONNECTING window. Nothing to re-assign here.
+            // Superseded-socket guard: if finishRecognition / external stop /
+            // startListenReentry / usageLimit fired during the CONNECTING
+            // window, wsRef.current may have been nulled (terminal-close
+            // paths) or replaced by a fresh connectFresh ws. Marking the
+            // hook warm against an orphan would (a) leak a Deepgram
+            // connection running its KeepAlive forever until GC + stick the
+            // hook in "warmed" state that never clears (onclose identity
+            // guard would fail the same way), and (b) force every future
+            // warmUp() call to early-return on isWarmedUpRef=true, regressing
+            // Q2-Q6 to cold-connect cost. Close the orphan cleanly instead.
+            // Codex P1 on PR #320 (round 2).
+            if (wsRef.current !== ws) {
+              warmUpPromiseRef.current = null
+              clearMyKeepAlive()
+              try { ws.close(1000, 'superseded') } catch { /* ignore */ }
+              resolve()
+              return
+            }
+            // wsRef.current was set at socket creation time (above) so the
+            // worklet could enqueue into pcmBufferRef during CONNECTING.
+            // Nothing to re-assign here; we just verified the ref still
+            // points at THIS ws.
             isWarmedUpRef.current = true
             warmUpPromiseRef.current = null
             // Keep the idle socket alive. Previous implementation sent

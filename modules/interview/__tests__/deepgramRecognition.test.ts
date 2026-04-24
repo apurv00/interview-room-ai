@@ -1461,6 +1461,121 @@ describe('useDeepgramRecognition', () => {
     expect(audioWorkletNodeCalls.length - worketsBefore).toBe(2)
   })
 
+  // ── Codex P1 on PR #320 round-2 — eagerFired vs processorRef.current race ──
+  //
+  // The earlier round-1 fix gated the .then catch-up on `!processorRef.current`.
+  // That ref is assigned only AFTER `await audioWorklet.addModule(...)` in
+  // setupAudioProcessing. If ws.onopen wins the race against addModule,
+  // the catch-up fires a SECOND setupAudioProcessing concurrently; the
+  // first hits its stale-guard and bails without closing its AudioContext
+  // or stopping the mic stream → leaked resources on every Q1 cold warmUp
+  // on hardware where addModule takes >200ms. The fix switches to an
+  // `eagerFired` boolean captured synchronously at the eager-check line —
+  // timing-independent.
+  it('does NOT double-start capture when ws.onopen wins race vs addModule', async () => {
+    // Hold addModule pending so setupAudioProcessing parks mid-await. The
+    // old guard would then see processorRef.current === null and fire a
+    // second setup. The new guard looks at a synchronously-captured flag
+    // and correctly skips.
+    let resolveAddModule: () => void = () => {}
+    mockAddModule.mockImplementationOnce(
+      () => new Promise<void>((r) => {
+        resolveAddModule = r
+      }),
+    )
+
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+    const gumSpy = vi.mocked(navigator.mediaDevices.getUserMedia)
+    gumSpy.mockClear()
+
+    act(() => { result.current.warmUp() })
+    // Let token fetch + ws construction happen. ws is now CONNECTING.
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    expect(mockWsInstance).not.toBeNull()
+
+    const worketsBefore = audioWorkletNodeCalls.length
+
+    // startListening while ws is CONNECTING. wsRef.current is set so the
+    // eager branch DOES fire — setupAudioProcessing starts, calls
+    // getUserMedia, then parks on our held addModule.
+    act(() => { result.current.startListening(onComplete) })
+    // Let getUserMedia → setupAudioProcessing reach the addModule await.
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    expect(gumSpy).toHaveBeenCalledTimes(1)
+
+    // Simulate ws.onopen BEFORE addModule resolves. Old implementation:
+    // catch-up sees processorRef.current === null → fires a second
+    // startAudioCapture → getUserMedia called again. New implementation:
+    // eagerFired=true captured at the eager-check → catch-up skipped.
+    act(() => { mockWsInstance!.simulateOpen() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+
+    // Pin the fix: getUserMedia must have been called exactly ONCE total.
+    // A second call here would prove the P1-A round-2 bug is live (and
+    // would also mean a leaked AudioContext/MediaStream on the old path).
+    expect(gumSpy).toHaveBeenCalledTimes(1)
+
+    // Now unblock the held addModule. The first (and only) setup should
+    // proceed to construct exactly one worklet.
+    await act(async () => {
+      resolveAddModule()
+      await vi.advanceTimersByTimeAsync(10)
+    })
+    expect(audioWorkletNodeCalls.length - worketsBefore).toBe(1)
+  })
+
+  // ── Codex P1 on PR #320 round-2 — superseded ws orphan on CONNECTING-window stop ──
+  //
+  // If finishRecognition fires while warmUp's ws is still CONNECTING (e.g.
+  // stopListening from an external caller, startListenReentry from rapid
+  // double-click, usageLimit trip), wsRef.current is nulled by finishRecognition.
+  // When the orphan ws finally reaches onopen, the old code unconditionally
+  // set isWarmedUpRef=true and started KeepAlive — leaving the hook stuck
+  // in "warm" state against a ws it doesn't even track, and the orphan ws
+  // alive forever with a KeepAlive closure pinning it. The fix: identity-
+  // guard at the top of ws.onopen. If wsRef.current !== ws, close the orphan
+  // cleanly and bail before touching any hook-level state.
+  it('closes orphan ws when finishRecognition fires during warmUp CONNECTING', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+
+    act(() => { result.current.warmUp() })
+    // Let token fetch + ws construction happen. ws is CONNECTING, onopen
+    // has NOT fired yet.
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    expect(mockWsInstance).not.toBeNull()
+    const orphan = mockWsInstance!
+
+    // Fire a non-preserve terminal trigger while ws is still CONNECTING.
+    // finishRecognition's non-preserve branch nulls wsRef.current
+    // (the ws.close() call inside the branch is gated on readyState === OPEN,
+    // so the CONNECTING ws is NOT closed here — it's just dereferenced).
+    act(() => { result.current.stopListening() })
+
+    // The now-orphan ws finally reaches OPEN. P1-B guard must detect that
+    // wsRef.current !== ws and close the socket cleanly without polluting
+    // hook state.
+    act(() => { orphan.simulateOpen() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+
+    // Assert 1: orphan ws was explicitly closed by the guard with the
+    // 'superseded' label (not a clean-session 1000/empty — that would
+    // indicate remote-side close, or not-closed-at-all which would be
+    // the bug).
+    expect(orphan.lastCloseCode).toBe(1000)
+    expect(orphan.lastCloseReason).toBe('superseded')
+
+    // Assert 2 (behavioral): hook did NOT stick isWarmedUpRef=true against
+    // the orphan. Next warmUp() must construct a brand new ws — not early-
+    // return on a stale warm flag. Reset the mock sentinel so a new
+    // constructor call re-populates it.
+    mockWsInstance = null
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    expect(mockWsInstance).not.toBeNull()
+    expect(mockWsInstance).not.toBe(orphan)
+  })
+
   it('UtteranceEnd grace is 3000ms for short answers (was 4000ms)', async () => {
     const { result } = renderHook(() => useDeepgramRecognition())
     const onComplete = vi.fn()
