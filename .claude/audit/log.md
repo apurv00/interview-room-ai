@@ -1321,3 +1321,10 @@
 - **Root-cause:** Codex P0 on PR #319. Next.js App Router route files
 - **No-tests-needed-because: pure move + import-path swap. Logic and**
 - **Verified-by:** 14/14 generateFeedbackSilentZeros tests pass via the
+
+### 2026-04-24 14:52:43 +0000 · `b24caf9` · Claude
+- **Subject:** fix(stt): buffer PCM during WS open + silent-PCM KeepAlive
+- **Files:** 4 changed, 2 test file(s)
+- **Root-cause:** production interview session 69eb6689c6cbd204bd2b8266
+- **Tests-added:**
+- **Verified-by:** 9/9 new pcmRingBuffer tests pass, 68/68 existing
