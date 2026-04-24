@@ -231,7 +231,23 @@ async function main() {
   // Null-result warning
   console.log('\nInterpretation')
   console.log('--------------')
-  if (meanBody < 2 && meanEye < 2 && rankAgreement > 0.9) {
+  // Codex P2 on PR #318: if every session had null scores on one or
+  // both variants (e.g., all sessions were privacy-mode, or facial
+  // capture failed universally), `meanBody`/`meanEye` are NaN from the
+  // `length > 0 ? ... : NaN` branches above. Numeric comparisons
+  // against NaN always return false — so without this explicit guard,
+  // the script would take the `else` branch and print
+  // "Enhanced variant produces measurably different outputs" alongside
+  // `NaN.toFixed(2)` = "NaN", inverting the conclusion in exactly the
+  // no-data scenario. Explicit branch handles it honestly.
+  if (!Number.isFinite(meanBody) || !Number.isFinite(meanEye)) {
+    console.log('⚠ NO COMPARABLE SESSIONS: every session was skipped because at')
+    console.log('  least one variant had a null score (no facial data captured).')
+    console.log(`    - Sessions compared:      0 / ${comparisons.length}`)
+    console.log('    - Cannot compute mean Δ body language or eye contact.')
+    console.log('  Re-run the analysis against sessions that include camera-on')
+    console.log('  interviews before drawing any enhanced-vs-baseline conclusions.')
+  } else if (meanBody < 2 && meanEye < 2 && rankAgreement > 0.9) {
     console.log('⚠ NULL RESULT: enhanced variant is producing nearly identical scores')
     console.log('  and coaching tips to the baseline. Claude Haiku appears to be')
     console.log('  treating the extra blendshape block as noise. Consider:')
