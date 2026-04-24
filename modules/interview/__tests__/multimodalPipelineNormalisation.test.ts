@@ -91,12 +91,21 @@ function makeSessionDoc(opts: {
 // ─── Unit tests: computeSessionT0 ──────────────────────────────────────────
 
 describe('computeSessionT0', () => {
-  it('prefers session.startedAt when present', () => {
-    const startedAt = new Date('2026-04-23T15:13:00Z')
+  // PR #316 Codex P1 regression guard: session.startedAt is set at session
+  // CREATE (useInterview.ts:416) — BEFORE mic/camera permission is granted
+  // and recording starts. Using startedAt when the user delays permission
+  // anchors questionBoundaries to a pre-recording origin, shifting every
+  // window forward by the permission-grant delay. The earliest transcript
+  // timestamp is a strictly better proxy for recording-start wall-clock.
+  it('ignores startedAt and uses earliest transcript timestamp when both are present', () => {
+    const startedAt = new Date(1776957000000) // session create, 100s before any recording
     const t0 = computeSessionT0(startedAt, [
-      { speaker: 'candidate', timestamp: 1776957200000 },
+      { speaker: 'interviewer', timestamp: 1776957100000 }, // first greeting, ~recording start
+      { speaker: 'candidate', timestamp: 1776957130000 },
     ])
-    expect(t0).toBe(startedAt.getTime())
+    expect(t0).toBe(1776957100000)
+    // Critically NOT startedAt — which would have been 100s earlier.
+    expect(t0).not.toBe(startedAt.getTime())
   })
 
   it('falls back to earliest transcript timestamp when startedAt is absent', () => {
@@ -118,15 +127,15 @@ describe('computeSessionT0', () => {
     expect(t0).toBe(1776957100000)
   })
 
-  // PR #316 Codex P2 regression guard: startedAt is persisted via an async
-  // Mongoose write on finish; early client-side transcript timestamps can
-  // precede it. If we trusted startedAt alone, those entries would become
-  // negative deltas clamped to 0, collapsing the first question window.
-  // Taking the minimum of both sources guarantees monotonic non-negative
-  // deltas through secondsSinceT0.
-  it('uses earliest transcript timestamp when startedAt lags behind early entries', () => {
+  // Also covers the P2 round-3 scenario: startedAt's async Mongoose write
+  // can land AFTER an early transcript entry's client-side Date.now().
+  // Anchoring to earliest transcript handles that case identically — we
+  // never look at startedAt when transcript is non-empty, so whichever
+  // source wrote first is irrelevant.
+  it('uses earliest transcript timestamp even when it precedes startedAt', () => {
     const startedAt = new Date(1776957100000)
-    // Interviewer greeting captured 200ms before the persisted startedAt.
+    // Interviewer greeting captured 200ms before the persisted startedAt
+    // (async Mongoose write race, pre-finish crash re-hydration, etc).
     const t0 = computeSessionT0(startedAt, [
       { speaker: 'interviewer', timestamp: 1776957099800 },
       { speaker: 'candidate', timestamp: 1776957120000 },
@@ -134,13 +143,10 @@ describe('computeSessionT0', () => {
     expect(t0).toBe(1776957099800)
   })
 
-  it('uses startedAt when all transcript timestamps are after it', () => {
+  it('falls back to startedAt only when transcript is empty', () => {
     const startedAt = new Date(1776957100000)
-    const t0 = computeSessionT0(startedAt, [
-      { speaker: 'interviewer', timestamp: 1776957100500 },
-      { speaker: 'candidate', timestamp: 1776957120000 },
-    ])
-    expect(t0).toBe(1776957100000)
+    const t0 = computeSessionT0(startedAt, [])
+    expect(t0).toBe(startedAt.getTime())
   })
 
   it('falls back to first transcript entry when no candidate turn exists', () => {
@@ -178,12 +184,46 @@ describe('stepFetchSession — time normalisation contract', () => {
     vi.clearAllMocks()
   })
 
-  it('returns sessionT0 equal to session.startedAt.getTime()', async () => {
+  it('returns sessionT0 equal to the earliest transcript timestamp', async () => {
+    // makeSessionDoc places the first interviewer turn at t0Ms, so under the
+    // earliest-transcript-first rule sessionT0 coincides with t0Ms. startedAt
+    // (also t0Ms in this fixture) is irrelevant to the anchor choice.
     mockFindById.mockResolvedValue(
       makeSessionDoc({ interviewerCount: 3, evaluationsCount: 3, t0Ms: 1776957100000 }),
     )
     const result = await stepFetchSession('sess-test')
     expect(result.sessionT0).toBe(1776957100000)
+  })
+
+  // PR #316 Codex P1 regression guard: session.startedAt is written at
+  // session CREATE, BEFORE mic permission and recording start. If we ever
+  // anchor to startedAt when transcript is populated, a permission delay
+  // shifts every questionBoundary forward by the delay gap.
+  it('ignores session.startedAt when it predates the earliest transcript entry', async () => {
+    // startedAt = session create at T-100s. User delays permission 100s,
+    // then recording starts. First interviewer turn (greeting) lands at T+0.
+    const recordingStart = 1776957100000
+    const sessionCreate = recordingStart - 100_000
+    mockFindById.mockResolvedValue({
+      _id: 'sess-delay',
+      startedAt: new Date(sessionCreate),
+      recordingR2Key: 'r/sess-delay.webm',
+      transcript: [
+        { speaker: 'interviewer', text: 'Hi', timestamp: recordingStart, questionIndex: 0 },
+        { speaker: 'candidate', text: 'A1', timestamp: recordingStart + 30_000, questionIndex: 0 },
+        { speaker: 'interviewer', text: 'Q2', timestamp: recordingStart + 60_000, questionIndex: 1 },
+      ],
+      evaluations: [{ questionIndex: 0 }, { questionIndex: 1 }],
+      config: { role: 'pm' },
+    })
+    const result = await stepFetchSession('sess-delay')
+    // Pre-fix: sessionT0 = min(startedAt, earliest) = sessionCreate, which
+    // would shift questionBoundaries to [100, 160] — 100s AHEAD of where
+    // the audio/facial signals actually sit on the recording timeline.
+    // Post-fix: sessionT0 = earliest transcript = recording-aligned.
+    expect(result.sessionT0).toBe(recordingStart)
+    expect(result.sessionT0).not.toBe(sessionCreate)
+    expect(result.questionBoundaries).toEqual([0, 60])
   })
 
   it('normalises questionBoundaries to seconds-since-t0', async () => {
@@ -292,11 +332,15 @@ describe('stepFetchSession — time normalisation contract', () => {
     expect(result.questionBoundaries[0]).toBe(0) // still normalised to seconds-since-t0
   })
 
-  it('clamps boundaries that predate sessionT0 to 0', async () => {
+  it('anchors to a transcript entry that predates startedAt so its boundary is 0 (not negative)', async () => {
+    // Fixture: single interviewer transcript entry 100s BEFORE the persisted
+    // startedAt. Under earliest-transcript-first, sessionT0 = that entry's
+    // timestamp and its boundary normalises to 0 (not negative, not clamped).
     const doc = makeSessionDoc({ interviewerCount: 1, evaluationsCount: 1, t0Ms: 1776957100000 })
-    ;(doc.transcript as Array<{ timestamp: number }>)[0].timestamp = 1776957000000 // 100s before startedAt
+    ;(doc.transcript as Array<{ timestamp: number }>)[0].timestamp = 1776957000000
     mockFindById.mockResolvedValue(doc)
     const result = await stepFetchSession('sess-test')
+    expect(result.sessionT0).toBe(1776957000000) // NOT the startedAt value
     expect(result.questionBoundaries).toEqual([0])
   })
 

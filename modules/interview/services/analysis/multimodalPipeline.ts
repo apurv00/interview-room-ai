@@ -30,36 +30,46 @@ interface LiveTranscriptWord {
  * per-segment timestamps are normalised to seconds since this t0.
  *
  * Selection rule:
- *   t0 = min(startedAt, earliest transcript timestamp)
+ *   1. earliest transcript timestamp (when transcript is non-empty)
+ *   2. session.startedAt (only when transcript is empty)
+ *   3. 0 (degenerate fallback — analysis still runs, no real alignment)
  *
- * Why min and not just startedAt: `startedAt` is persisted via an async
- * Mongoose write on session finish, while transcript entries carry client-
- * side `Date.now()` stamps captured as the interview unfolded. On races
- * (retried writes, clock skew, pre-finish crashes re-hydrated later) an
- * interviewer turn can have a `timestamp` a few ms *before* the persisted
- * `startedAt`. Using `startedAt` alone would then yield negative deltas
- * that `secondsSinceT0` clamps to 0, collapsing the first question's
- * window. Taking the minimum guarantees monotonic non-negative deltas
- * regardless of which source wrote first.
+ * Why NOT startedAt when transcript exists: `session.startedAt` is written
+ * on session CREATE (`useInterview.ts:416`), BEFORE the user grants mic/
+ * camera permission. The audio/video timelines used by downstream
+ * aggregators (Deepgram word `start`/`end`, facial frame `ts`) start at
+ * t=0 = `recordingStartedAt` (`app/interview/page.tsx:497`), which runs
+ * AFTER permission is granted. When a user delays the permission prompt
+ * by several seconds, `startedAt` lands well before recording starts —
+ * anchoring questionBoundaries to `startedAt` then shifts every window
+ * forward by that gap and mis-assigns audio/facial segments to the wrong
+ * questions.
  *
- * Fallback order when both sources are absent:
- *   - no startedAt + empty transcript → 0 (degrades to pre-fix state).
+ * The earliest transcript timestamp is the closest server-side proxy for
+ * recording-start wall-clock: the first transcript entry (AI greeting /
+ * first question) is appended just after `mediaRecorder.start()` returns,
+ * so its `Date.now()` is tens of ms from recording start. Strictly
+ * closer to the audio origin than `startedAt` in every case, and also
+ * immune to the startedAt async-write race (a transcript entry captured
+ * client-side a few ms before the persisted startedAt write lands).
+ *
+ * `startedAt` is retained only as a last-resort fallback for sessions
+ * with an empty transcript — those sessions have no per-question windows
+ * to align anyway.
  */
 export function computeSessionT0(
   startedAt: Date | undefined,
   transcript: Array<{ speaker: string; timestamp: number }>,
 ): number {
-  const candidates: number[] = []
-  if (startedAt) candidates.push(startedAt.getTime())
   if (transcript.length > 0) {
     let earliest = transcript[0].timestamp
     for (let i = 1; i < transcript.length; i++) {
       if (transcript[i].timestamp < earliest) earliest = transcript[i].timestamp
     }
-    candidates.push(earliest)
+    return earliest
   }
-  if (candidates.length === 0) return 0
-  return candidates.reduce((min, v) => (v < min ? v : min), candidates[0])
+  if (startedAt) return startedAt.getTime()
+  return 0
 }
 
 /** Clamped ms→seconds normaliser; negative results (entry predates t0) become 0. */
