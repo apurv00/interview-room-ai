@@ -640,6 +640,16 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
           )
         }
         feedback = parsedRaw as unknown as FeedbackData
+        // Server owns the `degraded` flag. The LLM schema uses
+        // `.passthrough()`, so a hallucinated or prompt-injected
+        // `"degraded": true` in Claude's JSON would otherwise survive
+        // into this object and trip the `!feedback.degraded` gates
+        // below (suppressing persist + side effects on an otherwise
+        // healthy response) and the cache-bypass at :331 (forcing a
+        // regeneration). Strip any incoming value here; only the
+        // server's inner-fallback (route.ts:710) and outer-catch
+        // (route.ts:1220) paths set it legitimately. Codex P2 on #317.
+        delete (feedback as { degraded?: unknown }).degraded
       } catch {
         aiLogger.error({ raw: raw.slice(0, 500) }, 'Feedback JSON parse failed')
         // G.1 telemetry — parse failure path. Capture whatever we know so we
@@ -695,8 +705,23 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
           engagement_signals: { score: Math.round(feedback.overall_score * 0.9), engagement_score: Math.round(feedback.overall_score * 0.85), confidence_trend: 'stable' as const, energy_consistency: 0.7, composure_under_pressure: 65 },
         }
         feedback.pass_probability = feedback.pass_probability || (feedback.overall_score >= 70 ? 'High' : feedback.overall_score >= 50 ? 'Medium' : 'Low')
-        feedback.confidence_level = feedback.confidence_level || 'Medium'
-        feedback.red_flags = feedback.red_flags || []
+        // Fabricated-dimensions contract — match the outer-catch path at
+        // :1201 (PR #311 `3e425cc`). Before this fix the inner fallback
+        // shipped literal constants (composure_under_pressure: 65,
+        // energy_consistency: 0.7) and multiplier-derived engagement
+        // scores with confidence_level='Medium' and no `degraded` flag,
+        // so downstream readers (dashboard last-score tile, history
+        // pass-badge, peer-comparison $avg) couldn't distinguish it from
+        // real feedback. Forcing the same Low-confidence + degraded
+        // invariant the outer-catch uses gates those readers (they
+        // already short-circuit on `feedback.degraded`) and fires the
+        // page-level retry banner for the user.
+        feedback.confidence_level = 'Low'
+        feedback.degraded = true
+        feedback.red_flags = Array.isArray(feedback.red_flags) ? feedback.red_flags : []
+        if (!feedback.red_flags.some((f) => typeof f === 'string' && f.includes('approximate'))) {
+          feedback.red_flags.push('AI feedback response was incomplete — some dimension scores are approximate.')
+        }
         feedback.top_3_improvements = feedback.top_3_improvements || ['Practice more structured answers']
       }
 
@@ -916,7 +941,16 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       // Persist feedback to session document server-side so it survives page
       // reloads without relying on the client PATCH call (which can fail due
       // to Zod validation mismatches or network issues).
-      if (body.sessionId) {
+      //
+      // Degraded-guard (2026-04-24 inner-fallback extension): when the
+      // inner fallback at route.ts:685 fires because Claude's JSON was
+      // incomplete, `feedback.degraded` is set. Matching the outer-catch
+      // contract (PR #311 fb69ef6 — "Stop persisting degraded feedback
+      // fallback to Mongo"), we skip the write here too. The cache-
+      // bypass branch at :331 still protects LEGACY sessions that were
+      // persisted before this fix, but NEW degraded runs never land in
+      // Mongo — retries just see a cache miss and re-invoke the LLM.
+      if (body.sessionId && !feedback.degraded) {
         try {
           await InterviewSession.findByIdAndUpdate(body.sessionId, {
             feedback,
@@ -950,7 +984,29 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       // [pathwayPlan, practiceStats]"), which was impossible before
       // because the per-call warns had no sessionId and couldn't be
       // correlated across a session.
-      if (body.sessionId) {
+      //
+      // Degraded-guard (Codex P1 on #317): the side-effects in this
+      // block are NON-IDEMPOTENT across retries. `advanceUniversalPlan`
+      // increments `sessionsCompleted` on every invocation
+      // (pathwayPlanner.ts:541); `updateCompetencyState` appends to
+      // `scoreHistory` per session (competencyService.ts:90);
+      // `updateMasteryBatch` bumps streak counters;
+      // `updateWeaknessClusters` appends cluster observations; the
+      // feedback-dependent trio (`updatePracticeStats`,
+      // `generateSessionSummary`, `generatePathwayPlan`) also write or
+      // LLM-call on the fabricated dimensions. Since the degraded path
+      // no longer persists feedback (see :936), the user's retry hits a
+      // cache miss and re-invokes this whole block — firing every
+      // non-idempotent write a SECOND time for the same interview.
+      // Skip the whole block on degraded; retries get exactly one
+      // successful run of side effects. Matches the outer-catch
+      // contract (PR #311 fb69ef6), which bypasses this block entirely
+      // by throwing before reaching it.
+      //
+      // `trackUsage` (billing, :946) and `recordScoreDelta` (G.1
+      // telemetry, :908) are intentionally OUTSIDE this guard — both
+      // need to fire on every attempt including degraded ones.
+      if (body.sessionId && !feedback.degraded) {
         const sessionId = body.sessionId
         const typedEvaluations = evaluations as unknown as AnswerEvaluation[]
 

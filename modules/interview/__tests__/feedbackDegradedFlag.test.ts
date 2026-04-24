@@ -45,9 +45,27 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextRequest } from 'next/server'
 
-const { mockCompletion, mockIsFeatureEnabled } = vi.hoisted(() => ({
+const {
+  mockCompletion, mockIsFeatureEnabled,
+  mockGenerateSessionSummary, mockGeneratePathwayPlan, mockUpdatePracticeStats,
+  mockUpdateCompetencyState, mockUpdateMasteryBatch, mockAdvanceUniversalPlan,
+} = vi.hoisted(() => ({
   mockCompletion: vi.fn(),
   mockIsFeatureEnabled: vi.fn(),
+  // Hoisted so the inner-fallback side-effect-gating tests can assert
+  // these are NOT called when feedback.degraded is true. The full set
+  // (feedback-dependent + non-idempotent feedback-independent) is
+  // covered because Codex P1 on PR #317 flagged that advanceUniversalPlan
+  // (`pathwayPlanner.ts:541` — increments sessionsCompleted),
+  // updateMasteryBatch (streak counters), and updateCompetencyState
+  // (`competencyService.ts:90` — appends to scoreHistory) would
+  // otherwise double-fire across a degraded → retry sequence.
+  mockGenerateSessionSummary: vi.fn().mockResolvedValue(undefined),
+  mockGeneratePathwayPlan: vi.fn().mockResolvedValue(undefined),
+  mockUpdatePracticeStats: vi.fn().mockResolvedValue(undefined),
+  mockUpdateCompetencyState: vi.fn().mockResolvedValue(undefined),
+  mockUpdateMasteryBatch: vi.fn().mockResolvedValue([]),
+  mockAdvanceUniversalPlan: vi.fn().mockResolvedValue(null),
 }))
 
 vi.mock('@shared/middleware/composeApiRoute', () => ({
@@ -121,16 +139,31 @@ vi.mock('@interview/services/core/skillLoader', () => ({ getSkillSections: vi.fn
 vi.mock('@interview/config/companyProfiles', () => ({ findCompanyProfile: () => null }))
 vi.mock('@interview/services/eval/evaluationEngine', () => ({ evaluateSession: vi.fn().mockResolvedValue({}) }))
 vi.mock('@learn/services/competencyService', () => ({
-  updateCompetencyState: vi.fn().mockResolvedValue(undefined),
+  updateCompetencyState: mockUpdateCompetencyState,
   updateWeaknessClusters: vi.fn().mockResolvedValue(undefined),
   getUserCompetencySummary: vi.fn().mockResolvedValue(null),
 }))
+vi.mock('@learn/services/masteryTracker', () => ({
+  updateMasteryBatch: mockUpdateMasteryBatch,
+}))
+vi.mock('@learn/services/pathwayBadgeWiring', () => ({
+  registerPathwayBadgeWiring: vi.fn(),
+}))
 vi.mock('@learn/services/sessionSummaryService', () => ({
-  generateSessionSummary: vi.fn().mockResolvedValue(undefined),
+  generateSessionSummary: mockGenerateSessionSummary,
   buildHistorySummary: vi.fn().mockResolvedValue(null),
 }))
 vi.mock('@learn/services/pathwayPlanner', () => ({
-  generatePathwayPlan: vi.fn().mockResolvedValue(undefined),
+  generatePathwayPlan: mockGeneratePathwayPlan,
+  // Hoisted to assert the degraded path does NOT call this.
+  // `advanceUniversalPlan` is non-idempotent (pathwayPlanner.ts:541
+  // increments `sessionsCompleted`), so if the degraded → retry
+  // sequence fires it twice, the same interview is counted twice.
+  advanceUniversalPlan: mockAdvanceUniversalPlan,
+}))
+vi.mock('@learn/services/practiceStatsService', () => ({
+  updatePracticeStats: mockUpdatePracticeStats,
+  deriveStrongWeakDimensions: () => ({ strongDimensions: [], weakDimensions: [] }),
 }))
 
 import { POST } from '@/app/api/generate-feedback/route'
@@ -190,6 +223,12 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
     mockSessionFindOne.mockReset()
     mockFindByIdAndUpdate.mockReset()
     mockFindByIdAndUpdate.mockResolvedValue(undefined)
+    mockGenerateSessionSummary.mockClear()
+    mockGeneratePathwayPlan.mockClear()
+    mockUpdatePracticeStats.mockClear()
+    mockUpdateCompetencyState.mockClear()
+    mockUpdateMasteryBatch.mockClear()
+    mockAdvanceUniversalPlan.mockClear()
     // Default: no persisted feedback → preflight cache is a miss,
     // route proceeds to LLM call.
     mockSessionFindOne.mockResolvedValue(null)
@@ -506,6 +545,135 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
     expect(json.overall_score).toBe(60)
   })
 
+  // ── Inner-fallback contract — partial Claude JSON (audit 2026-04-24) ──
+  //
+  // Distinct from the outer-catch (Claude threw an exception) tested above.
+  // Here Claude returns a 200 response, JSON is parseable, but required
+  // fields (`overall_score` or `dimensions`) are missing — the common
+  // max_tokens-truncation shape. The inner fallback at route.ts:685-708
+  // used to silently patch missing fields with literal constants
+  // (composure_under_pressure: 65, energy_consistency: 0.7), set
+  // confidence_level='Medium', and NOT set the degraded flag — so every
+  // downstream reader (dashboard last-score tile, history pass-badge,
+  // peer-comparison $avg, GDPR export) rendered the fabricated numbers
+  // as real feedback.
+  //
+  // Contract: when the parsed response is missing `overall_score` or
+  // `dimensions`, the response MUST carry `degraded: true` +
+  // `confidence_level: 'Low'` + a red_flag mentioning "approximate", so
+  // UI gates the banner the same way it does for outer-catch failures.
+
+  it('sets degraded=true on inner fallback when Claude returns missing overall_score', async () => {
+    mockCompletion.mockResolvedValueOnce({
+      // Simulates a truncated Claude response — JSON parses, Zod passthrough
+      // validates, but the keystone field is absent.
+      text: JSON.stringify({
+        pass_probability: 'Medium',
+        top_3_improvements: ['A', 'B', 'C'],
+      }),
+      model: 't', provider: 't', inputTokens: 1000, outputTokens: 500, usedFallback: false, truncated: false,
+    })
+
+    const res = await POST(makeReq({
+      evals: evals(5),
+      plannedQuestionCount: 6,
+      answeredCount: 5,
+      endReason: 'normal',
+    }))
+    const json = await res.json()
+
+    expect(json.degraded).toBe(true)
+    expect(json.confidence_level).toBe('Low')
+    expect(Array.isArray(json.red_flags)).toBe(true)
+    expect(json.red_flags.some((f: string) => f.includes('approximate'))).toBe(true)
+
+    // Blast-radius gate contract (widened after Codex P1 on #317):
+    // when the inner fallback fires, NONE of the side effects in the
+    // `:968` block may run. The full set includes the feedback-
+    // dependent trio (persist, practiceStats, sessionSummary,
+    // pathwayPlan) AND the non-idempotent feedback-INDEPENDENT writes
+    // (competency, mastery, universal-plan), because the latter would
+    // double-fire across the degraded → retry sequence and corrupt
+    // user progression (advanceUniversalPlan increments sessionsCompleted
+    // on every call; updateCompetencyState appends to scoreHistory per
+    // session; updateMasteryBatch bumps streak counters).
+    const persistCalls = mockFindByIdAndUpdate.mock.calls.filter(([, update]) => {
+      return update && typeof update === 'object' && 'feedback' in update
+    })
+    expect(persistCalls).toHaveLength(0)
+    expect(mockUpdatePracticeStats).not.toHaveBeenCalled()
+    expect(mockGenerateSessionSummary).not.toHaveBeenCalled()
+    expect(mockGeneratePathwayPlan).not.toHaveBeenCalled()
+    expect(mockUpdateCompetencyState).not.toHaveBeenCalled()
+    expect(mockUpdateMasteryBatch).not.toHaveBeenCalled()
+    expect(mockAdvanceUniversalPlan).not.toHaveBeenCalled()
+  })
+
+  it('sets degraded=true on inner fallback when Claude returns missing dimensions', async () => {
+    mockCompletion.mockResolvedValueOnce({
+      // Another truncation shape — overall_score present but the whole
+      // `dimensions` block was cut off.
+      text: JSON.stringify({
+        overall_score: 72,
+        pass_probability: 'Medium',
+      }),
+      model: 't', provider: 't', inputTokens: 1000, outputTokens: 500, usedFallback: false, truncated: false,
+    })
+
+    const res = await POST(makeReq({
+      evals: evals(5),
+      plannedQuestionCount: 6,
+      answeredCount: 5,
+      endReason: 'normal',
+    }))
+    const json = await res.json()
+
+    expect(json.degraded).toBe(true)
+    expect(json.confidence_level).toBe('Low')
+    expect(json.red_flags.some((f: string) => f.includes('approximate'))).toBe(true)
+    // The fabricated dimensions are still present (the user still sees a
+    // full-shaped report), but the flags above tell the UI to gate it.
+    expect(json.dimensions).toBeDefined()
+    expect(json.dimensions.engagement_signals).toBeDefined()
+
+    // Same widened gate contract as the missing-overall_score test:
+    // case 2 also ships literal-fabricated engagement_signals
+    // (composure_under_pressure: 65, energy_consistency: 0.7,
+    // confidence_trend: 'stable') — skip every non-idempotent side
+    // effect until retry.
+    expect(mockUpdatePracticeStats).not.toHaveBeenCalled()
+    expect(mockGenerateSessionSummary).not.toHaveBeenCalled()
+    expect(mockGeneratePathwayPlan).not.toHaveBeenCalled()
+    expect(mockUpdateCompetencyState).not.toHaveBeenCalled()
+    expect(mockUpdateMasteryBatch).not.toHaveBeenCalled()
+    expect(mockAdvanceUniversalPlan).not.toHaveBeenCalled()
+  })
+
+  it('does NOT duplicate the approximate red_flag when Claude already included one', async () => {
+    // Defensive: if Claude's partial output already contained a red_flag
+    // matching /approximate/, we must not push a second one — the red_flag
+    // list appears verbatim in the UI.
+    mockCompletion.mockResolvedValueOnce({
+      text: JSON.stringify({
+        // overall_score missing — inner fallback fires
+        pass_probability: 'Medium',
+        red_flags: ['AI feedback response was incomplete — some dimension scores are approximate.'],
+      }),
+      model: 't', provider: 't', inputTokens: 1000, outputTokens: 500, usedFallback: false, truncated: false,
+    })
+
+    const res = await POST(makeReq({
+      evals: evals(5),
+      plannedQuestionCount: 6,
+      answeredCount: 5,
+      endReason: 'normal',
+    }))
+    const json = await res.json()
+
+    const approximateFlags = json.red_flags.filter((f: string) => f.includes('approximate'))
+    expect(approximateFlags).toHaveLength(1)
+  })
+
   it('does NOT set degraded on a normal successful Claude response', async () => {
     // The happy path. Flag must only appear on actual failures.
     // Regression guard — if someone accidentally sets degraded=true
@@ -528,5 +696,78 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
     expect(json.top_3_improvements).not.toContain(
       'Use the STAR framework explicitly for every behavioral question',
     )
+
+    // Positive regression guard on the widened gating contract: on a
+    // healthy response, EVERY side effect in the :968 block MUST fire.
+    // Catches an over-broad gate (e.g. `if (feedback.overall_score == null)`
+    // instead of `if (!feedback.degraded)`) that would silently stop
+    // XP writes / session summaries / pathway plans / competency updates
+    // / mastery streaks / universal-plan session counting for every
+    // real user.
+    const persistCalls = mockFindByIdAndUpdate.mock.calls.filter(([, update]) => {
+      return update && typeof update === 'object' && 'feedback' in update
+    })
+    expect(persistCalls.length).toBeGreaterThan(0)
+    expect(mockUpdatePracticeStats).toHaveBeenCalled()
+    expect(mockGenerateSessionSummary).toHaveBeenCalled()
+    expect(mockGeneratePathwayPlan).toHaveBeenCalled()
+    expect(mockUpdateCompetencyState).toHaveBeenCalled()
+    expect(mockUpdateMasteryBatch).toHaveBeenCalled()
+    expect(mockAdvanceUniversalPlan).toHaveBeenCalled()
+  })
+
+  // ── Codex P2 on #317 — server owns the `degraded` flag ──
+  //
+  // `FeedbackLlmSchema` uses `.passthrough()`, so a hallucinated or
+  // prompt-injected `"degraded": true` in Claude's raw JSON would
+  // otherwise survive into `feedback` and trip the `!feedback.degraded`
+  // gates in the route — suppressing side effects on an otherwise-healthy
+  // response AND forcing a regeneration via the cache-bypass at :331.
+  // The fix strips any incoming `degraded` field after parse; only the
+  // server's fallback paths (inner-fallback :710, outer-catch :1220)
+  // set it legitimately.
+
+  it('strips Claude-injected `degraded: true` from healthy JSON', async () => {
+    mockCompletion.mockResolvedValueOnce({
+      text: JSON.stringify({
+        overall_score: 80,
+        pass_probability: 'High',
+        confidence_level: 'High',
+        dimensions: {
+          answer_quality: { score: 80, strengths: ['clarity'], weaknesses: [] },
+          communication: { score: 72, wpm: 140, filler_rate: 0.04, pause_score: 70, rambling_index: 0.2 },
+          engagement_signals: { score: 80, engagement_score: 78, confidence_trend: 'stable', energy_consistency: 0.7, composure_under_pressure: 75 },
+        },
+        red_flags: [],
+        top_3_improvements: ['A', 'B', 'C'],
+        // Hostile payload — could be a hallucination, a jailbreak from a
+        // user-supplied JD or resume, or a future Claude fine-tune quirk.
+        degraded: true,
+      }),
+      model: 't', provider: 't', inputTokens: 1000, outputTokens: 500, usedFallback: false, truncated: false,
+    })
+
+    const res = await POST(makeReq({
+      evals: evals(5),
+      plannedQuestionCount: 6,
+      answeredCount: 5,
+      endReason: 'normal',
+    }))
+    const json = await res.json()
+
+    // Server stripped the injected flag → response is NOT marked degraded.
+    expect(json.degraded).toBeUndefined()
+    // Every side effect fires normally. If the strip wasn't there, all
+    // of these would be suppressed by the `!feedback.degraded` gates.
+    const persistCalls = mockFindByIdAndUpdate.mock.calls.filter(([, update]) => {
+      return update && typeof update === 'object' && 'feedback' in update
+    })
+    expect(persistCalls.length).toBeGreaterThan(0)
+    expect(mockUpdatePracticeStats).toHaveBeenCalled()
+    expect(mockGenerateSessionSummary).toHaveBeenCalled()
+    expect(mockGeneratePathwayPlan).toHaveBeenCalled()
+    expect(mockUpdateCompetencyState).toHaveBeenCalled()
+    expect(mockUpdateMasteryBatch).toHaveBeenCalled()
+    expect(mockAdvanceUniversalPlan).toHaveBeenCalled()
   })
 })

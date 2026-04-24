@@ -132,15 +132,32 @@ function makeBody(overrides: Record<string, unknown> = {}) {
 
 function happyCompletion() {
   return {
+    // Previously this fixture emitted `answer_quality`/`communication_skills`/
+    // `confidence_level` at the top level with no `dimensions` wrapper,
+    // which accidentally tripped the inner fallback at route.ts:685
+    // (`!feedback.dimensions`). That was tolerable when the inner fallback
+    // fired silently, but once PR #317 made the inner fallback mark
+    // `degraded: true` and skip non-idempotent side effects, this fixture
+    // stopped actually testing the happy path — it was testing that
+    // `masteryTracking` + `advanceUniversalPlan` fire on a DEGRADED
+    // response (which they no longer do, intentionally).
+    //
+    // Corrected shape: wrap dimensions properly so the route takes the
+    // fully-healthy path and side-effects fire because the response is
+    // legitimate, not because the gate failed to trigger.
     text: JSON.stringify({
       overall_score: 72,
-      answer_quality: {
-        score: 71,
-        strengths: ['Good structure'],
-        weaknesses: ['Could be more specific'],
+      pass_probability: 'Medium',
+      confidence_level: 'High',
+      dimensions: {
+        answer_quality: {
+          score: 71,
+          strengths: ['Good structure'],
+          weaknesses: ['Could be more specific'],
+        },
+        communication: { score: 70, wpm: 140, filler_rate: 0.04, pause_score: 70, rambling_index: 0.2 },
+        engagement_signals: { score: 72, engagement_score: 70, confidence_trend: 'stable', energy_consistency: 0.7, composure_under_pressure: 70 },
       },
-      communication_skills: { score: 70, strengths: [], weaknesses: [] },
-      confidence_level: { score: 68, strengths: [], weaknesses: [] },
       red_flags: [],
       top_3_improvements: ['Be more specific', 'Add metrics', 'Use STAR'],
       detailed_feedback: 'Good job.',
