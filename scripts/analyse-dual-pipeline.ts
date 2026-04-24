@@ -33,12 +33,14 @@ import type { FusionSummary, TimelineEvent } from '../shared/types/multimodal'
 
 interface SessionComparison {
   sessionId: string
-  bodyLanguageDelta: number
-  eyeContactDelta: number
-  enhancedBodyLanguage: number
-  baselineBodyLanguage: number
-  enhancedEyeContact: number
-  baselineEyeContact: number
+  // null when either variant had no facial data — the delta is undefined
+  // in that case, callers (analysis aggregation, printed report) skip.
+  bodyLanguageDelta: number | null
+  eyeContactDelta: number | null
+  enhancedBodyLanguage: number | null
+  baselineBodyLanguage: number | null
+  enhancedEyeContact: number | null
+  baselineEyeContact: number | null
   topTipOverlap: number  // count of tips shared between top 3 of each variant
   enhancedOnlyEvents: string[]
   baselineOnlyEvents: string[]
@@ -75,12 +77,18 @@ function compareSessions(
   enhancedTimeline: TimelineEvent[],
   baselineTimeline: TimelineEvent[]
 ): Omit<SessionComparison, 'sessionId'> {
-  const bodyLanguageDelta = Math.abs(
-    enhanced.overallBodyLanguageScore - baseline.overallBodyLanguageScore
-  )
-  const eyeContactDelta = Math.abs(
-    enhanced.eyeContactScore - baseline.eyeContactScore
-  )
+  // Post-PR #318: scores may be null when either variant had no valid
+  // facial data. A null on either side makes the delta meaningless —
+  // report null, not 0 (which would bias the aggregated median toward
+  // "agreement" on sessions that had no data to agree on).
+  const bodyLanguageDelta =
+    enhanced.overallBodyLanguageScore != null && baseline.overallBodyLanguageScore != null
+      ? Math.abs(enhanced.overallBodyLanguageScore - baseline.overallBodyLanguageScore)
+      : null
+  const eyeContactDelta =
+    enhanced.eyeContactScore != null && baseline.eyeContactScore != null
+      ? Math.abs(enhanced.eyeContactScore - baseline.eyeContactScore)
+      : null
 
   // Rank correlation of top-3 coaching tips — count how many enhanced top
   // tips also appear in baseline top tips (order-insensitive proxy).
@@ -161,16 +169,27 @@ async function main() {
     }
   })
 
-  // Dimension deltas
-  const bodyDeltas = comparisons.map((c) => c.bodyLanguageDelta)
-  const eyeDeltas = comparisons.map((c) => c.eyeContactDelta)
-  const meanBody = bodyDeltas.reduce((a, b) => a + b, 0) / bodyDeltas.length
-  const meanEye = eyeDeltas.reduce((a, b) => a + b, 0) / eyeDeltas.length
+  // Dimension deltas — skip sessions where either variant had null (no
+  // facial data). Including them as 0 would bias the median toward
+  // "agreement" on sessions where neither side had data to compare.
+  const bodyDeltas = comparisons
+    .map((c) => c.bodyLanguageDelta)
+    .filter((d): d is number => d !== null)
+  const eyeDeltas = comparisons
+    .map((c) => c.eyeContactDelta)
+    .filter((d): d is number => d !== null)
+  const meanBody = bodyDeltas.length > 0 ? bodyDeltas.reduce((a, b) => a + b, 0) / bodyDeltas.length : NaN
+  const meanEye = eyeDeltas.length > 0 ? eyeDeltas.reduce((a, b) => a + b, 0) / eyeDeltas.length : NaN
+  const skipped = comparisons.length - bodyDeltas.length
 
   console.log('Dimension-wise score deltas (|enhanced − baseline|)')
   console.log('----------------------------------------------------')
-  console.log(`Body language: mean=${meanBody.toFixed(2)} median=${median(bodyDeltas).toFixed(2)} max=${Math.max(...bodyDeltas).toFixed(2)}`)
-  console.log(`Eye contact:   mean=${meanEye.toFixed(2)} median=${median(eyeDeltas).toFixed(2)} max=${Math.max(...eyeDeltas).toFixed(2)}\n`)
+  if (skipped > 0) {
+    console.log(`(${skipped}/${comparisons.length} sessions skipped — null scores on one or both variants)`)
+  }
+  const fmt = (n: number) => (Number.isFinite(n) ? n.toFixed(2) : 'n/a')
+  console.log(`Body language: mean=${fmt(meanBody)} median=${fmt(median(bodyDeltas))} max=${bodyDeltas.length ? Math.max(...bodyDeltas).toFixed(2) : 'n/a'}`)
+  console.log(`Eye contact:   mean=${fmt(meanEye)} median=${fmt(median(eyeDeltas))} max=${eyeDeltas.length ? Math.max(...eyeDeltas).toFixed(2) : 'n/a'}\n`)
 
   // Top-tip overlap
   const overlaps = comparisons.map((c) => c.topTipOverlap)
@@ -193,9 +212,11 @@ async function main() {
   console.log('Per-session detail (first 5)')
   console.log('----------------------------')
   for (const c of comparisons.slice(0, 5)) {
+    const fmtScore = (v: number | null) => (v == null ? 'null' : String(v))
+    const fmtDelta = (v: number | null) => (v == null ? 'n/a' : v.toFixed(1))
     console.log(`${c.sessionId}:`)
-    console.log(`  body=${c.baselineBodyLanguage}→${c.enhancedBodyLanguage} (Δ${c.bodyLanguageDelta.toFixed(1)})`)
-    console.log(`  eye =${c.baselineEyeContact}→${c.enhancedEyeContact} (Δ${c.eyeContactDelta.toFixed(1)})`)
+    console.log(`  body=${fmtScore(c.baselineBodyLanguage)}→${fmtScore(c.enhancedBodyLanguage)} (Δ${fmtDelta(c.bodyLanguageDelta)})`)
+    console.log(`  eye =${fmtScore(c.baselineEyeContact)}→${fmtScore(c.enhancedEyeContact)} (Δ${fmtDelta(c.eyeContactDelta)})`)
     console.log(`  top-tip overlap: ${c.topTipOverlap}/3`)
     console.log(`  enhanced-only events: ${c.enhancedOnlyEvents.slice(0, 3).join(', ') || '(none)'}`)
   }

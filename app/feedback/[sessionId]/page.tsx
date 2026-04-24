@@ -1321,11 +1321,19 @@ function FeedbackPageInner() {
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                         <div className="surface-card-bordered p-4 text-center">
                           <p className="text-caption text-[#71767b]">Eye Contact</p>
-                          <p className="text-heading">{analysis.fusionSummary.eyeContactScore}<span className="text-sm text-[#71767b]">/100</span></p>
+                          {analysis.fusionSummary.eyeContactScore == null ? (
+                            <p className="text-heading text-[#71767b]">N/A<span className="sr-only"> — no facial data captured</span></p>
+                          ) : (
+                            <p className="text-heading">{analysis.fusionSummary.eyeContactScore}<span className="text-sm text-[#71767b]">/100</span></p>
+                          )}
                         </div>
                         <div className="surface-card-bordered p-4 text-center">
                           <p className="text-caption text-[#71767b]">Body Language</p>
-                          <p className="text-heading">{analysis.fusionSummary.overallBodyLanguageScore}<span className="text-sm text-[#71767b]">/100</span></p>
+                          {analysis.fusionSummary.overallBodyLanguageScore == null ? (
+                            <p className="text-heading text-[#71767b]">N/A<span className="sr-only"> — no facial data captured</span></p>
+                          ) : (
+                            <p className="text-heading">{analysis.fusionSummary.overallBodyLanguageScore}<span className="text-sm text-[#71767b]">/100</span></p>
+                          )}
                         </div>
                         <div className="surface-card-bordered p-4 text-center">
                           <p className="text-caption text-[#71767b]">Timeline Events</p>
