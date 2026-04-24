@@ -1192,7 +1192,16 @@ describe('useDeepgramRecognition', () => {
     })
   })
 
-  it('warmUp sends KeepAlive pings every 5s while idle', async () => {
+  it('warmUp sends silent-PCM KeepAlive pings every 3s while idle', async () => {
+    // Production session 69eb6689c6cbd204bd2b8266 (2026-04-24) logged two
+    // Deepgram 1011 idle-closes reasoning "did not receive audio data or
+    // a text message within the timeout window" DESPITE the previous
+    // `{"type":"KeepAlive"}` JSON heartbeats firing every 5s. The JSON
+    // text frame is ambiguous: Deepgram's idle timer may count only
+    // audio-bearing data, or may have a shorter-than-documented timeout.
+    // We now send a silent 10ms PCM frame (160 Int16 samples = 320 byte
+    // ArrayBuffer of zeros) every 3s — unambiguously audio, 4× safety
+    // margin against a 12s window, 2.7× against a more pessimistic 8s.
     const { result } = renderHook(() => useDeepgramRecognition())
 
     act(() => { result.current.warmUp() })
@@ -1202,19 +1211,26 @@ describe('useDeepgramRecognition', () => {
     // No pings yet
     expect(mockWsInstance!.send).not.toHaveBeenCalled()
 
-    // t=5s → first KeepAlive
-    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
-    expect(mockWsInstance!.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: 'KeepAlive' }),
-    )
+    // t=3s → first KeepAlive. Assert it's a 320-byte ArrayBuffer of
+    // zeros — the SILENT_PCM_KEEPALIVE constant.
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+    expect(mockWsInstance!.send).toHaveBeenCalledTimes(1)
+    const firstPing = mockWsInstance!.send.mock.calls[0][0] as ArrayBuffer
+    expect(firstPing).toBeInstanceOf(ArrayBuffer)
+    expect(firstPing.byteLength).toBe(320)
+    // All samples must be zero (silent).
+    const view = new Int16Array(firstPing)
+    for (let i = 0; i < view.length; i++) {
+      expect(view[i]).toBe(0)
+    }
 
-    // t=10s → second KeepAlive
-    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+    // t=6s → second KeepAlive
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
     expect(mockWsInstance!.send).toHaveBeenCalledTimes(2)
 
-    // t=15s → third KeepAlive. The warm socket survives past Deepgram's
-    // documented ~10s idle timeout, which is the whole point of this fix.
-    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+    // t=9s → third KeepAlive. The warm socket survives past Deepgram's
+    // documented ~12s idle timeout, which is the whole point of this fix.
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
     expect(mockWsInstance!.send).toHaveBeenCalledTimes(3)
   })
 

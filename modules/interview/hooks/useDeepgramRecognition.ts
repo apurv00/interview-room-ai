@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { track } from '@shared/analytics/track'
 import { wallClockMsToAudioSeconds } from '@interview/audio/recordingClock'
+import { PcmRingBuffer } from './pcmRingBuffer'
 import type {
   SpeechRecognitionResult,
   LiveTranscriptWord,
@@ -154,6 +155,32 @@ export interface UseDeepgramRecognitionReturn {
  *  reads the tag from ITS OWN `ws` closure variable — the instances
  *  never share the tag. Codex P2 on PR #293. */
 type TaggedWebSocket = WebSocket & { __finishTrigger?: FinishTrigger | null }
+
+/** Silent 10ms PCM frame (160 samples × Int16 = 320 bytes @ 16 kHz), used
+ *  as the KeepAlive heartbeat against Deepgram's idle-close timer.
+ *
+ *  We previously sent `{"type":"KeepAlive"}` as a text frame every 5s, but
+ *  production session 69eb6689c6cbd204bd2b8266 (2026-04-24) logged two
+ *  Deepgram 1011 closes with reason "did not receive audio data or a text
+ *  message within the timeout window" during `warmUp` context — despite
+ *  the 5s pings. The JSON keepalive is ambiguous: Deepgram's idle timer
+ *  may count only audio-bearing frames, or may have a timeout shorter
+ *  than the 12s documented via support, or both. A silent PCM frame is
+ *  unambiguously "audio data", matches the wire format Deepgram already
+ *  processes for live speech, and sidesteps the ambiguity entirely.
+ *
+ *  Kept as a module-level shared buffer so all sockets in the hook share
+ *  the same zero-copy bytes — JavaScript ArrayBuffer is reusable across
+ *  ws.send() calls. */
+const SILENT_PCM_KEEPALIVE: ArrayBuffer = new Int16Array(160).buffer
+
+/** KeepAlive interval shortened from 5s → 3s. The previous value relied
+ *  on Deepgram's 12s idle threshold being documented-accurate, but prod
+ *  logs showed 1011 closes fire earlier than expected. 3s gives 4× safety
+ *  margin against a 12s window and 2.7× against a more pessimistic 8s
+ *  window. Applied to both the warmUp and connectWebSocket KeepAlive
+ *  intervals. */
+const KEEPALIVE_INTERVAL_MS = 3000
 
 /** Classification of the candidate's utterance as of the most recent
  *  UtteranceEnd. Drives how long we wait before finalizing the answer.
@@ -309,9 +336,17 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
    *  sockets after ~10s of no traffic. During a long intro TTS (12s+)
    *  the warm socket would die server-side while the client still saw
    *  readyState=OPEN, producing phase=LISTENING with zero transcripts.
-   *  We send {"type":"KeepAlive"} every 5s from onopen until audio
+   *  We send silent PCM frames every 3s from onopen until audio
    *  actually starts flowing (which keeps the socket alive on its own). */
   const keepAliveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  /** Pre-open PCM ring buffer. Holds Int16 audio frames produced by the
+   *  AudioWorklet while the Deepgram WS is in CONNECTING state (warmUp
+   *  slow path: worklet starts BEFORE ws.onopen fires so Q1 speech isn't
+   *  lost to the warmUp→wsOpen gap observed at 5.8s on 2026-04-24). On
+   *  ws.onopen we flush the buffer into the open socket, then worklet
+   *  frames send directly. Overflow (>10s buffered = hung connection)
+   *  drops oldest frames — see PcmRingBuffer for rationale. */
+  const pcmBufferRef = useRef<PcmRingBuffer>(new PcmRingBuffer())
   /** True when document.visibilityState === 'hidden'. Browsers throttle
    *  setTimeout/setInterval and may suspend AudioContext when the tab is
    *  backgrounded — Deepgram receives silence, fires UtteranceEnd, and the
@@ -440,6 +475,10 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       isFinishingRef.current = false
       startTimeRef.current = Date.now()
       setLiveTranscript('')
+      // Reset the PCM pre-open buffer so frames from any prior listening
+      // session can't leak into the new ws. clear() also zeros the
+      // overflow-dropped counter so per-session telemetry is clean.
+      pcmBufferRef.current.clear()
 
       // Fresh listening session — drop any stale interrupt-accumulator
       // fragments so a prior almost-interrupt doesn't combine with this
@@ -497,30 +536,47 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
         return
       }
 
-      // If warmUp is in progress, wait for it then start capture
+      // If warmUp is in progress, start audio capture IMMEDIATELY against
+      // the still-CONNECTING socket. The worklet buffers into pcmBufferRef
+      // via worklet.port.onmessage's CONNECTING branch; on ws.onopen,
+      // flushPendingPcm drains the buffer into the now-open socket. This
+      // is the fix for Q1 audio loss (prod session 69eb6689c6cbd204bd2b8266,
+      // 5.8s warmUp→wsOpen window): previously the worklet wouldn't start
+      // until AFTER warmUp resolved, so any speech during the gap was
+      // silently discarded by the mic pipeline never instantiating.
       if (warmUpPromiseRef.current) {
+        if (wsRef.current) {
+          setIsListening(true)
+          startAudioCapture(wsRef.current)
+        }
         warmUpPromiseRef.current
           .then(() => {
             if (wsRef.current?.readyState === WebSocket.OPEN) {
-              setIsListening(true)
-              // Same rationale as the fast path: do NOT clear KeepAlive
-              // here. Deepgram idle-closes /v1/listen after ~12s of no
-              // data (confirmed via Deepgram support 2026-04-18, close
-              // code 1011 + NET-0001). ScriptProcessorNode throttling
-              // under main-thread pressure can stall audio long enough
-              // to trigger the idle close. Let the 5s KeepAlive started
-              // by warmUp continue throughout listening — it's ignored
-              // by Deepgram when audio flows normally, and saves the
-              // connection when audio stalls.
+              // KeepAlive note: Deepgram idle-closes /v1/listen after
+              // ~12s of no data (confirmed support 2026-04-18, close
+              // code 1011 + NET-0001). Previously we relied on the
+              // warmUp KeepAlive + the transition from idle to audio
+              // frames; now KeepAlive is silent PCM and the audio
+              // frames begin flushing from the pre-open buffer inside
+              // ws.onopen (see flushPendingPcm at line ~808). Together
+              // these cover both the idle-window and the
+              // CONNECTING→OPEN handoff.
               attachMessageHandler(wsRef.current)
-              startAudioCapture(wsRef.current)
               isWarmedUpRef.current = false
+              // startAudioCapture was already called above in parallel
+              // with warmUp, so the worklet is running and its output
+              // is either already flushed (onopen drained the buffer)
+              // or now routing live via the OPEN branch of onmessage.
+              // No second startAudioCapture call needed here.
             } else {
               // Warm-up WebSocket failed, fall back to full connection.
               // warmUp's onclose/onerror handlers already clear
               // keepAliveTimerRef when the socket dies, so no extra
               // cleanup is needed on this branch — the timer is already
-              // cleared by the time we reach here.
+              // cleared by the time we reach here. Any PCM frames
+              // accumulated in pcmBufferRef during the failed warmUp
+              // will drain when connectFresh's new ws reaches OPEN and
+              // its ws.onopen calls flushPendingPcm.
               connectFresh()
             }
           })
@@ -576,6 +632,18 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
         return new Promise<void>((resolve) => {
           const wsUrl = 'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&filler_words=true&utterance_end_ms=2500&interim_results=true&language=en&encoding=linear16&sample_rate=16000'
           const ws = new WebSocket(wsUrl, ['token', token])
+          // Publish the CONNECTING socket to wsRef eagerly (was previously
+          // deferred to ws.onopen at the bottom of this block). Rationale:
+          // `startListening` now launches the AudioWorklet IN PARALLEL with
+          // warmUp, and the worklet's onmessage reads wsRef.current to
+          // decide whether to send directly or enqueue into pcmBufferRef.
+          // Without this early assignment, worklet frames produced during
+          // the CONNECTING window would have no ws reference and would be
+          // silently discarded — precisely the Q1 audio loss that this
+          // whole PR is fixing. The existing Codex P2 race guard on PR
+          // #307 (identity check in ws.onclose) still holds because
+          // onclose bails when wsRef.current has moved on to a newer ws.
+          wsRef.current = ws
 
           // Per-socket KeepAlive timer handle. See connectWebSocket for
           // the full rationale — Codex P1 #2 on PR #291 pointed out the
@@ -604,20 +672,42 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             // [DIAGNOSTIC] Paired with warmUp→wsOpen timer above.
             // eslint-disable-next-line no-console
             console.timeEnd('[perf:stt] warmUp→wsOpen')
-            wsRef.current = ws
+            // wsRef.current was already set at socket creation time above
+            // so the worklet could enqueue into pcmBufferRef during the
+            // CONNECTING window. Nothing to re-assign here.
             isWarmedUpRef.current = true
             warmUpPromiseRef.current = null
-            // Keep the idle socket alive. Deepgram closes /v1/listen after
-            // ~12s of no inbound data (confirmed via support 2026-04-18);
-            // intro TTS runs 12s+ so without this ping the warm socket
-            // dies before startListening can use it.
+            // Keep the idle socket alive. Previous implementation sent
+            // `{"type":"KeepAlive"}` as text every 5s; prod session
+            // 69eb6689c6cbd204bd2b8266 showed Deepgram still fired 1011
+            // idle-close reasoning "did not receive audio data or a text
+            // message" despite those pings. Silent PCM (10ms × 16 kHz =
+            // 160 samples of zeros, 320 bytes) is unambiguously
+            // audio-bearing data; 3s cadence gives 4× safety on a 12s
+            // window. See SILENT_PCM_KEEPALIVE / KEEPALIVE_INTERVAL_MS.
             if (keepAliveTimerRef.current) clearInterval(keepAliveTimerRef.current)
             myKeepAliveTimer = setInterval(() => {
               if (ws.readyState === WebSocket.OPEN) {
-                try { ws.send(JSON.stringify({ type: 'KeepAlive' })) } catch { /* ignore */ }
+                try { ws.send(SILENT_PCM_KEEPALIVE) } catch { /* ignore */ }
               }
-            }, 5000)
+            }, KEEPALIVE_INTERVAL_MS)
             keepAliveTimerRef.current = myKeepAliveTimer
+            // Attach the Deepgram message handler BEFORE flushing pre-open
+            // PCM. If startListening fired while ws was CONNECTING, worklet
+            // frames are queued in pcmBufferRef; the flush below sends them
+            // and Deepgram responds with `Results`/`UtteranceEnd` packets
+            // almost immediately. Those must arrive at an attached
+            // onmessage handler or they vanish. Slow-path .then in
+            // startListening also calls attachMessageHandler as a redundant
+            // safety — the reattach is idempotent (it just reassigns the
+            // onmessage property to the same handler closure).
+            attachMessageHandler(ws)
+            // Drain any PCM frames that accumulated while ws was still
+            // CONNECTING. If startListening fired before ws.onopen, the
+            // worklet has been buffering; send those first so Deepgram
+            // sees contiguous audio beginning at the user's speech onset,
+            // not starting mid-utterance at the moment the socket opened.
+            flushPendingPcm(ws)
             resolve()
           }
           ws.onerror = () => {
@@ -757,6 +847,35 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   /** Attach the Deepgram message handler to a WebSocket.
    *  Called from both connectWebSocket (cold path) and the fast warmUp path.
    *  Without this, the warmed-up WS has no onmessage → transcripts are never received. */
+  /** Drain the pre-open PCM buffer into the now-open WebSocket. Called from
+   *  both ws.onopen handlers (warmUp and connectWebSocket) — whichever path
+   *  reaches OPEN state first flushes whatever was queued during the gap.
+   *
+   *  Delivered frames increment `audioFrameCountRef` so the diagnostic
+   *  packet log's `framesSentAtRx` snapshot remains accurate. If Deepgram
+   *  rejects a buffered frame (e.g. ws closed mid-flush), we swallow the
+   *  error and continue — the remaining frames are also sent best-effort,
+   *  because partial delivery is still better than outright discarding
+   *  the user's speech. */
+  function flushPendingPcm(ws: WebSocket): void {
+    if (ws.readyState !== WebSocket.OPEN) return
+    const frames = pcmBufferRef.current.drain()
+    if (frames.length === 0) return
+    for (const frame of frames) {
+      try {
+        ws.send(frame)
+        audioFrameCountRef.current++
+      } catch {
+        /* ignore — partial flush is still better than dropping everything */
+      }
+    }
+    const dropped = pcmBufferRef.current.droppedCount()
+    // eslint-disable-next-line no-console
+    console.info(
+      `[perf:stt] pcm_flushed frames=${frames.length} dropped_overflow=${dropped}`,
+    )
+  }
+
   function attachMessageHandler(ws: WebSocket) {
     ws.onmessage = (event) => {
       try {
@@ -968,11 +1087,18 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       if (keepAliveTimerRef.current) clearInterval(keepAliveTimerRef.current)
       myKeepAliveTimer = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
-          try { ws.send(JSON.stringify({ type: 'KeepAlive' })) } catch { /* ignore */ }
+          try { ws.send(SILENT_PCM_KEEPALIVE) } catch { /* ignore */ }
         }
-      }, 5000)
+      }, KEEPALIVE_INTERVAL_MS)
       keepAliveTimerRef.current = myKeepAliveTimer
       startAudioCapture(ws)
+      // Flush any PCM that buffered if the worklet was set up before
+      // this cold-connect completed. In normal cold-connect flow the
+      // worklet is created by startAudioCapture above so there's nothing
+      // queued, but in edge cases (warmUp failed → connectFresh retry
+      // after worklet already running) we must drain the buffer to
+      // preserve the user's in-flight speech.
+      flushPendingPcm(ws)
     }
 
     attachMessageHandler(ws)
@@ -1216,14 +1342,32 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     processorRef.current = worklet
 
     worklet.port.onmessage = (e) => {
-      if (ws.readyState !== WebSocket.OPEN) return
+      // Follow the active ws via wsRef.current rather than the closure-
+      // captured `ws` above: on a reconnect the worklet should switch
+      // targets instead of keep sending to a dead socket. Worklet is
+      // torn down in finishRecognition so cross-session leakage is still
+      // impossible.
+      const activeWs = wsRef.current
       // e.data is the transferred ArrayBuffer — 4096 Int16 samples =
       // 8192 bytes. Same wire format Deepgram saw under ScriptProcessor.
-      ws.send(e.data)
-      // Diagnostic: count every frame we send. Snapshotted into
-      // packetLogRef on each inbound Deepgram message so we can detect
-      // a potential double-send by looking for an unexpected 2× frame
-      // delta between consecutive packets.
+      const frame = e.data as ArrayBuffer
+      if (!activeWs || activeWs.readyState === WebSocket.CLOSING || activeWs.readyState === WebSocket.CLOSED) {
+        // Nothing we can do — the socket is gone. Drop.
+        return
+      }
+      if (activeWs.readyState === WebSocket.CONNECTING) {
+        // Worklet launched in parallel with warmUp (slow path in
+        // startListening) — buffer until ws.onopen fires flushPendingPcm.
+        // Q1 audio loss (prod session 69eb6689c6cbd204bd2b8266, 5.8s
+        // warmUp→wsOpen) was this frame being silently discarded.
+        pcmBufferRef.current.enqueue(frame)
+        return
+      }
+      // OPEN — normal hot path. Diagnostic: count every frame we send.
+      // Snapshotted into packetLogRef on each inbound Deepgram message
+      // so we can detect a potential double-send by looking for an
+      // unexpected 2× frame delta between consecutive packets.
+      activeWs.send(frame)
       audioFrameCountRef.current++
     }
 
