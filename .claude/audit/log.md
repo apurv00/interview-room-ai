@@ -1265,3 +1265,10 @@
 - **Root-cause:** when Claude returns a 200 with parseable JSON but missing
 - **Tests-added: modules/interview/__tests__/feedbackDegradedFlag.test.ts**
 - **Verified-by:** 14/14 feedbackDegradedFlag + 40/40 generateFeedback* tests pass,
+
+### 2026-04-24 10:34:28 +0000 · `c97fd67` · Claude
+- **Subject:** fix(feedback): skip persist + feedback-dependent side-effects on degraded
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** prior commit (f706260) added the `degraded` flag on the
+- **Tests-added: modules/interview/__tests__/feedbackDegradedFlag.test.ts**
+- **Verified-by:** 14/14 feedbackDegradedFlag + 6/6 feedbackMasteryAdvance
