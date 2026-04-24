@@ -1223,3 +1223,38 @@
 - **Root-cause:** shared/db/mongoClient.ts (raw driver used by NextAuth via
 - **Tests-added: shared/__tests__/mongoConfig.test.ts**
 - **Verified-by:** unit tests (shared/__tests__/mongoConfig.test.ts and
+
+### 2026-04-24 06:32:36 +0000 · `f5f1d56` · Claude
+- **Subject:** fix(analysis): normalise Replay timeline against session t0
+- **Files:** 4 changed, 2 test file(s)
+- **Root-cause:** multimodalPipeline.ts:94-96 mapped interviewer-turn
+- **Tests-added: modules/interview/__tests__/multimodalPipelineNormalisation.test.ts**
+- **Verified-by:** unit tests (27/27 on target files); full interview suite
+
+### 2026-04-24 06:49:26 +0000 · `ce6a4f8` · Claude
+- **Subject:** fix(analysis): dedupe question boundaries by questionIndex
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** multimodalPipeline.ts:110-113 (post-PR#316-commit-1) treated
+- **Tests-added: modules/interview/__tests__/multimodalPipelineNormalisation.test.ts**
+- **Verified-by:** unit tests (29/29 on target files — up from 27/27 pre-fix,
+
+### 2026-04-24 07:02:24 +0000 · `e460eba` · Claude
+- **Subject:** fix(analysis): remove evaluations-length cap on qIdx-deduped boundaries
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** multimodalPipeline.ts:143 capped the deduped byQIdx list
+- **Tests-added: modules/interview/__tests__/multimodalPipelineNormalisation.test.ts**
+- **Verified-by:** unit tests (30/30 on target files — previously 29/29; one
+
+### 2026-04-24 07:26:40 +0000 · `5fd3bcf` · Claude
+- **Subject:** fix(analysis): compute sessionT0 as min of startedAt and earliest transcript ts
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** session.startedAt is persisted via an async Mongoose write on
+- **Tests-added: modules/interview/__tests__/multimodalPipelineNormalisation.test.ts**
+- **Verified-by:** 20/20 multimodalPipelineNormalisation tests pass,
+
+### 2026-04-24 07:41:42 +0000 · `3d628c1` · Claude
+- **Subject:** fix(analysis): anchor sessionT0 to earliest transcript, not startedAt
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** session.startedAt is written at session CREATE time
+- **Tests-added: modules/interview/__tests__/multimodalPipelineNormalisation.test.ts**
+- **Verified-by:** 20/20 normalisation + 15/15 analysisJob tests pass,

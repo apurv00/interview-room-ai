@@ -50,6 +50,7 @@ import { runAnalysisJobHandler, analysisJob } from '@interview/jobs/analysisJob'
 
 const fakeSession = {
   sessionId: 'sess-1',
+  sessionT0: 0,
   recordingR2Key: 'rec.webm',
   audioRecordingR2Key: 'audio.webm',
   facialLandmarksR2Key: 'facial.json',
@@ -157,7 +158,8 @@ describe('analysisJob', () => {
         'facial.json',
         'audio.webm',
         undefined,
-        [{ speaker: 'candidate', text: 'hello', timestamp: 0 }]
+        [{ speaker: 'candidate', text: 'hello', timestamp: 0 }],
+        0, // sessionT0 — passed through from stepFetchSession output
       )
     })
 
