@@ -59,7 +59,14 @@ function parseArgs() {
 }
 
 function median(values: number[]): number {
-  if (values.length === 0) return 0
+  // Return NaN (not 0) on empty input — Codex P2 on PR #318. After
+  // null-skipping in the delta arrays, `values` can be genuinely empty
+  // (e.g., every session was privacy-mode with no facial data). The old
+  // `return 0` printed "median=0.00" and misled experiment conclusions
+  // into thinking measured agreement existed where data was missing.
+  // NaN routes through the printed `fmt` helper to "n/a", matching how
+  // mean handles the same case.
+  if (values.length === 0) return NaN
   const sorted = [...values].sort((a, b) => a - b)
   const mid = Math.floor(sorted.length / 2)
   return sorted.length % 2 === 0
