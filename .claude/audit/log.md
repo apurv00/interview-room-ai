@@ -1349,3 +1349,10 @@
 - **Root-cause:** two more races Codex flagged on the round-2 commit, both
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
 - **Verified-by:** npx vitest run modules/interview → 1592/1592 pass
+
+### 2026-04-24 18:24:00 +0000 · `7d78fd7` · Claude
+- **Subject:** fix(feedback): surface side-effect outcomes + fold persist into tracking
+- **Files:** 8 changed, 5 test file(s)
+- **Root-cause:** two real gaps in the generate-feedback pipeline surfaced
+- **Tests-added:**
+- **Verified-by:** npx vitest run modules/interview/__tests__/generateFeedback
