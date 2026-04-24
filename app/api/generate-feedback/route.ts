@@ -640,6 +640,16 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
           )
         }
         feedback = parsedRaw as unknown as FeedbackData
+        // Server owns the `degraded` flag. The LLM schema uses
+        // `.passthrough()`, so a hallucinated or prompt-injected
+        // `"degraded": true` in Claude's JSON would otherwise survive
+        // into this object and trip the `!feedback.degraded` gates
+        // below (suppressing persist + side effects on an otherwise
+        // healthy response) and the cache-bypass at :331 (forcing a
+        // regeneration). Strip any incoming value here; only the
+        // server's inner-fallback (route.ts:710) and outer-catch
+        // (route.ts:1220) paths set it legitimately. Codex P2 on #317.
+        delete (feedback as { degraded?: unknown }).degraded
       } catch {
         aiLogger.error({ raw: raw.slice(0, 500) }, 'Feedback JSON parse failed')
         // G.1 telemetry — parse failure path. Capture whatever we know so we
@@ -974,7 +984,29 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       // [pathwayPlan, practiceStats]"), which was impossible before
       // because the per-call warns had no sessionId and couldn't be
       // correlated across a session.
-      if (body.sessionId) {
+      //
+      // Degraded-guard (Codex P1 on #317): the side-effects in this
+      // block are NON-IDEMPOTENT across retries. `advanceUniversalPlan`
+      // increments `sessionsCompleted` on every invocation
+      // (pathwayPlanner.ts:541); `updateCompetencyState` appends to
+      // `scoreHistory` per session (competencyService.ts:90);
+      // `updateMasteryBatch` bumps streak counters;
+      // `updateWeaknessClusters` appends cluster observations; the
+      // feedback-dependent trio (`updatePracticeStats`,
+      // `generateSessionSummary`, `generatePathwayPlan`) also write or
+      // LLM-call on the fabricated dimensions. Since the degraded path
+      // no longer persists feedback (see :936), the user's retry hits a
+      // cache miss and re-invokes this whole block — firing every
+      // non-idempotent write a SECOND time for the same interview.
+      // Skip the whole block on degraded; retries get exactly one
+      // successful run of side effects. Matches the outer-catch
+      // contract (PR #311 fb69ef6), which bypasses this block entirely
+      // by throwing before reaching it.
+      //
+      // `trackUsage` (billing, :946) and `recordScoreDelta` (G.1
+      // telemetry, :908) are intentionally OUTSIDE this guard — both
+      // need to fire on every attempt including degraded ones.
+      if (body.sessionId && !feedback.degraded) {
         const sessionId = body.sessionId
         const typedEvaluations = evaluations as unknown as AnswerEvaluation[]
 
@@ -1004,14 +1036,7 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         // unconditional. The legacy /api/learn/stats endpoint
         // permanently no-ops in the same chunk so dual-write
         // double-counting can't happen.
-        // Degraded-guard: skip XP write when the inner fallback fabricated
-        // the dimensions. overall_score itself is either Claude-real or
-        // preQ.average (deterministic) — defensible in isolation — but
-        // pairing it with a degraded banner on the feedback page while
-        // silently crediting XP confuses the "why is my XP higher than
-        // my displayed score?" UX. The user's retry will re-run this
-        // write on a healthy response.
-        if (typeof feedback.overall_score === 'number' && !feedback.degraded) {
+        if (typeof feedback.overall_score === 'number') {
           const { strongDimensions, weakDimensions } = deriveStrongWeakDimensions(
             evaluations as unknown as Array<Record<string, unknown>>,
           )
@@ -1041,31 +1066,23 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
           'Competency state update failed',
         )
 
-        // Degraded-guard: generateSessionSummary makes its own LLM call
-        // with the whole `feedback` object as prompt context. Under the
-        // inner fallback, feedback.dimensions.engagement_signals is
-        // literal-constant-fabricated (confidence_trend: 'stable',
-        // composure_under_pressure: 65). Passing those to the summary
-        // LLM produces narrative that describes fake stability. Skip
-        // the call; retry re-generates on a healthy response.
-        if (!feedback.degraded) {
-          fireAndTrack(
-            'sessionSummary',
-            generateSessionSummary({
-              userId: user.id,
-              sessionId,
-              domain: config.role,
-              interviewType,
-              experience: config.experience,
-              evaluations: typedEvaluations,
-              speechMetrics,
-              feedback,
-              transcript,
-              durationMinutes: config.duration,
-            }),
-            'Session summary generation failed',
-          )
-        }
+        // Generate session summary
+        fireAndTrack(
+          'sessionSummary',
+          generateSessionSummary({
+            userId: user.id,
+            sessionId,
+            domain: config.role,
+            interviewType,
+            experience: config.experience,
+            evaluations: typedEvaluations,
+            speechMetrics,
+            feedback,
+            transcript,
+            durationMinutes: config.duration,
+          }),
+          'Session summary generation failed',
+        )
 
         // Update weakness clusters from flags
         const weaknessInputs = typedEvaluations
@@ -1094,39 +1111,26 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         // count reflects "pathway ready" as one unit — a failed
         // evaluateSession still flows through as a single rejection
         // attributed to `pathwayPlan`.
-        //
-        // Degraded-guard: pathwayPlanner uses `feedback` heavily —
-        // `overall_score` for readiness + difficulty calibration +
-        // interview-type auto-advancement (pathwayPlanner.ts:276-279),
-        // `dimensions.communication.filler_rate` for practice task
-        // selection, `top_3_improvements` + `pass_probability` in the
-        // AI-plan LLM prompt. Even though overall_score itself is
-        // synthesized from the deterministic formula in the inner
-        // fallback (not fabricated), the combination of "show user a
-        // degraded banner" and "also quietly generate a full multi-
-        // task learning plan" is the wrong UX. Wait for the retry.
-        if (!feedback.degraded) {
-          fireAndTrack(
-            'pathwayPlan',
-            evaluateSession({
+        fireAndTrack(
+          'pathwayPlan',
+          evaluateSession({
+            domain: config.role,
+            interviewType,
+            seniorityBand: config.experience,
+            evaluations: typedEvaluations,
+          }).then(sessionEval =>
+            generatePathwayPlan({
+              userId: user.id,
+              sessionId,
               domain: config.role,
               interviewType,
-              seniorityBand: config.experience,
-              evaluations: typedEvaluations,
-            }).then(sessionEval =>
-              generatePathwayPlan({
-                userId: user.id,
-                sessionId,
-                domain: config.role,
-                interviewType,
-                experience: config.experience,
-                feedback,
-                sessionEvaluation: sessionEval,
-              }),
-            ),
-            'Pathway plan (via session evaluation) failed',
-          )
-        }
+              experience: config.experience,
+              feedback,
+              sessionEvaluation: sessionEval,
+            }),
+          ),
+          'Pathway plan (via session evaluation) failed',
+        )
 
         // Mastery tracking: compute per-dimension averages from evaluations
         // and update the consecutive-at-target streak for each competency.
