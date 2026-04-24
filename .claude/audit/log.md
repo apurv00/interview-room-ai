@@ -1279,3 +1279,10 @@
 - **Root-cause:** two defects in PR #317's inner-fallback degraded gating.
 - **Tests-added: modules/interview/__tests__/feedbackDegradedFlag.test.ts**
 - **Verified-by:** 21/21 feedbackDegradedFlag + feedbackMasteryAdvance pass,
+
+### 2026-04-24 11:41:39 +0000 · `683f33b` · Claude
+- **Subject:** fix(analysis): null fusion scores on no-facial-data + sanitize [0,100]
+- **Files:** 6 changed, 1 test file(s)
+- **Root-cause:** two silent-garbage modes in the fusion pipeline.
+- **Tests-added: modules/interview/__tests__/fusionScoreBounds.test.ts (11 tests)**
+- **Verified-by:** 11/11 fusionScoreBounds + 35/35 multimodalPipelineNormalisation
