@@ -506,6 +506,102 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
     expect(json.overall_score).toBe(60)
   })
 
+  // ── Inner-fallback contract — partial Claude JSON (audit 2026-04-24) ──
+  //
+  // Distinct from the outer-catch (Claude threw an exception) tested above.
+  // Here Claude returns a 200 response, JSON is parseable, but required
+  // fields (`overall_score` or `dimensions`) are missing — the common
+  // max_tokens-truncation shape. The inner fallback at route.ts:685-708
+  // used to silently patch missing fields with literal constants
+  // (composure_under_pressure: 65, energy_consistency: 0.7), set
+  // confidence_level='Medium', and NOT set the degraded flag — so every
+  // downstream reader (dashboard last-score tile, history pass-badge,
+  // peer-comparison $avg, GDPR export) rendered the fabricated numbers
+  // as real feedback.
+  //
+  // Contract: when the parsed response is missing `overall_score` or
+  // `dimensions`, the response MUST carry `degraded: true` +
+  // `confidence_level: 'Low'` + a red_flag mentioning "approximate", so
+  // UI gates the banner the same way it does for outer-catch failures.
+
+  it('sets degraded=true on inner fallback when Claude returns missing overall_score', async () => {
+    mockCompletion.mockResolvedValueOnce({
+      // Simulates a truncated Claude response — JSON parses, Zod passthrough
+      // validates, but the keystone field is absent.
+      text: JSON.stringify({
+        pass_probability: 'Medium',
+        top_3_improvements: ['A', 'B', 'C'],
+      }),
+      model: 't', provider: 't', inputTokens: 1000, outputTokens: 500, usedFallback: false, truncated: false,
+    })
+
+    const res = await POST(makeReq({
+      evals: evals(5),
+      plannedQuestionCount: 6,
+      answeredCount: 5,
+      endReason: 'normal',
+    }))
+    const json = await res.json()
+
+    expect(json.degraded).toBe(true)
+    expect(json.confidence_level).toBe('Low')
+    expect(Array.isArray(json.red_flags)).toBe(true)
+    expect(json.red_flags.some((f: string) => f.includes('approximate'))).toBe(true)
+  })
+
+  it('sets degraded=true on inner fallback when Claude returns missing dimensions', async () => {
+    mockCompletion.mockResolvedValueOnce({
+      // Another truncation shape — overall_score present but the whole
+      // `dimensions` block was cut off.
+      text: JSON.stringify({
+        overall_score: 72,
+        pass_probability: 'Medium',
+      }),
+      model: 't', provider: 't', inputTokens: 1000, outputTokens: 500, usedFallback: false, truncated: false,
+    })
+
+    const res = await POST(makeReq({
+      evals: evals(5),
+      plannedQuestionCount: 6,
+      answeredCount: 5,
+      endReason: 'normal',
+    }))
+    const json = await res.json()
+
+    expect(json.degraded).toBe(true)
+    expect(json.confidence_level).toBe('Low')
+    expect(json.red_flags.some((f: string) => f.includes('approximate'))).toBe(true)
+    // The fabricated dimensions are still present (the user still sees a
+    // full-shaped report), but the flags above tell the UI to gate it.
+    expect(json.dimensions).toBeDefined()
+    expect(json.dimensions.engagement_signals).toBeDefined()
+  })
+
+  it('does NOT duplicate the approximate red_flag when Claude already included one', async () => {
+    // Defensive: if Claude's partial output already contained a red_flag
+    // matching /approximate/, we must not push a second one — the red_flag
+    // list appears verbatim in the UI.
+    mockCompletion.mockResolvedValueOnce({
+      text: JSON.stringify({
+        // overall_score missing — inner fallback fires
+        pass_probability: 'Medium',
+        red_flags: ['AI feedback response was incomplete — some dimension scores are approximate.'],
+      }),
+      model: 't', provider: 't', inputTokens: 1000, outputTokens: 500, usedFallback: false, truncated: false,
+    })
+
+    const res = await POST(makeReq({
+      evals: evals(5),
+      plannedQuestionCount: 6,
+      answeredCount: 5,
+      endReason: 'normal',
+    }))
+    const json = await res.json()
+
+    const approximateFlags = json.red_flags.filter((f: string) => f.includes('approximate'))
+    expect(approximateFlags).toHaveLength(1)
+  })
+
   it('does NOT set degraded on a normal successful Claude response', async () => {
     // The happy path. Flag must only appear on actual failures.
     // Regression guard — if someone accidentally sets degraded=true

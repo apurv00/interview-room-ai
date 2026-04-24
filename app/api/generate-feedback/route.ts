@@ -695,8 +695,23 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
           engagement_signals: { score: Math.round(feedback.overall_score * 0.9), engagement_score: Math.round(feedback.overall_score * 0.85), confidence_trend: 'stable' as const, energy_consistency: 0.7, composure_under_pressure: 65 },
         }
         feedback.pass_probability = feedback.pass_probability || (feedback.overall_score >= 70 ? 'High' : feedback.overall_score >= 50 ? 'Medium' : 'Low')
-        feedback.confidence_level = feedback.confidence_level || 'Medium'
-        feedback.red_flags = feedback.red_flags || []
+        // Fabricated-dimensions contract — match the outer-catch path at
+        // :1201 (PR #311 `3e425cc`). Before this fix the inner fallback
+        // shipped literal constants (composure_under_pressure: 65,
+        // energy_consistency: 0.7) and multiplier-derived engagement
+        // scores with confidence_level='Medium' and no `degraded` flag,
+        // so downstream readers (dashboard last-score tile, history
+        // pass-badge, peer-comparison $avg) couldn't distinguish it from
+        // real feedback. Forcing the same Low-confidence + degraded
+        // invariant the outer-catch uses gates those readers (they
+        // already short-circuit on `feedback.degraded`) and fires the
+        // page-level retry banner for the user.
+        feedback.confidence_level = 'Low'
+        feedback.degraded = true
+        feedback.red_flags = Array.isArray(feedback.red_flags) ? feedback.red_flags : []
+        if (!feedback.red_flags.some((f) => typeof f === 'string' && f.includes('approximate'))) {
+          feedback.red_flags.push('AI feedback response was incomplete — some dimension scores are approximate.')
+        }
         feedback.top_3_improvements = feedback.top_3_improvements || ['Practice more structured answers']
       }
 
