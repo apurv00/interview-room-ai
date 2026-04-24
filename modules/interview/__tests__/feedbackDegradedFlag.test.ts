@@ -219,7 +219,12 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
   beforeEach(() => {
     mockCompletion.mockReset()
     mockIsFeatureEnabled.mockReset()
-    mockIsFeatureEnabled.mockImplementation(() => false)
+    // PR #321: `pathway_planner` is preflighted now. Returning true
+    // for that flag keeps the pathway side-effect scheduled so it
+    // participates in the findByIdAndUpdate invariants this suite
+    // checks (persist is now in the sideEffects[] tracking array).
+    // Non-preflighted flags are irrelevant to these tests.
+    mockIsFeatureEnabled.mockImplementation((flag: string) => flag === 'pathway_planner')
     mockSessionFindOne.mockReset()
     mockFindByIdAndUpdate.mockReset()
     mockFindByIdAndUpdate.mockResolvedValue(undefined)

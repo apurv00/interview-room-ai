@@ -1349,3 +1349,31 @@
 - **Root-cause:** two more races Codex flagged on the round-2 commit, both
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
 - **Verified-by:** npx vitest run modules/interview → 1592/1592 pass
+
+### 2026-04-24 18:24:00 +0000 · `7d78fd7` · Claude
+- **Subject:** fix(feedback): surface side-effect outcomes + fold persist into tracking
+- **Files:** 8 changed, 5 test file(s)
+- **Root-cause:** two real gaps in the generate-feedback pipeline surfaced
+- **Tests-added:**
+- **Verified-by:** npx vitest run modules/interview/__tests__/generateFeedback
+
+### 2026-04-24 18:34:16 +0000 · `3b78670` · Claude
+- **Subject:** fix(feedback): reorder pathway red_flag push before persist (Codex P2)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** the PR #321 initial commit scheduled
+- **Tests-added: new case in**
+- **Verified-by:** npx vitest run
+
+### 2026-04-24 18:42:13 +0000 · `85a678e` · Claude
+- **Subject:** fix(feedback): Codex P1 + P2 round-2 on PR #321 — Mongoose Query + red_flags normalize
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** two additional defects Codex caught after the round-1
+- **Tests-added: two new regression cases in**
+- **Verified-by:** npx vitest run
+
+### 2026-04-24 18:49:49 +0000 · `fe46538` · Claude
+- **Subject:** fix(feedback): Codex P1 round-3 on PR #321 — await persist before response
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** the round-2 fix folded persist into fireAndTrack's fire-
+- **Tests-added: new reproducer in**
+- **Verified-by:** npx vitest run

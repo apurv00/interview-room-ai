@@ -304,6 +304,34 @@ export interface FeedbackData {
     description: string
     practiceQuestions: string[]
   }>
+  /**
+   * Side-effect scheduling outcomes captured synchronously at response
+   * time. Each entry is one of the fire-and-forget post-feedback writes
+   * (practiceStats, competency, sessionSummary, weaknessClusters,
+   * pathwayPlan, masteryTracking, universalPlanAdvance, persist).
+   *
+   * `status` resolves to:
+   *   - 'scheduled': the side-effect was kicked off. Runtime failures
+   *     land in the `post-feedback side effects settled` aggregate log
+   *     + per-call `aiLogger.warn`. The response can't be updated
+   *     retroactively so these don't re-surface here — use the log
+   *     dashboard. Failure does NOT block the response.
+   *   - 'skipped': the side-effect was short-circuited at response-
+   *     build time. Typically means a feature flag is off (e.g.
+   *     `FEATURE_FLAG_PATHWAY_PLANNER=false`) or a precondition is
+   *     unmet (e.g. `overall_score` is non-numeric for practiceStats).
+   *     The UI / pathway page can surface a targeted message instead
+   *     of the generic "complete an interview to generate a plan"
+   *     that confused users in prod session
+   *     69eb6689c6cbd204bd2b8266.
+   *
+   * Optional for backwards compat; sessions persisted before this
+   * field existed have `sideEffectOutcomes === undefined`.
+   */
+  sideEffectOutcomes?: Array<{
+    name: string
+    status: 'scheduled' | 'skipped'
+  }>
 }
 
 // ─── Stored interview data ────────────────────────────────────────────────────

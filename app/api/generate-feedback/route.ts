@@ -888,6 +888,22 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       // reloads without relying on the client PATCH call (which can fail due
       // to Zod validation mismatches or network issues).
       //
+      // Side-effect scheduling outcomes — captured synchronously at
+      // response-build time so the client can surface targeted
+      // messaging for skipped-by-feature-flag paths (PR #321). Async
+      // runtime failures of 'scheduled' items are caught by the
+      // aggregate log below + per-call warns; the response can't be
+      // updated retroactively for those. 'skipped' covers the
+      // deterministic-at-response-time short-circuits (feature flag
+      // off, precondition unmet) — exactly the failure mode behind
+      // the empty-pathway user complaint in prod session
+      // 69eb6689c6cbd204bd2b8266, which the aggregate log alone
+      // couldn't surface because `generatePathwayPlan` returns null
+      // synchronously on a flag-off check and that's not a rejection.
+      const sideEffectOutcomes: Array<{ name: string; status: 'scheduled' | 'skipped' }> = []
+      const markScheduled = (name: string) => sideEffectOutcomes.push({ name, status: 'scheduled' })
+      const markSkipped = (name: string) => sideEffectOutcomes.push({ name, status: 'skipped' })
+
       // Degraded-guard (2026-04-24 inner-fallback extension): when the
       // inner fallback at route.ts:685 fires because Claude's JSON was
       // incomplete, `feedback.degraded` is set. Matching the outer-catch
@@ -896,17 +912,11 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       // bypass branch at :331 still protects LEGACY sessions that were
       // persisted before this fix, but NEW degraded runs never land in
       // Mongo — retries just see a cache miss and re-invoke the LLM.
-      if (body.sessionId && !feedback.degraded) {
-        try {
-          await InterviewSession.findByIdAndUpdate(body.sessionId, {
-            feedback,
-            status: 'completed',
-            completedAt: new Date(),
-          })
-        } catch (err) {
-          aiLogger.warn({ err, sessionId: body.sessionId }, 'Failed to persist feedback to session')
-        }
-      }
+      //
+      // PR #321: persist is now folded into the `sideEffects` tracking
+      // array below (was its own inline try/catch). That change lets
+      // the aggregate log line cover persist failures, which previously
+      // could only be found by grepping the per-call `aiLogger.warn`.
 
       trackUsage({
         user,
@@ -963,12 +973,125 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
           errLabel: string,
         ) => {
           sideEffects.push({ name, promise })
+          markScheduled(name)
           // Attach the per-call warn separately so the raw promise
           // retains its rejected state for allSettled below.
           promise.catch((err) =>
             aiLogger.warn({ err, sessionId, userId: user.id, sideEffect: name }, errLabel),
           )
         }
+
+        // Pathway-planner preflight MUST run before persist is
+        // scheduled — the skip-branch mutates `feedback.red_flags`,
+        // and `findByIdAndUpdate` captures the feedback reference at
+        // call time. Mongoose's update query is built synchronously
+        // in the enclosing tick, so a later `.push()` on the array
+        // could land between "fireAndTrack schedules" and "Mongo
+        // serializes to BSON" — non-deterministic, and on reload flows
+        // the DB-persisted feedback would miss the pathway-unavailable
+        // red_flag that the in-tab response contains. Codex P2 on PR
+        // #321. Scheduling order within sideEffects[] is unchanged for
+        // aggregate-log purposes; only the mutation ordering matters.
+        if (isFeatureEnabled('pathway_planner')) {
+          // Chain evaluateSession + generatePathwayPlan into a single
+          // tracked side effect so the aggregate count reflects
+          // "pathway ready" as one unit — a failed evaluateSession
+          // still flows through as a single rejection attributed to
+          // `pathwayPlan`.
+          fireAndTrack(
+            'pathwayPlan',
+            evaluateSession({
+              domain: config.role,
+              interviewType,
+              seniorityBand: config.experience,
+              evaluations: typedEvaluations,
+            }).then(sessionEval =>
+              generatePathwayPlan({
+                userId: user.id,
+                sessionId,
+                domain: config.role,
+                interviewType,
+                experience: config.experience,
+                feedback,
+                sessionEvaluation: sessionEval,
+              }),
+            ),
+            'Pathway plan (via session evaluation) failed',
+          )
+        } else {
+          markSkipped('pathwayPlan')
+          // Normalize red_flags before mutation. FeedbackLlmSchema
+          // (validators/interview.ts:311) declares `red_flags` as
+          // `.optional()` — Claude can legally omit the field on
+          // partial payloads. The handler upstream intentionally
+          // continues on partial/Zod-failing JSON; calling `.includes`
+          // or `.push` on an undefined array would throw, drop to
+          // the outer catch, and return a degraded fallback. Codex P2
+          // on PR #321.
+          if (!Array.isArray(feedback.red_flags)) {
+            feedback.red_flags = []
+          }
+          // Red_flag is bounded by FeedbackDataSchema's max(30) — we
+          // only push when not already present so repeated generations
+          // don't accumulate duplicate copies.
+          const PATHWAY_UNAVAILABLE_FLAG =
+            'Your learning pathway plan is temporarily unavailable. Refresh the pathway page in a minute, or contact support if it stays empty.'
+          if (!feedback.red_flags.includes(PATHWAY_UNAVAILABLE_FLAG)) {
+            feedback.red_flags.push(PATHWAY_UNAVAILABLE_FLAG)
+          }
+        }
+
+        // Persist the feedback to the session document. Folded into
+        // sideEffects[] in PR #321 so the aggregate `post-feedback
+        // side effects settled` log line covers persist failures too
+        // (previously persist had its own inline try/catch that
+        // emitted a warn but left the aggregate blind to it — making
+        // "Claude billed twice on user reload because persist failed"
+        // invisible in telemetry). If Mongo is down this still doesn't
+        // block the response: the promise's rejection is logged and
+        // the client still receives the feedback body for the current
+        // tab; only the reload path pays the second Claude call.
+        //
+        // MUST run after the pathway_planner preflight above so any
+        // red_flag mutation for the flag-off case is captured in the
+        // DB write (Codex P2).
+        // Mongoose `Model.findByIdAndUpdate(...)` returns a *Query*,
+        // not a Promise. Queries are single-execution: each `.then()`
+        // observation triggers a fresh DB round-trip, and subsequent
+        // observations reject with `Query was already executed`.
+        // `fireAndTrack` attaches `.catch(...)` (execution #1) and the
+        // aggregate `Promise.allSettled(sideEffects.map(s => s.promise))`
+        // observes the same thenable again (execution #2), so the
+        // persist would be reported as failed on EVERY successful
+        // production run — while tests would pass because test mocks
+        // return a plain Promise. Wrap in `Promise.resolve().then(...)`
+        // to get a genuine Promise — the inner thenable is awaited once
+        // inside the callback, the outer real Promise is observed
+        // arbitrarily many times safely. Works with both Mongoose
+        // Query (prod) and Promise-returning mocks (tests). Codex P1
+        // on PR #321 round 2.
+        //
+        // Hoisted to a named local so we can `await` it before the
+        // response return — fire-and-forget would let the handler
+        // return 200 before Mongo commits, and the feedback-lock
+        // `finally` would release the Redis lock, and a concurrent
+        // reload-poll from the client would hit /api/interviews/
+        // [sessionId] → find `session.feedback` empty → re-POST
+        // generate-feedback → cache-miss → full Claude call AGAIN.
+        // Double Claude bill + double downstream side-effects. Codex
+        // P1 on PR #321 round 3.
+        const persistPromise = Promise.resolve().then(() =>
+          InterviewSession.findByIdAndUpdate(sessionId, {
+            feedback,
+            status: 'completed',
+            completedAt: new Date(),
+          }),
+        )
+        fireAndTrack(
+          'persist',
+          persistPromise,
+          'Failed to persist feedback to session',
+        )
 
         // G.14: flag-gated practiceStats write. When
         // xp_from_feedback=true, this is the authoritative path —
@@ -998,6 +1121,8 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
             }),
             'G.14 practiceStats write failed',
           )
+        } else {
+          markSkipped('practiceStats')
         }
 
         // Update competency state
@@ -1050,33 +1175,15 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
             }),
             'Weakness cluster update failed',
           )
+        } else {
+          markSkipped('weaknessClusters')
         }
 
-        // Generate session-level evaluation and pathway plan.
-        // Chain both into a single tracked side effect so the aggregate
-        // count reflects "pathway ready" as one unit — a failed
-        // evaluateSession still flows through as a single rejection
-        // attributed to `pathwayPlan`.
-        fireAndTrack(
-          'pathwayPlan',
-          evaluateSession({
-            domain: config.role,
-            interviewType,
-            seniorityBand: config.experience,
-            evaluations: typedEvaluations,
-          }).then(sessionEval =>
-            generatePathwayPlan({
-              userId: user.id,
-              sessionId,
-              domain: config.role,
-              interviewType,
-              experience: config.experience,
-              feedback,
-              sessionEvaluation: sessionEval,
-            }),
-          ),
-          'Pathway plan (via session evaluation) failed',
-        )
+        // (Session-level evaluation + pathway plan side effect is
+        // scheduled above — relocated to run BEFORE the persist call
+        // so the red_flag mutation lands on `feedback` before
+        // Mongoose captures the update object. See the pathway block
+        // above for rationale. Codex P2 on PR #321.)
 
         // Mastery tracking: compute per-dimension averages from evaluations
         // and update the consecutive-at-target streak for each competency.
@@ -1096,6 +1203,8 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
             Promise.resolve().then(() => updateMasteryBatch(user.id, dimScores, config.role)),
             'Mastery tracking batch update failed',
           )
+        } else {
+          markSkipped('masteryTracking')
         }
 
         // Advance universal plan: bump sessionsCompleted, detect phase graduation
@@ -1135,9 +1244,44 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
             'generate-feedback: post-feedback side effects settled',
           )
         })
+
+        // Await persist specifically before returning the response —
+        // the rest of the side-effects stay fire-and-forget (pathwayPlan
+        // in particular makes a Claude call internally and can take
+        // several seconds; blocking the response on it would slow the
+        // feedback page noticeably). Mongo round-trip for persist is
+        // typically ~50-200ms.
+        //
+        // Rationale: if we return before persist commits, the feedback-
+        // lock `finally` releases the Redis lock immediately, and a
+        // concurrent reload-poll from the feedback page hits /api/
+        // interviews/[sessionId] while `session.feedback` is still
+        // empty, times out its poll, re-POSTs generate-feedback,
+        // hits the cache-miss path (line ~241 `findOne({...})` returns
+        // no feedback), acquires the now-available lock, and re-runs
+        // the whole pipeline — full Claude call, duplicate side
+        // effects (practiceStats/competency/pathway are non-idempotent,
+        // so duplicate XP is a real concern). Codex P1 on PR #321
+        // round 3.
+        //
+        // Swallowed catch: the fireAndTrack above already installed
+        // a per-call `.catch(aiLogger.warn)` AND the aggregate log
+        // covers rejections. If persist rejects (Mongo down), we
+        // still return the feedback body to the in-tab caller — that
+        // preserves the current-tab UX — and the reload-then-regenerate
+        // cost is an accepted failure mode for Mongo outage, not a
+        // timing race.
+        await persistPromise.catch(() => { /* tracked above */ })
       }
 
-      return NextResponse.json(feedback)
+      // PR #321: attach side-effect scheduling outcomes to the
+      // response so the feedback UI can distinguish "pathway is
+      // generating, check back in a minute" from "pathway is
+      // unavailable on this deploy" — the latter was the real cause
+      // of empty pathways users saw in prod. Only populated on the
+      // non-degraded success path (degraded / short-form / no-data
+      // paths short-circuit earlier and don't schedule side-effects).
+      return NextResponse.json({ ...feedback, sideEffectOutcomes })
     } catch (err) {
       aiLogger.error({ err }, 'Claude API error in generate-feedback')
 

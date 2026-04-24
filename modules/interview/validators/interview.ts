@@ -111,6 +111,13 @@ const FeedbackDataSchema = z.object({
     description: z.string(),
     practiceQuestions: z.array(z.string()),
   })).optional(),
+  // Side-effect scheduling outcomes — see `FeedbackData.sideEffectOutcomes`
+  // JSDoc in shared/types.ts. Optional for backwards compatibility;
+  // pre-PR-#321 persisted sessions will have this field undefined.
+  sideEffectOutcomes: z.array(z.object({
+    name: z.string().max(64),
+    status: z.enum(['scheduled', 'skipped']),
+  })).max(20).optional(),
 }).passthrough()
 
 const ThreadSummarySchema = z.object({
