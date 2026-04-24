@@ -342,8 +342,20 @@ const TimelineEventSchema = z.object({
 export const FusionLlmSchema = z.object({
   timeline: z.array(TimelineEventSchema),
   fusionSummary: z.object({
-    overallBodyLanguageScore: z.number().optional(),
-    eyeContactScore: z.number().optional(),
+    // 0-100 bounds — the prompt promises them and the UI renders them
+    // as `{score}/100`. Out-of-range values (seen: Claude occasionally
+    // emitted 150+ or negatives during token-truncated responses) used
+    // to survive Zod + Mongo and render as nonsensical "152/100" on
+    // the feedback page. `.nullable()` lets the server null the scores
+    // post-parse when facialSegments has no valid data (was previously
+    // leading to fabricated 65-80 scores from the LLM).
+    //
+    // Schema validation here is non-fatal (route uses `safeParse` and
+    // logs drift), so real enforcement also happens as a runtime
+    // sanitize pass in fusionService after parse — see
+    // `sanitizeFusionScore` there for the authoritative guard.
+    overallBodyLanguageScore: z.number().min(0).max(100).nullable().optional(),
+    eyeContactScore: z.number().min(0).max(100).nullable().optional(),
     confidenceProgression: z.string().max(2000).optional(),
     topMoments: z.union([z.array(z.number()), z.array(TimelineEventSchema)]).optional(),
     improvementMoments: z.union([z.array(z.number()), z.array(TimelineEventSchema)]).optional(),

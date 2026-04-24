@@ -86,8 +86,14 @@ export interface TimelineEvent {
 // ─── Fusion Summary ─────────────────────────────────────────────────────────
 
 export interface FusionSummary {
-  overallBodyLanguageScore: number  // 0–100
-  eyeContactScore: number           // 0–100
+  // 0–100, or null when no valid facial data was captured (privacy-mode
+  // sessions, camera muted mid-interview, MediaPipe produced zero usable
+  // frames). null is the honest "we don't know" — the fusion LLM used
+  // to fabricate plausible 65-80 scores here when the server sent no
+  // facialSignals block. Readers must render "N/A" (or similar) when
+  // null; `app/feedback/[sessionId]/page.tsx:1324,1328` handles both.
+  overallBodyLanguageScore: number | null
+  eyeContactScore: number | null
   confidenceProgression: string     // narrative description
   topMoments: TimelineEvent[]       // best 3 moments
   improvementMoments: TimelineEvent[] // top 3 areas to improve

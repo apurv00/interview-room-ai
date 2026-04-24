@@ -1279,3 +1279,31 @@
 - **Root-cause:** two defects in PR #317's inner-fallback degraded gating.
 - **Tests-added: modules/interview/__tests__/feedbackDegradedFlag.test.ts**
 - **Verified-by:** 21/21 feedbackDegradedFlag + feedbackMasteryAdvance pass,
+
+### 2026-04-24 11:41:39 +0000 · `683f33b` · Claude
+- **Subject:** fix(analysis): null fusion scores on no-facial-data + sanitize [0,100]
+- **Files:** 6 changed, 1 test file(s)
+- **Root-cause:** two silent-garbage modes in the fusion pipeline.
+- **Tests-added: modules/interview/__tests__/fusionScoreBounds.test.ts (11 tests)**
+- **Verified-by:** 11/11 fusionScoreBounds + 35/35 multimodalPipelineNormalisation
+
+### 2026-04-24 11:47:29 +0000 · `fa80983` · Claude
+- **Subject:** fix(analyse-script): median([]) returns NaN so empty-input prints n/a
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** Codex P2 on PR #318. After introducing null-skipping in
+- **No-tests-needed-because: this is a script-only utility (scripts/ is**
+- **Verified-by:** npx tsc --noEmit clean. Manual trace: for empty input,
+
+### 2026-04-24 11:54:54 +0000 · `3062c87` · Claude
+- **Subject:** fix(analyse-script): explicit no-comparable-sessions branch for NaN means
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** Codex P2 (second round) on PR #318. When every session had
+- **No-tests-needed-because: offline analysis script (scripts/ not in vitest**
+- **Verified-by:** npx tsc --noEmit clean.
+
+### 2026-04-24 12:02:04 +0000 · `de9d8b8` · Claude
+- **Subject:** fix(analyse-script): split no-comparable handling by metric availability
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** Codex P2 (third round) on PR #318. My previous guard was
+- **No-tests-needed-because: offline analysis script (scripts/ not in**
+- **Verified-by:** npx tsc --noEmit clean.

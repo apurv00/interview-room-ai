@@ -45,8 +45,33 @@ interface FusionOutput {
   promptLength: number
 }
 
+/**
+ * Runtime guard for the LLM-emitted body-language + eye-contact scores.
+ *
+ * Zod does `safeParse` at the boundary and the route logs drift but
+ * continues with the raw object, so schema-level bounds are advisory,
+ * not enforced. This function is the authoritative sanitize step:
+ * any non-finite, out-of-[0,100], or non-numeric value becomes `null`.
+ * Readers already treat `null` as "N/A" (page.tsx + replay UI).
+ */
+function sanitizeFusionScore(v: unknown): number | null {
+  if (v === null || v === undefined) return null
+  if (typeof v !== 'number' || !Number.isFinite(v)) return null
+  if (v < 0 || v > 100) return null
+  return v
+}
+
 export async function runFusionAnalysis(input: FusionInput): Promise<FusionOutput> {
   const { prosodySegments, facialSegments, evaluations, transcript, config, includeBlendshapes, lowConfidenceWords } = input
+
+  // Defense-in-depth flag: if the server had zero usable facial frames
+  // (privacy-mode session, camera blocked mid-interview, MediaPipe
+  // produced only sentinel segments), we force both fusion scores to
+  // `null` after parse regardless of what Claude returned. The `-1`
+  // sentinel is set by `facialAggregator.ts` when a window has no
+  // frames; filtering it here matches the same filter applied when
+  // building `contextData.facialSignals` below.
+  const hasFacialData = facialSegments.some((f) => f.avgEyeContact !== -1)
 
   // Build the analysis prompt
   const systemPrompt = `You are an expert interview coach analyzing multimodal signals from a recorded mock interview. The candidate was interviewing for a ${config.role} position (${config.experience} years experience, ${config.interviewType || 'screening'} interview).
@@ -70,8 +95,8 @@ ${JSON_OUTPUT_RULE}
     }
   ],
   "fusionSummary": {
-    "overallBodyLanguageScore": number (0-100),
-    "eyeContactScore": number (0-100),
+    "overallBodyLanguageScore": number (0-100) or null,
+    "eyeContactScore": number (0-100) or null,
     "confidenceProgression": "one sentence on how confidence changed",
     "topMoments": [3 indices into timeline array for best moments],
     "improvementMoments": [3 indices into timeline array for worst moments],
@@ -85,7 +110,8 @@ Guidelines:
 - Include both strengths and areas for improvement
 - Tie coaching tips to specific timestamps when possible
 - Score body language based on eye contact, expressions, and head stability
-- Score eye contact based on facial data averages`
+- Score eye contact based on facial data averages
+- If the context data has NO \`facialSignals\` block (privacy mode, camera off, or no valid facial frames), return \`null\` for \`overallBodyLanguageScore\` and \`eyeContactScore\` — do NOT guess. The server also enforces this as a safety net, but emitting \`null\` from the model is the preferred signal.`
 
   const { userPrompt, contextData } = buildUserPromptWithContext(
     prosodySegments,
@@ -169,10 +195,48 @@ Guidelines:
     return items as TimelineEvent[]
   }
 
+  // Sanitize the two scores before anything downstream reads them. Zod
+  // bounds are advisory (safeParse + continue); this runtime pass is
+  // authoritative.
+  const bodyLanguageSanitized = sanitizeFusionScore(raw.fusionSummary.overallBodyLanguageScore)
+  const eyeContactSanitized = sanitizeFusionScore(raw.fusionSummary.eyeContactScore)
+  // No-facial-data override: even if Claude hallucinated a plausible
+  // 65-80 score (the historical failure mode when the prompt asked for
+  // a body-language score but no facialSignals context was attached),
+  // the server knows whether it sent any facial data. If not, force
+  // null — no amount of LLM output can trick us into displaying a
+  // number we have no data to back.
+  const bodyLanguageScore = hasFacialData ? bodyLanguageSanitized : null
+  const eyeContactScore = hasFacialData ? eyeContactSanitized : null
+
+  if (!hasFacialData && (raw.fusionSummary.overallBodyLanguageScore != null || raw.fusionSummary.eyeContactScore != null)) {
+    aiLogger.warn(
+      {
+        emittedBody: raw.fusionSummary.overallBodyLanguageScore,
+        emittedEye: raw.fusionSummary.eyeContactScore,
+      },
+      'fusion-analysis: LLM emitted facial scores despite no facial data in input — forcing null',
+    )
+  }
+  if (hasFacialData && bodyLanguageSanitized !== raw.fusionSummary.overallBodyLanguageScore) {
+    aiLogger.warn(
+      { raw: raw.fusionSummary.overallBodyLanguageScore },
+      'fusion-analysis: overallBodyLanguageScore out of [0,100] range — nulled',
+    )
+  }
+  if (hasFacialData && eyeContactSanitized !== raw.fusionSummary.eyeContactScore) {
+    aiLogger.warn(
+      { raw: raw.fusionSummary.eyeContactScore },
+      'fusion-analysis: eyeContactScore out of [0,100] range — nulled',
+    )
+  }
+
   const parsed = {
     timeline: raw.timeline,
     fusionSummary: {
       ...raw.fusionSummary,
+      overallBodyLanguageScore: bodyLanguageScore,
+      eyeContactScore: eyeContactScore,
       topMoments: resolveEvents(raw.fusionSummary.topMoments),
       improvementMoments: resolveEvents(raw.fusionSummary.improvementMoments),
     },
@@ -183,6 +247,7 @@ Guidelines:
       timelineEvents: parsed.timeline.length,
       bodyLanguageScore: parsed.fusionSummary.overallBodyLanguageScore,
       eyeContactScore: parsed.fusionSummary.eyeContactScore,
+      hasFacialData,
     },
     'Fusion analysis complete'
   )

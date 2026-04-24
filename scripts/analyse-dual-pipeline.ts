@@ -33,12 +33,14 @@ import type { FusionSummary, TimelineEvent } from '../shared/types/multimodal'
 
 interface SessionComparison {
   sessionId: string
-  bodyLanguageDelta: number
-  eyeContactDelta: number
-  enhancedBodyLanguage: number
-  baselineBodyLanguage: number
-  enhancedEyeContact: number
-  baselineEyeContact: number
+  // null when either variant had no facial data — the delta is undefined
+  // in that case, callers (analysis aggregation, printed report) skip.
+  bodyLanguageDelta: number | null
+  eyeContactDelta: number | null
+  enhancedBodyLanguage: number | null
+  baselineBodyLanguage: number | null
+  enhancedEyeContact: number | null
+  baselineEyeContact: number | null
   topTipOverlap: number  // count of tips shared between top 3 of each variant
   enhancedOnlyEvents: string[]
   baselineOnlyEvents: string[]
@@ -57,7 +59,14 @@ function parseArgs() {
 }
 
 function median(values: number[]): number {
-  if (values.length === 0) return 0
+  // Return NaN (not 0) on empty input — Codex P2 on PR #318. After
+  // null-skipping in the delta arrays, `values` can be genuinely empty
+  // (e.g., every session was privacy-mode with no facial data). The old
+  // `return 0` printed "median=0.00" and misled experiment conclusions
+  // into thinking measured agreement existed where data was missing.
+  // NaN routes through the printed `fmt` helper to "n/a", matching how
+  // mean handles the same case.
+  if (values.length === 0) return NaN
   const sorted = [...values].sort((a, b) => a - b)
   const mid = Math.floor(sorted.length / 2)
   return sorted.length % 2 === 0
@@ -75,12 +84,18 @@ function compareSessions(
   enhancedTimeline: TimelineEvent[],
   baselineTimeline: TimelineEvent[]
 ): Omit<SessionComparison, 'sessionId'> {
-  const bodyLanguageDelta = Math.abs(
-    enhanced.overallBodyLanguageScore - baseline.overallBodyLanguageScore
-  )
-  const eyeContactDelta = Math.abs(
-    enhanced.eyeContactScore - baseline.eyeContactScore
-  )
+  // Post-PR #318: scores may be null when either variant had no valid
+  // facial data. A null on either side makes the delta meaningless —
+  // report null, not 0 (which would bias the aggregated median toward
+  // "agreement" on sessions that had no data to agree on).
+  const bodyLanguageDelta =
+    enhanced.overallBodyLanguageScore != null && baseline.overallBodyLanguageScore != null
+      ? Math.abs(enhanced.overallBodyLanguageScore - baseline.overallBodyLanguageScore)
+      : null
+  const eyeContactDelta =
+    enhanced.eyeContactScore != null && baseline.eyeContactScore != null
+      ? Math.abs(enhanced.eyeContactScore - baseline.eyeContactScore)
+      : null
 
   // Rank correlation of top-3 coaching tips — count how many enhanced top
   // tips also appear in baseline top tips (order-insensitive proxy).
@@ -161,16 +176,35 @@ async function main() {
     }
   })
 
-  // Dimension deltas
-  const bodyDeltas = comparisons.map((c) => c.bodyLanguageDelta)
-  const eyeDeltas = comparisons.map((c) => c.eyeContactDelta)
-  const meanBody = bodyDeltas.reduce((a, b) => a + b, 0) / bodyDeltas.length
-  const meanEye = eyeDeltas.reduce((a, b) => a + b, 0) / eyeDeltas.length
+  // Dimension deltas — skip sessions where either variant had null (no
+  // facial data). Including them as 0 would bias the median toward
+  // "agreement" on sessions where neither side had data to compare.
+  const bodyDeltas = comparisons
+    .map((c) => c.bodyLanguageDelta)
+    .filter((d): d is number => d !== null)
+  const eyeDeltas = comparisons
+    .map((c) => c.eyeContactDelta)
+    .filter((d): d is number => d !== null)
+  const meanBody = bodyDeltas.length > 0 ? bodyDeltas.reduce((a, b) => a + b, 0) / bodyDeltas.length : NaN
+  const meanEye = eyeDeltas.length > 0 ? eyeDeltas.reduce((a, b) => a + b, 0) / eyeDeltas.length : NaN
+  // Per-metric skip counts: body and eye deltas are filtered
+  // independently — a session where only one dimension had valid scores
+  // across both variants still contributes to the other metric.
+  // Reporting a single `skipped` value was misleading (Codex P2 on #318,
+  // third round).
+  const bodySkipped = comparisons.length - bodyDeltas.length
+  const eyeSkipped = comparisons.length - eyeDeltas.length
 
   console.log('Dimension-wise score deltas (|enhanced − baseline|)')
   console.log('----------------------------------------------------')
-  console.log(`Body language: mean=${meanBody.toFixed(2)} median=${median(bodyDeltas).toFixed(2)} max=${Math.max(...bodyDeltas).toFixed(2)}`)
-  console.log(`Eye contact:   mean=${meanEye.toFixed(2)} median=${median(eyeDeltas).toFixed(2)} max=${Math.max(...eyeDeltas).toFixed(2)}\n`)
+  if (bodySkipped > 0 || eyeSkipped > 0) {
+    console.log(
+      `(body: ${bodySkipped}/${comparisons.length} skipped, eye: ${eyeSkipped}/${comparisons.length} skipped — null scores on one or both variants)`,
+    )
+  }
+  const fmt = (n: number) => (Number.isFinite(n) ? n.toFixed(2) : 'n/a')
+  console.log(`Body language: mean=${fmt(meanBody)} median=${fmt(median(bodyDeltas))} max=${bodyDeltas.length ? Math.max(...bodyDeltas).toFixed(2) : 'n/a'}`)
+  console.log(`Eye contact:   mean=${fmt(meanEye)} median=${fmt(median(eyeDeltas))} max=${eyeDeltas.length ? Math.max(...eyeDeltas).toFixed(2) : 'n/a'}\n`)
 
   // Top-tip overlap
   const overlaps = comparisons.map((c) => c.topTipOverlap)
@@ -193,17 +227,46 @@ async function main() {
   console.log('Per-session detail (first 5)')
   console.log('----------------------------')
   for (const c of comparisons.slice(0, 5)) {
+    const fmtScore = (v: number | null) => (v == null ? 'null' : String(v))
+    const fmtDelta = (v: number | null) => (v == null ? 'n/a' : v.toFixed(1))
     console.log(`${c.sessionId}:`)
-    console.log(`  body=${c.baselineBodyLanguage}→${c.enhancedBodyLanguage} (Δ${c.bodyLanguageDelta.toFixed(1)})`)
-    console.log(`  eye =${c.baselineEyeContact}→${c.enhancedEyeContact} (Δ${c.eyeContactDelta.toFixed(1)})`)
+    console.log(`  body=${fmtScore(c.baselineBodyLanguage)}→${fmtScore(c.enhancedBodyLanguage)} (Δ${fmtDelta(c.bodyLanguageDelta)})`)
+    console.log(`  eye =${fmtScore(c.baselineEyeContact)}→${fmtScore(c.enhancedEyeContact)} (Δ${fmtDelta(c.eyeContactDelta)})`)
     console.log(`  top-tip overlap: ${c.topTipOverlap}/3`)
     console.log(`  enhanced-only events: ${c.enhancedOnlyEvents.slice(0, 3).join(', ') || '(none)'}`)
   }
 
-  // Null-result warning
+  // Interpretation — split per-metric because `bodyDeltas` and
+  // `eyeDeltas` filter independently (Codex P2 on PR #318, third
+  // round). A run can have valid body data and zero eye data, or
+  // vice versa; the previous OR guard collapsed both cases into
+  // "zero comparable sessions" even when one metric had plenty.
+  //
+  // Earlier Codex rounds on this script:
+  //  - Round 1: median([]) was returning 0 → "median=0.00" in reports.
+  //    Fixed by making median([]) → NaN so fmt routes it to "n/a".
+  //  - Round 2: interpretation compared NaN < 2 which is always false,
+  //    silently taking the "measurably different" branch and printing
+  //    "NaN points". Added an all-NaN guard.
+  //  - Round 3 (this change): the all-NaN guard was over-broad — split
+  //    into per-metric availability.
   console.log('\nInterpretation')
   console.log('--------------')
-  if (meanBody < 2 && meanEye < 2 && rankAgreement > 0.9) {
+  const hasBody = Number.isFinite(meanBody)
+  const hasEye = Number.isFinite(meanEye)
+
+  if (!hasBody && !hasEye) {
+    console.log('⚠ NO COMPARABLE SESSIONS: every session was skipped because at')
+    console.log('  least one variant had a null score on every dimension.')
+    console.log(`    - Body language sessions compared: 0 / ${comparisons.length}`)
+    console.log(`    - Eye contact sessions compared:   0 / ${comparisons.length}`)
+    console.log('  Re-run the analysis against sessions that include camera-on')
+    console.log('  interviews before drawing any enhanced-vs-baseline conclusions.')
+  } else if (hasBody && hasEye && meanBody < 2 && meanEye < 2 && rankAgreement > 0.9) {
+    // Full-data null-result: only claimable when BOTH metrics are present
+    // AND both are tight AND rank agreement is high. Partial-data runs
+    // fall through to the summary branch where each metric is reported
+    // individually.
     console.log('⚠ NULL RESULT: enhanced variant is producing nearly identical scores')
     console.log('  and coaching tips to the baseline. Claude Haiku appears to be')
     console.log('  treating the extra blendshape block as noise. Consider:')
@@ -211,10 +274,25 @@ async function main() {
     console.log('    - Pre-computing a "blendshape summary" narrative for the model')
     console.log('    - Using a larger model (Sonnet) for the enhanced variant')
   } else {
-    console.log('✓ Enhanced variant produces measurably different outputs.')
-    console.log('  Use these numbers directly in the paper:')
-    console.log(`    - Mean |Δ| body language: ${meanBody.toFixed(2)} points`)
-    console.log(`    - Mean |Δ| eye contact:   ${meanEye.toFixed(2)} points`)
+    const partial = !hasBody || !hasEye
+    if (partial) {
+      console.log('⚠ PARTIAL RESULT: only one dimension had comparable sessions.')
+      console.log('  Conclusions below reflect the available dimension only — re-run')
+      console.log('  against camera-on sessions to compare both.')
+    } else {
+      console.log('✓ Enhanced variant produces measurably different outputs.')
+      console.log('  Use these numbers directly in the paper:')
+    }
+    if (hasBody) {
+      console.log(`    - Mean |Δ| body language: ${meanBody.toFixed(2)} points  (n=${bodyDeltas.length})`)
+    } else {
+      console.log(`    - Mean |Δ| body language: n/a  (0 / ${comparisons.length} sessions comparable)`)
+    }
+    if (hasEye) {
+      console.log(`    - Mean |Δ| eye contact:   ${meanEye.toFixed(2)} points  (n=${eyeDeltas.length})`)
+    } else {
+      console.log(`    - Mean |Δ| eye contact:   n/a  (0 / ${comparisons.length} sessions comparable)`)
+    }
     console.log(`    - Rank agreement:         ${rankAgreement.toFixed(3)}`)
   }
 
