@@ -187,12 +187,20 @@ async function main() {
     .filter((d): d is number => d !== null)
   const meanBody = bodyDeltas.length > 0 ? bodyDeltas.reduce((a, b) => a + b, 0) / bodyDeltas.length : NaN
   const meanEye = eyeDeltas.length > 0 ? eyeDeltas.reduce((a, b) => a + b, 0) / eyeDeltas.length : NaN
-  const skipped = comparisons.length - bodyDeltas.length
+  // Per-metric skip counts: body and eye deltas are filtered
+  // independently — a session where only one dimension had valid scores
+  // across both variants still contributes to the other metric.
+  // Reporting a single `skipped` value was misleading (Codex P2 on #318,
+  // third round).
+  const bodySkipped = comparisons.length - bodyDeltas.length
+  const eyeSkipped = comparisons.length - eyeDeltas.length
 
   console.log('Dimension-wise score deltas (|enhanced − baseline|)')
   console.log('----------------------------------------------------')
-  if (skipped > 0) {
-    console.log(`(${skipped}/${comparisons.length} sessions skipped — null scores on one or both variants)`)
+  if (bodySkipped > 0 || eyeSkipped > 0) {
+    console.log(
+      `(body: ${bodySkipped}/${comparisons.length} skipped, eye: ${eyeSkipped}/${comparisons.length} skipped — null scores on one or both variants)`,
+    )
   }
   const fmt = (n: number) => (Number.isFinite(n) ? n.toFixed(2) : 'n/a')
   console.log(`Body language: mean=${fmt(meanBody)} median=${fmt(median(bodyDeltas))} max=${bodyDeltas.length ? Math.max(...bodyDeltas).toFixed(2) : 'n/a'}`)
@@ -228,26 +236,37 @@ async function main() {
     console.log(`  enhanced-only events: ${c.enhancedOnlyEvents.slice(0, 3).join(', ') || '(none)'}`)
   }
 
-  // Null-result warning
+  // Interpretation — split per-metric because `bodyDeltas` and
+  // `eyeDeltas` filter independently (Codex P2 on PR #318, third
+  // round). A run can have valid body data and zero eye data, or
+  // vice versa; the previous OR guard collapsed both cases into
+  // "zero comparable sessions" even when one metric had plenty.
+  //
+  // Earlier Codex rounds on this script:
+  //  - Round 1: median([]) was returning 0 → "median=0.00" in reports.
+  //    Fixed by making median([]) → NaN so fmt routes it to "n/a".
+  //  - Round 2: interpretation compared NaN < 2 which is always false,
+  //    silently taking the "measurably different" branch and printing
+  //    "NaN points". Added an all-NaN guard.
+  //  - Round 3 (this change): the all-NaN guard was over-broad — split
+  //    into per-metric availability.
   console.log('\nInterpretation')
   console.log('--------------')
-  // Codex P2 on PR #318: if every session had null scores on one or
-  // both variants (e.g., all sessions were privacy-mode, or facial
-  // capture failed universally), `meanBody`/`meanEye` are NaN from the
-  // `length > 0 ? ... : NaN` branches above. Numeric comparisons
-  // against NaN always return false — so without this explicit guard,
-  // the script would take the `else` branch and print
-  // "Enhanced variant produces measurably different outputs" alongside
-  // `NaN.toFixed(2)` = "NaN", inverting the conclusion in exactly the
-  // no-data scenario. Explicit branch handles it honestly.
-  if (!Number.isFinite(meanBody) || !Number.isFinite(meanEye)) {
+  const hasBody = Number.isFinite(meanBody)
+  const hasEye = Number.isFinite(meanEye)
+
+  if (!hasBody && !hasEye) {
     console.log('⚠ NO COMPARABLE SESSIONS: every session was skipped because at')
-    console.log('  least one variant had a null score (no facial data captured).')
-    console.log(`    - Sessions compared:      0 / ${comparisons.length}`)
-    console.log('    - Cannot compute mean Δ body language or eye contact.')
+    console.log('  least one variant had a null score on every dimension.')
+    console.log(`    - Body language sessions compared: 0 / ${comparisons.length}`)
+    console.log(`    - Eye contact sessions compared:   0 / ${comparisons.length}`)
     console.log('  Re-run the analysis against sessions that include camera-on')
     console.log('  interviews before drawing any enhanced-vs-baseline conclusions.')
-  } else if (meanBody < 2 && meanEye < 2 && rankAgreement > 0.9) {
+  } else if (hasBody && hasEye && meanBody < 2 && meanEye < 2 && rankAgreement > 0.9) {
+    // Full-data null-result: only claimable when BOTH metrics are present
+    // AND both are tight AND rank agreement is high. Partial-data runs
+    // fall through to the summary branch where each metric is reported
+    // individually.
     console.log('⚠ NULL RESULT: enhanced variant is producing nearly identical scores')
     console.log('  and coaching tips to the baseline. Claude Haiku appears to be')
     console.log('  treating the extra blendshape block as noise. Consider:')
@@ -255,10 +274,25 @@ async function main() {
     console.log('    - Pre-computing a "blendshape summary" narrative for the model')
     console.log('    - Using a larger model (Sonnet) for the enhanced variant')
   } else {
-    console.log('✓ Enhanced variant produces measurably different outputs.')
-    console.log('  Use these numbers directly in the paper:')
-    console.log(`    - Mean |Δ| body language: ${meanBody.toFixed(2)} points`)
-    console.log(`    - Mean |Δ| eye contact:   ${meanEye.toFixed(2)} points`)
+    const partial = !hasBody || !hasEye
+    if (partial) {
+      console.log('⚠ PARTIAL RESULT: only one dimension had comparable sessions.')
+      console.log('  Conclusions below reflect the available dimension only — re-run')
+      console.log('  against camera-on sessions to compare both.')
+    } else {
+      console.log('✓ Enhanced variant produces measurably different outputs.')
+      console.log('  Use these numbers directly in the paper:')
+    }
+    if (hasBody) {
+      console.log(`    - Mean |Δ| body language: ${meanBody.toFixed(2)} points  (n=${bodyDeltas.length})`)
+    } else {
+      console.log(`    - Mean |Δ| body language: n/a  (0 / ${comparisons.length} sessions comparable)`)
+    }
+    if (hasEye) {
+      console.log(`    - Mean |Δ| eye contact:   ${meanEye.toFixed(2)} points  (n=${eyeDeltas.length})`)
+    } else {
+      console.log(`    - Mean |Δ| eye contact:   n/a  (0 / ${comparisons.length} sessions comparable)`)
+    }
     console.log(`    - Rank agreement:         ${rankAgreement.toFixed(3)}`)
   }
 
