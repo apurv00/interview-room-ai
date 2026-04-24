@@ -60,7 +60,8 @@ export async function runAnalysisJobHandler(
       session.facialLandmarksR2Key,
       session.audioRecordingR2Key,
       session.liveTranscriptWords,
-      session.transcript
+      session.transcript,
+      session.sessionT0,
     )
   )
 
@@ -76,13 +77,21 @@ export async function runAnalysisJobHandler(
     )
   )
 
+  // Pre-normalise transcript timestamps for fusion so the meta-block reports
+  // sensible seconds-since-t0 instead of raw ms-epoch values. Pure transform,
+  // no step.run wrapper needed.
+  const normalisedTranscript = session.transcript.map((t) => ({
+    ...t,
+    timestamp: Math.max(0, (t.timestamp - session.sessionT0) / 1000),
+  }))
+
   // Step 4a: enhanced fusion run (the one users see)
   const enhanced = await step.run('run-fusion-enhanced', () =>
     stepRunFusion(
       signals.prosodySegments,
       signals.facialSegments,
       session.evaluations,
-      session.transcript as unknown as Array<Record<string, unknown>>,
+      normalisedTranscript as unknown as Array<Record<string, unknown>>,
       session.config,
       { includeBlendshapes: true }
     )
@@ -100,7 +109,7 @@ export async function runAnalysisJobHandler(
         signals.prosodySegments,
         signals.facialSegments,
         session.evaluations,
-        session.transcript as unknown as Array<Record<string, unknown>>,
+        normalisedTranscript as unknown as Array<Record<string, unknown>>,
         session.config,
         { includeBlendshapes: false }
       )

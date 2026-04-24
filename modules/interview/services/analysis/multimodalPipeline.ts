@@ -23,10 +23,43 @@ interface LiveTranscriptWord {
   confidence: number
 }
 
+// ─── Time-reference helpers ─────────────────────────────────────────────────
+
+/**
+ * Resolve the canonical t0 (ms) for a session's time axis. All downstream
+ * per-segment timestamps are normalised to seconds since this t0.
+ *
+ * Fallback chain:
+ *   1. session.startedAt — authoritative, always set on completed sessions.
+ *   2. First candidate utterance timestamp — for legacy sessions pre-startedAt.
+ *   3. First transcript entry timestamp — last-resort for never-spoken sessions.
+ *   4. 0 — degrades to the pre-fix state; analysis still runs.
+ */
+export function computeSessionT0(
+  startedAt: Date | undefined,
+  transcript: Array<{ speaker: string; timestamp: number }>,
+): number {
+  if (startedAt) return startedAt.getTime()
+  const firstCandidate = transcript.find((t) => t.speaker === 'candidate' || t.speaker === 'user')
+  if (firstCandidate) return firstCandidate.timestamp
+  if (transcript.length > 0) return transcript[0].timestamp
+  return 0
+}
+
+/** Clamped ms→seconds normaliser; negative results (entry predates t0) become 0. */
+export function secondsSinceT0(timestampMs: number, t0Ms: number): number {
+  return Math.max(0, (timestampMs - t0Ms) / 1000)
+}
+
 // ─── Step result types ──────────────────────────────────────────────────────
 
 export interface SessionData {
   sessionId: string
+  /**
+   * Canonical t0 (ms) used to normalise every downstream timestamp to
+   * seconds-since-session-start. See computeSessionT0 for the fallback chain.
+   */
+  sessionT0: number
   /**
    * Camera webm key — present for normal sessions, absent for privacy-mode
    * sessions where the candidate opted out of video storage. The pipeline
@@ -91,18 +124,32 @@ export async function stepFetchSession(sessionId: string): Promise<SessionData> 
     throw new Error('Session has no recording or audio track')
   }
 
-  const questionBoundaries = (session.transcript || [])
+  const transcript = session.transcript || []
+  const evaluations = session.evaluations as unknown as Array<Record<string, unknown>>
+
+  // Canonical time axis for this session. All per-segment timestamps emitted
+  // downstream (facial windows, prosody windows, whisper segments, fusion
+  // meta-block) are normalised to seconds-since-t0 against this anchor.
+  const sessionT0 = computeSessionT0(session.startedAt, transcript)
+
+  // Question boundaries in seconds-since-t0, clipped at 0 (defensive against
+  // interviewer turns that predate t0), and CAPPED to evaluations.length + 1
+  // so greeting / closing interviewer turns don't generate phantom analysis
+  // windows with questionIndex past the actual evaluated questions.
+  const questionBoundaries = transcript
     .filter((t) => t.speaker === 'interviewer')
-    .map((t) => t.timestamp)
+    .map((t) => secondsSinceT0(t.timestamp, sessionT0))
+    .slice(0, evaluations.length + 1)
 
   return {
     sessionId,
+    sessionT0,
     recordingR2Key: session.recordingR2Key,
     audioRecordingR2Key: session.audioRecordingR2Key,
     facialLandmarksR2Key: session.facialLandmarksR2Key,
     liveTranscriptWords: (session.liveTranscriptWords as LiveTranscriptWord[] | undefined) ?? undefined,
-    transcript: session.transcript || [],
-    evaluations: session.evaluations as unknown as Array<Record<string, unknown>>,
+    transcript,
+    evaluations,
     config: session.config as unknown as Record<string, unknown>,
     questionBoundaries,
   }
@@ -125,7 +172,8 @@ export async function stepTranscribeAndDownload(
   facialLandmarksR2Key?: string,
   audioRecordingR2Key?: string,
   liveTranscriptWords?: LiveTranscriptWord[],
-  sessionTranscript?: Array<{ speaker: string; text: string; timestamp: number }>
+  sessionTranscript?: Array<{ speaker: string; text: string; timestamp: number }>,
+  sessionT0: number = 0,
 ): Promise<{ whisper: TranscribeResult; facialFrames: FacialFrame[] }> {
   // Path 1: Fast path — live Deepgram words (primary, no cost, instant)
   if (liveTranscriptWords && liveTranscriptWords.length > 0) {
@@ -151,7 +199,7 @@ export async function stepTranscribeAndDownload(
   // when running inline within a Vercel function timeout.
   if (sessionTranscript && sessionTranscript.length > 0) {
     const facialFrames = await downloadFacialFrames(facialLandmarksR2Key)
-    const synthetic = synthesiseWhisperResultFromTranscript(sessionTranscript)
+    const synthetic = synthesiseWhisperResultFromTranscript(sessionTranscript, sessionT0)
     aiLogger.info(
       { source: 'session-transcript', entries: sessionTranscript.length, durationSec: synthetic.durationSeconds },
       'Multimodal analysis using session transcript fallback (Whisper skipped)'
@@ -246,7 +294,8 @@ function synthesiseWhisperResultFromLiveWords(words: LiveTranscriptWord[]): {
  * that doesn't fit in a tight inline budget.
  */
 function synthesiseWhisperResultFromTranscript(
-  transcript: Array<{ speaker: string; text: string; timestamp: number }>
+  transcript: Array<{ speaker: string; text: string; timestamp: number }>,
+  t0: number,
 ): { segments: WhisperSegment[]; durationSeconds: number } {
   const candidateEntries = transcript
     .filter((e) => e.speaker === 'candidate' || e.speaker === 'user')
@@ -256,12 +305,12 @@ function synthesiseWhisperResultFromTranscript(
     return { segments: [], durationSeconds: 0 }
   }
 
-  // Normalise timestamps to seconds relative to the first candidate utterance.
-  const t0 = candidateEntries[0].timestamp
+  // Normalise timestamps to seconds relative to the caller-provided session t0,
+  // so boundaries emitted here share the reference frame with questionBoundaries.
   const segments: WhisperSegment[] = candidateEntries.map((entry, i) => {
-    const start = Math.max(0, (entry.timestamp - t0) / 1000)
+    const start = secondsSinceT0(entry.timestamp, t0)
     const nextTimestamp = i + 1 < candidateEntries.length ? candidateEntries[i + 1].timestamp : entry.timestamp + 5000
-    const end = Math.max(start + 1, (nextTimestamp - t0) / 1000)
+    const end = Math.max(start + 1, secondsSinceT0(nextTimestamp, t0))
     const wordTokens = entry.text.split(/\s+/).filter(Boolean)
     const perWord = wordTokens.length > 0 ? (end - start) / wordTokens.length : 0
     const words: WhisperWord[] = wordTokens.map((w, wi) => ({
@@ -468,8 +517,19 @@ export async function runMultimodalPipeline(
       session.facialLandmarksR2Key,
       session.audioRecordingR2Key,
       session.liveTranscriptWords,
-      session.transcript
+      session.transcript,
+      session.sessionT0,
     )
+
+    // Pre-normalise transcript timestamps for fusion so the meta-block in
+    // the fusion prompt reports sensible seconds-since-t0 instead of raw
+    // ms-epoch values (fusionService.ts references `transcript[i].timestamp`
+    // when formatting its "Ns duration" summary line).
+    const normalisedTranscript = session.transcript.map((t) => ({
+      ...t,
+      timestamp: secondsSinceT0(t.timestamp, session.sessionT0),
+    }))
+
     const signals = stepProcessSignals(
       whisper.segments,
       facialFrames,
@@ -498,7 +558,7 @@ export async function runMultimodalPipeline(
       signals.prosodySegments,
       signals.facialSegments,
       session.evaluations,
-      session.transcript as unknown as Array<Record<string, unknown>>,
+      normalisedTranscript as unknown as Array<Record<string, unknown>>,
       session.config,
       { includeBlendshapes: true }
     )
@@ -512,7 +572,7 @@ export async function runMultimodalPipeline(
         signals.prosodySegments,
         signals.facialSegments,
         session.evaluations,
-        session.transcript as unknown as Array<Record<string, unknown>>,
+        normalisedTranscript as unknown as Array<Record<string, unknown>>,
         session.config,
         { includeBlendshapes: false }
       )
