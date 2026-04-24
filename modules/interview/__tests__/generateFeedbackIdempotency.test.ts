@@ -89,7 +89,14 @@ vi.mock('@shared/db/models', () => ({
 }))
 
 vi.mock('@shared/featureFlags', () => ({
-  isFeatureEnabled: () => false,
+  // Match prod defaults (see shared/featureFlags.ts FLAG_DEFAULTS).
+  // PR #321: generate-feedback now preflights `pathway_planner` so a
+  // flag-off path skips pathway AND pushes a user-visible red_flag.
+  // Existing idempotency scenarios exercise pathway failure as a
+  // legitimate runtime rejection — flipping the mock to `true` keeps
+  // that path scheduled so the `mockRejectedValueOnce` on
+  // generatePathwayPlan still lands in the aggregate failure list.
+  isFeatureEnabled: () => true,
 }))
 
 vi.mock('@shared/services/promptSecurity', () => ({
@@ -417,8 +424,8 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
     )
     expect(summaryCall).toBeTruthy()
     const [context] = summaryCall as [Record<string, unknown>, string]
-    expect(context.totalSideEffects).toBe(6) // no weaknessClusters when no flags; +masteryTracking, +universalPlanAdvance
-    expect(context.succeeded).toBe(6)
+    expect(context.totalSideEffects).toBe(7) // persist + practiceStats + competency + sessionSummary + pathwayPlan + masteryTracking + universalPlanAdvance; no weaknessClusters when no flags
+    expect(context.succeeded).toBe(7)
     expect(context.failedCount).toBe(0)
     expect(context.failed).toBeUndefined()
     expect(context.sessionId).toBe('507f1f77bcf86cd799439011')
@@ -450,8 +457,8 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
     )
     expect(summaryCall).toBeTruthy()
     const [context] = summaryCall as [Record<string, unknown>, string]
-    expect(context.totalSideEffects).toBe(6)
-    expect(context.succeeded).toBe(4)
+    expect(context.totalSideEffects).toBe(7) // PR #321 added persist; pathway still scheduled because mock returns true
+    expect(context.succeeded).toBe(5)
     expect(context.failedCount).toBe(2)
     const failed = context.failed as Array<{ name: string; reason: string }>
     expect(failed.map((f) => f.name).sort()).toEqual(['competency', 'pathwayPlan'])

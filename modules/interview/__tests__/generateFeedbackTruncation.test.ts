@@ -76,7 +76,11 @@ vi.mock('@shared/db/models', () => ({
 }))
 
 vi.mock('@shared/featureFlags', () => ({
-  isFeatureEnabled: () => false,
+  // Match prod defaults (see shared/featureFlags.ts). PR #321: pathway_planner
+  // flag-off pushes a new red_flag, which would break the "red_flags is empty"
+  // truncation-path assertions in this file. Production default is true, so
+  // flip here to keep the truncation tests focused on their actual concern.
+  isFeatureEnabled: () => true,
 }))
 
 vi.mock('@shared/services/promptSecurity', () => ({

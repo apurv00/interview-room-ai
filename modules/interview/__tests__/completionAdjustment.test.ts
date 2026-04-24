@@ -317,9 +317,13 @@ describe('POST /api/generate-feedback — G.10 flag gate', () => {
   describe('post-G.15 unconditional behavior', () => {
     beforeEach(() => {
       // mockIsFeatureEnabled retains its mock — kept to confirm the
-      // route doesn't actually consult the flag anymore (the
-      // assertions hold the same regardless of what the mock returns).
-      mockIsFeatureEnabled.mockImplementation(() => false)
+      // route doesn't actually consult the flag anymore for G.10
+      // completion logic (the assertions hold the same regardless).
+      // PR #321: `pathway_planner` IS preflighted now; returning true
+      // keeps the pathway side-effect scheduled so no `pathway
+      // unavailable` red_flag fires, preserving the completion-only
+      // assertions in this suite.
+      mockIsFeatureEnabled.mockImplementation((flag: string) => flag === 'pathway_planner')
     })
 
     it('<3 answers → short-form feedback, no LLM call', async () => {
