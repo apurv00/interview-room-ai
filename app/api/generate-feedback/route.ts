@@ -1020,6 +1020,17 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
           )
         } else {
           markSkipped('pathwayPlan')
+          // Normalize red_flags before mutation. FeedbackLlmSchema
+          // (validators/interview.ts:311) declares `red_flags` as
+          // `.optional()` — Claude can legally omit the field on
+          // partial payloads. The handler upstream intentionally
+          // continues on partial/Zod-failing JSON; calling `.includes`
+          // or `.push` on an undefined array would throw, drop to
+          // the outer catch, and return a degraded fallback. Codex P2
+          // on PR #321.
+          if (!Array.isArray(feedback.red_flags)) {
+            feedback.red_flags = []
+          }
           // Red_flag is bounded by FeedbackDataSchema's max(30) — we
           // only push when not already present so repeated generations
           // don't accumulate duplicate copies.
@@ -1044,13 +1055,30 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         // MUST run after the pathway_planner preflight above so any
         // red_flag mutation for the flag-off case is captured in the
         // DB write (Codex P2).
+        // Mongoose `Model.findByIdAndUpdate(...)` returns a *Query*,
+        // not a Promise. Queries are single-execution: each `.then()`
+        // observation triggers a fresh DB round-trip, and subsequent
+        // observations reject with `Query was already executed`.
+        // `fireAndTrack` attaches `.catch(...)` (execution #1) and the
+        // aggregate `Promise.allSettled(sideEffects.map(s => s.promise))`
+        // observes the same thenable again (execution #2), so the
+        // persist would be reported as failed on EVERY successful
+        // production run — while tests would pass because test mocks
+        // return a plain Promise. Wrap in `Promise.resolve().then(...)`
+        // to get a genuine Promise — the inner thenable is awaited once
+        // inside the callback, the outer real Promise is observed
+        // arbitrarily many times safely. Works with both Mongoose
+        // Query (prod) and Promise-returning mocks (tests). Codex P1
+        // on PR #321.
         fireAndTrack(
           'persist',
-          InterviewSession.findByIdAndUpdate(sessionId, {
-            feedback,
-            status: 'completed',
-            completedAt: new Date(),
-          }),
+          Promise.resolve().then(() =>
+            InterviewSession.findByIdAndUpdate(sessionId, {
+              feedback,
+              status: 'completed',
+              completedAt: new Date(),
+            }),
+          ),
           'Failed to persist feedback to session',
         )
 

@@ -362,6 +362,114 @@ describe('POST /api/generate-feedback — side-effect outcome observability (PR 
     expect(persistedRedFlags?.some((f: string) => /pathway/i.test(f))).toBe(true)
   })
 
+  // ── Codex P2 on PR #321 — red_flags may be undefined on partial Claude payloads ──
+  //
+  // FeedbackLlmSchema declares `red_flags: z.array(z.string()).optional()`
+  // (validators/interview.ts:311) so Claude can legally omit the field.
+  // The handler tolerates Zod-failing JSON via `.passthrough()` — a
+  // partial payload with no `red_flags` reaches the pathway preflight
+  // with `feedback.red_flags === undefined`. Calling `.includes` /
+  // `.push` on undefined would throw, drop to the outer catch, and
+  // return a degraded fallback instead of the normal response. The
+  // fix normalizes the array via `Array.isArray(...) ? ... : []`
+  // before mutation.
+  it('does NOT crash when Claude omits red_flags and pathway_planner is off', async () => {
+    mockIsFeatureEnabled.mockImplementation((flag: string) => flag !== 'pathway_planner')
+
+    // Partial Claude payload — no top-level `red_flags` field at all.
+    // Schema.passthrough() + .optional() means this passes Zod; the
+    // handler proceeds. Pre-fix code would TypeError here.
+    mockCompletion.mockResolvedValueOnce({
+      text: JSON.stringify({
+        overall_score: 72,
+        pass_probability: 'Medium',
+        confidence_level: 'High',
+        dimensions: {
+          answer_quality: { score: 70, strengths: [], weaknesses: [] },
+          communication: { score: 72, wpm: 140, filler_rate: 0.04, pause_score: 70, rambling_index: 0.2 },
+          engagement_signals: { score: 70, engagement_score: 68, confidence_trend: 'stable', energy_consistency: 0.7, composure_under_pressure: 65 },
+        },
+        top_3_improvements: ['A', 'B', 'C'],
+        // red_flags intentionally omitted
+      }),
+      model: 'test-model',
+      provider: 'test',
+      inputTokens: 3000,
+      outputTokens: 2000,
+      usedFallback: false,
+      truncated: false,
+    })
+
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      red_flags?: string[]
+      degraded?: boolean
+    }
+
+    // Must have recovered + pushed the pathway red_flag without
+    // throwing. degraded should be falsy (normal path, not outer catch).
+    expect(body.degraded).toBeFalsy()
+    expect(Array.isArray(body.red_flags)).toBe(true)
+    expect(body.red_flags?.some((f) => /pathway/i.test(f))).toBe(true)
+  })
+
+  // ── Codex P1 on PR #321 — Mongoose Query double-observation ──
+  //
+  // Mongoose `Model.findByIdAndUpdate(...)` returns a single-execution
+  // Query (thenable, not a Promise). `fireAndTrack` attaches `.catch()`
+  // (execution #1); the aggregate `Promise.allSettled(sideEffects.map(s
+  // => s.promise))` observes the SAME thenable again (execution #2),
+  // which rejects with "Query was already executed". The aggregate log
+  // would falsely report persist as `failed` on every successful
+  // production run — while tests using Promise-returning mocks (like
+  // this suite's default `mockResolvedValue(undefined)`) wouldn't
+  // surface the bug at all. The fix wraps the Query in
+  // `Promise.resolve().then(() => query)` so the OUTER Promise is
+  // observed multiple times safely.
+  //
+  // This test uses a thenable that rejects on the 2nd `.then()` call —
+  // a faithful model of Mongoose's single-execution contract. Against
+  // the pre-fix code the aggregate would list persist as failed; with
+  // the wrapper it stays absent from the failed list even though the
+  // simulated Query is observed twice.
+  it('handles single-execution thenables like Mongoose queries without false-reporting persist as failed', async () => {
+    let observationCount = 0
+    mockFindByIdAndUpdate.mockImplementationOnce(() => {
+      // Mimic a Mongoose Query: on FIRST .then the query succeeds,
+      // on SECOND .then Mongoose throws "Query was already executed".
+      // The real class also implements .catch() as a pass-through.
+      return {
+        then(onFulfilled: (v: unknown) => unknown, onRejected?: (err: unknown) => unknown) {
+          observationCount += 1
+          if (observationCount === 1) {
+            return Promise.resolve().then(onFulfilled as () => unknown)
+          }
+          const err = new Error('Query was already executed')
+          return onRejected
+            ? Promise.resolve(onRejected(err))
+            : Promise.reject(err)
+        },
+        catch(onRejected: (err: unknown) => unknown) {
+          return this.then((v: unknown) => v, onRejected)
+        },
+      }
+    })
+
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+
+    // Wait for allSettled aggregate.
+    const aggregate = await waitForAggregateLog()
+    expect(aggregate).not.toBeNull()
+    const failed = (aggregate as { failed?: Array<{ name: string; reason: string }> }).failed
+    // With the wrapper: persist is observed exactly once (inside the
+    // Promise.resolve().then(...) callback), so the aggregate does NOT
+    // list it as failed. Without the wrapper, `persist` would be in
+    // `failed` with reason "Query was already executed".
+    expect((failed ?? []).some((f) => f.name === 'persist')).toBe(false)
+  })
+
   // ── Backward compatibility: response shape remains valid ──
   it('still returns a valid FeedbackData shape with the new field', async () => {
     mockIsFeatureEnabled.mockReturnValue(true)
