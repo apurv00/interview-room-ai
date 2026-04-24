@@ -106,6 +106,11 @@ const mockSource = {
 // CountMode options; without a capture hook a future refactor could
 // silently drop them and we'd re-introduce the stereo-mic bug).
 const audioWorkletNodeCalls: Array<{ context: unknown; name: string; options: unknown }> = []
+// Last constructed worklet instance, exposed so tests can invoke its
+// `port.onmessage` handler directly to simulate the audio-thread worklet
+// posting a PCM frame to the main thread (the real one would post a
+// 4096-sample Int16 ArrayBuffer every 256ms at 16 kHz).
+let lastWorkletInstance: MockAudioWorkletNode | null = null
 
 class MockAudioWorkletNode {
   port: { onmessage: ((e: unknown) => void) | null; postMessage: ReturnType<typeof vi.fn> } = {
@@ -116,6 +121,7 @@ class MockAudioWorkletNode {
   disconnect = mockDisconnect
   constructor(context: unknown, name: string, options?: unknown) {
     audioWorkletNodeCalls.push({ context, name, options })
+    lastWorkletInstance = this
   }
 }
 
@@ -274,6 +280,7 @@ describe('useDeepgramRecognition', () => {
     vi.useFakeTimers()
     vi.clearAllMocks()
     mockWsInstance = null
+    lastWorkletInstance = null
     // Re-establish the default fetch impl so per-test overrides
     // (notably mockImplementationOnce + mockRestore on the token
     // endpoint) cannot leak a "no default" fetch into the next test,
@@ -1574,6 +1581,154 @@ describe('useDeepgramRecognition', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(10) })
     expect(mockWsInstance).not.toBeNull()
     expect(mockWsInstance).not.toBe(orphan)
+  })
+
+  // ── Codex P1 on PR #320 round-3 — stale CLOSED wsRef from prior warmUp ──
+  //
+  // warmUp failure paths (onerror / onclose / warmUpTimeout) do NOT null
+  // wsRef.current — they leave it pointing at the failed ws so onclose
+  // identity guards keep working for late stale closes. If a subsequent
+  // warmUp enters its token-fetch stage, wsRef still points at the dead
+  // prior ws. The old eager check (`Boolean(wsRef.current)`) would then
+  // fire startAudioCapture against that CLOSED socket; the worklet's
+  // onmessage CLOSING/CLOSED branch would drop every frame, reintroducing
+  // front-of-answer audio loss for the warmUp-recovery edge case.
+  it('does NOT fire eager capture against a CLOSED ws from a prior failed warmUp', async () => {
+    const gumSpy = vi.mocked(navigator.mediaDevices.getUserMedia)
+    gumSpy.mockClear()
+
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+
+    // warmUp #1 — create a ws, let it sit CONNECTING, then advance past
+    // the 5s warmUpTimeout so the timeout branch closes it. onclose fires
+    // but does NOT null wsRef.current (by design — identity guards need
+    // the ref for late stale-close detection). Token is cached on this
+    // successful fetch path, so warmUp #2 won't re-fetch (that's what
+    // makes the race window shorter in real prod — cached-token flow
+    // creates ws2 in a single microtask).
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    expect(mockWsInstance).not.toBeNull()
+    const ws1 = mockWsInstance!
+    await act(async () => { await vi.advanceTimersByTimeAsync(5100) })
+    expect(ws1.readyState).toBe(3 /* CLOSED */)
+
+    // Reset the ws-instance sentinel so we can observe whether warmUp #2
+    // actually constructs a NEW ws via the `new WebSocket(...)` path.
+    mockWsInstance = null
+
+    // Fire warmUp #2 AND startListening in the SAME synchronous act —
+    // BEFORE React flushes microtasks that would create ws2 via the
+    // cached-token .then. At the synchronous eager-check moment,
+    // wsRef.current STILL points at ws1 CLOSED (since onclose left it
+    // intact). This matches the real production race window: same-event-
+    // tick warmUp + startListening after a prior warmUp failure.
+    //
+    // OLD check: `Boolean(wsRef.current)` → true (ws1 truthy even CLOSED)
+    // → fires startAudioCapture(ws1 CLOSED) → getUserMedia called →
+    // worklet produced frames get dropped by wsRef.current CLOSED/CLOSING
+    // branch in onmessage → front-of-answer audio loss.
+    // NEW check: `readyState ∈ {CONNECTING, OPEN}` → CLOSED rejected →
+    // eager skipped → catch-up fires after ws2 OPEN.
+    act(() => {
+      result.current.warmUp()
+      result.current.startListening(onComplete)
+    })
+    // Drain the cached-token microtask so ws2 gets constructed.
+    await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+    expect(mockWsInstance).not.toBeNull()
+    expect(mockWsInstance).not.toBe(ws1)
+
+    // Pin the P1 fix: eager branch must NOT have fired startAudioCapture
+    // during the ws1-CLOSED race window. Old code would have triggered
+    // getUserMedia → leaked worklet pinned to a dead socket.
+    expect(gumSpy).not.toHaveBeenCalled()
+
+    // Let ws2 reach OPEN — catch-up (`!eagerFired`) fires startAudioCapture
+    // against the live ws2.
+    act(() => { mockWsInstance!.simulateOpen() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    expect(gumSpy).toHaveBeenCalledTimes(1)
+  })
+
+  // ── Codex P2 on PR #320 round-3 — stale PCM across sessions ──
+  //
+  // pcmBufferRef is only cleared at startListening entry. If a turn is
+  // cancelled during CONNECTING (finishRecognition fires before ws.onopen),
+  // buffered worklet frames survive teardownAudioPipeline (intentionally —
+  // the warmUp-fallback path relies on in-session preservation). But on a
+  // real session-end (stopListening / reentry / usageLimit), the stale
+  // frames would be flushed into the NEXT warmUp's new ws by its onopen,
+  // leaking prior-turn audio into a new session and potentially tripping
+  // the ≥3-word interrupt detector.
+  it('clears pcmBufferRef on finishRecognition so next warmUp cannot leak prior-turn audio', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+
+    // Turn A: warmUp → startListening (slow path, ws CONNECTING) →
+    // worklet produces a frame → buffered into pcmBufferRef.
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    const wsA = mockWsInstance!
+    expect(wsA).not.toBeNull()
+    // Do NOT simulateOpen — keep ws CONNECTING so the worklet's
+    // onmessage takes the enqueue branch.
+
+    act(() => { result.current.startListening(onComplete) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    expect(lastWorkletInstance).not.toBeNull()
+
+    // Post a fake PCM frame through the worklet's port. Hook's onmessage
+    // sees wsRef.current === wsA (CONNECTING) → enqueue to pcmBufferRef.
+    const fakeFrame = new Int16Array(4096).buffer
+    act(() => {
+      lastWorkletInstance!.port.onmessage!({ data: fakeFrame } as unknown as MessageEvent)
+    })
+    // Sanity: ws.send was NOT called with this frame (it's buffered, not sent).
+    // wsA.send could be called for KeepAlive later, but we're BEFORE ws.onopen
+    // so keepalive hasn't started — send.mock.calls should be empty.
+    expect(wsA.send.mock.calls.length).toBe(0)
+
+    // Cancel the turn BEFORE wsA.onopen fires. stopListening → finishRecognition
+    // (non-preserve trigger since ws is CONNECTING, not OPEN) → inline
+    // teardown + pcmBufferRef.clear(). wsRef.current is nulled but wsA
+    // is still CONNECTING (close-branch in finishRecognition gates on
+    // readyState === OPEN) and warmUpPromiseRef.current is still pending.
+    act(() => { result.current.stopListening() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+
+    // Now simulate wsA's delayed onopen so the P1-B superseded-socket
+    // guard fires: wsRef.current !== wsA → close(1000, 'superseded')
+    // + warmUpPromiseRef = null + resolve(). Without this, the next
+    // warmUp() below would early-return on the still-pending promise.
+    act(() => { wsA.simulateOpen() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    expect(wsA.lastCloseCode).toBe(1000)
+    expect(wsA.lastCloseReason).toBe('superseded')
+
+    // Turn B: new warmUp creates a fresh ws. Reset sentinel.
+    mockWsInstance = null
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    expect(mockWsInstance).not.toBeNull()
+    const wsB = mockWsInstance!
+    expect(wsB).not.toBe(wsA)
+
+    const sendCallsBeforeOpen = wsB.send.mock.calls.length
+
+    // Simulate onopen — warmUp's ws.onopen calls flushPendingPcm. If
+    // the P2 fix held, pcmBufferRef is empty → no frames sent to wsB.
+    // Without the fix, the fakeFrame from Turn A would be sent here,
+    // Deepgram would emit a phantom Results packet, and the interrupt
+    // detector would accumulate phantom words across turns.
+    act(() => { wsB.simulateOpen() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+
+    const sendCallsAfterOpen = wsB.send.mock.calls.length
+    // Delta should be 0 immediately after onopen (KeepAlive's first
+    // tick fires at 3000ms, not within this 10ms advance).
+    expect(sendCallsAfterOpen - sendCallsBeforeOpen).toBe(0)
   })
 
   it('UtteranceEnd grace is 3000ms for short answers (was 4000ms)', async () => {

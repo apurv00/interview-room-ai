@@ -565,7 +565,20 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
         // addModule — the eager setup later hit its stale-guard and
         // returned without closing its AudioContext / stopping its
         // ownStream mic track, leaking both.
-        const eagerFired = Boolean(wsRef.current)
+        // Gate on a LIVE ws (CONNECTING or OPEN), not merely a non-null
+        // ref. warmUp failure paths (onerror / onclose / warmUpTimeout)
+        // do NOT null wsRef.current — they leave it pointing at the
+        // failed ws so onclose identity guards keep working for late
+        // stale closes. If a subsequent warmUp enters its token-fetch
+        // stage, wsRef still points at the dead prior ws. Treating
+        // that as "live" would fire startAudioCapture against a CLOSED
+        // socket; the worklet's onmessage would then drop every frame
+        // (CLOSING/CLOSED branch), reintroducing the exact front-of-
+        // answer audio loss this PR fixes — just in the warmUp-
+        // recovery edge case. Codex P1 on PR #320 (round 3).
+        const activeState = wsRef.current?.readyState
+        const eagerFired =
+          activeState === WebSocket.CONNECTING || activeState === WebSocket.OPEN
         if (eagerFired) {
           setIsListening(true)
           startAudioCapture(wsRef.current!)
@@ -923,7 +936,14 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
    *  (duplicate audio → duplicate transcripts). Codex P1 on PR #320.
    *
    *  Does NOT touch externalStreamRef — that's a page-level stream owned
-   *  by the caller (see setExternalStream), never stopped from here. */
+   *  by the caller (see setExternalStream), never stopped from here.
+   *
+   *  Does NOT clear pcmBufferRef either: the warmUp-fallback call sites
+   *  (startListening .then else / .catch) rely on buffer preservation so
+   *  the in-flight user speech from the eager branch bridges to the new
+   *  `connectFresh` ws via that ws.onopen's flushPendingPcm. Buffer
+   *  clearing belongs at true session-end boundaries (finishRecognition
+   *  + startListening entry), not at every pipeline-teardown. */
   function teardownAudioPipeline(): void {
     processorRef.current?.disconnect()
     sourceRef.current?.disconnect()
@@ -1531,6 +1551,22 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       audioStreamRef.current.getTracks().forEach(t => t.stop())
       audioStreamRef.current = null
     }
+
+    // Clear the pre-open PCM ring buffer on session-end. If the turn
+    // was cancelled during the CONNECTING window (finishRecognition
+    // fires before ws.onopen — e.g. stopListening from external,
+    // startListenReentry, usageLimit), the worklet's buffered frames
+    // from THIS turn would otherwise survive until the next warmUp()
+    // created a fresh ws; that ws.onopen calls flushPendingPcm and
+    // would dump prior-turn audio into Deepgram, producing phantom
+    // transcripts and potentially tripping the ≥3-word interrupt
+    // detector on the next turn. Codex P2 on PR #320 (round 3).
+    //
+    // The buffer is NOT cleared by teardownAudioPipeline because the
+    // warmUp-fallback call sites (startListening .then else / .catch)
+    // rely on preservation to bridge in-flight user speech across a
+    // mid-turn ws-replacement. Session-end is the right boundary.
+    pcmBufferRef.current.clear()
 
     if (preserveSocket && wsRef.current) {
       // Detach the message handler so any in-flight Deepgram packets that
