@@ -158,13 +158,42 @@ describe('stepFetchSession — time normalisation contract', () => {
     expect(result.questionBoundaries).toEqual([0, 60, 120])
   })
 
-  it('caps boundaries to evaluations.length + 1 (strips phantom greeting/closing turns)', async () => {
-    // 8 interviewer turns (greeting + 6 Qs + closing), 6 evaluations → capped at 7.
+  // PR #316 Codex P1 regression guard (second round): do NOT cap qIdx-deduped
+  // boundaries by evaluations.length. Some flows (coding intro + problem +
+  // follow-up in useInterview.ts:1878,1890,1950) record interviewer prompts
+  // with qIdx values that aren't 1:1 with evaluations — the old cap would
+  // drop the later qIdx boundary and merge real answers into earlier windows.
+  it('preserves all unique questionIndex boundaries even when evaluations is sparse', async () => {
+    // Coding-flow shape: 3 interviewer turns with qIdx 0/1/2, only 1 evaluation.
     mockFindById.mockResolvedValue(
-      makeSessionDoc({ interviewerCount: 8, evaluationsCount: 6, t0Ms: 1776957100000 }),
+      makeSessionDoc({ interviewerCount: 3, evaluationsCount: 1, t0Ms: 1776957100000 }),
     )
     const result = await stepFetchSession('sess-test')
-    expect(result.questionBoundaries).toHaveLength(7)
+    // Pre-fix: old slice(0, 2) → 2 boundaries, qIdx 2 dropped.
+    // Post-fix: 3 boundaries, one per unique qIdx.
+    expect(result.questionBoundaries).toHaveLength(3)
+    expect(result.questionBoundaries).toEqual([0, 60, 120])
+  })
+
+  it('phantom interviewer turns without questionIndex are excluded regardless of count', async () => {
+    // Greeting + closing have no qIdx; they're stripped by the qIdx filter,
+    // not by the evaluations.length cap.
+    const t0 = 1776957100000
+    mockFindById.mockResolvedValue({
+      _id: 'sess-phantom',
+      startedAt: new Date(t0),
+      recordingR2Key: 'r/sess-phantom.webm',
+      transcript: [
+        { speaker: 'interviewer', text: 'Hi', timestamp: t0 }, // no qIdx
+        { speaker: 'interviewer', text: 'Q1', timestamp: t0 + 10_000, questionIndex: 0 },
+        { speaker: 'interviewer', text: 'Q2', timestamp: t0 + 20_000, questionIndex: 1 },
+        { speaker: 'interviewer', text: 'Bye', timestamp: t0 + 30_000 }, // no qIdx
+      ],
+      evaluations: [{ questionIndex: 0 }, { questionIndex: 1 }],
+      config: { role: 'pm' },
+    })
+    const result = await stepFetchSession('sess-phantom')
+    expect(result.questionBoundaries).toEqual([10, 20])
   })
 
   // PR #316 Codex P1 regression guard: with multiple interviewer turns per

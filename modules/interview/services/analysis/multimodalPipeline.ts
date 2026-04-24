@@ -159,11 +159,18 @@ export async function stepFetchSession(sessionId: string): Promise<SessionData> 
 
   let questionBoundaries: number[]
   if (byQIdx.length > 0) {
+    // One boundary per unique questionIndex. DO NOT cap by
+    // evaluations.length — some flows (coding intro + problem + follow-up
+    // in useInterview.ts:1878,1890,1950) record interviewer prompts with
+    // qIdx values that aren't 1:1 with evaluations. The qIdx filter above
+    // already strips greeting/closing (which have no qIdx), so the cap is
+    // redundant on this path; capping here would drop real question starts.
     byQIdx.sort((a, b) => a.qIdx - b.qIdx)
-    // Cap still applied as defense-in-depth; under normal operation the
-    // unique qIdx count never exceeds evaluations.length anyway.
-    questionBoundaries = byQIdx.map((x) => x.t).slice(0, evaluations.length + 1)
+    questionBoundaries = byQIdx.map((x) => x.t)
   } else {
+    // Legacy fallback — no questionIndex present on any interviewer entry.
+    // Apply the cap here because we have no qIdx to filter greeting/closing
+    // turns out of the raw interviewer-turn list.
     questionBoundaries = transcript
       .filter((t) => t.speaker === 'interviewer')
       .map((t) => secondsSinceT0(t.timestamp, sessionT0))
