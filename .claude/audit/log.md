@@ -1300,3 +1300,10 @@
 - **Root-cause:** Codex P2 (second round) on PR #318. When every session had
 - **No-tests-needed-because: offline analysis script (scripts/ not in vitest**
 - **Verified-by:** npx tsc --noEmit clean.
+
+### 2026-04-24 12:02:04 +0000 · `de9d8b8` · Claude
+- **Subject:** fix(analyse-script): split no-comparable handling by metric availability
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** Codex P2 (third round) on PR #318. My previous guard was
+- **No-tests-needed-because: offline analysis script (scripts/ not in**
+- **Verified-by:** npx tsc --noEmit clean.
