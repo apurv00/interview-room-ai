@@ -470,6 +470,56 @@ describe('POST /api/generate-feedback — side-effect outcome observability (PR 
     expect((failed ?? []).some((f) => f.name === 'persist')).toBe(false)
   })
 
+  // ── Codex P1 on PR #321 round 3 — await persist before response ──
+  //
+  // Pre-fix behavior: persist was scheduled via fireAndTrack and the
+  // handler returned immediately. The feedback-lock `finally` released
+  // the Redis lock before `findByIdAndUpdate` committed. A concurrent
+  // reload-poll from the feedback page would hit /api/interviews/
+  // [sessionId] → see `session.feedback` empty → time out → re-POST
+  // generate-feedback → cache-miss → acquire the now-available lock →
+  // full Claude call again + duplicate non-idempotent side-effects
+  // (practiceStats / competency / pathway). Double-billed, user-
+  // invisible.
+  //
+  // Fix: explicitly `await persistPromise` before the response return
+  // so Mongo is guaranteed committed by the time the client sees 200.
+  // The other side-effects stay fire-and-forget (pathwayPlan's Claude
+  // call can take seconds — blocking on it would slow the feedback page
+  // noticeably).
+  it('awaits persist before returning so reload flows never see empty session.feedback', async () => {
+    // Make findByIdAndUpdate a slow mock: it must still be in-flight
+    // when the handler would have returned pre-fix. `persistCommitted`
+    // starts false, only flips true after the await completes.
+    let persistCommitted = false
+    mockFindByIdAndUpdate.mockImplementationOnce(async () => {
+      // 30ms is enough to detect the bug reliably; short enough to
+      // keep the suite fast. Pre-fix: handler returns in ~few ms (well
+      // before persistCommitted=true). Post-fix: handler awaits the
+      // full 30ms before returning.
+      await new Promise((r) => setTimeout(r, 30))
+      persistCommitted = true
+    })
+
+    const startedAt = Date.now()
+    const res = await POST(makeRequest())
+    const elapsed = Date.now() - startedAt
+    expect(res.status).toBe(200)
+
+    // Primary assertion: persist MUST have committed by the time
+    // the handler returned. Pre-fix this would be false (handler
+    // returned before the mock's setTimeout fired). Post-fix this
+    // is true — the await forces the handler to wait for the commit.
+    expect(persistCommitted).toBe(true)
+
+    // Secondary guard: the handler elapsed time should be ≥ the
+    // mock's 30ms delay. This catches the failure mode where
+    // someone removes the await but leaves persistCommitted=true
+    // (impossible here because the mock awaits its own setTimeout,
+    // but a defensive belt-and-suspenders assertion).
+    expect(elapsed).toBeGreaterThanOrEqual(30)
+  })
+
   // ── Backward compatibility: response shape remains valid ──
   it('still returns a valid FeedbackData shape with the new field', async () => {
     mockIsFeatureEnabled.mockReturnValue(true)

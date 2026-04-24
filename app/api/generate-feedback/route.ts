@@ -1069,16 +1069,27 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         // inside the callback, the outer real Promise is observed
         // arbitrarily many times safely. Works with both Mongoose
         // Query (prod) and Promise-returning mocks (tests). Codex P1
-        // on PR #321.
+        // on PR #321 round 2.
+        //
+        // Hoisted to a named local so we can `await` it before the
+        // response return — fire-and-forget would let the handler
+        // return 200 before Mongo commits, and the feedback-lock
+        // `finally` would release the Redis lock, and a concurrent
+        // reload-poll from the client would hit /api/interviews/
+        // [sessionId] → find `session.feedback` empty → re-POST
+        // generate-feedback → cache-miss → full Claude call AGAIN.
+        // Double Claude bill + double downstream side-effects. Codex
+        // P1 on PR #321 round 3.
+        const persistPromise = Promise.resolve().then(() =>
+          InterviewSession.findByIdAndUpdate(sessionId, {
+            feedback,
+            status: 'completed',
+            completedAt: new Date(),
+          }),
+        )
         fireAndTrack(
           'persist',
-          Promise.resolve().then(() =>
-            InterviewSession.findByIdAndUpdate(sessionId, {
-              feedback,
-              status: 'completed',
-              completedAt: new Date(),
-            }),
-          ),
+          persistPromise,
           'Failed to persist feedback to session',
         )
 
@@ -1233,6 +1244,34 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
             'generate-feedback: post-feedback side effects settled',
           )
         })
+
+        // Await persist specifically before returning the response —
+        // the rest of the side-effects stay fire-and-forget (pathwayPlan
+        // in particular makes a Claude call internally and can take
+        // several seconds; blocking the response on it would slow the
+        // feedback page noticeably). Mongo round-trip for persist is
+        // typically ~50-200ms.
+        //
+        // Rationale: if we return before persist commits, the feedback-
+        // lock `finally` releases the Redis lock immediately, and a
+        // concurrent reload-poll from the feedback page hits /api/
+        // interviews/[sessionId] while `session.feedback` is still
+        // empty, times out its poll, re-POSTs generate-feedback,
+        // hits the cache-miss path (line ~241 `findOne({...})` returns
+        // no feedback), acquires the now-available lock, and re-runs
+        // the whole pipeline — full Claude call, duplicate side
+        // effects (practiceStats/competency/pathway are non-idempotent,
+        // so duplicate XP is a real concern). Codex P1 on PR #321
+        // round 3.
+        //
+        // Swallowed catch: the fireAndTrack above already installed
+        // a per-call `.catch(aiLogger.warn)` AND the aggregate log
+        // covers rejections. If persist rejects (Mongo down), we
+        // still return the feedback body to the in-tab caller — that
+        // preserves the current-tab UX — and the reload-then-regenerate
+        // cost is an accepted failure mode for Mongo outage, not a
+        // timing race.
+        await persistPromise.catch(() => { /* tracked above */ })
       }
 
       // PR #321: attach side-effect scheduling outcomes to the
