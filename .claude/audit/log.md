@@ -1258,3 +1258,10 @@
 - **Root-cause:** session.startedAt is written at session CREATE time
 - **Tests-added: modules/interview/__tests__/multimodalPipelineNormalisation.test.ts**
 - **Verified-by:** 20/20 normalisation + 15/15 analysisJob tests pass,
+
+### 2026-04-24 09:37:37 +0000 · `f706260` · Claude
+- **Subject:** fix(feedback): flag inner fallback degraded — stop shipping fabricated dimensions
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** when Claude returns a 200 with parseable JSON but missing
+- **Tests-added: modules/interview/__tests__/feedbackDegradedFlag.test.ts**
+- **Verified-by:** 14/14 feedbackDegradedFlag + 40/40 generateFeedback* tests pass,
