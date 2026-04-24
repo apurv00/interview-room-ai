@@ -1321,3 +1321,31 @@
 - **Root-cause:** Codex P0 on PR #319. Next.js App Router route files
 - **No-tests-needed-because: pure move + import-path swap. Logic and**
 - **Verified-by:** 14/14 generateFeedbackSilentZeros tests pass via the
+
+### 2026-04-24 14:52:43 +0000 · `b24caf9` · Claude
+- **Subject:** fix(stt): buffer PCM during WS open + silent-PCM KeepAlive
+- **Files:** 4 changed, 2 test file(s)
+- **Root-cause:** production interview session 69eb6689c6cbd204bd2b8266
+- **Tests-added:**
+- **Verified-by:** 9/9 new pcmRingBuffer tests pass, 68/68 existing
+
+### 2026-04-24 15:19:01 +0000 · `b45e470` · Claude
+- **Subject:** fix(stt): Codex P1 on PR #320 — slow-path race + warmUp fallback dupes
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** two interlocking bugs in useDeepgramRecognition's slow-path
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+- **Verified-by:** npx vitest run modules/interview/__tests__/deepgramRecognition.test.ts
+
+### 2026-04-24 16:27:23 +0000 · `7f2f28a` · Claude
+- **Subject:** fix(stt): Codex P1 round-2 on PR #320 — eagerFired + superseded ws
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** two more races Codex flagged on the round-1 fix.
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+- **Verified-by:** npx vitest run modules/interview → 1590/1590 pass
+
+### 2026-04-24 16:57:58 +0000 · `d0357bc` · Claude
+- **Subject:** fix(stt): Codex P1+P2 round-3 on PR #320 — live-ws check + pcm clear
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** two more races Codex flagged on the round-2 commit, both
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+- **Verified-by:** npx vitest run modules/interview → 1592/1592 pass
