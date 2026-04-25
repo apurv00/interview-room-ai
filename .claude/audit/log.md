@@ -1387,3 +1387,10 @@
 - **Files:** 2 changed, 1 test file(s)
 - **Root-cause:** two P3 hot-path defensive items from the round-5 audit,
 - **Tests-added:**
+
+### 2026-04-25 07:01:09 +0000 · `db18446` · Claude
+- **Subject:** fix(stt): reconnect when preserved warmUp ws dies mid-listening
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** production session 2026-04-25 06:13–06:20 IST showed Q6
+- **Tests-added:**
+- **Verified-by:** npx vitest run
