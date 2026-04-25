@@ -2269,4 +2269,234 @@ describe('useDeepgramRecognition', () => {
       Object.defineProperty(window.navigator, 'onLine', onlineDescriptor)
     }
   })
+
+  // ── PR A round-2 — preserved warmUp ws death mid-listening must reconnect ──
+  //
+  // Production session 2026-04-25 06:13–06:20 IST: Q1-Q5 fine, Q6 fired
+  // `stopListeningInactivityPreSpeech` with `text: ""` after the user
+  // spoke for the full pre-speech window. The console showed Q6 took
+  // the FAST path (no `warmUp→wsOpen` log between Q5 grace and Q6
+  // captureReady), but the next turn paid a fresh `warmUp→wsOpen:
+  // 1434ms` — proving the preserved warmUp ws died DURING Q6's
+  // listening session.
+  //
+  // Root cause: warmUp's `ws.onclose` handler ONLY clears
+  // `isWarmedUpRef` and the closure-local KeepAlive — it does NOT
+  // call `handleDisconnect`/`maybeReconnectOrFinish` the way
+  // `connectWebSocket.onclose` does. So when Deepgram closes the
+  // preserved ws mid-answer (1011 idle, 1006 net, etc.), the worklet
+  // keeps producing PCM frames but the port handler reads
+  // `wsRef.current.readyState === CLOSED` and silently drops them.
+  // Deepgram never returns Results → liveTranscriptRef never grows →
+  // useInterview's pre-speech inactivity timer fires with empty text.
+  // PR #320 fixed Q1 cold-start audio loss but left this mid-turn
+  // warmUp-ws death hole open.
+  //
+  // Fix: when startListening's fast path takes over a preserved
+  // warmUp ws, install a reconnect-aware onclose that delegates to
+  // `maybeReconnectOrFinish(cachedTokenRef.current)` for untagged
+  // closes during an active listening session.
+  it('reconnects when preserved warmUp ws dies mid-listening (Q6 prod failure)', async () => {
+    // Defensive resets — the worklet/getUserMedia mocks can be
+    // contaminated by earlier tests in this file.
+    mockAddModule.mockReset()
+    mockAddModule.mockResolvedValue(undefined)
+    const gumSpy = vi.mocked(navigator.mediaDevices.getUserMedia)
+    gumSpy.mockReset()
+    gumSpy.mockResolvedValue(mockStream as unknown as MediaStream)
+
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+
+    // Step 1: warmUp + simulateOpen → preserved ws is live, isWarmedUpRef=true
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+    const firstWs = mockWsInstance!
+    expect(firstWs).not.toBeNull()
+    act(() => { firstWs.simulateOpen() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+
+    // Step 2: startListening fast path (the Q6 entry condition).
+    // No `warmUp→wsOpen` re-fire — ws is reused as-is.
+    await act(async () => {
+      result.current.startListening(onComplete)
+      await vi.advanceTimersByTimeAsync(50)
+    })
+
+    // Step 3: user starts speaking, partial text captured.
+    await act(async () => {
+      firstWs.simulateMessage(makeResult('I would start by understanding the user', true))
+    })
+
+    // Step 4: mid-answer, Deepgram closes the ws (untagged — 1011
+    // idle or 1006 net). Pre-fix: warmUp.onclose just clears
+    // isWarmedUpRef and audio silently drops. Post-fix: the
+    // fast-path-installed reconnect-aware onclose calls
+    // maybeReconnectOrFinish → schedules reconnect.
+    await act(async () => {
+      firstWs.close() // untagged — no __finishTrigger set
+      // Advance past the 800ms reconnect backoff (attempt 1 → 800ms)
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+
+    // Assertion 1: a NEW ws was constructed (reconnect happened),
+    // not the silent drop the old code did.
+    expect(mockWsInstance).not.toBe(firstWs)
+    expect(mockWsInstance).not.toBeNull()
+
+    // Assertion 2: onComplete has NOT fired — the candidate is still
+    // mid-answer. They should be able to keep talking on the new ws.
+    expect(onComplete).not.toHaveBeenCalled()
+
+    // Step 5: new ws opens; candidate continues; UtteranceEnd
+    // eventually fires graceTimer with the combined text.
+    act(() => { mockWsInstance!.simulateOpen() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+    await act(async () => {
+      mockWsInstance!.simulateMessage(makeResult('and then mapping their journey.', true))
+    })
+    await act(async () => {
+      mockWsInstance!.simulateMessage(makeUtteranceEnd())
+      await vi.advanceTimersByTimeAsync(4000)
+    })
+
+    // Assertion 3: final text combines both halves — partial text
+    // was preserved across the reconnect via finalTextRef.
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'I would start by understanding the user and then mapping their journey.',
+      }),
+    )
+  })
+
+  // ── PR A round-2 — WE-initiated close on a fast-path ws must NOT reconnect ──
+  //
+  // The reconnect-aware onclose installed by the fast path must only
+  // fire on UNTAGGED closes (Deepgram-initiated). When the hook itself
+  // closes the ws via finishRecognition (e.g. stopListeningFinishInterview
+  // = code 4014), the close is tagged with __finishTrigger and the
+  // onclose handler must NOT trigger a spurious reconnect on top of a
+  // legitimately-ended session. Mirrors the same guard in
+  // connectWebSocket.onclose (line ~1283).
+  it('does NOT reconnect when WE close the fast-path-reused ws (tagged finish)', async () => {
+    mockAddModule.mockReset()
+    mockAddModule.mockResolvedValue(undefined)
+    const gumSpy = vi.mocked(navigator.mediaDevices.getUserMedia)
+    gumSpy.mockReset()
+    gumSpy.mockResolvedValue(mockStream as unknown as MediaStream)
+
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+    const firstWs = mockWsInstance!
+    act(() => { firstWs.simulateOpen() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+
+    await act(async () => {
+      result.current.startListening(onComplete)
+      await vi.advanceTimersByTimeAsync(50)
+    })
+
+    // We end the interview (terminal trigger, not preserve).
+    // finishRecognition tags the ws with __finishTrigger and closes
+    // it. The fast-path onclose MUST see the tag and skip reconnect.
+    await act(async () => {
+      result.current.stopListening('finishInterview')
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+
+    // Pre-fix or post-fix this should be the same: NO new ws, NO
+    // reconnect attempt. The post-fix reconnect-aware onclose must
+    // honor the __finishTrigger tag the same way connectWebSocket's
+    // onclose does.
+    expect(mockWsInstance).toBe(firstWs)
+  })
+
+  // ── PR A round-2 idempotency — repeated fast-path entries must not
+  //    nest reconnect wraps (single close → single reconnect attempt) ──
+  //
+  // graceTimer preserves the ws across Q1→Q2→Q3 (etc). Each turn's
+  // startListening fast path wraps `ws.onclose`. Without an
+  // idempotency guard, the wraps nest: depth = number of turns. When
+  // the ws ever dies, ALL nested wraps fire and each calls
+  // `maybeReconnectOrFinish` — incrementing reconnectAttemptsRef
+  // multiple times for ONE close event, falsely exhausting the
+  // 2-attempt budget after just a single Deepgram disconnect on a
+  // long interview. Pin the contract: across 3 fast-path entries
+  // and one close, exactly ONE new ws is constructed (not N).
+  it('does NOT nest reconnect wraps across multiple preserveSocket fast-path entries', async () => {
+    mockAddModule.mockReset()
+    mockAddModule.mockResolvedValue(undefined)
+    const gumSpy = vi.mocked(navigator.mediaDevices.getUserMedia)
+    gumSpy.mockReset()
+    gumSpy.mockResolvedValue(mockStream as unknown as MediaStream)
+
+    const { result } = renderHook(() => useDeepgramRecognition())
+
+    // Q1 — warmUp + listen + graceTimer (preserve)
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+    const sharedWs = mockWsInstance!
+    act(() => { sharedWs.simulateOpen() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+
+    const onCompleteQ1 = vi.fn()
+    await act(async () => {
+      result.current.startListening(onCompleteQ1)
+      await vi.advanceTimersByTimeAsync(50)
+    })
+    await act(async () => {
+      sharedWs.simulateMessage(makeResult('Q1 answer', true))
+      sharedWs.simulateMessage(makeUtteranceEnd())
+      await vi.advanceTimersByTimeAsync(4000)
+    })
+    expect(onCompleteQ1).toHaveBeenCalled()
+    // graceTimer preserved — sharedWs is still OPEN
+    expect(sharedWs.readyState).toBe(1 /* OPEN */)
+    expect(mockWsInstance).toBe(sharedWs)
+
+    // Q2 — same ws reused via fast path (depth-2 wrap risk)
+    const onCompleteQ2 = vi.fn()
+    await act(async () => {
+      result.current.startListening(onCompleteQ2)
+      await vi.advanceTimersByTimeAsync(50)
+    })
+    await act(async () => {
+      sharedWs.simulateMessage(makeResult('Q2 answer', true))
+      sharedWs.simulateMessage(makeUtteranceEnd())
+      await vi.advanceTimersByTimeAsync(4000)
+    })
+    expect(onCompleteQ2).toHaveBeenCalled()
+
+    // Q3 — same ws reused via fast path (depth-3 wrap risk)
+    const onCompleteQ3 = vi.fn()
+    await act(async () => {
+      result.current.startListening(onCompleteQ3)
+      await vi.advanceTimersByTimeAsync(50)
+    })
+
+    // Now the ws dies untagged mid-Q3. With idempotent wrap, only
+    // ONE reconnect attempt fires → ONE new ws. Without it, three
+    // nested wraps fire → reconnectAttemptsRef hits 3 → first
+    // attempt's budget check `> maxReconnectAttempts (2)` would
+    // trigger `finishRecognition('reconnectExhausted')` instead of
+    // a clean reconnect, and the user sees an error instead of
+    // recovery.
+    await act(async () => {
+      sharedWs.close()
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+
+    // Exactly ONE new ws constructed. mockWsInstance should not be
+    // sharedWs (a reconnect happened), but should be ONE step removed
+    // — not exhausted, not double-reconnected.
+    expect(mockWsInstance).not.toBe(sharedWs)
+    expect(mockWsInstance).not.toBeNull()
+    // onCompleteQ3 must not have fired with a reconnectExhausted
+    // result — the user is mid-answer and should keep going on the
+    // new ws.
+    expect(onCompleteQ3).not.toHaveBeenCalled()
+  })
 })

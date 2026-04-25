@@ -531,6 +531,72 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
         // The warmUp WebSocket was created without an onmessage handler —
         // attach it now so Deepgram results are actually received.
         attachMessageHandler(wsRef.current)
+
+        // Install a reconnect-aware onclose for the duration of THIS
+        // listening session. Production session 2026-04-25 06:13–06:20
+        // IST surfaced the bug: warmUp's `ws.onclose` (lines ~795-815)
+        // only clears `isWarmedUpRef` and the KeepAlive — it does NOT
+        // call `handleDisconnect` / `maybeReconnectOrFinish` the way
+        // `connectWebSocket.onclose` does. So when Deepgram closes the
+        // preserved warmUp ws mid-answer (1011 idle / 1006 net /
+        // anything), the worklet keeps producing PCM frames but the
+        // port handler reads `wsRef.current.readyState === CLOSED` and
+        // silently drops them. Deepgram never returns Results,
+        // liveTranscriptRef stays empty, useInterview's pre-speech
+        // inactivity timer fires `stopListeningInactivityPreSpeech`
+        // with `text: ""` after 60s of dead-pipe speech.
+        //
+        // Wrap (don't replace) the original preserve-onclose so cross-
+        // turn semantics still work, AND chain into a reconnect attempt
+        // when the close is untagged (Deepgram-initiated) and we're in
+        // an active listening session. Same `triggerForLog === null`
+        // gate that `connectWebSocket.onclose` uses — WE-initiated
+        // tagged closes (graceTimer / stopListeningFinishInterview /
+        // etc.) must NOT trigger a spurious reconnect.
+        //
+        // Idempotency: when graceTimer preserves the same ws across
+        // multiple turns (Q1→Q2→...), each turn's startListening fast
+        // path runs this code. Without a guard we'd nest wraps every
+        // turn — and on close ALL N wraps would fire, calling
+        // maybeReconnectOrFinish N times and exhausting the 2-attempt
+        // budget on a single close event. Tag the ws once and skip
+        // subsequent wraps — the original wrap from turn 1 already
+        // handles every turn's reconnect via the
+        // `onCompleteRef.current !== null` gate (which is non-null
+        // ONLY when a listening session is active).
+        const liveWs = wsRef.current as WebSocket & {
+          __reconnectOnCloseWrapped?: boolean
+        }
+        if (!liveWs.__reconnectOnCloseWrapped) {
+          liveWs.__reconnectOnCloseWrapped = true
+          const originalOnClose = liveWs.onclose
+          liveWs.onclose = (ev) => {
+            // Run the original preserve-onclose first (clears
+            // isWarmedUpRef + KeepAlive + debug-POST). It's defensive-
+            // only on the side effects this branch then triggers.
+            if (typeof originalOnClose === 'function') {
+              try {
+                ;(originalOnClose as (e: CloseEvent) => unknown).call(liveWs, ev)
+              } catch { /* ignore — original handler must not block reconnect */ }
+            }
+            // Reconnect gate: only on untagged closes during an active
+            // listening session, with a token cached. Mirrors the gate
+            // at `connectWebSocket.onclose` line ~1283.
+            const triggerForLog = (liveWs as TaggedWebSocket).__finishTrigger ?? null
+            if (
+              triggerForLog === null
+              && onCompleteRef.current !== null
+              && !isFinishingRef.current
+              && cachedTokenRef.current
+            ) {
+              console.warn(
+                '[Deepgram] preserved warmUp ws died mid-listening, reconnecting',
+              )
+              maybeReconnectOrFinish(cachedTokenRef.current)
+            }
+          }
+        }
+
         startAudioCapture(wsRef.current)
         isWarmedUpRef.current = false
         return
