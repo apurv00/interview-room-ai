@@ -1,3 +1,5 @@
+import type { AnswerEvaluation } from '@shared/types'
+
 /**
  * Per-question answer-quality aggregation (Work Items G.4 + G.5).
  *
@@ -59,7 +61,7 @@ export interface AnswerQualityAggregate extends PerQAverageResult {
  * Pure and deterministic. Safe to call from any context.
  */
 export function computePerQAverage(
-  evaluations: Array<Record<string, unknown>>,
+  evaluations: AnswerEvaluation[],
 ): PerQAverageResult {
   const agg = computeAnswerQualityAggregate(evaluations)
   // Backward-compatible subset — pre-G.9 callers that only need the
@@ -81,19 +83,23 @@ export function computePerQAverage(
  * flag state — this helper never picks for the caller.
  */
 export function computeAnswerQualityAggregate(
-  evaluations: Array<Record<string, unknown>>,
+  evaluations: AnswerEvaluation[],
 ): AnswerQualityAggregate {
   const dims = ['relevance', 'structure', 'specificity', 'ownership'] as const
   const perQ: number[] = []
   let skippedFailed = 0
   for (const e of evaluations) {
-    const status = (e as { status?: string }).status
-    if (status === 'failed') {
+    if (e.status === 'failed') {
       skippedFailed++
       continue
     }
+    // PR #322: dims are required `number` per AnswerEvaluationSchema
+    // (validators/interview.ts) — Zod rejects payloads missing them at
+    // the HTTP boundary. The `Number(...) || 0` defensiveness is kept
+    // for paranoia (pre-Zod legacy paths) but no longer rescues a
+    // Zod-validated payload from undefined.
     const avg =
-      dims.reduce((acc, d) => acc + (Number((e as Record<string, unknown>)[d]) || 0), 0) /
+      dims.reduce((acc, d) => acc + (Number(e[d]) || 0), 0) /
       dims.length
     perQ.push(avg)
   }

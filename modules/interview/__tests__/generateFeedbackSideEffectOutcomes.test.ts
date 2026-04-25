@@ -224,11 +224,17 @@ async function waitForAggregateLog(): Promise<Record<string, unknown> | null> {
   // handler returns before it fires — we need to give microtasks a few
   // ticks to drain. 20ms is comfortably above the typical resolved-
   // promise resolution latency in a mocked environment.
+  //
+  // PR #322: aggregate log escalates from .info to .warn when any
+  // side-effect rejected. Probe both sinks so the helper works on
+  // happy-path and failure scenarios.
   await new Promise((r) => setTimeout(r, 20))
-  const aggregateCall = mockInfo.mock.calls.find(
-    (call) => typeof call[1] === 'string' && call[1].includes('post-feedback side effects settled'),
-  )
-  return aggregateCall ? (aggregateCall[0] as Record<string, unknown>) : null
+  const matcher = (call: unknown[]) =>
+    typeof call[1] === 'string' && call[1].includes('post-feedback side effects settled')
+  const warnCall = mockWarn.mock.calls.find(matcher)
+  if (warnCall) return warnCall[0] as Record<string, unknown>
+  const infoCall = mockInfo.mock.calls.find(matcher)
+  return infoCall ? (infoCall[0] as Record<string, unknown>) : null
 }
 
 describe('POST /api/generate-feedback — side-effect outcome observability (PR #321)', () => {

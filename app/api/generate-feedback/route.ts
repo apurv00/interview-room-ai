@@ -641,7 +641,7 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       if (feedback.overall_score == null || !feedback.dimensions) {
         aiLogger.warn({ raw: raw.slice(0, 500) }, 'Incomplete feedback from Claude — applying defaults')
         // G.4: reuse the failed-row-aware helper here too.
-        const preQ = computePerQAverage(evaluations as unknown as Array<Record<string, unknown>>)
+        const preQ = computePerQAverage(evaluations as unknown as AnswerEvaluation[])
         // G.5: `??` — a legit 0 (no-answer session) must not be
         // stomped to preQ.average. `||` did exactly that.
         feedback.overall_score = feedback.overall_score ?? preQ.average
@@ -690,7 +690,7 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       // reference until G.15c. `perQAvg` (the flat mean) is still
       // the input to the overall-score formula/blend — only the
       // user-visible AQ dimension differs here.
-      const perQ = computeAnswerQualityAggregate(evaluations as unknown as Array<Record<string, unknown>>)
+      const perQ = computeAnswerQualityAggregate(evaluations as unknown as AnswerEvaluation[])
       const perQAvg = perQ.average
       const aqDisplayScore = perQ.weighted
 
@@ -1107,7 +1107,7 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         // double-counting can't happen.
         if (typeof feedback.overall_score === 'number') {
           const { strongDimensions, weakDimensions } = deriveStrongWeakDimensions(
-            evaluations as unknown as Array<Record<string, unknown>>,
+            evaluations as unknown as AnswerEvaluation[],
           )
           fireAndTrack(
             'practiceStats',
@@ -1232,7 +1232,12 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
                   : null,
             }))
             .filter((r) => r.reason !== null)
-          aiLogger.info(
+          // Escalate to .warn when ANY side-effect failed so the
+          // aggregate line shows up in Vercel's default warn+ dashboard
+          // filter, not just on a verbose log fetch. Routine all-
+          // succeeded runs stay at .info to avoid noise. PR #322.
+          const aggregateLog = failed.length > 0 ? aiLogger.warn : aiLogger.info
+          aggregateLog(
             {
               sessionId,
               userId: user.id,
@@ -1303,7 +1308,7 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       // that the main path now avoids.
       const hasEvals = evaluations && evaluations.length > 0
       const roughScore = hasEvals
-        ? computePerQAverage(evaluations as unknown as Array<Record<string, unknown>>).average
+        ? computePerQAverage(evaluations as unknown as AnswerEvaluation[]).average
         : 0
 
       const fallbackCommScore = commScore || 0
