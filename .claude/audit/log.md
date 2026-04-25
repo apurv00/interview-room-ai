@@ -1443,3 +1443,10 @@
 - **Root-cause:** dbcd427 (Layer 1) introduced two new behaviors that
 - **Tests-added:**
 - **Verified-by:** vitest modules/interview/__tests__/deepgramRecognition
+
+### 2026-04-25 15:34:12 +0000 · `3e46546` · Claude
+- **Subject:** brand: replace mic mark with graduation cap
+- **Files:** 4 changed, 0 test file(s)
+- **Root-cause:** the previous mic glyph (lucide-react Mic icon in
+- **No-tests-needed-because: presentational-only change. AppShell has**
+- **Verified-by:** vitest shared (258/258 pass), tsc --noEmit clean,

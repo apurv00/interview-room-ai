@@ -33,8 +33,11 @@ export default function OgImage() {
             marginBottom: 32,
           }}
         >
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+          <svg width="48" height="48" viewBox="0 0 64 64" fill="none">
+            <path d="M32 16 L52 26 L32 36 L12 26 Z" fill="white" />
+            <path d="M22 32 V40 C22 43 26.5 45 32 45 C37.5 45 42 43 42 40 V32" fill="white" />
+            <path d="M50 26 V40" stroke="white" strokeWidth="2.5" strokeLinecap="round" />
+            <circle cx="50" cy="44" r="3" fill="white" />
           </svg>
         </div>
         <div
