@@ -1415,3 +1415,10 @@
 - **Root-cause:** Deepgram's /v1/listen idle counter does NOT credit
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
 - **Verified-by:** vitest modules/interview (1608/1608 pass, including
+
+### 2026-04-25 08:42:41 +0000 · `3c84988` · Claude
+- **Subject:** feat(stt): drop counter + readyState snapshot in close-debug POST
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** instrumentation gap. Multiple recent fixes (PR #324,
+- **Tests-added:**
+- **Verified-by:** vitest modules/interview (1610/1610 pass),
