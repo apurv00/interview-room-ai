@@ -1377,3 +1377,9 @@
 - **Root-cause:** the round-2 fix folded persist into fireAndTrack's fire-
 - **Tests-added: new reproducer in**
 - **Verified-by:** npx vitest run
+
+### 2026-04-25 04:45:58 +0000 · `764fcd3` · Claude
+- **Subject:** refactor(feedback): tighten eval-helper signatures + escalate aggregate log on failure
+- **Files:** 8 changed, 3 test file(s)
+- **Root-cause:** two P3 hygiene items surfaced by the round-5 audit, both
+- **Tests-added:**

@@ -1,3 +1,5 @@
+import type { AnswerEvaluation } from '@shared/types'
+
 /**
  * Engagement context builder for the post-interview feedback prompt.
  *
@@ -62,7 +64,7 @@ export function averageDefined(values: (number | null)[]): number | null {
 
 export function computeEngagementContext(
   speechMetrics: Record<string, unknown>[],
-  evaluations: Record<string, unknown>[],
+  evaluations: AnswerEvaluation[],
   pressureIdx: number,
 ): { perQSummary: string; pressureContext: string } {
   if (!speechMetrics.length) {
@@ -111,8 +113,8 @@ export function computeEngagementContext(
       // G.5: skip status='failed' rows in the normal-avg denominator
       // so the pressure-vs-normal delta isn't diluted by fabricated
       // 60/55/55/60 placeholders. Mirrors the G.4 aggregation policy.
-      const normalRows = evaluations.filter((e, i) =>
-        i !== pressureIdx && (e as { status?: string }).status !== 'failed',
+      const normalRows = evaluations.filter(
+        (e, i) => i !== pressureIdx && e.status !== 'failed',
       )
       const avgNormalScore = normalRows.length > 0
         ? normalRows.reduce((s, e) => {
@@ -126,7 +128,7 @@ export function computeEngagementContext(
       // Don't report a pressure score for a failed pressure row — the
       // number would be the placeholder, not the candidate's actual
       // pressure performance. Drop the context instead.
-      if ((pEval as { status?: string }).status === 'failed') {
+      if (pEval.status === 'failed') {
         pressureContext = `\nPressure question (Q${pressureIdx + 1}) could not be scored — AI evaluation failed on that answer.`
       } else {
         const pressureScore = ((Number(pEval.relevance) ?? 0) + (Number(pEval.structure) ?? 0) + (Number(pEval.specificity) ?? 0) + (Number(pEval.ownership) ?? 0)) / 4

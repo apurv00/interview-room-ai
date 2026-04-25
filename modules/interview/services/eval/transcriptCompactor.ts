@@ -103,7 +103,7 @@ export function compactTranscript(input: CompactTranscriptInput): CompactTranscr
       candidateText,
       answerSummary: ev.answerSummary ?? '',
       wordCount,
-      status: (ev as { status?: string }).status ?? 'ok',
+      status: ev.status ?? 'ok',
     }
   })
 

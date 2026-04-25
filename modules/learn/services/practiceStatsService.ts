@@ -24,6 +24,7 @@ import mongoose from 'mongoose'
 import { connectDB } from '@shared/db/connection'
 import { User } from '@shared/db/models'
 import { logger } from '@shared/logger'
+import type { AnswerEvaluation } from '@shared/types'
 
 export interface UpdatePracticeStatsInput {
   userId: string
@@ -116,11 +117,9 @@ export async function updatePracticeStats(
 const RUBRIC_DIMS = ['relevance', 'structure', 'specificity', 'ownership'] as const
 
 export function deriveStrongWeakDimensions(
-  evaluations: Array<Record<string, unknown>>,
+  evaluations: AnswerEvaluation[],
 ): { strongDimensions: string[]; weakDimensions: string[] } {
-  const realEvals = evaluations.filter(
-    (e) => (e as { status?: string }).status !== 'failed',
-  )
+  const realEvals = evaluations.filter((e) => e.status !== 'failed')
   if (!realEvals.length) {
     return { strongDimensions: [], weakDimensions: [] }
   }

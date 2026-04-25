@@ -452,7 +452,11 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
 
     await new Promise((r) => setTimeout(r, 0))
 
-    const summaryCall = mockInfo.mock.calls.find((c) =>
+    // PR #322: aggregate log escalates from .info to .warn when
+    // failedCount > 0 so operators see degradation in the default
+    // Vercel filter (info+ shows everything but warn+ is the standard
+    // dashboard threshold). Look in mockWarn now, not mockInfo.
+    const summaryCall = mockWarn.mock.calls.find((c) =>
       typeof c[1] === 'string' && c[1].includes('post-feedback side effects settled'),
     )
     expect(summaryCall).toBeTruthy()
@@ -464,5 +468,40 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
     expect(failed.map((f) => f.name).sort()).toEqual(['competency', 'pathwayPlan'])
     expect(failed.find((f) => f.name === 'competency')?.reason).toContain('competency DB down')
     expect(failed.find((f) => f.name === 'pathwayPlan')?.reason).toContain('pathway OOM')
+
+    // Belt-and-suspenders: same call MUST NOT have fired at .info too —
+    // otherwise the upgrade would double-log every failure.
+    const infoCall = mockInfo.mock.calls.find((c) =>
+      typeof c[1] === 'string' && c[1].includes('post-feedback side effects settled'),
+    )
+    expect(infoCall).toBeFalsy()
+  })
+
+  // PR #322: explicit pin on the log-level conditional. The "all
+  // succeeded" test above (line 411) already implicitly verifies
+  // info is the default; this test verifies the level-swap rule
+  // ("warn iff failedCount > 0") doesn't accidentally flip both
+  // ways or swap the conditional sense in a future refactor.
+  it('F-3: aggregate log uses .info when ALL side effects succeed (no swap)', async () => {
+    mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: true })
+    mockCompletion.mockResolvedValue(happyCompletion)
+
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+
+    await new Promise((r) => setTimeout(r, 0))
+
+    const infoCall = mockInfo.mock.calls.find((c) =>
+      typeof c[1] === 'string' && c[1].includes('post-feedback side effects settled'),
+    )
+    expect(infoCall).toBeTruthy()
+    const [context] = infoCall as [Record<string, unknown>, string]
+    expect(context.failedCount).toBe(0)
+
+    // Symmetric check: no warn-level aggregate when there are no failures.
+    const warnCall = mockWarn.mock.calls.find((c) =>
+      typeof c[1] === 'string' && c[1].includes('post-feedback side effects settled'),
+    )
+    expect(warnCall).toBeFalsy()
   })
 })

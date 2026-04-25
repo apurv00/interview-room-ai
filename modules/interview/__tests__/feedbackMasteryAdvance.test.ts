@@ -9,13 +9,14 @@ import { NextRequest } from 'next/server'
 
 const {
   mockCompletion, mockUpdateMasteryBatch, mockAdvanceUniversalPlan,
-  mockRegisterBadgeWiring, mockInfo,
+  mockRegisterBadgeWiring, mockInfo, mockWarn,
 } = vi.hoisted(() => ({
   mockCompletion: vi.fn(),
   mockUpdateMasteryBatch: vi.fn().mockResolvedValue([]),
   mockAdvanceUniversalPlan: vi.fn().mockResolvedValue(null),
   mockRegisterBadgeWiring: vi.fn(),
   mockInfo: vi.fn(),
+  mockWarn: vi.fn(),
 }))
 
 vi.mock('@shared/middleware/composeApiRoute', () => ({
@@ -37,8 +38,8 @@ vi.mock('@shared/middleware/composeApiRoute', () => ({
 }))
 
 vi.mock('@shared/logger', () => ({
-  aiLogger: { warn: vi.fn(), error: vi.fn(), info: mockInfo, debug: vi.fn() },
-  logger: { warn: vi.fn(), error: vi.fn(), info: mockInfo, debug: vi.fn() },
+  aiLogger: { warn: mockWarn, error: vi.fn(), info: mockInfo, debug: vi.fn() },
+  logger: { warn: mockWarn, error: vi.fn(), info: mockInfo, debug: vi.fn() },
 }))
 
 vi.mock('@shared/services/modelRouter', () => ({ completion: mockCompletion }))
@@ -254,7 +255,9 @@ describe('generate-feedback → mastery + universal plan wiring', () => {
 
     expect(mockAdvanceUniversalPlan).toHaveBeenCalledOnce()
 
-    const summaryCall = mockInfo.mock.calls.find((c: unknown[]) =>
+    // PR #322: aggregate log escalates to .warn when failedCount > 0.
+    // Look in the warn sink (mastery rejection means failedCount=1).
+    const summaryCall = mockWarn.mock.calls.find((c: unknown[]) =>
       typeof c[1] === 'string' && c[1].includes('post-feedback side effects settled'),
     )
     expect(summaryCall).toBeTruthy()
