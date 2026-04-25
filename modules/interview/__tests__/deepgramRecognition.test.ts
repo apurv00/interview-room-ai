@@ -1131,6 +1131,120 @@ describe('useDeepgramRecognition', () => {
       )
     })
 
+    // Layer 1 (2026-04-25 / claude/stt-decouple-audio-from-ws-reconnect):
+    // pin the new invariant — audio capture (AudioContext + AudioWorkletNode +
+    // MediaStream) survives across a reconnect. Pre-Layer 1 the entire
+    // audio pipeline was torn down in maybeReconnectOrFinish, forcing a
+    // 5-17s rebuild on every ws death (Chrome AudioContext rate-limit
+    // dominates). Production session 2026-04-25 09:06 UTC measured 17s
+    // captureReady on a single Deepgram-initiated 1011 close. After Layer 1
+    // the worklet keeps producing; the worklet's port.onmessage reads
+    // wsRef.current at frame-arrival time and naturally follows the swap.
+    it('Layer 1: audio pipeline persists across ws reconnect (no AudioWorkletNode rebuild)', async () => {
+      const { result } = renderHook(() => useDeepgramRecognition())
+      const onComplete = vi.fn()
+
+      // Capture worklet count BEFORE this test's action — other tests in
+      // the suite leave the module-scoped audioWorkletNodeCalls populated.
+      // We assert deltas, not absolute counts.
+      const workletsBefore = audioWorkletNodeCalls.length
+
+      act(() => { result.current.startListening(onComplete) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+      act(() => { mockWsInstance!.simulateOpen() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+
+      // After successful initial setup: exactly one new AudioWorkletNode
+      // for this session.
+      expect(audioWorkletNodeCalls.length - workletsBefore).toBe(1)
+      const workletAfterFirstSetup = lastWorkletInstance
+
+      // Network-level death (1006). Untagged → handleDisconnect →
+      // maybeReconnectOrFinish.
+      const firstWs = mockWsInstance!
+      await act(async () => {
+        firstWs.onclose?.(new CloseEvent('close', { code: 1006, reason: '', wasClean: false }))
+        // Past the 800ms reconnect backoff so the new ws is created.
+        await vi.advanceTimersByTimeAsync(1000)
+      })
+
+      // New ws constructed. Pipeline-level invariant: NO new AudioWorkletNode.
+      // Pre-Layer 1 this would be +1 (rebuild on the new ws.onopen). Layer 1
+      // skips the rebuild because the existing worklet is still alive.
+      expect(mockWsInstance).not.toBe(firstWs)
+      act(() => { mockWsInstance!.simulateOpen() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+
+      // Still exactly +1 from the start of this test — the reconnect did
+      // NOT construct a second worklet.
+      expect(audioWorkletNodeCalls.length - workletsBefore).toBe(1)
+      expect(lastWorkletInstance).toBe(workletAfterFirstSetup)
+    })
+
+    it('Layer 1: PCM frames produced during the reconnect window enqueue + flush on new ws.onopen', async () => {
+      const { result } = renderHook(() => useDeepgramRecognition())
+      const onComplete = vi.fn()
+
+      act(() => { result.current.startListening(onComplete) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+      act(() => { mockWsInstance!.simulateOpen() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+
+      expect(lastWorkletInstance).not.toBeNull()
+      const firstWs = mockWsInstance!
+
+      // ws dies. The 800ms reconnect timer is now pending.
+      await act(async () => {
+        firstWs.onclose?.(new CloseEvent('close', { code: 1006, reason: '', wasClean: false }))
+        await vi.advanceTimersByTimeAsync(10)
+      })
+
+      // The new ws hasn't been constructed yet (still in the 800ms backoff).
+      expect(mockWsInstance).toBe(firstWs)
+
+      // Worklet keeps firing during the backoff. wsRef.current still
+      // points at the closed firstWs → CLOSING/CLOSED branch → drop +
+      // droppedFrameCount tick (verified by the existing drop-counter
+      // suite — not re-asserted here).
+      const deadFrame = new Int16Array(4096).buffer
+      act(() => {
+        lastWorkletInstance!.port.onmessage!({ data: deadFrame } as unknown as MessageEvent)
+      })
+
+      // Advance into the new ws being created (CONNECTING). Past 800ms
+      // → connectWebSocket runs → wsRef.current = newWs (CONNECTING).
+      await act(async () => { await vi.advanceTimersByTimeAsync(900) })
+      const newWs = mockWsInstance!
+      expect(newWs).not.toBe(firstWs)
+
+      // Worklet fires while new ws is CONNECTING → enqueue branch.
+      const buf1 = new Int16Array(4096).fill(1).buffer
+      const buf2 = new Int16Array(4096).fill(2).buffer
+      act(() => {
+        lastWorkletInstance!.port.onmessage!({ data: buf1 } as unknown as MessageEvent)
+        lastWorkletInstance!.port.onmessage!({ data: buf2 } as unknown as MessageEvent)
+      })
+
+      // Frames not sent yet (ws still CONNECTING) — verify by send count.
+      expect(newWs.send.mock.calls.length).toBe(0)
+
+      // New ws opens → ws.onopen → flushPendingPcm drains pcmBufferRef.
+      // Buffered frames flush in arrival order before any subsequent
+      // live frames. flushPendingPcm calls ws.send for each frame.
+      act(() => { newWs.simulateOpen() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+
+      // The KeepAlive interval starts on ws.onopen at 3s cadence — so
+      // immediately after onopen + 10ms there should be NO KeepAlive
+      // sends yet, only the flushed buffer (2 frames).
+      const sendCalls = newWs.send.mock.calls
+      const flushedBinaryCalls = sendCalls.filter(([arg]) => arg instanceof ArrayBuffer)
+      expect(flushedBinaryCalls.length).toBe(2)
+      // Order preserved: buf1 then buf2.
+      expect(flushedBinaryCalls[0][0]).toBe(buf1)
+      expect(flushedBinaryCalls[1][0]).toBe(buf2)
+    })
+
     it('finishes once maxReconnectAttempts is exhausted even with partial text', async () => {
       const { result } = renderHook(() => useDeepgramRecognition())
       const onComplete = vi.fn()
@@ -2139,18 +2253,27 @@ describe('useDeepgramRecognition', () => {
     expect(onComplete.mock.calls.length).toBeLessThanOrEqual(1)
   })
 
-  // Regression for Codex P1 #2 (follow-up) on PR #300. The prior guard
-  // keyed off `wsRef.current !== ws` — but during the 800ms reconnect
-  // *delay* window, `maybeReconnectOrFinish` has already synchronously
-  // closed + nulled the AudioContext, yet `wsRef.current` still points
-  // at the now-dead ws (the new ws is only created by the delayed
-  // connectWebSocket call). If addModule resolves in that window, a
-  // ws-identity check would treat the setup as current, construct the
-  // worklet against a closed context → throw → finishRecognition
-  // ('getUserMediaFailed') → truncate the in-flight answer.
-  // Context-identity is the correct key: maybeReconnectOrFinish nulls
-  // `audioContextRef.current` synchronously.
-  it('setupAudioProcessing bails when reconnect cleared context during addModule await', async () => {
+  // History — Layer 1 (2026-04-25, claude/stt-decouple-audio-from-ws-reconnect)
+  // changed the invariant this test enforces. Pre-Layer 1, maybeReconnectOrFinish
+  // synchronously closed the AudioContext and nulled audioContextRef — and the
+  // matching context-identity guard in setupAudioProcessing kept a mid-await
+  // setup from constructing an AudioWorkletNode against a closed context
+  // (Codex P1 #2 on PR #300; the original test asserted
+  // `audioWorkletNodeCalls.length === 0`).
+  //
+  // Layer 1 deletes that audio teardown from maybeReconnectOrFinish. The
+  // AudioContext stays alive across the reconnect, so a mid-await
+  // setupAudioProcessing now legitimately resolves and constructs the
+  // AudioWorkletNode against the still-open context. There is no closed-
+  // context bug to prevent because the context is no longer closed — that
+  // entire failure mode disappears with Layer 1.
+  //
+  // The new invariant tested below: an addModule resolving DURING a
+  // reconnect-delay window completes setup against the still-alive context,
+  // and the resulting worklet correctly hands frames off across the ws
+  // swap (drop during the dead-ws window, enqueue during CONNECTING,
+  // send during OPEN) without throwing or firing onComplete spuriously.
+  it('setupAudioProcessing completes against still-alive context when reconnect fires mid-addModule (Layer 1)', async () => {
     const { result } = renderHook(() => useDeepgramRecognition())
     const onComplete = vi.fn()
 
@@ -2181,28 +2304,27 @@ describe('useDeepgramRecognition', () => {
 
     // Untagged remote close (1006 network drop / 1011 Deepgram idle).
     // onclose reads a null __finishTrigger → handleDisconnect →
-    // maybeReconnectOrFinish synchronously closes the AudioContext and
-    // nulls audioContextRef. Crucially this does NOT touch wsRef.current
-    // — the new ws is only created after the 800ms reconnect delay. A
-    // ws-identity guard in setupAudioProcessing would still match here,
-    // which is the exact bug Codex flagged. Context-identity catches it.
+    // maybeReconnectOrFinish. Layer 1: this no longer closes the
+    // AudioContext nor nulls audioContextRef — only schedules the
+    // delayed connectWebSocket. The audio pipeline stays alive.
     await act(async () => {
       midAwaitWs.onclose?.(new CloseEvent('close', { code: 1006, reason: '', wasClean: false }))
       await vi.advanceTimersByTimeAsync(10)
     })
 
-    // DO NOT advance past the 800ms reconnect delay — we need the test
-    // to exercise the vulnerable window where wsRef.current is still the
-    // stale ws.
+    // DO NOT advance past the 800ms reconnect delay — exercise the
+    // window where wsRef.current still points at the stale ws.
     await act(async () => {
       resolveAdd()
       await vi.advanceTimersByTimeAsync(10)
     })
 
-    // Bug signature: AudioWorkletNode constructed against the closed
-    // context. Context-identity guard must catch the reconnect-delay
-    // window and bail before construction.
-    expect(audioWorkletNodeCalls.length).toBe(0)
+    // Layer 1 invariant: AudioContext was preserved → addModule resolves →
+    // setupAudioProcessing's identity guard sees audioContextRef.current
+    // === audioContext (no nulling happened) → worklet constructed against
+    // the still-alive context. Exactly one AudioWorkletNode for the
+    // session, no ghost setups.
+    expect(audioWorkletNodeCalls.length).toBe(1)
     // No truncation-by-error: getUserMediaFailed would fire onComplete
     // prematurely. A spurious finishRecognition would also fire it.
     expect(onComplete).not.toHaveBeenCalled()

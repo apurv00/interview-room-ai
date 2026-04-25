@@ -1337,13 +1337,31 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
         }
       }, KEEPALIVE_INTERVAL_MS)
       keepAliveTimerRef.current = myKeepAliveTimer
-      startAudioCapture(ws)
+      // Layer 1B (2026-04-25): only build a fresh audio pipeline if one
+      // isn't already alive. After the Layer 1A change to
+      // maybeReconnectOrFinish, the AudioContext + AudioWorkletNode
+      // survive across ws deaths. Calling startAudioCapture again here
+      // would create a SECOND AudioContext + AudioWorkletNode, leaving
+      // the originals dangling (eventually GC'd but never explicitly
+      // closed) and introducing a race window where the worklet's
+      // `port.onmessage` could fire on either pipeline depending on
+      // timing. The audioContext.state check catches the case where
+      // an earlier teardown ran (e.g., finishRecognition called between
+      // the old ws's onclose and a delayed reconnect) — in that
+      // scenario we DO need a fresh pipeline.
+      const audioPipelineAlive =
+        processorRef.current !== null
+        && audioContextRef.current !== null
+        && audioContextRef.current.state !== 'closed'
+      if (!audioPipelineAlive) {
+        startAudioCapture(ws)
+      }
       // Flush any PCM that buffered if the worklet was set up before
-      // this cold-connect completed. In normal cold-connect flow the
-      // worklet is created by startAudioCapture above so there's nothing
-      // queued, but in edge cases (warmUp failed → connectFresh retry
-      // after worklet already running) we must drain the buffer to
-      // preserve the user's in-flight speech.
+      // this cold-connect completed, OR if the worklet was producing
+      // frames during the Layer-1A reconnect window. In the cold path
+      // pcmBufferRef is empty (worklet just created); in the reconnect
+      // path it holds whatever frames arrived while the new ws was
+      // CONNECTING, in arrival order.
       flushPendingPcm(ws)
     }
 
@@ -1457,15 +1475,35 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     // that truncated the candidate's answer on a single network blip. Now
     // we preserve partial text across reconnects (finalTextRef is only
     // cleared at startListening time) and only finish once maxReconnect
-    // attempts are exhausted. The old audio processor is bound to the
-    // dead ws, so tear it down here — setupAudioProcessing rebuilds fresh
-    // on the next onopen.
-    processorRef.current?.disconnect()
-    sourceRef.current?.disconnect()
-    audioContextRef.current?.close().catch(() => {})
-    processorRef.current = null
-    sourceRef.current = null
-    audioContextRef.current = null
+    // attempts are exhausted.
+    //
+    // Layer 1 (2026-04-25): we used to also tear down the audio capture
+    // pipeline here (processor.disconnect / source.disconnect /
+    // audioContext.close + null all three refs) on the assumption that
+    // "the old audio processor is bound to the dead ws". That assumption
+    // was wrong. The worklet's `port.onmessage` reads `wsRef.current` at
+    // FRAME-ARRIVAL TIME (line ~1617), not closure-captured at worklet
+    // construction. So the worklet automatically follows whichever ws is
+    // current. Tearing down audio forced a full rebuild on every ws death
+    // — getUserMedia + new AudioContext (Chrome rate-limits hard) +
+    // addModule(/pcm-processor.js) + new AudioWorkletNode + worklet
+    // warmup. Production session 2026-04-25 09:06 UTC measured 17s
+    // captureReady on one Deepgram-initiated 1011 close. The 17s is
+    // dominated by Chrome's AudioContext-creation rate-limiting on the
+    // 2nd+ context per origin.
+    //
+    // After Layer 1: audio capture stays alive across the ~1-2s ws
+    // reconnect window. PCM frames produced during the gap follow the
+    // existing branches in worklet.port.onmessage:
+    //   - old ws CLOSED   → drop + droppedFrameCount tick (telemetry)
+    //   - new ws CONNECTING → enqueue to pcmBufferRef (40-frame ring,
+    //                          ~10s of audio at 16kHz/4096-sample frames)
+    //   - new ws OPEN     → ws.send() live; flushPendingPcm drains the
+    //                       buffer in connectWebSocket.onopen (Layer 1B
+    //                       there guards against double-rebuild).
+    // finishRecognition still tears down everything at session end (per-
+    // turn or user-clicked End), so per-turn mic-light blink behavior is
+    // unchanged. Only the unexpected-ws-death path is faster.
 
     const delay = 800 * reconnectAttemptsRef.current
     console.log(`[Deepgram] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current})`)
