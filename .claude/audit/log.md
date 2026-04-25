@@ -1429,3 +1429,10 @@
 - **Root-cause:** race condition in finishInterview's tail. The
 - **No-tests-needed-because: the change is an awaited timing**
 - **Verified-by:** vitest modules/interview (1610/1610 pass),
+
+### 2026-04-25 12:32:54 +0000 · `dbcd427` · Claude
+- **Subject:** fix(stt): decouple audio capture from ws lifecycle (Layer 1)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** the audio capture pipeline was being torn down on
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+- **Verified-by:** vitest modules/interview (1612/1612 pass), tsc
