@@ -1394,3 +1394,10 @@
 - **Root-cause:** production session 2026-04-25 06:13–06:20 IST showed Q6
 - **Tests-added:**
 - **Verified-by:** npx vitest run
+
+### 2026-04-25 07:07:52 +0000 · `6a73b9d` · Claude
+- **Subject:** fix(stt): Codex P1 on PR #324 — prevent double reconnect on cold-path-preserved ws
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** my round-1 fix installed a reconnect-aware onclose wrap
+- **Tests-added: new regression case in**
+- **Verified-by:** npx vitest run
