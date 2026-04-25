@@ -1422,3 +1422,10 @@
 - **Root-cause:** instrumentation gap. Multiple recent fixes (PR #324,
 - **Tests-added:**
 - **Verified-by:** vitest modules/interview (1610/1610 pass),
+
+### 2026-04-25 09:59:09 +0000 · `355b58c` · Claude
+- **Subject:** fix(interview): await recording upload before /api/analysis/start
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** race condition in finishInterview's tail. The
+- **No-tests-needed-because: the change is an awaited timing**
+- **Verified-by:** vitest modules/interview (1610/1610 pass),
