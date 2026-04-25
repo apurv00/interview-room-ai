@@ -1401,3 +1401,10 @@
 - **Root-cause:** my round-1 fix installed a reconnect-aware onclose wrap
 - **Tests-added: new regression case in**
 - **Verified-by:** npx vitest run
+
+### 2026-04-25 07:16:19 +0000 · `cf410a3` · Claude
+- **Subject:** fix(stt): Codex P2 on PR #324 — identity-guard the fast-path reconnect wrap
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** my round-2 fix's reconnect gate didn't verify that the
+- **Tests-added: new regression case in**
+- **Verified-by:** npx vitest run
