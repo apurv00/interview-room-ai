@@ -1436,3 +1436,10 @@
 - **Root-cause:** the audio capture pipeline was being torn down on
 - **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
 - **Verified-by:** vitest modules/interview (1612/1612 pass), tsc
+
+### 2026-04-25 12:47:18 +0000 · `97872f3` · Claude
+- **Subject:** test(stt): add Layer 1 race + overflow coverage
+- **Files:** 1 changed, 1 test file(s)
+- **Root-cause:** dbcd427 (Layer 1) introduced two new behaviors that
+- **Tests-added:**
+- **Verified-by:** vitest modules/interview/__tests__/deepgramRecognition
