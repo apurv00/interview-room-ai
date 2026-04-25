@@ -156,23 +156,43 @@ export interface UseDeepgramRecognitionReturn {
  *  never share the tag. Codex P2 on PR #293. */
 type TaggedWebSocket = WebSocket & { __finishTrigger?: FinishTrigger | null }
 
-/** Silent 10ms PCM frame (160 samples × Int16 = 320 bytes @ 16 kHz), used
- *  as the KeepAlive heartbeat against Deepgram's idle-close timer.
+/** Belt-and-suspenders KeepAlive heartbeats against Deepgram's idle-close
+ *  timer. We send BOTH on every tick:
  *
- *  We previously sent `{"type":"KeepAlive"}` as a text frame every 5s, but
- *  production session 69eb6689c6cbd204bd2b8266 (2026-04-24) logged two
- *  Deepgram 1011 closes with reason "did not receive audio data or a text
- *  message within the timeout window" during `warmUp` context — despite
- *  the 5s pings. The JSON keepalive is ambiguous: Deepgram's idle timer
- *  may count only audio-bearing frames, or may have a timeout shorter
- *  than the 12s documented via support, or both. A silent PCM frame is
- *  unambiguously "audio data", matches the wire format Deepgram already
- *  processes for live speech, and sidesteps the ambiguity entirely.
+ *    1. `SILENT_PCM_KEEPALIVE` — 10ms (160 samples × Int16 = 320 bytes @
+ *       16 kHz) of zeros. Unambiguously "audio data", matches the wire
+ *       format Deepgram already processes for live speech.
+ *    2. `KEEPALIVE_JSON` — `{"type":"KeepAlive"}` as a text frame.
+ *       Deepgram's documented idle-keepalive mechanism.
  *
- *  Kept as a module-level shared buffer so all sockets in the hook share
- *  the same zero-copy bytes — JavaScript ArrayBuffer is reusable across
- *  ws.send() calls. */
+ *  History:
+ *    - PR pre-#320: only JSON `{"type":"KeepAlive"}`, every 5s. Production
+ *      session 69eb6689c6cbd204bd2b8266 (2026-04-24) logged Deepgram 1011
+ *      closes with reason "did not receive audio data or a text message
+ *      within the timeout window" during `warmUp` context.
+ *    - PR #320: switched to silent PCM only (and shortened cadence to 3s),
+ *      reasoning the PCM frame was unambiguous audio data.
+ *    - 2026-04-25 incident (session log timestamp 1777097944627, 06:19:04
+ *      UTC): /api/debug/deepgram-ws-close logged code=1011 NET-0001
+ *      reason="Deepgram did not provide a response message within the
+ *      timeout window" during `warmUp` context with `trigger: null`
+ *      (Deepgram-initiated close). PROVED silent-PCM alone is not
+ *      satisfying Deepgram's idle counter.
+ *    - This fix: send BOTH on every tick. JSON is the documented method;
+ *      silent PCM is kept because it was independently observed in PR #320
+ *      to extend connection lifetime in some scenarios. Sending both
+ *      hedges against either mechanism being the actual gate. PCM is sent
+ *      FIRST so the audio frame is on the wire before the text frame —
+ *      preserves the sequencing established in PR #320.
+ *
+ *  ArrayBuffer is reused as a module-level zero-copy shared buffer
+ *  (ws.send accepts the same backing buffer across calls). */
 const SILENT_PCM_KEEPALIVE: ArrayBuffer = new Int16Array(160).buffer
+
+/** Documented Deepgram keepalive text frame. Sent in addition to silent
+ *  PCM on every KeepAlive tick — see SILENT_PCM_KEEPALIVE doc block for
+ *  the production incident that drove the dual-send strategy. */
+const KEEPALIVE_JSON: string = JSON.stringify({ type: 'KeepAlive' })
 
 /** KeepAlive interval shortened from 5s → 3s. The previous value relied
  *  on Deepgram's 12s idle threshold being documented-accurate, but prod
@@ -835,18 +855,17 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             // points at THIS ws.
             isWarmedUpRef.current = true
             warmUpPromiseRef.current = null
-            // Keep the idle socket alive. Previous implementation sent
-            // `{"type":"KeepAlive"}` as text every 5s; prod session
-            // 69eb6689c6cbd204bd2b8266 showed Deepgram still fired 1011
-            // idle-close reasoning "did not receive audio data or a text
-            // message" despite those pings. Silent PCM (10ms × 16 kHz =
-            // 160 samples of zeros, 320 bytes) is unambiguously
-            // audio-bearing data; 3s cadence gives 4× safety on a 12s
-            // window. See SILENT_PCM_KEEPALIVE / KEEPALIVE_INTERVAL_MS.
+            // Keep the idle socket alive. Dual-send: silent PCM (audio
+            // data) + `{"type":"KeepAlive"}` (documented text frame) on
+            // every tick. PR #320's silent-PCM-only strategy was
+            // disproved by the 2026-04-25 incident — Deepgram still
+            // closed 1011 NET-0001 mid-warmUp despite the PCM pings.
+            // See SILENT_PCM_KEEPALIVE doc block for the full history.
             if (keepAliveTimerRef.current) clearInterval(keepAliveTimerRef.current)
             myKeepAliveTimer = setInterval(() => {
               if (ws.readyState === WebSocket.OPEN) {
                 try { ws.send(SILENT_PCM_KEEPALIVE) } catch { /* ignore */ }
+                try { ws.send(KEEPALIVE_JSON) } catch { /* ignore */ }
               }
             }, KEEPALIVE_INTERVAL_MS)
             keepAliveTimerRef.current = myKeepAliveTimer
@@ -1285,10 +1304,12 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       // start, leaving every cold reconnect vulnerable to idle close if
       // ScriptProcessorNode throttled even briefly. Clear any prior
       // interval first — on reconnect this replaces a stale ref.
+      // Dual-send (silent PCM + JSON) — see SILENT_PCM_KEEPALIVE doc.
       if (keepAliveTimerRef.current) clearInterval(keepAliveTimerRef.current)
       myKeepAliveTimer = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           try { ws.send(SILENT_PCM_KEEPALIVE) } catch { /* ignore */ }
+          try { ws.send(KEEPALIVE_JSON) } catch { /* ignore */ }
         }
       }, KEEPALIVE_INTERVAL_MS)
       keepAliveTimerRef.current = myKeepAliveTimer

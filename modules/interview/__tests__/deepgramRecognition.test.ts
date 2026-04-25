@@ -1208,16 +1208,17 @@ describe('useDeepgramRecognition', () => {
     })
   })
 
-  it('warmUp sends silent-PCM KeepAlive pings every 3s while idle', async () => {
-    // Production session 69eb6689c6cbd204bd2b8266 (2026-04-24) logged two
-    // Deepgram 1011 idle-closes reasoning "did not receive audio data or
-    // a text message within the timeout window" DESPITE the previous
-    // `{"type":"KeepAlive"}` JSON heartbeats firing every 5s. The JSON
-    // text frame is ambiguous: Deepgram's idle timer may count only
-    // audio-bearing data, or may have a shorter-than-documented timeout.
-    // We now send a silent 10ms PCM frame (160 Int16 samples = 320 byte
-    // ArrayBuffer of zeros) every 3s — unambiguously audio, 4× safety
-    // margin against a 12s window, 2.7× against a more pessimistic 8s.
+  it('warmUp sends BOTH silent-PCM and JSON KeepAlive every 3s while idle', async () => {
+    // Production close-debug log timestamp 1777097944627 (2026-04-25
+    // 06:19:04 UTC, session 69ec…) recorded code=1011 NET-0001
+    // reason="Deepgram did not provide a response message within the
+    // timeout window" with `trigger: null` and `context: warmUp` —
+    // proving silent-PCM-only KeepAlive (PR #320) does NOT satisfy
+    // Deepgram's idle counter. Fix: dual-send. Every tick we emit BOTH
+    // the silent PCM frame (audio data, kept for hedging) AND the
+    // documented `{"type":"KeepAlive"}` JSON text frame. PCM is sent
+    // first to preserve the audio-frame-first ordering established in
+    // PR #320.
     const { result } = renderHook(() => useDeepgramRecognition())
 
     act(() => { result.current.warmUp() })
@@ -1227,27 +1228,40 @@ describe('useDeepgramRecognition', () => {
     // No pings yet
     expect(mockWsInstance!.send).not.toHaveBeenCalled()
 
-    // t=3s → first KeepAlive. Assert it's a 320-byte ArrayBuffer of
-    // zeros — the SILENT_PCM_KEEPALIVE constant.
+    // t=3s → first KeepAlive tick. TWO sends: PCM then JSON.
     await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
-    expect(mockWsInstance!.send).toHaveBeenCalledTimes(1)
-    const firstPing = mockWsInstance!.send.mock.calls[0][0] as ArrayBuffer
-    expect(firstPing).toBeInstanceOf(ArrayBuffer)
-    expect(firstPing.byteLength).toBe(320)
-    // All samples must be zero (silent).
-    const view = new Int16Array(firstPing)
+    expect(mockWsInstance!.send).toHaveBeenCalledTimes(2)
+
+    // First send: 320-byte ArrayBuffer of zeros (SILENT_PCM_KEEPALIVE).
+    const pcmPing = mockWsInstance!.send.mock.calls[0][0] as ArrayBuffer
+    expect(pcmPing).toBeInstanceOf(ArrayBuffer)
+    expect(pcmPing.byteLength).toBe(320)
+    const view = new Int16Array(pcmPing)
     for (let i = 0; i < view.length; i++) {
       expect(view[i]).toBe(0)
     }
 
-    // t=6s → second KeepAlive
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
-    expect(mockWsInstance!.send).toHaveBeenCalledTimes(2)
+    // Second send: '{"type":"KeepAlive"}' string — Deepgram's documented
+    // keepalive text frame.
+    const jsonPing = mockWsInstance!.send.mock.calls[1][0]
+    expect(typeof jsonPing).toBe('string')
+    expect(JSON.parse(jsonPing as string)).toEqual({ type: 'KeepAlive' })
 
-    // t=9s → third KeepAlive. The warm socket survives past Deepgram's
-    // documented ~12s idle timeout, which is the whole point of this fix.
+    // t=6s → second tick → 2 more sends (4 total).
     await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
-    expect(mockWsInstance!.send).toHaveBeenCalledTimes(3)
+    expect(mockWsInstance!.send).toHaveBeenCalledTimes(4)
+
+    // t=9s → third tick → 2 more (6 total). The warm socket survives
+    // past Deepgram's documented ~12s idle timeout, which is the whole
+    // point of this fix.
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+    expect(mockWsInstance!.send).toHaveBeenCalledTimes(6)
+
+    // Every tick must send BOTH types in order.
+    for (let i = 0; i < 6; i += 2) {
+      expect(mockWsInstance!.send.mock.calls[i][0]).toBeInstanceOf(ArrayBuffer)
+      expect(typeof mockWsInstance!.send.mock.calls[i + 1][0]).toBe('string')
+    }
   })
 
   it('KeepAlive continues through the fast-path listening handoff', async () => {
@@ -1269,9 +1283,9 @@ describe('useDeepgramRecognition', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(10) })
     act(() => { mockWsInstance!.simulateOpen() })
 
-    // One KeepAlive ping at t=5s
+    // One KeepAlive tick at t=3s → 2 sends (PCM + JSON dual-send).
     await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
-    expect(mockWsInstance!.send).toHaveBeenCalledTimes(1)
+    expect(mockWsInstance!.send).toHaveBeenCalledTimes(2)
 
     // startListening takes over via the fast path
     await act(async () => {
