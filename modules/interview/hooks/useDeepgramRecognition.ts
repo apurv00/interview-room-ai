@@ -156,23 +156,43 @@ export interface UseDeepgramRecognitionReturn {
  *  never share the tag. Codex P2 on PR #293. */
 type TaggedWebSocket = WebSocket & { __finishTrigger?: FinishTrigger | null }
 
-/** Silent 10ms PCM frame (160 samples × Int16 = 320 bytes @ 16 kHz), used
- *  as the KeepAlive heartbeat against Deepgram's idle-close timer.
+/** Belt-and-suspenders KeepAlive heartbeats against Deepgram's idle-close
+ *  timer. We send BOTH on every tick:
  *
- *  We previously sent `{"type":"KeepAlive"}` as a text frame every 5s, but
- *  production session 69eb6689c6cbd204bd2b8266 (2026-04-24) logged two
- *  Deepgram 1011 closes with reason "did not receive audio data or a text
- *  message within the timeout window" during `warmUp` context — despite
- *  the 5s pings. The JSON keepalive is ambiguous: Deepgram's idle timer
- *  may count only audio-bearing frames, or may have a timeout shorter
- *  than the 12s documented via support, or both. A silent PCM frame is
- *  unambiguously "audio data", matches the wire format Deepgram already
- *  processes for live speech, and sidesteps the ambiguity entirely.
+ *    1. `SILENT_PCM_KEEPALIVE` — 10ms (160 samples × Int16 = 320 bytes @
+ *       16 kHz) of zeros. Unambiguously "audio data", matches the wire
+ *       format Deepgram already processes for live speech.
+ *    2. `KEEPALIVE_JSON` — `{"type":"KeepAlive"}` as a text frame.
+ *       Deepgram's documented idle-keepalive mechanism.
  *
- *  Kept as a module-level shared buffer so all sockets in the hook share
- *  the same zero-copy bytes — JavaScript ArrayBuffer is reusable across
- *  ws.send() calls. */
+ *  History:
+ *    - PR pre-#320: only JSON `{"type":"KeepAlive"}`, every 5s. Production
+ *      session 69eb6689c6cbd204bd2b8266 (2026-04-24) logged Deepgram 1011
+ *      closes with reason "did not receive audio data or a text message
+ *      within the timeout window" during `warmUp` context.
+ *    - PR #320: switched to silent PCM only (and shortened cadence to 3s),
+ *      reasoning the PCM frame was unambiguous audio data.
+ *    - 2026-04-25 incident (session log timestamp 1777097944627, 06:19:04
+ *      UTC): /api/debug/deepgram-ws-close logged code=1011 NET-0001
+ *      reason="Deepgram did not provide a response message within the
+ *      timeout window" during `warmUp` context with `trigger: null`
+ *      (Deepgram-initiated close). PROVED silent-PCM alone is not
+ *      satisfying Deepgram's idle counter.
+ *    - This fix: send BOTH on every tick. JSON is the documented method;
+ *      silent PCM is kept because it was independently observed in PR #320
+ *      to extend connection lifetime in some scenarios. Sending both
+ *      hedges against either mechanism being the actual gate. PCM is sent
+ *      FIRST so the audio frame is on the wire before the text frame —
+ *      preserves the sequencing established in PR #320.
+ *
+ *  ArrayBuffer is reused as a module-level zero-copy shared buffer
+ *  (ws.send accepts the same backing buffer across calls). */
 const SILENT_PCM_KEEPALIVE: ArrayBuffer = new Int16Array(160).buffer
+
+/** Documented Deepgram keepalive text frame. Sent in addition to silent
+ *  PCM on every KeepAlive tick — see SILENT_PCM_KEEPALIVE doc block for
+ *  the production incident that drove the dual-send strategy. */
+const KEEPALIVE_JSON: string = JSON.stringify({ type: 'KeepAlive' })
 
 /** KeepAlive interval shortened from 5s → 3s. The previous value relied
  *  on Deepgram's 12s idle threshold being documented-accurate, but prod
@@ -370,6 +390,19 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
    *  potential double-send (frame count jumping by 2× expected between
    *  two consecutive packets would indicate duplicated audio). */
   const audioFrameCountRef = useRef(0)
+  /** Counter of PCM frames silently dropped by `worklet.port.onmessage`
+   *  because the active ws was CLOSING/CLOSED at frame-arrival time.
+   *  Surfaced in `/api/debug/deepgram-ws-close` POST bodies so a single
+   *  Vercel log line tells us whether a "lost answer" is (a) audio that
+   *  reached Deepgram and got ignored or (b) audio that never left the
+   *  browser because our ws was already a corpse when the user spoke.
+   *  Reset per-turn in startListening alongside `audioFrameCountRef`. */
+  const droppedFrameCountRef = useRef(0)
+  /** ws.readyState at the moment of the most recent dropped frame
+   *  (CLOSING=2, CLOSED=3). `null` when no drop has occurred this turn.
+   *  Reported to /api/debug/deepgram-ws-close so we can distinguish
+   *  "ws was closing during the drop" from "ws was already closed". */
+  const lastDropReadyStateRef = useRef<number | null>(null)
 
   // Hook-level visibility listener. Mounted once per hook instance, replaces
   // the per-session listener that used to live inside setupAudioProcessing
@@ -469,6 +502,8 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       // Reset diagnostic counters per turn so each answer's log starts
       // at frame 0. Ring buffer keeps prior turns' packets until capped.
       audioFrameCountRef.current = 0
+      droppedFrameCountRef.current = 0
+      lastDropReadyStateRef.current = null
       wordsRef.current = []
       lastTranscriptRef.current = ''
       reconnectAttemptsRef.current = 0
@@ -531,6 +566,87 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
         // The warmUp WebSocket was created without an onmessage handler —
         // attach it now so Deepgram results are actually received.
         attachMessageHandler(wsRef.current)
+
+        // Install a reconnect-aware onclose for the duration of THIS
+        // listening session. Production session 2026-04-25 06:13–06:20
+        // IST surfaced the bug: warmUp's `ws.onclose` (lines ~795-815)
+        // only clears `isWarmedUpRef` and the KeepAlive — it does NOT
+        // call `handleDisconnect` / `maybeReconnectOrFinish` the way
+        // `connectWebSocket.onclose` does. So when Deepgram closes the
+        // preserved warmUp ws mid-answer (1011 idle / 1006 net /
+        // anything), the worklet keeps producing PCM frames but the
+        // port handler reads `wsRef.current.readyState === CLOSED` and
+        // silently drops them. Deepgram never returns Results,
+        // liveTranscriptRef stays empty, useInterview's pre-speech
+        // inactivity timer fires `stopListeningInactivityPreSpeech`
+        // with `text: ""` after 60s of dead-pipe speech.
+        //
+        // Wrap (don't replace) the original preserve-onclose so cross-
+        // turn semantics still work, AND chain into a reconnect attempt
+        // when the close is untagged (Deepgram-initiated) and we're in
+        // an active listening session. Same `triggerForLog === null`
+        // gate that `connectWebSocket.onclose` uses — WE-initiated
+        // tagged closes (graceTimer / stopListeningFinishInterview /
+        // etc.) must NOT trigger a spurious reconnect.
+        //
+        // Idempotency: when graceTimer preserves the same ws across
+        // multiple turns (Q1→Q2→...), each turn's startListening fast
+        // path runs this code. Without a guard we'd nest wraps every
+        // turn — and on close ALL N wraps would fire, calling
+        // maybeReconnectOrFinish N times and exhausting the 2-attempt
+        // budget on a single close event. Tag the ws once and skip
+        // subsequent wraps — the original wrap from turn 1 already
+        // handles every turn's reconnect via the
+        // `onCompleteRef.current !== null` gate (which is non-null
+        // ONLY when a listening session is active).
+        const liveWs = wsRef.current as WebSocket & {
+          __reconnectOnCloseWrapped?: boolean
+        }
+        if (!liveWs.__reconnectOnCloseWrapped) {
+          liveWs.__reconnectOnCloseWrapped = true
+          const originalOnClose = liveWs.onclose
+          liveWs.onclose = (ev) => {
+            // Run the original preserve-onclose first (clears
+            // isWarmedUpRef + KeepAlive + debug-POST). It's defensive-
+            // only on the side effects this branch then triggers.
+            if (typeof originalOnClose === 'function') {
+              try {
+                ;(originalOnClose as (e: CloseEvent) => unknown).call(liveWs, ev)
+              } catch { /* ignore — original handler must not block reconnect */ }
+            }
+            // Reconnect gate: only on untagged closes during an active
+            // listening session, with a token cached, AND only when
+            // liveWs is still the active socket. Mirrors the gate at
+            // `connectWebSocket.onclose` line ~1283 plus the identity
+            // check from `connectWebSocket.onclose` line ~1271.
+            //
+            // Stale-onclose protection (Codex P2 on PR #324): if liveWs
+            // entered CLOSING just before the next turn's startListening
+            // ran, the fast-path readyState===OPEN check fails and the
+            // slow path fires `connectFresh`, which creates ws2 and
+            // sets `wsRef.current = ws2`. ws1's onclose later fires
+            // (delayed dispatch) — without the identity check below,
+            // this wrap would call `maybeReconnectOrFinish` against
+            // the HEALTHY ws2, tearing down the active audio pipeline
+            // and overwriting ws2 with a fresh ws3 mid-session. The
+            // identity check makes the wrap a no-op for late-arriving
+            // closes from superseded sockets.
+            const triggerForLog = (liveWs as TaggedWebSocket).__finishTrigger ?? null
+            if (
+              triggerForLog === null
+              && wsRef.current === liveWs
+              && onCompleteRef.current !== null
+              && !isFinishingRef.current
+              && cachedTokenRef.current
+            ) {
+              console.warn(
+                '[Deepgram] preserved warmUp ws died mid-listening, reconnecting',
+              )
+              maybeReconnectOrFinish(cachedTokenRef.current)
+            }
+          }
+        }
+
         startAudioCapture(wsRef.current)
         isWarmedUpRef.current = false
         return
@@ -754,18 +870,17 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             // points at THIS ws.
             isWarmedUpRef.current = true
             warmUpPromiseRef.current = null
-            // Keep the idle socket alive. Previous implementation sent
-            // `{"type":"KeepAlive"}` as text every 5s; prod session
-            // 69eb6689c6cbd204bd2b8266 showed Deepgram still fired 1011
-            // idle-close reasoning "did not receive audio data or a text
-            // message" despite those pings. Silent PCM (10ms × 16 kHz =
-            // 160 samples of zeros, 320 bytes) is unambiguously
-            // audio-bearing data; 3s cadence gives 4× safety on a 12s
-            // window. See SILENT_PCM_KEEPALIVE / KEEPALIVE_INTERVAL_MS.
+            // Keep the idle socket alive. Dual-send: silent PCM (audio
+            // data) + `{"type":"KeepAlive"}` (documented text frame) on
+            // every tick. PR #320's silent-PCM-only strategy was
+            // disproved by the 2026-04-25 incident — Deepgram still
+            // closed 1011 NET-0001 mid-warmUp despite the PCM pings.
+            // See SILENT_PCM_KEEPALIVE doc block for the full history.
             if (keepAliveTimerRef.current) clearInterval(keepAliveTimerRef.current)
             myKeepAliveTimer = setInterval(() => {
               if (ws.readyState === WebSocket.OPEN) {
                 try { ws.send(SILENT_PCM_KEEPALIVE) } catch { /* ignore */ }
+                try { ws.send(KEEPALIVE_JSON) } catch { /* ignore */ }
               }
             }, KEEPALIVE_INTERVAL_MS)
             keepAliveTimerRef.current = myKeepAliveTimer
@@ -825,6 +940,15 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
                 wasClean: ev.wasClean,
                 context: 'warmUp',
                 trigger: triggerForLog,
+                // Per-turn diagnostic counters. `droppedFrameCount` > 0
+                // means the worklet was producing PCM but the ws was
+                // already CLOSING/CLOSED — i.e. user spoke into a dead
+                // pipe. `audioFrameCount` is the success counterpart.
+                // Both reset at startListening, so non-zero values here
+                // describe the just-finished (or in-progress) turn.
+                audioFrameCount: audioFrameCountRef.current,
+                droppedFrameCount: droppedFrameCountRef.current,
+                lastDropReadyState: lastDropReadyStateRef.current,
               }),
             }).catch(() => { /* ignore */ })
             clearMyKeepAlive()
@@ -1157,7 +1281,17 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
 
     const wsUrl = 'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&filler_words=true&utterance_end_ms=2500&interim_results=true&language=en&encoding=linear16&sample_rate=16000'
     // Use auth via websocket subprotocol so transient token is not logged in the URL.
-    const ws = new WebSocket(wsUrl, ['token', token])
+    const ws = new WebSocket(wsUrl, ['token', token]) as WebSocket & {
+      __reconnectOnCloseWrapped?: boolean
+    }
+    // Mark this cold-path ws as already having reconnect-on-close
+    // baked into its native handler (the ws.onclose installed below
+    // calls handleDisconnect → maybeReconnectOrFinish for untagged
+    // closes at line ~1306). When startListening's fast path later
+    // takes over a graceTimer-preserved cold-path ws, its idempotency
+    // guard reads this flag and skips installing its own wrap —
+    // preventing double-reconnect (Codex P1 on PR #324).
+    ws.__reconnectOnCloseWrapped = true
     let disconnectHandled = false
 
     wsRef.current = ws
@@ -1194,10 +1328,12 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       // start, leaving every cold reconnect vulnerable to idle close if
       // ScriptProcessorNode throttled even briefly. Clear any prior
       // interval first — on reconnect this replaces a stale ref.
+      // Dual-send (silent PCM + JSON) — see SILENT_PCM_KEEPALIVE doc.
       if (keepAliveTimerRef.current) clearInterval(keepAliveTimerRef.current)
       myKeepAliveTimer = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           try { ws.send(SILENT_PCM_KEEPALIVE) } catch { /* ignore */ }
+          try { ws.send(KEEPALIVE_JSON) } catch { /* ignore */ }
         }
       }, KEEPALIVE_INTERVAL_MS)
       keepAliveTimerRef.current = myKeepAliveTimer
@@ -1243,6 +1379,12 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           wasClean: ev.wasClean,
           context: 'connectWebSocket',
           trigger: triggerForLog,
+          // Per-turn diagnostic counters — see warmUp close handler for
+          // the rationale. Mirrored here so cold-path closes carry the
+          // same telemetry as warm closes.
+          audioFrameCount: audioFrameCountRef.current,
+          droppedFrameCount: droppedFrameCountRef.current,
+          lastDropReadyState: lastDropReadyStateRef.current,
         }),
       }).catch(() => { /* ignore */ })
 
@@ -1478,6 +1620,15 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       const frame = e.data as ArrayBuffer
       if (!activeWs || activeWs.readyState === WebSocket.CLOSING || activeWs.readyState === WebSocket.CLOSED) {
         // Nothing we can do — the socket is gone. Drop.
+        // Diagnostic: count the drop and snapshot the readyState so the
+        // close-debug POST can tell us "audio was hitting a dead pipe"
+        // vs. "audio reached Deepgram but they ignored it". A user
+        // reporting "I spoke the whole time, transcript was empty" is
+        // the hardest STT failure to triangulate without this counter.
+        droppedFrameCountRef.current++
+        // activeWs may be null (ref nulled mid-turn after finishRecognition);
+        // record CLOSED (=3) for that case — semantically the same outcome.
+        lastDropReadyStateRef.current = activeWs ? activeWs.readyState : WebSocket.CLOSED
         return
       }
       if (activeWs.readyState === WebSocket.CONNECTING) {

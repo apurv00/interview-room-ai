@@ -1387,3 +1387,38 @@
 - **Files:** 2 changed, 1 test file(s)
 - **Root-cause:** two P3 hot-path defensive items from the round-5 audit,
 - **Tests-added:**
+
+### 2026-04-25 07:01:09 +0000 · `db18446` · Claude
+- **Subject:** fix(stt): reconnect when preserved warmUp ws dies mid-listening
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** production session 2026-04-25 06:13–06:20 IST showed Q6
+- **Tests-added:**
+- **Verified-by:** npx vitest run
+
+### 2026-04-25 07:07:52 +0000 · `6a73b9d` · Claude
+- **Subject:** fix(stt): Codex P1 on PR #324 — prevent double reconnect on cold-path-preserved ws
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** my round-1 fix installed a reconnect-aware onclose wrap
+- **Tests-added: new regression case in**
+- **Verified-by:** npx vitest run
+
+### 2026-04-25 07:16:19 +0000 · `cf410a3` · Claude
+- **Subject:** fix(stt): Codex P2 on PR #324 — identity-guard the fast-path reconnect wrap
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** my round-2 fix's reconnect gate didn't verify that the
+- **Tests-added: new regression case in**
+- **Verified-by:** npx vitest run
+
+### 2026-04-25 08:07:23 +0000 · `d23b98c` · Claude
+- **Subject:** fix(stt): dual-send KeepAlive — silent PCM + JSON text frame
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** Deepgram's /v1/listen idle counter does NOT credit
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+- **Verified-by:** vitest modules/interview (1608/1608 pass, including
+
+### 2026-04-25 08:42:41 +0000 · `3c84988` · Claude
+- **Subject:** feat(stt): drop counter + readyState snapshot in close-debug POST
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** instrumentation gap. Multiple recent fixes (PR #324,
+- **Tests-added:**
+- **Verified-by:** vitest modules/interview (1610/1610 pass),
