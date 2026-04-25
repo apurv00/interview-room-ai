@@ -1245,6 +1245,140 @@ describe('useDeepgramRecognition', () => {
       expect(flushedBinaryCalls[1][0]).toBe(buf2)
     })
 
+    // Layer 1 race-test: user clicks End BETWEEN ws death and reconnect
+    // setTimeout firing. Pre-Layer 1 this was rare-but-handled (audio
+    // teardown happened in maybeReconnectOrFinish AND in
+    // finishRecognition — idempotent). Post-Layer 1 the audio teardown
+    // moved entirely to finishRecognition; the pending setTimeout still
+    // fires its connectWebSocket call after onCompleteRef has been
+    // nulled. The expected behavior: connectWebSocket sees
+    // `onCompleteRef.current && !isFinishingRef.current` evaluate
+    // false at the timer-fire site (line ~1474) and SKIP the connect
+    // entirely — no orphan ws is created. This test pins that gate so
+    // a future refactor can't accidentally re-create the orphan-ws bug.
+    it('Layer 1: finishRecognition during pending reconnect skips the timer’s connectWebSocket (no orphan ws)', async () => {
+      const { result } = renderHook(() => useDeepgramRecognition())
+      const onComplete = vi.fn()
+
+      act(() => { result.current.startListening(onComplete) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+      act(() => { mockWsInstance!.simulateOpen() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+
+      const firstWs = mockWsInstance!
+
+      // Untagged remote close → handleDisconnect → maybeReconnectOrFinish
+      // schedules a setTimeout for connectWebSocket at +800ms.
+      await act(async () => {
+        firstWs.onclose?.(new CloseEvent('close', { code: 1006, reason: '', wasClean: false }))
+        await vi.advanceTimersByTimeAsync(100) // not past the 800ms backoff yet
+      })
+
+      // The pending reconnect setTimeout has not fired. mockWsInstance
+      // is still the closed firstWs (no new ws constructed yet).
+      expect(mockWsInstance).toBe(firstWs)
+
+      // User clicks End BEFORE the reconnect timer fires. finishRecognition
+      // runs synchronously: tears down audio, sets isFinishingRef=true,
+      // nulls onCompleteRef, fires onComplete with whatever transcript
+      // exists.
+      await act(async () => {
+        result.current.stopListening('finishInterview')
+        await vi.advanceTimersByTimeAsync(10)
+      })
+      expect(onComplete).toHaveBeenCalledTimes(1)
+
+      // Now advance PAST the original 800ms reconnect deadline. The
+      // setTimeout fires its callback, which gates on
+      // `onCompleteRef.current && !isFinishingRef.current` — both are
+      // falsy now (finishRecognition cleared them), so connectWebSocket
+      // is NOT called. No new WebSocket is constructed.
+      const wsConstructorCalls = (globalThis.WebSocket as unknown as { mock?: { calls: unknown[] } }).mock?.calls.length ?? 0
+      const wsBeforeTimer = mockWsInstance
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+      // mockWsInstance is overwritten on every `new WebSocket(...)` call
+      // (see test setup line 41). If any new WebSocket was created, the
+      // sentinel would point at it. It must still be the original firstWs.
+      expect(mockWsInstance).toBe(wsBeforeTimer)
+      expect(mockWsInstance).toBe(firstWs)
+      // onComplete must not fire a second time from a phantom finishRecognition.
+      expect(onComplete).toHaveBeenCalledTimes(1)
+    })
+
+    // Layer 1 telemetry-test: pathological 30s+ reconnect window where
+    // the worklet keeps producing frames the entire time. pcmBufferRef
+    // capacity is 40 frames (~10.24s of audio at 16kHz/4096-sample
+    // cadence). The 41st-and-onwards frames must drop the OLDEST
+    // (preserving the most recent speech), and droppedCount() must
+    // tick. flushPendingPcm logs the overflow count via console.info
+    // (`pcm_flushed frames=N dropped_overflow=M`) so operators can see
+    // it in production. This test pins that overflow telemetry — pre-
+    // Layer 1 this code path was untestable because audio was always
+    // torn down on reconnect, so frames never enqueued during reconnect.
+    it('Layer 1: pcmBufferRef overflow during long reconnect drops oldest frames + logs overflow count', async () => {
+      const { result } = renderHook(() => useDeepgramRecognition())
+      const onComplete = vi.fn()
+      const consoleInfoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+
+      act(() => { result.current.startListening(onComplete) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+      act(() => { mockWsInstance!.simulateOpen() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+
+      const firstWs = mockWsInstance!
+
+      // ws dies. Reconnect timer pending (800ms).
+      await act(async () => {
+        firstWs.onclose?.(new CloseEvent('close', { code: 1006, reason: '', wasClean: false }))
+        await vi.advanceTimersByTimeAsync(900)
+      })
+      const newWs = mockWsInstance!
+      expect(newWs).not.toBe(firstWs)
+      // newWs is in CONNECTING state at this point (not simulated open yet).
+
+      // Worklet keeps firing during the prolonged CONNECTING window.
+      // Push 50 frames into the worklet — buffer cap is 40, so 10 must
+      // overflow (oldest dropped). The buffer's enqueue() drops oldest
+      // and ticks _droppedCount.
+      const frames: ArrayBuffer[] = []
+      for (let i = 0; i < 50; i++) {
+        const buf = new Int16Array(4096).fill(i + 1).buffer  // distinct content
+        frames.push(buf)
+        act(() => {
+          lastWorkletInstance!.port.onmessage!({ data: buf } as unknown as MessageEvent)
+        })
+      }
+
+      // Frames not sent yet (ws still CONNECTING).
+      const sendCallsBeforeOpen = newWs.send.mock.calls.length
+      expect(sendCallsBeforeOpen).toBe(0)
+
+      // ws opens → flushPendingPcm drains the buffer. Should send the
+      // SURVIVING 40 frames in arrival order. The first 10 frames were
+      // dropped (overflow). flushPendingPcm logs the overflow count.
+      act(() => { newWs.simulateOpen() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+
+      const flushedFrames = newWs.send.mock.calls.filter(
+        ([arg]: [unknown]) => arg instanceof ArrayBuffer,
+      )
+      expect(flushedFrames.length).toBe(40)
+      // Order preserved: surviving frames are indices 10-49 of `frames`.
+      // The first surviving frame = frames[10] (frames 0-9 were dropped).
+      expect(flushedFrames[0][0]).toBe(frames[10])
+      expect(flushedFrames[39][0]).toBe(frames[49])
+
+      // Overflow telemetry: console.info should report dropped_overflow=10.
+      const overflowLog = consoleInfoSpy.mock.calls.find(
+        ([msg]) => typeof msg === 'string' && msg.includes('pcm_flushed'),
+      )
+      expect(overflowLog).toBeDefined()
+      expect(overflowLog![0]).toContain('dropped_overflow=10')
+      expect(overflowLog![0]).toContain('frames=40')
+
+      consoleInfoSpy.mockRestore()
+    })
+
     it('finishes once maxReconnectAttempts is exhausted even with partial text', async () => {
       const { result } = renderHook(() => useDeepgramRecognition())
       const onComplete = vi.fn()
