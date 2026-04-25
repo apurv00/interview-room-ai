@@ -2499,4 +2499,90 @@ describe('useDeepgramRecognition', () => {
     // new ws.
     expect(onCompleteQ3).not.toHaveBeenCalled()
   })
+
+  // ── Codex P1 on PR #324 — cold-path-preserved ws must not double-reconnect ──
+  //
+  // Scenario the fast-path's reconnect-aware wrap MUST handle
+  // correctly: `connectWebSocket`'s own onclose ALREADY calls
+  // handleDisconnect → maybeReconnectOrFinish for untagged closes.
+  // When a cold-path-created ws gets preserved through finishRecognition
+  // (graceTimer + readyState === OPEN), startListening's next-turn
+  // fast path reuses it. Without the idempotency guard, the wrap
+  // would chain on top → close fires → original onclose calls
+  // maybeReconnectOrFinish (legitimate, attempt counter += 1) →
+  // wrap calls maybeReconnectOrFinish AGAIN (illegitimate,
+  // counter += 2 total) → 2-attempt budget exhausted on a single
+  // close event → user sees `reconnectExhausted` instead of
+  // recovery.
+  //
+  // Fix mechanism: connectWebSocket sets `__reconnectOnCloseWrapped
+  // = true` on the ws at creation. When the fast path later sees
+  // the flag it skips wrapping — letting the cold-path ws's native
+  // onclose handle reconnect on its own. Pin the contract: cold-
+  // path Q1 → graceTimer preserve → Q2 fast-path → ws.close untagged
+  // → exactly ONE new ws (NOT zero from reconnectExhausted, NOT
+  // two from double-reconnect).
+  it('does NOT double-reconnect when a cold-path-preserved ws dies on the fast path', async () => {
+    mockAddModule.mockReset()
+    mockAddModule.mockResolvedValue(undefined)
+    const gumSpy = vi.mocked(navigator.mediaDevices.getUserMedia)
+    gumSpy.mockReset()
+    gumSpy.mockResolvedValue(mockStream as unknown as MediaStream)
+
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onCompleteQ1 = vi.fn()
+
+    // Q1 cold path — startListening WITHOUT prior warmUp drives
+    // connectFresh → connectWebSocket. The resulting ws has
+    // reconnect-on-close baked into its native handler (the path
+    // Codex highlighted).
+    await act(async () => {
+      result.current.startListening(onCompleteQ1)
+      await vi.advanceTimersByTimeAsync(50)
+    })
+    expect(mockWsInstance).not.toBeNull()
+    const coldPathWs = mockWsInstance!
+    act(() => { coldPathWs.simulateOpen() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+
+    // Q1 finishes via graceTimer → preserveSocket=true keeps the
+    // cold-path ws alive for Q2 (it's OPEN at trigger time, and
+    // graceTimer is in PRESERVE_SOCKET_TRIGGERS).
+    await act(async () => {
+      coldPathWs.simulateMessage(makeResult('Q1 cold-path answer', true))
+      coldPathWs.simulateMessage(makeUtteranceEnd())
+      await vi.advanceTimersByTimeAsync(4000)
+    })
+    expect(onCompleteQ1).toHaveBeenCalled()
+    expect(coldPathWs.readyState).toBe(1 /* OPEN */)
+    expect(mockWsInstance).toBe(coldPathWs)
+
+    // Q2 fast-path entry on the cold-path ws. This is the line my
+    // fast-path wrap touches; the idempotency flag set by
+    // connectWebSocket should make this branch a no-op for the wrap.
+    const onCompleteQ2 = vi.fn()
+    await act(async () => {
+      result.current.startListening(onCompleteQ2)
+      await vi.advanceTimersByTimeAsync(50)
+    })
+
+    // Mid-Q2, the cold-path ws dies untagged. connectWebSocket's
+    // native onclose runs handleDisconnect → maybeReconnectOrFinish
+    // (legitimate, ONE attempt). My fast-path wrap should NOT have
+    // installed itself (flag was set by connectWebSocket), so no
+    // second maybeReconnectOrFinish call.
+    await act(async () => {
+      coldPathWs.close()
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+
+    // Exactly ONE new ws → reconnect succeeded once. Without the
+    // fix: reconnectAttemptsRef would have gone from 0→2 in a single
+    // close event, hitting `>= maxReconnectAttempts(2)` on the next
+    // legitimate disconnect, which would have surfaced as
+    // reconnectExhausted on Q3 instead of clean recovery.
+    expect(mockWsInstance).not.toBe(coldPathWs)
+    expect(mockWsInstance).not.toBeNull()
+    expect(onCompleteQ2).not.toHaveBeenCalled()
+  })
 })

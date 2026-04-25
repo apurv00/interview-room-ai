@@ -1223,7 +1223,17 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
 
     const wsUrl = 'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&filler_words=true&utterance_end_ms=2500&interim_results=true&language=en&encoding=linear16&sample_rate=16000'
     // Use auth via websocket subprotocol so transient token is not logged in the URL.
-    const ws = new WebSocket(wsUrl, ['token', token])
+    const ws = new WebSocket(wsUrl, ['token', token]) as WebSocket & {
+      __reconnectOnCloseWrapped?: boolean
+    }
+    // Mark this cold-path ws as already having reconnect-on-close
+    // baked into its native handler (the ws.onclose installed below
+    // calls handleDisconnect → maybeReconnectOrFinish for untagged
+    // closes at line ~1306). When startListening's fast path later
+    // takes over a graceTimer-preserved cold-path ws, its idempotency
+    // guard reads this flag and skips installing its own wrap —
+    // preventing double-reconnect (Codex P1 on PR #324).
+    ws.__reconnectOnCloseWrapped = true
     let disconnectHandled = false
 
     wsRef.current = ws
