@@ -1264,6 +1264,177 @@ describe('useDeepgramRecognition', () => {
     }
   })
 
+  it('worklet drop counter ticks when ws is CLOSED and surfaces in close-debug POST', async () => {
+    // 2026-04-25 production incident: user reported speaking the entire
+    // duration of Q6 yet `stopListeningInactivityPreSpeech` fired with
+    // text:"". Vercel close-debug log showed code=1011 NET-0001 in
+    // `warmUp` context with `trigger: null`. Two competing hypotheses
+    // were impossible to distinguish without instrumentation:
+    //
+    //   (a) Deepgram closed mid-turn while audio WAS reaching them →
+    //       audioFrameCount > 0, droppedFrameCount = 0
+    //   (b) Deepgram closed before/early in the turn → user's speech
+    //       hit the worklet's `readyState !== OPEN` drop gate → audio
+    //       never left the browser → audioFrameCount low,
+    //       droppedFrameCount > 0
+    //
+    // This test verifies the diagnostic: when the worklet posts frames
+    // against a CLOSED ws, droppedFrameCount increments AND the value
+    // is reported in the /api/debug/deepgram-ws-close POST body.
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+    const fetchSpy = vi.spyOn(global, 'fetch')
+
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    act(() => { mockWsInstance!.simulateOpen() })
+
+    await act(async () => {
+      result.current.startListening(onComplete)
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    expect(lastWorkletInstance).not.toBeNull()
+    fetchSpy.mockClear()
+
+    // First frame: ws is OPEN — sent normally, audioFrameCount++.
+    const liveFrame = new Int16Array(4096).buffer
+    act(() => {
+      lastWorkletInstance!.port.onmessage!({ data: liveFrame } as unknown as MessageEvent)
+    })
+
+    // Now Deepgram-side close: readyState transitions to CLOSED. We set
+    // the readyState directly (bypassing close()'s onclose dispatch) so
+    // we can verify the worklet's drop branch BEFORE the close-debug
+    // POST fires — mirroring the prod sequence where idle-close lands
+    // a fraction of a second before the next worklet message.
+    mockWsInstance!.readyState = MockWebSocket.CLOSED
+
+    // Three frames hit the dead pipe — should all be dropped, NOT sent.
+    const sendCallsBeforeDrop = mockWsInstance!.send.mock.calls.length
+    for (let i = 0; i < 3; i++) {
+      act(() => {
+        lastWorkletInstance!.port.onmessage!({ data: liveFrame } as unknown as MessageEvent)
+      })
+    }
+    expect(mockWsInstance!.send.mock.calls.length).toBe(sendCallsBeforeDrop)
+
+    // Now fire the remote-close event so the close-debug POST captures
+    // the drop counts. Use code 1011 NET-0001 to match the prod incident.
+    act(() => {
+      mockWsInstance!.onclose?.(new CloseEvent('close', {
+        code: 1011,
+        reason: 'Deepgram did not provide a response message within the timeout window. See https://dpgr.am/net0000',
+        wasClean: true,
+      }))
+    })
+
+    const debugCall = fetchSpy.mock.calls.find(
+      ([url]) => typeof url === 'string' && url.includes('/api/debug/deepgram-ws-close'),
+    )
+    expect(debugCall).toBeDefined()
+    const body = JSON.parse((debugCall![1] as RequestInit).body as string)
+    expect(body.code).toBe(1011)
+    expect(body.trigger).toBe(null)
+    // The diagnostic payload — the whole point of this fix:
+    expect(body.audioFrameCount).toBe(1)
+    expect(body.droppedFrameCount).toBe(3)
+    expect(body.lastDropReadyState).toBe(MockWebSocket.CLOSED)
+  })
+
+  it('worklet drop counter resets to 0 at the start of each new turn', async () => {
+    // Counters must reset per turn so the close-debug POST for Q6 only
+    // describes Q6, not the cumulative session. Without this reset, a
+    // single dropped frame at session start would poison every
+    // subsequent turn's diagnostic.
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+    const fetchSpy = vi.spyOn(global, 'fetch')
+
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    act(() => { mockWsInstance!.simulateOpen() })
+
+    // Turn 1: two drops + one send. End with a Deepgram-initiated 1011
+    // close so the close-debug POST snapshots turn-1's counters.
+    await act(async () => {
+      result.current.startListening(onComplete)
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    const frame = new Int16Array(4096).buffer
+    act(() => {
+      lastWorkletInstance!.port.onmessage!({ data: frame } as unknown as MessageEvent)
+    })
+    const wsA = mockWsInstance!
+    wsA.readyState = MockWebSocket.CLOSED
+    for (let i = 0; i < 2; i++) {
+      act(() => {
+        lastWorkletInstance!.port.onmessage!({ data: frame } as unknown as MessageEvent)
+      })
+    }
+    // Tag the close as WE-initiated so the fast-path reconnect wrap
+    // (PR #324) does NOT fire — otherwise it would schedule an 800ms
+    // setTimeout that creates a third ws and mucks with the per-turn
+    // counter snapshot we're trying to verify.
+    ;(wsA as unknown as { __finishTrigger: string }).__finishTrigger = 'graceTimer'
+    act(() => {
+      wsA.onclose?.(new CloseEvent('close', { code: 4001, reason: 'graceTimer', wasClean: true }))
+    })
+
+    const turn1Call = fetchSpy.mock.calls.find(
+      ([url]) => typeof url === 'string' && url.includes('/api/debug/deepgram-ws-close'),
+    )
+    expect(turn1Call).toBeDefined()
+    const turn1Body = JSON.parse((turn1Call![1] as RequestInit).body as string)
+    expect(turn1Body.audioFrameCount).toBe(1)
+    expect(turn1Body.droppedFrameCount).toBe(2)
+
+    // Turn 2: warm + listen again. Counters should be 0 at startListening.
+    fetchSpy.mockClear()
+    mockWsInstance = null
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    expect(mockWsInstance).not.toBeNull()
+    expect(mockWsInstance).not.toBe(wsA)
+    act(() => { mockWsInstance!.simulateOpen() })
+
+    await act(async () => {
+      result.current.startListening(onComplete)
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    // Manually fire a remote-style close on turn 2's ws. Tag avoids the
+    // reconnect wrap (same reason as turn 1). Use a distinct code (4099)
+    // so the test can disambiguate this POST from any close-debug POST
+    // that turn-2's startListening's reentry-finish path may have emitted
+    // against this same socket.
+    ;(mockWsInstance as unknown as { __finishTrigger: string }).__finishTrigger = 'testTurn2Close'
+    act(() => {
+      mockWsInstance!.onclose?.(new CloseEvent('close', { code: 4099, reason: 'testTurn2Close', wasClean: true }))
+    })
+
+    // Find the POST our manual close fired — filter on code so we don't
+    // accidentally match the reentry-finish POST (which fires BEFORE the
+    // counter reset and would carry stale turn-1 numbers).
+    const turn2Call = fetchSpy.mock.calls.find(
+      ([url, init]) => {
+        if (typeof url !== 'string' || !url.includes('/api/debug/deepgram-ws-close')) return false
+        try {
+          const parsed = JSON.parse((init as RequestInit).body as string)
+          return parsed.code === 4099
+        } catch {
+          return false
+        }
+      },
+    )
+    expect(turn2Call).toBeDefined()
+    const turn2Body = JSON.parse((turn2Call![1] as RequestInit).body as string)
+    expect(turn2Body.audioFrameCount).toBe(0)
+    expect(turn2Body.droppedFrameCount).toBe(0)
+    expect(turn2Body.lastDropReadyState).toBe(null)
+  })
+
   it('KeepAlive continues through the fast-path listening handoff', async () => {
     // Per Deepgram support (2026-04-18): /v1/listen idle-closes after
     // ~12s of no data with close code 1011 + NET-0001, and the

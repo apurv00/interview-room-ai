@@ -390,6 +390,19 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
    *  potential double-send (frame count jumping by 2× expected between
    *  two consecutive packets would indicate duplicated audio). */
   const audioFrameCountRef = useRef(0)
+  /** Counter of PCM frames silently dropped by `worklet.port.onmessage`
+   *  because the active ws was CLOSING/CLOSED at frame-arrival time.
+   *  Surfaced in `/api/debug/deepgram-ws-close` POST bodies so a single
+   *  Vercel log line tells us whether a "lost answer" is (a) audio that
+   *  reached Deepgram and got ignored or (b) audio that never left the
+   *  browser because our ws was already a corpse when the user spoke.
+   *  Reset per-turn in startListening alongside `audioFrameCountRef`. */
+  const droppedFrameCountRef = useRef(0)
+  /** ws.readyState at the moment of the most recent dropped frame
+   *  (CLOSING=2, CLOSED=3). `null` when no drop has occurred this turn.
+   *  Reported to /api/debug/deepgram-ws-close so we can distinguish
+   *  "ws was closing during the drop" from "ws was already closed". */
+  const lastDropReadyStateRef = useRef<number | null>(null)
 
   // Hook-level visibility listener. Mounted once per hook instance, replaces
   // the per-session listener that used to live inside setupAudioProcessing
@@ -489,6 +502,8 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       // Reset diagnostic counters per turn so each answer's log starts
       // at frame 0. Ring buffer keeps prior turns' packets until capped.
       audioFrameCountRef.current = 0
+      droppedFrameCountRef.current = 0
+      lastDropReadyStateRef.current = null
       wordsRef.current = []
       lastTranscriptRef.current = ''
       reconnectAttemptsRef.current = 0
@@ -925,6 +940,15 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
                 wasClean: ev.wasClean,
                 context: 'warmUp',
                 trigger: triggerForLog,
+                // Per-turn diagnostic counters. `droppedFrameCount` > 0
+                // means the worklet was producing PCM but the ws was
+                // already CLOSING/CLOSED — i.e. user spoke into a dead
+                // pipe. `audioFrameCount` is the success counterpart.
+                // Both reset at startListening, so non-zero values here
+                // describe the just-finished (or in-progress) turn.
+                audioFrameCount: audioFrameCountRef.current,
+                droppedFrameCount: droppedFrameCountRef.current,
+                lastDropReadyState: lastDropReadyStateRef.current,
               }),
             }).catch(() => { /* ignore */ })
             clearMyKeepAlive()
@@ -1355,6 +1379,12 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           wasClean: ev.wasClean,
           context: 'connectWebSocket',
           trigger: triggerForLog,
+          // Per-turn diagnostic counters — see warmUp close handler for
+          // the rationale. Mirrored here so cold-path closes carry the
+          // same telemetry as warm closes.
+          audioFrameCount: audioFrameCountRef.current,
+          droppedFrameCount: droppedFrameCountRef.current,
+          lastDropReadyState: lastDropReadyStateRef.current,
         }),
       }).catch(() => { /* ignore */ })
 
@@ -1590,6 +1620,15 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       const frame = e.data as ArrayBuffer
       if (!activeWs || activeWs.readyState === WebSocket.CLOSING || activeWs.readyState === WebSocket.CLOSED) {
         // Nothing we can do — the socket is gone. Drop.
+        // Diagnostic: count the drop and snapshot the readyState so the
+        // close-debug POST can tell us "audio was hitting a dead pipe"
+        // vs. "audio reached Deepgram but they ignored it". A user
+        // reporting "I spoke the whole time, transcript was empty" is
+        // the hardest STT failure to triangulate without this counter.
+        droppedFrameCountRef.current++
+        // activeWs may be null (ref nulled mid-turn after finishRecognition);
+        // record CLOSED (=3) for that case — semantically the same outcome.
+        lastDropReadyStateRef.current = activeWs ? activeWs.readyState : WebSocket.CLOSED
         return
       }
       if (activeWs.readyState === WebSocket.CONNECTING) {

@@ -48,6 +48,23 @@ const DeepgramWsCloseSchema = z.object({
    *  a free-form string (not an enum) so the server accepts triggers
    *  added client-side without requiring a matching server deploy. */
   trigger: z.string().max(50).nullable().optional(),
+  /** Per-turn count of PCM frames the client successfully sent to
+   *  Deepgram before this close. Optional so older client builds keep
+   *  validating without a coordinated deploy. Cap = 1e7: a single
+   *  4-minute answer at 4096-sample / 256ms cadence emits ~937 frames,
+   *  so any value over 1e6 indicates a bug worth seeing in raw form. */
+  audioFrameCount: z.number().int().nonnegative().max(10_000_000).optional(),
+  /** Per-turn count of PCM frames the worklet had to drop because the
+   *  active ws was CLOSING/CLOSED at frame-arrival time. Non-zero is
+   *  the smoking-gun for "user spoke into a dead pipe" — directly
+   *  attributable to the audio loss the user reports as "I was
+   *  speaking the whole time but transcript was empty". */
+  droppedFrameCount: z.number().int().nonnegative().max(10_000_000).optional(),
+  /** ws.readyState (CLOSING=2, CLOSED=3) at the most recent dropped
+   *  frame. `null` when no drop occurred this turn. Distinguishes
+   *  "closed before user started speaking" (=3 throughout) from
+   *  "closed mid-speech" (=2 transitioning to =3). */
+  lastDropReadyState: z.number().int().min(0).max(3).nullable().optional(),
 })
 
 type DeepgramWsClosePayload = z.infer<typeof DeepgramWsCloseSchema>
@@ -74,8 +91,14 @@ export const POST = composeApiRoute<DeepgramWsClosePayload>({
         wasClean: body.wasClean,
         context: body.context,
         trigger: body.trigger ?? null,
+        audioFrameCount: body.audioFrameCount ?? null,
+        droppedFrameCount: body.droppedFrameCount ?? null,
+        lastDropReadyState: body.lastDropReadyState ?? null,
       },
-      `Deepgram WS close — code=${body.code} context=${body.context} trigger=${body.trigger ?? 'remote'} wasClean=${body.wasClean}`
+      // Inline the counters in the message string too so they show up
+      // in plain-text Vercel log views (default `level:error` search
+      // displays the message, not the structured fields).
+      `Deepgram WS close — code=${body.code} context=${body.context} trigger=${body.trigger ?? 'remote'} wasClean=${body.wasClean} audioFrames=${body.audioFrameCount ?? 'n/a'} droppedFrames=${body.droppedFrameCount ?? 'n/a'} lastDropReadyState=${body.lastDropReadyState ?? 'n/a'}`
     )
 
     return NextResponse.json({ received: true })
