@@ -2585,4 +2585,98 @@ describe('useDeepgramRecognition', () => {
     expect(mockWsInstance).not.toBeNull()
     expect(onCompleteQ2).not.toHaveBeenCalled()
   })
+
+  // ── Codex P2 on PR #324 — stale preserved-ws onclose must not steal
+  //    reconnect from the active healthy ws ──
+  //
+  // Codex scenario: ws1 (preserved warmUp, wrap installed in a prior
+  // turn) enters CLOSING but its onclose hasn't dispatched yet. The
+  // next turn's startListening runs — fast-path check fails because
+  // CLOSING !== OPEN. Slow path falls through to connectFresh →
+  // creates ws2 → wsRef.current = ws2. The new session is healthy.
+  // Eventually ws1's delayed onclose finally dispatches; without the
+  // identity check, the wrap would call maybeReconnectOrFinish
+  // against ws2 → tearing down the active audio pipeline + creating
+  // a NEW ws3 to replace the healthy ws2 → losing the in-flight
+  // session.
+  //
+  // Fix: the wrap's reconnect gate now includes `wsRef.current ===
+  // liveWs`, matching the identity check that the rest of the file's
+  // onclose handlers already use (e.g. connectWebSocket.onclose line
+  // ~1271 for isWarmedUpRef cleanup). Late-arriving closes from
+  // superseded sockets become a no-op.
+  it('stale preserved-ws onclose does NOT steal reconnect from active healthy ws', async () => {
+    mockAddModule.mockReset()
+    mockAddModule.mockResolvedValue(undefined)
+    const gumSpy = vi.mocked(navigator.mediaDevices.getUserMedia)
+    gumSpy.mockReset()
+    gumSpy.mockResolvedValue(mockStream as unknown as MediaStream)
+
+    const { result } = renderHook(() => useDeepgramRecognition())
+
+    // Q1: warmUp + listen + graceTimer (preserve) — ws1 stays alive
+    // and the fast-path wrap was installed during Q1's startListening.
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+    const ws1 = mockWsInstance!
+    act(() => { ws1.simulateOpen() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+
+    const onCompleteQ1 = vi.fn()
+    await act(async () => {
+      result.current.startListening(onCompleteQ1)
+      await vi.advanceTimersByTimeAsync(50)
+    })
+    await act(async () => {
+      ws1.simulateMessage(makeResult('Q1', true))
+      ws1.simulateMessage(makeUtteranceEnd())
+      await vi.advanceTimersByTimeAsync(4000)
+    })
+    expect(onCompleteQ1).toHaveBeenCalled()
+    // ws1 is preserved & wrap installed (idempotency flag set by Q1).
+    expect(ws1.readyState).toBe(1 /* OPEN */)
+    expect(mockWsInstance).toBe(ws1)
+
+    // Manually transition ws1 into CLOSING WITHOUT dispatching onclose
+    // — simulating the race where the close frame is in flight but
+    // the onclose event hasn't fired yet on the main thread.
+    ws1.readyState = 2 /* CLOSING */
+
+    // Q2 startListening runs while ws1 is CLOSING. Fast-path check
+    // (`readyState === OPEN`) fails → slow path → warmUpPromiseRef
+    // is null → falls through to connectFresh → ws2 created.
+    const onCompleteQ2 = vi.fn()
+    await act(async () => {
+      result.current.startListening(onCompleteQ2)
+      await vi.advanceTimersByTimeAsync(50)
+    })
+    expect(mockWsInstance).not.toBe(ws1)
+    const ws2 = mockWsInstance!
+    expect(ws2).not.toBeNull()
+
+    // ws2 opens, takes over the active session. wsRef.current is now
+    // ws2; ws1 is superseded.
+    act(() => { ws2.simulateOpen() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+
+    // NOW ws1's delayed onclose finally fires. With the identity check,
+    // the wrap's reconnect gate sees `wsRef.current (ws2) !== liveWs
+    // (ws1)` and skips. Without the fix, it would call
+    // maybeReconnectOrFinish → tear down ws2's audio pipeline + create
+    // ws3, killing the active session.
+    await act(async () => {
+      // Force the onclose to fire on ws1 (the close event the test
+      // model would have dispatched after the CLOSING transition).
+      // MockWebSocket.close() handles that, but ws1 is already
+      // CLOSING, so we directly invoke the handler with a synthesized
+      // CloseEvent matching what the browser would send.
+      ws1.onclose?.(new CloseEvent('close', { code: 1006, reason: '', wasClean: false }))
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+
+    // Pin: the active socket is still ws2 — NO ws3 was created (the
+    // wrap correctly identified ws1 as superseded and skipped
+    // reconnect). The healthy in-flight session is intact.
+    expect(mockWsInstance).toBe(ws2)
+  })
 })

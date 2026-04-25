@@ -580,11 +580,26 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
               } catch { /* ignore — original handler must not block reconnect */ }
             }
             // Reconnect gate: only on untagged closes during an active
-            // listening session, with a token cached. Mirrors the gate
-            // at `connectWebSocket.onclose` line ~1283.
+            // listening session, with a token cached, AND only when
+            // liveWs is still the active socket. Mirrors the gate at
+            // `connectWebSocket.onclose` line ~1283 plus the identity
+            // check from `connectWebSocket.onclose` line ~1271.
+            //
+            // Stale-onclose protection (Codex P2 on PR #324): if liveWs
+            // entered CLOSING just before the next turn's startListening
+            // ran, the fast-path readyState===OPEN check fails and the
+            // slow path fires `connectFresh`, which creates ws2 and
+            // sets `wsRef.current = ws2`. ws1's onclose later fires
+            // (delayed dispatch) — without the identity check below,
+            // this wrap would call `maybeReconnectOrFinish` against
+            // the HEALTHY ws2, tearing down the active audio pipeline
+            // and overwriting ws2 with a fresh ws3 mid-session. The
+            // identity check makes the wrap a no-op for late-arriving
+            // closes from superseded sockets.
             const triggerForLog = (liveWs as TaggedWebSocket).__finishTrigger ?? null
             if (
               triggerForLog === null
+              && wsRef.current === liveWs
               && onCompleteRef.current !== null
               && !isFinishingRef.current
               && cachedTokenRef.current
