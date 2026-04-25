@@ -1408,3 +1408,10 @@
 - **Root-cause:** my round-2 fix's reconnect gate didn't verify that the
 - **Tests-added: new regression case in**
 - **Verified-by:** npx vitest run
+
+### 2026-04-25 08:07:23 +0000 · `d23b98c` · Claude
+- **Subject:** fix(stt): dual-send KeepAlive — silent PCM + JSON text frame
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** Deepgram's /v1/listen idle counter does NOT credit
+- **Tests-added: modules/interview/__tests__/deepgramRecognition.test.ts**
+- **Verified-by:** vitest modules/interview (1608/1608 pass, including
