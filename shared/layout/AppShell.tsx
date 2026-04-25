@@ -4,7 +4,7 @@ import { useState, type ReactNode } from 'react'
 import { usePathname } from 'next/navigation'
 import { useSession, signOut } from 'next-auth/react'
 import Link from 'next/link'
-import { Mic, Menu, X } from 'lucide-react'
+import { Menu, X } from 'lucide-react'
 import AuthMenu from './AuthMenu'
 import Footer from './Footer'
 import { useAuthGate } from '@shared/providers/AuthGateProvider'
@@ -77,7 +77,12 @@ export default function AppShell({
             {/* Brand */}
             <Link href="/" className="flex items-center gap-2.5 no-underline group">
               <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center shadow-sm shadow-blue-600/20 transition-transform duration-200 group-hover:scale-105">
-                <Mic className="w-[18px] h-[18px] text-white" />
+                <svg width="22" height="22" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+                  <path d="M32 16 L52 26 L32 36 L12 26 Z" fill="white" />
+                  <path d="M22 32 V40 C22 43 26.5 45 32 45 C37.5 45 42 43 42 40 V32" fill="white" />
+                  <path d="M50 26 V40" stroke="white" strokeWidth="2.5" strokeLinecap="round" />
+                  <circle cx="50" cy="44" r="3" fill="white" />
+                </svg>
               </div>
               <span className="font-bold text-[17px] tracking-tight text-slate-900">
                 interviewprep<span className="text-blue-600">.guru</span>
