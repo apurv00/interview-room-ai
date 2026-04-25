@@ -1287,6 +1287,21 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   }
 
   function maybeReconnectOrFinish(token: string) {
+    // Browser-offline preflight — short-circuit before counter++ and
+    // before scheduling the 800ms × attempt backoff. The post-timer
+    // path (`connectWebSocket` line ~1152) ALREADY checks
+    // `!navigator.onLine` and routes to `finishRecognition('offline')`,
+    // but only AFTER (a) consuming a reconnect-budget slot and
+    // (b) waiting 800-1600ms for the timer to fire. Both are pure
+    // waste when we already know the browser is offline. Checking
+    // here saves the latency + preserves the budget for the case
+    // where the network blip ends and reconnect is viable.
+    // PR A item 6 (PR #320 round-5 audit follow-up).
+    if (!navigator.onLine) {
+      finishRecognition('offline')
+      return
+    }
+
     const maxReconnectAttempts = 2
     reconnectAttemptsRef.current++
 
@@ -1539,7 +1554,24 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     // Cleanup audio processing — same regardless of preserve state.
     // We always stop capturing audio after a turn; only the ws lifecycle
     // branches below.
-    processorRef.current?.disconnect()
+    //
+    // Null `worklet.port.onmessage` BEFORE `disconnect()` to drain
+    // queued cross-thread tasks. `disconnect()` severs the audio graph
+    // (audio thread stops scheduling `process()`) but leaves the
+    // MessagePort alive — frames already posted from the audio thread
+    // sit in the main-thread task queue and dispatch on the next tick.
+    // On preserveSocket teardown (graceTimer / stopListeningMaxAnswer
+    // / etc.) `wsRef.current` stays pointing at the OPEN preserved ws,
+    // and the dispatched task would `ws.send(frame)` a stale PCM frame
+    // to Deepgram's session state — bleeding ~256ms of speech across
+    // turn boundaries (worst case: stopListeningMaxAnswer mid-sentence
+    // → next turn's transcript opens with phantom words). Nulling the
+    // handler first guarantees the queued task hits a no-op closure.
+    // PR A item 2 (PR #320 round-5 audit follow-up).
+    if (processorRef.current) {
+      processorRef.current.port.onmessage = null
+      processorRef.current.disconnect()
+    }
     sourceRef.current?.disconnect()
     audioContextRef.current?.close().catch(() => {})
     processorRef.current = null
