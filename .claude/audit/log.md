@@ -1382,4 +1382,8 @@
 - **Subject:** refactor(feedback): tighten eval-helper signatures + escalate aggregate log on failure
 - **Files:** 8 changed, 3 test file(s)
 - **Root-cause:** two P3 hygiene items surfaced by the round-5 audit, both
+### 2026-04-25 05:23:04 +0000 · `835fc29` · Claude
+- **Subject:** fix(stt): null worklet.port.onmessage + offline preflight in reconnect
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** two P3 hot-path defensive items from the round-5 audit,
 - **Tests-added:**

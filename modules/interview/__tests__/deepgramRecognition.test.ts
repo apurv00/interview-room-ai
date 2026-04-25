@@ -2118,4 +2118,155 @@ describe('useDeepgramRecognition', () => {
       expect.objectContaining({ text: 'Hello world' }),
     )
   })
+
+  // ── PR A item 2 — drain worklet port queue before disconnect ─────────
+  //
+  // RCA: `worklet.port.onmessage` is the hook's audio-frame dispatcher.
+  // It reads `wsRef.current` per call. On preserveSocket teardown
+  // (graceTimer / stopListeningMaxAnswer / etc.), `processorRef.disconnect()`
+  // severs the audio graph but leaves the MessagePort alive — already-
+  // queued worklet messages can fire AFTER disconnect, find wsRef.current
+  // still pointing at the OPEN preserved ws, and `ws.send(frame)` a stale
+  // PCM frame to Deepgram's session state. Worst case in prod: 256ms of
+  // user speech leaks across to the next turn's transcript.
+  // Fix: null `worklet.port.onmessage` BEFORE `disconnect()` so any
+  // queued task dispatches to a null handler and is silently dropped.
+  it('nulls worklet.port.onmessage before disconnect on preserveSocket teardown', async () => {
+    // Defensive reset on shared mocks. `vi.clearAllMocks()` in the
+    // suite's beforeEach only clears call history — `mockReturnValue`
+    // / `mockResolvedValue` overrides set by earlier tests (e.g. the
+    // never-resolving `getUserMedia` near line 2033) persist into
+    // this test and silently park `setupAudioProcessing` mid-await,
+    // leaving `lastWorkletInstance` null. Reset + re-install defaults
+    // to guarantee the worklet construction path actually executes.
+    mockAddModule.mockReset()
+    mockAddModule.mockResolvedValue(undefined)
+    const gumSpy = vi.mocked(navigator.mediaDevices.getUserMedia)
+    gumSpy.mockReset()
+    gumSpy.mockResolvedValue(mockStream as unknown as MediaStream)
+
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+
+    // connectFresh path (no warmUp) — drives setupAudioProcessing
+    // through ws.onopen → startAudioCapture, the cleanest path that
+    // mirrors what other passing tests in this file use (e.g.
+    // E-3.4 reconnect tests). Avoids the warmUp/fast-path branch
+    // whose extra microtasks make the worklet-construction timing
+    // less predictable under full-suite load.
+    await act(async () => {
+      result.current.startListening(onComplete)
+      await vi.advanceTimersByTimeAsync(20)
+    })
+    expect(mockWsInstance).not.toBeNull()
+    act(() => { mockWsInstance!.simulateOpen() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+
+    // setupAudioProcessing wired the hook's frame dispatcher. Capture
+    // the worklet handle at this point so the post-teardown assertion
+    // remains meaningful even if global mock-state from earlier tests
+    // happened to clear `lastWorkletInstance` between then and now.
+    // Pre-teardown the handler MUST be set; if it isn't, the test
+    // setup didn't reach the worklet construction line.
+    const workletAtSetup = lastWorkletInstance
+    expect(workletAtSetup).not.toBeNull()
+    expect(workletAtSetup!.port.onmessage).not.toBeNull()
+
+    // stopListeningExternal is in PRESERVE_SOCKET_TRIGGERS, so the
+    // ws stays OPEN after finishRecognition. The worklet is torn
+    // down regardless. We're testing that port.onmessage is nulled
+    // BEFORE processorRef.disconnect() so any queued cross-thread
+    // task hits a no-op closure rather than ws.send'ing stale PCM
+    // to the preserved-OPEN ws.
+    await act(async () => {
+      mockWsInstance!.simulateMessage(makeResult('Hello world', true))
+      mockWsInstance!.simulateMessage(makeUtteranceEnd())
+      await vi.advanceTimersByTimeAsync(3500)
+    })
+    expect(onComplete).toHaveBeenCalled()
+
+    // Pre-fix: port.onmessage still pointed at the hook's closure,
+    // and any queued worklet frame would have called `wsRef.current.send`
+    // against the still-OPEN preserved ws — a stale frame to Deepgram.
+    // Post-fix: handler nulled before processorRef.disconnect() so a
+    // queued message dispatches to nothing. We assert against the
+    // captured handle so a separate setup elsewhere doesn't muddy the
+    // signal.
+    expect(workletAtSetup!.port.onmessage).toBeNull()
+  })
+
+  // ── PR A item 6 — short-circuit reconnect when browser is offline ─────
+  //
+  // RCA: maybeReconnectOrFinish increments the attempt counter and
+  // schedules an 800ms × attempt setTimeout BEFORE checking
+  // navigator.onLine. The check happens inside connectWebSocket once
+  // the timer fires, so an offline browser still costs (a) the
+  // 800-1600ms wait and (b) a reconnect-budget slot — even though the
+  // outcome is guaranteed to be `finishRecognition('offline')`.
+  // Fix: check navigator.onLine at the TOP of maybeReconnectOrFinish
+  // and short-circuit straight to finishRecognition('offline') when
+  // the browser is offline. Saves the wait + preserves the budget for
+  // the case where the network blip ends and reconnect is viable.
+  it('short-circuits reconnect when navigator.onLine is false (no 800ms wait)', async () => {
+    // Capture the current onLine descriptor so we can restore at the end —
+    // jsdom defines navigator.onLine but as configurable, so we can stub.
+    const onlineDescriptor =
+      Object.getOwnPropertyDescriptor(window.navigator, 'onLine') ??
+      ({ configurable: true, value: true, writable: true } as PropertyDescriptor)
+
+    try {
+      const { result } = renderHook(() => useDeepgramRecognition())
+      const onComplete = vi.fn()
+
+      // connectFresh path (no warmUp) so the cold-connect onclose
+      // handler routes to maybeReconnectOrFinish — the warmUp fast
+      // path has its own onclose that doesn't reconnect.
+      act(() => { result.current.startListening(onComplete) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(20) })
+      expect(mockWsInstance).not.toBeNull()
+      act(() => { mockWsInstance!.simulateOpen() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+
+      // Candidate says something so finalTextRef is non-empty (legit
+      // mid-answer state — without partial text, the reconnect path
+      // doesn't even fire).
+      await act(async () => {
+        mockWsInstance!.simulateMessage(makeResult('In my previous role', true))
+      })
+
+      const firstWs = mockWsInstance!
+
+      // Browser goes offline THEN ws dies. Pre-fix: counter++ →
+      // 800ms timer scheduled → eventually fires connectWebSocket →
+      // navigator.onLine=false → finishRecognition('offline'). Total
+      // wait: 800ms + 1 reconnect budget consumed.
+      // Post-fix: maybeReconnectOrFinish entry checks navigator.onLine,
+      // bails immediately to finishRecognition('offline'). Total wait:
+      // ~0ms, budget intact.
+      Object.defineProperty(window.navigator, 'onLine', {
+        configurable: true,
+        get: () => false,
+      })
+
+      await act(async () => {
+        firstWs.close()
+        // Advance ONLY past microtasks, NOT past the 800ms backoff.
+        // Pre-fix this would not yet have fired onComplete (timer
+        // hasn't fired). Post-fix onComplete fired synchronously
+        // inside handleDisconnect → maybeReconnectOrFinish → early-out.
+        await vi.advanceTimersByTimeAsync(50)
+      })
+
+      // Primary assertion: onComplete fired well before the 800ms
+      // backoff would have elapsed.
+      expect(onComplete).toHaveBeenCalled()
+
+      // Belt-and-suspenders: NO new WebSocket was constructed (no
+      // reconnect attempt was scheduled at all). mockWsInstance still
+      // points at firstWs because the constructor was never re-invoked.
+      expect(mockWsInstance).toBe(firstWs)
+    } finally {
+      Object.defineProperty(window.navigator, 'onLine', onlineDescriptor)
+    }
+  })
 })
