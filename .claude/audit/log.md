@@ -1450,3 +1450,10 @@
 - **Root-cause:** the previous mic glyph (lucide-react Mic icon in
 - **No-tests-needed-because: presentational-only change. AppShell has**
 - **Verified-by:** vitest shared (258/258 pass), tsc --noEmit clean,
+
+### 2026-04-26 14:04:05 +0000 · `10da50c` · Claude
+- **Subject:** remove mute feature from live interview
+- **Files:** 2 changed, 0 test file(s)
+- **Root-cause:** track.enabled=false on a MediaStreamTrack does NOT stop the
+- **No-tests-needed-because: pure deletion of a UI feature with one**
+- **Verified-by:** npx tsc --noEmit clean; npx eslint clean for both files;
