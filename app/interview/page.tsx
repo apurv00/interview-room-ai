@@ -91,7 +91,6 @@ export default function InterviewPage() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const screenStreamRef = useRef<MediaStream | null>(null)
-  const [muted, setMuted] = useState(false)
 
   // Screen capture is gated to coding & system-design — those interviews
   // produce work that lives on screen (IDE / canvas) and the camera-only
@@ -302,18 +301,6 @@ export default function InterviewPage() {
   const handleDesignSubmit = useCallback((data: DesignSubmission) => {
     interviewOnDesignSubmit(data)
   }, [interviewOnDesignSubmit])
-
-  // ─── Keyboard shortcut (M to toggle mute) ──────────────────────────────────
-  useEffect(() => {
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === 'm' || e.key === 'M') {
-        if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
-        toggleMute()
-      }
-    }
-    window.addEventListener('keydown', handleKey)
-    return () => window.removeEventListener('keydown', handleKey)
-  })
 
   // ─── Prevent accidental navigation away during active interview ────────────
   useEffect(() => {
@@ -585,20 +572,6 @@ export default function InterviewPage() {
     return () => window.speechSynthesis.removeEventListener('voiceschanged', load)
   }, [])
 
-  // ─── Mute toggle ──────────────────────────────────────────────────────────
-  function toggleMute() {
-    if (!streamRef.current) return
-    const willMute = !muted
-    streamRef.current.getAudioTracks().forEach((t) => {
-      t.enabled = !willMute
-    })
-    // Stop speech recognition when muting to prevent phantom input
-    if (willMute) {
-      stopListening()
-    }
-    setMuted(willMute)
-  }
-
   // ─── Loading state ─────────────────────────────────────────────────────────
   if (!config) {
     return (
@@ -808,8 +781,6 @@ export default function InterviewPage() {
 
       {/* ── Controls ── */}
       <InterviewControls
-        muted={muted}
-        onToggleMute={toggleMute}
         // G.7: the End button explicitly tags the session as candidate-ended,
         // distinct from time_up or a normal closing-line exit.
         onEndInterview={() => finishInterview('user_ended')}
