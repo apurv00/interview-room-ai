@@ -59,11 +59,14 @@ const nextConfig = {
           //   script-src: googletagmanager.com hosts the gtag.js loader.
           //     The inline init in <GoogleAnalyticsScripts> piggybacks on
           //     'unsafe-inline' (already present for Next runtime + jsdelivr).
-          //   connect-src: GA event/pageview hits go to www.google-analytics.com
-          //     and *.analytics.google.com (regional collect endpoints).
+          //   connect-src: GA event/pageview hits go to *.google-analytics.com
+          //     (covers www. and region1./region5./etc. regional collect hosts;
+          //     gtag picks the regional one based on the user's location, so
+          //     a www-only allowance silently drops a chunk of hits) and
+          //     *.analytics.google.com (newer GA4 measurement protocol hosts).
           //     us.i.posthog.com is the PostHog Cloud US capture host that
           //     shared/analytics/track.ts POSTs to as the second sink.
-          { key: 'Content-Security-Policy', value: "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net https://www.googletagmanager.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com https://api.deepgram.com wss://api.deepgram.com https://*.r2.cloudflarestorage.com https://www.google-analytics.com https://*.analytics.google.com https://us.i.posthog.com; media-src 'self' blob: https://*.r2.cloudflarestorage.com; worker-src 'self' blob:; frame-ancestors 'none'" },
+          { key: 'Content-Security-Policy', value: "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net https://www.googletagmanager.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com https://api.deepgram.com wss://api.deepgram.com https://*.r2.cloudflarestorage.com https://*.google-analytics.com https://*.analytics.google.com https://us.i.posthog.com; media-src 'self' blob: https://*.r2.cloudflarestorage.com; worker-src 'self' blob:; frame-ancestors 'none'" },
         ],
       },
       {
