@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next'
 import { SpeedInsights } from '@vercel/speed-insights/next'
+import { GoogleAnalytics } from '@next/third-parties/google'
 import SessionProvider from '@shared/providers/SessionProvider'
 import { ThemeProvider } from '@shared/providers/ThemeProvider'
 import XpProvider from '@shared/providers/XpProvider'
@@ -61,6 +62,7 @@ export const metadata: Metadata = {
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  const gaId = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID
   return (
     <html lang="en">
       <body className="min-h-screen bg-page text-[var(--foreground)] antialiased">
@@ -112,6 +114,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </AuthGateProvider>
         </SessionProvider>
         <SpeedInsights />
+        {gaId && <GoogleAnalytics gaId={gaId} />}
       </body>
     </html>
   )
