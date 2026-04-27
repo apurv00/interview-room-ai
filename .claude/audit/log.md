@@ -1492,3 +1492,10 @@
 - **Root-cause:** enforced CSP under the global /(.*) header rule has no allowance for the analytics hosts our two sinks need. Without this, both PostHog (existing) and GA (new in this PR) silently fail in production w
 - **No-tests-needed-because: config-only change (CSP header string) with no JS symbol surface. The repo has no existing CSP-asserting test pattern, and a one-off snapshot would calcify the string against **
 - **Verified-by:** npm run build clean (header config still parses + emits at compile time), `node -e require('./next.config.js').headers().then(...)` prints the expected string with all three new connect-src hosts and 
+
+### 2026-04-27 19:44:27 +0000 · `7688600` · Claude
+- **Subject:** fix(csp): widen google-analytics allowance to *.google-analytics.com (Codex P2)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** gtag's regional-host routing was unknown to the previous CSP allowance, so the literal www. allowlist created a partial-data failure mode that would only surface as missing rows in the GA dashboard fo
+- **No-tests-needed-because: one-character allowlist widening (www. → *.) on a config string. The repo has no CSP-asserting test pattern. Rendering still verified by `node -e require('./next.config.js')**
+- **Verified-by:** `node -e` materialized CSP — assertion `csp.includes('https://*.google-analytics.com') === true` and `csp.includes('https://www.google-analytics.com') === false`. Build still clean from the previous
