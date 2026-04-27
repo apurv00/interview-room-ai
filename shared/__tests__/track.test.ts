@@ -126,20 +126,36 @@ describe('shared/analytics/track', () => {
   })
 
   describe('identify()', () => {
-    it('calls gtag config with user_id when both GA id and gtag are present', async () => {
-      const { identify } = await import('@shared/analytics/track')
-      identify('user_123', { plan: 'pro' })
-
-      expect(gtag).toHaveBeenCalledWith('config', 'G-TEST', { user_id: 'user_123' })
-    })
-
-    it('does not call gtag when GA measurement id is unset', async () => {
-      delete process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID
-
+    it('uses gtag set (not config) to avoid retriggering automatic pageviews', async () => {
       const { identify } = await import('@shared/analytics/track')
       identify('user_123', {})
 
-      expect(gtag).not.toHaveBeenCalled()
+      // Must use 'set' — calling 'config' a second time would refire
+      // automatic pageviews even after the loader disabled them.
+      expect(gtag).toHaveBeenCalledWith('set', { user_id: 'user_123' })
+      const configCalls = gtag.mock.calls.filter((args) => args[0] === 'config')
+      expect(configCalls).toHaveLength(0)
+    })
+
+    it('sets user properties from traits via gtag set/user_properties', async () => {
+      const { identify } = await import('@shared/analytics/track')
+      identify('user_123', { plan: 'pro', signup_source: 'organic' })
+
+      expect(gtag).toHaveBeenCalledWith('set', { user_id: 'user_123' })
+      expect(gtag).toHaveBeenCalledWith('set', 'user_properties', {
+        plan: 'pro',
+        signup_source: 'organic',
+      })
+    })
+
+    it('skips the user_properties call when traits is empty', async () => {
+      const { identify } = await import('@shared/analytics/track')
+      identify('user_123', {})
+
+      const userPropCalls = gtag.mock.calls.filter(
+        (args) => args[0] === 'set' && args[1] === 'user_properties'
+      )
+      expect(userPropCalls).toHaveLength(0)
     })
 
     it('does not call gtag when window.gtag is undefined', async () => {

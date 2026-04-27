@@ -136,8 +136,11 @@ export function track(
 /**
  * Associate the current distinct_id with a known user id after sign-in.
  * PostHog's capture endpoint supports this via a `$identify` event.
- * GA receives the `user_id` via `gtag('config', GA_ID, { user_id })`,
- * which scopes subsequent events to that user across devices.
+ * GA receives the `user_id` via `gtag('set', { user_id })`, which is
+ * the GA4-documented non-pageview update path. Using `gtag('config', ...)`
+ * here would re-trigger automatic pageview tracking even when the loader
+ * was initialized with `send_page_view: false`, because each `config`
+ * call re-evaluates that flag against its own options object.
  */
 export function identify(userId: string, traits: Record<string, unknown> = {}): void {
   if (typeof window === 'undefined') return
@@ -169,10 +172,13 @@ export function identify(userId: string, traits: Record<string, unknown> = {}): 
     }
   }
 
-  const gaId = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID
-  if (gaId && typeof window.gtag === 'function') {
+  if (typeof window.gtag === 'function') {
     try {
-      window.gtag('config', gaId, { user_id: userId })
+      window.gtag('set', { user_id: userId })
+      const sanitizedTraits = sanitizeForGa(traits)
+      if (Object.keys(sanitizedTraits).length > 0) {
+        window.gtag('set', 'user_properties', sanitizedTraits)
+      }
     } catch {
       // Swallow.
     }
