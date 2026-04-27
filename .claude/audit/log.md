@@ -1485,3 +1485,10 @@
 - **Root-cause:** gtag.js's automatic page_view tracking is on by default and operates outside our event dispatcher, so suppressing custom events on admin routes does not suppress pageviews from the same routes. The fr
 - **Tests-updated: shared/__tests__/track.test.ts — replaced 3 identify cases (config-based) with 4 set-based cases asserting (i) gtag('set', { user_id }) is used, (ii) NO 'config' calls happen during i**
 - **Verified-by:** vitest 13/13 in suite + full suite 2394/2394, npm run lint clean, npm run build clean. The implicit-pageview path verified by counting 'config' calls during identify() — assertion fails if anyone re
+
+### 2026-04-27 19:39:11 +0000 · `fc8497a` · Claude
+- **Subject:** fix(csp): allow GA + PostHog hosts so analytics actually loads (Codex P1)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** enforced CSP under the global /(.*) header rule has no allowance for the analytics hosts our two sinks need. Without this, both PostHog (existing) and GA (new in this PR) silently fail in production w
+- **No-tests-needed-because: config-only change (CSP header string) with no JS symbol surface. The repo has no existing CSP-asserting test pattern, and a one-off snapshot would calcify the string against **
+- **Verified-by:** npm run build clean (header config still parses + emits at compile time), `node -e require('./next.config.js').headers().then(...)` prints the expected string with all three new connect-src hosts and 
