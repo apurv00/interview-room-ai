@@ -1478,3 +1478,10 @@
 - **Root-cause:** Phase 1 fan-out in shared/analytics/track.ts only fires
 - **No-tests-needed-because: thin Next.js component mount with env-var guard. The conditional render is covered by the manual verification matrix in the PR description (gtag.js absent when env var unset, **
 - **Verified-by:** npm run build clean (route table unchanged, layout still SSG-prerendered), npm run lint clean, full vitest suite 2393/2393 still green after the commit-1 changes; manual loader-presence check deferred
+
+### 2026-04-27 19:33:23 +0000 · `0428301` · Claude
+- **Subject:** fix(analytics): suppress GA auto-pageviews on admin routes (Codex P1+P2)
+- **Files:** 6 changed, 1 test file(s)
+- **Root-cause:** gtag.js's automatic page_view tracking is on by default and operates outside our event dispatcher, so suppressing custom events on admin routes does not suppress pageviews from the same routes. The fr
+- **Tests-updated: shared/__tests__/track.test.ts — replaced 3 identify cases (config-based) with 4 set-based cases asserting (i) gtag('set', { user_id }) is used, (ii) NO 'config' calls happen during i**
+- **Verified-by:** vitest 13/13 in suite + full suite 2394/2394, npm run lint clean, npm run build clean. The implicit-pageview path verified by counting 'config' calls during identify() — assertion fails if anyone re
