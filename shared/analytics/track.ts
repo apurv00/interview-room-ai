@@ -1,10 +1,19 @@
 /**
  * Lightweight, zero-dependency analytics helper.
  *
- * Sends events to PostHog's capture endpoint via fetch. Uses the public
- * project key (`NEXT_PUBLIC_POSTHOG_KEY`) and host (`NEXT_PUBLIC_POSTHOG_HOST`,
- * defaulting to PostHog Cloud US). If the key is not configured, all calls
- * are no-ops — safe to deploy before PostHog is wired up in the dashboard.
+ * Fans every event out to BOTH sinks from a single call site:
+ *   1. PostHog — fire-and-forget POST to the capture endpoint, gated on
+ *      `NEXT_PUBLIC_POSTHOG_KEY`. Uses the public project key so the
+ *      browser bundle can authenticate without a backend round-trip.
+ *   2. Google Analytics 4 — `window.gtag('event', ...)`, gated on the
+ *      `<GoogleAnalytics />` loader having installed gtag. The loader
+ *      is mounted in `app/layout.tsx` and itself no-ops when
+ *      `NEXT_PUBLIC_GA_MEASUREMENT_ID` is unset, so this branch is also
+ *      a safe no-op pre-config.
+ *
+ * Either sink can be unconfigured without affecting the other — this
+ * is what lets us deploy GA infrastructure ahead of having a property
+ * ID, and keep PostHog when GA isn't loaded yet.
  *
  * A stable anonymous distinct_id is persisted in localStorage so funnels
  * correctly attribute anonymous → signed-in journeys when we later call
@@ -15,7 +24,21 @@
  * later without changing call sites.
  */
 
+declare global {
+  interface Window {
+    gtag?: (...args: unknown[]) => void
+  }
+}
+
 const DISTINCT_ID_KEY = 'ipg_distinct_id'
+
+// Admin surfaces shouldn't pollute product analytics. PostHog still
+// receives these (we use it for ops debugging too), but GA only sees
+// candidate-facing traffic. Prefixes match the Next.js App Router URLs
+// produced by the `(cms)` and `(hire)` route groups.
+const ADMIN_ROUTE_PREFIXES = ['/cms', '/hire'] as const
+
+const GA_STRING_PROP_LIMIT = 500
 
 function getDistinctId(): string {
   if (typeof window === 'undefined') return 'server'
@@ -33,6 +56,43 @@ function getDistinctId(): string {
   }
 }
 
+function isAdminRoute(pathname: string): boolean {
+  for (const prefix of ADMIN_ROUTE_PREFIXES) {
+    if (pathname === prefix || pathname.startsWith(prefix + '/')) return true
+  }
+  return false
+}
+
+function sanitizeForGa(
+  properties: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(properties)) {
+    if (value === undefined) continue
+    if (typeof value === 'string' && value.length > GA_STRING_PROP_LIMIT) {
+      out[key] = value.slice(0, GA_STRING_PROP_LIMIT)
+      continue
+    }
+    out[key] = value
+  }
+  return out
+}
+
+function dispatchToGa(
+  event: string,
+  properties: Record<string, unknown>
+): void {
+  if (typeof window === 'undefined') return
+  if (typeof window.gtag !== 'function') return
+  if (isAdminRoute(window.location.pathname)) return
+
+  try {
+    window.gtag('event', event, sanitizeForGa(properties))
+  } catch {
+    // Swallow — analytics should never break the app.
+  }
+}
+
 export function track(
   event: string,
   properties: Record<string, unknown> = {}
@@ -40,67 +100,81 @@ export function track(
   if (typeof window === 'undefined') return
 
   const apiKey = process.env.NEXT_PUBLIC_POSTHOG_KEY
-  if (!apiKey) return
+  if (apiKey) {
+    const host =
+      process.env.NEXT_PUBLIC_POSTHOG_HOST || 'https://us.i.posthog.com'
 
-  const host =
-    process.env.NEXT_PUBLIC_POSTHOG_HOST || 'https://us.i.posthog.com'
+    const payload = {
+      api_key: apiKey,
+      event,
+      distinct_id: getDistinctId(),
+      properties: {
+        ...properties,
+        $current_url: window.location.href,
+        $pathname: window.location.pathname,
+        $referrer: document.referrer || undefined,
+      },
+      timestamp: new Date().toISOString(),
+    }
 
-  const payload = {
-    api_key: apiKey,
-    event,
-    distinct_id: getDistinctId(),
-    properties: {
-      ...properties,
-      $current_url: window.location.href,
-      $pathname: window.location.pathname,
-      $referrer: document.referrer || undefined,
-    },
-    timestamp: new Date().toISOString(),
+    try {
+      // Fire-and-forget; don't block UI on analytics.
+      void fetch(`${host}/capture/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        keepalive: true,
+      }).catch(() => {})
+    } catch {
+      // Swallow — analytics should never break the app.
+    }
   }
 
-  try {
-    // Fire-and-forget; don't block UI on analytics.
-    void fetch(`${host}/capture/`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      keepalive: true,
-    }).catch(() => {})
-  } catch {
-    // Swallow — analytics should never break the app.
-  }
+  dispatchToGa(event, properties)
 }
 
 /**
  * Associate the current distinct_id with a known user id after sign-in.
  * PostHog's capture endpoint supports this via a `$identify` event.
+ * GA receives the `user_id` via `gtag('config', GA_ID, { user_id })`,
+ * which scopes subsequent events to that user across devices.
  */
 export function identify(userId: string, traits: Record<string, unknown> = {}): void {
   if (typeof window === 'undefined') return
+
   const apiKey = process.env.NEXT_PUBLIC_POSTHOG_KEY
-  if (!apiKey) return
+  if (apiKey) {
+    const host =
+      process.env.NEXT_PUBLIC_POSTHOG_HOST || 'https://us.i.posthog.com'
 
-  const host =
-    process.env.NEXT_PUBLIC_POSTHOG_HOST || 'https://us.i.posthog.com'
+    const anonId = getDistinctId()
+    try {
+      void fetch(`${host}/capture/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          api_key: apiKey,
+          event: '$identify',
+          distinct_id: userId,
+          properties: {
+            $anon_distinct_id: anonId,
+            ...traits,
+          },
+        }),
+        keepalive: true,
+      }).catch(() => {})
+      window.localStorage.setItem(DISTINCT_ID_KEY, userId)
+    } catch {
+      // Swallow.
+    }
+  }
 
-  const anonId = getDistinctId()
-  try {
-    void fetch(`${host}/capture/`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        api_key: apiKey,
-        event: '$identify',
-        distinct_id: userId,
-        properties: {
-          $anon_distinct_id: anonId,
-          ...traits,
-        },
-      }),
-      keepalive: true,
-    }).catch(() => {})
-    window.localStorage.setItem(DISTINCT_ID_KEY, userId)
-  } catch {
-    // Swallow.
+  const gaId = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID
+  if (gaId && typeof window.gtag === 'function') {
+    try {
+      window.gtag('config', gaId, { user_id: userId })
+    } catch {
+      // Swallow.
+    }
   }
 }
