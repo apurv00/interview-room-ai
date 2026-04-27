@@ -1464,3 +1464,17 @@
 - **Root-cause:** post-commit hook auto-appended accountability log entry
 - **No-tests-needed-because: auto-generated audit log + auto-generated**
 - **Verified-by:** git diff inspection — only the gitnexus-managed sections
+
+### 2026-04-27 19:22:05 +0000 · `e291055` · Claude
+- **Subject:** feat(analytics): fan out track() to GA4 alongside PostHog
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** GA4 instrumentation was missing — product-funnel data
+- **Tests-added: shared/__tests__/track.test.ts (12 cases — fan-out, gtag-absent, /cms+/hire denylist, prefix-boundary, undefined-strip, 500-char truncate, posthog-key-unset, gtag-throws, identify happy**
+- **Verified-by:** vitest 12/12 in new suite + full suite 2393/2393, npm run lint clean, npm run build clean
+
+### 2026-04-27 19:22:22 +0000 · `93006aa` · Claude
+- **Subject:** feat(layout): mount GoogleAnalytics tag via @next/third-parties
+- **Files:** 3 changed, 0 test file(s)
+- **Root-cause:** Phase 1 fan-out in shared/analytics/track.ts only fires
+- **No-tests-needed-because: thin Next.js component mount with env-var guard. The conditional render is covered by the manual verification matrix in the PR description (gtag.js absent when env var unset, **
+- **Verified-by:** npm run build clean (route table unchanged, layout still SSG-prerendered), npm run lint clean, full vitest suite 2393/2393 still green after the commit-1 changes; manual loader-presence check deferred
