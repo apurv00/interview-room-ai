@@ -23,13 +23,18 @@
  *     non-null sessionId. (Mic-permission-denied paths never reach
  *     this state — sessionId stays null — so no spurious starts.)
  *   - `interview_completed` fires once per page mount, the first time
- *     `phase === 'FEEDBACK'` is observed AND the candidate did not
- *     mark abandon via `markAbandoned()`.
+ *     `phase === 'SCORING'` is observed AND the candidate did not
+ *     mark abandon via `markAbandoned()`. SCORING is the actual
+ *     terminal phase reached inside `useInterview` —
+ *     `finishInterview` calls `transitionTo('SCORING')` and then
+ *     `router.push('/feedback/...')`, so FEEDBACK is never observed
+ *     on this hook (the page unmounts after the navigation). Per
+ *     Codex P1 review on PR #331.
  *   - `interview_abandoned` fires synchronously from `markAbandoned()`
  *     (called from the End button click handler in
  *     `app/interview/page.tsx`) BEFORE `finishInterview('user_ended')`
  *     runs. Sets a ref that suppresses the otherwise-imminent
- *     `interview_completed` emit on the SCORING → FEEDBACK transition.
+ *     `interview_completed` emit on the SCORING transition.
  */
 
 import { useEffect, useRef } from 'react'
@@ -92,13 +97,22 @@ export function useInterviewLifecycleEvents({
     if (
       !completedFiredRef.current &&
       !abandonedFiredRef.current &&
-      phase === 'FEEDBACK' &&
+      phase === 'SCORING' &&
       sessionId
     ) {
       completedFiredRef.current = true
       track('interview_completed', {
         session_id: sessionId,
-        question_count: questionIndex,
+        // questionIndex is 0-based and lags by one at SCORING entry:
+        // `setQuestionIndex(qIdx)` is called at the START of each
+        // loop iteration in useInterview, but the local `qIdx++`
+        // happens AFTER the answer is processed and the loop exits
+        // before the next setQuestionIndex call. So an N-question
+        // interview shows questionIndex=N-1 here. +1 yields the
+        // real count, matching the UI's "Question X of N" display
+        // (TranscriptPanel.tsx:56) which also adds 1. Codex P2 on
+        // PR #331.
+        question_count: questionIndex + 1,
         duration_seconds_elapsed: durationSecondsElapsed(config, timeRemaining),
       })
     }

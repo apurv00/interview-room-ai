@@ -129,7 +129,7 @@ describe('useInterviewLifecycleEvents', () => {
   })
 
   describe('interview_completed', () => {
-    it('fires once on first transition into FEEDBACK with elapsed-duration math', () => {
+    it('fires once on first transition into SCORING with question_count=questionIndex+1 (Codex P2)', () => {
       const { rerender } = renderHook(
         (args: Args) => useInterviewLifecycleEvents(args),
         {
@@ -143,11 +143,16 @@ describe('useInterviewLifecycleEvents', () => {
       )
       trackMock.mockClear()
 
+      // A 6-question interview reaches SCORING with questionIndex=5
+      // because setQuestionIndex(qIdx) is called at the start of each
+      // iteration in useInterview.ts and the final qIdx++ happens
+      // after the loop's last setQuestionIndex call. The hook adds 1
+      // to recover the cardinal count.
       rerender({
-        phase: 'FEEDBACK',
+        phase: 'SCORING',
         sessionId: 'sess-1',
         config: baseConfig,
-        questionIndex: 6,
+        questionIndex: 5,
         timeRemaining: 120,
       })
 
@@ -159,32 +164,68 @@ describe('useInterviewLifecycleEvents', () => {
       })
     })
 
-    it('does NOT re-fire on subsequent renders after FEEDBACK was reached', () => {
+    it('uses SCORING (not FEEDBACK) as the terminal phase — Codex P1', () => {
+      // useInterview never transitionTo('FEEDBACK'); it goes to
+      // SCORING then router.push('/feedback/...') which unmounts
+      // this hook. Asserting we don't accidentally regress to the
+      // unreachable FEEDBACK gate.
       const { rerender } = renderHook(
         (args: Args) => useInterviewLifecycleEvents(args),
         {
           initialProps: {
             ...initialArgs,
-            phase: 'FEEDBACK' as InterviewState,
+            phase: 'INTERVIEW_START' as InterviewState,
             sessionId: 'sess-1',
             config: baseConfig,
-            questionIndex: 6,
+          },
+        },
+      )
+      trackMock.mockClear()
+
+      // Phase reaching FEEDBACK should NOT fire — that's not a
+      // reachable phase in production.
+      rerender({
+        phase: 'FEEDBACK',
+        sessionId: 'sess-1',
+        config: baseConfig,
+        questionIndex: 5,
+        timeRemaining: 120,
+      })
+
+      // FEEDBACK is past the pre-start gate so interview_started
+      // fires, but interview_completed does NOT.
+      const completedCalls = trackMock.mock.calls.filter(
+        ([name]) => name === 'interview_completed',
+      )
+      expect(completedCalls).toHaveLength(0)
+    })
+
+    it('does NOT re-fire on subsequent renders after SCORING was reached', () => {
+      const { rerender } = renderHook(
+        (args: Args) => useInterviewLifecycleEvents(args),
+        {
+          initialProps: {
+            ...initialArgs,
+            phase: 'SCORING' as InterviewState,
+            sessionId: 'sess-1',
+            config: baseConfig,
+            questionIndex: 5,
             timeRemaining: 120,
           },
         },
       )
-      // Initial mount with phase=FEEDBACK fires BOTH interview_started
-      // (FEEDBACK is past the pre-start gate) AND interview_completed.
+      // Initial mount with phase=SCORING fires BOTH interview_started
+      // (SCORING is past the pre-start gate) AND interview_completed.
       const completedCalls = () =>
         trackMock.mock.calls.filter(([name]) => name === 'interview_completed')
       expect(completedCalls()).toHaveLength(1)
 
       rerender({
         ...initialArgs,
-        phase: 'FEEDBACK',
+        phase: 'SCORING',
         sessionId: 'sess-1',
         config: baseConfig,
-        questionIndex: 6,
+        questionIndex: 5,
         timeRemaining: 120,
       })
 
@@ -257,7 +298,7 @@ describe('useInterviewLifecycleEvents', () => {
       ).toHaveLength(1)
     })
 
-    it('SUPPRESSES interview_completed when FEEDBACK transition follows abandon', () => {
+    it('SUPPRESSES interview_completed when SCORING transition follows abandon', () => {
       const { result, rerender } = renderHook(
         (args: Args) => useInterviewLifecycleEvents(args),
         {
@@ -281,7 +322,7 @@ describe('useInterviewLifecycleEvents', () => {
 
       rerender({
         ...initialArgs,
-        phase: 'FEEDBACK',
+        phase: 'SCORING',
         sessionId: 'sess-1',
         config: baseConfig,
         questionIndex: 3,
