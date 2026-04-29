@@ -1520,3 +1520,10 @@
 - **Root-cause:** phase-1 instrumented marketing CTA + lobby + auth-gate but
 - **Tests-added: No-tests-needed-because: each call site is a single**
 - **Verified-by:** full vitest suite (146 files, 2410 passed) + npx tsc
+
+### 2026-04-29 07:14:23 +0000 · `3796183` · Claude
+- **Subject:** chore(ci): retrigger CI after pre-existing modelRouter test flake
+- **Files:** 0 changed, 0 test file(s)
+- **Root-cause:** empty commit to retrigger GitHub Actions on PR #329 after
+- **No-tests-needed-because: empty commit with no code or content change.**
+- **Verified-by:** `git diff HEAD~1 HEAD` is empty (confirmed before push);
