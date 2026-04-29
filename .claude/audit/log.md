@@ -1588,3 +1588,10 @@
 - **Root-cause:** I assumed sessionId was React state because it appears
 - **Tests-added: useInterviewLifecycleEvents.test.tsx — new test "STILL**
 - **Verified-by:** vitest run on the test file — 14/14 passed (was 13 + 1
+
+### 2026-04-29 10:42:23 +0000 · `9ca1ec7` · Claude
+- **Subject:** fix(analytics): gate interview_started on !abandonedFiredRef (Codex P2 round 3)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** I gated interview_started purely on a phase-set check,
+- **Tests-added: useInterviewLifecycleEvents.test.tsx — new test**
+- **Verified-by:** vitest run on the test file — 15/15 passed (was 14 + 1
