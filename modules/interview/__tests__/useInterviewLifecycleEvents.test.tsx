@@ -97,6 +97,45 @@ describe('useInterviewLifecycleEvents', () => {
       })
     })
 
+    it('SUPPRESSES interview_started after pre-start abandon — Codex P2', () => {
+      // User clicks End during CALIBRATION (sessionId already created
+      // server-side). markAbandoned() latches the ref synchronously.
+      // finishInterview('user_ended') drives state to SCORING.
+      // Without the abandon-check on the started gate, SCORING would
+      // satisfy "phase not in PRE_START_PHASES" and emit
+      // interview_started — inflating the funnel with sessions that
+      // never actually began.
+      const { result, rerender } = renderHook(
+        (args: Args) => useInterviewLifecycleEvents(args),
+        {
+          initialProps: {
+            ...initialArgs,
+            phase: 'CALIBRATION' as InterviewState,
+            sessionId: 'sess-early',
+            config: baseConfig,
+          },
+        },
+      )
+      expect(trackMock).not.toHaveBeenCalled()
+
+      act(() => {
+        result.current.markAbandoned()
+      })
+      const startedCalls = () =>
+        trackMock.mock.calls.filter(([name]) => name === 'interview_started')
+      expect(trackMock.mock.calls.filter(([name]) => name === 'interview_abandoned')).toHaveLength(1)
+      expect(startedCalls()).toHaveLength(0)
+
+      rerender({
+        ...initialArgs,
+        phase: 'SCORING',
+        sessionId: 'sess-early',
+        config: baseConfig,
+      })
+
+      expect(startedCalls()).toHaveLength(0)
+    })
+
     it('does NOT re-fire across subsequent phase transitions', () => {
       const { rerender } = renderHook(
         (args: Args) => useInterviewLifecycleEvents(args),

@@ -20,8 +20,13 @@
  * Single-fire guarantees:
  *   - `interview_started` fires once per page mount, the first time we
  *     observe `phase` outside {INIT, LOBBY, CALIBRATION} with a
- *     non-null sessionId. (Mic-permission-denied paths never reach
- *     this state — sessionId stays null — so no spurious starts.)
+ *     non-null sessionId AND no prior abandon. (Mic-permission-denied
+ *     paths never reach this state — sessionId stays null — so no
+ *     spurious starts. The abandon-ref check additionally suppresses
+ *     started for the case where the user clicks End during
+ *     calibration: finishInterview('user_ended') drives state to
+ *     SCORING, which would otherwise satisfy the "non-prestart phase"
+ *     gate. Codex P2 on PR #331.)
  *   - `interview_completed` fires once per page mount, the first time
  *     `phase === 'SCORING'` is observed AND the candidate did not
  *     mark abandon via `markAbandoned()`. SCORING is the actual
@@ -80,6 +85,7 @@ export function useInterviewLifecycleEvents({
   useEffect(() => {
     if (
       !startedFiredRef.current &&
+      !abandonedFiredRef.current &&
       sessionId &&
       config &&
       !PRE_START_PHASES.has(phase)
