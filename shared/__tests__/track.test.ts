@@ -62,7 +62,7 @@ describe('shared/analytics/track', () => {
       window.history.pushState({}, '', '/cms/domains')
 
       const { track } = await import('@shared/analytics/track')
-      track('admin_action', { from: 'domain_editor' })
+      track('cta_clicked', { cta: 'start', location: 'cms_home' })
 
       expect(fetchMock).toHaveBeenCalledTimes(1)
       expect(gtag).not.toHaveBeenCalled()
@@ -72,7 +72,7 @@ describe('shared/analytics/track', () => {
       window.history.pushState({}, '', '/hire/candidates/abc123')
 
       const { track } = await import('@shared/analytics/track')
-      track('candidate_viewed', {})
+      track('cta_clicked', { cta: 'view', location: 'hire_candidate' })
 
       expect(gtag).not.toHaveBeenCalled()
     })
@@ -83,33 +83,45 @@ describe('shared/analytics/track', () => {
       window.history.pushState({}, '', '/hireling-news')
 
       const { track } = await import('@shared/analytics/track')
-      track('candidate_viewed', {})
+      track('cta_clicked', { cta: 'start', location: 'news' })
 
       expect(gtag).toHaveBeenCalledTimes(1)
     })
 
     it('strips undefined props before sending to GA', async () => {
       const { track } = await import('@shared/analytics/track')
-      track('event_name', { a: 1, b: undefined, c: 'kept' })
+      // audio_worklet_loaded has optional error/stale — useful for
+      // exercising the sanitize-undefined path.
+      track('audio_worklet_loaded', {
+        success: true,
+        durationMs: 42,
+        error: undefined,
+        stale: true,
+      })
 
       const props = gtag.mock.calls[0][2] as Record<string, unknown>
-      expect(props).toEqual({ a: 1, c: 'kept' })
+      expect(props).toEqual({ success: true, durationMs: 42, stale: true })
+      expect(props).not.toHaveProperty('error')
     })
 
     it('truncates GA string props longer than 500 chars', async () => {
       const long = 'x'.repeat(600)
       const { track } = await import('@shared/analytics/track')
-      track('event_name', { long })
+      track('audio_worklet_loaded', {
+        success: false,
+        durationMs: 99,
+        error: long,
+      })
 
       const props = gtag.mock.calls[0][2] as Record<string, string>
-      expect(props.long).toHaveLength(500)
+      expect(props.error).toHaveLength(500)
     })
 
     it('still dispatches to GA when PostHog key is unset', async () => {
       delete process.env.NEXT_PUBLIC_POSTHOG_KEY
 
       const { track } = await import('@shared/analytics/track')
-      track('event_name', {})
+      track('page_view', { pathname: '/' })
 
       expect(fetchMock).not.toHaveBeenCalled()
       expect(gtag).toHaveBeenCalledTimes(1)
@@ -121,7 +133,26 @@ describe('shared/analytics/track', () => {
       })
 
       const { track } = await import('@shared/analytics/track')
-      expect(() => track('event_name', {})).not.toThrow()
+      expect(() => track('page_view', { pathname: '/' })).not.toThrow()
+    })
+
+    it('rejects unregistered event names at compile time', async () => {
+      const { track } = await import('@shared/analytics/track')
+      // @ts-expect-error - 'totally_made_up' is not in EVENT_NAMES; the
+      // typed signature must reject it.
+      track('totally_made_up', {})
+      // No runtime assertion — the assertion is the @ts-expect-error
+      // succeeding at typecheck. We still call track to keep the lint
+      // happy (the variable is used).
+    })
+
+    it('rejects wrong-shape properties for a registered event', async () => {
+      const { track } = await import('@shared/analytics/track')
+      // @ts-expect-error - cta_clicked requires { cta, location }; missing
+      // 'location' is a shape mismatch.
+      track('cta_clicked', { cta: 'x' })
+      // @ts-expect-error - 'pathname' is required for page_view.
+      track('page_view', {})
     })
   })
 
@@ -139,13 +170,26 @@ describe('shared/analytics/track', () => {
 
     it('sets user properties from traits via gtag set/user_properties', async () => {
       const { identify } = await import('@shared/analytics/track')
-      identify('user_123', { plan: 'pro', signup_source: 'organic' })
+      identify('user_123', {
+        plan: 'pro',
+        role: 'candidate',
+        onboardingCompleted: true,
+      })
 
       expect(gtag).toHaveBeenCalledWith('set', { user_id: 'user_123' })
       expect(gtag).toHaveBeenCalledWith('set', 'user_properties', {
         plan: 'pro',
-        signup_source: 'organic',
+        role: 'candidate',
+        onboardingCompleted: true,
       })
+    })
+
+    it('rejects PII fields on the UserTraits type at compile time', async () => {
+      const { identify } = await import('@shared/analytics/track')
+      // @ts-expect-error - email is PII and must not be a UserTraits key.
+      identify('user_123', { email: 'a@b.com' })
+      // @ts-expect-error - name is PII.
+      identify('user_123', { name: 'Alex Chen' })
     })
 
     it('skips the user_properties call when traits is empty', async () => {
