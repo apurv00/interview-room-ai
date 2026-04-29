@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Sparkles, Loader2, AlertCircle, ArrowRight, AlertTriangle } from 'lucide-react'
 import type { AnalysisStatus } from '@shared/types/multimodal'
+import { track } from '@shared/analytics/track'
 
 interface AnalysisTriggerProps {
   sessionId: string
@@ -88,6 +89,14 @@ export default function AnalysisTrigger({ sessionId, onAnalysisComplete }: Analy
         if (data.status === 'completed') {
           setStatus('completed')
           clearInterval(interval)
+          const pollDuration =
+            pollStartedAtRef.current !== null
+              ? Date.now() - pollStartedAtRef.current
+              : undefined
+          track('analysis_completed', {
+            session_id: sessionId,
+            ...(pollDuration !== undefined && { poll_duration_ms: pollDuration }),
+          })
           onAnalysisComplete()
         } else if (data.status === 'failed') {
           setStatus('failed')
@@ -137,6 +146,7 @@ export default function AnalysisTrigger({ sessionId, onAnalysisComplete }: Analy
 
       if (data.status === 'completed') {
         setStatus('completed')
+        track('analysis_completed', { session_id: sessionId })
         onAnalysisComplete()
       } else {
         setStatus(data.status)

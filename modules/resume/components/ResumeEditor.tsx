@@ -19,6 +19,7 @@ import SortableList from './SortableList'
 import SortableItem, { DragHandle } from './SortableItem'
 import AnonymousDraftBanner from './AnonymousDraftBanner'
 import { useAuthGate } from '@shared/providers/AuthGateProvider'
+import { track } from '@shared/analytics/track'
 
 interface Props {
   initialData?: Partial<ResumeData>
@@ -260,6 +261,10 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
       a.click()
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
+      track('resume_downloaded', {
+        template: resume.template || 'professional',
+        file_type: 'pdf',
+      })
     } catch {
       handlePrintPDF()
     }
