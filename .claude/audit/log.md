@@ -1602,3 +1602,10 @@
 - **Root-cause:** empty commit to retrigger GitHub Actions on PR #331 after
 - **No-tests-needed-because: empty commit with no code or content change.**
 - **Verified-by:** `git diff HEAD~1 HEAD` is empty (confirmed before push).
+
+### 2026-04-29 10:57:07 +0000 · `377826b` · Claude
+- **Subject:** fix(analytics): mode-aware question_count + require real interview phase (Codex P1+P2 round 4)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** assumed that any phase outside pre-start was guaranteed
+- **Tests-added: useInterviewLifecycleEvents.test.tsx — three new tests**
+- **Verified-by:** vitest run on the test file — 18/18 passed (was 15 +
