@@ -277,6 +277,54 @@ describe('useInterviewLifecycleEvents', () => {
       expect(trackMock).not.toHaveBeenCalled()
     })
 
+    it('STILL latches abandonedFiredRef when sessionId is stale-null — Codex P1', () => {
+      // useInterview.ts:2247 exposes sessionId via `sessionIdRef.current`,
+      // and the ref write at useInterview.ts:411 is not paired with a
+      // setState. So between session creation and the next unrelated
+      // re-render, the page's `interview.sessionId` is stale `null`.
+      // If End is clicked in that window the closure sees null.
+      // We must STILL latch abandonedFiredRef so the subsequent
+      // SCORING transition (with its now-fresh sessionId) doesn't
+      // misclassify the abandon as completed.
+      const { result, rerender } = renderHook(
+        (args: Args) => useInterviewLifecycleEvents(args),
+        {
+          initialProps: {
+            ...initialArgs,
+            phase: 'INTERVIEW_START' as InterviewState,
+            sessionId: null,
+            config: baseConfig,
+          },
+        },
+      )
+
+      // User clicks End during the stale-sessionId window.
+      act(() => {
+        result.current.markAbandoned()
+      })
+      expect(trackMock).not.toHaveBeenCalled()
+
+      // SCORING arrives — and so does the now-fresh sessionId, because
+      // transitionTo('SCORING') itself is a state-setter that
+      // refreshes the closure.
+      rerender({
+        phase: 'SCORING',
+        sessionId: 'sess-late',
+        config: baseConfig,
+        questionIndex: 3,
+        timeRemaining: 600,
+      })
+
+      // The interview_started event is allowed (we just learned the
+      // sessionId) but interview_completed must NOT fire — the abandon
+      // latch is the only guarantee distinguishing user-ended from
+      // natural completion.
+      const completedCalls = trackMock.mock.calls.filter(
+        ([name]) => name === 'interview_completed',
+      )
+      expect(completedCalls).toHaveLength(0)
+    })
+
     it('is idempotent — second markAbandoned() call is a no-op', () => {
       const { result } = renderHook(() =>
         useInterviewLifecycleEvents({

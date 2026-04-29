@@ -120,8 +120,19 @@ export function useInterviewLifecycleEvents({
 
   const markAbandoned = (): void => {
     if (abandonedFiredRef.current) return
-    if (!sessionId) return
+    // Latch BEFORE the sessionId guard. useInterview exposes
+    // sessionId via `sessionIdRef.current` (useInterview.ts:2247 —
+    // not React state). Refs writes don't re-render, so the page's
+    // `interview.sessionId` stays stale at `null` between
+    // sessionIdRef = sid (useInterview.ts:411) and the next
+    // unrelated state-setter. If End is clicked in that window the
+    // closure here sees null. Without latching abandonedFiredRef,
+    // the SCORING transition (whose transitionTo IS a state-setter
+    // and refreshes the closure) would then fire interview_completed,
+    // misclassifying a user-ended interview as completed. Codex P1
+    // on PR #331.
     abandonedFiredRef.current = true
+    if (!sessionId) return
     track('interview_abandoned', {
       session_id: sessionId,
       q_index_at_abandon: questionIndex,
