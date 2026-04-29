@@ -1581,3 +1581,10 @@
 - **Root-cause:** I gated on `'FEEDBACK'` because the state-machine doc
 - **Tests-added: extended useInterviewLifecycleEvents.test.tsx — renamed**
 - **Verified-by:** vitest run on the test file — 13/13 passed (was 12 + 1
+
+### 2026-04-29 10:36:35 +0000 · `414865a` · Claude
+- **Subject:** fix(analytics): latch abandon ref before sessionId guard (Codex P1 round 2)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** I assumed sessionId was React state because it appears
+- **Tests-added: useInterviewLifecycleEvents.test.tsx — new test "STILL**
+- **Verified-by:** vitest run on the test file — 14/14 passed (was 13 + 1
