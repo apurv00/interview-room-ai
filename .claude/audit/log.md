@@ -1574,3 +1574,10 @@
 - **Root-cause:** completes phase-2b by activating the lifecycle hook from
 - **Tests-added: No-tests-needed-because: this commit is pure plumbing**
 - **Verified-by:** full vitest suite (147 files, 2422 passed); npx tsc
+
+### 2026-04-29 10:29:36 +0000 · `442f74b` · Claude
+- **Subject:** fix(analytics): SCORING is the terminal phase, qIdx+1 is the count (Codex P1+P2)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** I gated on `'FEEDBACK'` because the state-machine doc
+- **Tests-added: extended useInterviewLifecycleEvents.test.tsx — renamed**
+- **Verified-by:** vitest run on the test file — 13/13 passed (was 12 + 1
