@@ -1595,3 +1595,10 @@
 - **Root-cause:** I gated interview_started purely on a phase-set check,
 - **Tests-added: useInterviewLifecycleEvents.test.tsx — new test**
 - **Verified-by:** vitest run on the test file — 15/15 passed (was 14 + 1
+
+### 2026-04-29 10:45:02 +0000 · `fd5d18b` · Claude
+- **Subject:** chore(ci): retrigger CI after pre-existing modelRouter test flake
+- **Files:** 0 changed, 0 test file(s)
+- **Root-cause:** empty commit to retrigger GitHub Actions on PR #331 after
+- **No-tests-needed-because: empty commit with no code or content change.**
+- **Verified-by:** `git diff HEAD~1 HEAD` is empty (confirmed before push).
