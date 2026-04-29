@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next'
 import { SpeedInsights } from '@vercel/speed-insights/next'
 import { GoogleAnalyticsScripts } from '@shared/analytics/GoogleAnalyticsScripts'
+import { AnalyticsProvider } from '@shared/analytics/AnalyticsProvider'
 import SessionProvider from '@shared/providers/SessionProvider'
 import { ThemeProvider } from '@shared/providers/ThemeProvider'
 import XpProvider from '@shared/providers/XpProvider'
@@ -100,18 +101,20 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           }}
         />
         <SessionProvider>
-          <AuthGateProvider>
-            <ThemeProvider>
-              <XpProvider>
-                <AppShell
-                  navAuthExtras={<XpBadge />}
-                  authedGlobalWidgets={<BadgeUnlockChecker />}
-                >
-                  {children}
-                </AppShell>
-              </XpProvider>
-            </ThemeProvider>
-          </AuthGateProvider>
+          <AnalyticsProvider>
+            <AuthGateProvider>
+              <ThemeProvider>
+                <XpProvider>
+                  <AppShell
+                    navAuthExtras={<XpBadge />}
+                    authedGlobalWidgets={<BadgeUnlockChecker />}
+                  >
+                    {children}
+                  </AppShell>
+                </XpProvider>
+              </ThemeProvider>
+            </AuthGateProvider>
+          </AnalyticsProvider>
         </SessionProvider>
         <SpeedInsights />
         {gaId && <GoogleAnalyticsScripts gaId={gaId} />}
