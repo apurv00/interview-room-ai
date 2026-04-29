@@ -1609,3 +1609,10 @@
 - **Root-cause:** assumed that any phase outside pre-start was guaranteed
 - **Tests-added: useInterviewLifecycleEvents.test.tsx — three new tests**
 - **Verified-by:** vitest run on the test file — 18/18 passed (was 15 +
+
+### 2026-04-29 11:06:30 +0000 · `cf3331b` · Claude
+- **Subject:** fix(analytics): backfill interview_abandoned across stale-null sessionId (Codex P2 round 5)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** in round 2 I prioritized "don't misclassify as
+- **Tests-added: useInterviewLifecycleEvents.test.tsx —**
+- **Verified-by:** vitest run on the test file — 19/19 passed (was 18 +
