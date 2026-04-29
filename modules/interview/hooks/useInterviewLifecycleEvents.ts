@@ -18,23 +18,24 @@
  *     → WRAP_UP → SCORING → FEEDBACK → ENDED
  *
  * Single-fire guarantees:
- *   - `interview_started` fires once per page mount, the first time we
- *     observe `phase` outside {INIT, LOBBY, CALIBRATION} with a
- *     non-null sessionId AND no prior abandon. (Mic-permission-denied
- *     paths never reach this state — sessionId stays null — so no
- *     spurious starts. The abandon-ref check additionally suppresses
- *     started for the case where the user clicks End during
- *     calibration: finishInterview('user_ended') drives state to
- *     SCORING, which would otherwise satisfy the "non-prestart phase"
- *     gate. Codex P2 on PR #331.)
- *   - `interview_completed` fires once per page mount, the first time
- *     `phase === 'SCORING'` is observed AND the candidate did not
- *     mark abandon via `markAbandoned()`. SCORING is the actual
- *     terminal phase reached inside `useInterview` —
- *     `finishInterview` calls `transitionTo('SCORING')` and then
- *     `router.push('/feedback/...')`, so FEEDBACK is never observed
- *     on this hook (the page unmounts after the navigation). Per
- *     Codex P1 review on PR #331.
+ *   - `interview_started` fires once per page mount, the first time
+ *     `phase` enters REAL_INTERVIEW_PHASES (ASK_QUESTION, LISTENING,
+ *     CODE_EDITING, DESIGN_CANVAS, PROCESSING, COACHING, FOLLOW_UP,
+ *     WRAP_UP) with a non-null sessionId AND no prior abandon.
+ *     INIT/LOBBY/CALIBRATION/INTERVIEW_START/SCORING/ENDED do NOT
+ *     count as a real start. The positive-allowlist gate prevents
+ *     pre-start time-ups (useInterview.ts:520-521 catch-all `else`
+ *     branch fires `finishInterview('time_up')` from any unlisted
+ *     phase, including CALIBRATION) from being misclassified as
+ *     started.
+ *   - `interview_completed` fires once per page mount when
+ *     `phase === 'SCORING'` AND `startedFiredRef.current` is true
+ *     AND no prior abandon. The startedFiredRef requirement closes
+ *     the same pre-start time-up loophole on the completion side.
+ *     SCORING (not FEEDBACK) is the terminal phase reached inside
+ *     useInterview — `finishInterview` calls `transitionTo('SCORING')`
+ *     then `router.push('/feedback/...')`, which unmounts this hook
+ *     before FEEDBACK could be observed. Per Codex P1 review.
  *   - `interview_abandoned` fires synchronously from `markAbandoned()`
  *     (called from the End button click handler in
  *     `app/interview/page.tsx`) BEFORE `finishInterview('user_ended')`
@@ -64,11 +65,62 @@ interface UseInterviewLifecycleEventsReturn {
   markAbandoned: () => void
 }
 
-const PRE_START_PHASES = new Set<InterviewState>(['INIT', 'LOBBY', 'CALIBRATION'])
+/**
+ * Positive allowlist of phases that count as "the user reached a real
+ * interview phase". A pre-start timeout (timer expires while still in
+ * INIT/LOBBY/CALIBRATION/INTERVIEW_START) drives `finishInterview` →
+ * SCORING without ever passing through one of these phases, so we
+ * suppress lifecycle events for those idle sessions. Codex P2 round 4
+ * on PR #331.
+ *
+ * INTERVIEW_START is intentionally NOT in this set — the avatar's
+ * intro greeting starts there, but the timer's catch-all `else`
+ * branch (useInterview.ts:520-521) fires `finishInterview('time_up')`
+ * from INTERVIEW_START too if nothing has progressed past it. The
+ * earliest *certain* "real interview" signal is ASK_QUESTION (or
+ * CODE_EDITING / DESIGN_CANVAS for the coding / system-design flows
+ * where ASK_QUESTION is brief and immediately followed).
+ */
+const REAL_INTERVIEW_PHASES = new Set<InterviewState>([
+  'ASK_QUESTION',
+  'LISTENING',
+  'CODE_EDITING',
+  'DESIGN_CANVAS',
+  'PROCESSING',
+  'COACHING',
+  'FOLLOW_UP',
+  'WRAP_UP',
+])
 
 function durationSecondsElapsed(config: InterviewConfig | null, timeRemaining: number): number {
   if (!config?.duration) return 0
   return Math.max(0, config.duration * 60 - timeRemaining)
+}
+
+/**
+ * Convert `questionIndex` to a cardinal count, accounting for the
+ * different index bases useInterview.ts uses per interview mode:
+ *
+ * - General/screening/behavioral/etc. (`useInterview.ts:1350`):
+ *   `setQuestionIndex(qIdx)` runs at the START of each loop iteration
+ *   with a 0-based qIdx. The local `qIdx++` after the answer happens
+ *   AFTER the loop's last setQuestionIndex call, so React state ends
+ *   up one less than the count. +1 recovers the cardinal.
+ *
+ * - Coding (`useInterview.ts:1921-1922`) and system-design
+ *   (`useInterview.ts:2039-2040`): `setQuestionIndex(1)` at the first
+ *   problem (1-based). React state at SCORING already equals the
+ *   cardinal count. No +1 needed.
+ *
+ * Codex P1 round 4 on PR #331.
+ */
+function questionCountAtCompletion(
+  config: InterviewConfig | null,
+  questionIndex: number,
+): number {
+  const t = config?.interviewType
+  if (t === 'coding' || t === 'system-design') return questionIndex
+  return questionIndex + 1
 }
 
 export function useInterviewLifecycleEvents({
@@ -88,7 +140,7 @@ export function useInterviewLifecycleEvents({
       !abandonedFiredRef.current &&
       sessionId &&
       config &&
-      !PRE_START_PHASES.has(phase)
+      REAL_INTERVIEW_PHASES.has(phase)
     ) {
       startedFiredRef.current = true
       track('interview_started', {
@@ -100,7 +152,15 @@ export function useInterviewLifecycleEvents({
       })
     }
 
+    // `interview_completed` REQUIRES `interview_started` to have fired.
+    // Second half of the Codex P2 round 4 fix: an idle pre-start
+    // session whose timer fires `finishInterview('time_up')` from
+    // CALIBRATION reaches SCORING without ever passing through
+    // REAL_INTERVIEW_PHASES, so startedFiredRef is false and the
+    // spurious completion is suppressed. Without this gate, pre-start
+    // time-ups would inflate the funnel completion count.
     if (
+      startedFiredRef.current &&
       !completedFiredRef.current &&
       !abandonedFiredRef.current &&
       phase === 'SCORING' &&
@@ -109,16 +169,7 @@ export function useInterviewLifecycleEvents({
       completedFiredRef.current = true
       track('interview_completed', {
         session_id: sessionId,
-        // questionIndex is 0-based and lags by one at SCORING entry:
-        // `setQuestionIndex(qIdx)` is called at the START of each
-        // loop iteration in useInterview, but the local `qIdx++`
-        // happens AFTER the answer is processed and the loop exits
-        // before the next setQuestionIndex call. So an N-question
-        // interview shows questionIndex=N-1 here. +1 yields the
-        // real count, matching the UI's "Question X of N" display
-        // (TranscriptPanel.tsx:56) which also adds 1. Codex P2 on
-        // PR #331.
-        question_count: questionIndex + 1,
+        question_count: questionCountAtCompletion(config, questionIndex),
         duration_seconds_elapsed: durationSecondsElapsed(config, timeRemaining),
       })
     }

@@ -38,7 +38,10 @@ describe('useInterviewLifecycleEvents', () => {
   })
 
   describe('interview_started', () => {
-    it('does NOT fire while phase is in {INIT, LOBBY, CALIBRATION}', () => {
+    it('does NOT fire while phase is in {INIT, LOBBY, CALIBRATION, INTERVIEW_START}', () => {
+      // Codex P2 round 4: INTERVIEW_START is also pre-real because
+      // useInterview.ts:520-521 catch-all timer-fire reaches SCORING
+      // from any unlisted phase. Only ASK_QUESTION and onward count.
       const { rerender } = renderHook(
         ({ phase }: { phase: InterviewState }) =>
           useInterviewLifecycleEvents({
@@ -51,6 +54,7 @@ describe('useInterviewLifecycleEvents', () => {
       )
       rerender({ phase: 'LOBBY' as InterviewState })
       rerender({ phase: 'CALIBRATION' as InterviewState })
+      rerender({ phase: 'INTERVIEW_START' as InterviewState })
       expect(trackMock).not.toHaveBeenCalled()
     })
 
@@ -58,7 +62,7 @@ describe('useInterviewLifecycleEvents', () => {
       renderHook(() =>
         useInterviewLifecycleEvents({
           ...initialArgs,
-          phase: 'INTERVIEW_START',
+          phase: 'ASK_QUESTION',
           sessionId: null,
           config: baseConfig,
         }),
@@ -66,7 +70,7 @@ describe('useInterviewLifecycleEvents', () => {
       expect(trackMock).not.toHaveBeenCalled()
     })
 
-    it('fires once with full payload on first transition past CALIBRATION', () => {
+    it('fires once with full payload on first transition into ASK_QUESTION', () => {
       const { rerender } = renderHook(
         (args: Args) => useInterviewLifecycleEvents(args),
         { initialProps: { ...initialArgs } },
@@ -74,7 +78,7 @@ describe('useInterviewLifecycleEvents', () => {
 
       rerender({
         ...initialArgs,
-        phase: 'CALIBRATION',
+        phase: 'INTERVIEW_START',
         sessionId: 'sess-1',
         config: baseConfig,
       })
@@ -82,7 +86,7 @@ describe('useInterviewLifecycleEvents', () => {
 
       rerender({
         ...initialArgs,
-        phase: 'INTERVIEW_START',
+        phase: 'ASK_QUESTION',
         sessionId: 'sess-1',
         config: baseConfig,
       })
@@ -142,7 +146,7 @@ describe('useInterviewLifecycleEvents', () => {
         {
           initialProps: {
             ...initialArgs,
-            phase: 'INTERVIEW_START' as InterviewState,
+            phase: 'ASK_QUESTION' as InterviewState,
             sessionId: 'sess-1',
             config: baseConfig,
           },
@@ -152,7 +156,7 @@ describe('useInterviewLifecycleEvents', () => {
 
       rerender({
         ...initialArgs,
-        phase: 'ASK_QUESTION',
+        phase: 'PROCESSING',
         sessionId: 'sess-1',
         config: baseConfig,
       })
@@ -168,13 +172,16 @@ describe('useInterviewLifecycleEvents', () => {
   })
 
   describe('interview_completed', () => {
-    it('fires once on first transition into SCORING with question_count=questionIndex+1 (Codex P2)', () => {
+    it('fires once on first transition into SCORING with question_count=questionIndex+1 for general flow (Codex P2)', () => {
+      // Setup: phase=ASK_QUESTION first so started fires (the
+      // completed gate now requires startedFiredRef per Codex P2
+      // round 4).
       const { rerender } = renderHook(
         (args: Args) => useInterviewLifecycleEvents(args),
         {
           initialProps: {
             ...initialArgs,
-            phase: 'INTERVIEW_START' as InterviewState,
+            phase: 'ASK_QUESTION' as InterviewState,
             sessionId: 'sess-1',
             config: baseConfig,
           },
@@ -182,11 +189,11 @@ describe('useInterviewLifecycleEvents', () => {
       )
       trackMock.mockClear()
 
-      // A 6-question interview reaches SCORING with questionIndex=5
-      // because setQuestionIndex(qIdx) is called at the start of each
-      // iteration in useInterview.ts and the final qIdx++ happens
-      // after the loop's last setQuestionIndex call. The hook adds 1
-      // to recover the cardinal count.
+      // A 6-question general/screening interview reaches SCORING
+      // with questionIndex=5 because setQuestionIndex(qIdx) is called
+      // at the start of each iteration in useInterview.ts and the
+      // final qIdx++ happens after the loop's last setQuestionIndex
+      // call. The hook adds 1 to recover the cardinal count.
       rerender({
         phase: 'SCORING',
         sessionId: 'sess-1',
@@ -203,17 +210,111 @@ describe('useInterviewLifecycleEvents', () => {
       })
     })
 
-    it('uses SCORING (not FEEDBACK) as the terminal phase — Codex P1', () => {
-      // useInterview never transitionTo('FEEDBACK'); it goes to
-      // SCORING then router.push('/feedback/...') which unmounts
-      // this hook. Asserting we don't accidentally regress to the
-      // unreachable FEEDBACK gate.
+    it('emits question_count=questionIndex (no +1) for coding flow — Codex P1 round 4', () => {
+      // Coding flow uses 1-based questionIndex (useInterview.ts:1922
+      // setQuestionIndex(1) at the first problem). React state at
+      // SCORING already equals the cardinal count.
+      const codingConfig: InterviewConfig = { ...baseConfig, interviewType: 'coding' }
       const { rerender } = renderHook(
         (args: Args) => useInterviewLifecycleEvents(args),
         {
           initialProps: {
             ...initialArgs,
-            phase: 'INTERVIEW_START' as InterviewState,
+            phase: 'CODE_EDITING' as InterviewState,
+            sessionId: 'sess-c',
+            config: codingConfig,
+          },
+        },
+      )
+      trackMock.mockClear()
+
+      rerender({
+        phase: 'SCORING',
+        sessionId: 'sess-c',
+        config: codingConfig,
+        questionIndex: 3,
+        timeRemaining: 200,
+      })
+
+      expect(trackMock).toHaveBeenCalledWith('interview_completed', expect.objectContaining({
+        question_count: 3,
+      }))
+    })
+
+    it('emits question_count=questionIndex (no +1) for system-design flow — Codex P1 round 4', () => {
+      const designConfig: InterviewConfig = { ...baseConfig, interviewType: 'system-design' }
+      const { rerender } = renderHook(
+        (args: Args) => useInterviewLifecycleEvents(args),
+        {
+          initialProps: {
+            ...initialArgs,
+            phase: 'DESIGN_CANVAS' as InterviewState,
+            sessionId: 'sess-d',
+            config: designConfig,
+          },
+        },
+      )
+      trackMock.mockClear()
+
+      rerender({
+        phase: 'SCORING',
+        sessionId: 'sess-d',
+        config: designConfig,
+        questionIndex: 2,
+        timeRemaining: 300,
+      })
+
+      expect(trackMock).toHaveBeenCalledWith('interview_completed', expect.objectContaining({
+        question_count: 2,
+      }))
+    })
+
+    it('SUPPRESSES interview_completed when SCORING is reached without ever entering a real phase — Codex P2 round 4', () => {
+      // Idle pre-start time-up: timer expires while still in
+      // CALIBRATION → useInterview.ts:520-521 catch-all `else` fires
+      // `finishInterview('time_up')` → SCORING. Before this fix, my
+      // hook would have emitted interview_completed for an interview
+      // that never actually started.
+      const { rerender } = renderHook(
+        (args: Args) => useInterviewLifecycleEvents(args),
+        {
+          initialProps: {
+            ...initialArgs,
+            phase: 'CALIBRATION' as InterviewState,
+            sessionId: 'sess-idle',
+            config: baseConfig,
+          },
+        },
+      )
+      expect(trackMock).not.toHaveBeenCalled()
+
+      // Timer expires from CALIBRATION — useInterview drives
+      // straight to SCORING without passing through ASK_QUESTION.
+      rerender({
+        ...initialArgs,
+        phase: 'SCORING',
+        sessionId: 'sess-idle',
+        config: baseConfig,
+        questionIndex: 0,
+        timeRemaining: 0,
+      })
+
+      expect(trackMock).not.toHaveBeenCalled()
+    })
+
+    it('uses SCORING (not FEEDBACK) as the terminal phase — Codex P1', () => {
+      // useInterview never transitionTo('FEEDBACK'); it goes to
+      // SCORING then router.push('/feedback/...') which unmounts
+      // this hook. Asserting we don't accidentally regress to the
+      // unreachable FEEDBACK gate. Setup uses ASK_QUESTION so
+      // started fires (Codex P2 round 4: completed gate now
+      // requires startedFiredRef).
+      const { rerender } = renderHook(
+        (args: Args) => useInterviewLifecycleEvents(args),
+        {
+          initialProps: {
+            ...initialArgs,
+            phase: 'ASK_QUESTION' as InterviewState,
             sessionId: 'sess-1',
             config: baseConfig,
           },
@@ -221,8 +322,7 @@ describe('useInterviewLifecycleEvents', () => {
       )
       trackMock.mockClear()
 
-      // Phase reaching FEEDBACK should NOT fire — that's not a
-      // reachable phase in production.
+      // Phase reaching FEEDBACK should NOT fire completed.
       rerender({
         phase: 'FEEDBACK',
         sessionId: 'sess-1',
@@ -231,8 +331,6 @@ describe('useInterviewLifecycleEvents', () => {
         timeRemaining: 120,
       })
 
-      // FEEDBACK is past the pre-start gate so interview_started
-      // fires, but interview_completed does NOT.
       const completedCalls = trackMock.mock.calls.filter(
         ([name]) => name === 'interview_completed',
       )
@@ -240,12 +338,14 @@ describe('useInterviewLifecycleEvents', () => {
     })
 
     it('does NOT re-fire on subsequent renders after SCORING was reached', () => {
+      // Setup: ASK_QUESTION → SCORING. ASK_QUESTION fires started,
+      // SCORING fires completed (gate now requires startedFiredRef).
       const { rerender } = renderHook(
         (args: Args) => useInterviewLifecycleEvents(args),
         {
           initialProps: {
             ...initialArgs,
-            phase: 'SCORING' as InterviewState,
+            phase: 'ASK_QUESTION' as InterviewState,
             sessionId: 'sess-1',
             config: baseConfig,
             questionIndex: 5,
@@ -253,8 +353,15 @@ describe('useInterviewLifecycleEvents', () => {
           },
         },
       )
-      // Initial mount with phase=SCORING fires BOTH interview_started
-      // (SCORING is past the pre-start gate) AND interview_completed.
+      rerender({
+        ...initialArgs,
+        phase: 'SCORING',
+        sessionId: 'sess-1',
+        config: baseConfig,
+        questionIndex: 5,
+        timeRemaining: 120,
+      })
+
       const completedCalls = () =>
         trackMock.mock.calls.filter(([name]) => name === 'interview_completed')
       expect(completedCalls()).toHaveLength(1)
@@ -428,7 +535,7 @@ describe('useInterviewLifecycleEvents', () => {
       renderHook(() =>
         useInterviewLifecycleEvents({
           ...initialArgs,
-          phase: 'INTERVIEW_START',
+          phase: 'ASK_QUESTION',
           sessionId: 'sess-x',
           config: sparseConfig,
         }),
