@@ -19,10 +19,16 @@
  * correctly attribute anonymous → signed-in journeys when we later call
  * `identify()`.
  *
+ * Event names and property shapes are typed against the registry in
+ * `./events.ts`. Adding a new event requires registering it there
+ * first; the call site then gets full IDE completion + typo rejection.
+ *
  * Why not the posthog-js SDK? It adds ~50KB gzip and we only need the
  * capture endpoint for pre-GTM funnel baselining. We can swap in the SDK
  * later without changing call sites.
  */
+
+import type { EventName, EventProps, UserTraits } from './events'
 
 declare global {
   interface Window {
@@ -93,9 +99,9 @@ function dispatchToGa(
   }
 }
 
-export function track(
-  event: string,
-  properties: Record<string, unknown> = {}
+export function track<E extends EventName>(
+  event: E,
+  properties: EventProps<E>
 ): void {
   if (typeof window === 'undefined') return
 
@@ -109,7 +115,7 @@ export function track(
       event,
       distinct_id: getDistinctId(),
       properties: {
-        ...properties,
+        ...(properties as Record<string, unknown>),
         $current_url: window.location.href,
         $pathname: window.location.pathname,
         $referrer: document.referrer || undefined,
@@ -130,7 +136,7 @@ export function track(
     }
   }
 
-  dispatchToGa(event, properties)
+  dispatchToGa(event, properties as Record<string, unknown>)
 }
 
 /**
@@ -142,7 +148,7 @@ export function track(
  * was initialized with `send_page_view: false`, because each `config`
  * call re-evaluates that flag against its own options object.
  */
-export function identify(userId: string, traits: Record<string, unknown> = {}): void {
+export function identify(userId: string, traits: UserTraits = {}): void {
   if (typeof window === 'undefined') return
 
   const apiKey = process.env.NEXT_PUBLIC_POSTHOG_KEY
@@ -161,7 +167,7 @@ export function identify(userId: string, traits: Record<string, unknown> = {}): 
           distinct_id: userId,
           properties: {
             $anon_distinct_id: anonId,
-            ...traits,
+            ...(traits as Record<string, unknown>),
           },
         }),
         keepalive: true,
@@ -175,7 +181,7 @@ export function identify(userId: string, traits: Record<string, unknown> = {}): 
   if (typeof window.gtag === 'function') {
     try {
       window.gtag('set', { user_id: userId })
-      const sanitizedTraits = sanitizeForGa(traits)
+      const sanitizedTraits = sanitizeForGa(traits as Record<string, unknown>)
       if (Object.keys(sanitizedTraits).length > 0) {
         window.gtag('set', 'user_properties', sanitizedTraits)
       }

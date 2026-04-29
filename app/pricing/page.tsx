@@ -10,6 +10,7 @@ import Badge from '@shared/ui/Badge'
 import Button from '@shared/ui/Button'
 import Input from '@shared/ui/Input'
 import Accordion from '@shared/ui/Accordion'
+import { track } from '@shared/analytics/track'
 
 const PLAN_ORDER = ['free', 'pro', 'enterprise'] as const
 
@@ -44,6 +45,7 @@ function PlanCard({ plan, isCurrent }: { plan: PlanConfig; isCurrent: boolean })
         return
       }
       setNotifySubmitted(true)
+      track('waitlist_joined', { source: 'pricing-pro' })
     } catch {
       setNotifyError('Network error. Try again.')
     } finally {

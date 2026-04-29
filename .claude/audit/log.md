@@ -1499,3 +1499,31 @@
 - **Root-cause:** gtag's regional-host routing was unknown to the previous CSP allowance, so the literal www. allowlist created a partial-data failure mode that would only surface as missing rows in the GA dashboard fo
 - **No-tests-needed-because: one-character allowlist widening (www. → *.) on a config string. The repo has no CSP-asserting test pattern. Rendering still verified by `node -e require('./next.config.js')**
 - **Verified-by:** `node -e` materialized CSP — assertion `csp.includes('https://*.google-analytics.com') === true` and `csp.includes('https://www.google-analytics.com') === false`. Build still clean from the previous
+
+### 2026-04-29 04:59:25 +0000 · `e7c7aed` · Claude
+- **Subject:** feat(analytics): typed event registry + UserTraits for track/identify
+- **Files:** 4 changed, 2 test file(s)
+- **Root-cause:** phase-1 GA infra shipped a string-typed track() helper. As
+- **Tests-added: shared/analytics/__tests__/events.test.ts (5 tests:**
+- **Verified-by:** vitest run on track.test.ts + events.test.ts (15 passed);
+
+### 2026-04-29 04:59:43 +0000 · `d72e467` · Claude
+- **Subject:** feat(analytics): AnalyticsProvider — pageview + identify + signin transition
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** phase-1 had no client-side pageview tracking — GA was
+- **Tests-added: shared/analytics/__tests__/AnalyticsProvider.test.tsx**
+- **Verified-by:** vitest run on AnalyticsProvider.test.tsx (8 passed);
+
+### 2026-04-29 05:00:03 +0000 · `66eb803` · Claude
+- **Subject:** feat(analytics): wire resume_downloaded, analysis_completed, waitlist_joined
+- **Files:** 3 changed, 0 test file(s)
+- **Root-cause:** phase-1 instrumented marketing CTA + lobby + auth-gate but
+- **Tests-added: No-tests-needed-because: each call site is a single**
+- **Verified-by:** full vitest suite (146 files, 2410 passed) + npx tsc
+
+### 2026-04-29 07:14:23 +0000 · `3796183` · Claude
+- **Subject:** chore(ci): retrigger CI after pre-existing modelRouter test flake
+- **Files:** 0 changed, 0 test file(s)
+- **Root-cause:** empty commit to retrigger GitHub Actions on PR #329 after
+- **No-tests-needed-because: empty commit with no code or content change.**
+- **Verified-by:** `git diff HEAD~1 HEAD` is empty (confirmed before push);
