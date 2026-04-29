@@ -133,8 +133,33 @@ export function useInterviewLifecycleEvents({
   const startedFiredRef = useRef(false)
   const completedFiredRef = useRef(false)
   const abandonedFiredRef = useRef(false)
+  /**
+   * Captures the click-time payload when markAbandoned() runs with a
+   * stale-null sessionId. The useEffect below backfills the emit on
+   * the next render that has a fresh sessionId. Without this, the
+   * round-2 latch correctly suppressed the false `interview_completed`
+   * but threw away the abandon attribution itself — undercounting
+   * user-ended sessions in the staleness window. Codex P2 round 5.
+   */
+  const pendingAbandonRef = useRef<null | {
+    q_index_at_abandon: number
+    time_remaining_at_abandon: number
+    duration_seconds_elapsed: number
+  }>(null)
 
   useEffect(() => {
+    // Backfill: if a markAbandoned() call landed during the stale-null
+    // sessionId window, emit the deferred event now that sessionId is
+    // available. The captured fields reflect the click moment, not the
+    // current render — the user clicked End at q=3 / t=600s, that's
+    // what the funnel needs to record regardless of when the closure
+    // refreshed. Codex P2 round 5.
+    if (pendingAbandonRef.current && sessionId) {
+      const payload = pendingAbandonRef.current
+      pendingAbandonRef.current = null
+      track('interview_abandoned', { session_id: sessionId, ...payload })
+    }
+
     if (
       !startedFiredRef.current &&
       !abandonedFiredRef.current &&
@@ -179,7 +204,7 @@ export function useInterviewLifecycleEvents({
     if (abandonedFiredRef.current) return
     // Latch BEFORE the sessionId guard. useInterview exposes
     // sessionId via `sessionIdRef.current` (useInterview.ts:2247 —
-    // not React state). Refs writes don't re-render, so the page's
+    // not React state). Ref writes don't re-render, so the page's
     // `interview.sessionId` stays stale at `null` between
     // sessionIdRef = sid (useInterview.ts:411) and the next
     // unrelated state-setter. If End is clicked in that window the
@@ -187,15 +212,22 @@ export function useInterviewLifecycleEvents({
     // the SCORING transition (whose transitionTo IS a state-setter
     // and refreshes the closure) would then fire interview_completed,
     // misclassifying a user-ended interview as completed. Codex P1
-    // on PR #331.
+    // round 2.
     abandonedFiredRef.current = true
-    if (!sessionId) return
-    track('interview_abandoned', {
-      session_id: sessionId,
+    const payload = {
       q_index_at_abandon: questionIndex,
       time_remaining_at_abandon: timeRemaining,
       duration_seconds_elapsed: durationSecondsElapsed(config, timeRemaining),
-    })
+    }
+    if (!sessionId) {
+      // Stash for backfill — the useEffect will emit on the next
+      // render that has a fresh sessionId, preserving abandon
+      // attribution that round 2's bare latch threw away. Codex P2
+      // round 5.
+      pendingAbandonRef.current = payload
+      return
+    }
+    track('interview_abandoned', { session_id: sessionId, ...payload })
   }
 
   return { markAbandoned }

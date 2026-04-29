@@ -423,52 +423,107 @@ describe('useInterviewLifecycleEvents', () => {
       expect(trackMock).not.toHaveBeenCalled()
     })
 
-    it('STILL latches abandonedFiredRef when sessionId is stale-null — Codex P1', () => {
-      // useInterview.ts:2247 exposes sessionId via `sessionIdRef.current`,
+    it('BACKFILLS interview_abandoned when sessionId is stale-null then arrives — Codex P2 round 5', () => {
+      // useInterview.ts:2247 exposes sessionId via sessionIdRef.current,
       // and the ref write at useInterview.ts:411 is not paired with a
       // setState. So between session creation and the next unrelated
       // re-render, the page's `interview.sessionId` is stale `null`.
-      // If End is clicked in that window the closure sees null.
-      // We must STILL latch abandonedFiredRef so the subsequent
-      // SCORING transition (with its now-fresh sessionId) doesn't
-      // misclassify the abandon as completed.
+      // If End is clicked in that window:
+      //   - markAbandoned latches abandonedFiredRef (round-2 fix —
+      //     prevents subsequent SCORING render from firing
+      //     interview_completed).
+      //   - The click-time payload is stashed in pendingAbandonRef
+      //     (round-5 fix — preserves abandon attribution that round 2
+      //     would have thrown away).
+      //   - The next render that has a fresh sessionId emits
+      //     interview_abandoned with the stashed payload, so the
+      //     funnel correctly records the user-ended session.
       const { result, rerender } = renderHook(
         (args: Args) => useInterviewLifecycleEvents(args),
         {
           initialProps: {
             ...initialArgs,
-            phase: 'INTERVIEW_START' as InterviewState,
+            phase: 'CALIBRATION' as InterviewState,
+            sessionId: null,
+            config: baseConfig,
+            questionIndex: 3,
+            timeRemaining: 600,
+          },
+        },
+      )
+
+      // User clicks End during the stale-sessionId window. The emit
+      // bails because sessionId is null in the closure, but the
+      // payload + abandon-latch are captured.
+      act(() => {
+        result.current.markAbandoned()
+      })
+      expect(trackMock).not.toHaveBeenCalled()
+
+      // SCORING arrives with a fresh sessionId (transitionTo is a
+      // state-setter that refreshes the closure). The useEffect's
+      // backfill block emits interview_abandoned with the captured
+      // payload + the now-fresh session_id.
+      rerender({
+        phase: 'SCORING',
+        sessionId: 'sess-late',
+        config: baseConfig,
+        // Drift: by the time SCORING lands the timer has continued
+        // ticking. The backfill MUST emit the click-time values
+        // (q=3 / t=600), not the SCORING-time values, so funnel
+        // attribution stays accurate to the moment of intent.
+        questionIndex: 5,
+        timeRemaining: 0,
+      })
+
+      const abandonedCalls = trackMock.mock.calls.filter(
+        ([name]) => name === 'interview_abandoned',
+      )
+      expect(abandonedCalls).toHaveLength(1)
+      expect(abandonedCalls[0]).toEqual([
+        'interview_abandoned',
+        {
+          session_id: 'sess-late',
+          q_index_at_abandon: 3,
+          time_remaining_at_abandon: 600,
+          duration_seconds_elapsed: 30 * 60 - 600,
+        },
+      ])
+
+      // interview_completed is still suppressed (round-2 mechanic).
+      const completedCalls = trackMock.mock.calls.filter(
+        ([name]) => name === 'interview_completed',
+      )
+      expect(completedCalls).toHaveLength(0)
+    })
+
+    it('does NOT backfill if sessionId never arrives (genuinely sessionless abandon)', () => {
+      const { result, rerender } = renderHook(
+        (args: Args) => useInterviewLifecycleEvents(args),
+        {
+          initialProps: {
+            ...initialArgs,
+            phase: 'CALIBRATION' as InterviewState,
             sessionId: null,
             config: baseConfig,
           },
         },
       )
 
-      // User clicks End during the stale-sessionId window.
       act(() => {
         result.current.markAbandoned()
       })
-      expect(trackMock).not.toHaveBeenCalled()
 
-      // SCORING arrives — and so does the now-fresh sessionId, because
-      // transitionTo('SCORING') itself is a state-setter that
-      // refreshes the closure.
+      // sessionId never arrives — re-render with phase=ENDED but
+      // sessionId still null (e.g., mic-permission-denied path).
       rerender({
-        phase: 'SCORING',
-        sessionId: 'sess-late',
+        ...initialArgs,
+        phase: 'ENDED',
+        sessionId: null,
         config: baseConfig,
-        questionIndex: 3,
-        timeRemaining: 600,
       })
 
-      // The interview_started event is allowed (we just learned the
-      // sessionId) but interview_completed must NOT fire — the abandon
-      // latch is the only guarantee distinguishing user-ended from
-      // natural completion.
-      const completedCalls = trackMock.mock.calls.filter(
-        ([name]) => name === 'interview_completed',
-      )
-      expect(completedCalls).toHaveLength(0)
+      expect(trackMock).not.toHaveBeenCalled()
     })
 
     it('is idempotent — second markAbandoned() call is a no-op', () => {
