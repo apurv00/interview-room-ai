@@ -1554,3 +1554,23 @@
 - **Root-cause:** closure-captured `record` was the iteration-start snapshot; uploadMultipartRecord's inner `putUpload(current)` writes had advanced IDB past it. Spreading `...record` overwrote the latest progress with
 - **Tests-added: modules/interview/__tests__/resumableUpload.test.ts — new "preserves intra-attempt progress when a queued retry fails (Codex P1 #339)" case. Pre-seeds IDB with a 2-part record (parts=[]**
 - **Verified-by:** vitest run on resumableUpload.test.ts (4 passed including the new case); npm run test:run (153 files / 2433 tests passed); npm run lint (clean); tsc --noEmit (clean).
+### 2026-04-29 10:18:10 +0000 · `bc7bf8f` · Claude
+- **Subject:** feat(analytics): register interview_{started,completed,abandoned} events
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** phase-2a shipped the always-on AnalyticsProvider + 3
+- **Tests-added: shared/analytics/__tests__/events.test.ts — extended**
+- **Verified-by:** full vitest suite (147 files, 2422 passed) — proves
+
+### 2026-04-29 10:18:32 +0000 · `5b18326` · Claude
+- **Subject:** feat(analytics): useInterviewLifecycleEvents — observe phase from outside hot-path
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** phase-1 instrumented top-of-funnel (CTA + lobby + auth)
+- **Tests-added: modules/interview/__tests__/useInterviewLifecycleEvents.test.tsx**
+- **Verified-by:** vitest run on the new test file — 12/12 passed; full
+
+### 2026-04-29 10:18:53 +0000 · `0f097f6` · Claude
+- **Subject:** feat(analytics): wire useInterviewLifecycleEvents into interview page
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** completes phase-2b by activating the lifecycle hook from
+- **Tests-added: No-tests-needed-because: this commit is pure plumbing**
+- **Verified-by:** full vitest suite (147 files, 2422 passed); npx tsc
