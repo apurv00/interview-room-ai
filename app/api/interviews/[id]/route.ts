@@ -13,6 +13,7 @@ import { logger } from '@shared/logger'
 import { AppError } from '@shared/errors'
 import { deleteInterviewSession } from '@shared/services/accountDeletion'
 import { flushUsageBuffer } from '@shared/services/usageBuffer'
+import { InterviewSession } from '@shared/db/models'
 
 export const dynamic = 'force-dynamic'
 
@@ -43,21 +44,42 @@ export async function GET(
     const responseData = interviewSession.toObject ? interviewSession.toObject() : { ...interviewSession }
     const hasRecording = !!responseData.recordingR2Key
     const hasScreenRecording = !!responseData.screenRecordingR2Key
-    // Mirror the gate in /api/analysis/start (route.ts): only
-    // liveTranscriptWords or transcript drive analysis. Evaluations alone
-    // cannot — including them here let the feedback page advertise
-    // analysis-ready and then auto-fire /api/analysis/start, which
-    // returned 400 and stuck users in a failed-analysis state.
     const hasLiveTranscriptWords =
       Array.isArray(responseData.liveTranscriptWords) && responseData.liveTranscriptWords.length > 0
-    const hasStoredTranscript =
-      Array.isArray(responseData.transcript) && responseData.transcript.length > 0
+
+    // hasStoredTranscript must be derived independently of the
+    // excludeTranscript projection — otherwise transcript-only sessions
+    // queried with excludeTranscript=true (the feedback page) would
+    // incorrectly report hasAnalysisSource=false even though
+    // /api/analysis/start would accept them (Codex P2 #4 on PR #332).
+    // When transcript was projected out, derive size server-side via
+    // $size+$ifNull so the array never leaves Mongo.
+    let hasStoredTranscript: boolean
+    if (excludeTranscript) {
+      const [stat] = await InterviewSession.aggregate([
+        { $match: { _id: new mongoose.Types.ObjectId(params.id) } },
+        {
+          $project: {
+            hasStoredTranscript: {
+              $gt: [{ $size: { $ifNull: ['$transcript', []] } }, 0],
+            },
+          },
+        },
+      ])
+      hasStoredTranscript = !!(stat?.hasStoredTranscript)
+    } else {
+      hasStoredTranscript =
+        Array.isArray(responseData.transcript) && responseData.transcript.length > 0
+    }
+
     delete responseData.recordingR2Key
     delete responseData.screenRecordingR2Key
     delete responseData.audioRecordingR2Key
     delete responseData.liveTranscriptWords
     responseData.hasRecording = hasRecording
     responseData.hasScreenRecording = hasScreenRecording
+    // Mirror the gate in /api/analysis/start: transcript or live words only.
+    // Evaluations alone do NOT drive analysis (Codex P2 #1 on PR #332).
     responseData.hasAnalysisSource = hasLiveTranscriptWords || hasStoredTranscript
 
     // Strip PII and non-essential fields for non-owner viewers (recruiters viewing org sessions)

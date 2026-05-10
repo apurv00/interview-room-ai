@@ -380,10 +380,14 @@ function FeedbackPageInner() {
 
             setData(d)
             cleanupLocalInterviewData(sessionId)
+            // Mirror the gate in /api/analysis/start: transcript or live
+            // words only. Evaluations alone cannot drive analysis (Codex P2
+            // #3 on PR #332). The server already sets `session.hasAnalysisSource`
+            // using the same rule; the d.transcript fallback covers stale
+            // cached responses from before the server flag was added.
             setHasAnalysisSource(Boolean(
               session.hasAnalysisSource ||
-              d.transcript?.length ||
-              d.evaluations?.length
+              d.transcript?.length
             ))
 
             // Fetch presigned recording URL — check cache first
