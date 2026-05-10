@@ -2,6 +2,9 @@
   "name": "interview-room-ai",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "24.x"
+  },
   "scripts": {
     "postinstall": "node scripts/build-resume-css.js",
     "dev": "next dev --port 3000",
