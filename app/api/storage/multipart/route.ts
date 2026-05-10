@@ -72,6 +72,19 @@ function isSessionRecordingKey(key: string, userId: string, sessionId: string): 
   return isOwnedRecordingKey(key, userId) && key.startsWith(`recordings/${userId}/${sessionId}`)
 }
 
+// R2/S3 returns NoSuchUpload when CompleteMultipartUpload is called with an
+// uploadId that has already been finalized (or aborted). We use this to make
+// the `complete` action idempotent: if a prior call committed the object but
+// the subsequent DB PATCH failed and the client retried, swallow the error
+// and persist the DB state so the session ends up consistent. Without this,
+// retries loop forever (R2 keeps returning NoSuchUpload) and the object is
+// orphaned with no session pointer. (Codex P1 on PR #332.)
+function isAlreadyCompletedError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false
+  const e = err as { name?: string; Code?: string }
+  return e.name === 'NoSuchUpload' || e.Code === 'NoSuchUpload'
+}
+
 async function requireOwnedSession(sessionId: string | undefined, userId: string) {
   if (!sessionId || !mongoose.Types.ObjectId.isValid(sessionId)) {
     return null
@@ -143,11 +156,15 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
       }
 
-      await completeMultipartUpload(
-        key,
-        uploadId,
-        parts.map((part) => ({ PartNumber: part.partNumber, ETag: part.etag }))
-      )
+      try {
+        await completeMultipartUpload(
+          key,
+          uploadId,
+          parts.map((part) => ({ PartNumber: part.partNumber, ETag: part.etag }))
+        )
+      } catch (err) {
+        if (!isAlreadyCompletedError(err)) throw err
+      }
       await InterviewSession.findOneAndUpdate(
         { _id: sessionId, userId },
         { $set: patchFor(type, key, sizeBytes) }

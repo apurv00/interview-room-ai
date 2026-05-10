@@ -380,15 +380,14 @@ function FeedbackPageInner() {
 
             setData(d)
             cleanupLocalInterviewData(sessionId)
-            // Mirror the gate in /api/analysis/start: transcript or live
-            // words only. Evaluations alone cannot drive analysis (Codex P2
-            // #3 on PR #332). The server already sets `session.hasAnalysisSource`
-            // using the same rule; the d.transcript fallback covers stale
-            // cached responses from before the server flag was added.
-            setHasAnalysisSource(Boolean(
-              session.hasAnalysisSource ||
-              d.transcript?.length
-            ))
+            // Trust the server-derived flag only. `d.transcript` may include
+            // localStorage fallback that was never persisted to Mongo, in
+            // which case auto-triggering /api/analysis/start would 400
+            // because the server gate checks persisted sources only. (Codex
+            // P2 on PR #332.) The server has set hasAnalysisSource on every
+            // /api/interviews/[id] response since eee404b — older cached
+            // responses age out within SESSION_CACHE_TTL_MS (2 min).
+            setHasAnalysisSource(Boolean(session.hasAnalysisSource))
 
             // Fetch presigned recording URL — check cache first
             if (session.hasRecording) {
