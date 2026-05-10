@@ -396,7 +396,7 @@ export async function listSessions(input: ListSessionsInput) {
   const limit = Math.min(input.limit || 20, 50)
   const skip = (page - 1) * limit
 
-  const filter: any = {}
+  const filter: Record<string, unknown> = {}
 
   // If recruiter/admin, show org sessions; otherwise show own sessions
   if (input.organizationId && ['recruiter', 'org_admin', 'platform_admin'].includes(input.role)) {
@@ -409,13 +409,47 @@ export async function listSessions(input: ListSessionsInput) {
     filter.status = input.status
   }
 
+  // Aggregation, not find().select(), because the previous projection
+  // (`-transcript -evaluations -speechMetrics`) still loaded full
+  // `liveTranscriptWords` arrays — tens of thousands of word objects
+  // per session — only to compute a boolean and `delete` it from the
+  // response. Now that PR #332 starts persisting liveTranscriptWords,
+  // that materialisation is a real memory + latency regression as
+  // session count grows (Codex P2 on PR #332).
+  //
+  // The pipeline:
+  //   1. $addFields derives `hasLiveTranscriptWords` and
+  //      `hasStoredTranscript` from $size+$ifNull, so existence checks
+  //      do not require shipping the underlying arrays out of Mongo.
+  //   2. $project drops the heavy arrays before rows leave the server.
+  //
+  // Booleans match the gate in /api/analysis/start (transcript or live
+  // words only — evaluations alone are not a transcript source).
   const [sessions, total] = await Promise.all([
-    InterviewSession.find(filter)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .select('-transcript -evaluations -speechMetrics')
-      .lean(),
+    InterviewSession.aggregate([
+      { $match: filter },
+      { $sort: { createdAt: -1 } },
+      { $skip: skip },
+      { $limit: limit },
+      {
+        $addFields: {
+          hasLiveTranscriptWords: {
+            $gt: [{ $size: { $ifNull: ['$liveTranscriptWords', []] } }, 0],
+          },
+          hasStoredTranscript: {
+            $gt: [{ $size: { $ifNull: ['$transcript', []] } }, 0],
+          },
+        },
+      },
+      {
+        $project: {
+          transcript: 0,
+          evaluations: 0,
+          speechMetrics: 0,
+          liveTranscriptWords: 0,
+        },
+      },
+    ]),
     InterviewSession.countDocuments(filter),
   ])
 
