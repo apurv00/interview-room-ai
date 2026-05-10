@@ -36,7 +36,11 @@ import { selectDesignProblem, type DesignProblem } from '@interview/config/desig
 import type { InterviewConfig, DesignSubmission } from '@shared/types'
 import { AVATAR_NAME, getAvatarTitle } from '@interview/config/interviewConfig'
 import { STORAGE_KEYS } from '@shared/storageKeys'
-import { drainQueuedReplayUploads, uploadReplayRecording } from '@interview/utils/resumableUpload'
+import {
+  drainQueuedReplayUploads,
+  uploadReplayRecording,
+  type ReplayUploadResult,
+} from '@interview/utils/resumableUpload'
 
 import { formatTime } from '@shared/utils'
 
@@ -262,7 +266,7 @@ export default function InterviewPage() {
 
     // Upload audio/landmarks as small analysis artifacts. Camera/screen
     // recordings are replay-only and must not block feedback or analysis.
-    const replayUploads: Promise<boolean>[] = []
+    const replayUploads: Promise<ReplayUploadResult>[] = []
     if (cameraBlob && !privacyMode) {
       replayUploads.push(uploadReplayRecording(sessionId, 'camera', cameraBlob))
     }
@@ -273,11 +277,23 @@ export default function InterviewPage() {
 
     if (replayUploads.length > 0) {
       Promise.allSettled(replayUploads).then((results) => {
-        const failed = results.filter(
-          (r) => r.status === 'rejected' || (r.status === 'fulfilled' && r.value === false)
-        ).length
-        if (failed > 0) {
-          console.warn('Replay recording upload completed with failures', { failed, total: results.length })
+        const rejected = results.filter((r) => r.status === 'rejected').length
+        const fulfilled = results.filter((r): r is PromiseFulfilledResult<ReplayUploadResult> => r.status === 'fulfilled')
+        const queued = fulfilled.filter((r) => r.value.status === 'queued').length
+        const dropped = fulfilled.filter((r) => r.value.status === 'dropped').length
+        const uploaded = fulfilled.filter((r) => r.value.status === 'uploaded').length
+
+        if (queued > 0) {
+          console.info('Replay recording upload queued for retry', { queued, uploaded, total: results.length })
+        }
+        if (dropped + rejected > 0) {
+          console.warn('Replay recording upload completed with unrecoverable failures', {
+            dropped,
+            rejected,
+            uploaded,
+            queued,
+            total: results.length,
+          })
         }
       })
     }

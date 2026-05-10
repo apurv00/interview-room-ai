@@ -46,6 +46,18 @@ describe('computePerQAverage (G.4)', () => {
     expect(r.skippedFailedCount).toBe(1)
   })
 
+  it('excludes status="failed" timeout fallbacks with 50/50/50/50 scores', () => {
+    const evals = [
+      { relevance: 80, structure: 80, specificity: 80, ownership: 80 },
+      { relevance: 50, structure: 50, specificity: 50, ownership: 50, status: 'failed' },
+      { relevance: 80, structure: 80, specificity: 80, ownership: 80 },
+    ]
+    const r = computePerQAverage(evals)
+    expect(r.average).toBe(80)
+    expect(r.usedCount).toBe(2)
+    expect(r.skippedFailedCount).toBe(1)
+  })
+
   it('includes rows with status="truncated" (partial data is best-effort real)', () => {
     const evals = [
       { relevance: 80, structure: 80, specificity: 80, ownership: 80 }, // 80
