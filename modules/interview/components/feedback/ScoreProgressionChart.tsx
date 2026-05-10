@@ -11,6 +11,9 @@ import {
 } from 'recharts'
 
 interface Evaluation {
+  /** 1-based original question number, preserved across filters in OverviewTab.
+   *  Falls back to array position for older callers that don't supply it. */
+  questionNumber?: number
   relevance: number
   structure: number
   specificity: number
@@ -38,7 +41,7 @@ export default function ScoreProgressionChart({ evaluations }: ScoreProgressionC
   }
 
   const data = evaluations.map((ev, i) => ({
-    name: `Q${i + 1}`,
+    name: `Q${ev.questionNumber ?? i + 1}`,
     relevance: ev.relevance,
     structure: ev.structure,
     specificity: ev.specificity,
