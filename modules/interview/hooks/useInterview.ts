@@ -42,7 +42,7 @@ import {
   toneToEmotion,
 } from './interviewUtils'
 import { useAvatarSpeech } from './useAvatarSpeech'
-import { useInterviewAPI } from './useInterviewAPI'
+import { EVALUATE_ANSWER_BACKGROUND_TIMEOUT_MS, useInterviewAPI } from './useInterviewAPI'
 import { createDbSession, persistSession, type CreateDbSessionResult } from './interviewPersistence'
 
 // ─── Hook options ─────────────────────────────────────────────────────────────
@@ -560,7 +560,13 @@ export function useInterview({
   )
 
   const evaluateAnswer = useCallback(
-    (question: string, answer: string, qIdx: number, probeDepth?: number): Promise<AnswerEvaluation> => {
+    (
+      question: string,
+      answer: string,
+      qIdx: number,
+      probeDepth?: number,
+      timeoutMs?: number,
+    ): Promise<AnswerEvaluation> => {
       // G.12: consume + reset the latch. The timer-hit-0 branch sets
       // this true before finishInterview runs, so the in-flight or
       // about-to-fire evaluateAnswer for the current answer carries the
@@ -573,6 +579,7 @@ export function useInterview({
           answerSummary: e.answerSummary || e.answer?.slice(0, 150) || '',
         })),
         truncatedByTimer,
+        timeoutMs,
       )
     },
     [apiEvaluateAnswer]
@@ -983,7 +990,13 @@ export function useInterview({
     // Background: full evaluation (non-blocking from here on)
     // Updates evaluationsRef and shows coaching tip overlay when resolved.
     // Captured in pendingEvalRef so finishInterview can await the last eval.
-    pendingEvalRef.current = evaluateAnswer(question, answer, qIdx, probeDepth)
+    pendingEvalRef.current = evaluateAnswer(
+      question,
+      answer,
+      qIdx,
+      probeDepth,
+      EVALUATE_ANSWER_BACKGROUND_TIMEOUT_MS
+    )
       .then((evaluation) => {
         evaluationsRef.current = [...evaluationsRef.current, { ...evaluation, question, answer }]
         performanceSignalRef.current = computePerformanceSignal()
@@ -1007,6 +1020,7 @@ export function useInterview({
             structure: 55,
             specificity: 55,
             ownership: 60,
+            status: 'failed',
             probeDecision: { shouldProbe: false },
           },
         ]
