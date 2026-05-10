@@ -41,12 +41,13 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
         const scoreColor = isFailed
           ? 'text-[#71767b]'
           : avgScore >= 75 ? 'text-[#059669]' : avgScore >= 55 ? 'text-amber-600' : 'text-red-500'
-        const scoreBg =
-          avgScore >= 75
-            ? 'bg-emerald-500/10 border-emerald-500/30'
-            : avgScore >= 55
-            ? 'bg-amber-500/10 border-amber-500/30'
-            : 'bg-red-500/10 border-red-500/30'
+        const scoreBg = isFailed
+          ? 'bg-[#f1f5f9] border-[#e1e8ed]'
+          : avgScore >= 75
+          ? 'bg-emerald-500/10 border-emerald-500/30'
+          : avgScore >= 55
+          ? 'bg-amber-500/10 border-amber-500/30'
+          : 'bg-red-500/10 border-red-500/30'
 
         // Find follow-up Q&A for this question index
         const followUpEntries = transcript.filter(
