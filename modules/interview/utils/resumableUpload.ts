@@ -1,6 +1,18 @@
 'use client'
 
 export type ReplayUploadKind = 'camera' | 'screen'
+export type ReplayUploadStatus = 'uploaded' | 'queued' | 'dropped'
+
+export interface ReplayUploadResult {
+  status: ReplayUploadStatus
+}
+
+export interface DrainReplayUploadsResult {
+  attempted: number
+  uploaded: number
+  queued: number
+  dropped: number
+}
 
 interface UploadedPart {
   partNumber: number
@@ -28,6 +40,17 @@ interface MultipartCreateResponse {
   uploadId: string
   contentType: string
   partSizeBytes: number
+}
+
+class PermanentMultipartUploadError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'PermanentMultipartUploadError'
+  }
+}
+
+function isPermanentMultipartUploadError(err: unknown): err is PermanentMultipartUploadError {
+  return err instanceof PermanentMultipartUploadError
 }
 
 const DB_NAME = 'interview-replay-uploads'
@@ -98,7 +121,12 @@ async function postMultipart<T>(body: Record<string, unknown>): Promise<T> {
     body: JSON.stringify(body),
   })
   if (!res.ok) {
-    throw new Error(`Multipart API failed: ${res.status}`)
+    const responseText = await res.text().catch(() => '')
+    const message = `Multipart API failed: ${res.status}${responseText ? ` ${responseText.slice(0, 300)}` : ''}`
+    if (res.status === 410) {
+      throw new PermanentMultipartUploadError(message)
+    }
+    throw new Error(message)
   }
   return res.json() as Promise<T>
 }
@@ -262,10 +290,16 @@ export async function uploadReplayRecording(
   sessionId: string,
   kind: ReplayUploadKind,
   blob: Blob
-): Promise<boolean> {
+): Promise<ReplayUploadResult> {
   const contentType = blob.type || 'video/webm'
   if (blob.size <= DIRECT_UPLOAD_LIMIT_BYTES) {
-    return uploadDirect(sessionId, kind, blob, contentType)
+    try {
+      const uploaded = await uploadDirect(sessionId, kind, blob, contentType)
+      return { status: uploaded ? 'uploaded' : 'dropped' }
+    } catch (err) {
+      console.warn('Replay direct upload dropped', err)
+      return { status: 'dropped' }
+    }
   }
 
   const record: QueuedReplayUpload = {
@@ -280,26 +314,49 @@ export async function uploadReplayRecording(
     attempts: 0,
   }
 
-  await putUpload(record)
+  const queued = await putUpload(record)
   try {
     await uploadMultipartRecord(record)
-    return true
+    return { status: 'uploaded' }
   } catch (err) {
-    console.warn('Replay multipart upload queued for retry', err)
-    return false
+    if (isPermanentMultipartUploadError(err)) {
+      await deleteUpload(record.id)
+      console.warn('Replay multipart upload permanently dropped', err)
+      return { status: 'dropped' }
+    }
+    if (queued) {
+      console.warn('Replay multipart upload queued for retry', err)
+      return { status: 'queued' }
+    }
+    console.warn('Replay multipart upload failed before it could be queued', err)
+    return { status: 'dropped' }
   }
 }
 
-export async function drainQueuedReplayUploads(): Promise<{ attempted: number; completed: number }> {
+export async function drainQueuedReplayUploads(): Promise<DrainReplayUploadsResult> {
   const records = await getAllUploads()
-  let completed = 0
+  let uploaded = 0
+  let queued = 0
+  let dropped = 0
   for (const record of records) {
     try {
       await uploadMultipartRecord(record)
-      completed++
+      uploaded++
     } catch (err) {
-      console.warn('Queued replay upload retry failed', err)
+      if (isPermanentMultipartUploadError(err)) {
+        await deleteUpload(record.id)
+        dropped++
+        console.warn('Queued replay upload permanently dropped', err)
+      } else {
+        queued++
+        await putUpload({
+          ...record,
+          attempts: record.attempts + 1,
+          lastError: err instanceof Error ? err.message : String(err),
+        })
+        console.warn('Queued replay upload retry failed', err)
+      }
     }
   }
-  return { attempted: records.length, completed }
+  return { attempted: records.length, uploaded, queued, dropped }
 }
