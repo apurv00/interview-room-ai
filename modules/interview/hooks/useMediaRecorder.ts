@@ -5,7 +5,7 @@ import { useCallback, useRef, useState } from 'react'
 export interface UseMediaRecorderReturn {
   isRecording: boolean
   recordingDuration: number
-  startRecording: (stream: MediaStream) => void
+  startRecording: (stream: MediaStream, options?: MediaRecorderOptions) => void
   stopRecording: () => Promise<Blob | null>
 }
 
@@ -18,7 +18,7 @@ export function useMediaRecorder(): UseMediaRecorderReturn {
   const timerRef = useRef<ReturnType<typeof setInterval>>()
   const resolveRef = useRef<((blob: Blob | null) => void) | null>(null)
 
-  const startRecording = useCallback((stream: MediaStream) => {
+  const startRecording = useCallback((stream: MediaStream, options?: MediaRecorderOptions) => {
     // Require at least audio; video is optional but preferred
     const audioTracks = stream.getAudioTracks()
     if (audioTracks.length === 0) {
@@ -51,7 +51,10 @@ export function useMediaRecorder(): UseMediaRecorderReturn {
     }
 
     try {
-      const recorder = new MediaRecorder(recordingStream, { mimeType })
+      const recorder = new MediaRecorder(recordingStream, {
+        ...options,
+        mimeType,
+      })
       chunksRef.current = []
 
       recorder.ondataavailable = (event) => {

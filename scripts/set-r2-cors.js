@@ -23,7 +23,23 @@ client.send(new PutBucketCorsCommand({
       {
         AllowedOrigins: ['https://www.interviewprep.guru', 'https://interviewprep.guru', 'http://localhost:3000'],
         AllowedMethods: ['GET', 'PUT', 'HEAD'],
-        AllowedHeaders: ['Content-Type', 'Content-Length'],
+        // Multipart browser uploads need ETag exposed after each PUT part.
+        // Keep the request headers broad enough for presigned S3/R2 uploads
+        // across browsers and future checksum-enabled multipart requests.
+        AllowedHeaders: [
+          'Content-Type',
+          'Content-Length',
+          'Content-MD5',
+          'x-amz-content-sha256',
+          'x-amz-date',
+          'x-amz-security-token',
+          'x-amz-user-agent',
+          'x-amz-sdk-checksum-algorithm',
+          'x-amz-checksum-crc32',
+          'x-amz-checksum-crc32c',
+          'x-amz-checksum-sha1',
+          'x-amz-checksum-sha256',
+        ],
         ExposeHeaders: ['ETag'],
         MaxAgeSeconds: 3600,
       },

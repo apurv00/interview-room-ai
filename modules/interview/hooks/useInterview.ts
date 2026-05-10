@@ -1036,16 +1036,9 @@ export function useInterview({
     cancelTTS() // stops streaming + buffered audio + in-flight TTS fetches
     window.speechSynthesis.cancel()
     stopListening('finishInterview')
-    // Capture the recording-upload promise so we can await it before
-    // firing /api/analysis/start (~13s later). Without this await,
-    // the upload (presign → R2 PUT → PATCH session.recordingR2Key)
-    // races the analysis-start fetch and the route's no-audio gate
-    // returns 400 if uploads haven't linked yet. UI does NOT block —
-    // the await happens silently inside the async tail of this function
-    // AFTER the SCORING transition, so the user sees the scoring screen
-    // immediately. Production demo run on 2026-04-25 hit this race
-    // (see [interview] /api/analysis/start fire-and-forget failed
-    // HTTP 400: "Session has no audio to transcribe...").
+    // Capture the recording-stop promise so small analysis artifacts
+    // (audio-only + landmarks) can finish opportunistically. Replay video
+    // uploads are detached and must not block feedback or analysis.
     const recordingStopPromise: Promise<void> | void = onRecordingStop?.()
     setCoachingTip(null)
     transitionTo('SCORING')
@@ -1130,41 +1123,6 @@ export function useInterview({
         }
       }
 
-      // Auto-trigger AI analysis if recording exists (fire-and-forget).
-      //
-      // Wait for the recording-upload pipeline (started ~13s ago at
-      // `onRecordingStop?.()`) to finish patching session.recordingR2Key /
-      // session.audioRecordingR2Key BEFORE firing /api/analysis/start.
-      // Otherwise the route's no-audio gate returns 400. Hard cap at 25s
-      // so a hung upload doesn't block the user from reaching the
-      // feedback page indefinitely — if we time out, the auto-trigger
-      // skips and the AnalysisTrigger component on the replay page
-      // surfaces a manual "Run Analysis" button as a fallback.
-      if (isMultimodalEnabled) {
-        if (recordingStopPromise) {
-          try {
-            await Promise.race([
-              recordingStopPromise,
-              new Promise<void>((_, reject) =>
-                setTimeout(() => reject(new Error('RECORDING_UPLOAD_TIMEOUT')), 25_000)
-              ),
-            ])
-          } catch (err) {
-            console.warn('[interview] recording upload did not complete before analysis-start', {
-              sessionId: sid,
-              err: err instanceof Error ? err.message : String(err),
-            })
-          }
-        }
-        fetch('/api/analysis/start', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId: sid }),
-        })
-          .then(checkOk)
-          .catch(logFireAndForgetFailure('/api/analysis/start'))
-      }
-
       // Pre-generate feedback so it's ready when user opens feedback page.
       // Fire-and-forget — persists to session.feedback in DB. The feedback
       // page checks session.feedback on load and skips re-generation if
@@ -1183,6 +1141,37 @@ export function useInterview({
         })
           .then(checkOk)
           .catch(logFireAndForgetFailure('/api/generate-feedback'))
+      }
+
+      // Auto-trigger AI analysis (fire-and-forget). Analysis no longer
+      // depends on the replay-video upload; the server can run from live
+      // Deepgram words or the stored transcript. Wait briefly for small
+      // artifacts (audio-only and landmarks) when they are still finishing,
+      // but never hold feedback navigation behind large camera/screen PUTs.
+      if (isMultimodalEnabled) {
+        const startAnalysis = async () => {
+          if (recordingStopPromise) {
+            try {
+              await Promise.race([
+                recordingStopPromise,
+                new Promise<void>((resolve) => setTimeout(resolve, 8_000)),
+              ])
+            } catch (err) {
+              console.warn('[interview] analysis starting without completed recording artifacts', {
+                sessionId: sid,
+                err: err instanceof Error ? err.message : String(err),
+              })
+            }
+          }
+          const res = await fetch('/api/analysis/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId: sid }),
+          })
+          await checkOk(res)
+        }
+
+        void startAnalysis().catch(logFireAndForgetFailure('/api/analysis/start'))
       }
 
       // Clear session state — interview is complete

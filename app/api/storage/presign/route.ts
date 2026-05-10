@@ -70,15 +70,14 @@ export async function POST(req: NextRequest) {
 
         if (type === 'screen-recording') {
           r2Key = screenRecordingKey(userId, sessionId)
+          contentType = 'video/webm'
         } else if (type === 'audio-recording') {
           r2Key = audioRecordingKey(userId, sessionId)
+          contentType = 'audio/webm'
         } else {
           r2Key = recordingKey(userId, sessionId)
+          contentType = 'video/webm'
         }
-        // Preserve the existing 'audio/webm' content type for all recording
-        // variants so presign-signature behavior is unchanged. All three
-        // upload a webm container.
-        contentType = 'audio/webm'
       } else if (type === 'document') {
         if (!docType || !fileName) {
           return NextResponse.json({ error: 'docType and fileName required for document upload' }, { status: 400 })
@@ -90,7 +89,7 @@ export async function POST(req: NextRequest) {
       }
 
       const url = await getUploadPresignedUrl(r2Key, contentType)
-      return NextResponse.json({ url, key: r2Key })
+      return NextResponse.json({ url, key: r2Key, contentType })
     }
 
     if (action === 'download') {

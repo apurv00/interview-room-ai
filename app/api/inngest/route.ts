@@ -4,12 +4,14 @@ import { analysisJob } from '@interview/jobs/analysisJob'
 import { emailDigestJob } from '@learn/jobs/emailDigestJob'
 import { regeneratePlansJob } from '@learn/jobs/regeneratePlansJob'
 import { keepMongoWarmJob } from '@learn/jobs/keepMongoWarm'
+import { recordingRetentionJob } from '@interview/jobs/recordingRetentionJob'
 
 /**
  * Inngest handler route — entry point for all background jobs.
  *
  * - Event-triggered: analysisJob (reacts to 'analysis/requested')
- * - Scheduled:       emailDigestJob, regeneratePlansJob, keepMongoWarmJob
+ * - Scheduled:       emailDigestJob, regeneratePlansJob, keepMongoWarmJob,
+ *                    recordingRetentionJob
  *
  * Inngest's serve() handler responds to:
  *   GET   — health check + function introspection for Inngest Cloud sync
@@ -26,5 +28,5 @@ export const dynamic = 'force-dynamic'
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [analysisJob, emailDigestJob, regeneratePlansJob, keepMongoWarmJob],
+  functions: [analysisJob, emailDigestJob, regeneratePlansJob, keepMongoWarmJob, recordingRetentionJob],
 })

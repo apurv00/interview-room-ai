@@ -1527,3 +1527,10 @@
 - **Root-cause:** empty commit to retrigger GitHub Actions on PR #329 after
 - **No-tests-needed-because: empty commit with no code or content change.**
 - **Verified-by:** `git diff HEAD~1 HEAD` is empty (confirmed before push);
+
+### 2026-05-10 05:21:29 +0000 · `332450c` · Claude
+- **Subject:** fix(feedback): drop evaluations fallback from hasAnalysisSource; derive hasStoredTranscript independent of excludeTranscript projection
+- **Files:** 2 changed, 0 test file(s)
+- **Root-cause:** PR #332 narrowed /api/analysis/start to transcript-or-
+- **No-tests-needed-because: (a) the server-side gate this aligns to is**
+- **Verified-by:** code review against Codex P2 findings #3 and #4 on PR

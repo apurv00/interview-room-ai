@@ -69,15 +69,28 @@ export async function GET(req: NextRequest) {
       status,
     })
 
-    // Strip internal R2 keys, expose hasRecording boolean instead
+    // Strip internal R2 keys, expose hasRecording boolean instead.
+    // hasAnalysisSource mirrors the gate in /api/analysis/start (transcript
+    // or live words only — evaluations alone do NOT drive analysis, see
+    // Codex P2 on PR #332). Existence booleans are computed server-side
+    // in listSessions() via aggregation so the response never carries the
+    // heavy liveTranscriptWords / transcript arrays.
     const sanitizedSessions = result.sessions.map((s: any) => { // eslint-disable-line
       const obj = s.toObject ? s.toObject() : { ...s }
       const hasRecording = !!obj.recordingR2Key
       const hasScreenRecording = !!obj.screenRecordingR2Key
+      const hasAnalysisSource = Boolean(obj.hasLiveTranscriptWords || obj.hasStoredTranscript)
       delete obj.recordingR2Key
       delete obj.screenRecordingR2Key
       delete obj.audioRecordingR2Key
-      return { ...obj, hasRecording, hasScreenRecording }
+      delete obj.hasLiveTranscriptWords
+      delete obj.hasStoredTranscript
+      return {
+        ...obj,
+        hasRecording,
+        hasScreenRecording,
+        hasAnalysisSource,
+      }
     })
 
     return NextResponse.json({ ...result, sessions: sanitizedSessions })

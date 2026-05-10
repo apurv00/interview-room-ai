@@ -9,6 +9,7 @@ import { Inngest } from 'inngest'
  * Scheduled functions registered to this client (no event triggers):
  * - "email-digest-daily"         → daily engagement digest (modules/learn/jobs/emailDigestJob)
  * - "regenerate-plans-monthly"   → monthly pathway plan regen (modules/learn/jobs/regeneratePlansJob)
+ * - "recording-retention-cleanup"→ daily replay-video retention cleanup
  *
  * In local dev, run the Inngest dev server:
  *   npm run dev:inngest

@@ -2,7 +2,13 @@ import {
   S3Client,
   PutObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   DeleteObjectCommand,
+  CreateMultipartUploadCommand,
+  UploadPartCommand,
+  CompleteMultipartUploadCommand,
+  AbortMultipartUploadCommand,
+  type CompletedPart,
 } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 
@@ -92,6 +98,79 @@ export async function getUploadPresignedUrl(
   )
 }
 
+/** Start a multipart upload for large browser-originated recordings. */
+export async function createMultipartUpload(
+  key: string,
+  contentType: string
+): Promise<{ key: string; uploadId: string }> {
+  const client = getR2Client()
+  const result = await client.send(
+    new CreateMultipartUploadCommand({
+      Bucket: getBucket(),
+      Key: key,
+      ContentType: contentType,
+    })
+  )
+  if (!result.UploadId) {
+    throw new Error('R2 did not return a multipart upload ID')
+  }
+  return { key, uploadId: result.UploadId }
+}
+
+/** Generate a presigned URL for one multipart upload part. */
+export async function getMultipartPartPresignedUrl(
+  key: string,
+  uploadId: string,
+  partNumber: number,
+  expiresIn = 3600
+): Promise<string> {
+  const client = getR2Client()
+  return getSignedUrl(
+    client,
+    new UploadPartCommand({
+      Bucket: getBucket(),
+      Key: key,
+      UploadId: uploadId,
+      PartNumber: partNumber,
+    }),
+    { expiresIn }
+  )
+}
+
+/** Complete a multipart upload after every part has reached R2. */
+export async function completeMultipartUpload(
+  key: string,
+  uploadId: string,
+  parts: CompletedPart[]
+): Promise<void> {
+  const client = getR2Client()
+  await client.send(
+    new CompleteMultipartUploadCommand({
+      Bucket: getBucket(),
+      Key: key,
+      UploadId: uploadId,
+      MultipartUpload: {
+        Parts: parts.slice().sort((a, b) => (a.PartNumber ?? 0) - (b.PartNumber ?? 0)),
+      },
+    })
+  )
+}
+
+/** Abort a multipart upload and discard already-uploaded parts. */
+export async function abortMultipartUpload(
+  key: string,
+  uploadId: string
+): Promise<void> {
+  const client = getR2Client()
+  await client.send(
+    new AbortMultipartUploadCommand({
+      Bucket: getBucket(),
+      Key: key,
+      UploadId: uploadId,
+    })
+  )
+}
+
 /** Generate a presigned URL for downloading from R2 (GET) */
 export async function getDownloadPresignedUrl(
   key: string,
@@ -106,6 +185,26 @@ export async function getDownloadPresignedUrl(
     }),
     { expiresIn }
   )
+}
+
+/** Check whether an object exists at `key`. Returns false on 404; rethrows on other errors. */
+export async function objectExists(key: string): Promise<boolean> {
+  const client = getR2Client()
+  try {
+    await client.send(
+      new HeadObjectCommand({
+        Bucket: getBucket(),
+        Key: key,
+      })
+    )
+    return true
+  } catch (err) {
+    if (err && typeof err === 'object') {
+      const e = err as { name?: string; $metadata?: { httpStatusCode?: number } }
+      if (e.name === 'NotFound' || e.$metadata?.httpStatusCode === 404) return false
+    }
+    throw err
+  }
 }
 
 /** Delete an object from R2 */

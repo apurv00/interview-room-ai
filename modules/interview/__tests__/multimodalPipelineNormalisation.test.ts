@@ -195,6 +195,26 @@ describe('stepFetchSession — time normalisation contract', () => {
     expect(result.sessionT0).toBe(1776957100000)
   })
 
+  it('allows transcript-only sessions so analysis is not gated on replay upload', async () => {
+    mockFindById.mockResolvedValue({
+      _id: 'sess-transcript-only',
+      startedAt: new Date(1776957100000),
+      transcript: [
+        { speaker: 'interviewer', text: 'Q1', timestamp: 1776957100000, questionIndex: 0 },
+        { speaker: 'candidate', text: 'A1', timestamp: 1776957110000, questionIndex: 0 },
+      ],
+      evaluations: [{ questionIndex: 0 }],
+      config: { role: 'pm' },
+    })
+
+    const result = await stepFetchSession('sess-transcript-only')
+
+    expect(result.recordingR2Key).toBeUndefined()
+    expect(result.audioRecordingR2Key).toBeUndefined()
+    expect(result.transcript).toHaveLength(2)
+    expect(result.questionBoundaries).toEqual([0])
+  })
+
   // PR #316 Codex P1 regression guard: session.startedAt is written at
   // session CREATE, BEFORE mic permission and recording start. If we ever
   // anchor to startedAt when transcript is populated, a permission delay
