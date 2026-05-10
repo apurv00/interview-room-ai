@@ -149,6 +149,46 @@ describe('POST /api/storage/multipart', () => {
     )
   })
 
+  it('treats a NoSuchUpload error as already-completed and still patches the session', async () => {
+    const key = `recordings/${mocks.userId}/${mocks.sessionId}-camera.webm`
+    const noSuchUpload = Object.assign(new Error('NoSuchUpload'), { name: 'NoSuchUpload' })
+    mocks.completeMultipartUpload.mockRejectedValueOnce(noSuchUpload)
+
+    const res = await POST(makeRequest({
+      action: 'complete',
+      type: 'recording',
+      sessionId: mocks.sessionId,
+      key,
+      uploadId: 'upload-123',
+      sizeBytes: 999_000,
+      parts: [{ partNumber: 1, etag: '"etag-1"' }],
+    }))
+
+    expect(res.status).toBe(200)
+    expect(mocks.sessionFindOneAndUpdate).toHaveBeenCalledWith(
+      { _id: mocks.sessionId, userId: mocks.userId },
+      { $set: { recordingR2Key: key, recordingSizeBytes: 999_000 } }
+    )
+  })
+
+  it('does not patch the session when complete fails with a non-recoverable error', async () => {
+    const key = `recordings/${mocks.userId}/${mocks.sessionId}-camera.webm`
+    mocks.completeMultipartUpload.mockRejectedValueOnce(new Error('network blip'))
+
+    const res = await POST(makeRequest({
+      action: 'complete',
+      type: 'recording',
+      sessionId: mocks.sessionId,
+      key,
+      uploadId: 'upload-123',
+      sizeBytes: 999_000,
+      parts: [{ partNumber: 1, etag: '"etag-1"' }],
+    }))
+
+    expect(res.status).toBe(500)
+    expect(mocks.sessionFindOneAndUpdate).not.toHaveBeenCalled()
+  })
+
   it('rejects completion when the key belongs to a different session', async () => {
     const res = await POST(makeRequest({
       action: 'complete',
