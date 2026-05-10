@@ -1541,3 +1541,10 @@
 - **Root-cause:** no `engines` field + ad-hoc Node versions in workflow files = silent runtime drift across environments.
 - **No-tests-needed-because: no application code changed; the workflow Node bump is itself the verification (CI on this PR re-runs lint, tsc, vitest, and `next build` on Node 24).**
 - **Verified-by:** local `npm run lint` (clean, on Node 22.22.2 — same lockfile, same source), and the workflow re-run on this PR's CI checks under Node 24.
+
+### 2026-05-10 18:30:40 +0000 · `c834874` · Claude
+- **Subject:** fix(feedback): exclude status='failed' evaluations from server aggregation and feedback UI
+- **Files:** 4 changed, 1 test file(s)
+- **Root-cause:** PR #339's status='failed' flag was set at the source (client fallbacks in useInterviewAPI.ts) and consumed by computePerQAverage, but four other downstream readers (evaluateSession + three UI componen
+- **Tests-added: modules/interview/__tests__/evaluationEngine.test.ts — new "excludes status='failed' rows from dimension averages" case verifying the dimension averages stay at 80 (not 70) when one of **
+- **Verified-by:** vitest run on evaluationEngine.test.ts (10 passed); npm run test:run (152 files / 2429 tests passed); npm run lint (clean); tsc --noEmit (clean). UI changes are read-only of the existing 'status' fiel
