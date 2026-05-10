@@ -1534,3 +1534,10 @@
 - **Root-cause:** PR #332 narrowed /api/analysis/start to transcript-or-
 - **No-tests-needed-because: (a) the server-side gate this aligns to is**
 - **Verified-by:** code review against Codex P2 findings #3 and #4 on PR
+
+### 2026-05-10 14:36:55 +0000 · `20c2b16` · Claude
+- **Subject:** chore: pin Node version to 24 across Docker, CI, and engines
+- **Files:** 5 changed, 0 test file(s)
+- **Root-cause:** no `engines` field + ad-hoc Node versions in workflow files = silent runtime drift across environments.
+- **No-tests-needed-because: no application code changed; the workflow Node bump is itself the verification (CI on this PR re-runs lint, tsc, vitest, and `next build` on Node 24).**
+- **Verified-by:** local `npm run lint` (clean, on Node 22.22.2 — same lockfile, same source), and the workflow re-run on this PR's CI checks under Node 24.
