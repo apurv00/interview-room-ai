@@ -349,9 +349,18 @@ export async function drainQueuedReplayUploads(): Promise<DrainReplayUploadsResu
         console.warn('Queued replay upload permanently dropped', err)
       } else {
         queued++
+        // Codex P1 on PR #339: do NOT spread `...record` here — `record` is
+        // the pre-attempt snapshot, but uploadMultipartRecord persists newer
+        // state (parts, key, uploadId) to IndexedDB during the attempt via
+        // its inner putUpload(current) calls. Spreading the stale snapshot
+        // would clobber that progress, forcing every retry to re-upload
+        // already-completed parts and orphan multipart sessions on R2.
+        // Read the latest persisted state and only bump attempts/lastError.
+        const latestAll = await getAllUploads()
+        const latest = latestAll.find((r) => r.id === record.id) ?? record
         await putUpload({
-          ...record,
-          attempts: record.attempts + 1,
+          ...latest,
+          attempts: latest.attempts + 1,
           lastError: err instanceof Error ? err.message : String(err),
         })
         console.warn('Queued replay upload retry failed', err)
