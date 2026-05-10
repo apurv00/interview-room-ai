@@ -12,6 +12,7 @@ import {
   createMultipartUpload,
   getMultipartPartPresignedUrl,
   isR2Configured,
+  objectExists,
   recordingKey,
   screenRecordingKey,
 } from '@shared/storage/r2'
@@ -73,13 +74,11 @@ function isSessionRecordingKey(key: string, userId: string, sessionId: string): 
 }
 
 // R2/S3 returns NoSuchUpload when CompleteMultipartUpload is called with an
-// uploadId that has already been finalized (or aborted). We use this to make
-// the `complete` action idempotent: if a prior call committed the object but
-// the subsequent DB PATCH failed and the client retried, swallow the error
-// and persist the DB state so the session ends up consistent. Without this,
-// retries loop forever (R2 keeps returning NoSuchUpload) and the object is
-// orphaned with no session pointer. (Codex P1 on PR #332.)
-function isAlreadyCompletedError(err: unknown): boolean {
+// uploadId that has already been finalized, was aborted, or has expired.
+// Only the first case is a recoverable retry — the other two mean the object
+// does not exist at `key`. The caller MUST verify object existence before
+// treating this as success. (Codex P1 on PR #332 + follow-up.)
+function isNoSuchUploadError(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false
   const e = err as { name?: string; Code?: string }
   return e.name === 'NoSuchUpload' || e.Code === 'NoSuchUpload'
@@ -163,7 +162,17 @@ export async function POST(req: NextRequest) {
           parts.map((part) => ({ PartNumber: part.partNumber, ETag: part.etag }))
         )
       } catch (err) {
-        if (!isAlreadyCompletedError(err)) throw err
+        if (!isNoSuchUploadError(err)) throw err
+        // NoSuchUpload covers three cases: already-completed (object exists
+        // at `key` from a prior call), aborted, and expired. Only the first
+        // is a legitimate retry recovery — verify the object actually exists
+        // before patching the session, otherwise we'd silently persist a
+        // pointer to a non-existent replay. 410 Gone signals that the
+        // upload is permanently unrecoverable (R2 has discarded the parts);
+        // the queued client record can stop retrying.
+        if (!(await objectExists(key))) {
+          return NextResponse.json({ error: 'Multipart upload no longer recoverable' }, { status: 410 })
+        }
       }
       await InterviewSession.findOneAndUpdate(
         { _id: sessionId, userId },

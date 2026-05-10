@@ -2,6 +2,7 @@ import {
   S3Client,
   PutObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   DeleteObjectCommand,
   CreateMultipartUploadCommand,
   UploadPartCommand,
@@ -184,6 +185,26 @@ export async function getDownloadPresignedUrl(
     }),
     { expiresIn }
   )
+}
+
+/** Check whether an object exists at `key`. Returns false on 404; rethrows on other errors. */
+export async function objectExists(key: string): Promise<boolean> {
+  const client = getR2Client()
+  try {
+    await client.send(
+      new HeadObjectCommand({
+        Bucket: getBucket(),
+        Key: key,
+      })
+    )
+    return true
+  } catch (err) {
+    if (err && typeof err === 'object') {
+      const e = err as { name?: string; $metadata?: { httpStatusCode?: number } }
+      if (e.name === 'NotFound' || e.$metadata?.httpStatusCode === 404) return false
+    }
+    throw err
+  }
 }
 
 /** Delete an object from R2 */
