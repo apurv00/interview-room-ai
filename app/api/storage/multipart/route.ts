@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import { InterviewSession } from '@shared/db/models/InterviewSession'
+import { aiLogger } from '@shared/logger'
 import {
   abortMultipartUpload,
   audioRecordingKey,
@@ -38,6 +39,16 @@ const MultipartSchema = z.object({
 })
 
 type RecordingType = 'recording' | 'screen-recording' | 'audio-recording'
+
+interface MultipartLogContext {
+  action?: string
+  type?: string
+  sessionId?: string
+  keySuffix?: string
+  partNumber?: number
+  partCount?: number
+  sizeBytes?: number
+}
 
 function contentTypeFor(type: RecordingType): string {
   return type === 'audio-recording' ? 'audio/webm' : 'video/webm'
@@ -84,6 +95,27 @@ function isNoSuchUploadError(err: unknown): boolean {
   return e.name === 'NoSuchUpload' || e.Code === 'NoSuchUpload'
 }
 
+function safeErrorInfo(err: unknown): { name?: string; code?: string; message: string } {
+  if (err instanceof Error) {
+    const e = err as Error & { Code?: unknown; code?: unknown }
+    const code = typeof e.Code === 'string'
+      ? e.Code
+      : typeof e.code === 'string'
+      ? e.code
+      : undefined
+    return { name: err.name, code, message: err.message }
+  }
+  if (err && typeof err === 'object') {
+    const e = err as { name?: unknown; Code?: unknown; code?: unknown; message?: unknown }
+    return {
+      name: typeof e.name === 'string' ? e.name : undefined,
+      code: typeof e.Code === 'string' ? e.Code : typeof e.code === 'string' ? e.code : undefined,
+      message: typeof e.message === 'string' ? e.message : String(err),
+    }
+  }
+  return { message: String(err) }
+}
+
 async function requireOwnedSession(sessionId: string | undefined, userId: string) {
   if (!sessionId || !mongoose.Types.ObjectId.isValid(sessionId)) {
     return null
@@ -105,6 +137,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Storage not configured' }, { status: 503 })
   }
 
+  const logContext: MultipartLogContext = {}
   try {
     const parsed = MultipartSchema.safeParse(await req.json())
     if (!parsed.success) {
@@ -112,6 +145,15 @@ export async function POST(req: NextRequest) {
     }
 
     const { action, type, sessionId, key, uploadId, partNumber, parts, sizeBytes } = parsed.data
+    Object.assign(logContext, {
+      action,
+      type,
+      sessionId,
+      keySuffix: key ? key.slice(-120) : undefined,
+      partNumber,
+      partCount: parts?.length,
+      sizeBytes,
+    })
     const userId = session.user.id
 
     if (action === 'create') {
@@ -183,7 +225,11 @@ export async function POST(req: NextRequest) {
 
     await abortMultipartUpload(key, uploadId)
     return NextResponse.json({ ok: true })
-  } catch {
+  } catch (err) {
+    aiLogger.error({
+      ...logContext,
+      error: safeErrorInfo(err),
+    }, 'Multipart upload failed')
     return NextResponse.json({ error: 'Multipart upload failed' }, { status: 500 })
   }
 }

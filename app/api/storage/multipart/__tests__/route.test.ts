@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   completeMultipartUpload: vi.fn(),
   abortMultipartUpload: vi.fn(),
   objectExists: vi.fn(),
+  aiLoggerError: vi.fn(),
 }))
 
 vi.mock('next-auth', () => ({
@@ -44,6 +45,12 @@ vi.mock('@shared/storage/r2', () => ({
   completeMultipartUpload: mocks.completeMultipartUpload,
   abortMultipartUpload: mocks.abortMultipartUpload,
   objectExists: mocks.objectExists,
+}))
+
+vi.mock('@shared/logger', () => ({
+  aiLogger: {
+    error: mocks.aiLoggerError,
+  },
 }))
 
 import { POST } from '../route'
@@ -214,6 +221,21 @@ describe('POST /api/storage/multipart', () => {
     expect(res.status).toBe(500)
     expect(mocks.objectExists).not.toHaveBeenCalled()
     expect(mocks.sessionFindOneAndUpdate).not.toHaveBeenCalled()
+    expect(mocks.aiLoggerError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'complete',
+        type: 'recording',
+        sessionId: mocks.sessionId,
+        keySuffix: key,
+        partCount: 1,
+        sizeBytes: 999_000,
+        error: expect.objectContaining({
+          name: 'Error',
+          message: 'network blip',
+        }),
+      }),
+      'Multipart upload failed'
+    )
   })
 
   it('rejects completion when the key belongs to a different session', async () => {

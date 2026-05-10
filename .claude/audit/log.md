@@ -1034,7 +1034,7 @@
 - **Subject:** feat(db): feature-flagged connectDB bypass when session cache populated (Phase 1 PR C)
 - **Files:** 5 changed, 1 test file(s)
 - **Root-cause:** /api/generate-question and /api/evaluate-answer call `await connectDB()` unconditionally even when the PR B session cache returns populated domain/depth/userProfile fields. In that cache-full-hit case
-- **Tests-added: shared/db/__tests__/connection.test.ts — 4 new tests covering the wrapper contract. (1) needsMongo=true → always calls connectDB regardless of flag; (2) flag OFF + needsMongo=false �**
+- **Tests-added: shared/db/__tests__/connection.test.ts — 4 new tests covering the wrapper contract. (1) needsMongo=true → always calls connectDB regardless of flag; (2) flag OFF + needsMongo=false �**
 - **Verified-by:** npx vitest run shared/db/__tests__/connection.test.ts → 4/4 pass. npm run build succeeds. Lint clean on all 5 touched files. `gitnexus detect_changes` confirms connectDB/isConnected themselves are u
 
 ### 2026-04-21 12:38:45 +0000 · `06e839b` · Claude
@@ -1548,3 +1548,9 @@
 - **Root-cause:** PR #339's status='failed' flag was set at the source (client fallbacks in useInterviewAPI.ts) and consumed by computePerQAverage, but four other downstream readers (evaluateSession + three UI componen
 - **Tests-added: modules/interview/__tests__/evaluationEngine.test.ts — new "excludes status='failed' rows from dimension averages" case verifying the dimension averages stay at 80 (not 70) when one of **
 - **Verified-by:** vitest run on evaluationEngine.test.ts (10 passed); npm run test:run (152 files / 2429 tests passed); npm run lint (clean); tsc --noEmit (clean). UI changes are read-only of the existing 'status' fiel
+### 2026-05-10 18:47:18 +0000 · `5805af4` · Claude
+- **Subject:** fix(replay): merge latest IDB state on queued retry-failed write (Codex P1 #339)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** closure-captured `record` was the iteration-start snapshot; uploadMultipartRecord's inner `putUpload(current)` writes had advanced IDB past it. Spreading `...record` overwrote the latest progress with
+- **Tests-added: modules/interview/__tests__/resumableUpload.test.ts — new "preserves intra-attempt progress when a queued retry fails (Codex P1 #339)" case. Pre-seeds IDB with a 2-part record (parts=[]**
+- **Verified-by:** vitest run on resumableUpload.test.ts (4 passed including the new case); npm run test:run (153 files / 2433 tests passed); npm run lint (clean); tsc --noEmit (clean).
