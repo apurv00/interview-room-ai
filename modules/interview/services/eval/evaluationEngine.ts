@@ -262,6 +262,12 @@ export async function evaluateSession(
 
   // From standard evaluations
   for (const ev of evaluations) {
+    // Skip status='failed' rows: they carry 50/50/50/50 or 60/55/55/60 fallback
+    // scores from useInterviewAPI.ts when the client aborted on timeout / non-OK
+    // response. Including them here would corrupt the dimension averages on the
+    // user's feedback page (G.4 policy — same exclusion already applied in
+    // computePerQAverage).
+    if (ev.status === 'failed') continue
     pushToMap(dimScores, 'relevance', ev.relevance)
     pushToMap(dimScores, 'structure', ev.structure)
     pushToMap(dimScores, 'specificity', ev.specificity)

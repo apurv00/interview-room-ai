@@ -30,12 +30,17 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
   return (
     <div className="space-y-3">
       {evaluations.map((ev, i) => {
+        // status='failed' = client never received a real evaluation (timeout /
+        // non-OK from useInterviewAPI). The 50/50/50/50 fallback exists only so
+        // type contracts hold; surfacing it as a real score is misleading.
+        const isFailed = (ev as unknown as { status?: string }).status === 'failed'
         const avgScore = Math.round(
           (ev.relevance + ev.structure + ev.specificity + ev.ownership) / 4
         )
         const isOpen = expandedIdx === i
-        const scoreColor =
-          avgScore >= 75 ? 'text-[#059669]' : avgScore >= 55 ? 'text-amber-600' : 'text-red-500'
+        const scoreColor = isFailed
+          ? 'text-[#71767b]'
+          : avgScore >= 75 ? 'text-[#059669]' : avgScore >= 55 ? 'text-amber-600' : 'text-red-500'
         const scoreBg =
           avgScore >= 75
             ? 'bg-emerald-500/10 border-emerald-500/30'
@@ -62,9 +67,10 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
               className="w-full flex items-center gap-3 sm:gap-4 p-3 sm:p-4 text-left hover:bg-[#f8fafc] transition"
             >
               <div
-                className={`shrink-0 w-11 h-11 sm:w-10 sm:h-10 rounded-xl border flex items-center justify-center text-sm font-bold ${scoreBg} ${scoreColor}`}
+                className={`shrink-0 w-11 h-11 sm:w-10 sm:h-10 rounded-xl border flex items-center justify-center text-xs font-bold ${scoreBg} ${scoreColor}`}
+                title={isFailed ? 'Could not score — model timed out or returned a non-OK response' : undefined}
               >
-                {avgScore}
+                {isFailed ? '—' : avgScore}
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-xs text-[#8b98a5] mb-0.5">Question {i + 1}</p>
@@ -111,15 +117,24 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
                   <p className="text-xs text-[#8b98a5] font-medium mb-2 uppercase tracking-wide">
                     Score Breakdown
                   </p>
-                  <div className="space-y-2">
-                    <ScoreBar label="Relevance" score={ev.relevance} delay={0} />
-                    <ScoreBar label="Structure (STAR)" score={ev.structure} delay={50} />
-                    <ScoreBar label="Specificity" score={ev.specificity} delay={100} />
-                    <ScoreBar label="Ownership" score={ev.ownership} delay={150} />
-                    {ev.jdAlignment != null && (
-                      <ScoreBar label="JD Alignment" score={ev.jdAlignment} color="cyan" delay={200} />
-                    )}
-                  </div>
+                  {isFailed ? (
+                    <div className="bg-[#f8fafc] border border-[#e1e8ed] rounded-xl p-3">
+                      <p className="text-xs text-[#71767b]">
+                        Could not score this answer — the model timed out or returned a non-OK response.
+                        This question is excluded from your overall and dimension averages.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <ScoreBar label="Relevance" score={ev.relevance} delay={0} />
+                      <ScoreBar label="Structure (STAR)" score={ev.structure} delay={50} />
+                      <ScoreBar label="Specificity" score={ev.specificity} delay={100} />
+                      <ScoreBar label="Ownership" score={ev.ownership} delay={150} />
+                      {ev.jdAlignment != null && (
+                        <ScoreBar label="JD Alignment" score={ev.jdAlignment} color="cyan" delay={200} />
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Flags */}
@@ -137,7 +152,7 @@ export default function QuestionBreakdown({ transcript, evaluations }: QuestionB
                 )}
 
                 {/* Low score suggestions */}
-                {avgScore < 60 && (
+                {!isFailed && avgScore < 60 && (
                   <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
                     <p className="text-xs text-amber-700 font-medium mb-1">Suggestion</p>
                     <p className="text-xs text-amber-600">

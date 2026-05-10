@@ -38,21 +38,26 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
   const { answer_quality, communication } = dimensions
   const engagementSignals = dimensions.engagement_signals || null
 
-  // Compute evaluation data for charts
+  // Compute evaluation data for charts. Excludes status='failed' rows so the
+  // 50/50/50/50 client-fallback scores from useInterviewAPI don't pull down
+  // line charts and heatmap cells with fake numbers. Per-question detail
+  // (QuestionBreakdown) still surfaces failed evals as "Could not score".
   const evalData = useMemo(() =>
-    (data.evaluations || []).map((e) => {
-      const ev = e as unknown as Record<string, unknown>
-      return {
-        question: (ev.question as string) || '',
-        answer: (ev.answer as string) || '',
-        relevance: Number(ev.relevance) || 0,
-        structure: Number(ev.structure) || 0,
-        specificity: Number(ev.specificity) || 0,
-        ownership: Number(ev.ownership) || 0,
-        jdAlignment: ev.jdAlignment as number | undefined,
-        flags: (ev.flags as string[]) || [],
-      }
-    })
+    (data.evaluations || [])
+      .filter((e) => (e as unknown as Record<string, unknown>).status !== 'failed')
+      .map((e) => {
+        const ev = e as unknown as Record<string, unknown>
+        return {
+          question: (ev.question as string) || '',
+          answer: (ev.answer as string) || '',
+          relevance: Number(ev.relevance) || 0,
+          structure: Number(ev.structure) || 0,
+          specificity: Number(ev.specificity) || 0,
+          ownership: Number(ev.ownership) || 0,
+          jdAlignment: ev.jdAlignment as number | undefined,
+          flags: (ev.flags as string[]) || [],
+        }
+      })
   , [data.evaluations])
 
   const speechData = useMemo(() =>
