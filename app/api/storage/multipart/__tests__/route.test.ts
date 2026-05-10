@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   getMultipartPartPresignedUrl: vi.fn(),
   completeMultipartUpload: vi.fn(),
   abortMultipartUpload: vi.fn(),
+  objectExists: vi.fn(),
 }))
 
 vi.mock('next-auth', () => ({
@@ -42,6 +43,7 @@ vi.mock('@shared/storage/r2', () => ({
   getMultipartPartPresignedUrl: mocks.getMultipartPartPresignedUrl,
   completeMultipartUpload: mocks.completeMultipartUpload,
   abortMultipartUpload: mocks.abortMultipartUpload,
+  objectExists: mocks.objectExists,
 }))
 
 import { POST } from '../route'
@@ -69,6 +71,7 @@ describe('POST /api/storage/multipart', () => {
     mocks.getMultipartPartPresignedUrl.mockResolvedValue('https://r2.example/part')
     mocks.completeMultipartUpload.mockResolvedValue(undefined)
     mocks.abortMultipartUpload.mockResolvedValue(undefined)
+    mocks.objectExists.mockResolvedValue(true)
   })
 
   it('creates a multipart upload for an owned recording session', async () => {
@@ -149,10 +152,11 @@ describe('POST /api/storage/multipart', () => {
     )
   })
 
-  it('treats a NoSuchUpload error as already-completed and still patches the session', async () => {
+  it('recovers a retried complete (NoSuchUpload) when the object exists and patches the session', async () => {
     const key = `recordings/${mocks.userId}/${mocks.sessionId}-camera.webm`
     const noSuchUpload = Object.assign(new Error('NoSuchUpload'), { name: 'NoSuchUpload' })
     mocks.completeMultipartUpload.mockRejectedValueOnce(noSuchUpload)
+    mocks.objectExists.mockResolvedValueOnce(true)
 
     const res = await POST(makeRequest({
       action: 'complete',
@@ -165,10 +169,32 @@ describe('POST /api/storage/multipart', () => {
     }))
 
     expect(res.status).toBe(200)
+    expect(mocks.objectExists).toHaveBeenCalledWith(key)
     expect(mocks.sessionFindOneAndUpdate).toHaveBeenCalledWith(
       { _id: mocks.sessionId, userId: mocks.userId },
       { $set: { recordingR2Key: key, recordingSizeBytes: 999_000 } }
     )
+  })
+
+  it('returns 410 and skips the session patch when NoSuchUpload but the object does not exist', async () => {
+    const key = `recordings/${mocks.userId}/${mocks.sessionId}-camera.webm`
+    const noSuchUpload = Object.assign(new Error('NoSuchUpload'), { name: 'NoSuchUpload' })
+    mocks.completeMultipartUpload.mockRejectedValueOnce(noSuchUpload)
+    mocks.objectExists.mockResolvedValueOnce(false)
+
+    const res = await POST(makeRequest({
+      action: 'complete',
+      type: 'recording',
+      sessionId: mocks.sessionId,
+      key,
+      uploadId: 'upload-123',
+      sizeBytes: 999_000,
+      parts: [{ partNumber: 1, etag: '"etag-1"' }],
+    }))
+
+    expect(res.status).toBe(410)
+    expect(mocks.objectExists).toHaveBeenCalledWith(key)
+    expect(mocks.sessionFindOneAndUpdate).not.toHaveBeenCalled()
   })
 
   it('does not patch the session when complete fails with a non-recoverable error', async () => {
@@ -186,6 +212,7 @@ describe('POST /api/storage/multipart', () => {
     }))
 
     expect(res.status).toBe(500)
+    expect(mocks.objectExists).not.toHaveBeenCalled()
     expect(mocks.sessionFindOneAndUpdate).not.toHaveBeenCalled()
   })
 
