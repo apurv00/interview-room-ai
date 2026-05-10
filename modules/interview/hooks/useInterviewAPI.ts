@@ -28,6 +28,32 @@ export interface PreviousAnswerSummary {
   answerSummary: string
 }
 
+export const EVALUATE_ANSWER_BLOCKING_TIMEOUT_MS = 10_000
+export const EVALUATE_ANSWER_BACKGROUND_TIMEOUT_MS = 15_000
+
+type EvaluationFallbackScores = Pick<AnswerEvaluation, 'relevance' | 'structure' | 'specificity' | 'ownership'>
+
+export function buildFailedAnswerEvaluation(
+  question: string,
+  answer: string,
+  qIdx: number,
+  scores: EvaluationFallbackScores
+): AnswerEvaluation {
+  return {
+    questionIndex: qIdx,
+    question,
+    answer,
+    ...scores,
+    status: 'failed',
+    probeDecision: { shouldProbe: false },
+  }
+}
+
+function errorDetails(err: unknown): { name?: string; message: string } {
+  if (err instanceof Error) return { name: err.name, message: err.message }
+  return { message: String(err) }
+}
+
 export interface TurnRouterResult {
   nextAction: 'probe' | 'advance'
   probeQuestion?: string
@@ -69,6 +95,7 @@ export interface UseInterviewAPIReturn {
      * evaluation's flags array.
      */
     wasTruncatedByTimer?: boolean,
+    timeoutMs?: number,
   ) => Promise<AnswerEvaluation>
   callTurnRouter: (params: {
     question: string
@@ -143,9 +170,20 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
       signal?: AbortSignal,
       previousSummaries?: PreviousAnswerSummary[],
       wasTruncatedByTimer?: boolean,
+      timeoutMs = EVALUATE_ANSWER_BLOCKING_TIMEOUT_MS,
     ): Promise<AnswerEvaluation> => {
       const timeoutController = new AbortController()
-      const timeoutId = setTimeout(() => timeoutController.abort(), 5000)
+      let didTimeout = false
+      const timeoutId = setTimeout(() => {
+        didTimeout = true
+        timeoutController.abort()
+      }, timeoutMs)
+      const sessionId = getSessionId?.() ?? undefined
+      let externalAbortListener: (() => void) | undefined
+      if (signal && !AbortSignal.any) {
+        externalAbortListener = () => timeoutController.abort()
+        signal.addEventListener('abort', externalAbortListener, { once: true })
+      }
       try {
         const combinedSignal = signal && AbortSignal.any
           ? AbortSignal.any([signal, timeoutController.signal])
@@ -161,50 +199,58 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
             questionIndex: qIdx,
             probeDepth,
             previousAnswerSummaries: previousSummaries,
-            sessionId: getSessionId?.() ?? undefined,
+            sessionId,
             // G.12: only include when true — keeps the body minimal and
             // the server's Zod schema treats absence = false.
             ...(wasTruncatedByTimer && { wasTruncatedByTimer: true }),
           }),
         })
-        clearTimeout(timeoutId)
         if (!res.ok) {
-          return {
+          console.warn('[evaluateAnswer] API returned non-OK', {
+            status: res.status,
             questionIndex: qIdx,
-            question,
-            answer,
+            sessionId,
+          })
+          return buildFailedAnswerEvaluation(question, answer, qIdx, {
             relevance: 60,
             structure: 55,
             specificity: 55,
             ownership: 60,
-            probeDecision: { shouldProbe: false },
-          }
+          })
         }
         return res.json()
       } catch (err) {
-        clearTimeout(timeoutId)
-        if (timeoutController.signal.aborted) {
-          // Timeout — return quick fallback scores
-          return {
+        if (didTimeout) {
+          console.warn('[evaluateAnswer] timed out', {
             questionIndex: qIdx,
-            question,
-            answer,
+            sessionId,
+            timeoutMs,
+          })
+          return buildFailedAnswerEvaluation(question, answer, qIdx, {
             relevance: 50,
             structure: 50,
             specificity: 50,
             ownership: 50,
-            probeDecision: { shouldProbe: false },
-          }
+          })
         }
-        return {
-          questionIndex: qIdx,
-          question,
-          answer,
+
+        if (!signal?.aborted) {
+          console.warn('[evaluateAnswer] fetch failed', {
+            questionIndex: qIdx,
+            sessionId,
+            error: errorDetails(err),
+          })
+        }
+        return buildFailedAnswerEvaluation(question, answer, qIdx, {
           relevance: 60,
           structure: 55,
           specificity: 55,
           ownership: 60,
-          probeDecision: { shouldProbe: false },
+        })
+      } finally {
+        clearTimeout(timeoutId)
+        if (signal && externalAbortListener) {
+          signal.removeEventListener('abort', externalAbortListener)
         }
       }
     },
