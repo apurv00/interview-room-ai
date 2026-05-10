@@ -38,21 +38,35 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
   const { answer_quality, communication } = dimensions
   const engagementSignals = dimensions.engagement_signals || null
 
-  // Compute evaluation data for charts
+  // Compute evaluation data for charts. Excludes status='failed' rows so the
+  // 50/50/50/50 client-fallback scores from useInterviewAPI don't pull down
+  // line charts and heatmap cells with fake numbers. Per-question detail
+  // (QuestionBreakdown) still surfaces failed evals as "Could not score".
+  //
+  // CRITICAL: capture the original 1-based question number BEFORE filtering.
+  // Charts (ScoreProgressionChart, QuestionHeatmap) used to label by array
+  // position which silently renumbered surviving rows after a filter (e.g.
+  // Q1=ok, Q2=failed, Q3=ok rendered as "Q1, Q2" instead of "Q1, Q3"),
+  // diverging from QuestionBreakdown's transcript-driven numbering. Codex P2
+  // on PR #340.
   const evalData = useMemo(() =>
-    (data.evaluations || []).map((e) => {
-      const ev = e as unknown as Record<string, unknown>
-      return {
-        question: (ev.question as string) || '',
-        answer: (ev.answer as string) || '',
-        relevance: Number(ev.relevance) || 0,
-        structure: Number(ev.structure) || 0,
-        specificity: Number(ev.specificity) || 0,
-        ownership: Number(ev.ownership) || 0,
-        jdAlignment: ev.jdAlignment as number | undefined,
-        flags: (ev.flags as string[]) || [],
-      }
-    })
+    (data.evaluations || [])
+      .map((e, i) => {
+        const ev = e as unknown as Record<string, unknown>
+        return {
+          questionNumber: i + 1,
+          status: ev.status as string | undefined,
+          question: (ev.question as string) || '',
+          answer: (ev.answer as string) || '',
+          relevance: Number(ev.relevance) || 0,
+          structure: Number(ev.structure) || 0,
+          specificity: Number(ev.specificity) || 0,
+          ownership: Number(ev.ownership) || 0,
+          jdAlignment: ev.jdAlignment as number | undefined,
+          flags: (ev.flags as string[]) || [],
+        }
+      })
+      .filter((row) => row.status !== 'failed')
   , [data.evaluations])
 
   const speechData = useMemo(() =>

@@ -3,6 +3,9 @@
 import { useState } from 'react'
 
 interface Evaluation {
+  /** 1-based original question number, preserved across filters in OverviewTab.
+   *  Falls back to array position for older callers that don't supply it. */
+  questionNumber?: number
   question: string
   answer: string
   relevance: number
@@ -94,7 +97,7 @@ export default function QuestionHeatmap({ evaluations, transcript }: QuestionHea
                   >
                     <div className="flex items-center">
                       <div className="flex-1 py-2 pr-3 min-w-0">
-                        <span className="text-xs text-[#71767b]">Q{i + 1}</span>
+                        <span className="text-xs text-[#71767b]">Q{ev.questionNumber ?? i + 1}</span>
                         <span className="ml-2 text-xs text-[#0f1419] truncate">
                           {truncate(ev.question, 40)}
                         </span>

@@ -146,6 +146,41 @@ describe('evaluationEngine', () => {
       expect(result.allFlags).toEqual([])
     })
 
+    it("excludes status='failed' rows from dimension averages", async () => {
+      const result = await evaluateSession({
+        domain: 'pm',
+        interviewType: 'screening',
+        seniorityBand: '3-6',
+        evaluations: [
+          {
+            questionIndex: 0, question: 'Q1', answer: 'A1',
+            relevance: 80, structure: 80, specificity: 80, ownership: 80,
+            needsFollowUp: false, flags: [],
+          },
+          {
+            // Client fallback row from useInterviewAPI when the request
+            // timed out — must NOT pull the dimension averages down.
+            questionIndex: 1, question: 'Q2', answer: 'A2',
+            relevance: 50, structure: 50, specificity: 50, ownership: 50,
+            status: 'failed',
+            needsFollowUp: false, flags: [],
+          },
+          {
+            questionIndex: 2, question: 'Q3', answer: 'A3',
+            relevance: 80, structure: 80, specificity: 80, ownership: 80,
+            needsFollowUp: false, flags: [],
+          },
+        ],
+      })
+
+      // Both surviving rows are 80 — average should be 80, not 70 (which is
+      // what we'd get if the failed 50/50/50/50 were included).
+      expect(result.dimensionAverages.relevance).toBe(80)
+      expect(result.dimensionAverages.structure).toBe(80)
+      expect(result.dimensionAverages.specificity).toBe(80)
+      expect(result.dimensionAverages.ownership).toBe(80)
+    })
+
     it('includes jdAlignment when present', async () => {
       const result = await evaluateSession({
         domain: 'pm',

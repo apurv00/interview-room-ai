@@ -1187,7 +1187,15 @@ function FeedbackPageInner() {
             peerLoading={peerLoading}
             currentScore={overall_score}
             currentScores={data.evaluations.length > 0 ? (() => {
-              const evals = data.evaluations
+              // Mirror the server (`evaluationEngine.evaluateSession`) and
+              // OverviewTab evalData filters: exclude status='failed' rows
+              // (50/50/50/50 client-fallback from useInterviewAPI) so the
+              // ComparisonCard doesn't see inflated/skewed dimension scores
+              // that the rest of the feedback page already filters out.
+              const evals = data.evaluations.filter(
+                (e) => (e as unknown as { status?: string }).status !== 'failed'
+              )
+              if (evals.length === 0) return undefined
               const avg = (key: 'relevance' | 'structure' | 'specificity' | 'ownership') =>
                 Math.round(evals.reduce((s, e) => s + (e[key] || 0), 0) / evals.length)
               return {
