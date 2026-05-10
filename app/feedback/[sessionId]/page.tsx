@@ -21,6 +21,7 @@ import { getDomainLabel } from '@interview/config/interviewConfig'
 import { computeOffsetSeconds } from '@interview/utils/offsetHelpers'
 import { mergeWithLocalData, readLocalInterviewData, cleanupLocalInterviewData } from '@interview/utils/mergeSessionData'
 import { buildFeedbackPrintHtml } from '@interview/utils/feedbackPrintHtml'
+import { drainQueuedReplayUploads } from '@interview/utils/resumableUpload'
 import { fetchWithRetry } from '@shared/fetchWithRetry'
 import { bisectLastLE } from '@shared/utils'
 import { PROBABILITY_COLORS } from '@interview/config/feedbackConfig'
@@ -141,6 +142,7 @@ function FeedbackPageInner() {
   const [analysisProgress, setAnalysisProgress] = useState<string>('')
   const analysisTriggeredRef = useRef(false)
   const [hasRecording, setHasRecording] = useState(false)
+  const [hasAnalysisSource, setHasAnalysisSource] = useState(false)
   // Video for analysis tab
   const [videoSrc, setVideoSrc] = useState<string | null>(null)
   const [analysisVideoTime, setAnalysisVideoTime] = useState(0)
@@ -158,6 +160,13 @@ function FeedbackPageInner() {
   const seekToRef = useRef<((s: number) => void) | null>(null)
   const activeEntryRef = useRef<HTMLDivElement>(null)
   const handleSeekExpose = useCallback((fn: (s: number) => void) => { seekToRef.current = fn }, [])
+
+  // ── Retry queued replay uploads ────────────────────────────────────────────
+  useEffect(() => {
+    void drainQueuedReplayUploads().catch((err) =>
+      console.warn('Failed to drain queued replay uploads', err)
+    )
+  }, [])
 
   // ── Fullscreen replay overlay ──────────────────────────────────────────────
   useEffect(() => {
@@ -195,8 +204,8 @@ function FeedbackPageInner() {
         }
       }
 
-      // No analysis exists — trigger if recording available
-      if (hasRecording && !analysisTriggeredRef.current) {
+      // No analysis exists — trigger if transcript/live words are available
+      if (hasAnalysisSource && !analysisTriggeredRef.current) {
         analysisTriggeredRef.current = true
         setAnalysisProgress('Starting analysis...')
         const startRes = await fetch('/api/analysis/start', {
@@ -222,8 +231,8 @@ function FeedbackPageInner() {
           setAnalysisError(errData.error || 'Failed to start analysis')
           setAnalysisLoading(false)
         }
-      } else if (!hasRecording) {
-        setAnalysisError('No recording available for analysis')
+      } else if (!hasAnalysisSource) {
+        setAnalysisError('No transcript source is available for analysis')
         setAnalysisLoading(false)
       } else {
         setAnalysisLoading(false)
@@ -232,7 +241,7 @@ function FeedbackPageInner() {
       setAnalysisError('Failed to load analysis')
       setAnalysisLoading(false)
     }
-  }, [sessionId, hasRecording]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sessionId, hasAnalysisSource]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const pollAnalysis = useCallback(() => {
     const phases = [
@@ -371,6 +380,11 @@ function FeedbackPageInner() {
 
             setData(d)
             cleanupLocalInterviewData(sessionId)
+            setHasAnalysisSource(Boolean(
+              session.hasAnalysisSource ||
+              d.transcript?.length ||
+              d.evaluations?.length
+            ))
 
             // Fetch presigned recording URL — check cache first
             if (session.hasRecording) {
@@ -962,7 +976,7 @@ function FeedbackPageInner() {
     { key: 'overview', label: 'Overview' },
     { key: 'questions', label: 'Questions' },
     { key: 'transcript', label: 'Transcript' },
-    ...(hasRecording || analysis ? [{ key: 'analysis' as const, label: 'AI Analysis' }] : []),
+    ...(hasAnalysisSource || analysis ? [{ key: 'analysis' as const, label: 'AI Analysis' }] : []),
   ]
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -1223,7 +1237,7 @@ function FeedbackPageInner() {
             {analysisError && (
               <div className="surface-card-bordered border-red-500/30 p-6 text-center space-y-3">
                 <p className="text-body text-red-600">{analysisError}</p>
-                {hasRecording && (
+                {hasAnalysisSource && (
                   <button
                     onClick={() => {
                       analysisTriggeredRef.current = false
@@ -1242,15 +1256,17 @@ function FeedbackPageInner() {
                 {/* ── Segment 1: Interview Replay ─────────────────────────── */}
                 <section className="surface-card-bordered p-4 sm:p-6 space-y-4 relative">
                   {/* Fullscreen toggle */}
-                  <button
-                    onClick={() => setReplayFullscreen(true)}
-                    className="absolute top-3 right-3 z-10 p-2 rounded-lg bg-white/80 hover:bg-white border border-[#e1e8ed] text-[#536471] hover:text-[#0f1419] transition-colors"
-                    title="Expand replay"
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m4 0l-5-5" />
-                    </svg>
-                  </button>
+                  {videoSrc && (
+                    <button
+                      onClick={() => setReplayFullscreen(true)}
+                      className="absolute top-3 right-3 z-10 p-2 rounded-lg bg-white/80 hover:bg-white border border-[#e1e8ed] text-[#536471] hover:text-[#0f1419] transition-colors"
+                      title="Expand replay"
+                    >
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m4 0l-5-5" />
+                      </svg>
+                    </button>
+                  )}
 
                   {/* Video + Transcript side-by-side */}
                   <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
@@ -1503,7 +1519,7 @@ function FeedbackPageInner() {
             >
               New interview
             </button>
-            {(hasRecording || analysis) && (
+            {(hasAnalysisSource || analysis) && (
               <button
                 type="button"
                 onClick={() => handleTabChange('analysis')}

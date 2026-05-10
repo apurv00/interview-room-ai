@@ -74,10 +74,21 @@ export async function GET(req: NextRequest) {
       const obj = s.toObject ? s.toObject() : { ...s }
       const hasRecording = !!obj.recordingR2Key
       const hasScreenRecording = !!obj.screenRecordingR2Key
+      const hasLiveTranscriptWords =
+        Array.isArray(obj.liveTranscriptWords) && obj.liveTranscriptWords.length > 0
+      const hasTranscriptOrEvaluations =
+        (Array.isArray(obj.transcript) && obj.transcript.length > 0) ||
+        (Array.isArray(obj.evaluations) && obj.evaluations.length > 0)
       delete obj.recordingR2Key
       delete obj.screenRecordingR2Key
       delete obj.audioRecordingR2Key
-      return { ...obj, hasRecording, hasScreenRecording }
+      delete obj.liveTranscriptWords
+      return {
+        ...obj,
+        hasRecording,
+        hasScreenRecording,
+        hasAnalysisSource: hasLiveTranscriptWords || hasTranscriptOrEvaluations,
+      }
     })
 
     return NextResponse.json({ ...result, sessions: sanitizedSessions })

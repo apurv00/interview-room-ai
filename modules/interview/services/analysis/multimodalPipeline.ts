@@ -87,14 +87,13 @@ export interface SessionData {
    */
   sessionT0: number
   /**
-   * Camera webm key — present for normal sessions, absent for privacy-mode
-   * sessions where the candidate opted out of video storage. The pipeline
-   * transcribes whichever audio source is available (see `audioRecordingR2Key`).
+   * Camera webm key — present for normal sessions when replay upload
+   * finishes. Analysis does not require it; live words / transcript are
+   * preferred so large replay uploads cannot block feedback.
    */
   recordingR2Key?: string
-  /** Optional audio-only key used in preference to the camera webm for Whisper
-   * transcription, since Groq Whisper rejects files >25MB. Required when
-   * `recordingR2Key` is absent (privacy mode). */
+  /** Optional audio-only key. Kept for legacy/transcription fallback, but
+   * analysis can also run from live Deepgram words or the stored transcript. */
   audioRecordingR2Key?: string
   facialLandmarksR2Key?: string
   /** Deepgram-captured words from the live interview with audio-timeline
@@ -143,15 +142,17 @@ export async function stepFetchSession(sessionId: string): Promise<SessionData> 
 
   const session = await InterviewSession.findById(sessionId)
   if (!session) throw new Error(`Session ${sessionId} not found`)
-  // Privacy-mode sessions skip the camera webm upload but still ship the
-  // small audio-only track, which is all Whisper needs. Require at least
-  // one audio source.
-  if (!session.recordingR2Key && !session.audioRecordingR2Key) {
-    throw new Error('Session has no recording or audio track')
-  }
 
   const transcript = session.transcript || []
   const evaluations = session.evaluations as unknown as Array<Record<string, unknown>>
+  const liveTranscriptWords =
+    (session.liveTranscriptWords as LiveTranscriptWord[] | undefined) ?? undefined
+  const hasLiveTranscriptWords = Array.isArray(liveTranscriptWords) && liveTranscriptWords.length > 0
+  const hasStoredTranscript = Array.isArray(transcript) && transcript.length > 0
+  const hasAnalysisSource = hasLiveTranscriptWords || hasStoredTranscript
+  if (!hasAnalysisSource) {
+    throw new Error('Session has no transcript or live words')
+  }
 
   // Canonical time axis for this session. All per-segment timestamps emitted
   // downstream (facial windows, prosody windows, whisper segments, fusion
@@ -209,7 +210,7 @@ export async function stepFetchSession(sessionId: string): Promise<SessionData> 
     recordingR2Key: session.recordingR2Key,
     audioRecordingR2Key: session.audioRecordingR2Key,
     facialLandmarksR2Key: session.facialLandmarksR2Key,
-    liveTranscriptWords: (session.liveTranscriptWords as LiveTranscriptWord[] | undefined) ?? undefined,
+    liveTranscriptWords,
     transcript,
     evaluations,
     config: session.config as unknown as Record<string, unknown>,
@@ -217,17 +218,15 @@ export async function stepFetchSession(sessionId: string): Promise<SessionData> 
   }
 }
 
-/** Step 2: Transcribe recording + download facial data (parallel).
+/** Step 2: Build transcript segments + download facial data (parallel).
  *
- * Three paths, in order of preference:
+ * Two active transcript paths, in order of preference:
  *   1. `liveTranscriptWords` (Deepgram fast path) — synthesised word-level
  *      segments. Primary path. No API call, no cost, instant.
  *   2. `sessionTranscript` fallback — for sessions without Deepgram words,
  *      build coarse segments from the stored transcript entries. No word-level
  *      timestamps but everything downstream still works. Avoids the slow
  *      Whisper call when running on a constrained function timeout.
- *   3. Whisper API (slow path) — 60-120s. Only used if no transcript source
- *      is available (effectively never with the fallback in place).
  */
 export async function stepTranscribeAndDownload(
   recordingR2Key: string | undefined,

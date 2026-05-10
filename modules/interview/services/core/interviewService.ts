@@ -47,6 +47,23 @@ interface UpdateSessionInput {
   completedAt?: string
   recordingR2Key?: string
   recordingSizeBytes?: number
+  screenRecordingR2Key?: string
+  screenRecordingSizeBytes?: number
+  audioRecordingR2Key?: string
+  audioRecordingSizeBytes?: number
+  liveTranscriptWords?: Array<{
+    word: string
+    start: number
+    end: number
+    confidence: number
+  }>
+  codingProblemId?: string
+  designProblemId?: string
+  scoringDimensions?: Array<{ name: string; label: string; weight: number }>
+  plannedQuestionCount?: number
+  answeredCount?: number
+  endReason?: 'normal' | 'time_up' | 'user_ended' | 'usage_limit' | 'abandoned'
+  wasTruncatedByTimer?: boolean[]
 }
 
 interface ListSessionsInput {
@@ -325,6 +342,18 @@ export async function updateSession(
   if (input.completedAt) updateFields.completedAt = new Date(input.completedAt)
   if (input.recordingR2Key) updateFields.recordingR2Key = input.recordingR2Key
   if (input.recordingSizeBytes !== undefined) updateFields.recordingSizeBytes = input.recordingSizeBytes
+  if (input.screenRecordingR2Key) updateFields.screenRecordingR2Key = input.screenRecordingR2Key
+  if (input.screenRecordingSizeBytes !== undefined) updateFields.screenRecordingSizeBytes = input.screenRecordingSizeBytes
+  if (input.audioRecordingR2Key) updateFields.audioRecordingR2Key = input.audioRecordingR2Key
+  if (input.audioRecordingSizeBytes !== undefined) updateFields.audioRecordingSizeBytes = input.audioRecordingSizeBytes
+  if (input.liveTranscriptWords) updateFields.liveTranscriptWords = input.liveTranscriptWords
+  if (input.codingProblemId) updateFields.codingProblemId = input.codingProblemId
+  if (input.designProblemId) updateFields.designProblemId = input.designProblemId
+  if (input.scoringDimensions) updateFields.scoringDimensions = input.scoringDimensions
+  if (input.plannedQuestionCount !== undefined) updateFields.plannedQuestionCount = input.plannedQuestionCount
+  if (input.answeredCount !== undefined) updateFields.answeredCount = input.answeredCount
+  if (input.endReason) updateFields.endReason = input.endReason
+  if (input.wasTruncatedByTimer) updateFields.wasTruncatedByTimer = input.wasTruncatedByTimer
 
   const updated = await InterviewSession.findByIdAndUpdate(sessionId, updateFields, { new: true })
   if (!updated) throw new NotFoundError('Interview session')

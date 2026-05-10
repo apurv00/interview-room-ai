@@ -36,6 +36,7 @@ import { selectDesignProblem, type DesignProblem } from '@interview/config/desig
 import type { InterviewConfig, DesignSubmission } from '@shared/types'
 import { AVATAR_NAME, getAvatarTitle } from '@interview/config/interviewConfig'
 import { STORAGE_KEYS } from '@shared/storageKeys'
+import { drainQueuedReplayUploads, uploadReplayRecording } from '@interview/utils/resumableUpload'
 
 import { formatTime } from '@shared/utils'
 
@@ -97,6 +98,26 @@ export default function InterviewPage() {
   // recording can't replay it.
   const wantsScreenCapture = isCodingMode || isDesignMode
 
+  const cameraVideoConstraints: MediaTrackConstraints = {
+    width: { ideal: 1280, max: 1280 },
+    height: { ideal: 720, max: 720 },
+    frameRate: { ideal: 24, max: 24 },
+  }
+
+  const cameraRecorderOptions: MediaRecorderOptions = {
+    videoBitsPerSecond: 700_000,
+    audioBitsPerSecond: 64_000,
+  }
+
+  const audioRecorderOptions: MediaRecorderOptions = {
+    audioBitsPerSecond: 64_000,
+  }
+
+  const screenRecorderOptions: MediaRecorderOptions = {
+    videoBitsPerSecond: 800_000,
+    audioBitsPerSecond: 64_000,
+  }
+
   // ── Voices loaded ──
   const [voicesReady, setVoicesReady] = useState(false)
 
@@ -111,6 +132,13 @@ export default function InterviewPage() {
   //    separate from the camera webm because Groq Whisper rejects files
   //    >25MB and a multi-minute HD camera recording easily exceeds that.
   const audioRecorder = useMediaRecorder()
+
+  useEffect(() => {
+    if (!authSession?.user?.id) return
+    void drainQueuedReplayUploads().catch((err) =>
+      console.warn('Failed to drain queued replay uploads', err)
+    )
+  }, [authSession?.user?.id])
 
   // ── Facial landmarks (multimodal analysis) ──
   const isMultimodalEnabled = process.env.NEXT_PUBLIC_FEATURE_MULTIMODAL === 'true'
@@ -144,11 +172,15 @@ export default function InterviewPage() {
           console.error('Presign request failed:', presignRes.status)
           return false
         }
-        const { url, key } = await presignRes.json()
+        const { url, key, contentType } = await presignRes.json()
+        const uploadContentType =
+          contentType ||
+          blob.type ||
+          (kind === 'audio' ? 'audio/webm' : 'video/webm')
 
         const uploadRes = await fetch(url, {
           method: 'PUT',
-          headers: { 'Content-Type': 'video/webm' },
+          headers: { 'Content-Type': uploadContentType },
           body: blob,
         })
         if (!uploadRes.ok) {
@@ -163,11 +195,15 @@ export default function InterviewPage() {
             ? { audioRecordingR2Key: key, audioRecordingSizeBytes: blob.size }
             : { recordingR2Key: key, recordingSizeBytes: blob.size }
 
-        await fetch(`/api/interviews/${sessionId}`, {
+        const patchRes = await fetch(`/api/interviews/${sessionId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(patchBody),
-        }).catch((err) => console.error('Failed to update session with R2 key:', err))
+        })
+        if (!patchRes.ok) {
+          console.error('Failed to update session with R2 key:', patchRes.status)
+          return false
+        }
         return true
       } catch (err) {
         console.error('Recording upload error:', err)
@@ -194,16 +230,23 @@ export default function InterviewPage() {
       screenStreamRef.current = null
     }
 
-    // Stop facial capture and upload landmarks
+    const criticalUploads: Promise<unknown>[] = []
+
+    // Stop facial capture and upload landmarks. This is small enough to wait
+    // for briefly before analysis starts; replay video uploads stay detached.
     if (isMultimodalEnabled) {
       const frames = stopCapture()
       const sessionId = interviewRef.current?.sessionId
       if (frames.length > 0 && sessionId) {
-        fetch('/api/recordings/landmarks', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId, frames }),
-        }).catch((err) => console.error('Landmarks upload error:', err))
+        criticalUploads.push(
+          fetch('/api/recordings/landmarks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId, frames }),
+          }).then((res) => {
+            if (!res.ok) throw new Error(`Landmarks upload failed: ${res.status}`)
+          })
+        )
       }
     }
 
@@ -217,16 +260,34 @@ export default function InterviewPage() {
     // client-derived and tiny) hit R2.
     const privacyMode = config?.privacyMode === true
 
-    // Upload the camera, audio, and (optional) screen tracks in parallel
-    const uploads: Promise<boolean>[] = []
+    // Upload audio/landmarks as small analysis artifacts. Camera/screen
+    // recordings are replay-only and must not block feedback or analysis.
+    const replayUploads: Promise<boolean>[] = []
     if (cameraBlob && !privacyMode) {
-      uploads.push(uploadRecordingBlob(cameraBlob, sessionId, 'camera'))
+      replayUploads.push(uploadReplayRecording(sessionId, 'camera', cameraBlob))
     }
-    if (audioBlob) uploads.push(uploadRecordingBlob(audioBlob, sessionId, 'audio'))
+    if (audioBlob) criticalUploads.push(uploadRecordingBlob(audioBlob, sessionId, 'audio'))
     if (screenBlob && !privacyMode) {
-      uploads.push(uploadRecordingBlob(screenBlob, sessionId, 'screen'))
+      replayUploads.push(uploadReplayRecording(sessionId, 'screen', screenBlob))
     }
-    await Promise.all(uploads)
+
+    if (replayUploads.length > 0) {
+      Promise.allSettled(replayUploads).then((results) => {
+        const failed = results.filter(
+          (r) => r.status === 'rejected' || (r.status === 'fulfilled' && r.value === false)
+        ).length
+        if (failed > 0) {
+          console.warn('Replay recording upload completed with failures', { failed, total: results.length })
+        }
+      })
+    }
+
+    if (criticalUploads.length > 0) {
+      await Promise.race([
+        Promise.allSettled(criticalUploads),
+        new Promise<void>((resolve) => setTimeout(resolve, 8_000)),
+      ])
+    }
   }, [stopRecording, screenRecorder, audioRecorder, isMultimodalEnabled, stopCapture, uploadRecordingBlob, config?.privacyMode])
 
   // ── Interview engine ──
@@ -440,7 +501,7 @@ export default function InterviewPage() {
       let stream: MediaStream
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
+          video: cameraVideoConstraints,
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         })
       } catch (err) {
@@ -482,7 +543,7 @@ export default function InterviewPage() {
       // per-turn word timestamps into recording-relative offsets so
       // the multimodal analysis pipeline can skip Whisper entirely.
       setRecordingStartedAt(Date.now())
-      startRecording(cameraRecordingStream)
+      startRecording(cameraRecordingStream, cameraRecorderOptions)
 
       // Audio-only recording for Whisper transcription. Groq Whisper
       // rejects files >25MB, and a 5+ minute HD camera webm blows past
@@ -495,7 +556,7 @@ export default function InterviewPage() {
         : stream.getAudioTracks()
       if (audioTracks.length > 0) {
         const audioOnlyStream = new MediaStream(audioTracks)
-        audioRecorder.startRecording(audioOnlyStream)
+        audioRecorder.startRecording(audioOnlyStream, audioRecorderOptions)
       }
 
       // Coding & system-design: also capture the screen so the candidate's
@@ -532,7 +593,7 @@ export default function InterviewPage() {
               ])
             : new MediaStream([...screenStream.getVideoTracks()])
 
-          screenRecorder.startRecording(screenRecordingStream)
+          screenRecorder.startRecording(screenRecordingStream, screenRecorderOptions)
         } catch (err) {
           // User cancelled or capture unavailable — continue with camera only.
           console.warn('Screen capture unavailable, continuing without it:', err)

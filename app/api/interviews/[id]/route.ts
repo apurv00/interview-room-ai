@@ -43,11 +43,18 @@ export async function GET(
     const responseData = interviewSession.toObject ? interviewSession.toObject() : { ...interviewSession }
     const hasRecording = !!responseData.recordingR2Key
     const hasScreenRecording = !!responseData.screenRecordingR2Key
+    const hasLiveTranscriptWords =
+      Array.isArray(responseData.liveTranscriptWords) && responseData.liveTranscriptWords.length > 0
+    const hasTranscriptOrEvaluations =
+      (Array.isArray(responseData.transcript) && responseData.transcript.length > 0) ||
+      (Array.isArray(responseData.evaluations) && responseData.evaluations.length > 0)
     delete responseData.recordingR2Key
     delete responseData.screenRecordingR2Key
     delete responseData.audioRecordingR2Key
+    delete responseData.liveTranscriptWords
     responseData.hasRecording = hasRecording
     responseData.hasScreenRecording = hasScreenRecording
+    responseData.hasAnalysisSource = hasLiveTranscriptWords || hasTranscriptOrEvaluations
 
     // Strip PII and non-essential fields for non-owner viewers (recruiters viewing org sessions)
     const isOwner = responseData.userId?.toString() === session.user.id

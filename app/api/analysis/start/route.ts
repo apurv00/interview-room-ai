@@ -34,6 +34,10 @@ export const POST = composeApiRoute<StartPayload>({
   handler: async (_req, ctx) => {
     const { sessionId } = ctx.body
     const userId = ctx.user.id
+    if (!mongoose.Types.ObjectId.isValid(sessionId)) {
+      return NextResponse.json({ error: 'Invalid session ID format' }, { status: 400 })
+    }
+    const sessionObjectId = new mongoose.Types.ObjectId(sessionId)
 
     // Feature flag check
     if (!isFeatureEnabled('multimodal_analysis')) {
@@ -54,7 +58,7 @@ export const POST = composeApiRoute<StartPayload>({
     const staleCutoff = new Date(Date.now() - STALE_PENDING_CUTOFF_MS)
 
     // Check if analysis already exists
-    const existing = await MultimodalAnalysis.findOne({ sessionId })
+    const existing = await MultimodalAnalysis.findOne({ sessionId: sessionObjectId })
     if (existing) {
       if (existing.status === 'completed') {
         return NextResponse.json({
@@ -78,21 +82,24 @@ export const POST = composeApiRoute<StartPayload>({
       await MultimodalAnalysis.deleteOne({ _id: existing._id })
     }
 
-    // Verify session ownership and that some audio source is available
-    // for transcription. Non-privacy-mode sessions upload the full camera
-    // webm; privacy-mode sessions upload only the small audio-only track.
-    // Either satisfies the pipeline — `stepTranscribeAndDownload` already
-    // prefers the audio-only key when present.
+    // Verify session ownership and that at least one analysis source is
+    // available. Prefer live Deepgram words / stored transcript so analysis
+    // is not blocked by a large replay-video upload.
     const session = await InterviewSession.findOne({
-      _id: sessionId,
+      _id: sessionObjectId,
       userId,
     })
     if (!session) {
       return NextResponse.json({ error: 'Session not found' }, { status: 404 })
     }
-    if (!session.recordingR2Key && !session.audioRecordingR2Key) {
+    const hasLiveTranscriptWords =
+      Array.isArray(session.liveTranscriptWords) && session.liveTranscriptWords.length > 0
+    const hasStoredTranscript =
+      Array.isArray(session.transcript) && session.transcript.length > 0
+    const hasAnalysisSource = hasLiveTranscriptWords || hasStoredTranscript
+    if (!hasAnalysisSource) {
       return NextResponse.json(
-        { error: 'Session has no audio to transcribe — multimodal analysis requires a recording or audio track' },
+        { error: 'Session has no transcript or live words for analysis' },
         { status: 400 }
       )
     }
@@ -119,7 +126,7 @@ export const POST = composeApiRoute<StartPayload>({
     // will flip it to 'processing' in step 1 (stepFetchSession) and then
     // to 'completed' or 'failed' on the way out.
     const analysis = await MultimodalAnalysis.create({
-      sessionId: new mongoose.Types.ObjectId(sessionId),
+      sessionId: sessionObjectId,
       userId: new mongoose.Types.ObjectId(userId),
       status: 'pending',
     })
