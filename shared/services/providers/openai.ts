@@ -33,9 +33,24 @@ registerProvider({
     const tokenParam = __usesMaxCompletionTokens(params.model)
       ? { max_completion_tokens: params.maxTokens }
       : { max_tokens: params.maxTokens }
+    const responseFormat = params.responseFormat?.type === 'json_schema'
+      ? {
+          response_format: {
+            type: 'json_schema' as const,
+            json_schema: {
+              name: params.responseFormat.name,
+              strict: params.responseFormat.strict ?? true,
+              schema: params.responseFormat.schema,
+            },
+          },
+        }
+      : params.responseFormat?.type === 'json_object'
+      ? { response_format: { type: 'json_object' as const } }
+      : {}
     const response = await client.chat.completions.create({
       model: params.model,
       ...tokenParam,
+      ...responseFormat,
       messages: [
         { role: 'system', content: params.system },
         ...params.messages.map((m) => ({

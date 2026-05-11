@@ -861,6 +861,7 @@ export interface CompletionOptions {
   contextData?: Record<string, unknown>
   maxTokens?: number
   temperature?: number
+  responseFormat?: import('./providers/index').CompletionResponseFormat
 }
 
 export interface CompletionResult {
@@ -910,6 +911,7 @@ async function callProvider(
   messages: Array<{ role: 'user' | 'assistant'; content: string }>,
   maxTokens: number,
   temperature?: number,
+  responseFormat?: import('./providers/index').CompletionResponseFormat,
 ): Promise<{ text: string; inputTokens: number; outputTokens: number; truncated?: boolean }> {
   // Dynamic import to avoid pulling all provider SDKs into client bundles
   const { getProvider } = await import('./providers/index')
@@ -920,7 +922,7 @@ async function callProvider(
   if (!provider.isConfigured()) {
     throw new Error(`Provider "${providerName}" not configured (missing API key)`)
   }
-  return provider.complete({ model, system, messages, maxTokens, temperature })
+  return provider.complete({ model, system, messages, maxTokens, temperature, responseFormat })
 }
 
 /**
@@ -940,7 +942,7 @@ export async function completion(opts: CompletionOptions): Promise<CompletionRes
 
   // Attempt 1: primary model via configured provider
   try {
-    const result = await callProvider(resolved.provider, resolved.model, system, messages, maxTokens, temperature)
+    const result = await callProvider(resolved.provider, resolved.model, system, messages, maxTokens, temperature, opts.responseFormat)
     return { ...result, model: resolved.model, provider: resolved.provider, usedFallback: false }
   } catch (primaryErr) {
     aiLogger.warn({ err: primaryErr, taskSlot: opts.taskSlot, model: resolved.model, provider: resolved.provider },
@@ -951,7 +953,7 @@ export async function completion(opts: CompletionOptions): Promise<CompletionRes
   if (resolved.fallbackModel) {
     const fbProvider = resolved.fallbackProvider ?? 'anthropic'
     try {
-      const result = await callProvider(fbProvider, resolved.fallbackModel, system, messages, maxTokens, temperature)
+      const result = await callProvider(fbProvider, resolved.fallbackModel, system, messages, maxTokens, temperature, opts.responseFormat)
       return { ...result, model: resolved.fallbackModel, provider: fbProvider, usedFallback: true }
     } catch (fallbackErr) {
       aiLogger.warn({ err: fallbackErr, taskSlot: opts.taskSlot, fallbackModel: resolved.fallbackModel, fallbackProvider: fbProvider },
@@ -966,7 +968,7 @@ export async function completion(opts: CompletionOptions): Promise<CompletionRes
     throw new Error(`ModelRouter: all attempts failed for ${opts.taskSlot}`)
   }
 
-  const result = await callProvider(defaultProvider, defaults.model, system, messages, defaults.maxTokens, temperature)
+  const result = await callProvider(defaultProvider, defaults.model, system, messages, opts.maxTokens ?? defaults.maxTokens, temperature, opts.responseFormat)
   return { ...result, model: defaults.model, provider: defaultProvider, usedFallback: true }
 }
 

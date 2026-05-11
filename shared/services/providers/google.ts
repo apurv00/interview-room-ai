@@ -18,6 +18,9 @@ registerProvider({
   isConfigured: () => !!process.env.GOOGLE_AI_API_KEY,
 
   async complete(params: CompletionParams): Promise<CompletionResponse> {
+    if (params.responseFormat) {
+      throw new Error('Provider "google" does not support enforced structured responseFormat')
+    }
     const genAI = await getGenAI()
     const model = genAI.getGenerativeModel({
       model: params.model,

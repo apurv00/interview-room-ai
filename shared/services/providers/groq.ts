@@ -23,6 +23,9 @@ registerProvider({
   isConfigured: () => !!process.env.GROQ_API_KEY,
 
   async complete(params: CompletionParams): Promise<CompletionResponse> {
+    if (params.responseFormat) {
+      throw new Error('Provider "groq" does not support enforced structured responseFormat')
+    }
     const client = getClient()
     const response = await client.chat.completions.create({
       model: params.model,

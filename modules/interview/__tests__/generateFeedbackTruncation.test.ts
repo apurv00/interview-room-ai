@@ -204,18 +204,20 @@ describe('POST /api/generate-feedback — G.3 truncation handling', () => {
     mockInfo.mockReset()
   })
 
-  it('no retry on non-truncated response; no red_flag', async () => {
+  it('uses one structured core call plus best-effort enrichment on non-truncated response', async () => {
     mockCompletion.mockResolvedValueOnce(completionResult(validFeedback, false))
 
     const res = await POST(makeRequest())
     const json = await res.json()
 
-    expect(mockCompletion).toHaveBeenCalledTimes(1)
+    expect(mockCompletion).toHaveBeenCalledTimes(2)
+    expect(mockCompletion.mock.calls[0][0].responseFormat.name).toBe('feedback_core')
+    expect(mockCompletion.mock.calls[1][0].responseFormat.name).toBe('feedback_enrichment')
     expect(json.red_flags).toEqual([])
     expect(json.confidence_level).not.toBe('Low')
   })
 
-  it('retries with maxTokens=8000 when first response is truncated', async () => {
+  it('repairs structured core feedback when the first response is truncated', async () => {
     mockCompletion
       .mockResolvedValueOnce(completionResult(validFeedback, true))
       .mockResolvedValueOnce(completionResult(validFeedback, false))
@@ -223,14 +225,15 @@ describe('POST /api/generate-feedback — G.3 truncation handling', () => {
     const res = await POST(makeRequest())
     const json = await res.json()
 
-    expect(mockCompletion).toHaveBeenCalledTimes(2)
-    const retryCall = mockCompletion.mock.calls[1][0] as { maxTokens?: number }
-    expect(retryCall.maxTokens).toBe(8000)
+    expect(mockCompletion).toHaveBeenCalledTimes(3)
+    const repairCall = mockCompletion.mock.calls[1][0] as { maxTokens?: number; responseFormat?: { name?: string } }
+    expect(repairCall.maxTokens).toBe(3600)
+    expect(repairCall.responseFormat?.name).toBe('feedback_core')
     expect(json.red_flags).toEqual([])
     expect(json.confidence_level).not.toBe('Low')
   })
 
-  it('clamps confidence=Low and adds red_flag when retry also truncates', async () => {
+  it('returns degraded fallback when core response and structured repair both truncate', async () => {
     mockCompletion
       .mockResolvedValueOnce(completionResult(validFeedback, true))
       .mockResolvedValueOnce(completionResult(validFeedback, true))
@@ -239,9 +242,10 @@ describe('POST /api/generate-feedback — G.3 truncation handling', () => {
     const json = await res.json()
 
     expect(mockCompletion).toHaveBeenCalledTimes(2)
+    expect(json.degraded).toBe(true)
     expect(json.confidence_level).toBe('Low')
-    expect(json.red_flags.some((f: string) =>
-      f.toLowerCase().includes('truncated'))).toBe(true)
+    expect(json.dimensions.answer_quality.weaknesses.some((f: string) =>
+      f.toLowerCase().includes('approximate'))).toBe(true)
   })
 
   it('surfaces upstream truncated evaluation rows as red_flags', async () => {
