@@ -412,4 +412,105 @@ describe('POST /api/generate-feedback — enrichment bounding (Codex P1) + token
     expect(json.dimensions.communication.pause_score).toBe(70)
     expect(json.dimensions.communication.rambling_index).toBe(0.2)
   })
+
+  // ── Codex P2 on PR #351: dominant-token model attribution ────────────────
+  it('attributes modelUsed to the call with the most output tokens when core and repair use different models', async () => {
+    // Simulates the model-router fallback chain producing different
+    // models for core (gpt-5.4-mini, 2500 out tokens) and repair
+    // (claude-sonnet-fallback, 3500 out tokens — dominant). Pre-fix,
+    // modelUsed was naively `result.model` (the final/repair model
+    // here, which happens to be correct in this case) — but the same
+    // code would have been wrong if core had been the larger call.
+    // We test the dominant-pick directly with repair as the larger one,
+    // and a companion test (below) covers the case where core wins.
+    const malformedCoreText = JSON.stringify({
+      overall_score: 'not a number',
+      pass_probability: 'Medium',
+      confidence_level: 'High',
+      dimensions: {
+        answer_quality: { score: 70, strengths: [], weaknesses: [] },
+        communication: { score: 72, wpm: 140, filler_rate: 0.04, pause_score: 70, rambling_index: 0.2 },
+        engagement_signals: {
+          score: 70, engagement_score: 68, confidence_trend: 'stable',
+          energy_consistency: 0.7, composure_under_pressure: 65,
+        },
+      },
+      red_flags: [],
+      top_3_improvements: ['A', 'B', 'C'],
+    })
+
+    mockCompletion
+      .mockResolvedValueOnce({
+        text: malformedCoreText,
+        model: 'gpt-5.4-mini',
+        provider: 'openai',
+        inputTokens: 2000,
+        outputTokens: 2500,
+        usedFallback: false,
+        truncated: false,
+      })
+      .mockResolvedValueOnce({
+        text: validCoreFeedback,
+        model: 'claude-sonnet-fallback',
+        provider: 'anthropic',
+        inputTokens: 1500,
+        outputTokens: 3500, // dominant
+        usedFallback: true,
+        truncated: false,
+      })
+      .mockResolvedValueOnce(enrichmentResult({ input: 400, output: 300 }))
+
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+
+    const feedbackCall = mockTrackUsage.mock.calls.find(
+      (c) => (c[0] as { type: string }).type === 'api_call_feedback',
+    )
+    expect(feedbackCall).toBeDefined()
+    const usage = feedbackCall![0] as {
+      inputTokens: number; outputTokens: number; modelUsed: string; success: boolean
+    }
+    expect(usage.success).toBe(true)
+    expect(usage.modelUsed).toBe('claude-sonnet-fallback')
+    // Sanity-check: token sum still correct.
+    expect(usage.inputTokens).toBe(2000 + 1500 + 400)
+    expect(usage.outputTokens).toBe(2500 + 3500 + 300)
+  })
+
+  it('attributes modelUsed to the core call when core has more output tokens than enrichment', async () => {
+    // No repair needed; core succeeds. Enrichment runs as a smaller
+    // second call. modelUsed must follow the core model — pre-fix,
+    // result.model was already the core's model here, so naive code
+    // happened to be correct; this test pins the post-fix behavior
+    // so subsequent refactors don't silently regress to e.g. "last
+    // call wins" or "alphabetical."
+    mockCompletion
+      .mockResolvedValueOnce({
+        text: validCoreFeedback,
+        model: 'gpt-5.4-mini',
+        provider: 'openai',
+        inputTokens: 3000,
+        outputTokens: 4000, // dominant
+        usedFallback: false,
+        truncated: false,
+      })
+      .mockResolvedValueOnce({
+        text: validEnrichment,
+        model: 'enrichment-fallback-model',
+        provider: 'anthropic',
+        inputTokens: 500,
+        outputTokens: 600, // smaller
+        usedFallback: true,
+        truncated: false,
+      })
+
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+
+    const feedbackCall = mockTrackUsage.mock.calls.find(
+      (c) => (c[0] as { type: string }).type === 'api_call_feedback',
+    )
+    const usage = feedbackCall![0] as { modelUsed: string }
+    expect(usage.modelUsed).toBe('gpt-5.4-mini')
+  })
 })

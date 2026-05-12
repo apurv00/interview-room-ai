@@ -158,12 +158,12 @@ async function generateOptionalEnrichment(params: {
 }): Promise<{
   ideal_answers: Array<Record<string, unknown>>
   drill_recommendations: Array<Record<string, unknown>>
-  usage: { inputTokens: number; outputTokens: number }
+  usage: { inputTokens: number; outputTokens: number; model: string }
 }> {
   const empty = {
     ideal_answers: [] as Array<Record<string, unknown>>,
     drill_recommendations: [] as Array<Record<string, unknown>>,
-    usage: { inputTokens: 0, outputTokens: 0 },
+    usage: { inputTokens: 0, outputTokens: 0, model: '' },
   }
   const targetContext = weakestQuestionContext(params.evaluations)
   if (!targetContext) {
@@ -212,6 +212,11 @@ Return ideal_answers for these 2-3 questions only and 2-3 drill_recommendations.
       usage: {
         inputTokens: result.inputTokens ?? 0,
         outputTokens: result.outputTokens ?? 0,
+        // Codex P2 on PR #351: report enrichment model alongside tokens
+        // so the handler's modelUsed picker can attribute trackUsage to
+        // whichever call dominated the cost, instead of blanket-pricing
+        // the cross-call sum as a single (possibly-different) model.
+        model: result.model ?? '',
       },
     }
   } catch (err) {
@@ -674,8 +679,22 @@ If no JD was supplied, set jd_match_score to null and jd_requirement_breakdown t
       // dropped the core call's tokens from billing/cost telemetry on
       // every parse-repair scenario — exactly the reliability fallback
       // path where we MOST need accurate cost data.
-      let coreInputTokens = result.inputTokens
-      let coreOutputTokens = result.outputTokens
+      let totalInputTokens = result.inputTokens
+      let totalOutputTokens = result.outputTokens
+
+      // Codex P2 on PR #351 (2026-05-12): also track per-call model
+      // attribution. With the cross-call token sum, `modelUsed` taken
+      // naively from the final `result.model` mis-prices the whole
+      // bundle if core and repair (or enrichment) resolved to different
+      // models via the router fallback chain in shared/services/modelRouter.ts.
+      // Pick the model whose call produced the most output tokens — the
+      // "dominant cost" call — as the single attribution for this
+      // api_call_feedback row. Skip the per-call records option (would
+      // change the contract of "one row per feedback render" and break
+      // downstream plan-quota counting + cost dashboards).
+      const usageCalls: Array<{ model: string; outputTokens: number }> = [
+        { model: result.model, outputTokens: result.outputTokens },
+      ]
 
       let feedback: FeedbackData
       try {
@@ -723,13 +742,14 @@ You repair malformed interview feedback JSON. The output must match the supplied
         })
 
         // Codex P2 (2026-05-12): accumulate repair tokens into the
-        // running core total. We add unconditionally (success OR repair-
+        // running total. We add unconditionally (success OR repair-
         // failed) because the repair call was billed regardless of
         // whether its output ended up shaping the response. The outer-
         // catch handler below uses its own trackUsage(success: false)
         // path, so this only affects the success branch.
-        coreInputTokens += repairResult.inputTokens
-        coreOutputTokens += repairResult.outputTokens
+        totalInputTokens += repairResult.inputTokens
+        totalOutputTokens += repairResult.outputTokens
+        usageCalls.push({ model: repairResult.model, outputTokens: repairResult.outputTokens })
 
         try {
           feedback = requireCoreFeedback(repairResult)
@@ -1101,20 +1121,44 @@ You repair malformed interview feedback JSON. The output must match the supplied
       // the aggregate log line cover persist failures, which previously
       // could only be found by grepping the per-call `aiLogger.warn`.
 
+      // Codex P2 on PR #351: enrichment also feeds the per-call list
+      // when it actually ran (outputTokens>0 and model is non-empty).
+      // On the no-targets / timeout / failure paths enrichment returns
+      // {0,0,''} so we skip it — adding a zero-token call would just
+      // be noise in the dominant-token pick.
+      if (enrichmentTokens.outputTokens > 0 && enrichmentTokens.model) {
+        usageCalls.push({ model: enrichmentTokens.model, outputTokens: enrichmentTokens.outputTokens })
+      }
+
+      // Pick the dominant-cost call's model for trackUsage attribution.
+      // Tie-breaker: the first entry (which is always the core call)
+      // wins, because `reduce` keeps the accumulator on `>` (not `>=`).
+      const dominantCall = usageCalls.reduce(
+        (max, c) => (c.outputTokens > max.outputTokens ? c : max),
+        usageCalls[0],
+      )
+
       trackUsage({
         user,
         type: 'api_call_feedback',
         sessionId: body.sessionId,
         // Codex P2 on PR #349: sum core + repair (when fired) + enrichment
         // tokens so a single api_call_feedback record reflects the full
-        // cost of a successful feedback generation. coreInputTokens /
-        // coreOutputTokens accumulate across the core and structured-
+        // cost of a successful feedback generation. totalInputTokens /
+        // totalOutputTokens accumulate across the core and structured-
         // repair completions (see the catch branch above). enrichmentTokens
-        // is {0,0} when enrichment didn't run (no targets, timeout, or
-        // failure), so that addition is a no-op in those paths.
-        inputTokens: coreInputTokens + enrichmentTokens.inputTokens,
-        outputTokens: coreOutputTokens + enrichmentTokens.outputTokens,
-        modelUsed: result.model,
+        // is {0,0,''} when enrichment didn't run, so that addition is a
+        // no-op in those paths.
+        inputTokens: totalInputTokens + enrichmentTokens.inputTokens,
+        outputTokens: totalOutputTokens + enrichmentTokens.outputTokens,
+        // Codex P2 on PR #351: attribute to the dominant-token call's
+        // model. With the cross-call token sum, naively using
+        // `result.model` (the final completion) priced all tokens at
+        // the repair model's rate even when most of them came from the
+        // core call's model — misreporting cost telemetry by the rate
+        // ratio whenever the router fallback chain picked different
+        // models per call.
+        modelUsed: dominantCall.model,
         durationMs: Date.now() - startTime,
         success: true,
       }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
