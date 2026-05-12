@@ -80,6 +80,27 @@ if command -v cmd.exe >/dev/null 2>&1; then
         }
       '
     }
+    # Codex P2 on PR #354 (2026-05-12): cmd.exe expands %var% syntax in
+    # the command line BEFORE gitnexus.cmd runs, so a user arg containing
+    # `%PATH%`, `%TEMP%`, or any string matching a set env var gets
+    # silently rewritten. There is no clean cross-environment escape on
+    # the cmd /c command line — `%%` is special inside batch files but
+    # literal at the cmd prompt; `^%` escapes only OUTSIDE quotes; the
+    # `!_GN_PCT!` + /v:on approach needs the sentinel seeded with a
+    # literal `%`, which itself requires a `for /f` indirection or a
+    # temp batch file at the cmd prompt — an untested Windows-specific
+    # fix that I won't ship blind from a Linux env. Until someone can
+    # validate on a real Windows-Bash host, warn loudly when `%` appears
+    # in any arg so users see the corruption risk instead of silent
+    # expansion. Realistic gitnexus usage (cypher queries, symbol names,
+    # POSIX-style paths) rarely contains literal `%` anyway.
+    for arg in "$@"; do
+      case "$arg" in
+        *%*)
+          printf 'gitnexus-bin.sh: WARNING — argument contains %% which cmd.exe may expand as %%var%% before gitnexus.cmd receives it. If the result looks wrong, set the value via an env file or invoke gitnexus.cmd from a Windows shell directly. Arg: %s\n' "$arg" >&2
+          ;;
+      esac
+    done
     win_cmdline="gitnexus.cmd"
     for arg in "$@"; do
       win_cmdline="$win_cmdline $(_win_quote_arg "$arg")"
