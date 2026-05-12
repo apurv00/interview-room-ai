@@ -1265,67 +1265,89 @@ function FeedbackPageInner() {
             {analysis && analysis.status === 'completed' && (
               <>
                 {/* ── Segment 1: Interview Replay ─────────────────────────── */}
-                <section className="surface-card-bordered p-4 sm:p-6 space-y-4 relative">
-                  {/* Fullscreen toggle */}
-                  {videoSrc && (
-                    <button
-                      onClick={() => setReplayFullscreen(true)}
-                      className="absolute top-3 right-3 z-10 p-2 rounded-lg bg-white/80 hover:bg-white border border-[#e1e8ed] text-[#536471] hover:text-[#0f1419] transition-colors"
-                      title="Expand replay"
-                    >
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m4 0l-5-5" />
-                      </svg>
-                    </button>
-                  )}
+                <section
+                  className={
+                    replayFullscreen
+                      ? 'fixed inset-0 z-50 bg-white overflow-y-auto'
+                      : 'surface-card-bordered p-4 sm:p-6 relative'
+                  }
+                >
+                  <div className={replayFullscreen ? 'max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6' : 'space-y-4'}>
+                    <div className={replayFullscreen ? 'flex items-center justify-between' : 'absolute top-3 right-3 z-10'}>
+                      {replayFullscreen ? (
+                        <>
+                          <h2 className="text-heading text-[#0f1419]">Interview Replay</h2>
+                          <button
+                            onClick={() => setReplayFullscreen(false)}
+                            className="p-2 rounded-lg hover:bg-[#f8fafc] border border-[#e1e8ed] text-[#536471] hover:text-[#0f1419] transition-colors"
+                            title="Close (Esc)"
+                          >
+                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </>
+                      ) : videoSrc ? (
+                        <button
+                          onClick={() => setReplayFullscreen(true)}
+                          className="p-2 rounded-lg bg-white/80 hover:bg-white border border-[#e1e8ed] text-[#536471] hover:text-[#0f1419] transition-colors"
+                          title="Expand replay"
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m4 0l-5-5" />
+                          </svg>
+                        </button>
+                      ) : null}
+                    </div>
 
-                  {/* Video + Transcript side-by-side */}
-                  <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
-                    {videoSrc && (
-                      <VideoPlayer
-                        src={videoSrc}
-                        questionMarkers={questionMarkers}
-                        onTimeUpdate={setAnalysisVideoTime}
-                        onSeek={(fn) => { analysisSeekRef.current = fn }}
-                        activeWarning={activeWarning}
+                    {/* Video + Transcript side-by-side */}
+                    <div className={`grid grid-cols-1 lg:grid-cols-[3fr_2fr] ${replayFullscreen ? 'gap-6' : 'gap-4'}`}>
+                      {videoSrc && (
+                        <VideoPlayer
+                          src={videoSrc}
+                          questionMarkers={questionMarkers}
+                          onTimeUpdate={setAnalysisVideoTime}
+                          onSeek={(fn) => { analysisSeekRef.current = fn }}
+                          activeWarning={activeWarning}
+                        />
+                      )}
+                      {analysis.whisperTranscript && analysis.whisperTranscript.length > 0 && (
+                        <div className="space-y-2">
+                          <p className="text-caption text-[#71767b] uppercase tracking-wide font-medium">Transcript</p>
+                          <div className={replayFullscreen ? 'max-h-[60vh] overflow-y-auto' : 'max-h-[340px] overflow-y-auto'}>
+                            <ReplayTranscript
+                              whisperSegments={analysis.whisperTranscript}
+                              transcript={data.transcript}
+                              currentTimeSec={analysisVideoTime}
+                              onWordClick={(sec) => analysisSeekRef.current?.(sec)}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Timeline */}
+                    {analysis.timeline && analysis.timeline.length > 0 && (
+                      <TimelineTrack
+                        events={analysis.timeline}
+                        totalDurationSec={
+                          analysis.timeline.length > 0
+                            ? Math.ceil(analysis.timeline[analysis.timeline.length - 1].endSec)
+                            : 300
+                        }
+                        currentTimeSec={analysisVideoTime}
+                        onSeek={(sec) => analysisSeekRef.current?.(sec)}
                       />
                     )}
-                    {analysis.whisperTranscript && analysis.whisperTranscript.length > 0 && (
-                      <div className="space-y-2">
-                        <p className="text-caption text-[#71767b] uppercase tracking-wide font-medium">Transcript</p>
-                        <div className="max-h-[340px] overflow-y-auto">
-                          <ReplayTranscript
-                            whisperSegments={analysis.whisperTranscript}
-                            transcript={data.transcript}
-                            currentTimeSec={analysisVideoTime}
-                            onWordClick={(sec) => analysisSeekRef.current?.(sec)}
-                          />
-                        </div>
-                      </div>
+
+                    {/* Key Moments */}
+                    {keyMoments.length > 0 && (
+                      <MomentCards
+                        moments={keyMoments}
+                        onSeek={(sec) => analysisSeekRef.current?.(sec)}
+                      />
                     )}
                   </div>
-
-                  {/* Timeline */}
-                  {analysis.timeline && analysis.timeline.length > 0 && (
-                    <TimelineTrack
-                      events={analysis.timeline}
-                      totalDurationSec={
-                        analysis.timeline.length > 0
-                          ? Math.ceil(analysis.timeline[analysis.timeline.length - 1].endSec)
-                          : 300
-                      }
-                      currentTimeSec={analysisVideoTime}
-                      onSeek={(sec) => analysisSeekRef.current?.(sec)}
-                    />
-                  )}
-
-                  {/* Key Moments */}
-                  {keyMoments.length > 0 && (
-                    <MomentCards
-                      moments={keyMoments}
-                      onSeek={(sec) => analysisSeekRef.current?.(sec)}
-                    />
-                  )}
                 </section>
 
                 {/* ── Segment 2: Deep Analysis (collapsed by default) ────── */}
@@ -1401,73 +1423,6 @@ function FeedbackPageInner() {
           </div>
         )}
 
-        {/* Fullscreen Replay Overlay */}
-        {replayFullscreen && analysis && analysis.status === 'completed' && (
-          <div className="fixed inset-0 z-50 bg-white overflow-y-auto">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-              {/* Close button */}
-              <div className="flex items-center justify-between">
-                <h2 className="text-heading text-[#0f1419]">Interview Replay</h2>
-                <button
-                  onClick={() => setReplayFullscreen(false)}
-                  className="p-2 rounded-lg hover:bg-[#f8fafc] border border-[#e1e8ed] text-[#536471] hover:text-[#0f1419] transition-colors"
-                  title="Close (Esc)"
-                >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-
-              {/* Video + Transcript side-by-side (expanded) */}
-              <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-6">
-                {videoSrc && (
-                  <VideoPlayer
-                    src={videoSrc}
-                    questionMarkers={questionMarkers}
-                    onTimeUpdate={setAnalysisVideoTime}
-                    onSeek={(fn) => { analysisSeekRef.current = fn }}
-                  />
-                )}
-                {analysis.whisperTranscript && analysis.whisperTranscript.length > 0 && (
-                  <div className="space-y-2">
-                    <p className="text-caption text-[#71767b] uppercase tracking-wide font-medium">Transcript</p>
-                    <div className="max-h-[60vh] overflow-y-auto">
-                      <ReplayTranscript
-                        whisperSegments={analysis.whisperTranscript}
-                        transcript={data.transcript}
-                        currentTimeSec={analysisVideoTime}
-                        onWordClick={(sec) => analysisSeekRef.current?.(sec)}
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Timeline */}
-              {analysis.timeline && analysis.timeline.length > 0 && (
-                <TimelineTrack
-                  events={analysis.timeline}
-                  totalDurationSec={
-                    analysis.timeline.length > 0
-                      ? Math.ceil(analysis.timeline[analysis.timeline.length - 1].endSec)
-                      : 300
-                  }
-                  currentTimeSec={analysisVideoTime}
-                  onSeek={(sec) => analysisSeekRef.current?.(sec)}
-                />
-              )}
-
-              {/* Key Moments */}
-              {keyMoments.length > 0 && (
-                <MomentCards
-                  moments={keyMoments}
-                  onSeek={(sec) => analysisSeekRef.current?.(sec)}
-                />
-              )}
-            </div>
-          </div>
-        )}
         </div>{/* close #tab-content */}
 
         {/* CTA — habit-loop strip */}
