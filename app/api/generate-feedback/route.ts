@@ -667,6 +667,16 @@ If no JD was supplied, set jd_match_score to null and jd_requirement_breakdown t
         responseFormat: FEEDBACK_CORE_RESPONSE_FORMAT,
       })
 
+      // Codex P2 on PR #349 (2026-05-12): track tokens across BOTH the
+      // core and the structured-repair completions instead of reading
+      // `result.*` at the trackUsage call site below. The repair branch
+      // reassigns `result = repairResult` (line ~717), which silently
+      // dropped the core call's tokens from billing/cost telemetry on
+      // every parse-repair scenario — exactly the reliability fallback
+      // path where we MOST need accurate cost data.
+      let coreInputTokens = result.inputTokens
+      let coreOutputTokens = result.outputTokens
+
       let feedback: FeedbackData
       try {
         feedback = requireCoreFeedback(result)
@@ -711,6 +721,15 @@ You repair malformed interview feedback JSON. The output must match the supplied
           maxTokens: 3600,
           responseFormat: FEEDBACK_CORE_RESPONSE_FORMAT,
         })
+
+        // Codex P2 (2026-05-12): accumulate repair tokens into the
+        // running core total. We add unconditionally (success OR repair-
+        // failed) because the repair call was billed regardless of
+        // whether its output ended up shaping the response. The outer-
+        // catch handler below uses its own trackUsage(success: false)
+        // path, so this only affects the success branch.
+        coreInputTokens += repairResult.inputTokens
+        coreOutputTokens += repairResult.outputTokens
 
         try {
           feedback = requireCoreFeedback(repairResult)
@@ -821,9 +840,23 @@ You repair malformed interview feedback JSON. The output must match the supplied
         feedback.top_3_improvements = feedback.top_3_improvements || ['Practice more structured answers']
       }
 
-      // Enforce pre-computed communication score (the model may deviate from the provided value)
+      // Enforce pre-computed communication metrics. The strict
+      // FEEDBACK_CORE_RESPONSE_FORMAT schema only constrains the SHAPE
+      // of these numbers (must be present, must be `number`); it does
+      // NOT pin their values. So a schema-valid response can still
+      // hallucinate wpm/filler_rate/pause_score/rambling_index alongside
+      // the score. We already compute these deterministically from the
+      // speech-metrics telemetry (see aggMetrics above), and downstream
+      // logic (pathway drills triggered by high filler_rate, dashboard
+      // tiles, peer-comparison stats) consumes them directly — so model
+      // drift here causes incorrect coaching recommendations and
+      // misleading UI metrics. Codex P2 on PR #349 (2026-05-12).
       if (feedback.dimensions?.communication) {
         feedback.dimensions.communication.score = commScore
+        feedback.dimensions.communication.wpm = aggMetrics.wpm
+        feedback.dimensions.communication.filler_rate = aggMetrics.fillerRate
+        feedback.dimensions.communication.pause_score = aggMetrics.pauseScore
+        feedback.dimensions.communication.rambling_index = aggMetrics.ramblingIndex
       }
 
       // BUG 2 fix: derive answer_quality from the actual per-question evaluation
@@ -1072,13 +1105,15 @@ You repair malformed interview feedback JSON. The output must match the supplied
         user,
         type: 'api_call_feedback',
         sessionId: body.sessionId,
-        // Codex P2 on PR #349: sum core/repair + enrichment tokens so
-        // a single api_call_feedback record reflects the full cost of
-        // a successful feedback generation. enrichmentTokens is
-        // {0,0} when enrichment didn't run (no targets, timeout, or
-        // failure), so the addition is a no-op in those paths.
-        inputTokens: result.inputTokens + enrichmentTokens.inputTokens,
-        outputTokens: result.outputTokens + enrichmentTokens.outputTokens,
+        // Codex P2 on PR #349: sum core + repair (when fired) + enrichment
+        // tokens so a single api_call_feedback record reflects the full
+        // cost of a successful feedback generation. coreInputTokens /
+        // coreOutputTokens accumulate across the core and structured-
+        // repair completions (see the catch branch above). enrichmentTokens
+        // is {0,0} when enrichment didn't run (no targets, timeout, or
+        // failure), so that addition is a no-op in those paths.
+        inputTokens: coreInputTokens + enrichmentTokens.inputTokens,
+        outputTokens: coreOutputTokens + enrichmentTokens.outputTokens,
         modelUsed: result.model,
         durationMs: Date.now() - startTime,
         success: true,

@@ -298,4 +298,118 @@ describe('POST /api/generate-feedback — enrichment bounding (Codex P1) + token
     })
     expect(warnedTimeout).toBe(true)
   }, 10_000)
+
+  // ── Codex P2 on 2026-05-12: core + repair token aggregation ──────────────
+  it('aggregates core + repair tokens when structured repair fires', async () => {
+    // First core completion returns valid JSON shape but missing the
+    // required `overall_score` (typeof !== 'number') so requireCoreFeedback
+    // throws FeedbackCoreParseError → repair branch runs. The repair
+    // succeeds. trackUsage must record BOTH calls' tokens; pre-fix the
+    // `result = repairResult` overwrite silently dropped core's tokens.
+    const malformedCoreText = JSON.stringify({
+      overall_score: 'not a number',
+      pass_probability: 'Medium',
+      confidence_level: 'High',
+      dimensions: {
+        answer_quality: { score: 70, strengths: [], weaknesses: [] },
+        communication: { score: 72, wpm: 140, filler_rate: 0.04, pause_score: 70, rambling_index: 0.2 },
+        engagement_signals: {
+          score: 70, engagement_score: 68, confidence_trend: 'stable',
+          energy_consistency: 0.7, composure_under_pressure: 65,
+        },
+      },
+      red_flags: [],
+      top_3_improvements: ['A', 'B', 'C'],
+    })
+
+    mockCompletion
+      // 1. core call — malformed; triggers repair branch
+      .mockResolvedValueOnce({
+        text: malformedCoreText,
+        model: 'core-model',
+        provider: 'test',
+        inputTokens: 3000,
+        outputTokens: 2500,
+        usedFallback: false,
+        truncated: false,
+      })
+      // 2. repair call — valid
+      .mockResolvedValueOnce({
+        text: validCoreFeedback,
+        model: 'repair-model',
+        provider: 'test',
+        inputTokens: 1200,
+        outputTokens: 900,
+        usedFallback: false,
+        truncated: false,
+      })
+      // 3. enrichment call
+      .mockResolvedValueOnce(enrichmentResult({ input: 800, output: 600 }))
+
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+
+    const feedbackCall = mockTrackUsage.mock.calls.find(
+      (c) => (c[0] as { type: string }).type === 'api_call_feedback',
+    )
+    expect(feedbackCall).toBeDefined()
+    const usage = feedbackCall![0] as { inputTokens: number; outputTokens: number; success: boolean }
+    expect(usage.success).toBe(true)
+    // Core (3000 + 2500) + Repair (1200 + 900) + Enrichment (800 + 600)
+    // = 5000 in + 4000 out.
+    expect(usage.inputTokens).toBe(5000)
+    expect(usage.outputTokens).toBe(4000)
+  })
+
+  // ── Codex P2 on 2026-05-12: deterministic communication metrics ──────────
+  it('overrides hallucinated communication metrics with server-computed aggMetrics', async () => {
+    // Model returns plausibly-shaped but wildly inaccurate values. The
+    // route must replace them with the aggMetrics values mocked above
+    // (wpm: 140, fillerRate: 0.04, pauseScore: 70, ramblingIndex: 0.2).
+    // Pre-fix, only `score` was overridden — the other four numbers
+    // were trusted as-is and could mislead downstream coaching logic.
+    const driftingCore = JSON.stringify({
+      overall_score: 72,
+      pass_probability: 'Medium',
+      confidence_level: 'High',
+      dimensions: {
+        answer_quality: { score: 70, strengths: [], weaknesses: [] },
+        communication: {
+          score: 50, // wrong; route must override to commScore=72
+          wpm: 999, // hallucinated
+          filler_rate: 0.99, // hallucinated
+          pause_score: 5, // hallucinated
+          rambling_index: 9.9, // hallucinated
+        },
+        engagement_signals: {
+          score: 70, engagement_score: 68, confidence_trend: 'stable',
+          energy_consistency: 0.7, composure_under_pressure: 65,
+        },
+      },
+      red_flags: [],
+      top_3_improvements: ['A', 'B', 'C'],
+    })
+
+    mockCompletion
+      .mockResolvedValueOnce({
+        text: driftingCore,
+        model: 'core-model',
+        provider: 'test',
+        inputTokens: 3000,
+        outputTokens: 2500,
+        usedFallback: false,
+        truncated: false,
+      })
+      .mockResolvedValueOnce(enrichmentResult())
+
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+    const json = await res.json()
+
+    expect(json.dimensions.communication.score).toBe(72)
+    expect(json.dimensions.communication.wpm).toBe(140)
+    expect(json.dimensions.communication.filler_rate).toBe(0.04)
+    expect(json.dimensions.communication.pause_score).toBe(70)
+    expect(json.dimensions.communication.rambling_index).toBe(0.2)
+  })
 })
