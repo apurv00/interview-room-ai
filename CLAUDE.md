@@ -8,7 +8,6 @@ Full-stack Next.js 14 app with Claude AI, MongoDB, Redis, and Stripe.
 
 ```bash
 git pull origin main        # Get latest changes
-npx gitnexus analyze        # Rebuild codebase graph for full awareness
 ```
 
 ## Quick Commands
@@ -174,16 +173,6 @@ If a file listed in `.claude/hotpath.txt` is in the staged diff, the
 commit MUST also include a test file (under `__tests__/`, `*.test.ts`,
 or `*.spec.ts`) OR an explicit `No-tests-needed-because:` line.
 
-**Every edit to a hot-path file MUST be preceded by:**
-
-```
-./scripts/gitnexus-impact.sh <file>
-```
-
-This writes `.claude/audit/current/impact-<basename>.md`, listing every
-d=1 caller from `.gitnexus/csv/relations.csv`. The pre-edit hook blocks
-the edit until this file exists and is <24h old.
-
 **Permanent audit trail:** every commit is appended to
 `.claude/audit/log.md` with its root-cause, verification method, and
 test delta — giving the user an independent record of every claim
@@ -325,47 +314,3 @@ _Add items as they arise. Remove when resolved._
 - **Tech debt: expand `REQUIREMENT_TO_SLOT` for non-SWE domains before flipping `FEATURE_FLAG_JD_FLOW_OVERLAY=true` in production for PM/design/business JDs.** The keyword map at `modules/interview/flow/jdOverlayBuilder.ts:8-49` is SWE-biased. Keywords like `incident`, `tech debt`, `ci/cd` land cleanly on backend/sdet/data-science slot ids but have near-zero coverage for pm, design, and business templates. Consequence: for PM/design/business JDs, the overlay degrades to "2 generic insertions, cap-dropped rest" — still a net improvement over today's zero-overlay, but not high-quality. Fix paths: (a) widen the flat map in-place (~2h content authoring + 30min coverage test), or (b) refactor to per-domain keyword files (`modules/interview/flow/templates/{domain}-jd-keywords.ts` composed in the builder) when the flat map exceeds ~100 entries. Also note: current matcher uses `String.includes(keyword)` which can false-positive short keywords (`ml`, `api`) — consider `\b` word-boundary regex before the map grows. Safe to enable `FEATURE_FLAG_JD_FLOW_OVERLAY=true` in production for backend/frontend/sdet/data-science domains today (keyword coverage solid); defer PM/design/business enable until keyword expansion lands.
 
 - **Tuning experiment: AudioWorklet buffer size (`public/pcm-processor.js` line `CHUNK_SAMPLES = 4096`).** The worklet currently buffers 32 render quanta (32 × 128 = 4096 samples = 256 ms at 16 kHz) before posting to the main thread — chosen to match the previous `ScriptProcessorNode(4096, 1, 1)` cadence so Deepgram's server-side VAD (`utterance_end_ms=2500`) and all client-side grace timers (`GRACE_MS_BY_INTENT` in `useDeepgramRecognition.ts`) continue to work without retuning. AudioWorklet itself has no 4096-sample constraint (unlike the deprecated ScriptProcessor), so smaller buffers are possible and may reduce interim-transcript latency for live coaching feedback. Candidate values to measure: 8 render quanta (1024 samples / 64 ms / 15.6 WS msgs per sec), 16 quanta (2048 / 128 ms / 7.8 msgs/sec), 32 (current). Experiment scope: run 5 interviews per setting with DevTools Network panel recording Deepgram WS frames, measure p95 `time-from-last-spoken-word → speech_final`, confirm no increase in `graceTimer` firings (would indicate the server-side VAD isn't getting enough signal per packet). Gate behind a feature flag before flipping the default. Low-priority win — the migration itself (ScriptProcessor → AudioWorklet, PR with root-cause fix) already buys us the main-thread-throttle immunity that was actually hurting users; chunk size is second-order polish.
-
-<!-- gitnexus:start -->
-# GitNexus — Code Intelligence
-
-This project is indexed by GitNexus as **interview-room-ai** (10543 symbols, 15683 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
-
-> If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
-
-## Always Do
-
-- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `gitnexus_impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
-- **MUST run `gitnexus_detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows.
-- **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
-- When exploring unfamiliar code, use `gitnexus_query({query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
-- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `gitnexus_context({name: "symbolName"})`.
-
-## Never Do
-
-- NEVER edit a function, class, or method without first running `gitnexus_impact` on it.
-- NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
-- NEVER rename symbols with find-and-replace — use `gitnexus_rename` which understands the call graph.
-- NEVER commit changes without running `gitnexus_detect_changes()` to check affected scope.
-
-## Resources
-
-| Resource | Use for |
-|----------|---------|
-| `gitnexus://repo/interview-room-ai/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/interview-room-ai/clusters` | All functional areas |
-| `gitnexus://repo/interview-room-ai/processes` | All execution flows |
-| `gitnexus://repo/interview-room-ai/process/{name}` | Step-by-step execution trace |
-
-## CLI
-
-| Task | Read this skill file |
-|------|---------------------|
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
-| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
-| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
-| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
-| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
-
-<!-- gitnexus:end -->

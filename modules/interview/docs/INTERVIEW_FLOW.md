@@ -519,12 +519,12 @@ no new speech has arrived for the full `timeoutMs` window.
 Also increased `MAX_ANSWER_MS` from 120s to 180s to give candidates more
 room for long-form answers (case study, system design).
 
-**Why gitnexus flagged HIGH risk:** `listenForAnswer` is called from
-`useInterview.start` (the main interview loop) at 10+ call sites covering
-main answers, probe answers, wrap-up, retry, and pivot flows. All share
-the same `timeoutMs=30000` default. The fix is internal to `listenForAnswer`
-and does not change its signature or return contract, so all callers
-benefit without modification.
+**Blast radius:** `listenForAnswer` is called from `useInterview.start`
+(the main interview loop) at 10+ call sites covering main answers, probe
+answers, wrap-up, retry, and pivot flows. All share the same
+`timeoutMs=30000` default. The fix is internal to `listenForAnswer` and
+does not change its signature or return contract, so all callers benefit
+without modification.
 
 ---
 

@@ -1,6 +1,6 @@
 # Interview Pipeline — Complete Call Map (Post-Interrupt Layer)
 
-Updated after Phases 1-6. Source: gitnexus rebuild (4,376 nodes, 9,007 edges).
+Updated after Phases 1-6.
 
 **Legend:**
 - `[A]` = **A**lways fires (unconditional)
