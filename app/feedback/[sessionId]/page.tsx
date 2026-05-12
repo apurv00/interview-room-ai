@@ -178,6 +178,12 @@ function FeedbackPageInner() {
     return () => { document.body.style.overflow = prev; window.removeEventListener('keydown', onKey) }
   }, [replayFullscreen])
 
+  useEffect(() => {
+    if (activeTab !== 'analysis' && replayFullscreen) {
+      setReplayFullscreen(false)
+    }
+  }, [activeTab, replayFullscreen])
+
   // ── Tab switching with lazy transcript fetch ────────────────────────────────
 
   // ── Analysis fetch + auto-trigger ─────────────────────────────────────────
