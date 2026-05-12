@@ -43,6 +43,30 @@ if ! "$BIN" --version >/dev/null 2>&1; then
   exit 2
 fi
 
+json_markdown() {
+  if command -v jq >/dev/null 2>&1; then
+    jq -r '.markdown // ""'
+    return
+  fi
+
+  if command -v powershell.exe >/dev/null 2>&1; then
+    powershell.exe -NoProfile -Command \
+      '$raw = [Console]::In.ReadToEnd(); if ($raw.Trim()) { ($raw | ConvertFrom-Json).markdown }' \
+      | tr -d '\r'
+    return
+  fi
+
+  awk '
+    match($0, /"markdown"[[:space:]]*:[[:space:]]*"/) {
+      line = substr($0, RSTART + RLENGTH)
+      sub(/",[[:space:]]*"row_count".*$/, "", line)
+      gsub(/\\n/, "\n", line)
+      gsub(/\\"/, "\"", line)
+      print line
+    }
+  '
+}
+
 GRAPH_DB="$REPO_ROOT/.gitnexus/lbug"
 META="$REPO_ROOT/.gitnexus/meta.json"
 if [ ! -e "$GRAPH_DB" ] || [ ! -f "$META" ]; then
@@ -77,20 +101,25 @@ CYPHER_PATH="${REL_PATH//\"/\\\"}"
 
 # Fetch symbols defined in this file.
 SYMBOLS_JSON="$(
-  "$BIN" cypher "MATCH (s:Function) WHERE s.filePath = \"$CYPHER_PATH\" RETURN s.name AS name
+  "$BIN" cypher "MATCH (s:Function) WHERE s.filePath = \"$CYPHER_PATH\" RETURN s.name AS name, s.id AS uid
                  UNION
-                 MATCH (s:Method) WHERE s.filePath = \"$CYPHER_PATH\" RETURN s.name AS name
+                 MATCH (s:Method) WHERE s.filePath = \"$CYPHER_PATH\" RETURN s.name AS name, s.id AS uid
                  UNION
-                 MATCH (s:Class) WHERE s.filePath = \"$CYPHER_PATH\" RETURN s.name AS name" \
+                 MATCH (s:Class) WHERE s.filePath = \"$CYPHER_PATH\" RETURN s.name AS name, s.id AS uid" \
     2>/dev/null || echo '{}'
 )"
 
 # Parse names out of the cypher markdown table (cypher CLI returns
 # { markdown: "| name |\n| --- |\n| foo |\n| bar |", row_count: N }).
-SYMBOLS="$(
+SYMBOL_ROWS="$(
   echo "$SYMBOLS_JSON" \
-    | jq -r '.markdown // ""' \
-    | awk -F '|' 'NR>2 {gsub(/^ +| +$/, "", $2); if ($2 != "" && $2 != "name") print $2}' \
+    | json_markdown \
+    | awk -F '|' 'NR>2 {
+        name=$2; uid=$3;
+        gsub(/^ +| +$/, "", name);
+        gsub(/^ +| +$/, "", uid);
+        if (name != "" && uid != "" && name != "name") print name "\t" uid
+      }' \
     | sort -u
 )"
 
@@ -109,7 +138,7 @@ SYMBOLS="$(
 
   echo "## Symbols defined in this file"
   echo ""
-  if [ -z "$SYMBOLS" ]; then
+  if [ -z "$SYMBOL_ROWS" ]; then
     echo "_(no indexed symbols for this file — the file may be new,"
     echo "outside the graph's scope, or pure data. If this is a source"
     echo "file under \`app/\`, \`modules/\`, or \`shared/\`, run"
@@ -117,29 +146,29 @@ SYMBOLS="$(
     echo ""
   else
     echo '```'
-    echo "$SYMBOLS"
+    echo "$SYMBOL_ROWS" | awk -F '\t' '{print $1}'
     echo '```'
     echo ""
   fi
 
-  if [ -n "$SYMBOLS" ]; then
+  if [ -n "$SYMBOL_ROWS" ]; then
     echo "## Per-symbol callers and callees (from the graph)"
     echo ""
-    echo "_Each block is \`gitnexus context <symbol> --file $REL_PATH\` —"
-    echo "file-scoped so duplicated names (\`GET\`, \`POST\`, \`handler\`)"
-    echo "resolve to THIS file's definition, not the first match. \`incoming\`"
-    echo "are d=1 callers (WILL BREAK on signature change); \`outgoing\` are"
-    echo "d=1 dependencies (may break this file if they change)._"
+    echo "_Each block is \`gitnexus context --uid <symbol-id>\` so duplicated"
+    echo "names (\`GET\`, \`POST\`, \`handler\`) resolve to THIS file's"
+    echo "definition, not the first match. \`incoming\` are d=1 callers"
+    echo "(WILL BREAK on signature change); \`outgoing\` are d=1 dependencies"
+    echo "(may break this file if they change)._"
     echo ""
-    while IFS= read -r sym; do
+    while IFS=$'\t' read -r sym uid; do
       [ -z "$sym" ] && continue
       echo "### \`$sym\`"
       echo ""
       echo '```json'
-      "$BIN" context "$sym" --file "$REL_PATH" 2>&1 | head -120
+      "$BIN" context --uid "$uid" 2>&1 | head -120
       echo '```'
       echo ""
-    done <<<"$SYMBOLS"
+    done <<<"$SYMBOL_ROWS"
   fi
 
   echo "## Risk acknowledgement"

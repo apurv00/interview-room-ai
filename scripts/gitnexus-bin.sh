@@ -17,8 +17,14 @@ if [ -n "${GITNEXUS_BIN:-}" ] && [ -x "$GITNEXUS_BIN" ]; then
   exec "$GITNEXUS_BIN" "$@"
 fi
 
-if command -v gitnexus >/dev/null 2>&1; then
+if command -v gitnexus >/dev/null 2>&1 && gitnexus --version >/dev/null 2>&1; then
   exec gitnexus "$@"
+fi
+
+if command -v cmd.exe >/dev/null 2>&1; then
+  if cmd.exe /d /s /c gitnexus.cmd --version >/dev/null 2>&1; then
+    exec cmd.exe /d /s /c gitnexus.cmd "$@"
+  fi
 fi
 
 if command -v npx >/dev/null 2>&1; then
