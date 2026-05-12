@@ -55,6 +55,7 @@ vi.mock('../services/providers/index', async () => {
 
 process.env.OPENAI_API_KEY = 'test-openai-key'
 process.env.ANTHROPIC_API_KEY = 'test-anthropic-key'
+process.env.OPENROUTER_API_KEY = 'test-openrouter-key'
 
 describe('OpenAI provider adapter', () => {
   beforeEach(() => {
@@ -146,6 +147,29 @@ describe('OpenAI provider adapter', () => {
     expect(sentArgs.max_tokens).toBe(500)
     expect(sentArgs.max_completion_tokens).toBeUndefined()
   })
+
+  it('sends strict json_schema response_format when requested', async () => {
+    mockOpenAICreate.mockResolvedValue({
+      choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 5, completion_tokens: 5 },
+    })
+    const adapter = await getAdapter()
+    const schema = {
+      type: 'object',
+      additionalProperties: false,
+      required: ['ok'],
+      properties: { ok: { type: 'boolean' } },
+    }
+    await adapter.complete({
+      ...baseParams,
+      responseFormat: { type: 'json_schema', name: 'test_schema', strict: true, schema },
+    })
+    const sentArgs = mockOpenAICreate.mock.calls[0][0]
+    expect(sentArgs.response_format).toEqual({
+      type: 'json_schema',
+      json_schema: { name: 'test_schema', strict: true, schema },
+    })
+  })
 })
 
 describe('Anthropic provider adapter', () => {
@@ -190,5 +214,70 @@ describe('Anthropic provider adapter', () => {
     const result = await adapter.complete(baseParams)
     expect(result.truncated).toBe(false)
     expect(result.text).toBe('complete response.')
+  })
+
+  it('uses forced tool use for json_schema response format', async () => {
+    mockAnthropicCreate.mockResolvedValue({
+      content: [{ type: 'tool_use', id: 'toolu_1', name: 'feedback_core', input: { ok: true } }],
+      usage: { input_tokens: 10, output_tokens: 15 },
+      stop_reason: 'tool_use',
+    })
+    const adapter = await getAdapter()
+    const schema = {
+      type: 'object',
+      additionalProperties: false,
+      required: ['ok'],
+      properties: { ok: { type: 'boolean' } },
+    }
+    const result = await adapter.complete({
+      ...baseParams,
+      responseFormat: { type: 'json_schema', name: 'feedback_core', strict: true, schema },
+    })
+    expect(result.text).toBe('{"ok":true}')
+    expect(mockAnthropicCreate.mock.calls[0][0]).toMatchObject({
+      tools: [{ name: 'feedback_core', input_schema: schema }],
+      tool_choice: { type: 'tool', name: 'feedback_core' },
+    })
+  })
+})
+
+describe('OpenRouter provider adapter', () => {
+  beforeEach(() => {
+    mockAnthropicCreate.mockReset()
+  })
+
+  async function getAdapter(): Promise<ProviderAdapter> {
+    await import('../services/providers/openrouter')
+    const adapter = captured.get('openrouter') as ProviderAdapter | undefined
+    expect(adapter).toBeDefined()
+    return adapter!
+  }
+
+  it('uses forced tool use for json_schema response format', async () => {
+    mockAnthropicCreate.mockResolvedValue({
+      content: [{ type: 'tool_use', id: 'toolu_1', name: 'feedback_core', input: { ok: true } }],
+      usage: { input_tokens: 10, output_tokens: 15 },
+      stop_reason: 'tool_use',
+    })
+    const adapter = await getAdapter()
+    const schema = {
+      type: 'object',
+      additionalProperties: false,
+      required: ['ok'],
+      properties: { ok: { type: 'boolean' } },
+    }
+    const result = await adapter.complete({
+      model: 'openrouter-model',
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hi' }],
+      maxTokens: 100,
+      responseFormat: { type: 'json_schema', name: 'feedback_core', strict: true, schema },
+    })
+    expect(result.text).toBe('{"ok":true}')
+    expect(result.truncated).toBe(false)
+    expect(mockAnthropicCreate.mock.calls[0][0]).toMatchObject({
+      tools: [{ name: 'feedback_core', input_schema: schema }],
+      tool_choice: { type: 'tool', name: 'feedback_core' },
+    })
   })
 })

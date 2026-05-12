@@ -70,6 +70,16 @@ function patchFor(type: RecordingType, key: string, sizeBytes: number) {
   return { recordingR2Key: key, recordingSizeBytes: sizeBytes }
 }
 
+function persistedFieldNames(type: RecordingType) {
+  if (type === 'screen-recording') {
+    return { keyField: 'screenRecordingR2Key', sizeField: 'screenRecordingSizeBytes' }
+  }
+  if (type === 'audio-recording') {
+    return { keyField: 'audioRecordingR2Key', sizeField: 'audioRecordingSizeBytes' }
+  }
+  return { keyField: 'recordingR2Key', sizeField: 'recordingSizeBytes' }
+}
+
 function isOwnedRecordingKey(key: string, userId: string): boolean {
   const segments = key.split('/')
   return (
@@ -122,6 +132,20 @@ async function requireOwnedSession(sessionId: string | undefined, userId: string
   }
   await connectDB()
   return InterviewSession.exists({ _id: sessionId, userId })
+}
+
+async function sessionAlreadyReferencesRecording(
+  type: RecordingType,
+  sessionId: string,
+  userId: string,
+  key: string,
+  sizeBytes: number,
+): Promise<boolean> {
+  const { keyField, sizeField } = persistedFieldNames(type)
+  const existing = await InterviewSession.findOne({ _id: sessionId, userId })
+    .select(`${keyField} ${sizeField}`)
+    .lean() as Record<string, unknown> | null
+  return existing?.[keyField] === key && Number(existing?.[sizeField]) === sizeBytes
 }
 
 /**
@@ -213,6 +237,13 @@ export async function POST(req: NextRequest) {
         // upload is permanently unrecoverable (R2 has discarded the parts);
         // the queued client record can stop retrying.
         if (!(await objectExists(key))) {
+          if (await sessionAlreadyReferencesRecording(type, sessionId, userId, key, sizeBytes)) {
+            aiLogger.warn(
+              { ...logContext, status: 'already-persisted' },
+              'Multipart complete retried after session was already patched',
+            )
+            return NextResponse.json({ key })
+          }
           return NextResponse.json({ error: 'Multipart upload no longer recoverable' }, { status: 410 })
         }
       }

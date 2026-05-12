@@ -347,9 +347,8 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
     const res = await POST(makeRequest())
 
     expect(res.status).toBe(200)
-    // LLM ran normally — the pre-flight check is non-intrusive on the
-    // cold path.
-    expect(mockCompletion).toHaveBeenCalledTimes(1)
+    // LLM ran normally — one core call plus best-effort enrichment.
+    expect(mockCompletion).toHaveBeenCalledTimes(2)
   })
 
   it('F-4: pre-flight DB read failure is non-fatal (falls through to normal pipeline)', async () => {
@@ -364,7 +363,7 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
 
     expect(res.status).toBe(200)
     // Pipeline still runs — pre-flight is best-effort, not a gate.
-    expect(mockCompletion).toHaveBeenCalledTimes(1)
+    expect(mockCompletion).toHaveBeenCalledTimes(2)
     // Warn was logged (but not error — non-fatal).
     expect(mockWarn).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: expect.any(String) }),
@@ -396,7 +395,7 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
     )
     // Pipeline continued normally — findOne returned null means no
     // concurrent writer visible to this user, so we generate freshly.
-    expect(mockCompletion).toHaveBeenCalledTimes(1)
+    expect(mockCompletion).toHaveBeenCalledTimes(2)
   })
 
   // ─── F-3: aggregate side-effect summary log ─────────────────────────────

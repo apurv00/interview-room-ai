@@ -370,7 +370,9 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
     const json = await res.json()
 
     // The cache was bypassed — LLM was called.
-    expect(mockCompletion).toHaveBeenCalledTimes(1)
+    expect(mockCompletion).toHaveBeenCalledTimes(2)
+    expect(mockCompletion.mock.calls[0][0].responseFormat.name).toBe('feedback_core')
+    expect(mockCompletion.mock.calls[1][0].responseFormat.name).toBe('feedback_enrichment')
     // Fresh LLM output replaced the degraded payload.
     expect(json.overall_score).toBeGreaterThan(0)
     expect(json.degraded).toBeUndefined()
@@ -454,7 +456,7 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
     const json = await res.json()
 
     // Cache bypassed → LLM was called.
-    expect(mockCompletion).toHaveBeenCalledTimes(1)
+    expect(mockCompletion).toHaveBeenCalledTimes(2)
     // Fresh response, not the string-degraded cached one.
     expect(json.overall_score).toBeGreaterThan(30)
   })
@@ -483,7 +485,7 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
       endReason: 'normal',
     }))
 
-    expect(mockCompletion).toHaveBeenCalledTimes(1)
+    expect(mockCompletion).toHaveBeenCalledTimes(2)
   })
 
   it('still USES cache when degraded is a falsy non-boolean (0, "", null)', async () => {

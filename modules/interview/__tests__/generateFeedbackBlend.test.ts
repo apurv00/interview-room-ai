@@ -194,8 +194,9 @@ describe('POST /api/generate-feedback — G.8 blend integration', () => {
       expect(json.overall_score).toBe(78)
     })
 
-    it('falls back to formula when Claude value missing', async () => {
-      // Mock a Claude response with no overall_score.
+    it('repairs structured feedback when the model value is missing', async () => {
+      // Mock a model response with no overall_score. The route should run
+      // the structured repair path, not trust a partial core object.
       const mockResp = {
         text: JSON.stringify({
           pass_probability: 'Medium',
@@ -209,11 +210,14 @@ describe('POST /api/generate-feedback — G.8 blend integration', () => {
         }),
         model: 't', provider: 't', inputTokens: 1000, outputTokens: 500, usedFallback: false, truncated: false,
       }
-      mockCompletion.mockResolvedValueOnce(mockResp)
+      mockCompletion
+        .mockResolvedValueOnce(mockResp)
+        .mockResolvedValueOnce(claudeFeedback(70, 70))
 
       const res = await POST(makeRequest(evals5at70()))
       const json = await res.json()
 
+      expect(mockCompletion.mock.calls[1][0].responseFormat.name).toBe('feedback_core')
       expect(json.overall_score).toBe(70) // formula
     })
   })

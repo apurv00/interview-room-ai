@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { completion } from '@shared/services/modelRouter'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
-import { GenerateFeedbackSchema, FeedbackLlmSchema } from '@interview/validators/interview'
+import { GenerateFeedbackSchema } from '@interview/validators/interview'
 import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
 import type { FeedbackData, AnswerEvaluation } from '@shared/types'
@@ -22,7 +22,7 @@ import { registerPathwayBadgeWiring } from '@learn/services/pathwayBadgeWiring'
 import { evaluateSession } from '@interview/services/eval/evaluationEngine'
 import { getUserCompetencySummary } from '@learn/services/competencyService'
 import { buildHistorySummary } from '@learn/services/sessionSummaryService'
-import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
+import { DATA_BOUNDARY_RULE } from '@shared/services/promptSecurity'
 import { recordScoreDelta } from '@shared/services/scoreTelemetry'
 import { acquireFeedbackLock, releaseFeedbackLock } from '@shared/services/feedbackLock'
 import { computeBlendedOverallScore, resolveBlendWeights } from '@interview/services/eval/overallScore'
@@ -31,18 +31,198 @@ import { computeCompletionAdjustment } from '@interview/services/eval/completion
 import { compactTranscript } from '@interview/services/eval/transcriptCompactor'
 import { computeEngagementContext } from '@interview/services/eval/engagementContext'
 import { getQuestionCount } from '@interview/config/interviewConfig'
+import {
+  FEEDBACK_CORE_RESPONSE_FORMAT,
+  FEEDBACK_ENRICHMENT_RESPONSE_FORMAT,
+} from '@interview/config/feedbackJsonSchemas'
 import type { Duration } from '@shared/types'
 import { z } from 'zod'
 
 registerPathwayBadgeWiring()
 
 export const dynamic = 'force-dynamic'
-// Feedback generation calls Claude Sonnet with a large prompt (transcript +
-// evaluations + profile context) and requests up to 4000 output tokens.
-// Without this, Vercel Hobby defaults to ~10s which is too short for Sonnet.
+// Feedback generation calls the configured LLM with transcript, evaluations,
+// and profile context. Without this, Vercel's default can be too short.
 export const maxDuration = 60
 
 type GenerateFeedbackBody = z.infer<typeof GenerateFeedbackSchema>
+
+type FeedbackCompletionResult = Awaited<ReturnType<typeof completion>>
+
+class FeedbackCoreParseError extends Error {
+  constructor(
+    message: string,
+    readonly result: FeedbackCompletionResult,
+    readonly rawSnippet: string,
+  ) {
+    super(message)
+    this.name = 'FeedbackCoreParseError'
+  }
+}
+
+function stripJsonFences(raw: string): string {
+  return raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim()
+}
+
+function parseJsonRecord(raw: string): Record<string, unknown> {
+  const parsed = JSON.parse(stripJsonFences(raw || '{}')) as unknown
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Feedback response was not a JSON object')
+  }
+  return parsed as Record<string, unknown>
+}
+
+function requireCoreFeedback(result: FeedbackCompletionResult): FeedbackData {
+  const raw = result.text || '{}'
+  if (result.truncated) {
+    throw new FeedbackCoreParseError('Feedback core response was truncated', result, raw.slice(0, 500))
+  }
+
+  let parsed: Record<string, unknown>
+  try {
+    parsed = parseJsonRecord(raw)
+  } catch (err) {
+    throw new FeedbackCoreParseError(
+      err instanceof Error ? err.message : 'Feedback core JSON parse failed',
+      result,
+      raw.slice(0, 500),
+    )
+  }
+
+  if (
+    typeof parsed.overall_score !== 'number' ||
+    !parsed.dimensions ||
+    typeof parsed.dimensions !== 'object' ||
+    Array.isArray(parsed.dimensions)
+  ) {
+    throw new FeedbackCoreParseError('Feedback core response missing required score/dimensions', result, raw.slice(0, 500))
+  }
+
+  const feedback = parsed as unknown as FeedbackData & {
+    jd_match_score?: number | null
+    jd_requirement_breakdown?: FeedbackData['jd_requirement_breakdown'] | null
+  }
+  if (feedback.jd_match_score == null) {
+    delete feedback.jd_match_score
+  }
+  if (!Array.isArray(feedback.jd_requirement_breakdown)) {
+    delete feedback.jd_requirement_breakdown
+  }
+  feedback.red_flags = Array.isArray(feedback.red_flags) ? feedback.red_flags : []
+  feedback.top_3_improvements = Array.isArray(feedback.top_3_improvements)
+    ? feedback.top_3_improvements
+    : ['Practice more structured answers']
+  delete (feedback as { degraded?: unknown }).degraded
+  delete (feedback as { sideEffectOutcomes?: unknown }).sideEffectOutcomes
+  return feedback
+}
+
+function scoreForEvaluation(e: Record<string, unknown>): number {
+  return Math.round((
+    (Number(e.relevance) || 0) +
+    (Number(e.structure) || 0) +
+    (Number(e.specificity) || 0) +
+    (Number(e.ownership) || 0)
+  ) / 4)
+}
+
+function weakestQuestionContext(evaluations: Array<Record<string, unknown>>, limit = 3): string {
+  return evaluations
+    .filter((e) => e.status !== 'failed')
+    .map((e) => ({ e, score: scoreForEvaluation(e) }))
+    .sort((a, b) => a.score - b.score || Number(a.e.questionIndex ?? 0) - Number(b.e.questionIndex ?? 0))
+    .slice(0, limit)
+    .map(({ e, score }) => {
+      const questionIndex = Number(e.questionIndex ?? 0)
+      const question = String(e.question ?? '').replace(/\s+/g, ' ').slice(0, 320)
+      const answer = String(e.answerSummary || e.answer || '').replace(/\s+/g, ' ').slice(0, 700)
+      return `Q${questionIndex + 1} (avg ${score})\nQuestion: ${question}\nAnswer evidence: ${answer}`
+    })
+    .join('\n\n')
+}
+
+// Default upper bound for the enrichment call. Enrichment is optional —
+// ideal_answers and drill_recommendations are nice-to-have, not required
+// for valid feedback. Awaiting it unbounded risks pushing the route past
+// `maxDuration=60` and losing persist + side effects of an otherwise
+// valid core scoring (Codex P1 on PR #349).
+const ENRICHMENT_TIMEOUT_MS = 8000
+
+async function generateOptionalEnrichment(params: {
+  systemPrompt: string
+  domainLabel: string
+  interviewType: string
+  evaluations: Array<Record<string, unknown>>
+  sessionId?: string
+  timeoutMs?: number
+}): Promise<{
+  ideal_answers: Array<Record<string, unknown>>
+  drill_recommendations: Array<Record<string, unknown>>
+  usage: { inputTokens: number; outputTokens: number }
+}> {
+  const empty = {
+    ideal_answers: [] as Array<Record<string, unknown>>,
+    drill_recommendations: [] as Array<Record<string, unknown>>,
+    usage: { inputTokens: 0, outputTokens: 0 },
+  }
+  const targetContext = weakestQuestionContext(params.evaluations)
+  if (!targetContext) {
+    return empty
+  }
+
+  // Promise.race-with-timeout: the underlying LLM call cannot be aborted
+  // (providers don't accept AbortSignal in this codebase), so a slow
+  // request keeps running as a "ghost" until the lambda terminates. But
+  // the response path stops waiting after `timeoutMs`, which is what
+  // protects the persist + side-effect block below.
+  const timeoutMs = params.timeoutMs ?? ENRICHMENT_TIMEOUT_MS
+  let timeoutHandle: NodeJS.Timeout | undefined
+  try {
+    const result = await Promise.race([
+      completion({
+        taskSlot: 'interview.generate-feedback',
+        system: `${params.systemPrompt}\n\nGenerate only supplemental coaching enrichment. Keep it concise and schema-conformant.`,
+        messages: [{
+          role: 'user',
+          content: `Create supplemental feedback for this ${params.domainLabel} ${params.interviewType} interview.
+
+Weakest-question evidence:
+${targetContext}
+
+Return ideal_answers for these 2-3 questions only and 2-3 drill_recommendations. Each drill must have exactly two practice questions.`,
+        }],
+        maxTokens: 1800,
+        responseFormat: FEEDBACK_ENRICHMENT_RESPONSE_FORMAT,
+      }),
+      new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error(`Feedback enrichment timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        )
+      }),
+    ])
+    if (timeoutHandle) clearTimeout(timeoutHandle)
+    if (result.truncated) {
+      throw new Error('Feedback enrichment response was truncated')
+    }
+    const parsed = parseJsonRecord(result.text || '{}')
+    return {
+      ideal_answers: Array.isArray(parsed.ideal_answers) ? parsed.ideal_answers : [],
+      drill_recommendations: Array.isArray(parsed.drill_recommendations) ? parsed.drill_recommendations : [],
+      usage: {
+        inputTokens: result.inputTokens ?? 0,
+        outputTokens: result.outputTokens ?? 0,
+      },
+    }
+  } catch (err) {
+    if (timeoutHandle) clearTimeout(timeoutHandle)
+    aiLogger.warn(
+      { err, sessionId: params.sessionId, evaluationCount: params.evaluations.length, timeoutMs },
+      'generate-feedback enrichment failed or timed out; continuing with core feedback',
+    )
+    return empty
+  }
+}
 
 // `computeEngagementContext` used to live here as an inline helper.
 // It moved to `modules/interview/services/eval/engagementContext.ts`
@@ -217,10 +397,10 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
     // F-4: concurrent-writer short-circuit. The Redis lock fails open
     // on connection errors (feedbackLock.ts:83-87), which lets both the
     // finishInterview pre-gen + the feedback page's fallback call run
-    // the full Claude + side-effect pipeline in parallel — 2× LLM bill,
+    // the full LLM + side-effect pipeline in parallel — 2× LLM bill,
     // double-fired XP, competency, pathway. Read session.feedback once
     // right before the expensive work. If another caller already landed
-    // a result in the DB, reuse it; skip the duplicate Claude call and
+    // a result in the DB, reuse it; skip the duplicate LLM call and
     // all side effects. The try/catch keeps this check non-fatal: a
     // transient DB blip or a mock with no findOne falls through to
     // the original pipeline (same behavior as pre-F-4).
@@ -305,7 +485,7 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
     )
 
     // Build transcript text. G.13 (always-on post-G.15): always use
-    // the per-question-summary builder so Claude sees coverage of
+    // the per-question-summary builder so the model sees coverage of
     // ALL questions, with full detail for the 2 weakest. Pre-G.15
     // was flag-gated on `compact_transcript`; the head/tail slice
     // fallback is gone for good. When compactor returns empty
@@ -319,6 +499,7 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
     const compacted = compactTranscript({
       transcript,
       evaluations: evaluations as unknown as import('@shared/types').AnswerEvaluation[],
+      budgetChars: evaluations.length >= 10 ? 6000 : undefined,
     })
     const transcriptText: string = compacted.text || fullTranscript
     if (compacted.budgetHit) {
@@ -333,14 +514,8 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
     }
 
     let jdBlock = ''
-    let jdSchemaBlock = ''
     if (config.jobDescription) {
       jdBlock = `\n\n<job_description>\n${config.jobDescription.slice(0, 2000)}\n</job_description>\n\nEvaluate how well the candidate's answers align with the JD requirements.`
-      jdSchemaBlock = `,
-  "jd_match_score": <integer 0-100, overall alignment with JD requirements>,
-  "jd_requirement_breakdown": [
-    { "requirement": "<key requirement from JD>", "matched": <true/false>, "evidence": "<brief evidence from candidate's answers or null>" }
-  ]`
     }
 
     // ── Context assembly — all three blocks are independent, run in parallel ──
@@ -478,54 +653,9 @@ ${perQSummary}${pressureContext}
 ${transcriptText}
 </interview_transcript>
 
-${JSON_OUTPUT_RULE}
-{
-  "overall_score": <integer 0-100>,
-  "pass_probability": <"High"|"Medium"|"Low">,
-  "confidence_level": <"High"|"Medium"|"Low">,
-  "dimensions": {
-    "answer_quality": {
-      "score": <integer 0-100>,
-      "strengths": [<up to 3 specific strength strings>],
-      "weaknesses": [<up to 3 specific weakness strings>]
-    },
-    "communication": {
-      "score": ${commScore},
-      "wpm": ${aggMetrics.wpm},
-      "filler_rate": ${aggMetrics.fillerRate},
-      "pause_score": ${aggMetrics.pauseScore},
-      "rambling_index": ${aggMetrics.ramblingIndex}
-    },
-    "engagement_signals": {
-      "score": <integer 0-100, overall engagement quality>,
-      "engagement_score": <integer 0-100, depth and consistency of answers>,
-      "confidence_trend": <"increasing"|"stable"|"declining">,
-      "energy_consistency": <float 0-1>,
-      "composure_under_pressure": <integer 0-100>
-    }
-  },
-  "red_flags": [<array of red flag strings, may be empty>],
-  "top_3_improvements": [<exactly 3 specific, actionable improvement strings>],
-  "ideal_answers": [
-    {
-      "questionIndex": <0-based question index>,
-      "strongAnswer": "<2-3 sentence outline of what a strong answer would include — not a full script, but the key points and structure>",
-      "keyElements": ["<element 1 they should have included>", "<element 2>", "<element 3>"]
-    }
-  ],
-  "drill_recommendations": [
-    {
-      "skillArea": "<e.g. STAR Structure, Metrics Thinking, Leadership Impact, Technical Depth>",
-      "description": "<one sentence on why this drill matters based on THIS session's gaps>",
-      "practiceQuestions": ["<specific practice question 1>", "<specific practice question 2>"]
-    }
-  ]${jdSchemaBlock}
-}
-
-For ideal_answers: Generate for the 2-3 WEAKEST-scoring questions only (not all questions). Show what good looks like without fabricating the candidate's experience — use generic strong-answer patterns.
-For drill_recommendations: Generate 2-3 drills targeting the candidate's weakest dimensions. Each drill should have 2 specific practice questions they can try in their next session.
-
-Be honest. Use ${commScore} for communication.score exactly as provided.`
+Generate the core feedback object only. Do not include ideal_answers, drill_recommendations, degraded, or sideEffectOutcomes in this response.
+Use ${commScore} for communication.score exactly as provided.
+If no JD was supplied, set jd_match_score to null and jd_requirement_breakdown to an empty array.`
 
     try {
       let result = await completion({
@@ -533,95 +663,115 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
         contextData: { evaluationScores: evaluationData },
+        maxTokens: evaluations.length >= 10 ? 3600 : 4200,
+        responseFormat: FEEDBACK_CORE_RESPONSE_FORMAT,
       })
 
-      // G.3: truncation detection + single retry with expanded budget.
-      // Feedback generation uses maxTokens=6000 by default (see
-      // shared/services/taskSlots.ts) — the largest ceiling in the app
-      // — but long interviews with JD + resume + per-question ideals +
-      // drill recs can still hit it. Truncated output parses as
-      // partial JSON and the downstream `|| 0` silent defaults then
-      // collapse overall_score. Retry once to 8000 tokens before
-      // surfacing the partial-scoring fact to the user via confidence.
-      let truncationRetried = false
-      if (result.truncated) {
-        truncationRetried = true
-        aiLogger.warn(
-          {
-            taskSlot: 'interview.generate-feedback',
-            model: result.model,
-            outputTokens: result.outputTokens,
-            evaluationCount: evaluations.length,
-          },
-          'generate-feedback truncated; retrying with expanded maxTokens',
-        )
-        result = await completion({
-          taskSlot: 'interview.generate-feedback',
-          system: systemPrompt,
-          messages: [{ role: 'user', content: userPrompt }],
-          contextData: { evaluationScores: evaluationData },
-          maxTokens: 8000,
-        })
-      }
-      const feedbackTruncated = result.truncated === true
-
-      const raw = result.text || '{}'
-      const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
       let feedback: FeedbackData
       try {
-        const parsedRaw = JSON.parse(cleaned) as Record<string, unknown>
-        // G.2: Zod-validate the LLM payload. Failure is non-fatal — we
-        // log the drift and continue with the raw parsed object. Downstream
-        // null-checks + deterministic overrides handle missing/variant
-        // fields. This schema is `.passthrough()` so benign field additions
-        // don't reject the whole payload.
-        const parsedLlm = FeedbackLlmSchema.safeParse(parsedRaw)
-        if (!parsedLlm.success) {
-          aiLogger.warn(
-            {
-              issues: parsedLlm.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
-              raw: raw.slice(0, 500),
-            },
-            'generate-feedback: LLM response failed Zod validation — continuing with raw object',
-          )
-        }
-        feedback = parsedRaw as unknown as FeedbackData
-        // Server owns the `degraded` flag. The LLM schema uses
-        // `.passthrough()`, so a hallucinated or prompt-injected
-        // `"degraded": true` in Claude's JSON would otherwise survive
-        // into this object and trip the `!feedback.degraded` gates
-        // below (suppressing persist + side effects on an otherwise
-        // healthy response) and the cache-bypass at :331 (forcing a
-        // regeneration). Strip any incoming value here; only the
-        // server's inner-fallback (route.ts:710) and outer-catch
-        // (route.ts:1220) paths set it legitimately. Codex P2 on #317.
-        delete (feedback as { degraded?: unknown }).degraded
-      } catch {
-        aiLogger.error({ raw: raw.slice(0, 500) }, 'Feedback JSON parse failed')
-        // G.1 telemetry — parse failure path. Capture whatever we know so we
-        // can correlate parse failures with model/prompt size.
-        if (body.sessionId) {
-          recordScoreDelta({
+        feedback = requireCoreFeedback(result)
+      } catch (coreErr) {
+        const cause = coreErr instanceof FeedbackCoreParseError ? coreErr : null
+        aiLogger.warn(
+          {
+            err: coreErr,
             sessionId: body.sessionId,
-            userId: user.id,
-            source: 'generate-feedback',
-            taskSlot: 'interview.generate-feedback',
-            modelUsed: result.model ?? 'unknown',
+            model: result.model,
+            provider: result.provider,
             inputTokens: result.inputTokens,
             outputTokens: result.outputTokens,
             truncated: result.truncated,
             evaluationCount: evaluations.length,
-            recordReason: 'parse-failed',
-          }).catch(() => {})
-        }
-        throw new Error('Feedback JSON parse failed')
-      }
+            raw: cause?.rawSnippet ?? result.text?.slice(0, 500),
+          },
+          'generate-feedback core parse failed; retrying structured repair',
+        )
 
-      // G.1 telemetry — snapshot Claude's raw values BEFORE any of the
+        const repairPrompt = `Repair the previous feedback response into a schema-valid core feedback JSON object.
+
+Rules:
+- Return the JSON object only.
+- Preserve factual feedback from the raw response where possible.
+- Use empty arrays for missing lists.
+- Use null for jd_match_score when no JD alignment score is available.
+- Do not include ideal_answers, drill_recommendations, degraded, or sideEffectOutcomes.
+
+Raw previous response:
+<raw_feedback_response>
+${(cause?.result.text ?? result.text ?? '').slice(0, 12000)}
+</raw_feedback_response>`
+
+        const repairResult = await completion({
+          taskSlot: 'interview.generate-feedback',
+          system: `${DATA_BOUNDARY_RULE}
+
+You repair malformed interview feedback JSON. The output must match the supplied schema exactly.`,
+          messages: [{ role: 'user', content: repairPrompt }],
+          contextData: { evaluationScores: evaluationData },
+          maxTokens: 3600,
+          responseFormat: FEEDBACK_CORE_RESPONSE_FORMAT,
+        })
+
+        try {
+          feedback = requireCoreFeedback(repairResult)
+          result = repairResult
+        } catch (repairErr) {
+          const repairCause = repairErr instanceof FeedbackCoreParseError ? repairErr : null
+          aiLogger.error(
+            {
+              err: repairErr,
+              sessionId: body.sessionId,
+              model: repairResult.model,
+              provider: repairResult.provider,
+              inputTokens: repairResult.inputTokens,
+              outputTokens: repairResult.outputTokens,
+              truncated: repairResult.truncated,
+              evaluationCount: evaluations.length,
+              raw: repairCause?.rawSnippet ?? repairResult.text?.slice(0, 500),
+            },
+            'generate-feedback structured repair failed',
+          )
+          if (body.sessionId) {
+            recordScoreDelta({
+              sessionId: body.sessionId,
+              userId: user.id,
+              source: 'generate-feedback',
+              taskSlot: 'interview.generate-feedback',
+              modelUsed: repairResult.model ?? 'unknown',
+              inputTokens: repairResult.inputTokens,
+              outputTokens: repairResult.outputTokens,
+              truncated: repairResult.truncated,
+              evaluationCount: evaluations.length,
+              recordReason: 'parse-failed',
+            }).catch(() => {})
+          }
+          throw new Error('Feedback JSON parse failed')
+        }
+      }
+      const feedbackTruncated = false
+      const raw = result.text || '{}'
+
+      const enrichment = await generateOptionalEnrichment({
+        systemPrompt,
+        domainLabel,
+        interviewType,
+        evaluations: evaluations as Array<Record<string, unknown>>,
+        sessionId: body.sessionId,
+      })
+      feedback.ideal_answers = enrichment.ideal_answers as FeedbackData['ideal_answers']
+      feedback.drill_recommendations = enrichment.drill_recommendations as FeedbackData['drill_recommendations']
+      // Codex P2 on PR #349: fold enrichment tokens into the
+      // api_call_feedback usage record below so cost/usage analytics
+      // capture both LLM calls. Enrichment returns { inputTokens: 0,
+      // outputTokens: 0 } on the empty/timeout/failure paths, so the
+      // addition is a no-op when enrichment didn't actually run.
+      const enrichmentTokens = enrichment.usage
+
+      // G.1 telemetry — snapshot the model's raw values BEFORE any of the
       // server-side deterministic overrides below. This is the only place
       // we can still see what the LLM actually chose; the rest of the
       // handler replaces these fields. Numbers are coerced safely — if
-      // Claude returned a string or null, `claudeRawOverall` becomes
+      // If the model returned a string or null, `claudeRawOverall` becomes
       // undefined and the delta calc skips.
       const claudeRawOverall = typeof feedback.overall_score === 'number'
         ? feedback.overall_score
@@ -637,9 +787,9 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         claudeRawDimensions.engagement_signals = feedback.dimensions.engagement_signals.score
       }
 
-      // Validate required fields exist (Claude may truncate if hitting max_tokens)
+      // Validate required fields exist (a provider may truncate if hitting max tokens)
       if (feedback.overall_score == null || !feedback.dimensions) {
-        aiLogger.warn({ raw: raw.slice(0, 500) }, 'Incomplete feedback from Claude — applying defaults')
+        aiLogger.warn({ raw: raw.slice(0, 500) }, 'Incomplete feedback from model — applying defaults')
         // G.4: reuse the failed-row-aware helper here too.
         const preQ = computePerQAverage(evaluations as unknown as AnswerEvaluation[])
         // G.5: `??` — a legit 0 (no-answer session) must not be
@@ -671,13 +821,13 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         feedback.top_3_improvements = feedback.top_3_improvements || ['Practice more structured answers']
       }
 
-      // Enforce pre-computed communication score (Claude may deviate from the provided value)
+      // Enforce pre-computed communication score (the model may deviate from the provided value)
       if (feedback.dimensions?.communication) {
         feedback.dimensions.communication.score = commScore
       }
 
       // BUG 2 fix: derive answer_quality from the actual per-question evaluation
-      // scores instead of trusting Claude's free-form summary value, which had
+      // scores instead of trusting the model's free-form summary value, which had
       // no rubric anchors and tended to inflate to 60-75.
       // G.4: delegate to a status-aware helper so status='failed' rows
       // (whose 60/55/55/60 shape is a placeholder, not real scores)
@@ -694,7 +844,7 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       const perQAvg = perQ.average
       const aqDisplayScore = perQ.weighted
 
-      // Override Claude's answer_quality score with the deterministic value.
+      // Override the model's answer_quality score with the deterministic value.
       if (feedback.dimensions?.answer_quality) {
         feedback.dimensions.answer_quality.score = aqDisplayScore
       }
@@ -707,21 +857,21 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       const engScore = feedback.dimensions?.engagement_signals?.score ?? 0
       const formulaOverall = Math.round(aqScore * 0.4 + commScore * 0.3 + engScore * 0.3)
 
-      // G.8: blend Claude's holistic overall_score with the
+      // G.8: blend the model's holistic overall_score with the
       // deterministic formula. Flag-gated so we can ramp the rollout
       // and A/B-compare against G.1 telemetry. When the flag is off,
       // `overall_score` stays exactly what pre-G.8 produced. When on,
-      // Claude's value is factored in (defaulting to 0.6 weight) so
+      // The model's value is factored in (defaulting to 0.6 weight) so
       // scores escape the compressed 55–75 band — but a safety clamp
-      // engages if Claude disagrees wildly (|Δ| > 20) to prevent a
+      // engages if the model disagrees wildly (|Δ| > 20) to prevent a
       // hallucinated extreme from dominating the user-visible number.
-      // G.8 (always-on post-G.15): blend Claude's holistic
+      // G.8 (always-on post-G.15): blend the model's holistic
       // overall_score with the deterministic formula. Pre-G.15 this
       // was flag-gated on `scoring_v2_overall`; the flag definition
       // remains in shared/featureFlags.ts as a dead-reference until
       // G.15c cleanup but the code path is now unconditional. Safety
-      // clamp engages if Claude disagrees wildly (|Δ| > 20) so a
-      // hallucinated Claude value can't dominate the user-visible
+      // clamp engages if the model disagrees wildly (|Δ| > 20) so a
+      // hallucinated model value can't dominate the user-visible
       // number.
       const blend = computeBlendedOverallScore(
         claudeRawOverall,
@@ -785,7 +935,7 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
           )
         }
         // Down-rate confidence when ≥20% of evaluations had integrity
-        // issues. Preserves Claude's 'High' when the sample is mostly
+        // issues. Preserves the model's 'High' when the sample is mostly
         // clean.
         const problemRatio = (truncatedEvalCount + failedEvalCount) / Math.max(evaluations.length, 1)
         if (problemRatio >= 0.2 && feedback.confidence_level !== 'Low') {
@@ -802,7 +952,7 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       // those here and, if any, add a single clarifying red_flag so the
       // user understands WHY structure/specificity on those questions
       // might look lower than expected (note: the route also tells
-      // Claude not to penalize, so typically they don't, but the red
+      // the model not to penalize, so typically it does not, but the red
       // flag is still the right UX signal).
       const timerTruncatedCount = evaluations.filter(
         (e) => Array.isArray(e.flags) && e.flags.includes('truncated_by_timer'),
@@ -853,11 +1003,11 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         )
       }
 
-      // G.1 telemetry — record Claude's raw value vs the deterministic
+      // G.1 telemetry — record the model's raw value vs the deterministic
       // formula value. G.8 NOTE: we record `formulaOverall` here (not
       // `feedback.overall_score`) so the A/B analysis keeps comparing
       // the pre-G.8 "what-the-formula-alone-would-have-returned" value
-      // against Claude's raw value. The actually-shipped blended value
+      // against the model's raw value. The actually-shipped blended value
       // is logged separately via aiLogger above and can be reconstructed
       // from (claudeOverallScore, deterministicOverallScore, blend
       // weights) if needed. Fire-and-forget; never blocks the response.
@@ -905,7 +1055,7 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       const markSkipped = (name: string) => sideEffectOutcomes.push({ name, status: 'skipped' })
 
       // Degraded-guard (2026-04-24 inner-fallback extension): when the
-      // inner fallback at route.ts:685 fires because Claude's JSON was
+      // inner fallback at route.ts:685 fires because the model JSON was
       // incomplete, `feedback.degraded` is set. Matching the outer-catch
       // contract (PR #311 fb69ef6 — "Stop persisting degraded feedback
       // fallback to Mongo"), we skip the write here too. The cache-
@@ -922,8 +1072,13 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         user,
         type: 'api_call_feedback',
         sessionId: body.sessionId,
-        inputTokens: result.inputTokens,
-        outputTokens: result.outputTokens,
+        // Codex P2 on PR #349: sum core/repair + enrichment tokens so
+        // a single api_call_feedback record reflects the full cost of
+        // a successful feedback generation. enrichmentTokens is
+        // {0,0} when enrichment didn't run (no targets, timeout, or
+        // failure), so the addition is a no-op in those paths.
+        inputTokens: result.inputTokens + enrichmentTokens.inputTokens,
+        outputTokens: result.outputTokens + enrichmentTokens.outputTokens,
         modelUsed: result.model,
         durationMs: Date.now() - startTime,
         success: true,
@@ -1020,14 +1175,9 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
           )
         } else {
           markSkipped('pathwayPlan')
-          // Normalize red_flags before mutation. FeedbackLlmSchema
-          // (validators/interview.ts:311) declares `red_flags` as
-          // `.optional()` — Claude can legally omit the field on
-          // partial payloads. The handler upstream intentionally
-          // continues on partial/Zod-failing JSON; calling `.includes`
-          // or `.push` on an undefined array would throw, drop to
-          // the outer catch, and return a degraded fallback. Codex P2
-          // on PR #321.
+          // Normalize red_flags before mutation. Legacy and fallback paths
+          // may omit the field; calling `.includes` or `.push` on an
+          // undefined array would drop to the outer catch.
           if (!Array.isArray(feedback.red_flags)) {
             feedback.red_flags = []
           }
@@ -1046,11 +1196,11 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         // side effects settled` log line covers persist failures too
         // (previously persist had its own inline try/catch that
         // emitted a warn but left the aggregate blind to it — making
-        // "Claude billed twice on user reload because persist failed"
+        // "LLM billed twice on user reload because persist failed"
         // invisible in telemetry). If Mongo is down this still doesn't
         // block the response: the promise's rejection is logged and
         // the client still receives the feedback body for the current
-        // tab; only the reload path pays the second Claude call.
+        // tab; only the reload path pays the second LLM call.
         //
         // MUST run after the pathway_planner preflight above so any
         // red_flag mutation for the flag-off case is captured in the
@@ -1077,8 +1227,8 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         // `finally` would release the Redis lock, and a concurrent
         // reload-poll from the client would hit /api/interviews/
         // [sessionId] → find `session.feedback` empty → re-POST
-        // generate-feedback → cache-miss → full Claude call AGAIN.
-        // Double Claude bill + double downstream side-effects. Codex
+        // generate-feedback → cache-miss → full LLM call AGAIN.
+        // Double LLM bill + double downstream side-effects. Codex
         // P1 on PR #321 round 3.
         const persistPromise = Promise.resolve().then(() =>
           InterviewSession.findByIdAndUpdate(sessionId, {
@@ -1252,7 +1402,7 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
 
         // Await persist specifically before returning the response —
         // the rest of the side-effects stay fire-and-forget (pathwayPlan
-        // in particular makes a Claude call internally and can take
+        // in particular makes an LLM call internally and can take
         // several seconds; blocking the response on it would slow the
         // feedback page noticeably). Mongo round-trip for persist is
         // typically ~50-200ms.
@@ -1264,7 +1414,7 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
         // empty, times out its poll, re-POSTs generate-feedback,
         // hits the cache-miss path (line ~241 `findOne({...})` returns
         // no feedback), acquires the now-available lock, and re-runs
-        // the whole pipeline — full Claude call, duplicate side
+        // the whole pipeline — full LLM call, duplicate side
         // effects (practiceStats/competency/pathway are non-idempotent,
         // so duplicate XP is a real concern). Codex P1 on PR #321
         // round 3.
@@ -1288,7 +1438,7 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
       // paths short-circuit earlier and don't schedule side-effects).
       return NextResponse.json({ ...feedback, sideEffectOutcomes })
     } catch (err) {
-      aiLogger.error({ err }, 'Claude API error in generate-feedback')
+      aiLogger.error({ err }, 'LLM error in generate-feedback')
 
       trackUsage({
         user,
@@ -1358,7 +1508,9 @@ Be honest. Use ${commScore} for communication.score exactly as provided.`
           communication: { score: fallbackCommScore, wpm: aggMetrics.wpm, filler_rate: aggMetrics.fillerRate, pause_score: aggMetrics.pauseScore, rambling_index: aggMetrics.ramblingIndex },
           engagement_signals: { score: fallbackEngScore, engagement_score: fallbackEngScore, confidence_trend: 'stable', energy_consistency: 0.5, composure_under_pressure: Math.round(roughScore * 0.85) },
         },
-        red_flags: hasEvals ? [] : ['No responses recorded'],
+        red_flags: hasEvals
+          ? ['Feedback generation encountered an error — scores are approximate']
+          : ['No responses recorded'],
         top_3_improvements: [
           'Use the STAR framework explicitly for every behavioral question',
           'Include specific metrics and outcomes to strengthen specificity',

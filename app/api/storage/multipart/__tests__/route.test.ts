@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   getServerSession: vi.fn(),
   connectDB: vi.fn(),
   sessionExists: vi.fn(),
+  sessionFindOne: vi.fn(),
   sessionFindOneAndUpdate: vi.fn(),
   isR2Configured: vi.fn(),
   createMultipartUpload: vi.fn(),
@@ -14,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   abortMultipartUpload: vi.fn(),
   objectExists: vi.fn(),
   aiLoggerError: vi.fn(),
+  aiLoggerWarn: vi.fn(),
 }))
 
 vi.mock('next-auth', () => ({
@@ -31,6 +33,7 @@ vi.mock('@shared/db/connection', () => ({
 vi.mock('@shared/db/models/InterviewSession', () => ({
   InterviewSession: {
     exists: mocks.sessionExists,
+    findOne: mocks.sessionFindOne,
     findOneAndUpdate: mocks.sessionFindOneAndUpdate,
   },
 }))
@@ -50,6 +53,7 @@ vi.mock('@shared/storage/r2', () => ({
 vi.mock('@shared/logger', () => ({
   aiLogger: {
     error: mocks.aiLoggerError,
+    warn: mocks.aiLoggerWarn,
   },
 }))
 
@@ -71,6 +75,11 @@ describe('POST /api/storage/multipart', () => {
     })
     mocks.isR2Configured.mockReturnValue(true)
     mocks.sessionExists.mockResolvedValue({ _id: mocks.sessionId })
+    mocks.sessionFindOne.mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        lean: vi.fn().mockResolvedValue(null),
+      }),
+    })
     mocks.createMultipartUpload.mockResolvedValue({
       key: `recordings/${mocks.userId}/${mocks.sessionId}-camera.webm`,
       uploadId: 'upload-123',
@@ -202,6 +211,40 @@ describe('POST /api/storage/multipart', () => {
     expect(res.status).toBe(410)
     expect(mocks.objectExists).toHaveBeenCalledWith(key)
     expect(mocks.sessionFindOneAndUpdate).not.toHaveBeenCalled()
+  })
+
+  it('treats a retried complete as idempotent when the session already has the final recording', async () => {
+    const key = `recordings/${mocks.userId}/${mocks.sessionId}-camera.webm`
+    const noSuchUpload = Object.assign(new Error('NoSuchUpload'), { name: 'NoSuchUpload' })
+    mocks.completeMultipartUpload.mockRejectedValueOnce(noSuchUpload)
+    mocks.objectExists.mockResolvedValueOnce(false)
+    mocks.sessionFindOne.mockReturnValueOnce({
+      select: vi.fn().mockReturnValue({
+        lean: vi.fn().mockResolvedValue({
+          recordingR2Key: key,
+          recordingSizeBytes: 999_000,
+        }),
+      }),
+    })
+
+    const res = await POST(makeRequest({
+      action: 'complete',
+      type: 'recording',
+      sessionId: mocks.sessionId,
+      key,
+      uploadId: 'upload-123',
+      sizeBytes: 999_000,
+      parts: [{ partNumber: 1, etag: '"etag-1"' }],
+    }))
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.key).toBe(key)
+    expect(mocks.sessionFindOneAndUpdate).not.toHaveBeenCalled()
+    expect(mocks.aiLoggerWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'already-persisted', action: 'complete' }),
+      'Multipart complete retried after session was already patched',
+    )
   })
 
   it('does not patch the session when complete fails with a non-recoverable error', async () => {

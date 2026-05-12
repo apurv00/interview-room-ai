@@ -14,7 +14,21 @@ export interface CompletionParams {
   messages: Array<{ role: 'user' | 'assistant'; content: string }>
   maxTokens: number
   temperature?: number
+  responseFormat?: CompletionResponseFormat
 }
+
+export type JsonSchema = Record<string, unknown>
+
+export type CompletionResponseFormat =
+  | {
+      type: 'json_schema'
+      name: string
+      schema: JsonSchema
+      strict?: boolean
+    }
+  | {
+      type: 'json_object'
+    }
 
 export interface CompletionResponse {
   text: string
