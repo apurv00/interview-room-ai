@@ -141,34 +141,67 @@ function weakestQuestionContext(evaluations: Array<Record<string, unknown>>, lim
     .join('\n\n')
 }
 
+// Default upper bound for the enrichment call. Enrichment is optional —
+// ideal_answers and drill_recommendations are nice-to-have, not required
+// for valid feedback. Awaiting it unbounded risks pushing the route past
+// `maxDuration=60` and losing persist + side effects of an otherwise
+// valid core scoring (Codex P1 on PR #349).
+const ENRICHMENT_TIMEOUT_MS = 8000
+
 async function generateOptionalEnrichment(params: {
   systemPrompt: string
   domainLabel: string
   interviewType: string
   evaluations: Array<Record<string, unknown>>
   sessionId?: string
-}) {
+  timeoutMs?: number
+}): Promise<{
+  ideal_answers: Array<Record<string, unknown>>
+  drill_recommendations: Array<Record<string, unknown>>
+  usage: { inputTokens: number; outputTokens: number }
+}> {
+  const empty = {
+    ideal_answers: [] as Array<Record<string, unknown>>,
+    drill_recommendations: [] as Array<Record<string, unknown>>,
+    usage: { inputTokens: 0, outputTokens: 0 },
+  }
   const targetContext = weakestQuestionContext(params.evaluations)
   if (!targetContext) {
-    return { ideal_answers: [], drill_recommendations: [] }
+    return empty
   }
 
+  // Promise.race-with-timeout: the underlying LLM call cannot be aborted
+  // (providers don't accept AbortSignal in this codebase), so a slow
+  // request keeps running as a "ghost" until the lambda terminates. But
+  // the response path stops waiting after `timeoutMs`, which is what
+  // protects the persist + side-effect block below.
+  const timeoutMs = params.timeoutMs ?? ENRICHMENT_TIMEOUT_MS
+  let timeoutHandle: NodeJS.Timeout | undefined
   try {
-    const result = await completion({
-      taskSlot: 'interview.generate-feedback',
-      system: `${params.systemPrompt}\n\nGenerate only supplemental coaching enrichment. Keep it concise and schema-conformant.`,
-      messages: [{
-        role: 'user',
-        content: `Create supplemental feedback for this ${params.domainLabel} ${params.interviewType} interview.
+    const result = await Promise.race([
+      completion({
+        taskSlot: 'interview.generate-feedback',
+        system: `${params.systemPrompt}\n\nGenerate only supplemental coaching enrichment. Keep it concise and schema-conformant.`,
+        messages: [{
+          role: 'user',
+          content: `Create supplemental feedback for this ${params.domainLabel} ${params.interviewType} interview.
 
 Weakest-question evidence:
 ${targetContext}
 
 Return ideal_answers for these 2-3 questions only and 2-3 drill_recommendations. Each drill must have exactly two practice questions.`,
-      }],
-      maxTokens: 1800,
-      responseFormat: FEEDBACK_ENRICHMENT_RESPONSE_FORMAT,
-    })
+        }],
+        maxTokens: 1800,
+        responseFormat: FEEDBACK_ENRICHMENT_RESPONSE_FORMAT,
+      }),
+      new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error(`Feedback enrichment timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        )
+      }),
+    ])
+    if (timeoutHandle) clearTimeout(timeoutHandle)
     if (result.truncated) {
       throw new Error('Feedback enrichment response was truncated')
     }
@@ -176,13 +209,18 @@ Return ideal_answers for these 2-3 questions only and 2-3 drill_recommendations.
     return {
       ideal_answers: Array.isArray(parsed.ideal_answers) ? parsed.ideal_answers : [],
       drill_recommendations: Array.isArray(parsed.drill_recommendations) ? parsed.drill_recommendations : [],
+      usage: {
+        inputTokens: result.inputTokens ?? 0,
+        outputTokens: result.outputTokens ?? 0,
+      },
     }
   } catch (err) {
+    if (timeoutHandle) clearTimeout(timeoutHandle)
     aiLogger.warn(
-      { err, sessionId: params.sessionId, evaluationCount: params.evaluations.length },
-      'generate-feedback enrichment failed; continuing with core feedback',
+      { err, sessionId: params.sessionId, evaluationCount: params.evaluations.length, timeoutMs },
+      'generate-feedback enrichment failed or timed out; continuing with core feedback',
     )
-    return { ideal_answers: [], drill_recommendations: [] }
+    return empty
   }
 }
 
@@ -722,6 +760,12 @@ You repair malformed interview feedback JSON. The output must match the supplied
       })
       feedback.ideal_answers = enrichment.ideal_answers as FeedbackData['ideal_answers']
       feedback.drill_recommendations = enrichment.drill_recommendations as FeedbackData['drill_recommendations']
+      // Codex P2 on PR #349: fold enrichment tokens into the
+      // api_call_feedback usage record below so cost/usage analytics
+      // capture both LLM calls. Enrichment returns { inputTokens: 0,
+      // outputTokens: 0 } on the empty/timeout/failure paths, so the
+      // addition is a no-op when enrichment didn't actually run.
+      const enrichmentTokens = enrichment.usage
 
       // G.1 telemetry — snapshot the model's raw values BEFORE any of the
       // server-side deterministic overrides below. This is the only place
@@ -1028,8 +1072,13 @@ You repair malformed interview feedback JSON. The output must match the supplied
         user,
         type: 'api_call_feedback',
         sessionId: body.sessionId,
-        inputTokens: result.inputTokens,
-        outputTokens: result.outputTokens,
+        // Codex P2 on PR #349: sum core/repair + enrichment tokens so
+        // a single api_call_feedback record reflects the full cost of
+        // a successful feedback generation. enrichmentTokens is
+        // {0,0} when enrichment didn't run (no targets, timeout, or
+        // failure), so the addition is a no-op in those paths.
+        inputTokens: result.inputTokens + enrichmentTokens.inputTokens,
+        outputTokens: result.outputTokens + enrichmentTokens.outputTokens,
         modelUsed: result.model,
         durationMs: Date.now() - startTime,
         success: true,
