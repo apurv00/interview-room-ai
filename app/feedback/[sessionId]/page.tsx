@@ -1307,7 +1307,7 @@ function FeedbackPageInner() {
                     </div>
 
                     {/* Video + Transcript side-by-side */}
-                    <div className={`grid grid-cols-1 lg:grid-cols-[3fr_2fr] ${replayFullscreen ? 'gap-6' : 'gap-4'}`}>
+                    <div className={`grid grid-cols-1 items-start lg:grid-cols-[3fr_2fr] ${replayFullscreen ? 'gap-6' : 'gap-4'}`}>
                       {videoSrc && (
                         <VideoPlayer
                           src={videoSrc}
