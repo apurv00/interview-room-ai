@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { WhisperSegment } from '@shared/types/multimodal'
 import type { TranscriptEntry } from '@shared/types'
 
@@ -9,6 +9,9 @@ const FILLER_WORDS = new Set([
   'like', 'basically', 'literally', 'actually', 'honestly',
   'right', 'okay', 'so', 'well', 'yeah', 'you know',
 ])
+
+const MANUAL_SCROLL_RESUME_MS = 1500
+const PROGRAMMATIC_SCROLL_IGNORE_MS = 120
 
 function isFiller(word: string): boolean {
   return FILLER_WORDS.has(word.toLowerCase().replace(/[.,!?;:]/g, ''))
@@ -19,6 +22,7 @@ interface ReplayTranscriptProps {
   transcript: TranscriptEntry[]
   currentTimeSec: number
   onWordClick: (timestampSec: number) => void
+  className?: string
 }
 
 export default function ReplayTranscript({
@@ -26,18 +30,62 @@ export default function ReplayTranscript({
   transcript,
   currentTimeSec,
   onWordClick,
+  className = 'max-h-[400px]',
 }: ReplayTranscriptProps) {
+  const containerRef = useRef<HTMLDivElement>(null)
   const activeRef = useRef<HTMLSpanElement>(null)
+  const manualScrollResumeAtRef = useRef(0)
+  const programmaticScrollIgnoreUntilRef = useRef(0)
 
-  // Auto-scroll to active word
+  const activeWordKey = useMemo(() => {
+    for (const segment of whisperSegments) {
+      for (let i = 0; i < segment.words.length; i++) {
+        const word = segment.words[i]
+        if (currentTimeSec >= word.start && currentTimeSec < word.end) {
+          return `${segment.id}-${i}`
+        }
+      }
+    }
+    return null
+  }, [currentTimeSec, whisperSegments])
+
+  const handleTranscriptScroll = useCallback(() => {
+    const now = Date.now()
+    if (now < programmaticScrollIgnoreUntilRef.current) return
+    manualScrollResumeAtRef.current = now + MANUAL_SCROLL_RESUME_MS
+  }, [])
+
+  // Keep auto-follow scoped to the transcript pane so playback never steals
+  // page or fullscreen-overlay scrolling from the user.
   useEffect(() => {
-    activeRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  }, [currentTimeSec])
+    if (!activeWordKey) return
+    if (Date.now() < manualScrollResumeAtRef.current) return
+
+    const container = containerRef.current
+    const active = activeRef.current
+    if (!container || !active) return
+
+    const containerRect = container.getBoundingClientRect()
+    const activeRect = active.getBoundingClientRect()
+    const activeCenterOffset =
+      activeRect.top - containerRect.top + activeRect.height / 2
+    const targetScrollTop =
+      container.scrollTop + activeCenterOffset - container.clientHeight / 2
+
+    programmaticScrollIgnoreUntilRef.current =
+      Date.now() + PROGRAMMATIC_SCROLL_IGNORE_MS
+    container.scrollTop = Math.max(0, targetScrollTop)
+  }, [activeWordKey])
 
   // If we have Whisper word-level data, show karaoke-style transcript
   if (whisperSegments.length > 0) {
     return (
-      <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 transcript-scroll">
+      <div
+        ref={containerRef}
+        onScroll={handleTranscriptScroll}
+        data-testid="replay-transcript-scroll"
+        className={`space-y-4 ${className} overflow-y-auto pr-2 transcript-scroll`}
+      >
         {whisperSegments.map((segment) => {
           const isActiveSegment = currentTimeSec >= segment.start &&
             currentTimeSec < (segment.words.length > 0 ? segment.words[segment.words.length - 1].end : segment.end)
@@ -90,7 +138,12 @@ export default function ReplayTranscript({
 
   // Fallback: show existing transcript entries
   return (
-    <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2 transcript-scroll">
+    <div
+      ref={containerRef}
+      onScroll={handleTranscriptScroll}
+      data-testid="replay-transcript-scroll"
+      className={`space-y-3 ${className} overflow-y-auto pr-2 transcript-scroll`}
+    >
       {transcript.map((entry, i) => (
         <div
           key={i}

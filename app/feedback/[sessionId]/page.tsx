@@ -1320,14 +1320,13 @@ function FeedbackPageInner() {
                       {analysis.whisperTranscript && analysis.whisperTranscript.length > 0 && (
                         <div className="space-y-2">
                           <p className="text-caption text-[#71767b] uppercase tracking-wide font-medium">Transcript</p>
-                          <div className={replayFullscreen ? 'max-h-[60vh] overflow-y-auto' : 'max-h-[340px] overflow-y-auto'}>
-                            <ReplayTranscript
-                              whisperSegments={analysis.whisperTranscript}
-                              transcript={data.transcript}
-                              currentTimeSec={analysisVideoTime}
-                              onWordClick={(sec) => analysisSeekRef.current?.(sec)}
-                            />
-                          </div>
+                          <ReplayTranscript
+                            whisperSegments={analysis.whisperTranscript}
+                            transcript={data.transcript}
+                            currentTimeSec={analysisVideoTime}
+                            onWordClick={(sec) => analysisSeekRef.current?.(sec)}
+                            className={replayFullscreen ? 'max-h-[60vh]' : 'max-h-[340px]'}
+                          />
                         </div>
                       )}
                     </div>
