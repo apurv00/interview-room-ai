@@ -648,7 +648,13 @@ describe('resolveModel', () => {
       expect(calls.length).toBeGreaterThanOrEqual(1)
       const coldPayload = calls[0]?.[0] as { source: string; durationMs: number }
       expect(coldPayload.source).toBe('cold-defaults-synthetic')
-      expect(coldPayload.durationMs).toBe(0)
+      // The synchronous cold-defaults branch runs in microseconds, but
+      // `durationMs: Date.now() - startMs` can race the millisecond tick
+      // and report 1 instead of 0 on slower CI runners. The contract this
+      // test guards is "the synchronous path returns essentially instantly,
+      // not after a network round-trip" — anything well under 50 ms proves
+      // we never blocked on Mongo or Redis.
+      expect(coldPayload.durationMs).toBeLessThan(50)
     })
 
     it('L2 hit on first call honors CMS config — does NOT return TASK_SLOT_DEFAULTS (Codex P2 #308)', async () => {

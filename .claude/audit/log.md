@@ -1616,3 +1616,9 @@
 - **Root-cause:** in round 2 I prioritized "don't misclassify as
 - **Tests-added: useInterviewLifecycleEvents.test.tsx —**
 - **Verified-by:** vitest run on the test file — 19/19 passed (was 18 +
+### 2026-04-29 09:08:00 +0000 · `f445157` · Claude
+- **Subject:** fix(test): widen modelRouter cold-defaults durationMs assertion (PR #329 flake)
+- **Files:** 1 changed, 1 test file(s)
+- **Root-cause:** `Date.now()` has 1ms resolution and fences on the integer
+- **Tests-added: No-tests-needed-because: this IS a test fix. The change**
+- **Verified-by:** 10 consecutive `vitest run shared/__tests__/modelRouter.test.ts -t "cold-defaults-synthetic"`
