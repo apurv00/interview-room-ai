@@ -1554,3 +1554,65 @@
 - **Root-cause:** closure-captured `record` was the iteration-start snapshot; uploadMultipartRecord's inner `putUpload(current)` writes had advanced IDB past it. Spreading `...record` overwrote the latest progress with
 - **Tests-added: modules/interview/__tests__/resumableUpload.test.ts — new "preserves intra-attempt progress when a queued retry fails (Codex P1 #339)" case. Pre-seeds IDB with a 2-part record (parts=[]**
 - **Verified-by:** vitest run on resumableUpload.test.ts (4 passed including the new case); npm run test:run (153 files / 2433 tests passed); npm run lint (clean); tsc --noEmit (clean).
+### 2026-04-29 10:18:10 +0000 · `bc7bf8f` · Claude
+- **Subject:** feat(analytics): register interview_{started,completed,abandoned} events
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** phase-2a shipped the always-on AnalyticsProvider + 3
+- **Tests-added: shared/analytics/__tests__/events.test.ts — extended**
+- **Verified-by:** full vitest suite (147 files, 2422 passed) — proves
+
+### 2026-04-29 10:18:32 +0000 · `5b18326` · Claude
+- **Subject:** feat(analytics): useInterviewLifecycleEvents — observe phase from outside hot-path
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** phase-1 instrumented top-of-funnel (CTA + lobby + auth)
+- **Tests-added: modules/interview/__tests__/useInterviewLifecycleEvents.test.tsx**
+- **Verified-by:** vitest run on the new test file — 12/12 passed; full
+
+### 2026-04-29 10:18:53 +0000 · `0f097f6` · Claude
+- **Subject:** feat(analytics): wire useInterviewLifecycleEvents into interview page
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** completes phase-2b by activating the lifecycle hook from
+- **Tests-added: No-tests-needed-because: this commit is pure plumbing**
+- **Verified-by:** full vitest suite (147 files, 2422 passed); npx tsc
+
+### 2026-04-29 10:29:36 +0000 · `442f74b` · Claude
+- **Subject:** fix(analytics): SCORING is the terminal phase, qIdx+1 is the count (Codex P1+P2)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** I gated on `'FEEDBACK'` because the state-machine doc
+- **Tests-added: extended useInterviewLifecycleEvents.test.tsx — renamed**
+- **Verified-by:** vitest run on the test file — 13/13 passed (was 12 + 1
+
+### 2026-04-29 10:36:35 +0000 · `414865a` · Claude
+- **Subject:** fix(analytics): latch abandon ref before sessionId guard (Codex P1 round 2)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** I assumed sessionId was React state because it appears
+- **Tests-added: useInterviewLifecycleEvents.test.tsx — new test "STILL**
+- **Verified-by:** vitest run on the test file — 14/14 passed (was 13 + 1
+
+### 2026-04-29 10:42:23 +0000 · `9ca1ec7` · Claude
+- **Subject:** fix(analytics): gate interview_started on !abandonedFiredRef (Codex P2 round 3)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** I gated interview_started purely on a phase-set check,
+- **Tests-added: useInterviewLifecycleEvents.test.tsx — new test**
+- **Verified-by:** vitest run on the test file — 15/15 passed (was 14 + 1
+
+### 2026-04-29 10:45:02 +0000 · `fd5d18b` · Claude
+- **Subject:** chore(ci): retrigger CI after pre-existing modelRouter test flake
+- **Files:** 0 changed, 0 test file(s)
+- **Root-cause:** empty commit to retrigger GitHub Actions on PR #331 after
+- **No-tests-needed-because: empty commit with no code or content change.**
+- **Verified-by:** `git diff HEAD~1 HEAD` is empty (confirmed before push).
+
+### 2026-04-29 10:57:07 +0000 · `377826b` · Claude
+- **Subject:** fix(analytics): mode-aware question_count + require real interview phase (Codex P1+P2 round 4)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** assumed that any phase outside pre-start was guaranteed
+- **Tests-added: useInterviewLifecycleEvents.test.tsx — three new tests**
+- **Verified-by:** vitest run on the test file — 18/18 passed (was 15 +
+
+### 2026-04-29 11:06:30 +0000 · `cf3331b` · Claude
+- **Subject:** fix(analytics): backfill interview_abandoned across stale-null sessionId (Codex P2 round 5)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** in round 2 I prioritized "don't misclassify as
+- **Tests-added: useInterviewLifecycleEvents.test.tsx —**
+- **Verified-by:** vitest run on the test file — 19/19 passed (was 18 +

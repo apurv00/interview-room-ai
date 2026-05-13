@@ -42,6 +42,12 @@ export const EVENT_NAMES = {
   lobby_check_failed: 'lobby_check_failed',
   interview_join_clicked: 'interview_join_clicked',
 
+  // ── Interview lifecycle (fires from app/interview/page.tsx, NOT
+  //    from useInterview.ts — see useInterviewLifecycleEvents) ────
+  interview_started: 'interview_started',
+  interview_completed: 'interview_completed',
+  interview_abandoned: 'interview_abandoned',
+
   // ── Post-interview / value capture ─────────────────────────────
   resume_downloaded: 'resume_downloaded',
   analysis_completed: 'analysis_completed',
@@ -78,6 +84,51 @@ export interface EventPropsMap {
   lobby_ready: { degraded: boolean }
   lobby_check_failed: { failed: string[] }
   interview_join_clicked: { degraded: boolean }
+
+  /**
+   * Lifecycle: fired exactly once per page mount when phase first
+   * advances past CALIBRATION with a non-null sessionId. The session
+   * is durable from this point forward (a row exists in
+   * InterviewSession), so this is the earliest reliable "the user
+   * actually started a real interview" signal.
+   *
+   * `depth` is the InterviewType slug from CMS (e.g. 'screening',
+   * 'behavioral', 'technical', 'case-study', 'coding',
+   * 'system-design'). Downstream consumers can group by the special
+   * 'coding' / 'system-design' values to split UI flow paths.
+   */
+  interview_started: {
+    session_id: string
+    domain: string
+    depth: string
+    duration_minutes: number
+    experience: string
+  }
+
+  /**
+   * Lifecycle: fired exactly once when phase first reaches FEEDBACK
+   * AND the candidate did NOT click End. (User-ended sessions emit
+   * `interview_abandoned` instead — `useInterviewLifecycleEvents`
+   * suppresses the completed event on those paths.)
+   */
+  interview_completed: {
+    session_id: string
+    question_count: number
+    duration_seconds_elapsed: number
+  }
+
+  /**
+   * Lifecycle: fired synchronously when the candidate clicks End
+   * Interview, BEFORE finishInterview('user_ended') runs. Captures
+   * funnel drop-off attribution: which question and how much time
+   * was left when they bailed.
+   */
+  interview_abandoned: {
+    session_id: string
+    q_index_at_abandon: number
+    time_remaining_at_abandon: number
+    duration_seconds_elapsed: number
+  }
 
   // Post-interview / value capture
   resume_downloaded: { template: string; file_type: 'pdf' }

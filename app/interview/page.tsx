@@ -13,6 +13,7 @@ import CoachingNudge from '@interview/components/interview/CoachingNudge'
 import CoachingTip from '@interview/components/interview/CoachingTip'
 import { useSpeechRecognitionAdapter as useSpeechRecognition } from '@interview/hooks/useSpeechRecognitionAdapter'
 import { useInterview } from '@interview/hooks/useInterview'
+import { useInterviewLifecycleEvents } from '@interview/hooks/useInterviewLifecycleEvents'
 import { useMediaRecorder } from '@interview/hooks/useMediaRecorder'
 import { useCoachingNudge } from '@interview/hooks/useCoachingNudge'
 import { useFacialLandmarks } from '@interview/hooks/useFacialLandmarks'
@@ -350,6 +351,18 @@ export default function InterviewPage() {
   const displayAnswer = isListening ? liveTranscript : liveAnswer
   const phaseColor = PHASE_COLORS[phase] ?? DEFAULT_PHASE_COLOR
   const isProcessing = phase === 'PROCESSING'
+
+  // ── Lifecycle analytics ──
+  // Observes useInterview's exposed phase + sessionId from the outside
+  // so useInterview.ts (HOT PATH) stays untouched. See the hook's
+  // header for single-fire semantics.
+  const { markAbandoned } = useInterviewLifecycleEvents({
+    phase,
+    sessionId: interview.sessionId,
+    config,
+    questionIndex,
+    timeRemaining,
+  })
 
   // ── Live coaching nudges ──
   const isCoachMode = config?.coachMode ?? false
@@ -860,7 +873,14 @@ export default function InterviewPage() {
       <InterviewControls
         // G.7: the End button explicitly tags the session as candidate-ended,
         // distinct from time_up or a normal closing-line exit.
-        onEndInterview={() => finishInterview('user_ended')}
+        onEndInterview={() => {
+          // markAbandoned() must run BEFORE finishInterview so the
+          // abandon-fired ref is set before the SCORING → FEEDBACK
+          // transition tempts the lifecycle observer into firing
+          // interview_completed.
+          markAbandoned()
+          finishInterview('user_ended')
+        }}
         isScoring={phase === 'SCORING'}
         darkMode={isCodingMode || isDesignMode}
       />
