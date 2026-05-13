@@ -93,7 +93,7 @@ export async function generateSessionSummary(input: GenerateSummaryInput): Promi
         sessionDate: new Date(),
         durationMinutes,
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     )
 
     return summary

@@ -286,7 +286,7 @@ export async function generateMonthlyPlan(
         userGoal: (userDoc?.interviewGoal as string) || '',
         targetRole: (userDoc?.targetRole as string) || domain,
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     )
 
     return plan

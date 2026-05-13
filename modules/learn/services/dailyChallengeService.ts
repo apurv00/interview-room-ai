@@ -227,7 +227,7 @@ ${JSON_OUTPUT_RULE}
       {
         $inc: { participantCount: 1 },
       },
-      { new: true },
+      { returnDocument: 'after' },
     )
 
     // Recalculate average

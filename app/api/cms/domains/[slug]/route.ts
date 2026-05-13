@@ -60,7 +60,7 @@ export async function PUT(
     const domain = await InterviewDomain.findOneAndUpdate(
       { slug: params.slug },
       { $set: parsed.data },
-      { new: true, runValidators: true }
+      { returnDocument: 'after', runValidators: true }
     ).lean()
 
     if (!domain) {

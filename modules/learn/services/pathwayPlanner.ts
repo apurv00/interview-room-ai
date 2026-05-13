@@ -112,7 +112,7 @@ export async function generatePathwayPlan(input: GeneratePathwayInput): Promise<
         userGoal: (profile?.interviewGoal as string) || '',
         targetRole: (profile?.targetRole as string) || domain,
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     )
 
     return plan
@@ -497,7 +497,7 @@ export async function generateUniversalPlan(
           generatedAt: new Date(),
         },
       },
-      { upsert: true, new: true },
+      { upsert: true, returnDocument: 'after' },
     )
 
     if (isNew) {

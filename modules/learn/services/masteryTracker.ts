@@ -59,7 +59,7 @@ export async function updateMasteryTracking(
       const mastered = await UserCompetencyState.findOneAndUpdate(
         { ...filter, masteredAt: { $exists: false } },
         { $set: { masteredAt: new Date() } },
-        { new: true },
+        { returnDocument: 'after' },
       )
       crossedThreshold = !!mastered
     }

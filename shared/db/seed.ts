@@ -157,7 +157,7 @@ export async function seedDatabase() {
     await InterviewDomain.findOneAndUpdate(
       { slug: domain.slug },
       { ...domain, isBuiltIn: true, isActive: true },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     )
   }
 
@@ -172,7 +172,7 @@ export async function seedDatabase() {
     await InterviewDepth.findOneAndUpdate(
       { slug: depth.slug },
       { ...depth, isBuiltIn: true, isActive: true },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     )
   }
 
