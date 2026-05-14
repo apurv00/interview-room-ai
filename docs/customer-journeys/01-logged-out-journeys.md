@@ -28,7 +28,6 @@ An anonymous visitor can land on the site from:
 
 Routes that **immediately redirect anonymous users** to `/signin`:
 
-- `/onboarding` → `/signin` (client-side guard)
 - `/settings` → displays nothing; nav menu hides this link
 
 Routes middleware protects at the edge (redirect to `/signin?callbackUrl=...`):
@@ -169,7 +168,7 @@ Every column has multiple links — all public unless noted.
 
 ### 3.2 `/signup`
 
-- **"Continue with Google"** → Google OAuth → new `User` row auto-created with defaults (`role: candidate`, `plan: free`, `onboardingCompleted: false`)
+- **"Continue with Google"** → Google OAuth → new `User` row auto-created with defaults (`role: candidate`, `plan: free`)
 - **"Continue with GitHub"** → same
 - Link: **"Already have an account? Sign in"** → `/signin`
 - Link: **"View pricing"** → `/pricing`
@@ -385,7 +384,6 @@ Anonymous consumption only — there is no way to interact beyond the single CTA
 
 | Starting point | Action | Outcome |
 |----------------|--------|---------|
-| `/onboarding` direct hit | none | `router.replace('/signin')` (client-side) |
 | `/settings` direct hit | none | Client-side empty render; nav link hidden |
 | `/history`, `/dashboard`, `/learn/progress` | none | `SignedOutEmptyState` with auth-gate CTA |
 | `/interview/setup` | **"Enter Interview Room →"** | `/signin?callbackUrl=/lobby` |

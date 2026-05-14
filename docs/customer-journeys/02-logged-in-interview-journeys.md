@@ -1,38 +1,21 @@
 # Logged-In Interview Journeys
 
-Everything an **authenticated** user can do inside the **core interview product**: onboarding, setup, lobby, the live interview state machine, feedback, replay, drill mode, and history.
+Everything an **authenticated** user can do inside the **core interview product**: setup, lobby, the live interview state machine, feedback, replay, drill mode, and history.
 
 Resume, Learn, Settings, and sharing are covered in `03-*.md` and `04-*.md`.
 
 ---
 
-## 1. First-Time Sign-In & Onboarding
+## 1. First-Time Sign-In
 
-### 1.1 Post-auth redirect
+After Google/GitHub OAuth (or credentials) completes:
 
-After Google/GitHub OAuth completes:
+1. NextAuth sets the JWT cookie and upserts the `User` row with `role: 'candidate'`, `plan: 'free'`, and the default monthly interview limit.
+2. The user is redirected to `callbackUrl` (default `/`) — there is **no separate onboarding gate**. Profile capture happens inline on the home page (`AuthenticatedHome`).
+3. On home, the user can upload a resume (AI extracts `currentTitle`, `currentIndustry`, `experienceLevel`, `inferredRole`) or enter a quick profile (job title + skills). Each save PATCHes `/api/onboarding` with the captured fields.
+4. Once a resume + role + experience + duration are set, the **"Enter Interview Room →"** CTA becomes active and routes to `/lobby`.
 
-1. NextAuth sets JWT cookie, `User` row is upserted (`onboardingCompleted: false` for new users).
-2. Redirect to `callbackUrl` (default `/`) — **but** any page that calls `useUser()` or the `OnboardingGate` will detect `onboardingCompleted === false` and redirect to `/onboarding`.
-
-### 1.2 `/onboarding`
-
-Multi-step wizard (`OnboardingWizard.tsx`):
-
-| Step | Fields | Action |
-|------|--------|--------|
-| 1. Name & Role | Name (prefilled), current title, industry | **"Next"** |
-| 2. Experience | Years of experience, level (junior/mid/senior/lead) | **"Next"** / **"Back"** |
-| 3. Goals | Target roles (multi), target companies (chips), timeline | **"Next"** / **"Back"** |
-| 4. Skills | Skill chips, optional LinkedIn URL | **"Finish"** → `POST /api/user/onboarding` → updates `User`, sets `onboardingCompleted: true` → `router.push('/interview/setup')` |
-
-- **"Skip for now"** (top-right): sets `onboardingCompleted: true` with defaults and routes to `/`.
-- Progress bar + step indicator.
-- Closing the tab preserves partial state in React component state only (not persisted).
-
-### 1.3 Welcome banner
-
-On the first visit to `/` post-onboarding, a dismissible "Welcome, {name}!" banner appears with **"Start your first interview"** → `/interview/setup`.
+Editing the profile later is done via `/settings` (the same `/api/onboarding` API, different UI).
 
 ---
 
