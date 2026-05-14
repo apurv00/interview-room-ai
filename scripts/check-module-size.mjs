@@ -17,7 +17,9 @@ import { readdirSync, statSync } from 'fs'
 import { join, extname } from 'path'
 
 const BUDGETS = {
-  'modules/interview': { maxLOC: 30_000, maxFiles: 160 },
+  // interview bumped to 32k on 2026-05-14: replay-upload race fix added the
+  // resumableUpload lease/cap layers. See docs/adr/0003-interview-module-budget-bump.md.
+  'modules/interview': { maxLOC: 32_000, maxFiles: 160 },
   'modules/learn':     { maxLOC: 25_000, maxFiles: 80 },
   'modules/resume':    { maxLOC: 20_000, maxFiles: 70 },
   'modules/b2b':       { maxLOC: 5_000,  maxFiles: 20 },
