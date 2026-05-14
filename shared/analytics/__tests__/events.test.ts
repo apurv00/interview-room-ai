@@ -40,7 +40,6 @@ describe('shared/analytics/events registry', () => {
       plan: 'pro',
       role: 'candidate',
       organizationId: 'org_x',
-      onboardingCompleted: true,
     }
     expect(safe.plan).toBe('pro')
 

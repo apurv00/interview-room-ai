@@ -87,7 +87,6 @@ export function AnalyticsProvider({ children }: { children: React.ReactNode }) {
           | 'platform_admin'
           | undefined,
         organizationId: session.user.organizationId,
-        onboardingCompleted: session.user.onboardingCompleted,
       })
       lastIdentifiedUserIdRef.current = userId
 

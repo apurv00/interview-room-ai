@@ -41,7 +41,6 @@ export interface Resource {
   relevantExperience: string[]    // empty = all
   relevantWeakAreas: string[]
   relevantGoals: string[]
-  isCareerSwitcher?: boolean      // true = boost for career switchers
   /** Optional HowTo step mapping for `HowTo` JSON-LD. Only populated for resources where the framework maps cleanly onto a step-by-step structure (e.g. STAR method). */
   howToSteps?: ResourceHowToStep[]
   content: {
@@ -714,7 +713,6 @@ export const RESOURCES: Resource[] = [
     relevantExperience: [],
     relevantWeakAreas: ['storytelling'],
     relevantGoals: ['career_switch'],
-    isCareerSwitcher: true,
     content: {
       intro: 'Switching careers is increasingly common and often valued by employers for the diverse perspective it brings. The key is framing your transition as a strength, not a liability. Here\'s how to interview with confidence when changing fields.',
       sections: [
@@ -1246,7 +1244,6 @@ export interface UserProfile {
   experienceLevel?: string
   interviewGoal?: string
   weakAreas?: string[]
-  isCareerSwitcher?: boolean
 }
 
 export function calculateRelevance(resource: Resource, profile: UserProfile): number {
@@ -1262,9 +1259,6 @@ export function calculateRelevance(resource: Resource, profile: UserProfile): nu
   }
   if (profile.interviewGoal && resource.relevantGoals.includes(profile.interviewGoal)) {
     score += 3
-  }
-  if (resource.isCareerSwitcher && profile.isCareerSwitcher) {
-    score += 5
   }
   return score
 }

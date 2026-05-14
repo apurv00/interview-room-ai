@@ -45,9 +45,7 @@ Return JSON matching this exact schema:
   "currentTitle": string | null,
   "currentIndustry": "tech"|"finance"|"consulting"|"healthcare"|"retail"|"media"|"government"|"education"|"startup"|"other" | null,
   "experienceLevel": "0-2"|"3-6"|"7+" | null,
-  "inferredRole": "PM"|"SWE"|"Sales"|"MBA" | null,
-  "isCareerSwitcher": boolean,
-  "switchingFrom": string | null
+  "inferredRole": "PM"|"SWE"|"Sales"|"MBA" | null
 }`,
       }],
     })
@@ -68,8 +66,6 @@ Return JSON matching this exact schema:
       currentIndustry: extracted.currentIndustry || null,
       experienceLevel: extracted.experienceLevel || null,
       inferredRole: extracted.inferredRole || null,
-      isCareerSwitcher: extracted.isCareerSwitcher ?? false,
-      switchingFrom: typeof extracted.switchingFrom === 'string' ? extracted.switchingFrom : null,
     })
   } catch (err) {
     aiLogger.error({ err }, 'Resume extraction error')
@@ -78,8 +74,6 @@ Return JSON matching this exact schema:
       currentIndustry: null,
       experienceLevel: null,
       inferredRole: null,
-      isCareerSwitcher: false,
-      switchingFrom: null,
     })
   }
 }

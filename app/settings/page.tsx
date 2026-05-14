@@ -14,8 +14,6 @@ interface OnboardingProfile {
   experienceLevel: string | null
   currentTitle: string | null
   currentIndustry: string | null
-  isCareerSwitcher: boolean
-  switchingFrom: string | null
   targetCompanyType: string | null
   interviewGoal: string | null
   weakAreas: string[]

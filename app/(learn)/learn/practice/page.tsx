@@ -33,7 +33,6 @@ interface PracticeData {
     experienceLevel: string | null
     weakAreas: string[]
     interviewGoal: string | null
-    isCareerSwitcher: boolean
   }
 }
 

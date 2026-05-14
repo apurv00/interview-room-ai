@@ -173,14 +173,12 @@ describe('shared/analytics/track', () => {
       identify('user_123', {
         plan: 'pro',
         role: 'candidate',
-        onboardingCompleted: true,
       })
 
       expect(gtag).toHaveBeenCalledWith('set', { user_id: 'user_123' })
       expect(gtag).toHaveBeenCalledWith('set', 'user_properties', {
         plan: 'pro',
         role: 'candidate',
-        onboardingCompleted: true,
       })
     })
 

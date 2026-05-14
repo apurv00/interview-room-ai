@@ -136,7 +136,6 @@ export const authOptions: NextAuthOptions = {
           token.role = dbUser.role
           token.organizationId = dbUser.organizationId?.toString()
           token.plan = dbUser.plan
-          token.onboardingCompleted = dbUser.onboardingCompleted ?? false
         }
         // Store provider info for debugging
         if (account) {
@@ -161,12 +160,11 @@ export const authOptions: NextAuthOptions = {
       if (trigger === 'update' && token.userId) {
         try {
           await connectDB()
-          const dbUser = await User.findById(token.userId).select('plan role organizationId onboardingCompleted')
+          const dbUser = await User.findById(token.userId).select('plan role organizationId')
           if (dbUser) {
             token.role = dbUser.role
             token.plan = dbUser.plan
             token.organizationId = dbUser.organizationId?.toString()
-            token.onboardingCompleted = dbUser.onboardingCompleted ?? false
             token.lastRefreshedAt = Date.now()
           }
         } catch (err) {
@@ -182,7 +180,6 @@ export const authOptions: NextAuthOptions = {
         session.user.role = (token.role as string) || 'candidate'
         session.user.organizationId = token.organizationId as string | undefined
         session.user.plan = (token.plan as string) || 'free'
-        session.user.onboardingCompleted = token.onboardingCompleted ?? false
       }
       return session
     },
@@ -231,7 +228,6 @@ export const authOptions: NextAuthOptions = {
             role: 'candidate',
             plan: 'free',
             monthlyInterviewLimit: 999999,
-            onboardingCompleted: false,
           })
         }
       } catch (err) {

@@ -164,5 +164,4 @@ export interface UserTraits {
   plan?: 'free' | 'pro' | 'enterprise'
   role?: 'candidate' | 'recruiter' | 'org_admin' | 'platform_admin'
   organizationId?: string
-  onboardingCompleted?: boolean
 }

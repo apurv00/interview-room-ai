@@ -227,13 +227,12 @@ describe('authOptions callbacks', () => {
   describe('jwt callback', () => {
     const jwt = authOptions.callbacks!.jwt!
 
-    it('populates plan/role/onboarding from DB on initial sign-in (user present)', async () => {
+    it('populates plan/role from DB on initial sign-in (user present)', async () => {
       mockUserFindOne.mockResolvedValue({
         _id: { toString: () => 'user-1' },
         role: 'recruiter',
         organizationId: { toString: () => 'org-A' },
         plan: 'pro',
-        onboardingCompleted: true,
       })
 
       const result = await jwt({
@@ -246,7 +245,6 @@ describe('authOptions callbacks', () => {
       expect(result.role).toBe('recruiter')
       expect(result.plan).toBe('pro')
       expect(result.organizationId).toBe('org-A')
-      expect(result.onboardingCompleted).toBe(true)
     })
 
     it('does NOT periodically refresh plan/role from DB between sign-ins (hot-path stall guard)', async () => {
@@ -274,7 +272,6 @@ describe('authOptions callbacks', () => {
         role: 'org_admin',
         plan: 'enterprise',
         organizationId: { toString: () => 'org-B' },
-        onboardingCompleted: true,
       })
 
       const result = await jwt({
@@ -287,7 +284,6 @@ describe('authOptions callbacks', () => {
       expect(result.role).toBe('org_admin')
       expect(result.plan).toBe('enterprise')
       expect(result.organizationId).toBe('org-B')
-      expect(result.onboardingCompleted).toBe(true)
     })
 
     it('keeps stale token values when trigger==="update" DB read fails', async () => {

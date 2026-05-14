@@ -8,11 +8,11 @@ import { OnboardingUpdateSchema } from '@shared/validators/onboarding'
 export const dynamic = 'force-dynamic'
 
 const ONBOARDING_FIELDS = [
-  'targetRole', 'experienceLevel', 'onboardingCompleted',
-  'currentTitle', 'currentIndustry', 'isCareerSwitcher', 'switchingFrom',
+  'targetRole', 'experienceLevel',
+  'currentTitle', 'currentIndustry',
   'targetCompanyType', 'interviewGoal', 'weakAreas',
   'resumeText', 'resumeFileName', 'resumeR2Key',
-  'preferredDomains', 'preferredInterviewTypes', 'targetCompanies',
+  'targetCompanies',
   'linkedinUrl', 'yearsInCurrentRole', 'educationLevel',
   'topSkills', 'communicationStyle', 'feedbackPreference',
   'practiceStats',
@@ -34,11 +34,8 @@ export async function GET() {
   return NextResponse.json({
     targetRole: user.targetRole || null,
     experienceLevel: user.experienceLevel || null,
-    onboardingCompleted: user.onboardingCompleted ?? false,
     currentTitle: user.currentTitle || null,
     currentIndustry: user.currentIndustry || null,
-    isCareerSwitcher: user.isCareerSwitcher ?? false,
-    switchingFrom: user.switchingFrom || null,
     targetCompanyType: user.targetCompanyType || null,
     interviewGoal: user.interviewGoal || null,
     weakAreas: user.weakAreas || [],
@@ -53,8 +50,6 @@ export async function GET() {
       updatedAt: r.updatedAt || r.createdAt || null,
     })),
     // Extended profile
-    preferredDomains: user.preferredDomains || [],
-    preferredInterviewTypes: user.preferredInterviewTypes || [],
     targetCompanies: user.targetCompanies || [],
     linkedinUrl: user.linkedinUrl || null,
     yearsInCurrentRole: user.yearsInCurrentRole ?? null,
@@ -84,11 +79,7 @@ export async function PATCH(req: Request) {
     )
   }
 
-  const { complete, ...fields } = parsed.data
-  const update: Record<string, unknown> = { ...fields }
-  if (complete) {
-    update.onboardingCompleted = true
-  }
+  const update: Record<string, unknown> = { ...parsed.data }
 
   await connectDB()
   const user = await User.findByIdAndUpdate(session.user.id, { $set: update }, { returnDocument: 'after' })

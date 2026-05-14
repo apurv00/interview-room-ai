@@ -134,7 +134,6 @@ export async function POST(
       role: 'candidate',
       plan: 'free',
       monthlyInterviewLimit: 999999,
-      onboardingCompleted: true,
     })
   }
 

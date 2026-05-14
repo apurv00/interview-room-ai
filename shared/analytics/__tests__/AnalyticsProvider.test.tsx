@@ -20,7 +20,6 @@ interface MockSession {
     plan?: string
     role?: string
     organizationId?: string
-    onboardingCompleted?: boolean
     email?: string
     name?: string
     image?: string
@@ -76,7 +75,6 @@ describe('AnalyticsProvider', () => {
         plan: 'pro',
         role: 'candidate',
         organizationId: 'org_x',
-        onboardingCompleted: true,
         // PII fields included on the session — must NOT be forwarded:
         email: 'leaked@example.com',
         name: 'Leak Name',
@@ -93,7 +91,6 @@ describe('AnalyticsProvider', () => {
       plan: 'pro',
       role: 'candidate',
       organizationId: 'org_x',
-      onboardingCompleted: true,
     })
     expect(traits).not.toHaveProperty('email')
     expect(traits).not.toHaveProperty('name')
