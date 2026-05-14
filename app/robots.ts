@@ -26,7 +26,6 @@ export default function robots(): MetadataRoute.Robots {
           '/resume/builder',
           '/resume/wizard',
           '/settings',
-          '/onboarding',
         ],
       },
     ],
