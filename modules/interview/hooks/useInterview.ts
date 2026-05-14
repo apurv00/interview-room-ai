@@ -223,7 +223,7 @@ export function useInterview({
   const questionIndexRef = useRef(0)
   const transcriptRef = useRef<TranscriptEntry[]>([])
   const evaluationsRef = useRef<AnswerEvaluation[]>([])
-  const pendingEvalRef = useRef<Promise<void> | null>(null)
+  const pendingEvaluationsRef = useRef<Set<Promise<void>>>(new Set())
   /**
    * G.12: latched true when the interview timer hits 0 while the
    * candidate is still in LISTENING. The next evaluateAnswer call (for
@@ -934,6 +934,61 @@ export function useInterview({
     return { evaluation, concurrentResult }
   }
 
+  function appendEvaluationAndMaybeCoach(evaluation: AnswerEvaluation, question: string, answer: string): void {
+    evaluationsRef.current = [...evaluationsRef.current, { ...evaluation, question, answer }]
+    performanceSignalRef.current = computePerformanceSignal()
+    const tip = deriveCoachingTip(evaluation, config?.role, config?.interviewType, evaluation.primaryGap)
+    if (tip) {
+      setCoachingTip(tip)
+      const dismissMs = tip.length > 100 ? 6000 : tip.length > 50 ? 4000 : 2000
+      setTimeout(() => setCoachingTip((prev) => (prev === tip ? null : prev)), dismissMs)
+    }
+  }
+
+  function enqueueBackgroundEvaluation(
+    question: string,
+    answer: string,
+    qIdx: number,
+    probeDepth?: number,
+    timeoutMs = EVALUATE_ANSWER_BACKGROUND_TIMEOUT_MS,
+  ): Promise<void> {
+    const task = evaluateAnswer(question, answer, qIdx, probeDepth, timeoutMs)
+      .then((evaluation) => {
+        appendEvaluationAndMaybeCoach(evaluation, question, answer)
+      })
+      .catch((err) => {
+        // evaluateAnswer normally resolves fallback rows itself. This catch
+        // only protects unexpected promise failures so final persistence still
+        // has a row for the answered question.
+        evaluationsRef.current = [
+          ...evaluationsRef.current,
+          {
+            questionIndex: qIdx,
+            question,
+            answer,
+            relevance: 60,
+            structure: 55,
+            specificity: 55,
+            ownership: 60,
+            status: 'failed',
+            failure: {
+              source: 'client',
+              reason: 'client_fetch_error',
+              message: err instanceof Error ? err.message : String(err),
+              taskSlot: 'interview.evaluate-answer',
+            },
+            probeDecision: { shouldProbe: false },
+          },
+        ]
+        performanceSignalRef.current = computePerformanceSignal()
+      })
+      .finally(() => {
+        pendingEvaluationsRef.current.delete(task)
+      })
+    pendingEvaluationsRef.current.add(task)
+    return task
+  }
+
   /**
    * Fast-path evaluation for main (non-probe) answers.
    *
@@ -989,43 +1044,8 @@ export function useInterview({
 
     // Background: full evaluation (non-blocking from here on)
     // Updates evaluationsRef and shows coaching tip overlay when resolved.
-    // Captured in pendingEvalRef so finishInterview can await the last eval.
-    pendingEvalRef.current = evaluateAnswer(
-      question,
-      answer,
-      qIdx,
-      probeDepth,
-      EVALUATE_ANSWER_BACKGROUND_TIMEOUT_MS
-    )
-      .then((evaluation) => {
-        evaluationsRef.current = [...evaluationsRef.current, { ...evaluation, question, answer }]
-        performanceSignalRef.current = computePerformanceSignal()
-        // Coaching tip as non-blocking overlay — appears during TTS or while listening
-        const tip = deriveCoachingTip(evaluation, config?.role, config?.interviewType, evaluation.primaryGap)
-        if (tip) {
-          setCoachingTip(tip)
-          const dismissMs = tip.length > 100 ? 6000 : tip.length > 50 ? 4000 : 2000
-          setTimeout(() => setCoachingTip((prev) => (prev === tip ? null : prev)), dismissMs)
-        }
-      })
-      .catch(() => {
-        // Push a minimal eval so session summary still has an entry
-        evaluationsRef.current = [
-          ...evaluationsRef.current,
-          {
-            questionIndex: qIdx,
-            question,
-            answer,
-            relevance: 60,
-            structure: 55,
-            specificity: 55,
-            ownership: 60,
-            status: 'failed',
-            probeDecision: { shouldProbe: false },
-          },
-        ]
-        performanceSignalRef.current = computePerformanceSignal()
-      })
+    // Captured so finishInterview can await all pending evals, including Q0.
+    enqueueBackgroundEvaluation(question, answer, qIdx, probeDepth)
 
     return { routerResult, prefetchedQ: prefetchedQ as string | null }
   }
@@ -1057,14 +1077,14 @@ export function useInterview({
     setCoachingTip(null)
     transitionTo('SCORING')
 
-    // Wait for any in-flight background evaluation to settle so
-    // evaluationsRef includes the last answer's scores.
-    if (pendingEvalRef.current) {
+    // Wait for in-flight background evaluations to settle so evaluationsRef
+    // includes recently answered questions' scores when they finish in time.
+    if (pendingEvaluationsRef.current.size > 0) {
+      const pending = Array.from(pendingEvaluationsRef.current)
       await Promise.race([
-        pendingEvalRef.current,
+        Promise.allSettled(pending).then(() => undefined),
         new Promise<void>((r) => setTimeout(r, 3000)),
       ])
-      pendingEvalRef.current = null
     }
 
     const data = {
@@ -2218,7 +2238,7 @@ export function useInterview({
         currentThreadRef.current.push(
           { role: 'candidate', text: introAnswer, isProbe: false, probeDepth: 0 },
         )
-        await evaluateAndCoach(intro, introAnswer, 0, undefined, 0)
+        enqueueBackgroundEvaluation(intro, introAnswer, 0, 0)
       }
 
       // Finalize intro thread

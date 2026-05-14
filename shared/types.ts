@@ -150,6 +150,21 @@ export interface TranscriptEntry {
 
 // ─── Evaluation ───────────────────────────────────────────────────────────────
 
+export interface AnswerEvaluationFailure {
+  source: 'client' | 'server'
+  reason:
+    | 'client_timeout'
+    | 'client_http_non_ok'
+    | 'client_fetch_error'
+    | 'server_modelrouter_failed'
+    | 'server_parse_error'
+    | 'server_llm_error'
+  message?: string
+  httpStatus?: number
+  timeoutMs?: number
+  taskSlot?: string
+}
+
 export interface AnswerEvaluation {
   questionIndex: number
   question: string
@@ -180,6 +195,8 @@ export interface AnswerEvaluation {
    * truncated in red_flags) and feedback UI rendering.
    */
   status?: 'ok' | 'truncated' | 'failed'
+  /** Optional machine-readable reason for status='failed' rows. */
+  failure?: AnswerEvaluationFailure
 }
 
 // ─── Interrupt context ──────────────────────────────────────────────────────

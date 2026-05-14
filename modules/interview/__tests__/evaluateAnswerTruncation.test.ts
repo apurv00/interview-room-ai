@@ -57,6 +57,7 @@ vi.mock('@shared/services/usageTracking', () => ({
 
 vi.mock('@shared/db/connection', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
+  connectDBIfNeeded: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('@shared/db/models', () => ({
@@ -177,6 +178,7 @@ describe('POST /api/evaluate-answer — G.3 truncation handling', () => {
 
     expect(mockCompletionStream).toHaveBeenCalledTimes(1)
     expect(json.status).toBe('ok')
+    expect(json.failure).toBeUndefined()
     expect(json.relevance).toBe(75)
   })
 
@@ -235,6 +237,11 @@ describe('POST /api/evaluate-answer — G.3 truncation handling', () => {
 
     expect(mockCompletionStream).toHaveBeenCalledTimes(2)
     expect(json.status).toBe('failed')
+    expect(json.failure).toMatchObject({
+      source: 'server',
+      reason: 'server_parse_error',
+      taskSlot: 'interview.evaluate-answer',
+    })
     expect(mockError).toHaveBeenCalled()
   })
 
@@ -245,9 +252,34 @@ describe('POST /api/evaluate-answer — G.3 truncation handling', () => {
     const json = await res.json()
 
     expect(json.status).toBe('failed')
+    expect(json.failure).toMatchObject({
+      source: 'server',
+      reason: 'server_llm_error',
+      message: 'network down',
+      taskSlot: 'interview.evaluate-answer',
+    })
     // Keeps the legacy placeholder shape so old clients don't crash.
     expect(typeof json.relevance).toBe('number')
     expect(mockError).toHaveBeenCalled()
+  })
+
+  it('classifies ModelRouter all-attempts failures explicitly', async () => {
+    mockCompletionStream.mockRejectedValueOnce(new Error('ModelRouter: all attempts failed for interview.evaluate-answer'))
+
+    const res = await POST(makeRequest())
+    const json = await res.json()
+
+    expect(json.status).toBe('failed')
+    expect(json.failure).toMatchObject({
+      source: 'server',
+      reason: 'server_modelrouter_failed',
+      message: 'ModelRouter: all attempts failed for interview.evaluate-answer',
+      taskSlot: 'interview.evaluate-answer',
+    })
+    expect(json.relevance).toBe(60)
+    expect(json.structure).toBe(55)
+    expect(json.specificity).toBe(55)
+    expect(json.ownership).toBe(60)
   })
 
   it('short-circuits with score=0 when answer is empty — no completion call', async () => {
