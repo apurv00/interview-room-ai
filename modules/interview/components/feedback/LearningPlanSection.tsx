@@ -18,21 +18,12 @@ export default function LearningPlanSection({ feedback, sessionId }: LearningPla
   const pathwayHref = canTrackFeedbackUpdate ? `/learn/pathway?fromFeedback=${encodeURIComponent(sessionId)}` : '/learn/pathway'
   const pathwayCopy = (() => {
     if (pathwayOutcome?.status === 'scheduled') {
-      return {
-        title: 'Your pathway update is queued',
-        description: 'Open Pathway to see the current plan while the latest interview update catches up.',
-      }
+      return { title: 'Your pathway update is queued', description: 'Open Pathway to see the current plan while the latest interview update catches up.' }
     }
     if (pathwayOutcome?.status === 'skipped') {
-      return {
-        title: 'Pathway update unavailable',
-        description: 'This feedback did not create a new pathway update. You can still continue from the current plan.',
-      }
+      return { title: 'Pathway update unavailable', description: 'This feedback did not create a new pathway update. You can still continue from the current plan.' }
     }
-    return {
-      title: 'Continue from your pathway',
-      description: 'Personalized milestones, drills, and your next recommended session — all in one place.',
-    }
+    return { title: 'Continue from your pathway', description: 'Personalized milestones, drills, and your next recommended session — all in one place.' }
   })()
 
   if (!hasDrills && !hasIdealAnswers) return null
@@ -44,7 +35,6 @@ export default function LearningPlanSection({ feedback, sessionId }: LearningPla
         <h3 className="text-heading text-[#0f1419]">Learning &amp; Development</h3>
       </div>
 
-      {/* Pathway callout — promoted to the top so users see it before drills */}
       <Link
         href={pathwayHref}
         className="flex items-center justify-between p-4 rounded-xl bg-gradient-to-r from-brand-500/10 to-blue-500/10 border border-brand-500/20 hover:from-brand-500/15 hover:to-blue-500/15 transition-colors group"
@@ -56,7 +46,6 @@ export default function LearningPlanSection({ feedback, sessionId }: LearningPla
         <ArrowRight className="w-5 h-5 text-brand-500 group-hover:translate-x-0.5 transition-transform shrink-0" />
       </Link>
 
-      {/* Drill Recommendations */}
       {hasDrills && (
         <div className="space-y-3">
           <h4 className="text-subheading text-[#536471]">Targeted Practice Drills</h4>
@@ -88,7 +77,6 @@ export default function LearningPlanSection({ feedback, sessionId }: LearningPla
         </div>
       )}
 
-      {/* Ideal Answer Outlines */}
       {hasIdealAnswers && (
         <div className="space-y-3">
           <h4 className="text-subheading text-[#536471]">Ideal Answer Outlines</h4>

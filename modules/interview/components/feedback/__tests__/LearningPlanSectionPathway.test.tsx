@@ -5,14 +5,7 @@ import type { FeedbackData } from '@shared/types'
 import LearningPlanSection from '../LearningPlanSection'
 
 vi.mock('next/link', () => ({
-  default: ({
-    href,
-    children,
-    ...props
-  }: {
-    href: string
-    children: React.ReactNode
-  }) => (
+  default: ({ href, children, ...props }: { href: string; children: React.ReactNode }) => (
     <a href={href} {...props}>
       {children}
     </a>
@@ -45,13 +38,11 @@ const baseFeedback: FeedbackData = {
   },
   red_flags: [],
   top_3_improvements: ['Add sharper metrics'],
-  drill_recommendations: [
-    {
-      skillArea: 'Specificity',
-      description: 'Practice using concrete evidence.',
-      practiceQuestions: ['Tell me about a time you influenced a roadmap.'],
-    },
-  ],
+  drill_recommendations: [{
+    skillArea: 'Specificity',
+    description: 'Practice using concrete evidence.',
+    practiceQuestions: ['Tell me about a time you influenced a roadmap.'],
+  }],
 }
 
 describe('LearningPlanSection Pathway CTA', () => {
