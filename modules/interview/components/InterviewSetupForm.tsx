@@ -65,10 +65,53 @@ interface SavedResumeMeta {
   updatedAt?: string | null
 }
 
+interface PathwaySetupContext {
+  source: 'pathway'
+  actionId?: string
+  domain?: string
+  interviewType?: string
+  difficulty?: string
+  focus?: string[]
+  returnTo?: string
+}
+
+type PathwayInterviewConfig = InterviewConfig & {
+  pathwayContext?: Omit<PathwaySetupContext, 'domain' | 'interviewType'>
+}
+
+function readPathwaySetupContext(searchParams: ReturnType<typeof useSearchParams>): PathwaySetupContext | null {
+  if (searchParams?.get('source') !== 'pathway') return null
+
+  const clean = (value: string | null, max = 120) => {
+    const trimmed = value?.trim()
+    return trimmed ? trimmed.slice(0, max) : undefined
+  }
+
+  const focus = clean(searchParams.get('focus'), 1000)
+    ?.split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 10)
+
+  return {
+    source: 'pathway',
+    actionId: clean(searchParams.get('actionId')),
+    domain: clean(searchParams.get('domain'), 50),
+    interviewType: clean(searchParams.get('interviewType'), 50),
+    difficulty: clean(searchParams.get('difficulty'), 40),
+    focus,
+    returnTo: clean(searchParams.get('returnTo'), 500),
+  }
+}
+
 export default function InterviewSetupForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const retakeParentId = searchParams?.get('retake') || null
+  const pathwayContext = useMemo(
+    () => readPathwaySetupContext(searchParams),
+    [searchParams],
+  )
   const { data: authSession, status } = useSession()
   const { requireAuth } = useAuthGate()
 
@@ -128,8 +171,9 @@ export default function InterviewSetupForm() {
     const hydrate = (c: InterviewConfig) => {
       if (cancelled) return
       setLastConfig(c)
-      setRole(c.role)
-      if (c.interviewType) setInterviewType(c.interviewType)
+      setRole(pathwayContext?.domain || c.role)
+      if (pathwayContext?.interviewType) setInterviewType(pathwayContext.interviewType)
+      else if (c.interviewType) setInterviewType(c.interviewType)
       setExperience(c.experience)
       setDuration(c.duration)
       if (c.resumeText) {
@@ -155,7 +199,7 @@ export default function InterviewSetupForm() {
     const finalize = (c: InterviewConfig | null) => {
       if (cancelled) return
       if (c) hydrate(c)
-      if (c && isCompleteConfig(c)) setShowRepeatModal(true)
+      if (!pathwayContext && c && isCompleteConfig(c)) setShowRepeatModal(true)
       setRepeatCheckDone(true)
     }
 
@@ -211,7 +255,14 @@ export default function InterviewSetupForm() {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, authSession?.user?.id, retakeParentId])
+  }, [status, authSession?.user?.id, retakeParentId, pathwayContext])
+
+  // ─── Pathway action hand-off ───────────────────────────────────────────
+  useEffect(() => {
+    if (!pathwayContext) return
+    if (pathwayContext.domain) setRole(pathwayContext.domain)
+    if (pathwayContext.interviewType) setInterviewType(pathwayContext.interviewType)
+  }, [pathwayContext])
 
   // ─── Pre-fill from onboarding profile ──────────────────────────────────
   useEffect(() => {
@@ -295,17 +346,19 @@ export default function InterviewSetupForm() {
     setQuickProfileDone(true)
     setShowNoResumeOptions(false)
     if (!experience) setExperience(exp as ExperienceLevel)
-    fetch('/api/onboarding', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        currentTitle: quickTitle.trim(),
-        experienceLevel: exp,
-        topSkills: quickSkills.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 10),
-        complete: true,
-      }),
-    }).catch(() => {})
-  }, [quickTitle, quickSkills, experience])
+    if (status === 'authenticated') {
+      fetch('/api/onboarding', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          currentTitle: quickTitle.trim(),
+          experienceLevel: exp,
+          topSkills: quickSkills.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 10),
+          complete: true,
+        }),
+      }).catch(() => {})
+    }
+  }, [quickTitle, quickSkills, experience, status])
 
   const handleJdPaste = useCallback(() => {
     if (!jdPasteText.trim()) return
@@ -416,7 +469,7 @@ export default function InterviewSetupForm() {
     if (!ready) return
     if (status === 'loading') return
     const effectiveCompany = targetCompany || jdCompany.trim()
-    const config: InterviewConfig = {
+    const config: PathwayInterviewConfig = {
       role: role!,
       ...(interviewType && { interviewType }),
       experience: experience!,
@@ -425,6 +478,15 @@ export default function InterviewSetupForm() {
       ...(resumeText && { resumeText, resumeFileName }),
       ...(effectiveCompany && { targetCompany: effectiveCompany }),
       ...(targetIndustry && { targetIndustry }),
+      ...(pathwayContext && {
+        pathwayContext: {
+          source: 'pathway',
+          ...(pathwayContext.actionId && { actionId: pathwayContext.actionId }),
+          ...(pathwayContext.focus?.length && { focus: pathwayContext.focus }),
+          ...(pathwayContext.difficulty && { difficulty: pathwayContext.difficulty }),
+          ...(pathwayContext.returnTo && { returnTo: pathwayContext.returnTo }),
+        },
+      }),
     }
     // Always persist the config so it survives an OAuth round-trip.
     // Stamp _ownerId so the interview page can reject configs from other users.
@@ -461,6 +523,7 @@ export default function InterviewSetupForm() {
     resumeFileName,
     targetCompany,
     targetIndustry,
+    pathwayContext,
     authSession?.user?.id,
     router,
     requireAuth,

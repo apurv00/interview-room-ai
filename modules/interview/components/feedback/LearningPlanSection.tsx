@@ -6,12 +6,25 @@ import type { FeedbackData } from '@shared/types'
 
 interface LearningPlanSectionProps {
   feedback: FeedbackData
+  sessionId?: string
 }
 
-export default function LearningPlanSection({ feedback }: LearningPlanSectionProps) {
+export default function LearningPlanSection({ feedback, sessionId }: LearningPlanSectionProps) {
   const { drill_recommendations, ideal_answers } = feedback
   const hasDrills = drill_recommendations && drill_recommendations.length > 0
   const hasIdealAnswers = ideal_answers && ideal_answers.length > 0
+  const pathwayOutcome = feedback.sideEffectOutcomes?.find((outcome) => outcome.name === 'pathwayPlan')
+  const canTrackFeedbackUpdate = !!sessionId && sessionId !== 'local'
+  const pathwayHref = canTrackFeedbackUpdate ? `/learn/pathway?fromFeedback=${encodeURIComponent(sessionId)}` : '/learn/pathway'
+  const pathwayCopy = (() => {
+    if (pathwayOutcome?.status === 'scheduled') {
+      return { title: 'Your pathway update is queued', description: 'Open Pathway to see the current plan while the latest interview update catches up.' }
+    }
+    if (pathwayOutcome?.status === 'skipped') {
+      return { title: 'Pathway update unavailable', description: 'This feedback did not create a new pathway update. You can still continue from the current plan.' }
+    }
+    return { title: 'Continue from your pathway', description: 'Personalized milestones, drills, and your next recommended session — all in one place.' }
+  })()
 
   if (!hasDrills && !hasIdealAnswers) return null
 
@@ -22,19 +35,17 @@ export default function LearningPlanSection({ feedback }: LearningPlanSectionPro
         <h3 className="text-heading text-[#0f1419]">Learning &amp; Development</h3>
       </div>
 
-      {/* Pathway callout — promoted to the top so users see it before drills */}
       <Link
-        href="/learn/pathway"
+        href={pathwayHref}
         className="flex items-center justify-between p-4 rounded-xl bg-gradient-to-r from-brand-500/10 to-blue-500/10 border border-brand-500/20 hover:from-brand-500/15 hover:to-blue-500/15 transition-colors group"
       >
         <div className="min-w-0">
-          <p className="text-sm font-semibold text-[#0f1419]">Your pathway was just updated</p>
-          <p className="text-caption text-[#536471] mt-0.5">Personalized milestones, drills, and your next recommended session — all in one place.</p>
+          <p className="text-sm font-semibold text-[#0f1419]">{pathwayCopy.title}</p>
+          <p className="text-caption text-[#536471] mt-0.5">{pathwayCopy.description}</p>
         </div>
         <ArrowRight className="w-5 h-5 text-brand-500 group-hover:translate-x-0.5 transition-transform shrink-0" />
       </Link>
 
-      {/* Drill Recommendations */}
       {hasDrills && (
         <div className="space-y-3">
           <h4 className="text-subheading text-[#536471]">Targeted Practice Drills</h4>
@@ -66,7 +77,6 @@ export default function LearningPlanSection({ feedback }: LearningPlanSectionPro
         </div>
       )}
 
-      {/* Ideal Answer Outlines */}
       {hasIdealAnswers && (
         <div className="space-y-3">
           <h4 className="text-subheading text-[#536471]">Ideal Answer Outlines</h4>

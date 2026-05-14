@@ -64,6 +64,9 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const gaId = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID
+  const enableSpeedInsights =
+    process.env.VERCEL === '1' || process.env.NEXT_PUBLIC_ENABLE_SPEED_INSIGHTS === 'true'
+
   return (
     <html lang="en">
       <body className="min-h-screen bg-page text-[var(--foreground)] antialiased">
@@ -116,7 +119,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </AuthGateProvider>
           </AnalyticsProvider>
         </SessionProvider>
-        <SpeedInsights />
+        {enableSpeedInsights && <SpeedInsights />}
         {gaId && <GoogleAnalyticsScripts gaId={gaId} />}
       </body>
     </html>

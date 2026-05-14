@@ -127,6 +127,14 @@ function DrillPageInner() {
     )
   }
 
+  const emptySetupParams = new URLSearchParams({
+    source: 'pathway',
+    actionId: filter ? `drill-${filter}` : 'drill-empty',
+    returnTo: '/learn/pathway',
+  })
+  if (filter) emptySetupParams.set('focus', filter)
+  const emptySetupHref = `/interview/setup?${emptySetupParams.toString()}`
+
   return (
     <main className="max-w-4xl mx-auto px-4 py-8 space-y-6">
       <div>
@@ -308,10 +316,16 @@ function DrillPageInner() {
                     : 'No weak answers found yet. Complete more interviews to get drill questions!'}
                 </p>
                 <a
-                  href="/lobby"
+                  href="/learn/pathway"
                   className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors"
                 >
-                  Start an Interview
+                  View Pathway
+                </a>
+                <a
+                  href={emptySetupHref}
+                  className="ml-3 inline-flex items-center gap-2 px-4 py-2 bg-white hover:bg-blue-50 border border-blue-500/40 text-blue-600 text-sm font-medium rounded-lg transition-colors"
+                >
+                  Start Interview
                 </a>
               </div>
             ) : (

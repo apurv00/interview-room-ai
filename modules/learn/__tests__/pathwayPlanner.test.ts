@@ -13,13 +13,17 @@ vi.mock('@shared/logger', () => ({
 }))
 
 const mockFindOneAndUpdate = vi.fn()
+const mockFindOneQuery = vi.fn()
 const mockFindOne = vi.fn()
 const mockUpdateOne = vi.fn()
 
 vi.mock('@shared/db/models', () => ({
   PathwayPlan: {
     findOneAndUpdate: (...args: unknown[]) => mockFindOneAndUpdate(...args),
-    findOne: () => ({ sort: () => ({ lean: () => mockFindOne() }) }),
+    findOne: (...args: unknown[]) => {
+      mockFindOneQuery(...args)
+      return { sort: () => ({ lean: () => mockFindOne() }) }
+    },
     updateOne: (...args: unknown[]) => mockUpdateOne(...args),
   },
   User: {
@@ -55,6 +59,25 @@ vi.mock('@learn/services/sessionSummaryService', () => ({
   ]),
 }))
 
+vi.mock('@shared/services/modelRouter', () => ({
+  completion: vi.fn().mockResolvedValue({
+    text: JSON.stringify({
+      suggestedTasks: [{
+        type: 'drill',
+        title: 'Metrics Practice',
+        description: 'Practice with metrics',
+        targetCompetency: 'specificity',
+        difficulty: 'medium',
+        estimatedMinutes: 15,
+      }],
+    }),
+  }),
+}))
+
+vi.mock('@shared/services/promptSecurity', () => ({
+  JSON_OUTPUT_RULE: '',
+}))
+
 vi.mock('@interview/services/evaluationEngine', () => ({
   evaluateSession: vi.fn().mockResolvedValue({
     dimensionAverages: { relevance: 75, structure: 80, specificity: 45, ownership: 70 },
@@ -86,7 +109,7 @@ vi.mock('@anthropic-ai/sdk', () => ({
   })),
 }))
 
-import { getCurrentPathway, markTaskComplete } from '@learn/services/pathwayPlanner'
+import { generatePathwayPlan, getCurrentPathway, markTaskComplete } from '@learn/services/pathwayPlanner'
 import { isFeatureEnabled } from '@shared/featureFlags'
 
 const TEST_USER_ID = '507f1f77bcf86cd799439011' // valid ObjectId
@@ -94,6 +117,8 @@ const TEST_USER_ID = '507f1f77bcf86cd799439011' // valid ObjectId
 describe('pathwayPlanner', () => {
   beforeEach(() => {
     mockFindOneAndUpdate.mockClear()
+    mockFindOneAndUpdate.mockResolvedValue({ _id: 'plan-1', planType: 'standard' })
+    mockFindOneQuery.mockClear()
     mockFindOne.mockClear()
     mockFindOne.mockResolvedValue(null)
     mockUpdateOne.mockClear()
@@ -119,6 +144,9 @@ describe('pathwayPlanner', () => {
 
       const result = await getCurrentPathway(TEST_USER_ID)
       expect(result).toEqual(mockPathway)
+      expect(mockFindOneQuery).toHaveBeenCalledWith(expect.objectContaining({
+        planType: 'standard',
+      }))
     })
 
     it('returns null when no pathway exists', async () => {
@@ -133,12 +161,54 @@ describe('pathwayPlanner', () => {
       mockUpdateOne.mockResolvedValue({ modifiedCount: 1 })
       const result = await markTaskComplete(TEST_USER_ID, 'task_1')
       expect(result).toBe(true)
+      expect(mockUpdateOne.mock.calls[0][0]).toEqual(expect.objectContaining({
+        planType: 'standard',
+        'practiceTasks.taskId': 'task_1',
+      }))
     })
 
     it('returns false when task is not found', async () => {
       mockUpdateOne.mockResolvedValue({ modifiedCount: 0 })
       const result = await markTaskComplete(TEST_USER_ID, 'nonexistent')
       expect(result).toBe(false)
+    })
+  })
+
+  describe('generatePathwayPlan', () => {
+    it('upserts only the standard plan and never overwrites universal plans', async () => {
+      await generatePathwayPlan({
+        userId: TEST_USER_ID,
+        sessionId: '507f1f77bcf86cd799439012',
+        domain: 'pm',
+        interviewType: 'behavioral',
+        experience: '3-6',
+        feedback: {
+          overall_score: 62,
+          pass_probability: 'Medium',
+          confidence_level: 'Medium',
+          dimensions: {
+            answer_quality: { score: 60, strengths: ['clear'], weaknesses: ['specificity'] },
+            communication: { score: 60, wpm: 120, filler_rate: 0.04, pause_score: 60, rambling_index: 0.2 },
+            engagement_signals: {
+              score: 60,
+              engagement_score: 60,
+              confidence_trend: 'stable',
+              energy_consistency: 0.7,
+              composure_under_pressure: 60,
+            },
+          },
+          red_flags: [],
+          top_3_improvements: ['Add metrics'],
+        },
+      })
+
+      expect(mockFindOneAndUpdate).toHaveBeenCalled()
+      expect(mockFindOneAndUpdate.mock.calls[0][0]).toEqual(expect.objectContaining({
+        planType: 'standard',
+      }))
+      expect(mockFindOneAndUpdate.mock.calls[0][1]).toEqual(expect.objectContaining({
+        planType: 'standard',
+      }))
     })
   })
 })
