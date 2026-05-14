@@ -15,6 +15,18 @@ interface BannerPathway {
   practiceTasks?: Array<{ title: string; completed: boolean }>
 }
 
+interface BannerAction {
+  title: string
+  ctaLabel: string
+  href?: string
+}
+
+interface BannerResponse {
+  state?: 'empty' | 'active' | 'completed' | 'pending' | 'abandoned' | 'returning'
+  nextAction?: BannerAction
+  pathway?: BannerPathway | null
+}
+
 const READINESS_LABELS: Record<string, string> = {
   not_ready: 'Foundation',
   developing: 'Developing',
@@ -25,15 +37,14 @@ const READINESS_LABELS: Record<string, string> = {
 
 /**
  * Authed-only banner shown above the marketing homepage hero.
- * Silently renders nothing for:
- *  - unauthenticated visitors
- *  - users with no pathway yet (zero completed sessions)
- * This keeps the marketing page pristine for first-time visitors while
- * giving returning users a one-click hook back into their habit loop.
+ * Silently renders nothing for unauthenticated visitors. Authenticated users
+ * see either their next Pathway action or the baseline interview activation.
  */
 export default function PathwayStatusBanner() {
   const { status } = useSession()
   const [pathway, setPathway] = useState<BannerPathway | null>(null)
+  const [pathwayState, setPathwayState] = useState<BannerResponse['state']>()
+  const [nextAction, setNextAction] = useState<BannerAction | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -44,16 +55,51 @@ export default function PathwayStatusBanner() {
     fetch('/api/learn/pathway')
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        setPathway(data?.pathway || null)
+        const response = data as BannerResponse | null
+        setPathway(response?.pathway || null)
+        setPathwayState(response?.state)
+        setNextAction(response?.nextAction || null)
         setLoading(false)
       })
       .catch(() => setLoading(false))
   }, [status])
 
-  if (status !== 'authenticated' || loading || !pathway) return null
+  if (status !== 'authenticated' || loading) return null
+
+  if (pathwayState === 'empty' || !pathway) {
+    return (
+      <div className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
+          <Link
+            href={nextAction?.href || '/learn/pathway'}
+            className="flex items-center justify-between gap-4 group"
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="shrink-0 w-9 h-9 rounded-full bg-white/15 flex items-center justify-center">
+                <Target className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-[11px] uppercase tracking-wide text-white/70 font-semibold">
+                  Start your pathway
+                </div>
+                <p className="text-sm font-medium truncate">
+                  Run a baseline interview to generate your first plan.
+                </p>
+              </div>
+            </div>
+            <div className="shrink-0 flex items-center gap-1 text-sm font-semibold group-hover:translate-x-0.5 transition-transform">
+              <span className="hidden sm:inline">{nextAction?.ctaLabel || 'Start baseline'}</span>
+              <ArrowRight className="w-4 h-4" />
+            </div>
+          </Link>
+        </div>
+      </div>
+    )
+  }
 
   const readinessLabel = READINESS_LABELS[pathway.readinessLevel] || 'In progress'
   const nextTask =
+    nextAction?.title ||
     pathway.practiceTasks?.find((t) => !t.completed)?.title ||
     pathway.nextSessionRecommendation?.reason ||
     'Continue your pathway'

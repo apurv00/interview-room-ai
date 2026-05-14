@@ -988,6 +988,24 @@ function FeedbackPageInner() {
     ...(hasAnalysisSource || analysis ? [{ key: 'analysis' as const, label: 'AI Analysis' }] : []),
   ]
 
+  const pathwayOutcome = feedback.sideEffectOutcomes?.find((outcome) => outcome.name === 'pathwayPlan')
+  const canTrackPathwayUpdate = sessionId !== 'local'
+  const pathwayHref = canTrackPathwayUpdate
+    ? `/learn/pathway?fromFeedback=${encodeURIComponent(sessionId)}`
+    : '/learn/pathway'
+  const pathwayCtaLabel =
+    pathwayOutcome?.status === 'skipped'
+      ? 'View current pathway'
+      : pathwayOutcome?.status === 'scheduled'
+        ? 'View pending pathway'
+        : 'View pathway'
+  const pathwayCtaDescription =
+    pathwayOutcome?.status === 'skipped'
+      ? 'Retake this mock to see your improvement, or continue from your current pathway.'
+      : pathwayOutcome?.status === 'scheduled'
+        ? 'Retake this mock to see your improvement, or open Pathway while the update catches up.'
+        : 'Retake this mock to see your improvement, or head to your pathway.'
+
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
@@ -1421,7 +1439,7 @@ function FeedbackPageInner() {
 
                 {/* ── Learning & Development ──────────────────────────────── */}
                 {feedback && (
-                  <LearningPlanSection feedback={feedback} />
+                  <LearningPlanSection feedback={feedback} sessionId={sessionId} />
                 )}
               </>
             )}
@@ -1434,7 +1452,7 @@ function FeedbackPageInner() {
         <section className="surface-card-bordered p-5 sm:p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-fade-in">
           <div>
             <p className="text-subheading text-[#0f1419]">Keep the momentum going</p>
-            <p className="text-body text-[#71767b]">Retake this mock to see your improvement, or head to your pathway.</p>
+            <p className="text-body text-[#71767b]">{pathwayCtaDescription}</p>
           </div>
           <div className="flex gap-3 flex-wrap shrink-0 w-full sm:w-auto">
             <button
@@ -1474,10 +1492,10 @@ function FeedbackPageInner() {
             </button>
             <button
               type="button"
-              onClick={() => router.push('/learn/pathway')}
+              onClick={() => router.push(pathwayHref)}
               className="px-5 py-2.5 bg-white hover:bg-blue-50 border border-blue-500/40 text-blue-600 rounded-[var(--radius-md)] font-semibold transition text-sm"
             >
-              View pathway
+              {pathwayCtaLabel}
             </button>
             <button
               type="button"

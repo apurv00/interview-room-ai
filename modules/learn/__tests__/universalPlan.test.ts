@@ -128,6 +128,35 @@ describe('universalPlan', () => {
 
       expect(mockEmit).not.toHaveBeenCalled()
     })
+
+    it('creates fallback support lessons when competency signals are empty', async () => {
+      mockCompetencySummary.mockResolvedValueOnce({
+        weakAreas: [],
+        strongAreas: [],
+        overallReadiness: 0,
+      })
+      mockFindOne.mockReturnValue(null)
+      mockFindOneAndUpdate.mockImplementation((_filter: unknown, update: { $set: { lessons: unknown[] } }) => Promise.resolve({
+        _id: 'plan-1',
+        planType: 'universal',
+        currentPhase: 'assessment',
+        lessons: update.$set.lessons,
+      }))
+
+      const plan = await generateUniversalPlan({
+        userId: '507f1f77bcf86cd799439011',
+        domain: 'pm',
+        depth: 'behavioral',
+      })
+
+      expect(plan!.lessons).toHaveLength(3)
+      expect(plan!.lessons?.map((lesson) => lesson.competency)).toEqual([
+        'relevance',
+        'structure',
+        'specificity',
+      ])
+      expect(mockFindOneAndUpdate.mock.calls[0][1].$set.planType).toBe('universal')
+    })
   })
 
   describe('advanceUniversalPlan', () => {

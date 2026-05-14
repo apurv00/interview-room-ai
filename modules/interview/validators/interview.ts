@@ -12,6 +12,13 @@ export const InterviewConfigSchema = z.object({
   targetCompany: z.string().max(200).optional(),
   targetIndustry: z.string().max(200).optional(),
   privacyMode: z.boolean().optional(),
+  pathwayContext: z.object({
+    source: z.literal('pathway'),
+    actionId: z.string().max(120).optional(),
+    focus: z.array(z.string().max(120)).max(10).optional(),
+    difficulty: z.string().max(40).optional(),
+    returnTo: z.string().max(500).optional(),
+  }).optional(),
 })
 
 export const TranscriptEntrySchema = z.object({

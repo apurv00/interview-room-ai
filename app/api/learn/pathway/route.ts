@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { getCurrentPathway, markTaskComplete } from '@learn/services/pathwayPlanner'
 import { getUserCompetencySummary, getUserWeaknesses } from '@learn/services/competencyService'
+import { buildPathwayViewModel } from '@learn/services/pathwayViewModel'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -11,13 +12,22 @@ export const GET = composeApiRoute({
   rateLimit: { windowMs: 60_000, maxRequests: 20, keyPrefix: 'rl:pathway' },
 
   async handler(req, { user }) {
+    const { searchParams } = new URL(req.url)
+    const fromFeedback = searchParams.get('fromFeedback')
     const [pathway, competencySummary, weaknesses] = await Promise.all([
       getCurrentPathway(user.id),
       getUserCompetencySummary(user.id),
       getUserWeaknesses(user.id, 10),
     ])
+    const viewModel = buildPathwayViewModel({
+      pathway,
+      competencySummary,
+      weaknesses,
+      fromFeedback,
+    })
 
     return NextResponse.json({
+      ...viewModel,
       pathway,
       competencySummary,
       weaknesses,

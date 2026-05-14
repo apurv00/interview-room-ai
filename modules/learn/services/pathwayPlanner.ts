@@ -20,6 +20,10 @@ import {
 import { emitPathwayEvent } from './pathwayEvents'
 import { buildLessonCacheKey, getOrGenerateLesson } from './lessonGenerator'
 
+const STANDARD_PLAN_TYPE = 'standard' as const
+const UNIVERSAL_PLAN_TYPE = 'universal' as const
+const UNIVERSAL_FALLBACK_COMPETENCIES = ['relevance', 'structure', 'specificity']
+
 // ─── Generate Pathway Plan ──────────────────────────────────────────────────
 
 interface GeneratePathwayInput {
@@ -94,11 +98,15 @@ export async function generatePathwayPlan(input: GeneratePathwayInput): Promise<
       }
     }
 
-    // Upsert the pathway plan (one active plan per user)
+    const uid = new mongoose.Types.ObjectId(userId)
+
+    // Upsert the standard interview-derived plan without colliding with the
+    // universal support curriculum.
     const plan = await PathwayPlan.findOneAndUpdate(
-      { userId: new mongoose.Types.ObjectId(userId) },
+      { userId: uid, planType: STANDARD_PLAN_TYPE },
       {
-        userId: new mongoose.Types.ObjectId(userId),
+        userId: uid,
+        planType: STANDARD_PLAN_TYPE,
         readinessLevel,
         readinessScore,
         topBlockingWeaknesses,
@@ -131,6 +139,7 @@ export async function getCurrentPathway(userId: string): Promise<IPathwayPlan | 
     await connectDB()
     return await PathwayPlan.findOne({
       userId: new mongoose.Types.ObjectId(userId),
+      planType: STANDARD_PLAN_TYPE,
     }).sort({ generatedAt: -1 }).lean() as IPathwayPlan | null
   } catch (err) {
     logger.error({ err }, 'Failed to get pathway')
@@ -146,6 +155,7 @@ export async function markTaskComplete(userId: string, taskId: string): Promise<
     const result = await PathwayPlan.updateOne(
       {
         userId: new mongoose.Types.ObjectId(userId),
+        planType: STANDARD_PLAN_TYPE,
         'practiceTasks.taskId': taskId,
       },
       {
@@ -465,14 +475,14 @@ export async function generateUniversalPlan(
     const thresholds = input.thresholds ?? DEFAULT_PHASE_THRESHOLDS
 
     const uid = new mongoose.Types.ObjectId(userId)
-    const existing = await PathwayPlan.findOne({ userId: uid, planType: 'universal' })
+    const existing = await PathwayPlan.findOne({ userId: uid, planType: UNIVERSAL_PLAN_TYPE })
     const sessionsCompleted = existing?.sessionsCompleted ?? 0
     const currentPhase = resolveCurrentPhase(sessionsCompleted, thresholds)
 
     const competencySummary = await getUserCompetencySummary(userId, domain)
     const weakAreas = competencySummary?.weakAreas ?? []
     const strongAreas = competencySummary?.strongAreas ?? []
-    const focus = phaseFocusCompetencies(currentPhase, weakAreas, strongAreas)
+    const focus = resolveUniversalFocus(currentPhase, weakAreas, strongAreas)
 
     const lessons = focus.map((competency) => ({
       lessonId: buildLessonCacheKey(competency, domain, depth),
@@ -482,11 +492,11 @@ export async function generateUniversalPlan(
 
     const isNew = !existing
     const plan = await PathwayPlan.findOneAndUpdate(
-      { userId: uid, planType: 'universal' },
+      { userId: uid, planType: UNIVERSAL_PLAN_TYPE },
       {
         $set: {
           userId: uid,
-          planType: 'universal',
+          planType: UNIVERSAL_PLAN_TYPE,
           domain,
           depth,
           sessionsCompleted,
@@ -528,7 +538,7 @@ export async function advanceUniversalPlan(
   try {
     await connectDB()
     const uid = new mongoose.Types.ObjectId(userId)
-    const plan = await PathwayPlan.findOne({ userId: uid, planType: 'universal' })
+    const plan = await PathwayPlan.findOne({ userId: uid, planType: UNIVERSAL_PLAN_TYPE })
     if (!plan) return null
 
     const prevSessions = plan.sessionsCompleted ?? 0
@@ -583,7 +593,7 @@ export async function advanceUniversalPlan(
         const depth = plan.depth
         getUserCompetencySummary(userId, domain)
           .then((summary) => {
-            const focus = phaseFocusCompetencies(
+            const focus = resolveUniversalFocus(
               newPhase,
               summary?.weakAreas ?? [],
               summary?.strongAreas ?? [],
@@ -616,7 +626,7 @@ export async function getUniversalPlan(userId: string): Promise<IPathwayPlan | n
     await connectDB()
     return (await PathwayPlan.findOne({
       userId: new mongoose.Types.ObjectId(userId),
-      planType: 'universal',
+      planType: UNIVERSAL_PLAN_TYPE,
     }).lean()) as IPathwayPlan | null
   } catch (err) {
     logger.error({ err, userId }, 'Failed to get universal plan')
@@ -635,7 +645,7 @@ export async function markLessonComplete(
     await connectDB()
     const uid = new mongoose.Types.ObjectId(userId)
     const result = await PathwayPlan.updateOne(
-      { userId: uid, planType: 'universal', 'lessons.lessonId': lessonId },
+      { userId: uid, planType: UNIVERSAL_PLAN_TYPE, 'lessons.lessonId': lessonId },
       {
         $set: {
           'lessons.$.completed': true,
@@ -648,6 +658,15 @@ export async function markLessonComplete(
     logger.error({ err, userId, lessonId }, 'Failed to mark lesson complete')
     return false
   }
+}
+
+function resolveUniversalFocus(
+  phase: PathwayPhase,
+  weakAreas: string[],
+  strongAreas: string[],
+): string[] {
+  const focus = phaseFocusCompetencies(phase, weakAreas, strongAreas)
+  return focus.length > 0 ? focus : UNIVERSAL_FALLBACK_COMPETENCIES
 }
 
 export type { PathwayPhase }

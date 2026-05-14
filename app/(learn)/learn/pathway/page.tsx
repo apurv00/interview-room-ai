@@ -1,138 +1,87 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { Suspense, useCallback, useEffect, useState } from 'react'
 import { useSession } from 'next-auth/react'
-import { useRouter } from 'next/navigation'
+import { useSearchParams } from 'next/navigation'
 import { motion } from 'framer-motion'
 import SignedOutEmptyState from '@shared/ui/SignedOutEmptyState'
-import { useAuthGate } from '@shared/providers/AuthGateProvider'
-import NextStepHero from '@learn/components/pathway/NextStepHero'
-import RecentSessionsStrip from '@learn/components/pathway/RecentSessionsStrip'
+import PathwayEmptyState from '@learn/components/pathway/PathwayEmptyState'
+import TodayActionCard from '@learn/components/pathway/TodayActionCard'
+import PathwayPlanQueue from '@learn/components/pathway/PathwayPlanQueue'
+import PathwayProgressPanel from '@learn/components/pathway/PathwayProgressPanel'
+import PathwayActivityPanel from '@learn/components/pathway/PathwayActivityPanel'
+import PathwayPendingBanner from '@learn/components/pathway/PathwayPendingBanner'
 import UniversalPathwayView from '@learn/components/pathway/UniversalPathwayView'
+import type { PathwayViewModel } from '@learn/services/pathwayViewModel'
 
-interface PracticeTask {
-  taskId: string
-  type: 'drill' | 'full_session' | 'review' | 'homework'
-  title: string
-  description: string
-  targetCompetency: string
-  difficulty: 'easy' | 'medium' | 'hard'
-  estimatedMinutes: number
-  completed: boolean
-}
-
-interface Milestone {
-  name: string
-  description: string
-  targetScore: number
-  currentScore: number
-  achieved: boolean
-}
-
-interface PathwayData {
+interface PathwayApiResponse extends PathwayViewModel {
   pathway: {
-    readinessLevel: string
-    readinessScore: number
-    topBlockingWeaknesses: Array<{
-      competency: string
-      currentScore: number
-      targetScore: number
-      reason: string
-    }>
-    strengthsToPreserve: string[]
-    nextSessionRecommendation: {
-      domain: string
-      interviewType: string
-      focusCompetencies: string[]
-      difficulty: string
-      reason: string
-    }
-    practiceTasks: PracticeTask[]
-    milestones: Milestone[]
-    userGoal: string
-    targetRole: string
+    targetRole?: string
+    nextSessionRecommendation?: {
+      domain?: string
+      interviewType?: string
+    } | null
   } | null
-  competencySummary: {
-    avgScore: number
-    totalCompetencies: number
-    improving: number
-    declining: number
-    stable: number
-  } | null
-  weaknesses: Array<{
-    competencyName: string
-    currentScore: number
-    trend: string
-  }>
+  competencySummary: unknown
+  weaknesses: unknown[]
 }
 
-const READINESS_STAGES = [
-  { key: 'not_ready', label: 'Foundation', color: 'bg-red-500' },
-  { key: 'developing', label: 'Developing', color: 'bg-amber-500' },
-  { key: 'approaching', label: 'Approaching', color: 'bg-blue-500' },
-  { key: 'ready', label: 'Interview Ready', color: 'bg-emerald-500' },
-  { key: 'strong', label: 'Strong', color: 'bg-purple-500' },
-]
-
-const DIFFICULTY_COLORS: Record<string, string> = {
-  easy: 'bg-emerald-500/10 text-[#059669]',
-  medium: 'bg-amber-500/10 text-[#d97706]',
-  hard: 'bg-red-500/10 text-[#f4212e]',
-}
-
-const TYPE_ICONS: Record<string, string> = {
-  drill: 'D',
-  full_session: 'S',
-  review: 'R',
-  homework: 'H',
-}
+const BASELINE_HREF = '/interview/setup?source=pathway&actionId=baseline&returnTo=%2Flearn%2Fpathway'
 
 export default function PathwayPage() {
-  const router = useRouter()
-  const { status: authStatus } = useSession()
-  const { requireAuth } = useAuthGate()
-  const [data, setData] = useState<PathwayData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [completing, setCompleting] = useState<string | null>(null)
+  return (
+    <Suspense fallback={<PathwayLoading />}>
+      <PathwayPageInner />
+    </Suspense>
+  )
+}
 
-  useEffect(() => {
+function PathwayPageInner() {
+  const { status: authStatus } = useSession()
+  const searchParams = useSearchParams()
+  const fromFeedback = searchParams.get('fromFeedback')
+  const [data, setData] = useState<PathwayApiResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [completingTaskId, setCompletingTaskId] = useState<string | null>(null)
+
+  const loadPathway = useCallback(async () => {
     if (authStatus !== 'authenticated') {
       setLoading(false)
       return
     }
-    fetch('/api/learn/pathway')
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { setData(d); setLoading(false) })
-      .catch(() => setLoading(false))
-  }, [authStatus])
 
-  const startInterview = () => {
-    requireAuth('start_interview', () => router.push('/interview/setup'))
-  }
+    setLoading(true)
+    const params = new URLSearchParams()
+    if (fromFeedback) params.set('fromFeedback', fromFeedback)
+
+    try {
+      const suffix = params.toString() ? `?${params.toString()}` : ''
+      const res = await fetch(`/api/learn/pathway${suffix}`)
+      setData(res.ok ? await res.json() : null)
+    } catch {
+      setData(null)
+    } finally {
+      setLoading(false)
+    }
+  }, [authStatus, fromFeedback])
+
+  useEffect(() => {
+    void loadPathway()
+  }, [loadPathway])
 
   const completeTask = async (taskId: string) => {
-    setCompleting(taskId)
+    setCompletingTaskId(taskId)
     try {
       const res = await fetch('/api/learn/pathway', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'complete_task', taskId }),
       })
-      if (res.ok && data?.pathway) {
-        setData({
-          ...data,
-          pathway: {
-            ...data.pathway,
-            practiceTasks: data.pathway.practiceTasks.map(t =>
-              t.taskId === taskId ? { ...t, completed: true } : t
-            ),
-          },
-        })
-      }
+      if (res.ok) await loadPathway()
     } catch {
-      // silently fail
+      // best-effort UI action
     } finally {
-      setCompleting(null)
+      setCompletingTaskId(null)
     }
   }
 
@@ -141,285 +90,109 @@ export default function PathwayPage() {
       <main className="max-w-4xl mx-auto px-4 py-8">
         <SignedOutEmptyState
           reason="view_progress"
-          headline="Build your personalized pathway"
-          description="Sign in and run your first interview — we'll generate a tailored learning pathway with practice tasks and milestones."
+          headline="Build your interview pathway"
+          description="Sign in and run a baseline interview. Pathway will turn the feedback into your next actions."
+          primaryHref={BASELINE_HREF}
+          primaryLabel="Start baseline interview"
         />
       </main>
     )
   }
 
   if (loading) {
+    return <PathwayLoading />
+  }
+
+  const viewModel = data
+  const pathway = data?.pathway ?? null
+
+  if (!viewModel || viewModel.state === 'empty') {
+    const action = viewModel?.nextAction ?? {
+      id: 'baseline-interview',
+      type: 'interview' as const,
+      title: 'Run a baseline interview',
+      description: 'Complete one interview so Pathway can build a focused plan from your actual answers.',
+      ctaLabel: 'Start baseline interview',
+      href: BASELINE_HREF,
+    }
+
     return (
-      <main className="max-w-4xl mx-auto px-4 py-8">
-        <div className="animate-pulse space-y-6">
-          <div className="h-8 bg-[#eff3f4] rounded w-48" />
-          <div className="h-32 bg-[#eff3f4] rounded-xl" />
-          <div className="h-48 bg-[#eff3f4] rounded-xl" />
-        </div>
+      <main className="max-w-4xl mx-auto px-4 py-8 space-y-6">
+        <PathwayHeader />
+        <PathwayEmptyState action={action} />
       </main>
     )
   }
 
-  const pathway = data?.pathway
-
-  if (!pathway) {
-    return (
-      <main className="max-w-4xl mx-auto px-4 py-8 space-y-8">
-        <h1 className="text-2xl font-bold text-[#0f1419]">Learning Pathway</h1>
-        <UniversalPathwayView domain="general" depth="behavioral" />
-        <div className="surface-card-bordered p-5 sm:p-6 text-center">
-          <p className="text-sm text-[#71767b] mb-3">
-            Prefer to start with an interview? Complete one to generate a personalised plan of practice tasks and milestones.
-          </p>
-          <button
-            type="button"
-            onClick={startInterview}
-            className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors"
-          >
-            Start an Interview
-          </button>
-        </div>
-      </main>
-    )
-  }
-
-  const stageIndex = READINESS_STAGES.findIndex(s => s.key === pathway.readinessLevel)
-  const completedTasks = pathway.practiceTasks.filter(t => t.completed).length
-  const totalTasks = pathway.practiceTasks.length
-  const achievedMilestones = pathway.milestones.filter(m => m.achieved).length
+  const supportDomain =
+    pathway?.nextSessionRecommendation?.domain ||
+    pathway?.targetRole ||
+    'general'
+  const supportDepth =
+    pathway?.nextSessionRecommendation?.interviewType ||
+    'behavioral'
 
   return (
-    <main className="max-w-4xl mx-auto px-4 py-8 space-y-8">
-      <motion.h1
-        className="text-2xl font-bold text-[#0f1419]"
-        initial={{ opacity: 0, y: -10 }}
-        animate={{ opacity: 1, y: 0 }}
-      >
-        Learning Pathway
-      </motion.h1>
+    <main className="max-w-5xl mx-auto px-4 py-8 space-y-6">
+      <PathwayHeader />
 
-      {/* Next Step Hero — answers "what should I do right now?" */}
-      <NextStepHero
-        practiceTasks={pathway.practiceTasks}
-        nextSessionRecommendation={pathway.nextSessionRecommendation}
-        readinessScore={pathway.readinessScore}
-        onStartInterview={startInterview}
+      {viewModel.state === 'pending' && (
+        <PathwayPendingBanner action={viewModel.nextAction} />
+      )}
+
+      <TodayActionCard
+        action={viewModel.nextAction}
+        state={viewModel.state}
+        completing={!!completingTaskId && completingTaskId === viewModel.nextAction.taskId}
+        onCompleteTask={completeTask}
       />
 
-      {/* Recent Sessions Strip — closes the habit loop with inline Retake */}
-      <RecentSessionsStrip />
-
-      {/* Universal phased pathway — 6-phase guided curriculum paced to sessions */}
-      <UniversalPathwayView
-        domain={pathway.nextSessionRecommendation?.domain || 'general'}
-        depth={pathway.nextSessionRecommendation?.interviewType || 'behavioral'}
-      />
-
-      {/* Readiness Gauge */}
-      <motion.section
-        className="surface-card-bordered p-5 sm:p-6"
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1 }}
-      >
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-[#0f1419]">Interview Readiness</h2>
-          <span className="text-2xl font-bold text-[#0f1419]">{pathway.readinessScore}/100</span>
-        </div>
-
-        {/* Progress bar */}
-        <div className="relative h-2 bg-[#eff3f4] rounded-full mb-4 overflow-hidden">
-          <motion.div
-            className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-red-500 via-amber-500 via-blue-500 to-emerald-500"
-            initial={{ width: 0 }}
-            animate={{ width: `${pathway.readinessScore}%` }}
-            transition={{ duration: 1, ease: 'easeOut' }}
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.85fr)]">
+        <div className="space-y-6 min-w-0">
+          <PathwayPlanQueue
+            items={viewModel.planItems}
+            completingTaskId={completingTaskId}
+            onCompleteTask={completeTask}
+          />
+          <UniversalPathwayView
+            domain={supportDomain}
+            depth={supportDepth}
+            mode="support"
+            showEmptyState={false}
           />
         </div>
-
-        {/* Stage indicators */}
-        <div className="flex justify-between">
-          {READINESS_STAGES.map((stage, i) => (
-            <div key={stage.key} className="flex flex-col items-center gap-1">
-              <div className={`w-3 h-3 rounded-full ${
-                i <= stageIndex ? stage.color : 'bg-[#e1e8ed]'
-              }`} />
-              <span className={`text-[10px] ${
-                i === stageIndex ? 'text-[#0f1419] font-medium' : 'text-[#8b98a5]'
-              }`}>
-                {stage.label}
-              </span>
-            </div>
-          ))}
+        <div className="space-y-6 min-w-0">
+          <PathwayProgressPanel progress={viewModel.progress} />
+          <PathwayActivityPanel />
         </div>
-      </motion.section>
-
-      {/* Milestones */}
-      {pathway.milestones.length > 0 && (
-        <motion.section
-          className="surface-card-bordered p-5 sm:p-6"
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-        >
-          <h2 className="text-sm font-semibold text-[#0f1419] mb-4">
-            Milestones ({achievedMilestones}/{pathway.milestones.length})
-          </h2>
-          <div className="space-y-3">
-            {pathway.milestones.map((m, i) => (
-              <div key={i} className="flex items-center gap-3">
-                <div className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${
-                  m.achieved ? 'bg-emerald-500' : 'bg-[#e1e8ed]'
-                }`}>
-                  {m.achieved && (
-                    <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                    </svg>
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className={`text-sm ${m.achieved ? 'text-[#8b98a5] line-through' : 'text-[#536471]'}`}>
-                    {m.name}
-                  </div>
-                  <div className="text-xs text-[#8b98a5]">{m.description}</div>
-                </div>
-                <span className="text-xs text-[#71767b] shrink-0">{m.currentScore}/{m.targetScore}</span>
-              </div>
-            ))}
-          </div>
-        </motion.section>
-      )}
-
-      {/* Practice Tasks */}
-      <motion.section
-        className="surface-card-bordered p-5 sm:p-6"
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.3 }}
-      >
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-[#0f1419]">
-            Practice Tasks ({completedTasks}/{totalTasks})
-          </h2>
-          {totalTasks > 0 && (
-            <div className="w-24 h-1.5 bg-[#eff3f4] rounded-full overflow-hidden">
-              <div
-                className="h-full bg-blue-500 rounded-full transition-all"
-                style={{ width: `${(completedTasks / totalTasks) * 100}%` }}
-              />
-            </div>
-          )}
-        </div>
-
-        <div className="space-y-2">
-          {pathway.practiceTasks.map(task => (
-            <div
-              key={task.taskId}
-              className={`flex items-start gap-3 p-3 rounded-xl transition-colors ${
-                task.completed ? 'bg-[#f8fafc]' : 'bg-[#eff3f4]'
-              }`}
-            >
-              <button
-                onClick={() => !task.completed && completeTask(task.taskId)}
-                disabled={task.completed || completing === task.taskId}
-                className={`mt-0.5 w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-colors ${
-                  task.completed
-                    ? 'bg-emerald-500 border-emerald-500'
-                    : completing === task.taskId
-                    ? 'border-blue-500 animate-pulse'
-                    : 'border-[#e1e8ed] hover:border-blue-500'
-                }`}
-              >
-                {task.completed && (
-                  <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                  </svg>
-                )}
-              </button>
-
-              <div className="flex-1 min-w-0">
-                <div className={`text-sm ${task.completed ? 'text-[#71767b] line-through' : 'text-[#536471]'}`}>
-                  {task.title}
-                </div>
-                {task.description && (
-                  <div className="text-xs text-[#8b98a5] mt-0.5">{task.description}</div>
-                )}
-                <div className="flex items-center gap-2 mt-1.5">
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#eff3f4] text-[#8b98a5]">
-                    {TYPE_ICONS[task.type]} {task.type.replace('_', ' ')}
-                  </span>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${DIFFICULTY_COLORS[task.difficulty] || 'bg-[#eff3f4] text-[#8b98a5]'}`}>
-                    {task.difficulty}
-                  </span>
-                  <span className="text-[10px] text-[#8b98a5]">{task.estimatedMinutes}m</span>
-                  {task.type === 'drill' && !task.completed && (
-                    <a
-                      href={`/practice/drill?competency=${task.targetCompetency}`}
-                      className="text-[10px] text-blue-400 hover:text-blue-300"
-                      onClick={e => e.stopPropagation()}
-                    >
-                      Start drill
-                    </a>
-                  )}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </motion.section>
-
-      {/* Blocking Weaknesses */}
-      {pathway.topBlockingWeaknesses.length > 0 && (
-        <motion.section
-          className="surface-card-bordered p-5 sm:p-6"
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.4 }}
-        >
-          <h2 className="text-sm font-semibold text-[#0f1419] mb-4">Blocking Weaknesses</h2>
-          <div className="space-y-3">
-            {pathway.topBlockingWeaknesses.map((w, i) => (
-              <div key={i} className="flex items-center gap-3 p-3 rounded-xl bg-red-500/5">
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm text-[#536471] capitalize">{w.competency.replace(/_/g, ' ')}</div>
-                  <div className="text-xs text-[#71767b] mt-0.5">{w.reason}</div>
-                </div>
-                <div className="text-right shrink-0">
-                  <div className="text-sm font-medium text-[#f4212e]">{w.currentScore}</div>
-                  <div className="text-[10px] text-[#8b98a5]">target: {w.targetScore}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </motion.section>
-      )}
-
-      {/* Next Session Recommendation */}
-      {pathway.nextSessionRecommendation?.reason && (
-        <motion.section
-          className="surface-card-bordered p-5 sm:p-6 border-blue-500/20"
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.5 }}
-        >
-          <h2 className="text-sm font-semibold text-[#0f1419] mb-3">Recommended Next Session</h2>
-          <p className="text-sm text-[#8b98a5] mb-4">{pathway.nextSessionRecommendation.reason}</p>
-          <div className="flex items-center gap-3 flex-wrap mb-4">
-            {pathway.nextSessionRecommendation.focusCompetencies.map(c => (
-              <span key={c} className="text-xs px-2 py-1 rounded-lg bg-blue-500/10 text-blue-400 capitalize">
-                {c.replace(/_/g, ' ')}
-              </span>
-            ))}
-          </div>
-          <button
-            type="button"
-            onClick={startInterview}
-            className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors"
-          >
-            Start Practice
-          </button>
-        </motion.section>
-      )}
+      </div>
     </main>
+  )
+}
+
+function PathwayLoading() {
+  return (
+    <main className="max-w-4xl mx-auto px-4 py-8">
+      <div className="animate-pulse space-y-6">
+        <div className="h-8 bg-[#eff3f4] rounded w-48" />
+        <div className="h-32 bg-[#eff3f4] rounded-xl" />
+        <div className="h-56 bg-[#eff3f4] rounded-xl" />
+      </div>
+    </main>
+  )
+}
+
+function PathwayHeader() {
+  return (
+    <motion.header
+      className="space-y-1"
+      initial={{ opacity: 0, y: -10 }}
+      animate={{ opacity: 1, y: 0 }}
+    >
+      <h1 className="text-2xl font-bold text-[#0f1419]">Learning Pathway</h1>
+      <p className="text-sm text-[#71767b]">
+        Your interview-derived improvement loop: next action, plan, progress, and recent activity.
+      </p>
+    </motion.header>
   )
 }

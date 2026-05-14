@@ -24,12 +24,19 @@ interface UniversalPathwayResponse {
 interface UniversalPathwayViewProps {
   domain: string
   depth: string
+  mode?: 'primary' | 'support'
+  showEmptyState?: boolean
 }
 
 const CREATE_DOMAIN_DEFAULT = 'general'
 const CREATE_DEPTH_DEFAULT = 'behavioral'
 
-export default function UniversalPathwayView({ domain, depth }: UniversalPathwayViewProps) {
+export default function UniversalPathwayView({
+  domain,
+  depth,
+  mode = 'primary',
+  showEmptyState = true,
+}: UniversalPathwayViewProps) {
   const [plan, setPlan] = useState<UniversalPlan | null>(null)
   const [phaseStatus, setPhaseStatus] = useState<PhaseStatusProps | null>(null)
   const [loading, setLoading] = useState(true)
@@ -115,6 +122,8 @@ export default function UniversalPathwayView({ domain, depth }: UniversalPathway
   }
 
   if (!plan || !phaseStatus) {
+    if (!showEmptyState) return null
+
     return (
       <motion.section
         className="surface-card-bordered p-6 sm:p-8 bg-gradient-to-br from-indigo-50 to-blue-50 border-indigo-200 text-center"
@@ -147,6 +156,14 @@ export default function UniversalPathwayView({ domain, depth }: UniversalPathway
 
   return (
     <div className="space-y-5">
+      {mode === 'support' && (
+        <div className="px-1">
+          <h2 className="text-sm font-semibold text-[#0f1419]">Support lessons</h2>
+          <p className="text-xs text-[#71767b] mt-0.5">
+            Optional curriculum content. Your interview-derived plan above stays the source of truth.
+          </p>
+        </div>
+      )}
       <PhaseProgressCard phaseStatus={phaseStatus} />
 
       {error && <div className="text-sm text-[#f4212e]">{error}</div>}
@@ -159,7 +176,7 @@ export default function UniversalPathwayView({ domain, depth }: UniversalPathway
       >
         <div className="flex items-center justify-between px-1">
           <h2 className="text-sm font-semibold text-[#0f1419]">
-            Lessons ({completedCount}/{lessons.length})
+            {mode === 'support' ? 'Lesson queue' : 'Lessons'} ({completedCount}/{lessons.length})
           </h2>
           {lessons.length > 0 && (
             <div className="w-24 h-1.5 bg-[#eff3f4] rounded-full overflow-hidden">

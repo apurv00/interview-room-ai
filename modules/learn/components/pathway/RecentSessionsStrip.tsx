@@ -89,7 +89,35 @@ export default function RecentSessionsStrip() {
     )
   }
 
-  if (sessions.length === 0) return null
+  if (sessions.length === 0) {
+    return (
+      <motion.section
+        className="surface-card-bordered p-5 sm:p-6"
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.15 }}
+      >
+        <div className="flex items-start gap-3">
+          <div className="shrink-0 w-8 h-8 rounded-lg bg-[#f8fafc] border border-[#e1e8ed] flex items-center justify-center">
+            <Clock className="w-4 h-4 text-[#71767b]" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-sm font-semibold text-[#0f1419]">Recent sessions</h2>
+            <p className="text-xs text-[#71767b] mt-1">
+              Completed interviews will appear here after your first baseline session.
+            </p>
+          </div>
+          <Link
+            href="/interview/setup?source=pathway&actionId=baseline&returnTo=%2Flearn%2Fpathway"
+            className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium transition-colors"
+          >
+            Start
+            <ArrowRight className="w-3 h-3" />
+          </Link>
+        </div>
+      </motion.section>
+    )
+  }
 
   return (
     <motion.section
