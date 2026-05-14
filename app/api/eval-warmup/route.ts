@@ -8,6 +8,7 @@ import {
   getOrLoadJDContext,
   getOrLoadResumeContext,
 } from '@interview/services/persona/documentContextCache'
+import { canViewSession } from '@shared/auth/permissions'
 import { aiLogger } from '@shared/logger'
 
 /**
@@ -79,15 +80,19 @@ export const POST = composeApiRoute<WarmupBody>({
     try {
       await connectDB()
 
-      // Caller owns the session — or it's a recruiter/admin viewing a
-      // candidate's session, in which case we still warm. We only assert
-      // the row exists and read the fields we need; we do NOT enforce
-      // userId match because warming a row you can't access is harmless
-      // (the actual eval call will enforce its own auth).
+      // Per-session authz: warming has side effects (LLM token cost on cold
+      // doc-context cache miss + Redis cache writes). Without this guard, any
+      // authenticated user who guesses or scrapes another user's sessionId
+      // could drive arbitrary LLM cost on the victim's documents. Mirrors
+      // the canViewSession check used by /api/interviews/[id] GET so the
+      // surface is consistent: owner + platform_admin + same-org recruiter.
+      // Codex P1 (PR #359) flagged this; the fix removes the original
+      // "warming a row you can't access is harmless" assumption.
       const sessionDoc = (await InterviewSession.findById(sessionId)
-        .select('userId config jobDescription resumeText')
+        .select('userId organizationId config jobDescription resumeText')
         .lean()) as {
         userId?: { toString(): string }
+        organizationId?: { toString(): string }
         config?: { role?: string; interviewType?: string; experience?: string }
         jobDescription?: string
         resumeText?: string
@@ -98,6 +103,23 @@ export const POST = composeApiRoute<WarmupBody>({
         result.warmed = false
         result.durationMs = Date.now() - startTime
         return NextResponse.json(result)
+      }
+
+      const sessionUserId = sessionDoc.userId?.toString() ?? ''
+      const sessionOrgId = sessionDoc.organizationId?.toString()
+      const allowed = canViewSession(
+        { userId: sessionUserId, organizationId: sessionOrgId },
+        { id: user.id, role: user.role, organizationId: user.organizationId },
+      )
+      if (!allowed) {
+        aiLogger.warn(
+          { sessionId, requestUserId: user.id, sessionUserId },
+          'eval-warmup: forbidden — user does not have access to this session',
+        )
+        return NextResponse.json(
+          { warmed: false, reason: 'forbidden', durationMs: Date.now() - startTime },
+          { status: 403 },
+        )
       }
 
       const role = sessionDoc.config?.role ?? ''

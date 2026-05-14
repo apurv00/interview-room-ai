@@ -122,7 +122,7 @@ describe('/api/eval-warmup', () => {
 
   it('warms all three caches when session has JD and resume', async () => {
     mockSessionDoc({
-      userId: { toString: () => 'user-123' },
+      userId: { toString: () => 'test-user-1' },
       config: { role: 'sdet', interviewType: 'behavioral', experience: '0-2' },
       jobDescription: 'A QA engineer role at Trustmore...',
       resumeText: 'Rakshit — Quality Assurance Engineer...',
@@ -137,7 +137,7 @@ describe('/api/eval-warmup', () => {
     expect(mockGetOrLoadSessionConfig).toHaveBeenCalledWith('sess-1', {
       role: 'sdet',
       interviewType: 'behavioral',
-      userId: 'user-123',
+      userId: 'test-user-1',
       experience: '0-2',
     })
     expect(mockGetOrLoadJDContext).toHaveBeenCalledWith('sess-1', 'A QA engineer role at Trustmore...')
@@ -148,9 +148,29 @@ describe('/api/eval-warmup', () => {
     )
   })
 
+  it('returns 403 when the caller is not the session owner (Codex P1 fix)', async () => {
+    // Session owned by a different user; mocked auth user is 'test-user-1'.
+    mockSessionDoc({
+      userId: { toString: () => 'someone-else-456' },
+      config: { role: 'sdet', interviewType: 'behavioral', experience: '0-2' },
+      jobDescription: 'private JD',
+      resumeText: 'private resume',
+    })
+
+    const { status, json } = await callRoute({ sessionId: 'sess-victim' })
+
+    expect(status).toBe(403)
+    expect(json.warmed).toBe(false)
+    expect(json.reason).toBe('forbidden')
+    // Critical: no doc-context loaders fired for the unauthorized session.
+    expect(mockGetOrLoadSessionConfig).not.toHaveBeenCalled()
+    expect(mockGetOrLoadJDContext).not.toHaveBeenCalled()
+    expect(mockGetOrLoadResumeContext).not.toHaveBeenCalled()
+  })
+
   it('does NOT call the LLM router on its response path', async () => {
     mockSessionDoc({
-      userId: { toString: () => 'user-123' },
+      userId: { toString: () => 'test-user-1' },
       config: { role: 'sdet', interviewType: 'behavioral', experience: '0-2' },
       jobDescription: 'jd',
       resumeText: 'resume',
@@ -166,7 +186,7 @@ describe('/api/eval-warmup', () => {
 
   it('skips JD and resume warms when the session has neither', async () => {
     mockSessionDoc({
-      userId: { toString: () => 'user-123' },
+      userId: { toString: () => 'test-user-1' },
       config: { role: 'sdet', interviewType: 'behavioral', experience: '0-2' },
     })
 
@@ -192,7 +212,7 @@ describe('/api/eval-warmup', () => {
 
   it('marks the failing component as error but still returns 200', async () => {
     mockSessionDoc({
-      userId: { toString: () => 'user-123' },
+      userId: { toString: () => 'test-user-1' },
       config: { role: 'sdet', interviewType: 'behavioral', experience: '0-2' },
       jobDescription: 'jd',
       resumeText: 'resume',
