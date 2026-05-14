@@ -508,6 +508,78 @@ describe('resumable replay upload helpers', () => {
     expect(leaseSnapshots[leaseSnapshots.length - 1]).toBeGreaterThanOrEqual(leaseSnapshots[0])
   })
 
+  // ── Layer 1: drain-vs-drain race (Vercel Agent finding 2026-05-14) ──────
+  it('blocks two concurrent drainQueuedReplayUploads from racing the same record (Layer 1 drain-vs-drain)', async () => {
+    // Vercel Agent caught this on the first version of the fix: the original
+    // tryAcquireLease added to inFlightRecordIds AFTER the IDB write+verify
+    // awaits, leaving a window where two concurrent drain calls could both
+    // pass the .has() check synchronously, both write their lease (same
+    // PROCESS_ID since same tab), both pass the verify, both proceed to
+    // uploadMultipartRecord → duplicate multipart upload on the same record.
+    //
+    // The fix: move inFlightRecordIds.add() to immediately after the .has()
+    // check, synchronously, before any await. This test seeds a record with
+    // a slow complete so the lease is held during the second drain call,
+    // and asserts exactly one complete fires.
+    const stores = installFakeIndexedDb()
+    await drainQueuedReplayUploads()
+
+    const record = {
+      id: 'drain-vs-drain:camera:0',
+      sessionId: '507f1f77bcf86cd799439011',
+      kind: 'camera' as const,
+      blob: new Blob([new Uint8Array(8 * 1024 * 1024)], { type: 'video/webm' }),
+      sizeBytes: 8 * 1024 * 1024,
+      contentType: 'video/webm',
+      createdAt: Date.now(),
+      parts: [{ partNumber: 1, etag: '"e1"' }],
+      attempts: 0,
+      key: 'recordings/user/session-camera.webm',
+      uploadId: 'upload-drain-race',
+      partSizeBytes: 8 * 1024 * 1024,
+    }
+    stores.get('uploads')!.set(record.id, record)
+
+    let resolveComplete: ((value: unknown) => void) | null = null
+    const completeBarrier = new Promise<unknown>((r) => { resolveComplete = r })
+    const completeCalls: number[] = []
+
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (url === '/api/storage/multipart') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as { action?: string }
+        if (body.action === 'complete') {
+          completeCalls.push(Date.now())
+          await completeBarrier // hold so the second drain races the first
+          return jsonResponse({ key: record.key })
+        }
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+
+    // Fire two drains in parallel — exactly the situation a fast
+    // /interview → /feedback navigation produces.
+    const drainA = drainQueuedReplayUploads()
+    const drainB = drainQueuedReplayUploads()
+
+    // Let drainA reach the complete barrier; drainB must see drainA's
+    // inFlightRecordIds entry and skip.
+    await new Promise((r) => setTimeout(r, 20))
+
+    resolveComplete!(null)
+    const [resultA, resultB] = await Promise.all([drainA, drainB])
+
+    // Exactly one upload across both drains. The other must have been
+    // skipped — not failed, not queued, not dropped.
+    expect(resultA.uploaded + resultB.uploaded).toBe(1)
+    expect(resultA.skipped + resultB.skipped).toBe(1)
+    expect(resultA.queued + resultB.queued).toBe(0)
+    expect(resultA.dropped + resultB.dropped).toBe(0)
+
+    // And — the load-bearing invariant — exactly one complete call.
+    expect(completeCalls).toHaveLength(1)
+  })
+
   // ── Layer 4: 401 from server marks the record permanent ─────────────────
   it('treats 401/403 from /api/storage/multipart as a permanent failure (Layer 4)', async () => {
     // Simulates the user's NextAuth session expiring mid-upload. Retrying

@@ -284,35 +284,57 @@ function isExhaustedRetries(record: QueuedReplayUpload): boolean {
  * Acquire the lease on a record. Returns the leased record on success, or
  * null if another tab/process beat us to it.
  *
- * The IDB write + re-read pattern is a poor-man's CAS — IndexedDB has no
- * native compare-and-swap. Two tabs that race exactly here could both think
- * they have the lease, but the in-memory Set in Layer 1 prevents this within
- * a single tab. Cross-tab races fall back to the server's idempotent complete
- * path ([app/api/storage/multipart/route.ts:230-249]) which absorbs the
- * second `complete` call without corruption.
+ * Layer 1 (same-tab) — the inFlightRecordIds Set check + add is performed
+ * SYNCHRONOUSLY before any await. JS is single-threaded but each `await`
+ * yields the event loop, so any check-then-await-then-add pattern can lose
+ * a same-tab race (e.g., two concurrent drainQueuedReplayUploads calls
+ * triggered by /interview and /feedback page mounts firing back-to-back).
+ * The Vercel Agent caught exactly this on the first version of this fix —
+ * the add now happens immediately after the has-check.
+ *
+ * Layer 2 (cross-tab) — the IDB write + re-read pattern is a poor-man's CAS
+ * (IndexedDB has no native compare-and-swap). Two tabs that race the IDB
+ * write could both think they have the lease, but the server's idempotent
+ * complete path ([app/api/storage/multipart/route.ts:230-249]) absorbs the
+ * second `complete` without corruption.
  */
 async function tryAcquireLease(
   record: QueuedReplayUpload
 ): Promise<QueuedReplayUpload | null> {
   if (inFlightRecordIds.has(record.id)) return null
   if (isLeaseHeldByOther(record)) return null
-
-  const leased: QueuedReplayUpload = {
-    ...record,
-    leaseHolder: PROCESS_ID,
-    leaseExpiresAt: Date.now() + LEASE_TTL_MS,
-  }
-  const written = await putUpload(leased)
-  if (!written) return null
-
-  // Re-read to confirm our lease landed (a concurrent writer in another tab
-  // would have stomped it). If the row is gone, another process completed
-  // the upload and deleted it — back off.
-  const verified = (await getAllUploads()).find((r) => r.id === record.id)
-  if (!verified || verified.leaseHolder !== PROCESS_ID) return null
-
+  // CRITICAL: add to the in-memory Set BEFORE any await. This closes the
+  // drain-vs-drain race that the original implementation had — the previous
+  // version delayed the .add() until after the IDB write+verify, leaving a
+  // window where two concurrent calls could both pass the .has() check.
   inFlightRecordIds.add(record.id)
-  return verified
+
+  try {
+    const leased: QueuedReplayUpload = {
+      ...record,
+      leaseHolder: PROCESS_ID,
+      leaseExpiresAt: Date.now() + LEASE_TTL_MS,
+    }
+    const written = await putUpload(leased)
+    if (!written) {
+      inFlightRecordIds.delete(record.id)
+      return null
+    }
+
+    // Re-read to confirm our lease landed (a concurrent writer in another tab
+    // would have stomped it). If the row is gone, another process completed
+    // the upload and deleted it — back off.
+    const verified = (await getAllUploads()).find((r) => r.id === record.id)
+    if (!verified || verified.leaseHolder !== PROCESS_ID) {
+      inFlightRecordIds.delete(record.id)
+      return null
+    }
+
+    return verified
+  } catch (err) {
+    inFlightRecordIds.delete(record.id)
+    throw err
+  }
 }
 
 function releaseLease(recordId: string): void {
