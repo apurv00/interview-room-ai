@@ -326,14 +326,12 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
       const profile = (sessionCfg?.userProfile != null
         ? sessionCfg.userProfile
         : await User.findById(user.id).select(
-            'currentTitle currentIndustry isCareerSwitcher switchingFrom targetCompanyType weakAreas ' +
+            'currentTitle currentIndustry targetCompanyType weakAreas ' +
             'topSkills educationLevel yearsInCurrentRole communicationStyle ' +
             'targetCompanies practiceStats interviewGoal',
           ).lean()) as {
         currentTitle?: string
         currentIndustry?: string
-        isCareerSwitcher?: boolean
-        switchingFrom?: string
         targetCompanyType?: string
         weakAreas?: string[]
         topSkills?: string[]
@@ -352,9 +350,6 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
       }
       if (profile?.yearsInCurrentRole) {
         profileBlock += ` They have been in their current role for ${profile.yearsInCurrentRole} years.`
-      }
-      if (profile?.isCareerSwitcher && profile?.switchingFrom) {
-        profileBlock += `\nIMPORTANT: This candidate is making a career transition from ${profile.switchingFrom} to ${config.role}. Focus on transferable skills and probe how their background applies to the new role.`
       }
       if (profile?.targetCompanyType && profile.targetCompanyType !== 'any') {
         profileBlock += `\nThey are targeting ${profile.targetCompanyType} companies — calibrate question depth and formality accordingly.`

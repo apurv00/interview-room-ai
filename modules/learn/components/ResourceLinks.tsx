@@ -32,7 +32,6 @@ export default function ResourceLinks() {
           experienceLevel: data.experienceLevel,
           interviewGoal: data.interviewGoal,
           weakAreas: data.weakAreas,
-          isCareerSwitcher: data.isCareerSwitcher,
         }
         setProfile(p)
         // Mark resources with score > 0 as recommended

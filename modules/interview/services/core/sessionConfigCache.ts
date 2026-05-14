@@ -160,7 +160,7 @@ export async function getOrLoadSessionConfig(
       InterviewDepth.findOne({ slug: opts.interviewType, isActive: true }).lean(),
       User.findById(opts.userId)
         .select(
-          'currentTitle currentIndustry isCareerSwitcher switchingFrom targetCompanyType ' +
+          'currentTitle currentIndustry targetCompanyType ' +
           'weakAreas topSkills educationLevel yearsInCurrentRole communicationStyle ' +
           'targetCompanies practiceStats interviewGoal feedbackPreference',
         )

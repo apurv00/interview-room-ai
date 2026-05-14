@@ -89,7 +89,7 @@ const OPTS = {
 
 const DOMAIN_DOC = { label: 'Product Manager', systemPromptContext: 'Focus on roadmap...' }
 const DEPTH_DOC = { questionStrategy: 'Use STAR method', evaluationCriteria: 'Judge specificity' }
-const PROFILE_DOC = { currentTitle: 'PM', isCareerSwitcher: false }
+const PROFILE_DOC = { currentTitle: 'PM' }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
 

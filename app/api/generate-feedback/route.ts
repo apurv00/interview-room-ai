@@ -536,7 +536,7 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
         await connectDB()
         return User.findById(user.id).select(
           'interviewGoal targetCompanyType weakAreas feedbackPreference ' +
-          'targetCompanies topSkills isCareerSwitcher switchingFrom practiceStats'
+          'targetCompanies topSkills practiceStats'
         ).lean()
       })(),
 
@@ -590,9 +590,6 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
           tough_love: 'Be direct, critical, and specific. The candidate wants brutal honesty.',
         }
         profileBlock += `\nFeedback style preference: ${prefGuide[profile.feedbackPreference as string] || 'balanced'}`
-      }
-      if (profile?.isCareerSwitcher && profile?.switchingFrom) {
-        profileBlock += `\nCareer switcher from ${profile.switchingFrom}. Acknowledge transferable skills and suggest how to better bridge the gap.`
       }
       const practiceKey = `${config.role}:${interviewType}`
       const stats = (profile?.practiceStats as Record<string, { totalSessions?: number; avgScore?: number; lastScore?: number }> | undefined)?.[practiceKey]

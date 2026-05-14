@@ -71,7 +71,7 @@ export async function generateSessionBrief(input: SessionBriefInput): Promise<Se
     const [profile, competencySummary, weaknesses, recentSummaries, historySummary, companyCtx, persona] =
       await Promise.all([
         User.findById(userId).select(
-          'currentTitle currentIndustry isCareerSwitcher switchingFrom targetCompanyType ' +
+          'currentTitle currentIndustry targetCompanyType ' +
           'weakAreas topSkills communicationStyle feedbackPreference targetCompanies ' +
           'practiceStats interviewGoal yearsInCurrentRole resumeText'
         ).lean(),
@@ -373,10 +373,6 @@ function buildProfileContext(
 
   if (profile.currentTitle) {
     parts.push(`Current role: ${profile.currentTitle}${profile.currentIndustry ? ` in ${profile.currentIndustry}` : ''}`)
-  }
-
-  if (profile.isCareerSwitcher && profile.switchingFrom) {
-    parts.push(`Career switcher from ${profile.switchingFrom} — weight transferable skills`)
   }
 
   if (profile.targetCompanyType && profile.targetCompanyType !== 'any') {

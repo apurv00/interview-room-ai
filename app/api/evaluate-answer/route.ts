@@ -154,7 +154,7 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
         if (sessionCfg?.userProfile != null) return sessionCfg.userProfile
         await connectDB()
         return User.findById(user.id).select(
-          'isCareerSwitcher switchingFrom interviewGoal weakAreas feedbackPreference ' +
+          'interviewGoal weakAreas feedbackPreference ' +
           'targetCompanyType topSkills communicationStyle practiceStats',
         ).lean()
       })(),
@@ -182,9 +182,6 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
     let profileContext = ''
     if (profileResult.status === 'fulfilled' && profileResult.value) {
       const profile = profileResult.value as Record<string, unknown>
-      if (profile.isCareerSwitcher && profile.switchingFrom) {
-        profileContext += `\nThis candidate is transitioning from ${profile.switchingFrom} — weight transferable skills and learning agility more heavily when scoring.`
-      }
       if (profile.interviewGoal === 'first_interview') {
         profileContext += `\nThis is the candidate's first interview preparation — be encouraging in follow-up framing while still being honest about scores.`
       }

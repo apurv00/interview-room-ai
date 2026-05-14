@@ -15,11 +15,8 @@ export interface IUser extends Document {
   experienceLevel?: '0-2' | '3-6' | '7+'
 
   // Onboarding profile
-  onboardingCompleted: boolean
   currentTitle?: string
   currentIndustry?: 'tech' | 'finance' | 'consulting' | 'healthcare' | 'retail' | 'media' | 'government' | 'education' | 'startup' | 'other'
-  isCareerSwitcher?: boolean
-  switchingFrom?: string
   targetCompanyType?: 'faang' | 'startup' | 'midsize' | 'consulting' | 'enterprise' | 'any'
   interviewGoal?: 'first_interview' | 'improve_scores' | 'career_switch' | 'promotion' | 'general_practice'
   weakAreas?: string[]
@@ -28,8 +25,6 @@ export interface IUser extends Document {
   resumeR2Key?: string
 
   // Extended profile for personalization
-  preferredDomains?: string[]          // domains user practices most / wants to focus on
-  preferredInterviewTypes?: string[]   // interview types user prefers
   targetCompanies?: string[]           // specific company names
   linkedinUrl?: string
   yearsInCurrentRole?: number
@@ -208,11 +203,8 @@ const UserSchema = new Schema<IUser>(
     experienceLevel: { type: String, enum: ['0-2', '3-6', '7+'] },
 
     // Onboarding profile
-    onboardingCompleted: { type: Boolean, default: false },
     currentTitle: { type: String, trim: true, maxlength: 100 },
     currentIndustry: { type: String, enum: ['tech', 'finance', 'consulting', 'healthcare', 'retail', 'media', 'government', 'education', 'startup', 'other'] },
-    isCareerSwitcher: { type: Boolean, default: false },
-    switchingFrom: { type: String, trim: true, maxlength: 100 },
     targetCompanyType: { type: String, enum: ['faang', 'startup', 'midsize', 'consulting', 'enterprise', 'any'] },
     interviewGoal: { type: String, enum: ['first_interview', 'improve_scores', 'career_switch', 'promotion', 'general_practice'] },
     weakAreas: [{ type: String, enum: ['star_structure', 'specificity', 'conciseness', 'confidence', 'technical_depth', 'storytelling'] }],
@@ -221,8 +213,6 @@ const UserSchema = new Schema<IUser>(
     resumeR2Key: { type: String },
 
     // Extended profile for personalization
-    preferredDomains: [{ type: String }],
-    preferredInterviewTypes: [{ type: String }],
     targetCompanies: [{ type: String }],
     linkedinUrl: { type: String, trim: true },
     yearsInCurrentRole: { type: Number, min: 0, max: 50 },

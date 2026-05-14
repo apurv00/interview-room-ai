@@ -307,7 +307,6 @@ In the replay page:
 
 | Starting point | Action | Outcome |
 |----------------|--------|---------|
-| `/onboarding` after completion | none | `router.replace('/')` |
 | `/signin` while authenticated | none | `router.replace('/')` |
 | `/signup` while authenticated | none | `router.replace('/')` |
 | `/hire/*` as candidate | none | 403 or redirect (out of scope) |

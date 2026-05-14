@@ -36,8 +36,8 @@ export async function GET() {
 
   const [user, domainsRaw, depthsRaw, recentSessions] = await Promise.all([
     User.findById(session.user.id).select(
-      'targetRole experienceLevel currentIndustry isCareerSwitcher switchingFrom ' +
-      'targetCompanyType interviewGoal weakAreas preferredDomains preferredInterviewTypes ' +
+      'targetRole experienceLevel currentIndustry ' +
+      'targetCompanyType interviewGoal weakAreas ' +
       'topSkills communicationStyle practiceStats'
     ).lean(),
     InterviewDomain.find({ isActive: true }).sort({ sortOrder: 1 }).lean().catch(() => null),
@@ -90,12 +90,9 @@ export async function GET() {
     }
   }
 
-  // Priority domains: user's preferred + target role + domains from recent sessions
+  // Priority domains: target role + domains from recent sessions
   const priorityDomains = new Set<string>()
   if (user.targetRole) priorityDomains.add(user.targetRole)
-  if (user.preferredDomains?.length) {
-    user.preferredDomains.forEach(d => priorityDomains.add(d))
-  }
   recentSessions.forEach(s => {
     if (s.config?.role) priorityDomains.add(s.config.role)
   })
@@ -105,16 +102,12 @@ export async function GET() {
     domains.slice(0, 3).forEach(d => priorityDomains.add(d.slug))
   }
 
-  // Priority depths
+  // Priority depths — fixed defaults; preferredInterviewTypes was never
+  // populated in the UI, so the field was retired with the onboarding cleanup.
   const priorityDepths = new Set<string>()
-  if (user.preferredInterviewTypes?.length) {
-    user.preferredInterviewTypes.forEach(d => priorityDepths.add(d))
-  }
-  if (priorityDepths.size === 0) {
-    priorityDepths.add('screening')
-    priorityDepths.add('behavioral')
-    priorityDepths.add('technical')
-  }
+  priorityDepths.add('screening')
+  priorityDepths.add('behavioral')
+  priorityDepths.add('technical')
 
   const weakAreaTips: Record<string, string> = {
     star_structure: 'Focus on structuring answers with Situation, Task, Action, Result.',
@@ -166,9 +159,6 @@ export async function GET() {
       if (user.weakAreas?.length) {
         const relevantWeak = user.weakAreas[0]
         personalizedTip = weakAreaTips[relevantWeak]
-      }
-      if (user.isCareerSwitcher && user.switchingFrom) {
-        personalizedTip = `As a career switcher from ${user.switchingFrom}, focus on transferable skills and learning agility.`
       }
       if (user.targetCompanyType && user.targetCompanyType !== 'any') {
         const companyContext: Record<string, string> = {
@@ -225,7 +215,6 @@ export async function GET() {
       experienceLevel: user.experienceLevel,
       weakAreas: user.weakAreas || [],
       interviewGoal: user.interviewGoal,
-      isCareerSwitcher: user.isCareerSwitcher,
     },
   })
 }

@@ -354,7 +354,6 @@ export default function InterviewSetupForm() {
           currentTitle: quickTitle.trim(),
           experienceLevel: exp,
           topSkills: quickSkills.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 10),
-          complete: true,
         }),
       }).catch(() => {})
     }
@@ -450,7 +449,6 @@ export default function InterviewSetupForm() {
                   ...(extracted.currentTitle && { currentTitle: extracted.currentTitle }),
                   ...(extracted.currentIndustry && { currentIndustry: extracted.currentIndustry }),
                   ...(extracted.experienceLevel && { experienceLevel: extracted.experienceLevel }),
-                  complete: true,
                 }),
               }).catch(() => {})
             })
