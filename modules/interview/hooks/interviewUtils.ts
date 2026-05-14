@@ -14,10 +14,11 @@ import { getMinimumTopics } from '@interview/config/interviewConfig'
  * Used to adapt question difficulty dynamically.
  */
 export function computePerformanceSignal(evals: AnswerEvaluation[]): PerformanceSignal {
-  if (evals.length < 2) return 'calibrating'
-  const avg = evals.reduce((sum, e) =>
+  const scored = evals.filter((e) => e.status !== 'failed')
+  if (scored.length < 2) return 'calibrating'
+  const avg = scored.reduce((sum, e) =>
     sum + (e.relevance + e.structure + e.specificity + e.ownership) / 4, 0
-  ) / evals.length
+  ) / scored.length
   if (avg >= 70) return 'strong'
   if (avg >= 45) return 'on_track'
   return 'struggling'

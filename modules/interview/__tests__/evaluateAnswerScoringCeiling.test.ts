@@ -58,6 +58,7 @@ vi.mock('@shared/services/usageTracking', () => ({
 
 vi.mock('@shared/db/connection', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
+  connectDBIfNeeded: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('@shared/db/models', () => ({

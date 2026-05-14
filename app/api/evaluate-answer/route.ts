@@ -21,6 +21,14 @@ import { z } from 'zod'
 export const dynamic = 'force-dynamic'
 
 type EvaluateAnswerBody = z.infer<typeof EvaluateAnswerSchema>
+type EvaluationFailureReason = NonNullable<AnswerEvaluation['failure']>['reason']
+
+function classifyEvaluateAnswerFailure(err: unknown): EvaluationFailureReason {
+  const message = err instanceof Error ? err.message : String(err)
+  if (message.includes('ModelRouter: all attempts failed')) return 'server_modelrouter_failed'
+  if (err instanceof SyntaxError) return 'server_parse_error'
+  return 'server_llm_error'
+}
 
 export const POST = composeApiRoute<EvaluateAnswerBody>({
   schema: EvaluateAnswerSchema,
@@ -29,6 +37,7 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
   async handler(req, { user, body }) {
     const { config, question, answer, questionIndex, probeDepth, sessionId, wasTruncatedByTimer } = body
     const startTime = Date.now()
+    const timings: Record<string, number> = {}
     const interviewType = config.interviewType || 'behavioral'
     const domainLabel = getDomainLabel(config.role)
 
@@ -50,6 +59,7 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
     }
 
     // Pre-fetch session config (depth, rubric, user profile) from Redis cache.
+    const sessionConfigStart = Date.now()
     const sessionCfg = sessionId
       ? await getOrLoadSessionConfig(sessionId, {
           role: config.role,
@@ -58,6 +68,7 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
           experience: config.experience,
         }).catch(() => null)
       : null
+    timings.sessionConfigMs = Date.now() - sessionConfigStart
 
     // Fetch depth-specific evaluation criteria — cache-first, Mongo fallback
     let evalCriteria = ''
@@ -132,6 +143,7 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
     // Previously sequential: JD → profile → skill file → resume, adding
     // 400-1200ms of avoidable latency from DB/cache round-trips. Each
     // fetch is independent; failures produce empty strings (same as before).
+    const contextStart = Date.now()
     const [jdResult, profileResult, skillResult, resumeResult] = await Promise.allSettled([
       // 1. JD context
       config.jobDescription && sessionId
@@ -155,6 +167,7 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
         ? getOrLoadResumeContext(sessionId, config.resumeText, config.role)
         : Promise.resolve(null),
     ])
+    timings.contextMs = Date.now() - contextStart
 
     // Build JD context
     let jdContext = ''
@@ -331,6 +344,7 @@ ${dimensionSchema}${jdAlignmentSchema},
 }`
 
     try {
+      const modelStart = Date.now()
       let result = await completionStream({
         taskSlot: 'interview.evaluate-answer',
         system: systemPrompt,
@@ -365,6 +379,7 @@ ${dimensionSchema}${jdAlignmentSchema},
         })
         result = retry
       }
+      timings.modelMs = Date.now() - modelStart
 
       const raw = result.text || '{}'
       const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
@@ -376,6 +391,7 @@ ${dimensionSchema}${jdAlignmentSchema},
       // `scores` stays loose (any) to match the pre-G.2 behavior for the
       // downstream spread/indexing logic — the schema adds the safety
       // layer without narrowing the type surface.
+      const parseStart = Date.now()
       let scores: any /* eslint-disable-line */
       try {
         scores = JSON.parse(cleaned)
@@ -387,6 +403,7 @@ ${dimensionSchema}${jdAlignmentSchema},
         throw parseErr
       }
       const parsedLlm = EvaluateAnswerLlmSchema.safeParse(scores)
+      timings.parseValidationMs = Date.now() - parseStart
       if (!parsedLlm.success) {
         aiLogger.warn(
           {
@@ -454,9 +471,23 @@ ${dimensionSchema}${jdAlignmentSchema},
         success: true,
       }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
 
+      aiLogger.info(
+        {
+          event: 'evaluate_answer_timing',
+          sessionId,
+          questionIndex,
+          status: evaluation.status,
+          totalMs: Date.now() - startTime,
+          ...timings,
+        },
+        'evaluate-answer timing',
+      )
+
       return NextResponse.json(evaluation)
     } catch (err) {
       aiLogger.error({ err }, 'LLM API error in evaluate-answer')
+      const failureReason = classifyEvaluateAnswerFailure(err)
+      const failureMessage = err instanceof Error ? err.message : String(err)
 
       trackUsage({
         user,
@@ -467,8 +498,21 @@ ${dimensionSchema}${jdAlignmentSchema},
         modelUsed: 'unknown',
         durationMs: Date.now() - startTime,
         success: false,
-        errorMessage: err instanceof Error ? err.message : 'Unknown error',
+        errorMessage: failureMessage,
       }).catch((err) => aiLogger.warn({ err }, 'Usage tracking failed'))
+
+      aiLogger.info(
+        {
+          event: 'evaluate_answer_timing',
+          sessionId,
+          questionIndex,
+          status: 'failed',
+          failureReason,
+          totalMs: Date.now() - startTime,
+          ...timings,
+        },
+        'evaluate-answer timing',
+      )
 
       // G.3: mark this evaluation as failed so generate-feedback can
       // skip it in aggregation rather than trusting the placeholder
@@ -485,6 +529,12 @@ ${dimensionSchema}${jdAlignmentSchema},
         specificity: 55,
         ownership: 60,
         status: 'failed',
+        failure: {
+          source: 'server',
+          reason: failureReason,
+          message: failureMessage,
+          taskSlot: 'interview.evaluate-answer',
+        },
         probeDecision: { shouldProbe: false },
       } as AnswerEvaluation)
     }

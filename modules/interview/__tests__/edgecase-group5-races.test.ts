@@ -30,9 +30,9 @@ describe('Group 5: Timer + finishInterview Races', () => {
     // finishInterview → abort signal → evaluateAnswer fetch aborted →
     // catch block in useInterviewAPI.ts:148-158 returns fallback:
     //   { relevance: 60, structure: 55, specificity: 55, ownership: 60 }
-    // pendingEvalRef.current resolves via .catch handler in evaluateMainAnswer:
+    // pendingEvaluationsRef tracks the background task until it resolves:
     //   pushes { relevance: 60, structure: 55, specificity: 55, ownership: 60 }
-    // pendingEvalRef await in finishInterview resolves within ms (abort is instant)
+    // finishInterview waits for all pending evaluations for up to 3s
 
     const fallbackEval = {
       relevance: 60, structure: 55, specificity: 55, ownership: 60,
@@ -48,10 +48,10 @@ describe('Group 5: Timer + finishInterview Races', () => {
     // User clicks End at the same time → finishInterview() again
     //
     // First call:
-    //   abort() → cancelTTS → SCORING → await pendingEval → persist → navigate
+    //   abort() → cancelTTS → SCORING → await pending evaluations → persist → navigate
     // Second call (ms later):
     //   abort() (no-op) → cancelTTS (no-op) → SCORING (already) →
-    //   await pendingEval (null) → persist AGAIN → navigate AGAIN
+    //   await pending evaluations → persist AGAIN → navigate AGAIN
     //
     // Double persistSession, double feedback generation.
     // No guard: `if (phaseRef.current === 'SCORING') return`
@@ -79,7 +79,7 @@ describe('Group 5: Timer + finishInterview Races', () => {
     // - finishInterview aborts the signal → evaluateAnswer fetch aborted
     // - evaluateAndCoach throws (caught by main try/catch as AbortError)
     // - Probe evaluation lost
-    // - pendingEvalRef has the PREVIOUS answer's eval (already settled)
+    // - pendingEvaluationsRef may have earlier background evals, usually already settled
     // - finishInterview proceeds normally — probe scores missing
 
     const probeInProgress = true

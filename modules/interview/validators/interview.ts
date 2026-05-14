@@ -41,6 +41,22 @@ const PushbackSchema = z.object({
   tone: z.enum(['curious', 'probing', 'encouraging']),
 })
 
+const AnswerEvaluationFailureSchema = z.object({
+  source: z.enum(['client', 'server']),
+  reason: z.enum([
+    'client_timeout',
+    'client_http_non_ok',
+    'client_fetch_error',
+    'server_modelrouter_failed',
+    'server_parse_error',
+    'server_llm_error',
+  ]),
+  message: z.string().max(1000).optional(),
+  httpStatus: z.number().int().min(100).max(599).optional(),
+  timeoutMs: z.number().int().positive().optional(),
+  taskSlot: z.string().max(100).optional(),
+})
+
 export const AnswerEvaluationSchema = z.object({
   questionIndex: z.number().int().min(0).max(100),
   question: z.string().max(2000),
@@ -55,6 +71,7 @@ export const AnswerEvaluationSchema = z.object({
   flags: z.array(z.string().max(500)).max(20).optional(),
   /** G.3: integrity marker — ok | truncated | failed. See shared/types.ts. */
   status: z.enum(['ok', 'truncated', 'failed']).optional(),
+  failure: AnswerEvaluationFailureSchema.optional(),
   probeDecision: ProbeDecisionSchema.nullish(),
   pushback: PushbackSchema.nullish(),
 })

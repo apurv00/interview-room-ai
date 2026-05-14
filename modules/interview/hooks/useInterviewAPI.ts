@@ -37,7 +37,8 @@ export function buildFailedAnswerEvaluation(
   question: string,
   answer: string,
   qIdx: number,
-  scores: EvaluationFallbackScores
+  scores: EvaluationFallbackScores,
+  failure?: AnswerEvaluation['failure'],
 ): AnswerEvaluation {
   return {
     questionIndex: qIdx,
@@ -45,6 +46,7 @@ export function buildFailedAnswerEvaluation(
     answer,
     ...scores,
     status: 'failed',
+    ...(failure && { failure }),
     probeDecision: { shouldProbe: false },
   }
 }
@@ -216,6 +218,12 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
             structure: 55,
             specificity: 55,
             ownership: 60,
+          }, {
+            source: 'client',
+            reason: 'client_http_non_ok',
+            httpStatus: res.status,
+            message: `HTTP ${res.status}`,
+            taskSlot: 'interview.evaluate-answer',
           })
         }
         return res.json()
@@ -231,14 +239,20 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
             structure: 50,
             specificity: 50,
             ownership: 50,
+          }, {
+            source: 'client',
+            reason: 'client_timeout',
+            timeoutMs,
+            taskSlot: 'interview.evaluate-answer',
           })
         }
 
+        const details = errorDetails(err)
         if (!signal?.aborted) {
           console.warn('[evaluateAnswer] fetch failed', {
             questionIndex: qIdx,
             sessionId,
-            error: errorDetails(err),
+            error: details,
           })
         }
         return buildFailedAnswerEvaluation(question, answer, qIdx, {
@@ -246,6 +260,11 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
           structure: 55,
           specificity: 55,
           ownership: 60,
+        }, {
+          source: 'client',
+          reason: 'client_fetch_error',
+          message: details.message,
+          taskSlot: 'interview.evaluate-answer',
         })
       } finally {
         clearTimeout(timeoutId)

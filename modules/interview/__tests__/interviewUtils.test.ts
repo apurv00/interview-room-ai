@@ -103,6 +103,25 @@ describe('computePerformanceSignal', () => {
     ]
     expect(computePerformanceSignal(evals)).toBe('strong')
   })
+
+  it('excludes failed fallback rows from live performance signal', () => {
+    const evals = [
+      makeEvalWithAvg(90),
+      { ...makeEvalWithAvg(20), status: 'failed' as const },
+      makeEvalWithAvg(80),
+    ]
+
+    expect(computePerformanceSignal(evals)).toBe('strong')
+  })
+
+  it('returns calibrating when fewer than two non-failed rows remain', () => {
+    const evals = [
+      makeEvalWithAvg(90),
+      { ...makeEvalWithAvg(20), status: 'failed' as const },
+    ]
+
+    expect(computePerformanceSignal(evals)).toBe('calibrating')
+  })
 })
 
 // ─── shouldProbeOrAdvance ───────────────────────────────────────────────────
