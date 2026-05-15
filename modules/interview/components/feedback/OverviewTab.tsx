@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, type ReactNode } from 'react'
+import { useMemo } from 'react'
 import { ScoreBar } from '@shared/ui/ScoreBar'
 import PeerComparison, { type PeerData } from '@interview/components/feedback/PeerComparison'
 import ScoreProgressionChart from '@interview/components/feedback/ScoreProgressionChart'
@@ -9,6 +9,7 @@ import DimensionRadar from '@interview/components/feedback/DimensionRadar'
 import ConfidenceTrend from '@interview/components/feedback/ConfidenceTrend'
 import RedFlagCards from '@interview/components/feedback/RedFlagCards'
 import ScoreTrendChart from '@interview/components/feedback/ScoreTrendChart'
+import TextWithQuestionChips from '@interview/components/feedback/TextWithQuestionChips'
 // eslint-disable-next-line no-restricted-imports -- direct import is required: the @learn barrel transitively pulls server-only Redis (ioredis → dns/net) into this client component.
 import ComparisonCard from '@learn/components/feedback/ComparisonCard'
 import type { FeedbackData, StoredInterviewData } from '@shared/types'
@@ -31,15 +32,13 @@ interface OverviewTabProps {
   domain?: string
   /** Set when this session is a retake — drives "vs first attempt" comparison. */
   parentSessionId?: string
-  /**
-   * Optional content rendered at the very bottom of the tab. Used to inject
-   * `LearningPlanSection` from the page without coupling OverviewTab to the
-   * @learn or @interview learning-plan modules.
-   */
-  footer?: ReactNode
+  /** Click handler for Q-chips parsed out of top_3_improvements + red flags. */
+  onQuestionClick?: (questionIndex: number) => void
+  /** Highest valid question index for chip range guard. */
+  maxQuestionIndex?: number
 }
 
-export default function OverviewTab({ data, feedback, sessionId, peerData, peerLoading, currentScore, currentScores, domain, parentSessionId, footer }: OverviewTabProps) {
+export default function OverviewTab({ data, feedback, sessionId, peerData, peerLoading, currentScore, currentScores, domain, parentSessionId, onQuestionClick, maxQuestionIndex }: OverviewTabProps) {
   const { dimensions, red_flags, top_3_improvements } = feedback
   const { answer_quality, communication } = dimensions
   const engagementSignals = dimensions.engagement_signals || null
@@ -98,7 +97,13 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
                 <span className="shrink-0 w-6 h-6 rounded-full bg-brand-500/20 border border-brand-500/30 text-brand-500 text-xs flex items-center justify-center font-bold">
                   {i + 1}
                 </span>
-                <p className="text-body text-[#0f1419] leading-relaxed">{s(tip)}</p>
+                <p className="text-body text-[#0f1419] leading-relaxed">
+                  <TextWithQuestionChips
+                    text={s(tip)}
+                    onQuestionClick={onQuestionClick}
+                    maxQuestionIndex={maxQuestionIndex}
+                  />
+                </p>
               </div>
             ))}
           </div>
@@ -106,7 +111,11 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
       )}
 
       {/* Red Flags — hoisted to top alongside Top Improvements */}
-      <RedFlagCards redFlags={Array.isArray(red_flags) ? red_flags.map(f => s(f)) : []} />
+      <RedFlagCards
+        redFlags={Array.isArray(red_flags) ? red_flags.map(f => s(f)) : []}
+        onQuestionClick={onQuestionClick}
+        maxQuestionIndex={maxQuestionIndex}
+      />
 
       {/* Score Trend + Comparison */}
       <div className="grid md:grid-cols-2 gap-4">
@@ -213,9 +222,6 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
       {sessionId && sessionId !== 'local' && data.config && feedback && (
         <PeerComparison data={peerData} loading={peerLoading} userFeedback={feedback} />
       )}
-
-      {/* Closing slot — page injects LearningPlanSection here ("constructive end") */}
-      {footer}
     </div>
   )
 }
