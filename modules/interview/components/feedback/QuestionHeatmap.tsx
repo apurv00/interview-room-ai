@@ -23,6 +23,14 @@ interface TranscriptEntry {
 interface QuestionHeatmapProps {
   evaluations: Evaluation[]
   transcript: TranscriptEntry[]
+  /**
+   * Click handler for a question row. When provided, suppresses the local
+   * inline-expand behavior — parent owns navigation (e.g. ScoresTab scrolls
+   * to and expands the matching QuestionBreakdown row instead).
+   * `questionIndex` is the array index `i` (0-based), matching how
+   * QuestionBreakdown indexes its accordion rows.
+   */
+  onCellClick?: (questionIndex: number) => void
 }
 
 const DIMENSIONS = ['relevance', 'structure', 'specificity', 'ownership'] as const
@@ -50,7 +58,7 @@ function truncate(text: string, max: number): string {
   return text.length > max ? text.slice(0, max) + '...' : text
 }
 
-export default function QuestionHeatmap({ evaluations, transcript }: QuestionHeatmapProps) {
+export default function QuestionHeatmap({ evaluations, transcript: _transcript, onCellClick }: QuestionHeatmapProps) {
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
 
   if (!evaluations || evaluations.length === 0) {
@@ -92,7 +100,13 @@ export default function QuestionHeatmap({ evaluations, transcript }: QuestionHea
                 <td colSpan={DIMENSIONS.length + 2} className="p-0">
                   {/* Clickable row */}
                   <button
-                    onClick={() => setExpandedIdx(isExpanded ? null : i)}
+                    onClick={() => {
+                      if (onCellClick) {
+                        onCellClick(i)
+                      } else {
+                        setExpandedIdx(isExpanded ? null : i)
+                      }
+                    }}
                     className="w-full text-left hover:bg-[#f8fafc] transition"
                   >
                     <div className="flex items-center">
@@ -109,6 +123,8 @@ export default function QuestionHeatmap({ evaluations, transcript }: QuestionHea
                           viewBox="0 0 24 24"
                           stroke="currentColor"
                           strokeWidth={2}
+                          // When parent owns navigation, point right to suggest "jumps to row" instead of "expands here"
+                          style={onCellClick ? { transform: 'rotate(-90deg)' } : undefined}
                         >
                           <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
                         </svg>
@@ -134,8 +150,8 @@ export default function QuestionHeatmap({ evaluations, transcript }: QuestionHea
                     </div>
                   </button>
 
-                  {/* Expanded detail */}
-                  {isExpanded && (
+                  {/* Expanded detail (suppressed when parent owns navigation via onCellClick) */}
+                  {isExpanded && !onCellClick && (
                     <div className="px-3 pb-3 pt-1 border-t border-[#e1e8ed] bg-[#f8fafc]">
                       <div className="space-y-2">
                         <div>
