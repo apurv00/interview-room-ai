@@ -1,18 +1,18 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useMemo, type ReactNode } from 'react'
 import { ScoreBar } from '@shared/ui/ScoreBar'
 import PeerComparison, { type PeerData } from '@interview/components/feedback/PeerComparison'
 import ScoreProgressionChart from '@interview/components/feedback/ScoreProgressionChart'
 import SpeechMetricsChart from '@interview/components/feedback/SpeechMetricsChart'
 import DimensionRadar from '@interview/components/feedback/DimensionRadar'
 import ConfidenceTrend from '@interview/components/feedback/ConfidenceTrend'
-import QuestionHeatmap from '@interview/components/feedback/QuestionHeatmap'
 import RedFlagCards from '@interview/components/feedback/RedFlagCards'
 import ScoreTrendChart from '@interview/components/feedback/ScoreTrendChart'
+// eslint-disable-next-line no-restricted-imports -- direct import is required: the @learn barrel transitively pulls server-only Redis (ioredis → dns/net) into this client component.
 import ComparisonCard from '@learn/components/feedback/ComparisonCard'
 import type { FeedbackData, StoredInterviewData } from '@shared/types'
-import { PROBABILITY_COLORS, CONFIDENCE_TREND_LABELS } from '@interview/config/feedbackConfig'
+import { CONFIDENCE_TREND_LABELS } from '@interview/config/feedbackConfig'
 
 function s(v: unknown): string {
   if (v === null || v === undefined) return ''
@@ -31,9 +31,15 @@ interface OverviewTabProps {
   domain?: string
   /** Set when this session is a retake — drives "vs first attempt" comparison. */
   parentSessionId?: string
+  /**
+   * Optional content rendered at the very bottom of the tab. Used to inject
+   * `LearningPlanSection` from the page without coupling OverviewTab to the
+   * @learn or @interview learning-plan modules.
+   */
+  footer?: ReactNode
 }
 
-export default function OverviewTab({ data, feedback, sessionId, peerData, peerLoading, currentScore, currentScores, domain, parentSessionId }: OverviewTabProps) {
+export default function OverviewTab({ data, feedback, sessionId, peerData, peerLoading, currentScore, currentScores, domain, parentSessionId, footer }: OverviewTabProps) {
   const { dimensions, red_flags, top_3_improvements } = feedback
   const { answer_quality, communication } = dimensions
   const engagementSignals = dimensions.engagement_signals || null
@@ -82,6 +88,26 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
 
   return (
     <div className="space-y-6 animate-fade-in">
+      {/* Top 3 Improvements — hoisted to top so the closing tab leads with what to fix */}
+      {Array.isArray(top_3_improvements) && top_3_improvements.length > 0 && (
+        <section className="surface-card-bordered p-5">
+          <h3 className="text-subheading text-[#0f1419] mb-4">Top Improvements</h3>
+          <div className="space-y-3">
+            {top_3_improvements.map((tip, i) => (
+              <div key={i} className="flex items-start gap-3">
+                <span className="shrink-0 w-6 h-6 rounded-full bg-brand-500/20 border border-brand-500/30 text-brand-500 text-xs flex items-center justify-center font-bold">
+                  {i + 1}
+                </span>
+                <p className="text-body text-[#0f1419] leading-relaxed">{s(tip)}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Red Flags — hoisted to top alongside Top Improvements */}
+      <RedFlagCards redFlags={Array.isArray(red_flags) ? red_flags.map(f => s(f)) : []} />
+
       {/* Score Trend + Comparison */}
       <div className="grid md:grid-cols-2 gap-4">
         <section className="surface-card-bordered p-4 sm:p-5">
@@ -157,14 +183,6 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
         </section>
       )}
 
-      {/* Row 4: Question Heatmap */}
-      {evalData.length > 0 && (
-        <section className="surface-card-bordered p-4 sm:p-5">
-          <h3 className="text-subheading text-[#0f1419] mb-3">Question Breakdown</h3>
-          <QuestionHeatmap evaluations={evalData} transcript={data.transcript} />
-        </section>
-      )}
-
       {/* JD Alignment */}
       {feedback.jd_match_score !== undefined && (
         <section className="surface-card-bordered p-4 sm:p-5 space-y-3">
@@ -191,28 +209,13 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
         </section>
       )}
 
-      {/* Red Flags */}
-      <RedFlagCards redFlags={Array.isArray(red_flags) ? red_flags.map(f => s(f)) : []} />
-
-      {/* Top 3 Improvements */}
-      <section className="surface-card-bordered p-5">
-        <h3 className="text-subheading text-[#0f1419] mb-4">Top Improvements</h3>
-        <div className="space-y-3">
-          {Array.isArray(top_3_improvements) && top_3_improvements.map((tip, i) => (
-            <div key={i} className="flex items-start gap-3">
-              <span className="shrink-0 w-6 h-6 rounded-full bg-brand-500/20 border border-brand-500/30 text-brand-500 text-xs flex items-center justify-center font-bold">
-                {i + 1}
-              </span>
-              <p className="text-body text-[#0f1419] leading-relaxed">{s(tip)}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
       {/* Peer Comparison */}
       {sessionId && sessionId !== 'local' && data.config && feedback && (
         <PeerComparison data={peerData} loading={peerLoading} userFeedback={feedback} />
       )}
+
+      {/* Closing slot — page injects LearningPlanSection here ("constructive end") */}
+      {footer}
     </div>
   )
 }
