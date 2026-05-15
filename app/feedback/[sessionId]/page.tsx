@@ -165,8 +165,15 @@ function FeedbackPageInner() {
   // app/interview/page.tsx), so up to three code paths race to fetch the
   // presign URL: initial load, the feedback poll loop, and the
   // late-landing watcher below. This ref guarantees the actual
-  // /api/recordings/presign call fires at most once per page mount.
+  // /api/recordings/presign call fires at most once *in-flight* per page
+  // mount; on failure it resets so the next caller can retry.
   const recordingFetchTriggeredRef = useRef(false)
+
+  // Mirror of `recordingUrl` for closure-safe reads inside long-lived
+  // setInterval callbacks (the watcher useEffect below would otherwise
+  // capture the initial null value forever). Updated in a tiny
+  // useEffect that runs whenever recordingUrl changes.
+  const recordingUrlRef = useRef<string | null>(null)
 
   const fetchRecordingUrl = useCallback(() => {
     if (recordingFetchTriggeredRef.current) return
@@ -193,6 +200,12 @@ function FeedbackPageInner() {
         recordingFetchTriggeredRef.current = false
       })
   }, [sessionId])
+
+  // Keep recordingUrlRef in sync with recordingUrl state for the
+  // watcher's closure-safe reads.
+  useEffect(() => {
+    recordingUrlRef.current = recordingUrl
+  }, [recordingUrl])
 
   // ── Retry queued replay uploads ────────────────────────────────────────────
   useEffect(() => {
@@ -226,7 +239,12 @@ function FeedbackPageInner() {
       }
     }
     const tick = async () => {
-      if (cancelled || recordingFetchTriggeredRef.current) {
+      // Stop conditions: unmounted, URL successfully obtained, or budget
+      // exhausted. We deliberately do NOT short-circuit on the in-flight
+      // latch (`recordingFetchTriggeredRef.current`) — if a presign fetch
+      // fails it resets the latch, and the watcher needs to be alive to
+      // retry on the next tick. (Codex P2 + Vercel Agent #239 on PR #364.)
+      if (cancelled || recordingUrlRef.current) {
         stop()
         return
       }
@@ -239,8 +257,9 @@ function FeedbackPageInner() {
         if (!res.ok) return
         const data = await res.json()
         if (data?.hasRecording) {
+          // No-op if another path already triggered fetch; on its eventual
+          // success the next tick observes recordingUrlRef and stops.
           fetchRecordingUrl()
-          stop()
         }
       } catch {
         // network/abort — keep ticking
