@@ -161,12 +161,116 @@ function FeedbackPageInner() {
   const activeEntryRef = useRef<HTMLDivElement>(null)
   const handleSeekExpose = useCallback((fn: (s: number) => void) => { seekToRef.current = fn }, [])
 
+  // Dedup latch — the camera upload is fire-and-forget (see
+  // app/interview/page.tsx), so up to three code paths race to fetch the
+  // presign URL: initial load, the feedback poll loop, and the
+  // late-landing watcher below. This ref guarantees the actual
+  // /api/recordings/presign call fires at most once *in-flight* per page
+  // mount; on failure it resets so the next caller can retry.
+  const recordingFetchTriggeredRef = useRef(false)
+
+  // Mirror of `recordingUrl` for closure-safe reads inside long-lived
+  // setInterval callbacks (the watcher useEffect below would otherwise
+  // capture the initial null value forever). Updated in a tiny
+  // useEffect that runs whenever recordingUrl changes.
+  const recordingUrlRef = useRef<string | null>(null)
+
+  const fetchRecordingUrl = useCallback(() => {
+    if (recordingFetchTriggeredRef.current) return
+    recordingFetchTriggeredRef.current = true
+    setHasRecording(true)
+    const cachedUrl = getCachedJSON<string>(`${RECORDING_URL_PREFIX}${sessionId}`, RECORDING_URL_TTL_MS)
+    if (cachedUrl) {
+      setRecordingUrl(cachedUrl)
+      setVideoSrc(cachedUrl)
+      return
+    }
+    fetch(`/api/recordings/presign?sessionId=${sessionId}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(presignData => {
+        if (presignData?.url) {
+          setRecordingUrl(presignData.url)
+          setVideoSrc(presignData.url)
+          setCachedJSON(`${RECORDING_URL_PREFIX}${sessionId}`, presignData.url)
+        } else {
+          recordingFetchTriggeredRef.current = false
+        }
+      })
+      .catch(() => {
+        recordingFetchTriggeredRef.current = false
+      })
+  }, [sessionId])
+
+  // Keep recordingUrlRef in sync with recordingUrl state for the
+  // watcher's closure-safe reads.
+  useEffect(() => {
+    recordingUrlRef.current = recordingUrl
+  }, [recordingUrl])
+
   // ── Retry queued replay uploads ────────────────────────────────────────────
   useEffect(() => {
     void drainQueuedReplayUploads().catch((err) =>
       console.warn('Failed to drain queued replay uploads', err)
     )
   }, [])
+
+  // ── Late-landing recording catcher (Shape B) ───────────────────────────────
+  // Camera upload is fire-and-forget per app/interview/page.tsx — the
+  // feedback page can (and does) mount before the multipart 'complete'
+  // PATCHes session.recordingR2Key. Initial-load + the feedback poll
+  // loop's Shape A check cover the in-flight case, but if feedback
+  // arrives quickly enough that the poll loop never runs (or exits
+  // before the upload lands), neither path picks the recording up.
+  // This independent watcher polls /api/interviews/<id> every 3s for
+  // ~45s, calling fetchRecordingUrl once hasRecording flips true. The
+  // dedup ref makes it safe to overlap with the other paths.
+  useEffect(() => {
+    if (!sessionId || sessionId === 'local') return
+    if (recordingFetchTriggeredRef.current) return
+    let cancelled = false
+    let attempts = 0
+    const MAX_ATTEMPTS = 15
+    const INTERVAL_MS = 3000
+    let timer: ReturnType<typeof setInterval> | undefined
+    const stop = () => {
+      if (timer !== undefined) {
+        clearInterval(timer)
+        timer = undefined
+      }
+    }
+    const tick = async () => {
+      // Stop conditions: unmounted, URL successfully obtained, or budget
+      // exhausted. We deliberately do NOT short-circuit on the in-flight
+      // latch (`recordingFetchTriggeredRef.current`) — if a presign fetch
+      // fails it resets the latch, and the watcher needs to be alive to
+      // retry on the next tick. (Codex P2 + Vercel Agent #239 on PR #364.)
+      if (cancelled || recordingUrlRef.current) {
+        stop()
+        return
+      }
+      if (++attempts > MAX_ATTEMPTS) {
+        stop()
+        return
+      }
+      try {
+        const res = await fetch(`/api/interviews/${sessionId}?excludeTranscript=true`)
+        if (!res.ok) return
+        const data = await res.json()
+        if (data?.hasRecording) {
+          // No-op if another path already triggered fetch; on its eventual
+          // success the next tick observes recordingUrlRef and stops.
+          fetchRecordingUrl()
+        }
+      } catch {
+        // network/abort — keep ticking
+      }
+    }
+    timer = setInterval(tick, INTERVAL_MS)
+    return () => {
+      cancelled = true
+      stop()
+    }
+  }, [sessionId, fetchRecordingUrl])
 
   // ── Fullscreen replay overlay ──────────────────────────────────────────────
   useEffect(() => {
@@ -395,25 +499,11 @@ function FeedbackPageInner() {
             // responses age out within SESSION_CACHE_TTL_MS (2 min).
             setHasAnalysisSource(Boolean(session.hasAnalysisSource))
 
-            // Fetch presigned recording URL — check cache first
+            // Fetch presigned recording URL. If hasRecording is still false
+            // here, the camera upload is in flight — Shape A inside the
+            // poll loop + Shape B's watcher will pick it up.
             if (session.hasRecording) {
-              setHasRecording(true)
-              const cachedUrl = getCachedJSON<string>(`${RECORDING_URL_PREFIX}${sessionId}`, RECORDING_URL_TTL_MS)
-              if (cachedUrl) {
-                setRecordingUrl(cachedUrl)
-                setVideoSrc(cachedUrl)
-              } else {
-                fetch(`/api/recordings/presign?sessionId=${sessionId}`)
-                  .then(r => r.ok ? r.json() : null)
-                  .then(presignData => {
-                    if (presignData?.url) {
-                      setRecordingUrl(presignData.url)
-                      setVideoSrc(presignData.url)
-                      setCachedJSON(`${RECORDING_URL_PREFIX}${sessionId}`, presignData.url)
-                    }
-                  })
-                  .catch(() => {})
-              }
+              fetchRecordingUrl()
             } else if (session.recordingUrl) {
               setRecordingUrl(session.recordingUrl as string)
               setVideoSrc(session.recordingUrl as string)
@@ -457,6 +547,7 @@ function FeedbackPageInner() {
                 )
                 if (pollRes.ok) {
                   const pollData = await pollRes.json()
+                  if (pollData.hasRecording) fetchRecordingUrl()
                   if (pollData.feedback) {
                     setFeedback(pollData.feedback as FeedbackData)
                     setLoading(false)
