@@ -161,12 +161,97 @@ function FeedbackPageInner() {
   const activeEntryRef = useRef<HTMLDivElement>(null)
   const handleSeekExpose = useCallback((fn: (s: number) => void) => { seekToRef.current = fn }, [])
 
+  // Dedup latch — the camera upload is fire-and-forget (see
+  // app/interview/page.tsx), so up to three code paths race to fetch the
+  // presign URL: initial load, the feedback poll loop, and the
+  // late-landing watcher below. This ref guarantees the actual
+  // /api/recordings/presign call fires at most once per page mount.
+  const recordingFetchTriggeredRef = useRef(false)
+
+  const fetchRecordingUrl = useCallback(() => {
+    if (recordingFetchTriggeredRef.current) return
+    recordingFetchTriggeredRef.current = true
+    setHasRecording(true)
+    const cachedUrl = getCachedJSON<string>(`${RECORDING_URL_PREFIX}${sessionId}`, RECORDING_URL_TTL_MS)
+    if (cachedUrl) {
+      setRecordingUrl(cachedUrl)
+      setVideoSrc(cachedUrl)
+      return
+    }
+    fetch(`/api/recordings/presign?sessionId=${sessionId}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(presignData => {
+        if (presignData?.url) {
+          setRecordingUrl(presignData.url)
+          setVideoSrc(presignData.url)
+          setCachedJSON(`${RECORDING_URL_PREFIX}${sessionId}`, presignData.url)
+        } else {
+          recordingFetchTriggeredRef.current = false
+        }
+      })
+      .catch(() => {
+        recordingFetchTriggeredRef.current = false
+      })
+  }, [sessionId])
+
   // ── Retry queued replay uploads ────────────────────────────────────────────
   useEffect(() => {
     void drainQueuedReplayUploads().catch((err) =>
       console.warn('Failed to drain queued replay uploads', err)
     )
   }, [])
+
+  // ── Late-landing recording catcher (Shape B) ───────────────────────────────
+  // Camera upload is fire-and-forget per app/interview/page.tsx — the
+  // feedback page can (and does) mount before the multipart 'complete'
+  // PATCHes session.recordingR2Key. Initial-load + the feedback poll
+  // loop's Shape A check cover the in-flight case, but if feedback
+  // arrives quickly enough that the poll loop never runs (or exits
+  // before the upload lands), neither path picks the recording up.
+  // This independent watcher polls /api/interviews/<id> every 3s for
+  // ~45s, calling fetchRecordingUrl once hasRecording flips true. The
+  // dedup ref makes it safe to overlap with the other paths.
+  useEffect(() => {
+    if (!sessionId || sessionId === 'local') return
+    if (recordingFetchTriggeredRef.current) return
+    let cancelled = false
+    let attempts = 0
+    const MAX_ATTEMPTS = 15
+    const INTERVAL_MS = 3000
+    let timer: ReturnType<typeof setInterval> | undefined
+    const stop = () => {
+      if (timer !== undefined) {
+        clearInterval(timer)
+        timer = undefined
+      }
+    }
+    const tick = async () => {
+      if (cancelled || recordingFetchTriggeredRef.current) {
+        stop()
+        return
+      }
+      if (++attempts > MAX_ATTEMPTS) {
+        stop()
+        return
+      }
+      try {
+        const res = await fetch(`/api/interviews/${sessionId}?excludeTranscript=true`)
+        if (!res.ok) return
+        const data = await res.json()
+        if (data?.hasRecording) {
+          fetchRecordingUrl()
+          stop()
+        }
+      } catch {
+        // network/abort — keep ticking
+      }
+    }
+    timer = setInterval(tick, INTERVAL_MS)
+    return () => {
+      cancelled = true
+      stop()
+    }
+  }, [sessionId, fetchRecordingUrl])
 
   // ── Fullscreen replay overlay ──────────────────────────────────────────────
   useEffect(() => {
@@ -395,25 +480,11 @@ function FeedbackPageInner() {
             // responses age out within SESSION_CACHE_TTL_MS (2 min).
             setHasAnalysisSource(Boolean(session.hasAnalysisSource))
 
-            // Fetch presigned recording URL — check cache first
+            // Fetch presigned recording URL. If hasRecording is still false
+            // here, the camera upload is in flight — Shape A inside the
+            // poll loop + Shape B's watcher will pick it up.
             if (session.hasRecording) {
-              setHasRecording(true)
-              const cachedUrl = getCachedJSON<string>(`${RECORDING_URL_PREFIX}${sessionId}`, RECORDING_URL_TTL_MS)
-              if (cachedUrl) {
-                setRecordingUrl(cachedUrl)
-                setVideoSrc(cachedUrl)
-              } else {
-                fetch(`/api/recordings/presign?sessionId=${sessionId}`)
-                  .then(r => r.ok ? r.json() : null)
-                  .then(presignData => {
-                    if (presignData?.url) {
-                      setRecordingUrl(presignData.url)
-                      setVideoSrc(presignData.url)
-                      setCachedJSON(`${RECORDING_URL_PREFIX}${sessionId}`, presignData.url)
-                    }
-                  })
-                  .catch(() => {})
-              }
+              fetchRecordingUrl()
             } else if (session.recordingUrl) {
               setRecordingUrl(session.recordingUrl as string)
               setVideoSrc(session.recordingUrl as string)
@@ -457,6 +528,7 @@ function FeedbackPageInner() {
                 )
                 if (pollRes.ok) {
                   const pollData = await pollRes.json()
+                  if (pollData.hasRecording) fetchRecordingUrl()
                   if (pollData.feedback) {
                     setFeedback(pollData.feedback as FeedbackData)
                     setLoading(false)
