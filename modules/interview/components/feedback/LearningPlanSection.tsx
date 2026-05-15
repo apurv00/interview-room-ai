@@ -70,10 +70,13 @@ export default function LearningPlanSection({
         <div className="space-y-3">
           <h4 className="text-subheading text-[#536471]">Targeted Practice Drills</h4>
           {drill_recommendations.map((drill, i) => {
-            // Phase A: derive Q-refs from prose. Phase B will prefer a structured
-            // `targetQuestions: number[]` field on the drill (backward-compat
-            // fallback to this regex-parsed list when the field is absent).
-            const drillQuestionIndices = parseQuestionRefs(drill.description)
+            // Phase B (2026-05-16): prefer the structured `targetQuestions`
+            // field. Falls back to Phase A's regex parse of `Q\d+` tokens
+            // in the prose description for old DB rows that pre-date Phase B.
+            const drillQuestionIndices =
+              drill.targetQuestions && drill.targetQuestions.length > 0
+                ? drill.targetQuestions
+                : parseQuestionRefs(drill.description)
             return (
               <div
                 key={i}

@@ -320,6 +320,14 @@ export interface FeedbackData {
     skillArea: string
     description: string
     practiceQuestions: string[]
+    /**
+     * Phase B (2026-05-16): 0-based questionIndex values this drill targets.
+     * Required in the LLM JSON schema (always emitted, possibly empty for
+     * truly cross-cutting drills). Optional here so old DB rows that
+     * pre-date Phase B still type-check; UI consumers should fall back to
+     * regex-parsing drill.description when the field is missing or empty.
+     */
+    targetQuestions?: number[]
   }>
   /**
    * Side-effect scheduling outcomes captured synchronously at response

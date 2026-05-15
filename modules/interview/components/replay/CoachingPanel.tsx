@@ -106,6 +106,21 @@ export default function CoachingPanel({
   const improvementEvents = fusionSummary.improvementMoments || []
 
   const tips: AnnotatedTip[] = useMemo(() => {
+    // Phase B (2026-05-16): prefer the structured `coachingTipsRich` field
+    // (LLM-emitted category + 0-based questionIndex per tip). Falls back to
+    // Phase A's heuristic categorization (categorizeTip) + regex Q-ref
+    // parsing for old DB rows that pre-date Phase B.
+    const rich = fusionSummary.coachingTipsRich
+    if (rich && rich.length > 0) {
+      return rich.map((entry) => ({
+        text: entry.text,
+        category: entry.category as TipCategory,
+        // findMatchingDrillIndex still uses the (text, category) signal — the
+        // structured `questionIndex` improves chip-rendering accuracy via
+        // TextWithQuestionChips, but the drill-match heuristic stays the same.
+        drillIndex: findMatchingDrillIndex(entry.text, entry.category as TipCategory, drillRecommendations),
+      }))
+    }
     return (fusionSummary.coachingTips || []).map((tip) => {
       const category = categorizeTip(tip)
       return {
@@ -114,7 +129,7 @@ export default function CoachingPanel({
         drillIndex: findMatchingDrillIndex(tip, category, drillRecommendations),
       }
     })
-  }, [fusionSummary.coachingTips, drillRecommendations])
+  }, [fusionSummary.coachingTips, fusionSummary.coachingTipsRich, drillRecommendations])
 
   return (
     <div className="space-y-6">

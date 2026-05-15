@@ -391,5 +391,22 @@ export const FusionLlmSchema = z.object({
     topMoments: z.union([z.array(z.number()), z.array(TimelineEventSchema)]).optional(),
     improvementMoments: z.union([z.array(z.number()), z.array(TimelineEventSchema)]).optional(),
     coachingTips: z.array(z.string()).optional(),
+    /**
+     * Phase B (2026-05-16): structured parallel field for coaching tips.
+     * When present, the UI prefers this over `coachingTips` — each rich tip
+     * carries its category (deterministic, not heuristic) and an optional
+     * 0-based questionIndex tying it back to a source question.
+     *
+     * Backward-compat: old DB analysis rows have only `coachingTips` (the
+     * string[] form); the UI's CoachingPanel falls back to that path
+     * (heuristic categorization via categorizeTip + regex Q-ref parsing).
+     * Both fields may be present simultaneously when the model emits the
+     * rich form alongside the legacy strings.
+     */
+    coachingTipsRich: z.array(z.object({
+      text: z.string(),
+      category: z.enum(['Behavior', 'Communication', 'Content', 'General']),
+      questionIndex: z.number().int().min(0).optional(),
+    })).optional(),
   }).passthrough(),
 }).passthrough()

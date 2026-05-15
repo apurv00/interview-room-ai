@@ -100,7 +100,14 @@ ${JSON_OUTPUT_RULE}
     "confidenceProgression": "one sentence on how confidence changed",
     "topMoments": [3 indices into timeline array for best moments],
     "improvementMoments": [3 indices into timeline array for worst moments],
-    "coachingTips": ["3 specific, actionable coaching tips"]
+    "coachingTips": ["3 specific, actionable coaching tips"],
+    "coachingTipsRich": [
+      {
+        "text": "the same coaching tip text as above, one entry per tip in the same order",
+        "category": "Behavior" | "Communication" | "Content" | "General",
+        "questionIndex": 0-based index of the question this tip is rooted in (omit when cross-cutting)
+      }
+    ]
   }
 }
 
@@ -111,7 +118,17 @@ Guidelines:
 - Tie coaching tips to specific timestamps when possible
 - Score body language based on eye contact, expressions, and head stability
 - Score eye contact based on facial data averages
-- If the context data has NO \`facialSignals\` block (privacy mode, camera off, or no valid facial frames), return \`null\` for \`overallBodyLanguageScore\` and \`eyeContactScore\` — do NOT guess. The server also enforces this as a safety net, but emitting \`null\` from the model is the preferred signal.`
+- If the context data has NO \`facialSignals\` block (privacy mode, camera off, or no valid facial frames), return \`null\` for \`overallBodyLanguageScore\` and \`eyeContactScore\` — do NOT guess. The server also enforces this as a safety net, but emitting \`null\` from the model is the preferred signal.
+
+CATEGORY RULE (Phase B 2026-05-16): for each tip, choose the dominant signal type and emit it in \`coachingTipsRich.category\`:
+  - "Behavior" — eye contact, body language, gestures, posture, facial expression, head stability
+  - "Communication" — pace/WPM, filler words, pauses, hesitation, tone, conciseness
+  - "Content" — STAR structure, specificity (metrics/examples), ownership ("I" vs "we"), relevance, JD alignment
+  - "General" — only when none of the above clearly dominate
+
+Q-REF RULE (Phase B 2026-05-16): set \`questionIndex\` on each rich tip to the 0-based questionIndex value (from the timeline events' \`questionIndex\` field) when the tip is rooted in a specific question. Omit \`questionIndex\` ONLY for cross-cutting tips (e.g. "speak more slowly throughout"). Additionally, for tips tied to a question, also include the \`Q\\d+\` reference inline in the legacy \`coachingTips\` string itself (1-based, so Q1 for questionIndex=0) so older clients that don't yet read \`coachingTipsRich\` still get a navigable chip via the UI's regex parser.
+
+The \`coachingTips\` (string array) and \`coachingTipsRich\` (object array) MUST have the same length and ordering — \`coachingTipsRich[i]\` is the structured form of \`coachingTips[i]\`.`
 
   const { userPrompt, contextData } = buildUserPromptWithContext(
     prosodySegments,
