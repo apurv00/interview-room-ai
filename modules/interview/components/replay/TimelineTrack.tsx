@@ -3,6 +3,37 @@
 import { useMemo } from 'react'
 import type { TimelineEvent } from '@shared/types/multimodal'
 
+/**
+ * Group events whose normalized timeline position is within `thresholdPct`
+ * percent of each other. Returns an array of clusters, each cluster being
+ * the original events sorted by startSec. Used to prevent co-located dot
+ * markers from visually stacking into a single dot (see the "8 events, 6
+ * dots" perception bug — two cards at 2:12 collapse to one marker without
+ * clustering).
+ */
+export function clusterByPosition(
+  events: TimelineEvent[],
+  totalDurationSec: number,
+  thresholdPct: number
+): TimelineEvent[][] {
+  if (events.length === 0 || totalDurationSec <= 0) return []
+  // Events arrive already sorted by startSec from the parent component.
+  const clusters: TimelineEvent[][] = []
+  for (const ev of events) {
+    const pos = (ev.startSec / totalDurationSec) * 100
+    const last = clusters[clusters.length - 1]
+    if (last) {
+      const lastPos = (last[0].startSec / totalDurationSec) * 100
+      if (pos - lastPos <= thresholdPct) {
+        last.push(ev)
+        continue
+      }
+    }
+    clusters.push([ev])
+  }
+  return clusters
+}
+
 interface TimelineTrackProps {
   events: TimelineEvent[]
   totalDurationSec: number
@@ -77,24 +108,58 @@ export default function TimelineTrack({ events, totalDurationSec, currentTimeSec
           )
         })}
 
-        {/* Dot markers for key moments */}
-        {sortedEvents
-          .filter((e) => e.type === 'strength' || e.type === 'improvement' || e.type === 'coaching_tip')
-          .map((event, i) => {
-            const pos = (event.startSec / totalDurationSec) * 100
-            return (
-              <div
-                key={`dot-${i}`}
-                className={`absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full ${DOT_COLORS[event.type]} ring-2 ring-white z-[5] cursor-pointer`}
-                style={{ left: `${pos}%` }}
-                title={event.title}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onSeek(event.startSec)
-                }}
-              />
-            )
-          })}
+        {/* Dot markers for key moments — co-located events cluster into one
+            marker with a +N badge so 8 events with 2 pairs sharing startSec
+            don't visually collapse to 6 (the "missing dots" perception bug
+            on the live preview). Cluster when normalized x-positions are
+            within ~1% of timeline width. */}
+        {clusterByPosition(
+          sortedEvents.filter((e) =>
+            e.type === 'strength' || e.type === 'improvement' || e.type === 'coaching_tip'
+          ),
+          totalDurationSec,
+          1 // 1% cluster threshold
+        ).map((cluster, i) => {
+          const earliest = cluster[0]
+          const pos = (earliest.startSec / totalDurationSec) * 100
+          // Pick the highest-priority type for the dot color when a cluster
+          // mixes types (strength > improvement > coaching_tip — most-positive
+          // first so a mixed cluster reads as "good moment with a coaching
+          // overlay" rather than a generic blob).
+          const displayType =
+            cluster.find((e) => e.type === 'strength')?.type ??
+            cluster.find((e) => e.type === 'improvement')?.type ??
+            cluster[0].type
+          const extraCount = cluster.length - 1
+          const hoverTitle = cluster.map((e) => e.title).join(' · ')
+          return (
+            <div
+              key={`dot-${i}`}
+              className={`absolute top-1/2 -translate-y-1/2 ${
+                cluster.length > 1 ? 'w-3.5 h-3.5' : 'w-2.5 h-2.5'
+              } rounded-full ${DOT_COLORS[displayType]} ring-2 ring-white z-[5] cursor-pointer`}
+              style={{ left: `${pos}%` }}
+              title={hoverTitle}
+              onClick={(e) => {
+                e.stopPropagation()
+                // Seek to the EARLIEST event in the cluster so the
+                // auto-expand effect on MomentCards picks the first
+                // co-located card; user can scroll the cards strip to
+                // see the others at the same timestamp.
+                onSeek(earliest.startSec)
+              }}
+            >
+              {extraCount > 0 && (
+                <span
+                  className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] px-[3px] rounded-full bg-[#0f1419] text-white text-[9px] font-bold leading-[14px] text-center ring-2 ring-white"
+                  aria-label={`${cluster.length} moments at this position`}
+                >
+                  +{extraCount}
+                </span>
+              )}
+            </div>
+          )
+        })}
 
         {/* Playhead */}
         <div

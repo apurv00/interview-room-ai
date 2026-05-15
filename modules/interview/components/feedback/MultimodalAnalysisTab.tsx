@@ -84,9 +84,10 @@ export default function MultimodalAnalysisTab({
   maxQuestionIndex,
   onPracticeClick,
 }: MultimodalAnalysisTabProps) {
-  // Default sub-tab is now "moments" (was "transcript"). Information Foraging
-  // says lead with the AI's analysis (Moments + Tips), not the raw evidence.
-  const [rightPaneTab, setRightPaneTab] = useState<'moments' | 'tips' | 'transcript'>('moments')
+  // Round 3: right-pane segmented control retired. Moments moved to a
+  // full-width horizontal scroller below the body (synced with video).
+  // Right pane now stacks Tips above Transcript with no toggle (only 2
+  // sections; the tab chrome cost more attention than it saved).
   const [seek, setSeek] = useState<((sec: number) => void) | null>(null)
   // Local mirror of seek so the right-pane click handlers can call it without re-renders.
   useEffect(() => {
@@ -271,82 +272,60 @@ export default function MultimodalAnalysisTab({
             )}
           </div>
 
-          {/* RIGHT — scrolling insight stream
-              Order: Moments → Tips → Transcript. Lead with the AI's analysis
-              (Information Foraging: highest scent first); raw transcript is
-              evidence available on demand. */}
-          <div className="space-y-3 min-w-0">
-            <div className="flex gap-1 bg-[#f8fafc] border border-[#e1e8ed] rounded-xl p-1" role="tablist">
-              {(
-                [
-                  { key: 'moments', label: `Key Moments${keyMoments.length > 0 ? ` (${keyMoments.length})` : ''}` },
-                  { key: 'tips', label: `Tips${(analysis.fusionSummary?.coachingTips.length ?? 0) > 0 ? ` (${analysis.fusionSummary?.coachingTips.length})` : ''}` },
-                  { key: 'transcript', label: 'Transcript' },
-                ] as const
-              ).map((t) => (
-                <button
-                  key={t.key}
-                  role="tab"
-                  aria-selected={rightPaneTab === t.key}
-                  onClick={() => setRightPaneTab(t.key)}
-                  className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                    rightPaneTab === t.key
-                      ? 'bg-white text-[#0f1419] shadow-sm'
-                      : 'text-[#71767b] hover:text-[#0f1419]'
-                  }`}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
-
-            {rightPaneTab === 'moments' && (
-              keyMoments.length > 0 ? (
-                <MomentCards
-                  moments={keyMoments}
-                  onSeek={(sec) => seek?.(sec)}
-                  prosodySegments={analysis.prosodySegments}
-                  facialSegments={analysis.facialSegments}
-                  whisperTranscript={analysis.whisperTranscript}
-                  questionMarkers={questionMarkers}
-                  maxQuestionIndex={maxQuestionIndex}
-                />
-              ) : (
-                <p className="text-caption text-[#71767b] p-4">No key moments captured.</p>
-              )
-            )}
-
-            {rightPaneTab === 'tips' && (
-              analysis.fusionSummary && analysis.fusionSummary.coachingTips.length > 0 ? (
-                <CoachingPanel
-                  fusionSummary={analysis.fusionSummary}
-                  timeline={analysis.timeline || []}
-                  onSeek={(sec) => seek?.(sec)}
-                  hideMoments
-                  drillRecommendations={drillRecommendations}
-                  onQuestionClick={onQuestionClick}
-                  maxQuestionIndex={maxQuestionIndex}
-                  onPracticeClick={onPracticeClick}
-                />
-              ) : (
-                <p className="text-caption text-[#71767b] p-4">No coaching tips generated.</p>
-              )
-            )}
-
-            {rightPaneTab === 'transcript' && analysis.whisperTranscript && analysis.whisperTranscript.length > 0 && (
-              <ReplayTranscript
-                whisperSegments={analysis.whisperTranscript}
-                transcript={data.transcript}
-                currentTimeSec={analysisVideoTime}
-                onWordClick={(sec) => seek?.(sec)}
-                className={replayFullscreen ? 'max-h-[60vh]' : 'max-h-[420px]'}
+          {/* RIGHT — Tips on top, Transcript below. No toggle: only 2 sections,
+              both useful, neither competes for the user's attention. */}
+          <div className="space-y-4 min-w-0">
+            {analysis.fusionSummary && analysis.fusionSummary.coachingTips.length > 0 && (
+              <CoachingPanel
+                fusionSummary={analysis.fusionSummary}
+                timeline={analysis.timeline || []}
+                onSeek={(sec) => seek?.(sec)}
+                hideMoments
+                drillRecommendations={drillRecommendations}
+                onQuestionClick={onQuestionClick}
+                maxQuestionIndex={maxQuestionIndex}
+                onPracticeClick={onPracticeClick}
               />
             )}
-            {rightPaneTab === 'transcript' && (!analysis.whisperTranscript || analysis.whisperTranscript.length === 0) && (
-              <p className="text-caption text-[#71767b] p-4">Word-level transcript not available.</p>
+
+            {analysis.whisperTranscript && analysis.whisperTranscript.length > 0 && (
+              <div className="surface-card-bordered p-3 sm:p-4 space-y-2">
+                <p className="text-caption text-[#71767b] uppercase tracking-wide font-medium">Transcript</p>
+                <ReplayTranscript
+                  whisperSegments={analysis.whisperTranscript}
+                  transcript={data.transcript}
+                  currentTimeSec={analysisVideoTime}
+                  onWordClick={(sec) => seek?.(sec)}
+                  className={replayFullscreen ? 'max-h-[60vh]' : 'max-h-[420px]'}
+                />
+              </div>
             )}
           </div>
         </div>
+
+        {/* Key Moments — full-width horizontal scroller, three-way synced
+            with the video and timeline above. Clicking a card seeks the
+            video; as the video plays the matching card auto-expands. */}
+        {keyMoments.length > 0 && (
+          <section className="space-y-2">
+            <div className="flex items-baseline gap-2">
+              <h3 className="text-subheading text-[#0f1419]">Key Moments</h3>
+              <span className="text-caption text-[#71767b]">
+                ({keyMoments.length}) — click a card or play the video to explore
+              </span>
+            </div>
+            <MomentCards
+              moments={keyMoments}
+              onSeek={(sec) => seek?.(sec)}
+              currentTimeSec={analysisVideoTime}
+              prosodySegments={analysis.prosodySegments}
+              facialSegments={analysis.facialSegments}
+              whisperTranscript={analysis.whisperTranscript}
+              questionMarkers={questionMarkers}
+              maxQuestionIndex={maxQuestionIndex}
+            />
+          </section>
+        )}
 
         {/* Per-question signal charts — full-width, open by default */}
         {((analysis.prosodySegments?.length ?? 0) > 0 || (analysis.facialSegments?.length ?? 0) > 0) && (
