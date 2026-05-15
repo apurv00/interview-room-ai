@@ -189,7 +189,9 @@ async function generateOptionalEnrichment(params: {
 Weakest-question evidence:
 ${targetContext}
 
-Return ideal_answers for these 2-3 questions only and 2-3 drill_recommendations. Each drill must have exactly two practice questions.`,
+Return ideal_answers for these 2-3 questions only and 2-3 drill_recommendations. Each drill must have exactly two practice questions.
+
+For EACH drill_recommendation, populate \`targetQuestions\` with the 0-based questionIndex values from the weakest-question evidence above that this drill addresses. Use an empty array \`[]\` ONLY when the drill is genuinely cross-cutting (e.g. a general delivery drill not tied to any specific question). Prefer 1-2 entries when a clear question-to-drill mapping exists.`,
         }],
         maxTokens: 1800,
         responseFormat: FEEDBACK_ENRICHMENT_RESPONSE_FORMAT,
@@ -634,7 +636,9 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
 
 You are an expert interview coach. Generate honest, specific, and actionable feedback for a candidate.
 
-SPECIFICITY RULE: Reference specific questions by number (e.g., "In Q3...") and quote brief phrases from the candidate's actual answers. Never give generic feedback like "improve your structure" — instead say "In Q3, you said 'we did X' without clarifying your personal role — use 'I led/managed/designed' instead."${interviewTypeContext}${domainFeedbackContext}${companyFeedbackContext}${jdBlock}${resumeBlock}${profileBlock}${competencyBlock}${historyBlock}`
+SPECIFICITY RULE: Reference specific questions by number and quote brief phrases from the candidate's actual answers. Never give generic feedback like "improve your structure" — instead say "In Q3, you said 'we did X' without clarifying your personal role — use 'I led/managed/designed' instead."
+
+Q-REF FORMAT (Phase B 2026-05-16): every entry in \`top_3_improvements\` and \`red_flags\` that is rooted in a specific question MUST include the question reference in the form \`Q\\d+\` (e.g. "Q3") or a range \`Q\\d+-Q\\d+\` (e.g. "Q3-Q5") inline in the text. Use no Q-ref ONLY when the issue is genuinely cross-cutting (e.g. overall pace across the whole session) — in that case, omit Q-refs rather than fabricating one. The UI parses these Q-refs into clickable chips that jump the user to the source question, so misformatted refs ("question 3", "Q-3", "Question3") will not chip-link correctly.${interviewTypeContext}${domainFeedbackContext}${companyFeedbackContext}${jdBlock}${resumeBlock}${profileBlock}${competencyBlock}${historyBlock}`
 
     const userPrompt = `Interview summary for ${domainLabel} (${config.experience} yrs), ${config.duration}-min ${interviewType} session.
 

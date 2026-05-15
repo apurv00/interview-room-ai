@@ -111,11 +111,21 @@ export const FeedbackEnrichmentJsonSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['skillArea', 'description', 'practiceQuestions'],
+        // Phase B: targetQuestions is REQUIRED in the strict-mode schema
+        // (every drill must emit it, possibly as an empty array). The model
+        // populates it with the 0-based questionIndex values that this drill
+        // addresses, derived from the weakest-question evidence in the prompt.
+        // Backward-compat: old DB rows without this field are handled by the
+        // UI's regex fallback (parseQuestionRefs over drill.description).
+        required: ['skillArea', 'description', 'practiceQuestions', 'targetQuestions'],
         properties: {
           skillArea: { type: 'string' },
           description: { type: 'string' },
           practiceQuestions: stringArray,
+          targetQuestions: {
+            type: 'array',
+            items: { type: 'number' },
+          },
         },
       },
     },

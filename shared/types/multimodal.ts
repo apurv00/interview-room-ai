@@ -97,7 +97,26 @@ export interface FusionSummary {
   confidenceProgression: string     // narrative description
   topMoments: TimelineEvent[]       // best 3 moments
   improvementMoments: TimelineEvent[] // top 3 areas to improve
-  coachingTips: string[]            // 3–5 actionable tips
+  coachingTips: string[]            // 3–5 actionable tips (legacy, always present)
+  /**
+   * Phase B (2026-05-16): structured rich form of `coachingTips`. When the
+   * fusion service supplies it, the UI prefers it over the string[] form
+   * because:
+   *   - `category` is deterministic (LLM-emitted) instead of heuristic
+   *     (CoachingPanel's `categorizeTip()` keyword matcher).
+   *   - `questionIndex` gives a structured 0-based Q-ref per tip instead
+   *     of the regex parse of `Q\d+` tokens inside the string.
+   *
+   * Same length and ordering as `coachingTips` — `coachingTipsRich[i]` is
+   * the structured form of `coachingTips[i]`. May be missing on old DB
+   * analysis rows (pre-Phase-B); UI falls back to the string + heuristic
+   * pipeline established in Round 2 Phase A.
+   */
+  coachingTipsRich?: Array<{
+    text: string
+    category: 'Behavior' | 'Communication' | 'Content' | 'General'
+    questionIndex?: number
+  }>
 }
 
 // ─── Analysis Job ────────────────────────────────────────────────────────────
