@@ -216,7 +216,7 @@ export default function ScoreTrendChart({ currentScore, sessionId }: ScoreTrendC
           className="absolute -top-2 bg-white border border-[#e1e8ed] rounded-lg px-2 py-1 text-xs text-[#0f1419] pointer-events-none whitespace-nowrap shadow-sm"
           style={{ left: `${(coords[hoverIdx].x / W) * 100}%`, transform: 'translateX(-50%)' }}
         >
-          {points[hoverIdx].date}: <span className="font-bold" style={{ color: colors.line }}>{points[hoverIdx].score}</span>
+          {points[hoverIdx].date}: <span className="font-bold" style={{ color: bandColor(points[hoverIdx].score).line }}>{points[hoverIdx].score}</span>
           {hoverIdx === lastIdx && <span className="text-[#71767b] ml-1">· this session</span>}
         </div>
       )}
@@ -227,7 +227,7 @@ export default function ScoreTrendChart({ currentScore, sessionId }: ScoreTrendC
           <span className="inline-block w-2.5 h-px bg-emerald-500" /> Strong ≥ {STRONG_THRESHOLD}
         </span>
         <span className="flex items-center gap-1">
-          <span className="inline-block w-2.5 h-px bg-amber-500" /> Watch &lt; {STRONG_THRESHOLD}
+          <span className="inline-block w-2.5 h-px bg-amber-500" /> Watch ≥ {WARNING_THRESHOLD} &lt; {STRONG_THRESHOLD}
         </span>
         <span className="flex items-center gap-1">
           <span className="inline-block w-2.5 h-px bg-red-500" /> Needs work &lt; {WARNING_THRESHOLD}
