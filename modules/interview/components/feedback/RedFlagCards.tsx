@@ -1,7 +1,13 @@
 'use client'
 
+import TextWithQuestionChips from '@interview/components/feedback/TextWithQuestionChips'
+
 interface RedFlagCardsProps {
   redFlags: string[]
+  /** Click handler for Q-chips parsed out of each flag string. */
+  onQuestionClick?: (questionIndex: number) => void
+  /** Highest valid question index for chip range guard. */
+  maxQuestionIndex?: number
 }
 
 interface FlagGroup {
@@ -81,7 +87,7 @@ function getSeverity(flagCount: number): 'high' | 'medium' | 'low' {
   return 'low'
 }
 
-export default function RedFlagCards({ redFlags }: RedFlagCardsProps) {
+export default function RedFlagCards({ redFlags, onQuestionClick, maxQuestionIndex }: RedFlagCardsProps) {
   if (!redFlags || redFlags.length === 0) {
     return (
       <div className="bg-green-50 border border-green-200 rounded-2xl p-5 flex items-center gap-3">
@@ -141,7 +147,13 @@ export default function RedFlagCards({ redFlags }: RedFlagCardsProps) {
               {group.flags.map((flag, i) => (
                 <li key={i} className="flex items-start gap-1.5 text-xs">
                   <span className="shrink-0 mt-0.5">&#183;</span>
-                  <span>{flag}</span>
+                  <span>
+                    <TextWithQuestionChips
+                      text={flag}
+                      onQuestionClick={onQuestionClick}
+                      maxQuestionIndex={maxQuestionIndex}
+                    />
+                  </span>
                 </li>
               ))}
             </ul>

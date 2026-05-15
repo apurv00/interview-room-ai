@@ -19,7 +19,10 @@ import { join, extname } from 'path'
 const BUDGETS = {
   // interview bumped to 32k on 2026-05-14: replay-upload race fix added the
   // resumableUpload lease/cap layers. See docs/adr/0003-interview-module-budget-bump.md.
-  'modules/interview': { maxLOC: 32_000, maxFiles: 160 },
+  // Bumped LOC 32k→33k and files 160→168 on 2026-05-16: feedback-page Round 2
+  // added 4 new components + 2 utils (Q-chip system + Learning tab + ideal-answer
+  // comparison card). See docs/adr/0004-interview-module-budget-bump-feedback.md.
+  'modules/interview': { maxLOC: 33_000, maxFiles: 168 },
   'modules/learn':     { maxLOC: 25_000, maxFiles: 80 },
   'modules/resume':    { maxLOC: 20_000, maxFiles: 70 },
   'modules/b2b':       { maxLOC: 5_000,  maxFiles: 20 },

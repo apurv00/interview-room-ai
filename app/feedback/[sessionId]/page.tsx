@@ -8,13 +8,26 @@ import AudioPlayer from '@interview/components/feedback/AudioPlayer'
 import OverviewTab from '@interview/components/feedback/OverviewTab'
 import ScoresTab from '@interview/components/feedback/ScoresTab'
 import type { PeerData } from '@interview/components/feedback/PeerComparison'
-import LearningPlanSection from '@interview/components/feedback/LearningPlanSection'
 import type { MultimodalAnalysisData } from '@shared/types/multimodal'
 
 // Multimodal tab pulls in Recharts + the video player. Lazy-load it so the
 // default Scores tab's bundle stays small. (Rule: bundle-dynamic-imports.)
 const MultimodalAnalysisTab = dynamic(
   () => import('@interview/components/feedback/MultimodalAnalysisTab'),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="surface-card-bordered p-8 text-center">
+        <div className="w-6 h-6 rounded-full border-2 border-brand-500 border-t-transparent animate-spin mx-auto" />
+      </div>
+    ),
+  }
+)
+
+// Learning tab content — same dynamic-import pattern. Only loaded when the
+// user clicks into the Learning tab, keeping the default Scores tab fast.
+const LearningTab = dynamic(
+  () => import('@interview/components/feedback/LearningTab'),
   {
     ssr: false,
     loading: () => (
@@ -108,7 +121,7 @@ function setCachedJSON<T>(key: string, data: T): void {
   }
 }
 
-type FeedbackTab = 'overview' | 'questions' | 'analysis'
+type FeedbackTab = 'overview' | 'questions' | 'analysis' | 'learning'
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -953,12 +966,27 @@ function FeedbackPageInner() {
     return bisectLastLE(transcriptOffsets, currentAudioTime)
   }, [recordingUrl, transcriptOffsets, currentAudioTime])
 
-  // Key moments for replay segment (top moments + improvement moments)
+  // Key moments — sourced from the FULL timeline (not the LLM-capped 3+3 in
+  // fusionSummary.topMoments/improvementMoments). The fusion prompt artificially
+  // caps to "best 3 + worst 3" but the underlying timeline carries 6–10 distinct
+  // events; longer interviews surface 8+ moments. Filter to the types worth
+  // showing as moment cards (strength, improvement, coaching_tip; observations
+  // are too low-signal). Sort chronologically. Default severity falls back from
+  // event.type when missing.
   const keyMoments = useMemo(() => {
-    if (!analysis?.fusionSummary) return []
-    const top = (analysis.fusionSummary.topMoments || []).map(m => ({ ...m, severity: m.severity || 'positive' as const }))
-    const improve = (analysis.fusionSummary.improvementMoments || []).map(m => ({ ...m, severity: m.severity || 'attention' as const }))
-    return [...top, ...improve].sort((a, b) => a.startSec - b.startSec)
+    if (!analysis?.timeline || analysis.timeline.length === 0) return []
+    const SHOWN_TYPES = new Set(['strength', 'improvement', 'coaching_tip'])
+    return analysis.timeline
+      .filter((e) => SHOWN_TYPES.has(e.type))
+      .map((e) => {
+        if (e.severity) return e
+        const fallback: 'positive' | 'attention' | 'neutral' =
+          e.type === 'strength' ? 'positive'
+          : e.type === 'improvement' ? 'attention'
+          : 'neutral'
+        return { ...e, severity: fallback }
+      })
+      .sort((a, b) => a.startSec - b.startSec)
   }, [analysis])
 
   // Compute active warning from timeline events at current playback position
@@ -999,6 +1027,43 @@ function FeedbackPageInner() {
     )
     return () => timers.forEach(clearTimeout)
   }, [loading])
+
+  // ── Cross-tab navigation handlers (must precede early returns per Rules of Hooks)
+  // Q-chip click behavior is contextual to which tab the chip lives on:
+  //   - From Multimodal tab: seek the video to that question's start
+  //   - From Feedback / Learning tab: switch to Scores and expand the matching row
+  const handleQuestionRefFromMultimodal = useCallback((qIdx: number) => {
+    const marker = questionMarkers[qIdx]
+    if (marker && analysisSeekRef.current) {
+      analysisSeekRef.current(marker.offsetSeconds)
+    }
+  }, [questionMarkers])
+
+  const handleQuestionRefToScoresTab = useCallback((qIdx: number) => {
+    setActiveTab('questions')
+    requestAnimationFrame(() => {
+      // ScoresTab uses data-question-idx={i} on QuestionBreakdown rows.
+      const row = document.querySelector(`[data-question-idx="${qIdx}"]`) as HTMLElement | null
+      if (row) {
+        row.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        // The first child button is the accordion toggle — click to expand if collapsed.
+        const toggle = row.querySelector('button')
+        if (toggle && toggle.getAttribute('aria-expanded') !== 'true') {
+          toggle.click()
+        }
+      }
+    })
+  }, [])
+
+  // Practice-this handler: from a Multimodal Tip card → switch to Learning,
+  // scroll to drill-N. drillRowId="drill-${i}" set by LearningTab.
+  const handlePracticeClick = useCallback((drillIdx: number) => {
+    setActiveTab('learning')
+    requestAnimationFrame(() => {
+      const el = document.getElementById(`drill-${drillIdx}`)
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }, [])
 
   if (loading || !data) {
     const progressSteps = [
@@ -1082,14 +1147,23 @@ function FeedbackPageInner() {
 
   const { overall_score, pass_probability } = feedback
 
-  // Tab order: Scores → Multimodal Analysis → Feedback.
-  // Verdict first (Information Foraging, Hick's Law leftmost-default),
-  // evidence in the middle, synthesis-and-what's-next last (Peak-end rule).
+  // Tab order: Scores → Multimodal Analysis → Feedback → Learning.
+  // Maps the user's emotional arc: outcome → evidence → synthesis → action.
+  // Learning closes the experience (peak-end rule still satisfied — closing
+  // on a constructive action surface, not on narrative).
+  // Learning tab only shows when there's actual L&D content to render.
+  const hasLearningContent =
+    (feedback.drill_recommendations?.length ?? 0) > 0 ||
+    (feedback.ideal_answers?.length ?? 0) > 0
   const TABS: { key: FeedbackTab; label: string }[] = [
     { key: 'questions', label: 'Scores' },
     ...(hasAnalysisSource || analysis ? [{ key: 'analysis' as const, label: 'Multimodal Analysis' }] : []),
     { key: 'overview', label: 'Feedback' },
+    ...(hasLearningContent ? [{ key: 'learning' as const, label: 'Learning' }] : []),
   ]
+
+  const maxQuestionIndex =
+    Math.max(0, (data.evaluations?.length || data.transcript?.length || 1) - 1)
 
   const pathwayOutcome = feedback.sideEffectOutcomes?.find((outcome) => outcome.name === 'pathwayPlan')
   const canTrackPathwayUpdate = sessionId !== 'local'
@@ -1338,10 +1412,14 @@ function FeedbackPageInner() {
             activeTranscriptIndex={activeTranscriptIndex}
             activeEntryRef={activeEntryRef}
             seekToAudio={seekToRef.current}
+            drillRecommendations={feedback.drill_recommendations}
+            onQuestionClick={handleQuestionRefFromMultimodal}
+            maxQuestionIndex={maxQuestionIndex}
+            onPracticeClick={handlePracticeClick}
           />
         )}
 
-        {/* Feedback tab — synthesis & what's-next surface (closing tab) */}
+        {/* Feedback tab — synthesis surface (no longer the closing tab; Learning closes when present) */}
         {activeTab === 'overview' && (
           <OverviewTab
             data={data}
@@ -1371,7 +1449,19 @@ function FeedbackPageInner() {
             })() : undefined}
             domain={data.config?.role}
             parentSessionId={parentSessionId || undefined}
-            footer={feedback ? <LearningPlanSection feedback={feedback} sessionId={sessionId} /> : null}
+            onQuestionClick={handleQuestionRefToScoresTab}
+            maxQuestionIndex={maxQuestionIndex}
+          />
+        )}
+
+        {/* Learning tab — closing/action surface (drill traceability, ideal-answer comparison) */}
+        {activeTab === 'learning' && (
+          <LearningTab
+            feedback={feedback}
+            data={data}
+            sessionId={sessionId}
+            onQuestionClick={handleQuestionRefToScoresTab}
+            maxQuestionIndex={maxQuestionIndex}
           />
         )}
 
