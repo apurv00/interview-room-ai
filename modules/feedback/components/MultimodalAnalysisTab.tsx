@@ -8,6 +8,7 @@ import Scrubber from '@feedback/components/multimodal/Scrubber'
 import SignalTrack from '@feedback/components/multimodal/SignalTrack'
 import VideoMetricChips from '@feedback/components/multimodal/VideoMetricChips'
 import PeakStumbleCTAs from '@feedback/components/multimodal/PeakStumbleCTAs'
+import { composureLevels as computeComposureLevels } from '@feedback/components/multimodal/composureScore'
 import MomentsTabBody from '@feedback/components/multimodal/MomentsTabBody'
 import TranscriptTabBody from '@feedback/components/multimodal/TranscriptTabBody'
 import CoachingTipsTabBody from '@feedback/components/multimodal/CoachingTipsTabBody'
@@ -162,6 +163,14 @@ export default function MultimodalAnalysisTab({
         endSec: nextQuestion ? nextQuestion.offsetSeconds : totalDurationSec,
       }
     : null
+
+  // Round 5b feature #8 — per-question composure levels (1/2/3 or null).
+  // Aligned to questionMarkers by index. Pure derivation in composureScore.ts;
+  // the helper handles the audio-only / facial-only / missing-both fallbacks.
+  const composureByQ = useMemo(
+    () => computeComposureLevels(analysis?.prosodySegments, analysis?.facialSegments, questionMarkers.length),
+    [analysis?.prosodySegments, analysis?.facialSegments, questionMarkers.length]
+  )
 
   // The interviewer text of the active question, looked up from the
   // transcript via questionIndex. Used in the asked-question chip on the video.
@@ -374,6 +383,7 @@ export default function MultimodalAnalysisTab({
             totalDurationSec={totalDurationSec}
             activeIndex={activeQuestionIndex}
             onJumpToQuestion={(sec) => seek?.(sec)}
+            composureLevels={composureByQ}
           />
 
           <Scrubber
