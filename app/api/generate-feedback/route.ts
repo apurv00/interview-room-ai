@@ -1211,18 +1211,39 @@ You repair malformed interview feedback JSON. The output must match the supplied
               await InterviewSession.findByIdAndUpdate(sessionId, {
                 $set: { pathwayGenerationStatus: 'pending' },
               })
-              await inngest.send({
-                name: 'pathway/regenerate',
-                data: {
-                  sessionId,
-                  userId: user.id,
-                  domain: config.role,
-                  interviewType,
-                  experience: config.experience,
-                  feedback,
-                  typedEvaluations,
-                },
-              })
+              try {
+                await inngest.send({
+                  name: 'pathway/regenerate',
+                  data: {
+                    sessionId,
+                    userId: user.id,
+                    domain: config.role,
+                    interviewType,
+                    experience: config.experience,
+                    feedback,
+                    typedEvaluations,
+                  },
+                })
+              } catch (err) {
+                // Codex P1 + Vercel P1 on PR #379 — deadlock-on-enqueue.
+                // If Inngest is down or the event-key check fails, the
+                // status above stays at 'pending' forever and the retry
+                // endpoint refuses to re-enqueue. Roll status back to
+                // 'failed' so the UI surfaces the retry CTA + the next
+                // /api/learn/pathway/retry call passes the guard.
+                const message = err instanceof Error ? err.message : 'Failed to enqueue pathway regeneration.'
+                await InterviewSession.findByIdAndUpdate(sessionId, {
+                  $set: {
+                    pathwayGenerationStatus: 'failed',
+                    pathwayGenerationError: message.slice(0, 500),
+                  },
+                }).catch(() => {
+                  // Best-effort rollback; degenerate case (Mongo also
+                  // down) leaves status 'pending'. The retry rate-limit
+                  // window expires within 60s.
+                })
+                throw err
+              }
             })(),
             'Pathway plan regeneration enqueue failed',
           )

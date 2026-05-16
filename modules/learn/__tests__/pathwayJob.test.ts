@@ -38,6 +38,14 @@ vi.mock('@learn/services/pathwayPlanner', () => ({
   generatePathwayPlan: (...args: unknown[]) => mockGeneratePathwayPlan(...args),
 }))
 
+// Codex P1 review on PR #379 — the job now consults the feature flag
+// up front so it can distinguish a legitimate flag-off skip from a
+// planner-returned-null-due-to-internal-failure (which now throws).
+const mockIsFeatureEnabled = vi.fn(() => true)
+vi.mock('@shared/featureFlags', () => ({
+  isFeatureEnabled: (...args: unknown[]) => mockIsFeatureEnabled(...args),
+}))
+
 import { runPathwayJobHandler, PATHWAY_STATUS_FIELDS } from '@learn/jobs/pathwayJob'
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -73,6 +81,8 @@ beforeEach(() => {
   mockEvaluateSession.mockResolvedValue({ overallScore: 70 })
   mockGeneratePathwayPlan.mockResolvedValue({ _id: 'plan-1' })
   mockFindByIdAndUpdate.mockResolvedValue({})
+  // Default: feature on (post-Codex-P1, the job branches on this).
+  mockIsFeatureEnabled.mockImplementation(() => true)
 })
 
 describe('runPathwayJobHandler', () => {
@@ -136,14 +146,46 @@ describe('runPathwayJobHandler', () => {
     expect(finalUpdate[1].$set.pathwayGenerationStatus).toBe('succeeded')
   })
 
-  it('marks status="skipped" when generatePathwayPlan returns null (flag off, silent skip)', async () => {
-    mockGeneratePathwayPlan.mockResolvedValue(null)
+  // Codex P1 review on PR #379 — distinguish "feature flag off" (skip) from
+  // "planner returned null due to internal failure" (must throw so Inngest
+  // retries and onFailure writes status='failed').
+  describe('null planner result handling (Codex P1 fix)', () => {
+    it('marks status="skipped" when the feature flag is OFF and skips the planner call', async () => {
+      mockIsFeatureEnabled.mockImplementation((flag: string) => flag !== 'pathway_planner')
+      const step = makeStep()
+      const result = await runPathwayJobHandler(makeEvent(), step)
+      // Steps run: mark-running → evaluate-session → mark-skipped.
+      // generate-plan must NOT have been called (planner skipped entirely).
+      expect(step.calls).toEqual(['mark-running', 'evaluate-session', 'mark-skipped'])
+      expect(mockGeneratePathwayPlan).not.toHaveBeenCalled()
+      const finalUpdate = mockFindByIdAndUpdate.mock.calls[1]
+      expect(finalUpdate[1].$set.pathwayGenerationStatus).toBe('skipped')
+      expect(result).toEqual({ sessionId: 'sess-1', status: 'skipped' })
+    })
+
+    it('throws when planner returns null with flag ON (so Inngest retries + onFailure runs)', async () => {
+      // Flag is ON by default (beforeEach). Simulate the planner's outer
+      // try/catch swallowing an error and returning null — previously this
+      // was silently coerced to 'skipped'.
+      mockGeneratePathwayPlan.mockResolvedValue(null)
+      const step = makeStep()
+      await expect(runPathwayJobHandler(makeEvent(), step)).rejects.toThrow(
+        /generatePathwayPlan returned null/i,
+      )
+      // mark-completed must NOT have fired (throw is before it).
+      expect(step.calls).not.toContain('mark-completed')
+    })
+  })
+
+  it('does NOT write `$set: { error: undefined }` on mark-completed (Mongo no-op; only $unset clears)', async () => {
     const step = makeStep()
-    const result = await runPathwayJobHandler(makeEvent(), step)
+    await runPathwayJobHandler(makeEvent(), step)
     const finalUpdate = mockFindByIdAndUpdate.mock.calls[1]
-    expect(finalUpdate[1].$set.pathwayGenerationStatus).toBe('skipped')
-    expect(result.status).toBe('skipped')
-    expect(result.pathwayId).toBeUndefined()
+    // The success path uses $unset to clear the error field — the previous
+    // code also had a dead `$set: { ..., error: undefined }` which Mongo
+    // ignores. Vercel review on PR #379 flagged it as misleading.
+    expect(finalUpdate[1].$set).not.toHaveProperty('pathwayGenerationError')
+    expect(finalUpdate[1].$unset).toEqual({ pathwayGenerationError: 1 })
   })
 
   it('propagates errors from evaluateSession so Inngest can retry', async () => {

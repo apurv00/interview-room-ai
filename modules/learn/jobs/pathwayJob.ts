@@ -3,6 +3,7 @@ import { inngest } from '@shared/services/inngest'
 import { aiLogger } from '@shared/logger'
 import { connectDB } from '@shared/db/connection'
 import { InterviewSession } from '@shared/db/models'
+import { isFeatureEnabled } from '@shared/featureFlags'
 import { evaluateSession, type SessionEvaluationSummary } from '@interview'
 import { generatePathwayPlan } from '@learn/services/pathwayPlanner'
 import type { FeedbackData, AnswerEvaluation } from '@shared/types'
@@ -96,10 +97,38 @@ export async function runPathwayJobHandler(
     }),
   )
 
+  // Codex P1 on PR #379 — `generatePathwayPlan()` returns null for TWO
+  // distinct reasons:
+  //   (a) `isFeatureEnabled('pathway_planner') === false` — legitimate skip
+  //   (b) an internal exception caught by its outer try/catch — REAL failure
+  //
+  // The previous code treated both as 'skipped', so a real failure (LLM
+  // timeout, Mongo blip, schema validation drift) was silently turned into
+  // a terminal success state. Inngest's onFailure never fired, the session
+  // never reached 'failed', and the retry CTA never appeared.
+  //
+  // Fix: branch on the flag explicitly. When the flag is off → mark
+  // 'skipped' and return. When the flag is on → a null return value can
+  // only mean an internal failure, so throw and let Inngest retry +
+  // onFailure write 'failed'.
+  if (!isFeatureEnabled('pathway_planner')) {
+    await step.run('mark-skipped', async () => {
+      await connectDB()
+      await InterviewSession.findByIdAndUpdate(sessionId, {
+        $set: {
+          [STATUS_FIELDS.status]: 'skipped',
+          [STATUS_FIELDS.completedAt]: new Date(),
+        },
+        $unset: { [STATUS_FIELDS.error]: 1 },
+      })
+    })
+    return { sessionId, status: 'skipped' }
+  }
+
   // Step 3: generate the actual plan. This is the LLM-heavy step;
   // wrapping it independently means a retry won't redo `evaluate-session`.
   const plan = await step.run('generate-plan', async () => {
-    return await generatePathwayPlan({
+    const result = await generatePathwayPlan({
       userId,
       sessionId,
       domain,
@@ -108,19 +137,31 @@ export async function runPathwayJobHandler(
       feedback,
       sessionEvaluation: sessionEval,
     })
+    // Feature flag is ON (checked above) — null here means the planner's
+    // internal try/catch swallowed an error. Re-raise so Inngest retries
+    // and onFailure marks the session 'failed' for the retry CTA.
+    if (!result) {
+      throw new Error(
+        'generatePathwayPlan returned null with pathway_planner flag enabled — internal planner failure',
+      )
+    }
+    return result
   })
 
-  // Step 4: persist final status. If the planner returned null (feature
-  // flag off, silent skip), mark 'skipped' instead of 'succeeded' so the
-  // UI can distinguish "we tried and got nothing" from "we tried and
-  // produced a plan".
+  // Step 4: persist final status. We're guaranteed `plan` is truthy here
+  // because the flag-off case returned early above and the null-with-flag-
+  // on case threw.
+  //
+  // Vercel review on PR #379 — `$set: { error: undefined }` is a no-op in
+  // MongoDB (Mongo treats `undefined` as "field not specified"); only the
+  // `$unset` actually clears the field. Drop the dead `$set` entry to
+  // avoid misleading any future reader.
   await step.run('mark-completed', async () => {
     await connectDB()
     await InterviewSession.findByIdAndUpdate(sessionId, {
       $set: {
-        [STATUS_FIELDS.status]: plan ? 'succeeded' : 'skipped',
+        [STATUS_FIELDS.status]: 'succeeded',
         [STATUS_FIELDS.completedAt]: new Date(),
-        [STATUS_FIELDS.error]: undefined,
       },
       $unset: { [STATUS_FIELDS.error]: 1 },
     })
@@ -128,8 +169,8 @@ export async function runPathwayJobHandler(
 
   return {
     sessionId,
-    status: plan ? 'completed' : 'skipped',
-    pathwayId: plan?._id ? String(plan._id) : undefined,
+    status: 'completed',
+    pathwayId: plan._id ? String(plan._id) : undefined,
   }
 }
 
