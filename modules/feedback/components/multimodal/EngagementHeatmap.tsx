@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useCallback, useMemo, type MouseEvent } from 'react'
 import type { FacialSegment } from '@shared/types/multimodal'
 import { FONT_MONO } from './tokens'
 import {
@@ -74,6 +74,21 @@ function describeBand(band: EngagementBand, avg: number | null): string {
  * rule as the rest of Round 5b. No placeholder grey row when we have
  * literally nothing to show.
  *
+ * ## Interaction model (Codex P2 review on Round 5c)
+ *
+ * Buckets are non-interactive `<span>`s (no per-span role, no per-span
+ * aria-label, no per-span event listener). The strip wrapper is the
+ * single keyboard/screen-reader entry point and the single click target;
+ * a delegated `onClick` reads the bucket's `data-start` off the actual
+ * click target via `closest()`.
+ *
+ * Why: the previous design rendered each bucket as `<button>` and on
+ * long sessions polluted Tab order with up to 600 sequential stops.
+ * Screen readers also enumerated 600 button entries via the rotor.
+ * Keyboard users have not lost any functionality — they use the main
+ * Scrubber for arrow-key seeking; this strip is purely informational
+ * for them.
+ *
  * Round 5c feature #7.
  */
 export default function EngagementHeatmap({
@@ -86,31 +101,51 @@ export default function EngagementHeatmap({
     [facialTimeseries],
   )
 
+  // Single delegated click handler. Find the nearest ancestor (or self)
+  // carrying `data-start`, parse, and seek. Safe to no-op when click
+  // lands on the wrapper background instead of a bucket.
+  const onStripClick = useCallback(
+    (e: MouseEvent<HTMLDivElement>) => {
+      if (!onSeek) return
+      const target = (e.target as HTMLElement).closest<HTMLElement>('[data-start]')
+      if (!target) return
+      const startStr = target.getAttribute('data-start')
+      if (!startStr) return
+      const start = Number(startStr)
+      if (!Number.isFinite(start)) return
+      onSeek(start)
+    },
+    [onSeek],
+  )
+
   if (buckets.length === 0 || totalDurationSec <= 0) return null
 
   return (
     <div
       className="flex items-center gap-2.5 flex-shrink-0"
       data-testid="engagement-heatmap"
-      aria-label="Per-second engagement (eye contact)"
     >
       <span
         className="text-[9px] uppercase tracking-[0.1em] text-stone-400 flex-shrink-0"
         style={{ fontFamily: FONT_MONO }}
+        aria-hidden="true"
       >
         Attention
       </span>
-      <div className="relative h-2.5 flex-1 rounded-sm overflow-hidden bg-stone-100">
+      <div
+        className={`relative h-2.5 flex-1 rounded-sm overflow-hidden bg-stone-100 ${onSeek ? 'cursor-pointer' : ''}`}
+        onClick={onStripClick}
+        role="group"
+        aria-label="Per-second engagement strip — eye contact over the interview"
+      >
         {buckets.map((b, i) => {
           const band = bandForEyeContact(b.avgEyeContact)
           const left = (b.startSec / totalDurationSec) * 100
           const width = ((b.endSec - b.startSec) / totalDurationSec) * 100
           return (
-            <button
+            <span
               key={i}
-              type="button"
-              onClick={() => onSeek?.(b.startSec)}
-              className="absolute top-0 bottom-0 cursor-pointer hover:brightness-110 p-0 border-0 m-0 block"
+              className="absolute top-0 bottom-0 block hover:brightness-110"
               style={{
                 left: `${left}%`,
                 width: `${Math.max(width, 0.15)}%`, // floor so sub-pixel buckets are still pickable
@@ -118,8 +153,8 @@ export default function EngagementHeatmap({
                 opacity: BAND_OPACITY[band],
               }}
               title={`${formatTime(b.startSec)} · ${describeBand(band, b.avgEyeContact)}`}
-              aria-label={`At ${formatTime(b.startSec)}: ${describeBand(band, b.avgEyeContact)}`}
               data-band={band}
+              data-start={b.startSec}
             />
           )
         })}
