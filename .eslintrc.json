@@ -11,7 +11,8 @@
               "@learn/*",
               "@b2b/*",
               "@resume/*",
-              "@cms/*"
+              "@cms/*",
+              "@feedback/*"
             ],
             "message": "Cross-module imports must go through the module barrel (e.g. '@interview') rather than reaching into internal paths. If the symbol you need isn't exported, add it to the module's index.ts."
           }
@@ -28,7 +29,7 @@
           {
             "patterns": [
               {
-                "group": ["@learn/*", "@b2b/*", "@resume/*", "@cms/*"],
+                "group": ["@learn/*", "@b2b/*", "@resume/*", "@cms/*", "@feedback/*"],
                 "message": "Cross-module imports must use the module barrel (e.g. '@learn')."
               }
             ]
@@ -44,7 +45,7 @@
           {
             "patterns": [
               {
-                "group": ["@interview/*", "@b2b/*", "@resume/*", "@cms/*"],
+                "group": ["@interview/*", "@b2b/*", "@resume/*", "@cms/*", "@feedback/*"],
                 "message": "Cross-module imports must use the module barrel (e.g. '@interview')."
               }
             ]
@@ -60,7 +61,7 @@
           {
             "patterns": [
               {
-                "group": ["@interview/*", "@learn/*", "@resume/*", "@cms/*"],
+                "group": ["@interview/*", "@learn/*", "@resume/*", "@cms/*", "@feedback/*"],
                 "message": "Cross-module imports must use the module barrel."
               }
             ]
@@ -76,7 +77,7 @@
           {
             "patterns": [
               {
-                "group": ["@interview/*", "@learn/*", "@b2b/*", "@cms/*"],
+                "group": ["@interview/*", "@learn/*", "@b2b/*", "@cms/*", "@feedback/*"],
                 "message": "Cross-module imports must use the module barrel."
               }
             ]
@@ -92,8 +93,28 @@
           {
             "patterns": [
               {
-                "group": ["@interview/*", "@learn/*", "@b2b/*", "@resume/*"],
+                "group": ["@interview/*", "@learn/*", "@b2b/*", "@resume/*", "@feedback/*"],
                 "message": "Cross-module imports must use the module barrel."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["modules/feedback/**/*"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["@learn/*", "@b2b/*", "@resume/*", "@cms/*"],
+                "message": "Cross-module imports must use the module barrel (e.g. '@interview'). Note: @interview/* deep imports are also barred — go through the @interview barrel."
+              },
+              {
+                "group": ["@interview/*"],
+                "message": "Use the @interview barrel (e.g. `from '@interview'`). If the symbol you need isn't exported, add it to modules/interview/index.ts."
               }
             ]
           }
@@ -118,7 +139,9 @@
                   "@resume",
                   "@resume/*",
                   "@cms",
-                  "@cms/*"
+                  "@cms/*",
+                  "@feedback",
+                  "@feedback/*"
                 ],
                 "message": "shared/ is the kernel — it cannot depend on any domain module. Inject module-specific behavior via slot props or callbacks from the composition root (app/)."
               }

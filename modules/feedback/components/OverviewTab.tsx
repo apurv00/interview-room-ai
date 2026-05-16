@@ -2,17 +2,18 @@
 
 import { useMemo } from 'react'
 import { ScoreBar } from '@shared/ui/ScoreBar'
-import PeerComparison, { type PeerData } from '@interview/components/feedback/PeerComparison'
-import ScoreProgressionChart from '@interview/components/feedback/ScoreProgressionChart'
-import SpeechMetricsChart from '@interview/components/feedback/SpeechMetricsChart'
-import DimensionRadar from '@interview/components/feedback/DimensionRadar'
-import ConfidenceTrend from '@interview/components/feedback/ConfidenceTrend'
-import RedFlagCards from '@interview/components/feedback/RedFlagCards'
-import ScoreTrendChart from '@interview/components/feedback/ScoreTrendChart'
-import TextWithQuestionChips from '@interview/components/feedback/TextWithQuestionChips'
+import PeerComparison, { type PeerData } from '@feedback/components/PeerComparison'
+import ScoreProgressionChart from '@feedback/components/ScoreProgressionChart'
+import SpeechMetricsChart from '@feedback/components/SpeechMetricsChart'
+import DimensionRadar from '@feedback/components/DimensionRadar'
+import ConfidenceTrend from '@feedback/components/ConfidenceTrend'
+import RedFlagCards from '@feedback/components/RedFlagCards'
+import ScoreTrendChart from '@feedback/components/ScoreTrendChart'
+import TextWithQuestionChips from '@feedback/components/TextWithQuestionChips'
 // eslint-disable-next-line no-restricted-imports -- direct import is required: the @learn barrel transitively pulls server-only Redis (ioredis → dns/net) into this client component.
 import ComparisonCard from '@learn/components/feedback/ComparisonCard'
 import type { FeedbackData, StoredInterviewData } from '@shared/types'
+// eslint-disable-next-line no-restricted-imports -- direct import required: the @interview barrel transitively pulls server-only Redis (ioredis → dns/net) into this client component.
 import { CONFIDENCE_TREND_LABELS } from '@interview/config/feedbackConfig'
 
 function s(v: unknown): string {

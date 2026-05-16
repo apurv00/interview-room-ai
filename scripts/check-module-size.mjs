@@ -25,7 +25,11 @@ const BUDGETS = {
   // Bumped LOC 33k→35k and files 168→180 on 2026-05-16: Multimodal tab Round 4
   // full visual + IA redesign added 9 new components + tokens (multimodal/
   // subdirectory). See docs/adr/0005-interview-module-budget-bump-multimodal.md.
-  'modules/interview': { maxLOC: 35_000, maxFiles: 180 },
+  // Reset LOC 35k→25k and files 180→140 on 2026-05-16: feedback-page UI carved
+  // out into the new modules/feedback/ module, dead components/replay/* purged.
+  // See docs/adr/0006-feedback-module-split.md.
+  'modules/interview': { maxLOC: 25_000, maxFiles: 140 },
+  'modules/feedback':  { maxLOC: 10_000, maxFiles: 60 },
   'modules/learn':     { maxLOC: 25_000, maxFiles: 80 },
   'modules/resume':    { maxLOC: 20_000, maxFiles: 70 },
   'modules/b2b':       { maxLOC: 5_000,  maxFiles: 20 },

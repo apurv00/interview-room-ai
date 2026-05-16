@@ -4,9 +4,11 @@ import { useMemo } from 'react'
 import { Lightbulb } from 'lucide-react'
 import type { FusionSummary } from '@shared/types/multimodal'
 import type { FeedbackData } from '@shared/types'
+// eslint-disable-next-line no-restricted-imports -- direct imports required: the @interview barrel transitively pulls server-only Redis (ioredis → dns/net) into this client component.
 import { categorizeTip, type TipCategory } from '@interview/utils/categorizeTip'
+// eslint-disable-next-line no-restricted-imports -- see comment above.
 import { parseQuestionRefs } from '@interview/utils/parseQuestionRefs'
-import TextWithQuestionChips from '@interview/components/feedback/TextWithQuestionChips'
+import TextWithQuestionChips from '@feedback/components/TextWithQuestionChips'
 import { FONT_MONO } from './tokens'
 
 interface CoachingTipsTabBodyProps {

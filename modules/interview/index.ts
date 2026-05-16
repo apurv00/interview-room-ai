@@ -35,6 +35,10 @@ export { PROBABILITY_COLORS, CONFIDENCE_TREND_LABELS } from './config/feedbackCo
 // ── Utils ──
 export { readLocalInterviewData, mergeWithLocalData, cleanupLocalInterviewData } from './utils/mergeSessionData'
 export { computeOffsetSeconds } from './utils/offsetHelpers'
+export { parseQuestionRefs, parseQuestionRefSegments } from './utils/parseQuestionRefs'
+export type { QuestionRefMatch, QuestionRefSegment } from './utils/parseQuestionRefs'
+export { categorizeTip } from './utils/categorizeTip'
+export type { TipCategory } from './utils/categorizeTip'
 
 // ── Validators ──
 export { GenerateQuestionSchema, EvaluateAnswerSchema, GenerateFeedbackSchema, CreateSessionSchema, UpdateSessionSchema } from './validators/interview'
