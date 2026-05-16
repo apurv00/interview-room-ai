@@ -214,7 +214,7 @@ export default function MultimodalReplayShell({
           }}
         >
           <span style={{ color: '#fbbf24' }}>●</span>
-          {activeQuestionLabel} · {formatTime(currentTimeSec)} / {formatTime(duration)}
+          {activeQuestionLabel}
         </div>
       )}
 
