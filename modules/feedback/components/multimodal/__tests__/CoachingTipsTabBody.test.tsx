@@ -98,4 +98,53 @@ describe('CoachingTipsTabBody — Phase B preference + Phase A fallback', () => 
     )
     expect(screen.getByText('Practice this →')).toBeInTheDocument()
   })
+
+  /**
+   * Regression for Codex P2 (unresolved comment on PR #370):
+   *
+   *   "Handle unknown rich-tip categories before reading styles. The render
+   *   path assumes `tip.category` is always one of the four CATEGORY_STYLES
+   *   keys, but rich tip categories are runtime LLM output and the fusion
+   *   service continues with raw payloads even after schema-validation
+   *   drift; if a stored tip has an unexpected category,
+   *   CATEGORY_STYLES[tip.category] is undefined and catStyle.bg throws,
+   *   breaking the Coaching Tips tab."
+   *
+   * Fix: `normalizeCategory()` coerces any category outside the known
+   * union to `'General'` before the style lookup. The tab renders fine
+   * with a neutral stone-100 / stone-600 badge instead of crashing.
+   */
+  it('does not crash when a rich tip has an unknown category — renders as "General"', () => {
+    const fusion = makeFusion({
+      coachingTips: ['Try a different framing.'],
+      coachingTipsRich: [
+        // 'Strategy' is NOT one of the schema-declared categories. Cast
+        // through `unknown` because TS would otherwise reject the off-union
+        // string — but at runtime LLM output can absolutely emit this.
+        { text: 'Try a different framing.', category: 'Strategy' as unknown as 'General' },
+      ],
+    })
+    expect(() =>
+      render(<CoachingTipsTabBody fusionSummary={fusion} />)
+    ).not.toThrow()
+    expect(screen.getByText('Try a different framing.')).toBeInTheDocument()
+    // The unknown category falls back to "General" — the neutral badge.
+    expect(screen.getByText('General')).toBeInTheDocument()
+  })
+
+  it('does not crash when a rich tip has an empty/missing category', () => {
+    const fusion = makeFusion({
+      coachingTips: ['Generic advice'],
+      coachingTipsRich: [
+        // category is required by the type but Zod safeParse + passthrough
+        // can leak undefined through if the schema validation is bypassed.
+        { text: 'Generic advice', category: undefined as unknown as 'General' },
+      ],
+    })
+    expect(() =>
+      render(<CoachingTipsTabBody fusionSummary={fusion} />)
+    ).not.toThrow()
+    expect(screen.getByText('Generic advice')).toBeInTheDocument()
+    expect(screen.getByText('General')).toBeInTheDocument()
+  })
 })

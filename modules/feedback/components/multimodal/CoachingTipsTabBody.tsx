@@ -85,6 +85,24 @@ const CATEGORY_STYLES: Record<TipCategory, { bg: string; fg: string }> = {
 }
 
 /**
+ * Coerce an arbitrary category string to a known `TipCategory`. Rich tip
+ * categories are runtime LLM output; the fusion service uses safeParse +
+ * passthrough on the Zod schema, so a category like "Strategy" or "Body
+ * language" can reach the UI even though the schema declares the union as
+ * Behavior | Communication | Content | General. Without this guard,
+ * `CATEGORY_STYLES[tip.category]` returns undefined and reading `.bg`
+ * throws, breaking the whole Coaching Tips tab.
+ *
+ * Codex P2 review on PR #370.
+ */
+function normalizeCategory(c: string | undefined): TipCategory {
+  if (c === 'Behavior' || c === 'Communication' || c === 'Content' || c === 'General') {
+    return c
+  }
+  return 'General'
+}
+
+/**
  * Coaching tips list. Prefers Phase B's `coachingTipsRich` (LLM-emitted
  * category + structured questionIndex). Falls back to Phase A's pipeline
  * (`coachingTips: string[]` + heuristic `categorizeTip` + regex Q-ref).
@@ -103,17 +121,20 @@ export default function CoachingTipsTabBody({
   const tips: Array<AnnotatedTip & { questionIndex?: number }> = useMemo(() => {
     const rich = fusionSummary?.coachingTipsRich
     if (rich && rich.length > 0) {
-      return rich.map((entry) => ({
-        text: entry.text,
-        category: entry.category as TipCategory,
-        questionIndex: entry.questionIndex,
-        drillIndex: findMatchingDrillIndex(
-          entry.text,
-          entry.category as TipCategory,
-          entry.questionIndex,
-          drillRecommendations
-        ),
-      }))
+      return rich.map((entry) => {
+        const category = normalizeCategory(entry.category)
+        return {
+          text: entry.text,
+          category,
+          questionIndex: entry.questionIndex,
+          drillIndex: findMatchingDrillIndex(
+            entry.text,
+            category,
+            entry.questionIndex,
+            drillRecommendations
+          ),
+        }
+      })
     }
     return (fusionSummary?.coachingTips || []).map((tip) => {
       const category = categorizeTip(tip)
