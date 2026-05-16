@@ -87,20 +87,27 @@ split PR and tracked as tech debt.
 
 | Module | Before | After | Δ |
 |---|---|---|---|
-| `modules/interview` | 176 files / ~30k LOC | 135 files / ~22k LOC | −41 / −8k |
-| `modules/feedback` | — | 35 files / ~7k LOC | new |
+| `modules/interview` | 176 files / ~34.5k LOC | 135 files / ~27.3k LOC | −41 / −7.2k |
+| `modules/feedback` | — | 35 files / ~5.4k LOC | new |
 
 **Budgets:**
 
 | Module | Budget before | Budget after |
 |---|---|---|
-| `modules/interview` | 180 files / 35k LOC | 140 files / 25k LOC |
+| `modules/interview` | 180 files / 35k LOC | 140 files / 30k LOC |
 | `modules/feedback` | — | 60 files / 10k LOC |
 
-**Headroom:** interview drops to 96% utilization (135/140 files) — comfortable
-margin for the next handful of changes without budget pressure. Feedback opens
-at 58% utilization (35/60), with room for the next several rounds of
-post-interview UI work without revisiting this ADR.
+**Headroom:** interview drops to 96% utilization (135/140 files) and ~91% LOC
+(27.3k/30k). Feedback opens at 58% files / 54% LOC. Next bump-pressure on
+interview should carve out `services/analysis/` + `jobs/analysisJob.ts`
+(post-interview pipeline, currently ~1.6k LOC plus the hot-path job) rather than
+re-bump — that's a known follow-up.
+
+**Why not 25k?** I underestimated interview's LOC when first writing this ADR —
+my local `check-module-size.mjs` reported 0 LOC on Windows (`find` missing) so I
+worked from a stale Node tally that missed `components/*.tsx` at the module
+root. Linux CI caught the gap. 30k = real (~27.3k) + ~10% headroom, the same
+pattern the prior bump ADRs used.
 
 **Test impact:** all 120 feedback tests pass. Pre-existing baseline failures
 unchanged (10 in `skillLoader.test.ts`, 1 flaky perf test). Total: 2599 passing.
