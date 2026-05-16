@@ -179,15 +179,23 @@ export default function MomentsTabBody({
   // builds trust (Lee & See, automation trust). Shows the user that the AI
   // didn't hallucinate from the transcript alone; some moments are driven
   // by how they sounded or looked.
+  //
+  // Codex P3 review (post-Round 5c): previously a missing `signal` field
+  // was silently coerced to 'fused', overcounting fused and lying about
+  // the channel breakdown. Missing values now bucket into 'unknown' so
+  // the user sees the discrepancy rather than a misleading 'fused' count.
+  // In practice Claude always emits signal — 'unknown' will normally be
+  // 0 and is hidden from the rendered line.
   const signalBreakdown = useMemo(() => {
     const counts: Record<string, number> = {}
     for (const m of moments) {
-      const k = m.signal || 'fused'
+      const k = m.signal && ['audio', 'facial', 'content', 'fused'].includes(m.signal)
+        ? m.signal
+        : 'unknown'
       counts[k] = (counts[k] || 0) + 1
     }
-    // Order: audio, facial, content, fused — matches the visual order in the
-    // moment cards / signal track legend.
-    const order = ['audio', 'facial', 'content', 'fused']
+    // Order: audio, facial, content, fused, unknown.
+    const order = ['audio', 'facial', 'content', 'fused', 'unknown']
     return order
       .filter((k) => counts[k] > 0)
       .map((k) => `${counts[k]} ${k}`)

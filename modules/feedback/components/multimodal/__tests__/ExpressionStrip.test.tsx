@@ -77,7 +77,10 @@ describe('ExpressionStrip (Round 5b #5)', () => {
     expect(screen.getByText('😐')).toBeInTheDocument()
   })
 
-  it('dims neutral and unknown expressions to opacity 0.35; full opacity otherwise', () => {
+  // Codex P2 review on Round 5b — three distinct semantic states must
+  // have three distinct visual treatments. Previously neutral/unknown/
+  // missing all collapsed to 😐 at 0.35.
+  it('distinguishes expressive (1.0), neutral (0.35), and absent (0.25) via opacity + glyph', () => {
     render(
       <ExpressionStrip
         questions={QS}
@@ -87,12 +90,31 @@ describe('ExpressionStrip (Round 5b #5)', () => {
       />
     )
     const buttons = screen.getByTestId('expression-strip').querySelectorAll('button')
-    // smile → 1 (full)
+    // smile → expressive: 1.0 opacity, full emoji
     expect(buttons[0].style.opacity).toBe('1')
-    // neutral → 0.35
+    expect(buttons[0].getAttribute('data-expression-state')).toBe('expressive')
+    // neutral → neutral state: 0.35 opacity, 😐 emoji (the user *did* look neutral)
     expect(buttons[1].style.opacity).toBe('0.35')
-    // unknown → dims to neutral
-    expect(buttons[2].style.opacity).toBe('0.35')
+    expect(buttons[1].getAttribute('data-expression-state')).toBe('neutral')
+    // made-up-class → absent: 0.25 opacity, em-dash (visually distinct from
+    // both real reads so the user can't mistake "no signal" for "neutral")
+    expect(buttons[2].style.opacity).toBe('0.25')
+    expect(buttons[2].getAttribute('data-expression-state')).toBe('absent')
+  })
+
+  it('renders an em-dash (—) instead of 😐 when expression data is missing entirely', () => {
+    render(
+      <ExpressionStrip
+        questions={[QS[0], QS[1]]}
+        totalDurationSec={300}
+        facialSegments={[fs('smile'), undefined]}
+        onJumpToQuestion={vi.fn()}
+      />
+    )
+    const buttons = screen.getByTestId('expression-strip').querySelectorAll('button')
+    expect(buttons[1].textContent).toBe('—')
+    expect(buttons[1].style.opacity).toBe('0.25')
+    expect(buttons[1].getAttribute('data-expression-state')).toBe('absent')
   })
 
   it('clicking an emoji calls onJumpToQuestion with offsetSeconds+8 lede skip + index', () => {
@@ -146,7 +168,7 @@ describe('ExpressionStrip (Round 5b #5)', () => {
     )
     const buttons = screen.getByTestId('expression-strip').querySelectorAll('button')
     expect(buttons[0].getAttribute('title')).toBe('Q1 · smile')
-    // Missing segment → fallback text
-    expect(buttons[1].getAttribute('title')).toBe('Q2 · no expression data')
+    // Missing segment → "no data" (was "no expression data" pre-Round 5 fix-ups)
+    expect(buttons[1].getAttribute('title')).toBe('Q2 · no data')
   })
 })

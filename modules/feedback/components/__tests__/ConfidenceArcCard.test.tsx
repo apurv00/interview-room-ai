@@ -61,4 +61,40 @@ describe('ConfidenceArcCard (Round 5a feature #2)', () => {
     expect(bars[0].title).toBe('Q1: high')
     expect(bars[1].title).toBe('Q2: low')
   })
+
+  // Codex P2 review on Round 5b — runtime values can drift outside the
+  // TS union (service emits an unexpected string, schema validation
+  // bypassed, etc). MARKER_HEIGHT/MARKER_COLOR lookup must not throw.
+  it('does not throw when a per-Q band value is outside the union (renders normalized "low")', () => {
+    expect(() =>
+      render(
+        <ConfidenceArcCard
+          // Cast to bypass TS — at runtime an unexpected string can land
+          // here (Zod safeParse + passthrough, service drift, etc).
+          perQuestionConfidence={['high', 'something-weird' as unknown as 'high', 'medium']}
+        />
+      )
+    ).not.toThrow()
+    const bars = Array.from(
+      screen.getByLabelText(/sparkline/i).children
+    ) as HTMLElement[]
+    // The unknown value normalizes to "low" (safest fallback — implies
+    // "we're not confident in this signal").
+    expect(bars[1].getAttribute('data-band')).toBe('low')
+    expect(bars[1].title).toBe('Q2: low')
+  })
+
+  it('treats undefined per-Q band entries as "low" without throwing', () => {
+    expect(() =>
+      render(
+        <ConfidenceArcCard
+          perQuestionConfidence={[undefined as unknown as 'high', 'medium']}
+        />
+      )
+    ).not.toThrow()
+    const bars = Array.from(
+      screen.getByLabelText(/sparkline/i).children
+    ) as HTMLElement[]
+    expect(bars[0].getAttribute('data-band')).toBe('low')
+  })
 })

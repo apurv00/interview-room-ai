@@ -47,9 +47,10 @@ export default function PeakStumbleCTAs({
           onClick={() => onSeek(peak.startSec)}
           className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 cursor-pointer transition-colors min-w-0"
           title={peak.title}
+          aria-label={`Jump to peak at ${formatTime(peak.startSec)} — ${peak.title}`}
         >
           <span className="text-[11px] font-semibold" style={{ fontFamily: FONT_MONO }}>
-            ▶ Peak
+            <span aria-hidden="true">▶ </span>Peak
           </span>
           <span className="text-[11px] text-emerald-700 truncate min-w-0 max-w-[260px]">
             {peak.title}
@@ -65,9 +66,10 @@ export default function PeakStumbleCTAs({
           onClick={() => onSeek(stumble.startSec)}
           className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 cursor-pointer transition-colors min-w-0"
           title={stumble.title}
+          aria-label={`Jump to stumble at ${formatTime(stumble.startSec)} — ${stumble.title}`}
         >
           <span className="text-[11px] font-semibold" style={{ fontFamily: FONT_MONO }}>
-            ▶ Stumble
+            <span aria-hidden="true">▶ </span>Stumble
           </span>
           <span className="text-[11px] text-amber-700 truncate min-w-0 max-w-[260px]">
             {stumble.title}

@@ -21,14 +21,25 @@ interface ExpressionStripProps {
 /**
  * Maps the 5 MediaPipe expression classes to single-glyph emojis. Per the
  * user's explicit sign-off in Round 5b planning:
- *   neutral  → 😐  (rendered at low opacity so it doesn't compete visually)
+ *   neutral  → 😐
  *   smile    → 🙂
  *   frown    → 😟
  *   surprise → 😯
  *   focused  → 🤔
  *
- * Any unknown class falls back to the neutral glyph (dim) — same honest-data
- * principle as composureScore: don't fabricate a vibe we don't have.
+ * Three distinct semantic states with distinct visual treatments
+ * (Codex P2 review on Round 5b — the previous "everything that isn't a
+ * known emotion → 😐 dim" path collapsed actual neutral, unknown class,
+ * and missing data into the same glyph, lying about data availability):
+ *
+ *   `expressive` — known non-neutral class. Full opacity, full emoji.
+ *   `neutral`    — known neutral class. 😐 at 35% opacity. The user
+ *                  *did* look neutral; we want it quieter than emotional
+ *                  reads but still recognizable.
+ *   `absent`     — missing data OR unrecognized class. Mono em-dash at
+ *                  25% opacity. Visually distinct from both real reads
+ *                  so the user can't mistake "we have no signal" for
+ *                  "the candidate looked neutral".
  */
 const EXPRESSION_EMOJI: Record<string, string> = {
   neutral: '😐',
@@ -38,11 +49,20 @@ const EXPRESSION_EMOJI: Record<string, string> = {
   focused: '🤔',
 }
 
-function emojiForExpression(expr: string | undefined): { glyph: string; isNeutral: boolean } {
-  if (!expr) return { glyph: '😐', isNeutral: true }
+type ExpressionState = 'expressive' | 'neutral' | 'absent'
+
+function emojiForExpression(expr: string | undefined): { glyph: string; state: ExpressionState } {
+  if (!expr) return { glyph: '—', state: 'absent' }
   const key = expr.toLowerCase()
-  const glyph = EXPRESSION_EMOJI[key] ?? '😐'
-  return { glyph, isNeutral: key === 'neutral' || !(key in EXPRESSION_EMOJI) }
+  if (!(key in EXPRESSION_EMOJI)) return { glyph: '—', state: 'absent' }
+  if (key === 'neutral') return { glyph: '😐', state: 'neutral' }
+  return { glyph: EXPRESSION_EMOJI[key], state: 'expressive' }
+}
+
+const STATE_OPACITY: Record<ExpressionState, number> = {
+  expressive: 1,
+  neutral: 0.35,
+  absent: 0.25,
 }
 
 /**
@@ -84,7 +104,9 @@ export default function ExpressionStrip({
         const left = (q.offsetSeconds / totalDurationSec) * 100
         const seg = facialSegments?.[i]
         const expr = seg?.dominantExpression
-        const { glyph, isNeutral } = emojiForExpression(expr)
+        const { glyph, state } = emojiForExpression(expr)
+        // Honest hover label: "no data" for absent, the actual class otherwise.
+        const hoverLabel = state === 'absent' ? 'no data' : (expr ?? 'no data')
 
         return (
           <button
@@ -97,10 +119,11 @@ export default function ExpressionStrip({
               transform: 'translateX(0)',
               fontSize: '14px',
               lineHeight: 1,
-              opacity: isNeutral ? 0.35 : 1,
+              opacity: STATE_OPACITY[state],
             }}
-            title={`${q.label} · ${expr || 'no expression data'}`}
-            aria-label={`${q.label}: ${expr || 'no expression data'}`}
+            title={`${q.label} · ${hoverLabel}`}
+            aria-label={`${q.label}: ${hoverLabel}`}
+            data-expression-state={state}
           >
             <span aria-hidden="true">{glyph}</span>
           </button>
