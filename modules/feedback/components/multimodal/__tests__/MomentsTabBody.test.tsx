@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
-import MomentsTabBody from '../MomentsTabBody'
-import type { TimelineEvent } from '@shared/types/multimodal'
+import MomentsTabBody, { topFillerWords } from '../MomentsTabBody'
+import type { TimelineEvent, ProsodySegment } from '@shared/types/multimodal'
 
 function makeMoment(
   startSec: number,
@@ -167,5 +167,136 @@ describe('MomentsTabBody', () => {
       expect(line).not.toContain('content')
       expect(line).not.toContain('fused')
     })
+  })
+
+  // Round 5b feature #11 — per-Q filler lexicon (rendered inside expanded card)
+  describe('filler lexicon (Round 5b #11)', () => {
+    function makeProsody(filler: Array<{ word: string; timestampSec: number }>): ProsodySegment {
+      return {
+        startSec: 0,
+        endSec: 1000,
+        wpm: 140,
+        fillerWords: filler,
+        pauseDurationSec: 0,
+        confidenceMarker: 'high',
+      } as ProsodySegment
+    }
+
+    it('renders rose pills with top filler words inside the expanded moment window', () => {
+      const moments = [makeMoment(10, 30, 'Opening')]
+      const prosody = [
+        makeProsody([
+          { word: 'um', timestampSec: 11 },
+          { word: 'um', timestampSec: 14 },
+          { word: 'um', timestampSec: 22 },
+          { word: 'like', timestampSec: 17 },
+          { word: 'you know', timestampSec: 25 },
+        ]),
+      ]
+      render(
+        <MomentsTabBody moments={moments} onSeek={vi.fn()} prosodySegments={prosody} />
+      )
+      const lex = screen.getByTestId('moments-filler-lexicon')
+      const text = lex.textContent ?? ''
+      expect(text).toContain('um')
+      expect(text).toContain('3') // um × 3
+      expect(text).toContain('like')
+      expect(text).toContain('you know')
+    })
+
+    it('omits the lexicon row entirely when the expanded moment has 0 fillers', () => {
+      const moments = [makeMoment(10, 30, 'Clean answer')]
+      const prosody = [
+        makeProsody([{ word: 'um', timestampSec: 100 /* outside window */ }]),
+      ]
+      render(
+        <MomentsTabBody moments={moments} onSeek={vi.fn()} prosodySegments={prosody} />
+      )
+      expect(screen.queryByTestId('moments-filler-lexicon')).toBeNull()
+    })
+
+    it('omits the lexicon row when no prosody data is passed at all', () => {
+      render(<MomentsTabBody moments={[makeMoment(0, 30, 'X')]} onSeek={vi.fn()} />)
+      expect(screen.queryByTestId('moments-filler-lexicon')).toBeNull()
+    })
+  })
+})
+
+// Pure helper — exercised in isolation so the rolling-window math is testable
+// without rendering a component.
+describe('topFillerWords (pure helper for Round 5b #11)', () => {
+  it('returns empty when prosody is undefined or empty', () => {
+    expect(topFillerWords(undefined, 0, 100)).toEqual([])
+    expect(topFillerWords([], 0, 100)).toEqual([])
+  })
+
+  it('filters by [windowStart, windowEnd) half-open interval', () => {
+    const out = topFillerWords(
+      [{ startSec: 0, endSec: 100, wpm: 0, fillerWords: [
+        { word: 'um', timestampSec: 9.999 }, // out — before window
+        { word: 'um', timestampSec: 10 },    // in
+        { word: 'um', timestampSec: 19.999 }, // in
+        { word: 'um', timestampSec: 20 },    // out — exactly at end
+      ], pauseDurationSec: 0, confidenceMarker: 'high' }],
+      10, 20,
+    )
+    expect(out).toEqual([{ word: 'um', count: 2 }])
+  })
+
+  it('case-folds and groups (Um, UM, um all collapse)', () => {
+    const out = topFillerWords(
+      [{ startSec: 0, endSec: 100, wpm: 0, fillerWords: [
+        { word: 'Um', timestampSec: 1 },
+        { word: 'UM', timestampSec: 2 },
+        { word: 'um', timestampSec: 3 },
+      ], pauseDurationSec: 0, confidenceMarker: 'high' }],
+      0, 100,
+    )
+    expect(out).toEqual([{ word: 'um', count: 3 }])
+  })
+
+  it('sorts by descending count, alphabetic tiebreak', () => {
+    const out = topFillerWords(
+      [{ startSec: 0, endSec: 100, wpm: 0, fillerWords: [
+        { word: 'you know', timestampSec: 1 },
+        { word: 'like', timestampSec: 2 },
+        { word: 'um', timestampSec: 3 },
+        { word: 'um', timestampSec: 4 },
+        { word: 'like', timestampSec: 5 },
+      ], pauseDurationSec: 0, confidenceMarker: 'high' }],
+      0, 100,
+    )
+    expect(out).toEqual([
+      { word: 'like', count: 2 },
+      { word: 'um', count: 2 },
+      { word: 'you know', count: 1 },
+    ])
+  })
+
+  it('caps to maxN (default 3)', () => {
+    const out = topFillerWords(
+      [{ startSec: 0, endSec: 100, wpm: 0, fillerWords: [
+        { word: 'a', timestampSec: 1 },
+        { word: 'b', timestampSec: 2 },
+        { word: 'c', timestampSec: 3 },
+        { word: 'd', timestampSec: 4 },
+        { word: 'e', timestampSec: 5 },
+      ], pauseDurationSec: 0, confidenceMarker: 'high' }],
+      0, 100,
+    )
+    expect(out).toHaveLength(3)
+  })
+
+  it('drops non-finite timestamps and empty words', () => {
+    const out = topFillerWords(
+      [{ startSec: 0, endSec: 100, wpm: 0, fillerWords: [
+        { word: 'um', timestampSec: 1 },
+        { word: 'um', timestampSec: NaN },
+        { word: '', timestampSec: 2 },
+        { word: '   ', timestampSec: 3 },
+      ], pauseDurationSec: 0, confidenceMarker: 'high' }],
+      0, 100,
+    )
+    expect(out).toEqual([{ word: 'um', count: 1 }])
   })
 })
