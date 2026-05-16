@@ -295,6 +295,7 @@ export default function MultimodalAnalysisTab({
             currentTimeSec={analysisVideoTime}
             sessionStartedAt={sessionStartedAt}
             onSeek={(sec) => seek?.(sec)}
+            whisperSegments={analysis.whisperTranscript}
           />
         )}
         {tab === 'tips' && (
