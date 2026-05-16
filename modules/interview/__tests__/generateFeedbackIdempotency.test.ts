@@ -142,6 +142,18 @@ vi.mock('@learn/services/pathwayPlanner', () => ({
   advanceUniversalPlan: vi.fn().mockResolvedValue(null),
 }))
 
+// Bug B fix — route now emits `inngest.send({ name: 'pathway/regenerate' })`
+// instead of calling generatePathwayPlan directly. The OOM test below
+// rejects this send to simulate the pathway side-effect failing, which
+// is what fireAndTrack catches and attributes to 'pathwayPlan' in the
+// aggregate log.
+vi.mock('@shared/services/inngest', () => ({
+  inngest: {
+    send: vi.fn().mockResolvedValue({ ids: ['evt-1'] }),
+    createFunction: (_cfg: unknown, handler: unknown) => ({ id: 'mock', handler }),
+  },
+}))
+
 vi.mock('@learn/services/masteryTracker', () => ({
   updateMasteryBatch: vi.fn().mockResolvedValue([]),
 }))
@@ -441,8 +453,12 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
     vi.mocked(competencyModule.updateCompetencyState).mockRejectedValueOnce(
       new Error('competency DB down'),
     )
-    const pathwayModule = await import('@learn/services/pathwayPlanner')
-    vi.mocked(pathwayModule.generatePathwayPlan).mockRejectedValueOnce(
+    // Bug B fix: pathway side-effect is now `inngest.send('pathway/regenerate')`.
+    // To simulate the same failure shape (pathway plan generation died),
+    // reject the inngest.send call. fireAndTrack catches it and attributes
+    // to 'pathwayPlan' in the aggregate log, same as before.
+    const inngestModule = await import('@shared/services/inngest')
+    vi.mocked(inngestModule.inngest.send).mockRejectedValueOnce(
       new Error('pathway OOM'),
     )
 

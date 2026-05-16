@@ -49,6 +49,7 @@ const {
   mockCompletion, mockIsFeatureEnabled,
   mockGenerateSessionSummary, mockGeneratePathwayPlan, mockUpdatePracticeStats,
   mockUpdateCompetencyState, mockUpdateMasteryBatch, mockAdvanceUniversalPlan,
+  mockInngestSend,
 } = vi.hoisted(() => ({
   mockCompletion: vi.fn(),
   mockIsFeatureEnabled: vi.fn(),
@@ -61,11 +62,19 @@ const {
   // (`competencyService.ts:90` — appends to scoreHistory) would
   // otherwise double-fire across a degraded → retry sequence.
   mockGenerateSessionSummary: vi.fn().mockResolvedValue(undefined),
+  // Kept hoisted for the import-time mock factory below; the route
+  // no longer calls `generatePathwayPlan` directly (Bug B fix —
+  // moved to Inngest 'pathway/regenerate' job), so this mock will
+  // never be invoked. Assertions about pathway side-effects now go
+  // through `mockInngestSend`.
   mockGeneratePathwayPlan: vi.fn().mockResolvedValue(undefined),
   mockUpdatePracticeStats: vi.fn().mockResolvedValue(undefined),
   mockUpdateCompetencyState: vi.fn().mockResolvedValue(undefined),
   mockUpdateMasteryBatch: vi.fn().mockResolvedValue([]),
   mockAdvanceUniversalPlan: vi.fn().mockResolvedValue(null),
+  // Bug B fix: pathway regeneration is now enqueued via Inngest.
+  // Tests assert against this mock instead of mockGeneratePathwayPlan.
+  mockInngestSend: vi.fn().mockResolvedValue({ ids: ['evt-1'] }),
 }))
 
 vi.mock('@shared/middleware/composeApiRoute', () => ({
@@ -161,6 +170,15 @@ vi.mock('@learn/services/pathwayPlanner', () => ({
   // sequence fires it twice, the same interview is counted twice.
   advanceUniversalPlan: mockAdvanceUniversalPlan,
 }))
+// Bug B fix — route now emits `inngest.send({ name: 'pathway/regenerate' })`
+// instead of calling generatePathwayPlan directly. Mock the client so the
+// real Inngest event-key check doesn't blow up in test env.
+vi.mock('@shared/services/inngest', () => ({
+  inngest: {
+    send: mockInngestSend,
+    createFunction: (_cfg: unknown, handler: unknown) => ({ id: 'mock', handler }),
+  },
+}))
 vi.mock('@learn/services/practiceStatsService', () => ({
   updatePracticeStats: mockUpdatePracticeStats,
   deriveStrongWeakDimensions: () => ({ strongDimensions: [], weakDimensions: [] }),
@@ -234,6 +252,8 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
     mockUpdateCompetencyState.mockClear()
     mockUpdateMasteryBatch.mockClear()
     mockAdvanceUniversalPlan.mockClear()
+    mockInngestSend.mockClear()
+    mockInngestSend.mockResolvedValue({ ids: ['evt-1'] })
     // Default: no persisted feedback → preflight cache is a miss,
     // route proceeds to LLM call.
     mockSessionFindOne.mockResolvedValue(null)
@@ -610,7 +630,13 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
     expect(persistCalls).toHaveLength(0)
     expect(mockUpdatePracticeStats).not.toHaveBeenCalled()
     expect(mockGenerateSessionSummary).not.toHaveBeenCalled()
-    expect(mockGeneratePathwayPlan).not.toHaveBeenCalled()
+    // Bug B fix: pathway regen is now enqueued via inngest.send('pathway/regenerate').
+    // The degraded gate must prevent the event from being emitted.
+    expect(
+      mockInngestSend.mock.calls.some(
+        ([evt]: Array<{ name?: string }>) => evt?.name === 'pathway/regenerate',
+      ),
+    ).toBe(false)
     expect(mockUpdateCompetencyState).not.toHaveBeenCalled()
     expect(mockUpdateMasteryBatch).not.toHaveBeenCalled()
     expect(mockAdvanceUniversalPlan).not.toHaveBeenCalled()
@@ -650,7 +676,11 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
     // effect until retry.
     expect(mockUpdatePracticeStats).not.toHaveBeenCalled()
     expect(mockGenerateSessionSummary).not.toHaveBeenCalled()
-    expect(mockGeneratePathwayPlan).not.toHaveBeenCalled()
+    expect(
+      mockInngestSend.mock.calls.some(
+        ([evt]: Array<{ name?: string }>) => evt?.name === 'pathway/regenerate',
+      ),
+    ).toBe(false)
     expect(mockUpdateCompetencyState).not.toHaveBeenCalled()
     expect(mockUpdateMasteryBatch).not.toHaveBeenCalled()
     expect(mockAdvanceUniversalPlan).not.toHaveBeenCalled()
@@ -717,7 +747,14 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
     expect(persistCalls.length).toBeGreaterThan(0)
     expect(mockUpdatePracticeStats).toHaveBeenCalled()
     expect(mockGenerateSessionSummary).toHaveBeenCalled()
-    expect(mockGeneratePathwayPlan).toHaveBeenCalled()
+    // Bug B fix: pathway side-effect is now an inngest.send('pathway/regenerate')
+    // emit, not a direct generatePathwayPlan call. The Inngest job does the
+    // actual planner invocation downstream.
+    expect(
+      mockInngestSend.mock.calls.some(
+        ([evt]: Array<{ name?: string }>) => evt?.name === 'pathway/regenerate',
+      ),
+    ).toBe(true)
     expect(mockUpdateCompetencyState).toHaveBeenCalled()
     expect(mockUpdateMasteryBatch).toHaveBeenCalled()
     expect(mockAdvanceUniversalPlan).toHaveBeenCalled()
@@ -772,7 +809,14 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
     expect(persistCalls.length).toBeGreaterThan(0)
     expect(mockUpdatePracticeStats).toHaveBeenCalled()
     expect(mockGenerateSessionSummary).toHaveBeenCalled()
-    expect(mockGeneratePathwayPlan).toHaveBeenCalled()
+    // Bug B fix: pathway side-effect is now an inngest.send('pathway/regenerate')
+    // emit, not a direct generatePathwayPlan call. The Inngest job does the
+    // actual planner invocation downstream.
+    expect(
+      mockInngestSend.mock.calls.some(
+        ([evt]: Array<{ name?: string }>) => evt?.name === 'pathway/regenerate',
+      ),
+    ).toBe(true)
     expect(mockUpdateCompetencyState).toHaveBeenCalled()
     expect(mockUpdateMasteryBatch).toHaveBeenCalled()
     expect(mockAdvanceUniversalPlan).toHaveBeenCalled()
