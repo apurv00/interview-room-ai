@@ -9,6 +9,7 @@ import SignalTrack from '@feedback/components/multimodal/SignalTrack'
 import VideoMetricChips from '@feedback/components/multimodal/VideoMetricChips'
 import PeakStumbleCTAs from '@feedback/components/multimodal/PeakStumbleCTAs'
 import { composureLevels as computeComposureLevels } from '@feedback/components/multimodal/composureScore'
+import ExpressionStrip from '@feedback/components/multimodal/ExpressionStrip'
 import MomentsTabBody from '@feedback/components/multimodal/MomentsTabBody'
 import TranscriptTabBody from '@feedback/components/multimodal/TranscriptTabBody'
 import CoachingTipsTabBody from '@feedback/components/multimodal/CoachingTipsTabBody'
@@ -171,6 +172,18 @@ export default function MultimodalAnalysisTab({
     () => computeComposureLevels(analysis?.prosodySegments, analysis?.facialSegments, questionMarkers.length),
     [analysis?.prosodySegments, analysis?.facialSegments, questionMarkers.length]
   )
+
+  // Round 5b feature #5 — per-question facial segments aligned to questionMarkers
+  // by index. Prefer the segment whose `questionIndex` matches; fall back to
+  // positional index when the field is absent (older pipeline output).
+  const facialByQ = useMemo(() => {
+    const segs = analysis?.facialSegments
+    if (!segs || segs.length === 0) return []
+    return questionMarkers.map((_, i) => {
+      const byField = segs.find((s) => s.questionIndex === i)
+      return byField ?? segs[i]
+    })
+  }, [analysis?.facialSegments, questionMarkers])
 
   // The interviewer text of the active question, looked up from the
   // transcript via questionIndex. Used in the asked-question chip on the video.
@@ -384,6 +397,13 @@ export default function MultimodalAnalysisTab({
             activeIndex={activeQuestionIndex}
             onJumpToQuestion={(sec) => seek?.(sec)}
             composureLevels={composureByQ}
+          />
+
+          <ExpressionStrip
+            questions={questionMarkers}
+            totalDurationSec={totalDurationSec}
+            facialSegments={facialByQ}
+            onJumpToQuestion={(sec) => seek?.(sec)}
           />
 
           <Scrubber
