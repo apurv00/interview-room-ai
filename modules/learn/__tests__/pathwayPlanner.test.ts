@@ -144,15 +144,38 @@ describe('pathwayPlanner', () => {
 
       const result = await getCurrentPathway(TEST_USER_ID)
       expect(result).toEqual(mockPathway)
-      expect(mockFindOneQuery).toHaveBeenCalledWith(expect.objectContaining({
-        planType: 'standard',
-      }))
     })
 
     it('returns null when no pathway exists', async () => {
       mockFindOne.mockResolvedValue(null)
       const result = await getCurrentPathway(TEST_USER_ID)
       expect(result).toBeNull()
+    })
+
+    // Bug A fix (2026-05-16) — pre-redesign documents lacked `planType`
+    // entirely. The strict `planType: 'standard'` filter hid them from the
+    // UI even when fully-populated plans existed in the DB. The read
+    // filter must now accept three cases: 'standard', missing field,
+    // and null.
+    it('uses an $or filter that matches docs with planType "standard", missing, or null', async () => {
+      // Don't care about the result — just inspect the query shape.
+      mockFindOne.mockResolvedValue(null)
+      await getCurrentPathway(TEST_USER_ID)
+      const calledWith = mockFindOneQuery.mock.calls[0][0]
+      expect(calledWith).toEqual(expect.objectContaining({
+        $or: [
+          { planType: 'standard' },
+          { planType: { $exists: false } },
+          { planType: null },
+        ],
+      }))
+    })
+
+    it('does NOT carry a top-level planType filter (would AND with the $or and over-restrict)', async () => {
+      mockFindOne.mockResolvedValue(null)
+      await getCurrentPathway(TEST_USER_ID)
+      const calledWith = mockFindOneQuery.mock.calls[0][0]
+      expect(calledWith).not.toHaveProperty('planType')
     })
   })
 
@@ -162,7 +185,6 @@ describe('pathwayPlanner', () => {
       const result = await markTaskComplete(TEST_USER_ID, 'task_1')
       expect(result).toBe(true)
       expect(mockUpdateOne.mock.calls[0][0]).toEqual(expect.objectContaining({
-        planType: 'standard',
         'practiceTasks.taskId': 'task_1',
       }))
     })
@@ -171,6 +193,23 @@ describe('pathwayPlanner', () => {
       mockUpdateOne.mockResolvedValue({ modifiedCount: 0 })
       const result = await markTaskComplete(TEST_USER_ID, 'nonexistent')
       expect(result).toBe(false)
+    })
+
+    // Bug A fix — markTaskComplete must use the same relaxed filter as the
+    // read query so a task completion on a pre-redesign pathway doc
+    // actually lands on the right doc.
+    it('uses the $or planType filter so pre-redesign docs are still mutable', async () => {
+      mockUpdateOne.mockResolvedValue({ modifiedCount: 1 })
+      await markTaskComplete(TEST_USER_ID, 'task_1')
+      const calledWith = mockUpdateOne.mock.calls[0][0]
+      expect(calledWith).toEqual(expect.objectContaining({
+        $or: [
+          { planType: 'standard' },
+          { planType: { $exists: false } },
+          { planType: null },
+        ],
+      }))
+      expect(calledWith).not.toHaveProperty('planType')
     })
   })
 
