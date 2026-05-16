@@ -216,7 +216,7 @@ describe('MultimodalReplayShell — fullscreen overlay click capture (Codex P1 #
 })
 
 describe('MultimodalReplayShell — basic render', () => {
-  it('renders the Q chip when activeQuestionLabel is provided', () => {
+  it('renders the Q chip when activeQuestionLabel is provided (label only, no timer)', () => {
     render(
       <MultimodalReplayShell
         src="blob:fake"
@@ -229,7 +229,11 @@ describe('MultimodalReplayShell — basic render', () => {
         activeQuestionLabel="Q3"
       />
     )
-    expect(screen.getByText(/Q3 · 0:42 \/ 5:00/)).toBeInTheDocument()
+    // The chip shows just the Q label now — the timer was removed because the
+    // scrubber row right below already shows currentTime / totalDuration.
+    expect(screen.getByText('Q3')).toBeInTheDocument()
+    expect(screen.queryByText(/0:42/)).toBeNull()
+    expect(screen.queryByText(/5:00/)).toBeNull()
   })
 
   it('renders the asked-question chip when askedQuestion is provided', () => {
