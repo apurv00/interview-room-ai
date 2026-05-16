@@ -172,6 +172,49 @@ describe('MultimodalReplayShell — MediaRecorder duration probe (Codex P1)', ()
   })
 })
 
+describe('MultimodalReplayShell — fullscreen overlay click capture (Codex P1 #2)', () => {
+  it('renders the play button as a 60×60 element, NOT a full-frame absolute overlay', () => {
+    const { container } = render(
+      <MultimodalReplayShell
+        src="blob:fake"
+        currentTimeSec={0}
+        playing={false}
+        setPlaying={() => {}}
+        replayFullscreen={false}
+        setReplayFullscreen={() => {}}
+      />
+    )
+    // The play button itself must be sized (not `absolute inset-0`). The
+    // wrapper centering it can be inset-0 but must be pointer-events-none.
+    const playBtn = container.querySelector('button[aria-label="Play video"]') as HTMLElement
+    expect(playBtn).toBeTruthy()
+    // Regression: the button class must NOT include "inset-0" (which made
+    // the whole frame swallow clicks meant for the fullscreen icon).
+    expect(playBtn.className).not.toMatch(/inset-0/)
+    // The wrapper that uses inset-0 must disable pointer events so the
+    // surrounding video frame doesn't block other overlay buttons.
+    const wrapper = playBtn.parentElement!
+    expect(wrapper.className).toContain('inset-0')
+    expect(wrapper.className).toContain('pointer-events-none')
+  })
+
+  it('fullscreen toggle button is reachable (not occluded by the play overlay)', () => {
+    const setFullscreen = vi.fn()
+    render(
+      <MultimodalReplayShell
+        src="blob:fake"
+        currentTimeSec={0}
+        playing={false}
+        setPlaying={() => {}}
+        replayFullscreen={false}
+        setReplayFullscreen={setFullscreen}
+      />
+    )
+    fireEvent.click(screen.getByLabelText('Enter fullscreen'))
+    expect(setFullscreen).toHaveBeenCalledWith(true)
+  })
+})
+
 describe('MultimodalReplayShell — basic render', () => {
   it('renders the Q chip when activeQuestionLabel is provided', () => {
     render(

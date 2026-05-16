@@ -248,20 +248,22 @@ export default function MultimodalReplayShell({
         {replayFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
       </button>
 
-      {/* Centered play/pause button */}
-      <button
-        type="button"
-        onClick={() => setPlaying(!playing)}
-        className="absolute inset-0 grid place-items-center group"
-        aria-label={playing ? 'Pause video' : 'Play video'}
-      >
-        <span
-          className="w-[60px] h-[60px] rounded-full grid place-items-center text-stone-900 transition-transform group-hover:scale-105"
+      {/* Centered play/pause button. Wrapper is `inset-0 pointer-events-none`
+          so it can flex-center its child without capturing clicks across the
+          whole frame — that was the Codex P1 bug (PR #370) where the play
+          overlay stole clicks meant for the top-right fullscreen icon. Only
+          the 60×60 button itself is clickable (`pointer-events-auto`). */}
+      <div className="absolute inset-0 grid place-items-center pointer-events-none">
+        <button
+          type="button"
+          onClick={() => setPlaying(!playing)}
+          className="w-[60px] h-[60px] rounded-full grid place-items-center text-stone-900 transition-transform hover:scale-105 pointer-events-auto"
           style={{ background: 'rgba(255,255,255,0.92)' }}
+          aria-label={playing ? 'Pause video' : 'Play video'}
         >
           {playing ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 translate-x-0.5" />}
-        </span>
-      </button>
+        </button>
+      </div>
 
       {/* Bottom: live transcript caption overlay */}
       <VideoCaptionOverlay

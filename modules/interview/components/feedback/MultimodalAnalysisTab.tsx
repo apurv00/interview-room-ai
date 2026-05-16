@@ -11,6 +11,7 @@ import MomentsTabBody from '@interview/components/feedback/multimodal/MomentsTab
 import TranscriptTabBody from '@interview/components/feedback/multimodal/TranscriptTabBody'
 import CoachingTipsTabBody from '@interview/components/feedback/multimodal/CoachingTipsTabBody'
 import { FONT_MONO } from '@interview/components/feedback/multimodal/tokens'
+import { findActiveQuestionIndex } from '@interview/components/feedback/multimodal/activeQuestion'
 import type { MultimodalAnalysisData, TimelineEvent } from '@shared/types/multimodal'
 import type { FeedbackData, StoredInterviewData } from '@shared/types'
 
@@ -126,16 +127,16 @@ export default function MultimodalAnalysisTab({
     return 300
   }, [videoDuration, analysis?.timeline])
 
-  // Active question — the one whose [start, end) contains the current video time.
-  const activeQuestionIndex = useMemo(() => {
-    if (!questionMarkers.length) return -1
-    let last = 0
-    for (let i = 0; i < questionMarkers.length; i++) {
-      if (questionMarkers[i].offsetSeconds <= analysisVideoTime) last = i
-      else break
-    }
-    return last
-  }, [questionMarkers, analysisVideoTime])
+  // Active question — extracted to `findActiveQuestionIndex` for direct unit
+  // testing. Returns -1 (no active question) when playback is before the
+  // first marker (intro/silence) — Codex P2 on PR #370. Downstream
+  // renderers (activeQuestion, activeQuestionRange, askedQuestionText,
+  // activeQuestionLabel, QuestionChapterRow.activeIndex) all guard
+  // against `< 0` already.
+  const activeQuestionIndex = useMemo(
+    () => findActiveQuestionIndex(questionMarkers, analysisVideoTime),
+    [questionMarkers, analysisVideoTime]
+  )
 
   const activeQuestion = activeQuestionIndex >= 0 ? questionMarkers[activeQuestionIndex] : null
   const nextQuestion = activeQuestionIndex >= 0 ? questionMarkers[activeQuestionIndex + 1] : null
