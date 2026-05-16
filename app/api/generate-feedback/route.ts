@@ -1212,16 +1212,18 @@ You repair malformed interview feedback JSON. The output must match the supplied
                 $set: { pathwayGenerationStatus: 'pending' },
               })
               try {
+                // Codex P2 on PR #379 (effectively P0) — payload contains
+                // ONLY identifiers. The job re-fetches feedback/evaluations/
+                // config from Mongo. Previously the event carried the full
+                // feedback + per-question evaluations inline, which for a
+                // long interview could exceed Inngest's 512KB event-size
+                // limit and brick that session's regeneration forever
+                // (every retry resent the same oversized payload).
                 await inngest.send({
                   name: 'pathway/regenerate',
                   data: {
                     sessionId,
                     userId: user.id,
-                    domain: config.role,
-                    interviewType,
-                    experience: config.experience,
-                    feedback,
-                    typedEvaluations,
                   },
                 })
               } catch (err) {

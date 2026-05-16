@@ -68,17 +68,12 @@ const RETRYABLE_STATUS_FILTER = {
   ],
 }
 
-/**
- * Default `interviewType` when the session's config doesn't specify one.
- * Must match the primary feedback flow's default (currently
- * `'screening'`, set at app/api/generate-feedback/route.ts:243) so a
- * retry doesn't silently regenerate a plan under different evaluation
- * assumptions than the original generation. Codex P2 on PR #379.
- *
- * If you change the primary default, change this too — they're
- * intentionally coupled.
- */
-const DEFAULT_INTERVIEW_TYPE = 'screening'
+// NOTE: the previous `DEFAULT_INTERVIEW_TYPE = 'screening'` constant
+// is no longer needed at this site — the event payload no longer
+// carries `interviewType` (Codex P2 on PR #379 — payload slim-down).
+// The Inngest job (modules/learn/jobs/pathwayJob.ts) now owns the
+// default and reads it from the session.config when it fetches the
+// session itself. If you change the default, change it there.
 
 export const POST = composeApiRoute<z.infer<typeof RetrySchema>>({
   schema: RetrySchema,
@@ -177,22 +172,23 @@ export const POST = composeApiRoute<z.infer<typeof RetrySchema>>({
     // inngest.send below fails, we must roll back to 'failed' so the
     // retry guard doesn't block all future attempts permanently.
     try {
+      // Codex P2 on PR #379 (effectively P0) — event payload contains
+      // ONLY identifiers. The Inngest job re-fetches config / feedback /
+      // evaluations from Mongo and applies its own 'screening' default
+      // for missing interviewType (same value DEFAULT_INTERVIEW_TYPE
+      // documented above). Previously the event carried the full
+      // feedback + evaluations inline; on a long interview that could
+      // exceed Inngest's 512KB event-size limit and brick this
+      // session's regeneration forever — every retry resent the same
+      // oversized payload. The validation reads above (config /
+      // feedback / evaluations existence) stay in place so we don't
+      // claim + enqueue a job that will just fail in its fetch-session
+      // step.
       await inngest.send({
         name: 'pathway/regenerate',
         data: {
           sessionId,
           userId: user.id,
-          domain: session.config.role,
-          // Codex P2 on PR #379 — match the primary flow's default in
-          // app/api/generate-feedback/route.ts:243 ('screening'). A
-          // retry must regenerate under the SAME assumptions as the
-          // original generation; using a different default here would
-          // silently shift evaluation weighting + pathway picks for
-          // any session that lacks an explicit interviewType.
-          interviewType: session.config.interviewType || DEFAULT_INTERVIEW_TYPE,
-          experience: session.config.experience,
-          feedback: session.feedback,
-          typedEvaluations: session.evaluations,
         },
       })
     } catch (err) {

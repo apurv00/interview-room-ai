@@ -84,37 +84,60 @@ beforeEach(() => {
   mockInngestSend.mockResolvedValue({ ids: ['evt-1'] })
 })
 
-// ─── Codex P2 #8 — interviewType default must match the primary flow ──────
+// ─── Codex P2 (effectively P0) — event payload slim-down ───────────────────
+// Previous version of these tests asserted that the retry route SENT
+// interviewType in the event payload. The payload slim-down (Codex P2
+// #10 on PR #379) moved that concern to the Inngest job — the job
+// reads config from Mongo and applies the 'screening' default there.
+// See pathwayJob.test.ts for the interviewType-default coverage.
+//
+// The retry route now sends ONLY identifiers; this block pins that
+// contract so a future regression can't sneak heavy data back into
+// the event.
 
-describe('POST /api/learn/pathway/retry — interviewType default (Codex P2 #8)', () => {
-  it("defaults to 'screening' when session.config.interviewType is undefined (matches generate-feedback:243)", async () => {
+describe('POST /api/learn/pathway/retry — slim event payload (Codex P2 #10)', () => {
+  it('emits only {sessionId, userId} (no inline feedback / evaluations / config)', async () => {
     mockFindOne.mockResolvedValue(fullSession())
     mockFindOneAndUpdate.mockResolvedValue(fullSession())
     await POST(makeReq())
     expect(mockInngestSend).toHaveBeenCalledTimes(1)
-    const eventArg = mockInngestSend.mock.calls[0][0] as { data: { interviewType: string } }
-    expect(eventArg.data.interviewType).toBe('screening')
+    const event = mockInngestSend.mock.calls[0][0] as { name: string; data: Record<string, unknown> }
+    expect(event.name).toBe('pathway/regenerate')
+    // Identifiers only — must be present.
+    expect(event.data.sessionId).toBe(SESSION_ID)
+    expect(event.data.userId).toBeTypeOf('string')
+    // Heavy data must NOT be in the payload — the job re-fetches it from Mongo.
+    expect(event.data).not.toHaveProperty('feedback')
+    expect(event.data).not.toHaveProperty('typedEvaluations')
+    expect(event.data).not.toHaveProperty('evaluations')
+    expect(event.data).not.toHaveProperty('config')
+    expect(event.data).not.toHaveProperty('domain')
+    expect(event.data).not.toHaveProperty('interviewType')
+    expect(event.data).not.toHaveProperty('experience')
   })
 
-  it('passes through an explicit interviewType from the session config', async () => {
+  it('keeps event size bounded regardless of session size (no large nested objects)', async () => {
+    // Stuff the session with a long fake feedback + evaluations to confirm
+    // none of it ends up serialized into the event. Pre-fix this would
+    // have produced a 100k+ byte event that could exceed Inngest's 512KB
+    // limit on the largest interviews.
+    const bigFeedback: Record<string, string> = {}
+    for (let i = 0; i < 500; i++) bigFeedback[`k${i}`] = 'x'.repeat(200)
+    const bigEvaluations = Array.from({ length: 100 }, (_, i) => ({
+      questionIndex: i,
+      question: 'q'.repeat(2000),
+      answer: 'a'.repeat(5000),
+    }))
     mockFindOne.mockResolvedValue(fullSession({
-      config: { role: 'pm', experience: '3-6', interviewType: 'behavioral' },
+      feedback: bigFeedback,
+      evaluations: bigEvaluations,
     }))
     mockFindOneAndUpdate.mockResolvedValue(fullSession())
     await POST(makeReq())
-    const eventArg = mockInngestSend.mock.calls[0][0] as { data: { interviewType: string } }
-    expect(eventArg.data.interviewType).toBe('behavioral')
-  })
-
-  it("treats empty-string interviewType as missing and falls back to 'screening'", async () => {
-    // Matches generate-feedback's `||` semantics: `'' || 'screening'` → 'screening'.
-    mockFindOne.mockResolvedValue(fullSession({
-      config: { role: 'pm', experience: '3-6', interviewType: '' },
-    }))
-    mockFindOneAndUpdate.mockResolvedValue(fullSession())
-    await POST(makeReq())
-    const eventArg = mockInngestSend.mock.calls[0][0] as { data: { interviewType: string } }
-    expect(eventArg.data.interviewType).toBe('screening')
+    const event = mockInngestSend.mock.calls[0][0]
+    const serialized = JSON.stringify(event)
+    // ~200 bytes is comfortable for {name, data:{sessionId, userId}}.
+    expect(serialized.length).toBeLessThan(500)
   })
 })
 

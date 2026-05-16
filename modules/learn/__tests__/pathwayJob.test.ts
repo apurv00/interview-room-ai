@@ -22,9 +22,16 @@ vi.mock('@shared/db/connection', () => ({
 }))
 
 const mockFindByIdAndUpdate = vi.fn()
+const mockFindOneLean = vi.fn()
 vi.mock('@shared/db/models', () => ({
   InterviewSession: {
     findByIdAndUpdate: (...args: unknown[]) => mockFindByIdAndUpdate(...args),
+    // findOne(...).select(...).lean() — chain returns whatever
+    // mockFindOneLean resolves to. Lets each test set the session
+    // payload (or null / missing-fields) per case.
+    findOne: () => ({
+      select: () => ({ lean: () => mockFindOneLean() }),
+    }),
   },
 }))
 
@@ -52,16 +59,22 @@ import { runPathwayJobHandler, PATHWAY_STATUS_FIELDS } from '@learn/jobs/pathway
 
 function makeEvent() {
   return {
+    // Codex P2 on PR #379 (effectively P0) — event payload now carries
+    // only identifiers. The job fetches config/feedback/evaluations from
+    // Mongo itself. This keeps event size constant regardless of
+    // interview length, well under Inngest's 512KB hard limit.
     data: {
       sessionId: 'sess-1',
-      userId: 'user-1',
-      domain: 'pm',
-      interviewType: 'behavioral',
-      experience: '3-6',
-      feedback: { overall_score: 70 } as never,
-      typedEvaluations: [],
+      userId: '507f1f77bcf86cd799439099',
     },
   }
+}
+
+/** Heavy session data the new fetch-session step reads from Mongo. */
+const SESSION_PAYLOAD = {
+  config: { role: 'pm', interviewType: 'behavioral', experience: '3-6' },
+  feedback: { overall_score: 70 } as never,
+  evaluations: [{ questionIndex: 0, relevance: 70, structure: 65, specificity: 60, ownership: 75 }],
 }
 
 /** Step runner that just invokes the function and records the name. */
@@ -81,16 +94,21 @@ beforeEach(() => {
   mockEvaluateSession.mockResolvedValue({ overallScore: 70 })
   mockGeneratePathwayPlan.mockResolvedValue({ _id: 'plan-1' })
   mockFindByIdAndUpdate.mockResolvedValue({})
+  // Default fetch-session result — happy-path session payload.
+  mockFindOneLean.mockResolvedValue(SESSION_PAYLOAD)
   // Default: feature on (post-Codex-P1, the job branches on this).
   mockIsFeatureEnabled.mockImplementation(() => true)
 })
 
 describe('runPathwayJobHandler', () => {
-  it('runs the 4 steps in order: mark-running → evaluate-session → generate-plan → mark-completed', async () => {
+  it('runs the 5 steps in order: mark-running → fetch-session → evaluate-session → generate-plan → mark-completed', async () => {
     const step = makeStep()
     await runPathwayJobHandler(makeEvent(), step)
+    // Codex P2 on PR #379 — fetch-session is now a dedicated step
+    // (event no longer carries the heavy data inline).
     expect(step.calls).toEqual([
       'mark-running',
+      'fetch-session',
       'evaluate-session',
       'generate-plan',
       'mark-completed',
@@ -111,19 +129,23 @@ describe('runPathwayJobHandler', () => {
     ])
   })
 
-  it('passes the event payload through to evaluateSession and generatePathwayPlan', async () => {
+  it('fetches session data from Mongo (not from event payload) and passes it to evaluateSession + planner', async () => {
     const step = makeStep()
     await runPathwayJobHandler(makeEvent(), step)
     expect(mockEvaluateSession).toHaveBeenCalledWith({
       domain: 'pm',
       interviewType: 'behavioral',
       seniorityBand: '3-6',
-      evaluations: [],
+      evaluations: SESSION_PAYLOAD.evaluations,
     })
     expect(mockGeneratePathwayPlan).toHaveBeenCalledWith(
       expect.objectContaining({
-        userId: 'user-1',
+        userId: '507f1f77bcf86cd799439099',
         sessionId: 'sess-1',
+        domain: 'pm',
+        interviewType: 'behavioral',
+        experience: '3-6',
+        feedback: SESSION_PAYLOAD.feedback,
         sessionEvaluation: { overallScore: 70 },
       }),
     )
@@ -154,9 +176,14 @@ describe('runPathwayJobHandler', () => {
       mockIsFeatureEnabled.mockImplementation((flag: string) => flag !== 'pathway_planner')
       const step = makeStep()
       const result = await runPathwayJobHandler(makeEvent(), step)
-      // Steps run: mark-running → evaluate-session → mark-skipped.
+      // Steps run: mark-running → fetch-session → evaluate-session → mark-skipped.
       // generate-plan must NOT have been called (planner skipped entirely).
-      expect(step.calls).toEqual(['mark-running', 'evaluate-session', 'mark-skipped'])
+      expect(step.calls).toEqual([
+        'mark-running',
+        'fetch-session',
+        'evaluate-session',
+        'mark-skipped',
+      ])
       expect(mockGeneratePathwayPlan).not.toHaveBeenCalled()
       const finalUpdate = mockFindByIdAndUpdate.mock.calls[1]
       expect(finalUpdate[1].$set.pathwayGenerationStatus).toBe('skipped')
@@ -192,9 +219,9 @@ describe('runPathwayJobHandler', () => {
     mockEvaluateSession.mockRejectedValue(new Error('LLM timeout'))
     const step = makeStep()
     await expect(runPathwayJobHandler(makeEvent(), step)).rejects.toThrow('LLM timeout')
-    // mark-running ran (step 1), evaluate-session threw (step 2),
+    // mark-running → fetch-session → evaluate-session (throws).
     // generate-plan and mark-completed should NOT have been invoked.
-    expect(step.calls).toEqual(['mark-running', 'evaluate-session'])
+    expect(step.calls).toEqual(['mark-running', 'fetch-session', 'evaluate-session'])
     expect(mockGeneratePathwayPlan).not.toHaveBeenCalled()
   })
 
@@ -203,7 +230,64 @@ describe('runPathwayJobHandler', () => {
     const step = makeStep()
     await expect(runPathwayJobHandler(makeEvent(), step)).rejects.toThrow('Mongo connection lost')
     // mark-completed should NOT have run.
-    expect(step.calls).toEqual(['mark-running', 'evaluate-session', 'generate-plan'])
+    expect(step.calls).toEqual([
+      'mark-running',
+      'fetch-session',
+      'evaluate-session',
+      'generate-plan',
+    ])
+  })
+
+  // Codex P2 on PR #379 (effectively P0) — payload slim-down.
+  describe('fetch-session step (Codex P2 — payload slim-down)', () => {
+    it('throws when the session document does not exist (Inngest retries → onFailure marks failed)', async () => {
+      mockFindOneLean.mockResolvedValue(null)
+      const step = makeStep()
+      await expect(runPathwayJobHandler(makeEvent(), step)).rejects.toThrow(
+        /session sess-1 not found/i,
+      )
+      expect(step.calls).toEqual(['mark-running', 'fetch-session'])
+      expect(mockEvaluateSession).not.toHaveBeenCalled()
+    })
+
+    it('throws when session.feedback is missing (degenerate race with generate-feedback persist)', async () => {
+      mockFindOneLean.mockResolvedValue({ ...SESSION_PAYLOAD, feedback: undefined })
+      const step = makeStep()
+      await expect(runPathwayJobHandler(makeEvent(), step)).rejects.toThrow(
+        /has no feedback yet/i,
+      )
+    })
+
+    it('throws when session.evaluations is empty', async () => {
+      mockFindOneLean.mockResolvedValue({ ...SESSION_PAYLOAD, evaluations: [] })
+      const step = makeStep()
+      await expect(runPathwayJobHandler(makeEvent(), step)).rejects.toThrow(
+        /has no evaluations/i,
+      )
+    })
+
+    it('throws when session.config is missing required fields (role / experience)', async () => {
+      mockFindOneLean.mockResolvedValue({ ...SESSION_PAYLOAD, config: {} })
+      const step = makeStep()
+      await expect(runPathwayJobHandler(makeEvent(), step)).rejects.toThrow(
+        /missing config\.role\/experience/i,
+      )
+    })
+
+    it("defaults missing config.interviewType to 'screening' (matches generate-feedback:243)", async () => {
+      mockFindOneLean.mockResolvedValue({
+        ...SESSION_PAYLOAD,
+        config: { role: 'pm', experience: '3-6' /* no interviewType */ },
+      })
+      const step = makeStep()
+      await runPathwayJobHandler(makeEvent(), step)
+      expect(mockEvaluateSession).toHaveBeenCalledWith(
+        expect.objectContaining({ interviewType: 'screening' }),
+      )
+      expect(mockGeneratePathwayPlan).toHaveBeenCalledWith(
+        expect.objectContaining({ interviewType: 'screening' }),
+      )
+    })
   })
 })
 

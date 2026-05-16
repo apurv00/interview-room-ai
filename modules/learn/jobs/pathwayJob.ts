@@ -42,14 +42,28 @@ interface PathwayJobStepRunner {
   run: <T>(name: string, fn: () => Promise<T> | T) => Promise<T>
 }
 
+/**
+ * Event payload — intentionally minimal (Codex P2 on PR #379 — flagged
+ * by the user as effectively P0 because the failure mode is unrecoverable).
+ *
+ * The previous shape carried `domain`, `interviewType`, `experience`,
+ * `feedback`, and `typedEvaluations` inline. For a long interview those
+ * objects can run into tens of kilobytes (full question/answer text +
+ * 4-dimension evaluations × N questions + the full FeedbackData with
+ * its red flags + dimension breakdowns + ideal answers). Inngest events
+ * have a hard size limit (512KB at the time of writing); if a session
+ * exceeds it, every `inngest.send()` for that session fails forever,
+ * the retry endpoint resends the SAME oversized payload, and
+ * regeneration is permanently bricked for that user.
+ *
+ * Fix: send only the identifiers. The job re-fetches the heavy data
+ * from Mongo as its first real step. Mirrors `analysisJob`'s shape
+ * (`{sessionId, userId, startTime}`) so the two background-job
+ * modules stay consistent.
+ */
 export interface PathwayJobEventData {
   sessionId: string
   userId: string
-  domain: string
-  interviewType: string
-  experience: string
-  feedback: FeedbackData
-  typedEvaluations: AnswerEvaluation[]
 }
 
 /** Field names on InterviewSession that track pathway-generation lifecycle. */
@@ -69,7 +83,7 @@ export async function runPathwayJobHandler(
   event: { data: PathwayJobEventData },
   step: PathwayJobStepRunner,
 ): Promise<{ sessionId: string; status: 'completed' | 'skipped'; pathwayId?: string }> {
-  const { sessionId, userId, domain, interviewType, experience, feedback, typedEvaluations } = event.data
+  const { sessionId, userId } = event.data
 
   // Step 1: mark the session running + increment attempt counter. Inngest
   // retries call this handler from the top, so each attempt bumps the
@@ -86,8 +100,57 @@ export async function runPathwayJobHandler(
     })
   })
 
-  // Step 2: evaluate session (pure, no LLM call; uses the per-question
-  // evaluations passed in the event payload). Independently retryable.
+  // Step 2: fetch the heavy session data from Mongo.
+  //
+  // Previously the event payload carried `config`, `feedback`, and
+  // `typedEvaluations` inline; we now read them from the session
+  // document here so the event stays small (Codex P2 on PR #379).
+  //
+  // Race note: generate-feedback's persist + pathway-enqueue side-
+  // effects fire in parallel. By the time the Inngest worker picks
+  // up the event (typically <2s), persist has completed (it's
+  // awaited before the API returns — see route.ts:1230 comment).
+  // If feedback is genuinely missing here (degenerate case: session
+  // deleted, retake flow racing, etc.), throw so Inngest retries —
+  // by the 2nd attempt persist will definitely have landed.
+  const sessionData = await step.run('fetch-session', async () => {
+    await connectDB()
+    const doc = await InterviewSession.findOne({
+      _id: sessionId,
+      userId: new mongoose.Types.ObjectId(userId),
+    })
+      .select('config feedback evaluations')
+      .lean<{
+        config?: { role?: string; interviewType?: string; experience?: string }
+        feedback?: FeedbackData
+        evaluations?: AnswerEvaluation[]
+      }>()
+    if (!doc) {
+      throw new Error(`pathwayJob: session ${sessionId} not found for user ${userId}`)
+    }
+    if (!doc.config?.role || !doc.config?.experience) {
+      throw new Error(`pathwayJob: session ${sessionId} missing config.role/experience`)
+    }
+    if (!doc.feedback) {
+      throw new Error(`pathwayJob: session ${sessionId} has no feedback yet — generate-feedback persist race`)
+    }
+    if (!Array.isArray(doc.evaluations) || doc.evaluations.length === 0) {
+      throw new Error(`pathwayJob: session ${sessionId} has no evaluations`)
+    }
+    return {
+      domain: doc.config.role,
+      // Match the primary feedback flow's default
+      // (app/api/generate-feedback/route.ts:243) so the regenerated
+      // plan uses the same evaluation assumptions as the original.
+      interviewType: doc.config.interviewType || 'screening',
+      experience: doc.config.experience,
+      feedback: doc.feedback,
+      typedEvaluations: doc.evaluations,
+    }
+  })
+  const { domain, interviewType, experience, feedback, typedEvaluations } = sessionData
+
+  // Step 3: evaluate session (pure, no LLM call). Independently retryable.
   const sessionEval: SessionEvaluationSummary = await step.run('evaluate-session', async () =>
     evaluateSession({
       domain,
