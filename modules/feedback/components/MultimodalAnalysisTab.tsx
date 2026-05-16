@@ -10,6 +10,7 @@ import VideoMetricChips from '@feedback/components/multimodal/VideoMetricChips'
 import PeakStumbleCTAs from '@feedback/components/multimodal/PeakStumbleCTAs'
 import { composureLevels as computeComposureLevels } from '@feedback/components/multimodal/composureScore'
 import ExpressionStrip from '@feedback/components/multimodal/ExpressionStrip'
+import EngagementHeatmap from '@feedback/components/multimodal/EngagementHeatmap'
 import MomentsTabBody from '@feedback/components/multimodal/MomentsTabBody'
 import TranscriptTabBody from '@feedback/components/multimodal/TranscriptTabBody'
 import CoachingTipsTabBody from '@feedback/components/multimodal/CoachingTipsTabBody'
@@ -425,6 +426,12 @@ export default function MultimodalAnalysisTab({
             totalDurationSec={totalDurationSec}
             currentTimeSec={analysisVideoTime}
             questions={questionMarkers}
+          />
+
+          <EngagementHeatmap
+            facialTimeseries={analysis.facialTimeseries}
+            totalDurationSec={totalDurationSec}
+            onSeek={(sec) => seek?.(sec)}
           />
 
           <VideoMetricChips
