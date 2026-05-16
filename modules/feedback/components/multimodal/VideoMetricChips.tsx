@@ -7,8 +7,6 @@ import { FONT_MONO } from './tokens'
 interface VideoMetricChipsProps {
   fusionSummary?: FusionSummary
   speechMetrics?: SpeechMetrics[]
-  /** Optional dominant expression — derived in MultimodalAnalysisTab from per-Q facial segments. */
-  dominantExpression?: string | null
 }
 
 interface ChipDatum {
@@ -18,14 +16,14 @@ interface ChipDatum {
 }
 
 /**
- * 5 chips at the bottom of the video panel — quick-read summary stats:
- *   WPM · Fillers · Avg pause · Eye contact · Expression
+ * 4 chips at the bottom of the video panel — quick-read summary stats:
+ *   WPM · Fillers · Eye contact · Body language
  *
- * Mirrors the prototype's `OVERALL_METRICS` shape: tiny mono label, big
- * numeric value, tiny note. Data sources:
- *   - WPM, Fillers count, Avg pause → aggregated from `speechMetrics[]`
+ * Tiny mono label, big numeric value, tiny note. Data sources:
+ *   - WPM, Fillers → aggregated from `speechMetrics[]`
  *   - Eye contact → fusionSummary.eyeContactScore
- *   - Expression → caller-provided (page level derives from facialSegments)
+ *   - Body language → fusionSummary.overallBodyLanguageScore (Claude's
+ *     holistic posture/head/expression score, already in the schema)
  *
  * Missing data renders "N/A" with no note. Layout uses `flex` with each chip
  * `flex-1 min-w-0` so they share the row evenly without overflow.
@@ -33,7 +31,6 @@ interface ChipDatum {
 function buildChips(
   fusion: FusionSummary | undefined,
   metrics: SpeechMetrics[] | undefined,
-  dominantExpression: string | null | undefined
 ): ChipDatum[] {
   const valid = (metrics || []).filter((m) => m && m.totalWords > 0)
   const totalWords = valid.reduce((s, m) => s + m.totalWords, 0)
@@ -46,13 +43,8 @@ function buildChips(
   const fillersPerMin = totalDurationMinutes > 0
     ? (totalFillers / totalDurationMinutes).toFixed(1)
     : null
-  const avgPauseScore = valid.length > 0
-    ? valid.reduce((s, m) => s + (m.pauseScore || 0), 0) / valid.length
-    : null
-  // Convert the 0–100 pauseScore into an approximate "average pause length"
-  // for display. Lower score = longer pauses; we just show the score with
-  // a note rather than fabricating a seconds figure we don't have.
   const eye = fusion?.eyeContactScore ?? null
+  const body = fusion?.overallBodyLanguageScore ?? null
 
   const wpmNote =
     avgWpm == null ? '' :
@@ -66,17 +58,17 @@ function buildChips(
     fillerRate > 0.04 ? `${fillersPerMin ?? '?'}/min` :
     'low'
 
-  const pauseNote =
-    avgPauseScore == null ? '' :
-    avgPauseScore >= 70 ? 'on target' :
-    avgPauseScore >= 50 ? 'fair' :
-    'above target'
-
   const eyeNote =
     eye == null ? '' :
     eye >= 75 ? 'strong' :
     eye >= 55 ? 'fair' :
     'low'
+
+  const bodyNote =
+    body == null ? '' :
+    body >= 75 ? 'confident' :
+    body >= 55 ? 'fair' :
+    'work on it'
 
   return [
     {
@@ -90,19 +82,14 @@ function buildChips(
       note: fillerNote,
     },
     {
-      label: 'Avg pause',
-      value: avgPauseScore != null ? `${Math.round(avgPauseScore)}/100` : 'N/A',
-      note: pauseNote,
-    },
-    {
       label: 'Eye contact',
       value: eye != null ? `${eye}%` : 'N/A',
       note: eyeNote,
     },
     {
-      label: 'Expression',
-      value: dominantExpression || 'N/A',
-      note: dominantExpression ? 'most-common' : '',
+      label: 'Body language',
+      value: body != null ? `${body}/100` : 'N/A',
+      note: bodyNote,
     },
   ]
 }
@@ -110,9 +97,8 @@ function buildChips(
 export default function VideoMetricChips({
   fusionSummary,
   speechMetrics,
-  dominantExpression,
 }: VideoMetricChipsProps) {
-  const chips = buildChips(fusionSummary, speechMetrics, dominantExpression)
+  const chips = buildChips(fusionSummary, speechMetrics)
 
   return (
     <div className="flex gap-2 flex-shrink-0">
