@@ -11,6 +11,7 @@ import PeakStumbleCTAs from '@feedback/components/multimodal/PeakStumbleCTAs'
 import { composureLevels as computeComposureLevels } from '@feedback/components/multimodal/composureScore'
 import ExpressionStrip from '@feedback/components/multimodal/ExpressionStrip'
 import EngagementHeatmap from '@feedback/components/multimodal/EngagementHeatmap'
+import DeliveryContentMatrix from '@feedback/components/multimodal/DeliveryContentMatrix'
 import MomentsTabBody from '@feedback/components/multimodal/MomentsTabBody'
 import TranscriptTabBody from '@feedback/components/multimodal/TranscriptTabBody'
 import CoachingTipsTabBody from '@feedback/components/multimodal/CoachingTipsTabBody'
@@ -62,7 +63,7 @@ interface MultimodalAnalysisTabProps {
   onPracticeClick?: (drillIndex: number) => void
 }
 
-type RightPaneTab = 'moments' | 'transcript' | 'tips'
+type RightPaneTab = 'moments' | 'transcript' | 'tips' | 'matrix'
 
 /**
  * Round 4: full visual + IA redesign of the Multimodal tab.
@@ -186,6 +187,19 @@ export default function MultimodalAnalysisTab({
     })
   }, [analysis?.facialSegments, questionMarkers])
 
+  // Round 5d feature #1 — non-failed evaluations for the Delivery × Content
+  // matrix. Mirrors OverviewTab.evalData's filter. Memoized so the matrix's
+  // own useMemo dependency stays referentially stable across the frequent
+  // re-renders triggered by analysisVideoTime / playing state changes;
+  // without this lift, buildMatrixData re-runs ~7 times per second during
+  // playback (Codex P3 review on Round 5d).
+  const matrixEvaluations = useMemo(
+    () => data.evaluations.filter(
+      (e) => (e as unknown as { status?: string }).status !== 'failed'
+    ),
+    [data.evaluations]
+  )
+
   // The interviewer text of the active question, looked up from the
   // transcript via questionIndex. Used in the asked-question chip on the video.
   const askedQuestionText = useMemo(() => {
@@ -242,6 +256,9 @@ export default function MultimodalAnalysisTab({
     { id: 'moments', label: 'Key moments', count: keyMoments.length },
     { id: 'transcript', label: 'Transcript', count: null },
     { id: 'tips', label: 'Coaching tips', count: analysis.fusionSummary?.coachingTips.length ?? 0 },
+    // Round 5d feature #1 — Delivery × Content matrix. Headline insight
+    // of the tab; the only view that fuses content + delivery scores.
+    { id: 'matrix', label: 'Delivery × Content', count: questionMarkers.length || null },
   ]
 
   const tabsPanel = (
@@ -306,6 +323,15 @@ export default function MultimodalAnalysisTab({
             onQuestionClick={onQuestionClick}
             maxQuestionIndex={maxQuestionIndex}
             onPracticeClick={onPracticeClick}
+          />
+        )}
+        {tab === 'matrix' && (
+          <DeliveryContentMatrix
+            evaluations={matrixEvaluations}
+            prosodySegments={analysis.prosodySegments}
+            facialSegments={analysis.facialSegments}
+            questions={questionMarkers}
+            onSeek={(sec) => seek?.(sec)}
           />
         )}
       </div>
