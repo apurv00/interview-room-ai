@@ -1,6 +1,6 @@
 'use client'
 
-import TextWithQuestionChips from '@interview/components/feedback/TextWithQuestionChips'
+import TextWithQuestionChips from '@feedback/components/TextWithQuestionChips'
 
 interface RedFlagCardsProps {
   redFlags: string[]

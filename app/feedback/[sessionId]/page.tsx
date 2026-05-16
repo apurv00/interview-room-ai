@@ -4,16 +4,16 @@ import { Component, useCallback, useEffect, useMemo, useRef, useState, type Reac
 import dynamic from 'next/dynamic'
 import { useRouter, useParams } from 'next/navigation'
 import { ScoreRing } from '@shared/ui/ScoreBar'
-import AudioPlayer from '@interview/components/feedback/AudioPlayer'
-import OverviewTab from '@interview/components/feedback/OverviewTab'
-import ScoresTab from '@interview/components/feedback/ScoresTab'
-import type { PeerData } from '@interview/components/feedback/PeerComparison'
+import AudioPlayer from '@feedback/components/AudioPlayer'
+import OverviewTab from '@feedback/components/OverviewTab'
+import ScoresTab from '@feedback/components/ScoresTab'
+import type { PeerData } from '@feedback/components/PeerComparison'
 import type { MultimodalAnalysisData } from '@shared/types/multimodal'
 
 // Multimodal tab pulls in Recharts + the video player. Lazy-load it so the
 // default Scores tab's bundle stays small. (Rule: bundle-dynamic-imports.)
 const MultimodalAnalysisTab = dynamic(
-  () => import('@interview/components/feedback/MultimodalAnalysisTab'),
+  () => import('@feedback/components/MultimodalAnalysisTab'),
   {
     ssr: false,
     loading: () => (
@@ -27,7 +27,7 @@ const MultimodalAnalysisTab = dynamic(
 // Learning tab content — same dynamic-import pattern. Only loaded when the
 // user clicks into the Learning tab, keeping the default Scores tab fast.
 const LearningTab = dynamic(
-  () => import('@interview/components/feedback/LearningTab'),
+  () => import('@feedback/components/LearningTab'),
   {
     ssr: false,
     loading: () => (

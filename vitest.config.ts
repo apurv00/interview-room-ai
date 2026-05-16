@@ -13,6 +13,7 @@ export default defineConfig({
       '@b2b': path.resolve(__dirname, 'modules/b2b'),
       '@cms': path.resolve(__dirname, 'modules/cms'),
       '@resume': path.resolve(__dirname, 'modules/resume'),
+      '@feedback': path.resolve(__dirname, 'modules/feedback'),
       '@': path.resolve(__dirname, '.'),
     },
   },

@@ -3,8 +3,9 @@
 import Link from 'next/link'
 import { BookOpen, Target, CheckCircle2, ArrowRight } from 'lucide-react'
 import type { FeedbackData } from '@shared/types'
-import TextWithQuestionChips from '@interview/components/feedback/TextWithQuestionChips'
-import QuestionRefChip from '@interview/components/feedback/QuestionRefChip'
+import TextWithQuestionChips from '@feedback/components/TextWithQuestionChips'
+import QuestionRefChip from '@feedback/components/QuestionRefChip'
+// eslint-disable-next-line no-restricted-imports -- direct import required: the @interview barrel transitively pulls server-only Redis (ioredis → dns/net) into this client component.
 import { parseQuestionRefs } from '@interview/utils/parseQuestionRefs'
 
 interface LearningPlanSectionProps {

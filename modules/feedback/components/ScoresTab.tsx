@@ -1,11 +1,11 @@
 'use client'
 
 import { useCallback, useMemo, useRef, useState } from 'react'
-import ScoreSummaryHeader from '@interview/components/feedback/ScoreSummaryHeader'
-import QuestionHeatmap from '@interview/components/feedback/QuestionHeatmap'
+import ScoreSummaryHeader from '@feedback/components/ScoreSummaryHeader'
+import QuestionHeatmap from '@feedback/components/QuestionHeatmap'
 import QuestionBreakdown, {
   type QuestionBreakdownSortOrder,
-} from '@interview/components/feedback/QuestionBreakdown'
+} from '@feedback/components/QuestionBreakdown'
 import type { StoredInterviewData } from '@shared/types'
 
 interface ScoresTabProps {

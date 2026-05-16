@@ -1,8 +1,8 @@
 'use client'
 
 import { useMemo } from 'react'
-import LearningPlanSection from '@interview/components/feedback/LearningPlanSection'
-import IdealAnswerComparisonCard from '@interview/components/feedback/IdealAnswerComparisonCard'
+import LearningPlanSection from '@feedback/components/LearningPlanSection'
+import IdealAnswerComparisonCard from '@feedback/components/IdealAnswerComparisonCard'
 import type { FeedbackData, StoredInterviewData } from '@shared/types'
 
 interface LearningTabProps {

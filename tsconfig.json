@@ -30,7 +30,9 @@
       "@cms": ["./modules/cms"],
       "@cms/*": ["./modules/cms/*"],
       "@resume": ["./modules/resume"],
-      "@resume/*": ["./modules/resume/*"]
+      "@resume/*": ["./modules/resume/*"],
+      "@feedback": ["./modules/feedback"],
+      "@feedback/*": ["./modules/feedback/*"]
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
