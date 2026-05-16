@@ -148,4 +148,90 @@ describe('Scrubber', () => {
     fireEvent.click(screen.getByLabelText('Play'))
     expect(setPlaying).toHaveBeenCalledWith(true)
   })
+
+  // Round 5a feature #3 — filler-word ticks
+  describe('filler-word ticks', () => {
+    it('renders a tick for each valid filler timestamp', () => {
+      const { container } = render(
+        <Scrubber
+          currentTimeSec={0}
+          totalDurationSec={100}
+          onSeek={vi.fn()}
+          playing={false}
+          setPlaying={vi.fn()}
+          questions={[]}
+          keyMoments={[]}
+          fillerTimestamps={[10, 25, 50, 80]}
+        />
+      )
+      const ticks = container.querySelectorAll('[title^="Filler word at"]')
+      expect(ticks.length).toBe(4)
+    })
+
+    it('positions each tick at (ts / totalDurationSec * 100)%', () => {
+      const { container } = render(
+        <Scrubber
+          currentTimeSec={0}
+          totalDurationSec={200}
+          onSeek={vi.fn()}
+          playing={false}
+          setPlaying={vi.fn()}
+          questions={[]}
+          keyMoments={[]}
+          fillerTimestamps={[50]}
+        />
+      )
+      const tick = container.querySelector('[title="Filler word at 0:50"]') as HTMLElement
+      expect(tick).toBeTruthy()
+      // 50 / 200 = 25%
+      expect(tick.style.left).toBe('25%')
+    })
+
+    it('skips ticks with non-finite or out-of-range timestamps', () => {
+      const { container } = render(
+        <Scrubber
+          currentTimeSec={0}
+          totalDurationSec={100}
+          onSeek={vi.fn()}
+          playing={false}
+          setPlaying={vi.fn()}
+          questions={[]}
+          keyMoments={[]}
+          fillerTimestamps={[10, NaN, Infinity, -1, 150, 60]}
+        />
+      )
+      const ticks = container.querySelectorAll('[title^="Filler word at"]')
+      // Only 10 and 60 are valid (-1 < 0, 150 > 100, NaN/Infinity not finite)
+      expect(ticks.length).toBe(2)
+    })
+
+    it('renders no ticks when fillerTimestamps is undefined or empty', () => {
+      const { container: c1 } = render(
+        <Scrubber
+          currentTimeSec={0}
+          totalDurationSec={100}
+          onSeek={vi.fn()}
+          playing={false}
+          setPlaying={vi.fn()}
+          questions={[]}
+          keyMoments={[]}
+        />
+      )
+      expect(c1.querySelectorAll('[title^="Filler word at"]').length).toBe(0)
+
+      const { container: c2 } = render(
+        <Scrubber
+          currentTimeSec={0}
+          totalDurationSec={100}
+          onSeek={vi.fn()}
+          playing={false}
+          setPlaying={vi.fn()}
+          questions={[]}
+          keyMoments={[]}
+          fillerTimestamps={[]}
+        />
+      )
+      expect(c2.querySelectorAll('[title^="Filler word at"]').length).toBe(0)
+    })
+  })
 })

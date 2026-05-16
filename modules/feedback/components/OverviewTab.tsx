@@ -7,6 +7,7 @@ import ScoreProgressionChart from '@feedback/components/ScoreProgressionChart'
 import SpeechMetricsChart from '@feedback/components/SpeechMetricsChart'
 import DimensionRadar from '@feedback/components/DimensionRadar'
 import ConfidenceTrend from '@feedback/components/ConfidenceTrend'
+import ConfidenceArcCard from '@feedback/components/ConfidenceArcCard'
 import RedFlagCards from '@feedback/components/RedFlagCards'
 import ScoreTrendChart from '@feedback/components/ScoreTrendChart'
 import TextWithQuestionChips from '@feedback/components/TextWithQuestionChips'
@@ -37,9 +38,16 @@ interface OverviewTabProps {
   onQuestionClick?: (questionIndex: number) => void
   /** Highest valid question index for chip range guard. */
   maxQuestionIndex?: number
+  /** Round 5a feature #2: Claude's per-session narrative confidence read,
+   *  sourced from `FusionSummary.confidenceProgression`. Rendered as the
+   *  qualitative twin of the existing ConfidenceTrend chart. */
+  confidenceProgression?: string | null
+  /** Round 5a feature #2: per-question audio confidence band from
+   *  `prosodySegments[i].confidenceMarker`. Drives the small sparkline. */
+  perQuestionConfidence?: ReadonlyArray<'high' | 'medium' | 'low'>
 }
 
-export default function OverviewTab({ data, feedback, sessionId, peerData, peerLoading, currentScore, currentScores, domain, parentSessionId, onQuestionClick, maxQuestionIndex }: OverviewTabProps) {
+export default function OverviewTab({ data, feedback, sessionId, peerData, peerLoading, currentScore, currentScores, domain, parentSessionId, onQuestionClick, maxQuestionIndex, confidenceProgression, perQuestionConfidence }: OverviewTabProps) {
   const { dimensions, red_flags, top_3_improvements } = feedback
   const { answer_quality, communication } = dimensions
   const engagementSignals = dimensions.engagement_signals || null
@@ -174,6 +182,10 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
           ) : (
             <p className="text-caption text-[#71767b]">No speech data</p>
           )}
+          <ConfidenceArcCard
+            confidenceProgression={confidenceProgression}
+            perQuestionConfidence={perQuestionConfidence}
+          />
         </div>
       </section>
 

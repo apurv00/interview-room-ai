@@ -134,6 +134,26 @@ export default function MomentsTabBody({
     })
   }, [moments, selectedIdx, prosodySegments, facialSegments, whisperSegments, questions])
 
+  // Signal-source breakdown: count moments by where the signal came from
+  // (audio / facial / content / fused). Round 5a feature #9 — transparency
+  // builds trust (Lee & See, automation trust). Shows the user that the AI
+  // didn't hallucinate from the transcript alone; some moments are driven
+  // by how they sounded or looked.
+  const signalBreakdown = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const m of moments) {
+      const k = m.signal || 'fused'
+      counts[k] = (counts[k] || 0) + 1
+    }
+    // Order: audio, facial, content, fused — matches the visual order in the
+    // moment cards / signal track legend.
+    const order = ['audio', 'facial', 'content', 'fused']
+    return order
+      .filter((k) => counts[k] > 0)
+      .map((k) => `${counts[k]} ${k}`)
+      .join(' · ')
+  }, [moments])
+
   if (moments.length === 0) {
     return (
       <p className="text-sm text-stone-400 italic p-2">No key moments captured.</p>
@@ -142,6 +162,15 @@ export default function MomentsTabBody({
 
   return (
     <div className="flex flex-col gap-1.5">
+      {signalBreakdown && (
+        <p
+          className="text-[10px] text-stone-400 px-1 mb-0.5"
+          style={{ fontFamily: FONT_MONO }}
+          data-testid="moments-signal-breakdown"
+        >
+          {moments.length} {moments.length === 1 ? 'moment' : 'moments'}: {signalBreakdown}
+        </p>
+      )}
       {enriched.map(({ moment, questionIdx, questionLabel, stats, excerpt }, i) => {
         const kind = timelineTypeToKind(moment.type)
         const c = KIND_STYLES[kind]
