@@ -157,19 +157,6 @@ export default function MultimodalAnalysisTab({
     return entry?.text
   }, [data.transcript, activeQuestionIndex])
 
-  // Dominant facial expression across the session — used by VideoMetricChips.
-  const dominantExpression = useMemo(() => {
-    const segs = analysis?.facialSegments || []
-    if (segs.length === 0) return null
-    const counts: Record<string, number> = {}
-    for (const s of segs) {
-      const e = s.dominantExpression || 'neutral'
-      counts[e] = (counts[e] || 0) + 1
-    }
-    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1])
-    return sorted[0]?.[0] ?? null
-  }, [analysis?.facialSegments])
-
   // ── Loading ────────────────────────────────────────────────────────────────
   if (analysisLoading) {
     return (
@@ -233,7 +220,7 @@ export default function MultimodalAnalysisTab({
               role="tab"
               aria-selected={isActive}
               onClick={() => setTab(t.id)}
-              className={`px-3.5 py-2.5 cursor-pointer text-[13px] font-medium inline-flex items-center gap-1.5 -mb-px border-b-2 transition-colors ${
+              className={`px-2.5 py-2.5 cursor-pointer text-[12px] font-medium inline-flex items-center gap-1 -mb-px border-b-2 whitespace-nowrap transition-colors ${
                 isActive
                   ? 'text-stone-900 border-stone-900'
                   : 'text-stone-600 border-transparent hover:text-stone-900'
@@ -251,17 +238,6 @@ export default function MultimodalAnalysisTab({
             </button>
           )
         })}
-        <div className="ml-auto flex items-center gap-1.5 px-1 py-1.5">
-          <button
-            type="button"
-            disabled
-            className="px-2 py-1 border border-stone-200 rounded-md bg-white text-[11px] text-stone-400 cursor-not-allowed"
-            style={{ fontFamily: FONT_MONO }}
-            title="Filter (coming soon)"
-          >
-            Filter
-          </button>
-        </div>
       </div>
 
       <div className="flex-1 min-h-0 overflow-auto p-3.5">
@@ -400,7 +376,6 @@ export default function MultimodalAnalysisTab({
           <VideoMetricChips
             fusionSummary={analysis.fusionSummary}
             speechMetrics={data.speechMetrics}
-            dominantExpression={dominantExpression}
           />
         </div>
 
