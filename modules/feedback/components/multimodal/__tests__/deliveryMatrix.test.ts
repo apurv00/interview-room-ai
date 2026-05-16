@@ -4,7 +4,10 @@ import {
   deliveryScoreForQuestion,
   quadrantOf,
   buildMatrixData,
+  buildExclusionFootnote,
+  REASON_LABEL,
   QUADRANT_LABEL,
+  type ExcludedQuestion,
 } from '../deliveryMatrix'
 import type { AnswerEvaluation } from '@shared/types'
 import type { ProsodySegment, FacialSegment } from '@shared/types/multimodal'
@@ -238,5 +241,135 @@ describe('buildMatrixData', () => {
     expect(data.excluded).toEqual([
       { questionIndex: 1, questionLabel: 'Q2', reason: 'no-facial-data' },
     ])
+  })
+
+  // Codex P2 review on Round 5d — previously hardcoded reason 'no-facial-data'
+  // even when the cause was missing audio. The diagnosis must match the actual
+  // cause so the footnote doesn't lie to the user.
+  describe('precise exclusion reasons (P2 fix)', () => {
+    it('reports reason no-audio-data when prosody is missing but facial is present', () => {
+      const data = buildMatrixData({
+        evaluations: [evaln(0, { rel: 80, str: 80, spec: 80, own: 80 })],
+        prosodySegments: [], // no audio
+        facialSegments: [facial(0, 0.9, 0.9)],
+        questions: [QS[0]],
+      })
+      expect(data.points).toHaveLength(0)
+      expect(data.excluded).toEqual([
+        { questionIndex: 0, questionLabel: 'Q1', reason: 'no-audio-data' },
+      ])
+    })
+
+    it('reports reason no-audio-data when prosody exists but confidenceMarker is unrecognized', () => {
+      const data = buildMatrixData({
+        evaluations: [evaln(0, { rel: 80, str: 80, spec: 80, own: 80 })],
+        prosodySegments: [{
+          ...prosody(0, 'high'),
+          confidenceMarker: 'unknown' as unknown as ProsodySegment['confidenceMarker'],
+        }],
+        facialSegments: [facial(0, 0.9, 0.9)],
+        questions: [QS[0]],
+      })
+      expect(data.excluded[0]?.reason).toBe('no-audio-data')
+    })
+
+    it('reports reason no-facial-data when audio is fine but facial is missing', () => {
+      const data = buildMatrixData({
+        evaluations: [evaln(0, { rel: 80, str: 80, spec: 80, own: 80 })],
+        prosodySegments: [prosody(0, 'high')],
+        facialSegments: [],
+        questions: [QS[0]],
+      })
+      expect(data.excluded[0]?.reason).toBe('no-facial-data')
+    })
+
+    it('reports reason no-content-score first, before checking delivery signals', () => {
+      const data = buildMatrixData({
+        evaluations: [],
+        prosodySegments: [], // also missing — but content takes precedence
+        facialSegments: [],
+        questions: [QS[0]],
+      })
+      expect(data.excluded[0]?.reason).toBe('no-content-score')
+    })
+
+    it('handles mixed-reason batches correctly (one of each)', () => {
+      const data = buildMatrixData({
+        evaluations: [
+          evaln(0, { rel: 80, str: 80, spec: 80, own: 80 }), // Q1 has eval
+          // Q2 missing eval
+          evaln(2, { rel: 80, str: 80, spec: 80, own: 80 }), // Q3 has eval
+        ],
+        prosodySegments: [
+          prosody(0, 'high'),
+          // Q2 missing prosody (doesn't matter — content takes precedence)
+          // Q3 missing prosody — should report no-audio-data
+          { ...prosody(2, 'high'), confidenceMarker: undefined as unknown as 'high' },
+        ],
+        facialSegments: [
+          facial(0, 0.9, 0.9), // Q1 has facial
+          facial(2, 0.9, 0.9), // Q3 has facial
+          // Q2 missing — but it'll be caught by no-content-score first
+        ],
+        questions: QS,
+      })
+      // Q1 plots; Q2 excluded for no-content-score; Q3 excluded for no-audio-data
+      expect(data.points).toHaveLength(1)
+      expect(data.points[0].questionIndex).toBe(0)
+      expect(data.excluded).toEqual([
+        { questionIndex: 1, questionLabel: 'Q2', reason: 'no-content-score' },
+        { questionIndex: 2, questionLabel: 'Q3', reason: 'no-audio-data' },
+      ])
+    })
+  })
+})
+
+// Codex P3 #1 review on Round 5d — footnote must group reasons honestly
+// rather than picking 'no-facial-data' if any excluded Q has it.
+describe('buildExclusionFootnote', () => {
+  function ex(q: string, reason: ExcludedQuestion['reason']): ExcludedQuestion {
+    return { questionIndex: 0, questionLabel: q, reason }
+  }
+
+  it('returns empty string for empty input', () => {
+    expect(buildExclusionFootnote([])).toBe('')
+  })
+
+  it('single Q, single reason — uses "was"', () => {
+    expect(buildExclusionFootnote([ex('Q2', 'no-facial-data')]))
+      .toBe('Q2 was excluded — no facial signal.')
+  })
+
+  it('multiple Qs same reason — uses "were"', () => {
+    expect(buildExclusionFootnote([ex('Q1', 'no-audio-data'), ex('Q3', 'no-audio-data')]))
+      .toBe('Q1, Q3 were excluded — no audio signal.')
+  })
+
+  it('multiple Qs mixed reasons — annotates each Q with its own reason', () => {
+    const out = buildExclusionFootnote([
+      ex('Q1', 'no-facial-data'),
+      ex('Q3', 'no-audio-data'),
+    ])
+    expect(out).toBe('Q1 (no facial signal), Q3 (no audio signal) were excluded.')
+  })
+
+  it('all three reasons mixed — annotates per Q in input order', () => {
+    const out = buildExclusionFootnote([
+      ex('Q1', 'no-content-score'),
+      ex('Q2', 'no-facial-data'),
+      ex('Q3', 'no-audio-data'),
+    ])
+    expect(out).toContain('Q1 (no content score)')
+    expect(out).toContain('Q2 (no facial signal)')
+    expect(out).toContain('Q3 (no audio signal)')
+    expect(out).toMatch(/were excluded\.?$/)
+  })
+})
+
+describe('REASON_LABEL', () => {
+  it('exposes friendly copy for every exclusion reason', () => {
+    expect(REASON_LABEL['no-facial-data']).toBe('no facial signal')
+    expect(REASON_LABEL['no-audio-data']).toBe('no audio signal')
+    expect(REASON_LABEL['no-content-score']).toBe('no content score')
   })
 })

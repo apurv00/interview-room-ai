@@ -5,6 +5,7 @@ import type { AnswerEvaluation } from '@shared/types'
 import type { ProsodySegment, FacialSegment } from '@shared/types/multimodal'
 import { FONT_MONO } from './tokens'
 import {
+  buildExclusionFootnote,
   buildMatrixData,
   QUADRANT_LABEL,
   type Quadrant,
@@ -150,7 +151,7 @@ export default function DeliveryContentMatrix({
         </p>
         {data.excluded.length > 0 && (
           <p className="text-[11px] text-stone-400" data-testid="matrix-footnote">
-            {data.excluded.length} {data.excluded.length === 1 ? 'question was' : 'questions were'} excluded — see hover details on each Q chip.
+            {buildExclusionFootnote(data.excluded)}
           </p>
         )}
       </div>
@@ -317,10 +318,7 @@ export default function DeliveryContentMatrix({
           className="text-[11px] italic text-stone-400"
           data-testid="matrix-footnote"
         >
-          {data.excluded.map((e) => e.questionLabel).join(', ')}{' '}
-          {data.excluded.length === 1 ? 'was' : 'were'} excluded —{' '}
-          {data.excluded.some((e) => e.reason === 'no-facial-data') ? 'no facial signal' : 'no content score'}
-          {data.excluded.length > 1 ? ' for one or more Qs' : ''}.
+          {buildExclusionFootnote(data.excluded)}
         </p>
       )}
     </div>

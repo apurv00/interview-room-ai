@@ -187,6 +187,19 @@ export default function MultimodalAnalysisTab({
     })
   }, [analysis?.facialSegments, questionMarkers])
 
+  // Round 5d feature #1 — non-failed evaluations for the Delivery × Content
+  // matrix. Mirrors OverviewTab.evalData's filter. Memoized so the matrix's
+  // own useMemo dependency stays referentially stable across the frequent
+  // re-renders triggered by analysisVideoTime / playing state changes;
+  // without this lift, buildMatrixData re-runs ~7 times per second during
+  // playback (Codex P3 review on Round 5d).
+  const matrixEvaluations = useMemo(
+    () => data.evaluations.filter(
+      (e) => (e as unknown as { status?: string }).status !== 'failed'
+    ),
+    [data.evaluations]
+  )
+
   // The interviewer text of the active question, looked up from the
   // transcript via questionIndex. Used in the asked-question chip on the video.
   const askedQuestionText = useMemo(() => {
@@ -314,9 +327,7 @@ export default function MultimodalAnalysisTab({
         )}
         {tab === 'matrix' && (
           <DeliveryContentMatrix
-            evaluations={data.evaluations.filter(
-              (e) => (e as unknown as { status?: string }).status !== 'failed'
-            )}
+            evaluations={matrixEvaluations}
             prosodySegments={analysis.prosodySegments}
             facialSegments={analysis.facialSegments}
             questions={questionMarkers}

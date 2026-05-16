@@ -116,6 +116,27 @@ describe('DeliveryContentMatrix (Round 5d #1)', () => {
     expect(footnote.textContent).toMatch(/no facial signal/i)
   })
 
+  // Codex P2 + P3 #1 fix-up: when excluded Qs have mixed reasons, each
+  // Q gets its own annotation rather than the single-reason umbrella.
+  it('footnote annotates per Q when exclusion reasons differ', () => {
+    render(
+      <DeliveryContentMatrix
+        // Q1 plottable; Q2 has eval but no audio; Q3 has eval + audio but no facial
+        evaluations={[evaln(0, 80), evaln(1, 80), evaln(2, 80)]}
+        prosodySegments={[
+          prosody(0, 'high'),
+          { ...prosody(1, 'high'), confidenceMarker: undefined as unknown as 'high' },
+          prosody(2, 'high'),
+        ]}
+        facialSegments={[facial(0, 0.9, 0.9), facial(1, 0.9, 0.9)]} // Q3 missing
+        questions={QS}
+      />
+    )
+    const footnote = screen.getByTestId('matrix-footnote')
+    expect(footnote.textContent).toMatch(/Q2 \(no audio signal\)/)
+    expect(footnote.textContent).toMatch(/Q3 \(no facial signal\)/)
+  })
+
   it('clicking a dot calls onSeek with offsetSeconds + 8 lede skip', () => {
     const onSeek = vi.fn()
     render(
