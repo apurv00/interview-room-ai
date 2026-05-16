@@ -62,6 +62,43 @@ function transcriptExcerpt(
   return text
 }
 
+interface FillerCount { word: string; count: number }
+
+/**
+ * Top-N filler words used inside a moment's time window.
+ *
+ * Round 5b feature #11 — surfaces the *specific* filler vocabulary the
+ * candidate used, not just the aggregate rate. Behavior-change literature
+ * (Locke's goal-setting theory) consistently finds "you said 'um' 4 times"
+ * produces measurable change where "your filler rate is high" does not.
+ *
+ * Case-folds and groups: "Um" and "um" become one entry. Limits to `maxN`
+ * (default 3 per Hick's Law — beyond 3 the user can't act on them anyway).
+ * Returns [] for moments with no fillers (renderer hides the row entirely).
+ */
+export function topFillerWords(
+  prosody: ProsodySegment[] | undefined,
+  windowStartSec: number,
+  windowEndSec: number,
+  maxN: number = 3,
+): FillerCount[] {
+  if (!prosody || prosody.length === 0) return []
+  const counts = new Map<string, number>()
+  for (const seg of prosody) {
+    for (const f of seg.fillerWords || []) {
+      if (!Number.isFinite(f.timestampSec)) continue
+      if (f.timestampSec < windowStartSec || f.timestampSec >= windowEndSec) continue
+      const key = (f.word || '').toLowerCase().trim()
+      if (!key) continue
+      counts.set(key, (counts.get(key) || 0) + 1)
+    }
+  }
+  return Array.from(counts.entries())
+    .map(([word, count]) => ({ word, count }))
+    .sort((a, b) => b.count - a.count || a.word.localeCompare(b.word))
+    .slice(0, maxN)
+}
+
 interface MiniStat { label: string; value: string }
 
 function buildStats(
@@ -124,12 +161,15 @@ export default function MomentsTabBody({
     return moments.map((m, i) => {
       if (i !== selectedIdx) return { moment: m }
       const qIdx = questionIndexForMoment(m.startSec, questions)
+      const windowEnd = m.endSec || m.startSec + 5
       return {
         moment: m,
         questionIdx: qIdx,
         questionLabel: qIdx != null && questions?.[qIdx] ? questions[qIdx].label : null,
         stats: buildStats(qIdx, prosodySegments, facialSegments),
-        excerpt: transcriptExcerpt(m.startSec, m.endSec || m.startSec + 5, whisperSegments),
+        excerpt: transcriptExcerpt(m.startSec, windowEnd, whisperSegments),
+        // Round 5b feature #11 — top 3 filler words inside this moment's window.
+        fillers: topFillerWords(prosodySegments, m.startSec, windowEnd),
       }
     })
   }, [moments, selectedIdx, prosodySegments, facialSegments, whisperSegments, questions])
@@ -171,7 +211,7 @@ export default function MomentsTabBody({
           {moments.length} {moments.length === 1 ? 'moment' : 'moments'}: {signalBreakdown}
         </p>
       )}
-      {enriched.map(({ moment, questionIdx, questionLabel, stats, excerpt }, i) => {
+      {enriched.map(({ moment, questionIdx, questionLabel, stats, excerpt, fillers }, i) => {
         const kind = timelineTypeToKind(moment.type)
         const c = KIND_STYLES[kind]
         const isSelected = i === selectedIdx
@@ -283,6 +323,30 @@ export default function MomentsTabBody({
                     <span className="text-stone-400">{stat.label}</span>
                     <span className="text-stone-900 font-semibold">{stat.value}</span>
                   </div>
+                ))}
+              </div>
+            )}
+
+            {/* Filler-word lexicon (top 3 inside this moment's window).
+                Round 5b feature #11. Rose chips echo the inline filler chips
+                in the transcript so the user makes the visual link
+                "this is the same kind of thing I saw in the transcript".
+                Hidden entirely when this moment had 0 fillers (silence = signal). */}
+            {fillers && fillers.length > 0 && (
+              <div
+                className="flex gap-1 flex-wrap"
+                data-testid="moments-filler-lexicon"
+              >
+                {fillers.map((f) => (
+                  <span
+                    key={f.word}
+                    className="px-1.5 py-px rounded bg-rose-50 text-rose-700 border border-rose-100 text-[10px] inline-flex items-baseline gap-1"
+                    style={{ fontFamily: FONT_MONO }}
+                  >
+                    <span>{f.word}</span>
+                    <span className="text-rose-400">·</span>
+                    <span className="font-semibold">{f.count}</span>
+                  </span>
                 ))}
               </div>
             )}
