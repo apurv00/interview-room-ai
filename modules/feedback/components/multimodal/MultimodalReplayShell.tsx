@@ -80,18 +80,55 @@ export default function MultimodalReplayShell({
     return () => onSeekRef?.(null)
   }, [seekTo, onSeekRef])
 
-  // Honor the external `playing` prop. Avoid calling play()/pause()
-  // unnecessarily — only call when the actual paused state diverges.
+  // Honor the external `playing` prop (panel-level Scrubber play button,
+  // keyboard shortcut, etc.). Direct user clicks on the centered overlay
+  // button go through `togglePlay` below, which calls v.play() inside the
+  // gesture handler — this useEffect is the fallback for state-driven
+  // changes that originate outside this component.
   useEffect(() => {
     const v = videoRef.current
     if (!v) return
     if (playing && v.paused) {
       v.play().catch(() => {
-        // Autoplay blocked or other media error — flip external state back
+        // Autoplay blocked or other media error — flip external state back.
         setPlaying(false)
       })
     } else if (!playing && !v.paused) {
       v.pause()
+    }
+  }, [playing, setPlaying])
+
+  // Direct gesture-bound play/pause for the centered overlay button.
+  //
+  // Codex P2 review on PR #370 caught that the previous `onClick` only
+  // toggled React state and deferred `v.play()` to the useEffect above —
+  // by the time the effect runs, browsers that enforce user-activation
+  // playback rules (notably Safari and stricter autoplay contexts) have
+  // lost the gesture context and reject the play() promise. The button
+  // then flipped back to paused and the video never started.
+  //
+  // Calling `v.play()` synchronously from the click handler preserves the
+  // user-activation token so playback is honored. We still update React
+  // state so external listeners (panel Scrubber play button, etc.) stay
+  // in sync, but the play() call itself no longer crosses an event-loop
+  // boundary that strips the gesture.
+  const togglePlay = useCallback(() => {
+    const v = videoRef.current
+    if (!v) {
+      setPlaying(!playing)
+      return
+    }
+    if (v.paused) {
+      const result = v.play()
+      // play() may return undefined in very old browsers; guard the chain.
+      if (result && typeof result.then === 'function') {
+        result.then(() => setPlaying(true)).catch(() => setPlaying(false))
+      } else {
+        setPlaying(true)
+      }
+    } else {
+      v.pause()
+      setPlaying(false)
     }
   }, [playing, setPlaying])
 
@@ -256,7 +293,7 @@ export default function MultimodalReplayShell({
       <div className="absolute inset-0 grid place-items-center pointer-events-none">
         <button
           type="button"
-          onClick={() => setPlaying(!playing)}
+          onClick={togglePlay}
           className="w-[60px] h-[60px] rounded-full grid place-items-center text-stone-900 transition-transform hover:scale-105 pointer-events-auto"
           style={{ background: 'rgba(255,255,255,0.92)' }}
           aria-label={playing ? 'Pause video' : 'Play video'}

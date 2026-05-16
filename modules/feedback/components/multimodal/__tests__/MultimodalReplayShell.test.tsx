@@ -252,3 +252,97 @@ describe('MultimodalReplayShell — basic render', () => {
     expect(screen.getByText('Tell me about a tradeoff.')).toBeInTheDocument()
   })
 })
+
+/**
+ * Regression test for Codex P2 (unresolved comment on PR #370):
+ *
+ *   The previous click handler only toggled `playing` state and deferred
+ *   `video.play()` to a `useEffect`. By the time the effect ran, Safari
+ *   and other strict-autoplay browsers had lost the user-activation
+ *   token and rejected play() as non-gesture playback — the button
+ *   flipped back to paused and the video never started.
+ *
+ * The fix: call `v.play()` synchronously from the onClick handler so the
+ * gesture context is preserved. `setPlaying` is still updated for
+ * external listeners (panel-level Scrubber play button, etc.).
+ */
+describe('MultimodalReplayShell — direct user-gesture play (Codex P2)', () => {
+  it('calls video.play() synchronously inside the click handler', () => {
+    const playSpy = vi.spyOn(HTMLMediaElement.prototype, 'play')
+      .mockImplementation(() => Promise.resolve())
+    const setPlaying = vi.fn()
+    const { container } = render(
+      <MultimodalReplayShell
+        src="blob:fake"
+        currentTimeSec={0}
+        playing={false}
+        setPlaying={setPlaying}
+        replayFullscreen={false}
+        setReplayFullscreen={() => {}}
+      />
+    )
+    // Force the video to look "paused" so togglePlay calls play().
+    const video = container.querySelector('video') as HTMLVideoElement
+    Object.defineProperty(video, 'paused', { configurable: true, value: true })
+
+    const playBtn = screen.getByLabelText('Play video')
+    fireEvent.click(playBtn)
+
+    // The play() call must happen synchronously during the click event —
+    // before any setState batch flushes — so the user-gesture token is
+    // still valid when Safari evaluates the autoplay policy.
+    expect(playSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('calls video.pause() synchronously inside the click handler when already playing', () => {
+    const pauseSpy = vi.spyOn(HTMLMediaElement.prototype, 'pause')
+      .mockImplementation(() => {})
+    const setPlaying = vi.fn()
+    const { container } = render(
+      <MultimodalReplayShell
+        src="blob:fake"
+        currentTimeSec={0}
+        playing={true}
+        setPlaying={setPlaying}
+        replayFullscreen={false}
+        setReplayFullscreen={() => {}}
+      />
+    )
+    const video = container.querySelector('video') as HTMLVideoElement
+    Object.defineProperty(video, 'paused', { configurable: true, value: false })
+
+    const pauseBtn = screen.getByLabelText('Pause video')
+    pauseSpy.mockClear() // ignore any pause() calls triggered by mount effects
+    fireEvent.click(pauseBtn)
+
+    expect(pauseSpy).toHaveBeenCalledTimes(1)
+    expect(setPlaying).toHaveBeenCalledWith(false)
+  })
+
+  it('reverts external playing state to false when play() rejects (autoplay block)', async () => {
+    const setPlaying = vi.fn()
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(
+      () => Promise.reject(new Error('NotAllowedError'))
+    )
+    const { container } = render(
+      <MultimodalReplayShell
+        src="blob:fake"
+        currentTimeSec={0}
+        playing={false}
+        setPlaying={setPlaying}
+        replayFullscreen={false}
+        setReplayFullscreen={() => {}}
+      />
+    )
+    const video = container.querySelector('video') as HTMLVideoElement
+    Object.defineProperty(video, 'paused', { configurable: true, value: true })
+
+    const playBtn = screen.getByLabelText('Play video')
+    await act(async () => {
+      fireEvent.click(playBtn)
+      await new Promise((r) => setTimeout(r, 0))
+    })
+
+    expect(setPlaying).toHaveBeenLastCalledWith(false)
+  })
+})
