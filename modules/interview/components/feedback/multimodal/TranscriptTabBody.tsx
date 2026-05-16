@@ -3,33 +3,17 @@
 import { useEffect, useMemo, useRef, Fragment } from 'react'
 import type { TranscriptEntry } from '@shared/types'
 import { FONT_MONO } from './tokens'
+import { computeTranscriptSeconds } from './transcriptOffsets'
 
 interface TranscriptTabBodyProps {
   transcript: TranscriptEntry[]
   /** Drives active-line highlighting. */
   currentTimeSec: number
   /** Optional anchor for converting `timestamp` (epoch ms) to seconds-from-start.
-   *  If absent, we assume `timestamp` is already seconds. */
+   *  If absent, the offsets util falls back to the first transcript entry's
+   *  timestamp as the origin (preserves relative spacing). */
   sessionStartedAt?: number | null
   onSeek: (sec: number) => void
-}
-
-/**
- * Convert a transcript entry's `timestamp` field to seconds-from-session-start.
- * Two regimes observed in practice:
- *  (a) `timestamp` is a real epoch ms (e.g. 1747370812345). Subtract
- *      sessionStartedAt and divide by 1000.
- *  (b) `timestamp` is already seconds-from-start (small number).
- * Heuristic: anything > 1e10 is treated as epoch ms; smaller as seconds.
- */
-function entrySeconds(entry: TranscriptEntry, sessionStartedAt?: number | null): number {
-  const t = entry.timestamp
-  if (!Number.isFinite(t)) return 0
-  if (t > 1e10) {
-    if (!sessionStartedAt) return 0
-    return Math.max(0, (t - sessionStartedAt) / 1000)
-  }
-  return Math.max(0, t)
 }
 
 function formatTime(seconds: number): string {
@@ -82,9 +66,12 @@ export default function TranscriptTabBody({
   const containerRef = useRef<HTMLDivElement | null>(null)
   const lineRefs = useRef<Array<HTMLDivElement | null>>([])
 
-  // Derive timestamps once and find active index.
+  // Derive timestamps once and find active index. Uses computeTranscriptSeconds
+  // which picks sessionStartedAt as the epoch-ms origin when present, or falls
+  // back to the first transcript entry's timestamp when missing (Codex P2 on
+  // PR #370 — previous behavior collapsed every line to 0:00 in that case).
   const { secs, activeIndex } = useMemo(() => {
-    const list = transcript.map((e) => entrySeconds(e, sessionStartedAt))
+    const list = computeTranscriptSeconds(transcript, sessionStartedAt)
     let idx = -1
     for (let i = 0; i < list.length; i++) {
       if (list[i] <= currentTimeSec) idx = i
