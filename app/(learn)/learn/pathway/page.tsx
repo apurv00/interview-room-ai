@@ -11,6 +11,7 @@ import PathwayPlanQueue from '@learn/components/pathway/PathwayPlanQueue'
 import PathwayProgressPanel from '@learn/components/pathway/PathwayProgressPanel'
 import PathwayActivityPanel from '@learn/components/pathway/PathwayActivityPanel'
 import PathwayPendingBanner from '@learn/components/pathway/PathwayPendingBanner'
+import PathwayFailedBanner from '@learn/components/pathway/PathwayFailedBanner'
 import UniversalPathwayView from '@learn/components/pathway/UniversalPathwayView'
 import type { PathwayViewModel } from '@learn/services/pathwayViewModel'
 
@@ -138,6 +139,13 @@ function PathwayPageInner() {
 
       {viewModel.state === 'pending' && (
         <PathwayPendingBanner action={viewModel.nextAction} />
+      )}
+
+      {viewModel.state === 'failed' && (
+        <PathwayFailedBanner
+          action={viewModel.nextAction}
+          onRetried={() => void loadPathway()}
+        />
       )}
 
       <TodayActionCard

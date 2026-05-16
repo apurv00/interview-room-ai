@@ -24,6 +24,35 @@ const STANDARD_PLAN_TYPE = 'standard' as const
 const UNIVERSAL_PLAN_TYPE = 'universal' as const
 const UNIVERSAL_FALLBACK_COMPETENCIES = ['relevance', 'structure', 'specificity']
 
+/**
+ * Filter for "standard" pathway documents that includes pre-redesign docs
+ * that were written before the `planType` field existed.
+ *
+ * Before the 2026-05-14 pathway redesign (commit 3a9a9e7), PathwayPlan
+ * documents didn't carry a `planType` field at all. After the redesign,
+ * `getCurrentPathway` started filtering strictly on `planType: 'standard'`,
+ * so every pathway document in production written before the redesign
+ * silently became invisible to the UI — the Pathway page showed
+ * "NO PATHWAY YET" even when a fully-populated plan existed in the DB.
+ *
+ * Match behavior:
+ *   - planType: 'standard'          → matches (post-redesign docs)
+ *   - planType: { $exists: false }  → matches (pre-redesign docs)
+ *   - planType: null                → matches (defensive: serialized null)
+ *   - planType: 'monthly'           → does NOT match (older system, different shape)
+ *   - planType: 'universal'         → does NOT match (separate planning path)
+ *
+ * scripts/migrate-pathway-plan-type.mjs backfills the missing field so
+ * this OR clause can eventually simplify back to `planType: 'standard'`.
+ */
+const STANDARD_OR_LEGACY_FILTER = {
+  $or: [
+    { planType: STANDARD_PLAN_TYPE },
+    { planType: { $exists: false } },
+    { planType: null },
+  ],
+}
+
 // ─── Generate Pathway Plan ──────────────────────────────────────────────────
 
 interface GeneratePathwayInput {
@@ -139,7 +168,7 @@ export async function getCurrentPathway(userId: string): Promise<IPathwayPlan | 
     await connectDB()
     return await PathwayPlan.findOne({
       userId: new mongoose.Types.ObjectId(userId),
-      planType: STANDARD_PLAN_TYPE,
+      ...STANDARD_OR_LEGACY_FILTER,
     }).sort({ generatedAt: -1 }).lean() as IPathwayPlan | null
   } catch (err) {
     logger.error({ err }, 'Failed to get pathway')
@@ -155,7 +184,7 @@ export async function markTaskComplete(userId: string, taskId: string): Promise<
     const result = await PathwayPlan.updateOne(
       {
         userId: new mongoose.Types.ObjectId(userId),
-        planType: STANDARD_PLAN_TYPE,
+        ...STANDARD_OR_LEGACY_FILTER,
         'practiceTasks.taskId': taskId,
       },
       {

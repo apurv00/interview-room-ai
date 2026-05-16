@@ -34,7 +34,7 @@ import { NextRequest } from 'next/server'
 const {
   mockAcquire, mockRelease, mockCompletion, mockWarn, mockError, mockInfo,
   mockSessionFindOne, mockFindByIdAndUpdate, mockIsFeatureEnabled,
-  mockGeneratePathwayPlan, mockEvaluateSession,
+  mockGeneratePathwayPlan, mockEvaluateSession, mockInngestSend,
 } = vi.hoisted(() => ({
   mockAcquire: vi.fn(),
   mockRelease: vi.fn(),
@@ -47,8 +47,14 @@ const {
   })),
   mockFindByIdAndUpdate: vi.fn().mockResolvedValue(undefined),
   mockIsFeatureEnabled: vi.fn(() => true),
+  // Bug B fix: route no longer calls generatePathwayPlan / evaluateSession
+  // directly. Both moved into the Inngest `pathway/regenerate` job. These
+  // mocks are kept hoisted so the import-time mock factories below stay
+  // valid — but assertions about pathway scheduling now go through
+  // mockInngestSend.
   mockGeneratePathwayPlan: vi.fn().mockResolvedValue(undefined),
   mockEvaluateSession: vi.fn().mockResolvedValue({}),
+  mockInngestSend: vi.fn().mockResolvedValue({ ids: ['evt-1'] }),
 }))
 
 vi.mock('@shared/middleware/composeApiRoute', () => ({
@@ -149,6 +155,16 @@ vi.mock('@learn/services/sessionSummaryService', () => ({
 vi.mock('@learn/services/pathwayPlanner', () => ({
   generatePathwayPlan: mockGeneratePathwayPlan,
   advanceUniversalPlan: vi.fn().mockResolvedValue(null),
+}))
+
+// Bug B fix — route uses inngest.send to enqueue pathway/regenerate
+// instead of calling generatePathwayPlan inline. Mocked so the real
+// Inngest event-key check doesn't blow up in test env.
+vi.mock('@shared/services/inngest', () => ({
+  inngest: {
+    send: mockInngestSend,
+    createFunction: (_cfg: unknown, handler: unknown) => ({ id: 'mock', handler }),
+  },
 }))
 
 vi.mock('@learn/services/masteryTracker', () => ({
@@ -253,6 +269,8 @@ describe('POST /api/generate-feedback — side-effect outcome observability (PR 
     mockGeneratePathwayPlan.mockResolvedValue(undefined)
     mockEvaluateSession.mockReset()
     mockEvaluateSession.mockResolvedValue({})
+    mockInngestSend.mockReset()
+    mockInngestSend.mockResolvedValue({ ids: ['evt-1'] })
 
     // Default: feedback lock acquires cleanly, completion succeeds.
     mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: true })
@@ -317,7 +335,19 @@ describe('POST /api/generate-feedback — side-effect outcome observability (PR 
   // status: 'scheduled' at response time (actual failure detected
   // async by allSettled).
   it('includes persist in sideEffects tracking so aggregate log catches persist failures', async () => {
-    mockFindByIdAndUpdate.mockRejectedValueOnce(new Error('mongo timeout'))
+    // Bug B fix: route now also calls findByIdAndUpdate with
+    // { $set: { pathwayGenerationStatus: 'pending' } } as part of the
+    // pathway-plan side-effect (before emitting the Inngest event).
+    // mockRejectedValueOnce would consume that pre-persist call instead
+    // of the persist call we actually want to fail. Route by shape: only
+    // reject when the update is a persist (writes the `feedback` field).
+    mockFindByIdAndUpdate.mockImplementation(async (_id: unknown, update: unknown) => {
+      const u = update as { feedback?: unknown }
+      if (u?.feedback !== undefined) {
+        throw new Error('mongo timeout')
+      }
+      return undefined
+    })
 
     const res = await POST(makeRequest())
     expect(res.status).toBe(200)
@@ -497,8 +527,19 @@ describe('POST /api/generate-feedback — side-effect outcome observability (PR 
     // Make findByIdAndUpdate a slow mock: it must still be in-flight
     // when the handler would have returned pre-fix. `persistCommitted`
     // starts false, only flips true after the await completes.
+    //
+    // Bug B fix: route now ALSO calls findByIdAndUpdate with
+    // { $set: { pathwayGenerationStatus: 'pending' } } as part of the
+    // pathway-plan side-effect. mockImplementationOnce would burn on
+    // that pre-persist call. Route by shape so only the persist call
+    // (writes the `feedback` field) gets the slow path.
     let persistCommitted = false
-    mockFindByIdAndUpdate.mockImplementationOnce(async () => {
+    mockFindByIdAndUpdate.mockImplementation(async (_id: unknown, update: unknown) => {
+      const u = update as { feedback?: unknown }
+      if (u?.feedback === undefined) {
+        // Pathway-status update or other — fast no-op.
+        return undefined
+      }
       // 30ms is enough to detect the bug reliably; short enough to
       // keep the suite fast. Pre-fix: handler returns in ~few ms (well
       // before persistCommitted=true). Post-fix: handler awaits the

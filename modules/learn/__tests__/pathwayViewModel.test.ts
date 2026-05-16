@@ -138,4 +138,77 @@ describe('buildPathwayViewModel', () => {
     expect(returning.state).toBe('returning')
     expect(abandoned.state).toBe('abandoned')
   })
+
+  // Bug B fix (2026-05-16) — when the upstream session's pathway
+  // generation job has terminally failed (status: 'failed'), the view
+  // model should expose a 'failed' state with a Retry CTA rather than
+  // hanging on the perpetual 'pending' banner.
+  describe('failed state from feedbackSessionStatus', () => {
+    it('returns state="failed" when fromFeedback session has status="failed" and pathway is stale', () => {
+      const result = buildPathwayViewModel({
+        // pathway exists but for an EARLIER session, so isPendingForFeedback is true
+        pathway: makePathway({ generatedFromSessionId: 'old-session' } as Partial<IPathwayPlan>),
+        competencySummary: null,
+        weaknesses: [],
+        fromFeedback: 'new-session',
+        feedbackSessionStatus: 'failed',
+        feedbackSessionError: 'LLM call timed out',
+        now: NOW,
+      })
+      expect(result.state).toBe('failed')
+      expect(result.nextAction.id).toBe('retry-pathway')
+      expect(result.nextAction.ctaLabel).toMatch(/retry/i)
+      // sessionId must be available in metadata so the UI can POST to retry
+      expect(result.nextAction.metadata?.sessionId).toBe('new-session')
+    })
+
+    it('surfaces the error message in the action description', () => {
+      const result = buildPathwayViewModel({
+        pathway: makePathway({ generatedFromSessionId: 'old' } as Partial<IPathwayPlan>),
+        competencySummary: null,
+        weaknesses: [],
+        fromFeedback: 'new',
+        feedbackSessionStatus: 'failed',
+        feedbackSessionError: 'evaluateSession returned null',
+        now: NOW,
+      })
+      expect(result.nextAction.description).toContain('evaluateSession returned null')
+    })
+
+    it('does NOT surface failed state when the pathway is already in sync (regen succeeded after the fail)', () => {
+      const result = buildPathwayViewModel({
+        // pathway IS for this session — no longer pending, no need for failed UI
+        pathway: makePathway({ generatedFromSessionId: 'new' } as Partial<IPathwayPlan>),
+        competencySummary: null,
+        weaknesses: [],
+        fromFeedback: 'new',
+        feedbackSessionStatus: 'failed', // stale status; pathway was regenerated since
+        now: NOW,
+      })
+      expect(result.state).not.toBe('failed')
+    })
+
+    it('falls through to pending banner when status is "running" (not failed)', () => {
+      const result = buildPathwayViewModel({
+        pathway: makePathway({ generatedFromSessionId: 'old' } as Partial<IPathwayPlan>),
+        competencySummary: null,
+        weaknesses: [],
+        fromFeedback: 'new',
+        feedbackSessionStatus: 'running',
+        now: NOW,
+      })
+      expect(result.state).toBe('pending')
+    })
+
+    it('ignores feedbackSessionStatus when fromFeedback is absent', () => {
+      const result = buildPathwayViewModel({
+        pathway: makePathway(),
+        competencySummary: null,
+        weaknesses: [],
+        feedbackSessionStatus: 'failed', // but no fromFeedback
+        now: NOW,
+      })
+      expect(result.state).not.toBe('failed')
+    })
+  })
 })
