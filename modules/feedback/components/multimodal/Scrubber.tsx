@@ -27,6 +27,14 @@ interface ScrubberProps {
   activeQuestion?: ActiveQuestionRange | null
   /** Key moments — drives the 2×10 colored ticks on the rail. */
   keyMoments: TimelineEvent[]
+  /**
+   * Optional filler-word timestamps (seconds from session start). When
+   * provided, each filler is rendered as a tiny rose dot below the rail.
+   * Round 5a feature #3 — Goal-setting theory says specific timestamps
+   * make a quantity goal ("8 fillers → 4") actionable in a way "lower
+   * your filler rate" never is.
+   */
+  fillerTimestamps?: number[]
 }
 
 function formatTime(seconds: number): string {
@@ -57,6 +65,7 @@ export default function Scrubber({
   questions,
   activeQuestion,
   keyMoments,
+  fillerTimestamps,
 }: ScrubberProps) {
   const trackRef = useRef<HTMLDivElement>(null)
 
@@ -151,6 +160,28 @@ export default function Scrubber({
             />
           )
         })}
+
+        {/* Filler-word dots — small rose ticks slightly below the rail so they
+            don't overlap the key-moment ticks above. Click bubbles to the
+            track for seeking; we add a title so hover names the filler word
+            and timestamp. */}
+        {totalDurationSec > 0 && fillerTimestamps && fillerTimestamps.length > 0 &&
+          fillerTimestamps.map((ts, i) => {
+            if (!Number.isFinite(ts) || ts < 0 || ts > totalDurationSec) return null
+            return (
+              <div
+                key={`fl-${i}`}
+                className="absolute w-1 h-1 rounded-full"
+                style={{
+                  left: `${(ts / totalDurationSec) * 100}%`,
+                  background: '#f43f5e', // rose-500
+                  transform: 'translate(-50%, 7px)',
+                }}
+                aria-hidden="true"
+                title={`Filler word at ${formatTime(ts)}`}
+              />
+            )
+          })}
 
         {/* Playhead */}
         <div

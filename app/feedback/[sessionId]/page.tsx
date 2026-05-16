@@ -1451,6 +1451,17 @@ function FeedbackPageInner() {
             parentSessionId={parentSessionId || undefined}
             onQuestionClick={handleQuestionRefToScoresTab}
             maxQuestionIndex={maxQuestionIndex}
+            // Round 5a feature #2 — Claude's narrative arc + per-Q sparkline.
+            // Both are no-ops when multimodal analysis hasn't run; the
+            // ConfidenceArcCard itself renders null in that case.
+            confidenceProgression={analysis?.fusionSummary?.confidenceProgression}
+            perQuestionConfidence={
+              analysis?.prosodySegments
+                ?.map((s) => s.confidenceMarker)
+                .filter((m): m is 'high' | 'medium' | 'low' =>
+                  m === 'high' || m === 'medium' || m === 'low'
+                )
+            }
           />
         )}
 

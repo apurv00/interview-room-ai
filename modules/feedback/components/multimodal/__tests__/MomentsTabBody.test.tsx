@@ -106,4 +106,66 @@ describe('MomentsTabBody', () => {
     )
     expect(screen.getByText(/Asked during Q2/i)).toBeInTheDocument()
   })
+
+  // Round 5a feature #9 — signal-source breakdown line
+  describe('signal-source breakdown', () => {
+    function makeMomentWithSignal(signal: TimelineEvent['signal']): TimelineEvent {
+      return { ...makeMoment(0, 30, 'X'), signal }
+    }
+
+    it('renders a "{N} moments: ..." line with counts per signal source', () => {
+      const moments: TimelineEvent[] = [
+        makeMomentWithSignal('audio'),
+        makeMomentWithSignal('audio'),
+        makeMomentWithSignal('audio'),
+        makeMomentWithSignal('facial'),
+        makeMomentWithSignal('facial'),
+        makeMomentWithSignal('content'),
+        makeMomentWithSignal('fused'),
+      ]
+      render(<MomentsTabBody moments={moments} onSeek={vi.fn()} />)
+      const line = screen.getByTestId('moments-signal-breakdown')
+      expect(line.textContent).toContain('7 moments')
+      expect(line.textContent).toContain('3 audio')
+      expect(line.textContent).toContain('2 facial')
+      expect(line.textContent).toContain('1 content')
+      expect(line.textContent).toContain('1 fused')
+    })
+
+    it('renders moments count in singular form when only one moment', () => {
+      const moments: TimelineEvent[] = [makeMomentWithSignal('audio')]
+      render(<MomentsTabBody moments={moments} onSeek={vi.fn()} />)
+      const line = screen.getByTestId('moments-signal-breakdown')
+      expect(line.textContent).toContain('1 moment:')
+    })
+
+    it('orders the breakdown audio · facial · content · fused regardless of input order', () => {
+      const moments: TimelineEvent[] = [
+        makeMomentWithSignal('fused'),
+        makeMomentWithSignal('content'),
+        makeMomentWithSignal('facial'),
+        makeMomentWithSignal('audio'),
+      ]
+      render(<MomentsTabBody moments={moments} onSeek={vi.fn()} />)
+      const line = screen.getByTestId('moments-signal-breakdown').textContent ?? ''
+      const audioIdx = line.indexOf('audio')
+      const facialIdx = line.indexOf('facial')
+      const contentIdx = line.indexOf('content')
+      const fusedIdx = line.indexOf('fused')
+      expect(audioIdx).toBeLessThan(facialIdx)
+      expect(facialIdx).toBeLessThan(contentIdx)
+      expect(contentIdx).toBeLessThan(fusedIdx)
+    })
+
+    it('omits signal kinds with zero moments', () => {
+      const moments: TimelineEvent[] = [
+        makeMomentWithSignal('audio'),
+        makeMomentWithSignal('facial'),
+      ]
+      render(<MomentsTabBody moments={moments} onSeek={vi.fn()} />)
+      const line = screen.getByTestId('moments-signal-breakdown').textContent ?? ''
+      expect(line).not.toContain('content')
+      expect(line).not.toContain('fused')
+    })
+  })
 })

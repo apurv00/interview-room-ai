@@ -7,6 +7,7 @@ import QuestionChapterRow from '@feedback/components/multimodal/QuestionChapterR
 import Scrubber from '@feedback/components/multimodal/Scrubber'
 import SignalTrack from '@feedback/components/multimodal/SignalTrack'
 import VideoMetricChips from '@feedback/components/multimodal/VideoMetricChips'
+import PeakStumbleCTAs from '@feedback/components/multimodal/PeakStumbleCTAs'
 import MomentsTabBody from '@feedback/components/multimodal/MomentsTabBody'
 import TranscriptTabBody from '@feedback/components/multimodal/TranscriptTabBody'
 import CoachingTipsTabBody from '@feedback/components/multimodal/CoachingTipsTabBody'
@@ -137,6 +138,21 @@ export default function MultimodalAnalysisTab({
     () => findActiveQuestionIndex(questionMarkers, analysisVideoTime),
     [questionMarkers, analysisVideoTime]
   )
+
+  // Flat list of every filler-word timestamp across every question. Drives
+  // the rose dots Scrubber renders for Round 5a feature #3 (specific
+  // timestamps beat aggregate rates for behaviour change).
+  const fillerTimestamps = useMemo(() => {
+    const segs = analysis?.prosodySegments
+    if (!segs || segs.length === 0) return []
+    const out: number[] = []
+    for (const s of segs) {
+      for (const f of s.fillerWords || []) {
+        if (Number.isFinite(f.timestampSec)) out.push(f.timestampSec)
+      }
+    }
+    return out
+  }, [analysis?.prosodySegments])
 
   const activeQuestion = activeQuestionIndex >= 0 ? questionMarkers[activeQuestionIndex] : null
   const nextQuestion = activeQuestionIndex >= 0 ? questionMarkers[activeQuestionIndex + 1] : null
@@ -347,6 +363,12 @@ export default function MultimodalAnalysisTab({
             onDurationKnown={setVideoDuration}
           />
 
+          <PeakStumbleCTAs
+            topMoments={analysis.fusionSummary?.topMoments}
+            improvementMoments={analysis.fusionSummary?.improvementMoments}
+            onSeek={(sec) => seek?.(sec)}
+          />
+
           <QuestionChapterRow
             questions={questionMarkers}
             totalDurationSec={totalDurationSec}
@@ -363,6 +385,7 @@ export default function MultimodalAnalysisTab({
             questions={questionMarkers}
             activeQuestion={activeQuestionRange}
             keyMoments={keyMoments}
+            fillerTimestamps={fillerTimestamps}
           />
 
           <SignalTrack
