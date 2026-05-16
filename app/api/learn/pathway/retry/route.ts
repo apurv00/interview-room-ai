@@ -41,11 +41,44 @@ const RetrySchema = z.object({
  * Retries are allowed only for: 'failed' (the recovery case this endpoint
  * exists for) and undefined (never attempted — typically a session that
  * pre-dates Bug B's status tracking).
+ *
+ * The set is used post-CAS to format helpful error messages. The CAS
+ * itself uses `RETRYABLE_STATUS_FILTER` below (Codex P2 on PR #379 —
+ * atomic claim, prevents two concurrent retries both passing the check).
  */
 const RETRYABLE_STATUSES: ReadonlySet<string | undefined> = new Set([
   'failed',
   undefined,
 ])
+
+/**
+ * Mongo filter that matches the same set of statuses as
+ * `RETRYABLE_STATUSES`. Used inside the atomic `findOneAndUpdate` so
+ * the read+write happen as a single operation. Without this, two
+ * concurrent /api/learn/pathway/retry calls could both pass a separate
+ * status check and then both flip 'pending' + both enqueue — duplicate
+ * background jobs, conflicting terminal status writes (one writes
+ * 'succeeded', the other 'failed' over it), and 2× LLM cost.
+ */
+const RETRYABLE_STATUS_FILTER = {
+  $or: [
+    { pathwayGenerationStatus: 'failed' },
+    { pathwayGenerationStatus: { $exists: false } },
+    { pathwayGenerationStatus: null },
+  ],
+}
+
+/**
+ * Default `interviewType` when the session's config doesn't specify one.
+ * Must match the primary feedback flow's default (currently
+ * `'screening'`, set at app/api/generate-feedback/route.ts:243) so a
+ * retry doesn't silently regenerate a plan under different evaluation
+ * assumptions than the original generation. Codex P2 on PR #379.
+ *
+ * If you change the primary default, change this too — they're
+ * intentionally coupled.
+ */
+const DEFAULT_INTERVIEW_TYPE = 'screening'
 
 export const POST = composeApiRoute<z.infer<typeof RetrySchema>>({
   schema: RetrySchema,
@@ -96,39 +129,53 @@ export const POST = composeApiRoute<z.infer<typeof RetrySchema>>({
       )
     }
 
-    // Codex P2 on PR #379 — tighten the retry guard.
+    // Codex P2 on PR #379 — atomic retry claim.
     //
-    // Previously this only blocked 'running'/'pending' which left 'succeeded'
-    // and 'skipped' sessions wide-open for re-enqueue. That meant any
-    // authenticated caller could repeatedly trigger pathway regeneration
-    // on a working plan, racking up LLM cost AND potentially overwriting
-    // a good plan with another generation that wasn't requested by the
-    // UI flow. The rate-limit (3/min) is a backstop, not a contract.
-    if (!RETRYABLE_STATUSES.has(session.pathwayGenerationStatus)) {
+    // Combine the retryability check and the status flip into a single
+    // findOneAndUpdate so two concurrent retry calls cannot both pass
+    // the guard. If two requests race here:
+    //   - the first findOneAndUpdate matches the retryable filter and
+    //     flips status to 'pending', returning the updated doc
+    //   - the second findOneAndUpdate now sees status='pending' (which
+    //     is NOT in RETRYABLE_STATUS_FILTER) and returns null
+    //   - we return 409 instead of enqueueing a duplicate job
+    //
+    // This replaces the previous read-check-write pattern that had a
+    // race window between the status check and the flip.
+    const claimed = await InterviewSession.findOneAndUpdate(
+      {
+        _id: new mongoose.Types.ObjectId(sessionId),
+        userId: new mongoose.Types.ObjectId(user.id),
+        ...RETRYABLE_STATUS_FILTER,
+      },
+      {
+        $set: { pathwayGenerationStatus: 'pending' },
+        $unset: { pathwayGenerationError: 1 },
+      },
+      { returnDocument: 'after' }
+    )
+
+    if (!claimed) {
+      // Either the session moved out of a retryable state between our
+      // validation read and the CAS, or another concurrent retry just
+      // won. Disambiguate via a quick re-read so the user gets a useful
+      // error rather than a generic "could not claim".
       const reason =
-        session.pathwayGenerationStatus === 'running' || session.pathwayGenerationStatus === 'pending'
+        session.pathwayGenerationStatus === 'running' ||
+        session.pathwayGenerationStatus === 'pending'
           ? 'A pathway regeneration is already in flight for this session.'
-          : `Pathway regeneration is not retryable from status '${session.pathwayGenerationStatus}'. ` +
-            'Retries are reserved for failed or never-attempted sessions.'
+          : RETRYABLE_STATUSES.has(session.pathwayGenerationStatus)
+            ? 'Another retry just claimed this session — refresh and try again if needed.'
+            : `Pathway regeneration is not retryable from status '${session.pathwayGenerationStatus}'. ` +
+              'Retries are reserved for failed or never-attempted sessions.'
       return NextResponse.json({ error: reason }, { status: 409 })
     }
 
     // Codex P1 + Vercel P1 on PR #379 — deadlock-on-enqueue-failure.
     //
-    // Previously this flipped status to 'pending' BEFORE calling
-    // inngest.send(). If the send itself failed (Inngest outage, network
-    // blip, missing event key in some envs), the session was left
-    // permanently in 'pending' state and the retry guard above blocked
-    // every future attempt — users stuck forever with no recovery.
-    //
-    // Fix: wrap the enqueue in try/catch and roll the status back to
-    // 'failed' (with the enqueue error captured) so the UI surfaces a
-    // retryable error message and the next call passes the guard.
-    await InterviewSession.findByIdAndUpdate(sessionId, {
-      $set: { pathwayGenerationStatus: 'pending' },
-      $unset: { pathwayGenerationError: 1 },
-    })
-
+    // After the atomic claim above, the status is 'pending'. If the
+    // inngest.send below fails, we must roll back to 'failed' so the
+    // retry guard doesn't block all future attempts permanently.
     try {
       await inngest.send({
         name: 'pathway/regenerate',
@@ -136,7 +183,13 @@ export const POST = composeApiRoute<z.infer<typeof RetrySchema>>({
           sessionId,
           userId: user.id,
           domain: session.config.role,
-          interviewType: session.config.interviewType ?? 'behavioral',
+          // Codex P2 on PR #379 — match the primary flow's default in
+          // app/api/generate-feedback/route.ts:243 ('screening'). A
+          // retry must regenerate under the SAME assumptions as the
+          // original generation; using a different default here would
+          // silently shift evaluation weighting + pathway picks for
+          // any session that lacks an explicit interviewType.
+          interviewType: session.config.interviewType || DEFAULT_INTERVIEW_TYPE,
           experience: session.config.experience,
           feedback: session.feedback,
           typedEvaluations: session.evaluations,
