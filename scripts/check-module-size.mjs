@@ -22,7 +22,10 @@ const BUDGETS = {
   // Bumped LOC 32k→33k and files 160→168 on 2026-05-16: feedback-page Round 2
   // added 4 new components + 2 utils (Q-chip system + Learning tab + ideal-answer
   // comparison card). See docs/adr/0004-interview-module-budget-bump-feedback.md.
-  'modules/interview': { maxLOC: 33_000, maxFiles: 168 },
+  // Bumped LOC 33k→35k and files 168→180 on 2026-05-16: Multimodal tab Round 4
+  // full visual + IA redesign added 9 new components + tokens (multimodal/
+  // subdirectory). See docs/adr/0005-interview-module-budget-bump-multimodal.md.
+  'modules/interview': { maxLOC: 35_000, maxFiles: 180 },
   'modules/learn':     { maxLOC: 25_000, maxFiles: 80 },
   'modules/resume':    { maxLOC: 20_000, maxFiles: 70 },
   'modules/b2b':       { maxLOC: 5_000,  maxFiles: 20 },

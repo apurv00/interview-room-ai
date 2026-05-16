@@ -1,14 +1,16 @@
 'use client'
 
-import { useEffect, useState, type RefObject } from 'react'
-import VideoPlayer from '@interview/components/replay/VideoPlayer'
-import ReplayTranscript from '@interview/components/replay/ReplayTranscript'
-import TimelineTrack from '@interview/components/replay/TimelineTrack'
-import MomentCards from '@interview/components/replay/MomentCards'
-import SignalCharts from '@interview/components/replay/SignalCharts'
-import CoachingPanel from '@interview/components/replay/CoachingPanel'
+import { useMemo, useState, type RefObject } from 'react'
 import TranscriptTab from '@interview/components/feedback/TranscriptTab'
-import MultimodalScoreChips from '@interview/components/feedback/MultimodalScoreChips'
+import MultimodalReplayShell from '@interview/components/feedback/multimodal/MultimodalReplayShell'
+import QuestionChapterRow from '@interview/components/feedback/multimodal/QuestionChapterRow'
+import Scrubber from '@interview/components/feedback/multimodal/Scrubber'
+import SignalTrack from '@interview/components/feedback/multimodal/SignalTrack'
+import VideoMetricChips from '@interview/components/feedback/multimodal/VideoMetricChips'
+import MomentsTabBody from '@interview/components/feedback/multimodal/MomentsTabBody'
+import TranscriptTabBody from '@interview/components/feedback/multimodal/TranscriptTabBody'
+import CoachingTipsTabBody from '@interview/components/feedback/multimodal/CoachingTipsTabBody'
+import { FONT_MONO } from '@interview/components/feedback/multimodal/tokens'
 import type { MultimodalAnalysisData, TimelineEvent } from '@shared/types/multimodal'
 import type { FeedbackData, StoredInterviewData } from '@shared/types'
 
@@ -17,6 +19,8 @@ interface QuestionMarker {
   offsetSeconds: number
 }
 
+// Kept for prop compatibility with page.tsx — not used by the new layout
+// (the playhead-driven active-warning was a Round-3 concern).
 interface ActiveWarning {
   label: string
   type: 'attention' | 'neutral'
@@ -47,16 +51,35 @@ interface MultimodalAnalysisTabProps {
   activeEntryRef: RefObject<HTMLDivElement | null>
   /** Used by the video-less fallback's TranscriptTab to seek the audio player. */
   seekToAudio: ((sec: number) => void) | null
-  /** Optional drill_recommendations — drives the "Practice this →" link on tip cards. */
   drillRecommendations?: FeedbackData['drill_recommendations']
-  /** Click handler for Q-chips parsed out of tip text — typically seeks the video to that question's start. */
   onQuestionClick?: (questionIndex: number) => void
-  /** Highest valid question index for chip range guard. */
   maxQuestionIndex?: number
-  /** Click handler when a tip card's "Practice this →" link is clicked — typically switches to Learning tab. */
   onPracticeClick?: (drillIndex: number) => void
 }
 
+type RightPaneTab = 'moments' | 'transcript' | 'tips'
+
+/**
+ * Round 4: full visual + IA redesign of the Multimodal tab.
+ *
+ * Two-column layout: video panel (left) + tabs panel (right).
+ *  - Video panel: bare <video> + custom controls (Q chip, asked chip,
+ *    fullscreen, play overlay, live caption) + Q chapter row + scrubber +
+ *    session-wide signal track + 5 metric chips.
+ *  - Tabs panel: 3 tabs — Key moments | Transcript | Coaching tips.
+ *
+ * Single source of truth: `analysisVideoTime` from page.tsx state. Drives
+ * the live caption, the active Q chip, the scrubber position, the active
+ * highlight band, the active line in TranscriptTabBody, and the playhead
+ * bar on the SignalTrack. The Moments tab uses its own local
+ * `selectedMomentId` state — clicking a moment seeks the video (which
+ * indirectly updates everything time-derived) and expands the card; auto-
+ * expand on playback was rejected to avoid visual churn in the list.
+ *
+ * `replayFullscreen` mode keeps the same internal layout but fills the
+ * viewport (strict 1440×900 fit happens here per the user's "no scroll"
+ * constraint).
+ */
 export default function MultimodalAnalysisTab({
   data,
   analysis,
@@ -69,7 +92,9 @@ export default function MultimodalAnalysisTab({
   sessionStartedAt,
   questionMarkers,
   keyMoments,
-  activeWarning,
+  // activeWarning intentionally unused — Round 4 doesn't surface playhead
+  // warnings on the video the same way Round 3 did.
+  activeWarning: _activeWarning,
   analysisVideoTime,
   setAnalysisVideoTime,
   onSeekRef,
@@ -84,23 +109,72 @@ export default function MultimodalAnalysisTab({
   maxQuestionIndex,
   onPracticeClick,
 }: MultimodalAnalysisTabProps) {
-  // Round 3: right-pane segmented control retired. Moments moved to a
-  // full-width horizontal scroller below the body (synced with video).
-  // Right pane now stacks Tips above Transcript with no toggle (only 2
-  // sections; the tab chrome cost more attention than it saved).
+  const [tab, setTab] = useState<RightPaneTab>('moments')
+  const [playing, setPlaying] = useState(false)
+  // The new shell exposes seek via the same ref-callback pattern as VideoPlayer.
+  // We track it locally so the scrubber + chapter row + moment clicks can call it.
   const [seek, setSeek] = useState<((sec: number) => void) | null>(null)
-  // Local mirror of seek so the right-pane click handlers can call it without re-renders.
-  useEffect(() => {
-    onSeekRef(seek)
-    return () => onSeekRef(null)
-  }, [seek, onSeekRef])
+  const [videoDuration, setVideoDuration] = useState<number>(0)
+
+  // Total duration prefers the video's actual duration; falls back to the
+  // last timeline event's endSec; final fallback 300s so divisions don't blow up.
+  const totalDurationSec = useMemo(() => {
+    if (videoDuration > 0) return videoDuration
+    if (analysis?.timeline && analysis.timeline.length > 0) {
+      return Math.ceil(analysis.timeline[analysis.timeline.length - 1].endSec)
+    }
+    return 300
+  }, [videoDuration, analysis?.timeline])
+
+  // Active question — the one whose [start, end) contains the current video time.
+  const activeQuestionIndex = useMemo(() => {
+    if (!questionMarkers.length) return -1
+    let last = 0
+    for (let i = 0; i < questionMarkers.length; i++) {
+      if (questionMarkers[i].offsetSeconds <= analysisVideoTime) last = i
+      else break
+    }
+    return last
+  }, [questionMarkers, analysisVideoTime])
+
+  const activeQuestion = activeQuestionIndex >= 0 ? questionMarkers[activeQuestionIndex] : null
+  const nextQuestion = activeQuestionIndex >= 0 ? questionMarkers[activeQuestionIndex + 1] : null
+  const activeQuestionRange = activeQuestion
+    ? {
+        startSec: activeQuestion.offsetSeconds,
+        endSec: nextQuestion ? nextQuestion.offsetSeconds : totalDurationSec,
+      }
+    : null
+
+  // The interviewer text of the active question, looked up from the
+  // transcript via questionIndex. Used in the asked-question chip on the video.
+  const askedQuestionText = useMemo(() => {
+    if (activeQuestionIndex < 0) return undefined
+    const entry = data.transcript.find(
+      (e) => e.speaker === 'interviewer' && e.questionIndex === activeQuestionIndex
+    )
+    return entry?.text
+  }, [data.transcript, activeQuestionIndex])
+
+  // Dominant facial expression across the session — used by VideoMetricChips.
+  const dominantExpression = useMemo(() => {
+    const segs = analysis?.facialSegments || []
+    if (segs.length === 0) return null
+    const counts: Record<string, number> = {}
+    for (const s of segs) {
+      const e = s.dominantExpression || 'neutral'
+      counts[e] = (counts[e] || 0) + 1
+    }
+    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1])
+    return sorted[0]?.[0] ?? null
+  }, [analysis?.facialSegments])
 
   // ── Loading ────────────────────────────────────────────────────────────────
   if (analysisLoading) {
     return (
-      <div className="surface-card-bordered p-8 text-center space-y-4 animate-fade-in">
-        <div className="w-8 h-8 rounded-full border-2 border-brand-500 border-t-transparent animate-spin mx-auto" />
-        <p className="text-body text-[#536471]">{analysisProgress || 'Loading analysis...'}</p>
+      <div className="bg-white border border-stone-200 rounded-xl p-8 text-center space-y-4 animate-fade-in">
+        <div className="w-8 h-8 rounded-full border-2 border-blue-600 border-t-transparent animate-spin mx-auto" />
+        <p className="text-sm text-stone-600">{analysisProgress || 'Loading analysis...'}</p>
       </div>
     )
   }
@@ -108,12 +182,13 @@ export default function MultimodalAnalysisTab({
   // ── Error ──────────────────────────────────────────────────────────────────
   if (analysisError) {
     return (
-      <div className="surface-card-bordered border-red-500/30 p-6 text-center space-y-3 animate-fade-in">
-        <p className="text-body text-red-600">{analysisError}</p>
+      <div className="bg-white border border-red-500/30 rounded-xl p-6 text-center space-y-3 animate-fade-in">
+        <p className="text-sm text-red-600">{analysisError}</p>
         {hasAnalysisSource && (
           <button
+            type="button"
             onClick={onRetry}
-            className="px-4 py-2 bg-brand-500 hover:bg-brand-600 text-white rounded-[var(--radius-md)] text-sm font-medium transition"
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-sm font-medium transition"
           >
             Retry Analysis
           </button>
@@ -125,8 +200,8 @@ export default function MultimodalAnalysisTab({
   // ── Pending (no analysis yet, but source exists) ────────────────────────────
   if (!analysis || analysis.status !== 'completed') {
     return (
-      <div className="surface-card-bordered p-8 text-center animate-fade-in">
-        <p className="text-body text-[#71767b]">
+      <div className="bg-white border border-stone-200 rounded-xl p-8 text-center animate-fade-in">
+        <p className="text-sm text-stone-600">
           {hasAnalysisSource
             ? 'Multimodal analysis is being prepared. Refresh in a moment.'
             : 'Multimodal analysis is not available for this session.'}
@@ -135,39 +210,104 @@ export default function MultimodalAnalysisTab({
     )
   }
 
-  // ── Common: aggregate chips + confidence narrative (always render) ─────────
-  const chips = (
-    <div className="space-y-2">
-      <MultimodalScoreChips
-        fusionSummary={analysis.fusionSummary}
-        speechMetrics={data.speechMetrics}
-      />
-      {/* Confidence-progression narrative — generated by fusion service but
-          previously never rendered. One italic line below the chips, always
-          visible when present. */}
-      {analysis.fusionSummary?.confidenceProgression && (
-        <p className="text-caption text-[#536471] italic px-1">
-          {analysis.fusionSummary.confidenceProgression}
-        </p>
-      )}
+  // ── Tab bar (right pane) ───────────────────────────────────────────────────
+  const tabs: Array<{ id: RightPaneTab; label: string; count: number | null }> = [
+    { id: 'moments', label: 'Key moments', count: keyMoments.length },
+    { id: 'transcript', label: 'Transcript', count: null },
+    { id: 'tips', label: 'Coaching tips', count: analysis.fusionSummary?.coachingTips.length ?? 0 },
+  ]
+
+  const tabsPanel = (
+    <div className="bg-white border border-stone-200 rounded-xl flex flex-col min-h-0 flex-1">
+      <div
+        className="flex border-b border-stone-200 px-2 flex-shrink-0"
+        role="tablist"
+      >
+        {tabs.map((t) => {
+          const isActive = tab === t.id
+          return (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              onClick={() => setTab(t.id)}
+              className={`px-3.5 py-2.5 cursor-pointer text-[13px] font-medium inline-flex items-center gap-1.5 -mb-px border-b-2 transition-colors ${
+                isActive
+                  ? 'text-stone-900 border-stone-900'
+                  : 'text-stone-600 border-transparent hover:text-stone-900'
+              }`}
+            >
+              {t.label}
+              {t.count !== null && (
+                <span
+                  className="text-[10px] text-stone-400 bg-stone-100 px-1.5 py-px rounded"
+                  style={{ fontFamily: FONT_MONO }}
+                >
+                  {t.count}
+                </span>
+              )}
+            </button>
+          )
+        })}
+        <div className="ml-auto flex items-center gap-1.5 px-1 py-1.5">
+          <button
+            type="button"
+            disabled
+            className="px-2 py-1 border border-stone-200 rounded-md bg-white text-[11px] text-stone-400 cursor-not-allowed"
+            style={{ fontFamily: FONT_MONO }}
+            title="Filter (coming soon)"
+          >
+            Filter
+          </button>
+        </div>
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-auto p-3.5">
+        {tab === 'moments' && (
+          <MomentsTabBody
+            moments={keyMoments}
+            onSeek={(sec) => seek?.(sec)}
+            prosodySegments={analysis.prosodySegments}
+            facialSegments={analysis.facialSegments}
+            whisperSegments={analysis.whisperTranscript}
+            questions={questionMarkers}
+          />
+        )}
+        {tab === 'transcript' && (
+          <TranscriptTabBody
+            transcript={data.transcript}
+            currentTimeSec={analysisVideoTime}
+            sessionStartedAt={sessionStartedAt}
+            onSeek={(sec) => seek?.(sec)}
+          />
+        )}
+        {tab === 'tips' && (
+          <CoachingTipsTabBody
+            fusionSummary={analysis.fusionSummary}
+            drillRecommendations={drillRecommendations}
+            onQuestionClick={onQuestionClick}
+            maxQuestionIndex={maxQuestionIndex}
+            onPracticeClick={onPracticeClick}
+          />
+        )}
+      </div>
     </div>
   )
 
   // ── Video-less fallback ────────────────────────────────────────────────────
   if (!videoSrc) {
     return (
-      <div className="space-y-6 animate-fade-in">
-        {chips}
-
-        <section className="surface-card-bordered p-6 sm:p-8 text-center space-y-3">
-          <div className="mx-auto w-12 h-12 rounded-full bg-[#f1f5f9] flex items-center justify-center">
-            <svg className="w-6 h-6 text-[#71767b]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+      <div className="space-y-4 animate-fade-in">
+        <section className="bg-white border border-stone-200 rounded-xl p-6 sm:p-8 text-center space-y-3">
+          <div className="mx-auto w-12 h-12 rounded-full bg-stone-100 flex items-center justify-center">
+            <svg className="w-6 h-6 text-stone-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 002.25 7.5v9a2.25 2.25 0 002.25 2.25z" />
             </svg>
           </div>
-          <p className="text-subheading text-[#0f1419]">Video wasn&apos;t recorded for this session</p>
-          <p className="text-body text-[#71767b] max-w-md mx-auto">
-            Multimodal replay is unavailable, but you can still review the transcript and any signal data captured during the interview.
+          <p className="text-lg font-medium text-stone-900">Video wasn&apos;t recorded for this session</p>
+          <p className="text-sm text-stone-600 max-w-md mx-auto">
+            Multimodal replay is unavailable, but you can still review the transcript and coaching tips below.
           </p>
         </section>
 
@@ -180,164 +320,93 @@ export default function MultimodalAnalysisTab({
           seekTo={seekToAudio}
         />
 
-        {((analysis.prosodySegments?.length ?? 0) > 0 || (analysis.facialSegments?.length ?? 0) > 0) && (
-          <section className="surface-card-bordered p-4 sm:p-6">
-            <h3 className="text-subheading text-[#0f1419] mb-4">Per-Question Signals</h3>
-            <SignalCharts
-              prosodySegments={analysis.prosodySegments || []}
-              facialSegments={analysis.facialSegments || []}
-              currentTimeSec={0}
-            />
-          </section>
-        )}
-
         {analysis.fusionSummary && analysis.fusionSummary.coachingTips.length > 0 && (
-          <CoachingPanel
-            fusionSummary={analysis.fusionSummary}
-            timeline={analysis.timeline || []}
-            onSeek={() => {}}
-            hideMoments
-            drillRecommendations={drillRecommendations}
-            onQuestionClick={onQuestionClick}
-            maxQuestionIndex={maxQuestionIndex}
-            onPracticeClick={onPracticeClick}
-          />
+          <div className="bg-white border border-stone-200 rounded-xl p-4">
+            <CoachingTipsTabBody
+              fusionSummary={analysis.fusionSummary}
+              drillRecommendations={drillRecommendations}
+              onQuestionClick={onQuestionClick}
+              maxQuestionIndex={maxQuestionIndex}
+              onPracticeClick={onPracticeClick}
+            />
+          </div>
         )}
       </div>
     )
   }
 
-  // ── Full layout: aggregate chips → sticky-spine + scrolling stream → signal charts ──
+  // ── Full layout ────────────────────────────────────────────────────────────
   return (
     <div
       className={
         replayFullscreen
-          ? 'fixed inset-0 z-50 bg-white overflow-y-auto p-6 space-y-6'
-          : 'space-y-6 animate-fade-in'
+          ? 'fixed inset-0 z-50 bg-stone-50 overflow-hidden p-3.5'
+          : 'animate-fade-in'
       }
+      style={replayFullscreen ? { height: '100vh' } : undefined}
     >
-      {replayFullscreen && (
-        <div className="flex items-center justify-between max-w-7xl mx-auto">
-          <h2 className="text-heading text-[#0f1419]">Interview Replay</h2>
-          <button
-            onClick={() => setReplayFullscreen(false)}
-            className="p-2 rounded-lg hover:bg-[#f8fafc] border border-[#e1e8ed] text-[#536471] hover:text-[#0f1419] transition-colors"
-            title="Close (Esc)"
-          >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-      )}
+      <div
+        className="flex gap-3 h-full min-h-0"
+        style={replayFullscreen ? undefined : { height: 'min(808px, calc(100vh - 280px))' }}
+      >
+        {/* LEFT — video panel */}
+        <div className="bg-white border border-stone-200 rounded-xl p-3.5 flex flex-col gap-3 min-h-0 flex-[1.4] min-w-0">
+          <MultimodalReplayShell
+            src={videoSrc}
+            currentTimeSec={analysisVideoTime}
+            onTimeUpdate={setAnalysisVideoTime}
+            onSeekRef={(fn) => {
+              setSeek(() => fn)
+              onSeekRef(fn)
+            }}
+            whisperSegments={analysis.whisperTranscript}
+            askedQuestion={askedQuestionText}
+            activeQuestionLabel={activeQuestion?.label}
+            totalDurationSec={totalDurationSec}
+            playing={playing}
+            setPlaying={setPlaying}
+            replayFullscreen={replayFullscreen}
+            setReplayFullscreen={setReplayFullscreen}
+            onDurationKnown={setVideoDuration}
+          />
 
-      <div className={replayFullscreen ? 'max-w-7xl mx-auto space-y-6' : 'space-y-6'}>
-        {chips}
+          <QuestionChapterRow
+            questions={questionMarkers}
+            totalDurationSec={totalDurationSec}
+            activeIndex={activeQuestionIndex}
+            onJumpToQuestion={(sec) => seek?.(sec)}
+          />
 
-        {/* Two-column body — sticky video spine + scrolling insight stream */}
-        <div className="grid grid-cols-1 lg:grid-cols-[55fr_45fr] gap-5 items-start">
-          {/* LEFT — sticky video + timeline */}
-          <div className="lg:sticky lg:top-[180px] space-y-3">
-            <div className="relative">
-              <VideoPlayer
-                src={videoSrc}
-                questionMarkers={questionMarkers}
-                onTimeUpdate={setAnalysisVideoTime}
-                onSeek={(fn) => setSeek(() => fn)}
-                activeWarning={activeWarning}
-              />
-              {!replayFullscreen && (
-                <button
-                  onClick={() => setReplayFullscreen(true)}
-                  className="absolute top-3 right-3 z-10 p-2 rounded-lg bg-white/80 hover:bg-white border border-[#e1e8ed] text-[#536471] hover:text-[#0f1419] transition-colors"
-                  title="Expand replay"
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m4 0l-5-5" />
-                  </svg>
-                </button>
-              )}
-            </div>
-            {analysis.timeline && analysis.timeline.length > 0 && (
-              <TimelineTrack
-                events={analysis.timeline}
-                totalDurationSec={
-                  analysis.timeline.length > 0
-                    ? Math.ceil(analysis.timeline[analysis.timeline.length - 1].endSec)
-                    : 300
-                }
-                currentTimeSec={analysisVideoTime}
-                onSeek={(sec) => seek?.(sec)}
-              />
-            )}
-          </div>
+          <Scrubber
+            currentTimeSec={analysisVideoTime}
+            totalDurationSec={totalDurationSec}
+            onSeek={(sec) => seek?.(sec)}
+            playing={playing}
+            setPlaying={setPlaying}
+            questions={questionMarkers}
+            activeQuestion={activeQuestionRange}
+            keyMoments={keyMoments}
+          />
 
-          {/* RIGHT — Tips on top, Transcript below. No toggle: only 2 sections,
-              both useful, neither competes for the user's attention. */}
-          <div className="space-y-4 min-w-0">
-            {analysis.fusionSummary && analysis.fusionSummary.coachingTips.length > 0 && (
-              <CoachingPanel
-                fusionSummary={analysis.fusionSummary}
-                timeline={analysis.timeline || []}
-                onSeek={(sec) => seek?.(sec)}
-                hideMoments
-                drillRecommendations={drillRecommendations}
-                onQuestionClick={onQuestionClick}
-                maxQuestionIndex={maxQuestionIndex}
-                onPracticeClick={onPracticeClick}
-              />
-            )}
+          <SignalTrack
+            timeline={analysis.timeline || []}
+            keyMoments={keyMoments}
+            totalDurationSec={totalDurationSec}
+            currentTimeSec={analysisVideoTime}
+            questions={questionMarkers}
+          />
 
-            {analysis.whisperTranscript && analysis.whisperTranscript.length > 0 && (
-              <div className="surface-card-bordered p-3 sm:p-4 space-y-2">
-                <p className="text-caption text-[#71767b] uppercase tracking-wide font-medium">Transcript</p>
-                <ReplayTranscript
-                  whisperSegments={analysis.whisperTranscript}
-                  transcript={data.transcript}
-                  currentTimeSec={analysisVideoTime}
-                  onWordClick={(sec) => seek?.(sec)}
-                  className={replayFullscreen ? 'max-h-[60vh]' : 'max-h-[420px]'}
-                />
-              </div>
-            )}
-          </div>
+          <VideoMetricChips
+            fusionSummary={analysis.fusionSummary}
+            speechMetrics={data.speechMetrics}
+            dominantExpression={dominantExpression}
+          />
         </div>
 
-        {/* Key Moments — full-width horizontal scroller, three-way synced
-            with the video and timeline above. Clicking a card seeks the
-            video; as the video plays the matching card auto-expands. */}
-        {keyMoments.length > 0 && (
-          <section className="space-y-2">
-            <div className="flex items-baseline gap-2">
-              <h3 className="text-subheading text-[#0f1419]">Key Moments</h3>
-              <span className="text-caption text-[#71767b]">
-                ({keyMoments.length}) — click a card or play the video to explore
-              </span>
-            </div>
-            <MomentCards
-              moments={keyMoments}
-              onSeek={(sec) => seek?.(sec)}
-              currentTimeSec={analysisVideoTime}
-              prosodySegments={analysis.prosodySegments}
-              facialSegments={analysis.facialSegments}
-              whisperTranscript={analysis.whisperTranscript}
-              questionMarkers={questionMarkers}
-              maxQuestionIndex={maxQuestionIndex}
-            />
-          </section>
-        )}
-
-        {/* Per-question signal charts — full-width, open by default */}
-        {((analysis.prosodySegments?.length ?? 0) > 0 || (analysis.facialSegments?.length ?? 0) > 0) && (
-          <section className="surface-card-bordered p-4 sm:p-6">
-            <h3 className="text-subheading text-[#0f1419] mb-4">Per-Question Signals</h3>
-            <SignalCharts
-              prosodySegments={analysis.prosodySegments || []}
-              facialSegments={analysis.facialSegments || []}
-              currentTimeSec={analysisVideoTime}
-            />
-          </section>
-        )}
+        {/* RIGHT — tabs panel */}
+        <div className="flex flex-col min-h-0 flex-1 min-w-[360px]">
+          {tabsPanel}
+        </div>
       </div>
     </div>
   )

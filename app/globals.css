@@ -150,6 +150,13 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* Multimodal Round 4 — live caption swap animation. Re-fires on each new
+   transcript line via React `key` change (forces remount). */
+@keyframes multimodal-caption-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 .animate-slide-up {
   animation: slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
