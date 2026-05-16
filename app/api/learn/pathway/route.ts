@@ -1,5 +1,8 @@
+import mongoose from 'mongoose'
 import { NextResponse } from 'next/server'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
+import { connectDB } from '@shared/db/connection'
+import { InterviewSession } from '@shared/db/models'
 import { getCurrentPathway, markTaskComplete } from '@learn/services/pathwayPlanner'
 import { getUserCompetencySummary, getUserWeaknesses } from '@learn/services/competencyService'
 import { buildPathwayViewModel } from '@learn/services/pathwayViewModel'
@@ -14,6 +17,35 @@ export const GET = composeApiRoute({
   async handler(req, { user }) {
     const { searchParams } = new URL(req.url)
     const fromFeedback = searchParams.get('fromFeedback')
+
+    // Resolve the upstream session's pathway-generation status when the
+    // caller arrived from feedback. This lets the view model distinguish
+    // "still running" (banner) from "failed after retries" (retry CTA)
+    // — Bug B fix. Defensive try/catch so a bad sessionId or DB hiccup
+    // never blocks the pathway page itself.
+    let feedbackSessionStatus: string | null = null
+    let feedbackSessionError: string | null = null
+    if (fromFeedback) {
+      try {
+        await connectDB()
+        if (mongoose.isValidObjectId(fromFeedback)) {
+          const sess = await InterviewSession.findOne({
+            _id: fromFeedback,
+            userId: new mongoose.Types.ObjectId(user.id),
+          })
+            .select('pathwayGenerationStatus pathwayGenerationError')
+            .lean<{
+              pathwayGenerationStatus?: string
+              pathwayGenerationError?: string
+            }>()
+          feedbackSessionStatus = sess?.pathwayGenerationStatus ?? null
+          feedbackSessionError = sess?.pathwayGenerationError ?? null
+        }
+      } catch {
+        // Swallow — status lookup is informational only.
+      }
+    }
+
     const [pathway, competencySummary, weaknesses] = await Promise.all([
       getCurrentPathway(user.id),
       getUserCompetencySummary(user.id),
@@ -24,6 +56,8 @@ export const GET = composeApiRoute({
       competencySummary,
       weaknesses,
       fromFeedback,
+      feedbackSessionStatus,
+      feedbackSessionError,
     })
 
     return NextResponse.json({

@@ -131,6 +131,25 @@ export interface IInterviewSession extends Document {
   parentSessionId?: mongoose.Types.ObjectId
   retakeNumber?: number
 
+  // ── Pathway regeneration status ───────────────────────────────────────
+  // Tracks the lifecycle of the post-feedback pathway-plan generation
+  // (Inngest job: `pathway/regenerate`). Before this field existed, the
+  // pathway page inferred "is the plan ready?" by comparing
+  // `PathwayPlan.generatedFromSessionId` to the `?fromFeedback=<sessionId>`
+  // query param. If the fire-and-forget side-effect chain ever rejected
+  // (LLM timeout, schema mismatch, eval failure), the field stayed stale
+  // forever and the UI hung on "catching up" with no recovery path.
+  //
+  // The status field gives the UI an explicit signal — pending/running/
+  // succeeded/failed/skipped — so it can show a retry affordance instead
+  // of a stuck banner. All fields optional so legacy sessions remain
+  // valid; readers treat undefined as "no attempt yet recorded".
+  pathwayGenerationStatus?: 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped'
+  pathwayGenerationError?: string
+  pathwayGenerationStartedAt?: Date
+  pathwayGenerationCompletedAt?: Date
+  pathwayGenerationAttempts?: number
+
   // ── G.7: session completion shape ─────────────────────────────────────
   // Populated at session-create time (from getQuestionCount(config.duration))
   // and at finishInterview time (from how the session ended). Consumed by
@@ -261,6 +280,16 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
       enum: ['normal', 'time_up', 'user_ended', 'usage_limit', 'abandoned'],
     },
     wasTruncatedByTimer: { type: [Boolean], default: undefined },
+
+    // Pathway regeneration status — see interface comment for rationale.
+    pathwayGenerationStatus: {
+      type: String,
+      enum: ['pending', 'running', 'succeeded', 'failed', 'skipped'],
+    },
+    pathwayGenerationError: { type: String, maxlength: 500 },
+    pathwayGenerationStartedAt: { type: Date },
+    pathwayGenerationCompletedAt: { type: Date },
+    pathwayGenerationAttempts: { type: Number, min: 0, default: 0 },
   },
   { timestamps: true }
 )

@@ -1,6 +1,6 @@
 import type { IPathwayPlan, PracticeTask } from '@shared/db/models'
 
-export type PathwayState = 'empty' | 'active' | 'completed' | 'pending' | 'abandoned' | 'returning'
+export type PathwayState = 'empty' | 'active' | 'completed' | 'pending' | 'abandoned' | 'returning' | 'failed'
 
 export interface PathwayAction {
   id: string
@@ -55,6 +55,14 @@ interface BuildPathwayViewModelInput {
   competencySummary: unknown
   weaknesses: unknown[]
   fromFeedback?: string | null
+  /** Bug B fix (2026-05-16) — when the caller arrives from feedback, we
+   *  read the upstream session's `pathwayGenerationStatus` so the view
+   *  model can distinguish "still running" (pending banner) from
+   *  "failed after retries" (retry CTA). null/undefined means we either
+   *  weren't called from feedback or the session had no recorded
+   *  attempt — both fall through to the existing pending behavior. */
+  feedbackSessionStatus?: string | null
+  feedbackSessionError?: string | null
   now?: Date
 }
 
@@ -67,8 +75,35 @@ export function buildPathwayViewModel({
   competencySummary,
   weaknesses,
   fromFeedback,
+  feedbackSessionStatus,
+  feedbackSessionError,
   now = new Date(),
 }: BuildPathwayViewModelInput): PathwayViewModel {
+  // Bug B fix — if we arrived from feedback AND the upstream session's
+  // background regeneration job has terminally failed, surface a 'failed'
+  // state with a Retry CTA instead of the perpetual 'pending' banner.
+  if (
+    fromFeedback &&
+    feedbackSessionStatus === 'failed' &&
+    isPendingForFeedback(pathway, fromFeedback)
+  ) {
+    const errorSuffix = feedbackSessionError ? ` (${feedbackSessionError})` : ''
+    return {
+      state: 'failed',
+      nextAction: {
+        id: 'retry-pathway',
+        type: 'review',
+        title: 'Pathway update failed',
+        description: `We couldn't regenerate your plan from this interview after 3 attempts${errorSuffix}. Retry to enqueue another attempt, or head back to feedback.`,
+        ctaLabel: 'Retry pathway update',
+        metadata: { fromFeedback, sessionId: fromFeedback },
+      },
+      planItems: pathway ? mapPlanItems(pathway.practiceTasks ?? []) : [],
+      progress: buildProgress(pathway, competencySummary),
+      activity: buildActivity(pathway, weaknesses),
+    }
+  }
+
   if (isPendingForFeedback(pathway, fromFeedback)) {
     return {
       state: 'pending',

@@ -14,12 +14,14 @@ import { User, InterviewSession } from '@shared/db/models'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { updateCompetencyState, updateWeaknessClusters } from '@learn/services/competencyService'
 import { generateSessionSummary } from '@learn/services/sessionSummaryService'
-import { generatePathwayPlan } from '@learn/services/pathwayPlanner'
+import { inngest } from '@shared/services/inngest'
 import { updatePracticeStats, deriveStrongWeakDimensions } from '@learn/services/practiceStatsService'
 import { updateMasteryBatch } from '@learn/services/masteryTracker'
 import { advanceUniversalPlan } from '@learn/services/pathwayPlanner'
 import { registerPathwayBadgeWiring } from '@learn/services/pathwayBadgeWiring'
-import { evaluateSession } from '@interview/services/eval/evaluationEngine'
+// `evaluateSession` was previously called inline here as part of the
+// pathway-plan side-effect chain. Now it runs inside the Inngest
+// `pathway/regenerate` job, so the import lives there instead.
 import { getUserCompetencySummary } from '@learn/services/competencyService'
 import { buildHistorySummary } from '@learn/services/sessionSummaryService'
 import { DATA_BOUNDARY_RULE } from '@shared/services/promptSecurity'
@@ -1184,30 +1186,45 @@ You repair malformed interview feedback JSON. The output must match the supplied
         // #321. Scheduling order within sideEffects[] is unchanged for
         // aggregate-log purposes; only the mutation ordering matters.
         if (isFeatureEnabled('pathway_planner')) {
-          // Chain evaluateSession + generatePathwayPlan into a single
-          // tracked side effect so the aggregate count reflects
-          // "pathway ready" as one unit — a failed evaluateSession
-          // still flows through as a single rejection attributed to
-          // `pathwayPlan`.
+          // Bug B fix (2026-05-16) — move pathway generation off the
+          // request lifecycle into the Inngest `pathway/regenerate` job.
+          // The previous in-request chain ran fire-and-forget with no
+          // retry; if the LLM inside `generatePathwayPlan` timed out or
+          // `evaluateSession()` threw, the chain died silently and the
+          // pathway page's "catching up" banner hung indefinitely.
+          //
+          // The Inngest job:
+          //   - retries 2× (total 3 attempts) with exponential backoff
+          //   - writes `pathwayGenerationStatus` to the session at each
+          //     lifecycle transition (pending → running → succeeded/failed)
+          //   - on terminal failure, writes status='failed' so the UI
+          //     can render a retry CTA instead of a stuck banner
+          //
+          // The fireAndTrack wrapper still surrounds the enqueue so a
+          // failed event-send (Inngest down, network blip) shows up in
+          // the aggregate side-effects log line the same way the inline
+          // chain used to.
           fireAndTrack(
             'pathwayPlan',
-            evaluateSession({
-              domain: config.role,
-              interviewType,
-              seniorityBand: config.experience,
-              evaluations: typedEvaluations,
-            }).then(sessionEval =>
-              generatePathwayPlan({
-                userId: user.id,
-                sessionId,
-                domain: config.role,
-                interviewType,
-                experience: config.experience,
-                feedback,
-                sessionEvaluation: sessionEval,
-              }),
-            ),
-            'Pathway plan (via session evaluation) failed',
+            (async () => {
+              await connectDB()
+              await InterviewSession.findByIdAndUpdate(sessionId, {
+                $set: { pathwayGenerationStatus: 'pending' },
+              })
+              await inngest.send({
+                name: 'pathway/regenerate',
+                data: {
+                  sessionId,
+                  userId: user.id,
+                  domain: config.role,
+                  interviewType,
+                  experience: config.experience,
+                  feedback,
+                  typedEvaluations,
+                },
+              })
+            })(),
+            'Pathway plan regeneration enqueue failed',
           )
         } else {
           markSkipped('pathwayPlan')

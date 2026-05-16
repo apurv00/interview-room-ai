@@ -18,6 +18,7 @@ const STATE_LABELS: Record<PathwayState, string> = {
   returning: 'Resume',
   abandoned: 'Pick back up',
   completed: 'Next challenge',
+  failed: 'Needs attention',
 }
 
 export default function TodayActionCard({
