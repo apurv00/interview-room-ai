@@ -95,26 +95,90 @@ export default function MultimodalReplayShell({
     }
   }, [playing, setPlaying])
 
-  // Wire video events to external time stream.
-  const handleTimeUpdate = useCallback(() => {
+  // MediaRecorder-produced webm files don't include a duration header, so
+  // `video.duration` is `Infinity` on `loadedmetadata` until the browser has
+  // scanned to EOF. If we forward Infinity to the parent's `onDurationKnown`,
+  // downstream timeline math uses it as the denominator (`currentTime /
+  // Infinity * 100 = 0`), collapsing every scrubber/marker/playhead and
+  // showing "Infinity" in time readouts. Ported from VideoPlayer.tsx's
+  // probe-and-seek workaround — Codex P1 review on PR #370.
+  //
+  // Approach: on loadedmetadata, if duration is non-finite, seek to
+  // MAX_SAFE_INTEGER to force the browser to read to EOF; the real duration
+  // then arrives via `durationchange`, after which we seek back to 0 and
+  // forward the real value.
+  //
+  // Use a single useEffect (instead of separate useCallbacks) so the probe
+  // state (`durationProbeInProgress`) is correctly scoped to the listener
+  // lifetime — if `playing`/etc. changes between events, the probe state
+  // must persist.
+  useEffect(() => {
     const v = videoRef.current
     if (!v) return
-    const now = performance.now()
-    if (now - lastEmitRef.current < TIME_UPDATE_THROTTLE_MS) return
-    lastEmitRef.current = now
-    onTimeUpdate?.(v.currentTime)
-  }, [onTimeUpdate])
 
-  const handleLoadedMetadata = useCallback(() => {
-    const v = videoRef.current
-    if (!v) return
-    setInternalDuration(v.duration || 0)
-    onDurationKnown?.(v.duration || 0)
-  }, [onDurationKnown])
+    let durationProbeInProgress = false
 
-  const handleEnded = useCallback(() => setPlaying(false), [setPlaying])
-  const handlePlay = useCallback(() => setPlaying(true), [setPlaying])
-  const handlePause = useCallback(() => setPlaying(false), [setPlaying])
+    const onLoadedMetadata = () => {
+      if (Number.isFinite(v.duration) && v.duration > 0) {
+        setInternalDuration(v.duration)
+        onDurationKnown?.(v.duration)
+        return
+      }
+      // Trigger the probe.
+      durationProbeInProgress = true
+      try {
+        v.currentTime = Number.MAX_SAFE_INTEGER
+      } catch {
+        // Some browsers throw on non-finite seeks; nothing we can do
+        // beyond leaving duration at 0.
+      }
+    }
+
+    const onDurationChange = () => {
+      if (Number.isFinite(v.duration) && v.duration > 0) {
+        setInternalDuration(v.duration)
+        onDurationKnown?.(v.duration)
+        if (durationProbeInProgress) {
+          durationProbeInProgress = false
+          // Restore playhead to start after the EOF probe.
+          try { v.currentTime = 0 } catch { /* ignore */ }
+        }
+      }
+    }
+
+    const onTimeUpdateEv = () => {
+      // While probing, currentTime briefly spikes to MAX_SAFE_INTEGER;
+      // suppress those events so neither our internal time nor the parent
+      // gets a garbage value.
+      if (durationProbeInProgress) return
+      const now = performance.now()
+      if (now - lastEmitRef.current < TIME_UPDATE_THROTTLE_MS) return
+      lastEmitRef.current = now
+      if (Number.isFinite(v.currentTime)) {
+        onTimeUpdate?.(v.currentTime)
+      }
+    }
+
+    const onEnded = () => setPlaying(false)
+    const onPlay = () => setPlaying(true)
+    const onPause = () => setPlaying(false)
+
+    v.addEventListener('loadedmetadata', onLoadedMetadata)
+    v.addEventListener('durationchange', onDurationChange)
+    v.addEventListener('timeupdate', onTimeUpdateEv)
+    v.addEventListener('ended', onEnded)
+    v.addEventListener('play', onPlay)
+    v.addEventListener('pause', onPause)
+
+    return () => {
+      v.removeEventListener('loadedmetadata', onLoadedMetadata)
+      v.removeEventListener('durationchange', onDurationChange)
+      v.removeEventListener('timeupdate', onTimeUpdateEv)
+      v.removeEventListener('ended', onEnded)
+      v.removeEventListener('play', onPlay)
+      v.removeEventListener('pause', onPause)
+    }
+  }, [onTimeUpdate, onDurationKnown, setPlaying])
 
   const duration = totalDurationSec ?? internalDuration
 
@@ -125,16 +189,14 @@ export default function MultimodalReplayShell({
         background: 'linear-gradient(180deg, #18181b 0%, #27272a 100%)',
       }}
     >
-      {/* The bare video — no native controls; we own the UX. */}
+      {/* The bare video — no native controls; we own the UX.
+          All event listeners (loadedmetadata, durationchange, timeupdate,
+          ended, play, pause) are registered via the useEffect above so the
+          MediaRecorder duration-probe state stays scoped correctly. */}
       <video
         ref={videoRef}
         src={src}
         className="absolute inset-0 w-full h-full object-cover"
-        onTimeUpdate={handleTimeUpdate}
-        onLoadedMetadata={handleLoadedMetadata}
-        onPlay={handlePlay}
-        onPause={handlePause}
-        onEnded={handleEnded}
         playsInline
         preload="metadata"
       />
