@@ -167,6 +167,35 @@ describe('MomentsTabBody', () => {
       expect(line).not.toContain('content')
       expect(line).not.toContain('fused')
     })
+
+    // Codex P3 review on Round 5c — previously `m.signal || 'fused'`
+    // silently coerced missing values into 'fused', overcounting that
+    // bucket and lying about the channel breakdown.
+    it('buckets moments with a missing signal field into "unknown" instead of overcounting fused', () => {
+      const moments: TimelineEvent[] = [
+        makeMomentWithSignal('audio'),
+        makeMomentWithSignal('audio'),
+        // Missing signal field — cast bypasses TS, simulates service drift.
+        { ...makeMoment(0, 30, 'X'), signal: undefined as unknown as TimelineEvent['signal'] },
+      ]
+      render(<MomentsTabBody moments={moments} onSeek={vi.fn()} />)
+      const line = screen.getByTestId('moments-signal-breakdown').textContent ?? ''
+      expect(line).toContain('2 audio')
+      expect(line).toContain('1 unknown')
+      // Critically: does NOT silently merge missing-signal into 'fused'.
+      expect(line).not.toContain('fused')
+    })
+
+    it('buckets moments with an unrecognized signal value into "unknown"', () => {
+      const moments: TimelineEvent[] = [
+        // Off-union signal value — service drift or schema bypass.
+        { ...makeMoment(0, 30, 'X'), signal: 'made-up' as unknown as TimelineEvent['signal'] },
+      ]
+      render(<MomentsTabBody moments={moments} onSeek={vi.fn()} />)
+      const line = screen.getByTestId('moments-signal-breakdown').textContent ?? ''
+      expect(line).toContain('1 unknown')
+      expect(line).not.toContain('made-up')
+    })
   })
 
   // Round 5b feature #11 — per-Q filler lexicon (rendered inside expanded card)

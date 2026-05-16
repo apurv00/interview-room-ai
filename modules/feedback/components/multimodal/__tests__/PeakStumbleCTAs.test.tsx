@@ -32,9 +32,11 @@ describe('PeakStumbleCTAs (Round 5a feature #10)', () => {
         onSeek={() => {}}
       />
     )
-    expect(screen.getByText('▶ Peak')).toBeInTheDocument()
+    // The label is split: <span aria-hidden>▶ </span>Peak — search by role+name
+    // (which follows aria-label, so the full timestamp+title comes through).
+    expect(screen.getByRole('button', { name: /Jump to peak at 0:42/ })).toBeInTheDocument()
     expect(screen.getByText('Strong opening presence')).toBeInTheDocument()
-    expect(screen.queryByText('▶ Stumble')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Jump to stumble/ })).toBeNull()
   })
 
   it('renders only the Stumble pill when only improvementMoments has entries', () => {
@@ -45,9 +47,9 @@ describe('PeakStumbleCTAs (Round 5a feature #10)', () => {
         onSeek={() => {}}
       />
     )
-    expect(screen.getByText('▶ Stumble')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Jump to stumble at 2:08/ })).toBeInTheDocument()
     expect(screen.getByText('Lost composure on hard question')).toBeInTheDocument()
-    expect(screen.queryByText('▶ Peak')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Jump to peak/ })).toBeNull()
   })
 
   it('renders both pills with formatted timestamps when both arrays have entries', () => {
@@ -92,7 +94,7 @@ describe('PeakStumbleCTAs (Round 5a feature #10)', () => {
         onSeek={onSeek}
       />
     )
-    fireEvent.click(screen.getByText('Peak'))
+    fireEvent.click(screen.getByRole('button', { name: /Jump to peak/ }))
     expect(onSeek).toHaveBeenCalledWith(42)
   })
 
@@ -105,7 +107,42 @@ describe('PeakStumbleCTAs (Round 5a feature #10)', () => {
         onSeek={onSeek}
       />
     )
-    fireEvent.click(screen.getByText('Stumble'))
+    fireEvent.click(screen.getByRole('button', { name: /Jump to stumble/ }))
     expect(onSeek).toHaveBeenCalledWith(100)
+  })
+
+  // Codex P3 review on Round 5c — per-button aria-label so screen
+  // readers announce timestamp + moment title, not just "▶ Peak".
+  describe('accessibility', () => {
+    it('exposes an aria-label per button with formatted timestamp + moment title', () => {
+      render(
+        <PeakStumbleCTAs
+          topMoments={[ev({ startSec: 42, title: 'Strong opening presence' })]}
+          improvementMoments={[ev({ startSec: 128, title: 'Lost composure', type: 'improvement' })]}
+          onSeek={vi.fn()}
+        />
+      )
+      // Use queryByLabelText so the matcher follows aria-label.
+      expect(
+        screen.getByLabelText('Jump to peak at 0:42 — Strong opening presence')
+      ).toBeInTheDocument()
+      expect(
+        screen.getByLabelText('Jump to stumble at 2:08 — Lost composure')
+      ).toBeInTheDocument()
+    })
+
+    it('hides the leading ▶ glyph from screen readers via aria-hidden', () => {
+      const { container } = render(
+        <PeakStumbleCTAs
+          topMoments={[ev({ startSec: 0, title: 'P' })]}
+          improvementMoments={[ev({ startSec: 1, title: 'S', type: 'improvement' })]}
+          onSeek={vi.fn()}
+        />
+      )
+      const ariaHidden = container.querySelectorAll('[aria-hidden="true"]')
+      // Two ▶ spans, one per button.
+      const triangles = Array.from(ariaHidden).filter((el) => el.textContent?.includes('▶'))
+      expect(triangles.length).toBe(2)
+    })
   })
 })

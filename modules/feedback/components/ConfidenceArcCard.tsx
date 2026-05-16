@@ -11,16 +11,38 @@ interface ConfidenceArcCardProps {
   perQuestionConfidence?: ReadonlyArray<'high' | 'medium' | 'low'>
 }
 
-const MARKER_HEIGHT: Record<'high' | 'medium' | 'low', number> = {
+type ConfidenceBand = 'high' | 'medium' | 'low'
+
+const MARKER_HEIGHT: Record<ConfidenceBand, number> = {
   high: 16,
   medium: 10,
   low: 5,
 }
 
-const MARKER_COLOR: Record<'high' | 'medium' | 'low', string> = {
+const MARKER_COLOR: Record<ConfidenceBand, string> = {
   high: '#059669', // emerald-600
   medium: '#d97706', // amber-600
   low: '#dc2626', // red-600
+}
+
+/**
+ * Defensive coercion for prosody.confidenceMarker. The TS type is
+ * `'high' | 'medium' | 'low'`, but the runtime source is a service-emitted
+ * string — if the prosody service ever adds a band, renames one, or
+ * upstream casts an unexpected value through, `MARKER_HEIGHT[band]` /
+ * `MARKER_COLOR[band]` would silently return undefined and break the
+ * inline style render.
+ *
+ * Codex P2 review on Round 5b — same precedent as
+ * `CoachingTipsTabBody.normalizeCategory` (commit 02becb4 on PR #370).
+ * Unknown values fall back to `low` so the user at least sees a marker
+ * rather than a missing bar; `low` is the safest fallback because it
+ * implies "we're not confident in this signal", which is consistent
+ * with the actual situation.
+ */
+function normalizeBand(b: string | undefined): ConfidenceBand {
+  if (b === 'high' || b === 'medium' || b === 'low') return b
+  return 'low'
 }
 
 /**
@@ -59,17 +81,21 @@ export default function ConfidenceArcCard({
           className="flex items-end gap-1 h-4 flex-shrink-0 pt-0.5"
           aria-label="Per-question confidence sparkline"
         >
-          {perQuestionConfidence!.map((band, i) => (
-            <div
-              key={i}
-              className="w-1 rounded-sm"
-              style={{
-                height: MARKER_HEIGHT[band],
-                background: MARKER_COLOR[band],
-              }}
-              title={`Q${i + 1}: ${band}`}
-            />
-          ))}
+          {perQuestionConfidence!.map((rawBand, i) => {
+            const band = normalizeBand(rawBand)
+            return (
+              <div
+                key={i}
+                className="w-1 rounded-sm"
+                style={{
+                  height: MARKER_HEIGHT[band],
+                  background: MARKER_COLOR[band],
+                }}
+                title={`Q${i + 1}: ${band}`}
+                data-band={band}
+              />
+            )
+          })}
         </div>
       )}
       {hasNarrative && (
