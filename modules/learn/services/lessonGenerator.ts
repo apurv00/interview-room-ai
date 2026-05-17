@@ -105,6 +105,7 @@ async function generateLessonContent(
   input: GenerateLessonInput,
   maxTokens: number,
 ): Promise<LessonContent | null> {
+  let raw = ''
   try {
     const prompt = buildLessonPrompt(input)
     const result = await completion({
@@ -115,10 +116,8 @@ async function generateLessonContent(
       maxTokens,
     })
 
-    const raw = (result.text || '{}').trim()
-    const cleaned = raw
-      .replace(/^```(?:json)?\n?/, '')
-      .replace(/\n?```$/, '')
+    raw = (result.text || '{}').trim()
+    const cleaned = extractJsonObject(raw)
     const parsed = JSON.parse(cleaned) as LessonContent
 
     if (!isValidLesson(parsed)) {
@@ -127,9 +126,56 @@ async function generateLessonContent(
     }
     return parsed
   } catch (err) {
-    logger.error({ err, input }, 'LLM lesson generation call failed')
+    // Production diagnosis (2026-05-17): all 3 lessons on the Pathway
+    // page returned 502 because the model occasionally returns prose
+    // around the JSON, or fence variants the strip-regex didn't handle.
+    // We now use extractJsonObject (front+back fence variants + balanced
+    // {…} fallback) above, AND log the raw text (truncated) on parse
+    // failure so future regressions are debuggable directly from Vercel
+    // runtime logs instead of requiring a code-side reproduction.
+    logger.error(
+      { err, input, rawTextPrefix: raw.slice(0, 400) },
+      'LLM lesson generation call failed',
+    )
     return null
   }
+}
+
+/**
+ * Pull a JSON object out of an LLM response, handling the most common
+ * wrapping the model produces despite "respond with ONLY valid JSON":
+ *
+ *   1. Code-fenced output (with or without `json` hint, surrounding
+ *      whitespace, trailing-only fences).
+ *   2. Prose before/after the JSON ("Here's the lesson: {…}").
+ *
+ * Strategy:
+ *   a) Strip leading/trailing whitespace and code fences (case-insensitive,
+ *      both ``` and ```json variants, leading or trailing whitespace).
+ *   b) If the result still doesn't start with `{`, fall back to slicing
+ *      from the first `{` to the last `}` — a safe heuristic for any
+ *      single-object response.
+ *
+ * Exported for tests; not part of the public API otherwise.
+ */
+export function extractJsonObject(raw: string): string {
+  let s = raw.trim()
+  // Strip a leading code fence (```json\n / ```\n / ```)
+  s = s.replace(/^```(?:json)?\s*/i, '')
+  // Strip a trailing code fence (\n``` / ```)
+  s = s.replace(/\s*```\s*$/i, '')
+  s = s.trim()
+  if (s.startsWith('{')) return s
+
+  // Fall back: pull the first balanced-looking {…} block. We don't
+  // try to be clever about nested braces inside strings — the entire
+  // payload is a single object so first-{ to last-} is the right cut.
+  const start = s.indexOf('{')
+  const end = s.lastIndexOf('}')
+  if (start >= 0 && end > start) {
+    return s.slice(start, end + 1)
+  }
+  return s
 }
 
 function buildLessonPrompt(input: GenerateLessonInput): string {
