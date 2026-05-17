@@ -192,6 +192,64 @@ describe('lessonGenerator', () => {
       expect(r1).toBe(r2)
     })
 
+    it('caches repaired (truncated) lessons with reviewStatus="flagged" so they regenerate next access (Codex P2 PR #387)', async () => {
+      // Codex P2 — when JSON.parse fails and repairTruncatedJson rescues
+      // the output, the result may be missing trailing fields (e.g. 1 of
+      // 4 keyTakeaways) but still pass isValidLesson. Caching as
+      // 'pending' would serve that partial content forever; caching as
+      // 'flagged' ensures getOrGenerateLesson's `reviewStatus !== 'flagged'`
+      // check triggers a fresh LLM call on the next request.
+      mockFindOne.mockResolvedValue(null)
+      // Truncated mid-keyTakeaways. The repair will close `["a","b"`,
+      // add `]`, then close the object. isValidLesson passes because
+      // the schema only requires keyTakeaways.length > 0.
+      const truncated = JSON.stringify({
+        title: 'X',
+        conceptSummary: 'short',
+        conceptDeepDive: 'short',
+        example: {
+          question: 'Q',
+          goodAnswer: 'A',
+          annotations: ['x'],
+        },
+      }).slice(0, -1) + ',"keyTakeaways":["a","b"'
+      mockCompletion.mockResolvedValue({
+        text: truncated,
+        inputTokens: 10,
+        outputTokens: 100,
+      })
+      mockFindOneAndUpdate.mockImplementation((_q, update) => update)
+
+      await getOrGenerateLesson({
+        competency: 'specificity',
+        domain: 'pm',
+        depth: 'behavioral',
+      })
+
+      expect(mockFindOneAndUpdate).toHaveBeenCalledOnce()
+      const upsertedDoc = mockFindOneAndUpdate.mock.calls[0][1]
+      expect(upsertedDoc.reviewStatus).toBe('flagged')
+    })
+
+    it('caches clean (non-repaired) lessons with reviewStatus="pending"', async () => {
+      mockFindOne.mockResolvedValue(null)
+      mockCompletion.mockResolvedValue({
+        text: validLessonJson,
+        inputTokens: 50,
+        outputTokens: 200,
+      })
+      mockFindOneAndUpdate.mockImplementation((_q, update) => update)
+
+      await getOrGenerateLesson({
+        competency: 'specificity',
+        domain: 'pm',
+        depth: 'behavioral',
+      })
+
+      const upsertedDoc = mockFindOneAndUpdate.mock.calls[0][1]
+      expect(upsertedDoc.reviewStatus).toBe('pending')
+    })
+
     it('returns null (not unhandled rejection) when shared in-flight promise rejects', async () => {
       mockFindOne.mockResolvedValue(null)
       mockCompletion.mockRejectedValue(new Error('LLM down'))

@@ -76,9 +76,10 @@ async function generateAndCache(
   staleDoc: IGeneratedLesson | null,
 ): Promise<IGeneratedLesson | null> {
   const budget = getLessonBudget(input.competency)
-  const lesson = await generateLessonContent(input, budget.maxTokens)
-  if (!lesson) return staleDoc ?? null
+  const generated = await generateLessonContent(input, budget.maxTokens)
+  if (!generated) return staleDoc ?? null
 
+  const { content, wasRepaired } = generated
   const doc = await GeneratedLesson.findOneAndUpdate(
     { cacheKey },
     {
@@ -86,14 +87,24 @@ async function generateAndCache(
       competency: input.competency,
       domain: input.domain,
       depth: input.depth,
-      title: lesson.title,
-      conceptSummary: lesson.conceptSummary,
-      conceptDeepDive: lesson.conceptDeepDive,
-      example: lesson.example,
-      keyTakeaways: lesson.keyTakeaways,
+      title: content.title,
+      conceptSummary: content.conceptSummary,
+      conceptDeepDive: content.conceptDeepDive,
+      example: content.example,
+      keyTakeaways: content.keyTakeaways,
       tokenBudgetUsed: budget.maxTokens,
       generatedByModel: 'learn.pathway-lesson',
-      reviewStatus: 'pending',
+      // Codex P2 on PR #387 — repaired output may be missing trailing
+      // fields (e.g. only 1 of 4 keyTakeaways) but still pass the
+      // shape validator. Caching as 'flagged' makes the next read
+      // bypass the cache (see getOrGenerateLesson's
+      // `cached.reviewStatus !== 'flagged'` check) and regenerate
+      // with a fresh LLM call. Trade-off: a permanently-too-large
+      // lesson regenerates on every load; in practice the bumped
+      // token budgets in lessonBudgets.ts make repair rare, so this
+      // is acceptable. If logs show repeated repairs for the same
+      // cacheKey, bump that competency's budget further.
+      reviewStatus: wasRepaired ? 'flagged' : 'pending',
     },
     { upsert: true, returnDocument: 'after' },
   )
@@ -101,10 +112,18 @@ async function generateAndCache(
   return doc
 }
 
+interface GeneratedLessonContent {
+  content: LessonContent
+  /** True iff parse only succeeded after repairTruncatedJson — caller
+   *  must cache as reviewStatus='flagged' so the next request
+   *  regenerates instead of serving the partial forever. */
+  wasRepaired: boolean
+}
+
 async function generateLessonContent(
   input: GenerateLessonInput,
   maxTokens: number,
-): Promise<LessonContent | null> {
+): Promise<GeneratedLessonContent | null> {
   let raw = ''
   try {
     const prompt = buildLessonPrompt(input)
@@ -120,14 +139,25 @@ async function generateLessonContent(
     const cleaned = extractJsonObject(raw)
     const parsed = parseLessonJsonWithRepair(cleaned)
 
-    if (!parsed || !isValidLesson(parsed)) {
+    if (!parsed || !isValidLesson(parsed.value)) {
       logger.warn(
         { input, rawTextPrefix: raw.slice(0, 400) },
         'Generated lesson failed validation',
       )
       return null
     }
-    return parsed
+    if (parsed.repaired) {
+      // Codex P2 on PR #387 — surface repaired-but-valid lessons in the
+      // logs so ops can see how often this fires post-budget-bump. The
+      // caller marks the cached doc as 'flagged' (see generateAndCache)
+      // so the next request regenerates fresh rather than serving the
+      // partial content indefinitely.
+      logger.warn(
+        { input, rawTextPrefix: raw.slice(0, 400) },
+        'Generated lesson required JSON repair — caching as flagged for regen',
+      )
+    }
+    return { content: parsed.value as LessonContent, wasRepaired: parsed.repaired }
   } catch (err) {
     // Production diagnosis (2026-05-17): all 3 lessons on the Pathway
     // page returned 502 because the model occasionally returns prose
@@ -184,14 +214,28 @@ async function generateLessonContent(
  *
  * Exported for tests.
  */
-export function parseLessonJsonWithRepair(text: string): unknown {
+export interface ParseLessonJsonResult {
+  value: unknown
+  /**
+   * True when the JSON only parsed after `repairTruncatedJson` ran.
+   * Caller MUST treat repaired output as a degraded result — the lesson
+   * may be missing trailing fields (e.g. only 1 keyTakeaway of 4) even
+   * when isValidLesson() passes, because the validator only enforces
+   * non-empty arrays. Codex P2 on PR #387 — without flagging these,
+   * partial lessons silently cached as successful and the user got
+   * thin content forever.
+   */
+  repaired: boolean
+}
+
+export function parseLessonJsonWithRepair(text: string): ParseLessonJsonResult | null {
   try {
-    return JSON.parse(text)
+    return { value: JSON.parse(text), repaired: false }
   } catch {
     const repaired = repairTruncatedJson(text)
     if (repaired === text) return null // nothing changed; pointless to retry
     try {
-      return JSON.parse(repaired)
+      return { value: JSON.parse(repaired), repaired: true }
     } catch {
       return null
     }
@@ -265,8 +309,17 @@ export function repairTruncatedJson(text: string): string {
     else if (ch === '}' || ch === ']') closeStack.pop()
   }
 
-  // Close any remaining open structures in reverse open order.
+  // Vercel Agent on PR #387 — close any unclosed string BEFORE closing
+  // braces. Reaches here when the original walk ended inside a string
+  // AND `lastSafeBoundary` was -1 (no comma/close-brace ever seen
+  // outside a string), so the trim block above couldn't trim back to
+  // a safe spot. Without this, `{"title":"unfinished` becomes
+  // `{"title":"unfinished}` (invalid: string never terminates).
   let result = trimmed
+  if (inStr2) {
+    result += '"'
+  }
+  // Close any remaining open structures in reverse open order.
   while (closeStack.length > 0) {
     result += closeStack.pop()
   }
