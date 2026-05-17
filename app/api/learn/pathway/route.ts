@@ -2,11 +2,19 @@ import mongoose from 'mongoose'
 import { NextResponse } from 'next/server'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { connectDB } from '@shared/db/connection'
-import { InterviewSession } from '@shared/db/models'
+import { InterviewSession, PathwayPlan, UserCompetencyState } from '@shared/db/models'
 import { getCurrentPathway, markTaskComplete } from '@learn/services/pathwayPlanner'
 import { getUserCompetencySummary, getUserWeaknesses } from '@learn/services/competencyService'
 import { buildPathwayViewModel } from '@learn/services/pathwayViewModel'
 import { z } from 'zod'
+
+/**
+ * Pathway P2 Wave 3 — how many prior pathway plans we scan to compute
+ * recurrence counts. Three plans is enough to distinguish a one-off
+ * (count 0) from a persistent blocker (count 1-2) without dragging in
+ * ancient history that's no longer meaningful.
+ */
+const RECURRENCE_PLAN_WINDOW = 3
 
 export const dynamic = 'force-dynamic'
 
@@ -51,6 +59,56 @@ export const GET = composeApiRoute({
       getUserCompetencySummary(user.id),
       getUserWeaknesses(user.id, 10),
     ])
+
+    // Pathway P2 Wave 3 — fetch the data the view model needs to
+    // populate per-blocker insights (#2 momentum + #8 recurrence).
+    // Both queries are bounded (3 prior plans, only the competency
+    // states matching current blockers) so the payload stays small.
+    // We run these AFTER the main fetch because they depend on the
+    // current plan's blocker list — paralellizing pre-fetch isn't
+    // worth the wasted query when there's no plan yet.
+    const blockerCompetencies = (pathway?.topBlockingWeaknesses ?? []).map((b) => b.competency)
+    let priorPlans: Array<{ topBlockingWeaknesses: Array<{ competency: string }> }> = []
+    let competencyStates: Array<{
+      competencyName: string
+      scoreHistory: Array<{ score: number; timestamp: Date }>
+    }> = []
+
+    if (pathway) {
+      try {
+        await connectDB()
+        const userObjId = new mongoose.Types.ObjectId(user.id)
+        const [priors, states] = await Promise.all([
+          PathwayPlan.find({ userId: userObjId, _id: { $ne: pathway._id } })
+            .sort({ generatedAt: -1 })
+            .limit(RECURRENCE_PLAN_WINDOW)
+            .select({ topBlockingWeaknesses: 1 })
+            .lean<Array<{ topBlockingWeaknesses?: Array<{ competency: string }> }>>(),
+          blockerCompetencies.length > 0
+            ? UserCompetencyState.find({
+                userId: userObjId,
+                competencyName: { $in: blockerCompetencies },
+              })
+                .select({ competencyName: 1, scoreHistory: 1 })
+                .lean<Array<{
+                  competencyName: string
+                  scoreHistory?: Array<{ score: number; timestamp: Date }>
+                }>>()
+            : Promise.resolve([]),
+        ])
+        priorPlans = priors.map((p) => ({
+          topBlockingWeaknesses: p.topBlockingWeaknesses ?? [],
+        }))
+        competencyStates = states.map((s) => ({
+          competencyName: s.competencyName,
+          scoreHistory: s.scoreHistory ?? [],
+        }))
+      } catch {
+        // Insights are additive — degrade silently so a bad query never
+        // breaks the main pathway page render.
+      }
+    }
+
     const viewModel = buildPathwayViewModel({
       pathway,
       competencySummary,
@@ -58,6 +116,8 @@ export const GET = composeApiRoute({
       fromFeedback,
       feedbackSessionStatus,
       feedbackSessionError,
+      priorPlans,
+      competencyStates,
     })
 
     return NextResponse.json({
