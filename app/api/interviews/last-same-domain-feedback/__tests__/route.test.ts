@@ -191,6 +191,33 @@ describe('GET /api/interviews/last-same-domain-feedback', () => {
     expect(secondFilter.completedAt).toEqual({ $lt: refCompletedAt })
   })
 
+  it('Wave 2 Vercel Agent fix: when ref has only createdAt, filter target by createdAt (not completedAt)', async () => {
+    // Regression: previous version fetched ref.completedAt ?? ref.createdAt
+    // and then ALWAYS filtered targets by completedAt < that value. When
+    // the ref lacked completedAt, that mixed createdAt (ref side) with
+    // completedAt (target side) and could miss the correct predecessor.
+    // The fix: filter the target by whichever field the ref actually has.
+    mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+    const REF_SESSION = new mongoose.Types.ObjectId()
+    const refCreatedAt = new Date('2026-05-15T10:00:00Z')
+
+    mockFindOne
+      // Reference session has only createdAt (no completedAt)
+      .mockReturnValueOnce(buildChain({ createdAt: refCreatedAt }))
+      .mockReturnValueOnce(buildChain(null))
+
+    const req = new NextRequest(
+      `http://localhost/api/interviews/last-same-domain-feedback?domain=software-engineer&priorTo=${REF_SESSION.toString()}`,
+    )
+    await GET(req)
+
+    const secondFilter = mockFindOne.mock.calls[1][0]
+    // The target filter MUST use createdAt (matching the ref's only
+    // available timestamp), NOT completedAt.
+    expect(secondFilter.createdAt).toEqual({ $lt: refCreatedAt })
+    expect(secondFilter.completedAt).toBeUndefined()
+  })
+
   it('Wave 2: invalid priorTo is ignored (route still returns most-recent)', async () => {
     mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
     mockFindOne.mockReturnValue(buildChain(null))

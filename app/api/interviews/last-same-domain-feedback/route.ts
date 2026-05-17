@@ -63,7 +63,12 @@ export async function GET(req: NextRequest) {
 
     await connectDB()
 
-    let priorToCompletedAt: Date | null = null
+    // Reference timestamp + which field to filter by. The reference and
+    // the target row MUST be compared using the same timestamp field
+    // (Vercel Agent on PR #381) — otherwise the query mixes completedAt
+    // with createdAt and can skip the actual predecessor.
+    let refTime: Date | null = null
+    let refTimeField: 'completedAt' | 'createdAt' | null = null
     if (priorToValid) {
       const ref = await InterviewSession.findOne({
         _id: new mongoose.Types.ObjectId(priorToValid),
@@ -71,9 +76,13 @@ export async function GET(req: NextRequest) {
       })
         .select({ completedAt: 1, createdAt: 1 })
         .lean<{ completedAt?: Date; createdAt?: Date }>()
-      // Prefer completedAt (when feedback was minted) but fall back to
-      // createdAt because some legacy rows may lack completedAt.
-      priorToCompletedAt = ref?.completedAt ?? ref?.createdAt ?? null
+      if (ref?.completedAt) {
+        refTime = ref.completedAt
+        refTimeField = 'completedAt'
+      } else if (ref?.createdAt) {
+        refTime = ref.createdAt
+        refTimeField = 'createdAt'
+      }
     }
 
     // Most recent completed session in this domain with non-degraded feedback.
@@ -88,11 +97,12 @@ export async function GET(req: NextRequest) {
       'feedback.degraded': { $ne: true },
     }
     if (priorToValid) {
-      // Exclude the reference session itself even when its completedAt
-      // is missing — covers in-flight rows.
+      // Exclude the reference session itself even when its timestamps
+      // are missing — covers in-flight rows where _id is the only
+      // reliable identity.
       filter._id = { $ne: new mongoose.Types.ObjectId(priorToValid) }
-      if (priorToCompletedAt) {
-        filter.completedAt = { $lt: priorToCompletedAt }
+      if (refTime && refTimeField) {
+        filter[refTimeField] = { $lt: refTime }
       }
     }
 
