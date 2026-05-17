@@ -588,6 +588,34 @@ export async function advanceUniversalPlan(
         exitedAt: new Date(),
         avgScore: 0,
       })
+
+      // Bug fix (2026-05-17) — refresh plan.lessons[] on phase
+      // transition so the lesson queue actually surfaces guidance for
+      // the user's CURRENT phase. Previously the lessons array was
+      // populated once at plan creation and never touched again, so a
+      // user 3 phases deep was still seeing assessment-phase lessons
+      // (or in many cases, an empty queue if they had no weaknesses
+      // at creation time and pre-dated the fallback).
+      //
+      // Completion state for any lesson the user has finished is
+      // preserved across the refresh.
+      if (plan.domain && plan.depth) {
+        try {
+          plan.lessons = await buildPhaseLessons(
+            userId,
+            plan.domain,
+            plan.depth,
+            newPhase,
+            plan.lessons ?? [],
+          )
+        } catch (err) {
+          // Don't fail the session-advance just because the lesson
+          // refresh hit an LLM/DB hiccup — sessionsCompleted +
+          // phaseHistory progression is the higher-priority update.
+          // The backfill in getUniversalPlan will catch it next read.
+          logger.warn({ err, userId, newPhase }, 'Failed to refresh plan.lessons on phase transition')
+        }
+      }
     }
 
     await plan.save()
@@ -648,15 +676,57 @@ export async function advanceUniversalPlan(
 
 /**
  * Fetch the current universal plan for a user, or null if none exists.
+ *
+ * Backfill (2026-05-17): self-heals legacy plans where `lessons` was
+ * persisted as `[]`. This happened to plans created before the
+ * `UNIVERSAL_FALLBACK_COMPETENCIES` fallback existed (commit 3a9a9e7,
+ * 2026-05-14) — if the user had no `weakAreas`/`strongAreas` at
+ * creation time, `phaseFocusCompetencies` returned `[]` and the empty
+ * array was persisted forever. The UI showed `Lesson queue (0/0)`
+ * with no recovery path. We can't migrate those rows in bulk safely
+ * (need per-user competency lookup), so we self-heal on first read.
  */
 export async function getUniversalPlan(userId: string): Promise<IPathwayPlan | null> {
   if (!isFeatureEnabled('pathway_planner')) return null
   try {
     await connectDB()
-    return (await PathwayPlan.findOne({
+    const plan = (await PathwayPlan.findOne({
       userId: new mongoose.Types.ObjectId(userId),
       planType: UNIVERSAL_PLAN_TYPE,
     }).lean()) as IPathwayPlan | null
+
+    if (!plan) return null
+
+    // Self-heal empty lessons[] — only when plan has the data we need
+    // to compute lessons (domain + depth). Without those we can't
+    // recompute the lessonId cache key, so leave the empty array and
+    // let the user re-create through the UI.
+    if ((!plan.lessons || plan.lessons.length === 0) && plan.domain && plan.depth) {
+      try {
+        const refreshed = await buildPhaseLessons(
+          userId,
+          plan.domain,
+          plan.depth,
+          (plan.currentPhase as PathwayPhase) ?? 'assessment',
+          [],
+        )
+        if (refreshed.length > 0) {
+          await PathwayPlan.updateOne(
+            { _id: plan._id },
+            { $set: { lessons: refreshed } },
+          )
+          // Return the freshly-populated plan so the caller sees the
+          // backfill on this same request — no need to round-trip.
+          plan.lessons = refreshed
+        }
+      } catch (err) {
+        // Best-effort heal — degrade silently so a competency-summary
+        // hiccup doesn't take down the pathway page.
+        logger.warn({ err, userId, planId: String(plan._id) }, 'Failed to backfill empty plan.lessons on read')
+      }
+    }
+
+    return plan
   } catch (err) {
     logger.error({ err, userId }, 'Failed to get universal plan')
     return null
@@ -696,6 +766,44 @@ function resolveUniversalFocus(
 ): string[] {
   const focus = phaseFocusCompetencies(phase, weakAreas, strongAreas)
   return focus.length > 0 ? focus : UNIVERSAL_FALLBACK_COMPETENCIES
+}
+
+/**
+ * Build `lessons[]` entries for the user's current phase, preserving any
+ * already-completed lessons so we don't reset progress when refreshing
+ * on phase transition or when self-healing an empty array.
+ *
+ * Used by both:
+ *   - advanceUniversalPlan (Bug #2: phase-transition refresh)
+ *   - getUniversalPlan (Bug #1: backfill-on-read for legacy empty plans)
+ */
+async function buildPhaseLessons(
+  userId: string,
+  domain: string,
+  depth: string,
+  phase: PathwayPhase,
+  existingLessons: Array<{ lessonId: string; competency: string; completed: boolean; completedAt?: Date }> = [],
+): Promise<Array<{ lessonId: string; competency: string; completed: boolean; completedAt?: Date }>> {
+  const summary = await getUserCompetencySummary(userId, domain)
+  const focus = resolveUniversalFocus(
+    phase,
+    summary?.weakAreas ?? [],
+    summary?.strongAreas ?? [],
+  )
+  // Index existing by lessonId so we carry forward completion state for
+  // any lesson that was finished before this refresh.
+  const completedByLessonId = new Map(
+    existingLessons
+      .filter((l) => l.completed)
+      .map((l) => [l.lessonId, l] as const),
+  )
+  return focus.map((competency) => {
+    const lessonId = buildLessonCacheKey(competency, domain, depth)
+    const prior = completedByLessonId.get(lessonId)
+    return prior
+      ? { lessonId, competency, completed: true, completedAt: prior.completedAt }
+      : { lessonId, competency, completed: false }
+  })
 }
 
 export type { PathwayPhase }
