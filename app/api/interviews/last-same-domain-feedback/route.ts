@@ -9,18 +9,28 @@ import { logger } from '@shared/logger'
 export const dynamic = 'force-dynamic'
 
 /**
- * GET /api/interviews/last-same-domain-feedback?domain=<role>
+ * GET /api/interviews/last-same-domain-feedback?domain=<role>[&priorTo=<sessionId>]
  *
  * Returns a compact summary of the user's most recent COMPLETED interview
- * in the requested domain — the top-3 improvements + overall score —
- * so the Setup page's Pre-interview Coach Card (Pathway P2 Wave 1, feature A)
- * can surface "Last time on Product Manager, your top focus was: …"
- * directly at the moment the user is about to take another interview.
+ * in the requested domain — the top-3 improvements + overall score.
  *
- * Diagnostic-coach product framing: insights live at the moment of action,
- * not on a calendar cadence. The card only renders when same-domain
- * history exists; otherwise the response is `{ feedback: null }` and the
- * card no-ops.
+ * Two callers, both action-anchored:
+ *
+ *   - Setup page (Wave 1, feature A): no priorTo. Returns the most recent
+ *     completed same-domain session so the Pre-interview Coach Card can
+ *     surface "Last time on Product Manager, your top focus was: …" at
+ *     the moment the user is configuring another interview.
+ *
+ *   - Feedback page (Wave 2, feature B): priorTo=<currentSessionId>.
+ *     Returns the session IMMEDIATELY BEFORE the current one in the same
+ *     domain, so the Post-interview Delta Card can render "Last time
+ *     your focus was X; this time it's Y — overall +N" — closing the
+ *     action-anchored coaching loop opened by the setup card.
+ *
+ * Diagnostic-coach product framing: insights live at the moment of
+ * action, not on a calendar cadence. The card only renders when
+ * same-domain history exists; otherwise the response is
+ * `{ feedback: null }` and the card no-ops.
  *
  * Why a dedicated route (not a flag on /api/interviews):
  *   - Tight projection: ships ~6 small fields instead of a full session row
@@ -42,19 +52,51 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'domain is required' }, { status: 400 })
     }
 
+    // Optional: bound the search to sessions completed BEFORE this one.
+    // Used by the Feedback page's Post-interview Delta Card so it can
+    // surface "the session immediately before this one" without showing
+    // the user their own current session. Invalid id ⇒ ignore the bound
+    // (the route still returns the most recent in domain) rather than
+    // 400, because the card should degrade silently if the URL is weird.
+    const priorTo = searchParams.get('priorTo')?.trim()
+    const priorToValid = priorTo && mongoose.Types.ObjectId.isValid(priorTo) ? priorTo : null
+
     await connectDB()
+
+    let priorToCompletedAt: Date | null = null
+    if (priorToValid) {
+      const ref = await InterviewSession.findOne({
+        _id: new mongoose.Types.ObjectId(priorToValid),
+        userId: new mongoose.Types.ObjectId(session.user.id),
+      })
+        .select({ completedAt: 1, createdAt: 1 })
+        .lean<{ completedAt?: Date; createdAt?: Date }>()
+      // Prefer completedAt (when feedback was minted) but fall back to
+      // createdAt because some legacy rows may lack completedAt.
+      priorToCompletedAt = ref?.completedAt ?? ref?.createdAt ?? null
+    }
 
     // Most recent completed session in this domain with non-degraded feedback.
     // Degraded feedback (LLM failure fallback) carries synthetic scores —
     // surfacing those as "your top focus area" would mislead the user, so
     // we exclude them.
-    const doc = await InterviewSession.findOne({
+    const filter: Record<string, unknown> = {
       userId: new mongoose.Types.ObjectId(session.user.id),
       'config.role': domain,
       status: 'completed',
       feedback: { $exists: true, $ne: null },
       'feedback.degraded': { $ne: true },
-    })
+    }
+    if (priorToValid) {
+      // Exclude the reference session itself even when its completedAt
+      // is missing — covers in-flight rows.
+      filter._id = { $ne: new mongoose.Types.ObjectId(priorToValid) }
+      if (priorToCompletedAt) {
+        filter.completedAt = { $lt: priorToCompletedAt }
+      }
+    }
+
+    const doc = await InterviewSession.findOne(filter)
       .select({
         _id: 1,
         completedAt: 1,
