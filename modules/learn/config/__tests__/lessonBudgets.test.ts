@@ -22,13 +22,28 @@ describe('lessonBudgets config', () => {
 
   it('default budget is medium complexity', () => {
     expect(DEFAULT_LESSON_BUDGET.complexity).toBe('medium')
-    expect(DEFAULT_LESSON_BUDGET.maxTokens).toBe(350)
+    // Budgets bumped 2026-05-17 because the lesson schema (title +
+    // summary + deep dive + worked example + takeaways) needs
+    // ~500-700 tokens of output — the previous 350 ceiling was
+    // truncating mid-output and 502ing every lesson on /pathway.
+    expect(DEFAULT_LESSON_BUDGET.maxTokens).toBe(700)
   })
 
   it('getLessonBudget returns correct budget for known competency', () => {
     const budget = getLessonBudget('star_structure')
     expect(budget.complexity).toBe('complex')
-    expect(budget.maxTokens).toBe(600)
+    expect(budget.maxTokens).toBe(800)
+  })
+
+  it('covers all UNIVERSAL_FALLBACK_COMPETENCIES so they do not hit DEFAULT', () => {
+    // Production diagnosis 2026-05-17 — the fallback competencies
+    // (relevance, structure, specificity) are what every legacy plan
+    // self-heals to via getUniversalPlan's backfill. Each MUST have
+    // an explicit budget entry so token-sizing decisions stay local
+    // to this file when behaviour needs tuning.
+    expect(COMPETENCY_LESSON_BUDGETS['relevance']).toBeDefined()
+    expect(COMPETENCY_LESSON_BUDGETS['structure']).toBeDefined()
+    expect(COMPETENCY_LESSON_BUDGETS['specificity']).toBeDefined()
   })
 
   it('getLessonBudget returns default for unknown competency', () => {
