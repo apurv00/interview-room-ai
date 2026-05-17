@@ -54,26 +54,45 @@ export const GET = composeApiRoute({
       }
     }
 
-    // Pathway P2 Wave 4 — fetch the user's most-recent completed session
-    // timestamp alongside the existing parallel fetches so the view model
-    // can derive ActivityRhythm.decayProfile in a single round trip. We
-    // need the connection now (the other fetchers connect lazily inside
-    // themselves) before issuing the timestamp query.
-    await connectDB()
-    const [pathway, competencySummary, weaknesses, lastSessionDoc] = await Promise.all([
+    // Pathway P2 Wave 4 — most-recent completed session timestamp,
+    // used to derive ActivityRhythm.decayProfile.
+    //
+    // Codex P1 on PR #383 — this MUST stay isolated from the main
+    // payload. The previous shape had `await connectDB()` + a raw
+    // `InterviewSession.findOne` inside `Promise.all`, so a Mongo
+    // hiccup (or `connectDB` throwing on env/connection issues)
+    // rejected the entire handler and returned 500. But the existing
+    // service helpers (`getCurrentPathway` / `getUserCompetencySummary`
+    // / `getUserWeaknesses`) each have internal try/catches that
+    // return null/empty on error, so the handler used to degrade
+    // gracefully. Activity rhythm is purely additive UI context
+    // (DecayContextCard renders nothing when `lastSessionAt` is null);
+    // it should never take down the page.
+    //
+    // Fix: isolate connect + query in a try/catch with a `null` fallback,
+    // matching the Wave 3 priors/states block below.
+    const [pathway, competencySummary, weaknesses] = await Promise.all([
       getCurrentPathway(user.id),
       getUserCompetencySummary(user.id),
       getUserWeaknesses(user.id, 10),
-      InterviewSession.findOne({
+    ])
+
+    let lastSessionAt: Date | null = null
+    try {
+      await connectDB()
+      const lastSessionDoc = await InterviewSession.findOne({
         userId: new mongoose.Types.ObjectId(user.id),
         status: 'completed',
         completedAt: { $exists: true, $ne: null },
       })
         .select({ completedAt: 1 })
         .sort({ completedAt: -1 })
-        .lean<{ completedAt?: Date }>(),
-    ])
-    const lastSessionAt = lastSessionDoc?.completedAt ?? null
+        .lean<{ completedAt?: Date }>()
+      lastSessionAt = lastSessionDoc?.completedAt ?? null
+    } catch {
+      // Swallow — activity-rhythm lookup is additive UI context, never
+      // a payload blocker. Card renders nothing when lastSessionAt is null.
+    }
 
     // Pathway P2 Wave 3 — fetch the data the view model needs to
     // populate per-blocker insights (#2 momentum + #8 recurrence).
