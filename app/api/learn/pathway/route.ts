@@ -54,11 +54,26 @@ export const GET = composeApiRoute({
       }
     }
 
-    const [pathway, competencySummary, weaknesses] = await Promise.all([
+    // Pathway P2 Wave 4 — fetch the user's most-recent completed session
+    // timestamp alongside the existing parallel fetches so the view model
+    // can derive ActivityRhythm.decayProfile in a single round trip. We
+    // need the connection now (the other fetchers connect lazily inside
+    // themselves) before issuing the timestamp query.
+    await connectDB()
+    const [pathway, competencySummary, weaknesses, lastSessionDoc] = await Promise.all([
       getCurrentPathway(user.id),
       getUserCompetencySummary(user.id),
       getUserWeaknesses(user.id, 10),
+      InterviewSession.findOne({
+        userId: new mongoose.Types.ObjectId(user.id),
+        status: 'completed',
+        completedAt: { $exists: true, $ne: null },
+      })
+        .select({ completedAt: 1 })
+        .sort({ completedAt: -1 })
+        .lean<{ completedAt?: Date }>(),
     ])
+    const lastSessionAt = lastSessionDoc?.completedAt ?? null
 
     // Pathway P2 Wave 3 — fetch the data the view model needs to
     // populate per-blocker insights (#2 momentum + #8 recurrence).
@@ -118,6 +133,7 @@ export const GET = composeApiRoute({
       feedbackSessionError,
       priorPlans,
       competencyStates,
+      lastSessionAt,
     })
 
     return NextResponse.json({

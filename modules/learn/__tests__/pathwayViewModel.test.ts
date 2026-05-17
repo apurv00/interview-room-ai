@@ -52,6 +52,122 @@ function makePathway(overrides: Partial<IPathwayPlan> = {}): IPathwayPlan {
   } as unknown as IPathwayPlan
 }
 
+describe('buildPathwayViewModel — Pathway P2 Wave 4 (activityRhythm + decayProfile)', () => {
+  it('returns nulls when lastSessionAt is undefined (never had a session)', () => {
+    const result = buildPathwayViewModel({
+      pathway: null,
+      competencySummary: null,
+      weaknesses: [],
+      now: NOW,
+    })
+    expect(result.activityRhythm).toEqual({
+      lastSessionAt: null,
+      daysSinceLastSession: null,
+      decayProfile: null,
+    })
+  })
+
+  it('returns "fresh" when the user took an interview today or up to 2 days ago', () => {
+    const result = buildPathwayViewModel({
+      pathway: null,
+      competencySummary: null,
+      weaknesses: [],
+      lastSessionAt: new Date('2026-05-13T00:00:00Z'), // 1 day before NOW
+      now: NOW,
+    })
+    expect(result.activityRhythm.decayProfile).toBe('fresh')
+    expect(result.activityRhythm.daysSinceLastSession).toBe(1)
+  })
+
+  it('returns "warmup" at 3-7 days', () => {
+    const result = buildPathwayViewModel({
+      pathway: null,
+      competencySummary: null,
+      weaknesses: [],
+      lastSessionAt: new Date('2026-05-09T00:00:00Z'), // 5 days before NOW
+      now: NOW,
+    })
+    expect(result.activityRhythm.decayProfile).toBe('warmup')
+    expect(result.activityRhythm.daysSinceLastSession).toBe(5)
+  })
+
+  it('returns "rusty" at 8-21 days', () => {
+    const result = buildPathwayViewModel({
+      pathway: null,
+      competencySummary: null,
+      weaknesses: [],
+      lastSessionAt: new Date('2026-05-02T00:00:00Z'), // 12 days before NOW
+      now: NOW,
+    })
+    expect(result.activityRhythm.decayProfile).toBe('rusty')
+    expect(result.activityRhythm.daysSinceLastSession).toBe(12)
+  })
+
+  it('returns "cold" at >21 days', () => {
+    const result = buildPathwayViewModel({
+      pathway: null,
+      competencySummary: null,
+      weaknesses: [],
+      lastSessionAt: new Date('2026-04-01T00:00:00Z'), // 43 days before NOW
+      now: NOW,
+    })
+    expect(result.activityRhythm.decayProfile).toBe('cold')
+    expect(result.activityRhythm.daysSinceLastSession).toBe(43)
+  })
+
+  it('falls back to null nulls when lastSessionAt is not a valid date', () => {
+    const result = buildPathwayViewModel({
+      pathway: null,
+      competencySummary: null,
+      weaknesses: [],
+      lastSessionAt: 'not-a-real-date',
+      now: NOW,
+    })
+    expect(result.activityRhythm).toEqual({
+      lastSessionAt: null,
+      daysSinceLastSession: null,
+      decayProfile: null,
+    })
+  })
+
+  it('caps daysSinceLastSession at 0 (does not return negatives for future timestamps)', () => {
+    const result = buildPathwayViewModel({
+      pathway: null,
+      competencySummary: null,
+      weaknesses: [],
+      lastSessionAt: new Date('2026-05-20T00:00:00Z'), // 6 days AFTER NOW
+      now: NOW,
+    })
+    expect(result.activityRhythm.daysSinceLastSession).toBe(0)
+    expect(result.activityRhythm.decayProfile).toBe('fresh')
+  })
+
+  it('attaches activityRhythm to every state, including pending and failed', () => {
+    const pending = buildPathwayViewModel({
+      pathway: makePathway({ generatedFromSessionId: 'older-session' } as Partial<IPathwayPlan>),
+      competencySummary: null,
+      weaknesses: [],
+      fromFeedback: 'newer-session',
+      lastSessionAt: new Date('2026-04-25T00:00:00Z'),
+      now: NOW,
+    })
+    expect(pending.state).toBe('pending')
+    expect(pending.activityRhythm.decayProfile).toBe('rusty')
+
+    const failed = buildPathwayViewModel({
+      pathway: makePathway({ generatedFromSessionId: 'older' } as Partial<IPathwayPlan>),
+      competencySummary: null,
+      weaknesses: [],
+      fromFeedback: 'newer',
+      feedbackSessionStatus: 'failed',
+      lastSessionAt: new Date('2026-05-10T00:00:00Z'),
+      now: NOW,
+    })
+    expect(failed.state).toBe('failed')
+    expect(failed.activityRhythm.decayProfile).toBe('warmup')
+  })
+})
+
 describe('buildPathwayViewModel — Pathway P2 Wave 3 (milestones + blockerInsights)', () => {
   it('exposes milestones as a UI-safe array (#9)', () => {
     const result = buildPathwayViewModel({
