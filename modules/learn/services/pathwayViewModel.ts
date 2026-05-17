@@ -2,6 +2,43 @@ import type { IPathwayPlan, PracticeTask } from '@shared/db/models'
 
 export type PathwayState = 'empty' | 'active' | 'completed' | 'pending' | 'abandoned' | 'returning' | 'failed'
 
+/**
+ * Pathway P2 Wave 3 (feature #9) — UI projection of a Milestone.
+ * The model carries Date objects; this is the serialised, UI-safe shape.
+ */
+export interface MilestoneSummary {
+  name: string
+  description: string
+  currentScore: number
+  targetScore: number
+  achieved: boolean
+  achievedAt: string | null
+}
+
+/**
+ * Pathway P2 Wave 3 — per-blocker insights, computed outside the
+ * stored blocker shape so we don't need to mutate `IPathwayPlan`.
+ *
+ *   - recurrenceCount (#8): how many of the user's prior pathway plans
+ *     listed the same competency as a blocker. Surfaces "is this a
+ *     repeating pattern or a one-off?" — answers a question the
+ *     current per-plan blocker UI can't.
+ *
+ *   - momentum (#2): the last N (score, timestamp) points from
+ *     `UserCompetencyState.scoreHistory` for this competency. Lets
+ *     the UI render a tiny sparkline so the user sees whether their
+ *     score on a blocker competency is trending up or down across
+ *     recent sessions.
+ *
+ * Keyed by competency name so the panel can look up insights for a
+ * blocker without coupling to array index ordering (the underlying
+ * stored blockers array order is not stable).
+ */
+export interface BlockerInsight {
+  recurrenceCount: number
+  momentum: Array<{ score: number; at: string }>
+}
+
 export interface PathwayAction {
   id: string
   type: 'interview' | 'drill' | 'task' | 'review'
@@ -34,6 +71,12 @@ export interface PathwayProgress {
   totalMilestones: number
   blockers: IPathwayPlan['topBlockingWeaknesses']
   competencySummary: unknown
+  /** Pathway P2 Wave 3 #9 — UI projection of the underlying milestones array. */
+  milestones: MilestoneSummary[]
+  /** Pathway P2 Wave 3 #2 + #8 — keyed by competency name. Empty object when
+   *  no priors / competency states are available. Components must treat a
+   *  missing key as "no insight" rather than an error. */
+  blockerInsights: Record<string, BlockerInsight>
 }
 
 export interface PathwayActivity {
@@ -50,6 +93,20 @@ export interface PathwayViewModel {
   activity: PathwayActivity
 }
 
+/**
+ * Pathway P2 Wave 3 — minimal shapes the builder needs. We accept
+ * these instead of the full Mongoose `IPathwayPlan` / `IUserCompetencyState`
+ * documents so tests can construct fixtures without leaning on the ODM
+ * and the route handler can ship tight `.lean()` projections.
+ */
+export interface PriorPlanForRecurrence {
+  topBlockingWeaknesses: Array<{ competency: string }>
+}
+export interface CompetencyStateForMomentum {
+  competencyName: string
+  scoreHistory: Array<{ score: number; timestamp: Date | string }>
+}
+
 interface BuildPathwayViewModelInput {
   pathway: IPathwayPlan | null
   competencySummary: unknown
@@ -63,8 +120,23 @@ interface BuildPathwayViewModelInput {
    *  attempt — both fall through to the existing pending behavior. */
   feedbackSessionStatus?: string | null
   feedbackSessionError?: string | null
+  /** Pathway P2 Wave 3 #8 — prior pathway plans (excluding the current
+   *  one) used to compute per-blocker recurrenceCount. Pass the last N
+   *  plans sorted by generatedAt desc; the builder counts unique plans
+   *  where this competency appeared in topBlockingWeaknesses. */
+  priorPlans?: PriorPlanForRecurrence[]
+  /** Pathway P2 Wave 3 #2 — UserCompetencyState rows used to populate
+   *  per-blocker momentum sparklines. Only rows whose competencyName
+   *  matches a current blocker are needed. */
+  competencyStates?: CompetencyStateForMomentum[]
+  /** Pathway P2 Wave 3 #2 — cap on momentum points per competency to
+   *  keep the sparkline visually meaningful and the payload small.
+   *  Defaults to 6 (matches the visual width of the SVG). */
+  momentumWindow?: number
   now?: Date
 }
+
+const DEFAULT_MOMENTUM_WINDOW = 6
 
 const RETURN_TO_PATHWAY = '/learn/pathway'
 const RETURNING_AFTER_DAYS = 2
@@ -77,6 +149,9 @@ export function buildPathwayViewModel({
   fromFeedback,
   feedbackSessionStatus,
   feedbackSessionError,
+  priorPlans = [],
+  competencyStates = [],
+  momentumWindow = DEFAULT_MOMENTUM_WINDOW,
   now = new Date(),
 }: BuildPathwayViewModelInput): PathwayViewModel {
   // Bug B fix — if we arrived from feedback AND the upstream session's
@@ -99,7 +174,7 @@ export function buildPathwayViewModel({
         metadata: { fromFeedback, sessionId: fromFeedback },
       },
       planItems: pathway ? mapPlanItems(pathway.practiceTasks ?? []) : [],
-      progress: buildProgress(pathway, competencySummary),
+      progress: buildProgress(pathway, competencySummary, priorPlans, competencyStates, momentumWindow),
       activity: buildActivity(pathway, weaknesses),
     }
   }
@@ -116,7 +191,7 @@ export function buildPathwayViewModel({
         href: fromFeedback ? `/feedback/${encodeURIComponent(fromFeedback)}` : undefined,
       },
       planItems: pathway ? mapPlanItems(pathway.practiceTasks ?? []) : [],
-      progress: buildProgress(pathway, competencySummary),
+      progress: buildProgress(pathway, competencySummary, priorPlans, competencyStates, momentumWindow),
       activity: buildActivity(pathway, weaknesses),
     }
   }
@@ -126,13 +201,13 @@ export function buildPathwayViewModel({
       state: 'empty',
       nextAction: buildBaselineInterviewAction(),
       planItems: [],
-      progress: buildProgress(null, competencySummary),
+      progress: buildProgress(null, competencySummary, priorPlans, competencyStates, momentumWindow),
       activity: buildActivity(null, weaknesses),
     }
   }
 
   const planItems = mapPlanItems(pathway.practiceTasks ?? [])
-  const progress = buildProgress(pathway, competencySummary)
+  const progress = buildProgress(pathway, competencySummary, priorPlans, competencyStates, momentumWindow)
   const state = resolveState(pathway, progress, now)
 
   return {
@@ -176,9 +251,13 @@ function resolveNextAction(pathway: IPathwayPlan, state: PathwayState): PathwayA
 function buildProgress(
   pathway: IPathwayPlan | null,
   competencySummary: unknown,
+  priorPlans: PriorPlanForRecurrence[] = [],
+  competencyStates: CompetencyStateForMomentum[] = [],
+  momentumWindow: number = DEFAULT_MOMENTUM_WINDOW,
 ): PathwayProgress {
   const tasks = pathway?.practiceTasks ?? []
   const milestones = pathway?.milestones ?? []
+  const blockers = pathway?.topBlockingWeaknesses ?? []
   return {
     readinessScore: pathway?.readinessScore ?? 0,
     readinessLevel: pathway?.readinessLevel ?? null,
@@ -186,9 +265,69 @@ function buildProgress(
     totalTasks: tasks.length,
     achievedMilestones: milestones.filter((milestone) => milestone.achieved).length,
     totalMilestones: milestones.length,
-    blockers: pathway?.topBlockingWeaknesses ?? [],
+    blockers,
     competencySummary,
+    // #9
+    milestones: milestones.map((m) => ({
+      name: m.name,
+      description: m.description ?? '',
+      currentScore: m.currentScore,
+      targetScore: m.targetScore,
+      achieved: !!m.achieved,
+      achievedAt: m.achievedAt ? new Date(m.achievedAt).toISOString() : null,
+    })),
+    // #2 + #8
+    blockerInsights: buildBlockerInsights(blockers, priorPlans, competencyStates, momentumWindow),
   }
+}
+
+/**
+ * Pathway P2 Wave 3 — derive recurrence + momentum for each current
+ * blocker. Skips silently when priors/states are empty (the panel
+ * treats missing insights as "no extra context").
+ */
+function buildBlockerInsights(
+  blockers: IPathwayPlan['topBlockingWeaknesses'],
+  priorPlans: PriorPlanForRecurrence[],
+  competencyStates: CompetencyStateForMomentum[],
+  momentumWindow: number,
+): Record<string, BlockerInsight> {
+  if (blockers.length === 0) return {}
+
+  // Build a competency → recurrence count map once, then look up per blocker.
+  // Counts UNIQUE prior plans (not duplicate listings within a single plan).
+  const recurrenceByCompetency = new Map<string, number>()
+  for (const plan of priorPlans) {
+    const seen = new Set<string>()
+    for (const w of plan.topBlockingWeaknesses ?? []) {
+      if (w.competency && !seen.has(w.competency)) {
+        seen.add(w.competency)
+        recurrenceByCompetency.set(w.competency, (recurrenceByCompetency.get(w.competency) ?? 0) + 1)
+      }
+    }
+  }
+
+  // Build a competency → most recent N momentum points lookup.
+  // Sort timestamps ascending so the sparkline reads left-to-right
+  // oldest-to-newest. Cap to the most recent `momentumWindow` points.
+  const momentumByCompetency = new Map<string, BlockerInsight['momentum']>()
+  for (const state of competencyStates) {
+    const history = Array.isArray(state.scoreHistory) ? state.scoreHistory : []
+    const points = history
+      .map((h) => ({ score: h.score, at: new Date(h.timestamp).toISOString() }))
+      .sort((a, b) => a.at.localeCompare(b.at))
+      .slice(-momentumWindow)
+    momentumByCompetency.set(state.competencyName, points)
+  }
+
+  const out: Record<string, BlockerInsight> = {}
+  for (const b of blockers) {
+    out[b.competency] = {
+      recurrenceCount: recurrenceByCompetency.get(b.competency) ?? 0,
+      momentum: momentumByCompetency.get(b.competency) ?? [],
+    }
+  }
+  return out
 }
 
 function buildActivity(pathway: IPathwayPlan | null, weaknesses: unknown[]): PathwayActivity {

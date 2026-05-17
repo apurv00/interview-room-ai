@@ -52,6 +52,144 @@ function makePathway(overrides: Partial<IPathwayPlan> = {}): IPathwayPlan {
   } as unknown as IPathwayPlan
 }
 
+describe('buildPathwayViewModel — Pathway P2 Wave 3 (milestones + blockerInsights)', () => {
+  it('exposes milestones as a UI-safe array (#9)', () => {
+    const result = buildPathwayViewModel({
+      pathway: makePathway({
+        milestones: [
+          {
+            name: 'Foundation',
+            description: 'Score 50+',
+            targetScore: 50,
+            currentScore: 62,
+            achieved: true,
+            achievedAt: new Date('2026-05-13T00:00:00.000Z'),
+          },
+          {
+            name: 'Approaching ready',
+            description: 'Score 70+',
+            targetScore: 70,
+            currentScore: 62,
+            achieved: false,
+          },
+        ],
+      } as Partial<IPathwayPlan>),
+      competencySummary: null,
+      weaknesses: [],
+      now: NOW,
+    })
+
+    expect(result.progress.milestones).toHaveLength(2)
+    expect(result.progress.milestones[0]).toMatchObject({
+      name: 'Foundation',
+      description: 'Score 50+',
+      currentScore: 62,
+      targetScore: 50,
+      achieved: true,
+      achievedAt: '2026-05-13T00:00:00.000Z',
+    })
+    expect(result.progress.milestones[1].achievedAt).toBeNull()
+  })
+
+  it('counts unique prior plans containing each current blocker (#8)', () => {
+    const result = buildPathwayViewModel({
+      pathway: makePathway({
+        topBlockingWeaknesses: [
+          { competency: 'specificity', currentScore: 42, targetScore: 70, reason: '' },
+          { competency: 'structure', currentScore: 55, targetScore: 70, reason: '' },
+        ],
+      } as Partial<IPathwayPlan>),
+      competencySummary: null,
+      weaknesses: [],
+      priorPlans: [
+        // Plan A: both blockers appear
+        {
+          topBlockingWeaknesses: [
+            { competency: 'specificity' },
+            { competency: 'structure' },
+          ],
+        },
+        // Plan B: specificity appears twice — should count once
+        {
+          topBlockingWeaknesses: [
+            { competency: 'specificity' },
+            { competency: 'specificity' },
+            { competency: 'unrelated' },
+          ],
+        },
+        // Plan C: structure only
+        { topBlockingWeaknesses: [{ competency: 'structure' }] },
+      ],
+      now: NOW,
+    })
+
+    expect(result.progress.blockerInsights['specificity']?.recurrenceCount).toBe(2)
+    expect(result.progress.blockerInsights['structure']?.recurrenceCount).toBe(2)
+  })
+
+  it('produces oldest-to-newest momentum capped to momentumWindow (#2)', () => {
+    const result = buildPathwayViewModel({
+      pathway: makePathway({
+        topBlockingWeaknesses: [
+          { competency: 'specificity', currentScore: 60, targetScore: 70, reason: '' },
+        ],
+      } as Partial<IPathwayPlan>),
+      competencySummary: null,
+      weaknesses: [],
+      competencyStates: [
+        {
+          competencyName: 'specificity',
+          scoreHistory: [
+            { score: 30, timestamp: new Date('2026-04-01') },
+            { score: 40, timestamp: new Date('2026-04-15') },
+            { score: 45, timestamp: new Date('2026-05-01') },
+            { score: 60, timestamp: new Date('2026-05-10') },
+          ],
+        },
+      ],
+      momentumWindow: 3,
+      now: NOW,
+    })
+
+    const momentum = result.progress.blockerInsights['specificity']?.momentum ?? []
+    expect(momentum).toHaveLength(3)
+    expect(momentum[0].score).toBe(40)
+    expect(momentum[2].score).toBe(60)
+    // Sorted ascending by timestamp regardless of input order
+    expect(momentum[0].at < momentum[1].at).toBe(true)
+  })
+
+  it('falls back to empty insight when no priors / states are passed', () => {
+    const result = buildPathwayViewModel({
+      pathway: makePathway(),
+      competencySummary: null,
+      weaknesses: [],
+      now: NOW,
+    })
+    expect(result.progress.blockerInsights['specificity']).toEqual({
+      recurrenceCount: 0,
+      momentum: [],
+    })
+  })
+
+  it('returns empty blockerInsights when blockers are empty', () => {
+    const result = buildPathwayViewModel({
+      pathway: makePathway({ topBlockingWeaknesses: [] } as Partial<IPathwayPlan>),
+      competencySummary: null,
+      weaknesses: [],
+      priorPlans: [{ topBlockingWeaknesses: [{ competency: 'specificity' }] }],
+      competencyStates: [
+        {
+          competencyName: 'specificity',
+          scoreHistory: [{ score: 50, timestamp: new Date('2026-05-10') }],
+        },
+      ],
+      now: NOW,
+    })
+    expect(result.progress.blockerInsights).toEqual({})
+  })
+})
+
 describe('buildPathwayViewModel', () => {
   it('returns empty state with baseline interview action when no standard plan exists', () => {
     const result = buildPathwayViewModel({
