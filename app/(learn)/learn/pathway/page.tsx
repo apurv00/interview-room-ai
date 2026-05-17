@@ -13,6 +13,7 @@ import PathwayActivityPanel from '@learn/components/pathway/PathwayActivityPanel
 import PathwayPendingBanner from '@learn/components/pathway/PathwayPendingBanner'
 import PathwayFailedBanner from '@learn/components/pathway/PathwayFailedBanner'
 import UniversalPathwayView from '@learn/components/pathway/UniversalPathwayView'
+import DecayContextCard from '@learn/components/pathway/DecayContextCard'
 import type { PathwayViewModel } from '@learn/services/pathwayViewModel'
 
 interface PathwayApiResponse extends PathwayViewModel {
@@ -154,6 +155,13 @@ function PathwayPageInner() {
         completing={!!completingTaskId && completingTaskId === viewModel.nextAction.taskId}
         onCompleteTask={completeTask}
       />
+
+      {/* Pathway P2 Wave 4 — gap-aware coach observation. Self-hides
+          when the gap is <3 days or there's no completed-session
+          history. Sits between the action card (which drives action)
+          and the panels (which review progress) so it contextualises
+          the next move without becoming a nag. */}
+      <DecayContextCard rhythm={viewModel.activityRhythm ?? null} />
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.85fr)]">
         <div className="space-y-6 min-w-0">

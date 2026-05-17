@@ -85,12 +85,45 @@ export interface PathwayActivity {
   weaknessesCount: number
 }
 
+/**
+ * Pathway P2 Wave 4 (feature C — decay context) — the user's
+ * interview-cadence profile, derived from the most-recent completed
+ * session timestamp. UI uses `decayProfile` to render the
+ * DecayContextCard with the right tone and copy.
+ *
+ * Diagnostic-coach framing: this is OBSERVATION, not nag. The card
+ * surfaces a fact (days since last interview) + a coach insight (what
+ * tends to fade first at that range). It does NOT impose urgency or
+ * a curriculum cadence — that was the killed "SR urgency banner"
+ * pattern from Round 5 ideation.
+ *
+ * Thresholds (chosen to match the editorial copy on each band):
+ *   - 'fresh'  : 0-2 days  → card is hidden; nothing to observe yet
+ *   - 'warmup' : 3-7 days  → speech pace + fillers tend to slip first
+ *   - 'rusty'  : 8-21 days → communication + structural recall fade
+ *   - 'cold'   : 22+ days  → structure + recall need targeted refresh
+ *
+ * `null` is reserved for users who have never completed a session;
+ * the empty-state action covers them.
+ */
+export type DecayProfile = 'fresh' | 'warmup' | 'rusty' | 'cold'
+
+export interface ActivityRhythm {
+  lastSessionAt: string | null
+  daysSinceLastSession: number | null
+  decayProfile: DecayProfile | null
+}
+
 export interface PathwayViewModel {
   state: PathwayState
   nextAction: PathwayAction
   planItems: PathwayPlanItem[]
   progress: PathwayProgress
   activity: PathwayActivity
+  /** Pathway P2 Wave 4 — present even when the card won't render
+   *  (lastSessionAt may be null, decayProfile may be 'fresh'). The
+   *  component decides whether to render based on the profile. */
+  activityRhythm: ActivityRhythm
 }
 
 /**
@@ -133,6 +166,12 @@ interface BuildPathwayViewModelInput {
    *  keep the sparkline visually meaningful and the payload small.
    *  Defaults to 6 (matches the visual width of the SVG). */
   momentumWindow?: number
+  /** Pathway P2 Wave 4 — timestamp of the user's most-recent
+   *  COMPLETED session (status: 'completed', completedAt set). Used to
+   *  derive ActivityRhythm.decayProfile. null means the user has never
+   *  completed a session — DecayContextCard renders nothing in that
+   *  case (the empty-state action card covers them). */
+  lastSessionAt?: Date | string | null
   now?: Date
 }
 
@@ -152,8 +191,11 @@ export function buildPathwayViewModel({
   priorPlans = [],
   competencyStates = [],
   momentumWindow = DEFAULT_MOMENTUM_WINDOW,
+  lastSessionAt,
   now = new Date(),
 }: BuildPathwayViewModelInput): PathwayViewModel {
+  // Wave 4 — compute once, attach to every return path. Cheap.
+  const activityRhythm = buildActivityRhythm(lastSessionAt, now)
   // Bug B fix — if we arrived from feedback AND the upstream session's
   // background regeneration job has terminally failed, surface a 'failed'
   // state with a Retry CTA instead of the perpetual 'pending' banner.
@@ -176,6 +218,7 @@ export function buildPathwayViewModel({
       planItems: pathway ? mapPlanItems(pathway.practiceTasks ?? []) : [],
       progress: buildProgress(pathway, competencySummary, priorPlans, competencyStates, momentumWindow),
       activity: buildActivity(pathway, weaknesses),
+      activityRhythm,
     }
   }
 
@@ -193,6 +236,7 @@ export function buildPathwayViewModel({
       planItems: pathway ? mapPlanItems(pathway.practiceTasks ?? []) : [],
       progress: buildProgress(pathway, competencySummary, priorPlans, competencyStates, momentumWindow),
       activity: buildActivity(pathway, weaknesses),
+      activityRhythm,
     }
   }
 
@@ -203,6 +247,7 @@ export function buildPathwayViewModel({
       planItems: [],
       progress: buildProgress(null, competencySummary, priorPlans, competencyStates, momentumWindow),
       activity: buildActivity(null, weaknesses),
+      activityRhythm,
     }
   }
 
@@ -216,6 +261,7 @@ export function buildPathwayViewModel({
     planItems,
     progress,
     activity: buildActivity(pathway, weaknesses),
+    activityRhythm,
   }
 }
 
@@ -328,6 +374,46 @@ function buildBlockerInsights(
     }
   }
   return out
+}
+
+/**
+ * Pathway P2 Wave 4 — derive ActivityRhythm.
+ *
+ * Threshold rationale:
+ *   - 0-2 days ('fresh'): too recent for decay observation; the user
+ *     probably just took an interview yesterday. Hiding the card
+ *     keeps the page calm on the active-user happy path.
+ *   - 3-7 days ('warmup'): a short break — speech rhythm and filler
+ *     control are the first to slip per the speech-metrics literature
+ *     this app's coaching already uses.
+ *   - 8-21 days ('rusty'): communication patterns and structural
+ *     recall start to fade noticeably.
+ *   - 22+ days ('cold'): a long break — deeper skills (story recall,
+ *     STAR structure) need targeted refresh.
+ *
+ * Returns nulls when the user has never completed a session — the
+ * empty-state action card covers that flow, so showing a decay card
+ * would be misleading.
+ */
+function buildActivityRhythm(
+  lastSessionAt: Date | string | null | undefined,
+  now: Date,
+): ActivityRhythm {
+  if (!lastSessionAt) {
+    return { lastSessionAt: null, daysSinceLastSession: null, decayProfile: null }
+  }
+  const ts = new Date(lastSessionAt).getTime()
+  if (!Number.isFinite(ts)) {
+    return { lastSessionAt: null, daysSinceLastSession: null, decayProfile: null }
+  }
+  const days = Math.floor((now.getTime() - ts) / (24 * 60 * 60 * 1000))
+  const decayProfile: DecayProfile =
+    days <= 2 ? 'fresh' : days <= 7 ? 'warmup' : days <= 21 ? 'rusty' : 'cold'
+  return {
+    lastSessionAt: new Date(lastSessionAt).toISOString(),
+    daysSinceLastSession: Math.max(0, days),
+    decayProfile,
+  }
 }
 
 function buildActivity(pathway: IPathwayPlan | null, weaknesses: unknown[]): PathwayActivity {
