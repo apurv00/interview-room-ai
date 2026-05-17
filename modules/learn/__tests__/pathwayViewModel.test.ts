@@ -442,6 +442,38 @@ describe('buildPathwayViewModel', () => {
       expect(result.state).not.toBe('failed')
     })
 
+    // Bug: pre-fix, the catching-up banner stuck forever whenever the
+    // user came from a feedback link whose pathway regen had already
+    // SUCCEEDED (and the plan moved on to a newer session) or had been
+    // SKIPPED (flag was off). The mismatch on generatedFromSessionId
+    // alone wasn't enough to distinguish "regen still in flight" from
+    // "regen already terminal".
+    it('does NOT show pending banner when fromFeedback session has status="succeeded" but the plan has moved on', () => {
+      const result = buildPathwayViewModel({
+        // Plan has been regenerated for a NEWER session
+        pathway: makePathway({ generatedFromSessionId: 'newer-session' } as Partial<IPathwayPlan>),
+        competencySummary: null,
+        weaknesses: [],
+        // User came from the OLDER feedback page, whose regen succeeded long ago
+        fromFeedback: 'older-session',
+        feedbackSessionStatus: 'succeeded',
+        now: NOW,
+      })
+      expect(result.state).not.toBe('pending')
+    })
+
+    it('does NOT show pending banner when fromFeedback session has status="skipped" (flag was off)', () => {
+      const result = buildPathwayViewModel({
+        pathway: makePathway({ generatedFromSessionId: 'some-other-session' } as Partial<IPathwayPlan>),
+        competencySummary: null,
+        weaknesses: [],
+        fromFeedback: 'skipped-session',
+        feedbackSessionStatus: 'skipped',
+        now: NOW,
+      })
+      expect(result.state).not.toBe('pending')
+    })
+
     it('falls through to pending banner when status is "running" (not failed)', () => {
       const result = buildPathwayViewModel({
         pathway: makePathway({ generatedFromSessionId: 'old' } as Partial<IPathwayPlan>),

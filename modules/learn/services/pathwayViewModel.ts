@@ -202,7 +202,7 @@ export function buildPathwayViewModel({
   if (
     fromFeedback &&
     feedbackSessionStatus === 'failed' &&
-    isPendingForFeedback(pathway, fromFeedback)
+    isPendingForFeedback(pathway, fromFeedback, feedbackSessionStatus)
   ) {
     const errorSuffix = feedbackSessionError ? ` (${feedbackSessionError})` : ''
     return {
@@ -222,7 +222,7 @@ export function buildPathwayViewModel({
     }
   }
 
-  if (isPendingForFeedback(pathway, fromFeedback)) {
+  if (isPendingForFeedback(pathway, fromFeedback, feedbackSessionStatus)) {
     return {
       state: 'pending',
       nextAction: {
@@ -265,11 +265,54 @@ export function buildPathwayViewModel({
   }
 }
 
-function isPendingForFeedback(pathway: IPathwayPlan | null, fromFeedback?: string | null): boolean {
+/**
+ * Decide whether to render the "pathway update is catching up" banner.
+ *
+ * The banner exists to bridge the moment between "feedback page links
+ * to /learn/pathway?fromFeedback=X" and "the Inngest pathway/regenerate
+ * job finishes and updates the plan to match session X". It must NOT
+ * appear in terminal states where regen has already completed (or was
+ * deliberately skipped) — otherwise the banner sticks forever in two
+ * legitimate scenarios that surfaced in production:
+ *
+ *   1. User navigates from an OLDER feedback page. The pathway HAS
+ *      since been regenerated, but for a NEWER session, so
+ *      `generatedFromSessionId !== fromFeedback`. Pre-fix logic
+ *      misread this as "still catching up" — the regen for THIS
+ *      session was actually done long ago.
+ *
+ *   2. Pathway flag was off at feedback time. The Inngest job ran,
+ *      hit the flag check, and marked status='skipped' without
+ *      touching the plan. `generatedFromSessionId` doesn't match the
+ *      session id, so pre-fix logic showed the banner forever.
+ *
+ * Fix: short-circuit to "not pending" when the session's terminal
+ * status records that regen already completed or was skipped. Status
+ * 'failed' is handled separately upstream (renders the failed banner
+ * with retry CTA), so this function still returns true for that case
+ * — the caller checks `feedbackSessionStatus === 'failed'` first.
+ *
+ * Status undefined / null preserves the legacy behavior (show
+ * banner if mismatch), which covers sessions that pre-date Bug B's
+ * pathwayGenerationStatus tracking.
+ */
+function isPendingForFeedback(
+  pathway: IPathwayPlan | null,
+  fromFeedback?: string | null,
+  feedbackSessionStatus?: string | null,
+): boolean {
   if (!fromFeedback) return false
   if (!pathway) return true
   const generatedFrom = pathway.generatedFromSessionId ? String(pathway.generatedFromSessionId) : ''
-  return generatedFrom !== fromFeedback
+  if (generatedFrom === fromFeedback) return false
+  // Terminal status ⇒ regen already happened (or was deliberately
+  // skipped). The mismatch on `generatedFromSessionId` just means
+  // the plan has since moved on to a newer session, or the flag
+  // skipped this session — neither is a "catching up" state.
+  if (feedbackSessionStatus === 'succeeded' || feedbackSessionStatus === 'skipped') {
+    return false
+  }
+  return true
 }
 
 function resolveState(pathway: IPathwayPlan, progress: PathwayProgress, now: Date): PathwayState {
