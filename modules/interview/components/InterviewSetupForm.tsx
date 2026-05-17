@@ -36,6 +36,8 @@ import FileDropzone from '@shared/ui/FileDropzone'
 import DomainSelector from '@interview/components/DomainSelector'
 import DepthSelector from '@interview/components/DepthSelector'
 import RepeatSetupConfirmModal, { type RepeatSetupStep } from '@interview/components/RepeatSetupConfirmModal'
+import RecommendedFocusChips from '@interview/components/RecommendedFocusChips'
+import PreInterviewCoachCard from '@interview/components/PreInterviewCoachCard'
 import SelectionGroup from '@shared/ui/SelectionGroup'
 import Button from '@shared/ui/Button'
 import type {
@@ -615,6 +617,8 @@ export default function InterviewSetupForm() {
     // Step 3
     onJumpToStep={setStep}
     uploadError={uploadError}
+    // Pathway P2 Wave 1
+    recommendedFocus={pathwayContext?.focus}
   />
     {showRepeatModal && lastConfig && (
       <RepeatSetupConfirmModal
@@ -685,6 +689,13 @@ interface ViewProps {
   // Step 3
   onJumpToStep: (n: number) => void
   uploadError: string
+  // Pathway P2 Wave 1 — surfaced at top of Step 0 only.
+  // `recommendedFocus` comes from URL params (?focus=…) when the user
+  // launched the setup from a Pathway action; renders as visible chips
+  // so the user can see what the pathway is tuning this interview for.
+  // The coach card fetches its own data once `role` is set, so the
+  // view only needs to forward the selected role.
+  recommendedFocus?: string[]
 }
 
 function InterviewSetupFormView(p: ViewProps) {
@@ -761,6 +772,11 @@ function InterviewSetupFormView(p: ViewProps) {
           {/* ── Step 0: Domain + Resume ───────────────────────────────── */}
           {p.step === 0 && (
             <div className="space-y-7">
+              {/* Pathway P2 Wave 1 — action-anchored coaching surfaces here
+                  at the moment the user is configuring their next interview.
+                  Both cards self-hide when their data isn't present. */}
+              <RecommendedFocusChips focus={p.recommendedFocus ?? []} />
+              <PreInterviewCoachCard domain={p.role} />
               <section>
                 <h3 className="text-[11px] font-semibold text-slate-400 uppercase tracking-[0.12em] mb-2.5">
                   Interview Domain <span className="text-red-500">*</span>
