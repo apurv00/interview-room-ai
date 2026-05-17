@@ -3,6 +3,16 @@
 import { useEffect, useState, Suspense } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useSearchParams } from 'next/navigation'
+import { deduplicatedFetch } from '@shared/cachedFetch'
+import PathwayEntryStrip from '@learn/components/drill/PathwayEntryStrip'
+import QuestionInsightStrip from '@learn/components/drill/QuestionInsightStrip'
+import DeltaContextNote from '@learn/components/drill/DeltaContextNote'
+// eslint-disable-next-line no-restricted-imports -- direct import: the
+// @feedback barrel transitively pulls server-only types/Mongoose into
+// this client component.
+import IdealAnswerComparisonCard from '@feedback/components/IdealAnswerComparisonCard'
+// eslint-disable-next-line no-restricted-imports -- same reason.
+import type { AnswerEvaluation } from '@shared/types'
 
 interface WeakQuestion {
   sessionId: string
@@ -27,6 +37,29 @@ interface DrillResult {
     specificity: number
     ownership: number
   }
+}
+
+/**
+ * Pathway P2 Wave 5 — shape returned by /api/learn/drill/context/question.
+ * Drives the rendering choice in the active-drill view:
+ *
+ *   - `idealAnswer` present → reuse `IdealAnswerComparisonCard`
+ *     (already built with dim bars + keyElements chips + strongAnswer)
+ *   - `idealAnswer` null but `scores` + `primaryGap` present →
+ *     fallback to `QuestionInsightStrip` (thinner coach-tip)
+ *   - All null → neither renders (legacy session pre-dating primaryGap)
+ */
+interface QuestionContext {
+  primaryGap: string | null
+  scores: {
+    relevance: number
+    structure: number
+    specificity: number
+    ownership: number
+  } | null
+  domain: string | null
+  interviewType: string | null
+  idealAnswer: { strongAnswer: string; keyElements: string[] } | null
 }
 
 const COMPETENCIES = [
@@ -65,6 +98,16 @@ function DrillPageInner() {
   const [result, setResult] = useState<DrillResult | null>(null)
   const [showOriginal, setShowOriginal] = useState(false)
 
+  // Pathway P2 Wave 5 — pathway entry context (read once by parent,
+  // passed down as props to avoid every child re-calling
+  // useSearchParams and needing its own Suspense boundary). 5B's
+  // questionCtx fetches on startDrill via the new context endpoint.
+  const source = searchParams.get('source') ?? undefined
+  const actionId = searchParams.get('actionId') ?? undefined
+  const returnTo = searchParams.get('returnTo') ?? undefined
+  const [questionCtx, setQuestionCtx] = useState<QuestionContext | null>(null)
+  const [questionCtxLoading, setQuestionCtxLoading] = useState(false)
+
   useEffect(() => {
     setLoading(true)
     const params = new URLSearchParams()
@@ -80,6 +123,20 @@ function DrillPageInner() {
     setNewAnswer('')
     setResult(null)
     setShowOriginal(false)
+    setQuestionCtx(null)
+    setQuestionCtxLoading(true)
+    // Pathway P2 Wave 5 (5B) — fetch the per-question coach context
+    // so we can render either IdealAnswerComparisonCard or the
+    // QuestionInsightStrip fallback above the textarea. Best-effort:
+    // if the fetch fails the drill itself is still fully functional.
+    deduplicatedFetch(
+      `/api/learn/drill/context/question?sessionId=${encodeURIComponent(q.sessionId)}&questionIndex=${q.questionIndex}`,
+      { cache: 'no-store' },
+    )
+      .then((res) => (res.ok ? (res.json() as Promise<QuestionContext>) : null))
+      .then((payload) => setQuestionCtx(payload))
+      .catch(() => setQuestionCtx(null))
+      .finally(() => setQuestionCtxLoading(false))
   }
 
   const submitAnswer = async () => {
@@ -150,6 +207,12 @@ function DrillPageInner() {
         </p>
       </div>
 
+      {/* Pathway P2 Wave 5 (5A) — entry context strip. Self-hides
+          when source !== 'pathway' or the actionId doesn't resolve
+          to a current pathway task (Inngest regen may have replaced
+          the task list since the URL was minted). */}
+      <PathwayEntryStrip source={source} actionId={actionId} returnTo={returnTo} />
+
       {/* Competency filter */}
       <div className="flex gap-2 flex-wrap">
         {COMPETENCIES.map(c => (
@@ -210,6 +273,59 @@ function DrillPageInner() {
                 </div>
               )}
 
+              {/* Pathway P2 Wave 5 (5B) — per-question coach context.
+                  Primary path: IdealAnswerComparisonCard with the
+                  precomputed strong-answer outline. Fallback when
+                  ideal_answers absent: thin QuestionInsightStrip with
+                  the deriveCoachingTip output. Both gated on context
+                  having loaded; show nothing during the fetch (the
+                  textarea below is still rendered so users aren't
+                  blocked on a slow context load). */}
+              {!result && !questionCtxLoading && questionCtx && (
+                <div className="mb-4 space-y-3">
+                  {questionCtx.idealAnswer ? (
+                    <IdealAnswerComparisonCard
+                      ideal={{
+                        questionIndex: activeQuestion.questionIndex,
+                        strongAnswer: questionCtx.idealAnswer.strongAnswer,
+                        keyElements: questionCtx.idealAnswer.keyElements,
+                      }}
+                      originalQuestion={activeQuestion.question}
+                      userAnswer={activeQuestion.answer}
+                      evaluation={
+                        questionCtx.scores
+                          ? ({
+                              questionIndex: activeQuestion.questionIndex,
+                              question: activeQuestion.question,
+                              answer: activeQuestion.answer,
+                              relevance: questionCtx.scores.relevance,
+                              structure: questionCtx.scores.structure,
+                              specificity: questionCtx.scores.specificity,
+                              ownership: questionCtx.scores.ownership,
+                              primaryGap: questionCtx.primaryGap ?? undefined,
+                            } as AnswerEvaluation)
+                          : null
+                      }
+                    />
+                  ) : (
+                    <QuestionInsightStrip
+                      question={activeQuestion.question}
+                      questionIndex={activeQuestion.questionIndex}
+                      scores={questionCtx.scores}
+                      primaryGap={questionCtx.primaryGap}
+                      domain={questionCtx.domain}
+                      interviewType={questionCtx.interviewType}
+                    />
+                  )}
+                  <a
+                    href={`/feedback/${encodeURIComponent(activeQuestion.sessionId)}`}
+                    className="inline-block text-xs text-blue-500 hover:text-blue-600 font-medium"
+                  >
+                    View source feedback →
+                  </a>
+                </div>
+              )}
+
               {/* New answer input */}
               {!result && (
                 <>
@@ -261,6 +377,17 @@ function DrillPageInner() {
                     </div>
                   </div>
 
+                  {/* Pathway P2 Wave 5 (5C) — trend context note next
+                      to the delta badge. Shows "First {comp} drill"
+                      or "Average +N across M prior {comp} drills",
+                      plus an "approximate" caveat for large deltas.
+                      Self-fetches via deduplicatedFetch; renders
+                      nothing on error. */}
+                  <DeltaContextNote
+                    competency={activeQuestion.competency}
+                    latestDelta={result.delta}
+                  />
+
                   {/* Dimension breakdown */}
                   <div className="grid grid-cols-2 gap-3">
                     {Object.entries(result.breakdown).map(([dim, score]) => {
@@ -309,24 +436,38 @@ function DrillPageInner() {
             exit={{ opacity: 0 }}
           >
             {questions.length === 0 ? (
+              /* Pathway P2 Wave 5 (5E) — observational empty-state.
+                 Replaces the prior dual-CTA banner with framing that
+                 names what's true rather than what to do next: when
+                 the filter is set, the user has cleared that specific
+                 competency; when unfiltered, they've cleared the
+                 sub-60 backlog. The CTAs still live below but the
+                 main copy stops nagging. */
               <div className="text-center py-16">
-                <p className="text-[#71767b] mb-4">
+                <p className="text-[#536471] font-medium mb-1">
                   {filter
-                    ? `No weak ${filter} questions found. Try a different filter.`
-                    : 'No weak answers found yet. Complete more interviews to get drill questions!'}
+                    ? `Nothing under 60 on ${filter} right now.`
+                    : 'You’ve cleared the sub-60 backlog.'}
                 </p>
-                <a
-                  href="/learn/pathway"
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors"
-                >
-                  View Pathway
-                </a>
-                <a
-                  href={emptySetupHref}
-                  className="ml-3 inline-flex items-center gap-2 px-4 py-2 bg-white hover:bg-blue-50 border border-blue-500/40 text-blue-600 text-sm font-medium rounded-lg transition-colors"
-                >
-                  Start Interview
-                </a>
+                <p className="text-sm text-[#71767b] mb-5 max-w-md mx-auto">
+                  {filter
+                    ? 'Switch filters to see other weak areas, or run another interview to surface new drill candidates here.'
+                    : 'Run another interview to surface new drill candidates here, or head back to your pathway to pick up the next action.'}
+                </p>
+                <div className="flex items-center justify-center gap-3 flex-wrap">
+                  <a
+                    href="/learn/pathway"
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors"
+                  >
+                    View Pathway
+                  </a>
+                  <a
+                    href={emptySetupHref}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-white hover:bg-blue-50 border border-blue-500/40 text-blue-600 text-sm font-medium rounded-lg transition-colors"
+                  >
+                    Start Interview
+                  </a>
+                </div>
               </div>
             ) : (
               questions.map((q, i) => (

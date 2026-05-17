@@ -41,6 +41,17 @@ export interface DrillHistoryEntry {
   delta: number
   competency: string
   createdAt: string
+  /**
+   * Pathway P2 Wave 5 — per-dimension breakdown, present only on rows
+   * persisted after the schema upgrade. Old rows fall back to avg
+   * delta (`delta` field) in downstream UI.
+   */
+  breakdown?: {
+    relevance: number
+    structure: number
+    specificity: number
+    ownership: number
+  }
 }
 
 /**
@@ -121,6 +132,11 @@ export async function getWeakQuestions(
 
 /**
  * Save a drill attempt result.
+ *
+ * Wave 5 — `breakdown` is now persisted (previously only `delta`
+ * survived; per-dim scores were thrown away after the avg rolled up
+ * into `newScore`). Field is optional so callers that haven't been
+ * updated yet still work, but the evaluate route DOES pass it.
  */
 export async function saveDrillAttempt(
   userId: string,
@@ -133,6 +149,12 @@ export async function saveDrillAttempt(
     newAnswer: string
     newScore: number
     competency: string
+    breakdown?: {
+      relevance: number
+      structure: number
+      specificity: number
+      ownership: number
+    }
   },
 ): Promise<DrillResult> {
   await connectDB()
@@ -150,6 +172,7 @@ export async function saveDrillAttempt(
     newScore: data.newScore,
     delta,
     competency: data.competency,
+    ...(data.breakdown && { breakdown: data.breakdown }),
   })
 
   return {
@@ -158,7 +181,7 @@ export async function saveDrillAttempt(
     originalScore: data.originalScore,
     newScore: data.newScore,
     delta,
-    breakdown: {
+    breakdown: data.breakdown ?? {
       relevance: 0,
       structure: 0,
       specificity: 0,
@@ -169,17 +192,28 @@ export async function saveDrillAttempt(
 
 /**
  * Get recent drill attempts for a user.
+ *
+ * Wave 5 — optional `competency` filter so callers can ask "show me
+ * just the relevance drills" without pulling everything and filtering
+ * client-side. The new `/api/learn/drill/history` route uses this for
+ * `DeltaContextNote`'s "average delta on relevance" trend, and the
+ * filter happens in Mongo so the limit applies to the post-filter
+ * count (otherwise the limit was being spent on irrelevant rows).
  */
 export async function getDrillHistory(
   userId: string,
   limit = 20,
+  competency?: string,
 ): Promise<DrillHistoryEntry[]> {
   try {
     await connectDB()
 
-    const attempts = await DrillAttempt.find({
+    const filter: Record<string, unknown> = {
       userId: new mongoose.Types.ObjectId(userId),
-    })
+    }
+    if (competency) filter.competency = competency
+
+    const attempts = await DrillAttempt.find(filter)
       .sort({ createdAt: -1 })
       .limit(limit)
       .lean()
@@ -192,6 +226,10 @@ export async function getDrillHistory(
       delta: a.delta,
       competency: a.competency,
       createdAt: a.createdAt.toISOString(),
+      // Wave 5 — backwards-compat: old rows lack `breakdown`; pass
+      // through `undefined` so UI consumers know to fall back to
+      // avg-only trend rather than rendering a zero row.
+      ...(a.breakdown && { breakdown: a.breakdown }),
     }))
   } catch (err) {
     logger.error({ err }, 'Failed to get drill history')

@@ -12,6 +12,28 @@ import { JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 
 export const dynamic = 'force-dynamic'
 
+/**
+ * Wave 5 — type-guard on the LLM `scores` payload before we persist
+ * it into the new `DrillAttempt.breakdown` field. The LLM is prompted
+ * to return all 4 dims as numbers; this just defends against drift so
+ * a malformed response doesn't 500 the entire save.
+ */
+function isFourDimScore(s: unknown): s is {
+  relevance: number
+  structure: number
+  specificity: number
+  ownership: number
+} {
+  if (!s || typeof s !== 'object') return false
+  const r = s as Record<string, unknown>
+  return (
+    typeof r.relevance === 'number' &&
+    typeof r.structure === 'number' &&
+    typeof r.specificity === 'number' &&
+    typeof r.ownership === 'number'
+  )
+}
+
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions)
@@ -68,6 +90,12 @@ ${JSON_OUTPUT_RULE}
       newAnswer,
       newScore,
       competency: competency || 'general',
+      // Wave 5 — persist per-dim breakdown the LLM just computed
+      // instead of throwing it away after the avg rolled into
+      // `newScore`. Guarded against malformed LLM output: if any
+      // dimension is missing or non-numeric, skip the field so the
+      // save still succeeds with the avg-only delta as a fallback.
+      ...(isFourDimScore(scores) && { breakdown: scores }),
     })
 
     // Award XP and update streak for drill completion

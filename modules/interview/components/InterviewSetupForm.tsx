@@ -38,6 +38,14 @@ import DepthSelector from '@interview/components/DepthSelector'
 import RepeatSetupConfirmModal, { type RepeatSetupStep } from '@interview/components/RepeatSetupConfirmModal'
 import RecommendedFocusChips from '@interview/components/RecommendedFocusChips'
 import PreInterviewCoachCard from '@interview/components/PreInterviewCoachCard'
+// eslint-disable-next-line no-restricted-imports -- @learn barrel transitively
+// pulls server-only Redis (ioredis → dns/net) into this client component.
+// Pathway P2 Wave 5 extracted readPathwaySetupContext here so the Drill page
+// can share the parser without duplicating it (or its security gates).
+import {
+  readPathwaySetupContext,
+  type PathwaySetupContext,
+} from '@learn/lib/pathwaySetupContext'
 import SelectionGroup from '@shared/ui/SelectionGroup'
 import Button from '@shared/ui/Button'
 import type {
@@ -67,43 +75,14 @@ interface SavedResumeMeta {
   updatedAt?: string | null
 }
 
-interface PathwaySetupContext {
-  source: 'pathway'
-  actionId?: string
-  domain?: string
-  interviewType?: string
-  difficulty?: string
-  focus?: string[]
-  returnTo?: string
-}
-
+// Pathway P2 Wave 5 — the local PathwaySetupContext interface and the
+// readPathwaySetupContext parser previously declared here moved into
+// `@learn/lib/pathwaySetupContext` so the Drill page can reuse them.
+// `PathwayInterviewConfig` stays local because it's a setup-form-only
+// shape that extends InterviewConfig with the persisted-to-localStorage
+// pathway context — Drill page never needs it.
 type PathwayInterviewConfig = InterviewConfig & {
   pathwayContext?: Omit<PathwaySetupContext, 'domain' | 'interviewType'>
-}
-
-function readPathwaySetupContext(searchParams: ReturnType<typeof useSearchParams>): PathwaySetupContext | null {
-  if (searchParams?.get('source') !== 'pathway') return null
-
-  const clean = (value: string | null, max = 120) => {
-    const trimmed = value?.trim()
-    return trimmed ? trimmed.slice(0, max) : undefined
-  }
-
-  const focus = clean(searchParams.get('focus'), 1000)
-    ?.split(',')
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .slice(0, 10)
-
-  return {
-    source: 'pathway',
-    actionId: clean(searchParams.get('actionId')),
-    domain: clean(searchParams.get('domain'), 50),
-    interviewType: clean(searchParams.get('interviewType'), 50),
-    difficulty: clean(searchParams.get('difficulty'), 40),
-    focus,
-    returnTo: clean(searchParams.get('returnTo'), 500),
-  }
 }
 
 export default function InterviewSetupForm() {
