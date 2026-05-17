@@ -150,6 +150,90 @@ describe('GET /api/interviews/last-same-domain-feedback', () => {
     expect(filter['feedback.degraded']).toEqual({ $ne: true })
   })
 
+  it('Wave 2: priorTo bounds the search by completedAt of the named session', async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+    const REF_SESSION = new mongoose.Types.ObjectId()
+    const refCompletedAt = new Date('2026-05-15T10:00:00Z')
+
+    // First call: fetch the reference session's completedAt
+    // Second call: fetch the prior same-domain session
+    mockFindOne
+      .mockReturnValueOnce(buildChain({ completedAt: refCompletedAt }))
+      .mockReturnValueOnce(
+        buildChain({
+          _id: SESSION_ID,
+          completedAt: new Date('2026-05-10T12:00:00Z'),
+          config: { role: 'software-engineer' },
+          feedback: {
+            overall_score: 60,
+            top_3_improvements: ['Last time focus area'],
+          },
+        }),
+      )
+
+    const req = new NextRequest(
+      `http://localhost/api/interviews/last-same-domain-feedback?domain=software-engineer&priorTo=${REF_SESSION.toString()}`,
+    )
+    const res = await GET(req)
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.feedback).toMatchObject({
+      sessionId: SESSION_ID.toString(),
+      overallScore: 60,
+      topImprovements: ['Last time focus area'],
+    })
+
+    // Second call must scope by completedAt < refCompletedAt AND exclude REF_SESSION
+    const secondFilter = mockFindOne.mock.calls[1][0]
+    expect(secondFilter._id).toEqual({ $ne: expect.any(mongoose.Types.ObjectId) })
+    expect(secondFilter._id.$ne.toString()).toBe(REF_SESSION.toString())
+    expect(secondFilter.completedAt).toEqual({ $lt: refCompletedAt })
+  })
+
+  it('Wave 2 Vercel Agent fix: when ref has only createdAt, filter target by createdAt (not completedAt)', async () => {
+    // Regression: previous version fetched ref.completedAt ?? ref.createdAt
+    // and then ALWAYS filtered targets by completedAt < that value. When
+    // the ref lacked completedAt, that mixed createdAt (ref side) with
+    // completedAt (target side) and could miss the correct predecessor.
+    // The fix: filter the target by whichever field the ref actually has.
+    mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+    const REF_SESSION = new mongoose.Types.ObjectId()
+    const refCreatedAt = new Date('2026-05-15T10:00:00Z')
+
+    mockFindOne
+      // Reference session has only createdAt (no completedAt)
+      .mockReturnValueOnce(buildChain({ createdAt: refCreatedAt }))
+      .mockReturnValueOnce(buildChain(null))
+
+    const req = new NextRequest(
+      `http://localhost/api/interviews/last-same-domain-feedback?domain=software-engineer&priorTo=${REF_SESSION.toString()}`,
+    )
+    await GET(req)
+
+    const secondFilter = mockFindOne.mock.calls[1][0]
+    // The target filter MUST use createdAt (matching the ref's only
+    // available timestamp), NOT completedAt.
+    expect(secondFilter.createdAt).toEqual({ $lt: refCreatedAt })
+    expect(secondFilter.completedAt).toBeUndefined()
+  })
+
+  it('Wave 2: invalid priorTo is ignored (route still returns most-recent)', async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+    mockFindOne.mockReturnValue(buildChain(null))
+    const req = new NextRequest(
+      'http://localhost/api/interviews/last-same-domain-feedback?domain=software-engineer&priorTo=not-a-valid-objectid',
+    )
+
+    await GET(req)
+
+    // Only one findOne call (the main query), no reference-session lookup
+    expect(mockFindOne).toHaveBeenCalledTimes(1)
+    const filter = mockFindOne.mock.calls[0][0]
+    expect(filter._id).toBeUndefined()
+    expect(filter.completedAt).toBeUndefined()
+  })
+
   it('treats missing top_3_improvements array as no feedback', async () => {
     mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
     mockFindOne.mockReturnValue(

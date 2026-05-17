@@ -11,6 +11,7 @@ import ConfidenceArcCard from '@feedback/components/ConfidenceArcCard'
 import RedFlagCards from '@feedback/components/RedFlagCards'
 import ScoreTrendChart from '@feedback/components/ScoreTrendChart'
 import TextWithQuestionChips from '@feedback/components/TextWithQuestionChips'
+import PostInterviewDeltaCard from '@feedback/components/PostInterviewDeltaCard'
 // eslint-disable-next-line no-restricted-imports -- direct import is required: the @learn barrel transitively pulls server-only Redis (ioredis → dns/net) into this client component.
 import ComparisonCard from '@learn/components/feedback/ComparisonCard'
 import type { FeedbackData, StoredInterviewData } from '@shared/types'
@@ -125,6 +126,22 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
         onQuestionClick={onQuestionClick}
         maxQuestionIndex={maxQuestionIndex}
       />
+
+      {/* Pathway P2 Wave 2 — qualitative continuity loop with the prior
+          same-domain interview. Self-hides for first-in-domain sessions
+          and for local/unsaved sessions. Sits next to Top Improvements
+          so the user immediately sees whether last time's flagged area
+          repeated or shifted. */}
+      {sessionId && sessionId !== 'local' && (
+        <PostInterviewDeltaCard
+          sessionId={sessionId}
+          domain={domain}
+          currentOverallScore={currentScore}
+          currentTopImprovements={
+            Array.isArray(top_3_improvements) ? top_3_improvements.map((t) => s(t)) : []
+          }
+        />
+      )}
 
       {/* Score Trend + Comparison */}
       <div className="grid md:grid-cols-2 gap-4">
