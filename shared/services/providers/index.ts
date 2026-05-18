@@ -77,10 +77,10 @@ export interface ProviderAdapter {
    */
   complete: (params: CompletionParams, signal?: AbortSignal) => Promise<CompletionResponse>
   /**
-   * Optional: provider supports native streaming. When present AND the
-   * `drill_streaming` feature flag (or a future per-route flag) is on,
-   * modelRouter delegates to this. When absent, modelRouter polyfills
-   * via `complete()` so callers never have to branch on capability.
+   * Optional: provider supports native streaming. When present,
+   * modelRouter.streamCompletion delegates to this. When absent,
+   * modelRouter polyfills via `complete()` so callers never have to
+   * branch on capability.
    *
    * Implementations MUST:
    *   - Skip empty deltas (e.g. OpenAI's first chunk that carries only

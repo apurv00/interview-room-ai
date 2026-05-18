@@ -35,7 +35,6 @@ export type FeatureFlag =
   | 'jd_flow_overlay'
   | 'score_telemetry'
   | 'skip_connectdb_when_cached'
-  | 'drill_streaming'
 
 const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   personalization_engine: true,
@@ -97,17 +96,6 @@ const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   // with source:redis-hit is the common case (PR B's telemetry confirms
   // that). Each bypass emits `event:connectdb_bypass` for observability.
   skip_connectdb_when_cached: false,
-  // Drill streaming evaluator (Phase 1 — OpenAI only). When true AND
-  // the CMS-resolved provider for `learn.drill-evaluate` has a
-  // streaming adapter (Phase 1: openai only; anthropic etc. polyfill
-  // via complete()), the /api/learn/drill/evaluate route returns SSE
-  // and the drill page progressively renders per-dim scores. When
-  // false, the route falls back to the original non-streaming body —
-  // no behavioral change. Default OFF for conservative rollout; flip
-  // to true in Vercel env AFTER (a) CMS routes the slot to OpenAI
-  // and (b) preview testing confirms the SSE flow. See plan in
-  // PR description for the two-step engagement.
-  drill_streaming: false,
 }
 
 export function isFeatureEnabled(flag: FeatureFlag): boolean {

@@ -43,7 +43,16 @@ export const TASK_SLOTS = [
 
 export type TaskSlot = (typeof TASK_SLOTS)[number]
 
-export const TASK_SLOT_DEFAULTS: Record<TaskSlot, { model: string; maxTokens: number; provider: string }> = {
+export const TASK_SLOT_DEFAULTS: Record<
+  TaskSlot,
+  {
+    model: string
+    maxTokens: number
+    provider: string
+    fallbackModel?: string
+    fallbackProvider?: string
+  }
+> = {
   'interview.generate-question':    { model: 'gpt-5.4-mini', maxTokens: 300, provider: 'openai' },
   'interview.evaluate-answer':      { model: 'gpt-5.4-mini', maxTokens: 250, provider: 'openai' },
   'interview.generate-feedback':    { model: 'gpt-5.4-mini', maxTokens: 6000, provider: 'openai' },
@@ -67,7 +76,10 @@ export const TASK_SLOT_DEFAULTS: Record<TaskSlot, { model: string; maxTokens: nu
   'learn.pathway-lesson':           { model: 'claude-haiku-4-5', maxTokens: 900, provider: 'anthropic' },
   'learn.daily-challenge-gen':      { model: 'claude-haiku-4-5', maxTokens: 500, provider: 'anthropic' },
   'learn.daily-challenge-score':    { model: 'claude-sonnet-4-6', maxTokens: 1000, provider: 'anthropic' },
-  'learn.drill-evaluate':           { model: 'claude-sonnet-4-6', maxTokens: 1500, provider: 'anthropic' },
+  // Default to OpenAI so the streaming path (provider.stream on openai
+  // adapter) engages on merge with no operator action. Anthropic
+  // fallback covers OpenAI outages; CMS can override either side.
+  'learn.drill-evaluate':           { model: 'gpt-5.4-mini', maxTokens: 1500, provider: 'openai', fallbackModel: 'claude-sonnet-4-6', fallbackProvider: 'anthropic' },
   'b2b.scorecard':                  { model: 'claude-haiku-4-5', maxTokens: 1000, provider: 'anthropic' },
   'onboarding.extract-profile':     { model: 'claude-sonnet-4-6', maxTokens: 2000, provider: 'anthropic' },
   'interview.evaluation-engine-v2': { model: 'gpt-5.4-mini', maxTokens: 2000, provider: 'openai' },

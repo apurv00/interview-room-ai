@@ -192,10 +192,6 @@ function DrillPageInner() {
       const res = await fetch('/api/learn/drill/evaluate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // Accept hint — server reads this only for logging; the actual
-        // protocol switch is the feature flag, but signalling intent
-        // here helps debugging when streaming is enabled but the user
-        // somehow received JSON (e.g. cached preview).
         body: JSON.stringify({
           sessionId: activeQuestion.sessionId,
           questionIndex: activeQuestion.questionIndex,
@@ -207,24 +203,14 @@ function DrillPageInner() {
         }),
       })
 
-      const contentType = res.headers.get('content-type') || ''
-      if (contentType.includes('text/event-stream') && res.body) {
-        // Streaming branch — feature flag is on AND CMS routes
-        // learn.drill-evaluate to a provider with native streaming
-        // (Phase 1: openai only). Consume score-by-score; promote
-        // to `result` when `complete` lands.
-        await consumeStreamingEvaluator(res.body)
-      } else {
-        // Legacy synchronous branch — feature flag off or server
-        // returned JSON for any other reason. Behaviour identical to
-        // pre-streaming PR.
-        const data = await res.json()
-        setStreamingBreakdown(null)
-        setResult(data)
+      // Route always streams on 2xx. JSON content-type means an HTTP
+      // error envelope (401/400/500) — bail to the catch so the user
+      // returns to the textarea and can retry.
+      if (!res.ok || !res.body || !(res.headers.get('content-type') ?? '').includes('text/event-stream')) {
+        throw new Error(`drill-evaluate: ${res.status}`)
       }
+      await consumeStreamingEvaluator(res.body)
     } catch {
-      // silently fail; setEvaluating(false) in finally returns the
-      // user to the textarea so they can retry.
       setStreamingBreakdown(null)
     } finally {
       setEvaluating(false)
