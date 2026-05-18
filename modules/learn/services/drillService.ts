@@ -17,6 +17,37 @@ export interface WeakQuestion {
   ownership: number
   competency: string
   sessionDate: string
+  /**
+   * Number of past attempts on the same (normalized) question across
+   * the user's interview history. Always >= 1. The cluster surfaced
+   * here is the WORST-scoring attempt (lowest avg). Used by the
+   * drill-list UI to show a "N attempts" chip when > 1 so users
+   * know the question was clubbed. E1 on the drill-mode improvements.
+   */
+  attemptCount: number
+}
+
+/**
+ * Aggressive normalization for cluster-key matching:
+ *   1. Lowercase
+ *   2. Drop apostrophes entirely so contractions collapse with their
+ *      stripped form ("what's" matches "whats")
+ *   3. Replace remaining non-word characters with spaces so trailing
+ *      punctuation and surrounding quotes don't split clusters
+ *      ("...led a team." vs "...led a team")
+ *   4. Collapse whitespace runs + trim
+ *
+ * Closes the false-negative gap from the prior `.toLowerCase().trim()`
+ * dedup, where punctuation drift across LLM generations let the same
+ * question appear multiple times in the drill list.
+ */
+function normalizeQuestionForDedup(q: string): string {
+  return q
+    .toLowerCase()
+    .replace(/['’]/g, '')
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 export interface DrillResult {
@@ -108,20 +139,33 @@ export async function getWeakQuestions(
           ownership: ev.ownership,
           competency: weakestDim,
           sessionDate: session.createdAt.toISOString(),
+          // Filled in by the cluster pass below.
+          attemptCount: 1,
         })
       }
     }
 
-    // Sort by score ascending (weakest first), then deduplicate by question text
+    // Cluster by normalized question text. Two-pass:
+    //   1. Build counts per cluster (every weak attempt contributes,
+    //      so the count reflects the user's full attempt history).
+    //   2. Sort by avgScore ASC and keep the FIRST seen attempt per
+    //      cluster — the worst-scoring one, which matches the
+    //      practice-mode mental model ("drill where I'm weakest").
+    //      Stamp the cluster's full count onto the survivor.
+    const counts = new Map<string, number>()
+    for (const q of weak) {
+      const key = normalizeQuestionForDedup(q.question)
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+
     const seen = new Set<string>()
-    const deduped = weak
-      .sort((a, b) => a.avgScore - b.avgScore)
-      .filter(q => {
-        const key = q.question.toLowerCase().trim()
-        if (seen.has(key)) return false
-        seen.add(key)
-        return true
-      })
+    const deduped: WeakQuestion[] = []
+    for (const q of weak.sort((a, b) => a.avgScore - b.avgScore)) {
+      const key = normalizeQuestionForDedup(q.question)
+      if (seen.has(key)) continue
+      seen.add(key)
+      deduped.push({ ...q, attemptCount: counts.get(key) ?? 1 })
+    }
 
     return deduped.slice(0, limit)
   } catch (err) {

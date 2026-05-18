@@ -50,6 +50,12 @@ interface WeakQuestion {
   ownership: number
   competency: string
   sessionDate: string
+  /**
+   * E1: number of past attempts on the same (normalized) question.
+   * Optional for backwards compatibility — old server responses
+   * (pre-cluster) won't include it; we treat undefined as 1.
+   */
+  attemptCount?: number
 }
 
 interface DrillResult {
@@ -916,8 +922,16 @@ function DrillPageInner() {
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex-1 min-w-0">
-                      <h3 className="text-sm font-medium text-[#0f1419] line-clamp-2">{q.question}</h3>
-                      <div className="flex items-center gap-3 mt-2">
+                      {/* E1: full question available via title-tooltip
+                          when line-clamp-2 truncates. Long questions
+                          stay compact in the list. */}
+                      <h3
+                        className="text-sm font-medium text-[#0f1419] line-clamp-2"
+                        title={q.question}
+                      >
+                        {q.question}
+                      </h3>
+                      <div className="flex items-center gap-2 mt-2 flex-wrap">
                         <span className="text-xs text-[#71767b]">Score: {q.avgScore}/100</span>
                         <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${
                           q.avgScore < 30 ? 'bg-red-500/10 text-[#f4212e]' :
@@ -926,6 +940,19 @@ function DrillPageInner() {
                         }`}>
                           {q.competency}
                         </span>
+                        {/* E1: signals when the server clustered this
+                            question across multiple past sessions. The
+                            drill itself opens the worst-scoring attempt
+                            (same as before clustering); the chip just
+                            tells the user "you've tried this N times". */}
+                        {(q.attemptCount ?? 1) > 1 && (
+                          <span
+                            className="px-2 py-0.5 rounded text-[10px] font-medium bg-blue-500/10 text-blue-600"
+                            title={`This question has appeared in ${q.attemptCount} of your past sessions. Drill opens the lowest-scoring attempt.`}
+                          >
+                            {q.attemptCount} attempts
+                          </span>
+                        )}
                       </div>
                     </div>
                     <svg className="w-4 h-4 text-[#8b98a5] shrink-0 mt-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
