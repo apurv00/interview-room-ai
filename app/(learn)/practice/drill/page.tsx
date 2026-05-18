@@ -146,6 +146,25 @@ function DrillPageInner() {
     }
   }, [])
 
+  // Esc closes an active drill back to the list — keyboard parity
+  // for the new Back button. Guard against firing while evaluating
+  // OR while the user is typing in the textarea (capturing Esc
+  // there would be hostile); the latter is naturally handled
+  // because the textarea doesn't stopPropagation, but we still
+  // skip if `evaluating` is true so a mid-stream Esc doesn't lose
+  // the in-flight result.
+  useEffect(() => {
+    if (!activeQuestion || evaluating) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') resetDrill()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- resetDrill
+    // is stable enough (only reads setters); rebuilding the effect
+    // on every render would attach/detach the listener pointlessly.
+  }, [activeQuestion, evaluating])
+
   const startDrill = (q: WeakQuestion) => {
     setActiveQuestion(q)
     setNewAnswer('')
@@ -331,22 +350,28 @@ function DrillPageInner() {
           the task list since the URL was minted). */}
       <PathwayEntryStrip source={source} actionId={actionId} returnTo={returnTo} />
 
-      {/* Competency filter */}
-      <div className="flex gap-2 flex-wrap">
-        {COMPETENCIES.map(c => (
-          <button
-            key={c.value}
-            onClick={() => setFilter(c.value)}
-            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-              filter === c.value
-                ? 'bg-blue-600 text-white'
-                : 'bg-[#eff3f4] text-[#8b98a5] hover:text-[#536471]'
-            }`}
-          >
-            {c.label}
-          </button>
-        ))}
-      </div>
+      {/* Competency filter — hidden during an active drill so it can't
+          be clicked while in-question (Bug: switching filters mid-drill
+          left the user stuck on the previous question because filter
+          changes don't reset `activeQuestion`). Returning to the list
+          via Back/Esc brings the filter row back. */}
+      {!activeQuestion && (
+        <div className="flex gap-2 flex-wrap">
+          {COMPETENCIES.map(c => (
+            <button
+              key={c.value}
+              onClick={() => setFilter(c.value)}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                filter === c.value
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-[#eff3f4] text-[#8b98a5] hover:text-[#536471]'
+              }`}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       <AnimatePresence mode="wait">
         {activeQuestion ? (
@@ -357,17 +382,25 @@ function DrillPageInner() {
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: -20 }}
           >
+            {/* Prominent Back button — replaces the prior 12px text
+                link in the question-card corner, which users were
+                missing (no obvious "exit" affordance once a drill
+                started). Esc-key handler bound at the page level
+                (see useEffect above) provides keyboard parity. */}
+            <button
+              type="button"
+              onClick={resetDrill}
+              className="inline-flex items-center gap-1.5 text-sm text-[#536471] hover:text-[#0f1419] -mb-2"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+              Back to drill list
+            </button>
+
             {/* Question */}
             <div className="surface-card-bordered p-5 sm:p-6">
-              <div className="flex items-start justify-between gap-4 mb-4">
-                <h2 className="text-base font-semibold text-[#0f1419]">{activeQuestion.question}</h2>
-                <button
-                  onClick={resetDrill}
-                  className="text-xs text-[#71767b] hover:text-[#536471] shrink-0"
-                >
-                  Back
-                </button>
-              </div>
+              <h2 className="text-base font-semibold text-[#0f1419] mb-4">{activeQuestion.question}</h2>
 
               <div className="flex items-center gap-3 mb-4">
                 <span className="text-xs text-[#71767b]">Original score: {activeQuestion.avgScore}/100</span>
