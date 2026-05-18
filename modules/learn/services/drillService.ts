@@ -32,20 +32,31 @@ export interface WeakQuestion {
  *   1. Lowercase
  *   2. Drop apostrophes entirely so contractions collapse with their
  *      stripped form ("what's" matches "whats")
- *   3. Replace remaining non-word characters with spaces so trailing
- *      punctuation and surrounding quotes don't split clusters
- *      ("...led a team." vs "...led a team")
+ *   3. Replace anything that isn't a Unicode letter, number, or
+ *      whitespace with a space — so trailing punctuation and
+ *      surrounding quotes don't split clusters ("...led a team." vs
+ *      "...led a team"). Uses `\p{L}\p{N}` with the `u` flag so
+ *      accented Latin ("São Paulo", "naïve") and non-Latin scripts
+ *      (CJK, Cyrillic, Arabic, Devanagari) survive — the prior
+ *      `\w` was ASCII-only and would collapse every non-Latin
+ *      question to the empty string, dedup'ing all of them into a
+ *      single survivor (Codex P1 on PR #394).
  *   4. Collapse whitespace runs + trim
  *
- * Closes the false-negative gap from the prior `.toLowerCase().trim()`
- * dedup, where punctuation drift across LLM generations let the same
- * question appear multiple times in the drill list.
+ * Implementation note: built via `new RegExp(...)` instead of a
+ * literal so the `u`-flag check (TS1501 — only available at es6+)
+ * isn't triggered by the parser. The tsconfig doesn't set a `target`,
+ * which defaults to ES3 for the literal check. Bumping `target` for
+ * the whole project is a much bigger surface than this one regex
+ * needs.
  */
+const NON_LETTER_NUMBER_OR_SPACE_RE = new RegExp('[^\\p{L}\\p{N}\\s]', 'gu')
+
 function normalizeQuestionForDedup(q: string): string {
   return q
     .toLowerCase()
     .replace(/['’]/g, '')
-    .replace(/[^\w\s]/g, ' ')
+    .replace(NON_LETTER_NUMBER_OR_SPACE_RE, ' ')
     .replace(/\s+/g, ' ')
     .trim()
 }

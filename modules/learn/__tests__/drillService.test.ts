@@ -333,4 +333,67 @@ describe('getWeakQuestions (E1 cluster + count)', () => {
     const out = await getWeakQuestions(USER_ID)
     expect(out).toEqual([])
   })
+
+  // Codex P1 on PR #394 — the prior regex used ASCII-only `\w`,
+  // which collapsed every non-Latin question to the empty string
+  // and dedup'd them all into a single survivor. The Unicode-aware
+  // `\p{L}\p{N}` with the `u` flag preserves letters from any
+  // script.
+  it('preserves non-Latin scripts in the dedup key (distinct CJK questions stay separate)', async () => {
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          mkEval(0, '你最大的弱点是什么?', SCORES_40),
+          mkEval(1, '描述一个领导团队的经历', SCORES_30),
+        ],
+      },
+    ])
+
+    const out = await getWeakQuestions(USER_ID, 20)
+    // Two distinct CJK questions — must NOT collapse into one.
+    expect(out).toHaveLength(2)
+    expect(out.every((q) => q.attemptCount === 1)).toBe(true)
+  })
+
+  it('preserves accented Latin characters in the dedup key', async () => {
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          mkEval(0, 'Describe naïve approach to São Paulo expansion', SCORES_40),
+          mkEval(1, 'Describe the rollout strategy', SCORES_30),
+        ],
+      },
+    ])
+
+    const out = await getWeakQuestions(USER_ID, 20)
+    // Accented letters must survive as content, not get stripped to
+    // spaces — these are two genuinely different questions.
+    expect(out).toHaveLength(2)
+  })
+
+  it('still clusters identical non-Latin questions across sessions', async () => {
+    // Sanity: clustering still works for non-Latin text — the regex
+    // change preserved letters but punctuation/whitespace
+    // normalization still applies.
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [mkEval(0, '你最大的弱点是什么?', SCORES_40)],
+      },
+      {
+        _id: { toString: () => 'sess-b' },
+        createdAt: new Date('2026-05-02'),
+        evaluations: [mkEval(0, '你最大的弱点是什么?', SCORES_30)],
+      },
+    ])
+
+    const out = await getWeakQuestions(USER_ID, 20)
+    expect(out).toHaveLength(1)
+    expect(out[0].attemptCount).toBe(2)
+  })
 })
