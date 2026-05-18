@@ -8,6 +8,7 @@ import { parseSSEStream } from '@learn/lib/sse'
 import PathwayEntryStrip from '@learn/components/drill/PathwayEntryStrip'
 import QuestionInsightStrip from '@learn/components/drill/QuestionInsightStrip'
 import DeltaContextNote from '@learn/components/drill/DeltaContextNote'
+import SourceFeedbackDrawer from '@learn/components/drill/SourceFeedbackDrawer'
 // Reuses the production Web-Speech-API hook the live interview falls
 // back to when Deepgram is unavailable. Web Speech is free + runs
 // client-side — appropriate for drill (practice) traffic. We don't
@@ -180,6 +181,12 @@ function DrillPageInner() {
   const returnTo = searchParams.get('returnTo') ?? undefined
   const [questionCtx, setQuestionCtx] = useState<QuestionContext | null>(null)
   const [questionCtxLoading, setQuestionCtxLoading] = useState(false)
+  // E2 — source-feedback drawer. Opens in place of the prior
+  // /feedback/[id] page navigation. State lives here so resetDrill
+  // can close it on Back/Esc; the drawer's own Esc handler closes
+  // just the drawer (it stopPropagation's so the drill page's Esc
+  // doesn't also fire).
+  const [feedbackDrawerOpen, setFeedbackDrawerOpen] = useState(false)
 
   useEffect(() => {
     setLoading(true)
@@ -398,6 +405,10 @@ function DrillPageInner() {
   }
 
   const resetDrill = () => {
+    // Close the source-feedback drawer too if it's open — leaving it
+    // mounted across drill changes would leak the previous question's
+    // content into the new drill's drawer the next time it opens.
+    setFeedbackDrawerOpen(false)
     // Call stopListening unconditionally — the hook is idempotent
     // when not recording. Avoids a stale-closure trap (Codex P1 on
     // PR #392): the Esc useEffect captures resetDrill via deps
@@ -608,12 +619,16 @@ function DrillPageInner() {
                       interviewType={questionCtx.interviewType}
                     />
                   )}
-                  <a
-                    href={`/feedback/${encodeURIComponent(activeQuestion.sessionId)}`}
-                    className="inline-block text-xs text-blue-500 hover:text-blue-600 font-medium"
+                  <button
+                    type="button"
+                    onClick={() => setFeedbackDrawerOpen(true)}
+                    className="inline-flex items-center gap-1 text-xs text-blue-500 hover:text-blue-600 font-medium"
                   >
-                    View source feedback →
-                  </a>
+                    View source feedback
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
                 </div>
               )}
 
@@ -906,6 +921,30 @@ function DrillPageInner() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Source feedback drawer — outside AnimatePresence so its own
+          AnimatePresence-driven mount/unmount isn't tangled with the
+          drill-active/list transition. Only renders meaningful chrome
+          when `feedbackDrawerOpen` is true (otherwise just an empty
+          AnimatePresence). Mounted at the page level so it overlays
+          above all drill chrome. */}
+      {activeQuestion && (
+        <SourceFeedbackDrawer
+          open={feedbackDrawerOpen}
+          onClose={() => setFeedbackDrawerOpen(false)}
+          sessionId={activeQuestion.sessionId}
+          question={activeQuestion.question}
+          originalAnswer={activeQuestion.answer}
+          scores={
+            questionCtx?.scores ?? {
+              relevance: activeQuestion.relevance,
+              structure: activeQuestion.structure,
+              specificity: activeQuestion.specificity,
+              ownership: activeQuestion.ownership,
+            }
+          }
+        />
+      )}
     </main>
   )
 }
