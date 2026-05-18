@@ -389,7 +389,15 @@ function DrillPageInner() {
   }
 
   const resetDrill = () => {
-    if (isListening) stopListening()
+    // Call stopListening unconditionally — the hook is idempotent
+    // when not recording. Avoids a stale-closure trap (Codex P1 on
+    // PR #392): the Esc useEffect captures resetDrill via deps
+    // `[activeQuestion, evaluating]`, so if the user starts the mic
+    // AFTER the listener is attached, `isListening` in resetDrill's
+    // closure stays false and an `if (isListening) stopListening()`
+    // gate would skip the stop, leaving recognition active after
+    // Esc-to-close. Always-call removes that whole class of bug.
+    stopListening()
     // Clear any deferred submit so Back-mid-recording doesn't auto-
     // fire the evaluator once the mic stops.
     pendingSubmitRef.current = false
