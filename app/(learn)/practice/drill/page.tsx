@@ -155,6 +155,15 @@ function DrillPageInner() {
   // asynchronously, so the last spoken words landed in the textarea
   // AFTER the evaluator had already scored stale text.
   const pendingSubmitRef = useRef(false)
+  // Monotonic counter — every `startListening` call captures the
+  // current value, and the onComplete callback only appends its
+  // transcript if the value still matches. resetDrill bumps the
+  // counter, so any in-flight recognition session from a previous
+  // drill drops its transcript silently when the callback finally
+  // fires. Codex P2 on PR #392 — without this guard, clicking
+  // Back/Esc mid-recording then opening a different drill could
+  // leak the prior question's spoken text into the new answer box.
+  const transcriptSessionRef = useRef(0)
 
   // Tracks the in-flight evaluation fetch so we can abort it on
   // unmount or when the user submits again. Vercel Agent flagged the
@@ -398,6 +407,13 @@ function DrillPageInner() {
     // gate would skip the stop, leaving recognition active after
     // Esc-to-close. Always-call removes that whole class of bug.
     stopListening()
+    // Invalidate any in-flight transcript session — stopListening is
+    // sync (calls recognition.abort()) but the hook's onComplete
+    // fires async. Bumping the session counter makes the about-to-
+    // fire onComplete callback skip its append, preventing the
+    // prior drill's spoken text from leaking into the next drill's
+    // answer box. Codex P2 on PR #392.
+    transcriptSessionRef.current++
     // Clear any deferred submit so Back-mid-recording doesn't auto-
     // fire the evaluator once the mic stops.
     pendingSubmitRef.current = false
@@ -411,13 +427,22 @@ function DrillPageInner() {
 
   /** Toggle the mic on/off. On stop, the hook's onComplete callback
    *  appends the final transcript to whatever's already in the
-   *  textarea — supports mixed typing + speaking flows. */
+   *  textarea — supports mixed typing + speaking flows.
+   *
+   *  Session-counter guard: the callback captures `sessionId` from
+   *  the moment startListening was called. resetDrill bumps the
+   *  counter; if the captured id doesn't match the current value
+   *  when onComplete fires, this session was superseded (user
+   *  closed the drill before the transcript flushed) and the
+   *  append is dropped. */
   const toggleVoice = () => {
     if (isListening) {
       stopListening()
       return
     }
+    const sessionId = ++transcriptSessionRef.current
     startListening((result) => {
+      if (sessionId !== transcriptSessionRef.current) return
       const text = result.text.trim()
       if (!text) return
       setNewAnswer((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text))
@@ -662,10 +687,18 @@ function DrillPageInner() {
                   </div>
                   <button
                     onClick={submitAnswer}
-                    disabled={evaluating || !newAnswer.trim()}
+                    // Enabled when listening even if the textarea is
+                    // empty: a voice-only user clicks Submit while
+                    // speaking; submitAnswer's deferred-submit path
+                    // (Codex P1 fix) stops the mic, waits for the
+                    // final transcript to flush into newAnswer, then
+                    // re-fires. If they hadn't actually spoken, the
+                    // second pass short-circuits on the empty check.
+                    // Codex P2 on PR #392.
+                    disabled={evaluating || (!newAnswer.trim() && !isListening)}
                     className="mt-3 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-[#eff3f4] disabled:text-[#71767b] text-white text-sm font-medium rounded-lg transition-colors"
                   >
-                    {evaluating ? 'Evaluating...' : 'Submit Answer'}
+                    {evaluating ? 'Evaluating...' : isListening ? 'Stop & Submit' : 'Submit Answer'}
                   </button>
 
                   {/* Streaming progress strip — visible only while a
