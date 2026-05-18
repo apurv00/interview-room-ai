@@ -199,6 +199,62 @@ describe('LessonCard', () => {
       expect(screen.queryByRole('button', { name: /Try again/i })).toBeNull()
     })
 
+    // Codex P2 on PR #389 — only KNOWN 404 payloads are treated as
+    // non-retryable. An unknown 404 (Vercel/edge proxy returning a
+    // non-JSON HTML 404, or a future route copy change) must fall
+    // through to the generic retryable HTTP branch so the user gets
+    // a Try-again button rather than being told to refresh on a
+    // problem that refresh won't fix.
+    it('unknown 404 payload → retryable generic HTTP error (not the stale-plan branch)', async () => {
+      fetchSpy.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        // Some unfamiliar error string we haven't keyed on.
+        json: async () => ({ error: 'Unknown not-found reason' }),
+      } as Response)
+      render(
+        <LessonCard
+          entry={{ lessonId: 'L1', competency: 'relevance', completed: false }}
+          index={0}
+          domain="general"
+          depth="behavioral"
+          onComplete={vi.fn()}
+        />,
+      )
+      fireEvent.click(screen.getByRole('button', { expanded: false }))
+      await waitFor(() => {
+        expect(screen.getByText(/Could not load this lesson \(HTTP 404\)/)).toBeInTheDocument()
+      })
+      expect(screen.getByRole('button', { name: /Try again/i })).toBeInTheDocument()
+    })
+
+    it('non-JSON 404 (edge/proxy HTML) → retryable generic HTTP error', async () => {
+      // serverMessage parse fails → serverMessage stays null → my old
+      // fallthrough would have mapped this to "Refresh the page"
+      // non-retryable. With the fix it lands on the generic retryable.
+      fetchSpy.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: async () => {
+          throw new Error('Unexpected token < in JSON')
+        },
+      } as unknown as Response)
+      render(
+        <LessonCard
+          entry={{ lessonId: 'L1', competency: 'relevance', completed: false }}
+          index={0}
+          domain="general"
+          depth="behavioral"
+          onComplete={vi.fn()}
+        />,
+      )
+      fireEvent.click(screen.getByRole('button', { expanded: false }))
+      await waitFor(() => {
+        expect(screen.getByText(/Could not load this lesson \(HTTP 404\)/)).toBeInTheDocument()
+      })
+      expect(screen.getByRole('button', { name: /Try again/i })).toBeInTheDocument()
+    })
+
     it('network error (fetch throws) → retryable with connection-specific copy', async () => {
       fetchSpy.mockRejectedValueOnce(new Error('Network failure'))
       render(

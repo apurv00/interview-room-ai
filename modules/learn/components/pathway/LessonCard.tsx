@@ -74,16 +74,26 @@ async function classifyLessonError(res: Response): Promise<LessonError> {
   }
 
   if (res.status === 404) {
+    // Codex P2 on PR #389 — only KNOWN 404 payloads from this route
+    // are non-retryable. Unknown 404s (Vercel/edge proxy returning a
+    // non-JSON HTML 404, a future route copy change, or a 404 served
+    // for some other reason entirely) should fall through to the
+    // generic retryable HTTP branch — refreshing won't help if the
+    // 404 came from a transient edge issue, but retrying might.
     if (serverMessage === 'No universal plan') {
       return {
         retryable: false,
         message: 'No active pathway plan — head to the Pathway page to set one up.',
       }
     }
-    return {
-      retryable: false,
-      message: 'This lesson isn’t in your current plan. Refresh the page — your pathway may have updated.',
+    if (serverMessage === 'Lesson not in plan') {
+      return {
+        retryable: false,
+        message: 'This lesson isn’t in your current plan. Refresh the page — your pathway may have updated.',
+      }
     }
+    // Unknown 404 — fall through to the generic retryable handler
+    // below so the user gets a Try again button.
   }
   if (res.status === 502) {
     return {
