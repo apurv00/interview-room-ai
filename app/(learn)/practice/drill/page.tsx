@@ -123,21 +123,50 @@ function DrillPageInner() {
     setNewAnswer('')
     setResult(null)
     setShowOriginal(false)
+    // The synchronous clear keeps the UI from flashing a stale
+    // coach card from the previous drill during the brief moment
+    // between this click and the fetch effect committing. The
+    // actual fetch lives in the effect below — see the race fix.
     setQuestionCtx(null)
     setQuestionCtxLoading(true)
-    // Pathway P2 Wave 5 (5B) — fetch the per-question coach context
-    // so we can render either IdealAnswerComparisonCard or the
-    // QuestionInsightStrip fallback above the textarea. Best-effort:
-    // if the fetch fails the drill itself is still fully functional.
+  }
+
+  // Pathway P2 Wave 5 (5B) — fetch the per-question coach context
+  // for the active drill question.
+  //
+  // Codex P2 on PR #388 — this MUST be effect-driven, not imperative.
+  // The previous version fired the fetch inside `startDrill` with no
+  // cancellation, so a fast click A → click B sequence could land
+  // A's late `.then()` AFTER B's response, displaying A's coaching
+  // card alongside B's question. Effect-driven gives us free
+  // cleanup: when activeQuestion changes from A to B, A's cleanup
+  // sets `cancelled = true` and A's callbacks bail out.
+  useEffect(() => {
+    if (!activeQuestion) return
+    let cancelled = false
+
     deduplicatedFetch(
-      `/api/learn/drill/context/question?sessionId=${encodeURIComponent(q.sessionId)}&questionIndex=${q.questionIndex}`,
+      `/api/learn/drill/context/question?sessionId=${encodeURIComponent(activeQuestion.sessionId)}&questionIndex=${activeQuestion.questionIndex}`,
       { cache: 'no-store' },
     )
       .then((res) => (res.ok ? (res.json() as Promise<QuestionContext>) : null))
-      .then((payload) => setQuestionCtx(payload))
-      .catch(() => setQuestionCtx(null))
-      .finally(() => setQuestionCtxLoading(false))
-  }
+      .then((payload) => {
+        if (cancelled) return
+        setQuestionCtx(payload)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setQuestionCtx(null)
+      })
+      .finally(() => {
+        if (cancelled) return
+        setQuestionCtxLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeQuestion])
 
   const submitAnswer = async () => {
     if (!activeQuestion || !newAnswer.trim()) return
