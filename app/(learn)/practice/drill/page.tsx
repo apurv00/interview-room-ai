@@ -147,6 +147,15 @@ function DrillPageInner() {
     setVoiceSupported(browserSupportsSpeechRecognition())
   }, [])
 
+  // Set true when the user clicks Submit while the mic is still
+  // listening — defers the actual submit until the speech hook has
+  // appended the final transcript to `newAnswer`. Codex P1 on PR #392
+  // flagged that the prior version called stopListening() + read
+  // `newAnswer` synchronously, but the hook appends via onComplete
+  // asynchronously, so the last spoken words landed in the textarea
+  // AFTER the evaluator had already scored stale text.
+  const pendingSubmitRef = useRef(false)
+
   // Tracks the in-flight evaluation fetch so we can abort it on
   // unmount or when the user submits again. Vercel Agent flagged the
   // unguarded version for triggering setState-on-unmounted warnings
@@ -188,6 +197,23 @@ function DrillPageInner() {
     // underlying SpeechRecognition instance it closes over is stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Codex P1 follow-up: when the mic stops AND a submit is queued,
+  // fire submitAnswer now. React has committed both `setIsListening
+  // (false)` and `setNewAnswer(combined)` from the hook's complete()
+  // callback in the same render batch, so submitAnswer reads the
+  // up-to-date textarea content (including the final spoken words).
+  useEffect(() => {
+    if (!isListening && pendingSubmitRef.current) {
+      pendingSubmitRef.current = false
+      submitAnswer()
+    }
+    // submitAnswer reads `newAnswer` via closure — re-running this
+    // effect only on `isListening` changes is correct: the LATEST
+    // submitAnswer (closing over the latest newAnswer) is captured
+    // at render time, and the effect fires after that render commits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isListening])
 
   // Esc closes an active drill back to the list — keyboard parity
   // for the Back button. Two scope guards:
@@ -267,10 +293,18 @@ function DrillPageInner() {
   }, [activeQuestion])
 
   const submitAnswer = async () => {
-    if (!activeQuestion || !newAnswer.trim()) return
-    // Stop the mic if it's still hot — submitting commits the current
-    // answer, no point capturing more audio after this point.
-    if (isListening) stopListening()
+    if (!activeQuestion) return
+    // If the mic is still hot, defer: flip the pending flag, stop
+    // recording, and let the `[isListening]` effect re-call this
+    // function once the hook's onComplete callback has appended the
+    // final transcript to `newAnswer`. Reading `newAnswer` here
+    // would miss the last spoken words (Codex P1 on PR #392).
+    if (isListening) {
+      pendingSubmitRef.current = true
+      stopListening()
+      return
+    }
+    if (!newAnswer.trim()) return
     // Cancel any previous evaluation that's still in flight (e.g.
     // user clicked Submit twice). Race-free because the previous
     // submit's catch will see AbortError and skip its setState.
@@ -356,6 +390,9 @@ function DrillPageInner() {
 
   const resetDrill = () => {
     if (isListening) stopListening()
+    // Clear any deferred submit so Back-mid-recording doesn't auto-
+    // fire the evaluator once the mic stops.
+    pendingSubmitRef.current = false
     setActiveQuestion(null)
     setNewAnswer('')
     setResult(null)
