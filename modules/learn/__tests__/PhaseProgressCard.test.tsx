@@ -58,4 +58,34 @@ describe('PhaseProgressCard', () => {
     const bar = container.querySelector('[aria-label*="75%"]')
     expect(bar).not.toBeNull()
   })
+
+  // Wave 5 deferred cleanup — the per-phase row used to render each
+  // phase as a `div` with `rounded-lg` + `bg-blue-500/10` highlight
+  // that made the current phase look like a tap target. The phases
+  // are informational (no per-phase detail view exists to navigate
+  // to); these tests lock the "labelled indicator, not interactive
+  // button" treatment.
+  describe('Phase row is informational, not interactive', () => {
+    it('uses an ordered list with role="list" + aria-label', () => {
+      render(<PhaseProgressCard phaseStatus={base()} />)
+      const list = screen.getByRole('list', { name: /phase progress/i })
+      expect(list.tagName.toLowerCase()).toBe('ol')
+    })
+
+    it('renders no buttons or links in the phase row', () => {
+      const { container } = render(<PhaseProgressCard phaseStatus={base()} />)
+      const phaseList = container.querySelector('ol[aria-label*="progress"]')
+      expect(phaseList).not.toBeNull()
+      expect(phaseList?.querySelectorAll('button').length).toBe(0)
+      expect(phaseList?.querySelectorAll('a').length).toBe(0)
+    })
+
+    it('marks the current phase with aria-current="step"', () => {
+      render(<PhaseProgressCard phaseStatus={base({ currentPhase: 'building' })} />)
+      const items = screen.getAllByRole('listitem')
+      const current = items.find((el) => el.getAttribute('aria-current') === 'step')
+      expect(current).toBeTruthy()
+      expect(current?.textContent).toContain('Building')
+    })
+  })
 })

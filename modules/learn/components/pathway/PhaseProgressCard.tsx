@@ -79,25 +79,54 @@ export default function PhaseProgressCard({ phaseStatus }: { phaseStatus: PhaseS
         {!next && <span className="text-emerald-500 font-medium">Final phase</span>}
       </div>
 
-      <div className="mt-4 flex items-center gap-1 overflow-x-auto">
-        {PHASE_ORDER.map((p, i) => (
-          <div
-            key={p}
-            className={`flex-1 min-w-[54px] flex flex-col items-center gap-1 px-1 py-1.5 rounded-lg ${
-              i === currentIdx ? 'bg-blue-500/10' : ''
-            }`}
-          >
-            <span className="text-base leading-none" aria-hidden>{PHASE_LABELS[p].icon}</span>
-            <span
-              className={`text-[10px] ${
-                i < currentIdx ? 'text-[#8b98a5]' : i === currentIdx ? 'text-blue-500 font-medium' : 'text-[#8b98a5]'
-              }`}
+      {/* Phase row. Wave 5 deferred cleanup — previously each phase
+          had a rounded-lg + bg-blue-500/10 fill + extra padding that
+          made the current phase look like a tappable button, but the
+          row has never been interactive and there's no per-phase
+          detail view to navigate to. Stripped the rounded fill +
+          padding so it reads as a labelled indicator instead.
+          Current phase still gets a visual cue (blue + bold + a small
+          underline marker below the label) so the "you are here"
+          signal isn't lost. `role="list"` makes the informational
+          nature explicit to screen readers. */}
+      <ol
+        role="list"
+        aria-label="Pathway phase progress"
+        className="mt-4 flex items-center gap-1 overflow-x-auto list-none p-0"
+      >
+        {PHASE_ORDER.map((p, i) => {
+          const isCurrent = i === currentIdx
+          const isPast = i < currentIdx
+          return (
+            <li
+              key={p}
+              aria-current={isCurrent ? 'step' : undefined}
+              className="flex-1 min-w-[54px] flex flex-col items-center gap-1"
             >
-              {PHASE_LABELS[p].label}
-            </span>
-          </div>
-        ))}
-      </div>
+              <span className="text-base leading-none" aria-hidden>{PHASE_LABELS[p].icon}</span>
+              <span
+                className={`text-[10px] ${
+                  isCurrent
+                    ? 'text-blue-500 font-medium'
+                    : isPast
+                      ? 'text-[#8b98a5]'
+                      : 'text-[#8b98a5]'
+                }`}
+              >
+                {PHASE_LABELS[p].label}
+              </span>
+              {/* Reserve a 2px underline slot on every item so the
+                  current-phase indicator doesn't shift the row's
+                  vertical baseline. Only the current phase paints
+                  the marker. */}
+              <span
+                aria-hidden
+                className={`h-0.5 w-6 rounded-full ${isCurrent ? 'bg-blue-500' : 'bg-transparent'}`}
+              />
+            </li>
+          )
+        })}
+      </ol>
     </motion.section>
   )
 }
