@@ -49,16 +49,20 @@ export default function SourceFeedbackDrawer({
   scores,
 }: Props) {
   // Esc closes the drawer. Bound only when open to avoid wasted
-  // listener churn. `stopPropagation` keeps the drill page's own
-  // Esc handler from firing too — closing the drawer should NOT
-  // also close the underlying drill.
+  // listener churn.
+  //
+  // NOTE on coordination with the drill page's own Esc handler:
+  // both listeners are on `window`, so stopPropagation/Immediate
+  // from here would NOT stop a sibling window listener (and the
+  // drill listener was registered first, so it would run before
+  // this one anyway). The coordination lives on the drill side —
+  // it short-circuits when `feedbackDrawerOpenRef` is true. So
+  // closing the drawer via Esc only dismisses the drawer; the
+  // drill stays open. Codex P1 on PR #393.
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation()
-        onClose()
-      }
+      if (e.key === 'Escape') onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)

@@ -183,10 +183,19 @@ function DrillPageInner() {
   const [questionCtxLoading, setQuestionCtxLoading] = useState(false)
   // E2 — source-feedback drawer. Opens in place of the prior
   // /feedback/[id] page navigation. State lives here so resetDrill
-  // can close it on Back/Esc; the drawer's own Esc handler closes
-  // just the drawer (it stopPropagation's so the drill page's Esc
-  // doesn't also fire).
+  // can close it on Back; the drawer's own Esc handler closes
+  // just the drawer. Mirrored to a ref so the drill page's Esc
+  // handler can short-circuit when the drawer is open WITHOUT
+  // adding `feedbackDrawerOpen` to the Esc effect's deps (which
+  // would re-attach the listener on every toggle). Codex P1 on
+  // PR #393: stopPropagation from the drawer doesn't stop the
+  // drill listener because both are on `window`, so a guard at
+  // the drill side is required.
   const [feedbackDrawerOpen, setFeedbackDrawerOpen] = useState(false)
+  const feedbackDrawerOpenRef = useRef(false)
+  useEffect(() => {
+    feedbackDrawerOpenRef.current = feedbackDrawerOpen
+  }, [feedbackDrawerOpen])
 
   useEffect(() => {
     setLoading(true)
@@ -246,6 +255,14 @@ function DrillPageInner() {
     if (!activeQuestion || evaluating) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
+      // Drawer is open → Esc should close just the drawer (its own
+      // handler does that). Don't reset the drill. Codex P1 on PR
+      // #393: stopPropagation in the drawer's handler doesn't help
+      // because both listeners are on `window` and fire in
+      // registration order; the drill listener was registered
+      // first (when the drill started), so it would always win
+      // without this guard.
+      if (feedbackDrawerOpenRef.current) return
       const el = e.target as HTMLElement | null
       const tag = el?.tagName
       if (tag === 'TEXTAREA' || tag === 'INPUT' || el?.isContentEditable) return
