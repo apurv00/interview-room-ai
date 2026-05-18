@@ -8,12 +8,34 @@ import { parseSSEStream } from '@learn/lib/sse'
 import PathwayEntryStrip from '@learn/components/drill/PathwayEntryStrip'
 import QuestionInsightStrip from '@learn/components/drill/QuestionInsightStrip'
 import DeltaContextNote from '@learn/components/drill/DeltaContextNote'
+// Reuses the production Web-Speech-API hook the live interview falls
+// back to when Deepgram is unavailable. Web Speech is free + runs
+// client-side — appropriate for drill (practice) traffic. We don't
+// want to burn Deepgram cost on every retry.
+// eslint-disable-next-line no-restricted-imports -- direct import: no
+// barrel exists at modules/interview/hooks/ and the @interview barrel
+// pulls in server-only types we don't need here.
+import { useSpeechRecognition } from '@interview/hooks/useSpeechRecognition'
 // eslint-disable-next-line no-restricted-imports -- direct import: the
 // @feedback barrel transitively pulls server-only types/Mongoose into
 // this client component.
 import IdealAnswerComparisonCard from '@feedback/components/IdealAnswerComparisonCard'
 // eslint-disable-next-line no-restricted-imports -- same reason.
 import type { AnswerEvaluation } from '@shared/types'
+
+/** Web Speech API capability check — runs in the browser only.
+ *  When false we hide the mic button entirely so unsupported browsers
+ *  (older Firefox, some embedded webviews) don't see a broken affordance. */
+function browserSupportsSpeechRecognition(): boolean {
+  if (typeof window === 'undefined') return false
+  return Boolean(
+    (window as Window & {
+      SpeechRecognition?: unknown
+      webkitSpeechRecognition?: unknown
+    }).SpeechRecognition ||
+      (window as Window & { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition,
+  )
+}
 
 interface WeakQuestion {
   sessionId: string
@@ -112,6 +134,37 @@ function DrillPageInner() {
   // saveDrillAttempt threw after the user already saw their score.
   // We surface a warning rather than discarding the result.
   const [persistFailed, setPersistFailed] = useState(false)
+  // Voice input via Web Speech API (production-tested fallback the
+  // live interview uses when Deepgram is unavailable). The hook is
+  // SSR-safe — it touches `window.SpeechRecognition` only inside
+  // `startListening`. `voiceSupported` gates the mic button so
+  // unsupported browsers (older Firefox, embedded webviews) don't
+  // see a broken affordance. Detected post-mount to avoid
+  // hydration mismatch.
+  const { isListening, liveTranscript, startListening, stopListening } = useSpeechRecognition()
+  const [voiceSupported, setVoiceSupported] = useState(false)
+  useEffect(() => {
+    setVoiceSupported(browserSupportsSpeechRecognition())
+  }, [])
+
+  // Set true when the user clicks Submit while the mic is still
+  // listening — defers the actual submit until the speech hook has
+  // appended the final transcript to `newAnswer`. Codex P1 on PR #392
+  // flagged that the prior version called stopListening() + read
+  // `newAnswer` synchronously, but the hook appends via onComplete
+  // asynchronously, so the last spoken words landed in the textarea
+  // AFTER the evaluator had already scored stale text.
+  const pendingSubmitRef = useRef(false)
+  // Monotonic counter — every `startListening` call captures the
+  // current value, and the onComplete callback only appends its
+  // transcript if the value still matches. resetDrill bumps the
+  // counter, so any in-flight recognition session from a previous
+  // drill drops its transcript silently when the callback finally
+  // fires. Codex P2 on PR #392 — without this guard, clicking
+  // Back/Esc mid-recording then opening a different drill could
+  // leak the prior question's spoken text into the new answer box.
+  const transcriptSessionRef = useRef(0)
+
   // Tracks the in-flight evaluation fetch so we can abort it on
   // unmount or when the user submits again. Vercel Agent flagged the
   // unguarded version for triggering setState-on-unmounted warnings
@@ -138,13 +191,38 @@ function DrillPageInner() {
       .catch(() => setLoading(false))
   }, [filter])
 
-  // Cancel any in-flight drill submission on unmount so the SSE
-  // reader stops and we don't fire setState on an unmounted tree.
+  // Cancel any in-flight drill submission AND the mic on unmount so
+  // the SSE reader stops and we don't fire setState on an unmounted
+  // tree, and so the mic LED doesn't stay green when the user
+  // navigates away. `stopListening` is referenced via a ref-like
+  // closure — the hook re-creates the function each render but the
+  // underlying SpeechRecognition instance is stable.
   useEffect(() => {
     return () => {
       submitControllerRef.current?.abort()
+      stopListening()
     }
+    // Intentionally captures `stopListening` on first render; the
+    // underlying SpeechRecognition instance it closes over is stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Codex P1 follow-up: when the mic stops AND a submit is queued,
+  // fire submitAnswer now. React has committed both `setIsListening
+  // (false)` and `setNewAnswer(combined)` from the hook's complete()
+  // callback in the same render batch, so submitAnswer reads the
+  // up-to-date textarea content (including the final spoken words).
+  useEffect(() => {
+    if (!isListening && pendingSubmitRef.current) {
+      pendingSubmitRef.current = false
+      submitAnswer()
+    }
+    // submitAnswer reads `newAnswer` via closure — re-running this
+    // effect only on `isListening` changes is correct: the LATEST
+    // submitAnswer (closing over the latest newAnswer) is captured
+    // at render time, and the effect fires after that render commits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isListening])
 
   // Esc closes an active drill back to the list — keyboard parity
   // for the Back button. Two scope guards:
@@ -168,9 +246,9 @@ function DrillPageInner() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- resetDrill
-    // is stable enough (only reads setters); rebuilding the effect
-    // on every render would attach/detach the listener pointlessly.
+    // `resetDrill` only reads setters; rebuilding the effect on every
+    // render would attach/detach the listener pointlessly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeQuestion, evaluating])
 
   const startDrill = (q: WeakQuestion) => {
@@ -224,7 +302,18 @@ function DrillPageInner() {
   }, [activeQuestion])
 
   const submitAnswer = async () => {
-    if (!activeQuestion || !newAnswer.trim()) return
+    if (!activeQuestion) return
+    // If the mic is still hot, defer: flip the pending flag, stop
+    // recording, and let the `[isListening]` effect re-call this
+    // function once the hook's onComplete callback has appended the
+    // final transcript to `newAnswer`. Reading `newAnswer` here
+    // would miss the last spoken words (Codex P1 on PR #392).
+    if (isListening) {
+      pendingSubmitRef.current = true
+      stopListening()
+      return
+    }
+    if (!newAnswer.trim()) return
     // Cancel any previous evaluation that's still in flight (e.g.
     // user clicked Submit twice). Race-free because the previous
     // submit's catch will see AbortError and skip its setState.
@@ -309,12 +398,55 @@ function DrillPageInner() {
   }
 
   const resetDrill = () => {
+    // Call stopListening unconditionally — the hook is idempotent
+    // when not recording. Avoids a stale-closure trap (Codex P1 on
+    // PR #392): the Esc useEffect captures resetDrill via deps
+    // `[activeQuestion, evaluating]`, so if the user starts the mic
+    // AFTER the listener is attached, `isListening` in resetDrill's
+    // closure stays false and an `if (isListening) stopListening()`
+    // gate would skip the stop, leaving recognition active after
+    // Esc-to-close. Always-call removes that whole class of bug.
+    stopListening()
+    // Invalidate any in-flight transcript session — stopListening is
+    // sync (calls recognition.abort()) but the hook's onComplete
+    // fires async. Bumping the session counter makes the about-to-
+    // fire onComplete callback skip its append, preventing the
+    // prior drill's spoken text from leaking into the next drill's
+    // answer box. Codex P2 on PR #392.
+    transcriptSessionRef.current++
+    // Clear any deferred submit so Back-mid-recording doesn't auto-
+    // fire the evaluator once the mic stops.
+    pendingSubmitRef.current = false
     setActiveQuestion(null)
     setNewAnswer('')
     setResult(null)
     setShowOriginal(false)
     setStreamingBreakdown(null)
     setPersistFailed(false)
+  }
+
+  /** Toggle the mic on/off. On stop, the hook's onComplete callback
+   *  appends the final transcript to whatever's already in the
+   *  textarea — supports mixed typing + speaking flows.
+   *
+   *  Session-counter guard: the callback captures `sessionId` from
+   *  the moment startListening was called. resetDrill bumps the
+   *  counter; if the captured id doesn't match the current value
+   *  when onComplete fires, this session was superseded (user
+   *  closed the drill before the transcript flushed) and the
+   *  append is dropped. */
+  const toggleVoice = () => {
+    if (isListening) {
+      stopListening()
+      return
+    }
+    const sessionId = ++transcriptSessionRef.current
+    startListening((result) => {
+      if (sessionId !== transcriptSessionRef.current) return
+      const text = result.text.trim()
+      if (!text) return
+      setNewAnswer((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text))
+    })
   }
 
   if (loading) {
@@ -485,22 +617,88 @@ function DrillPageInner() {
                 </div>
               )}
 
-              {/* New answer input */}
+              {/* New answer input — voice-first (real interviews are
+                  spoken, not typed). Mic button lives inside the
+                  textarea wrapper; tap to record, tap again to stop.
+                  The final transcript is APPENDED to whatever is
+                  already in the box so users can mix typing and
+                  speaking. Browsers without Web Speech API hide the
+                  mic affordance entirely (typing still works). */}
               {!result && (
                 <>
-                  <textarea
-                    value={newAnswer}
-                    onChange={e => setNewAnswer(e.target.value)}
-                    placeholder="Type your improved answer here..."
-                    rows={6}
-                    className="w-full p-4 bg-white border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder:text-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500/50 resize-none"
-                  />
+                  {/* Live-transcript banner — visible only while the
+                      mic is hot. Shows the interim text as the user
+                      speaks so they have continuous visual feedback
+                      without polluting the textarea (their existing
+                      typed text stays visible underneath). */}
+                  {isListening && (
+                    <div
+                      data-testid="drill-listening-banner"
+                      className="mb-2 flex items-center gap-2 rounded-lg bg-red-50 border border-red-200 px-3 py-2"
+                    >
+                      <span className="relative flex h-2 w-2 shrink-0">
+                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+                        <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500" />
+                      </span>
+                      <span className="text-xs font-medium text-red-700 shrink-0">Listening</span>
+                      <span className="text-xs text-[#536471] truncate" title={liveTranscript}>
+                        {liveTranscript || 'Speak your answer…'}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="relative">
+                    <textarea
+                      value={newAnswer}
+                      onChange={e => setNewAnswer(e.target.value)}
+                      placeholder={voiceSupported
+                        ? 'Tap the mic to speak your answer (real interviews are spoken). You can also type.'
+                        : 'Type your improved answer here…'}
+                      rows={6}
+                      className={`w-full p-4 ${voiceSupported ? 'pr-14' : ''} bg-white border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder:text-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500/50 resize-none`}
+                    />
+                    {voiceSupported && (
+                      <button
+                        type="button"
+                        onClick={toggleVoice}
+                        disabled={evaluating}
+                        aria-label={isListening ? 'Stop recording' : 'Start voice answer'}
+                        aria-pressed={isListening}
+                        data-testid="drill-mic-button"
+                        className={`absolute top-3 right-3 flex items-center justify-center w-9 h-9 rounded-full transition-colors ${
+                          isListening
+                            ? 'bg-red-500 hover:bg-red-600 text-white'
+                            : 'bg-[#eff3f4] hover:bg-blue-100 text-[#536471] hover:text-blue-600'
+                        } disabled:opacity-40 disabled:cursor-not-allowed`}
+                      >
+                        {isListening ? (
+                          /* Stop square */
+                          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+                            <rect x="6" y="6" width="12" height="12" rx="1" />
+                          </svg>
+                        ) : (
+                          /* Mic icon */
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-14 0m7 7v3m-4 0h8m-4-7a3 3 0 01-3-3V5a3 3 0 016 0v6a3 3 0 01-3 3z" />
+                          </svg>
+                        )}
+                      </button>
+                    )}
+                  </div>
                   <button
                     onClick={submitAnswer}
-                    disabled={evaluating || !newAnswer.trim()}
+                    // Enabled when listening even if the textarea is
+                    // empty: a voice-only user clicks Submit while
+                    // speaking; submitAnswer's deferred-submit path
+                    // (Codex P1 fix) stops the mic, waits for the
+                    // final transcript to flush into newAnswer, then
+                    // re-fires. If they hadn't actually spoken, the
+                    // second pass short-circuits on the empty check.
+                    // Codex P2 on PR #392.
+                    disabled={evaluating || (!newAnswer.trim() && !isListening)}
                     className="mt-3 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-[#eff3f4] disabled:text-[#71767b] text-white text-sm font-medium rounded-lg transition-colors"
                   >
-                    {evaluating ? 'Evaluating...' : 'Submit Answer'}
+                    {evaluating ? 'Evaluating...' : isListening ? 'Stop & Submit' : 'Submit Answer'}
                   </button>
 
                   {/* Streaming progress strip — visible only while a
