@@ -85,16 +85,14 @@ const SYSTEM_PROMPT =
  * polyfills via streamCompletion's complete()-as-single-delta shim.
  * Provider + fallback are CMS-overridable via /cms/model-config.
  *
- * Side-effect cluster partitioning:
- *   - Cluster A (xp + recordActivity): score-independent, dispatched
- *     immediately, awaited before stream close via allSettled.
- *   - Cluster B (updateStreak → checkAndAwardBadges): order-dependent
- *     but score-independent (badges keyed on currentStreak, not raw
- *     drill score — score:0 is intentional), dispatched immediately.
- *   - Cluster C (saveDrillAttempt): requires newScore. Awaited in the
- *     `done` handler BEFORE emitting `complete`. On failure we still
- *     emit `complete` with `persistFailed:true` so the UI keeps the
- *     visible scores while warning the attempt didn't save.
+ * Side-effects (Codex P1 on streaming PR): XP / streak / badges
+ * fire ONLY after `saveDrillAttempt` succeeds. The original streaming
+ * draft dispatched them at stream-start to overlap with the model,
+ * but that granted progression rewards for evaluations that later
+ * failed parsing / shape-check / persistence — a regression from the
+ * sync path which only rewards a saved attempt. The user has already
+ * seen all four scores progressively by the time `done` lands, so
+ * moving rewards to post-save adds zero perceived latency.
  */
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions)
@@ -126,25 +124,18 @@ export async function POST(req: NextRequest) {
   const { questionIndex, originalAnswer, originalScore, competency } = body
   const encoder = new TextEncoder()
 
-  // Dispatched immediately; awaited before stream close.
-  const clusterA = Promise.allSettled([
-    awardXp(userId, 'drill_complete', XP_AMOUNTS.drill_complete, { sessionId, questionIndex }),
-    recordActivity(userId),
-  ])
-  const clusterB = updateStreak(userId).then((streakResult) =>
-    checkAndAwardBadges(userId, {
-      type: 'drill_complete',
-      score: 0,
-      currentStreak: streakResult.currentStreak,
-    }),
-  )
-
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       let accumulated = ''
       const emitted = new Set<string>()
 
+      // Centralized SSE writer + close. Calling controller.close()
+      // twice throws TypeError (WHATWG spec) — Vercel Agent flagged
+      // the previous "close inside catch + close in finally" pattern.
+      // We track `closed` and let the single outer `finally` close.
+      let closed = false
       const sse = (event: string, data: unknown) => {
+        if (closed) return
         controller.enqueue(
           encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
         )
@@ -192,7 +183,6 @@ export async function POST(req: NextRequest) {
                 'Drill stream: final JSON parse failed',
               )
               sse('error', { message: 'Evaluation failed (parse error)' })
-              controller.close()
               return
             }
             if (!isFourDimScore(scores)) {
@@ -201,7 +191,6 @@ export async function POST(req: NextRequest) {
                 'Drill stream: final scores failed shape validation',
               )
               sse('error', { message: 'Evaluation produced invalid scores' })
-              controller.close()
               return
             }
             const newScore = Math.round(
@@ -224,21 +213,39 @@ export async function POST(req: NextRequest) {
                 { err: saveErr, userId, sessionId },
                 'Drill stream: saveDrillAttempt failed',
               )
+              // No XP / streak / badges here — Codex P1: don't reward
+              // an attempt that didn't persist. User still sees scores.
               sse('complete', {
                 newScore,
                 delta: newScore - (originalScore ?? 0),
                 breakdown: scores,
                 persistFailed: true,
               })
-              controller.close()
               return
             }
-            await Promise.allSettled([clusterA, clusterB])
+            // Save succeeded — emit `complete` first so the user sees
+            // the final state immediately, then run side-effects.
+            // `allSettled` so any single failure (XP write, streak DB
+            // hiccup, badge service) doesn't block close or surface
+            // as an error frame.
             sse('complete', {
               newScore,
               delta: newScore - (originalScore ?? 0),
               breakdown: scores,
             })
+            await Promise.allSettled([
+              awardXp(userId, 'drill_complete', XP_AMOUNTS.drill_complete, { sessionId, questionIndex }),
+              recordActivity(userId),
+              updateStreak(userId).then((streakResult) =>
+                checkAndAwardBadges(userId, {
+                  type: 'drill_complete',
+                  // Badges keyed on currentStreak, not raw score —
+                  // score:0 is intentional and matches sync path.
+                  score: 0,
+                  currentStreak: streakResult.currentStreak,
+                }),
+              ),
+            ])
           }
         }
       } catch (err) {
@@ -249,7 +256,14 @@ export async function POST(req: NextRequest) {
           sse('error', { message: 'Evaluation failed' })
         }
       } finally {
-        controller.close()
+        closed = true
+        try {
+          controller.close()
+        } catch {
+          // Already closed (e.g. underlying source rejected and the
+          // stream tore itself down). Idempotent here so we never
+          // surface a noisy 500.
+        }
       }
     },
   })

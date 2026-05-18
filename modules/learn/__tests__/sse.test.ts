@@ -1,5 +1,5 @@
 /**
- * Tests for the client-side SSE parser shared/services/sse.ts.
+ * Tests for the client-side SSE parser modules/learn/lib/sse.ts.
  *
  * Covers the edge cases the drill streaming evaluator (Phase 1) and
  * any future SSE consumer will hit:
@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { parseSSEStream } from '../sse'
+import { parseSSEStream } from '../lib/sse'
 
 function stringStream(chunks: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder()

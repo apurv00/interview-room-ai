@@ -9,12 +9,9 @@
  * `ParsedSSEEvent` carrying the `event` name (default `'message'`)
  * and the joined `data` field.
  *
- * Why this lives in `shared/services/` and not inline in the drill
- * page: it's a generic primitive — the next SSE consumer (Phase 2
- * Anthropic streaming, or any future endpoint) should not have to
- * re-implement frame buffering, multi-byte UTF-8 chunk-boundary
- * handling, or comment-line skipping. Tested against the same edge
- * cases the production drill page will hit.
+ * Co-located in `modules/learn/lib/` because the drill page is the
+ * only current consumer. Promote to `shared/services/` once a second
+ * consumer appears.
  *
  * Limitations (intentionally minimal):
  *   - No reconnect / Last-Event-ID handling (those belong to

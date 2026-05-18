@@ -1,10 +1,10 @@
 'use client'
 
-import { useEffect, useState, Suspense } from 'react'
+import { useEffect, useRef, useState, Suspense } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useSearchParams } from 'next/navigation'
 import { deduplicatedFetch } from '@shared/cachedFetch'
-import { parseSSEStream } from '@shared/services/sse'
+import { parseSSEStream } from '@learn/lib/sse'
 import PathwayEntryStrip from '@learn/components/drill/PathwayEntryStrip'
 import QuestionInsightStrip from '@learn/components/drill/QuestionInsightStrip'
 import DeltaContextNote from '@learn/components/drill/DeltaContextNote'
@@ -112,6 +112,11 @@ function DrillPageInner() {
   // saveDrillAttempt threw after the user already saw their score.
   // We surface a warning rather than discarding the result.
   const [persistFailed, setPersistFailed] = useState(false)
+  // Tracks the in-flight evaluation fetch so we can abort it on
+  // unmount or when the user submits again. Vercel Agent flagged the
+  // unguarded version for triggering setState-on-unmounted warnings
+  // when users navigate away mid-stream.
+  const submitControllerRef = useRef<AbortController | null>(null)
 
   // Pathway P2 Wave 5 — pathway entry context (read once by parent,
   // passed down as props to avoid every child re-calling
@@ -132,6 +137,14 @@ function DrillPageInner() {
       .then(d => { setQuestions(d.questions || []); setLoading(false) })
       .catch(() => setLoading(false))
   }, [filter])
+
+  // Cancel any in-flight drill submission on unmount so the SSE
+  // reader stops and we don't fire setState on an unmounted tree.
+  useEffect(() => {
+    return () => {
+      submitControllerRef.current?.abort()
+    }
+  }, [])
 
   const startDrill = (q: WeakQuestion) => {
     setActiveQuestion(q)
@@ -185,6 +198,13 @@ function DrillPageInner() {
 
   const submitAnswer = async () => {
     if (!activeQuestion || !newAnswer.trim()) return
+    // Cancel any previous evaluation that's still in flight (e.g.
+    // user clicked Submit twice). Race-free because the previous
+    // submit's catch will see AbortError and skip its setState.
+    submitControllerRef.current?.abort()
+    const controller = new AbortController()
+    submitControllerRef.current = controller
+
     setEvaluating(true)
     setStreamingBreakdown({})
     setPersistFailed(false)
@@ -192,6 +212,7 @@ function DrillPageInner() {
       const res = await fetch('/api/learn/drill/evaluate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           sessionId: activeQuestion.sessionId,
           questionIndex: activeQuestion.questionIndex,
@@ -210,10 +231,20 @@ function DrillPageInner() {
         throw new Error(`drill-evaluate: ${res.status}`)
       }
       await consumeStreamingEvaluator(res.body)
-    } catch {
+    } catch (err) {
+      // Aborts (unmount or repeated-submit) aren't user-visible errors.
+      if (controller.signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
+        return
+      }
       setStreamingBreakdown(null)
     } finally {
-      setEvaluating(false)
+      // Only flip evaluating if this submission is still the active
+      // one — a repeated submit will have replaced the ref already
+      // and its own finally will own the flag.
+      if (submitControllerRef.current === controller) {
+        submitControllerRef.current = null
+        setEvaluating(false)
+      }
     }
   }
 
