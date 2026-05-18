@@ -44,6 +44,24 @@ export interface CompletionResponse {
   truncated?: boolean
 }
 
+/**
+ * Streaming event emitted by ProviderAdapter.stream (when implemented).
+ * The modelRouter consumes this stream and may re-emit it to SSE
+ * endpoints. Phase 1 (OpenAI only) only uses `delta` + `done` events;
+ * `json_delta` is reserved for Phase 2 (Anthropic tool_use) and OpenAI
+ * json_schema strict-mode futures — kept on the type union now so the
+ * contract doesn't need to change later.
+ */
+export type StreamEvent =
+  | { kind: 'delta'; text: string }
+  | { kind: 'json_delta'; partialJson: string }
+  | {
+      kind: 'done'
+      inputTokens: number
+      outputTokens: number
+      truncated: boolean
+    }
+
 export interface ProviderAdapter {
   /** Unique identifier used in config (e.g. 'anthropic', 'openai') */
   name: string
@@ -51,8 +69,29 @@ export interface ProviderAdapter {
   label: string
   /** Returns true if the required API key is set in environment */
   isConfigured: () => boolean
-  /** Run a completion against this provider */
-  complete: (params: CompletionParams) => Promise<CompletionResponse>
+  /**
+   * Run a completion against this provider.
+   * `signal` is optional and propagated to the SDK so a route handler
+   * can abort the upstream call when the client disconnects (Next.js
+   * Route Handlers expose `req.signal` for this).
+   */
+  complete: (params: CompletionParams, signal?: AbortSignal) => Promise<CompletionResponse>
+  /**
+   * Optional: provider supports native streaming. When present,
+   * modelRouter.streamCompletion delegates to this. When absent,
+   * modelRouter polyfills via `complete()` so callers never have to
+   * branch on capability.
+   *
+   * Implementations MUST:
+   *   - Skip empty deltas (e.g. OpenAI's first chunk that carries only
+   *     `{role:'assistant'}` with no content). The modelRouter relies
+   *     on "first non-empty delta" as the boundary for its provider
+   *     fallback chain.
+   *   - Yield exactly one `kind:'done'` event as the terminal element.
+   *   - Propagate `signal` aborts; throw on abort so the consumer's
+   *     for-await loop tears down cleanly.
+   */
+  stream?: (params: CompletionParams, signal?: AbortSignal) => AsyncIterable<StreamEvent>
 }
 
 // ─── Registry ───────────────────────────────────────────────────────────────

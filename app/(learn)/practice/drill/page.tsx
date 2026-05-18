@@ -1,9 +1,10 @@
 'use client'
 
-import { useEffect, useState, Suspense } from 'react'
+import { useEffect, useRef, useState, Suspense } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useSearchParams } from 'next/navigation'
 import { deduplicatedFetch } from '@shared/cachedFetch'
+import { parseSSEStream } from '@learn/lib/sse'
 import PathwayEntryStrip from '@learn/components/drill/PathwayEntryStrip'
 import QuestionInsightStrip from '@learn/components/drill/QuestionInsightStrip'
 import DeltaContextNote from '@learn/components/drill/DeltaContextNote'
@@ -97,6 +98,25 @@ function DrillPageInner() {
   const [evaluating, setEvaluating] = useState(false)
   const [result, setResult] = useState<DrillResult | null>(null)
   const [showOriginal, setShowOriginal] = useState(false)
+  // Streaming evaluator (PR feat/drill-streaming-evaluator, Phase 1).
+  // While a streaming evaluation is in flight, `streamingBreakdown`
+  // fills one dimension at a time as the server emits `event: score`
+  // SSE frames. On `event: complete` we promote the accumulated
+  // breakdown into `result` (the existing final state) and clear
+  // this. Renders alongside the existing UI — when null OR result is
+  // set, the existing breakdown grid takes over.
+  const [streamingBreakdown, setStreamingBreakdown] = useState<
+    Partial<{ relevance: number; structure: number; specificity: number; ownership: number }> | null
+  >(null)
+  // Streaming completion may emit `persistFailed:true` when
+  // saveDrillAttempt threw after the user already saw their score.
+  // We surface a warning rather than discarding the result.
+  const [persistFailed, setPersistFailed] = useState(false)
+  // Tracks the in-flight evaluation fetch so we can abort it on
+  // unmount or when the user submits again. Vercel Agent flagged the
+  // unguarded version for triggering setState-on-unmounted warnings
+  // when users navigate away mid-stream.
+  const submitControllerRef = useRef<AbortController | null>(null)
 
   // Pathway P2 Wave 5 — pathway entry context (read once by parent,
   // passed down as props to avoid every child re-calling
@@ -117,6 +137,14 @@ function DrillPageInner() {
       .then(d => { setQuestions(d.questions || []); setLoading(false) })
       .catch(() => setLoading(false))
   }, [filter])
+
+  // Cancel any in-flight drill submission on unmount so the SSE
+  // reader stops and we don't fire setState on an unmounted tree.
+  useEffect(() => {
+    return () => {
+      submitControllerRef.current?.abort()
+    }
+  }, [])
 
   const startDrill = (q: WeakQuestion) => {
     setActiveQuestion(q)
@@ -170,11 +198,21 @@ function DrillPageInner() {
 
   const submitAnswer = async () => {
     if (!activeQuestion || !newAnswer.trim()) return
+    // Cancel any previous evaluation that's still in flight (e.g.
+    // user clicked Submit twice). Race-free because the previous
+    // submit's catch will see AbortError and skip its setState.
+    submitControllerRef.current?.abort()
+    const controller = new AbortController()
+    submitControllerRef.current = controller
+
     setEvaluating(true)
+    setStreamingBreakdown({})
+    setPersistFailed(false)
     try {
       const res = await fetch('/api/learn/drill/evaluate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           sessionId: activeQuestion.sessionId,
           questionIndex: activeQuestion.questionIndex,
@@ -185,12 +223,61 @@ function DrillPageInner() {
           competency: activeQuestion.competency,
         }),
       })
-      const data = await res.json()
-      setResult(data)
-    } catch {
-      // silently fail
+
+      // Route always streams on 2xx. JSON content-type means an HTTP
+      // error envelope (401/400/500) — bail to the catch so the user
+      // returns to the textarea and can retry.
+      if (!res.ok || !res.body || !(res.headers.get('content-type') ?? '').includes('text/event-stream')) {
+        throw new Error(`drill-evaluate: ${res.status}`)
+      }
+      await consumeStreamingEvaluator(res.body)
+    } catch (err) {
+      // Aborts (unmount or repeated-submit) aren't user-visible errors.
+      if (controller.signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
+        return
+      }
+      setStreamingBreakdown(null)
     } finally {
-      setEvaluating(false)
+      // Only flip evaluating if this submission is still the active
+      // one — a repeated submit will have replaced the ref already
+      // and its own finally will own the flag.
+      if (submitControllerRef.current === controller) {
+        submitControllerRef.current = null
+        setEvaluating(false)
+      }
+    }
+  }
+
+  /**
+   * Consume the SSE response from /api/learn/drill/evaluate.
+   *   `event: score`    → updates one entry in streamingBreakdown
+   *   `event: complete` → promotes to result + clears streamingBreakdown
+   *   `event: error`    → bails (silent — error message already in console.log via logger)
+   */
+  async function consumeStreamingEvaluator(body: ReadableStream<Uint8Array>) {
+    for await (const ev of parseSSEStream(body)) {
+      if (ev.event === 'score') {
+        try {
+          const payload = JSON.parse(ev.data) as { dimension: string; score: number }
+          setStreamingBreakdown((prev) => ({ ...(prev ?? {}), [payload.dimension]: payload.score }))
+        } catch {
+          // ignore malformed score frame; stream continues
+        }
+      } else if (ev.event === 'complete') {
+        try {
+          const payload = JSON.parse(ev.data) as DrillResult & { persistFailed?: boolean }
+          if (payload.persistFailed) setPersistFailed(true)
+          setStreamingBreakdown(null)
+          setResult(payload)
+        } catch {
+          // shouldn't happen — server-controlled JSON, but stay safe
+        }
+      } else if (ev.event === 'error') {
+        setStreamingBreakdown(null)
+        // Caller's catch path handles the rest; throwing here keeps
+        // the for-await loop short-circuited.
+        throw new Error('stream-error')
+      }
     }
   }
 
@@ -199,6 +286,8 @@ function DrillPageInner() {
     setNewAnswer('')
     setResult(null)
     setShowOriginal(false)
+    setStreamingBreakdown(null)
+    setPersistFailed(false)
   }
 
   if (loading) {
@@ -372,6 +461,39 @@ function DrillPageInner() {
                   >
                     {evaluating ? 'Evaluating...' : 'Submit Answer'}
                   </button>
+
+                  {/* Streaming progress strip — visible only while a
+                      streaming evaluation is in flight (feature flag
+                      on + provider supports streaming). Each dim
+                      card fills in as its `event: score` lands.
+                      Disappears the moment `event: complete` arrives
+                      and the existing result block below takes over. */}
+                  {evaluating && streamingBreakdown && (
+                    <motion.div
+                      data-testid="drill-streaming-progress"
+                      className="mt-4 grid grid-cols-2 gap-3"
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                    >
+                      {(['relevance', 'structure', 'specificity', 'ownership'] as const).map((dim) => {
+                        const score = streamingBreakdown[dim]
+                        const arrived = typeof score === 'number'
+                        return (
+                          <div
+                            key={dim}
+                            data-testid={`drill-streaming-dim-${dim}`}
+                            data-arrived={arrived ? 'true' : 'false'}
+                            className={`p-3 rounded-lg ${arrived ? 'bg-[#f8fafc]' : 'bg-[#f8fafc] animate-pulse'}`}
+                          >
+                            <div className="text-xs text-[#8b98a5] capitalize mb-1">{dim}</div>
+                            <div className="text-sm font-medium text-[#0f1419] tabular-nums">
+                              {arrived ? score : '—'}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </motion.div>
+                  )}
                 </>
               )}
 
@@ -382,6 +504,19 @@ function DrillPageInner() {
                   initial={{ opacity: 0, y: 12 }}
                   animate={{ opacity: 1, y: 0 }}
                 >
+                  {/* Streaming evaluator may emit `complete` with
+                      `persistFailed:true` when saveDrillAttempt threw
+                      after the user already saw their score. Surface
+                      a non-blocking warning so they know the attempt
+                      didn't save and can retry to record it. */}
+                  {persistFailed && (
+                    <div
+                      data-testid="drill-persist-failed-warning"
+                      className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2"
+                    >
+                      We couldn&apos;t save this attempt to your history. Your score above is correct; try the drill again to record it.
+                    </div>
+                  )}
                   {/* Score comparison */}
                   <div className="flex items-center gap-4 p-4 rounded-xl bg-[#f8fafc]">
                     <div className="text-center">
