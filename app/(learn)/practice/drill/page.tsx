@@ -147,16 +147,24 @@ function DrillPageInner() {
   }, [])
 
   // Esc closes an active drill back to the list — keyboard parity
-  // for the new Back button. Guard against firing while evaluating
-  // OR while the user is typing in the textarea (capturing Esc
-  // there would be hostile); the latter is naturally handled
-  // because the textarea doesn't stopPropagation, but we still
-  // skip if `evaluating` is true so a mid-stream Esc doesn't lose
-  // the in-flight result.
+  // for the Back button. Two scope guards:
+  //
+  //   1. Skip while `evaluating` so a mid-stream Esc can't lose the
+  //      in-flight result.
+  //   2. Skip when focus is inside a text input (TEXTAREA / INPUT /
+  //      contenteditable). The textarea does NOT intercept Esc on
+  //      its own — without this guard, hitting Esc while typing an
+  //      answer would bubble to the window listener, close the
+  //      drill, and lose the user's work (Vercel Agent review on
+  //      PR #391).
   useEffect(() => {
     if (!activeQuestion || evaluating) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') resetDrill()
+      if (e.key !== 'Escape') return
+      const el = e.target as HTMLElement | null
+      const tag = el?.tagName
+      if (tag === 'TEXTAREA' || tag === 'INPUT' || el?.isContentEditable) return
+      resetDrill()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
