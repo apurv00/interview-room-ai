@@ -14,9 +14,26 @@ export const dynamic = 'force-dynamic'
 
 /**
  * Wave 5 — type-guard on the LLM `scores` payload before we persist
- * it into the new `DrillAttempt.breakdown` field. The LLM is prompted
- * to return all 4 dims as numbers; this just defends against drift so
- * a malformed response doesn't 500 the entire save.
+ * it into `DrillAttempt.breakdown`. Must validate THREE things, not
+ * just typeof:
+ *
+ *   1. Each field IS a number — typeof check
+ *   2. Each field is FINITE — `typeof NaN === 'number'` and
+ *      `typeof Infinity === 'number'` both slip past a naive typeof
+ *      check (Codex P1 on PR #388)
+ *   3. Each field is in the 0-100 range that the schema's
+ *      `min: 0, max: 100` validators enforce on the subdoc
+ *
+ * Without (2) and (3) the breakdown could pass the guard, fail
+ * Mongoose validation on `create`, and 500 the entire evaluate
+ * response — contradicting the comment at the call site that
+ * promises "skip the field so the save still succeeds with the
+ * avg-only delta as a fallback".
+ *
+ * On out-of-range or non-finite drift we drop `breakdown` entirely;
+ * the avg `newScore` path remains intact. This is honest degradation:
+ * an LLM that returned 105 or NaN is noisy enough that we shouldn't
+ * pretend the per-dim breakdown is meaningful.
  */
 function isFourDimScore(s: unknown): s is {
   relevance: number
@@ -27,11 +44,20 @@ function isFourDimScore(s: unknown): s is {
   if (!s || typeof s !== 'object') return false
   const r = s as Record<string, unknown>
   return (
-    typeof r.relevance === 'number' &&
-    typeof r.structure === 'number' &&
-    typeof r.specificity === 'number' &&
-    typeof r.ownership === 'number'
+    isValidDimScore(r.relevance) &&
+    isValidDimScore(r.structure) &&
+    isValidDimScore(r.specificity) &&
+    isValidDimScore(r.ownership)
   )
+}
+
+function isValidDimScore(v: unknown): v is number {
+  // `Number.isFinite` returns false for NaN, Infinity, -Infinity, and
+  // any non-number — strictly tighter than `typeof v === 'number'`.
+  // The 0-100 bounds mirror the DrillAttempt.breakdown subdoc schema
+  // (min: 0, max: 100) so the route's "skip on bad data" intent
+  // matches what Mongoose will accept.
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100
 }
 
 export async function POST(req: Request) {
