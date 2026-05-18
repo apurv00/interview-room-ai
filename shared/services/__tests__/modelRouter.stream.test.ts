@@ -404,6 +404,81 @@ describe('streamCompletion — firstTextByteSeen fallback guard', () => {
     expect(events[0]).toEqual({ kind: 'delta', text: 'ok' })
   })
 
+  it('dedupes the chain when primary equals the hardcoded default (Codex P2 on PR #390)', async () => {
+    // learn.drill-evaluate default is now openai/gpt-5.4-mini. If CMS
+    // also routes it to openai/gpt-5.4-mini with a fallback, the prior
+    // chain-builder produced [openai, fallback, openai] because it
+    // only compared the default against the LAST attempt. That third
+    // attempt is a wasted retry of the already-failed primary.
+    await injectSlotConfig({
+      primaryProvider: 'openai',
+      primaryModel: 'gpt-5.4-mini',
+      fallbackProvider: 'fake-fb',
+      fallbackModel: 'fb-m',
+    })
+
+    const err = new Error('all down')
+    mockGetProvider.mockReturnValue({
+      name: 'any',
+      isConfigured: () => true,
+      complete: vi.fn(),
+      stream: vi.fn().mockReturnValue(asyncIterImmediateThrow(err)),
+    })
+
+    let caught: unknown
+    try {
+      for await (const _ of streamCompletion({
+        taskSlot: 'learn.drill-evaluate',
+        system: 'sys',
+        messages: [{ role: 'user', content: 'hi' }],
+      })) {
+        // unreached
+      }
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(Error)
+    // Exactly 2 attempts: [openai/gpt-5.4-mini, fake-fb/fb-m].
+    // The hardcoded default (openai/gpt-5.4-mini) is dropped because
+    // it duplicates the primary.
+    expect(mockGetProvider).toHaveBeenCalledTimes(2)
+  })
+
+  it('dedupes the chain when fallback equals the hardcoded default', async () => {
+    // Symmetric case: CMS configures a custom primary with anthropic/
+    // claude-sonnet-4-6 as fallback (also the original Anthropic
+    // default for many slots). The default attempt should be skipped
+    // because the fallback already covers it.
+    await injectSlotConfig({
+      primaryProvider: 'fake-primary',
+      primaryModel: 'm-1',
+      fallbackProvider: 'openai',
+      fallbackModel: 'gpt-5.4-mini', // matches learn.drill-evaluate default
+    })
+
+    const err = new Error('all down')
+    mockGetProvider.mockReturnValue({
+      name: 'any',
+      isConfigured: () => true,
+      complete: vi.fn(),
+      stream: vi.fn().mockReturnValue(asyncIterImmediateThrow(err)),
+    })
+
+    try {
+      for await (const _ of streamCompletion({
+        taskSlot: 'learn.drill-evaluate',
+        system: 'sys',
+        messages: [{ role: 'user', content: 'hi' }],
+      })) {
+        // unreached
+      }
+    } catch {
+      // expected
+    }
+    // 2 attempts: [fake-primary/m-1, openai/gpt-5.4-mini].
+    expect(mockGetProvider).toHaveBeenCalledTimes(2)
+  })
+
   it('skips a provider that is not configured (missing API key) + falls back to next', async () => {
     await injectSlotConfig({ primaryProvider: 'fake-primary', primaryModel: 'm-1' })
 

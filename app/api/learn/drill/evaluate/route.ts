@@ -153,12 +153,20 @@ export async function POST(req: NextRequest) {
           if (ev.kind === 'delta') {
             accumulated += ev.text
             const scanBuffer = stripFences(accumulated)
+            // Lookahead `(?=[,}\s])` ensures the number is COMPLETE
+            // — without it, `\d+` greedy-matches whatever digits are
+            // at the buffer edge, so a stream like `"structure":6`
+            // + `5,...` would emit 6, mark "structure" as emitted,
+            // and never correct to 65 (Codex P2 on PR #390). Once
+            // a terminator (comma, close-brace, or whitespace) lands,
+            // the digit run is settled and safe to publish.
+            //
             // `matchAll` returns a RegExpStringIterator which the
             // project's tsconfig won't iterate via for-of without
             // `downlevelIteration`. Materializing via Array.from is
             // simpler than touching tsconfig.
             const matches = Array.from(
-              scanBuffer.matchAll(/"(relevance|structure|specificity|ownership)":\s*(\d+)/g),
+              scanBuffer.matchAll(/"(relevance|structure|specificity|ownership)":\s*(\d+)(?=[,}\s])/g),
             )
             for (const m of matches) {
               const dim = m[1]

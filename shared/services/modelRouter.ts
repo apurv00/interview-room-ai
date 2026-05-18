@@ -1041,16 +1041,28 @@ export async function* streamCompletion(
   const baseParams = { system, messages, maxTokens, temperature, responseFormat: opts.responseFormat }
 
   type Attempt = { provider: string; model: string }
-  const attempts: Attempt[] = [{ provider: resolved.provider, model: resolved.model }]
+  const attempts: Attempt[] = []
+  const seen = new Set<string>()
+  const pushAttempt = (provider: string, model: string) => {
+    const key = `${provider}|${model}`
+    if (seen.has(key)) return
+    seen.add(key)
+    attempts.push({ provider, model })
+  }
+  pushAttempt(resolved.provider, resolved.model)
   if (resolved.fallbackModel) {
-    attempts.push({ provider: resolved.fallbackProvider ?? 'anthropic', model: resolved.fallbackModel })
+    pushAttempt(resolved.fallbackProvider ?? 'anthropic', resolved.fallbackModel)
   }
+  // Hardcoded task-slot default — only adds an attempt when it
+  // differs from BOTH the primary AND the fallback. Codex P2 on
+  // PR #390: prior code only compared against the last attempt, so
+  // when the slot default equals the primary (now the case for
+  // `learn.drill-evaluate` after switching its default to OpenAI),
+  // the chain became [primary, fallback, primary-again] — an
+  // unnecessary third upstream call that just delays error delivery
+  // when both primary and fallback fail before first byte.
   const defaults = TASK_SLOT_DEFAULTS[opts.taskSlot]
-  const defaultProvider = defaults.provider ?? 'anthropic'
-  const lastAttempt = attempts[attempts.length - 1]
-  if (lastAttempt.provider !== defaultProvider || lastAttempt.model !== defaults.model) {
-    attempts.push({ provider: defaultProvider, model: defaults.model })
-  }
+  pushAttempt(defaults.provider ?? 'anthropic', defaults.model)
 
   let firstTextByteSeen = false
   let lastErr: unknown = new Error('streamCompletion: no attempts available')

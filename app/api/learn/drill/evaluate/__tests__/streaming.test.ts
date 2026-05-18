@@ -171,6 +171,45 @@ describe('POST /api/learn/drill/evaluate', () => {
     }
   })
 
+  it('does not emit partial digits when a number splits across deltas (Codex P2)', async () => {
+    // Streaming model emits the relevance value 65 in two chunks
+    // (`6` then `5,...`). Without a terminator-lookahead, the regex
+    // would match `6` on the first chunk, emit it, mark `relevance`
+    // as already-emitted, and never correct to 65 — the user sees a
+    // wrong per-dim value. With the lookahead, `6` is rejected (no
+    // terminator yet); after the next chunk lands, `65,` matches
+    // cleanly.
+    mockStreamCompletion.mockReturnValue(
+      asyncIterFrom([
+        { kind: 'delta', text: '{"relevance":6' },
+        { kind: 'delta', text: '5,"structure":7' },
+        { kind: 'delta', text: '0,"specificity":8' },
+        { kind: 'delta', text: '5,"ownership":9' },
+        { kind: 'delta', text: '0}' },
+        { kind: 'done', inputTokens: 50, outputTokens: 30, truncated: false },
+      ]),
+    )
+
+    const res = await POST(buildRequest(baseBody))
+    const frames = await collectSSEFrames(res)
+    const scoreFrames = frames.filter((f) => f.event === 'score')
+    // Exactly 4 score events, each carrying the FULL final number,
+    // not a leading-digit prefix.
+    expect(scoreFrames).toHaveLength(4)
+    const scoresByDim = Object.fromEntries(
+      scoreFrames.map((f) => {
+        const p = JSON.parse(f.data)
+        return [p.dimension, p.score]
+      }),
+    )
+    expect(scoresByDim).toEqual({
+      relevance: 65,
+      structure: 70,
+      specificity: 85,
+      ownership: 90,
+    })
+  })
+
   it('parses fence-wrapped JSON when chunks include ```json prefix', async () => {
     mockStreamCompletion.mockReturnValue(
       asyncIterFrom([
