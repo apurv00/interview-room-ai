@@ -974,13 +974,135 @@ export async function completion(opts: CompletionOptions): Promise<CompletionRes
 
 /**
  * Streaming version of completion. Same fallback chain.
+ *
+ * NOTE (2026-05-18): historically this was an alias for `completion()`
+ * — the "streaming" comment was aspirational; the work was never done.
+ * Several callers (evaluate-answer route + tests) rely on the
+ * `Promise<CompletionResult>` shape. We preserve that contract here
+ * to avoid breaking them. The genuinely-streaming primitive lives at
+ * `streamCompletion()` below, and new callers should use it.
  */
 export async function completionStream(opts: CompletionOptions): Promise<CompletionResult> {
-  // For non-Anthropic providers, streaming uses the same path as completion
-  // since the provider adapter handles the full request/response cycle.
-  // For Anthropic specifically, we could use the streaming SDK, but
-  // the adapter pattern abstracts this — callers get the same interface.
   return completion(opts)
+}
+
+/**
+ * Genuinely-streaming companion to `completion()`. Returns an
+ * AsyncIterable of `StreamEvent`s — one or more `delta` events
+ * (text chunks as the model emits them) followed by exactly one
+ * terminal `done` event with usage + truncation flag.
+ *
+ * Fallback chain (mirrors `completion()` shape but with a streaming
+ * safety guard):
+ *
+ *   1. Primary model via configured provider
+ *   2. Fallback model via fallback provider
+ *   3. Hardcoded task-slot default
+ *
+ * The fallback chain ONLY engages BEFORE the first non-empty `delta`
+ * event has been yielded — once bytes have left this function, the
+ * downstream SSE consumer has already committed to a provider/model
+ * choice and we can't restart without confusing the client. After the
+ * "first text byte" boundary, errors re-throw and the consumer must
+ * surface them (typically as an SSE `event: error` frame). See the
+ * PR-388 Plan-agent review for the rationale.
+ *
+ * Providers WITHOUT a `.stream` method are polyfilled: we call
+ * `complete()` and yield a single `delta` event with the full text,
+ * followed by `done`. Callers don't have to branch on capability.
+ *
+ * `signal` is plumbed through to the provider SDK so client
+ * disconnects (Next.js `req.signal`) abort the upstream LLM call.
+ */
+export async function* streamCompletion(
+  opts: CompletionOptions,
+  signal?: AbortSignal,
+): AsyncIterable<import('./providers/index').StreamEvent> {
+  const { getProvider } = await import('./providers/index')
+  const resolved = await resolveModel(opts.taskSlot)
+  const maxTokens = opts.maxTokens ?? resolved.maxTokens
+  const temperature = opts.temperature ?? resolved.temperature
+  const system = typeof opts.system === 'string' ? opts.system : opts.system.map((b) => b.text).join('\n\n')
+  const messages = await prepareMessages(opts, resolved)
+  const baseParams = { system, messages, maxTokens, temperature, responseFormat: opts.responseFormat }
+
+  type Attempt = { provider: string; model: string }
+  const attempts: Attempt[] = [{ provider: resolved.provider, model: resolved.model }]
+  if (resolved.fallbackModel) {
+    attempts.push({ provider: resolved.fallbackProvider ?? 'anthropic', model: resolved.fallbackModel })
+  }
+  const defaults = TASK_SLOT_DEFAULTS[opts.taskSlot]
+  const defaultProvider = defaults.provider ?? 'anthropic'
+  const lastAttempt = attempts[attempts.length - 1]
+  if (lastAttempt.provider !== defaultProvider || lastAttempt.model !== defaults.model) {
+    attempts.push({ provider: defaultProvider, model: defaults.model })
+  }
+
+  let firstTextByteSeen = false
+  let lastErr: unknown = new Error('streamCompletion: no attempts available')
+
+  for (let i = 0; i < attempts.length; i++) {
+    const { provider: providerName, model } = attempts[i]
+    const provider = getProvider(providerName)
+    if (!provider) {
+      lastErr = new Error(`Provider "${providerName}" not registered`)
+      aiLogger.warn({ taskSlot: opts.taskSlot, providerName }, 'streamCompletion: provider not registered, trying next')
+      continue
+    }
+    if (!provider.isConfigured()) {
+      lastErr = new Error(`Provider "${providerName}" not configured`)
+      aiLogger.warn({ taskSlot: opts.taskSlot, providerName }, 'streamCompletion: provider not configured, trying next')
+      continue
+    }
+
+    try {
+      if (provider.stream) {
+        // Native streaming path — pipe events through, flipping
+        // firstTextByteSeen the moment a non-empty delta lands.
+        for await (const ev of provider.stream({ model, ...baseParams }, signal)) {
+          if (ev.kind === 'delta' && ev.text.length > 0) {
+            firstTextByteSeen = true
+          }
+          yield ev
+        }
+        return
+      }
+      // Polyfill path: call complete() and synthesize the stream.
+      const result = await provider.complete({ model, ...baseParams }, signal)
+      if (result.text.length > 0) {
+        firstTextByteSeen = true
+        yield { kind: 'delta', text: result.text }
+      }
+      yield {
+        kind: 'done',
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
+        truncated: !!result.truncated,
+      }
+      return
+    } catch (err) {
+      lastErr = err
+      if (firstTextByteSeen) {
+        // Bytes already left this function — can't restart on a new
+        // provider without corrupting the consumer's view. Re-throw.
+        aiLogger.error(
+          { err, taskSlot: opts.taskSlot, providerName, model, attemptIndex: i },
+          'streamCompletion: failure AFTER first byte, propagating',
+        )
+        throw err
+      }
+      aiLogger.warn(
+        { err, taskSlot: opts.taskSlot, providerName, model, attemptIndex: i },
+        'streamCompletion: failure BEFORE first byte, trying next attempt',
+      )
+      // Fall through to next attempt
+    }
+  }
+
+  // Exhausted all attempts without yielding any bytes.
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error(`streamCompletion: all attempts failed for ${opts.taskSlot}`)
 }
 
 // ─── Re-exports for backward compatibility ──────────────────────────────────

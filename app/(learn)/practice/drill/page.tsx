@@ -4,6 +4,7 @@ import { useEffect, useState, Suspense } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useSearchParams } from 'next/navigation'
 import { deduplicatedFetch } from '@shared/cachedFetch'
+import { parseSSEStream } from '@shared/services/sse'
 import PathwayEntryStrip from '@learn/components/drill/PathwayEntryStrip'
 import QuestionInsightStrip from '@learn/components/drill/QuestionInsightStrip'
 import DeltaContextNote from '@learn/components/drill/DeltaContextNote'
@@ -97,6 +98,20 @@ function DrillPageInner() {
   const [evaluating, setEvaluating] = useState(false)
   const [result, setResult] = useState<DrillResult | null>(null)
   const [showOriginal, setShowOriginal] = useState(false)
+  // Streaming evaluator (PR feat/drill-streaming-evaluator, Phase 1).
+  // While a streaming evaluation is in flight, `streamingBreakdown`
+  // fills one dimension at a time as the server emits `event: score`
+  // SSE frames. On `event: complete` we promote the accumulated
+  // breakdown into `result` (the existing final state) and clear
+  // this. Renders alongside the existing UI — when null OR result is
+  // set, the existing breakdown grid takes over.
+  const [streamingBreakdown, setStreamingBreakdown] = useState<
+    Partial<{ relevance: number; structure: number; specificity: number; ownership: number }> | null
+  >(null)
+  // Streaming completion may emit `persistFailed:true` when
+  // saveDrillAttempt threw after the user already saw their score.
+  // We surface a warning rather than discarding the result.
+  const [persistFailed, setPersistFailed] = useState(false)
 
   // Pathway P2 Wave 5 — pathway entry context (read once by parent,
   // passed down as props to avoid every child re-calling
@@ -171,10 +186,16 @@ function DrillPageInner() {
   const submitAnswer = async () => {
     if (!activeQuestion || !newAnswer.trim()) return
     setEvaluating(true)
+    setStreamingBreakdown({})
+    setPersistFailed(false)
     try {
       const res = await fetch('/api/learn/drill/evaluate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        // Accept hint — server reads this only for logging; the actual
+        // protocol switch is the feature flag, but signalling intent
+        // here helps debugging when streaming is enabled but the user
+        // somehow received JSON (e.g. cached preview).
         body: JSON.stringify({
           sessionId: activeQuestion.sessionId,
           questionIndex: activeQuestion.questionIndex,
@@ -185,12 +206,61 @@ function DrillPageInner() {
           competency: activeQuestion.competency,
         }),
       })
-      const data = await res.json()
-      setResult(data)
+
+      const contentType = res.headers.get('content-type') || ''
+      if (contentType.includes('text/event-stream') && res.body) {
+        // Streaming branch — feature flag is on AND CMS routes
+        // learn.drill-evaluate to a provider with native streaming
+        // (Phase 1: openai only). Consume score-by-score; promote
+        // to `result` when `complete` lands.
+        await consumeStreamingEvaluator(res.body)
+      } else {
+        // Legacy synchronous branch — feature flag off or server
+        // returned JSON for any other reason. Behaviour identical to
+        // pre-streaming PR.
+        const data = await res.json()
+        setStreamingBreakdown(null)
+        setResult(data)
+      }
     } catch {
-      // silently fail
+      // silently fail; setEvaluating(false) in finally returns the
+      // user to the textarea so they can retry.
+      setStreamingBreakdown(null)
     } finally {
       setEvaluating(false)
+    }
+  }
+
+  /**
+   * Consume the SSE response from /api/learn/drill/evaluate.
+   *   `event: score`    → updates one entry in streamingBreakdown
+   *   `event: complete` → promotes to result + clears streamingBreakdown
+   *   `event: error`    → bails (silent — error message already in console.log via logger)
+   */
+  async function consumeStreamingEvaluator(body: ReadableStream<Uint8Array>) {
+    for await (const ev of parseSSEStream(body)) {
+      if (ev.event === 'score') {
+        try {
+          const payload = JSON.parse(ev.data) as { dimension: string; score: number }
+          setStreamingBreakdown((prev) => ({ ...(prev ?? {}), [payload.dimension]: payload.score }))
+        } catch {
+          // ignore malformed score frame; stream continues
+        }
+      } else if (ev.event === 'complete') {
+        try {
+          const payload = JSON.parse(ev.data) as DrillResult & { persistFailed?: boolean }
+          if (payload.persistFailed) setPersistFailed(true)
+          setStreamingBreakdown(null)
+          setResult(payload)
+        } catch {
+          // shouldn't happen — server-controlled JSON, but stay safe
+        }
+      } else if (ev.event === 'error') {
+        setStreamingBreakdown(null)
+        // Caller's catch path handles the rest; throwing here keeps
+        // the for-await loop short-circuited.
+        throw new Error('stream-error')
+      }
     }
   }
 
@@ -199,6 +269,8 @@ function DrillPageInner() {
     setNewAnswer('')
     setResult(null)
     setShowOriginal(false)
+    setStreamingBreakdown(null)
+    setPersistFailed(false)
   }
 
   if (loading) {
@@ -372,6 +444,39 @@ function DrillPageInner() {
                   >
                     {evaluating ? 'Evaluating...' : 'Submit Answer'}
                   </button>
+
+                  {/* Streaming progress strip — visible only while a
+                      streaming evaluation is in flight (feature flag
+                      on + provider supports streaming). Each dim
+                      card fills in as its `event: score` lands.
+                      Disappears the moment `event: complete` arrives
+                      and the existing result block below takes over. */}
+                  {evaluating && streamingBreakdown && (
+                    <motion.div
+                      data-testid="drill-streaming-progress"
+                      className="mt-4 grid grid-cols-2 gap-3"
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                    >
+                      {(['relevance', 'structure', 'specificity', 'ownership'] as const).map((dim) => {
+                        const score = streamingBreakdown[dim]
+                        const arrived = typeof score === 'number'
+                        return (
+                          <div
+                            key={dim}
+                            data-testid={`drill-streaming-dim-${dim}`}
+                            data-arrived={arrived ? 'true' : 'false'}
+                            className={`p-3 rounded-lg ${arrived ? 'bg-[#f8fafc]' : 'bg-[#f8fafc] animate-pulse'}`}
+                          >
+                            <div className="text-xs text-[#8b98a5] capitalize mb-1">{dim}</div>
+                            <div className="text-sm font-medium text-[#0f1419] tabular-nums">
+                              {arrived ? score : '—'}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </motion.div>
+                  )}
                 </>
               )}
 
@@ -382,6 +487,19 @@ function DrillPageInner() {
                   initial={{ opacity: 0, y: 12 }}
                   animate={{ opacity: 1, y: 0 }}
                 >
+                  {/* Streaming evaluator may emit `complete` with
+                      `persistFailed:true` when saveDrillAttempt threw
+                      after the user already saw their score. Surface
+                      a non-blocking warning so they know the attempt
+                      didn't save and can retry to record it. */}
+                  {persistFailed && (
+                    <div
+                      data-testid="drill-persist-failed-warning"
+                      className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2"
+                    >
+                      We couldn&apos;t save this attempt to your history. Your score above is correct; try the drill again to record it.
+                    </div>
+                  )}
                   {/* Score comparison */}
                   <div className="flex items-center gap-4 p-4 rounded-xl bg-[#f8fafc]">
                     <div className="text-center">
