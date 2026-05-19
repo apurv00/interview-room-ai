@@ -17,12 +17,7 @@ import SourceFeedbackDrawer from '@learn/components/drill/SourceFeedbackDrawer'
 // barrel exists at modules/interview/hooks/ and the @interview barrel
 // pulls in server-only types we don't need here.
 import { useSpeechRecognition } from '@interview/hooks/useSpeechRecognition'
-// eslint-disable-next-line no-restricted-imports -- direct import: the
-// @feedback barrel transitively pulls server-only types/Mongoose into
-// this client component.
-import IdealAnswerComparisonCard from '@feedback/components/IdealAnswerComparisonCard'
-// eslint-disable-next-line no-restricted-imports -- same reason.
-import type { AnswerEvaluation } from '@shared/types'
+import StrongAnswerOutlineCard from '@learn/components/drill/StrongAnswerOutlineCard'
 
 /** Web Speech API capability check — runs in the browser only.
  *  When false we hide the mic button entirely so unsupported browsers
@@ -126,7 +121,6 @@ function DrillPageInner() {
   const [newAnswer, setNewAnswer] = useState('')
   const [evaluating, setEvaluating] = useState(false)
   const [result, setResult] = useState<DrillResult | null>(null)
-  const [showOriginal, setShowOriginal] = useState(false)
   // Streaming evaluator (PR feat/drill-streaming-evaluator, Phase 1).
   // While a streaming evaluation is in flight, `streamingBreakdown`
   // fills one dimension at a time as the server emits `event: score`
@@ -285,7 +279,6 @@ function DrillPageInner() {
     setActiveQuestion(q)
     setNewAnswer('')
     setResult(null)
-    setShowOriginal(false)
     // The synchronous clear keeps the UI from flashing a stale
     // coach card from the previous drill during the brief moment
     // between this click and the fetch effect committing. The
@@ -454,7 +447,6 @@ function DrillPageInner() {
     setActiveQuestion(null)
     setNewAnswer('')
     setResult(null)
-    setShowOriginal(false)
     setStreamingBreakdown(null)
     setPersistFailed(false)
   }
@@ -585,52 +577,30 @@ function DrillPageInner() {
                 </span>
               </div>
 
-              {/* Toggle original answer */}
-              <button
-                onClick={() => setShowOriginal(!showOriginal)}
-                className="text-xs text-blue-400 hover:text-blue-300 mb-3"
-              >
-                {showOriginal ? 'Hide' : 'Show'} original answer
-              </button>
-              {showOriginal && (
-                <div className="p-3 rounded-lg bg-[#f8fafc] text-sm text-[#8b98a5] mb-4 border border-[#e1e8ed]">
-                  {activeQuestion.answer}
-                </div>
-              )}
-
-              {/* Pathway P2 Wave 5 (5B) — per-question coach context.
-                  Primary path: IdealAnswerComparisonCard with the
-                  precomputed strong-answer outline. Fallback when
-                  ideal_answers absent: thin QuestionInsightStrip with
-                  the deriveCoachingTip output. Both gated on context
-                  having loaded; show nothing during the fetch (the
-                  textarea below is still rendered so users aren't
-                  blocked on a slow context load). */}
+              {/* Drill coach card — slim version showing ONLY the
+                  prescriptive guidance (strong-answer outline + key
+                  elements). User feedback on the prior
+                  IdealAnswerComparisonCard usage: "while it's good to
+                  accommodate the suggested structure, rest of the
+                  things added doesn't make sense."
+                  Reasons the old card's other 3 sections were noise
+                  in the drill context:
+                    - Q-label / question text → already the heading
+                      above this card
+                    - Avg score → already the "Original score: N/100"
+                      chip above
+                    - YOUR ANSWER / SCORE BREAKDOWN / WHY IT SCORED LOW
+                      → already in the source-feedback drawer (PR #393)
+                  Fallback path (no idealAnswer) still uses
+                  QuestionInsightStrip — that's a different shape
+                  (coach-tip prose, not strong-answer guidance) and
+                  doesn't have the redundancy problem. */}
               {!result && !questionCtxLoading && questionCtx && (
                 <div className="mb-4 space-y-3">
                   {questionCtx.idealAnswer ? (
-                    <IdealAnswerComparisonCard
-                      ideal={{
-                        questionIndex: activeQuestion.questionIndex,
-                        strongAnswer: questionCtx.idealAnswer.strongAnswer,
-                        keyElements: questionCtx.idealAnswer.keyElements,
-                      }}
-                      originalQuestion={activeQuestion.question}
-                      userAnswer={activeQuestion.answer}
-                      evaluation={
-                        questionCtx.scores
-                          ? ({
-                              questionIndex: activeQuestion.questionIndex,
-                              question: activeQuestion.question,
-                              answer: activeQuestion.answer,
-                              relevance: questionCtx.scores.relevance,
-                              structure: questionCtx.scores.structure,
-                              specificity: questionCtx.scores.specificity,
-                              ownership: questionCtx.scores.ownership,
-                              primaryGap: questionCtx.primaryGap ?? undefined,
-                            } as AnswerEvaluation)
-                          : null
-                      }
+                    <StrongAnswerOutlineCard
+                      strongAnswer={questionCtx.idealAnswer.strongAnswer}
+                      keyElements={questionCtx.idealAnswer.keyElements}
                     />
                   ) : (
                     <QuestionInsightStrip
