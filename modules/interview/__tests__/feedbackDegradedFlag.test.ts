@@ -187,9 +187,16 @@ vi.mock('@learn/services/practiceStatsService', () => ({
 import { POST } from '@/app/api/generate-feedback/route'
 
 function evals(count: number) {
+  // Scores below 60 so the enrichment path fires (2026-05-19
+  // backfill: enrichment now only runs when there are questions
+  // with avg < 60 to generate ideal_answers for; previously it
+  // always ran for the top-3 weakest regardless of score). These
+  // tests assert two LLM calls (core + enrichment), so the
+  // fixtures must produce questions weak enough to trigger
+  // enrichment.
   return Array.from({ length: count }, (_, i) => ({
     questionIndex: i, question: `Q${i + 1}?`, answer: 'A',
-    relevance: 75, structure: 75, specificity: 75, ownership: 75,
+    relevance: 40, structure: 35, specificity: 30, ownership: 45,
     probeDecision: { shouldProbe: false },
   }))
 }

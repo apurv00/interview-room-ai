@@ -128,12 +128,36 @@ function scoreForEvaluation(e: Record<string, unknown>): number {
   ) / 4)
 }
 
-function weakestQuestionContext(evaluations: Array<Record<string, unknown>>, limit = 3): string {
+/**
+ * Build the LLM context block listing weak questions for enrichment.
+ *
+ * 2026-05-19: widened from "top-3 weakest only" to "all questions
+ * with avg < 60". User reported the prior behaviour as a visible bug:
+ * drilling a weak question that wasn't in the top-3 produced no
+ * strong-answer outline, just the lighter QuestionInsightStrip
+ * fallback. The new behaviour generates one ideal_answer per weak
+ * question — quadrupling typical enrichment token cost but matching
+ * the user's mental model ("if it's weak enough to drill, it should
+ * have an outline").
+ *
+ * `cap` is a hard upper bound (default 10) so a session with an
+ * unusually large number of weak questions doesn't blow past the
+ * enrichment LLM's maxTokens. Beyond 10 weak questions the user has
+ * bigger problems than missing outlines.
+ */
+function weakestQuestionContext(
+  evaluations: Array<Record<string, unknown>>,
+  cap = 10,
+): string {
   return evaluations
     .filter((e) => e.status !== 'failed')
     .map((e) => ({ e, score: scoreForEvaluation(e) }))
+    // Only weak questions (avg < 60) need a strong-answer outline.
+    // Above that threshold the candidate's answer is already passable;
+    // outline-style guidance dilutes the LLM's focus.
+    .filter(({ score }) => score < 60)
     .sort((a, b) => a.score - b.score || Number(a.e.questionIndex ?? 0) - Number(b.e.questionIndex ?? 0))
-    .slice(0, limit)
+    .slice(0, cap)
     .map(({ e, score }) => {
       const questionIndex = Number(e.questionIndex ?? 0)
       const question = String(e.question ?? '').replace(/\s+/g, ' ').slice(0, 320)
@@ -148,7 +172,13 @@ function weakestQuestionContext(evaluations: Array<Record<string, unknown>>, lim
 // for valid feedback. Awaiting it unbounded risks pushing the route past
 // `maxDuration=60` and losing persist + side effects of an otherwise
 // valid core scoring (Codex P1 on PR #349).
-const ENRICHMENT_TIMEOUT_MS = 8000
+//
+// 2026-05-19: bumped 8s → 18s to cover the larger enrichment payload
+// now that ideal_answers are generated for ALL weak questions (avg < 60),
+// not just the top-3. Typical session has 4–8 weak questions; the
+// model usually finishes within 8–12s but the headroom protects
+// against tail latencies. Still well below the 60s route maxDuration.
+const ENRICHMENT_TIMEOUT_MS = 18000
 
 async function generateOptionalEnrichment(params: {
   systemPrompt: string
@@ -188,14 +218,20 @@ async function generateOptionalEnrichment(params: {
           role: 'user',
           content: `Create supplemental feedback for this ${params.domainLabel} ${params.interviewType} interview.
 
-Weakest-question evidence:
+Weak-question evidence (all answers with avg score < 60):
 ${targetContext}
 
-Return ideal_answers for these 2-3 questions only and 2-3 drill_recommendations. Each drill must have exactly two practice questions.
+Return ONE ideal_answer for EACH weak question listed above (match by questionIndex), plus 2-3 drill_recommendations. Each drill must have exactly two practice questions.
 
-For EACH drill_recommendation, populate \`targetQuestions\` with the 0-based questionIndex values from the weakest-question evidence above that this drill addresses. Use an empty array \`[]\` ONLY when the drill is genuinely cross-cutting (e.g. a general delivery drill not tied to any specific question). Prefer 1-2 entries when a clear question-to-drill mapping exists.`,
+For EACH drill_recommendation, populate \`targetQuestions\` with the 0-based questionIndex values from the weak-question evidence above that this drill addresses. Use an empty array \`[]\` ONLY when the drill is genuinely cross-cutting (e.g. a general delivery drill not tied to any specific question). Prefer 1-2 entries when a clear question-to-drill mapping exists.`,
         }],
-        maxTokens: 1800,
+        // 2026-05-19: bumped 1800 → 5000 alongside widening to all
+        // weak questions. Each ideal_answer is ~250-350 tokens
+        // (strongAnswer paragraph + 3-5 keyElements chips); a typical
+        // 4-8 weak-question session needs ~1500-2800 tokens for
+        // ideal_answers, plus ~500 for drill_recommendations, plus
+        // headroom for the schema-validation buffer.
+        maxTokens: 5000,
         responseFormat: FEEDBACK_ENRICHMENT_RESPONSE_FORMAT,
       }),
       new Promise<never>((_, reject) => {

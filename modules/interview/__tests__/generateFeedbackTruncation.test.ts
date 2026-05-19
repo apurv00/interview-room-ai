@@ -135,14 +135,19 @@ import { POST } from '@/app/api/generate-feedback/route'
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
 function makeEvaluations(n: number, status?: 'ok' | 'truncated' | 'failed') {
+  // Scores below 60 so the enrichment LLM call fires (2026-05-19
+  // backfill: enrichment is skipped when no question has avg < 60).
+  // Truncation tests assert the count of completion() calls
+  // (core ± repair + enrichment), so the fixtures must trigger
+  // enrichment.
   return Array.from({ length: n }, (_, i) => ({
     questionIndex: i,
     question: `Q${i + 1}?`,
     answer: `Answer ${i + 1}`,
-    relevance: 70,
-    structure: 65,
-    specificity: 60,
-    ownership: 75,
+    relevance: 40,
+    structure: 35,
+    specificity: 30,
+    ownership: 45,
     ...(status && { status }),
     probeDecision: { shouldProbe: false },
   }))
