@@ -19,10 +19,16 @@ vi.mock('@shared/logger', () => ({
   aiLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }))
 
-const { mockCreate, mockFind, mockSessionFind } = vi.hoisted(() => ({
+const {
+  mockCreate, mockFind, mockSessionFind,
+  mockGenerateEmbedding, mockRedisMget, mockRedisSetex,
+} = vi.hoisted(() => ({
   mockCreate: vi.fn().mockResolvedValue({ _id: 'drill-id' }),
   mockFind: vi.fn(),
   mockSessionFind: vi.fn(),
+  mockGenerateEmbedding: vi.fn(),
+  mockRedisMget: vi.fn(),
+  mockRedisSetex: vi.fn(),
 }))
 vi.mock('@shared/db/models/DrillAttempt', () => ({
   DrillAttempt: {
@@ -32,6 +38,15 @@ vi.mock('@shared/db/models/DrillAttempt', () => ({
 }))
 vi.mock('@shared/db/models/InterviewSession', () => ({
   InterviewSession: { find: (...args: unknown[]) => mockSessionFind(...args) },
+}))
+vi.mock('@interview/services/core/embeddingService', () => ({
+  generateEmbedding: (...args: unknown[]) => mockGenerateEmbedding(...args),
+}))
+vi.mock('@shared/redis', () => ({
+  redis: {
+    mget: (...keys: string[]) => mockRedisMget(...keys),
+    setex: (...args: unknown[]) => mockRedisSetex(...args),
+  },
 }))
 
 import { saveDrillAttempt, getDrillHistory, getWeakQuestions } from '../services/drillService'
@@ -43,6 +58,18 @@ beforeEach(() => {
   mockCreate.mockClear()
   mockFind.mockReset()
   mockSessionFind.mockReset()
+  // Default: embedding API down + Redis empty → drillService takes
+  // the text-cluster fallback path. Existing tests that lock the
+  // text-normalizer behaviour rely on this. Tests for the embedding
+  // path override these in-test.
+  mockGenerateEmbedding.mockReset()
+  mockGenerateEmbedding.mockRejectedValue(new Error('embeddings not configured in test'))
+  mockRedisMget.mockReset()
+  mockRedisMget.mockImplementation((...keys: string[]) =>
+    Promise.resolve(keys.map(() => null)),
+  )
+  mockRedisSetex.mockReset()
+  mockRedisSetex.mockResolvedValue('OK')
 })
 
 /** Build the chain that `InterviewSession.find(...).sort(...).limit(...).select(...).lean()` returns. */
@@ -395,5 +422,470 @@ describe('getWeakQuestions (E1 cluster + count)', () => {
     const out = await getWeakQuestions(USER_ID, 20)
     expect(out).toHaveLength(1)
     expect(out[0].attemptCount).toBe(2)
+  })
+})
+
+describe('getWeakQuestions — failed-eval + greeting-pattern filters (2026-05-19)', () => {
+  const SCORES_30 = { r: 30, s: 30, sp: 30, o: 30 }
+
+  it('skips evals with status=failed (LLM couldn\'t score the answer)', async () => {
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          { ...mkEval(0, 'Question with failed eval', SCORES_30), status: 'failed' },
+          mkEval(1, 'Question that was scored OK', SCORES_30),
+        ],
+      },
+    ])
+    const out = await getWeakQuestions(USER_ID, 20)
+    expect(out).toHaveLength(1)
+    expect(out[0].question).toBe('Question that was scored OK')
+  })
+
+  it('skips ALL AI intro greeting variants (PM / SWE / Sales / MBA / coding / design)', async () => {
+    // Codex P2 round 2 on PR #397: the prior `^Hi[,!]` regex only
+    // caught the PM + generic + coding/design openers. The SWE
+    // ("Hey, welcome!"), Sales ("Great to meet you!"), and MBA
+    // ("Hello!") variants leaked through. New regex anchors on the
+    // shared "I'm Alex" substring within the first 40 chars.
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          // PM intro (interviewConfig.ts)
+          mkEval(0, "Hi, I'm Alex — thanks for making time today. We'll be doing a Product Manager screening.", SCORES_30),
+          // SWE intro (interviewConfig.ts)
+          mkEval(1, "Hey, welcome! I'm Alex from the talent team. We'll spend a bit of time today on your background.", SCORES_30),
+          // Sales intro (interviewConfig.ts)
+          mkEval(2, "Great to meet you! I'm Alex. We're going to talk about your sales experience and what drives you.", SCORES_30),
+          // MBA intro (interviewConfig.ts)
+          mkEval(3, "Hello! I'm Alex, nice to have you here. This is a general business leadership screen.", SCORES_30),
+          // Coding intro (useInterview.ts)
+          mkEval(4, "Hi! I'm Alex, and today we'll work through a coding challenge together.", SCORES_30),
+          // Generic fallback (interviewConfig.ts)
+          mkEval(5, "Hi, I'm Alex — thanks for joining today. We'll be doing a Pm screening.", SCORES_30),
+          // Real candidate-facing question — must stay
+          mkEval(6, 'A real question', SCORES_30),
+        ],
+      },
+    ])
+    const out = await getWeakQuestions(USER_ID, 20)
+    expect(out).toHaveLength(1)
+    expect(out[0].question).toBe('A real question')
+  })
+
+  it('catches smart-quote variants of the intro (LLM-echoed typographic apostrophes)', async () => {
+    // Codex P2 round 3 on PR #397: the prior literal-smart-quote chars
+    // in the regex source got silently flattened to ASCII apostrophe
+    // by an editor pass, so an LLM-echoed question with U+2019 (right
+    // single quotation mark) in "I’m Alex" would leak through.
+    // Regex now uses ' ‘ ’ escapes — editor-proof.
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          // U+2019 right single quotation mark
+          mkEval(0, 'Hi, I’m Alex — thanks for joining today.', SCORES_30),
+          // U+2018 left single quotation mark (less common but possible)
+          mkEval(1, 'Hey, welcome! I‘m Alex from the talent team.', SCORES_30),
+          // ASCII (still must match)
+          mkEval(2, "Hi, I'm Alex — same content, ASCII apostrophe.", SCORES_30),
+          // Real question — must stay
+          mkEval(3, 'A genuinely drillable question.', SCORES_30),
+        ],
+      },
+    ])
+    const out = await getWeakQuestions(USER_ID, 20)
+    expect(out).toHaveLength(1)
+    expect(out[0].question).toBe('A genuinely drillable question.')
+  })
+
+  it('PRESERVES a candidate\'s blank/off-topic 0/0/0/0 answer (Codex P2 regression guard)', async () => {
+    // A candidate's genuinely-bad answer can score 0/0/0/0. The prior
+    // all-zero filter would have hidden it; the new greeting-pattern
+    // filter only targets the AI opener.
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          // Real question with a blank/off-topic answer → all zeros
+          mkEval(0, 'Tell me about a time you led a team.', { r: 0, s: 0, sp: 0, o: 0 }),
+        ],
+      },
+    ])
+    const out = await getWeakQuestions(USER_ID, 20)
+    expect(out).toHaveLength(1)
+    expect(out[0].avgScore).toBe(0)
+    expect(out[0].question).toBe('Tell me about a time you led a team.')
+  })
+
+  it('does NOT mistake real candidate questions starting with "Hi" for the AI greeting', async () => {
+    // Pattern requires "I'm Alex" anywhere in the first 40 chars
+    // (any opener prefix). A question like "Hi there — talk through
+    // how you would prioritize?" doesn't contain "I'm Alex", so it
+    // stays in the list.
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          mkEval(0, 'Hi there — talk through how you would prioritize.', SCORES_30),
+          // Mention of "Alex" without "I'm" prefix — must not match
+          mkEval(1, 'Tell me about a time Alex on your team underperformed.', SCORES_30),
+        ],
+      },
+    ])
+    const out = await getWeakQuestions(USER_ID, 20)
+    expect(out).toHaveLength(2)
+  })
+})
+
+describe('getWeakQuestions — embedding-based semantic clustering (2026-05-19)', () => {
+  const SCORES_30 = { r: 30, s: 30, sp: 30, o: 30 }
+  const SCORES_40 = { r: 40, s: 40, sp: 40, o: 40 }
+
+  it('clusters semantically-similar questions (lexically very different)', async () => {
+    // Real screenshot example: main question + AI follow-up probe on
+    // the same topic. Lexically unrelated; semantically the same drill.
+    // Mock returns close vectors for both "product launch" variants and
+    // a far vector for an unrelated question.
+    mockGenerateEmbedding.mockImplementation(async (text: string) => {
+      if (text.includes('Tell me about a time you owned a product launch')) {
+        return [1, 0.05, 0]
+      }
+      if (text.includes('walk me through a real product launch')) {
+        return [0.95, 0.1, 0] // cos sim with above ≈ 0.998
+      }
+      return [0, 0, 1] // far from both
+    })
+
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          mkEval(0, 'Tell me about a time you owned a product launch end to end.', SCORES_40),
+          mkEval(1, 'Can you walk me through a real product launch you owned?', SCORES_30),
+          mkEval(2, 'Describe how you handle conflict on a cross-functional team.', SCORES_40),
+        ],
+      },
+    ])
+
+    const out = await getWeakQuestions(USER_ID, 20)
+    // Two clusters: product-launch (count 2) and conflict (count 1).
+    expect(out).toHaveLength(2)
+    const productLaunchCluster = out.find((q) => q.question.includes('product launch'))
+    expect(productLaunchCluster?.attemptCount).toBe(2)
+    // The lowest-scoring attempt survived (avg 30, the probe).
+    expect(productLaunchCluster?.avgScore).toBe(30)
+  })
+
+  it('clusters template variants where only a noun phrase differs (semantic, lexically off)', async () => {
+    // The "AI intro greeting" variant of this test was retired —
+    // greeting templates are now filtered earlier by the
+    // greeting-pattern rule (Codex P2 PR #397). This case keeps the
+    // intent: two questions that share a template but differ on a
+    // domain noun phrase (lexically far enough to dodge the text-
+    // normalizer) must still cluster via embeddings.
+    mockGenerateEmbedding.mockImplementation(async (text: string) => {
+      if (text.includes('led a team through')) {
+        return [1, 0, 0] // both template variants get the same vector
+      }
+      return [0, 1, 0]
+    })
+
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          mkEval(0, 'Tell me about a time you led a team through a big API migration.', SCORES_40),
+          mkEval(1, 'Tell me about a time you led a team through a major schema overhaul.', SCORES_30),
+        ],
+      },
+    ])
+
+    const out = await getWeakQuestions(USER_ID, 20)
+    expect(out).toHaveLength(1)
+    expect(out[0].attemptCount).toBe(2)
+  })
+
+  it('does NOT cluster questions on different topics (cosine below threshold)', async () => {
+    // Sanity: two genuinely different questions must stay separate
+    // even when both have low scores.
+    mockGenerateEmbedding.mockImplementation(async (text: string) => {
+      if (text.includes('product launch')) return [1, 0, 0]
+      if (text.includes('conflict')) return [0, 1, 0]
+      return [0, 0, 1]
+    })
+
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          mkEval(0, 'Tell me about a product launch you owned.', SCORES_30),
+          mkEval(1, 'Tell me about a time you handled team conflict.', SCORES_30),
+        ],
+      },
+    ])
+
+    const out = await getWeakQuestions(USER_ID, 20)
+    expect(out).toHaveLength(2)
+  })
+
+  it('falls back to text-based clustering when embedding API throws', async () => {
+    // Default mock setup (beforeEach) makes generateEmbedding reject
+    // and Redis return all-nulls — so the embedding path bails to
+    // null and clusterByText fires. Identical text should still
+    // cluster via the text-normalizer.
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          mkEval(0, 'Identical question text.', SCORES_40),
+        ],
+      },
+      {
+        _id: { toString: () => 'sess-b' },
+        createdAt: new Date('2026-05-02'),
+        evaluations: [
+          mkEval(0, 'Identical question text.', SCORES_30),
+        ],
+      },
+    ])
+
+    const out = await getWeakQuestions(USER_ID, 20)
+    expect(out).toHaveLength(1)
+    expect(out[0].attemptCount).toBe(2)
+  })
+
+  it('uses Redis-cached embeddings without calling the embedding API', async () => {
+    // Pre-populate the cache for one of the texts. The drill loader
+    // must read from Redis instead of calling generateEmbedding for it.
+    mockRedisMget.mockImplementation((...keys: string[]) =>
+      Promise.resolve(
+        keys.map((k, i) =>
+          // First key (the only unique text) returns a cached embedding
+          i === 0 ? JSON.stringify([1, 0, 0]) : null,
+        ),
+      ),
+    )
+
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [mkEval(0, 'Cached question.', SCORES_30)],
+      },
+    ])
+
+    const out = await getWeakQuestions(USER_ID, 20)
+    expect(out).toHaveLength(1)
+    expect(mockGenerateEmbedding).not.toHaveBeenCalled()
+  })
+})
+
+describe('getWeakQuestions — embedding safeguards (Codex P2 on PR #397)', () => {
+  const SCORES_30 = { r: 30, s: 30, sp: 30, o: 30 }
+
+  it('falls back to text-clustering when unique-question count exceeds the fan-out cap', async () => {
+    // Heavy user: generate 60 unique weak questions (above the 50-cap).
+    // The embedding path should bail entirely (return null), forcing
+    // text-cluster — keeping the request bounded even if Redis is cold.
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: Array.from({ length: 60 }, (_, i) =>
+          mkEval(i, `Unique question text variant ${i}`, SCORES_30),
+        ),
+      },
+    ])
+
+    // Mock embedding API to record any call (should not be called).
+    mockGenerateEmbedding.mockReset()
+    mockGenerateEmbedding.mockResolvedValue([1, 0, 0])
+
+    const out = await getWeakQuestions(USER_ID, 20)
+    // 60 unique texts → cap exceeded → text-cluster → all 60 stay as
+    // distinct (no duplicates by exact text), sliced to limit=20.
+    expect(out).toHaveLength(20)
+    expect(mockGenerateEmbedding).not.toHaveBeenCalled()
+  })
+
+  it('tolerates partial embedding-API failures (Promise.allSettled, not all-or-nothing)', async () => {
+    // 4 weak questions; the embedding API succeeds for 3 and fails for
+    // 1. Pre-fix (Promise.all), the whole batch would reject and the
+    // semantic path would be dropped. Post-fix the request still uses
+    // embeddings — the one failed item becomes its own cluster.
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          mkEval(0, 'Question A', SCORES_30),
+          mkEval(1, 'Question A repeated', SCORES_30),
+          mkEval(2, 'Question B', SCORES_30),
+          mkEval(3, 'Question C (will fail)', SCORES_30),
+        ],
+      },
+    ])
+
+    mockGenerateEmbedding.mockReset()
+    mockGenerateEmbedding.mockImplementation(async (text: string) => {
+      if (text === 'Question C (will fail)') {
+        throw new Error('transient embedding API error')
+      }
+      // Tight cluster for the two "Question A" variants
+      if (text.startsWith('Question A')) return [1, 0.01, 0]
+      if (text === 'Question B') return [0, 1, 0]
+      return [0, 0, 1]
+    })
+
+    const out = await getWeakQuestions(USER_ID, 20)
+    // Expected clusters:
+    //   - Question A + Question A repeated (2 attempts) — embedded + clustered
+    //   - Question B — embedded, own cluster
+    //   - Question C (will fail) — failed embedding, own cluster
+    // Total: 3 cards (down from 4 weak attempts).
+    expect(out).toHaveLength(3)
+    const aCluster = out.find((q) => q.question === 'Question A')
+    expect(aCluster?.attemptCount).toBe(2)
+  })
+
+  it('text-clusters identical-text items whose embeddings BOTH failed (Codex P2 round 2)', async () => {
+    // Codex regression catch: with the prior clusterByEmbedding, every
+    // item whose embedding failed got its own cluster — so two
+    // identical-text questions whose embeddings both failed showed as
+    // 2 cards instead of 1. The fix routes missing-embedding items
+    // through the text-key path so they still dedupe.
+    //
+    // Setup: 3 weak attempts → 2 unique texts. The "Two identical
+    // failing questions" text fails to embed (both occurrences); the
+    // "Different working question" succeeds. Result must be 2 cards,
+    // with the failing-text cluster carrying attemptCount=2.
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          mkEval(0, 'Two identical failing questions', SCORES_30),
+          mkEval(1, 'Two identical failing questions', { r: 40, s: 40, sp: 40, o: 40 }),
+          mkEval(2, 'Different working question', SCORES_30),
+        ],
+      },
+    ])
+
+    mockGenerateEmbedding.mockReset()
+    mockGenerateEmbedding.mockImplementation(async (text: string) => {
+      if (text === 'Different working question') return [0, 1, 0]
+      throw new Error('embedding API failed for this text only')
+    })
+
+    const out = await getWeakQuestions(USER_ID, 20)
+    expect(out).toHaveLength(2)
+    const failedCluster = out.find((q) => q.question === 'Two identical failing questions')
+    expect(failedCluster?.attemptCount).toBe(2)
+    // Lowest-scoring attempt survived as the representative.
+    expect(failedCluster?.avgScore).toBe(30)
+  })
+
+  it('does NOT bail when one fresh cache miss fails alongside many cache hits (Codex P2 round 3)', async () => {
+    // Codex regression: prior denominator was toFetch.length, so a
+    // single cache-miss failure with many cached siblings tripped the
+    // bail (`1 > 0.5 = true`) and dropped semantic clustering even
+    // though 95%+ of data was available via cache. New denominator is
+    // uniqueTexts.length so the threshold scales with request size.
+    //
+    // Setup: 5 unique texts, 4 are cache hits with embeddings that
+    // cluster two of them together, 1 is a fresh fetch that fails.
+    // Expected: NO bail, 4 cards (one cluster of 2 + 2 singletons +
+    // the failed-fetch item as its own text-keyed cluster).
+    const cachedA = JSON.stringify([1, 0, 0])
+    const cachedAVariant = JSON.stringify([0.99, 0.05, 0]) // clusters with A
+    const cachedB = JSON.stringify([0, 1, 0])
+    const cachedC = JSON.stringify([0, 0, 1])
+
+    // Mock Redis to return the 4 cached embeddings for the first 4
+    // requested keys, null for the 5th (which triggers a fresh fetch).
+    mockRedisMget.mockImplementation((...keys: string[]) =>
+      Promise.resolve(
+        keys.map((_k, i) => {
+          if (i === 0) return cachedA
+          if (i === 1) return cachedAVariant
+          if (i === 2) return cachedB
+          if (i === 3) return cachedC
+          return null // fresh fetch needed
+        }),
+      ),
+    )
+
+    mockGenerateEmbedding.mockReset()
+    mockGenerateEmbedding.mockRejectedValue(new Error('transient cache-miss failure'))
+
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          mkEval(0, 'Question A', SCORES_30),
+          mkEval(1, 'Question A variant', SCORES_30),
+          mkEval(2, 'Question B', SCORES_30),
+          mkEval(3, 'Question C', SCORES_30),
+          mkEval(4, 'Question D (cache miss + fetch fail)', SCORES_30),
+        ],
+      },
+    ])
+
+    const out = await getWeakQuestions(USER_ID, 20)
+    // 4 clusters: {A + A-variant via cosine} + {B} + {C} + {D text-key fallback}.
+    // Critically NOT 5 (which would mean the embedding path bailed and
+    // text-cluster ran with no dedup).
+    expect(out).toHaveLength(4)
+    const aCluster = out.find((q) => q.question === 'Question A')
+    expect(aCluster?.attemptCount).toBe(2)
+    // Fresh-fetch failure was a single item — only 1 failure out of 5
+    // unique texts → 1 > 2.5 false → no bail.
+    expect(mockGenerateEmbedding).toHaveBeenCalledTimes(1)
+  })
+
+  it('bails to text-clustering when MAJORITY of embedding fetches fail', async () => {
+    // 4 weak items, 3 of 4 embedding calls fail (>50%). Service treated
+    // as unhealthy → bail to text-cluster path. The two identical items
+    // ("Same question") still cluster via the text-normalizer.
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          mkEval(0, 'Same question', SCORES_30),
+          mkEval(1, 'Same question', SCORES_30),
+          mkEval(2, 'Different one', SCORES_30),
+          mkEval(3, 'Yet another', SCORES_30),
+        ],
+      },
+    ])
+
+    let callCount = 0
+    mockGenerateEmbedding.mockReset()
+    mockGenerateEmbedding.mockImplementation(async () => {
+      callCount++
+      if (callCount === 1) return [1, 0, 0] // first succeeds
+      throw new Error('embedding API unhealthy')
+    })
+
+    const out = await getWeakQuestions(USER_ID, 20)
+    // Text-cluster collapses the "Same question" duplicates to one card.
+    // 3 unique texts → 3 cards.
+    expect(out).toHaveLength(3)
+    const sameQ = out.find((q) => q.question === 'Same question')
+    expect(sameQ?.attemptCount).toBe(2)
   })
 })
