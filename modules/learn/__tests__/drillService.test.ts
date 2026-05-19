@@ -19,10 +19,16 @@ vi.mock('@shared/logger', () => ({
   aiLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }))
 
-const { mockCreate, mockFind, mockSessionFind } = vi.hoisted(() => ({
+const {
+  mockCreate, mockFind, mockSessionFind,
+  mockGenerateEmbedding, mockRedisMget, mockRedisSetex,
+} = vi.hoisted(() => ({
   mockCreate: vi.fn().mockResolvedValue({ _id: 'drill-id' }),
   mockFind: vi.fn(),
   mockSessionFind: vi.fn(),
+  mockGenerateEmbedding: vi.fn(),
+  mockRedisMget: vi.fn(),
+  mockRedisSetex: vi.fn(),
 }))
 vi.mock('@shared/db/models/DrillAttempt', () => ({
   DrillAttempt: {
@@ -32,6 +38,15 @@ vi.mock('@shared/db/models/DrillAttempt', () => ({
 }))
 vi.mock('@shared/db/models/InterviewSession', () => ({
   InterviewSession: { find: (...args: unknown[]) => mockSessionFind(...args) },
+}))
+vi.mock('@interview/services/core/embeddingService', () => ({
+  generateEmbedding: (...args: unknown[]) => mockGenerateEmbedding(...args),
+}))
+vi.mock('@shared/redis', () => ({
+  redis: {
+    mget: (...keys: string[]) => mockRedisMget(...keys),
+    setex: (...args: unknown[]) => mockRedisSetex(...args),
+  },
 }))
 
 import { saveDrillAttempt, getDrillHistory, getWeakQuestions } from '../services/drillService'
@@ -43,6 +58,18 @@ beforeEach(() => {
   mockCreate.mockClear()
   mockFind.mockReset()
   mockSessionFind.mockReset()
+  // Default: embedding API down + Redis empty → drillService takes
+  // the text-cluster fallback path. Existing tests that lock the
+  // text-normalizer behaviour rely on this. Tests for the embedding
+  // path override these in-test.
+  mockGenerateEmbedding.mockReset()
+  mockGenerateEmbedding.mockRejectedValue(new Error('embeddings not configured in test'))
+  mockRedisMget.mockReset()
+  mockRedisMget.mockImplementation((...keys: string[]) =>
+    Promise.resolve(keys.map(() => null)),
+  )
+  mockRedisSetex.mockReset()
+  mockRedisSetex.mockResolvedValue('OK')
 })
 
 /** Build the chain that `InterviewSession.find(...).sort(...).limit(...).select(...).lean()` returns. */
@@ -395,5 +422,207 @@ describe('getWeakQuestions (E1 cluster + count)', () => {
     const out = await getWeakQuestions(USER_ID, 20)
     expect(out).toHaveLength(1)
     expect(out[0].attemptCount).toBe(2)
+  })
+})
+
+describe('getWeakQuestions — failed-eval + all-zero filters (2026-05-19)', () => {
+  const SCORES_30 = { r: 30, s: 30, sp: 30, o: 30 }
+
+  it('skips evals with status=failed (LLM couldn\'t score the answer)', async () => {
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          { ...mkEval(0, 'Question with failed eval', SCORES_30), status: 'failed' },
+          mkEval(1, 'Question that was scored OK', SCORES_30),
+        ],
+      },
+    ])
+    const out = await getWeakQuestions(USER_ID, 20)
+    expect(out).toHaveLength(1)
+    expect(out[0].question).toBe('Question that was scored OK')
+  })
+
+  it('skips evals where all four scores are exactly 0 (AI intro greeting noise)', async () => {
+    // Reported by user in PR #396 screenshot — the "Hi, I'm Alex —
+    // thanks for joining today" intro greeting was showing up as a
+    // weak card with 0/100. These aren't drillable.
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          mkEval(0, "Hi, I'm Alex — thanks for joining today. Tell me about yourself.", {
+            r: 0, s: 0, sp: 0, o: 0,
+          }),
+          mkEval(1, 'A real question', SCORES_30),
+        ],
+      },
+    ])
+    const out = await getWeakQuestions(USER_ID, 20)
+    expect(out).toHaveLength(1)
+    expect(out[0].question).toBe('A real question')
+  })
+
+  it('does NOT skip evals with mostly-zero scores (one non-zero dim is enough)', async () => {
+    // The all-zero filter is intentionally conservative — a 0/0/0/1
+    // answer is legitimately bad but was scored. Keep it.
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          mkEval(0, 'Almost-zero answer', { r: 0, s: 0, sp: 0, o: 1 }),
+        ],
+      },
+    ])
+    const out = await getWeakQuestions(USER_ID, 20)
+    expect(out).toHaveLength(1)
+  })
+})
+
+describe('getWeakQuestions — embedding-based semantic clustering (2026-05-19)', () => {
+  const SCORES_30 = { r: 30, s: 30, sp: 30, o: 30 }
+  const SCORES_40 = { r: 40, s: 40, sp: 40, o: 40 }
+
+  it('clusters semantically-similar questions (lexically very different)', async () => {
+    // Real screenshot example: main question + AI follow-up probe on
+    // the same topic. Lexically unrelated; semantically the same drill.
+    // Mock returns close vectors for both "product launch" variants and
+    // a far vector for an unrelated question.
+    mockGenerateEmbedding.mockImplementation(async (text: string) => {
+      if (text.includes('Tell me about a time you owned a product launch')) {
+        return [1, 0.05, 0]
+      }
+      if (text.includes('walk me through a real product launch')) {
+        return [0.95, 0.1, 0] // cos sim with above ≈ 0.998
+      }
+      return [0, 0, 1] // far from both
+    })
+
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          mkEval(0, 'Tell me about a time you owned a product launch end to end.', SCORES_40),
+          mkEval(1, 'Can you walk me through a real product launch you owned?', SCORES_30),
+          mkEval(2, 'Describe how you handle conflict on a cross-functional team.', SCORES_40),
+        ],
+      },
+    ])
+
+    const out = await getWeakQuestions(USER_ID, 20)
+    // Two clusters: product-launch (count 2) and conflict (count 1).
+    expect(out).toHaveLength(2)
+    const productLaunchCluster = out.find((q) => q.question.includes('product launch'))
+    expect(productLaunchCluster?.attemptCount).toBe(2)
+    // The lowest-scoring attempt survived (avg 30, the probe).
+    expect(productLaunchCluster?.avgScore).toBe(30)
+  })
+
+  it('clusters intro-greeting variants where only the domain name differs', async () => {
+    // The other real-screenshot pattern: identical greeting template
+    // with the domain swapped in the middle ("Pm behavioral" vs
+    // "Pm technical deep-dive"). Lexically different by ~3 words,
+    // semantically identical.
+    mockGenerateEmbedding.mockImplementation(async (text: string) => {
+      if (text.includes("Hi, I'm Alex")) {
+        return [1, 0, 0] // both intro variants get the same vector
+      }
+      return [0, 1, 0]
+    })
+
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          mkEval(0, "Hi, I'm Alex — we'll be doing a Pm behavioral interview. Tell me about yourself.", SCORES_40),
+          mkEval(1, "Hi, I'm Alex — we'll be doing a Pm technical deep-dive. Tell me about yourself.", SCORES_30),
+        ],
+      },
+    ])
+
+    const out = await getWeakQuestions(USER_ID, 20)
+    expect(out).toHaveLength(1)
+    expect(out[0].attemptCount).toBe(2)
+  })
+
+  it('does NOT cluster questions on different topics (cosine below threshold)', async () => {
+    // Sanity: two genuinely different questions must stay separate
+    // even when both have low scores.
+    mockGenerateEmbedding.mockImplementation(async (text: string) => {
+      if (text.includes('product launch')) return [1, 0, 0]
+      if (text.includes('conflict')) return [0, 1, 0]
+      return [0, 0, 1]
+    })
+
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          mkEval(0, 'Tell me about a product launch you owned.', SCORES_30),
+          mkEval(1, 'Tell me about a time you handled team conflict.', SCORES_30),
+        ],
+      },
+    ])
+
+    const out = await getWeakQuestions(USER_ID, 20)
+    expect(out).toHaveLength(2)
+  })
+
+  it('falls back to text-based clustering when embedding API throws', async () => {
+    // Default mock setup (beforeEach) makes generateEmbedding reject
+    // and Redis return all-nulls — so the embedding path bails to
+    // null and clusterByText fires. Identical text should still
+    // cluster via the text-normalizer.
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          mkEval(0, 'Identical question text.', SCORES_40),
+        ],
+      },
+      {
+        _id: { toString: () => 'sess-b' },
+        createdAt: new Date('2026-05-02'),
+        evaluations: [
+          mkEval(0, 'Identical question text.', SCORES_30),
+        ],
+      },
+    ])
+
+    const out = await getWeakQuestions(USER_ID, 20)
+    expect(out).toHaveLength(1)
+    expect(out[0].attemptCount).toBe(2)
+  })
+
+  it('uses Redis-cached embeddings without calling the embedding API', async () => {
+    // Pre-populate the cache for one of the texts. The drill loader
+    // must read from Redis instead of calling generateEmbedding for it.
+    mockRedisMget.mockImplementation((...keys: string[]) =>
+      Promise.resolve(
+        keys.map((k, i) =>
+          // First key (the only unique text) returns a cached embedding
+          i === 0 ? JSON.stringify([1, 0, 0]) : null,
+        ),
+      ),
+    )
+
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [mkEval(0, 'Cached question.', SCORES_30)],
+      },
+    ])
+
+    const out = await getWeakQuestions(USER_ID, 20)
+    expect(out).toHaveLength(1)
+    expect(mockGenerateEmbedding).not.toHaveBeenCalled()
   })
 })

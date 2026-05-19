@@ -1,9 +1,12 @@
+import { createHash } from 'crypto'
 import mongoose from 'mongoose'
 import { connectDB } from '@shared/db/connection'
 import { InterviewSession } from '@shared/db/models/InterviewSession'
 import { DrillAttempt } from '@shared/db/models/DrillAttempt'
 import { aiLogger as logger } from '@shared/logger'
+import { redis } from '@shared/redis'
 import type { AnswerEvaluation } from '@shared/types'
+import { generateEmbedding } from '@interview/services/core/embeddingService'
 
 export interface WeakQuestion {
   sessionId: string
@@ -59,6 +62,208 @@ function normalizeQuestionForDedup(q: string): string {
     .replace(NON_LETTER_NUMBER_OR_SPACE_RE, ' ')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+// ─── Semantic clustering (embeddings) ────────────────────────────────────────
+//
+// E1 follow-up (2026-05-19): user reported the drill list still showed
+// duplicates after the text-normalizer clustering shipped in PR #394.
+// Inspection of their actual data confirmed:
+//   1. The normalizer DID work for exact-match duplicates (chips showed
+//      "2 attempts" on those).
+//   2. The visible duplicates were SEMANTIC — same intent, different
+//      LLM wording:
+//        - "Tell me about a time you owned a product launch end to end…"
+//          vs "Can you walk me through a real product launch you owned?"
+//        - Intro greeting templates with the domain swapped in the
+//          middle (`Pm behavioral` vs `Pm technical deep-dive`)
+//
+// Embeddings catch both because they compare meaning, not surface text.
+// We reuse the existing `generateEmbedding` helper (OpenAI
+// text-embedding-3-small, 1536 dims).
+
+/** Threshold above which two questions are treated as the same cluster.
+ *  0.85 is a conservative semantic-similarity bar for sentence embeddings —
+ *  catches paraphrases without over-clustering genuinely different
+ *  questions on related topics. Tunable based on production feedback. */
+const SEMANTIC_CLUSTER_THRESHOLD = 0.85
+
+/** Redis cache TTL for question embeddings — 30 days. Embeddings are
+ *  deterministic for a given (model, text) so the only reason to expire
+ *  is to recover RAM if the question text is never queried again. */
+const EMBEDDING_CACHE_TTL_SECONDS = 30 * 24 * 60 * 60
+
+function embeddingCacheKey(text: string): string {
+  return `qemb:v1:${createHash('sha1').update(text).digest('hex')}`
+}
+
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length !== b.length || a.length === 0) return 0
+  let dot = 0
+  let normA = 0
+  let normB = 0
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i]
+    normA += a[i] * a[i]
+    normB += b[i] * b[i]
+  }
+  const denom = Math.sqrt(normA) * Math.sqrt(normB)
+  return denom === 0 ? 0 : dot / denom
+}
+
+/**
+ * Fetch embeddings for a list of question texts, deduplicating
+ * identical texts and using Redis as a cross-request cache. Returns
+ * a Map keyed by the original text, or `null` on any unrecoverable
+ * failure so the caller can fall back to text-based clustering.
+ *
+ * Cost shape: first call for a fresh question text = one OpenAI
+ * embedding API call (~$0.00002 per question for text-embedding-3-
+ * small). Subsequent calls hit the Redis cache. Across users the
+ * cache is shared by exact text match, so popular questions
+ * ("Tell me about yourself") only pay the embedding cost once.
+ */
+async function getEmbeddingsForTexts(
+  texts: string[],
+): Promise<Map<string, number[]> | null> {
+  const uniqueTexts = Array.from(new Set(texts))
+  const result = new Map<string, number[]>()
+  if (uniqueTexts.length === 0) return result
+
+  // Phase 1: try Redis batch read for everything we know about.
+  const keys = uniqueTexts.map(embeddingCacheKey)
+  let cachedRaw: Array<string | null> = []
+  try {
+    cachedRaw = await redis.mget(...keys)
+  } catch (err) {
+    logger.warn({ err }, 'drillService: redis embedding cache mget failed; proceeding without cache')
+    cachedRaw = new Array(uniqueTexts.length).fill(null)
+  }
+
+  const toFetch: string[] = []
+  for (let i = 0; i < uniqueTexts.length; i++) {
+    const raw = cachedRaw[i]
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as number[]
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          result.set(uniqueTexts[i], parsed)
+          continue
+        }
+      } catch {
+        // Bad cache entry — fall through to refetch.
+      }
+    }
+    toFetch.push(uniqueTexts[i])
+  }
+
+  if (toFetch.length === 0) return result
+
+  // Phase 2: parallel-fetch the cache misses. generateEmbedding is one
+  // HTTP call per text; OpenAI's API doesn't batch in this codebase's
+  // helper. ~50-200ms per call concurrently. For a drill list of 20
+  // questions this is ~200-500ms total worst case.
+  try {
+    const fetched = await Promise.all(
+      toFetch.map(async (text) => {
+        const emb = await generateEmbedding(text)
+        return [text, emb] as const
+      }),
+    )
+    for (const [text, emb] of fetched) {
+      result.set(text, emb)
+    }
+
+    // Fire-and-forget cache write — failure to cache doesn't break the
+    // current request, just means we'll regenerate next time.
+    void (async () => {
+      try {
+        const pipeline = fetched.map(([text, emb]) =>
+          redis.setex(embeddingCacheKey(text), EMBEDDING_CACHE_TTL_SECONDS, JSON.stringify(emb)),
+        )
+        await Promise.allSettled(pipeline)
+      } catch (err) {
+        logger.warn({ err }, 'drillService: redis embedding cache write failed')
+      }
+    })()
+
+    return result
+  } catch (err) {
+    // Embedding API down, no key configured, network failure — bail to
+    // null so caller falls back to text-based clustering.
+    logger.warn({ err }, 'drillService: embedding API failed; falling back to text-based clustering')
+    return null
+  }
+}
+
+/**
+ * Cluster weak questions by semantic similarity using embeddings.
+ * Returns the deduplicated list with `attemptCount` stamped onto each
+ * survivor (the lowest-scoring member of the cluster, preserving the
+ * "drill where I'm weakest" mental model).
+ *
+ * Greedy union-find: walk weak questions in score-ascending order; for
+ * each, compute cosine similarity against existing cluster
+ * representatives and merge into the first one above the threshold.
+ * O(N²) in the number of weak questions — fine for the practical
+ * limit (≤20 per user).
+ */
+function clusterByEmbedding(
+  weak: WeakQuestion[],
+  embeddings: Map<string, number[]>,
+): WeakQuestion[] {
+  type Cluster = { rep: WeakQuestion; count: number; embedding: number[] }
+  const clusters: Cluster[] = []
+
+  for (const q of weak.sort((a, b) => a.avgScore - b.avgScore)) {
+    const emb = embeddings.get(q.question)
+    if (!emb) {
+      // No embedding for this text (shouldn't happen if caller did its
+      // job, but be defensive). Treat as its own cluster.
+      clusters.push({ rep: q, count: 1, embedding: [] })
+      continue
+    }
+
+    let matched: Cluster | null = null
+    for (const c of clusters) {
+      if (c.embedding.length === 0) continue
+      if (cosineSimilarity(emb, c.embedding) >= SEMANTIC_CLUSTER_THRESHOLD) {
+        matched = c
+        break
+      }
+    }
+
+    if (matched) {
+      matched.count += 1
+      // Keep the existing rep (already lowest-scoring since we sort asc).
+    } else {
+      clusters.push({ rep: q, count: 1, embedding: emb })
+    }
+  }
+
+  return clusters.map((c) => ({ ...c.rep, attemptCount: c.count }))
+}
+
+/**
+ * Fallback text-based clustering — same logic as the pre-embedding
+ * implementation. Used when the embedding API or Redis is down so the
+ * drill list still works (just with fewer semantic matches).
+ */
+function clusterByText(weak: WeakQuestion[]): WeakQuestion[] {
+  const counts = new Map<string, number>()
+  for (const q of weak) {
+    counts.set(normalizeQuestionForDedup(q.question), (counts.get(normalizeQuestionForDedup(q.question)) ?? 0) + 1)
+  }
+
+  const seen = new Set<string>()
+  const deduped: WeakQuestion[] = []
+  for (const q of weak.sort((a, b) => a.avgScore - b.avgScore)) {
+    const key = normalizeQuestionForDedup(q.question)
+    if (seen.has(key)) continue
+    seen.add(key)
+    deduped.push({ ...q, attemptCount: counts.get(key) ?? 1 })
+  }
+  return deduped
 }
 
 export interface DrillResult {
@@ -121,6 +326,24 @@ export async function getWeakQuestions(
     for (const session of sessions) {
       const evals = (session.evaluations || []) as AnswerEvaluation[]
       for (const ev of evals) {
+        // Skip evals where the LLM couldn't actually score the answer.
+        // Default fallback values (0/0/0/0) would pass the avg < 60
+        // check below and pollute the drill list with non-drillable
+        // entries.
+        if ((ev as { status?: string }).status === 'failed') continue
+
+        // Skip evals where all four scores are exactly 0 — these are
+        // the AI's opening greetings ("Hi, I'm Alex...") that the
+        // evaluator scored against the rubric and found nothing
+        // scorable. The user saw these as cards titled with the
+        // greeting text and rightly flagged them as noise.
+        if (
+          ev.relevance === 0 &&
+          ev.structure === 0 &&
+          ev.specificity === 0 &&
+          ev.ownership === 0
+        ) continue
+
         const avg = Math.round(
           (ev.relevance + ev.structure + ev.specificity + ev.ownership) / 4
         )
@@ -156,26 +379,23 @@ export async function getWeakQuestions(
       }
     }
 
-    // Cluster by normalized question text. Two-pass:
-    //   1. Build counts per cluster (every weak attempt contributes,
-    //      so the count reflects the user's full attempt history).
-    //   2. Sort by avgScore ASC and keep the FIRST seen attempt per
-    //      cluster — the worst-scoring one, which matches the
-    //      practice-mode mental model ("drill where I'm weakest").
-    //      Stamp the cluster's full count onto the survivor.
-    const counts = new Map<string, number>()
-    for (const q of weak) {
-      const key = normalizeQuestionForDedup(q.question)
-      counts.set(key, (counts.get(key) ?? 0) + 1)
-    }
-
-    const seen = new Set<string>()
-    const deduped: WeakQuestion[] = []
-    for (const q of weak.sort((a, b) => a.avgScore - b.avgScore)) {
-      const key = normalizeQuestionForDedup(q.question)
-      if (seen.has(key)) continue
-      seen.add(key)
-      deduped.push({ ...q, attemptCount: counts.get(key) ?? 1 })
+    // Two-tier cluster: try embeddings (catches semantic duplicates
+    // like main-question + follow-up probe + intro greetings with
+    // domain swapped), fall back to text-based clustering (the
+    // pre-embedding behaviour from PR #394) when the embedding API
+    // is unavailable or Redis is degraded.
+    //
+    // Both paths produce the same shape: deduplicated WeakQuestion[]
+    // with `attemptCount` stamped on the survivor (the lowest-scoring
+    // attempt of each cluster). The survivor selection logic is
+    // identical — only the cluster-key derivation differs.
+    let deduped: WeakQuestion[]
+    const embeddings = await getEmbeddingsForTexts(weak.map((q) => q.question))
+    if (embeddings) {
+      deduped = clusterByEmbedding(weak, embeddings)
+    } else {
+      // Embedding API failed; fall back so the drill list still works.
+      deduped = clusterByText(weak)
     }
 
     return deduped.slice(0, limit)
