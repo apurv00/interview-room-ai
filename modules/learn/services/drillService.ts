@@ -65,19 +65,25 @@ function normalizeQuestionForDedup(q: string): string {
 }
 
 /**
- * Detects the AI interviewer's opening greeting (templates live at
- * `modules/interview/config/interviewConfig.ts` and the coding/design
- * intros in `useInterview.ts`). All variants share the prefix
- * "Hi[,!] I'm Alex" — checking that prefix is reliable and won't
- * false-positive on real candidate answers.
+ * Detects the AI interviewer's opening greeting. Templates live at
+ * `modules/interview/config/interviewConfig.ts` (PM/SWE/Sales/MBA
+ * role-specific + the generic fallback) and `useInterview.ts`
+ * (coding/design). Codex P2 (round 2) on PR #397: the prior
+ * `^Hi[!,]…` matcher missed SWE ("Hey, welcome! I'm Alex…"), Sales
+ * ("Great to meet you! I'm Alex…") and MBA ("Hello! I'm Alex…")
+ * openers — those role flows still leaked AI greetings into the
+ * drill list.
  *
- * Used instead of "all four dim scores are 0" (Codex P2 on PR #397):
- * a candidate's legitimately bad answer (blank/off-topic) can ALSO
- * score 0/0/0/0 and is exactly what drill mode should surface.
- * Pattern-matching the question text targets the actual signal —
- * "is this the AI's opener?" — without hiding poor candidate answers.
+ * Common anchor across every known variant: the string `I'm Alex`
+ * appears within the first ~40 characters. We use a length-bounded
+ * prefix match so a candidate question that happens to mention
+ * "Alex" later on doesn't accidentally trip the filter.
+ *
+ * Apostrophe character class accepts ASCII `'`, typographic right-
+ * single-quotation-mark (`U+2019`), and left (`U+2018`) — LLMs
+ * sometimes substitute smart quotes when echoing the question text.
  */
-const AI_INTRO_GREETING_RE = /^Hi[!,]\s+I[''']?m\s+Alex\b/i
+const AI_INTRO_GREETING_RE = /^.{0,40}I[''']?m\s+Alex\b/i
 
 function isAIIntroGreeting(question: string | undefined | null): boolean {
   if (!question) return false
@@ -266,38 +272,70 @@ async function getEmbeddingsForTexts(
  * each, compute cosine similarity against existing cluster
  * representatives and merge into the first one above the threshold.
  * O(N²) in the number of weak questions — fine for the practical
- * limit (≤20 per user).
+ * limit (≤MAX_EMBEDDING_FANOUT).
+ *
+ * Partial-failure handling (Codex P2 round 2 on PR #397): when an
+ * embedding call failed for a specific text but the batch as a whole
+ * survived, that text has no entry in `embeddings`. Those items fall
+ * back to text-key clustering (same key as `clusterByText`) so two
+ * identical-text questions whose embeddings both failed STILL collapse
+ * to one card with `attemptCount: 2` — not two separate cards. Mixed
+ * pairs (one embedded, one not) can't be compared, so they stay
+ * separate (worst case: a tiny over-count of cards under partial
+ * outage, but never an under-count of `attemptCount`).
  */
 function clusterByEmbedding(
   weak: WeakQuestion[],
   embeddings: Map<string, number[]>,
 ): WeakQuestion[] {
-  type Cluster = { rep: WeakQuestion; count: number; embedding: number[] }
+  type Cluster = {
+    rep: WeakQuestion
+    count: number
+    /** Empty when this cluster is text-keyed (embedding fetch failed). */
+    embedding: number[]
+    /** Set when this cluster is text-keyed; matched by exact equality. */
+    textKey?: string
+  }
   const clusters: Cluster[] = []
 
   for (const q of weak.sort((a, b) => a.avgScore - b.avgScore)) {
     const emb = embeddings.get(q.question)
-    if (!emb) {
-      // No embedding for this text (shouldn't happen if caller did its
-      // job, but be defensive). Treat as its own cluster.
-      clusters.push({ rep: q, count: 1, embedding: [] })
-      continue
-    }
-
     let matched: Cluster | null = null
-    for (const c of clusters) {
-      if (c.embedding.length === 0) continue
-      if (cosineSimilarity(emb, c.embedding) >= SEMANTIC_CLUSTER_THRESHOLD) {
-        matched = c
-        break
+
+    if (emb) {
+      // Embedded: cosine against other embedded clusters.
+      for (const c of clusters) {
+        if (c.embedding.length === 0) continue
+        if (cosineSimilarity(emb, c.embedding) >= SEMANTIC_CLUSTER_THRESHOLD) {
+          matched = c
+          break
+        }
+      }
+    } else {
+      // Not embedded: exact text-key match against other text-keyed
+      // clusters. Preserves the PR #394 behaviour for the unembedded
+      // subset under partial outages.
+      const textKey = normalizeQuestionForDedup(q.question)
+      for (const c of clusters) {
+        if (c.textKey !== undefined && c.textKey === textKey) {
+          matched = c
+          break
+        }
       }
     }
 
     if (matched) {
       matched.count += 1
       // Keep the existing rep (already lowest-scoring since we sort asc).
-    } else {
+    } else if (emb) {
       clusters.push({ rep: q, count: 1, embedding: emb })
+    } else {
+      clusters.push({
+        rep: q,
+        count: 1,
+        embedding: [],
+        textKey: normalizeQuestionForDedup(q.question),
+      })
     }
   }
 

@@ -444,22 +444,31 @@ describe('getWeakQuestions — failed-eval + greeting-pattern filters (2026-05-1
     expect(out[0].question).toBe('Question that was scored OK')
   })
 
-  it('skips the AI intro greeting (Hi, I\'m Alex…) regardless of scores', async () => {
-    // Codex P2 on PR #397: the prior all-zero-scores filter would
-    // also hide a candidate's legitimately blank/off-topic answer,
-    // which is exactly what drill mode should surface. The greeting
-    // is filtered by pattern-matching the QUESTION text instead.
+  it('skips ALL AI intro greeting variants (PM / SWE / Sales / MBA / coding / design)', async () => {
+    // Codex P2 round 2 on PR #397: the prior `^Hi[,!]` regex only
+    // caught the PM + generic + coding/design openers. The SWE
+    // ("Hey, welcome!"), Sales ("Great to meet you!"), and MBA
+    // ("Hello!") variants leaked through. New regex anchors on the
+    // shared "I'm Alex" substring within the first 40 chars.
     mockSessionsReturning([
       {
         _id: { toString: () => 'sess-a' },
         createdAt: new Date('2026-05-01'),
         evaluations: [
-          // The AI's opening (matches the pattern) — must be filtered
-          mkEval(0, "Hi, I'm Alex — thanks for joining today. We'll be doing a Pm screening. Tell me about yourself.", SCORES_30),
-          // Coding-intro variant (different punctuation, same speaker)
-          mkEval(1, "Hi! I'm Alex, and today we'll work through a coding challenge.", SCORES_30),
-          // A real question — must stay
-          mkEval(2, 'A real question', SCORES_30),
+          // PM intro (interviewConfig.ts)
+          mkEval(0, "Hi, I'm Alex — thanks for making time today. We'll be doing a Product Manager screening.", SCORES_30),
+          // SWE intro (interviewConfig.ts)
+          mkEval(1, "Hey, welcome! I'm Alex from the talent team. We'll spend a bit of time today on your background.", SCORES_30),
+          // Sales intro (interviewConfig.ts)
+          mkEval(2, "Great to meet you! I'm Alex. We're going to talk about your sales experience and what drives you.", SCORES_30),
+          // MBA intro (interviewConfig.ts)
+          mkEval(3, "Hello! I'm Alex, nice to have you here. This is a general business leadership screen.", SCORES_30),
+          // Coding intro (useInterview.ts)
+          mkEval(4, "Hi! I'm Alex, and today we'll work through a coding challenge together.", SCORES_30),
+          // Generic fallback (interviewConfig.ts)
+          mkEval(5, "Hi, I'm Alex — thanks for joining today. We'll be doing a Pm screening.", SCORES_30),
+          // Real candidate-facing question — must stay
+          mkEval(6, 'A real question', SCORES_30),
         ],
       },
     ])
@@ -489,19 +498,23 @@ describe('getWeakQuestions — failed-eval + greeting-pattern filters (2026-05-1
   })
 
   it('does NOT mistake real candidate questions starting with "Hi" for the AI greeting', async () => {
-    // Pattern requires "Hi[!,] I'm Alex" — a question like "Hi there,
-    // how would you start?" doesn't match, so it stays in the list.
+    // Pattern requires "I'm Alex" anywhere in the first 40 chars
+    // (any opener prefix). A question like "Hi there — talk through
+    // how you would prioritize?" doesn't contain "I'm Alex", so it
+    // stays in the list.
     mockSessionsReturning([
       {
         _id: { toString: () => 'sess-a' },
         createdAt: new Date('2026-05-01'),
         evaluations: [
           mkEval(0, 'Hi there — talk through how you would prioritize.', SCORES_30),
+          // Mention of "Alex" without "I'm" prefix — must not match
+          mkEval(1, 'Tell me about a time Alex on your team underperformed.', SCORES_30),
         ],
       },
     ])
     const out = await getWeakQuestions(USER_ID, 20)
-    expect(out).toHaveLength(1)
+    expect(out).toHaveLength(2)
   })
 })
 
@@ -718,6 +731,43 @@ describe('getWeakQuestions — embedding safeguards (Codex P2 on PR #397)', () =
     expect(out).toHaveLength(3)
     const aCluster = out.find((q) => q.question === 'Question A')
     expect(aCluster?.attemptCount).toBe(2)
+  })
+
+  it('text-clusters identical-text items whose embeddings BOTH failed (Codex P2 round 2)', async () => {
+    // Codex regression catch: with the prior clusterByEmbedding, every
+    // item whose embedding failed got its own cluster — so two
+    // identical-text questions whose embeddings both failed showed as
+    // 2 cards instead of 1. The fix routes missing-embedding items
+    // through the text-key path so they still dedupe.
+    //
+    // Setup: 3 weak attempts → 2 unique texts. The "Two identical
+    // failing questions" text fails to embed (both occurrences); the
+    // "Different working question" succeeds. Result must be 2 cards,
+    // with the failing-text cluster carrying attemptCount=2.
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          mkEval(0, 'Two identical failing questions', SCORES_30),
+          mkEval(1, 'Two identical failing questions', { r: 40, s: 40, sp: 40, o: 40 }),
+          mkEval(2, 'Different working question', SCORES_30),
+        ],
+      },
+    ])
+
+    mockGenerateEmbedding.mockReset()
+    mockGenerateEmbedding.mockImplementation(async (text: string) => {
+      if (text === 'Different working question') return [0, 1, 0]
+      throw new Error('embedding API failed for this text only')
+    })
+
+    const out = await getWeakQuestions(USER_ID, 20)
+    expect(out).toHaveLength(2)
+    const failedCluster = out.find((q) => q.question === 'Two identical failing questions')
+    expect(failedCluster?.attemptCount).toBe(2)
+    // Lowest-scoring attempt survived as the representative.
+    expect(failedCluster?.avgScore).toBe(30)
   })
 
   it('bails to text-clustering when MAJORITY of embedding fetches fail', async () => {
