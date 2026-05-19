@@ -127,14 +127,21 @@ vi.mock('@learn/services/pathwayPlanner', () => ({
 import { POST } from '@/app/api/generate-feedback/route'
 
 function makeEvaluations(n: number) {
+  // Scores intentionally below 60 — the enrichment path only fires
+  // when there are weak questions (avg < 60) to produce ideal_answers
+  // for (2026-05-19 backfill: previously took top-3 weakest regardless
+  // of score; now scoped to questions actually weak enough to need an
+  // outline). Without this, weakestQuestionContext returns the empty
+  // string and enrichment short-circuits before calling the LLM,
+  // which breaks the token-aggregation + timeout assertions below.
   return Array.from({ length: n }, (_, i) => ({
     questionIndex: i,
     question: `Q${i + 1}?`,
     answer: `Answer ${i + 1}`,
-    relevance: 70,
-    structure: 65,
-    specificity: 60,
-    ownership: 75,
+    relevance: 40,
+    structure: 35,
+    specificity: 30,
+    ownership: 45,
     probeDecision: { shouldProbe: false },
   }))
 }
@@ -256,10 +263,121 @@ describe('POST /api/generate-feedback — enrichment bounding (Codex P1) + token
     expect(usage.outputTokens).toBe(2500)
   })
 
+  // ── 2026-05-19 backfill: all weak questions (avg < 60), not top-3 ──────
+  it('includes every weak question (avg < 60) in the enrichment prompt, capped at 10', async () => {
+    // 6 weak (avg 30, 31, 32, 33, 34, 35) and 2 strong (avg ~85). The
+    // enrichment prompt must reference all 6 weak questionIndexes
+    // (Q1..Q6) but NEITHER of the strong ones (Q7, Q8). Pre-backfill
+    // the prompt only included the top-3 weakest.
+    const evaluations = [
+      // 6 weak
+      ...Array.from({ length: 6 }, (_, i) => ({
+        questionIndex: i,
+        question: `Weak Q${i + 1}?`,
+        answer: `Weak answer ${i + 1}`,
+        relevance: 30 + i,
+        structure: 30 + i,
+        specificity: 30 + i,
+        ownership: 30 + i,
+        probeDecision: { shouldProbe: false },
+      })),
+      // 2 strong — must NOT appear in the enrichment context
+      ...Array.from({ length: 2 }, (_, i) => ({
+        questionIndex: 6 + i,
+        question: `Strong Q${7 + i}?`,
+        answer: `Strong answer ${7 + i}`,
+        relevance: 85,
+        structure: 85,
+        specificity: 85,
+        ownership: 85,
+        probeDecision: { shouldProbe: false },
+      })),
+    ]
+
+    mockCompletion
+      .mockResolvedValueOnce(coreResult())
+      .mockResolvedValueOnce(enrichmentResult({ input: 800, output: 600 }))
+
+    const req = new NextRequest('http://localhost:3000/api/generate-feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        config: { role: 'pm', experience: '0-2', duration: 30, interviewType: 'screening' },
+        transcript: [],
+        evaluations,
+        speechMetrics: [],
+        sessionId: '507f1f77bcf86cd799439011',
+      }),
+    })
+    const res = await POST(req)
+    expect(res.status).toBe(200)
+
+    // The 2nd completion call is the enrichment call (1st is core).
+    const enrichmentCall = mockCompletion.mock.calls[1]
+    const promptContent = (enrichmentCall[0] as {
+      messages: Array<{ content: string }>
+    }).messages[0].content
+
+    // All 6 weak questions present
+    for (let i = 1; i <= 6; i++) {
+      expect(promptContent).toContain(`Q${i} (avg`)
+    }
+    // Neither strong question present
+    expect(promptContent).not.toContain('Q7 (avg')
+    expect(promptContent).not.toContain('Q8 (avg')
+  })
+
+  it('caps the enrichment context at 10 questions even when more are weak', async () => {
+    // 15 weak questions. The cap in weakestQuestionContext (default 10)
+    // protects the enrichment LLM's maxTokens budget when an unusually
+    // bad session has many sub-60 answers.
+    const evaluations = Array.from({ length: 15 }, (_, i) => ({
+      questionIndex: i,
+      question: `Q${i + 1}?`,
+      answer: `Answer ${i + 1}`,
+      relevance: 20 + i, // 20, 21, ..., 34 — all well below 60
+      structure: 20 + i,
+      specificity: 20 + i,
+      ownership: 20 + i,
+      probeDecision: { shouldProbe: false },
+    }))
+
+    mockCompletion
+      .mockResolvedValueOnce(coreResult())
+      .mockResolvedValueOnce(enrichmentResult({ input: 800, output: 600 }))
+
+    const req = new NextRequest('http://localhost:3000/api/generate-feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        config: { role: 'pm', experience: '0-2', duration: 30, interviewType: 'screening' },
+        transcript: [],
+        evaluations,
+        speechMetrics: [],
+        sessionId: '507f1f77bcf86cd799439011',
+      }),
+    })
+    await POST(req)
+
+    const enrichmentCall = mockCompletion.mock.calls[1]
+    const promptContent = (enrichmentCall[0] as {
+      messages: Array<{ content: string }>
+    }).messages[0].content
+
+    // First 10 weak (by ascending score) included…
+    for (let i = 1; i <= 10; i++) {
+      expect(promptContent).toContain(`Q${i} (avg`)
+    }
+    // …11th onward excluded
+    expect(promptContent).not.toContain('Q11 (avg')
+    expect(promptContent).not.toContain('Q15 (avg')
+  })
+
   it('returns core feedback when enrichment hangs past the timeout (Codex P1)', async () => {
     // Core resolves immediately; enrichment hangs forever. With the
-    // 8000ms timeout the route must still return a non-degraded core
-    // response without waiting for enrichment.
+    // 18000ms timeout (2026-05-19: bumped from 8s to cover the larger
+    // backfill payload) the route must still return a non-degraded
+    // core response without waiting for enrichment.
     mockCompletion.mockImplementation((opts: { responseFormat?: { name?: string } }) => {
       if (opts.responseFormat?.name === 'feedback_enrichment') {
         return new Promise(() => {}) // never resolves — simulates a hung provider
@@ -269,8 +387,8 @@ describe('POST /api/generate-feedback — enrichment bounding (Codex P1) + token
 
     vi.useFakeTimers()
     const promise = POST(makeRequest())
-    // Advance past the 8s enrichment timeout deterministically.
-    await vi.advanceTimersByTimeAsync(8500)
+    // Advance past the 18s enrichment timeout deterministically.
+    await vi.advanceTimersByTimeAsync(18500)
     vi.useRealTimers()
 
     const res = await promise

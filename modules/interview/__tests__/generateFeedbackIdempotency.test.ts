@@ -176,15 +176,20 @@ function makeRequest(opts: { sessionId?: string; withSession?: boolean } = { wit
   const body: Record<string, unknown> = {
     config: { role: 'pm', experience: '0-2', duration: 30, interviewType: 'screening' },
     transcript: [],
+    // Scores below 60 so enrichment fires (2026-05-19 backfill: the
+    // enrichment LLM call is now skipped entirely when no question
+    // has avg < 60, since there's nothing to generate ideal_answers
+    // for). These tests assert mockCompletion called twice (core +
+    // enrichment), so the fixtures must produce weak questions.
     evaluations: [
       { questionIndex: 0, question: 'Q1?', answer: 'A reasonably substantive answer.',
-        relevance: 70, structure: 65, specificity: 60, ownership: 75,
+        relevance: 40, structure: 35, specificity: 30, ownership: 45,
         probeDecision: { shouldProbe: false } },
       { questionIndex: 1, question: 'Q2?', answer: 'Another substantive answer.',
-        relevance: 70, structure: 65, specificity: 60, ownership: 75,
+        relevance: 40, structure: 35, specificity: 30, ownership: 45,
         probeDecision: { shouldProbe: false } },
       { questionIndex: 2, question: 'Q3?', answer: 'And a third answer.',
-        relevance: 70, structure: 65, specificity: 60, ownership: 75,
+        relevance: 40, structure: 35, specificity: 30, ownership: 45,
         probeDecision: { shouldProbe: false } },
     ],
     speechMetrics: [],
