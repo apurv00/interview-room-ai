@@ -83,7 +83,16 @@ function normalizeQuestionForDedup(q: string): string {
  * single-quotation-mark (`U+2019`), and left (`U+2018`) — LLMs
  * sometimes substitute smart quotes when echoing the question text.
  */
-const AI_INTRO_GREETING_RE = /^.{0,40}I[''']?m\s+Alex\b/i
+// Explicit \uXXXX escapes for the apostrophe character class so the
+// smart quotes survive any tool/editor pass that might silently
+// normalize them to ASCII (Codex P2 round 3 on PR #397 — the literal
+// smart-quote chars in the prior commit got flattened to ASCII `'`
+// during a tool write, breaking the smart-quote claim in the JSDoc).
+//   ' = ASCII apostrophe '
+//   ‘ = LEFT  SINGLE QUOTATION MARK
+//   ’ = RIGHT SINGLE QUOTATION MARK (typographic; common in
+//            LLM-echoed question text)
+const AI_INTRO_GREETING_RE = /^.{0,40}I[\u0027\u2018\u2019]?m\s+Alex\b/i
 
 function isAIIntroGreeting(question: string | undefined | null): boolean {
   if (!question) return false
@@ -235,12 +244,19 @@ async function getEmbeddingsForTexts(
     }
   }
 
-  // If the majority of fresh fetches failed, the embedding service is
-  // unhealthy — bail to text-clustering rather than serve a list where
-  // most items don't cluster with anything.
-  if (failures > toFetch.length * EMBEDDING_FAILURE_BAIL_RATIO) {
+  // If the majority of the OVERALL workload (cache hits + fresh
+  // fetches) failed, the embedding service is unhealthy — bail to
+  // text-clustering rather than serve a list where most items don't
+  // cluster with anything. Codex P2 round 3 on PR #397: prior
+  // denominator was `toFetch.length`, which made a single failed
+  // cache miss with mostly-cached siblings trip the bail (e.g. 49
+  // cache hits + 1 fresh fail → 1 > 0.5 = true → drop semantic
+  // clustering despite 98% of data being available). Using
+  // `uniqueTexts.length` ties the threshold to the request size,
+  // not just the fresh-fetch slice.
+  if (failures > uniqueTexts.length * EMBEDDING_FAILURE_BAIL_RATIO) {
     logger.warn(
-      { failures, attempted: toFetch.length },
+      { failures, attempted: toFetch.length, total: uniqueTexts.length },
       'drillService: majority of embedding fetches failed; falling back to text-clustering',
     )
     return null

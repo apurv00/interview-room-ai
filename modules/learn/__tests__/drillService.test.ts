@@ -477,6 +477,33 @@ describe('getWeakQuestions — failed-eval + greeting-pattern filters (2026-05-1
     expect(out[0].question).toBe('A real question')
   })
 
+  it('catches smart-quote variants of the intro (LLM-echoed typographic apostrophes)', async () => {
+    // Codex P2 round 3 on PR #397: the prior literal-smart-quote chars
+    // in the regex source got silently flattened to ASCII apostrophe
+    // by an editor pass, so an LLM-echoed question with U+2019 (right
+    // single quotation mark) in "I’m Alex" would leak through.
+    // Regex now uses ' ‘ ’ escapes — editor-proof.
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          // U+2019 right single quotation mark
+          mkEval(0, 'Hi, I’m Alex — thanks for joining today.', SCORES_30),
+          // U+2018 left single quotation mark (less common but possible)
+          mkEval(1, 'Hey, welcome! I‘m Alex from the talent team.', SCORES_30),
+          // ASCII (still must match)
+          mkEval(2, "Hi, I'm Alex — same content, ASCII apostrophe.", SCORES_30),
+          // Real question — must stay
+          mkEval(3, 'A genuinely drillable question.', SCORES_30),
+        ],
+      },
+    ])
+    const out = await getWeakQuestions(USER_ID, 20)
+    expect(out).toHaveLength(1)
+    expect(out[0].question).toBe('A genuinely drillable question.')
+  })
+
   it('PRESERVES a candidate\'s blank/off-topic 0/0/0/0 answer (Codex P2 regression guard)', async () => {
     // A candidate's genuinely-bad answer can score 0/0/0/0. The prior
     // all-zero filter would have hidden it; the new greeting-pattern
@@ -768,6 +795,65 @@ describe('getWeakQuestions — embedding safeguards (Codex P2 on PR #397)', () =
     expect(failedCluster?.attemptCount).toBe(2)
     // Lowest-scoring attempt survived as the representative.
     expect(failedCluster?.avgScore).toBe(30)
+  })
+
+  it('does NOT bail when one fresh cache miss fails alongside many cache hits (Codex P2 round 3)', async () => {
+    // Codex regression: prior denominator was toFetch.length, so a
+    // single cache-miss failure with many cached siblings tripped the
+    // bail (`1 > 0.5 = true`) and dropped semantic clustering even
+    // though 95%+ of data was available via cache. New denominator is
+    // uniqueTexts.length so the threshold scales with request size.
+    //
+    // Setup: 5 unique texts, 4 are cache hits with embeddings that
+    // cluster two of them together, 1 is a fresh fetch that fails.
+    // Expected: NO bail, 4 cards (one cluster of 2 + 2 singletons +
+    // the failed-fetch item as its own text-keyed cluster).
+    const cachedA = JSON.stringify([1, 0, 0])
+    const cachedAVariant = JSON.stringify([0.99, 0.05, 0]) // clusters with A
+    const cachedB = JSON.stringify([0, 1, 0])
+    const cachedC = JSON.stringify([0, 0, 1])
+
+    // Mock Redis to return the 4 cached embeddings for the first 4
+    // requested keys, null for the 5th (which triggers a fresh fetch).
+    mockRedisMget.mockImplementation((...keys: string[]) =>
+      Promise.resolve(
+        keys.map((_k, i) => {
+          if (i === 0) return cachedA
+          if (i === 1) return cachedAVariant
+          if (i === 2) return cachedB
+          if (i === 3) return cachedC
+          return null // fresh fetch needed
+        }),
+      ),
+    )
+
+    mockGenerateEmbedding.mockReset()
+    mockGenerateEmbedding.mockRejectedValue(new Error('transient cache-miss failure'))
+
+    mockSessionsReturning([
+      {
+        _id: { toString: () => 'sess-a' },
+        createdAt: new Date('2026-05-01'),
+        evaluations: [
+          mkEval(0, 'Question A', SCORES_30),
+          mkEval(1, 'Question A variant', SCORES_30),
+          mkEval(2, 'Question B', SCORES_30),
+          mkEval(3, 'Question C', SCORES_30),
+          mkEval(4, 'Question D (cache miss + fetch fail)', SCORES_30),
+        ],
+      },
+    ])
+
+    const out = await getWeakQuestions(USER_ID, 20)
+    // 4 clusters: {A + A-variant via cosine} + {B} + {C} + {D text-key fallback}.
+    // Critically NOT 5 (which would mean the embedding path bailed and
+    // text-cluster ran with no dedup).
+    expect(out).toHaveLength(4)
+    const aCluster = out.find((q) => q.question === 'Question A')
+    expect(aCluster?.attemptCount).toBe(2)
+    // Fresh-fetch failure was a single item — only 1 failure out of 5
+    // unique texts → 1 > 2.5 false → no bail.
+    expect(mockGenerateEmbedding).toHaveBeenCalledTimes(1)
   })
 
   it('bails to text-clustering when MAJORITY of embedding fetches fail', async () => {
