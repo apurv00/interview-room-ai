@@ -64,6 +64,26 @@ function normalizeQuestionForDedup(q: string): string {
     .trim()
 }
 
+/**
+ * Detects the AI interviewer's opening greeting (templates live at
+ * `modules/interview/config/interviewConfig.ts` and the coding/design
+ * intros in `useInterview.ts`). All variants share the prefix
+ * "Hi[,!] I'm Alex" — checking that prefix is reliable and won't
+ * false-positive on real candidate answers.
+ *
+ * Used instead of "all four dim scores are 0" (Codex P2 on PR #397):
+ * a candidate's legitimately bad answer (blank/off-topic) can ALSO
+ * score 0/0/0/0 and is exactly what drill mode should surface.
+ * Pattern-matching the question text targets the actual signal —
+ * "is this the AI's opener?" — without hiding poor candidate answers.
+ */
+const AI_INTRO_GREETING_RE = /^Hi[!,]\s+I[''']?m\s+Alex\b/i
+
+function isAIIntroGreeting(question: string | undefined | null): boolean {
+  if (!question) return false
+  return AI_INTRO_GREETING_RE.test(question.trim())
+}
+
 // ─── Semantic clustering (embeddings) ────────────────────────────────────────
 //
 // E1 follow-up (2026-05-19): user reported the drill list still showed
@@ -111,11 +131,32 @@ function cosineSimilarity(a: number[], b: number[]): number {
   return denom === 0 ? 0 : dot / denom
 }
 
+/** Hard cap on the number of unique question texts we'll embed in one
+ *  drill-list request. Beyond this we fall back to text-clustering for
+ *  the whole batch (Codex P2 on PR #397: heavy users with many weak
+ *  questions across 20 sessions could otherwise trigger 100+ parallel
+ *  OpenAI calls per drill-list load — added latency + cost + tail-error
+ *  amplification). 50 is comfortably above any realistic drill-list
+ *  size for normal users; if a user exceeds it, their list reverts to
+ *  the PR #394 text-cluster behaviour (still useful, just less
+ *  aggressive). */
+const MAX_EMBEDDING_FANOUT = 50
+
+/** Threshold for "the embedding service is unhealthy, bail to text
+ *  fallback rather than serve degraded semantic clustering". Triggered
+ *  when more than half of fresh fetches fail. */
+const EMBEDDING_FAILURE_BAIL_RATIO = 0.5
+
 /**
  * Fetch embeddings for a list of question texts, deduplicating
  * identical texts and using Redis as a cross-request cache. Returns
- * a Map keyed by the original text, or `null` on any unrecoverable
- * failure so the caller can fall back to text-based clustering.
+ * a Map keyed by the original text, or `null` when the caller should
+ * fall back to text-based clustering entirely (over the fan-out cap,
+ * or majority of fresh fetches failed).
+ *
+ * Partial failures (a few embedding calls reject) do NOT bail — the
+ * cluster function treats missing entries as their own clusters, so
+ * the user still gets a usable list with fewer semantic matches.
  *
  * Cost shape: first call for a fresh question text = one OpenAI
  * embedding API call (~$0.00002 per question for text-embedding-3-
@@ -129,6 +170,16 @@ async function getEmbeddingsForTexts(
   const uniqueTexts = Array.from(new Set(texts))
   const result = new Map<string, number[]>()
   if (uniqueTexts.length === 0) return result
+
+  // Fan-out cap (Codex P2): bail to text-clustering rather than fire
+  // an unbounded number of parallel embedding requests.
+  if (uniqueTexts.length > MAX_EMBEDDING_FANOUT) {
+    logger.info(
+      { uniqueTextCount: uniqueTexts.length, cap: MAX_EMBEDDING_FANOUT },
+      'drillService: weak-question count exceeds embedding fan-out cap; falling back to text-clustering',
+    )
+    return null
+  }
 
   // Phase 1: try Redis batch read for everything we know about.
   const keys = uniqueTexts.map(embeddingCacheKey)
@@ -159,41 +210,50 @@ async function getEmbeddingsForTexts(
 
   if (toFetch.length === 0) return result
 
-  // Phase 2: parallel-fetch the cache misses. generateEmbedding is one
-  // HTTP call per text; OpenAI's API doesn't batch in this codebase's
-  // helper. ~50-200ms per call concurrently. For a drill list of 20
-  // questions this is ~200-500ms total worst case.
-  try {
-    const fetched = await Promise.all(
-      toFetch.map(async (text) => {
-        const emb = await generateEmbedding(text)
-        return [text, emb] as const
-      }),
-    )
-    for (const [text, emb] of fetched) {
-      result.set(text, emb)
+  // Phase 2: parallel-fetch the cache misses via allSettled — Codex P2:
+  // Promise.all would reject the whole batch on a single transient
+  // failure, dropping semantic clustering for everyone. allSettled
+  // lets the partial-success path through; clusterByEmbedding treats
+  // missing entries as their own clusters so the list still works.
+  const settled = await Promise.allSettled(
+    toFetch.map((text) => generateEmbedding(text).then((emb) => [text, emb] as const)),
+  )
+  let failures = 0
+  const fetched: Array<readonly [string, number[]]> = []
+  for (const r of settled) {
+    if (r.status === 'fulfilled') {
+      fetched.push(r.value)
+      result.set(r.value[0], r.value[1])
+    } else {
+      failures++
     }
+  }
 
-    // Fire-and-forget cache write — failure to cache doesn't break the
-    // current request, just means we'll regenerate next time.
-    void (async () => {
-      try {
-        const pipeline = fetched.map(([text, emb]) =>
-          redis.setex(embeddingCacheKey(text), EMBEDDING_CACHE_TTL_SECONDS, JSON.stringify(emb)),
-        )
-        await Promise.allSettled(pipeline)
-      } catch (err) {
-        logger.warn({ err }, 'drillService: redis embedding cache write failed')
-      }
-    })()
-
-    return result
-  } catch (err) {
-    // Embedding API down, no key configured, network failure — bail to
-    // null so caller falls back to text-based clustering.
-    logger.warn({ err }, 'drillService: embedding API failed; falling back to text-based clustering')
+  // If the majority of fresh fetches failed, the embedding service is
+  // unhealthy — bail to text-clustering rather than serve a list where
+  // most items don't cluster with anything.
+  if (failures > toFetch.length * EMBEDDING_FAILURE_BAIL_RATIO) {
+    logger.warn(
+      { failures, attempted: toFetch.length },
+      'drillService: majority of embedding fetches failed; falling back to text-clustering',
+    )
     return null
   }
+
+  // Fire-and-forget cache write — failure to cache doesn't break the
+  // current request, just means we'll regenerate next time.
+  void (async () => {
+    try {
+      const pipeline = fetched.map(([text, emb]) =>
+        redis.setex(embeddingCacheKey(text), EMBEDDING_CACHE_TTL_SECONDS, JSON.stringify(emb)),
+      )
+      await Promise.allSettled(pipeline)
+    } catch (err) {
+      logger.warn({ err }, 'drillService: redis embedding cache write failed')
+    }
+  })()
+
+  return result
 }
 
 /**
@@ -332,17 +392,13 @@ export async function getWeakQuestions(
         // entries.
         if ((ev as { status?: string }).status === 'failed') continue
 
-        // Skip evals where all four scores are exactly 0 — these are
-        // the AI's opening greetings ("Hi, I'm Alex...") that the
-        // evaluator scored against the rubric and found nothing
-        // scorable. The user saw these as cards titled with the
-        // greeting text and rightly flagged them as noise.
-        if (
-          ev.relevance === 0 &&
-          ev.structure === 0 &&
-          ev.specificity === 0 &&
-          ev.ownership === 0
-        ) continue
+        // Skip the AI's opening greeting ("Hi, I'm Alex…") — it isn't
+        // a drillable question, it's the interviewer's intro. Codex
+        // P2 on PR #397: the prior all-zero-scores filter would
+        // ALSO hide a candidate's legitimately blank/off-topic answer
+        // (which is precisely what drill mode should surface), so
+        // targeting the question text is the correct signal.
+        if (isAIIntroGreeting(ev.question)) continue
 
         const avg = Math.round(
           (ev.relevance + ev.structure + ev.specificity + ev.ownership) / 4
