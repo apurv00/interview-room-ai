@@ -79,12 +79,16 @@ export function canEnqueuePathwayRegeneration(
 export async function enqueuePathwayRegeneration(
   sessionId: string,
   userId: string,
-  opts?: { source?: string },
+  opts?: { source?: string; useSynthesizedFeedback?: boolean },
 ): Promise<void> {
   await connectDB()
-  await InterviewSession.findByIdAndUpdate(sessionId, {
-    $set: { pathwayGenerationStatus: 'pending' },
-  })
+  const $set: Record<string, unknown> = { pathwayGenerationStatus: 'pending' }
+  if (opts?.useSynthesizedFeedback) {
+    $set.pathwayGenerationUseSynthesizedFeedback = true
+  } else {
+    $set.pathwayGenerationUseSynthesizedFeedback = false
+  }
+  await InterviewSession.findByIdAndUpdate(sessionId, { $set })
   try {
     await inngest.send({
       name: 'pathway/regenerate',

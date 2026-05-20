@@ -250,8 +250,24 @@ describe('runPathwayJobHandler', () => {
       expect(mockEvaluateSession).not.toHaveBeenCalled()
     })
 
-    it('synthesizes feedback from evaluations when session.feedback is missing (outer-catch upstream fix)', async () => {
-      mockFindOneLean.mockResolvedValue({ ...SESSION_PAYLOAD, feedback: undefined })
+    it('throws when session.feedback is missing without synthesized flag (persist race)', async () => {
+      mockFindOneLean.mockResolvedValue({
+        ...SESSION_PAYLOAD,
+        feedback: undefined,
+        pathwayGenerationUseSynthesizedFeedback: false,
+      })
+      const step = makeStep()
+      await expect(runPathwayJobHandler(makeEvent(), step)).rejects.toThrow(
+        /has no feedback yet — generate-feedback persist race/i,
+      )
+    })
+
+    it('synthesizes feedback when useSynthesizedFeedback flag is set (outer-catch path)', async () => {
+      mockFindOneLean.mockResolvedValue({
+        ...SESSION_PAYLOAD,
+        feedback: undefined,
+        pathwayGenerationUseSynthesizedFeedback: true,
+      })
       const step = makeStep()
       const result = await runPathwayJobHandler(makeEvent(), step)
       expect(result.status).toBe('completed')

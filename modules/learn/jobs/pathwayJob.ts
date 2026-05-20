@@ -120,12 +120,13 @@ export async function runPathwayJobHandler(
       _id: sessionId,
       userId: new mongoose.Types.ObjectId(userId),
     })
-      .select('config feedback evaluations speechMetrics')
+      .select('config feedback evaluations speechMetrics pathwayGenerationUseSynthesizedFeedback')
       .lean<{
         config?: { role?: string; interviewType?: string; experience?: string }
         feedback?: FeedbackData
         evaluations?: AnswerEvaluation[]
         speechMetrics?: SpeechMetrics[]
+        pathwayGenerationUseSynthesizedFeedback?: boolean
       }>()
     if (!doc) {
       throw new Error(`pathwayJob: session ${sessionId} not found for user ${userId}`)
@@ -136,21 +137,31 @@ export async function runPathwayJobHandler(
     if (!Array.isArray(doc.evaluations) || doc.evaluations.length === 0) {
       throw new Error(`pathwayJob: session ${sessionId} has no evaluations`)
     }
-    // Upstream fix (2026-05-20): generate-feedback's outer-catch and inner-
-    // degraded paths intentionally skip persisting `session.feedback` (P0
-    // contract — synthetic scores must not leak to dashboard/history).
-    // Evaluations ARE persisted at interview end, so synthesize an in-memory
-    // feedback snapshot for the planner when the real one is absent.
+    // Upstream fix (2026-05-20): outer-catch / inner-degraded paths set
+    // `pathwayGenerationUseSynthesizedFeedback` at enqueue time because
+    // they never persist session.feedback (P0 contract). Legacy rows may
+    // still carry feedback.degraded in Mongo — synthesize for those too.
+    //
+    // Success-path enqueue runs AFTER persist (Codex P2 on PR #398), so
+    // missing feedback here without the flag is a persist race — throw so
+    // Inngest retries once real feedback has landed.
     let feedback = doc.feedback
-    if (!feedback || feedback.degraded) {
+    const maySynthesize =
+      doc.pathwayGenerationUseSynthesizedFeedback === true || feedback?.degraded === true
+
+    if (feedback && !feedback.degraded) {
+      // Real persisted feedback from the healthy generate-feedback path.
+    } else if (maySynthesize) {
       const synthesized = synthesizeFeedbackForPathway(
         doc.evaluations,
         doc.speechMetrics,
       )
       if (!synthesized) {
-        throw new Error(`pathwayJob: session ${sessionId} has no feedback yet — generate-feedback persist race`)
+        throw new Error(`pathwayJob: session ${sessionId} could not synthesize feedback from evaluations`)
       }
       feedback = synthesized
+    } else {
+      throw new Error(`pathwayJob: session ${sessionId} has no feedback yet — generate-feedback persist race`)
     }
     return {
       domain: doc.config.role,

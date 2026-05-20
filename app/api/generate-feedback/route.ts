@@ -1225,29 +1225,11 @@ You repair malformed interview feedback JSON. The output must match the supplied
         // #321. Scheduling order within sideEffects[] is unchanged for
         // aggregate-log purposes; only the mutation ordering matters.
         if (isFeatureEnabled('pathway_planner')) {
-          // Bug B fix (2026-05-16) — move pathway generation off the
-          // request lifecycle into the Inngest `pathway/regenerate` job.
-          // The previous in-request chain ran fire-and-forget with no
-          // retry; if the LLM inside `generatePathwayPlan` timed out or
-          // `evaluateSession()` threw, the chain died silently and the
-          // pathway page's "catching up" banner hung indefinitely.
-          //
-          // The Inngest job:
-          //   - retries 2× (total 3 attempts) with exponential backoff
-          //   - writes `pathwayGenerationStatus` to the session at each
-          //     lifecycle transition (pending → running → succeeded/failed)
-          //   - on terminal failure, writes status='failed' so the UI
-          //     can render a retry CTA instead of a stuck banner
-          //
-          // The fireAndTrack wrapper still surrounds the enqueue so a
-          // failed event-send (Inngest down, network blip) shows up in
-          // the aggregate side-effects log line the same way the inline
-          // chain used to.
-          fireAndTrack(
-            'pathwayPlan',
-            enqueuePathwayRegeneration(sessionId, user.id, { source: 'generate-feedback-success' }),
-            'Pathway plan regeneration enqueue failed',
-          )
+          // Pathway enqueue moved to AFTER persist completes (Codex P2 on
+          // PR #398) so the Inngest job reads real session.feedback instead
+          // of synthesizing from a persist race. markScheduled below so the
+          // response still reports pathwayPlan as scheduled.
+          markScheduled('pathwayPlan')
         } else {
           markSkipped('pathwayPlan')
           // Normalize red_flags before mutation. Legacy and fallback paths
@@ -1502,6 +1484,20 @@ You repair malformed interview feedback JSON. The output must match the supplied
         // cost is an accepted failure mode for Mongo outage, not a
         // timing race.
         await persistPromise.catch(() => { /* tracked above */ })
+
+        // Codex P2 on PR #398 — enqueue only after feedback is committed so
+        // pathwayJob reads real session.feedback (not synthetic persist-race
+        // fallback). Fire-and-forget; Inngest handles retries.
+        if (isFeatureEnabled('pathway_planner')) {
+          enqueuePathwayRegeneration(sessionId, user.id, {
+            source: 'generate-feedback-success',
+          }).catch((err) =>
+            aiLogger.warn(
+              { err, sessionId, userId: user.id, sideEffect: 'pathwayPlan' },
+              'Pathway plan regeneration enqueue failed',
+            ),
+          )
+        }
       }
 
       // Upstream fix (2026-05-20): when feedback is degraded (inner LLM
@@ -1513,6 +1509,7 @@ You repair malformed interview feedback JSON. The output must match the supplied
         try {
           await enqueuePathwayRegeneration(body.sessionId, user.id, {
             source: 'generate-feedback-degraded',
+            useSynthesizedFeedback: true,
           })
         } catch (err) {
           aiLogger.warn(
@@ -1638,6 +1635,7 @@ You repair malformed interview feedback JSON. The output must match the supplied
       if (canEnqueuePathwayRegeneration(body.sessionId, evaluations)) {
         enqueuePathwayRegeneration(body.sessionId, user.id, {
           source: 'generate-feedback-outer-catch',
+          useSynthesizedFeedback: true,
         }).catch((err) =>
           aiLogger.warn(
             { err, sessionId: body.sessionId, userId: user.id },

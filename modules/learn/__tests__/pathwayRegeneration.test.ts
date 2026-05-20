@@ -63,11 +63,21 @@ describe('enqueuePathwayRegeneration', () => {
   it('marks pending then emits pathway/regenerate', async () => {
     await enqueuePathwayRegeneration('sess-1', 'user-1', { source: 'test' })
     expect(mockFindByIdAndUpdate).toHaveBeenCalledWith('sess-1', {
-      $set: { pathwayGenerationStatus: 'pending' },
+      $set: { pathwayGenerationStatus: 'pending', pathwayGenerationUseSynthesizedFeedback: false },
     })
     expect(mockInngestSend).toHaveBeenCalledWith({
       name: 'pathway/regenerate',
       data: { sessionId: 'sess-1', userId: 'user-1' },
+    })
+  })
+
+  it('sets useSynthesizedFeedback flag for degraded/outer-catch enqueues', async () => {
+    await enqueuePathwayRegeneration('sess-1', 'user-1', {
+      source: 'generate-feedback-outer-catch',
+      useSynthesizedFeedback: true,
+    })
+    expect(mockFindByIdAndUpdate).toHaveBeenCalledWith('sess-1', {
+      $set: { pathwayGenerationStatus: 'pending', pathwayGenerationUseSynthesizedFeedback: true },
     })
   })
 

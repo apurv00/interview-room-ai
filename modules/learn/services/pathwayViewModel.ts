@@ -254,6 +254,33 @@ export function buildPathwayViewModel({
     }
   }
 
+  // Codex/Vercel P2 on PR #398 — direct nav to /learn/pathway (no
+  // ?fromFeedback=) while the latest session's pathway job is still
+  // pending/running must show the catching-up banner, not "didn't
+  // generate" retry copy.
+  if (
+    !pathway &&
+    lastSessionId &&
+    (lastSessionPathwayStatus === 'pending' || lastSessionPathwayStatus === 'running')
+  ) {
+    return {
+      state: 'pending',
+      nextAction: {
+        id: 'pending-last-session',
+        type: 'review',
+        title: 'Your pathway update is catching up',
+        description:
+          'Your last interview feedback is ready. Your pathway will update as soon as generation finishes.',
+        ctaLabel: 'Open last interview feedback',
+        href: `/feedback/${encodeURIComponent(lastSessionId)}`,
+      },
+      planItems: [],
+      progress: buildProgress(null, competencySummary, priorPlans, competencyStates, momentumWindow),
+      activity: buildActivity(null, weaknesses),
+      activityRhythm,
+    }
+  }
+
   if (!pathway) {
     // 2026-05-20 user-reported regression: this branch used to always
     // ship a "Take your first interview" CTA, even when the user had

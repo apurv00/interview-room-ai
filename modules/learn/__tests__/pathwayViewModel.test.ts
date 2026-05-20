@@ -363,6 +363,37 @@ describe('buildPathwayViewModel', () => {
     expect(result.nextAction.description.toLowerCase()).toContain('failed')
   })
 
+  it('shows catching-up pending state when lastSessionPathwayStatus is pending (no ?fromFeedback=)', () => {
+    const result = buildPathwayViewModel({
+      pathway: null,
+      competencySummary: null,
+      weaknesses: [],
+      lastSessionAt: new Date('2026-05-19T10:00:00Z'),
+      lastSessionId: '507f1f77bcf86cd799439011',
+      lastSessionPathwayStatus: 'pending',
+      now: NOW,
+    })
+
+    expect(result.state).toBe('pending')
+    expect(result.nextAction.title).toMatch(/catching up/i)
+    expect(result.nextAction.href).toBe('/feedback/507f1f77bcf86cd799439011')
+  })
+
+  it('shows catching-up pending state when lastSessionPathwayStatus is running', () => {
+    const result = buildPathwayViewModel({
+      pathway: null,
+      competencySummary: null,
+      weaknesses: [],
+      lastSessionAt: new Date('2026-05-19T10:00:00Z'),
+      lastSessionId: '507f1f77bcf86cd799439011',
+      lastSessionPathwayStatus: 'running',
+      now: NOW,
+    })
+
+    expect(result.state).toBe('pending')
+    expect(result.nextAction.title).toMatch(/catching up/i)
+  })
+
   it('still uses the baseline-interview CTA when no session exists at all', () => {
     // Sanity guard: a brand-new user (no sessions) should still see
     // "Take your first interview" — the contextual CTA only fires
