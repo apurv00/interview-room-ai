@@ -13,7 +13,6 @@ import ExpressionStrip from '@feedback/components/multimodal/ExpressionStrip'
 import EngagementHeatmap from '@feedback/components/multimodal/EngagementHeatmap'
 import DeliveryContentMatrix from '@feedback/components/multimodal/DeliveryContentMatrix'
 import MomentsTabBody from '@feedback/components/multimodal/MomentsTabBody'
-import TranscriptTabBody from '@feedback/components/multimodal/TranscriptTabBody'
 import CoachingTipsTabBody from '@feedback/components/multimodal/CoachingTipsTabBody'
 import { FONT_MONO } from '@feedback/components/multimodal/tokens'
 import { findActiveQuestionIndex } from '@feedback/components/multimodal/activeQuestion'
@@ -63,7 +62,7 @@ interface MultimodalAnalysisTabProps {
   onPracticeClick?: (drillIndex: number) => void
 }
 
-type RightPaneTab = 'moments' | 'transcript' | 'tips' | 'matrix'
+type RightPaneTab = 'moments' | 'tips' | 'matrix'
 
 /**
  * Round 4: full visual + IA redesign of the Multimodal tab.
@@ -72,11 +71,12 @@ type RightPaneTab = 'moments' | 'transcript' | 'tips' | 'matrix'
  *  - Video panel: bare <video> + custom controls (Q chip, asked chip,
  *    fullscreen, play overlay, live caption) + Q chapter row + scrubber +
  *    session-wide signal track + 5 metric chips.
- *  - Tabs panel: 3 tabs — Key moments | Transcript | Coaching tips.
+ *  - Tabs panel: Key moments | Coaching tips | Delivery × Content.
+ *    Transcript lives on the video panel (live caption + replay shell).
  *
  * Single source of truth: `analysisVideoTime` from page.tsx state. Drives
  * the live caption, the active Q chip, the scrubber position, the active
- * highlight band, the active line in TranscriptTabBody, and the playhead
+ * highlight band, and the playhead bar on the SignalTrack. The Moments tab
  * bar on the SignalTrack. The Moments tab uses its own local
  * `selectedMomentId` state — clicking a moment seeks the video (which
  * indirectly updates everything time-derived) and expands the card; auto-
@@ -254,7 +254,6 @@ export default function MultimodalAnalysisTab({
   // ── Tab bar (right pane) ───────────────────────────────────────────────────
   const tabs: Array<{ id: RightPaneTab; label: string; count: number | null }> = [
     { id: 'moments', label: 'Key moments', count: keyMoments.length },
-    { id: 'transcript', label: 'Transcript', count: null },
     { id: 'tips', label: 'Coaching tips', count: analysis.fusionSummary?.coachingTips.length ?? 0 },
     // Round 5d feature #1 — Delivery × Content matrix. Headline insight
     // of the tab; the only view that fuses content + delivery scores.
@@ -305,15 +304,6 @@ export default function MultimodalAnalysisTab({
             facialSegments={analysis.facialSegments}
             whisperSegments={analysis.whisperTranscript}
             questions={questionMarkers}
-          />
-        )}
-        {tab === 'transcript' && (
-          <TranscriptTabBody
-            transcript={data.transcript}
-            currentTimeSec={analysisVideoTime}
-            sessionStartedAt={sessionStartedAt}
-            onSeek={(sec) => seek?.(sec)}
-            whisperSegments={analysis.whisperTranscript}
           />
         )}
         {tab === 'tips' && (
