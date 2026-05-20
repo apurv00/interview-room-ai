@@ -418,7 +418,9 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
   // ─── F-3: aggregate side-effect summary log ─────────────────────────────
   //
   // Five post-feedback side effects (practiceStats, competency,
-  // sessionSummary, weaknessClusters, pathwayPlan) are fire-and-forget.
+  // sessionSummary, weaknessClusters, masteryTracking, universalPlanAdvance)
+  // are fire-and-forget. pathwayPlan enqueue runs AFTER persist (PR #398)
+  // and is logged separately — not in the aggregate sideEffects[] count.
   // Before F-3, a failed side effect only logged a per-call warn with
   // no sessionId, so ops couldn't correlate failures to an interview
   // or see how many of the N calls succeeded. F-3 wraps them in
@@ -440,8 +442,8 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
     )
     expect(summaryCall).toBeTruthy()
     const [context] = summaryCall as [Record<string, unknown>, string]
-    expect(context.totalSideEffects).toBe(7) // persist + practiceStats + competency + sessionSummary + pathwayPlan + masteryTracking + universalPlanAdvance; no weaknessClusters when no flags
-    expect(context.succeeded).toBe(7)
+    expect(context.totalSideEffects).toBe(6) // persist + practiceStats + competency + sessionSummary + masteryTracking + universalPlanAdvance; pathwayPlan enqueued after persist
+    expect(context.succeeded).toBe(6)
     expect(context.failedCount).toBe(0)
     expect(context.failed).toBeUndefined()
     expect(context.sessionId).toBe('507f1f77bcf86cd799439011')
@@ -458,14 +460,6 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
     vi.mocked(competencyModule.updateCompetencyState).mockRejectedValueOnce(
       new Error('competency DB down'),
     )
-    // Bug B fix: pathway side-effect is now `inngest.send('pathway/regenerate')`.
-    // To simulate the same failure shape (pathway plan generation died),
-    // reject the inngest.send call. fireAndTrack catches it and attributes
-    // to 'pathwayPlan' in the aggregate log, same as before.
-    const inngestModule = await import('@shared/services/inngest')
-    vi.mocked(inngestModule.inngest.send).mockRejectedValueOnce(
-      new Error('pathway OOM'),
-    )
 
     const res = await POST(makeRequest())
     expect(res.status).toBe(200)
@@ -481,13 +475,12 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
     )
     expect(summaryCall).toBeTruthy()
     const [context] = summaryCall as [Record<string, unknown>, string]
-    expect(context.totalSideEffects).toBe(7) // PR #321 added persist; pathway still scheduled because mock returns true
+    expect(context.totalSideEffects).toBe(6) // pathwayPlan no longer in sideEffects[] (PR #398)
     expect(context.succeeded).toBe(5)
-    expect(context.failedCount).toBe(2)
+    expect(context.failedCount).toBe(1)
     const failed = context.failed as Array<{ name: string; reason: string }>
-    expect(failed.map((f) => f.name).sort()).toEqual(['competency', 'pathwayPlan'])
+    expect(failed.map((f) => f.name)).toEqual(['competency'])
     expect(failed.find((f) => f.name === 'competency')?.reason).toContain('competency DB down')
-    expect(failed.find((f) => f.name === 'pathwayPlan')?.reason).toContain('pathway OOM')
 
     // Belt-and-suspenders: same call MUST NOT have fired at .info too —
     // otherwise the upgrade would double-log every failure.

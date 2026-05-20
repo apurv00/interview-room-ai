@@ -14,10 +14,13 @@ import { User, InterviewSession } from '@shared/db/models'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { updateCompetencyState, updateWeaknessClusters } from '@learn/services/competencyService'
 import { generateSessionSummary } from '@learn/services/sessionSummaryService'
-import { inngest } from '@shared/services/inngest'
 import { updatePracticeStats, deriveStrongWeakDimensions } from '@learn/services/practiceStatsService'
 import { updateMasteryBatch } from '@learn/services/masteryTracker'
 import { advanceUniversalPlan } from '@learn/services/pathwayPlanner'
+import {
+  canEnqueuePathwayRegeneration,
+  enqueuePathwayRegeneration,
+} from '@learn/services/pathwayRegeneration'
 import { registerPathwayBadgeWiring } from '@learn/services/pathwayBadgeWiring'
 // `evaluateSession` was previously called inline here as part of the
 // pathway-plan side-effect chain. Now it runs inside the Inngest
@@ -1222,69 +1225,11 @@ You repair malformed interview feedback JSON. The output must match the supplied
         // #321. Scheduling order within sideEffects[] is unchanged for
         // aggregate-log purposes; only the mutation ordering matters.
         if (isFeatureEnabled('pathway_planner')) {
-          // Bug B fix (2026-05-16) — move pathway generation off the
-          // request lifecycle into the Inngest `pathway/regenerate` job.
-          // The previous in-request chain ran fire-and-forget with no
-          // retry; if the LLM inside `generatePathwayPlan` timed out or
-          // `evaluateSession()` threw, the chain died silently and the
-          // pathway page's "catching up" banner hung indefinitely.
-          //
-          // The Inngest job:
-          //   - retries 2× (total 3 attempts) with exponential backoff
-          //   - writes `pathwayGenerationStatus` to the session at each
-          //     lifecycle transition (pending → running → succeeded/failed)
-          //   - on terminal failure, writes status='failed' so the UI
-          //     can render a retry CTA instead of a stuck banner
-          //
-          // The fireAndTrack wrapper still surrounds the enqueue so a
-          // failed event-send (Inngest down, network blip) shows up in
-          // the aggregate side-effects log line the same way the inline
-          // chain used to.
-          fireAndTrack(
-            'pathwayPlan',
-            (async () => {
-              await connectDB()
-              await InterviewSession.findByIdAndUpdate(sessionId, {
-                $set: { pathwayGenerationStatus: 'pending' },
-              })
-              try {
-                // Codex P2 on PR #379 (effectively P0) — payload contains
-                // ONLY identifiers. The job re-fetches feedback/evaluations/
-                // config from Mongo. Previously the event carried the full
-                // feedback + per-question evaluations inline, which for a
-                // long interview could exceed Inngest's 512KB event-size
-                // limit and brick that session's regeneration forever
-                // (every retry resent the same oversized payload).
-                await inngest.send({
-                  name: 'pathway/regenerate',
-                  data: {
-                    sessionId,
-                    userId: user.id,
-                  },
-                })
-              } catch (err) {
-                // Codex P1 + Vercel P1 on PR #379 — deadlock-on-enqueue.
-                // If Inngest is down or the event-key check fails, the
-                // status above stays at 'pending' forever and the retry
-                // endpoint refuses to re-enqueue. Roll status back to
-                // 'failed' so the UI surfaces the retry CTA + the next
-                // /api/learn/pathway/retry call passes the guard.
-                const message = err instanceof Error ? err.message : 'Failed to enqueue pathway regeneration.'
-                await InterviewSession.findByIdAndUpdate(sessionId, {
-                  $set: {
-                    pathwayGenerationStatus: 'failed',
-                    pathwayGenerationError: message.slice(0, 500),
-                  },
-                }).catch(() => {
-                  // Best-effort rollback; degenerate case (Mongo also
-                  // down) leaves status 'pending'. The retry rate-limit
-                  // window expires within 60s.
-                })
-                throw err
-              }
-            })(),
-            'Pathway plan regeneration enqueue failed',
-          )
+          // Pathway enqueue moved to AFTER persist completes (Codex P2 on
+          // PR #398) so the Inngest job reads real session.feedback instead
+          // of synthesizing from a persist race. markScheduled below so the
+          // response still reports pathwayPlan as scheduled.
+          markScheduled('pathwayPlan')
         } else {
           markSkipped('pathwayPlan')
           // Normalize red_flags before mutation. Legacy and fallback paths
@@ -1539,6 +1484,37 @@ You repair malformed interview feedback JSON. The output must match the supplied
         // cost is an accepted failure mode for Mongo outage, not a
         // timing race.
         await persistPromise.catch(() => { /* tracked above */ })
+
+        // Codex P2 on PR #398 — enqueue only after feedback is committed so
+        // pathwayJob reads real session.feedback (not synthetic persist-race
+        // fallback). Fire-and-forget; Inngest handles retries.
+        if (isFeatureEnabled('pathway_planner')) {
+          enqueuePathwayRegeneration(sessionId, user.id, {
+            source: 'generate-feedback-success',
+          }).catch((err) =>
+            aiLogger.warn(
+              { err, sessionId, userId: user.id, sideEffect: 'pathwayPlan' },
+              'Pathway plan regeneration enqueue failed',
+            ),
+          )
+        }
+      }
+
+      // Upstream fix (2026-05-20): when feedback is degraded (inner LLM
+      // fallback), the non-idempotent side-effect block above is skipped
+      // but evaluations are already in Mongo from finishInterview. Enqueue
+      // pathway regeneration only — the Inngest job synthesizes feedback
+      // in-memory and never persists synthetic scores to session.feedback.
+      if (canEnqueuePathwayRegeneration(body.sessionId, evaluations) && feedback.degraded) {
+        enqueuePathwayRegeneration(body.sessionId, user.id, {
+          source: 'generate-feedback-degraded',
+          useSynthesizedFeedback: true,
+        }).catch((err) =>
+          aiLogger.warn(
+            { err, sessionId: body.sessionId, userId: user.id },
+            'Pathway enqueue failed on degraded feedback path',
+          ),
+        )
       }
 
       // PR #321: attach side-effect scheduling outcomes to the
@@ -1649,6 +1625,21 @@ You repair malformed interview feedback JSON. The output must match the supplied
           evaluationCount: evaluations?.length ?? 0,
           recordReason: 'outer-catch',
         }).catch(() => {})
+      }
+      // Upstream fix (2026-05-20): outer-catch never persists feedback
+      // (P0 contract) but evaluations are in Mongo from finishInterview.
+      // Enqueue pathway so users aren't stuck with null PathwayPlan across
+      // retries. Fire-and-forget — response must not block on Inngest.
+      if (canEnqueuePathwayRegeneration(body.sessionId, evaluations)) {
+        enqueuePathwayRegeneration(body.sessionId, user.id, {
+          source: 'generate-feedback-outer-catch',
+          useSynthesizedFeedback: true,
+        }).catch((err) =>
+          aiLogger.warn(
+            { err, sessionId: body.sessionId, userId: user.id },
+            'Pathway enqueue failed on outer-catch',
+          ),
+        )
       }
       return NextResponse.json(fallback)
     }

@@ -91,12 +91,13 @@ export const POST = composeApiRoute<z.infer<typeof RetrySchema>>({
       _id: sessionId,
       userId: new mongoose.Types.ObjectId(user.id),
     })
-      .select('config feedback evaluations pathwayGenerationStatus')
+      .select('config feedback evaluations pathwayGenerationStatus pathwayGenerationUseSynthesizedFeedback')
       .lean<{
         config?: { role?: string; interviewType?: string; experience?: string }
         feedback?: unknown
         evaluations?: unknown[]
         pathwayGenerationStatus?: string
+        pathwayGenerationUseSynthesizedFeedback?: boolean
       }>()
 
     if (!session) {
@@ -111,16 +112,22 @@ export const POST = composeApiRoute<z.infer<typeof RetrySchema>>({
         { status: 409 }
       )
     }
-    if (!session.feedback) {
-      return NextResponse.json(
-        { error: 'Session has no feedback yet — generate feedback first.' },
-        { status: 409 }
-      )
-    }
     if (!Array.isArray(session.evaluations) || session.evaluations.length === 0) {
       return NextResponse.json(
         { error: 'Session has no evaluations to base a plan on.' },
         { status: 409 }
+      )
+    }
+    // Outer-catch / inner-degraded generate-feedback paths intentionally skip
+    // persisting session.feedback (P0 contract). Retry must still work when
+    // evaluations exist — pathwayJob synthesizes in-memory when
+    // pathwayGenerationUseSynthesizedFeedback is set at claim time (Codex P2
+    // on PR #398).
+    const useSynthesizedFeedback = !session.feedback
+    if (useSynthesizedFeedback) {
+      aiLogger.info(
+        { sessionId, userId: user.id },
+        'pathway/retry: no persisted feedback — will enqueue with synthesized-feedback flag',
       )
     }
 
@@ -144,7 +151,10 @@ export const POST = composeApiRoute<z.infer<typeof RetrySchema>>({
         ...RETRYABLE_STATUS_FILTER,
       },
       {
-        $set: { pathwayGenerationStatus: 'pending' },
+        $set: {
+          pathwayGenerationStatus: 'pending',
+          pathwayGenerationUseSynthesizedFeedback: useSynthesizedFeedback,
+        },
         $unset: { pathwayGenerationError: 1 },
       },
       { returnDocument: 'after' }

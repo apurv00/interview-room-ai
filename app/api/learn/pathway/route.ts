@@ -78,6 +78,16 @@ export const GET = composeApiRoute({
     ])
 
     let lastSessionAt: Date | null = null
+    // 2026-05-20 user-reported regression: when a user has completed
+    // interviews but no PathwayPlan was ever generated (LLM timeouts,
+    // outer-catch on generate-feedback, etc.), the empty-state used
+    // to say "Take your first interview" — misleading and frustrating
+    // because the user HAS taken interviews. Pulling lastSessionId +
+    // pathwayGenerationStatus lets the viewModel surface an actionable
+    // CTA ("Pathway didn't generate from your last interview — retry")
+    // instead of pretending no interviews exist.
+    let lastSessionId: string | null = null
+    let lastSessionPathwayStatus: string | null = null
     try {
       await connectDB()
       const lastSessionDoc = await InterviewSession.findOne({
@@ -85,10 +95,16 @@ export const GET = composeApiRoute({
         status: 'completed',
         completedAt: { $exists: true, $ne: null },
       })
-        .select({ completedAt: 1 })
+        .select({ completedAt: 1, pathwayGenerationStatus: 1 })
         .sort({ completedAt: -1 })
-        .lean<{ completedAt?: Date }>()
+        .lean<{
+          _id: mongoose.Types.ObjectId
+          completedAt?: Date
+          pathwayGenerationStatus?: string
+        }>()
       lastSessionAt = lastSessionDoc?.completedAt ?? null
+      lastSessionId = lastSessionDoc?._id.toString() ?? null
+      lastSessionPathwayStatus = lastSessionDoc?.pathwayGenerationStatus ?? null
     } catch {
       // Swallow — activity-rhythm lookup is additive UI context, never
       // a payload blocker. Card renders nothing when lastSessionAt is null.
@@ -153,6 +169,8 @@ export const GET = composeApiRoute({
       priorPlans,
       competencyStates,
       lastSessionAt,
+      lastSessionId,
+      lastSessionPathwayStatus,
     })
 
     return NextResponse.json({

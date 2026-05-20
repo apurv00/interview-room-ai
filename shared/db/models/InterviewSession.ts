@@ -149,6 +149,10 @@ export interface IInterviewSession extends Document {
   pathwayGenerationStartedAt?: Date
   pathwayGenerationCompletedAt?: Date
   pathwayGenerationAttempts?: number
+  /** Set when pathway/regenerate is enqueued from a path that will NOT
+   *  persist session.feedback (outer-catch / inner-degraded). The Inngest
+   *  job may synthesize planner input from evaluations in-memory only. */
+  pathwayGenerationUseSynthesizedFeedback?: boolean
 
   // ── G.7: session completion shape ─────────────────────────────────────
   // Populated at session-create time (from getQuestionCount(config.duration))
@@ -290,6 +294,7 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
     pathwayGenerationStartedAt: { type: Date },
     pathwayGenerationCompletedAt: { type: Date },
     pathwayGenerationAttempts: { type: Number, min: 0, default: 0 },
+    pathwayGenerationUseSynthesizedFeedback: { type: Boolean, default: false },
   },
   { timestamps: true }
 )

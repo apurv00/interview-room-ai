@@ -172,6 +172,18 @@ interface BuildPathwayViewModelInput {
    *  completed a session — DecayContextCard renders nothing in that
    *  case (the empty-state action card covers them). */
   lastSessionAt?: Date | string | null
+  /** 2026-05-20 — sessionId of the most-recent completed session.
+   *  Paired with `lastSessionAt`. When the user has sessions but no
+   *  PathwayPlan (LLM failure on generate-feedback, etc.) the empty
+   *  state uses this to link back to the actual interview's feedback
+   *  page instead of pretending no interviews exist.
+   *  null means no completed session. */
+  lastSessionId?: string | null
+  /** 2026-05-20 — `pathwayGenerationStatus` from the most-recent
+   *  completed session. Lets the empty-state distinguish
+   *  "pathway gen failed and can be retried" from "no attempt was
+   *  ever recorded" so the CTA points to the right recovery action. */
+  lastSessionPathwayStatus?: string | null
   now?: Date
 }
 
@@ -192,6 +204,8 @@ export function buildPathwayViewModel({
   competencyStates = [],
   momentumWindow = DEFAULT_MOMENTUM_WINDOW,
   lastSessionAt,
+  lastSessionId,
+  lastSessionPathwayStatus,
   now = new Date(),
 }: BuildPathwayViewModelInput): PathwayViewModel {
   // Wave 4 — compute once, attach to every return path. Cheap.
@@ -240,10 +254,65 @@ export function buildPathwayViewModel({
     }
   }
 
+  // Codex/Vercel P2 on PR #398 — direct nav to /learn/pathway (no
+  // ?fromFeedback=) while the latest session's pathway job is still
+  // pending/running must show the catching-up banner, not "didn't
+  // generate" retry copy.
+  if (
+    !pathway &&
+    lastSessionId &&
+    (lastSessionPathwayStatus === 'pending' || lastSessionPathwayStatus === 'running')
+  ) {
+    return {
+      state: 'pending',
+      nextAction: {
+        id: 'pending-last-session',
+        type: 'review',
+        title: 'Your pathway update is catching up',
+        description:
+          'Your last interview feedback is ready. Your pathway will update as soon as generation finishes.',
+        ctaLabel: 'Open last interview feedback',
+        href: `/feedback/${encodeURIComponent(lastSessionId)}`,
+      },
+      planItems: [],
+      progress: buildProgress(null, competencySummary, priorPlans, competencyStates, momentumWindow),
+      activity: buildActivity(null, weaknesses),
+      activityRhythm,
+    }
+  }
+
   if (!pathway) {
+    // 2026-05-20 user-reported regression: this branch used to always
+    // ship a "Take your first interview" CTA, even when the user had
+    // multiple completed sessions but no PathwayPlan got generated
+    // (LLM failures on /api/generate-feedback's pathway-enqueue side
+    // effect). Now we tailor the action based on whether sessions
+    // exist:
+    //   - No completed session at all → baseline-interview CTA (unchanged)
+    //   - Completed session(s) exist → contextual CTA pointing back to
+    //     the latest interview's feedback page where the user can retry
+    //     feedback generation (which in turn re-enqueues the pathway
+    //     Inngest job).
+    const hasCompletedSession = !!lastSessionAt && !!lastSessionId
+    const nextAction: PathwayAction = hasCompletedSession
+      ? {
+          id: 'retry-pathway-from-last-session',
+          type: 'review',
+          title: 'Your pathway didn’t generate from your last interview',
+          description:
+            lastSessionPathwayStatus === 'failed'
+              ? 'The background pathway-generation job failed on your most recent interview. Open the feedback page and use the Retry button there — that will re-trigger the pathway generation.'
+              : lastSessionPathwayStatus === 'skipped'
+                ? 'Pathway generation was disabled when you completed this interview. Run another interview to create a plan — if the feature is available, it will generate on your next session.'
+                : 'We have your interview but a pathway plan never landed. Open the feedback page for your most recent interview to retry — or run another interview if you want a fresh baseline.',
+          ctaLabel: 'Open last interview feedback',
+          href: `/feedback/${encodeURIComponent(lastSessionId)}?retryPathway=1`,
+        }
+      : buildBaselineInterviewAction()
+
     return {
       state: 'empty',
-      nextAction: buildBaselineInterviewAction(),
+      nextAction,
       planItems: [],
       progress: buildProgress(null, competencySummary, priorPlans, competencyStates, momentumWindow),
       activity: buildActivity(null, weaknesses),
