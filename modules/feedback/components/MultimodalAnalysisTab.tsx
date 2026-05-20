@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState, type RefObject } from 'react'
+import { useMemo, useState, useEffect, type RefObject } from 'react'
 import TranscriptTab from '@feedback/components/TranscriptTab'
 import MultimodalReplayShell from '@feedback/components/multimodal/MultimodalReplayShell'
 import QuestionChapterRow from '@feedback/components/multimodal/QuestionChapterRow'
@@ -72,12 +72,14 @@ type RightPaneTab = 'moments' | 'transcript' | 'tips' | 'matrix'
  *  - Video panel: bare <video> + custom controls (Q chip, asked chip,
  *    fullscreen, play overlay, live caption) + Q chapter row + scrubber +
  *    session-wide signal track + 5 metric chips.
- *  - Tabs panel: 3 tabs — Key moments | Transcript | Coaching tips.
+ *  - Tabs panel: Key moments | Coaching tips | Delivery × Content.
+ *    Transcript on video via live caption when Whisper output exists;
+ *    Transcript tab appears only as fallback when captions are unavailable
+ *    but session transcript data exists (legacy / empty-whisper sessions).
  *
  * Single source of truth: `analysisVideoTime` from page.tsx state. Drives
  * the live caption, the active Q chip, the scrubber position, the active
- * highlight band, the active line in TranscriptTabBody, and the playhead
- * bar on the SignalTrack. The Moments tab uses its own local
+ * highlight band, and the playhead bar on the SignalTrack. The Moments tab
  * `selectedMomentId` state — clicking a moment seeks the video (which
  * indirectly updates everything time-derived) and expands the card; auto-
  * expand on playback was rejected to avoid visual churn in the list.
@@ -210,6 +212,18 @@ export default function MultimodalAnalysisTab({
     return entry?.text
   }, [data.transcript, activeQuestionIndex])
 
+  // Codex P2 on PR #399 — hide Transcript tab when video captions work; keep
+  // it when whisperTranscript is empty so users can still read data.transcript.
+  const showTranscriptTab =
+    analysis?.status === 'completed' &&
+    (analysis.whisperTranscript?.length ?? 0) === 0 &&
+    Array.isArray(data.transcript) &&
+    data.transcript.length > 0
+
+  useEffect(() => {
+    if (tab === 'transcript' && !showTranscriptTab) setTab('moments')
+  }, [tab, showTranscriptTab])
+
   // ── Loading ────────────────────────────────────────────────────────────────
   if (analysisLoading) {
     return (
@@ -254,7 +268,9 @@ export default function MultimodalAnalysisTab({
   // ── Tab bar (right pane) ───────────────────────────────────────────────────
   const tabs: Array<{ id: RightPaneTab; label: string; count: number | null }> = [
     { id: 'moments', label: 'Key moments', count: keyMoments.length },
-    { id: 'transcript', label: 'Transcript', count: null },
+    ...(showTranscriptTab
+      ? [{ id: 'transcript' as const, label: 'Transcript', count: null }]
+      : []),
     { id: 'tips', label: 'Coaching tips', count: analysis.fusionSummary?.coachingTips.length ?? 0 },
     // Round 5d feature #1 — Delivery × Content matrix. Headline insight
     // of the tab; the only view that fuses content + delivery scores.
@@ -307,7 +323,7 @@ export default function MultimodalAnalysisTab({
             questions={questionMarkers}
           />
         )}
-        {tab === 'transcript' && (
+        {tab === 'transcript' && showTranscriptTab && (
           <TranscriptTabBody
             transcript={data.transcript}
             currentTimeSec={analysisVideoTime}
