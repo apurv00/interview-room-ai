@@ -279,20 +279,34 @@ function FeedbackPageInner() {
           setPathwayRetryStatus({ kind: 'success' })
           return
         }
-        // 409 from the retry route means an enqueue is already in flight
-        // (or status is succeeded/skipped). That's a "good enough"
-        // outcome from the user's perspective — pathway IS being worked
-        // on (or already done), so show success copy rather than error.
-        if (res.status === 409) {
-          setPathwayRetryStatus({ kind: 'success' })
-          return
-        }
+
+        // Codex P2 on PR #400 — /api/learn/pathway/retry returns 409 for
+        // several distinct cases:
+        //
+        //   In-flight (success-flavored from the user's perspective —
+        //   pathway IS being worked on):
+        //     "A pathway regeneration is already in flight for this session."
+        //     "Another retry just claimed this session ..."
+        //
+        //   Hard errors (treating these as success would mislead the user):
+        //     "Pathway regeneration is not retryable from status 'X' ..."
+        //         (status was 'succeeded' / 'skipped' / etc — no retry will fire)
+        //     "Session config is missing required fields ..."
+        //     "Session has no evaluations to base a plan on."
+        //
+        // We discriminate on the message substring rather than reusing
+        // the HTTP code so users on hard-error 409s see the actual reason
+        // rather than a misleading "regeneration started".
         let message = 'Could not start pathway retry.'
         try {
           const body = await res.json()
           if (typeof body?.error === 'string') message = body.error
         } catch {
           // Non-JSON body — keep generic message.
+        }
+        if (res.status === 409 && /already in flight|just claimed/i.test(message)) {
+          setPathwayRetryStatus({ kind: 'success' })
+          return
         }
         setPathwayRetryStatus({ kind: 'error', message })
       })

@@ -57,9 +57,11 @@ describe('canEnqueuePathwayRegeneration', () => {
 })
 
 describe('enqueuePathwayRegeneration', () => {
-  // Use a real ObjectId-shaped hex string so `new mongoose.Types.ObjectId(sessionId)`
-  // inside the service doesn't throw before reaching the mocked DB call.
+  // Use real ObjectId-shaped hex strings so `new mongoose.Types.ObjectId(...)`
+  // inside the service (for both _id and userId in the CAS filter) doesn't
+  // throw before reaching the mocked DB call.
   const SESSION_ID = '507f1f77bcf86cd799439011'
+  const USER_ID = '507f1f77bcf86cd799439022'
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -70,10 +72,14 @@ describe('enqueuePathwayRegeneration', () => {
   })
 
   it('atomically claims a failed/missing-status session, then emits pathway/regenerate', async () => {
-    await enqueuePathwayRegeneration(SESSION_ID, 'user-1', { source: 'test' })
+    await enqueuePathwayRegeneration(SESSION_ID, USER_ID, { source: 'test' })
 
     expect(mockFindOneAndUpdate).toHaveBeenCalledTimes(1)
     const [filter, update] = mockFindOneAndUpdate.mock.calls[0]
+    // Vercel security review on PR #400 — both _id and userId must be in
+    // the filter so we can never claim a session belonging to another user.
+    expect(filter._id.toString()).toBe(SESSION_ID)
+    expect(filter.userId.toString()).toBe(USER_ID)
     expect(filter.$or).toEqual([
       { pathwayGenerationStatus: 'failed' },
       { pathwayGenerationStatus: { $exists: false } },
@@ -87,12 +93,12 @@ describe('enqueuePathwayRegeneration', () => {
 
     expect(mockInngestSend).toHaveBeenCalledWith({
       name: 'pathway/regenerate',
-      data: { sessionId: SESSION_ID, userId: 'user-1' },
+      data: { sessionId: SESSION_ID, userId: USER_ID },
     })
   })
 
   it('sets useSynthesizedFeedback flag for degraded/outer-catch enqueues', async () => {
-    await enqueuePathwayRegeneration(SESSION_ID, 'user-1', {
+    await enqueuePathwayRegeneration(SESSION_ID, USER_ID, {
       source: 'generate-feedback-outer-catch',
       useSynthesizedFeedback: true,
     })
@@ -100,11 +106,13 @@ describe('enqueuePathwayRegeneration', () => {
     expect(update.$set.pathwayGenerationUseSynthesizedFeedback).toBe(true)
   })
 
-  it('skips Inngest send when CAS claim returns null (already pending/running/succeeded)', async () => {
-    // Status was already pending/running/succeeded/skipped — filter doesn't match.
+  it('skips Inngest send when CAS claim returns null (already pending/running/succeeded or wrong owner)', async () => {
+    // Status was already pending/running/succeeded/skipped — or the
+    // session belongs to a different userId. Either way the CAS filter
+    // doesn't match.
     mockFindOneAndUpdate.mockResolvedValueOnce(null)
 
-    await enqueuePathwayRegeneration(SESSION_ID, 'user-1', {
+    await enqueuePathwayRegeneration(SESSION_ID, USER_ID, {
       source: 'generate-feedback-outer-catch',
     })
 
@@ -116,7 +124,7 @@ describe('enqueuePathwayRegeneration', () => {
 
   it('rolls status back to failed when inngest.send throws after a successful claim', async () => {
     mockInngestSend.mockRejectedValueOnce(new Error('Inngest down'))
-    await expect(enqueuePathwayRegeneration(SESSION_ID, 'user-1')).rejects.toThrow('Inngest down')
+    await expect(enqueuePathwayRegeneration(SESSION_ID, USER_ID)).rejects.toThrow('Inngest down')
 
     expect(mockFindByIdAndUpdate).toHaveBeenCalledTimes(1)
     expect(mockFindByIdAndUpdate.mock.calls[0][1]).toEqual({

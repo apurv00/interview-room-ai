@@ -118,10 +118,20 @@ export async function enqueuePathwayRegeneration(
   // separate check and then both enqueue. If the doc isn't in a claimable
   // status (`pending` / `running` / `succeeded` / `skipped`), `claimed`
   // is null and we skip the Inngest send entirely.
+  //
+  // `userId` is in the filter as defense-in-depth (Vercel security review
+  // on PR #400). Callers in /api/generate-feedback already validate
+  // session ownership upstream, but enforcing it here too means a future
+  // caller that forgets to validate can't accidentally enable cross-user
+  // pathway writes. Matches the filter shape in /api/learn/pathway/retry.
   let claimed: unknown
   try {
     claimed = await InterviewSession.findOneAndUpdate(
-      { _id: new mongoose.Types.ObjectId(sessionId), ...ENQUEUE_STATUS_FILTER },
+      {
+        _id: new mongoose.Types.ObjectId(sessionId),
+        userId: new mongoose.Types.ObjectId(userId),
+        ...ENQUEUE_STATUS_FILTER,
+      },
       { $set, $unset: { pathwayGenerationError: 1 } },
       { returnDocument: 'after' },
     )
