@@ -3,7 +3,7 @@ import { InterviewSession } from '@shared/db/models'
 import { inngest } from '@shared/services/inngest'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { aiLogger } from '@shared/logger'
-import type { AnswerEvaluation, FeedbackData, SpeechMetricsEntry } from '@shared/types'
+import type { AnswerEvaluation, FeedbackData, SpeechMetrics } from '@shared/types'
 import { aggregateMetrics, communicationScore } from '@interview/config/speechMetrics'
 import { computePerQAverage } from '@interview/services/eval/perQAggregation'
 
@@ -15,7 +15,7 @@ import { computePerQAverage } from '@interview/services/eval/perQAggregation'
  */
 export function synthesizeFeedbackForPathway(
   evaluations: AnswerEvaluation[],
-  speechMetrics?: SpeechMetricsEntry[] | null,
+  speechMetrics?: SpeechMetrics[] | null,
 ): FeedbackData | null {
   if (!Array.isArray(evaluations) || evaluations.length === 0) return null
 

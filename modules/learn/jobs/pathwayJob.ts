@@ -7,7 +7,7 @@ import { isFeatureEnabled } from '@shared/featureFlags'
 import { evaluateSession, type SessionEvaluationSummary } from '@interview'
 import { generatePathwayPlan } from '@learn/services/pathwayPlanner'
 import { synthesizeFeedbackForPathway } from '@learn/services/pathwayRegeneration'
-import type { FeedbackData, AnswerEvaluation, SpeechMetricsEntry } from '@shared/types'
+import type { FeedbackData, AnswerEvaluation, SpeechMetrics } from '@shared/types'
 
 /**
  * Pathway regeneration background job.
@@ -125,7 +125,7 @@ export async function runPathwayJobHandler(
         config?: { role?: string; interviewType?: string; experience?: string }
         feedback?: FeedbackData
         evaluations?: AnswerEvaluation[]
-        speechMetrics?: SpeechMetricsEntry[]
+        speechMetrics?: SpeechMetrics[]
       }>()
     if (!doc) {
       throw new Error(`pathwayJob: session ${sessionId} not found for user ${userId}`)
