@@ -33,7 +33,7 @@ import { NextRequest } from 'next/server'
 
 const {
   mockAcquire, mockRelease, mockCompletion, mockWarn, mockError, mockInfo,
-  mockSessionFindOne, mockFindByIdAndUpdate, mockIsFeatureEnabled,
+  mockSessionFindOne, mockFindByIdAndUpdate, mockFindOneAndUpdate, mockIsFeatureEnabled,
   mockGeneratePathwayPlan, mockEvaluateSession, mockInngestSend,
 } = vi.hoisted(() => ({
   mockAcquire: vi.fn(),
@@ -46,6 +46,12 @@ const {
     select: () => ({ lean: () => Promise.resolve(null) }),
   })),
   mockFindByIdAndUpdate: vi.fn().mockResolvedValue(undefined),
+  // PR #398 follow-up (R11): `enqueuePathwayRegeneration` now uses an
+  // atomic findOneAndUpdate CAS instead of unconditional findByIdAndUpdate.
+  // Default to a truthy claim so the existing tests' Inngest send still
+  // happens; individual tests can override via mockResolvedValueOnce(null)
+  // to simulate the "already in flight" skip path.
+  mockFindOneAndUpdate: vi.fn().mockResolvedValue({ _id: 'sess-claimed' }),
   mockIsFeatureEnabled: vi.fn(() => true),
   // Bug B fix: route no longer calls generatePathwayPlan / evaluateSession
   // directly. Both moved into the Inngest `pathway/regenerate` job. These
@@ -105,6 +111,7 @@ vi.mock('@shared/db/models', () => ({
   User: { findById: () => ({ select: () => ({ lean: () => Promise.resolve(null) }) }) },
   InterviewSession: {
     findByIdAndUpdate: mockFindByIdAndUpdate,
+    findOneAndUpdate: mockFindOneAndUpdate,
     findOne: mockSessionFindOne,
   },
 }))
