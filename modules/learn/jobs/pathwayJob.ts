@@ -6,7 +6,8 @@ import { InterviewSession } from '@shared/db/models'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { evaluateSession, type SessionEvaluationSummary } from '@interview'
 import { generatePathwayPlan } from '@learn/services/pathwayPlanner'
-import type { FeedbackData, AnswerEvaluation } from '@shared/types'
+import { synthesizeFeedbackForPathway } from '@learn/services/pathwayRegeneration'
+import type { FeedbackData, AnswerEvaluation, SpeechMetricsEntry } from '@shared/types'
 
 /**
  * Pathway regeneration background job.
@@ -119,11 +120,12 @@ export async function runPathwayJobHandler(
       _id: sessionId,
       userId: new mongoose.Types.ObjectId(userId),
     })
-      .select('config feedback evaluations')
+      .select('config feedback evaluations speechMetrics')
       .lean<{
         config?: { role?: string; interviewType?: string; experience?: string }
         feedback?: FeedbackData
         evaluations?: AnswerEvaluation[]
+        speechMetrics?: SpeechMetricsEntry[]
       }>()
     if (!doc) {
       throw new Error(`pathwayJob: session ${sessionId} not found for user ${userId}`)
@@ -131,11 +133,24 @@ export async function runPathwayJobHandler(
     if (!doc.config?.role || !doc.config?.experience) {
       throw new Error(`pathwayJob: session ${sessionId} missing config.role/experience`)
     }
-    if (!doc.feedback) {
-      throw new Error(`pathwayJob: session ${sessionId} has no feedback yet — generate-feedback persist race`)
-    }
     if (!Array.isArray(doc.evaluations) || doc.evaluations.length === 0) {
       throw new Error(`pathwayJob: session ${sessionId} has no evaluations`)
+    }
+    // Upstream fix (2026-05-20): generate-feedback's outer-catch and inner-
+    // degraded paths intentionally skip persisting `session.feedback` (P0
+    // contract — synthetic scores must not leak to dashboard/history).
+    // Evaluations ARE persisted at interview end, so synthesize an in-memory
+    // feedback snapshot for the planner when the real one is absent.
+    let feedback = doc.feedback
+    if (!feedback || feedback.degraded) {
+      const synthesized = synthesizeFeedbackForPathway(
+        doc.evaluations,
+        doc.speechMetrics,
+      )
+      if (!synthesized) {
+        throw new Error(`pathwayJob: session ${sessionId} has no feedback yet — generate-feedback persist race`)
+      }
+      feedback = synthesized
     }
     return {
       domain: doc.config.role,
@@ -144,7 +159,7 @@ export async function runPathwayJobHandler(
       // plan uses the same evaluation assumptions as the original.
       interviewType: doc.config.interviewType || 'screening',
       experience: doc.config.experience,
-      feedback: doc.feedback,
+      feedback,
       typedEvaluations: doc.evaluations,
     }
   })
