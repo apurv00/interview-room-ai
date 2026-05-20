@@ -148,6 +148,18 @@ function DrillPageInner() {
     setVoiceSupported(browserSupportsSpeechRecognition())
   }, [])
 
+  // Voice-first input mode. Real interviews are spoken, not typed, so
+  // the mic is the primary CTA and the textarea is hidden behind a
+  // "Type instead" toggle. We default-open the textarea for browsers
+  // without Web Speech API so unsupported users still have a working
+  // input on the first paint. Once the user explicitly toggles, their
+  // choice sticks for the rest of the drill session (not persisted
+  // across reloads — practice is short).
+  const [showTextInput, setShowTextInput] = useState(false)
+  useEffect(() => {
+    if (!voiceSupported) setShowTextInput(true)
+  }, [voiceSupported])
+
   // Set true when the user clicks Submit while the mic is still
   // listening — defers the actual submit until the speech hook has
   // appended the final transcript to `newAnswer`. Codex P1 on PR #392
@@ -449,6 +461,9 @@ function DrillPageInner() {
     setResult(null)
     setStreamingBreakdown(null)
     setPersistFailed(false)
+    // Reset to voice-first when supported so each new drill starts
+    // from the same default surface.
+    setShowTextInput(!voiceSupported)
   }
 
   /** Toggle the mic on/off. On stop, the hook's onComplete callback
@@ -626,46 +641,22 @@ function DrillPageInner() {
               )}
 
               {/* New answer input — voice-first (real interviews are
-                  spoken, not typed). Mic button lives inside the
-                  textarea wrapper; tap to record, tap again to stop.
-                  The final transcript is APPENDED to whatever is
-                  already in the box so users can mix typing and
-                  speaking. Browsers without Web Speech API hide the
-                  mic affordance entirely (typing still works). */}
+                  spoken, not typed). The primary surface is a big mic
+                  button + live transcript display. Typing is hidden
+                  behind a "Type instead" toggle so the affordance
+                  matches the user's mental model: open mouth, not
+                  open keyboard. Toggling reveals the textarea
+                  (pre-filled with whatever was spoken so the user can
+                  edit before submitting). Browsers without Web Speech
+                  API skip the toggle and show the textarea by default
+                  (voiceSupported effect above). */}
               {!result && (
                 <>
-                  {/* Live-transcript banner — visible only while the
-                      mic is hot. Shows the interim text as the user
-                      speaks so they have continuous visual feedback
-                      without polluting the textarea (their existing
-                      typed text stays visible underneath). */}
-                  {isListening && (
-                    <div
-                      data-testid="drill-listening-banner"
-                      className="mb-2 flex items-center gap-2 rounded-lg bg-red-50 border border-red-200 px-3 py-2"
-                    >
-                      <span className="relative flex h-2 w-2 shrink-0">
-                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
-                        <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500" />
-                      </span>
-                      <span className="text-xs font-medium text-red-700 shrink-0">Listening</span>
-                      <span className="text-xs text-[#536471] truncate" title={liveTranscript}>
-                        {liveTranscript || 'Speak your answer…'}
-                      </span>
-                    </div>
-                  )}
-
-                  <div className="relative">
-                    <textarea
-                      value={newAnswer}
-                      onChange={e => setNewAnswer(e.target.value)}
-                      placeholder={voiceSupported
-                        ? 'Tap the mic to speak your answer (real interviews are spoken). You can also type.'
-                        : 'Type your improved answer here…'}
-                      rows={6}
-                      className={`w-full p-4 ${voiceSupported ? 'pr-14' : ''} bg-white border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder:text-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500/50 resize-none`}
-                    />
-                    {voiceSupported && (
+                  {/* Voice-first primary surface — mic button + live
+                      transcript display. Hidden when the user only
+                      has the type-instead surface (no voice). */}
+                  {voiceSupported && (
+                    <div className="rounded-xl border border-[#e1e8ed] bg-white p-5 flex flex-col items-center gap-3 text-center">
                       <button
                         type="button"
                         onClick={toggleVoice}
@@ -673,26 +664,97 @@ function DrillPageInner() {
                         aria-label={isListening ? 'Stop recording' : 'Start voice answer'}
                         aria-pressed={isListening}
                         data-testid="drill-mic-button"
-                        className={`absolute top-3 right-3 flex items-center justify-center w-9 h-9 rounded-full transition-colors ${
+                        className={`flex items-center justify-center w-20 h-20 rounded-full transition-colors shadow-sm ${
                           isListening
                             ? 'bg-red-500 hover:bg-red-600 text-white'
-                            : 'bg-[#eff3f4] hover:bg-blue-100 text-[#536471] hover:text-blue-600'
+                            : 'bg-blue-600 hover:bg-blue-500 text-white'
                         } disabled:opacity-40 disabled:cursor-not-allowed`}
                       >
                         {isListening ? (
-                          /* Stop square */
-                          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
-                            <rect x="6" y="6" width="12" height="12" rx="1" />
+                          <svg className="w-7 h-7" viewBox="0 0 24 24" fill="currentColor">
+                            <rect x="6" y="6" width="12" height="12" rx="1.5" />
                           </svg>
                         ) : (
-                          /* Mic icon */
-                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-14 0m7 7v3m-4 0h8m-4-7a3 3 0 01-3-3V5a3 3 0 016 0v6a3 3 0 01-3 3z" />
+                          <svg className="w-9 h-9" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M19 11a7 7 0 01-14 0m7 7v3m-4 0h8m-4-7a3 3 0 01-3-3V5a3 3 0 016 0v6a3 3 0 01-3 3z" />
                           </svg>
                         )}
                       </button>
-                    )}
-                  </div>
+
+                      {isListening ? (
+                        <div
+                          data-testid="drill-listening-banner"
+                          className="flex items-center justify-center gap-2 text-xs font-medium text-red-700"
+                        >
+                          <span className="relative flex h-2 w-2 shrink-0">
+                            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+                            <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500" />
+                          </span>
+                          <span>Listening — tap mic to stop</span>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-[#71767b]">
+                          {newAnswer.trim()
+                            ? 'Tap the mic to keep speaking, or submit your answer.'
+                            : 'Tap the mic and answer out loud — real interviews are spoken.'}
+                        </p>
+                      )}
+
+                      {/* Captured / interim transcript display — read-
+                          only mirror of what's been spoken so the user
+                          sees their answer take shape without needing
+                          the textarea. liveTranscript is the
+                          mid-utterance interim text; newAnswer is the
+                          flushed accumulated transcript. */}
+                      {(newAnswer.trim() || liveTranscript) && (
+                        <div
+                          data-testid="drill-spoken-transcript"
+                          className="w-full text-left rounded-lg bg-[#f7f9f9] border border-[#eff3f4] px-4 py-3 text-sm text-[#0f1419] whitespace-pre-wrap"
+                        >
+                          {newAnswer.trim()}
+                          {isListening && liveTranscript && (
+                            <span className="text-[#536471]">
+                              {newAnswer.trim() ? ' ' : ''}
+                              {liveTranscript}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* "Type instead" toggle — only shown when voice is
+                      supported (otherwise the textarea is already the
+                      only surface). Once expanded, stays open for the
+                      rest of the drill (resetDrill clears it). */}
+                  {voiceSupported && !showTextInput && (
+                    <button
+                      type="button"
+                      onClick={() => setShowTextInput(true)}
+                      data-testid="drill-type-instead"
+                      className="mt-3 inline-flex items-center gap-1 text-xs text-[#536471] hover:text-blue-600 font-medium"
+                    >
+                      Can&rsquo;t speak right now? Type instead
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+                  )}
+
+                  {showTextInput && (
+                    <div className={voiceSupported ? 'mt-3' : ''}>
+                      <textarea
+                        value={newAnswer}
+                        onChange={e => setNewAnswer(e.target.value)}
+                        placeholder={voiceSupported
+                          ? 'Edit what you spoke, or type your full answer here.'
+                          : 'Type your improved answer here…'}
+                        rows={6}
+                        className="w-full p-4 bg-white border border-[#e1e8ed] rounded-xl text-sm text-[#0f1419] placeholder:text-[#8b98a5] focus:outline-none focus:ring-2 focus:ring-blue-500/50 resize-none"
+                      />
+                    </div>
+                  )}
+
                   <button
                     onClick={submitAnswer}
                     // Enabled when listening even if the textarea is
