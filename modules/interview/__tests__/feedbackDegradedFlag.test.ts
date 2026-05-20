@@ -117,15 +117,20 @@ vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(u
  * cached hit and regenerates. Default: return no cached feedback
  * (happy path).
  */
-const { mockSessionFindOne, mockFindByIdAndUpdate } = vi.hoisted(() => ({
+const { mockSessionFindOne, mockFindByIdAndUpdate, mockFindOneAndUpdate } = vi.hoisted(() => ({
   mockSessionFindOne: vi.fn(),
   mockFindByIdAndUpdate: vi.fn(),
+  // PR #398 follow-up (R11): enqueuePathwayRegeneration uses atomic
+  // findOneAndUpdate for its status claim. Default to a truthy doc so
+  // Inngest send still happens; tests can override per case.
+  mockFindOneAndUpdate: vi.fn().mockResolvedValue({ _id: 'sess-claimed' }),
 }))
 
 vi.mock('@shared/db/models', () => ({
   User: { findById: () => ({ select: () => ({ lean: () => Promise.resolve(null) }) }) },
   InterviewSession: {
     findByIdAndUpdate: mockFindByIdAndUpdate,
+    findOneAndUpdate: mockFindOneAndUpdate,
     findOne: (query: unknown) => ({
       select: () => ({
         lean: () => Promise.resolve(mockSessionFindOne(query)),

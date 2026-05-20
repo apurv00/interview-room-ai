@@ -172,6 +172,16 @@ function FeedbackPageInner() {
 
   // Retake flow
   const [retakeLoading, setRetakeLoading] = useState(false)
+
+  // Pathway retry banner — when the pathway empty-state CTA sends the
+  // user here with `?retryPathway=1`, we fire one POST to
+  // /api/learn/pathway/retry and surface the outcome inline.
+  // Codex P2 on PR #398: previously the query param was set but never
+  // consumed, so following the CTA appeared to do nothing.
+  const [pathwayRetryStatus, setPathwayRetryStatus] = useState<
+    null | { kind: 'pending' } | { kind: 'success' } | { kind: 'error'; message: string }
+  >(null)
+  const pathwayRetryTriggeredRef = useRef(false)
   // Parent session id for retake comparison — populated from the session
   // GET response when the current session has `parentSessionId` set.
   const [parentSessionId, setParentSessionId] = useState<string | null>(null)
@@ -234,6 +244,63 @@ function FeedbackPageInner() {
       console.warn('Failed to drain queued replay uploads', err)
     )
   }, [])
+
+  // ── Pathway retry trigger (?retryPathway=1) ────────────────────────────────
+  // The pathway empty-state CTA in pathwayViewModel.ts sends users here
+  // with this flag when a prior pathway generation failed. We invoke the
+  // retry endpoint once, then strip the flag from the URL so a refresh
+  // doesn't re-fire it. The retry route is rate-limited (3/min) and uses
+  // its own atomic CAS, so a duplicate fire would just 409 — but stripping
+  // the param keeps the UI consistent on reload.
+  useEffect(() => {
+    if (!sessionId || sessionId === 'local') return
+    if (pathwayRetryTriggeredRef.current) return
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('retryPathway') !== '1') return
+    pathwayRetryTriggeredRef.current = true
+    setPathwayRetryStatus({ kind: 'pending' })
+
+    // Strip the query param immediately so a manual refresh / share doesn't
+    // re-trigger. `router.replace` with the cleaned URL preserves history
+    // entry instead of pushing a new one.
+    params.delete('retryPathway')
+    const cleanQuery = params.toString()
+    const cleanPath = `${window.location.pathname}${cleanQuery ? `?${cleanQuery}` : ''}`
+    router.replace(cleanPath)
+
+    fetch('/api/learn/pathway/retry', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId }),
+    })
+      .then(async (res) => {
+        if (res.ok) {
+          setPathwayRetryStatus({ kind: 'success' })
+          return
+        }
+        // 409 from the retry route means an enqueue is already in flight
+        // (or status is succeeded/skipped). That's a "good enough"
+        // outcome from the user's perspective — pathway IS being worked
+        // on (or already done), so show success copy rather than error.
+        if (res.status === 409) {
+          setPathwayRetryStatus({ kind: 'success' })
+          return
+        }
+        let message = 'Could not start pathway retry.'
+        try {
+          const body = await res.json()
+          if (typeof body?.error === 'string') message = body.error
+        } catch {
+          // Non-JSON body — keep generic message.
+        }
+        setPathwayRetryStatus({ kind: 'error', message })
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : 'Network error'
+        setPathwayRetryStatus({ kind: 'error', message })
+      })
+  }, [sessionId, router])
 
   // ── Late-landing recording catcher (Shape B) ───────────────────────────────
   // Camera upload is fire-and-forget per app/interview/page.tsx — the
@@ -1256,6 +1323,37 @@ function FeedbackPageInner() {
           </div>
         </div>
       </header>
+
+      {/* Pathway retry banner (?retryPathway=1 from the pathway empty-state CTA) */}
+      {pathwayRetryStatus && (
+        <div className="max-w-5xl mx-auto px-4 mt-4">
+          {pathwayRetryStatus.kind === 'pending' && (
+            <div className="bg-brand-500/10 border border-brand-500/30 rounded-[var(--radius-md)] px-5 py-3 text-sm text-brand-700 flex items-center gap-2">
+              <div className="w-4 h-4 rounded-full border-2 border-brand-500 border-t-transparent animate-spin shrink-0" />
+              <span>Restarting pathway generation…</span>
+            </div>
+          )}
+          {pathwayRetryStatus.kind === 'success' && (
+            <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-[var(--radius-md)] px-5 py-3 text-sm text-emerald-700 flex items-center justify-between gap-2">
+              <span>Pathway regeneration started. Check the Learning section in a minute.</span>
+              <button
+                onClick={() => router.push('/learn/pathway')}
+                className="shrink-0 px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md text-xs font-medium transition"
+              >
+                Open pathway
+              </button>
+            </div>
+          )}
+          {pathwayRetryStatus.kind === 'error' && (
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-[var(--radius-md)] px-5 py-3 text-sm text-amber-700 flex items-center gap-2">
+              <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span>Couldn’t restart pathway generation: {pathwayRetryStatus.message}</span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Save warning banner */}
       {saveWarning && (
