@@ -18,9 +18,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextRequest } from 'next/server'
 import mongoose from 'mongoose'
 
-const { mockGetServerSession, mockFindOne } = vi.hoisted(() => ({
+const { mockGetServerSession, mockFindOne, mockUpdateOne, mockGenerateIdeal, mockGetDomainLabel } = vi.hoisted(() => ({
   mockGetServerSession: vi.fn(),
   mockFindOne: vi.fn(),
+  mockUpdateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+  // Default: backfill returns null so legacy tests (which exercised the
+  // "no ideal answer" branch back when there was no JIT) stay no-ops.
+  // Tests that want to assert backfill happened override per-case.
+  mockGenerateIdeal: vi.fn().mockResolvedValue(null),
+  mockGetDomainLabel: vi.fn((role: string) => `Domain ${role}`),
 }))
 
 vi.mock('next-auth', () => ({
@@ -33,10 +39,17 @@ vi.mock('@shared/db/connection', () => ({
 vi.mock('@shared/db/models', () => ({
   InterviewSession: {
     findOne: (...args: unknown[]) => mockFindOne(...args),
+    updateOne: (...args: unknown[]) => mockUpdateOne(...args),
   },
 }))
 vi.mock('@shared/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}))
+vi.mock('@learn/services/idealAnswerBackfill', () => ({
+  generateIdealAnswerForQuestion: (...a: unknown[]) => mockGenerateIdeal(...a),
+}))
+vi.mock('@interview/config/interviewConfig', () => ({
+  getDomainLabel: (role: string) => mockGetDomainLabel(role),
 }))
 
 import { GET } from '../route'
@@ -54,6 +67,9 @@ function chain(result: unknown) {
 beforeEach(() => {
   mockGetServerSession.mockReset()
   mockFindOne.mockReset()
+  mockUpdateOne.mockReset().mockResolvedValue({ matchedCount: 1 })
+  mockGenerateIdeal.mockReset().mockResolvedValue(null)
+  mockGetDomainLabel.mockReset().mockImplementation((role: string) => `Domain ${role}`)
 })
 
 describe('GET /api/learn/drill/context/question', () => {
@@ -162,14 +178,20 @@ describe('GET /api/learn/drill/context/question', () => {
     })
   })
 
-  it('returns null idealAnswer when session has no ideal_answers for this question', async () => {
+  it('returns null idealAnswer when backfill is unavailable (timeout / LLM error)', async () => {
     mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+    // Weak question (avg 55) — JIT backfill kicks in, but the helper
+    // resolves null (LLM error / timeout). Route must degrade to the
+    // fallback strip rather than 500.
+    mockGenerateIdeal.mockResolvedValueOnce(null)
     mockFindOne.mockReturnValue(
       chain({
         config: { role: 'pm' },
         evaluations: [
           {
             questionIndex: 0,
+            question: 'Tell me about a time you owned an outcome',
+            answer: 'I worked on a feature',
             relevance: 60,
             structure: 50,
             specificity: 40,
@@ -189,8 +211,101 @@ describe('GET /api/learn/drill/context/question', () => {
 
     expect(res.status).toBe(200)
     expect(body.idealAnswer).toBeNull()
+    expect(mockGenerateIdeal).toHaveBeenCalledTimes(1)
+    // Backfill failed → no persist attempt.
+    expect(mockUpdateOne).not.toHaveBeenCalled()
     // Scores + primaryGap still flow through so the fallback strip works.
     expect(body.primaryGap).toBe('specificity')
     expect(body.scores).toBeTruthy()
+  })
+
+  it('JIT-generates + persists + returns an ideal answer for a weak question with none cached', async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+    mockGenerateIdeal.mockResolvedValueOnce({
+      strongAnswer: 'I prioritized... I chose... After launch...',
+      keyElements: ['Cites funnel data', 'Explains tradeoff', 'Includes measurable impact'],
+    })
+    mockFindOne.mockReturnValue(
+      chain({
+        config: { role: 'pm', interviewType: 'behavioral' },
+        evaluations: [
+          {
+            questionIndex: 3,
+            question: 'Walk me through a decision under constraint',
+            answer: 'We had limited eng time and I picked the smaller feature',
+            relevance: 50,
+            structure: 40,
+            specificity: 30,
+            ownership: 45,
+            primaryGap: 'specificity',
+          },
+        ],
+        feedback: { ideal_answers: [] },
+      }),
+    )
+
+    const req = new NextRequest(
+      `http://localhost/api/learn/drill/context/question?sessionId=${SESSION_ID}&questionIndex=3`,
+    )
+    const res = await GET(req)
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(mockGenerateIdeal).toHaveBeenCalledTimes(1)
+    const [args] = mockGenerateIdeal.mock.calls[0]
+    expect(args).toMatchObject({
+      question: expect.stringContaining('Walk me through'),
+      candidateAnswer: expect.stringContaining('limited eng time'),
+      interviewType: 'behavioral',
+      questionIndex: 3,
+    })
+    // Persisted with a $ne filter so concurrent backfills can't dupe.
+    expect(mockUpdateOne).toHaveBeenCalledTimes(1)
+    const [filter, update] = mockUpdateOne.mock.calls[0]
+    expect(filter['feedback.ideal_answers.questionIndex']).toEqual({ $ne: 3 })
+    expect(update.$push['feedback.ideal_answers']).toMatchObject({
+      questionIndex: 3,
+      strongAnswer: expect.stringContaining('I prioritized'),
+      keyElements: expect.arrayContaining(['Cites funnel data']),
+    })
+    expect(body.idealAnswer).toMatchObject({
+      strongAnswer: expect.stringContaining('I prioritized'),
+      keyElements: expect.arrayContaining(['Cites funnel data']),
+    })
+  })
+
+  it('does NOT JIT-backfill when the question is not weak (avg >= 60)', async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+    mockFindOne.mockReturnValue(
+      chain({
+        config: { role: 'pm' },
+        evaluations: [
+          {
+            questionIndex: 0,
+            question: 'Strong-answer question',
+            answer: 'A solid answer with metrics',
+            relevance: 80,
+            structure: 75,
+            specificity: 70,
+            ownership: 65,
+            primaryGap: 'ownership',
+          },
+        ],
+        feedback: { ideal_answers: [] },
+      }),
+    )
+
+    const req = new NextRequest(
+      `http://localhost/api/learn/drill/context/question?sessionId=${SESSION_ID}&questionIndex=0`,
+    )
+    const res = await GET(req)
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    // Strong question — outline is intentionally absent (avoids
+    // diluting LLM focus per the batch-enrichment threshold).
+    expect(mockGenerateIdeal).not.toHaveBeenCalled()
+    expect(mockUpdateOne).not.toHaveBeenCalled()
+    expect(body.idealAnswer).toBeNull()
   })
 })

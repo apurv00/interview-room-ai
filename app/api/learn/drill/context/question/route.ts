@@ -6,6 +6,27 @@ import { connectDB } from '@shared/db/connection'
 import { InterviewSession } from '@shared/db/models'
 import { logger } from '@shared/logger'
 import type { AnswerEvaluation, FeedbackData } from '@shared/types'
+import { getDomainLabel } from '@interview/config/interviewConfig'
+import { generateIdealAnswerForQuestion } from '@learn/services/idealAnswerBackfill'
+
+/**
+ * Below this average score we treat the question as "weak enough" to
+ * warrant a strong-answer outline. Matches the threshold in
+ * `weakestQuestionContext` (app/api/generate-feedback/route.ts:161) so
+ * the batch enrichment and the JIT backfill never disagree about which
+ * questions deserve coaching.
+ */
+const WEAK_QUESTION_SCORE_THRESHOLD = 60
+
+function avgEvaluationScore(evaluation: AnswerEvaluation): number {
+  return Math.round(
+    ((Number(evaluation.relevance) || 0) +
+      (Number(evaluation.structure) || 0) +
+      (Number(evaluation.specificity) || 0) +
+      (Number(evaluation.ownership) || 0)) /
+      4,
+  )
+}
 
 export const dynamic = 'force-dynamic'
 
@@ -73,9 +94,74 @@ export async function GET(req: NextRequest) {
     }
 
     const evaluation = (doc.evaluations ?? []).find((e) => e.questionIndex === questionIndex)
-    const idealAnswer = (doc.feedback?.ideal_answers ?? []).find(
+    let idealAnswer = (doc.feedback?.ideal_answers ?? []).find(
       (ia) => ia.questionIndex === questionIndex,
     )
+
+    // JIT backfill — the batch enrichment in /api/generate-feedback
+    // routinely produces partial coverage (the LLM picks the worst few
+    // weak questions and skips others) even though the prompt asks for
+    // one entry per weak question. Pre-2026-05-19 sessions also only
+    // have top-3 outlines from the older enrichment path. When this
+    // route is asked about a weak question (avg < 60) that has no
+    // outline, generate ONE on demand and persist it to the session.
+    //
+    // Costs: ~$0.0005 per backfilled question on haiku; capped at 6s
+    // wall-clock so the drill page never feels frozen. Race-safe via
+    // a $ne update filter — concurrent requests for the same question
+    // result in at most one DB write; the loser wastes its LLM call
+    // (~$0.0005) but doesn't corrupt state.
+    if (!idealAnswer && evaluation) {
+      const avg = avgEvaluationScore(evaluation)
+      if (avg < WEAK_QUESTION_SCORE_THRESHOLD && evaluation.question && doc.config?.role) {
+        const role = doc.config.role
+        const interviewType = doc.config.interviewType ?? 'screening'
+        let domainLabel: string
+        try {
+          domainLabel = getDomainLabel(role)
+        } catch {
+          domainLabel = role
+        }
+        const generated = await generateIdealAnswerForQuestion({
+          question: evaluation.question,
+          candidateAnswer: String(evaluation.answer ?? ''),
+          domainLabel,
+          interviewType,
+          sessionId,
+          questionIndex,
+        })
+        if (generated) {
+          const entry = {
+            questionIndex,
+            strongAnswer: generated.strongAnswer,
+            keyElements: generated.keyElements,
+          }
+          try {
+            // Conditional $push — only writes if no entry for this
+            // questionIndex already exists. Two concurrent backfills:
+            // the second's filter doesn't match and updateOne returns
+            // matchedCount=0, leaving the first write intact.
+            await InterviewSession.updateOne(
+              {
+                _id: new mongoose.Types.ObjectId(sessionId),
+                userId: new mongoose.Types.ObjectId(session.user.id),
+                'feedback.ideal_answers.questionIndex': { $ne: questionIndex },
+              },
+              { $push: { 'feedback.ideal_answers': entry } },
+            )
+          } catch (persistErr) {
+            // Persist failure is non-fatal — we still return the
+            // generated outline so the user sees it on THIS request.
+            // The next visit re-triggers JIT backfill.
+            logger.warn(
+              { err: persistErr, sessionId, questionIndex },
+              'ideal_answer backfill: persist failed; returning ephemeral outline',
+            )
+          }
+          idealAnswer = entry
+        }
+      }
+    }
 
     return NextResponse.json({
       primaryGap: evaluation?.primaryGap ?? null,
@@ -94,8 +180,10 @@ export async function GET(req: NextRequest) {
         : null,
       domain: doc.config?.role ?? null,
       interviewType: doc.config?.interviewType ?? null,
-      // Returned only if it actually exists on the session — drill page
-      // falls back to `QuestionInsightStrip` when this is null.
+      // Returned only if it actually exists on the session OR was just
+      // JIT-generated above — drill page falls back to
+      // `QuestionInsightStrip` when this is null (backfill timed out
+      // or LLM failed).
       idealAnswer: idealAnswer
         ? {
             strongAnswer: idealAnswer.strongAnswer,
