@@ -14,10 +14,13 @@ import { User, InterviewSession } from '@shared/db/models'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { updateCompetencyState, updateWeaknessClusters } from '@learn/services/competencyService'
 import { generateSessionSummary } from '@learn/services/sessionSummaryService'
-import { inngest } from '@shared/services/inngest'
 import { updatePracticeStats, deriveStrongWeakDimensions } from '@learn/services/practiceStatsService'
 import { updateMasteryBatch } from '@learn/services/masteryTracker'
 import { advanceUniversalPlan } from '@learn/services/pathwayPlanner'
+import {
+  canEnqueuePathwayRegeneration,
+  enqueuePathwayRegeneration,
+} from '@learn/services/pathwayRegeneration'
 import { registerPathwayBadgeWiring } from '@learn/services/pathwayBadgeWiring'
 // `evaluateSession` was previously called inline here as part of the
 // pathway-plan side-effect chain. Now it runs inside the Inngest
@@ -1242,47 +1245,7 @@ You repair malformed interview feedback JSON. The output must match the supplied
           // chain used to.
           fireAndTrack(
             'pathwayPlan',
-            (async () => {
-              await connectDB()
-              await InterviewSession.findByIdAndUpdate(sessionId, {
-                $set: { pathwayGenerationStatus: 'pending' },
-              })
-              try {
-                // Codex P2 on PR #379 (effectively P0) — payload contains
-                // ONLY identifiers. The job re-fetches feedback/evaluations/
-                // config from Mongo. Previously the event carried the full
-                // feedback + per-question evaluations inline, which for a
-                // long interview could exceed Inngest's 512KB event-size
-                // limit and brick that session's regeneration forever
-                // (every retry resent the same oversized payload).
-                await inngest.send({
-                  name: 'pathway/regenerate',
-                  data: {
-                    sessionId,
-                    userId: user.id,
-                  },
-                })
-              } catch (err) {
-                // Codex P1 + Vercel P1 on PR #379 — deadlock-on-enqueue.
-                // If Inngest is down or the event-key check fails, the
-                // status above stays at 'pending' forever and the retry
-                // endpoint refuses to re-enqueue. Roll status back to
-                // 'failed' so the UI surfaces the retry CTA + the next
-                // /api/learn/pathway/retry call passes the guard.
-                const message = err instanceof Error ? err.message : 'Failed to enqueue pathway regeneration.'
-                await InterviewSession.findByIdAndUpdate(sessionId, {
-                  $set: {
-                    pathwayGenerationStatus: 'failed',
-                    pathwayGenerationError: message.slice(0, 500),
-                  },
-                }).catch(() => {
-                  // Best-effort rollback; degenerate case (Mongo also
-                  // down) leaves status 'pending'. The retry rate-limit
-                  // window expires within 60s.
-                })
-                throw err
-              }
-            })(),
+            enqueuePathwayRegeneration(sessionId, user.id, { source: 'generate-feedback-success' }),
             'Pathway plan regeneration enqueue failed',
           )
         } else {
@@ -1541,6 +1504,24 @@ You repair malformed interview feedback JSON. The output must match the supplied
         await persistPromise.catch(() => { /* tracked above */ })
       }
 
+      // Upstream fix (2026-05-20): when feedback is degraded (inner LLM
+      // fallback), the non-idempotent side-effect block above is skipped
+      // but evaluations are already in Mongo from finishInterview. Enqueue
+      // pathway regeneration only — the Inngest job synthesizes feedback
+      // in-memory and never persists synthetic scores to session.feedback.
+      if (canEnqueuePathwayRegeneration(body.sessionId, evaluations) && feedback.degraded) {
+        try {
+          await enqueuePathwayRegeneration(body.sessionId, user.id, {
+            source: 'generate-feedback-degraded',
+          })
+        } catch (err) {
+          aiLogger.warn(
+            { err, sessionId: body.sessionId, userId: user.id },
+            'Pathway enqueue failed on degraded feedback path',
+          )
+        }
+      }
+
       // PR #321: attach side-effect scheduling outcomes to the
       // response so the feedback UI can distinguish "pathway is
       // generating, check back in a minute" from "pathway is
@@ -1649,6 +1630,20 @@ You repair malformed interview feedback JSON. The output must match the supplied
           evaluationCount: evaluations?.length ?? 0,
           recordReason: 'outer-catch',
         }).catch(() => {})
+      }
+      // Upstream fix (2026-05-20): outer-catch never persists feedback
+      // (P0 contract) but evaluations are in Mongo from finishInterview.
+      // Enqueue pathway so users aren't stuck with null PathwayPlan across
+      // retries. Fire-and-forget — response must not block on Inngest.
+      if (canEnqueuePathwayRegeneration(body.sessionId, evaluations)) {
+        enqueuePathwayRegeneration(body.sessionId, user.id, {
+          source: 'generate-feedback-outer-catch',
+        }).catch((err) =>
+          aiLogger.warn(
+            { err, sessionId: body.sessionId, userId: user.id },
+            'Pathway enqueue failed on outer-catch',
+          ),
+        )
       }
       return NextResponse.json(fallback)
     }

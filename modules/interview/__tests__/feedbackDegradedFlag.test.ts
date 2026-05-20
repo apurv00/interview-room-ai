@@ -29,7 +29,9 @@
  *
  *   1. Outer-catch fallback (Claude threw) → response has `degraded: true`
  *   2. Outer-catch fallback is NOT persisted — no `findByIdAndUpdate`
- *      call carries a `feedback` field.
+ *      call carries a `feedback` field. (Pathway-only recovery may
+ *      still set `pathwayGenerationStatus: 'pending'` — upstream fix
+ *      2026-05-20.)
  *   3. Legitimate low-signal paths (no evals, short-form <3) → NO
  *      `degraded` flag (those 0 scores are real, red_flags explains them)
  *   4. Normal successful path (Claude returned valid JSON) → NO
@@ -320,6 +322,23 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
       return update && typeof update === 'object' && 'feedback' in update
     })
     expect(callsCarryingFeedback).toHaveLength(0)
+  })
+
+  it('outer-catch STILL enqueues pathway/regenerate when evaluations exist (upstream fix)', async () => {
+    mockCompletion.mockRejectedValueOnce(new Error('Claude API timeout'))
+
+    await POST(makeReq({
+      evals: evals(5),
+      plannedQuestionCount: 6,
+      answeredCount: 5,
+      endReason: 'normal',
+    }))
+
+    expect(
+      mockInngestSend.mock.calls.some(
+        ([evt]: Array<{ name?: string }>) => evt?.name === 'pathway/regenerate',
+      ),
+    ).toBe(true)
   })
 
   it('does NOT set degraded on the no-data path (0 evaluations)', async () => {
@@ -637,13 +656,14 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
     expect(persistCalls).toHaveLength(0)
     expect(mockUpdatePracticeStats).not.toHaveBeenCalled()
     expect(mockGenerateSessionSummary).not.toHaveBeenCalled()
-    // Bug B fix: pathway regen is now enqueued via inngest.send('pathway/regenerate').
-    // The degraded gate must prevent the event from being emitted.
+    // Upstream fix (2026-05-20): pathway regen is enqueued even on degraded
+    // paths so the Inngest job can build a plan from persisted evaluations.
+    // Non-idempotent side effects (persist, competency, XP, etc.) stay gated.
     expect(
       mockInngestSend.mock.calls.some(
         ([evt]: Array<{ name?: string }>) => evt?.name === 'pathway/regenerate',
       ),
-    ).toBe(false)
+    ).toBe(true)
     expect(mockUpdateCompetencyState).not.toHaveBeenCalled()
     expect(mockUpdateMasteryBatch).not.toHaveBeenCalled()
     expect(mockAdvanceUniversalPlan).not.toHaveBeenCalled()
@@ -687,7 +707,7 @@ describe('POST /api/generate-feedback — degraded flag contract', () => {
       mockInngestSend.mock.calls.some(
         ([evt]: Array<{ name?: string }>) => evt?.name === 'pathway/regenerate',
       ),
-    ).toBe(false)
+    ).toBe(true)
     expect(mockUpdateCompetencyState).not.toHaveBeenCalled()
     expect(mockUpdateMasteryBatch).not.toHaveBeenCalled()
     expect(mockAdvanceUniversalPlan).not.toHaveBeenCalled()

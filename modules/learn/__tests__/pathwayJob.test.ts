@@ -250,12 +250,33 @@ describe('runPathwayJobHandler', () => {
       expect(mockEvaluateSession).not.toHaveBeenCalled()
     })
 
-    it('throws when session.feedback is missing (degenerate race with generate-feedback persist)', async () => {
+    it('synthesizes feedback from evaluations when session.feedback is missing (outer-catch upstream fix)', async () => {
       mockFindOneLean.mockResolvedValue({ ...SESSION_PAYLOAD, feedback: undefined })
       const step = makeStep()
-      await expect(runPathwayJobHandler(makeEvent(), step)).rejects.toThrow(
-        /has no feedback yet/i,
+      const result = await runPathwayJobHandler(makeEvent(), step)
+      expect(result.status).toBe('completed')
+      expect(mockGeneratePathwayPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          feedback: expect.objectContaining({
+            overall_score: expect.any(Number),
+          }),
+        }),
       )
+      const plannerFeedback = mockGeneratePathwayPlan.mock.calls[0][0].feedback
+      expect(plannerFeedback.degraded).toBeUndefined()
+    })
+
+    it('synthesizes feedback when persisted feedback is degraded (legacy rows)', async () => {
+      mockFindOneLean.mockResolvedValue({
+        ...SESSION_PAYLOAD,
+        feedback: { overall_score: 30, degraded: true } as never,
+      })
+      const step = makeStep()
+      await runPathwayJobHandler(makeEvent(), step)
+      const plannerFeedback = mockGeneratePathwayPlan.mock.calls[0][0].feedback
+      expect(plannerFeedback.overall_score).toBeGreaterThan(0)
+      expect(plannerFeedback.degraded).toBeUndefined()
+      expect(plannerFeedback.overall_score).not.toBe(30)
     })
 
     it('throws when session.evaluations is empty', async () => {
