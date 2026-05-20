@@ -161,7 +161,10 @@ describe('POST /api/learn/pathway/retry — atomic claim (Codex P2 #9)', () => {
         ],
       }),
     )
-    expect(update.$set).toEqual({ pathwayGenerationStatus: 'pending' })
+    expect(update.$set).toEqual({
+      pathwayGenerationStatus: 'pending',
+      pathwayGenerationUseSynthesizedFeedback: false,
+    })
     expect(update.$unset).toEqual({ pathwayGenerationError: 1 })
   })
 
@@ -239,14 +242,20 @@ describe('POST /api/learn/pathway/retry — validation', () => {
     expect(body.error).toMatch(/config is missing/i)
   })
 
-  it('409 when feedback is missing', async () => {
+  it('allows retry when feedback is missing but evaluations exist (outer-catch path)', async () => {
     mockFindOne.mockResolvedValue(fullSession({ feedback: undefined }))
+    mockFindOneAndUpdate.mockResolvedValue(fullSession({ feedback: undefined }))
     const res = await POST(makeReq())
-    expect(res.status).toBe(409)
-    expect((await res.json() as { error: string }).error).toMatch(/no feedback yet/i)
+    expect(res.status).toBe(200)
+    expect(mockInngestSend).toHaveBeenCalledTimes(1)
+    const [, update] = mockFindOneAndUpdate.mock.calls[0]
+    expect(update.$set).toEqual({
+      pathwayGenerationStatus: 'pending',
+      pathwayGenerationUseSynthesizedFeedback: true,
+    })
   })
 
-  it('409 when evaluations are missing or empty', async () => {
+  it('409 when evaluations are missing or empty (even if feedback exists)', async () => {
     mockFindOne.mockResolvedValue(fullSession({ evaluations: [] }))
     const res = await POST(makeReq())
     expect(res.status).toBe(409)
