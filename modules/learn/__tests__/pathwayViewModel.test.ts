@@ -321,6 +321,65 @@ describe('buildPathwayViewModel', () => {
     expect(result.planItems).toEqual([])
   })
 
+  // 2026-05-20 user-reported regression: when a user had completed
+  // interviews but no PathwayPlan got generated (LLM failure on
+  // /api/generate-feedback's pathway-enqueue side effect), the empty
+  // state shipped "Take your first interview" even after multiple
+  // interviews. New behaviour: contextual CTA pointing back to the
+  // most-recent interview's feedback page so the user can retry.
+  it('returns contextual retry CTA when user has sessions but no plan (NOT baseline interview)', () => {
+    const result = buildPathwayViewModel({
+      pathway: null,
+      competencySummary: null,
+      weaknesses: [],
+      lastSessionAt: new Date('2026-05-19T10:00:00Z'),
+      lastSessionId: '507f1f77bcf86cd799439011',
+      lastSessionPathwayStatus: null, // never attempted (legacy session)
+      now: NOW,
+    })
+
+    expect(result.state).toBe('empty')
+    // Critically NOT the baseline-interview CTA — that would tell a
+    // user with sessions they have no sessions.
+    expect(result.nextAction.id).not.toBe('baseline-interview')
+    expect(result.nextAction.href).toBe(
+      '/feedback/507f1f77bcf86cd799439011?retryPathway=1'
+    )
+    expect(result.nextAction.title).toMatch(/didn’t generate|did not generate/i)
+  })
+
+  it('mentions the failure when lastSessionPathwayStatus is \"failed\"', () => {
+    const result = buildPathwayViewModel({
+      pathway: null,
+      competencySummary: null,
+      weaknesses: [],
+      lastSessionAt: new Date('2026-05-19T10:00:00Z'),
+      lastSessionId: '507f1f77bcf86cd799439011',
+      lastSessionPathwayStatus: 'failed',
+      now: NOW,
+    })
+
+    expect(result.state).toBe('empty')
+    expect(result.nextAction.description.toLowerCase()).toContain('failed')
+  })
+
+  it('still uses the baseline-interview CTA when no session exists at all', () => {
+    // Sanity guard: a brand-new user (no sessions) should still see
+    // "Take your first interview" — the contextual CTA only fires
+    // when lastSessionId is truthy.
+    const result = buildPathwayViewModel({
+      pathway: null,
+      competencySummary: null,
+      weaknesses: [],
+      lastSessionAt: null,
+      lastSessionId: null,
+      now: NOW,
+    })
+
+    expect(result.state).toBe('empty')
+    expect(result.nextAction.href).toContain('actionId=baseline')
+  })
+
   it('returns active state with the first open plan action', () => {
     const result = buildPathwayViewModel({
       pathway: makePathway(),
