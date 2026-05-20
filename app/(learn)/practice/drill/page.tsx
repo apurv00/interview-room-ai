@@ -144,21 +144,33 @@ function DrillPageInner() {
   // hydration mismatch.
   const { isListening, liveTranscript, startListening, stopListening } = useSpeechRecognition()
   const [voiceSupported, setVoiceSupported] = useState(false)
-  useEffect(() => {
-    setVoiceSupported(browserSupportsSpeechRecognition())
-  }, [])
 
   // Voice-first input mode. Real interviews are spoken, not typed, so
   // the mic is the primary CTA and the textarea is hidden behind a
-  // "Type instead" toggle. We default-open the textarea for browsers
-  // without Web Speech API so unsupported users still have a working
-  // input on the first paint. Once the user explicitly toggles, their
-  // choice sticks for the rest of the drill session (not persisted
-  // across reloads — practice is short).
+  // "Type instead" toggle. The textarea defaults to OPEN only for
+  // browsers without Web Speech API (so unsupported users still have a
+  // working surface on the first paint).
+  //
+  // Codex P2 on PR #401 — both `voiceSupported` and `showTextInput`
+  // must be initialised in a SINGLE effect. The previous version had
+  // two effects: one to detect voice support, one to flip
+  // `showTextInput` whenever `voiceSupported` was false. But
+  // `voiceSupported` starts as `false` on first render, so the second
+  // effect fired BEFORE detection completed and opened the textarea
+  // for every user — and never reset it when detection later flipped
+  // `voiceSupported` to true. Result: voice-capable users always saw
+  // typing by default, defeating the voice-first UX.
+  //
+  // Detection is synchronous (checks `window.SpeechRecognition`), so
+  // we do both writes in a single useEffect with [] deps. Once
+  // initialised, the user's explicit toggle (via "Type instead")
+  // sticks for the rest of the drill session.
   const [showTextInput, setShowTextInput] = useState(false)
   useEffect(() => {
-    if (!voiceSupported) setShowTextInput(true)
-  }, [voiceSupported])
+    const supported = browserSupportsSpeechRecognition()
+    setVoiceSupported(supported)
+    if (!supported) setShowTextInput(true)
+  }, [])
 
   // Set true when the user clicks Submit while the mic is still
   // listening — defers the actual submit until the speech hook has
