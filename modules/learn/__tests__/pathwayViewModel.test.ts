@@ -394,6 +394,22 @@ describe('buildPathwayViewModel', () => {
     expect(result.nextAction.title).toMatch(/catching up/i)
   })
 
+  it('explains skipped status instead of generic retry when pathway was disabled', () => {
+    const result = buildPathwayViewModel({
+      pathway: null,
+      competencySummary: null,
+      weaknesses: [],
+      lastSessionAt: new Date('2026-05-19T10:00:00Z'),
+      lastSessionId: '507f1f77bcf86cd799439011',
+      lastSessionPathwayStatus: 'skipped',
+      now: NOW,
+    })
+
+    expect(result.state).toBe('empty')
+    expect(result.nextAction.description.toLowerCase()).toContain('disabled')
+    expect(result.nextAction.description.toLowerCase()).not.toContain('retry')
+  })
+
   it('still uses the baseline-interview CTA when no session exists at all', () => {
     // Sanity guard: a brand-new user (no sessions) should still see
     // "Take your first interview" — the contextual CTA only fires

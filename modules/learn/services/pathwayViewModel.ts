@@ -302,7 +302,9 @@ export function buildPathwayViewModel({
           description:
             lastSessionPathwayStatus === 'failed'
               ? 'The background pathway-generation job failed on your most recent interview. Open the feedback page and use the Retry button there — that will re-trigger the pathway generation.'
-              : 'We have your interview but a pathway plan never landed. Open the feedback page for your most recent interview to retry — or run another interview if you want a fresh baseline.',
+              : lastSessionPathwayStatus === 'skipped'
+                ? 'Pathway generation was disabled when you completed this interview. Run another interview to create a plan — if the feature is available, it will generate on your next session.'
+                : 'We have your interview but a pathway plan never landed. Open the feedback page for your most recent interview to retry — or run another interview if you want a fresh baseline.',
           ctaLabel: 'Open last interview feedback',
           href: `/feedback/${encodeURIComponent(lastSessionId)}?retryPathway=1`,
         }

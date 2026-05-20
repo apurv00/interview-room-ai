@@ -1506,17 +1506,15 @@ You repair malformed interview feedback JSON. The output must match the supplied
       // pathway regeneration only — the Inngest job synthesizes feedback
       // in-memory and never persists synthetic scores to session.feedback.
       if (canEnqueuePathwayRegeneration(body.sessionId, evaluations) && feedback.degraded) {
-        try {
-          await enqueuePathwayRegeneration(body.sessionId, user.id, {
-            source: 'generate-feedback-degraded',
-            useSynthesizedFeedback: true,
-          })
-        } catch (err) {
+        enqueuePathwayRegeneration(body.sessionId, user.id, {
+          source: 'generate-feedback-degraded',
+          useSynthesizedFeedback: true,
+        }).catch((err) =>
           aiLogger.warn(
             { err, sessionId: body.sessionId, userId: user.id },
             'Pathway enqueue failed on degraded feedback path',
-          )
-        }
+          ),
+        )
       }
 
       // PR #321: attach side-effect scheduling outcomes to the
