@@ -20,15 +20,34 @@ export const LEGACY_ROLE_LABELS: Record<string, string> = {
 
 // ─── Dynamic label resolver (falls back to legacy or capitalizes slug) ───────
 
+// UAT-013: slug lookups are now case-insensitive. CMS-managed domains
+// ship lowercase slugs like `pm`, `swe`, while the legacy map below
+// uses mixed-case keys (`PM`, `SWE`) — without normalization a `pm`
+// payload missed every entry and degraded to title-casing the slug,
+// surfacing "Pm" in history rows, the lobby, the TTS intro, etc.
 export function getDomainLabel(slug: string, domainsCache?: { slug: string; label: string }[]): string {
+  if (slug == null) return ''
+  const raw = String(slug).trim()
+  if (!raw) return ''
+  const normalized = raw.toLowerCase()
+
   if (domainsCache) {
-    const found = domainsCache.find(d => d.slug === slug)
+    const found = domainsCache.find(d => d.slug?.toLowerCase() === normalized)
     if (found) return found.label
   }
-  // Legacy mapping
-  if (LEGACY_ROLE_LABELS[slug]) return LEGACY_ROLE_LABELS[slug]
-  // Fallback: capitalize slug
-  return slug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+  // Legacy mapping — try exact key first, then case-insensitive sweep
+  // so callers that already pass canonical-case (`PM`) keep working
+  // while new lowercase slugs resolve too.
+  if (LEGACY_ROLE_LABELS[raw]) return LEGACY_ROLE_LABELS[raw]
+  for (const key of Object.keys(LEGACY_ROLE_LABELS)) {
+    if (key.toLowerCase() === normalized) return LEGACY_ROLE_LABELS[key]
+  }
+  // Fallback: capitalize each hyphen/underscore segment of the slug.
+  return normalized
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ')
 }
 
 // Backward compat export

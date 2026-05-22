@@ -27,7 +27,11 @@ export default function ResumeDashboardPage() {
   const [deleting, setDeleting] = useState<string | null>(null)
 
   useEffect(() => {
-    if (status !== 'authenticated') {
+    // UAT-012: don't kill the spinner while NextAuth is still resolving;
+    // the unauthenticated landing render at line 56 below was flashing
+    // for ~1s during hydration for signed-in users.
+    if (status === 'loading') return
+    if (status === 'unauthenticated') {
       setLoading(false)
       return
     }

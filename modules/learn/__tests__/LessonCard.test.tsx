@@ -30,7 +30,10 @@ describe('LessonCard', () => {
     fetchSpy.mockRestore()
   })
 
-  it('renders collapsed header with placeholder title', () => {
+  it('renders collapsed header with placeholder title and competency subtitle', () => {
+    // UAT-018: the collapsed fallback no longer doubles the competency
+    // into the title. Title is "Lesson N"; the competency lives only in
+    // the subtitle below.
     render(
       <LessonCard
         entry={{ lessonId: 'L1', competency: 'specificity', completed: false }}
@@ -40,7 +43,10 @@ describe('LessonCard', () => {
         onComplete={vi.fn()}
       />,
     )
-    expect(screen.getByText(/Lesson 1: specificity/i)).toBeInTheDocument()
+    expect(screen.getByText('Lesson 1')).toBeInTheDocument()
+    // Competency surfaces once, in the subtitle — not stacked into the title.
+    expect(screen.queryByText(/Lesson 1:/i)).toBeNull()
+    expect(screen.getByText('specificity')).toBeInTheDocument()
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 

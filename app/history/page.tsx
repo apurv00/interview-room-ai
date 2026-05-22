@@ -8,6 +8,7 @@ import Badge from '@shared/ui/Badge'
 import StateView from '@shared/ui/StateView'
 import Button from '@shared/ui/Button'
 import SignedOutEmptyState from '@shared/ui/SignedOutEmptyState'
+import { getScoreDisplay } from './scoreFormat'
 
 interface SessionSummary {
   _id: string
@@ -60,7 +61,11 @@ export default function HistoryPage() {
   }
 
   useEffect(() => {
-    if (authStatus !== 'authenticated') {
+    // UAT-020: keep the spinner up while NextAuth is still resolving the
+    // session — turning loading off here flashes the empty / signed-out
+    // state for ~1s during hydration.
+    if (authStatus === 'loading') return
+    if (authStatus === 'unauthenticated') {
       setLoading(false)
       return
     }
@@ -160,9 +165,14 @@ export default function HistoryPage() {
               >
                 {/* Score badge */}
                 <div className="w-11 h-11 rounded-[10px] bg-blue-50 flex items-center justify-center flex-shrink-0">
-                  <span className="text-lg font-bold text-[#2563eb]">
-                    {s.feedback?.overall_score || '--'}
-                  </span>
+                  {(() => {
+                    const score = getScoreDisplay(s)
+                    return (
+                      <span className="text-lg font-bold text-[#2563eb]" title={score.title}>
+                        {score.value}
+                      </span>
+                    )
+                  })()}
                 </div>
 
                 {/* Content */}

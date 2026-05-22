@@ -47,7 +47,11 @@ function PathwayPageInner() {
   const [completingTaskId, setCompletingTaskId] = useState<string | null>(null)
 
   const loadPathway = useCallback(async () => {
-    if (authStatus !== 'authenticated') {
+    // UAT-012: keep the page in the loading state while NextAuth resolves
+    // the session — turning loading off on 'loading' flashes the
+    // signed-out empty state for ~1s during hydration.
+    if (authStatus === 'loading') return
+    if (authStatus === 'unauthenticated') {
       setLoading(false)
       return
     }

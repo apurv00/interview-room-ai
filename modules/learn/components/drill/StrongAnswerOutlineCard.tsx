@@ -43,7 +43,7 @@ export default function StrongAnswerOutlineCard({ strongAnswer, keyElements }: P
       {hasOutline && (
         <section>
           <p className="text-[11px] uppercase tracking-wide text-[#71767b] font-medium mb-1.5">
-            Strong-answer outline
+            Example strong answer
           </p>
           <p className="text-sm text-[#0f1419] leading-relaxed bg-emerald-50 border border-emerald-200 rounded-xl p-3 whitespace-pre-line">
             {strongAnswer}
@@ -54,7 +54,7 @@ export default function StrongAnswerOutlineCard({ strongAnswer, keyElements }: P
       {hasElements && (
         <section>
           <p className="text-[11px] uppercase tracking-wide text-[#71767b] font-medium mb-2">
-            Key elements
+            What to include
           </p>
           <div className="flex flex-wrap gap-1.5">
             {keyElements.map((el, i) => (
