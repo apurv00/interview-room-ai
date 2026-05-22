@@ -2,6 +2,7 @@ import { completion } from '@shared/services/modelRouter'
 import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 import { getUserProfileContext } from './resumeService'
 import { extractJSON } from '@shared/utils'
+import { buildAtsCacheKey, getCachedAtsResult, setCachedAtsResult } from './atsCheckCache'
 
 // ─── Enhance Section ────────────────────────────────────────────────────────
 
@@ -90,6 +91,15 @@ ${JSON_OUTPUT_RULE}
 // ─── ATS Check ──────────────────────────────────────────────────────────────
 
 export async function checkATS(data: { resumeText: string; jobDescription?: string }) {
+  // UAT-024: content-keyed cache layer. Same (resume, JD) pair hits in
+  // <100ms instead of waiting on the ~35s LLM round-trip. Misses fall
+  // through to the LLM and persist on success.
+  const cacheKey = buildAtsCacheKey(data)
+  const cached = await getCachedAtsResult<AtsResultShape>(cacheKey)
+  if (cached) {
+    return { ...cached, cached: true as const }
+  }
+
   const jdContext = data.jobDescription
     ? `\n\n<job_description>\n${data.jobDescription.slice(0, 3000)}\n</job_description>\nAlso check keyword alignment with this job description.`
     : ''
@@ -128,7 +138,7 @@ ${JSON_OUTPUT_RULE}
   try {
     const result = JSON.parse(cleaned)
     // Ensure required fields have defaults
-    return {
+    const normalized: AtsResultShape = {
       score: result.score ?? 0,
       issues: Array.isArray(result.issues) ? result.issues : [],
       keywords: {
@@ -147,10 +157,22 @@ ${JSON_OUTPUT_RULE}
       },
       summary: result.summary || 'Unable to generate summary.',
     }
+    // Persist on the happy path only — never cache a parse-error round.
+    await setCachedAtsResult(cacheKey, normalized)
+    return { ...normalized, cached: false as const }
   } catch {
     console.error('checkATS JSON parse failed. Raw response:', raw.slice(0, 500))
     throw new Error('Failed to parse ATS analysis results. Please try again.')
   }
+}
+
+interface AtsResultShape {
+  score: number
+  issues: Array<{ category?: string; severity?: string; message?: string; fix?: string }>
+  keywords: { found: string[]; missing: string[]; total: number }
+  formatting: { score: number; issues: string[] }
+  sections: { found: string[]; missing: string[]; recommended: string[] }
+  summary: string
 }
 
 // ─── Tailor Resume ──────────────────────────────────────────────────────────
