@@ -1,31 +1,8 @@
 'use client'
 
-import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { useSession } from 'next-auth/react'
 import { ArrowRight, Target } from 'lucide-react'
-
-interface BannerPathway {
-  readinessScore: number
-  readinessLevel: string
-  nextSessionRecommendation?: {
-    reason?: string
-    focusCompetencies?: string[]
-  } | null
-  practiceTasks?: Array<{ title: string; completed: boolean }>
-}
-
-interface BannerAction {
-  title: string
-  ctaLabel: string
-  href?: string
-}
-
-interface BannerResponse {
-  state?: 'empty' | 'active' | 'completed' | 'pending' | 'abandoned' | 'returning'
-  nextAction?: BannerAction
-  pathway?: BannerPathway | null
-}
+import { usePathwayNextAction } from '@learn/hooks/usePathwayNextAction'
 
 const READINESS_LABELS: Record<string, string> = {
   not_ready: 'Foundation',
@@ -39,32 +16,16 @@ const READINESS_LABELS: Record<string, string> = {
  * Authed-only banner shown above the marketing homepage hero.
  * Silently renders nothing for unauthenticated visitors. Authenticated users
  * see either their next Pathway action or the baseline interview activation.
+ *
+ * Wave 3 / UAT-021: pathway state now comes from the shared
+ * `usePathwayNextAction` hook so the signed-in MarketingHomepage CTA
+ * can read the same `nextAction` (deduplicatedFetch shares the
+ * in-flight network call between this banner and the hero CTA).
  */
 export default function PathwayStatusBanner() {
-  const { status } = useSession()
-  const [pathway, setPathway] = useState<BannerPathway | null>(null)
-  const [pathwayState, setPathwayState] = useState<BannerResponse['state']>()
-  const [nextAction, setNextAction] = useState<BannerAction | null>(null)
-  const [loading, setLoading] = useState(true)
+  const { status: hookStatus, state: pathwayState, nextAction, pathway } = usePathwayNextAction()
 
-  useEffect(() => {
-    if (status !== 'authenticated') {
-      setLoading(false)
-      return
-    }
-    fetch('/api/learn/pathway')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        const response = data as BannerResponse | null
-        setPathway(response?.pathway || null)
-        setPathwayState(response?.state)
-        setNextAction(response?.nextAction || null)
-        setLoading(false)
-      })
-      .catch(() => setLoading(false))
-  }, [status])
-
-  if (status !== 'authenticated' || loading) return null
+  if (hookStatus !== 'ready') return null
 
   if (pathwayState === 'empty' || !pathway) {
     return (

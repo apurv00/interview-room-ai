@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import { useAuthGate } from '@shared/providers/AuthGateProvider'
 import { track } from '@shared/analytics/track'
 import { PLANS } from '@shared/services/stripe'
+import { usePathwayNextAction } from '@learn/hooks/usePathwayNextAction'
 import {
   Play, Eye, Mic, Brain, Activity,
   ChevronRight, CheckCircle2, User,
@@ -41,13 +42,28 @@ export default function MarketingHomepage() {
   const router = useRouter()
   const { requireAuth } = useAuthGate()
 
-  // Single hero/CTA click handler. Authenticated users go straight into
-  // the interview setup; anonymous users see the auth modal first and
-  // are redirected to setup once they sign in.
+  // UAT-021: signed-in visitors should land where their Pathway says
+  // to go next, not on the generic /interview/setup. Anonymous users
+  // keep the existing auth-gated flow. This hook shares its
+  // /api/learn/pathway fetch with PathwayStatusBanner above the hero
+  // via deduplicatedFetch — no extra network call.
+  const pathway = usePathwayNextAction()
+  const signedInCtaHref =
+    pathway.status === 'ready' && pathway.nextAction?.href
+      ? pathway.nextAction.href
+      : '/interview/setup'
+  const signedInCtaLabel =
+    pathway.status === 'ready' && pathway.nextAction?.ctaLabel
+      ? pathway.nextAction.ctaLabel
+      : 'Take Your First Interview — Free'
+
+  // Single hero/CTA click handler. Anonymous users see the auth modal
+  // first; signed-in users go straight to whatever the pathway says is
+  // next (signedInCtaHref).
   const handleStartCta = useCallback(() => {
     track('cta_clicked', { cta: 'start_interview', location: 'marketing_home' })
-    requireAuth('start_interview', () => router.push('/interview/setup'))
-  }, [requireAuth, router])
+    requireAuth('start_interview', () => router.push(signedInCtaHref))
+  }, [requireAuth, router, signedInCtaHref])
 
   // Sentinel used inside the JourneyStep array below to mark steps that
   // should trigger handleStartCta instead of a normal navigation.
@@ -91,7 +107,7 @@ export default function MarketingHomepage() {
                 onClick={handleStartCta}
                 className="inline-block px-8 py-3.5 text-[15px] font-semibold rounded-full bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-600/20 transition-all text-center"
               >
-                Take Your First Interview — Free
+                {signedInCtaLabel}
               </button>
               <p className="mt-4 text-sm text-slate-400">No credit card · No downloads · Takes 30 seconds to start</p>
 

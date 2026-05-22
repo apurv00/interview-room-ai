@@ -44,6 +44,7 @@ import { mergeWithLocalData, readLocalInterviewData, cleanupLocalInterviewData }
 import { buildFeedbackPrintHtml } from '@interview/utils/feedbackPrintHtml'
 import { drainQueuedReplayUploads } from '@interview/utils/resumableUpload'
 import { fetchWithRetry } from '@shared/fetchWithRetry'
+import { fetchFeedbackSessionSummary } from '@feedback/lib/feedbackSessionFetcher'
 import { bisectLastLE } from '@shared/utils'
 import { PROBABILITY_COLORS } from '@interview/config/feedbackConfig'
 import ShareButton from '@learn/components/feedback/ShareButton'
@@ -355,9 +356,10 @@ function FeedbackPageInner() {
         return
       }
       try {
-        const res = await fetch(`/api/interviews/${sessionId}?excludeTranscript=true`)
-        if (!res.ok) return
-        const data = await res.json()
+        // UAT-015: routed through the shared dedup'd helper so this
+        // recording-watcher GET shares its in-flight call with the
+        // initial-load + poll-loop GETs mounted by the same page.
+        const data = await fetchFeedbackSessionSummary(sessionId)
         if (data?.hasRecording) {
           // No-op if another path already triggered fetch; on its eventual
           // success the next tick observes recordingUrlRef and stops.
@@ -561,10 +563,11 @@ function FeedbackPageInner() {
 
         if (!session) {
           try {
-            const res = await fetch(`/api/interviews/${sessionId}?excludeTranscript=true`, { signal })
-            if (res.ok) {
-              session = await res.json()
-            }
+            // UAT-015: shared helper — same in-flight cache as the
+            // recording-watcher useEffect above and the poll loop
+            // below, so this initial-load GET fans in cleanly with the
+            // others when they all fire on mount.
+            session = await fetchFeedbackSessionSummary(sessionId, { signal }) as Record<string, unknown> | null
           } catch (e) {
             if ((e as Error).name === 'AbortError') return
             // fall through to local data path
@@ -644,12 +647,12 @@ function FeedbackPageInner() {
               if (signal?.aborted) return
               await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
               try {
-                const pollRes = await fetch(
-                  `/api/interviews/${sessionId}?excludeTranscript=true`,
-                  { signal }
-                )
-                if (pollRes.ok) {
-                  const pollData = await pollRes.json()
+                // UAT-015: shared helper — in-flight dedup means a
+                // poll cycle that overlaps the initial-load (rare but
+                // possible on slow networks) collapses to one
+                // request, not two.
+                const pollData = await fetchFeedbackSessionSummary(sessionId, { signal })
+                if (pollData) {
                   if (pollData.hasRecording) fetchRecordingUrl()
                   if (pollData.feedback) {
                     setFeedback(pollData.feedback as FeedbackData)

@@ -9,11 +9,18 @@ import AuthMenu from './AuthMenu'
 import Footer from './Footer'
 import { useAuthGate } from '@shared/providers/AuthGateProvider'
 
-const NAV_LINKS = [
-  { href: '/interview/setup', label: 'Interview' },
-  { href: '/learn/pathway', label: 'Pathway' },
-  { href: '/resume', label: 'Resume' },
-  { href: '/history', label: 'History' },
+// UAT-010: heavy authed routes (Interview / Pathway / Resume / History)
+// run a chunky useEffect + auth + data fetch on mount; default
+// `<Link prefetch>` causes Next.js to also fire those fetches whenever
+// the link enters the viewport on neighbouring pages, multiplying
+// pre-load cost on a hop the user may never make. Trim prefetch on
+// those four; keep it on the lighter marketing pages (Resources,
+// Pricing) where hover-to-click feel matters.
+const NAV_LINKS: Array<{ href: string; label: string; prefetch?: boolean }> = [
+  { href: '/interview/setup', label: 'Interview', prefetch: false },
+  { href: '/learn/pathway', label: 'Pathway', prefetch: false },
+  { href: '/resume', label: 'Resume', prefetch: false },
+  { href: '/history', label: 'History', prefetch: false },
   { href: '/resources', label: 'Resources' },
   { href: '/pricing', label: 'Pricing' },
 ]
@@ -99,6 +106,7 @@ export default function AppShell({
                   <Link
                     key={link.href}
                     href={link.href}
+                    prefetch={link.prefetch}
                     className={`px-3.5 py-2 rounded-full text-[13px] font-medium transition-all duration-150 ${
                       isActive
                         ? 'bg-blue-50 text-blue-700'
@@ -160,6 +168,7 @@ export default function AppShell({
                   <Link
                     key={link.href}
                     href={link.href}
+                    prefetch={link.prefetch}
                     onClick={() => setIsMobileMenuOpen(false)}
                     className={`block px-3 py-2.5 text-sm font-medium rounded-lg transition-colors ${
                       isActive
