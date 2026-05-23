@@ -118,7 +118,14 @@ export function useOnboardingProfile(): OnboardingHookValue {
       return
     }
     let cancelled = false
-    deduplicatedFetchJSON<OnboardingProfile>('/api/onboarding')
+    // Codex P1 (PR #402): pass a userId-discriminated cache key so the
+    // shared in-flight map cannot fan A's in-flight pathway/onboarding
+    // call out to B's mount during a tab account-switch.
+    deduplicatedFetchJSON<OnboardingProfile>(
+      '/api/onboarding',
+      undefined,
+      `/api/onboarding#${userId}`,
+    )
       .then((data) => {
         if (cancelled) return
         writeCache(userId, data)

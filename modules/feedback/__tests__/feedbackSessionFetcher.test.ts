@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { fetchFeedbackSessionSummary } from '@feedback/lib/feedbackSessionFetcher'
+import { _resetDeduplicatedFetchCache } from '@shared/cachedFetch'
 
 describe('fetchFeedbackSessionSummary', () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>
 
   beforeEach(() => {
+    _resetDeduplicatedFetchCache()
     fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -52,7 +54,7 @@ describe('fetchFeedbackSessionSummary', () => {
     expect(out).toBeNull()
   })
 
-  it('returns null on network failure', async () => {
+  it('returns null on network failure (non-abort)', async () => {
     fetchSpy.mockRejectedValueOnce(new Error('boom'))
     const out = await fetchFeedbackSessionSummary('sess-net')
     expect(out).toBeNull()
@@ -63,5 +65,29 @@ describe('fetchFeedbackSessionSummary', () => {
     await fetchFeedbackSessionSummary('sess-1', { signal: ctrl.signal })
     const init = fetchSpy.mock.calls[0][1] as RequestInit | undefined
     expect(init?.signal).toBe(ctrl.signal)
+  })
+
+  // ── Codex P1 (PR #402): abort semantics ─────────────────────────────────
+  // Catching the abort and returning null silently collapsed it into a
+  // "no data" miss — letting the feedback page's local-data fallback /
+  // generateFeedback POST fire on an unmounting component. The helper
+  // must rethrow AbortError so the existing
+  // `if ((e as Error).name === 'AbortError') return` guards in the page
+  // continue to short-circuit.
+
+  it('rethrows AbortError so callers can short-circuit on unmount', async () => {
+    const abortErr = Object.assign(new Error('aborted'), { name: 'AbortError' })
+    fetchSpy.mockRejectedValueOnce(abortErr)
+    await expect(fetchFeedbackSessionSummary('sess-abort')).rejects.toMatchObject({
+      name: 'AbortError',
+    })
+  })
+
+  it('still returns null for non-abort errors with similar shapes', async () => {
+    // A timeout error (no `name: 'AbortError'`) is still a network error
+    // and should land on the null-fallback path, NOT propagate.
+    fetchSpy.mockRejectedValueOnce(new Error('timeout'))
+    const out = await fetchFeedbackSessionSummary('sess-timeout')
+    expect(out).toBeNull()
   })
 })

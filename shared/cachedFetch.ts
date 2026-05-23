@@ -30,23 +30,41 @@ export function deduplicatedFetch(url: string, options?: RequestInit): Promise<R
  * parsed JSON from the same URL simultaneously (e.g. PathwayStatusBanner
  * + MarketingHomepage CTA, or the feedback page's three concurrent
  * session GETs).
+ *
+ * Codex P1 (PR #402): the in-flight map is keyed by URL alone. For
+ * auth-scoped endpoints (`/api/learn/pathway`, `/api/onboarding`) this
+ * permits a cross-account read: if the call is in-flight for user A
+ * and the tab switches accounts before it resolves, user B's mount
+ * attaches to A's promise and renders A's payload. Callers that read
+ * auth-sensitive endpoints MUST pass an explicit `cacheKey` that
+ * includes the user discriminator (e.g. `${url}#${userId}`). For
+ * endpoints whose URL is already user-resource-keyed
+ * (e.g. /api/interviews/{sessionId}), the default URL key is safe.
  */
 const inflightJSON = new Map<string, Promise<unknown>>()
 
 export function deduplicatedFetchJSON<T = unknown>(
   url: string,
   options?: RequestInit,
+  cacheKey?: string,
 ): Promise<T | null> {
   const method = options?.method?.toUpperCase() || 'GET'
   if (method !== 'GET') {
     return fetch(url, options).then((r) => (r.ok ? r.json() : null))
   }
-  if (inflightJSON.has(url)) {
-    return inflightJSON.get(url) as Promise<T | null>
+  const key = cacheKey ?? url
+  if (inflightJSON.has(key)) {
+    return inflightJSON.get(key) as Promise<T | null>
   }
   const promise = fetch(url, options)
     .then((r) => (r.ok ? r.json() : null))
-    .finally(() => inflightJSON.delete(url))
-  inflightJSON.set(url, promise)
+    .finally(() => inflightJSON.delete(key))
+  inflightJSON.set(key, promise)
   return promise as Promise<T | null>
+}
+
+/** Test-only escape hatch — wipes every in-flight cache slot. */
+export function _resetDeduplicatedFetchCache() {
+  inflight.clear()
+  inflightJSON.clear()
 }

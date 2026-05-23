@@ -4,6 +4,14 @@ import { useEffect, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import { deduplicatedFetchJSON } from '@shared/cachedFetch'
 
+// Augmented session shape — NextAuth's default doesn't include user.id
+// but authOptions.ts populates it (see shared/auth/next-auth.d.ts).
+// Narrowing locally avoids a hard dep on the module-augmented type in
+// test environments.
+interface SessionWithUserId {
+  user?: { id?: string }
+}
+
 /**
  * Shared pathway-status hook.
  *
@@ -60,7 +68,9 @@ export interface PathwayHookValue {
 }
 
 export function usePathwayNextAction(): PathwayHookValue {
-  const { status: authStatus } = useSession()
+  const { status: authStatus, data } = useSession()
+  const session = data as SessionWithUserId | null
+  const userId = session?.user?.id
   const [value, setValue] = useState<PathwayHookValue>({
     status: 'loading',
     nextAction: null,
@@ -73,8 +83,21 @@ export function usePathwayNextAction(): PathwayHookValue {
       setValue({ status: 'anonymous', nextAction: null, pathway: null })
       return
     }
+    if (!userId) {
+      // Authenticated but no userId surfaced yet — wait. Without a
+      // stable discriminator we can't safely share the in-flight
+      // promise with other concurrent mounts (Codex P1 on PR #402).
+      return
+    }
     let cancelled = false
-    deduplicatedFetchJSON<PathwayApiResponse>('/api/learn/pathway')
+    // Codex P1 (PR #402): cache key includes the userId so a tab
+    // account-switch mid-flight cannot fan A's pending pathway promise
+    // out to B's mount.
+    deduplicatedFetchJSON<PathwayApiResponse>(
+      '/api/learn/pathway',
+      undefined,
+      `/api/learn/pathway#${userId}`,
+    )
       .then((data) => {
         if (cancelled) return
         setValue({
@@ -91,7 +114,7 @@ export function usePathwayNextAction(): PathwayHookValue {
     return () => {
       cancelled = true
     }
-  }, [authStatus])
+  }, [authStatus, userId])
 
   return value
 }

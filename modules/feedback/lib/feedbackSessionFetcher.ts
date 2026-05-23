@@ -14,7 +14,15 @@ import { deduplicatedFetchJSON } from '@shared/cachedFetch'
  * data — no staleness.
  *
  * Returns `null` on a non-OK response (matches the original call sites'
- * `if (res.ok)` guards), or on network error.
+ * `if (res.ok)` guards), or on non-abort network error.
+ *
+ * Codex P1 (PR #402): callers in app/feedback/[sessionId]/page.tsx use
+ * `if ((e as Error).name === 'AbortError') return` to short-circuit
+ * route changes / unmount cleanup. Catching AbortError here would
+ * silently collapse it to a `null` "no data" miss and let downstream
+ * branches (local-data fallback, generateFeedback POST) fire on a
+ * component that's already unmounting. Preserve abort semantics by
+ * rethrowing AbortError; only convert real network errors to null.
  */
 
 export interface FeedbackSessionSummary {
@@ -39,7 +47,12 @@ export async function fetchFeedbackSessionSummary(
       `/api/interviews/${sessionId}?excludeTranscript=true`,
       options.signal ? { signal: options.signal } : undefined,
     )
-  } catch {
+  } catch (err) {
+    // Codex P1: AbortError MUST propagate so the feedback page can
+    // honor route/unmount cancellation. Treating an abort as "no data"
+    // would cause the local-data fallback to fire on a defunct
+    // component.
+    if ((err as { name?: string })?.name === 'AbortError') throw err
     return null
   }
 }

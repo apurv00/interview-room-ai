@@ -21,12 +21,25 @@ const READINESS_LABELS: Record<string, string> = {
  * `usePathwayNextAction` hook so the signed-in MarketingHomepage CTA
  * can read the same `nextAction` (deduplicatedFetch shares the
  * in-flight network call between this banner and the hero CTA).
+ *
+ * Codex P2 (PR #402): treat 'error' as 'empty' rather than vanishing
+ * the whole banner. Pre-Wave-3 code rendered the "Start your pathway"
+ * baseline whenever the fetch failed (the inline catch set loading
+ * false + pathway null, which fell into the empty branch). After the
+ * hook migration, returning null on `'error'` removed every recovery
+ * affordance on degraded networks — fix by falling through to the
+ * baseline render in both 'empty' AND 'error' states.
  */
 export default function PathwayStatusBanner() {
   const { status: hookStatus, state: pathwayState, nextAction, pathway } = usePathwayNextAction()
 
-  if (hookStatus !== 'ready') return null
+  // Anonymous + still-loading visitors get nothing.
+  if (hookStatus === 'loading' || hookStatus === 'anonymous') return null
 
+  // On 'error' we fall through to the baseline branch below — pathway
+  // is null in that state, so `!pathway` evaluates true and the
+  // "Start your pathway" affordance still renders. That keeps a
+  // recovery CTA in the banner area on transient network failures.
   if (pathwayState === 'empty' || !pathway) {
     return (
       <div className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white">
