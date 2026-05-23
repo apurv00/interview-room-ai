@@ -89,6 +89,13 @@ export function usePathwayNextAction(): PathwayHookValue {
       // promise with other concurrent mounts (Codex P1 on PR #402).
       return
     }
+    // PR #402 follow-up: clear any prior user's payload BEFORE firing
+    // the new fetch. Without this, an in-tab account switch leaves
+    // user A's `nextAction.href` in state until user B's fetch
+    // resolves — a fast click on the homepage CTA during that window
+    // navigates B to A's pathway action.
+    setValue({ status: 'loading', nextAction: null, pathway: null })
+
     let cancelled = false
     // Codex P1 (PR #402): cache key includes the userId so a tab
     // account-switch mid-flight cannot fan A's pending pathway promise

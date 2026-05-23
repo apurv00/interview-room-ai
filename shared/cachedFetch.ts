@@ -10,6 +10,13 @@ export function deduplicatedFetch(url: string, options?: RequestInit): Promise<R
   // Only deduplicate GET requests — mutations must always go through
   if (method !== 'GET') return fetch(url, options)
 
+  // PR #402 follow-up: signal-bearing requests bypass the cache for
+  // the same reasons as deduplicatedFetchJSON — a shared promise is
+  // bound to the first caller's abort lifecycle, so later callers
+  // either receive an unasked-for abort or lose the ability to abort
+  // themselves.
+  if (options?.signal) return fetch(url, options)
+
   if (inflight.has(url)) return inflight.get(url)!
 
   const promise = fetch(url, options).finally(() => inflight.delete(url))
@@ -51,6 +58,21 @@ export function deduplicatedFetchJSON<T = unknown>(
   const method = options?.method?.toUpperCase() || 'GET'
   if (method !== 'GET') {
     return fetch(url, options).then((r) => (r.ok ? r.json() : null))
+  }
+  // PR #402 follow-up: a caller passing its own AbortSignal opts OUT
+  // of in-flight sharing. The shared promise is bound to the FIRST
+  // caller's signal-or-lack-thereof, so a later caller would inherit
+  // the wrong abort lifecycle:
+  //   - signal-bearing first, signal-less second → first aborts and
+  //     second sees AbortError it never asked for
+  //   - signal-less first, signal-bearing second → second's abort
+  //     does nothing because the underlying fetch wasn't bound to it
+  // Each signal-bearing request gets its own fetch. Signal-less
+  // callers continue to coalesce as before.
+  if (options?.signal) {
+    return fetch(url, options).then(
+      (r) => (r.ok ? r.json() : null),
+    ) as Promise<T | null>
   }
   const key = cacheKey ?? url
   if (inflightJSON.has(key)) {

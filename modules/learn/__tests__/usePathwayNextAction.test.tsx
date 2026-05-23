@@ -130,4 +130,51 @@ describe('usePathwayNextAction', () => {
     expect(result.current.status).toBe('loading')
     expect(fetchSpy).not.toHaveBeenCalled()
   })
+
+  // ── PR #402 follow-up: clear stale nextAction on user switch ───────────
+  // Without the reset, the homepage CTA / banner can briefly use user A's
+  // nextAction.href while user B's fetch is still in flight. A fast click
+  // during that window navigates the wrong account's user.
+
+  it('clears nextAction immediately on userId change (no stale nav target during fetch)', async () => {
+    mockAuthedAs('user-A')
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        state: 'active',
+        nextAction: { title: 'A lesson', ctaLabel: 'A', href: '/learn/pathway?lesson=A' },
+        pathway: { readinessScore: 50, readinessLevel: 'developing' },
+      }),
+    } as Response)
+    const { result, rerender } = renderHook(() => usePathwayNextAction())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.nextAction?.href).toBe('/learn/pathway?lesson=A')
+
+    // Account switch: user A → user B. Hold B's fetch open so we can
+    // observe the in-between state.
+    let resolveB: (r: Response) => void = () => {}
+    fetchSpy.mockReturnValueOnce(new Promise<Response>((r) => { resolveB = r }))
+    mockAuthedAs('user-B')
+    rerender()
+
+    // The effect must reset the state to loading + null BEFORE the
+    // new fetch resolves. A click during this window cannot pull
+    // user A's nextAction.href.
+    await waitFor(() => {
+      expect(result.current.status).toBe('loading')
+      expect(result.current.nextAction).toBeNull()
+      expect(result.current.pathway).toBeNull()
+    })
+
+    // B's fetch lands; B's data populates state.
+    resolveB({
+      ok: true,
+      json: async () => ({
+        state: 'active',
+        nextAction: { title: 'B lesson', ctaLabel: 'B', href: '/learn/pathway?lesson=B' },
+        pathway: { readinessScore: 70, readinessLevel: 'developing' },
+      }),
+    } as Response)
+    await waitFor(() => expect(result.current.nextAction?.href).toBe('/learn/pathway?lesson=B'))
+  })
 })
