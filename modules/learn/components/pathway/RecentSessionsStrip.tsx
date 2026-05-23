@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import { motion } from 'framer-motion'
 import { Clock, RotateCcw, ArrowRight } from 'lucide-react'
 import { STORAGE_KEYS } from '@shared/storageKeys'
+import { getDomainLabel } from '@interview/config/interviewConfig'
 
 interface RecentSession {
   _id: string
@@ -138,7 +139,10 @@ export default function RecentSessionsStrip() {
       <div className="space-y-2">
         {sessions.map((s) => {
           const score = s.feedback?.overall_score
-          const role = s.config?.role || 'Interview'
+          // UAT-013: route the raw slug through the shared label resolver so
+          // CMS-lowercase slugs ("pm") render as "Product Manager" instead of
+          // the title-cased "Pm" leak.
+          const role = s.config?.role ? getDomainLabel(s.config.role) : 'Interview'
           const interviewType = s.config?.interviewType || ''
           return (
             <div

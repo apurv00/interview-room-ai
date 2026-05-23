@@ -7,6 +7,7 @@ import { aiLogger as logger } from '@shared/logger'
 import { redis } from '@shared/redis'
 import type { AnswerEvaluation } from '@shared/types'
 import { generateEmbedding } from '@interview/services/core/embeddingService'
+import { rewriteMetaDrillQuestion } from '@learn/copy/metaQuestionRewriter'
 
 export interface WeakQuestion {
   sessionId: string
@@ -471,10 +472,22 @@ export async function getWeakQuestions(
 
         if (competency && weakestDim !== competency) continue
 
+        // UAT-019: rewrite obviously robotic meta probes (e.g.
+        // "What exactly do you mean by X?") into a competency-
+        // targeted Alex-style question. The rotation key is stable
+        // per source-question so repeated reads of the same drill
+        // row always show the same rewritten text.
+        const rotationKey = `${session._id.toString()}-${ev.questionIndex}`
+        const { question: displayQuestion } = rewriteMetaDrillQuestion(
+          ev.question,
+          weakestDim,
+          rotationKey,
+        )
+
         weak.push({
           sessionId: session._id.toString(),
           questionIndex: ev.questionIndex,
-          question: ev.question,
+          question: displayQuestion,
           answer: ev.answer,
           avgScore: avg,
           relevance: ev.relevance,

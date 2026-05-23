@@ -36,7 +36,13 @@ const BUDGETS = {
   'modules/resume':    { maxLOC: 20_000, maxFiles: 70 },
   'modules/b2b':       { maxLOC: 5_000,  maxFiles: 20 },
   'modules/cms':       { maxLOC: 5_000,  maxFiles: 20 },
-  'shared':            { maxLOC: 25_000, maxFiles: 130 },
+  // Bumped maxFiles 130 → 132 on 2026-05-23 (PR #402): added
+  // shared/hooks/useOnboardingProfile.ts (cross-module client data
+  // hook consumed by both @interview/InterviewSetupForm and
+  // @learn/ResourceLinks — must live in shared/ to avoid a module
+  // cycle). Net +1 file; +2 headroom slot intentional. See
+  // docs/adr/0007-shared-budget-bump-onboarding-hook.md.
+  'shared':            { maxLOC: 25_000, maxFiles: 132 },
 }
 
 const TS_EXTENSIONS = new Set(['.ts', '.tsx'])

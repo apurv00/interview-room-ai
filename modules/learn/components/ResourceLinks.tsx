@@ -1,8 +1,7 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useMemo } from 'react'
 import Link from 'next/link'
-import { useSession } from 'next-auth/react'
 import {
   RESOURCES,
   getResourcesByCategory,
@@ -11,6 +10,7 @@ import {
   type UserProfile,
   type Resource,
 } from '@learn/lib/resources'
+import { useOnboardingProfile } from '@shared/hooks/useOnboardingProfile'
 
 const COLUMNS = [
   { key: 'questions' as const, label: 'Interview Questions' },
@@ -18,31 +18,30 @@ const COLUMNS = [
 ] as const
 
 export default function ResourceLinks() {
-  const { status } = useSession()
-  const [profile, setProfile] = useState<UserProfile | null>(null)
-  const [recommended, setRecommended] = useState<Set<string>>(new Set())
+  // UAT-014: setup page mounts InterviewSetupForm + ResourceLinks; both
+  // used to GET /api/onboarding independently. Form uses
+  // deduplicatedFetch already; this component now uses the shared
+  // hook which adds a TTL value-cache layer on top.
+  const { profile: data } = useOnboardingProfile()
 
-  useEffect(() => {
-    if (status !== 'authenticated') return
-    fetch('/api/onboarding')
-      .then((r) => r.json())
-      .then((data) => {
-        const p: UserProfile = {
-          targetRole: data.targetRole,
-          experienceLevel: data.experienceLevel,
-          interviewGoal: data.interviewGoal,
-          weakAreas: data.weakAreas,
-        }
-        setProfile(p)
-        // Mark resources with score > 0 as recommended
-        const recs = new Set<string>()
-        RESOURCES.forEach((r) => {
-          if (calculateRelevance(r, p) > 0) recs.add(r.slug)
-        })
-        setRecommended(recs)
-      })
-      .catch(() => {})
-  }, [status])
+  const profile = useMemo<UserProfile | null>(() => {
+    if (!data) return null
+    return {
+      targetRole: data.targetRole,
+      experienceLevel: data.experienceLevel,
+      interviewGoal: data.interviewGoal,
+      weakAreas: data.weakAreas,
+    }
+  }, [data])
+
+  const recommended = useMemo<Set<string>>(() => {
+    if (!profile) return new Set()
+    const recs = new Set<string>()
+    RESOURCES.forEach((r) => {
+      if (calculateRelevance(r, profile) > 0) recs.add(r.slug)
+    })
+    return recs
+  }, [profile])
 
   // Merge questions + frameworks into "questions" column, tips stays as "tips"
   const questionResources = [

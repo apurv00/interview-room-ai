@@ -9,37 +9,66 @@ const stats = [
 ]
 
 function AnimatedNumber({ target, suffix }: { target: number; suffix: string }) {
-  // Start with target so SSR/initial render shows the real value (not 0)
+  // UAT-008: previous implementation unconditionally `setCount(0)` on
+  // mount and relied on the IntersectionObserver to animate back up to
+  // `target`. SSR rendered `target` correctly, then the client reset
+  // produced a "0 → target" flash on every load even when the element
+  // was already in view above the fold.
+  //
+  // Fix: keep `target` as the steady-state value. On the FIRST observer
+  // callback, decide whether to animate:
+  //   - element already in view  → skip the animation, show target
+  //   - element below the fold   → wait for it to scroll in, then
+  //                                animate from 0 → target
+  // No zero frame is ever rendered when the user first paints the page.
   const [count, setCount] = useState(target)
   const ref = useRef<HTMLSpanElement>(null)
-  const hasAnimated = useRef(false)
+  const hasResolved = useRef(false)
 
   useEffect(() => {
-    // Reset to 0 on client so we can animate up when visible
-    setCount(0)
+    const node = ref.current
+    if (!node) return
 
+    let initialCheck = true
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting && !hasAnimated.current) {
-          hasAnimated.current = true
-          const duration = 800
-          const start = performance.now()
-
-          const animate = (now: number) => {
-            const elapsed = now - start
-            const progress = Math.min(elapsed / duration, 1)
-            const eased = 1 - Math.pow(1 - progress, 3) // easeOutCubic
-            setCount(Math.round(eased * target))
-            if (progress < 1) requestAnimationFrame(animate)
+        // First fire: classify mount state, then decide.
+        if (initialCheck) {
+          initialCheck = false
+          if (entry.isIntersecting) {
+            // Already visible — no animation needed. The displayed value
+            // stays at `target`, matching SSR / first paint exactly.
+            hasResolved.current = true
+            return
           }
-
-          requestAnimationFrame(animate)
+          // Off-screen on mount — leave the element showing `target`,
+          // but defer the animation until it scrolls into view.
+          return
         }
+
+        // Subsequent fires: animate only on the first scroll-into-view.
+        if (!entry.isIntersecting || hasResolved.current) return
+        hasResolved.current = true
+
+        const duration = 800
+        const start = performance.now()
+        // Now we deliberately start from 0 because the count-up
+        // animation is the visual hook. The 0 frame is the *intent*
+        // here, not a hydration glitch.
+        setCount(0)
+        const animate = (now: number) => {
+          const elapsed = now - start
+          const progress = Math.min(elapsed / duration, 1)
+          const eased = 1 - Math.pow(1 - progress, 3) // easeOutCubic
+          setCount(Math.round(eased * target))
+          if (progress < 1) requestAnimationFrame(animate)
+        }
+        requestAnimationFrame(animate)
       },
       { threshold: 0.3 }
     )
 
-    if (ref.current) observer.observe(ref.current)
+    observer.observe(node)
     return () => observer.disconnect()
   }, [target])
 

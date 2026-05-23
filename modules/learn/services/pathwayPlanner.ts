@@ -19,6 +19,8 @@ import {
 } from './phaseAdvancement'
 import { emitPathwayEvent } from './pathwayEvents'
 import { buildLessonCacheKey, getOrGenerateLesson } from './lessonGenerator'
+import { pickTaskTemplate } from '@learn/copy/pathwayTaskTemplates'
+import { sanitizeLearnerFields } from '@learn/copy/learnerCopySanitizer'
 
 const STANDARD_PLAN_TYPE = 'standard' as const
 const UNIVERSAL_PLAN_TYPE = 'universal' as const
@@ -111,19 +113,52 @@ export async function generatePathwayPlan(input: GeneratePathwayInput): Promise<
     // AI-enhanced improvement plan
     const aiPlan = await generateAIPlan(input, competencySummary, weaknesses, profile as Record<string, unknown> | null)
 
-    // Merge AI suggestions into practice tasks
+    // Merge AI suggestions into practice tasks.
+    //
+    // UAT-023: `learn.pathway-plan` LLM output occasionally leaked
+    // model-prompt jargon ("five different prompts", "Use this
+    // template…", "Return as JSON…") straight into the candidate-
+    // facing Learning tab. Run each task's title + description
+    // through the learner-copy sanitizer; if either field is
+    // rejected, discard the LLM task and substitute a curated
+    // template from the same competency pool. No LLM retry — the
+    // pool is the safer answer.
     if (aiPlan?.suggestedTasks) {
-      for (const task of aiPlan.suggestedTasks) {
-        practiceTasks.push({
-          taskId: `ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-          type: task.type || 'homework',
-          title: task.title,
-          description: task.description,
-          targetCompetency: task.targetCompetency || 'general',
-          difficulty: task.difficulty || 'medium',
-          estimatedMinutes: task.estimatedMinutes || 15,
-          completed: false,
-        })
+      for (let i = 0; i < aiPlan.suggestedTasks.length; i++) {
+        const task = aiPlan.suggestedTasks[i]
+        const targetCompetency = task.targetCompetency || 'general'
+        const cleaned = sanitizeLearnerFields(
+          { title: task.title, description: task.description },
+          ['title', 'description'],
+        )
+        if (cleaned.ok) {
+          practiceTasks.push({
+            taskId: `ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            type: task.type || 'homework',
+            title: task.title,
+            description: task.description,
+            targetCompetency,
+            difficulty: task.difficulty || 'medium',
+            estimatedMinutes: task.estimatedMinutes || 15,
+            completed: false,
+          })
+        } else {
+          logger.warn(
+            { reason: cleaned.reason, competency: targetCompetency },
+            'pathway-plan LLM task rejected by sanitizer — substituting curated template',
+          )
+          const tpl = pickTaskTemplate(targetCompetency, `ai-fallback-${i}`)
+          practiceTasks.push({
+            taskId: `ai_fb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            type: task.type || 'homework',
+            title: tpl.title,
+            description: tpl.description,
+            targetCompetency,
+            difficulty: tpl.difficulty,
+            estimatedMinutes: tpl.estimatedMinutes,
+            completed: false,
+          })
+        }
       }
     }
 
@@ -336,15 +371,23 @@ function generatePracticeTasks(
 ): PracticeTask[] {
   const tasks: PracticeTask[] = []
 
-  for (const blocker of blockers) {
+  // UAT-016: each blocker used to get the same hardcoded
+  // "Focus drill: Prepare 3 stories that demonstrate strong …"
+  // sentence regardless of competency or domain. Pull from a curated
+  // per-competency pool instead, deterministically rotated by blocker
+  // index + domain so two blockers in the same competency don't
+  // emit identical copy.
+  for (let i = 0; i < blockers.length; i++) {
+    const blocker = blockers[i]
+    const tpl = pickTaskTemplate(blocker.competency, `blocker-${i}-${domain}`)
     tasks.push({
       taskId: `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       type: 'drill',
-      title: `Practice ${blocker.competency.replace(/_/g, ' ')}`,
-      description: `Focus drill: Prepare 3 stories that demonstrate strong ${blocker.competency.replace(/_/g, ' ')}. Include specific metrics and outcomes.`,
+      title: tpl.title,
+      description: tpl.description,
       targetCompetency: blocker.competency,
-      difficulty: 'medium',
-      estimatedMinutes: 15,
+      difficulty: tpl.difficulty,
+      estimatedMinutes: tpl.estimatedMinutes,
       completed: false,
     })
   }

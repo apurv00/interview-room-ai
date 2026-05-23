@@ -1,10 +1,24 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useSession } from 'next-auth/react'
 import FileDropzone from '@shared/ui/FileDropzone'
-import { Check } from 'lucide-react'
+import { Check, Loader2 } from 'lucide-react'
 import { useAuthGate } from '@shared/providers/AuthGateProvider'
+
+// UAT-024: ATS check P95 is ~35s on Sonnet. While waiting on the LLM
+// the user previously saw a static "Analyzing..." button. Stepping
+// through realistic phase labels gives them a sense of progress even
+// when the underlying call is opaque. Pacing matches observed median
+// LLM latency — the final step holds until the response actually
+// arrives, so we never get ahead of reality.
+const ATS_PROGRESS_STEPS = [
+  'Parsing resume structure…',
+  'Analyzing formatting…',
+  'Matching keywords against the job description…',
+  'Compiling your compatibility score…',
+] as const
+const ATS_PROGRESS_INTERVAL_MS = 8_000
 
 interface SavedResume {
   id: string
@@ -77,10 +91,31 @@ export default function ATSCheckPage() {
     setUploading(false)
   }
 
+  // UAT-024: stepped progress indicator. Advances every
+  // ATS_PROGRESS_INTERVAL_MS while `checking === true`, capped at the
+  // last step so we never claim "Compiling…" before the LLM has spoken.
+  const [progressStep, setProgressStep] = useState(0)
+  const progressTimer = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  useEffect(() => {
+    if (!checking) {
+      setProgressStep(0)
+      return
+    }
+    progressTimer.current = setInterval(() => {
+      setProgressStep((s) => Math.min(s + 1, ATS_PROGRESS_STEPS.length - 1))
+    }, ATS_PROGRESS_INTERVAL_MS)
+    return () => {
+      if (progressTimer.current) clearInterval(progressTimer.current)
+      progressTimer.current = null
+    }
+  }, [checking])
+
   async function handleCheck() {
     if (!resumeText) { setError('Paste a resume or upload one first'); return }
     setError('')
     setChecking(true)
+    setProgressStep(0)
     try {
       const res = await fetch('/api/resume/ats-check', {
         method: 'POST',
@@ -186,12 +221,28 @@ export default function ATSCheckPage() {
 
           {error && <p className="text-xs text-red-400">{error}</p>}
 
+          {checking && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl px-4 py-3 flex items-center gap-3"
+            >
+              <Loader2 className="w-4 h-4 text-emerald-600 animate-spin shrink-0" />
+              <div className="text-sm text-emerald-700 flex-1 min-w-0">
+                <span className="font-medium">{ATS_PROGRESS_STEPS[progressStep]}</span>
+                <span className="ml-2 text-emerald-600/70 text-xs">
+                  Step {progressStep + 1} of {ATS_PROGRESS_STEPS.length}
+                </span>
+              </div>
+            </div>
+          )}
+
           <button
             onClick={handleCheck}
             disabled={checking || !resumeText}
             className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-medium transition-colors disabled:opacity-50"
           >
-            {checking ? 'Analyzing...' : 'Run ATS Check'}
+            {checking ? 'Analyzing…' : 'Run ATS Check'}
           </button>
         </div>
       ) : (

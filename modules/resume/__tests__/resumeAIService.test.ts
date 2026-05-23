@@ -9,6 +9,16 @@ vi.mock('@shared/services/modelRouter', () => ({
   completion: (...args: unknown[]) => mockCompletion(...args),
 }))
 
+// UAT-024 — checkATS now consults a Redis cache. Mock both the read
+// and write paths so tests don't try to open a real connection in
+// jsdom and so each test starts from a clean cache miss.
+vi.mock('@shared/redis', () => ({
+  redis: {
+    get: vi.fn().mockResolvedValue(null),
+    set: vi.fn().mockResolvedValue('OK'),
+  },
+}))
+
 vi.mock('@shared/db/connection', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
 }))

@@ -1,31 +1,8 @@
 'use client'
 
-import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { useSession } from 'next-auth/react'
 import { ArrowRight, Target } from 'lucide-react'
-
-interface BannerPathway {
-  readinessScore: number
-  readinessLevel: string
-  nextSessionRecommendation?: {
-    reason?: string
-    focusCompetencies?: string[]
-  } | null
-  practiceTasks?: Array<{ title: string; completed: boolean }>
-}
-
-interface BannerAction {
-  title: string
-  ctaLabel: string
-  href?: string
-}
-
-interface BannerResponse {
-  state?: 'empty' | 'active' | 'completed' | 'pending' | 'abandoned' | 'returning'
-  nextAction?: BannerAction
-  pathway?: BannerPathway | null
-}
+import { usePathwayNextAction } from '@learn/hooks/usePathwayNextAction'
 
 const READINESS_LABELS: Record<string, string> = {
   not_ready: 'Foundation',
@@ -39,33 +16,30 @@ const READINESS_LABELS: Record<string, string> = {
  * Authed-only banner shown above the marketing homepage hero.
  * Silently renders nothing for unauthenticated visitors. Authenticated users
  * see either their next Pathway action or the baseline interview activation.
+ *
+ * Wave 3 / UAT-021: pathway state now comes from the shared
+ * `usePathwayNextAction` hook so the signed-in MarketingHomepage CTA
+ * can read the same `nextAction` (deduplicatedFetch shares the
+ * in-flight network call between this banner and the hero CTA).
+ *
+ * Codex P2 (PR #402): treat 'error' as 'empty' rather than vanishing
+ * the whole banner. Pre-Wave-3 code rendered the "Start your pathway"
+ * baseline whenever the fetch failed (the inline catch set loading
+ * false + pathway null, which fell into the empty branch). After the
+ * hook migration, returning null on `'error'` removed every recovery
+ * affordance on degraded networks — fix by falling through to the
+ * baseline render in both 'empty' AND 'error' states.
  */
 export default function PathwayStatusBanner() {
-  const { status } = useSession()
-  const [pathway, setPathway] = useState<BannerPathway | null>(null)
-  const [pathwayState, setPathwayState] = useState<BannerResponse['state']>()
-  const [nextAction, setNextAction] = useState<BannerAction | null>(null)
-  const [loading, setLoading] = useState(true)
+  const { status: hookStatus, state: pathwayState, nextAction, pathway } = usePathwayNextAction()
 
-  useEffect(() => {
-    if (status !== 'authenticated') {
-      setLoading(false)
-      return
-    }
-    fetch('/api/learn/pathway')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        const response = data as BannerResponse | null
-        setPathway(response?.pathway || null)
-        setPathwayState(response?.state)
-        setNextAction(response?.nextAction || null)
-        setLoading(false)
-      })
-      .catch(() => setLoading(false))
-  }, [status])
+  // Anonymous + still-loading visitors get nothing.
+  if (hookStatus === 'loading' || hookStatus === 'anonymous') return null
 
-  if (status !== 'authenticated' || loading) return null
-
+  // On 'error' we fall through to the baseline branch below — pathway
+  // is null in that state, so `!pathway` evaluates true and the
+  // "Start your pathway" affordance still renders. That keeps a
+  // recovery CTA in the banner area on transient network failures.
   if (pathwayState === 'empty' || !pathway) {
     return (
       <div className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white">

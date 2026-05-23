@@ -194,11 +194,11 @@ export default function IdealAnswerComparisonCard({
         </section>
       )}
 
-      {/* Strong-answer outline */}
+      {/* Example strong answer */}
       {ideal.strongAnswer && (
         <section>
           <p className="text-caption text-[#71767b] uppercase tracking-wide font-medium mb-1.5">
-            Strong-answer outline
+            Example strong answer
           </p>
           <p className="text-body text-[#0f1419] leading-relaxed bg-emerald-50 border border-emerald-200 rounded-xl p-3 whitespace-pre-line">
             {ideal.strongAnswer}
@@ -206,11 +206,11 @@ export default function IdealAnswerComparisonCard({
         </section>
       )}
 
-      {/* Key elements that make a strong answer */}
+      {/* What to include — key elements that make a strong answer */}
       {ideal.keyElements && ideal.keyElements.length > 0 && (
         <section>
           <p className="text-caption text-[#71767b] uppercase tracking-wide font-medium mb-2">
-            Key elements
+            What to include
           </p>
           <div className="flex flex-wrap gap-1.5">
             {ideal.keyElements.map((el, i) => (

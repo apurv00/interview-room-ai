@@ -79,8 +79,12 @@ describe('UniversalPathwayView', () => {
       expect(screen.getByText(/Phase 2 of 6 · Foundation/)).toBeInTheDocument()
     })
     expect(screen.getByText('Lessons (1/2)')).toBeInTheDocument()
-    expect(screen.getByText(/Lesson 1: specificity/)).toBeInTheDocument()
-    expect(screen.getByText(/Lesson 2: structure/)).toBeInTheDocument()
+    // UAT-018: collapsed fallback title is "Lesson N" only; competency
+    // moved to the subtitle below the title.
+    expect(screen.getByText('Lesson 1')).toBeInTheDocument()
+    expect(screen.getByText('Lesson 2')).toBeInTheDocument()
+    expect(screen.getAllByText('specificity').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('structure').length).toBeGreaterThan(0)
   })
 
   it('optimistically marks a lesson complete on PATCH success', async () => {
@@ -97,7 +101,8 @@ describe('UniversalPathwayView', () => {
 
     await waitFor(() => screen.getByText('Lessons (1/2)'))
 
-    const firstLessonToggle = screen.getByText(/Lesson 1: specificity/).closest('button')!
+    // UAT-018: fallback title is just "Lesson 1" now.
+    const firstLessonToggle = screen.getByText('Lesson 1').closest('button')!
     fireEvent.click(firstLessonToggle)
     await waitFor(() => screen.getByText('Mark complete'))
 

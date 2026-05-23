@@ -191,7 +191,12 @@ export default function LessonCard({ entry, index, domain, depth, onComplete }: 
 
         <div className="flex-1 min-w-0">
           <div className={`text-sm font-medium ${entry.completed ? 'text-[#8b98a5] line-through' : 'text-[#0f1419]'}`}>
-            {lesson?.title ?? `Lesson ${index + 1}: ${prettyCompetency}`}
+            {/* UAT-018: before the lesson body loads, fallback title showed
+                "Lesson N: <competency>" while the subtitle below ALSO
+                rendered the competency — visually reading as "Lesson 1:
+                relevance relevance". Drop the competency from the
+                fallback; the subtitle still surfaces it. */}
+            {lesson?.title ?? `Lesson ${index + 1}`}
           </div>
           <div className="text-[11px] text-[#8b98a5] capitalize mt-0.5">{prettyCompetency}</div>
         </div>

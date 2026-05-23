@@ -421,9 +421,13 @@ export default function InterviewPage() {
 
   // ─── Load config (with session guard) ──────────────────────────────────────
   useEffect(() => {
+    // UAT-022: missing / cross-user / stale config previously bounced the
+    // user to `/` (the marketing homepage), which made bookmarked
+    // /interview links look broken. Redirect to the setup wizard instead
+    // so the user can recover.
     const stored = localStorage.getItem(STORAGE_KEYS.INTERVIEW_CONFIG)
     if (!stored) {
-      router.push('/')
+      router.push('/interview/setup')
       return
     }
 
@@ -432,7 +436,7 @@ export default function InterviewPage() {
       const raw = JSON.parse(stored)
       if (raw._ownerId && authSession?.user?.id && raw._ownerId !== authSession.user.id) {
         localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
-        router.push('/')
+        router.push('/interview/setup')
         return
       }
     } catch { /* malformed JSON — fall through to normal parsing below */ }
@@ -440,11 +444,12 @@ export default function InterviewPage() {
     // Guard: if there's already a completed session for this config, don't reuse it
     const activeSession = localStorage.getItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
     if (activeSession) {
-      // A previous session was in progress but user navigated back
-      // Clear stale state and redirect to home for fresh setup
+      // A previous session was in progress but user navigated back.
+      // Clear stale state and route to setup with a recoverable flag so
+      // the wizard can show a "your previous session ended" hint.
       localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
       localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
-      router.push('/')
+      router.push('/interview/setup?recover=stale-session')
       return
     }
 
