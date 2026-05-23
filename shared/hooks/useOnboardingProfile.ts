@@ -117,6 +117,19 @@ export function useOnboardingProfile(): OnboardingHookValue {
       setValue({ status: 'ready', profile: cached.value })
       return
     }
+
+    // PR #402 follow-up: cache miss for a NEW userId. Reset to
+    // loading + null profile before the fetch fires so the previous
+    // user's profile is not briefly visible during the in-tab
+    // account switch. We only do this on a miss (the hit branch
+    // already overwrote the state above), and we skip the noop when
+    // the state is already in the right shape — saves a render on
+    // the first mount of an authenticated user.
+    setValue((prev) => {
+      if (prev.status === 'loading' && prev.profile === null) return prev
+      return { status: 'loading', profile: null }
+    })
+
     let cancelled = false
     // Codex P1 (PR #402): pass a userId-discriminated cache key so the
     // shared in-flight map cannot fan A's in-flight pathway/onboarding

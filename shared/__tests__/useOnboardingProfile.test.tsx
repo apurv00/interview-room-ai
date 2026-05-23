@@ -145,4 +145,42 @@ describe('useOnboardingProfile', () => {
     expect(result.current.status).toBe('loading')
     expect(fetchSpy).not.toHaveBeenCalled()
   })
+
+  // ── PR #402 follow-up: clear stale profile on user-switch cache miss ────
+  // The per-user cache prevents cross-user reads on a hit, but a cache
+  // miss for the new userId still left the previous user's profile in
+  // state until the fetch resolved. UI rendering off `profile.*` could
+  // briefly show A's targetRole / topSkills to B.
+
+  it('clears profile state immediately on userId-change cache miss', async () => {
+    // Prime user A's cache.
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ targetRole: 'pm', _user: 'A' }),
+    } as Response)
+    mockAuthedAs('user-A')
+    const { result, rerender } = renderHook(() => useOnboardingProfile())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.profile).toMatchObject({ _user: 'A' })
+
+    // Switch to user B. Hold B's fetch open so we can observe the
+    // in-between state.
+    let resolveB: (r: Response) => void = () => {}
+    fetchSpy.mockReturnValueOnce(new Promise<Response>((r) => { resolveB = r }))
+    mockAuthedAs('user-B')
+    rerender()
+
+    // BEFORE B's fetch resolves, state MUST not still hold A's profile.
+    await waitFor(() => {
+      expect(result.current.status).toBe('loading')
+      expect(result.current.profile).toBeNull()
+    })
+
+    // B's fetch lands.
+    resolveB({
+      ok: true,
+      json: async () => ({ targetRole: 'swe', _user: 'B' }),
+    } as Response)
+    await waitFor(() => expect(result.current.profile).toMatchObject({ _user: 'B' }))
+  })
 })
