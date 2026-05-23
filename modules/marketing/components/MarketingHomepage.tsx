@@ -46,24 +46,36 @@ export default function MarketingHomepage() {
   // to go next, not on the generic /interview/setup. Anonymous users
   // keep the existing auth-gated flow. This hook shares its
   // /api/learn/pathway fetch with PathwayStatusBanner above the hero
-  // via deduplicatedFetch — no extra network call.
+  // via deduplicatedFetchJSON — no extra network call.
+  //
+  // UAT-021 follow-up (review fix): while `pathway.status === 'loading'`
+  // we don't yet know whether the visitor is anonymous or authed-with-
+  // pathway. The previous fix fell through to /interview/setup during
+  // this window, which let a fast click bypass the per-user pathway
+  // routing. Block the click + label the button explicitly while we
+  // wait — usually <200 ms on warm sessions.
   const pathway = usePathwayNextAction()
+  const isCtaLoading = pathway.status === 'loading'
   const signedInCtaHref =
     pathway.status === 'ready' && pathway.nextAction?.href
       ? pathway.nextAction.href
       : '/interview/setup'
-  const signedInCtaLabel =
-    pathway.status === 'ready' && pathway.nextAction?.ctaLabel
+  const signedInCtaLabel = isCtaLoading
+    ? 'Loading your next step…'
+    : pathway.status === 'ready' && pathway.nextAction?.ctaLabel
       ? pathway.nextAction.ctaLabel
       : 'Take Your First Interview — Free'
 
   // Single hero/CTA click handler. Anonymous users see the auth modal
   // first; signed-in users go straight to whatever the pathway says is
-  // next (signedInCtaHref).
+  // next (signedInCtaHref). Defensive short-circuit when pathway is
+  // still loading — paired with `disabled` on the button to cover both
+  // the keyboard and the pointer paths.
   const handleStartCta = useCallback(() => {
+    if (isCtaLoading) return
     track('cta_clicked', { cta: 'start_interview', location: 'marketing_home' })
     requireAuth('start_interview', () => router.push(signedInCtaHref))
-  }, [requireAuth, router, signedInCtaHref])
+  }, [requireAuth, router, signedInCtaHref, isCtaLoading])
 
   // Sentinel used inside the JourneyStep array below to mark steps that
   // should trigger handleStartCta instead of a normal navigation.
@@ -105,7 +117,9 @@ export default function MarketingHomepage() {
               <button
                 type="button"
                 onClick={handleStartCta}
-                className="inline-block px-8 py-3.5 text-[15px] font-semibold rounded-full bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-600/20 transition-all text-center"
+                disabled={isCtaLoading}
+                aria-busy={isCtaLoading}
+                className="inline-block px-8 py-3.5 text-[15px] font-semibold rounded-full bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-600/20 transition-all text-center disabled:opacity-70 disabled:cursor-wait disabled:hover:bg-blue-600"
               >
                 {signedInCtaLabel}
               </button>

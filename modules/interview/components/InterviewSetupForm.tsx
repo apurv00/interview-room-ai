@@ -60,7 +60,7 @@ import {
   getDurationLabel,
   getDomainLabel,
 } from '@interview/config/interviewConfig'
-import { deduplicatedFetch } from '@shared/cachedFetch'
+import { useOnboardingProfile } from '@shared/hooks/useOnboardingProfile'
 import { STORAGE_KEYS } from '@shared/storageKeys'
 import { useAuthGate } from '@shared/providers/AuthGateProvider'
 
@@ -95,6 +95,12 @@ export default function InterviewSetupForm() {
   )
   const { data: authSession, status } = useSession()
   const { requireAuth } = useAuthGate()
+  // UAT-014: read onboarding through the shared hook so this consumer
+  // shares the same TTL value cache as <ResourceLinks/> on the same
+  // page. Earlier, the form used deduplicatedFetch and ResourceLinks
+  // used useOnboardingProfile — they kept separate in-flight maps and
+  // /api/onboarding was hit twice per setup load.
+  const { profile: onboardingProfile } = useOnboardingProfile()
 
   // ─── Step state ────────────────────────────────────────────────────────
   const [step, setStep] = useState(0)
@@ -246,26 +252,41 @@ export default function InterviewSetupForm() {
   }, [pathwayContext])
 
   // ─── Pre-fill from onboarding profile ──────────────────────────────────
+  //
+  // UAT-014: profile object now arrives via useOnboardingProfile()
+  // above — single shared fetch + TTL cache across this form and
+  // ResourceLinks. Each guard below (`!role && …`, `!resumeText && …`)
+  // is intentional: the hook may re-emit the same profile (TTL cache
+  // hit on remount), and we must never overwrite a value the user
+  // has typed since pre-fill.
   useEffect(() => {
-    if (status !== 'authenticated') return
-    deduplicatedFetch('/api/onboarding')
-      .then((r) => r.json())
-      .then((profile) => {
-        if (!lastConfig) {
-          if (!role && profile.targetRole) setRole(profile.targetRole)
-          if (!experience && profile.experienceLevel) setExperience(profile.experienceLevel)
-        }
-        if (!resumeText && profile.hasResume) {
-          if (profile.resumeText) setResumeText(profile.resumeText)
-          if (profile.resumeFileName) setResumeFileName(profile.resumeFileName)
-        }
-        if (profile.savedResumes?.length) setSavedResumes(profile.savedResumes)
-        if (profile.currentTitle) setQuickTitle(profile.currentTitle)
-        if (profile.topSkills?.length) setQuickSkills(profile.topSkills.join(', '))
-      })
-      .catch(() => {})
+    if (!onboardingProfile) return
+    // Typed fields read directly off OnboardingProfile.
+    const targetRole = onboardingProfile.targetRole
+    const experienceLevel = onboardingProfile.experienceLevel
+    // Extended fields the form consumes — typed loose on the hook side
+    // (`[key: string]: unknown`), so we narrow per-field here rather
+    // than expanding the shared interface for one consumer.
+    const hasResume = onboardingProfile.hasResume as boolean | undefined
+    const resumeTextFromProfile = onboardingProfile.resumeText as string | undefined
+    const resumeFileNameFromProfile = onboardingProfile.resumeFileName as string | undefined
+    const savedResumesFromProfile = onboardingProfile.savedResumes as SavedResumeMeta[] | undefined
+    const currentTitle = onboardingProfile.currentTitle as string | undefined
+    const topSkills = onboardingProfile.topSkills as string[] | undefined
+
+    if (!lastConfig) {
+      if (!role && targetRole) setRole(targetRole as Role)
+      if (!experience && experienceLevel) setExperience(experienceLevel as ExperienceLevel)
+    }
+    if (!resumeText && hasResume) {
+      if (resumeTextFromProfile) setResumeText(resumeTextFromProfile)
+      if (resumeFileNameFromProfile) setResumeFileName(resumeFileNameFromProfile)
+    }
+    if (savedResumesFromProfile?.length) setSavedResumes(savedResumesFromProfile)
+    if (currentTitle) setQuickTitle(currentTitle)
+    if (topSkills?.length) setQuickSkills(topSkills.join(', '))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status])
+  }, [onboardingProfile])
 
   // ─── Derived values ────────────────────────────────────────────────────
   const progress = ((step + 1) / TOTAL_STEPS) * 100
