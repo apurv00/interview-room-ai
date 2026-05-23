@@ -22,15 +22,38 @@
  * templates are renamed.
  */
 
+// Codex P2 (PR #402): the matchers must mirror the literal templates
+// emitted by `buildProbeText` at modules/interview/hooks/interviewUtils.ts.
+// Anything looser (e.g. a bare "Could you walk me through …?" prefix)
+// captures real behavioral questions and rewrites them, which is the
+// exact failure mode we're trying to avoid.
+//
+// All probes share the shape `<prefix> <probeTarget>[?]`. probeTarget is
+// computed at interviewUtils.ts:55 as `probeTarget?.trim() || 'that'` —
+// effectively a short noun phrase (1–4 tokens) extracted from the
+// prior answer. We pin the prefix exactly and limit the trailing slot
+// so a long behavioral clause ("Can you tell me more about a time you
+// had to push back on a stakeholder…") doesn't match.
+//
+// "Could you walk me through" and "Could you elaborate" are NOT part
+// of the actual probe set — they were speculative additions in the
+// initial Wave 2 commit and are dropped here.
+const PROBE_TARGET_TAIL = '\\S+(?:\\s+\\S+){0,3}'
+
 const META_PROBE_PATTERNS: RegExp[] = [
-  /^\s*can you tell me more about\b/i,
-  /^\s*what exactly do you mean by\b/i,
-  /^\s*how did you specifically approach\b/i,
-  /^\s*can you put a number on\b/i,
-  /^\s*can you elaborate on\b/i,
-  // Adjacent shapes seen in past sessions (clarify/expand variants).
-  /^\s*could you walk me through\b.*\?\s*$/i,
-  /^\s*could you elaborate\b/i,
+  // case 'expand'    — `Can you tell me more about ${t}?`
+  new RegExp(`^\\s*can you tell me more about\\s+${PROBE_TARGET_TAIL}\\s*\\??\\s*$`, 'i'),
+  // case 'clarify'   — `What exactly do you mean by ${t}?`
+  new RegExp(`^\\s*what exactly do you mean by\\s+${PROBE_TARGET_TAIL}\\s*\\??\\s*$`, 'i'),
+  // case 'challenge' — `How did you specifically approach ${t}?`
+  new RegExp(`^\\s*how did you specifically approach\\s+${PROBE_TARGET_TAIL}\\s*\\??\\s*$`, 'i'),
+  // case 'quantify'  — `Can you put a number on ${t} — what was the measurable outcome?`
+  // The trailing "— what was the measurable outcome?" is distinctive
+  // enough that we anchor on it directly; the em-dash may come through
+  // as either `—` or `-` depending on transport.
+  new RegExp(`^\\s*can you put a number on\\s+${PROBE_TARGET_TAIL}\\s*[—\\-]\\s*what was the measurable outcome\\??\\s*$`, 'i'),
+  // default          — `Can you elaborate on ${t}?`
+  new RegExp(`^\\s*can you elaborate on\\s+${PROBE_TARGET_TAIL}\\s*\\??\\s*$`, 'i'),
 ]
 
 /**

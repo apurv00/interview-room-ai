@@ -9,15 +9,15 @@ import { sanitizeLearnerCopy } from '@learn/copy/learnerCopySanitizer'
 
 describe('isMetaDrillQuestion', () => {
   it('flags every probe pattern emitted by interviewUtils.buildProbeText', () => {
+    // Each sample MUST mirror the literal `buildProbeText` template shape
+    // (short noun-phrase target). Loose paraphrases that humans might
+    // also write naturally are NOT meta probes and stay through.
     const metaSamples = [
       'Can you tell me more about that initiative?',
-      'What exactly do you mean by "stakeholder buy-in"?',
+      'What exactly do you mean by stakeholder buy-in?',
       'How did you specifically approach the migration?',
       'Can you put a number on the impact — what was the measurable outcome?',
       'Can you elaborate on the rollout?',
-      // Variants that have shown up in past sessions
-      'Could you walk me through that decision?',
-      'Could you elaborate on that for me?',
     ]
     for (const q of metaSamples) {
       expect(isMetaDrillQuestion(q), `expected meta-match for "${q}"`).toBe(true)
@@ -32,6 +32,26 @@ describe('isMetaDrillQuestion', () => {
       "What's a result you're most proud of from the last year?",
     ]
     for (const q of realQuestions) {
+      expect(isMetaDrillQuestion(q), `expected non-meta for "${q}"`).toBe(false)
+    }
+  })
+
+  // Codex P2 (PR #402) regression guards — these legitimate prompts
+  // share a prefix with the probe templates but elaborate beyond the
+  // short noun-phrase shape that probes always emit, so they must NOT
+  // be rewritten.
+  it('does NOT flag long behavioral questions that share a probe prefix', () => {
+    const realButRiskyQuestions = [
+      // Same prefix as the 'expand' probe, but a long clause trails.
+      'Can you tell me more about a time you had to push back on a stakeholder under deadline pressure?',
+      // Same prefix as the 'elaborate' probe, but elaborated content.
+      'Can you elaborate on the most challenging cross-functional project you led last year?',
+      // Process-walkthrough — formerly false-positived by the dropped
+      // `^could you walk me through` matcher.
+      'Could you walk me through your end-to-end process for prioritizing a backlog of 30 tickets?',
+      'Could you elaborate on how you handle disagreements with your engineering manager during planning?',
+    ]
+    for (const q of realButRiskyQuestions) {
       expect(isMetaDrillQuestion(q), `expected non-meta for "${q}"`).toBe(false)
     }
   })
