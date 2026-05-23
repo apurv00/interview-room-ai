@@ -48,3 +48,9 @@ modules/resume/styles/resume-pdf-css.json
 
 # GitNexus codebase index (local only)
 .gitnexus/
+
+# QA agent harness output (reports)
+modules/qa/output/
+modules/qa/browser/.inject-url.txt
+modules/qa/browser/inject-chunk-*.txt
+modules/qa/browser/inject-manifest.json
