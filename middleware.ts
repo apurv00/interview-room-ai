@@ -171,7 +171,8 @@ export default withAuth(
           // Candidate invite OTP flow is auth-entry-point (user is not
           // signed in yet). Token + OTP are the gates — not NextAuth.
           pathname.startsWith('/invite/') ||
-          pathname.startsWith('/api/invite/')
+          pathname.startsWith('/api/invite/') ||
+          pathname.startsWith('/api/qa/automation-login')
         ) {
           return true
         }

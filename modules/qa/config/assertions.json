@@ -1,0 +1,15 @@
+{
+  "latencyMs": {
+    "generateQuestion": 8000,
+    "evaluateAnswer": 10000,
+    "generateFeedback": 120000,
+    "analysisPoll": 5000,
+    "pathwayPoll": 5000
+  },
+  "consoleErrorAllowlist": [
+    "[QA]",
+    "QA_TELEMETRY",
+    "QA_REPORT_"
+  ],
+  "questionMinLength": 20
+}
