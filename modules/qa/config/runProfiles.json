@@ -12,6 +12,14 @@
   "ci-smoke": {
     "mode": "smoke",
     "questions": 3,
-    "description": "12 cells, 3 questions — validates pathway (G.10 short-form needs ≥3 answers)"
+    "duration": 10,
+    "description": "12 cells, 3 questions × 10min — validates pathway (G.10 needs ≥3 answers)"
+  },
+  "mini-smoke": {
+    "mode": "smoke",
+    "questions": 6,
+    "duration": 10,
+    "maxCells": 3,
+    "description": "3 full 10-min interviews × 6 questions each — pathway + scoring validation"
   }
 }

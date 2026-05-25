@@ -15,9 +15,9 @@ import { spawnSync } from 'node:child_process'
 import { runPlaywrightMatrix, verifyAuthSession } from '../modules/qa/runner/playwrightMatrix.mjs'
 import { defaultAuthPath, loadManifest, runOutputDir } from '../modules/qa/orchestrator/runManifest.mjs'
 import { ensureQaAuth } from '../modules/qa/runner/automationAuth.mjs'
-import { loadQaEnv } from '../modules/qa/runner/loadEnv.mjs'
+import { loadDotEnvLocal } from '../modules/qa/runner/loadEnv.mjs'
 
-loadQaEnv()
+loadDotEnvLocal()
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const profiles = JSON.parse(readFileSync(join(root, 'modules/qa/config/runProfiles.json'), 'utf-8'))
@@ -33,7 +33,9 @@ const authPath = arg('--auth', defaultAuthPath(prod))
 const profileName = arg('--profile', null)
 const profile = profileName ? profiles[profileName] : null
 const mode = arg('--mode', profile?.mode ?? 'smoke')
-const questions = parseInt(arg('--questions', String(profile?.questions ?? 3)), 10)
+const questions = parseInt(arg('--questions', String(profile?.questions ?? 6)), 10)
+const duration = parseInt(arg('--duration', String(profile?.duration ?? 10)), 10)
+const maxCells = parseInt(arg('--max-cells', String(profile?.maxCells ?? 0)), 10)
 const headless = process.argv.includes('--headless')
 const generateReport = process.argv.includes('--report')
 const resumeId = arg('--resume', null)
@@ -76,6 +78,8 @@ try {
     storageStatePath: authPath,
     mode,
     questions,
+    duration,
+    maxCells,
     headless,
     reportId,
   })
@@ -88,6 +92,28 @@ try {
       shell: process.platform === 'win32',
     })
     if (gen.status !== 0) process.exit(gen.status ?? 1)
+  }
+
+  const runPost = process.argv.includes('--observe') || process.argv.includes('--infra')
+  if (runPost) {
+    if (process.argv.includes('--observe')) {
+      const obs = spawnSync('node', ['scripts/qa-v3-observe.mjs', result.reportId], {
+        cwd: root,
+        stdio: 'inherit',
+        shell: process.platform === 'win32',
+      })
+      if (obs.status !== 0) console.warn('Observer exited with errors (non-fatal)')
+    }
+    if (process.argv.includes('--infra')) {
+      const infraArgs = ['scripts/qa-v3-infra.mjs', result.reportId]
+      if (prod) infraArgs.push('--prod')
+      const infra = spawnSync('node', infraArgs, {
+        cwd: root,
+        stdio: 'inherit',
+        shell: process.platform === 'win32',
+      })
+      if (infra.status !== 0) console.warn('Infra verifier reported issues')
+    }
   }
 
   console.log(`\nReport ID: ${result.reportId}`)

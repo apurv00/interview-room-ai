@@ -464,27 +464,31 @@ scripts/
 ### Phase 3.1 — Playwright runner (3–4 days)
 
 - [x] Auth setup + `storageState` (`scripts/qa-auth-setup.mjs`)
+- [x] Automation login API (`POST /api/qa/automation-login`) — no manual cookie paste
 - [x] `playwrightMatrix.mjs` runs matrix via injected harness v2.1
 - [x] Per-activity files + Playwright console/network sidecars
 - [x] `run-manifest.json` + `--resume` (full re-run if incomplete)
 - [x] CLI `scripts/qa-v3-matrix.mjs` + npm scripts
-- [ ] First prod validation (requires `npm run qa:auth:setup:prod`)
+- [x] `mini-smoke` profile: 3 cells × 6Q × 10min — validated prod (`qa-browser-smoke-1779718960245`)
 
 **Exit criteria:** Overnight prod run with zero bookmarklets.
 
 ### Phase 3.2 — Observer agent (2 days)
 
-- [ ] `observer.ts` + `qa-v3-observe.mjs`
-- [ ] Failure + 5% sample triggers
-- [ ] `observations/*.json` output
+- [x] `observer.mjs` + `qa-v3-observe.mjs` (rule-based v1; LLM upgrade path documented)
+- [x] Failure + 5% sample triggers
+- [x] `observations/*.json` output
+- [x] Wired via `--observe` on `qa-v3-matrix.mjs`
 
 **Exit criteria:** Failed pathway poll auto-classified as infra vs product in observation file.
 
 ### Phase 3.3 — Infra verifier (1–2 days)
 
-- [ ] Mongo batch pathway status query
-- [ ] Inngest function count check
-- [ ] `infra-report.json`
+- [x] Mongo batch pathway status query (`interviewsessions` collection)
+- [x] Inngest function checklist (manual when `--prod`)
+- [x] `infra-report.json`
+- [x] Wired via `--infra` on `qa-v3-matrix.mjs`
+- [ ] Set `MONGODB_URI_PROD` in `.env.local` for prod pathway verification
 
 **Exit criteria:** P0 pathway would have been caught by infra check even if harness poll typo remained.
 

@@ -25,6 +25,8 @@ function readHarnessVersion(source) {
  * @param {string} options.storageStatePath
  * @param {string} [options.mode]
  * @param {number} [options.questions]
+ * @param {number} [options.duration]
+ * @param {number} [options.maxCells]
  * @param {boolean} [options.headless]
  * @param {number} [options.timeoutMs]
  * @param {string} [options.reportId]
@@ -36,6 +38,8 @@ export async function runPlaywrightMatrix(options) {
     storageStatePath,
     mode = 'smoke',
     questions = 3,
+    duration = 10,
+    maxCells = 0,
     headless = false,
     timeoutMs = 4 * 60 * 60 * 1000,
     reportId = `qa-browser-${mode}-${Date.now()}`,
@@ -61,7 +65,7 @@ export async function runPlaywrightMatrix(options) {
   const playwrightNetwork = []
   const consoleLines = []
 
-  log(`QA v3 Playwright — reportId=${reportId} mode=${mode} questions=${questions}`)
+  log(`QA v3 Playwright — reportId=${reportId} mode=${mode} questions=${questions} duration=${duration}min${maxCells ? ` cells=${maxCells}` : ''}`)
   log(`baseUrl=${baseUrl} harness=${harnessVersion}`)
   log(`Using storageState (OAuth not needed during matrix — cookies only)`)
 
@@ -105,7 +109,14 @@ export async function runPlaywrightMatrix(options) {
       })
     })
 
-    const hash = `mode=${encodeURIComponent(mode)}&questions=${questions}&autostart=1`
+    const hashParts = [
+      `mode=${encodeURIComponent(mode)}`,
+      `questions=${questions}`,
+      `duration=${duration}`,
+      'autostart=1',
+    ]
+    if (maxCells > 0) hashParts.push(`limit=${maxCells}`)
+    const hash = hashParts.join('&')
     const landing = `${baseUrl.replace(/\/$/, '')}/#${hash}`
     log(`Navigating ${landing}`)
     // Wait for React hydration before inject — otherwise homepage re-renders over harness.
@@ -152,6 +163,12 @@ export async function runPlaywrightMatrix(options) {
     await context.close()
   } catch (err) {
     fatalError = err
+    try {
+      writeFileSync(join(outDir, 'playwright-console.json'), JSON.stringify(consoleLines, null, 2), 'utf-8')
+      writeFileSync(join(outDir, 'playwright-network.json'), JSON.stringify(playwrightNetwork, null, 2), 'utf-8')
+    } catch {
+      /* best-effort debug artifacts */
+    }
     saveManifest(reportId, {
       status: 'failed',
       finishedAt: new Date().toISOString(),

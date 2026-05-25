@@ -41,6 +41,9 @@
     "qa:v3:matrix": "node scripts/qa-v3-matrix.mjs",
     "qa:v3:matrix:prod": "node scripts/qa-v3-matrix.mjs --prod --report",
     "qa:v3:smoke:prod": "node scripts/qa-v3-matrix.mjs --prod --profile ci-smoke --report",
+    "qa:v3:mini-smoke:prod": "node scripts/qa-v3-matrix.mjs --prod --profile mini-smoke --report --observe --infra",
+    "qa:v3:observe": "node scripts/qa-v3-observe.mjs",
+    "qa:v3:infra": "node scripts/qa-v3-infra.mjs",
     "replay:pathway": "node scripts/replay-pathway-regenerate.mjs"
   },
   "dependencies": {
