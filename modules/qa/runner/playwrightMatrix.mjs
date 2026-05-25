@@ -72,10 +72,15 @@ export async function runPlaywrightMatrix(options) {
   try {
     const context = await browser.newContext({ storageState: storageStatePath })
     const page = await context.newPage()
+    page.setDefaultTimeout(timeoutMs)
+    page.setDefaultNavigationTimeout(120_000)
 
     page.on('console', (msg) => {
       const text = msg.text()
       consoleLines.push({ level: msg.type(), text, timestamp: Date.now() })
+      if (text.startsWith('[QA]')) {
+        log(text)
+      }
       if (text.startsWith('QA_TELEMETRY ')) {
         try {
           externalTelemetry.push(JSON.parse(text.slice('QA_TELEMETRY '.length)))
@@ -103,7 +108,8 @@ export async function runPlaywrightMatrix(options) {
     const hash = `mode=${encodeURIComponent(mode)}&questions=${questions}&autostart=1`
     const landing = `${baseUrl.replace(/\/$/, '')}/#${hash}`
     log(`Navigating ${landing}`)
-    await page.goto(landing, { waitUntil: 'domcontentloaded', timeout: 120_000 })
+    // Wait for React hydration before inject — otherwise homepage re-renders over harness.
+    await page.goto(landing, { waitUntil: 'networkidle', timeout: 120_000 })
 
     await page.evaluate((src) => {
       const el = document.createElement('script')
@@ -111,10 +117,21 @@ export async function runPlaywrightMatrix(options) {
       document.documentElement.appendChild(el)
     }, runnerSource)
 
-    log('Matrix running — waiting for QA_MATRIX_DONE …')
+    log('Harness injected — watch this Chromium window for green QA log output')
+    await page.waitForFunction(
+      () =>
+        document.title === 'QA_MATRIX_RUNNING' ||
+        document.title === 'QA_MATRIX_DONE' ||
+        document.title === 'QA_MATRIX_ERROR',
+      null,
+      { timeout: 30_000 },
+    )
+    log(`Harness booted (title=${await page.title()})`)
+    log(`Matrix running — waiting for QA_MATRIX_DONE … (timeout ${Math.round(timeoutMs / 60000)} min)`)
 
     await page.waitForFunction(
       () => document.title === 'QA_MATRIX_DONE' || document.title === 'QA_MATRIX_ERROR',
+      null,
       { timeout: timeoutMs },
     )
 
