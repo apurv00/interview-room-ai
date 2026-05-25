@@ -11,7 +11,7 @@
   },
   "ci-smoke": {
     "mode": "smoke",
-    "questions": 1,
-    "description": "12 cells, 1 question each — fast CI gate"
+    "questions": 3,
+    "description": "12 cells, 3 questions — validates pathway (G.10 short-form needs ≥3 answers)"
   }
 }

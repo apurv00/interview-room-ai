@@ -157,22 +157,26 @@ location.hash='mode=full&questions=3&autostart=1';
     coding:{strong:'Hash map O(n) time O(k) space, handle empty input and edge cases, sort by frequency.',weak:'Loop and count with a hash map probably.'},
   }
 
-  const logEl = document.getElementById('qa-log') || (() => {
-    const d = document.createElement('div')
-    d.id = 'qa-log'
-    d.style.cssText = 'font:13px monospace;padding:12px;white-space:pre-wrap;max-height:40vh;overflow:auto;background:#111;color:#0f0'
-    document.body.prepend(d)
-    return d
-  })()
-  const pre = document.getElementById('qa-result') || (() => {
-    const p = document.createElement('pre')
-    p.id = 'qa-result'
-    p.style.cssText = 'font:11px monospace;padding:12px;white-space:pre-wrap;word-break:break-all'
-    document.body.appendChild(p)
-    return p
-  })()
+  let logEl = null
+  let pre = null
 
-  const log = (m) => { logEl.textContent += m + '\n'; logEl.scrollTop = logEl.scrollHeight; console.log('[QA]', m) }
+  function mountUi() {
+    document.body.innerHTML =
+      '<h1 style="font:16px sans-serif;padding:12px">QA Matrix Runner (browser session)</h1>' +
+      '<div id="qa-log" style="font:13px monospace;padding:12px;white-space:pre-wrap;max-height:40vh;overflow:auto;background:#111;color:#0f0"></div>' +
+      '<pre id="qa-result" style="font:11px monospace;padding:12px;white-space:pre-wrap;word-break:break-all"></pre>'
+    document.body.style.background = '#fff'
+    logEl = document.getElementById('qa-log')
+    pre = document.getElementById('qa-result')
+  }
+
+  const log = (m) => {
+    if (logEl) {
+      logEl.textContent += m + '\n'
+      logEl.scrollTop = logEl.scrollHeight
+    }
+    console.log('[QA]', m)
+  }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
   function applicable(domain, depth) {
@@ -243,8 +247,7 @@ location.hash='mode=full&questions=3&autostart=1';
 
   function buildAnswer(question, depth, persona) {
     if (persona === 'strong') return pickStrong(question, depth)
-    const base = (ANSWERS[depth] || ANSWERS.behavioral).weak
-    return (question.length > 80 ? `Regarding "${question.slice(0, 80)}...", ` : '') + base
+    return (ANSWERS[depth] || ANSWERS.behavioral).weak
   }
 
   function buildRuns() {
@@ -440,7 +443,6 @@ location.hash='mode=full&questions=3&autostart=1';
       pathwayGenerationStatus = sess.data.pathwayGenerationStatus ?? null
       const st = pathwayGenerationStatus
       if (st === 'succeeded' || st === 'failed' || st === 'skipped') break
-      if (st == null && i > 2) break
       await sleep(3000)
     }
     const pathway = await api('GET', `/api/learn/pathway?fromFeedback=${sessionId}`, undefined, {
@@ -584,9 +586,8 @@ location.hash='mode=full&questions=3&autostart=1';
     return report
   }
 
-  // UI
-  document.body.innerHTML = '<h1 style="font:16px sans-serif;padding:12px">QA Matrix Runner (browser session)</h1>'
-  document.body.style.background = '#fff'
+  // UI + autostart (Playwright injects this script — hash params alone do nothing in a normal browser)
+  mountUi()
   if (AUTOSTART || !document.getElementById('qa-start')) {
     runMatrix().catch((e) => { document.title = 'QA_MATRIX_ERROR'; log('Fatal: ' + e.message) })
   } else {
