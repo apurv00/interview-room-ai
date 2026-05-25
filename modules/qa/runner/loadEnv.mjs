@@ -4,10 +4,20 @@ import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 
-/** Load QA_* and NEXTAUTH vars from .env.local for CLI scripts. */
-export function loadQaEnv() {
+/** Load vars from .env.local for QA CLI scripts. */
+export function loadDotEnvLocal(keys = null) {
   const envPath = join(root, '.env.local')
   if (!existsSync(envPath)) return
+  const allow =
+    keys ??
+    new Set([
+      'QA_',
+      'NEXTAUTH_SECRET',
+      'MONGODB_URI',
+      'MONGODB_URI_PROD',
+      'INNGEST_EVENT_KEY',
+      'INNGEST_SIGNING_KEY',
+    ])
   const text = readFileSync(envPath, 'utf-8')
   for (const line of text.split('\n')) {
     const trimmed = line.trim()
@@ -15,7 +25,11 @@ export function loadQaEnv() {
     const eq = trimmed.indexOf('=')
     if (eq <= 0) continue
     const key = trimmed.slice(0, eq).trim()
-    if (!key.startsWith('QA_') && key !== 'NEXTAUTH_SECRET') continue
+    const allowed =
+      typeof allow === 'function'
+        ? allow(key)
+        : [...allow].some((p) => (p.endsWith('_') ? key.startsWith(p) : key === p))
+    if (!allowed) continue
     if (process.env[key]) continue
     let val = trimmed.slice(eq + 1).trim()
     if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
@@ -23,6 +37,11 @@ export function loadQaEnv() {
     }
     process.env[key] = val
   }
+}
+
+/** @deprecated use loadDotEnvLocal */
+export function loadQaEnv() {
+  loadDotEnvLocal(['QA_', 'NEXTAUTH_SECRET'])
 }
 
 export function qaAutomationConfig() {

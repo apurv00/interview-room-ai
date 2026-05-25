@@ -133,8 +133,9 @@ location.hash='mode=full&questions=3&autostart=1';
   const params = new URLSearchParams((location.hash.replace(/^#/, '') || location.search).replace(/^\?/, ''))
   const MODE = params.get('mode') || 'smoke'
   const Q_LIMIT = parseInt(params.get('questions') || '3', 10)
+  const RUN_LIMIT = parseInt(params.get('limit') || '0', 10)
   const AUTOSTART = params.get('autostart') === '1'
-  const DURATION = 10
+  const DURATION = parseInt(params.get('duration') || '10', 10)
 
   const DOMAINS = ['frontend','backend','sdet','data-science','pm','design','business','general']
   const DEPTHS = [
@@ -514,13 +515,14 @@ location.hash='mode=full&questions=3&autostart=1';
     runReportId = `qa-browser-${MODE}-${Date.now()}`
     telemetry.length = 0
     const runs = buildRuns()
-    log(`QA Matrix v${HARNESS_VERSION} — mode=${MODE} runs=${runs.length} questions=${Q_LIMIT}`)
+    const matrixRuns = RUN_LIMIT > 0 ? runs.slice(0, RUN_LIMIT) : runs
+    log(`QA Matrix v${HARNESS_VERSION} — mode=${MODE} runs=${matrixRuns.length} questions=${Q_LIMIT} duration=${DURATION}min`)
     const results = []
     const evalRows = []
     let done = 0
 
-    for (const run of runs) {
-      log(`[${++done}/${runs.length}] ${run.runId} …`)
+    for (const run of matrixRuns) {
+      log(`[${++done}/${matrixRuns.length}] ${run.runId} …`)
       activityCtx.matrixKey = `${run.domain}/${run.depth}/${run.persona}`
       activityCtx.sessionId = null
       const entry = { runId: run.runId, matrixKey: activityCtx.matrixKey, pass: true, stages: {}, questions: [] }
