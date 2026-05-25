@@ -1,0 +1,17 @@
+{
+  "smoke": {
+    "mode": "smoke",
+    "questions": 3,
+    "description": "12 cells (6 domain×depth × 2 personas) — quick validation"
+  },
+  "full": {
+    "mode": "full",
+    "questions": 3,
+    "description": "60 cells — full domain×depth×persona matrix"
+  },
+  "ci-smoke": {
+    "mode": "smoke",
+    "questions": 1,
+    "description": "12 cells, 1 question each — fast CI gate"
+  }
+}

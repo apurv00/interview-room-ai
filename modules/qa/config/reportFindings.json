@@ -1,0 +1,24 @@
+{
+  "findings": [
+    {
+      "id": "P0-001",
+      "severity": "P0",
+      "stage": "pathway",
+      "title": "Pathway plan does not update after interview",
+      "status": "resolved",
+      "impact": "Users finish an interview and feedback but the learning pathway stays stale or shows a perpetual “catching up” state — core post-interview loop is broken.",
+      "evidence": [
+        "Manual UAT on production: pathway unchanged after completing a new interview",
+        "Harness: 60/60 sessions — pathway view-model state remains pending after 120s poll",
+        "Root cause: Inngest Cloud missing pathway-regenerate (6/8 functions synced)",
+        "Fix: re-sync to 8 functions + bulk replay 59/59 stuck QA sessions"
+      ],
+      "nextSteps": [
+        "Overnight harness v2 run should show pathwayGenerationStatus=succeeded on ≥95% sessions",
+        "Product hardening: stale pending recovery + post-deploy Inngest function count check",
+        "See modules/qa/docs/PATHWAY_P0_TRACE.md"
+      ]
+    }
+  ]
+}
+
