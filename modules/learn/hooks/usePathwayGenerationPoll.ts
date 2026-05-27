@@ -18,12 +18,15 @@ interface UsePathwayGenerationPollOptions {
   sessionId: string | null | undefined
   enabled: boolean
   onRefresh: () => void | Promise<void>
+  /** Bump after a successful pathway retry to restart the 120s poll window. */
+  pollEpoch?: number
 }
 
 export function usePathwayGenerationPoll({
   sessionId,
   enabled,
   onRefresh,
+  pollEpoch = 0,
 }: UsePathwayGenerationPollOptions) {
   const [phase, setPhase] = useState<PathwayPollPhase>('idle')
   const startedAtRef = useRef<number | null>(null)
@@ -102,7 +105,7 @@ export function usePathwayGenerationPoll({
     return () => {
       cancelled = true
     }
-  }, [enabled, sessionId, pollOnce])
+  }, [enabled, sessionId, pollOnce, pollEpoch])
 
   return { phase, pollExhausted: phase === 'exhausted' }
 }

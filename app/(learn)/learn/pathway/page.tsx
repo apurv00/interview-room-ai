@@ -47,6 +47,7 @@ function PathwayPageInner() {
   const [data, setData] = useState<PathwayApiResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [completingTaskId, setCompletingTaskId] = useState<string | null>(null)
+  const [pollEpoch, setPollEpoch] = useState(0)
 
   const loadPathway = useCallback(async () => {
     // UAT-012: keep the page in the loading state while NextAuth resolves
@@ -78,12 +79,19 @@ function PathwayPageInner() {
   }, [loadPathway])
 
   const shouldPoll = Boolean(
-    fromFeedback && data?.pathwayUpdate?.poll && data.state === 'pending',
+    fromFeedback && data?.pathwayUpdate?.poll && (data.state === 'pending' || data.state === 'failed'),
   )
+
+  const handlePathwayPollRetried = useCallback(() => {
+    setPollEpoch((n) => n + 1)
+    void loadPathway()
+  }, [loadPathway])
+
   const { pollExhausted } = usePathwayGenerationPoll({
     sessionId: fromFeedback,
     enabled: shouldPoll,
     onRefresh: loadPathway,
+    pollEpoch,
   })
 
   const completeTask = async (taskId: string) => {
@@ -171,14 +179,14 @@ function PathwayPageInner() {
             },
           }}
           pollExhausted={pollExhausted}
-          onRetried={() => void loadPathway()}
+          onRetried={handlePathwayPollRetried}
         />
       )}
 
       {viewModel.state === 'failed' && (
         <PathwayFailedBanner
           action={viewModel.nextAction}
-          onRetried={() => void loadPathway()}
+          onRetried={handlePathwayPollRetried}
         />
       )}
 

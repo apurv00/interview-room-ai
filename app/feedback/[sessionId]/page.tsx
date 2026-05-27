@@ -184,6 +184,7 @@ function FeedbackPageInner() {
   const [pathwayRetryStatus, setPathwayRetryStatus] = useState<
     null | { kind: 'pending' } | { kind: 'success' } | { kind: 'error'; message: string }
   >(null)
+  const [pathwayPollEpoch, setPathwayPollEpoch] = useState(0)
   const pathwayRetryTriggeredRef = useRef(false)
 
   const pathwayPlanScheduled = useMemo(
@@ -193,9 +194,14 @@ function FeedbackPageInner() {
       ) ?? false,
     [feedback],
   )
+  const handlePathwayPollRetried = useCallback(() => {
+    setPathwayPollEpoch((n) => n + 1)
+  }, [])
+
   const { pollExhausted: pathwayPollExhausted } = usePathwayGenerationPoll({
     sessionId: sessionId !== 'local' ? sessionId : null,
     enabled: pathwayPlanScheduled,
+    pollEpoch: pathwayPollEpoch,
     onRefresh: async () => {
       if (!sessionId || sessionId === 'local') return
       try {
@@ -322,6 +328,7 @@ function FeedbackPageInner() {
         if (!res) return
         if (res.ok) {
           setPathwayRetryStatus({ kind: 'success' })
+          setPathwayPollEpoch((n) => n + 1)
           return
         }
 
@@ -351,6 +358,7 @@ function FeedbackPageInner() {
         }
         if (res.status === 409 && /already in flight|just claimed/i.test(message)) {
           setPathwayRetryStatus({ kind: 'success' })
+          setPathwayPollEpoch((n) => n + 1)
           return
         }
         setPathwayRetryStatus({ kind: 'error', message })
@@ -1399,6 +1407,7 @@ function FeedbackPageInner() {
               metadata: { sessionId, fromFeedback: sessionId },
             }}
             pollExhausted={pathwayPollExhausted}
+            onRetried={handlePathwayPollRetried}
           />
         </div>
       )}
