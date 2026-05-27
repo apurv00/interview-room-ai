@@ -101,11 +101,15 @@ function retryableStatusFilter() {
       { pathwayGenerationStatus: 'failed' },
       { pathwayGenerationStatus: { $exists: false } },
       { pathwayGenerationStatus: null },
-      { pathwayGenerationStatus: 'pending', completedAt: { $lte: cutoff } },
       {
         pathwayGenerationStatus: 'pending',
-        completedAt: { $lte: clientCutoff },
         pathwayGenerationAttempts: { $in: [0, null] },
+        $or: [
+          { pathwayGenerationStartedAt: { $lte: cutoff } },
+          { pathwayGenerationStartedAt: { $exists: false } },
+          { pathwayGenerationStartedAt: null },
+          { completedAt: { $lte: clientCutoff } },
+        ],
       },
       { pathwayGenerationStatus: 'running', pathwayGenerationStartedAt: { $lte: cutoff } },
     ],
@@ -240,7 +244,9 @@ export const POST = composeApiRoute<z.infer<typeof RetrySchema>>({
         $set: {
           pathwayGenerationStatus: 'pending',
           pathwayGenerationUseSynthesizedFeedback: useSynthesizedFeedback,
+          pathwayGenerationStartedAt: new Date(),
         },
+        $inc: { pathwayGenerationAttempts: 1 },
         $unset: { pathwayGenerationError: 1 },
       },
       { returnDocument: 'after' }

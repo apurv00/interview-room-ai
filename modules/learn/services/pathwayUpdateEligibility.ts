@@ -23,6 +23,8 @@ export interface PathwayUpdateEligibilityInput {
   } | null
   pathwayGenerationStatus?: string | null
   evaluationCount?: number
+  /** Set when feedback was not persisted but pathwayJob will synthesize from evals. */
+  useSynthesizedFeedback?: boolean
 }
 
 export interface PathwayUpdateEligibility {
@@ -85,25 +87,28 @@ export function getPathwayUpdateEligibility(
     }
   }
 
-  const scored =
-    hasScoredFeedback(input.feedback, answeredCount) ||
-    hasDegradedPathwayInput(input.feedback, evaluationCount, answeredCount)
-
-  if (!scored) {
-    return {
-      reason: 'no_scored_feedback',
-      canEnqueue: false,
-      poll: false,
-      allowPathwayRetry: false,
-    }
-  }
-
+  // In-flight jobs must win over the no-feedback guard — degraded/outer-catch
+  // paths enqueue with useSynthesizedFeedback and no persisted session.feedback.
   if (status === 'pending' || status === 'running') {
     return {
       reason: 'pathway_in_flight',
       canEnqueue: false,
       poll: true,
       allowPathwayRetry: true,
+    }
+  }
+
+  const hasPathwayInput =
+    hasScoredFeedback(input.feedback, answeredCount) ||
+    hasDegradedPathwayInput(input.feedback, evaluationCount, answeredCount) ||
+    (input.useSynthesizedFeedback === true && evaluationCount > 0)
+
+  if (!hasPathwayInput) {
+    return {
+      reason: 'no_scored_feedback',
+      canEnqueue: false,
+      poll: false,
+      allowPathwayRetry: false,
     }
   }
 

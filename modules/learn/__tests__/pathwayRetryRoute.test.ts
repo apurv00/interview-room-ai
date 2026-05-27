@@ -171,10 +171,12 @@ describe('POST /api/learn/pathway/retry — atomic claim (Codex P2 #9)', () => {
         ]),
       }),
     )
-    expect(update.$set).toEqual({
+    expect(update.$set).toMatchObject({
       pathwayGenerationStatus: 'pending',
       pathwayGenerationUseSynthesizedFeedback: false,
     })
+    expect(update.$set.pathwayGenerationStartedAt).toBeInstanceOf(Date)
+    expect(update.$inc).toEqual({ pathwayGenerationAttempts: 1 })
     expect(update.$unset).toEqual({ pathwayGenerationError: 1 })
   })
 
@@ -276,10 +278,11 @@ describe('POST /api/learn/pathway/retry — validation', () => {
     expect(res.status).toBe(200)
     expect(mockInngestSend).toHaveBeenCalledTimes(1)
     const [, update] = mockFindOneAndUpdate.mock.calls[0]
-    expect(update.$set).toEqual({
+    expect(update.$set).toMatchObject({
       pathwayGenerationStatus: 'pending',
       pathwayGenerationUseSynthesizedFeedback: true,
     })
+    expect(update.$inc).toEqual({ pathwayGenerationAttempts: 1 })
   })
 
   it('409 when evaluations are missing or empty (even if feedback exists)', async () => {

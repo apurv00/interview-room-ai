@@ -61,12 +61,13 @@ export const GET = composeApiRoute({
             userId: new mongoose.Types.ObjectId(user.id),
           })
             .select(
-              'pathwayGenerationStatus pathwayGenerationError pathwayGenerationStartedAt completedAt answeredCount feedback evaluations',
+              'pathwayGenerationStatus pathwayGenerationError pathwayGenerationStartedAt pathwayGenerationUseSynthesizedFeedback completedAt answeredCount feedback evaluations',
             )
             .lean<{
               pathwayGenerationStatus?: string
               pathwayGenerationError?: string
               pathwayGenerationStartedAt?: Date
+              pathwayGenerationUseSynthesizedFeedback?: boolean
               completedAt?: Date
               answeredCount?: number
               feedback?: {
@@ -94,6 +95,7 @@ export const GET = composeApiRoute({
             feedback: sess?.feedback ?? null,
             pathwayGenerationStatus: feedbackSessionStatus,
             evaluationCount: sess?.evaluations?.length ?? 0,
+            useSynthesizedFeedback: sess?.pathwayGenerationUseSynthesizedFeedback === true,
           })
         }
       } catch {

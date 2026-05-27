@@ -206,4 +206,27 @@ describe('GET /api/learn/pathway — Codex P1 resilience (Wave 4)', () => {
     expect(args.pathwayUpdate?.reason).toBe('pathway_in_flight')
     expect(args.pathwayUpdate?.poll).toBe(true)
   })
+
+  it('polls when pathway uses synthesized feedback without persisted session.feedback', async () => {
+    const sessionId = '507f1f77bcf86cd799439011'
+    mockInterviewSessionFindOne.mockReturnValue(
+      buildChain({
+        pathwayGenerationStatus: 'pending',
+        pathwayGenerationUseSynthesizedFeedback: true,
+        completedAt: new Date(),
+        answeredCount: 4,
+        feedback: null,
+        evaluations: [{}, {}, {}, {}],
+      }),
+    )
+
+    const req = new NextRequest(
+      `http://localhost/api/learn/pathway?fromFeedback=${sessionId}`,
+    )
+    const res = await GET(req)
+    expect(res.status).toBe(200)
+    const args = mockBuildPathwayViewModel.mock.calls[0][0]
+    expect(args.pathwayUpdate?.reason).toBe('pathway_in_flight')
+    expect(args.pathwayUpdate?.poll).toBe(true)
+  })
 })

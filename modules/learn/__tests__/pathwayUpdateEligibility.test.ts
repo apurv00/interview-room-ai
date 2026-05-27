@@ -17,7 +17,7 @@ describe('getPathwayUpdateEligibility', () => {
     })
   })
 
-  it('blocks when feedback is not scored', () => {
+  it('blocks when feedback is not scored and no job is in flight', () => {
     const result = getPathwayUpdateEligibility({
       answeredCount: 5,
       pathwayPlannerEnabled: true,
@@ -27,6 +27,19 @@ describe('getPathwayUpdateEligibility', () => {
     })
     expect(result.reason).toBe('no_scored_feedback')
     expect(result.canEnqueue).toBe(false)
+  })
+
+  it('polls for in-flight jobs without persisted feedback when synthesized flag is set', () => {
+    const result = getPathwayUpdateEligibility({
+      answeredCount: 5,
+      pathwayPlannerEnabled: true,
+      feedback: null,
+      evaluationCount: 5,
+      pathwayGenerationStatus: 'pending',
+      useSynthesizedFeedback: true,
+    })
+    expect(result.reason).toBe('pathway_in_flight')
+    expect(result.poll).toBe(true)
   })
 
   it('allows degraded feedback with evaluations as pathway input', () => {
