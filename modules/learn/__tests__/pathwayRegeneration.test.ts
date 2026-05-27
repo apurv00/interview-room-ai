@@ -48,11 +48,25 @@ describe('synthesizeFeedbackForPathway', () => {
 
 describe('canEnqueuePathwayRegeneration', () => {
   it('requires sessionId, evaluations, and pathway_planner flag', () => {
-    expect(canEnqueuePathwayRegeneration('sess-1', [{ questionIndex: 0 }])).toBe(true)
-    expect(canEnqueuePathwayRegeneration(undefined, [{ questionIndex: 0 }])).toBe(false)
+    const evals = [{ questionIndex: 0 }, { questionIndex: 1 }, { questionIndex: 2 }]
+    expect(canEnqueuePathwayRegeneration('sess-1', evals)).toBe(true)
+    expect(canEnqueuePathwayRegeneration(undefined, evals)).toBe(false)
     expect(canEnqueuePathwayRegeneration('sess-1', [])).toBe(false)
     mockIsFeatureEnabled.mockReturnValueOnce(false)
-    expect(canEnqueuePathwayRegeneration('sess-1', [{ questionIndex: 0 }])).toBe(false)
+    expect(canEnqueuePathwayRegeneration('sess-1', evals)).toBe(false)
+  })
+
+  it('requires at least three answered questions', () => {
+    expect(
+      canEnqueuePathwayRegeneration('sess-1', [{ questionIndex: 0 }, { questionIndex: 1 }], 2),
+    ).toBe(false)
+    expect(
+      canEnqueuePathwayRegeneration(
+        'sess-1',
+        [{ questionIndex: 0 }, { questionIndex: 1 }, { questionIndex: 2 }],
+        3,
+      ),
+    ).toBe(true)
   })
 })
 

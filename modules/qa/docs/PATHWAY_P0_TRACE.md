@@ -192,3 +192,19 @@ Search for session id:
 - Finding **P0-001** in `modules/qa/config/reportFindings.json`
 - Session rollup: `*-sessions.csv` column `pathwayState`
 - Scorecard §4.4 in generated `*.md`
+
+---
+
+## 2026-05-22 — Pathway loader / poll / unchanged plan (shipped in repo)
+
+| Change | Location |
+|--------|----------|
+| Eligibility (`<3` answers, no scored feedback, in-flight poll) | `modules/learn/services/pathwayUpdateEligibility.ts` |
+| Enqueue gate `answeredCount >= 3` | `canEnqueuePathwayRegeneration` in `pathwayRegeneration.ts` + all `generate-feedback` enqueue sites |
+| GET exposes `pathwayUpdate` + `unchanged` view state | `app/api/learn/pathway/route.ts`, `pathwayViewModel.ts` |
+| Client poll 3s × 120s, then Retry CTA | `usePathwayGenerationPoll.ts`, `PathwayPendingBanner.tsx` |
+| Recovery A/B/C banners | `PathwayUnchangedBanner.tsx` (retake / open feedback / planner off) |
+| Retry: block `<3` answers; reclaim pending stuck ≥2 min | `app/api/learn/pathway/retry/route.ts` (`PATHWAY_CLIENT_STUCK_MS`) |
+| Feedback page poll + gate `?retryPathway=1` | `app/feedback/[sessionId]/page.tsx` |
+
+**QA expectation after deploy:** coding/system-design cells with feedback 400 should show `unchanged` (not perpetual pending). Eligible text-depth cells should poll then succeed or offer Retry at 120s.

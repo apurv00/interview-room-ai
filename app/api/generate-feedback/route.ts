@@ -1224,7 +1224,9 @@ You repair malformed interview feedback JSON. The output must match the supplied
         // red_flag that the in-tab response contains. Codex P2 on PR
         // #321. Scheduling order within sideEffects[] is unchanged for
         // aggregate-log purposes; only the mutation ordering matters.
-        if (isFeatureEnabled('pathway_planner')) {
+        if (
+          canEnqueuePathwayRegeneration(sessionId, evaluations, g10AnsweredCount)
+        ) {
           // Pathway enqueue moved to AFTER persist completes (Codex P2 on
           // PR #398) so the Inngest job reads real session.feedback instead
           // of synthesizing from a persist race. markScheduled below so the
@@ -1488,7 +1490,7 @@ You repair malformed interview feedback JSON. The output must match the supplied
         // Codex P2 on PR #398 — enqueue only after feedback is committed so
         // pathwayJob reads real session.feedback (not synthetic persist-race
         // fallback). Fire-and-forget; Inngest handles retries.
-        if (isFeatureEnabled('pathway_planner')) {
+        if (canEnqueuePathwayRegeneration(sessionId, evaluations, g10AnsweredCount)) {
           enqueuePathwayRegeneration(sessionId, user.id, {
             source: 'generate-feedback-success',
           }).catch((err) =>
@@ -1505,7 +1507,10 @@ You repair malformed interview feedback JSON. The output must match the supplied
       // but evaluations are already in Mongo from finishInterview. Enqueue
       // pathway regeneration only — the Inngest job synthesizes feedback
       // in-memory and never persists synthetic scores to session.feedback.
-      if (canEnqueuePathwayRegeneration(body.sessionId, evaluations) && feedback.degraded) {
+      if (
+        canEnqueuePathwayRegeneration(body.sessionId, evaluations, g10AnsweredCount) &&
+        feedback.degraded
+      ) {
         enqueuePathwayRegeneration(body.sessionId, user.id, {
           source: 'generate-feedback-degraded',
           useSynthesizedFeedback: true,
@@ -1630,7 +1635,7 @@ You repair malformed interview feedback JSON. The output must match the supplied
       // (P0 contract) but evaluations are in Mongo from finishInterview.
       // Enqueue pathway so users aren't stuck with null PathwayPlan across
       // retries. Fire-and-forget — response must not block on Inngest.
-      if (canEnqueuePathwayRegeneration(body.sessionId, evaluations)) {
+      if (canEnqueuePathwayRegeneration(body.sessionId, evaluations, g10AnsweredCount)) {
         enqueuePathwayRegeneration(body.sessionId, user.id, {
           source: 'generate-feedback-outer-catch',
           useSynthesizedFeedback: true,

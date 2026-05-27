@@ -12,6 +12,8 @@ import PathwayProgressPanel from '@learn/components/pathway/PathwayProgressPanel
 import PathwayActivityPanel from '@learn/components/pathway/PathwayActivityPanel'
 import PathwayPendingBanner from '@learn/components/pathway/PathwayPendingBanner'
 import PathwayFailedBanner from '@learn/components/pathway/PathwayFailedBanner'
+import PathwayUnchangedBanner from '@learn/components/pathway/PathwayUnchangedBanner'
+import { usePathwayGenerationPoll } from '@learn/hooks/usePathwayGenerationPoll'
 import UniversalPathwayView from '@learn/components/pathway/UniversalPathwayView'
 import DecayContextCard from '@learn/components/pathway/DecayContextCard'
 import type { PathwayViewModel } from '@learn/services/pathwayViewModel'
@@ -74,6 +76,15 @@ function PathwayPageInner() {
   useEffect(() => {
     void loadPathway()
   }, [loadPathway])
+
+  const shouldPoll = Boolean(
+    fromFeedback && data?.pathwayUpdate?.poll && data.state === 'pending',
+  )
+  const { pollExhausted } = usePathwayGenerationPoll({
+    sessionId: fromFeedback,
+    enabled: shouldPoll,
+    onRefresh: loadPathway,
+  })
 
   const completeTask = async (taskId: string) => {
     setCompletingTaskId(taskId)
@@ -142,8 +153,22 @@ function PathwayPageInner() {
     <main className="max-w-5xl mx-auto px-4 py-8 space-y-6">
       <PathwayHeader />
 
+      {viewModel.state === 'unchanged' && (
+        <PathwayUnchangedBanner action={viewModel.nextAction} />
+      )}
+
       {viewModel.state === 'pending' && (
-        <PathwayPendingBanner action={viewModel.nextAction} />
+        <PathwayPendingBanner
+          action={{
+            ...viewModel.nextAction,
+            metadata: {
+              ...viewModel.nextAction.metadata,
+              sessionId: fromFeedback ?? viewModel.nextAction.metadata?.sessionId,
+            },
+          }}
+          pollExhausted={pollExhausted}
+          onRetried={() => void loadPathway()}
+        />
       )}
 
       {viewModel.state === 'failed' && (

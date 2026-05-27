@@ -1,6 +1,15 @@
 import type { IPathwayPlan, PracticeTask } from '@shared/db/models'
+import type { PathwayUpdateEligibility } from '@learn/services/pathwayUpdateEligibility'
 
-export type PathwayState = 'empty' | 'active' | 'completed' | 'pending' | 'abandoned' | 'returning' | 'failed'
+export type PathwayState =
+  | 'empty'
+  | 'active'
+  | 'completed'
+  | 'pending'
+  | 'abandoned'
+  | 'returning'
+  | 'failed'
+  | 'unchanged'
 
 /**
  * Pathway P2 Wave 3 (feature #9) — UI projection of a Milestone.
@@ -124,6 +133,8 @@ export interface PathwayViewModel {
    *  (lastSessionAt may be null, decayProfile may be 'fresh'). The
    *  component decides whether to render based on the profile. */
   activityRhythm: ActivityRhythm
+  /** Set when `fromFeedback` is present — drives poll/retry/unchanged UI. */
+  pathwayUpdate?: PathwayUpdateEligibility | null
 }
 
 /**
@@ -184,6 +195,8 @@ interface BuildPathwayViewModelInput {
    *  "pathway gen failed and can be retried" from "no attempt was
    *  ever recorded" so the CTA points to the right recovery action. */
   lastSessionPathwayStatus?: string | null
+  /** Eligibility for updating pathway from the upstream feedback session. */
+  pathwayUpdate?: PathwayUpdateEligibility | null
   now?: Date
 }
 
@@ -206,10 +219,32 @@ export function buildPathwayViewModel({
   lastSessionAt,
   lastSessionId,
   lastSessionPathwayStatus,
+  pathwayUpdate,
   now = new Date(),
 }: BuildPathwayViewModelInput): PathwayViewModel {
   // Wave 4 — compute once, attach to every return path. Cheap.
   const activityRhythm = buildActivityRhythm(lastSessionAt, now)
+
+  const attachPathwayUpdate = <T extends PathwayViewModel>(vm: T): T =>
+    pathwayUpdate ? { ...vm, pathwayUpdate } : vm
+
+  if (fromFeedback && pathwayUpdate) {
+    const unchanged = buildUnchangedViewModel({
+      pathway,
+      competencySummary,
+      weaknesses,
+      fromFeedback,
+      pathwayUpdate,
+      priorPlans,
+      competencyStates,
+      momentumWindow,
+      lastSessionAt,
+      activityRhythm,
+      now,
+    })
+    if (unchanged) return unchanged
+  }
+
   // Bug B fix — if we arrived from feedback AND the upstream session's
   // background regeneration job has terminally failed, surface a 'failed'
   // state with a Retry CTA instead of the perpetual 'pending' banner.
@@ -219,13 +254,13 @@ export function buildPathwayViewModel({
     isPendingForFeedback(pathway, fromFeedback, feedbackSessionStatus)
   ) {
     const errorSuffix = feedbackSessionError ? ` (${feedbackSessionError})` : ''
-    return {
+    return attachPathwayUpdate({
       state: 'failed',
       nextAction: {
         id: 'retry-pathway',
         type: 'review',
         title: 'Pathway update failed',
-        description: `We couldn't regenerate your plan from this interview after 3 attempts${errorSuffix}. Retry to enqueue another attempt, or head back to feedback.`,
+        description: `We couldn't regenerate your plan from this interview${errorSuffix}. Retry to enqueue another attempt, or head back to feedback.`,
         ctaLabel: 'Retry pathway update',
         metadata: { fromFeedback, sessionId: fromFeedback },
       },
@@ -233,11 +268,11 @@ export function buildPathwayViewModel({
       progress: buildProgress(pathway, competencySummary, priorPlans, competencyStates, momentumWindow),
       activity: buildActivity(pathway, weaknesses),
       activityRhythm,
-    }
+    })
   }
 
-  if (isPendingForFeedback(pathway, fromFeedback, feedbackSessionStatus)) {
-    return {
+  if (isPendingForFeedback(pathway, fromFeedback, feedbackSessionStatus, pathwayUpdate)) {
+    return attachPathwayUpdate({
       state: 'pending',
       nextAction: {
         id: 'pending-feedback',
@@ -251,7 +286,7 @@ export function buildPathwayViewModel({
       progress: buildProgress(pathway, competencySummary, priorPlans, competencyStates, momentumWindow),
       activity: buildActivity(pathway, weaknesses),
       activityRhythm,
-    }
+    })
   }
 
   // Codex/Vercel P2 on PR #398 — direct nav to /learn/pathway (no
@@ -324,13 +359,84 @@ export function buildPathwayViewModel({
   const progress = buildProgress(pathway, competencySummary, priorPlans, competencyStates, momentumWindow)
   const state = resolveState(pathway, progress, now)
 
-  return {
+  return attachPathwayUpdate({
     state,
     nextAction: resolveNextAction(pathway, state),
     planItems,
     progress,
     activity: buildActivity(pathway, weaknesses),
     activityRhythm,
+  })
+}
+
+function buildUnchangedViewModel(input: {
+  pathway: IPathwayPlan | null
+  competencySummary: unknown
+  weaknesses: unknown[]
+  fromFeedback: string
+  pathwayUpdate: PathwayUpdateEligibility
+  priorPlans: PriorPlanForRecurrence[]
+  competencyStates: CompetencyStateForMomentum[]
+  momentumWindow: number
+  lastSessionAt?: Date | string | null
+  activityRhythm: ActivityRhythm
+  now: Date
+}): PathwayViewModel | null {
+  const { reason } = input.pathwayUpdate
+  if (
+    reason !== 'insufficient_answers' &&
+    reason !== 'no_scored_feedback' &&
+    reason !== 'planner_disabled'
+  ) {
+    return null
+  }
+
+  const { pathway, competencySummary, weaknesses, fromFeedback, priorPlans, competencyStates, momentumWindow, activityRhythm } =
+    input
+
+  let nextAction: PathwayAction
+  if (reason === 'insufficient_answers') {
+    nextAction = {
+      id: 'retake-interview',
+      type: 'interview',
+      title: 'Finish at least three answers to update your pathway',
+      description:
+        'This interview ended before you answered enough questions for a scored report. Your current pathway plan is unchanged — retake when you are ready.',
+      ctaLabel: 'Retake interview',
+      href: '/interview/setup?source=pathway&actionId=retake&returnTo=%2Flearn%2Fpathway',
+      metadata: { fromFeedback, sessionId: fromFeedback },
+    }
+  } else if (reason === 'no_scored_feedback') {
+    nextAction = {
+      id: 'regenerate-feedback',
+      type: 'review',
+      title: 'Generate feedback before updating your pathway',
+      description:
+        'We saved your interview but do not have a scored feedback report yet. Your current pathway plan stays as-is until feedback is ready.',
+      ctaLabel: 'Open interview feedback',
+      href: `/feedback/${encodeURIComponent(fromFeedback)}`,
+      metadata: { fromFeedback, sessionId: fromFeedback },
+    }
+  } else {
+    nextAction = {
+      id: 'view-current-pathway',
+      type: 'review',
+      title: 'Pathway updates are not enabled',
+      description: 'Your plan was not changed from this interview. Continue with your current pathway.',
+      ctaLabel: 'Back to feedback',
+      href: `/feedback/${encodeURIComponent(fromFeedback)}`,
+      metadata: { fromFeedback, sessionId: fromFeedback },
+    }
+  }
+
+  return {
+    state: 'unchanged',
+    nextAction,
+    planItems: pathway ? mapPlanItems(pathway.practiceTasks ?? []) : [],
+    progress: buildProgress(pathway, competencySummary, priorPlans, competencyStates, momentumWindow),
+    activity: buildActivity(pathway, weaknesses),
+    activityRhythm,
+    pathwayUpdate: input.pathwayUpdate,
   }
 }
 
@@ -369,8 +475,13 @@ function isPendingForFeedback(
   pathway: IPathwayPlan | null,
   fromFeedback?: string | null,
   feedbackSessionStatus?: string | null,
+  pathwayUpdate?: PathwayUpdateEligibility | null,
 ): boolean {
   if (!fromFeedback) return false
+  if (pathwayUpdate && !pathwayUpdate.poll) return false
+  if (pathwayUpdate?.reason === 'pathway_succeeded' || pathwayUpdate?.reason === 'pathway_skipped') {
+    return false
+  }
   if (!pathway) return true
   const generatedFrom = pathway.generatedFromSessionId ? String(pathway.generatedFromSessionId) : ''
   if (generatedFrom === fromFeedback) return false
