@@ -7,7 +7,10 @@ import { InterviewSession } from '@shared/db/models'
 import { inngest } from '@shared/services/inngest'
 import { aiLogger } from '@shared/logger'
 import { SHORT_FORM_MIN_ANSWERS } from '@interview/services/eval/completionAdjustment'
-import { getPathwayUpdateEligibility } from '@learn/services/pathwayUpdateEligibility'
+import {
+  getPathwayUpdateEligibility,
+  PATHWAY_CLIENT_STUCK_MS,
+} from '@learn/services/pathwayUpdateEligibility'
 import { isFeatureEnabled } from '@shared/featureFlags'
 
 /**
@@ -35,8 +38,6 @@ const RetrySchema = z.object({
 })
 
 const STALE_PATHWAY_PENDING_MS = 10 * 60 * 1000
-/** Client poll window — allow retry when pending never picked up after ~2 min. */
-export const PATHWAY_CLIENT_STUCK_MS = 120_000
 
 function staleCutoffDate(): Date {
   return new Date(Date.now() - STALE_PATHWAY_PENDING_MS)

@@ -163,7 +163,11 @@ function PathwayPageInner() {
             ...viewModel.nextAction,
             metadata: {
               ...viewModel.nextAction.metadata,
-              sessionId: fromFeedback ?? viewModel.nextAction.metadata?.sessionId,
+              sessionId:
+                fromFeedback ??
+                (typeof viewModel.nextAction.metadata?.sessionId === 'string'
+                  ? viewModel.nextAction.metadata.sessionId
+                  : ''),
             },
           }}
           pollExhausted={pollExhausted}

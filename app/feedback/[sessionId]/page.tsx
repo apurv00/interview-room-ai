@@ -199,10 +199,10 @@ function FeedbackPageInner() {
     onRefresh: async () => {
       if (!sessionId || sessionId === 'local') return
       try {
-        const res = await fetchWithRetry(`/api/interviews/${sessionId}?excludeTranscript=true`, {
+        const res = await fetch(`/api/interviews/${sessionId}?excludeTranscript=true`, {
           credentials: 'include',
         })
-        if (!res?.ok) return
+        if (!res.ok) return
         const json = (await res.json()) as { feedback?: FeedbackData }
         if (json.feedback) setFeedback(json.feedback)
       } catch {

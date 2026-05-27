@@ -1,5 +1,8 @@
 import { SHORT_FORM_MIN_ANSWERS } from '@interview/services/eval/completionAdjustment'
 
+/** Client poll window — retry may reclaim pending jobs stuck longer than this. */
+export const PATHWAY_CLIENT_STUCK_MS = 120_000
+
 export type PathwayUpdateReason =
   | 'insufficient_answers'
   | 'no_scored_feedback'
