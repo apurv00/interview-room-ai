@@ -1,17 +1,40 @@
 import { describe, it, expect } from 'vitest'
 import { computeRunMetrics, computeAutoFindings } from '../runMetrics.mjs'
 import { diffMetrics, DEFAULT_BASELINE_ID } from '../baselineDiff.mjs'
-import { readFileSync } from 'node:fs'
-import { join, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
 
-const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..')
+/** Minimal report shape: baseline had zero pathway successes (historical P0). */
+const BASELINE_WITH_NO_PATHWAY_SUCCESS = {
+  reportId: DEFAULT_BASELINE_ID,
+  mode: 'full',
+  totalRuns: 2,
+  passedRuns: 0,
+  passRate: 0,
+  runs: [
+    {
+      matrixKey: 'pm/behavioral/strong',
+      pass: false,
+      stages: {
+        pathway: { pathwayGenerationStatus: 'pending' },
+        feedback: { pass: true },
+        analysis: { data: { status: 'completed' } },
+      },
+    },
+    {
+      matrixKey: 'backend/technical/weak',
+      pass: false,
+      stages: {
+        pathway: { pathwayGenerationStatus: 'failed' },
+        feedback: { pass: false },
+        analysis: { data: { status: 'failed' } },
+      },
+    },
+  ],
+  evaluationRows: [],
+}
 
 describe('baselineDiff', () => {
-  it('detects pathway fix vs full baseline', () => {
-    const baselinePath = join(root, 'modules/qa/output/qa-browser-full-1779529900005.json')
-    const baseline = JSON.parse(readFileSync(baselinePath, 'utf-8'))
-    const baselineMetrics = computeRunMetrics(baseline)
+  it('detects pathway fix vs baseline with no pathway successes', () => {
+    const baselineMetrics = computeRunMetrics(BASELINE_WITH_NO_PATHWAY_SUCCESS)
 
     const currentReport = {
       reportId: 'qa-browser-smoke-test',
@@ -20,9 +43,33 @@ describe('baselineDiff', () => {
       passedRuns: 1,
       passRate: 1 / 3,
       runs: [
-        { matrixKey: 'pm/behavioral/strong', pass: false, stages: { pathway: { pathwayGenerationStatus: 'succeeded' }, feedback: { pass: true }, analysis: { data: { status: 'completed' } } } },
-        { matrixKey: 'pm/behavioral/weak', pass: true, stages: { pathway: { pathwayGenerationStatus: 'succeeded' }, feedback: { pass: true }, analysis: { data: { status: 'completed' } } } },
-        { matrixKey: 'backend/technical/strong', pass: false, stages: { pathway: { pathwayGenerationStatus: 'succeeded' }, feedback: { pass: true }, analysis: { data: { status: 'completed' } } } },
+        {
+          matrixKey: 'pm/behavioral/strong',
+          pass: false,
+          stages: {
+            pathway: { pathwayGenerationStatus: 'succeeded' },
+            feedback: { pass: true },
+            analysis: { data: { status: 'completed' } },
+          },
+        },
+        {
+          matrixKey: 'pm/behavioral/weak',
+          pass: true,
+          stages: {
+            pathway: { pathwayGenerationStatus: 'succeeded' },
+            feedback: { pass: true },
+            analysis: { data: { status: 'completed' } },
+          },
+        },
+        {
+          matrixKey: 'backend/technical/strong',
+          pass: false,
+          stages: {
+            pathway: { pathwayGenerationStatus: 'succeeded' },
+            feedback: { pass: true },
+            analysis: { data: { status: 'completed' } },
+          },
+        },
       ],
       evaluationRows: [],
     }
