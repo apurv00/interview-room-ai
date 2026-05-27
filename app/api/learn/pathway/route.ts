@@ -6,7 +6,10 @@ import { InterviewSession, PathwayPlan, UserCompetencyState } from '@shared/db/m
 import { getCurrentPathway, markTaskComplete } from '@learn/services/pathwayPlanner'
 import { getUserCompetencySummary, getUserWeaknesses } from '@learn/services/competencyService'
 import { buildPathwayViewModel } from '@learn/services/pathwayViewModel'
-import { getPathwayUpdateEligibility } from '@learn/services/pathwayUpdateEligibility'
+import {
+  getPathwayUpdateEligibility,
+  isStalePathwayGeneration,
+} from '@learn/services/pathwayUpdateEligibility'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { z } from 'zod'
 
@@ -17,24 +20,8 @@ import { z } from 'zod'
  * ancient history that's no longer meaningful.
  */
 const RECURRENCE_PLAN_WINDOW = 3
-const STALE_PATHWAY_PENDING_MS = 10 * 60 * 1000
 
 export const dynamic = 'force-dynamic'
-
-function isStalePathwayGeneration(
-  status: string | undefined,
-  completedAt?: Date | string | null,
-  startedAt?: Date | string | null,
-): boolean {
-  const cutoff = Date.now() - STALE_PATHWAY_PENDING_MS
-  if (status === 'pending' && completedAt) {
-    return new Date(completedAt).getTime() <= cutoff
-  }
-  if (status === 'running' && startedAt) {
-    return new Date(startedAt).getTime() <= cutoff
-  }
-  return false
-}
 
 // GET: Retrieve current pathway plan and competency summary
 export const GET = composeApiRoute({

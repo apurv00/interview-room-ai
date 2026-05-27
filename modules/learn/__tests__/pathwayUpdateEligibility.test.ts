@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { getPathwayUpdateEligibility } from '../services/pathwayUpdateEligibility'
+import {
+  buildRetryablePathwayStatusFilter,
+  getPathwayUpdateEligibility,
+  isStalePathwayGeneration,
+} from '../services/pathwayUpdateEligibility'
 
 describe('getPathwayUpdateEligibility', () => {
   it('blocks enqueue and retry when fewer than three answers', () => {
@@ -68,5 +72,37 @@ describe('getPathwayUpdateEligibility', () => {
       poll: true,
       allowPathwayRetry: true,
     })
+  })
+})
+
+describe('isStalePathwayGeneration', () => {
+  it('does not treat pending as stale when retry set a fresh startedAt on an old interview', () => {
+    const oldCompleted = new Date(Date.now() - 30 * 60 * 1000)
+    const freshStarted = new Date(Date.now() - 30 * 1000)
+    expect(
+      isStalePathwayGeneration('pending', oldCompleted, freshStarted),
+    ).toBe(false)
+  })
+
+  it('treats unstarted pending as stale only when completedAt is old', () => {
+    const oldCompleted = new Date(Date.now() - 20 * 60 * 1000)
+    expect(isStalePathwayGeneration('pending', oldCompleted, null)).toBe(true)
+    expect(isStalePathwayGeneration('pending', new Date(), null)).toBe(false)
+  })
+})
+
+describe('buildRetryablePathwayStatusFilter', () => {
+  it('does not match fresh unstarted pending without a stale completedAt', () => {
+    const filter = buildRetryablePathwayStatusFilter() as {
+      $or: Array<Record<string, unknown>>
+    }
+    const pendingBranch = filter.$or.find(
+      (b) => b.pathwayGenerationStatus === 'pending',
+    ) as { $or: Array<Record<string, unknown>> }
+    const branches = pendingBranch.$or.map((b) => JSON.stringify(b))
+    expect(branches.some((b) => b.includes('pathwayGenerationStartedAt') && b.includes('$exists'))).toBe(
+      true,
+    )
+    expect(branches.some((b) => b === '{"pathwayGenerationStartedAt":null}')).toBe(false)
   })
 })

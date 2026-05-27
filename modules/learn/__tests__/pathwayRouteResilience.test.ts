@@ -207,6 +207,29 @@ describe('GET /api/learn/pathway — Codex P1 resilience (Wave 4)', () => {
     expect(args.pathwayUpdate?.poll).toBe(true)
   })
 
+  it('keeps pending status when retry claim has fresh startedAt on an old completedAt', async () => {
+    const sessionId = '507f1f77bcf86cd799439011'
+    mockInterviewSessionFindOne.mockReturnValue(
+      buildChain({
+        pathwayGenerationStatus: 'pending',
+        completedAt: new Date(Date.now() - 30 * 60 * 1000),
+        pathwayGenerationStartedAt: new Date(Date.now() - 30 * 1000),
+        answeredCount: 4,
+        feedback: { overall_score: 65 },
+        evaluations: [{}, {}, {}, {}],
+      }),
+    )
+
+    const req = new NextRequest(
+      `http://localhost/api/learn/pathway?fromFeedback=${sessionId}`,
+    )
+    const res = await GET(req)
+    expect(res.status).toBe(200)
+    const args = mockBuildPathwayViewModel.mock.calls[0][0]
+    expect(args.feedbackSessionStatus).toBe('pending')
+    expect(args.pathwayUpdate?.poll).toBe(true)
+  })
+
   it('polls when pathway uses synthesized feedback without persisted session.feedback', async () => {
     const sessionId = '507f1f77bcf86cd799439011'
     mockInterviewSessionFindOne.mockReturnValue(

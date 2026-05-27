@@ -318,6 +318,23 @@ describe('POST /api/learn/pathway/retry — validation', () => {
     expect(mockInngestSend).not.toHaveBeenCalled()
   })
 
+  it('returns 409 for fresh pending enqueue (recent completedAt, no startedAt)', async () => {
+    mockFindOne.mockResolvedValue(
+      fullSession({
+        pathwayGenerationStatus: 'pending',
+        completedAt: new Date(),
+        pathwayGenerationStartedAt: undefined,
+      }),
+    )
+    mockFindOneAndUpdate.mockResolvedValue(null)
+
+    const res = await POST(makeReq())
+
+    expect(res.status).toBe(409)
+    expect((await res.json() as { error: string }).error).toMatch(/already in flight/i)
+    expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+
   it('allows retry for client-stuck pending (≥2 min, zero attempts)', async () => {
     mockFindOne.mockResolvedValue(
       fullSession({

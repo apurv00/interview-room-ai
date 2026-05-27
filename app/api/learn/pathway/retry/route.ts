@@ -8,8 +8,9 @@ import { inngest } from '@shared/services/inngest'
 import { aiLogger } from '@shared/logger'
 import { SHORT_FORM_MIN_ANSWERS } from '@interview/services/eval/completionAdjustment'
 import {
+  buildRetryablePathwayStatusFilter,
   getPathwayUpdateEligibility,
-  PATHWAY_CLIENT_STUCK_MS,
+  isStalePathwayGeneration,
 } from '@learn/services/pathwayUpdateEligibility'
 import { isFeatureEnabled } from '@shared/featureFlags'
 
@@ -36,31 +37,6 @@ import { isFeatureEnabled } from '@shared/featureFlags'
 const RetrySchema = z.object({
   sessionId: z.string().min(1),
 })
-
-const STALE_PATHWAY_PENDING_MS = 10 * 60 * 1000
-
-function staleCutoffDate(): Date {
-  return new Date(Date.now() - STALE_PATHWAY_PENDING_MS)
-}
-
-function clientStuckCutoffDate(): Date {
-  return new Date(Date.now() - PATHWAY_CLIENT_STUCK_MS)
-}
-
-function isStaleInFlightStatus(
-  status: string | undefined,
-  completedAt?: Date | string | null,
-  startedAt?: Date | string | null,
-): boolean {
-  const cutoff = Date.now() - STALE_PATHWAY_PENDING_MS
-  if (status === 'pending' && completedAt) {
-    return new Date(completedAt).getTime() <= cutoff
-  }
-  if (status === 'running' && startedAt) {
-    return new Date(startedAt).getTime() <= cutoff
-  }
-  return false
-}
 
 /**
  * Status values that mean "no retry needed" (Codex P2 on PR #379):
@@ -93,29 +69,6 @@ const RETRYABLE_STATUSES: ReadonlySet<string | undefined> = new Set([
  * background jobs, conflicting terminal status writes (one writes
  * 'succeeded', the other 'failed' over it), and 2× LLM cost.
  */
-function retryableStatusFilter() {
-  const cutoff = staleCutoffDate()
-  const clientCutoff = clientStuckCutoffDate()
-  return {
-    $or: [
-      { pathwayGenerationStatus: 'failed' },
-      { pathwayGenerationStatus: { $exists: false } },
-      { pathwayGenerationStatus: null },
-      {
-        pathwayGenerationStatus: 'pending',
-        pathwayGenerationAttempts: { $in: [0, null] },
-        $or: [
-          { pathwayGenerationStartedAt: { $lte: cutoff } },
-          { pathwayGenerationStartedAt: { $exists: false } },
-          { pathwayGenerationStartedAt: null },
-          { completedAt: { $lte: clientCutoff } },
-        ],
-      },
-      { pathwayGenerationStatus: 'running', pathwayGenerationStartedAt: { $lte: cutoff } },
-    ],
-  }
-}
-
 // NOTE: the previous `DEFAULT_INTERVIEW_TYPE = 'screening'` constant
 // is no longer needed at this site — the event payload no longer
 // carries `interviewType` (Codex P2 on PR #379 — payload slim-down).
@@ -238,7 +191,7 @@ export const POST = composeApiRoute<z.infer<typeof RetrySchema>>({
       {
         _id: new mongoose.Types.ObjectId(sessionId),
         userId: new mongoose.Types.ObjectId(user.id),
-        ...retryableStatusFilter(),
+        ...buildRetryablePathwayStatusFilter(),
       },
       {
         $set: {
@@ -257,7 +210,7 @@ export const POST = composeApiRoute<z.infer<typeof RetrySchema>>({
       // validation read and the CAS, or another concurrent retry just
       // won. Disambiguate via a quick re-read so the user gets a useful
       // error rather than a generic "could not claim".
-      const isStaleInFlight = isStaleInFlightStatus(
+      const isStaleInFlight = isStalePathwayGeneration(
         session.pathwayGenerationStatus,
         session.completedAt,
         session.pathwayGenerationStartedAt,

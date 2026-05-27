@@ -3,6 +3,9 @@ import { SHORT_FORM_MIN_ANSWERS } from '@interview/services/eval/completionAdjus
 /** Client poll window — retry may reclaim pending jobs stuck longer than this. */
 export const PATHWAY_CLIENT_STUCK_MS = 120_000
 
+/** Server-side stale threshold for pending/running pathway jobs. */
+export const STALE_PATHWAY_PENDING_MS = 10 * 60 * 1000
+
 export type PathwayUpdateReason =
   | 'insufficient_answers'
   | 'no_scored_feedback'
@@ -144,5 +147,64 @@ export function getPathwayUpdateEligibility(
     canEnqueue: true,
     poll: false,
     allowPathwayRetry: false,
+  }
+}
+
+/**
+ * Whether a pending/running pathway job is stale. Pending uses
+ * pathwayGenerationStartedAt when set (retry claim / worker pickup) so a
+ * fresh retry on an old interview is not immediately treated as failed.
+ */
+export function isStalePathwayGeneration(
+  status: string | undefined,
+  completedAt?: Date | string | null,
+  startedAt?: Date | string | null,
+): boolean {
+  const cutoff = Date.now() - STALE_PATHWAY_PENDING_MS
+  if (status === 'pending') {
+    if (startedAt) {
+      return new Date(startedAt).getTime() <= cutoff
+    }
+    if (completedAt) {
+      return new Date(completedAt).getTime() <= cutoff
+    }
+    return false
+  }
+  if (status === 'running' && startedAt) {
+    return new Date(startedAt).getTime() <= cutoff
+  }
+  return false
+}
+
+/**
+ * Mongo filter for atomic pathway retry claims. Unstarted pending rows
+ * (no pathwayGenerationStartedAt) only match when completedAt is stale —
+ * fresh enqueues set pending without startedAt and must not be claimable.
+ */
+export function buildRetryablePathwayStatusFilter(): Record<string, unknown> {
+  const cutoff = new Date(Date.now() - STALE_PATHWAY_PENDING_MS)
+  const clientCutoff = new Date(Date.now() - PATHWAY_CLIENT_STUCK_MS)
+  const unstartedStartedAt = {
+    $or: [
+      { pathwayGenerationStartedAt: { $exists: false } },
+      { pathwayGenerationStartedAt: null },
+    ],
+  }
+  return {
+    $or: [
+      { pathwayGenerationStatus: 'failed' },
+      { pathwayGenerationStatus: { $exists: false } },
+      { pathwayGenerationStatus: null },
+      {
+        pathwayGenerationStatus: 'pending',
+        pathwayGenerationAttempts: { $in: [0, null] },
+        $or: [
+          { pathwayGenerationStartedAt: { $lte: cutoff } },
+          { $and: [unstartedStartedAt, { completedAt: { $lte: cutoff } }] },
+          { $and: [unstartedStartedAt, { completedAt: { $lte: clientCutoff } }] },
+        ],
+      },
+      { pathwayGenerationStatus: 'running', pathwayGenerationStartedAt: { $lte: cutoff } },
+    ],
   }
 }
