@@ -6,8 +6,9 @@
   },
   "full": {
     "mode": "full",
-    "questions": 3,
-    "description": "60 cells — full domain×depth×persona matrix"
+    "questions": 6,
+    "duration": 10,
+    "description": "60 cells — full domain×depth×persona matrix, 6 questions × 10min per cell"
   },
   "ci-smoke": {
     "mode": "smoke",
@@ -21,5 +22,10 @@
     "duration": 10,
     "maxCells": 3,
     "description": "3 full 10-min interviews × 6 questions each — pathway + scoring validation"
+  },
+  "ui-smoke": {
+    "mode": "ui-smoke",
+    "questions": 0,
+    "description": "6 cells — lobby → interview room, TTS stream TTFB ≤600ms, Deepgram WS"
   }
 }

@@ -56,7 +56,7 @@ describe('canEnqueuePathwayRegeneration', () => {
     expect(canEnqueuePathwayRegeneration('sess-1', evals)).toBe(false)
   })
 
-  it('requires at least three answered questions', () => {
+  it('requires at least three answered questions for behavioral sessions', () => {
     expect(
       canEnqueuePathwayRegeneration('sess-1', [{ questionIndex: 0 }, { questionIndex: 1 }], 2),
     ).toBe(false)
@@ -67,6 +67,15 @@ describe('canEnqueuePathwayRegeneration', () => {
         3,
       ),
     ).toBe(true)
+  })
+
+  it('allows one substantive submission for coding interviews', () => {
+    expect(
+      canEnqueuePathwayRegeneration('sess-1', [{ questionIndex: 0 }], 1, 'coding'),
+    ).toBe(true)
+    expect(
+      canEnqueuePathwayRegeneration('sess-1', [], 0, 'coding'),
+    ).toBe(false)
   })
 })
 
@@ -99,10 +108,11 @@ describe('enqueuePathwayRegeneration', () => {
       { pathwayGenerationStatus: { $exists: false } },
       { pathwayGenerationStatus: null },
     ])
-    expect(update.$set).toEqual({
+    expect(update.$set).toMatchObject({
       pathwayGenerationStatus: 'pending',
       pathwayGenerationUseSynthesizedFeedback: false,
     })
+    expect(update.$set.pathwayGenerationStartedAt).toBeInstanceOf(Date)
     expect(update.$unset).toEqual({ pathwayGenerationError: 1 })
 
     expect(mockInngestSend).toHaveBeenCalledWith({

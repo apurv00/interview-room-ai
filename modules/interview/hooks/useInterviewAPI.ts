@@ -71,6 +71,14 @@ export interface FlowHints {
   phase: string
   totalSlots: number
   remainingMustSlots: number
+  /** Active template slot id — used by QA harness for answer routing */
+  slotId?: string
+  /** Competency bucket for diversity + QA strong-answer routing */
+  competencyBucket?: string
+  slotLabel?: string
+  slotIndex?: number
+  domain?: string
+  depth?: string
 }
 
 export interface UseInterviewAPIReturn {

@@ -15,6 +15,7 @@ export function loadDotEnvLocal(keys = null) {
       'NEXTAUTH_SECRET',
       'MONGODB_URI',
       'MONGODB_URI_PROD',
+      'LINEAR_API_KEY',
       'INNGEST_EVENT_KEY',
       'INNGEST_SIGNING_KEY',
     ])

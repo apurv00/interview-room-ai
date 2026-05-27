@@ -35,17 +35,52 @@ const makePathway = (overrides: Partial<IPathwayPlan> = {}): IPathwayPlan =>
   }) as IPathwayPlan
 
 describe('pathway loader — local integration', () => {
-  it('coding-style failure: no enqueue, unchanged plan, no perpetual pending', () => {
+  it('coding session with one substantive submission: eligible enqueue and pathway update', () => {
+    expect(
+      canEnqueuePathwayRegeneration(
+        'sess',
+        [{ questionIndex: 0 }],
+        1,
+        'coding',
+      ),
+    ).toBe(true)
+
+    const update = getPathwayUpdateEligibility({
+      answeredCount: 1,
+      interviewType: 'coding',
+      pathwayPlannerEnabled: true,
+      feedback: { overall_score: 78 },
+      evaluationCount: 1,
+      pathwayGenerationStatus: null,
+    })
+    expect(update.reason).toBe('eligible')
+    expect(update.canEnqueue).toBe(true)
+
+    const vm = buildPathwayViewModel({
+      pathway: makePathway(),
+      competencySummary: null,
+      weaknesses: [],
+      fromFeedback: 'coding-session',
+      pathwayUpdate: update,
+    })
+    expect(vm.pathwayUpdate?.reason).toBe('eligible')
+    expect(vm.pathwayUpdate?.canEnqueue).toBe(true)
+    expect(vm.state).not.toBe('unchanged')
+  })
+
+  it('behavioral session with two answers: still insufficient for pathway', () => {
     expect(
       canEnqueuePathwayRegeneration(
         'sess',
         [{ questionIndex: 0 }, { questionIndex: 1 }],
         2,
+        'behavioral',
       ),
     ).toBe(false)
 
     const update = getPathwayUpdateEligibility({
       answeredCount: 2,
+      interviewType: 'behavioral',
       pathwayPlannerEnabled: true,
       feedback: null,
       evaluationCount: 2,
@@ -53,17 +88,6 @@ describe('pathway loader — local integration', () => {
     })
     expect(update.reason).toBe('insufficient_answers')
     expect(update.poll).toBe(false)
-
-    const vm = buildPathwayViewModel({
-      pathway: makePathway(),
-      competencySummary: null,
-      weaknesses: [],
-      fromFeedback: 'short-coding-session',
-      pathwayUpdate: update,
-    })
-    expect(vm.state).toBe('unchanged')
-    expect(vm.planItems).toHaveLength(1)
-    expect(vm.nextAction.id).toBe('retake-interview')
   })
 
   it('eligible session in flight: pending + poll, plan items preserved', () => {

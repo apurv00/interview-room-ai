@@ -8,6 +8,7 @@ import type {
   InterviewState,
   TranscriptEntry,
   AnswerEvaluation,
+  DesignSubmission,
   SpeechMetrics,
   PerformanceSignal,
   ProbeType,
@@ -20,6 +21,7 @@ import {
   WRAP_UP_LINE,
   getQuestionCount,
 } from '@interview/config/interviewConfig'
+import { getPlannedQuestionCountForFeedback } from '@interview/services/eval/sessionScoringPolicy'
 import { deriveCoachingTip } from '@interview/config/coachingTips'
 import { isThinkingHeavyDepth, computeIntentionalSilenceWindow } from '@interview/config/silenceWindow'
 import { STORAGE_KEYS, sessionScopedKey } from '@shared/storageKeys'
@@ -76,6 +78,81 @@ interface UseInterviewOptions {
   onRecordingStop?: () => void | Promise<void>
   currentProblem?: { id: string; title: string; description: string } | null
   currentDesignProblem?: { id: string; title: string; description: string; requirements: string[] } | null
+}
+
+function boundedScore(value: unknown): number {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return 0
+  return Math.max(0, Math.min(100, Math.round(n)))
+}
+
+function boundedQuestionIndex(value: unknown, fallback: number): number {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return fallback
+  return Math.max(0, Math.min(100, Math.round(n)))
+}
+
+function clampForFeedback(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text
+  return `${text.slice(0, Math.max(0, maxLength - 27))}\n[truncated for feedback]`
+}
+
+function feedbackFlags(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((f): f is string => typeof f === 'string')
+    .slice(0, 20)
+    .map((f) => clampForFeedback(f, 500))
+}
+
+function codeEvaluationToAnswerEvaluation(
+  evaluation: Record<string, unknown>,
+  problem: { title: string; description: string },
+  submission: { code: string; language: string },
+): AnswerEvaluation {
+  const feedback = typeof evaluation.feedback === 'string' ? evaluation.feedback : undefined
+  return {
+    questionIndex: boundedQuestionIndex(evaluation.questionIndex, 1),
+    question: clampForFeedback(`Coding challenge: ${problem.title}. ${problem.description}`, 2000),
+    answer: clampForFeedback(submission.code, 10000),
+    relevance: boundedScore(evaluation.correctness),
+    structure: boundedScore(evaluation.code_quality),
+    specificity: boundedScore(evaluation.efficiency),
+    ownership: boundedScore(evaluation.edge_cases ?? evaluation.communication),
+    primaryGap: 'technical_accuracy',
+    primaryStrength: 'code_quality',
+    answerSummary: feedback || `Submitted ${submission.language} solution for ${problem.title}.`,
+    flags: feedbackFlags(evaluation.flags),
+    status: 'ok',
+    probeDecision: { shouldProbe: false },
+  }
+}
+
+function designEvaluationToAnswerEvaluation(
+  evaluation: Record<string, unknown>,
+  problem: { title: string; description: string },
+  submission: DesignSubmission,
+): AnswerEvaluation {
+  const feedback = typeof evaluation.feedback === 'string' ? evaluation.feedback : undefined
+  const componentLabels = submission.components.map((c) => c.label).join(', ')
+  return {
+    questionIndex: boundedQuestionIndex(evaluation.questionIndex ?? submission.questionIndex, 1),
+    question: clampForFeedback(`System design challenge: ${problem.title}. ${problem.description}`, 2000),
+    answer: clampForFeedback(
+      `Design diagram with ${submission.components.length} components and ${submission.connections.length} connections: ${componentLabels}`,
+      10000,
+    ),
+    relevance: boundedScore(evaluation.requirements_clarity ?? evaluation.architecture),
+    structure: boundedScore(evaluation.architecture),
+    specificity: boundedScore(evaluation.scalability),
+    ownership: boundedScore(evaluation.tradeoffs ?? evaluation.communication),
+    primaryGap: 'system_design',
+    primaryStrength: 'architecture',
+    answerSummary: feedback || `Submitted architecture diagram for ${problem.title}.`,
+    flags: feedbackFlags(evaluation.flags),
+    status: 'ok',
+    probeDecision: { shouldProbe: false },
+  }
 }
 
 // ─── Hook return ──────────────────────────────────────────────────────────────
@@ -1171,6 +1248,12 @@ export function useInterview({
             evaluations: evaluationsRef.current,
             speechMetrics: speechMetricsRef.current,
             sessionId: sid,
+            plannedQuestionCount: getPlannedQuestionCountForFeedback(
+              config.interviewType,
+              config.duration,
+            ),
+            answeredCount: evaluationsRef.current.length,
+            endReason,
           }),
         })
           .then(checkOk)
@@ -1978,9 +2061,19 @@ export function useInterview({
             }),
           })
           if (evalRes.ok) {
-            const evaluation = await evalRes.json()
-            feedbackText = evaluation.feedback || feedbackText
-            const avgScore = ((evaluation.correctness || 0) + (evaluation.efficiency || 0) + (evaluation.code_quality || 0)) / 3
+            const evaluation = (await evalRes.json()) as Record<string, unknown>
+            const feedback = typeof evaluation.feedback === 'string' ? evaluation.feedback : undefined
+            feedbackText = feedback || feedbackText
+            evaluationsRef.current = [
+              ...evaluationsRef.current,
+              codeEvaluationToAnswerEvaluation(evaluation, problem, submission),
+            ]
+            performanceSignalRef.current = computePerformanceSignal()
+            const avgScore = (
+              boundedScore(evaluation.correctness) +
+              boundedScore(evaluation.efficiency) +
+              boundedScore(evaluation.code_quality)
+            ) / 3
             setAvatarEmotion(avgScore >= 70 ? 'impressed' : avgScore >= 40 ? 'friendly' : 'curious')
           }
         } catch { /* continue with default feedback */ }
@@ -2097,13 +2190,23 @@ export function useInterview({
             }),
           })
           if (evalRes.ok) {
-            const evaluation = await evalRes.json()
-            feedbackText = evaluation.feedback || feedbackText
-            const avgScore = ((evaluation.architecture || 0) + (evaluation.scalability || 0) + (evaluation.requirements_clarity || 0)) / 3
+            const evaluation = (await evalRes.json()) as Record<string, unknown>
+            const feedback = typeof evaluation.feedback === 'string' ? evaluation.feedback : undefined
+            feedbackText = feedback || feedbackText
+            evaluationsRef.current = [
+              ...evaluationsRef.current,
+              designEvaluationToAnswerEvaluation(evaluation, problem, submission),
+            ]
+            performanceSignalRef.current = computePerformanceSignal()
+            const avgScore = (
+              boundedScore(evaluation.architecture) +
+              boundedScore(evaluation.scalability) +
+              boundedScore(evaluation.requirements_clarity)
+            ) / 3
             setAvatarEmotion(avgScore >= 70 ? 'impressed' : avgScore >= 40 ? 'friendly' : 'curious')
 
             // Add follow-up question if provided
-            if (evaluation.follow_up_question) {
+            if (typeof evaluation.follow_up_question === 'string') {
               feedbackText += ` ${evaluation.follow_up_question}`
             }
           }

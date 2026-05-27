@@ -1,6 +1,6 @@
 # QA Agent v3 — Multi-Agent Architecture Plan
 
-Status: **planning** · Baseline: harness v2.0.0 (inject) · Target: unattended prod matrix with per-activity telemetry + LLM triage
+Status: **Phase 4 in progress** · Baseline: `qa-browser-full-1779529900005` · See also: `FULL_PLAN.md`
 
 ---
 
@@ -16,9 +16,9 @@ Status: **planning** · Baseline: harness v2.0.0 (inject) · Target: unattended 
 
 ## Non-goals (v3)
 
-- Full live-interview UI (TTS, Deepgram WS, avatar lip-sync) — separate **UI smoke** pipeline later
 - Replacing human P0 sign-off before release
 - LLM-judging every eval row (180+ calls per run)
+- Linear ticket sync (optional; skipped in current rollout)
 
 ---
 
@@ -467,7 +467,8 @@ scripts/
 - [x] Automation login API (`POST /api/qa/automation-login`) — no manual cookie paste
 - [x] `playwrightMatrix.mjs` runs matrix via injected harness v2.1
 - [x] Per-activity files + Playwright console/network sidecars
-- [x] `run-manifest.json` + `--resume` (full re-run if incomplete)
+- [x] `run-manifest.json` + `--resume` (cell offset merge from partial `matrix-report.json`)
+- [x] Per-cell retry (`cellRetry=1`) + quota abort on HTTP 402/403
 - [x] CLI `scripts/qa-v3-matrix.mjs` + npm scripts
 - [x] `mini-smoke` profile: 3 cells × 6Q × 10min — validated prod (`qa-browser-smoke-1779718960245`)
 
@@ -475,7 +476,8 @@ scripts/
 
 ### Phase 3.2 — Observer agent (2 days)
 
-- [x] `observer.mjs` + `qa-v3-observe.mjs` (rule-based v1; LLM upgrade path documented)
+- [x] `observer.mjs` + `qa-v3-observe.mjs` (rule-based v1)
+- [x] `llmObserver.mjs` + `--llm` flag (Anthropic Haiku, cap 50 calls)
 - [x] Failure + 5% sample triggers
 - [x] `observations/*.json` output
 - [x] Wired via `--observe` on `qa-v3-matrix.mjs`
@@ -485,7 +487,7 @@ scripts/
 ### Phase 3.3 — Infra verifier (1–2 days)
 
 - [x] Mongo batch pathway status query (`interviewsessions` collection)
-- [x] Inngest function checklist (manual when `--prod`)
+- [x] Inngest automated check via `GET /api/inngest` (`inngestCheck.mjs`)
 - [x] `infra-report.json`
 - [x] Wired via `--infra` on `qa-v3-matrix.mjs`
 - [ ] Set `MONGODB_URI_PROD` in `.env.local` for prod pathway verification
@@ -494,17 +496,40 @@ scripts/
 
 ### Phase 3.4 — Triage + report (2 days)
 
-- [ ] `triage.ts` merges all signals
-- [ ] Baseline diff command
-- [ ] Update `REPORT_STRUCTURE.md` for telemetry sections
+- [x] `triage.mjs` merges Observer + Infra + telemetry + manual findings
+- [x] `qa-v3-triage.mjs`, `qa-v3-diff.mjs`, `qa-v3-report.mjs` CLI
+- [x] `baselineDiff.mjs` — metrics diff vs `qa-browser-full-1779529900005`
+- [x] `findingsExporter.mjs` (Linear sync optional — not required for GA)
+- [x] Report generator reads `triage-summary.json` + `baseline-diff.json`
+- [x] Resolved P0 no longer shown as active ship blockers
+- [x] Wired: `--report` runs triage → MD (observe/infra/triage order in matrix CLI)
+- [ ] Set `LINEAR_API_KEY` only if enabling `--linear` ticket sync
 
 **Exit criteria:** Single command produces MD + findings with links to activity files.
 
-### Phase 3.5 — UI smoke mode (later)
+### Phase 3.5 — UI smoke mode
 
-- [ ] Separate profile: 6 cells, real `/interview` room
-- [ ] Capture `/api/tts/stream` TTFB, Deepgram WS frames
-- [ ] Not part of initial v3 GA
+- [x] `playwrightUiSmoke.mjs` + `qa-v3-ui-smoke.mjs`
+- [x] Profile `ui-smoke`: 6 cells, lobby → `/interview`
+- [x] Capture `/api/tts/stream` TTFB (budget ≤600ms) + Deepgram WS detection
+- [x] npm: `qa:v3:ui-smoke:prod`
+
+**Exit criteria:** UI smoke passes on prod for all 6 smoke cells before full matrix GA.
+
+### Phase 4 — SDK agents + matrix fidelity + GA gate
+
+- [x] `sdkClient.mjs` — `@cursor/sdk` + Anthropic fallback
+- [x] `sdkTriage.mjs` — 1 structured call per run (`--sdk` on triage/report)
+- [x] `reporterNarrative.mjs` — `narrative.md` (`--narrative` on report)
+- [x] Harness **v2.3.0** — real `generate-problem` → `evaluate-code`, `evaluate-design`
+- [x] Infra `analysis-failure-rate` batch (Mongo `multimodalanalyses`)
+- [x] `qa:v3:gate:prod` — preflight → ui-smoke → mini-smoke
+- [ ] UI smoke prod re-validation (TTS budget)
+- [ ] Coding/system-design UI smoke (Monaco submit, canvas)
+- [ ] Inngest orphan `pathway/regenerate` events check (needs events API creds)
+- [ ] First unattended **60-cell prod matrix** (v3 GA)
+
+**Exit criteria:** `npm run qa:v3:gate:prod` green; full matrix completes; SDK triage + narrative in run dir.
 
 ---
 
@@ -516,7 +541,7 @@ scripts/
 | Final JSON only | Per-activity telemetry |
 | Manual triage | Observer + Triage agents |
 | `npm run qa:report:browser` | `npm run qa:v3:report` (wraps same generator) |
-| `qa-matrix-runner.js` v2.0.0 | v2.1 activity hooks → v3 runner loads same file |
+| `qa-matrix-runner.js` v2.0.0 | v2.2 activity hooks + resume/retry/quota |
 
 **Tonight:** Can still run v2 inject while building 3.0.
 **v3 GA:** When Phase 3.1 passes one full unattended prod run.

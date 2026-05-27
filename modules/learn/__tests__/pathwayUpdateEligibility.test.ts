@@ -6,6 +6,18 @@ import {
 } from '../services/pathwayUpdateEligibility'
 
 describe('getPathwayUpdateEligibility', () => {
+  it('allows coding sessions with one scored answer', () => {
+    const result = getPathwayUpdateEligibility({
+      answeredCount: 1,
+      interviewType: 'coding',
+      pathwayPlannerEnabled: true,
+      feedback: { overall_score: 82 },
+      evaluationCount: 1,
+    })
+    expect(result.reason).toBe('eligible')
+    expect(result.canEnqueue).toBe(true)
+  })
+
   it('blocks enqueue and retry when fewer than three answers', () => {
     const result = getPathwayUpdateEligibility({
       answeredCount: 2,

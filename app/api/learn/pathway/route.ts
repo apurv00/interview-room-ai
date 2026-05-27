@@ -78,6 +78,7 @@ export const GET = composeApiRoute({
 
           pathwayUpdate = getPathwayUpdateEligibility({
             answeredCount: sess?.answeredCount ?? sess?.evaluations?.length ?? 0,
+            interviewType: sess?.config?.interviewType,
             pathwayPlannerEnabled: isFeatureEnabled('pathway_planner'),
             feedback: sess?.feedback ?? null,
             pathwayGenerationStatus: feedbackSessionStatus,

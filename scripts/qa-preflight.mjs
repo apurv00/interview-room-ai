@@ -8,6 +8,7 @@ import path from 'node:path';
 import { validateStorageState } from '../modules/qa/runner/validateAuth.mjs';
 import { defaultAuthPath } from '../modules/qa/orchestrator/runManifest.mjs';
 import { qaAutomationConfig, loadQaEnv } from '../modules/qa/runner/loadEnv.mjs';
+import { checkInngestEndpoint } from '../modules/qa/agents/inngestCheck.mjs';
 
 loadQaEnv();
 
@@ -37,10 +38,18 @@ function warn(name, detail) {
 const runnerPath = path.join(process.cwd(), 'modules/qa/browser/qa-matrix-runner.js');
 const runner = fs.readFileSync(runnerPath, 'utf8');
 const version = runner.match(/HARNESS_VERSION = '([^']+)'/)?.[1] ?? 'unknown';
-if (version.startsWith('2.')) {
+if (version.startsWith('2.4')) {
+  pass('Harness', `v${version} (flowMeta bucket routing + G1/G2/G3 gates)`);
+} else if (version.startsWith('2.')) {
   pass('Harness', `v${version} (telemetry + pathway poll + strong persona)`);
 } else {
-  warn('Harness', `v${version} — expected v2.1.x for v3 build`);
+  warn('Harness', `v${version} — expected v2.4.x for flowMeta routing`);
+}
+
+if (!runner.includes('pickStrongAnswer') || runner.includes('kwMatch')) {
+  fail('Harness routing', 'Expected pickStrongAnswer (flowMeta); found legacy kwMatch');
+} else {
+  pass('Harness routing', 'Competency-bucket routing (no keyword map)');
 }
 
 if (!runner.includes("'succeeded'") || /pathwayGenerationStatus[\s\S]{0,120}'completed'/.test(runner)) {
@@ -81,7 +90,13 @@ if (!prod) {
     warn('Inngest dev', 'not running — npm run dev:inngest (only needed for local runs)');
   }
 } else {
-  warn('Inngest Cloud', 'Manually verify 8 functions including pathway-regenerate in Inngest dashboard');
+  try {
+    const inngestCheck = await checkInngestEndpoint({ baseUrl: base })
+    if (inngestCheck.ok) pass('Inngest Cloud', inngestCheck.message);
+    else fail('Inngest Cloud', inngestCheck.message);
+  } catch (e) {
+    fail('Inngest Cloud', e.message);
+  }
 }
 
 // v3 Playwright auth

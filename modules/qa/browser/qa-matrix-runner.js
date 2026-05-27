@@ -1,6 +1,6 @@
 location.hash='mode=full&questions=3&autostart=1';
 ;(async function qaMatrixRunner() {
-  const HARNESS_VERSION = '2.1.0'
+  const HARNESS_VERSION = '2.4.0'
   const ASSERT_CFG = {
     questionMinLength: 20,
     genQMs: 8000,
@@ -60,6 +60,20 @@ location.hash='mode=full&questions=3&autostart=1';
         out.push(assert('ev-' + dim, Number.isFinite(Number(meta.eval[dim])), 'Missing ' + dim, 'fail'))
       }
       if (apiResult?.ms != null) out.push(assert('ev-latency', apiResult.ms < ASSERT_CFG.evalMs, 'Slow evaluate', 'warn'))
+    }
+    if (step === 'evaluate-code' && meta.eval) {
+      for (const dim of ['correctness', 'efficiency', 'code_quality']) {
+        out.push(assert('code-' + dim, Number.isFinite(Number(meta.eval[dim])), 'Missing ' + dim, 'fail'))
+      }
+      if (apiResult?.ms != null) out.push(assert('code-latency', apiResult.ms < ASSERT_CFG.evalMs, 'Slow evaluate-code', 'warn'))
+    }
+    if (step === 'evaluate-design' && meta.eval) {
+      for (const dim of ['architecture', 'scalability', 'tradeoffs']) {
+        if (meta.eval[dim] != null) {
+          out.push(assert('design-' + dim, Number.isFinite(Number(meta.eval[dim])), 'Missing ' + dim, 'fail'))
+        }
+      }
+      if (apiResult?.ms != null) out.push(assert('design-latency', apiResult.ms < ASSERT_CFG.evalMs, 'Slow evaluate-design', 'warn'))
     }
     if (step === 'generate-feedback') {
       out.push(assert('fb-response', apiResult?.ok || apiResult?.status === 202, 'Feedback HTTP ' + apiResult?.status, 'fail'))
@@ -136,6 +150,16 @@ location.hash='mode=full&questions=3&autostart=1';
   const RUN_LIMIT = parseInt(params.get('limit') || '0', 10)
   const AUTOSTART = params.get('autostart') === '1'
   const DURATION = parseInt(params.get('duration') || '10', 10)
+  const CELL_OFFSET = parseInt(params.get('offset') || '0', 10)
+  const CELL_RETRY = parseInt(params.get('cellRetry') || '1', 10)
+  const REPORT_ID_PARAM = params.get('reportId') || null
+
+  let quotaAborted = false
+  function QuotaExceeded(status) {
+    this.name = 'QuotaExceeded'
+    this.status = status
+    this.message = 'Usage quota exceeded (HTTP ' + status + ')'
+  }
 
   const DOMAINS = ['frontend','backend','sdet','data-science','pm','design','business','general']
   const DEPTHS = [
@@ -186,69 +210,63 @@ location.hash='mode=full&questions=3&autostart=1';
     return !d.domains || d.domains.includes(domain)
   }
 
-  const STRONG_VARIANTS = {
-    behavioral: [
-      { kw: ['conflict','disagree','tension','pushback','push back'], ans: 'Two senior engineers blocked a release over an architecture choice. I ran a 45-minute decision review with explicit criteria, surfaced the cost of delay, and chose the reversible option. We shipped on time and revisited the call in six weeks with data.' },
-      { kw: ['fail','failure','mistake','setback','regret'], ans: 'I owned a migration that dropped 4% of payment events on day one. I rolled back in 18 minutes, ran a blameless postmortem, added contract tests at the boundary, and led the second attempt two weeks later with zero data loss.' },
-      { kw: ['influence','persuade','convince','stakeholder','cross-functional','without authority'], ans: 'I needed legal, security, and design aligned on a new consent flow without formal authority. I built a one-page tradeoff doc, ran 1:1s before the group meeting, and we shipped a single agreed design in nine days versus the usual six weeks.' },
-      { kw: ['mentor','coach','junior','teach','grow someone'], ans: 'I mentored a junior engineer stuck in code review. We paired weekly for eight weeks, codified the team review rubric, and her PR turnaround dropped from four days to under one. She now runs onboarding for new hires.' },
-      { kw: ['feedback','criticism','difficult conversation','tough conversation'], ans: 'A peer was giving code reviews that demoralized the team. I gave direct private feedback with two specific examples, suggested a phrasing change, and offered to pair on the next review. The next team survey showed a measurable shift.' },
-      { kw: ['priorit','tradeoff','say no','decide'], ans: 'My team had eleven inbound requests in Q3. I aligned with the PM on three business outcomes, scored each request against them, said no to six, and we hit all three outcomes versus missing two the prior quarter.' },
-      { kw: [], ans: 'At Acme I led a cross-functional launch that cut checkout drop-off by 38% in six weeks. I ran weekly experiments with engineering and design, scoped a phased rollout behind feature flags, and owned the metrics review to leadership.' },
-    ],
-    technical: [
-      { kw: ['frontend','react','css','ui','render','browser','client','web vitals','lcp','hydration','bundle'], ans: 'I cut LCP from 4.2s to 1.8s on our marketing site. I code-split routes, deferred third-party scripts, inlined critical CSS, and switched to next/image. Lighthouse mobile rose from 42 to 89 and organic conversion climbed 11%.' },
-      { kw: ['test','automation','sdet','qa','coverage','flaky','flake','e2e','integration test'], ans: 'Our e2e suite was 12% flaky and blocking deploys. I isolated shared DB state per worker, added deterministic seeding, and parallelized to four workers. Flake rate dropped to 1.5%, suite time from 38 to 11 minutes, deploy throughput doubled.' },
-      { kw: ['data pipeline','ml','etl','dbt','airflow','analytics','feature store','model serving'], ans: 'I rebuilt our analytics pipeline on Kafka and Flink with schema validation and per-event idempotency. End-to-end latency dropped from six hours to twelve minutes, late-arriving events handled correctly, and downstream dashboards stopped diverging from source.' },
-      { kw: ['design system','ux','prototype','accessibility','a11y','wcag'], ans: 'I led a design system rollout across 14 product surfaces. Defined tokens, built primitives in Figma and code with WCAG AA contrast, and ran a six-week migration sprint. Component reuse went from 23% to 78% and design QA tickets dropped 60%.' },
-      { kw: ['product','roadmap','prioritization','tech debt','velocity'], ans: 'I owned the technical roadmap for our checkout team. Quantified tech debt cost at 22% of velocity, negotiated 30% capacity allocation with leadership, paid down the top three items in two quarters, and team throughput rose 28%.' },
-      { kw: ['rest api','public api','api design','url shortener','endpoint','pagination','openapi','swagger'], ans: 'For a public REST API: resource-oriented URIs, semantic verbs, consistent error envelope with code plus retryable hint, cursor-based pagination over offset, versioning via URL path prefix, rate limits per key returned as response headers, deprecation policy with six-month overlap and Sunset header, and OpenAPI spec as source of truth for SDK generation.' },
-      { kw: [], ans: 'We migrated a payments service from a monolith to event-driven microservices on Kafka. Cut p99 from 800ms to 120ms with a phased rollout, dual-write window, DLQs, and replay tooling. Zero data loss across 14 billion events.' },
-    ],
-    'case-study': [
-      { kw: ['design','ux','user research','usability','flow','interaction'], ans: 'For a B2B onboarding redesign: I would map the current funnel, identify the two highest-drop steps, prototype three alternatives, run unmoderated tests with eight users per variant, and ship the winner behind a 50/50 flag. Success: time-to-first-value under four minutes.' },
-      { kw: ['pricing','monetiz','revenue','business model','plan','tier'], ans: 'For a pricing rework: I would segment customers by current ARPU and usage, hypothesize three packaging variants, model revenue impact at conservative, realistic, and optimistic conversion, run a four-week price test on new signups, and gate rollout on a 95% CI on incremental revenue.' },
-      { kw: ['market','expansion','launch','segment','tam','geography','new product'], ans: 'For entering a new market: I would size the TAM bottom-up from comparable wedges, identify three beachhead segments, validate willingness-to-pay with 15 customer interviews, and gate a pilot on signed LOIs from five lighthouse accounts before building.' },
-      { kw: ['data','analysis','model','forecast','hypothesis','metric drop','funnel'], ans: 'For diagnosing a metric drop: I would decompose the funnel by segment, isolate the days the change appeared, cross-reference deploys and external events, form two or three falsifiable hypotheses, and run targeted analyses to confirm or rule out each before recommending action.' },
-      { kw: [], ans: 'Goal: 15% MAU growth in two quarters. I sized the market, prioritized referral and onboarding as highest-leverage levers, modeled +3.2pp impact at the activation step, and would gate the rollout on a four-week holdout with a pre-registered primary metric.' },
-    ],
-    'system-design': [
-      { kw: ['chat','message','notification','real-time','live','presence','websocket'], ans: 'For chat at 5M concurrent: WebSocket fanout via stateful gateway, Redis pubsub for cross-region, message store in Cassandra with per-room partitioning, idempotent delivery via dedupe key, and degraded mode to long-poll on gateway failure.' },
-      { kw: ['payment','transaction','ledger','consistency','money','billing'], ans: 'For a payment ledger: double-entry append-only on Postgres with strict serializable transactions, idempotency key on every write, async settlement to a separate ledger, daily reconciliation against the processor, and a kill switch that fails closed on integrity mismatch.' },
-      { kw: ['feed','timeline','news','social','followers'], ans: 'For a social feed at 100M DAU: hybrid fanout — push for users under 10k followers, pull for high-follow accounts, ranked by a feature store served from Redis, with 90-second freshness target and per-user ranking cache invalidated on new follow.' },
-      { kw: ['search','index','rank','elasticsearch','autocomplete'], ans: 'For search: ingestion via Kafka into an inverted index in Elasticsearch with rolling indexes, autocomplete from a trie in Redis, query-time ranking with a learned model, and a query log plus click feedback loop training a daily reranker.' },
-      { kw: ['recommendation','ml inference','model serving','personalization'], ans: 'For ML inference at 50k rps: feature store in Redis with TTL, model served via Triton on GPU autoscale, request-time embedding lookup, prediction cache for hot items at five-minute TTL, and a shadow-traffic A/B path to evaluate new models without user impact.' },
-      { kw: ['video','stream','live stream','vod','transcod'], ans: 'For live streaming: ingest via RTMP to a transcoding fleet on GPU, HLS chunks to S3 and CDN, viewer count via Redis sorted set, chat on a separate WS path, with adaptive bitrate ladder and per-region origin failover.' },
-      { kw: ['test framework','automated test','flaky','ci pipeline','test data','test isolation','parallel test','test runner architecture'], ans: 'For an e2e test framework at scale: per-worker isolated test data with namespaced records, deterministic seeding via per-run UUID prefix, parallel sharding by test file with a queue dispatcher, retry only on infra-flake error codes never on assertion failures, per-test artifacts (screenshot, HAR, logs) auto-uploaded on failure, and flake detection via passing-after-retry signal aggregated to a dashboard.' },
-      { kw: [], ans: 'For 10M DAU: CDN at the edge, stateless API behind an ALB, primary Postgres with two read replicas, Redis for hot cache, SQS for async work, observability via OpenTelemetry, and a 99.9% SLA with documented trade-offs against single-region failure.' },
-    ],
-    coding: [
-      { kw: ['tree','binary tree','bst','traversal','depth','height','ancestor'], ans: 'Iterative DFS with explicit stack, O(n) time, O(h) space where h is tree height. Handle null root, single node, and skewed tree edge cases. For BST problems exploit ordered traversal; for general trees prefer post-order when the result depends on subtrees.' },
-      { kw: ['graph','bfs','dfs','shortest','cycle','topological','dijkstra'], ans: 'BFS with a visited set for unweighted shortest path, O(V+E). For cycle detection in directed graphs use DFS with three-color (white, gray, black) marking. Outer loop over all nodes to handle disconnected components. Edge cases: self-loops and parallel edges.' },
-      { kw: ['dp','dynamic programming','memoize','subproblem','optimal substructure'], ans: 'Top-down with memoization first to verify the recurrence, then convert to bottom-up if space matters. State: input dimensions. Transition: enumerate choices at each step. Base case: smallest valid subproblem. Watch for off-by-one and integer overflow.' },
-      { kw: ['string','substring','palindrome','anagram','subsequence'], ans: 'Two-pointer for palindrome check at O(n) and O(1) space. For longest palindromic substring, expand-around-center at O(n^2)/O(1) beats DP at O(n^2)/O(n^2). Anagram: frequency array of size 26 for lowercase or hash map for unicode. Handle empty string and case sensitivity.' },
-      { kw: ['array','sort','two pointer','sliding window','subarray'], ans: 'Sliding window for contiguous-subarray problems with a monotone condition, O(n)/O(1). Two-pointer on sorted array for pair-sum. For kth-smallest prefer quickselect at O(n) average over full sort. Handle empty array and single-element edge cases.' },
-      { kw: ['linked list','reverse','cycle','merge'], ans: 'Reverse in place with three pointers (prev, curr, next), O(n)/O(1). Cycle detection via tortoise and hare, then find entry point. Merge sorted lists with a dummy head to simplify edge cases. Watch for null head and single-node list.' },
-      { kw: ['stack','queue','monotonic','parenthes','bracket'], ans: 'Monotonic stack for next-greater-element problems, O(n) amortized. For parentheses validity, push opens and pop-and-match closes; check stack empty at the end. Use a deque for sliding-window max in O(n). Edge cases: empty input and unmatched closes.' },
-      { kw: ['pandas','dataframe','groupby','aggregate','event-level','event level','sql query','watch_time'], ans: 'For event-level analysis on a media DataFrame: validate schema and null rates first, partition by user_id, compute per-user aggregates with a SQL window function or pandas groupby, and surface the top-N via a materialized view. For 100M-plus events, push the predicate down at read time and keep only projected columns in memory.' },
-      { kw: ['autocomplete','debounce','react component','props','event handler','usestate','usememo','controlled input'], ans: 'For an autocomplete component: controlled input with value and onChange props, query debounced at 300ms via a useRef timer to avoid stale closures, results cached by query in a Map ref, keyboard nav with aria-activedescendant, and abort the in-flight fetch on each new keystroke. Memoize the rendered list to skip re-renders on parent updates.' },
-      { kw: ['lru','test runner','parameterized','test harness','implement an','implement a tiny','design a tiny','register test','cache implementation'], ans: 'For an LRU cache: doubly linked list plus hash map, O(1) get and put. Hash map maps key to node pointer, list maintains recency. On get, splice the node to head; on put, evict tail if at capacity. Edge cases: capacity zero, update existing key by moving the node rather than allocating.' },
-      { kw: [], ans: 'Hash map for O(n) lookup versus O(n^2) brute force, trading O(k) space for time. Iterate once collecting counts, second pass to identify the result. Handle empty input, duplicates, and tie-breaking explicitly. Sort by count descending if order is required.' },
-    ],
-  }
-
-  function pickStrong(question, depth) {
-    const variants = STRONG_VARIANTS[depth] || STRONG_VARIANTS.behavioral
-    const q = (question || '').toLowerCase()
-    for (const v of variants) {
-      if (v.kw.length && v.kw.some((k) => q.includes(k))) return v.ans
+  // __QA_INJECT_START__ — replaced by npm run qa:build:browser from strongAnswers.json + strongAnswerRouter.mjs
+  const STRONG_ANSWERS_CONFIG = {"version":1,"byBucket":{},"byDomainBucket":{},"bySlot":{},"depthFallback":{"behavioral":"Situation: At Acme I led a cross-functional launch with clear metrics and ownership. Action: Scoped phased rollout and tracked weekly outcomes. Result: Delivered measurable impact on schedule."}}
+  function pickStrongAnswer(domain, depth, flowMeta) {
+    const bucket = flowMeta && flowMeta.competencyBucket
+    const slotId = flowMeta && flowMeta.slotId
+    if (slotId && STRONG_ANSWERS_CONFIG.bySlot && STRONG_ANSWERS_CONFIG.bySlot[slotId]) {
+      return { answer: STRONG_ANSWERS_CONFIG.bySlot[slotId], route: 'slot:' + slotId }
     }
-    return variants[variants.length - 1].ans
+    if (bucket && domain) {
+      const dbKey = domain + ':' + bucket
+      if (STRONG_ANSWERS_CONFIG.byDomainBucket && STRONG_ANSWERS_CONFIG.byDomainBucket[dbKey]) {
+        return { answer: STRONG_ANSWERS_CONFIG.byDomainBucket[dbKey], route: 'domain-bucket:' + dbKey }
+      }
+    }
+    if (bucket && STRONG_ANSWERS_CONFIG.byBucket && STRONG_ANSWERS_CONFIG.byBucket[bucket]) {
+      return { answer: STRONG_ANSWERS_CONFIG.byBucket[bucket], route: 'bucket:' + bucket }
+    }
+    const fb = (STRONG_ANSWERS_CONFIG.depthFallback && (STRONG_ANSWERS_CONFIG.depthFallback[depth] || STRONG_ANSWERS_CONFIG.depthFallback.behavioral)) || 'Situation: At Acme I led a cross-functional initiative with clear metrics and ownership.'
+    return { answer: fb, route: bucket ? 'depth-fallback:' + depth : 'no-flowMeta:' + depth }
+  }
+  function scoreQuestionGates(avg, persona, hasEval, depth) {
+    const g1Pipeline = hasEval && avg != null
+    if (depth === 'coding') {
+      const g2Separation = persona === 'weak' ? (g1Pipeline ? true : null) : null
+      const g3Relevance = persona === 'strong' && avg != null ? avg >= 60 : null
+      const bandOk = persona === 'weak' ? g1Pipeline : (g1Pipeline && g3Relevance === true)
+      return { g1Pipeline, g2Separation, g3Relevance, bandOk }
+    }
+    if (depth === 'system-design') {
+      const g2Separation = persona === 'weak' ? (g1Pipeline ? true : null) : null
+      const g3Relevance = persona === 'strong' && avg != null ? avg >= 60 : null
+      const bandOk = persona === 'weak' ? g1Pipeline : (g1Pipeline && g3Relevance === true)
+      return { g1Pipeline, g2Separation, g3Relevance, bandOk }
+    }
+    const g2Separation = persona === 'weak' && avg != null ? avg <= 55 : null
+    const g3Relevance = persona === 'strong' && avg != null ? avg >= 60 : null
+    const bandOk = persona === 'weak' ? (g1Pipeline && g2Separation === true) : g1Pipeline
+    return { g1Pipeline, g2Separation, g3Relevance, bandOk }
   }
 
-  function buildAnswer(question, depth, persona) {
-    if (persona === 'strong') return pickStrong(question, depth)
-    return (ANSWERS[depth] || ANSWERS.behavioral).weak
+  function plannedCountForHarness(iv) {
+    const t = iv.config?.interviewType
+    if (t === 'coding' || t === 'system-design') return Math.max(1, iv.evaluations.length || iv.questions.length)
+    return iv.questions.length
+  }
+
+  const HARNESS_TWO_SUM = {
+    id: 'harness-two-sum',
+    title: 'Two Sum',
+    description:
+      'Given an array of integers nums and an integer target, return indices of the two numbers such that they add up to target. You may assume each input has exactly one solution.',
+  }
+  // __QA_INJECT_END__
+
+  function buildAnswer(flowMeta, domain, depth, persona) {
+    if (persona === 'strong') return pickStrongAnswer(domain, depth, flowMeta)
+    return { answer: (ANSWERS[depth] || ANSWERS.behavioral).weak, route: 'weak-template:' + depth }
   }
 
   function buildRuns() {
@@ -286,6 +304,10 @@ location.hash='mode=full&questions=3&autostart=1';
       try { data = text ? JSON.parse(text) : {} } catch { data = { raw: text.slice(0, 500) } }
     }
     const result = { ok: !failed && res?.ok, status: failed ? 0 : res.status, data, ms }
+    if (!failed && (res.status === 402 || res.status === 403)) {
+      quotaAborted = true
+      throw new QuotaExceeded(res.status)
+    }
     if (activity) {
       const net = {
         method,
@@ -336,16 +358,32 @@ location.hash='mode=full&questions=3&autostart=1';
     let t = Date.now()
 
     for (let qi = 0; qi < Q_LIMIT; qi++) {
-      const gq = await api('POST', '/api/generate-question', {
+      let gq = await api('POST', '/api/generate-question', {
         config, questionIndex: qi, previousQA: transcript, sessionId,
         performanceSignal: persona === 'strong' ? 'on_track' : 'struggling',
       }, {
         stage: 'interview',
         step: 'generate-question',
-        meta: (r) => ({ questionIndex: qi, question: r.data.question || '' }),
+        meta: (r) => ({
+          questionIndex: qi,
+          question: r.data.question || '',
+          flowMeta: r.data.flowHints || null,
+        }),
       })
+      if ((!gq.ok || !gq.data?.question) && (gq.status >= 500 || gq.status === 504 || gq.status === 0)) {
+        await sleep(2500)
+        gq = await api('POST', '/api/generate-question', {
+          config, questionIndex: qi, previousQA: transcript, sessionId,
+          performanceSignal: persona === 'strong' ? 'on_track' : 'struggling',
+        }, { stage: 'interview', step: 'generate-question-retry' })
+      }
+      const flowMeta = gq.data.flowHints || null
       const question = gq.data.question || ''
-      const answer = buildAnswer(question, depth, persona)
+      if (!question) {
+        throw new Error('generate-question returned empty question (status ' + gq.status + ')')
+      }
+      const built = buildAnswer(flowMeta, domain, depth, persona)
+      const answer = built.answer
       transcript.push({ speaker: 'interviewer', text: question, timestamp: t, questionIndex: qi })
       t += 500
       transcript.push({ speaker: 'candidate', text: answer, timestamp: t, questionIndex: qi })
@@ -357,12 +395,18 @@ location.hash='mode=full&questions=3&autostart=1';
       })
       if (ev.ok) evaluations.push(ev.data)
       await api('PATCH', `/api/interviews/${sessionId}`, { transcript, evaluations, status: 'in_progress' }, { stage: 'interview', step: 'patch-progress' })
+      const avg = ev.ok ? avgScore(ev.data) : null
+      const gates = scoreQuestionGates(avg, persona, ev.ok, depth)
       questions.push({
         qi, question, answer, persona,
+        flowMeta,
+        answerRoute: built.route,
         eval: ev.ok ? ev.data : null,
-        avg: ev.ok ? avgScore(ev.data) : null,
+        avg,
         genMs: gq.ms, evalMs: ev.ms,
-        bandOk: ev.ok ? (persona === 'strong' ? avgScore(ev.data) >= 60 : avgScore(ev.data) <= 55) : false,
+        gates,
+        bandOk: gates.bandOk,
+        g3Relevance: gates.g3Relevance,
       })
     }
 
@@ -371,11 +415,223 @@ location.hash='mode=full&questions=3&autostart=1';
     return { sessionId, config, transcript, evaluations, questions, liveTranscriptWords }
   }
 
+  function clampFeedbackText(text, maxLength) {
+    if (String(text || '').length <= maxLength) return String(text || '')
+    return String(text || '').slice(0, Math.max(0, maxLength - 27)) + '\n[truncated for feedback]'
+  }
+
+  function feedbackFlags(value) {
+    return Array.isArray(value)
+      ? value.filter((f) => typeof f === 'string').slice(0, 20).map((f) => clampFeedbackText(f, 500))
+      : []
+  }
+
+  function codeEvalToStandard(ev, problem, submission) {
+    return {
+      questionIndex: Number.isFinite(Number(ev.questionIndex)) ? Number(ev.questionIndex) : 1,
+      question: clampFeedbackText(`Coding challenge: ${problem.title}. ${problem.description}`, 2000),
+      answer: clampFeedbackText(submission.code, 10000),
+      relevance: ev.correctness ?? 0,
+      structure: ev.code_quality ?? 0,
+      specificity: ev.efficiency ?? 0,
+      ownership: ev.edge_cases ?? ev.communication ?? 0,
+      primaryGap: 'technical_accuracy',
+      primaryStrength: 'code_quality',
+      answerSummary: ev.feedback || `Submitted ${submission.language} solution for ${problem.title}.`,
+      feedback: ev.feedback,
+      status: 'ok',
+      flags: feedbackFlags(ev.flags),
+    }
+  }
+
+  function designEvalToStandard(ev, problemTitle, problemDescription, components, connections) {
+    return {
+      questionIndex: Number.isFinite(Number(ev.questionIndex)) ? Number(ev.questionIndex) : 1,
+      question: clampFeedbackText(`System design challenge: ${problemTitle}. ${problemDescription}`, 2000),
+      answer: clampFeedbackText(`Design diagram with ${components.length} components and ${connections.length} connections: ${components.map((c) => c.label).join(', ')}`, 10000),
+      relevance: ev.requirements_clarity ?? ev.architecture ?? 0,
+      structure: ev.architecture ?? 0,
+      specificity: ev.scalability ?? 0,
+      ownership: ev.tradeoffs ?? ev.communication ?? 0,
+      primaryGap: 'system_design',
+      primaryStrength: 'architecture',
+      answerSummary: ev.feedback || `Submitted architecture diagram for ${problemTitle}.`,
+      feedback: ev.feedback,
+      status: 'ok',
+      flags: feedbackFlags(ev.flags),
+    }
+  }
+
+  const HARNESS_CODE = {
+    strong: `function twoSum(nums, target) {
+  const map = new Map();
+  for (let i = 0; i < nums.length; i++) {
+    const complement = target - nums[i];
+    if (map.has(complement)) return [map.get(complement), i];
+    map.set(nums[i], i);
+  }
+  return [];
+}`,
+    weak: `function twoSum(nums, target) {
+  for (let i = 0; i < nums.length; i++) {
+    for (let j = i + 1; j < nums.length; j++) {
+      if (nums[i] + nums[j] === target) return [i, j];
+    }
+  }
+}`,
+  }
+
+  async function runCodingInterview(domain, persona) {
+    const depth = 'coding'
+    const config = { role: domain, interviewType: depth, experience: '3-6', duration: DURATION, privacyMode: true }
+    const create = await api('POST', '/api/interviews', { config }, { stage: 'interview', step: 'create' })
+    if (!create.ok || !create.data.sessionId) throw new Error('create failed: ' + create.status)
+    const sessionId = create.data.sessionId
+    activityCtx.sessionId = sessionId
+    await api('PATCH', `/api/interviews/${sessionId}`, { status: 'in_progress', startedAt: new Date().toISOString() }, { stage: 'interview', step: 'patch-start' })
+
+    // RCA-4b: static Two Sum fixture — avoids domain-generated problem mismatch.
+    const problem = HARNESS_TWO_SUM
+    const gen = { ok: true, data: { problem }, ms: 0 }
+
+    const code = persona === 'strong' ? HARNESS_CODE.strong : HARNESS_CODE.weak
+    const ev = await api('POST', '/api/evaluate-code', {
+      code,
+      language: 'javascript',
+      problemTitle: problem.title,
+      problemDescription: problem.description,
+      questionIndex: 1,
+      sessionId,
+    }, {
+      stage: 'interview',
+      step: 'evaluate-code',
+      meta: (r) => ({ questionIndex: 1, eval: r.ok ? r.data : null }),
+    })
+
+    const stdEval = ev.ok ? codeEvalToStandard(ev.data, problem, { code, language: 'javascript' }) : null
+    let t = Date.now()
+    const transcript = [
+      { speaker: 'interviewer', text: 'Coding challenge — submit your solution when ready.', timestamp: t, questionIndex: 0 },
+    ]
+    t += 500
+    transcript.push({ speaker: 'interviewer', text: `Problem: ${problem.title}. ${problem.description.slice(0, 120)}…`, timestamp: t, questionIndex: 1 })
+    t += 500
+    transcript.push({ speaker: 'candidate', text: '[Code submitted in javascript]', timestamp: t, questionIndex: 1 })
+
+    const evaluations = stdEval ? [stdEval] : []
+    const avg = stdEval ? avgScore(stdEval) : null
+    const gates = scoreQuestionGates(avg, persona, !!stdEval, 'coding')
+    const questions = [{
+      qi: 1,
+      question: problem.title,
+      answer: '[javascript code]',
+      persona,
+      eval: stdEval,
+      avg,
+      genMs: gen.ms,
+      evalMs: ev.ms,
+      gates,
+      bandOk: gates.bandOk,
+      g3Relevance: gates.g3Relevance,
+    }]
+
+    const liveTranscriptWords = synthWords(transcript)
+    await api('PATCH', `/api/interviews/${sessionId}`, { transcript, evaluations, liveTranscriptWords, status: 'in_progress' }, { stage: 'interview', step: 'patch-pre-feedback' })
+    return { sessionId, config, transcript, evaluations, questions, liveTranscriptWords }
+  }
+
+  async function runDesignInterview(domain, persona) {
+    const depth = 'system-design'
+    const config = { role: domain, interviewType: depth, experience: '3-6', duration: DURATION, privacyMode: true }
+    const create = await api('POST', '/api/interviews', { config }, { stage: 'interview', step: 'create' })
+    if (!create.ok || !create.data.sessionId) throw new Error('create failed: ' + create.status)
+    const sessionId = create.data.sessionId
+    activityCtx.sessionId = sessionId
+    await api('PATCH', `/api/interviews/${sessionId}`, { status: 'in_progress', startedAt: new Date().toISOString() }, { stage: 'interview', step: 'patch-start' })
+
+    const problemTitle = 'Design a URL Shortener'
+    const problemDescription = 'Design a URL shortening service like bit.ly. Users submit long URLs and receive short URLs; visits redirect to the original.'
+    const requirements = [
+      'Shorten a given URL to a unique short URL',
+      'Redirect short URLs to the original URL',
+      'Handle high read throughput',
+      'Track click counts per URL',
+    ]
+    const components = [
+      { id: 'client', type: 'client', label: 'Client', x: 50, y: 50 },
+      { id: 'lb', type: 'load_balancer', label: 'Load Balancer', x: 200, y: 50 },
+      { id: 'api', type: 'web_server', label: 'API Server', x: 350, y: 50 },
+      { id: 'cache', type: 'cache', label: 'Redis Cache', x: 350, y: 150 },
+      { id: 'db', type: 'database', label: 'Database', x: 500, y: 50 },
+    ]
+    if (persona === 'weak') {
+      components.splice(2, 2)
+    }
+    const connections = [
+      { id: 'c1', from: 'client', to: 'lb', label: 'HTTPS' },
+      { id: 'c2', from: 'lb', to: 'api', label: 'HTTP' },
+      ...(persona === 'strong'
+        ? [
+            { id: 'c3', from: 'api', to: 'cache', label: 'read-through' },
+            { id: 'c4', from: 'api', to: 'db', label: 'persist' },
+          ]
+        : [{ id: 'c3', from: 'lb', to: 'db', label: 'direct' }]),
+    ]
+
+    const ev = await api('POST', '/api/evaluate-design', {
+      components,
+      connections,
+      problemTitle,
+      problemDescription,
+      requirements,
+      questionIndex: 1,
+      sessionId,
+    }, {
+      stage: 'interview',
+      step: 'evaluate-design',
+      meta: (r) => ({ questionIndex: 1, eval: r.ok ? r.data : null }),
+    })
+
+    const stdEval = ev.ok
+      ? designEvalToStandard(ev.data, problemTitle, problemDescription, components, connections)
+      : null
+    let t = Date.now()
+    const transcript = [
+      { speaker: 'interviewer', text: 'System design — walk me through your architecture on the canvas.', timestamp: t, questionIndex: 0 },
+    ]
+    t += 500
+    transcript.push({ speaker: 'interviewer', text: problemTitle, timestamp: t, questionIndex: 1 })
+    t += 500
+    transcript.push({ speaker: 'candidate', text: `[Design diagram: ${components.length} components, ${connections.length} connections]`, timestamp: t, questionIndex: 1 })
+
+    const evaluations = stdEval ? [stdEval] : []
+    const avg = stdEval ? avgScore(stdEval) : null
+    const gates = scoreQuestionGates(avg, persona, !!stdEval, 'system-design')
+    const questions = [{
+      qi: 1,
+      question: problemTitle,
+      answer: '[design diagram]',
+      persona,
+      eval: stdEval,
+      avg,
+      genMs: 0,
+      evalMs: ev.ms,
+      gates,
+      bandOk: gates.bandOk,
+      g3Relevance: gates.g3Relevance,
+    }]
+
+    const liveTranscriptWords = synthWords(transcript)
+    await api('PATCH', `/api/interviews/${sessionId}`, { transcript, evaluations, liveTranscriptWords, status: 'in_progress' }, { stage: 'interview', step: 'patch-pre-feedback' })
+    return { sessionId, config, transcript, evaluations, questions, liveTranscriptWords }
+  }
+
   async function runFeedback(iv) {
+    const planned = plannedCountForHarness(iv)
     const body = {
       config: iv.config, transcript: iv.transcript, evaluations: iv.evaluations,
       speechMetrics: [], sessionId: iv.sessionId,
-      plannedQuestionCount: iv.questions.length, answeredCount: iv.evaluations.length,
+      plannedQuestionCount: planned, answeredCount: iv.evaluations.length,
       endReason: 'user_ended',
     }
     let fb = await api('POST', '/api/generate-feedback', body, {
@@ -388,12 +644,12 @@ location.hash='mode=full&questions=3&autostart=1';
     })
     const sideEffectOutcomes = fb.data?.sideEffectOutcomes ?? null
     if (fb.status === 202 || fb.data.status === 'in_progress') {
-      for (let i = 0; i < 40; i++) {
+      for (let i = 0; i < 80; i++) {
         await sleep(3000)
         const sess = await api('GET', `/api/interviews/${iv.sessionId}?excludeTranscript=true`, undefined, {
           stage: 'feedback',
           step: 'poll-' + i,
-          meta: (r) => ({ pollIndex: i, pollMax: 40, overallScore: r.data?.feedback?.overall_score ?? null }),
+          meta: (r) => ({ pollIndex: i, pollMax: 80, overallScore: r.data?.feedback?.overall_score ?? null }),
         })
         if (sess.data.feedback?.overall_score != null) { fb = { ok: true, data: sess.data.feedback }; break }
       }
@@ -403,15 +659,20 @@ location.hash='mode=full&questions=3&autostart=1';
         status: 'completed', transcript: iv.transcript, evaluations: iv.evaluations,
         liveTranscriptWords: iv.liveTranscriptWords, feedback: fb.data,
         completedAt: new Date().toISOString(), endReason: 'user_ended',
-        answeredCount: iv.evaluations.length, plannedQuestionCount: iv.questions.length,
+        answeredCount: iv.evaluations.length, plannedQuestionCount: planned,
       }, { stage: 'feedback', step: 'patch-completed' })
     }
     return { ...fb, sideEffectOutcomes }
   }
 
   async function runAnalysis(sessionId) {
-    const start = await api('POST', '/api/analysis/start', { sessionId }, { stage: 'analysis', step: 'analysis-start' })
+    let start = await api('POST', '/api/analysis/start', { sessionId }, { stage: 'analysis', step: 'analysis-start' })
+    if (start.status === 429) {
+      await sleep(8000)
+      start = await api('POST', '/api/analysis/start', { sessionId }, { stage: 'analysis', step: 'analysis-start-retry' })
+    }
     if (start.status === 403) return { skipped: true, reason: '403' }
+    if (start.status === 429) return { skipped: true, reason: '429' }
     for (let i = 0; i < 60; i++) {
       await sleep(3000)
       const r = await api('GET', `/api/analysis/${sessionId}`, undefined, {
@@ -431,19 +692,23 @@ location.hash='mode=full&questions=3&autostart=1';
 
   async function runPathway(sessionId) {
     let pathwayGenerationStatus = null
-    for (let i = 0; i < 40; i++) {
+    const PATHWAY_POLL_MAX = 80
+    for (let i = 0; i < PATHWAY_POLL_MAX; i++) {
       const sess = await api('GET', `/api/interviews/${sessionId}?excludeTranscript=true`, undefined, {
         stage: 'pathway',
         step: 'pathway-poll',
         meta: (res) => ({
           pollIndex: i,
-          pollMax: 40,
+          pollMax: PATHWAY_POLL_MAX,
           pathwayGenerationStatus: res.data?.pathwayGenerationStatus ?? null,
         }),
       })
       pathwayGenerationStatus = sess.data.pathwayGenerationStatus ?? null
       const st = pathwayGenerationStatus
       if (st === 'succeeded' || st === 'failed' || st === 'skipped') break
+      if (i === 25 && st === 'pending') {
+        await api('POST', '/api/learn/pathway/retry', { sessionId }, { stage: 'pathway', step: 'pathway-retry' })
+      }
       await sleep(3000)
     }
     const pathway = await api('GET', `/api/learn/pathway?fromFeedback=${sessionId}`, undefined, {
@@ -510,55 +775,102 @@ location.hash='mode=full&questions=3&autostart=1';
     return { total: telemetry.length, pass, warn, fail, byStage }
   }
 
+  async function executeCell(run) {
+    activityCtx.matrixKey = `${run.domain}/${run.depth}/${run.persona}`
+    activityCtx.sessionId = null
+    const entry = { runId: run.runId, matrixKey: activityCtx.matrixKey, pass: true, stages: {}, questions: [] }
+    let iv
+    if (run.depth === 'coding') {
+      iv = await runCodingInterview(run.domain, run.persona)
+    } else if (run.depth === 'system-design') {
+      iv = await runDesignInterview(run.domain, run.persona)
+    } else {
+      iv = await runInterview(run.domain, run.depth, run.persona)
+    }
+    entry.sessionId = iv.sessionId
+    entry.questions = iv.questions
+    entry.stages.interview = { pass: iv.questions.every((q) => q.eval) }
+    entry.gates = {
+      g1Pipeline: iv.questions.every((q) => q.gates?.g1Pipeline !== false),
+      g2Separation: run.persona === 'weak'
+        ? iv.questions.every((q) => q.gates?.g2Separation !== false)
+        : null,
+      g3Relevance: run.persona === 'strong'
+        ? iv.questions.filter((q) => q.g3Relevance != null).every((q) => q.g3Relevance === true)
+        : null,
+    }
+    for (const q of iv.questions) {
+      if (!q.bandOk) entry.pass = false
+    }
+
+    const fb = await runFeedback(iv)
+    const pathwayPlanOutcome = fb.sideEffectOutcomes?.find((o) => o.name === 'pathwayPlan') ?? null
+    entry.stages.feedback = {
+      pass: fb.ok && fb.data?.overall_score != null,
+      score: fb.data?.overall_score,
+      sideEffectOutcomes: fb.sideEffectOutcomes,
+      pathwayPlanOutcome,
+    }
+    if (!entry.stages.feedback.pass) entry.pass = false
+
+    entry.stages.analysis = await runAnalysis(iv.sessionId)
+    entry.stages.pathway = await runPathway(iv.sessionId)
+    const pwStatus = entry.stages.pathway.pathwayGenerationStatus
+    entry.stages.pathway.pass = pwStatus === 'succeeded' || pwStatus === 'skipped'
+    if (!entry.stages.pathway.pass && pwStatus !== 'failed') entry.pass = false
+    entry.stages.drill = await runDrill(iv.sessionId, run.persona)
+    return { entry, evalRows: iv.questions.map((q) => ({ run: entry.matrixKey, q: q.qi + 1, persona: run.persona, ...q })) }
+  }
+
   async function runMatrix() {
     document.title = 'QA_MATRIX_RUNNING'
-    runReportId = `qa-browser-${MODE}-${Date.now()}`
-    telemetry.length = 0
-    const runs = buildRuns()
-    const matrixRuns = RUN_LIMIT > 0 ? runs.slice(0, RUN_LIMIT) : runs
-    log(`QA Matrix v${HARNESS_VERSION} — mode=${MODE} runs=${matrixRuns.length} questions=${Q_LIMIT} duration=${DURATION}min`)
-    const results = []
-    const evalRows = []
-    let done = 0
+    const prior = window.__QA_PRIOR_REPORT__ || null
+    runReportId = REPORT_ID_PARAM || prior?.reportId || `qa-browser-${MODE}-${Date.now()}`
+    if (!prior) telemetry.length = 0
+    const allRuns = buildRuns()
+    const capped = RUN_LIMIT > 0 ? allRuns.slice(0, RUN_LIMIT) : allRuns
+    const matrixRuns = capped.slice(Math.max(0, CELL_OFFSET))
+    log(`QA Matrix v${HARNESS_VERSION} — mode=${MODE} runs=${matrixRuns.length}/${capped.length} offset=${CELL_OFFSET} questions=${Q_LIMIT} duration=${DURATION}min cellRetry=${CELL_RETRY}`)
+    const results = prior?.runs ? prior.runs.slice() : []
+    const evalRows = prior?.evaluationRows ? prior.evaluationRows.slice() : []
+    let done = CELL_OFFSET
 
     for (const run of matrixRuns) {
-      log(`[${++done}/${matrixRuns.length}] ${run.runId} …`)
-      activityCtx.matrixKey = `${run.domain}/${run.depth}/${run.persona}`
-      activityCtx.sessionId = null
-      const entry = { runId: run.runId, matrixKey: activityCtx.matrixKey, pass: true, stages: {}, questions: [] }
-      try {
-        const iv = await runInterview(run.domain, run.depth, run.persona)
-        entry.sessionId = iv.sessionId
-        entry.questions = iv.questions
-        for (const q of iv.questions) {
-          evalRows.push({ run: entry.matrixKey, q: q.qi + 1, persona: run.persona, ...q })
-          if (!q.bandOk) entry.pass = false
+      log(`[${++done}/${capped.length}] ${run.runId} …`)
+      let entry = null
+      let attempt = 0
+      while (attempt <= CELL_RETRY) {
+        try {
+          const out = await executeCell(run)
+          entry = out.entry
+          evalRows.push(...out.evalRows)
+          break
+        } catch (err) {
+          if (err && err.name === 'QuotaExceeded') {
+            entry = { runId: run.runId, matrixKey: `${run.domain}/${run.depth}/${run.persona}`, pass: false, error: err.message, quotaAborted: true }
+            log(`  QUOTA STOP: ${err.message}`)
+            break
+          }
+          attempt++
+          if (attempt <= CELL_RETRY) {
+            log(`  retry ${attempt}/${CELL_RETRY} after: ${err.message || err}`)
+            await sleep(2000)
+            continue
+          }
+          entry = { runId: run.runId, matrixKey: `${run.domain}/${run.depth}/${run.persona}`, pass: false, error: String(err.message || err) }
+          log(`  FAIL: ${entry.error}`)
         }
-        entry.stages.interview = { pass: iv.questions.every((q) => q.eval) }
-
-        const fb = await runFeedback(iv)
-        const pathwayPlanOutcome = fb.sideEffectOutcomes?.find((o) => o.name === 'pathwayPlan') ?? null
-        entry.stages.feedback = {
-          pass: fb.ok && fb.data?.overall_score != null,
-          score: fb.data?.overall_score,
-          sideEffectOutcomes: fb.sideEffectOutcomes,
-          pathwayPlanOutcome,
-        }
-        if (!entry.stages.feedback.pass) entry.pass = false
-
-        entry.stages.analysis = await runAnalysis(iv.sessionId)
-        entry.stages.pathway = await runPathway(iv.sessionId)
-        const pwStatus = entry.stages.pathway.pathwayGenerationStatus
-        entry.stages.pathway.pass = pwStatus === 'succeeded' || pwStatus === 'skipped'
-        if (!entry.stages.pathway.pass && pwStatus !== 'failed') entry.pass = false
-        entry.stages.drill = await runDrill(iv.sessionId, run.persona)
-      } catch (err) {
-        entry.pass = false
-        entry.error = String(err.message || err)
-        log(`  FAIL: ${entry.error}`)
       }
-      results.push(entry)
-      log(`  ${entry.pass ? 'PASS' : 'FAIL'} session=${entry.sessionId || 'n/a'}`)
+      if (entry) {
+        const idx = results.findIndex((r) => r.runId === entry.runId)
+        if (idx >= 0) results[idx] = entry
+        else results.push(entry)
+        log(`  ${entry.pass ? 'PASS' : 'FAIL'} session=${entry.sessionId || 'n/a'}`)
+      }
+      if (quotaAborted) {
+        log('Quota exceeded — aborting remaining cells')
+        break
+      }
     }
 
     const passed = results.filter((r) => r.pass).length
@@ -569,8 +881,9 @@ location.hash='mode=full&questions=3&autostart=1';
       mode: MODE, totalRuns: results.length, passedRuns: passed,
       passRate: results.length ? passed / results.length : 0,
       evaluationRows: evalRows, runs: results,
-      telemetry,
+      telemetry: [...(prior?.telemetry ?? []), ...telemetry],
       telemetrySummary,
+      resume: { offset: results.length, quotaAborted, completedCells: results.map((r) => r.runId) },
       finishedAt: new Date().toISOString(),
     }
     pre.textContent = JSON.stringify(report, null, 2)

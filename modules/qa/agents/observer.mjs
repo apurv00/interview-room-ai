@@ -64,7 +64,7 @@ export function classifyActivity(bundle) {
         : `Interview eval failure on ${step}`,
       evidence,
       suggestedNextSteps: harnessLikely
-        ? ['Review STRONG_VARIANTS keyword map', 'Compare with human-rated answer']
+        ? ['Review strongAnswers.json bucket route', 'Compare with human-rated answer']
         : ['Review evaluate-answer prompt calibration'],
     }
   }

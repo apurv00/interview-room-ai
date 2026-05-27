@@ -204,7 +204,7 @@ Search for session id:
 | GET exposes `pathwayUpdate` + `unchanged` view state | `app/api/learn/pathway/route.ts`, `pathwayViewModel.ts` |
 | Client poll 3s × 120s, then Retry CTA | `usePathwayGenerationPoll.ts`, `PathwayPendingBanner.tsx` |
 | Recovery A/B/C banners | `PathwayUnchangedBanner.tsx` (retake / open feedback / planner off) |
-| Retry: block `<3` answers; reclaim pending stuck ≥2 min | `app/api/learn/pathway/retry/route.ts` (`PATHWAY_CLIENT_STUCK_MS`) |
+| Retry: block `<3` answers; reclaim pending stuck ≥2 min | `pathwayUpdateEligibility.ts` (`PATHWAY_CLIENT_STUCK_MS`) + retry route |
 | Feedback page poll + gate `?retryPathway=1` | `app/feedback/[sessionId]/page.tsx` |
 
 **QA expectation after deploy:** coding/system-design cells with feedback 400 should show `unchanged` (not perpetual pending). Eligible text-depth cells should poll then succeed or offer Retry at 120s.

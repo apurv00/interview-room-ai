@@ -15,13 +15,14 @@ loadDotEnvLocal()
 
 const reportId = process.argv.find((a) => !a.startsWith('-') && a.includes('qa-browser'))
 const prod = process.argv.includes('--prod')
+const baseUrl = prod ? 'https://www.interviewprep.guru' : 'http://localhost:3000'
 
 if (!reportId) {
   console.error('Usage: node scripts/qa-v3-infra.mjs <reportId> [--prod]')
   process.exit(1)
 }
 
-const result = await verifyRunInfra({ reportId, prod })
+const result = await verifyRunInfra({ reportId, prod, baseUrl })
 const outPath = join(result.outDir, 'infra-report.json')
 writeFileSync(outPath, JSON.stringify(result, null, 2), 'utf-8')
 

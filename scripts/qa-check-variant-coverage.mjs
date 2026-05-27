@@ -37,21 +37,38 @@ if (!fs.existsSync(jsonPath)) {
 
 const STRONG_VARIANTS = {
   behavioral: [
+    { kw: ['journey into product', 'product management and the kinds', 'first meaningful product project', 'role end to end'], label: 'PM-JOURNEY' },
+    { kw: ['change a product decision', 'new data or user feedback', "wasn't working", 'original approach wasn'], label: 'PM-PIVOT' },
+    { kw: ['disappointing one or more stakeholders', 'difficult prioritization call', 'prioritization call that disappointed'], label: 'PM-PRIOR-STAKE' },
+    { kw: ['idea to launch with limited', 'limited time or resources', 'take a product from idea to launch'], label: 'PM-LAUNCH' },
+    { kw: ['incomplete or conflicting data', 'product decision with incomplete', 'reason through it', 'keep the team aligned'], label: 'PM-AMBIGUITY' },
+    { kw: ['senior executive who was skeptical', 'explain a product decision to a senior executive', 'won them over'], label: 'PM-EXEC' },
+    { kw: ['owned a product outcome that went wrong', 'went wrong after launch', 'first 24 hours'], label: 'PM-FAILURE' },
     { kw: ['conflict','disagree','tension','pushback','push back'], label: 'CONFLICT' },
     { kw: ['fail','failure','mistake','setback','regret'], label: 'FAILURE' },
-    { kw: ['influence','persuade','convince','stakeholder','cross-functional','without authority'], label: 'INFLUENCE' },
+    { kw: ['influence','persuade','convince','cross-functional','without authority'], label: 'INFLUENCE' },
     { kw: ['mentor','coach','junior','teach','grow someone'], label: 'MENTOR' },
     { kw: ['feedback','criticism','difficult conversation','tough conversation'], label: 'FEEDBACK' },
     { kw: ['priorit','tradeoff','say no','decide'], label: 'PRIORITIZE' },
     { kw: [], label: 'DEFAULT(launch)' },
   ],
   technical: [
-    { kw: ['frontend','react','css','ui','render','browser','client','web vitals','lcp','hydration','bundle'], label: 'FRONTEND' },
-    { kw: ['test','automation','sdet','qa','coverage','flaky','flake','e2e','integration test'], label: 'TEST' },
-    { kw: ['data pipeline','ml','etl','dbt','airflow','analytics','feature store','model serving'], label: 'DATA' },
+    { kw: ['url shortener', 'short links', 'redirect latency', 'id generation', 'redirects fast and reliable'], label: 'URL-SHORT' },
+    { kw: ['article catalog', 'data model and query path', 'tables and indexes', 'publication status, publish time', 'author, publication status'], label: 'ARTICLE-CATALOG' },
+    { kw: ['article metadata service', 'fetch, update, and list content', 'filters like author, status', 'contract clean and the endpoints efficient'], label: 'API-METADATA' },
+    { kw: ['database schema', 'query strategy', 'publishing system', 'homepage feed', 'attach multiple tags'], label: 'DB-PUBLISH' },
+    { kw: ['rate-limiting service', 'rate limiting', 'user-facing apis and internal service', 'strong consistency, latency, and ease of operation'], label: 'RATE-LIMIT' },
+    { kw: ['design observability', 'observability for a backend', 'latency spikes or data goes missing', 'api layer, the database, the cache, or an async pipeline'], label: 'OBSERVABILITY' },
+    { kw: ['backward-compatible v2 redesign', 'v2 redesign', 'richer filtering and sorting', 'bursty publish traffic', 'caching/async update flow'], label: 'V2-REDESIGN' },
+    { kw: ['design caching', 'cache invalidation', 'staleness', 'article service', 'tag pages'], label: 'CACHE-MEDIA' },
+    { kw: ['on call', 'on-call', 'incident response', 'failed article publishes', 'homepage updates'], label: 'INCIDENT' },
+    { kw: ['globally distributed', 'multi-region', 'data ownership', 'failover', 'breaking-news'], label: 'GLOBAL' },
+    { kw: ['rest api','public api','api design','endpoint','pagination','openapi','swagger'], label: 'API-DESIGN' },
+    { kw: ['frontend','react','css','render','browser','web vitals','lcp','hydration','bundle'], label: 'FRONTEND' },
+    { kw: ['test','automation','sdet','coverage','flaky','flake','e2e','integration test'], label: 'TEST' },
+    { kw: ['data pipeline','ml','etl','dbt','airflow','feature store','model serving'], label: 'DATA' },
     { kw: ['design system','ux','prototype','accessibility','a11y','wcag'], label: 'DESIGN-SYS' },
     { kw: ['product','roadmap','prioritization','tech debt','velocity'], label: 'PRODUCT-TECH' },
-    { kw: ['rest api','public api','api design','url shortener','endpoint','pagination','openapi','swagger'], label: 'API-DESIGN' },
     { kw: [], label: 'DEFAULT(kafka)' },
   ],
   'case-study': [
@@ -86,12 +103,32 @@ const STRONG_VARIANTS = {
   ],
 }
 
+function kwMatch(q, keyword) {
+  const k = (keyword || '').toLowerCase().trim()
+  if (!k) return false
+  if (k.includes(' ')) return q.includes(k)
+  if (k.length <= 4) {
+    const esc = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    return new RegExp('(?:^|[^a-z0-9])' + esc + '(?:[^a-z0-9]|$)').test(q)
+  }
+  return q.includes(k)
+}
+
 function pickStrong(question, depth) {
   const variants = STRONG_VARIANTS[depth] || STRONG_VARIANTS.behavioral
   const q = (question || '').toLowerCase()
+  let bestLabel = null
+  let bestLen = 0
   for (const v of variants) {
-    if (v.kw.length && v.kw.some((k) => q.includes(k))) return v.label
+    for (const k of v.kw) {
+      if (!k) continue
+      if (kwMatch(q, k) && k.length > bestLen) {
+        bestLen = k.length
+        bestLabel = v.label
+      }
+    }
   }
+  if (bestLabel) return bestLabel
   return variants[variants.length - 1].label
 }
 

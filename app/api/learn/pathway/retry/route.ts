@@ -6,7 +6,7 @@ import { connectDB } from '@shared/db/connection'
 import { InterviewSession } from '@shared/db/models'
 import { inngest } from '@shared/services/inngest'
 import { aiLogger } from '@shared/logger'
-import { SHORT_FORM_MIN_ANSWERS } from '@interview/services/eval/completionAdjustment'
+import { getShortFormMinAnswers } from '@interview/services/eval/sessionScoringPolicy'
 import {
   buildRetryablePathwayStatusFilter,
   getPathwayUpdateEligibility,
@@ -118,10 +118,12 @@ export const POST = composeApiRoute<z.infer<typeof RetrySchema>>({
       typeof session.answeredCount === 'number'
         ? session.answeredCount
         : session.evaluations?.length ?? 0
-    if (answeredCount < SHORT_FORM_MIN_ANSWERS) {
+    const interviewType = session.config?.interviewType
+    const minAnswers = getShortFormMinAnswers(interviewType)
+    if (answeredCount < minAnswers) {
       return NextResponse.json(
         {
-          error: `At least ${SHORT_FORM_MIN_ANSWERS} answered questions are required before pathway regeneration can run.`,
+          error: `At least ${minAnswers} answered question${minAnswers === 1 ? '' : 's'} are required before pathway regeneration can run.`,
         },
         { status: 409 },
       )
@@ -156,6 +158,7 @@ export const POST = composeApiRoute<z.infer<typeof RetrySchema>>({
     } else {
       const eligibility = getPathwayUpdateEligibility({
         answeredCount,
+        interviewType,
         pathwayPlannerEnabled: isFeatureEnabled('pathway_planner'),
         feedback: session.feedback ?? null,
         pathwayGenerationStatus: session.pathwayGenerationStatus ?? null,

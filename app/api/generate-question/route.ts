@@ -686,6 +686,12 @@ Return ONLY the question text. No preamble, no numbering, no quotation marks. Ju
           remainingMustSlots: resolvedFlow.slots
             .slice(slotIdx + 1)
             .filter(s => s.priority === 'must').length,
+          slotId: slot.id,
+          competencyBucket: slot.competencyBucket,
+          slotLabel: slot.label,
+          slotIndex: slot.slotIndex,
+          domain: resolvedFlow.domain,
+          depth: resolvedFlow.depth,
         }
       })() : undefined
 

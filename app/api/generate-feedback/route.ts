@@ -35,7 +35,7 @@ import { computePerQAverage, computeAnswerQualityAggregate } from '@interview/se
 import { computeCompletionAdjustment } from '@interview/services/eval/completionAdjustment'
 import { compactTranscript } from '@interview/services/eval/transcriptCompactor'
 import { computeEngagementContext } from '@interview/services/eval/engagementContext'
-import { getQuestionCount } from '@interview/config/interviewConfig'
+import { getPlannedQuestionCountForFeedback } from '@interview/services/eval/sessionScoringPolicy'
 import {
   FEEDBACK_CORE_RESPONSE_FORMAT,
   FEEDBACK_ENRICHMENT_RESPONSE_FORMAT,
@@ -48,7 +48,8 @@ registerPathwayBadgeWiring()
 export const dynamic = 'force-dynamic'
 // Feedback generation calls the configured LLM with transcript, evaluations,
 // and profile context. Without this, Vercel's default can be too short.
-export const maxDuration = 60
+// RCA-3: headroom for long behavioral feedback (baseline 504s at ~60s).
+export const maxDuration = 300
 
 type GenerateFeedbackBody = z.infer<typeof GenerateFeedbackSchema>
 
@@ -370,7 +371,11 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
       typeof body.plannedQuestionCount === 'number' && body.plannedQuestionCount > 0
         ? body.plannedQuestionCount
         : (() => {
-            try { return getQuestionCount(config.duration as Duration) } catch { return 0 }
+            try {
+              return getPlannedQuestionCountForFeedback(interviewType, config.duration as Duration)
+            } catch {
+              return 0
+            }
           })()
     const g10AnsweredCount =
       typeof body.answeredCount === 'number' && body.answeredCount >= 0
@@ -381,6 +386,7 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
       plannedQuestionCount: g10PlannedCount,
       answeredCount: g10AnsweredCount,
       endReason: g10EndReason,
+      interviewType,
     })
 
     // Short-form guard: refuse to emit a scored report for <3 answers.
@@ -1225,7 +1231,7 @@ You repair malformed interview feedback JSON. The output must match the supplied
         // #321. Scheduling order within sideEffects[] is unchanged for
         // aggregate-log purposes; only the mutation ordering matters.
         if (
-          canEnqueuePathwayRegeneration(sessionId, evaluations, g10AnsweredCount)
+          canEnqueuePathwayRegeneration(sessionId, evaluations, g10AnsweredCount, interviewType)
         ) {
           // Pathway enqueue moved to AFTER persist completes (Codex P2 on
           // PR #398) so the Inngest job reads real session.feedback instead
@@ -1490,7 +1496,7 @@ You repair malformed interview feedback JSON. The output must match the supplied
         // Codex P2 on PR #398 — enqueue only after feedback is committed so
         // pathwayJob reads real session.feedback (not synthetic persist-race
         // fallback). Fire-and-forget; Inngest handles retries.
-        if (canEnqueuePathwayRegeneration(sessionId, evaluations, g10AnsweredCount)) {
+        if (canEnqueuePathwayRegeneration(sessionId, evaluations, g10AnsweredCount, interviewType)) {
           enqueuePathwayRegeneration(sessionId, user.id, {
             source: 'generate-feedback-success',
           }).catch((err) =>
@@ -1508,7 +1514,7 @@ You repair malformed interview feedback JSON. The output must match the supplied
       // pathway regeneration only — the Inngest job synthesizes feedback
       // in-memory and never persists synthetic scores to session.feedback.
       if (
-        canEnqueuePathwayRegeneration(body.sessionId, evaluations, g10AnsweredCount) &&
+        canEnqueuePathwayRegeneration(body.sessionId, evaluations, g10AnsweredCount, interviewType) &&
         feedback.degraded
       ) {
         enqueuePathwayRegeneration(body.sessionId, user.id, {
@@ -1635,7 +1641,7 @@ You repair malformed interview feedback JSON. The output must match the supplied
       // (P0 contract) but evaluations are in Mongo from finishInterview.
       // Enqueue pathway so users aren't stuck with null PathwayPlan across
       // retries. Fire-and-forget — response must not block on Inngest.
-      if (canEnqueuePathwayRegeneration(body.sessionId, evaluations, g10AnsweredCount)) {
+      if (canEnqueuePathwayRegeneration(body.sessionId, evaluations, g10AnsweredCount, interviewType)) {
         enqueuePathwayRegeneration(body.sessionId, user.id, {
           source: 'generate-feedback-outer-catch',
           useSynthesizedFeedback: true,

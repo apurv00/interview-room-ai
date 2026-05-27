@@ -21,7 +21,7 @@ export function createRunManifest(init) {
     passedRuns: null,
     totalRuns: null,
     error: null,
-    resume: { completedCells: [], note: 'Cell-level resume deferred — full matrix re-runs on retry' },
+    resume: { offset: 0, completedCells: [], cellRetry: 1, quotaAborted: false },
   }
 }
 
