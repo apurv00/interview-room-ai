@@ -27,6 +27,32 @@ function arg(name, fallback = null) {
   return i >= 0 ? process.argv[i + 1] : fallback
 }
 
+/** GA gate sets --strict-triage so active P0 findings fail the run (triage exits 2). */
+const strictTriage =
+  process.argv.includes('--strict-triage') || process.env.QA_MATRIX_STRICT_TRIAGE === '1'
+
+/**
+ * @param {import('node:child_process').SpawnSyncReturns<string>} triage
+ */
+function handleTriageExit(triage) {
+  if (triage.status === 2) {
+    const msg = 'Triage: active P0 findings remain'
+    if (strictTriage) {
+      console.error(`${msg} — failing run (--strict-triage)`)
+      process.exit(2)
+    }
+    console.warn(`${msg} (non-fatal without --strict-triage)`)
+    return
+  }
+  if (triage.status !== 0 && triage.status != null) {
+    if (strictTriage) {
+      console.error(`Triage exited with status ${triage.status} — failing run (--strict-triage)`)
+      process.exit(triage.status ?? 1)
+    }
+    console.warn(`Triage exited with errors (status ${triage.status})`)
+  }
+}
+
 const prod = process.argv.includes('--prod')
 const postOnlyId = arg('--post-only', null)
 
@@ -47,7 +73,12 @@ if (postOnlyId) {
     const postArgs = ['scripts/qa-v3-triage.mjs', postOnlyId]
     const baseline = arg('--baseline', null)
     if (baseline) postArgs.push('--baseline', baseline)
-    spawnSync('node', postArgs, { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' })
+    const triage = spawnSync('node', postArgs, {
+      cwd: root,
+      stdio: 'inherit',
+      shell: process.platform === 'win32',
+    })
+    handleTriageExit(triage)
   }
   if (process.argv.includes('--report')) {
     const reportJson = join(result.outDir, 'matrix-report.json')
@@ -164,8 +195,7 @@ try {
       stdio: 'inherit',
       shell: process.platform === 'win32',
     })
-    if (triage.status === 2) console.warn('Triage: active P0 findings remain')
-    else if (triage.status !== 0 && triage.status != null) console.warn('Triage exited with errors')
+    handleTriageExit(triage)
   }
 
   if (generateReport) {

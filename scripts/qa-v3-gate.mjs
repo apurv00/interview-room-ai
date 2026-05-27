@@ -53,6 +53,7 @@ if (!skipMini) {
     '--report',
     '--observe',
     '--infra',
+    '--strict-triage',
   ])
 }
 
@@ -65,6 +66,7 @@ if (withMatrix) {
     '--report',
     '--observe',
     '--infra',
+    '--strict-triage',
   ])
 }
 
