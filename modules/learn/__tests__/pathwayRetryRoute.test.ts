@@ -68,12 +68,19 @@ function makeReq(sessionId: string = SESSION_ID) {
   })
 }
 
+const THREE_EVALS = [
+  { questionIndex: 0 },
+  { questionIndex: 1 },
+  { questionIndex: 2 },
+]
+
 /** Minimum session payload that passes the validation reads. */
 function fullSession(overrides: Record<string, unknown> = {}) {
   return {
     config: { role: 'pm', experience: '3-6' /* no interviewType — exercises the default */ },
     feedback: { overall_score: 70 },
-    evaluations: [{ questionIndex: 0 }],
+    evaluations: THREE_EVALS,
+    answeredCount: 3,
     pathwayGenerationStatus: 'failed',
     ...overrides,
   }
@@ -129,8 +136,9 @@ describe('POST /api/learn/pathway/retry — slim event payload (Codex P2 #10)', 
       answer: 'a'.repeat(5000),
     }))
     mockFindOne.mockResolvedValue(fullSession({
-      feedback: bigFeedback,
+      feedback: { ...bigFeedback, overall_score: 70 },
       evaluations: bigEvaluations,
+      answeredCount: 100,
     }))
     mockFindOneAndUpdate.mockResolvedValue(fullSession())
     await POST(makeReq())
@@ -154,17 +162,21 @@ describe('POST /api/learn/pathway/retry — atomic claim (Codex P2 #9)', () => {
     const [filter, update] = mockFindOneAndUpdate.mock.calls[0]
     expect(filter).toEqual(
       expect.objectContaining({
-        $or: [
+        $or: expect.arrayContaining([
           { pathwayGenerationStatus: 'failed' },
           { pathwayGenerationStatus: { $exists: false } },
           { pathwayGenerationStatus: null },
-        ],
+          expect.objectContaining({ pathwayGenerationStatus: 'pending' }),
+          expect.objectContaining({ pathwayGenerationStatus: 'running' }),
+        ]),
       }),
     )
-    expect(update.$set).toEqual({
+    expect(update.$set).toMatchObject({
       pathwayGenerationStatus: 'pending',
       pathwayGenerationUseSynthesizedFeedback: false,
     })
+    expect(update.$set.pathwayGenerationStartedAt).toBeInstanceOf(Date)
+    expect(update.$inc).toEqual({ pathwayGenerationAttempts: 1 })
     expect(update.$unset).toEqual({ pathwayGenerationError: 1 })
   })
 
@@ -176,6 +188,19 @@ describe('POST /api/learn/pathway/retry — atomic claim (Codex P2 #9)', () => {
     const body = (await res.json()) as { error: string }
     expect(body.error).toMatch(/already in flight/i)
     expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+
+  it('allows retry for stale pending sessions that were never picked up', async () => {
+    mockFindOne.mockResolvedValue(fullSession({
+      pathwayGenerationStatus: 'pending',
+      completedAt: new Date(Date.now() - 20 * 60 * 1000),
+    }))
+    mockFindOneAndUpdate.mockResolvedValue(fullSession())
+
+    const res = await POST(makeReq())
+
+    expect(res.status).toBe(200)
+    expect(mockInngestSend).toHaveBeenCalledTimes(1)
   })
 
   it('returns 409 + "another retry just claimed" when CAS lost the race (read still showed retryable)', async () => {
@@ -195,7 +220,7 @@ describe('POST /api/learn/pathway/retry — atomic claim (Codex P2 #9)', () => {
     expect(res.status).toBe(409)
     const body = (await res.json()) as { error: string }
     expect(body.error).toMatch(/not retryable from status 'succeeded'/i)
-    expect(body.error).toMatch(/failed or never-attempted/i)
+    expect(body.error).toMatch(/failed, stale in-flight, or never-attempted/i)
     expect(mockInngestSend).not.toHaveBeenCalled()
   })
 
@@ -235,7 +260,11 @@ describe('POST /api/learn/pathway/retry — validation', () => {
   })
 
   it('409 when session.config is missing entirely', async () => {
-    mockFindOne.mockResolvedValue({ feedback: { x: 1 }, evaluations: [{}] })
+    mockFindOne.mockResolvedValue({
+      feedback: { overall_score: 70 },
+      evaluations: THREE_EVALS,
+      answeredCount: 3,
+    })
     const res = await POST(makeReq())
     expect(res.status).toBe(409)
     const body = (await res.json()) as { error: string }
@@ -249,10 +278,11 @@ describe('POST /api/learn/pathway/retry — validation', () => {
     expect(res.status).toBe(200)
     expect(mockInngestSend).toHaveBeenCalledTimes(1)
     const [, update] = mockFindOneAndUpdate.mock.calls[0]
-    expect(update.$set).toEqual({
+    expect(update.$set).toMatchObject({
       pathwayGenerationStatus: 'pending',
       pathwayGenerationUseSynthesizedFeedback: true,
     })
+    expect(update.$inc).toEqual({ pathwayGenerationAttempts: 1 })
   })
 
   it('409 when evaluations are missing or empty (even if feedback exists)', async () => {
@@ -260,6 +290,63 @@ describe('POST /api/learn/pathway/retry — validation', () => {
     const res = await POST(makeReq())
     expect(res.status).toBe(409)
     expect((await res.json() as { error: string }).error).toMatch(/no evaluations/i)
+  })
+
+  it('409 when fewer than three answers were recorded', async () => {
+    mockFindOne.mockResolvedValue(
+      fullSession({
+        answeredCount: 2,
+        evaluations: [{ questionIndex: 0 }, { questionIndex: 1 }],
+      }),
+    )
+    const res = await POST(makeReq())
+    expect(res.status).toBe(409)
+    expect((await res.json() as { error: string }).error).toMatch(/at least 3 answered/i)
+    expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+
+  it('409 when scored feedback is missing (no degraded synthesis path without evals)', async () => {
+    mockFindOne.mockResolvedValue(
+      fullSession({
+        feedback: null,
+        evaluations: [],
+        answeredCount: 0,
+      }),
+    )
+    const res = await POST(makeReq())
+    expect(res.status).toBe(409)
+    expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+
+  it('returns 409 for fresh pending enqueue (recent completedAt, no startedAt)', async () => {
+    mockFindOne.mockResolvedValue(
+      fullSession({
+        pathwayGenerationStatus: 'pending',
+        completedAt: new Date(),
+        pathwayGenerationStartedAt: undefined,
+      }),
+    )
+    mockFindOneAndUpdate.mockResolvedValue(null)
+
+    const res = await POST(makeReq())
+
+    expect(res.status).toBe(409)
+    expect((await res.json() as { error: string }).error).toMatch(/already in flight/i)
+    expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+
+  it('allows retry for client-stuck pending (≥2 min, zero attempts)', async () => {
+    mockFindOne.mockResolvedValue(
+      fullSession({
+        pathwayGenerationStatus: 'pending',
+        completedAt: new Date(Date.now() - 3 * 60 * 1000),
+        pathwayGenerationAttempts: 0,
+      }),
+    )
+    mockFindOneAndUpdate.mockResolvedValue(fullSession())
+    const res = await POST(makeReq())
+    expect(res.status).toBe(200)
+    expect(mockInngestSend).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -12,6 +12,8 @@ import PathwayProgressPanel from '@learn/components/pathway/PathwayProgressPanel
 import PathwayActivityPanel from '@learn/components/pathway/PathwayActivityPanel'
 import PathwayPendingBanner from '@learn/components/pathway/PathwayPendingBanner'
 import PathwayFailedBanner from '@learn/components/pathway/PathwayFailedBanner'
+import PathwayUnchangedBanner from '@learn/components/pathway/PathwayUnchangedBanner'
+import { usePathwayGenerationPoll } from '@learn/hooks/usePathwayGenerationPoll'
 import UniversalPathwayView from '@learn/components/pathway/UniversalPathwayView'
 import DecayContextCard from '@learn/components/pathway/DecayContextCard'
 import type { PathwayViewModel } from '@learn/services/pathwayViewModel'
@@ -45,6 +47,7 @@ function PathwayPageInner() {
   const [data, setData] = useState<PathwayApiResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [completingTaskId, setCompletingTaskId] = useState<string | null>(null)
+  const [pollEpoch, setPollEpoch] = useState(0)
 
   const loadPathway = useCallback(async () => {
     // UAT-012: keep the page in the loading state while NextAuth resolves
@@ -74,6 +77,22 @@ function PathwayPageInner() {
   useEffect(() => {
     void loadPathway()
   }, [loadPathway])
+
+  const shouldPoll = Boolean(
+    fromFeedback && data?.pathwayUpdate?.poll && (data.state === 'pending' || data.state === 'failed'),
+  )
+
+  const handlePathwayPollRetried = useCallback(() => {
+    setPollEpoch((n) => n + 1)
+    void loadPathway()
+  }, [loadPathway])
+
+  const { pollExhausted } = usePathwayGenerationPoll({
+    sessionId: fromFeedback,
+    enabled: shouldPoll,
+    onRefresh: loadPathway,
+    pollEpoch,
+  })
 
   const completeTask = async (taskId: string) => {
     setCompletingTaskId(taskId)
@@ -142,14 +161,32 @@ function PathwayPageInner() {
     <main className="max-w-5xl mx-auto px-4 py-8 space-y-6">
       <PathwayHeader />
 
+      {viewModel.state === 'unchanged' && (
+        <PathwayUnchangedBanner action={viewModel.nextAction} />
+      )}
+
       {viewModel.state === 'pending' && (
-        <PathwayPendingBanner action={viewModel.nextAction} />
+        <PathwayPendingBanner
+          action={{
+            ...viewModel.nextAction,
+            metadata: {
+              ...viewModel.nextAction.metadata,
+              sessionId:
+                fromFeedback ??
+                (typeof viewModel.nextAction.metadata?.sessionId === 'string'
+                  ? viewModel.nextAction.metadata.sessionId
+                  : ''),
+            },
+          }}
+          pollExhausted={pollExhausted}
+          onRetried={handlePathwayPollRetried}
+        />
       )}
 
       {viewModel.state === 'failed' && (
         <PathwayFailedBanner
           action={viewModel.nextAction}
-          onRetried={() => void loadPathway()}
+          onRetried={handlePathwayPollRetried}
         />
       )}
 

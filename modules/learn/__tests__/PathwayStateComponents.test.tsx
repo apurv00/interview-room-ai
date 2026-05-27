@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import PathwayEmptyState from '../components/pathway/PathwayEmptyState'
 import TodayActionCard from '../components/pathway/TodayActionCard'
 import PathwayPendingBanner from '../components/pathway/PathwayPendingBanner'
+import PathwayUnchangedBanner from '../components/pathway/PathwayUnchangedBanner'
 import RecentSessionsStrip from '../components/pathway/RecentSessionsStrip'
 import type { PathwayAction } from '../services/pathwayViewModel'
 
@@ -38,6 +39,41 @@ describe('Pathway state components', () => {
     expect(cta.getAttribute('href')).toContain('/interview/setup?')
     expect(cta.getAttribute('href')).toContain('actionId=baseline')
     expect(screen.queryByText(/Generate my pathway/i)).not.toBeInTheDocument()
+  })
+
+  it('renders unchanged banner with retake CTA', () => {
+    render(
+      <PathwayUnchangedBanner
+        action={{
+          id: 'retake-interview',
+          type: 'interview',
+          title: 'Finish at least three answers',
+          description: 'Your current pathway plan is unchanged.',
+          ctaLabel: 'Retake interview',
+          href: '/interview/setup?source=pathway',
+        }}
+      />,
+    )
+    expect(screen.getByTestId('pathway-unchanged-banner')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Retake interview' })).toBeInTheDocument()
+  })
+
+  it('shows retry button when poll is exhausted on pending banner', () => {
+    render(
+      <PathwayPendingBanner
+        action={{
+          id: 'pending-feedback',
+          type: 'review',
+          title: 'Catching up',
+          description: 'Waiting',
+          ctaLabel: 'Back',
+          metadata: { sessionId: '507f1f77bcf86cd799439011' },
+        }}
+        pollExhausted
+      />,
+    )
+    expect(screen.getByText(/taking longer than expected/i)).toBeInTheDocument()
+    expect(screen.getByTestId('pathway-pending-retry-button')).toBeInTheDocument()
   })
 
   it('renders the pending feedback banner with a return path', () => {

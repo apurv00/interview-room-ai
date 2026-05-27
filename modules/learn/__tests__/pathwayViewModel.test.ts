@@ -142,6 +142,41 @@ describe('buildPathwayViewModel — Pathway P2 Wave 4 (activityRhythm + decayPro
     expect(result.activityRhythm.decayProfile).toBe('fresh')
   })
 
+  it('returns unchanged when upstream session lacks scored feedback', () => {
+    const result = buildPathwayViewModel({
+      pathway: makePathway({ generatedFromSessionId: 'older' } as Partial<IPathwayPlan>),
+      competencySummary: null,
+      weaknesses: [],
+      fromFeedback: 'newer',
+      pathwayUpdate: {
+        reason: 'no_scored_feedback',
+        canEnqueue: false,
+        poll: false,
+        allowPathwayRetry: false,
+      },
+    })
+    expect(result.state).toBe('unchanged')
+    expect(result.nextAction.id).toBe('regenerate-feedback')
+    expect(result.planItems.length).toBeGreaterThan(0)
+  })
+
+  it('returns unchanged with retake CTA when fewer than three answers', () => {
+    const result = buildPathwayViewModel({
+      pathway: makePathway(),
+      competencySummary: null,
+      weaknesses: [],
+      fromFeedback: 'short-session',
+      pathwayUpdate: {
+        reason: 'insufficient_answers',
+        canEnqueue: false,
+        poll: false,
+        allowPathwayRetry: false,
+      },
+    })
+    expect(result.state).toBe('unchanged')
+    expect(result.nextAction.id).toBe('retake-interview')
+  })
+
   it('attaches activityRhythm to every state, including pending and failed', () => {
     const pending = buildPathwayViewModel({
       pathway: makePathway({ generatedFromSessionId: 'older-session' } as Partial<IPathwayPlan>),

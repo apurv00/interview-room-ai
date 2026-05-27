@@ -7,6 +7,7 @@ import { aiLogger } from '@shared/logger'
 import type { AnswerEvaluation, FeedbackData, SpeechMetrics } from '@shared/types'
 import { aggregateMetrics, communicationScore } from '@interview/config/speechMetrics'
 import { computePerQAverage } from '@interview/services/eval/perQAggregation'
+import { SHORT_FORM_MIN_ANSWERS } from '@interview/services/eval/completionAdjustment'
 
 /**
  * Mongo filter matching pathway statuses where a fresh enqueue is safe.
@@ -88,12 +89,20 @@ export function synthesizeFeedbackForPathway(
 export function canEnqueuePathwayRegeneration(
   sessionId: string | undefined,
   evaluations: unknown[] | undefined,
+  answeredCount?: number,
 ): sessionId is string {
+  const count =
+    typeof answeredCount === 'number' && answeredCount >= 0
+      ? answeredCount
+      : Array.isArray(evaluations)
+        ? evaluations.length
+        : 0
   return Boolean(
     sessionId &&
       isFeatureEnabled('pathway_planner') &&
       Array.isArray(evaluations) &&
-      evaluations.length > 0,
+      evaluations.length > 0 &&
+      count >= SHORT_FORM_MIN_ANSWERS,
   )
 }
 

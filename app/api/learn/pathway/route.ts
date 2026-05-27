@@ -6,6 +6,11 @@ import { InterviewSession, PathwayPlan, UserCompetencyState } from '@shared/db/m
 import { getCurrentPathway, markTaskComplete } from '@learn/services/pathwayPlanner'
 import { getUserCompetencySummary, getUserWeaknesses } from '@learn/services/competencyService'
 import { buildPathwayViewModel } from '@learn/services/pathwayViewModel'
+import {
+  getPathwayUpdateEligibility,
+  isStalePathwayGeneration,
+} from '@learn/services/pathwayUpdateEligibility'
+import { isFeatureEnabled } from '@shared/featureFlags'
 import { z } from 'zod'
 
 /**
@@ -33,6 +38,7 @@ export const GET = composeApiRoute({
     // never blocks the pathway page itself.
     let feedbackSessionStatus: string | null = null
     let feedbackSessionError: string | null = null
+    let pathwayUpdate = null as ReturnType<typeof getPathwayUpdateEligibility> | null
     if (fromFeedback) {
       try {
         await connectDB()
@@ -41,13 +47,43 @@ export const GET = composeApiRoute({
             _id: fromFeedback,
             userId: new mongoose.Types.ObjectId(user.id),
           })
-            .select('pathwayGenerationStatus pathwayGenerationError')
+            .select(
+              'pathwayGenerationStatus pathwayGenerationError pathwayGenerationStartedAt pathwayGenerationUseSynthesizedFeedback completedAt answeredCount feedback evaluations',
+            )
             .lean<{
               pathwayGenerationStatus?: string
               pathwayGenerationError?: string
+              pathwayGenerationStartedAt?: Date
+              pathwayGenerationUseSynthesizedFeedback?: boolean
+              completedAt?: Date
+              answeredCount?: number
+              feedback?: {
+                overall_score?: number | null
+                degraded?: boolean
+                red_flags?: string[] | null
+              } | null
+              evaluations?: unknown[]
             }>()
-          feedbackSessionStatus = sess?.pathwayGenerationStatus ?? null
-          feedbackSessionError = sess?.pathwayGenerationError ?? null
+          const rawStatus = sess?.pathwayGenerationStatus
+          const stale = isStalePathwayGeneration(
+            rawStatus,
+            sess?.completedAt,
+            sess?.pathwayGenerationStartedAt,
+          )
+          feedbackSessionStatus = stale ? 'failed' : rawStatus ?? null
+          feedbackSessionError = stale
+            ? sess?.pathwayGenerationError ??
+              'Pathway generation did not start or finish within the expected window.'
+            : sess?.pathwayGenerationError ?? null
+
+          pathwayUpdate = getPathwayUpdateEligibility({
+            answeredCount: sess?.answeredCount ?? sess?.evaluations?.length ?? 0,
+            pathwayPlannerEnabled: isFeatureEnabled('pathway_planner'),
+            feedback: sess?.feedback ?? null,
+            pathwayGenerationStatus: feedbackSessionStatus,
+            evaluationCount: sess?.evaluations?.length ?? 0,
+            useSynthesizedFeedback: sess?.pathwayGenerationUseSynthesizedFeedback === true,
+          })
         }
       } catch {
         // Swallow — status lookup is informational only.
@@ -171,6 +207,7 @@ export const GET = composeApiRoute({
       lastSessionAt,
       lastSessionId,
       lastSessionPathwayStatus,
+      pathwayUpdate,
     })
 
     return NextResponse.json({

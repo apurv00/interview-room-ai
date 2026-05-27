@@ -15,6 +15,7 @@ const STATE_LABELS: Record<PathwayState, string> = {
   empty: 'Start here',
   active: 'Today',
   pending: 'Updating',
+  unchanged: 'Current plan',
   returning: 'Resume',
   abandoned: 'Pick back up',
   completed: 'Next challenge',

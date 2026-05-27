@@ -48,6 +48,8 @@ import { fetchFeedbackSessionSummary } from '@feedback/lib/feedbackSessionFetche
 import { bisectLastLE } from '@shared/utils'
 import { PROBABILITY_COLORS } from '@interview/config/feedbackConfig'
 import ShareButton from '@learn/components/feedback/ShareButton'
+import PathwayPendingBanner from '@learn/components/pathway/PathwayPendingBanner'
+import { usePathwayGenerationPoll } from '@learn/hooks/usePathwayGenerationPoll'
 import { STORAGE_KEYS } from '@shared/storageKeys'
 
 // ─── Error Boundary ──────────────────────────────────────────────────────────
@@ -182,7 +184,45 @@ function FeedbackPageInner() {
   const [pathwayRetryStatus, setPathwayRetryStatus] = useState<
     null | { kind: 'pending' } | { kind: 'success' } | { kind: 'error'; message: string }
   >(null)
+  const [pathwayPollEpoch, setPathwayPollEpoch] = useState(0)
   const pathwayRetryTriggeredRef = useRef(false)
+
+  const pathwayPlanScheduled = useMemo(
+    () =>
+      feedback?.sideEffectOutcomes?.some(
+        (o) => o.name === 'pathwayPlan' && o.status === 'scheduled',
+      ) ?? false,
+    [feedback],
+  )
+  const handlePathwayPollRetried = useCallback(() => {
+    setPathwayPollEpoch((n) => n + 1)
+  }, [])
+
+  const { phase: pathwayPollPhase, pollExhausted: pathwayPollExhausted } =
+    usePathwayGenerationPoll({
+    sessionId: sessionId !== 'local' ? sessionId : null,
+    enabled: pathwayPlanScheduled,
+    pollEpoch: pathwayPollEpoch,
+    onRefresh: async () => {
+      if (!sessionId || sessionId === 'local') return
+      try {
+        const res = await fetch(`/api/interviews/${sessionId}?excludeTranscript=true`, {
+          credentials: 'include',
+        })
+        if (!res.ok) return
+        const json = (await res.json()) as { feedback?: FeedbackData }
+        if (json.feedback) setFeedback(json.feedback)
+      } catch {
+        // Poll refresh is best-effort on the feedback page.
+      }
+    },
+  })
+
+  // sideEffectOutcomes.pathwayPlan stays "scheduled" on persisted feedback even after
+  // the pathway job finishes; hide the inline banner once polling observes completion.
+  const showPathwayPendingBanner =
+    pathwayPlanScheduled && pathwayPollPhase !== 'done'
+
   // Parent session id for retake comparison — populated from the session
   // GET response when the current session has `parentSessionId` set.
   const [parentSessionId, setParentSessionId] = useState<string | null>(null)
@@ -270,14 +310,31 @@ function FeedbackPageInner() {
     const cleanPath = `${window.location.pathname}${cleanQuery ? `?${cleanQuery}` : ''}`
     router.replace(cleanPath)
 
-    fetch('/api/learn/pathway/retry', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId }),
-    })
+    fetch(`/api/learn/pathway?fromFeedback=${encodeURIComponent(sessionId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((vm) => {
+        const reason = vm?.pathwayUpdate?.reason
+        if (reason === 'insufficient_answers' || reason === 'no_scored_feedback') {
+          setPathwayRetryStatus({
+            kind: 'error',
+            message:
+              reason === 'insufficient_answers'
+                ? 'This interview needs at least three answers before a pathway update can run.'
+                : 'Generate scored feedback first — pathway retry is not available for this session.',
+          })
+          return null
+        }
+        return fetch('/api/learn/pathway/retry', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId }),
+        })
+      })
       .then(async (res) => {
+        if (!res) return
         if (res.ok) {
           setPathwayRetryStatus({ kind: 'success' })
+          setPathwayPollEpoch((n) => n + 1)
           return
         }
 
@@ -307,6 +364,7 @@ function FeedbackPageInner() {
         }
         if (res.status === 409 && /already in flight|just claimed/i.test(message)) {
           setPathwayRetryStatus({ kind: 'success' })
+          setPathwayPollEpoch((n) => n + 1)
           return
         }
         setPathwayRetryStatus({ kind: 'error', message })
@@ -1340,6 +1398,25 @@ function FeedbackPageInner() {
           </div>
         </div>
       </header>
+
+      {showPathwayPendingBanner && (
+        <div className="max-w-5xl mx-auto px-4 mt-4">
+          <PathwayPendingBanner
+            action={{
+              id: 'pending-feedback-inline',
+              type: 'review',
+              title: 'Your pathway update is in progress',
+              description:
+                'Your feedback is ready. We are updating your learning pathway in the background — your current plan stays visible until the update lands.',
+              ctaLabel: 'View pathway',
+              href: `/learn/pathway?fromFeedback=${encodeURIComponent(sessionId)}`,
+              metadata: { sessionId, fromFeedback: sessionId },
+            }}
+            pollExhausted={pathwayPollExhausted}
+            onRetried={handlePathwayPollRetried}
+          />
+        </div>
+      )}
 
       {/* Pathway retry banner (?retryPathway=1 from the pathway empty-state CTA) */}
       {pathwayRetryStatus && (

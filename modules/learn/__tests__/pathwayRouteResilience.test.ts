@@ -183,4 +183,73 @@ describe('GET /api/learn/pathway — Codex P1 resilience (Wave 4)', () => {
     expect(res.status).toBe(200)
     expect(mockBuildPathwayViewModel.mock.calls[0][0].lastSessionAt).toEqual(ts)
   })
+
+  it('passes pathwayUpdate when fromFeedback session is loaded', async () => {
+    const sessionId = '507f1f77bcf86cd799439011'
+    mockInterviewSessionFindOne.mockReturnValue(
+      buildChain({
+        pathwayGenerationStatus: 'pending',
+        completedAt: new Date(),
+        answeredCount: 4,
+        feedback: { overall_score: 65 },
+        evaluations: [{}, {}, {}, {}],
+      }),
+    )
+
+    const req = new NextRequest(
+      `http://localhost/api/learn/pathway?fromFeedback=${sessionId}`,
+    )
+    const res = await GET(req)
+    expect(res.status).toBe(200)
+    const args = mockBuildPathwayViewModel.mock.calls[0][0]
+    expect(args.fromFeedback).toBe(sessionId)
+    expect(args.pathwayUpdate?.reason).toBe('pathway_in_flight')
+    expect(args.pathwayUpdate?.poll).toBe(true)
+  })
+
+  it('keeps pending status when retry claim has fresh startedAt on an old completedAt', async () => {
+    const sessionId = '507f1f77bcf86cd799439011'
+    mockInterviewSessionFindOne.mockReturnValue(
+      buildChain({
+        pathwayGenerationStatus: 'pending',
+        completedAt: new Date(Date.now() - 30 * 60 * 1000),
+        pathwayGenerationStartedAt: new Date(Date.now() - 30 * 1000),
+        answeredCount: 4,
+        feedback: { overall_score: 65 },
+        evaluations: [{}, {}, {}, {}],
+      }),
+    )
+
+    const req = new NextRequest(
+      `http://localhost/api/learn/pathway?fromFeedback=${sessionId}`,
+    )
+    const res = await GET(req)
+    expect(res.status).toBe(200)
+    const args = mockBuildPathwayViewModel.mock.calls[0][0]
+    expect(args.feedbackSessionStatus).toBe('pending')
+    expect(args.pathwayUpdate?.poll).toBe(true)
+  })
+
+  it('polls when pathway uses synthesized feedback without persisted session.feedback', async () => {
+    const sessionId = '507f1f77bcf86cd799439011'
+    mockInterviewSessionFindOne.mockReturnValue(
+      buildChain({
+        pathwayGenerationStatus: 'pending',
+        pathwayGenerationUseSynthesizedFeedback: true,
+        completedAt: new Date(),
+        answeredCount: 4,
+        feedback: null,
+        evaluations: [{}, {}, {}, {}],
+      }),
+    )
+
+    const req = new NextRequest(
+      `http://localhost/api/learn/pathway?fromFeedback=${sessionId}`,
+    )
+    const res = await GET(req)
+    expect(res.status).toBe(200)
+    const args = mockBuildPathwayViewModel.mock.calls[0][0]
+    expect(args.pathwayUpdate?.reason).toBe('pathway_in_flight')
+    expect(args.pathwayUpdate?.poll).toBe(true)
+  })
 })

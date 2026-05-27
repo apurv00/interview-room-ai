@@ -6,6 +6,13 @@ import { connectDB } from '@shared/db/connection'
 import { InterviewSession } from '@shared/db/models'
 import { inngest } from '@shared/services/inngest'
 import { aiLogger } from '@shared/logger'
+import { SHORT_FORM_MIN_ANSWERS } from '@interview/services/eval/completionAdjustment'
+import {
+  buildRetryablePathwayStatusFilter,
+  getPathwayUpdateEligibility,
+  isStalePathwayGeneration,
+} from '@learn/services/pathwayUpdateEligibility'
+import { isFeatureEnabled } from '@shared/featureFlags'
 
 /**
  * POST /api/learn/pathway/retry
@@ -38,9 +45,10 @@ const RetrySchema = z.object({
  *   pending   — a job is already enqueued
  *   running   — a job is already executing
  *
- * Retries are allowed only for: 'failed' (the recovery case this endpoint
- * exists for) and undefined (never attempted — typically a session that
- * pre-dates Bug B's status tracking).
+ * Retries are allowed for: 'failed' (the recovery case this endpoint
+ * exists for), undefined (never attempted — typically a session that
+ * pre-dates Bug B's status tracking), and stale in-flight statuses
+ * where the worker never picked up the job.
  *
  * The set is used post-CAS to format helpful error messages. The CAS
  * itself uses `RETRYABLE_STATUS_FILTER` below (Codex P2 on PR #379 —
@@ -53,21 +61,14 @@ const RETRYABLE_STATUSES: ReadonlySet<string | undefined> = new Set([
 
 /**
  * Mongo filter that matches the same set of statuses as
- * `RETRYABLE_STATUSES`. Used inside the atomic `findOneAndUpdate` so
+ * `RETRYABLE_STATUSES`, plus stale pending/running states. Used inside
+ * the atomic `findOneAndUpdate` so
  * the read+write happen as a single operation. Without this, two
  * concurrent /api/learn/pathway/retry calls could both pass a separate
  * status check and then both flip 'pending' + both enqueue — duplicate
  * background jobs, conflicting terminal status writes (one writes
  * 'succeeded', the other 'failed' over it), and 2× LLM cost.
  */
-const RETRYABLE_STATUS_FILTER = {
-  $or: [
-    { pathwayGenerationStatus: 'failed' },
-    { pathwayGenerationStatus: { $exists: false } },
-    { pathwayGenerationStatus: null },
-  ],
-}
-
 // NOTE: the previous `DEFAULT_INTERVIEW_TYPE = 'screening'` constant
 // is no longer needed at this site — the event payload no longer
 // carries `interviewType` (Codex P2 on PR #379 — payload slim-down).
@@ -91,18 +92,41 @@ export const POST = composeApiRoute<z.infer<typeof RetrySchema>>({
       _id: sessionId,
       userId: new mongoose.Types.ObjectId(user.id),
     })
-      .select('config feedback evaluations pathwayGenerationStatus pathwayGenerationUseSynthesizedFeedback')
+      .select(
+        'config feedback evaluations pathwayGenerationStatus pathwayGenerationStartedAt pathwayGenerationUseSynthesizedFeedback completedAt answeredCount',
+      )
       .lean<{
         config?: { role?: string; interviewType?: string; experience?: string }
-        feedback?: unknown
+        feedback?: {
+          overall_score?: number | null
+          degraded?: boolean
+          red_flags?: string[] | null
+        } | null
         evaluations?: unknown[]
         pathwayGenerationStatus?: string
+        pathwayGenerationStartedAt?: Date
+        completedAt?: Date
         pathwayGenerationUseSynthesizedFeedback?: boolean
+        answeredCount?: number
       }>()
 
     if (!session) {
       return NextResponse.json({ error: 'Session not found' }, { status: 404 })
     }
+
+    const answeredCount =
+      typeof session.answeredCount === 'number'
+        ? session.answeredCount
+        : session.evaluations?.length ?? 0
+    if (answeredCount < SHORT_FORM_MIN_ANSWERS) {
+      return NextResponse.json(
+        {
+          error: `At least ${SHORT_FORM_MIN_ANSWERS} answered questions are required before pathway regeneration can run.`,
+        },
+        { status: 409 },
+      )
+    }
+
     // Vercel review on PR #379 — defensive null check. The Mongoose `lean()`
     // strips Mongoose defaults; a session row written by an older migration
     // or by a different code path may legitimately lack `config`.
@@ -129,6 +153,25 @@ export const POST = composeApiRoute<z.infer<typeof RetrySchema>>({
         { sessionId, userId: user.id },
         'pathway/retry: no persisted feedback — will enqueue with synthesized-feedback flag',
       )
+    } else {
+      const eligibility = getPathwayUpdateEligibility({
+        answeredCount,
+        pathwayPlannerEnabled: isFeatureEnabled('pathway_planner'),
+        feedback: session.feedback ?? null,
+        pathwayGenerationStatus: session.pathwayGenerationStatus ?? null,
+        evaluationCount: session.evaluations?.length ?? 0,
+      })
+      if (eligibility.reason === 'insufficient_answers' || eligibility.reason === 'no_scored_feedback') {
+        return NextResponse.json(
+          {
+            error:
+              eligibility.reason === 'insufficient_answers'
+                ? 'This interview did not have enough answers to update your pathway.'
+                : 'Scored feedback is required before pathway regeneration can run.',
+          },
+          { status: 409 },
+        )
+      }
     }
 
     // Codex P2 on PR #379 — atomic retry claim.
@@ -148,13 +191,15 @@ export const POST = composeApiRoute<z.infer<typeof RetrySchema>>({
       {
         _id: new mongoose.Types.ObjectId(sessionId),
         userId: new mongoose.Types.ObjectId(user.id),
-        ...RETRYABLE_STATUS_FILTER,
+        ...buildRetryablePathwayStatusFilter(),
       },
       {
         $set: {
           pathwayGenerationStatus: 'pending',
           pathwayGenerationUseSynthesizedFeedback: useSynthesizedFeedback,
+          pathwayGenerationStartedAt: new Date(),
         },
+        $inc: { pathwayGenerationAttempts: 1 },
         $unset: { pathwayGenerationError: 1 },
       },
       { returnDocument: 'after' }
@@ -165,14 +210,20 @@ export const POST = composeApiRoute<z.infer<typeof RetrySchema>>({
       // validation read and the CAS, or another concurrent retry just
       // won. Disambiguate via a quick re-read so the user gets a useful
       // error rather than a generic "could not claim".
+      const isStaleInFlight = isStalePathwayGeneration(
+        session.pathwayGenerationStatus,
+        session.completedAt,
+        session.pathwayGenerationStartedAt,
+      )
       const reason =
-        session.pathwayGenerationStatus === 'running' ||
-        session.pathwayGenerationStatus === 'pending'
+        (session.pathwayGenerationStatus === 'running' ||
+          session.pathwayGenerationStatus === 'pending') &&
+        !isStaleInFlight
           ? 'A pathway regeneration is already in flight for this session.'
-          : RETRYABLE_STATUSES.has(session.pathwayGenerationStatus)
+          : RETRYABLE_STATUSES.has(session.pathwayGenerationStatus) || isStaleInFlight
             ? 'Another retry just claimed this session — refresh and try again if needed.'
             : `Pathway regeneration is not retryable from status '${session.pathwayGenerationStatus}'. ` +
-              'Retries are reserved for failed or never-attempted sessions.'
+              'Retries are reserved for failed, stale in-flight, or never-attempted sessions.'
       return NextResponse.json({ error: reason }, { status: 409 })
     }
 
