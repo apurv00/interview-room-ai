@@ -59,4 +59,28 @@ describe('usePathwayGenerationPoll', () => {
     expect(result.current.pollExhausted).toBe(false)
     expect(result.current.phase).toBe('polling')
   })
+
+  it('enters done phase when pathway generation completes', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          state: 'success',
+          pathwayUpdate: { poll: false, reason: 'pathway_succeeded' },
+          pathway: { generatedFromSessionId: SESSION_ID },
+        }),
+      }),
+    )
+
+    const { result } = renderHook(() =>
+      usePathwayGenerationPoll({
+        sessionId: SESSION_ID,
+        enabled: true,
+        onRefresh: vi.fn(),
+      }),
+    )
+
+    await waitFor(() => expect(result.current.phase).toBe('done'))
+  })
 })

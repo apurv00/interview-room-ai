@@ -198,7 +198,8 @@ function FeedbackPageInner() {
     setPathwayPollEpoch((n) => n + 1)
   }, [])
 
-  const { pollExhausted: pathwayPollExhausted } = usePathwayGenerationPoll({
+  const { phase: pathwayPollPhase, pollExhausted: pathwayPollExhausted } =
+    usePathwayGenerationPoll({
     sessionId: sessionId !== 'local' ? sessionId : null,
     enabled: pathwayPlanScheduled,
     pollEpoch: pathwayPollEpoch,
@@ -216,6 +217,11 @@ function FeedbackPageInner() {
       }
     },
   })
+
+  // sideEffectOutcomes.pathwayPlan stays "scheduled" on persisted feedback even after
+  // the pathway job finishes; hide the inline banner once polling observes completion.
+  const showPathwayPendingBanner =
+    pathwayPlanScheduled && pathwayPollPhase !== 'done'
 
   // Parent session id for retake comparison — populated from the session
   // GET response when the current session has `parentSessionId` set.
@@ -1393,7 +1399,7 @@ function FeedbackPageInner() {
         </div>
       </header>
 
-      {pathwayPlanScheduled && (
+      {showPathwayPendingBanner && (
         <div className="max-w-5xl mx-auto px-4 mt-4">
           <PathwayPendingBanner
             action={{
