@@ -5,11 +5,13 @@ import { chromium } from '@playwright/test'
 import { createRunManifest, runOutputDir, saveManifest, loadManifest } from '../orchestrator/runManifest.mjs'
 import { writeTelemetryArtifacts } from './telemetry.mjs'
 import { computeResumeOffset, mergeMatrixReports } from '../orchestrator/retryPolicy.mjs'
+import { bakeStrongAnswersIntoRunner } from './bakeRunnerStrongAnswers.mjs'
 
 const moduleRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 function loadRunnerSource() {
   let source = readFileSync(join(moduleRoot, 'browser', 'qa-matrix-runner.js'), 'utf-8')
+  source = bakeStrongAnswersIntoRunner(source)
   // Playwright sets hash via goto URL
   source = source.replace(/^location\.hash=[^\r\n]+\r?\n/, '')
   return source

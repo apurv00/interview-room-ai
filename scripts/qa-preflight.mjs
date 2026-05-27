@@ -52,6 +52,19 @@ if (!runner.includes('pickStrongAnswer') || runner.includes('kwMatch')) {
   pass('Harness routing', 'Competency-bucket routing (no keyword map)');
 }
 
+const strongPath = path.join(process.cwd(), 'modules/qa/config/strongAnswers.json');
+try {
+  const strong = JSON.parse(fs.readFileSync(strongPath, 'utf8'));
+  const bucketCount = Object.keys(strong.byBucket ?? {}).length;
+  if (bucketCount < 10) {
+    fail('Strong answers', `byBucket has only ${bucketCount} entries — run npm run qa:validate:answers`);
+  } else {
+    pass('Strong answers', `${bucketCount} competency buckets (Playwright bakes at inject time)`);
+  }
+} catch (e) {
+  fail('Strong answers', e.message);
+}
+
 if (!runner.includes("'succeeded'") || /pathwayGenerationStatus[\s\S]{0,120}'completed'/.test(runner)) {
   fail('Harness pathway poll', 'Still polling for completed instead of succeeded');
 } else {

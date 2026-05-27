@@ -5,17 +5,11 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { bakeStrongAnswersIntoRunner } from '../modules/qa/runner/bakeRunnerStrongAnswers.mjs';
 
 const dir = path.join(process.cwd(), 'modules/qa/browser');
-const configPath = path.join(process.cwd(), 'modules/qa/config/strongAnswers.json');
 const srcPath = path.join(dir, 'qa-matrix-runner.js');
-let code = fs.readFileSync(srcPath, 'utf8');
-
-const strongConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-code = code.replace(
-  /const STRONG_ANSWERS_CONFIG = [\s\S]*?\n  function pickStrongAnswer/,
-  `const STRONG_ANSWERS_CONFIG = ${JSON.stringify(strongConfig)}\n  function pickStrongAnswer`,
-);
+let code = bakeStrongAnswersIntoRunner(fs.readFileSync(srcPath, 'utf8'));
 
 const hashPrefix = "location.hash='mode=full&questions=3&autostart=1';\r\n";
 if (!code.startsWith('location.hash')) {
