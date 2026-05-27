@@ -121,20 +121,38 @@ Put this immediately after metadata:
 
 ## Workflow
 
-1. **Run matrix** → JSON in `modules/qa/output/`
-2. **Add manual P0s** → edit `config/reportFindings.json`
-3. **Generate report** → `npm run qa:report:browser [json-path]`
-4. **Triage** → findings register → file tickets from P0 down
-5. **Re-run** after fix → set finding `status: resolved` in JSON
+1. **Run matrix** → `npm run qa:v3:matrix:prod` (or mini-smoke / smoke profiles)
+2. **Post-run agents** (automatic with `--report`): observe → infra → triage → MD
+3. **Baseline diff** → `npm run qa:v3:diff -- <reportId>` vs `qa-browser-full-1779529900005`
+4. **Linear tickets** → `npm run qa:v3:triage -- <reportId> --linear` (requires `LINEAR_API_KEY`)
+5. **Re-run** after fix → triage auto-marks pathway P0 `resolved` when ≥95% succeeded
 
----
+### v3 run directory (Phase 3.4)
+
+```
+modules/qa/output/runs/<reportId>/
+  matrix-report.json
+  triage-summary.json      ← merged findings + recommendations
+  baseline-diff.json       ← metrics vs baseline
+  findings.csv
+  observations/
+  infra-report.json
+  linear-sync.json         ← when --linear
+```
 
 ## Generator files
 
 | File | Role |
 |------|------|
-| `scripts/generate-qa-browser-report.mjs` | MD + CSV from browser JSON |
+| `scripts/generate-qa-browser-report.mjs` | MD + CSV from matrix JSON (reads triage/baseline if present) |
+| `scripts/qa-v3-triage.mjs` | Merge all signals → triage-summary.json |
+| `scripts/qa-v3-diff.mjs` | Baseline metrics comparison |
+| `scripts/qa-v3-report.mjs` | MD + triage in one command |
+| `modules/qa/agents/triage.mjs` | Triage merge logic |
+| `modules/qa/agents/baselineDiff.mjs` | Diff engine |
+| `modules/qa/agents/linearSync.mjs` | Linear P0/P1 sync |
 | `modules/qa/config/reportFindings.json` | Manual P0/P1 findings |
+| `modules/qa/config/linear.json.example` | Linear team config template |
 | `modules/qa/docs/REPORT_STRUCTURE.md` | This guide |
 | `modules/qa/docs/PATHWAY_P0_TRACE.md` | P0 pathway investigation — flow, Mongo/Inngest queries |
 

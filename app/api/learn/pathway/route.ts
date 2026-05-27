@@ -48,7 +48,7 @@ export const GET = composeApiRoute({
             userId: new mongoose.Types.ObjectId(user.id),
           })
             .select(
-              'pathwayGenerationStatus pathwayGenerationError pathwayGenerationStartedAt pathwayGenerationUseSynthesizedFeedback completedAt answeredCount feedback evaluations',
+              'pathwayGenerationStatus pathwayGenerationError pathwayGenerationStartedAt pathwayGenerationUseSynthesizedFeedback completedAt answeredCount feedback evaluations config.interviewType',
             )
             .lean<{
               pathwayGenerationStatus?: string
@@ -63,6 +63,7 @@ export const GET = composeApiRoute({
                 red_flags?: string[] | null
               } | null
               evaluations?: unknown[]
+              config?: { interviewType?: string }
             }>()
           const rawStatus = sess?.pathwayGenerationStatus
           const stale = isStalePathwayGeneration(
@@ -78,6 +79,7 @@ export const GET = composeApiRoute({
 
           pathwayUpdate = getPathwayUpdateEligibility({
             answeredCount: sess?.answeredCount ?? sess?.evaluations?.length ?? 0,
+            interviewType: sess?.config?.interviewType,
             pathwayPlannerEnabled: isFeatureEnabled('pathway_planner'),
             feedback: sess?.feedback ?? null,
             pathwayGenerationStatus: feedbackSessionStatus,

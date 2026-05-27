@@ -3,10 +3,11 @@
  * Generate Markdown + CSV from browser QA matrix JSON with quality-criteria mapping.
  * Usage: node scripts/generate-qa-browser-report.mjs [path-to-json]
  */
-import { readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { summarizeTelemetry, telemetryCsvRows, writeTelemetryArtifacts } from '../modules/qa/runner/telemetry.mjs'
+import { formatDiffMarkdown } from '../modules/qa/agents/baselineDiff.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const inputPath =
@@ -21,6 +22,17 @@ try {
 }
 
 const raw = JSON.parse(readFileSync(inputPath, 'utf-8'))
+const inputDir = dirname(inputPath)
+const triagePath = join(inputDir, 'triage-summary.json')
+const baselineDiffPath = join(inputDir, 'baseline-diff.json')
+let triageSummary = null
+let baselineDiffDoc = null
+if (existsSync(triagePath)) {
+  triageSummary = JSON.parse(readFileSync(triagePath, 'utf-8'))
+}
+if (existsSync(baselineDiffPath)) {
+  baselineDiffDoc = JSON.parse(readFileSync(baselineDiffPath, 'utf-8'))
+}
 const telemetry = raw.telemetry ?? []
 const telemetrySummary = raw.telemetrySummary ?? (telemetry.length ? summarizeTelemetry(telemetry) : null)
 
@@ -74,7 +86,7 @@ function mapQualityCriteria(row) {
   }
   if (str < 30) issues.push('[Eval/Tech] Low STAR/structure score')
   if (persona === 'strong' && avg != null && avg < 60) {
-    issues.push(`[Harness] Strong persona below band (avg ${avg}, expected ≥60)`)
+    issues.push(`[Harness/G3] Strong relevance calibration (avg ${avg}, target ≥60 — non-blocking on v2.4+)`)
   }
   if (persona === 'weak' && avg != null && avg <= 55) {
     issues.push(`[Harness] Weak persona in band (avg ${avg}) — separation OK`)
@@ -166,7 +178,11 @@ function sessionStageIssues(run) {
   const issues = []
   const fb = run.stages?.feedback
   if (!fb?.pass && fb?.score == null) issues.push('[Feedback] No overall_score returned')
-  if (fb?.score != null && fb.score < 10) issues.push('[Feedback] Very low session score (<10)')
+  if (fb?.score === 0) {
+    issues.push('[Feedback] Scoring withheld (short-form / no-data — not a calibrated low score)')
+  } else if (fb?.score != null && fb.score < 10) {
+    issues.push('[Feedback] Very low session score (<10)')
+  }
 
   const anStatus = analysisStatus(run)
   if (anStatus === 'failed') issues.push('[Analysis] Pipeline failed')
@@ -317,6 +333,10 @@ const evaluationRows = (raw.evaluationRows ?? []).map((row) => {
     jdAlignment: evNum(row.eval?.jdAlignment),
     avgDimensions: row.avg ?? avgDim(row.eval),
     pass: row.bandOk === true,
+    g3Relevance: row.g3Relevance ?? row.gates?.g3Relevance ?? null,
+    answerRoute: row.answerRoute ?? null,
+    competencyBucket: row.flowMeta?.competencyBucket ?? null,
+    slotId: row.flowMeta?.slotId ?? null,
     generateLatencyMs: row.genMs ?? null,
     evalLatencyMs: row.evalMs ?? null,
     issues: mapQualityCriteria(row),
@@ -356,7 +376,15 @@ const autoFindings = buildAutoFindings(sessionRows, downstream, evaluationRows, 
   weakPass: weakRuns.filter((r) => r.pass).length,
   totalRuns: runs.length,
 })
-const allFindings = [...manualFindings, ...autoFindings]
+const allFindings = triageSummary?.findings ?? [...manualFindings, ...autoFindings]
+
+function isActiveP0(f) {
+  return f.severity === 'P0' && f.status !== 'resolved' && f.status !== 'wont-fix'
+}
+
+function isActivePathwayP0(f) {
+  return isActiveP0(f) && f.stage === 'pathway'
+}
 const scorecard = buildScorecard(sessionRows, downstream, {
   strongPass: strongRuns.filter((r) => r.pass).length,
   weakPass: weakRuns.filter((r) => r.pass).length,
@@ -456,22 +484,27 @@ function buildScorecard(sessionRows, downstream, stats) {
     if (s.pathwayGenerationStatus === 'succeeded' || s.pathwayGenerationStatus === 'skipped') return true
     return s.pathwayState === 'completed' || s.pathwayState === 'active'
   }).length
-  const hasP0Pathway = allFindings.some((f) => f.severity === 'P0' && f.stage === 'pathway')
+  const hasP0Pathway = allFindings.some(isActivePathwayP0)
   const pathwayMetric = downstream.pathwayGenCaptured
     ? `${downstream.pathwayGenSucceeded + downstream.pathwayGenSkipped}/${n} gen succeeded/skipped`
     : `${pathwayOk}/${n} active or completed`
   const pathwayNotes = hasP0Pathway
     ? 'Pathway P0 — generation not completing'
-    : downstream.pathwayGenCaptured
-      ? `view-model pending: ${downstream.pathwayPending}/${n}`
-      : `${downstream.pathwayPending}/${n} pending`
+    : downstream.pathwayGenCaptured && pathwayOk === n
+      ? 'All sessions reached terminal pathway success'
+      : downstream.pathwayGenCaptured
+        ? `view-model pending: ${downstream.pathwayPending}/${n}`
+        : `${downstream.pathwayPending}/${n} pending`
 
   return [
     {
       stage: 'interview',
       rag: stats.strongPass === 0 ? '🟡' : stats.passedRuns === stats.totalRuns ? '🟢' : '🟡',
       metric: `${stats.passedRuns}/${stats.totalRuns} harness pass`,
-      notes: 'Weak persona separates; strong fails on canned paste (see AUTO-HAR-001)',
+      notes:
+        raw.harnessVersion?.startsWith('2.4')
+          ? 'G1 pipeline + G2 weak separation; G3 strong relevance tracked separately'
+          : 'Weak persona separates; strong fails on canned paste (see AUTO-HAR-001)',
     },
     {
       stage: 'feedback',
@@ -487,7 +520,7 @@ function buildScorecard(sessionRows, downstream, stats) {
     },
     {
       stage: 'pathway',
-      rag: hasP0Pathway || pathwayOk === 0 ? '🔴' : pathwayOk === n ? '🟢' : '🟡',
+      rag: hasP0Pathway ? '🔴' : pathwayOk === n ? '🟢' : '🟡',
       metric: pathwayMetric,
       notes: pathwayNotes,
     },
@@ -659,6 +692,9 @@ const md = formatMarkdown(raw, evaluationRows, topIssues, samples, sessionRows, 
   feedbackScores,
   telemetrySummary,
   telemetryCount: telemetry.length,
+  triageSummary,
+  baselineDiffDoc,
+  inputDir,
 })
 
 writeFileSync(mdPath, md, 'utf-8')
@@ -702,7 +738,8 @@ console.log(
 
 function formatMarkdown(raw, rows, topIssues, samples, sessionRows, downstream, findings, scorecard, stats) {
   const L = []
-  const p0 = findings.filter((f) => f.severity === 'P0')
+  const p0 = findings.filter(isActiveP0)
+  const resolvedP0 = findings.filter((f) => f.severity === 'P0' && f.status === 'resolved')
 
   L.push('# QA Matrix Report')
   L.push('')
@@ -731,6 +768,9 @@ function formatMarkdown(raw, rows, topIssues, samples, sessionRows, downstream, 
   L.push(`| Harness pass rate | ${raw.passedRuns}/${raw.totalRuns} (${(raw.passRate * 100).toFixed(1)}%) |`)
   L.push(`| Finished | ${raw.finishedAt ?? '—'} |`)
   L.push(`| P0 count | ${p0.length} |`)
+  if (resolvedP0.length) {
+    L.push(`| Resolved P0 (historical) | ${resolvedP0.map((f) => f.id).join(', ')} |`)
+  }
   L.push('')
   L.push('### Pipeline scorecard')
   L.push('')
@@ -745,7 +785,12 @@ function formatMarkdown(raw, rows, topIssues, samples, sessionRows, downstream, 
   L.push('## 2. Ship blockers (P0)')
   L.push('')
   if (p0.length === 0) {
-    L.push('_No P0 findings in this run._')
+    L.push('_No active P0 findings in this run._')
+    if (resolvedP0.length) {
+      L.push('')
+      L.push(`> Historical P0 resolved: ${resolvedP0.map((f) => f.id).join(', ')}`)
+    }
+    L.push('')
   } else {
     for (const f of p0) {
       L.push(`### ${f.id}: ${f.title}`)
@@ -775,7 +820,24 @@ function formatMarkdown(raw, rows, topIssues, samples, sessionRows, downstream, 
   }
   L.push('')
   L.push(`> Export: \`${id}-findings.csv\``)
+  if (stats.triageSummary) {
+    L.push(`> Triage: \`runs/${raw.reportId ?? id}/triage-summary.json\``)
+  }
   L.push('')
+
+  if (stats.baselineDiffDoc && !stats.baselineDiffDoc.error) {
+    L.push(formatDiffMarkdown(stats.baselineDiffDoc))
+    L.push('')
+  }
+
+  if (stats.triageSummary?.recommendations?.length) {
+    L.push('### Triage recommendations')
+    L.push('')
+    for (const r of stats.triageSummary.recommendations) {
+      L.push(`- **${r.action}** — ${r.reason}`)
+    }
+    L.push('')
+  }
 
   // §4 Pipeline deep-dives
   L.push('## 4. Pipeline deep-dives')
@@ -906,6 +968,11 @@ function formatMarkdown(raw, rows, topIssues, samples, sessionRows, downstream, 
   L.push(`| \`${id}-sessions.csv\` | ${sessionRows.length} | One row per interview session |`)
   L.push(`| \`${id}-evaluations.csv\` | ${rows.length} | One row per question eval |`)
   L.push(`| \`${id}.json\` | — | Raw harness payload |`)
+  if (stats.triageSummary) {
+    L.push(`| \`runs/${raw.reportId ?? id}/triage-summary.json\` | — | Merged triage (Observer + Infra + auto) |`)
+    L.push(`| \`runs/${raw.reportId ?? id}/baseline-diff.json\` | — | Metrics diff vs baseline |`)
+    L.push(`| \`runs/${raw.reportId ?? id}/observations/\` | — | Observer classifications |`)
+  }
   L.push('')
 
   L.push('### B. Session summary')

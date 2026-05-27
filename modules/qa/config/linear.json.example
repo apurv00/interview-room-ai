@@ -1,0 +1,7 @@
+{
+  "teamId": "",
+  "projectId": "",
+  "labelIds": [],
+  "createForSeverity": ["P0", "P1"],
+  "labels": ["qa-auto"]
+}

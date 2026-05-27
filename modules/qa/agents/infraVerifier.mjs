@@ -2,13 +2,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { MongoClient, ObjectId } from 'mongodb'
 import { runOutputDir } from '../orchestrator/runManifest.mjs'
-
-const REQUIRED_INNGEST_FUNCTIONS = [
-  'pathway-regenerate',
-  'analysis-job',
-  'email-digest',
-  'regenerate-plans',
-]
+import { checkInngestEndpoint, CRITICAL_FUNCTION_IDS } from './inngestCheck.mjs'
 
 /**
  * @param {string} reportId
@@ -28,10 +22,12 @@ export function loadSessionIdsFromRun(reportId) {
  * @param {object} opts
  * @param {string} opts.reportId
  * @param {string} [opts.mongoUri]
+ * @param {string} [opts.baseUrl]
  * @param {boolean} [opts.prod]
  */
 export async function verifyRunInfra(opts) {
   const { reportId, prod = false } = opts
+  const baseUrl = opts.baseUrl ?? (prod ? 'https://www.interviewprep.guru' : 'http://localhost:3000')
   const mongoUri =
     opts.mongoUri ?? (prod ? process.env.MONGODB_URI_PROD : null) ?? process.env.MONGODB_URI
   const sessionIds = loadSessionIdsFromRun(reportId)
@@ -123,14 +119,66 @@ export async function verifyRunInfra(opts) {
     }
   }
 
-  if (prod) {
+  if (mongoUri && sessionIds.length) {
+    const client = new MongoClient(mongoUri, { serverSelectionTimeoutMS: 10_000 })
+    try {
+      await client.connect()
+      const col = client.db().collection('multimodalanalyses')
+      const oids = sessionIds.filter((id) => /^[a-f0-9]{24}$/i.test(id)).map((id) => new ObjectId(id))
+      const docs = await col
+        .find({ sessionId: { $in: oids } })
+        .project({ status: 1, sessionId: 1, error: 1 })
+        .toArray()
+
+      let failed = 0
+      let completed = 0
+      let pending = 0
+      let missing = sessionIds.length
+
+      const bySession = new Map(docs.map((d) => [d.sessionId.toString(), d]))
+      for (const sid of sessionIds) {
+        const doc = bySession.get(sid)
+        if (!doc) continue
+        missing--
+        const st = doc.status
+        if (st === 'failed') failed++
+        else if (st === 'completed') completed++
+        else pending++
+      }
+
+      const analyzed = failed + completed + pending
+      const failRate = analyzed > 0 ? failed / analyzed : 0
+      const ok = failRate <= 0.05 && missing <= Math.ceil(sessionIds.length * 0.5)
+
+      checks.push({
+        id: 'analysis-failure-rate',
+        ok,
+        severity: ok ? 'none' : failRate > 0.05 ? 'P1' : 'P2',
+        message: `Multimodal analysis: ${completed} completed, ${failed} failed, ${pending} pending, ${missing} no record (fail rate ${Math.round(failRate * 100)}%)`,
+        detail: { completed, failed, pending, missing, failRate, analyzed, total: sessionIds.length },
+      })
+    } catch (err) {
+      checks.push({
+        id: 'analysis-failure-rate',
+        ok: false,
+        severity: 'P2',
+        message: `Analysis batch query failed: ${err instanceof Error ? err.message : String(err)}`,
+      })
+    } finally {
+      await client.close().catch(() => {})
+    }
+  }
+
+  try {
+    const inngestCheck = await checkInngestEndpoint({ baseUrl })
+    checks.push(inngestCheck)
+  } catch (err) {
     checks.push({
-      id: 'inngest-cloud-manual',
-      ok: true,
-      severity: 'none',
-      message:
-        'Verify Inngest Cloud dashboard: 8 functions including pathway-regenerate (automated API check requires signing key)',
-      detail: { requiredFunctions: REQUIRED_INNGEST_FUNCTIONS },
+      id: 'inngest-endpoint',
+      ok: false,
+      severity: prod ? 'P0' : 'P1',
+      message: `Inngest check failed: ${err instanceof Error ? err.message : String(err)}`,
+      detail: { criticalFunctions: CRITICAL_FUNCTION_IDS },
     })
   }
 

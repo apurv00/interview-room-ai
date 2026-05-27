@@ -1,14 +1,17 @@
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from '@playwright/test'
-import { createRunManifest, runOutputDir, saveManifest } from '../orchestrator/runManifest.mjs'
+import { createRunManifest, runOutputDir, saveManifest, loadManifest } from '../orchestrator/runManifest.mjs'
 import { writeTelemetryArtifacts } from './telemetry.mjs'
+import { computeResumeOffset, mergeMatrixReports } from '../orchestrator/retryPolicy.mjs'
+import { bakeStrongAnswersIntoRunner } from './bakeRunnerStrongAnswers.mjs'
 
 const moduleRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 function loadRunnerSource() {
   let source = readFileSync(join(moduleRoot, 'browser', 'qa-matrix-runner.js'), 'utf-8')
+  source = bakeStrongAnswersIntoRunner(source)
   // Playwright sets hash via goto URL
   source = source.replace(/^location\.hash=[^\r\n]+\r?\n/, '')
   return source
@@ -27,6 +30,9 @@ function readHarnessVersion(source) {
  * @param {number} [options.questions]
  * @param {number} [options.duration]
  * @param {number} [options.maxCells]
+ * @param {number} [options.offset]
+ * @param {number} [options.cellRetry]
+ * @param {object | null} [options.priorReport]
  * @param {boolean} [options.headless]
  * @param {number} [options.timeoutMs]
  * @param {string} [options.reportId]
@@ -40,6 +46,9 @@ export async function runPlaywrightMatrix(options) {
     questions = 3,
     duration = 10,
     maxCells = 0,
+    offset = 0,
+    cellRetry = 1,
+    priorReport = null,
     headless = false,
     timeoutMs = 4 * 60 * 60 * 1000,
     reportId = `qa-browser-${mode}-${Date.now()}`,
@@ -59,13 +68,19 @@ export async function runPlaywrightMatrix(options) {
     harnessVersion,
     status: 'running',
     startedAt: new Date().toISOString(),
+    resume: {
+      offset,
+      cellRetry,
+      completedCells: priorReport?.runs?.map((r) => r.runId) ?? [],
+      quotaAborted: false,
+    },
   })
 
   const externalTelemetry = []
   const playwrightNetwork = []
   const consoleLines = []
 
-  log(`QA v3 Playwright — reportId=${reportId} mode=${mode} questions=${questions} duration=${duration}min${maxCells ? ` cells=${maxCells}` : ''}`)
+  log(`QA v3 Playwright — reportId=${reportId} mode=${mode} questions=${questions} duration=${duration}min${maxCells ? ` cells=${maxCells}` : ''}${offset ? ` offset=${offset}` : ''}`)
   log(`baseUrl=${baseUrl} harness=${harnessVersion}`)
   log(`Using storageState (OAuth not needed during matrix — cookies only)`)
 
@@ -114,13 +129,22 @@ export async function runPlaywrightMatrix(options) {
       `questions=${questions}`,
       `duration=${duration}`,
       'autostart=1',
+      `reportId=${encodeURIComponent(reportId)}`,
+      `cellRetry=${cellRetry}`,
     ]
     if (maxCells > 0) hashParts.push(`limit=${maxCells}`)
+    if (offset > 0) hashParts.push(`offset=${offset}`)
     const hash = hashParts.join('&')
     const landing = `${baseUrl.replace(/\/$/, '')}/#${hash}`
     log(`Navigating ${landing}`)
-    // Wait for React hydration before inject — otherwise homepage re-renders over harness.
     await page.goto(landing, { waitUntil: 'networkidle', timeout: 120_000 })
+
+    if (priorReport) {
+      await page.evaluate((prior) => {
+        window.__QA_PRIOR_REPORT__ = prior
+      }, priorReport)
+      log(`Resuming from cell offset ${offset} (${priorReport.runs?.length ?? 0} prior runs)`)
+    }
 
     await page.evaluate((src) => {
       const el = document.createElement('script')
@@ -160,6 +184,10 @@ export async function runPlaywrightMatrix(options) {
       throw new Error('Matrix completed but window.__QA_REPORT__ is missing')
     }
 
+    if (priorReport) {
+      report = mergeMatrixReports(priorReport, report)
+    }
+
     await context.close()
   } catch (err) {
     fatalError = err
@@ -195,12 +223,33 @@ export async function runPlaywrightMatrix(options) {
     passedRuns: report.passedRuns,
     totalRuns: report.totalRuns,
     harnessVersion: report.harnessVersion ?? harnessVersion,
+    resume: {
+      offset: report.runs?.length ?? 0,
+      completedCells: report.runs?.map((r) => r.runId) ?? [],
+      quotaAborted: report.resume?.quotaAborted ?? false,
+      cellRetry,
+    },
     error: null,
   })
 
   log(`Done: ${report.passedRuns}/${report.totalRuns} passed — ${outDir}`)
 
   return { reportId, outDir, report, telemetry }
+}
+
+/**
+ * Load partial report + compute resume offset for --resume runs.
+ * @param {string} reportId
+ */
+export function loadResumeState(reportId) {
+  const manifest = loadManifest(reportId)
+  const reportPath = join(runOutputDir(reportId), 'matrix-report.json')
+  let priorReport = null
+  if (existsSync(reportPath)) {
+    priorReport = JSON.parse(readFileSync(reportPath, 'utf-8'))
+  }
+  const offset = computeResumeOffset(priorReport, manifest)
+  return { manifest, priorReport, offset }
 }
 
 /**

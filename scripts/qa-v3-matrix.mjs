@@ -12,8 +12,8 @@ import { existsSync, readFileSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
-import { runPlaywrightMatrix, verifyAuthSession } from '../modules/qa/runner/playwrightMatrix.mjs'
-import { defaultAuthPath, loadManifest, runOutputDir } from '../modules/qa/orchestrator/runManifest.mjs'
+import { runPlaywrightMatrix, verifyAuthSession, loadResumeState } from '../modules/qa/runner/playwrightMatrix.mjs'
+import { defaultAuthPath, runOutputDir } from '../modules/qa/orchestrator/runManifest.mjs'
 import { ensureQaAuth } from '../modules/qa/runner/automationAuth.mjs'
 import { loadDotEnvLocal } from '../modules/qa/runner/loadEnv.mjs'
 
@@ -27,7 +27,70 @@ function arg(name, fallback = null) {
   return i >= 0 ? process.argv[i + 1] : fallback
 }
 
+/** GA gate sets --strict-triage so active P0 findings fail the run (triage exits 2). */
+const strictTriage =
+  process.argv.includes('--strict-triage') || process.env.QA_MATRIX_STRICT_TRIAGE === '1'
+
+/**
+ * @param {import('node:child_process').SpawnSyncReturns<string>} triage
+ */
+function handleTriageExit(triage) {
+  if (triage.status === 2) {
+    const msg = 'Triage: active P0 findings remain'
+    if (strictTriage) {
+      console.error(`${msg} — failing run (--strict-triage)`)
+      process.exit(2)
+    }
+    console.warn(`${msg} (non-fatal without --strict-triage)`)
+    return
+  }
+  if (triage.status !== 0 && triage.status != null) {
+    if (strictTriage) {
+      console.error(`Triage exited with status ${triage.status} — failing run (--strict-triage)`)
+      process.exit(triage.status ?? 1)
+    }
+    console.warn(`Triage exited with errors (status ${triage.status})`)
+  }
+}
+
 const prod = process.argv.includes('--prod')
+const postOnlyId = arg('--post-only', null)
+
+if (postOnlyId) {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+  const result = { reportId: postOnlyId, outDir: runOutputDir(postOnlyId) }
+  if (process.argv.includes('--observe')) {
+    const obsArgs = ['scripts/qa-v3-observe.mjs', postOnlyId]
+    if (process.argv.includes('--llm')) obsArgs.push('--llm')
+    spawnSync('node', obsArgs, { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' })
+  }
+  if (process.argv.includes('--infra')) {
+    const infraArgs = ['scripts/qa-v3-infra.mjs', postOnlyId]
+    if (prod) infraArgs.push('--prod')
+    spawnSync('node', infraArgs, { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' })
+  }
+  if (process.argv.includes('--report') || process.argv.includes('--triage')) {
+    const postArgs = ['scripts/qa-v3-triage.mjs', postOnlyId]
+    const baseline = arg('--baseline', null)
+    if (baseline) postArgs.push('--baseline', baseline)
+    const triage = spawnSync('node', postArgs, {
+      cwd: root,
+      stdio: 'inherit',
+      shell: process.platform === 'win32',
+    })
+    handleTriageExit(triage)
+  }
+  if (process.argv.includes('--report')) {
+    const reportJson = join(result.outDir, 'matrix-report.json')
+    spawnSync('node', ['scripts/generate-qa-browser-report.mjs', reportJson], {
+      cwd: root,
+      stdio: 'inherit',
+      shell: process.platform === 'win32',
+    })
+  }
+  process.exit(0)
+}
+
 const baseUrl = arg('--url', prod ? 'https://www.interviewprep.guru' : 'http://localhost:3000')
 const authPath = arg('--auth', defaultAuthPath(prod))
 const profileName = arg('--profile', null)
@@ -35,19 +98,29 @@ const profile = profileName ? profiles[profileName] : null
 const mode = arg('--mode', profile?.mode ?? 'smoke')
 const questions = parseInt(arg('--questions', String(profile?.questions ?? 6)), 10)
 const duration = parseInt(arg('--duration', String(profile?.duration ?? 10)), 10)
-const maxCells = parseInt(arg('--max-cells', String(profile?.maxCells ?? 0)), 10)
+const maxCells = parseInt(arg('--limit', arg('--max-cells', String(profile?.maxCells ?? 0))), 10)
+const explicitOffset = arg('--offset', null)
 const headless = process.argv.includes('--headless')
 const generateReport = process.argv.includes('--report')
+const cellRetry = parseInt(arg('--cell-retry', '1'), 10)
 const resumeId = arg('--resume', null)
 
+let resumeOffset = 0
+let priorReport = null
 if (resumeId) {
-  const manifest = loadManifest(resumeId)
-  if (manifest?.status === 'completed') {
+  const resume = loadResumeState(resumeId)
+  priorReport = resume.priorReport
+  resumeOffset = resume.offset
+  const manifest = resume.manifest
+  if (manifest?.status === 'completed' && !manifest?.resume?.quotaAborted) {
     console.log(`Run ${resumeId} already completed (${manifest.passedRuns}/${manifest.totalRuns}).`)
     process.exit(0)
   }
   if (manifest?.status === 'running') {
-    console.warn(`Run ${resumeId} was marked running — re-executing full matrix.`)
+    console.warn(`Run ${resumeId} was marked running — resuming from cell offset ${resumeOffset}.`)
+  }
+  if (resumeOffset > 0) {
+    console.log(`Resume: ${resumeOffset} cells already in matrix-report.json`)
   }
 }
 
@@ -70,7 +143,8 @@ try {
 const auth = await verifyAuthSession(authPath, baseUrl)
 console.log(`Authenticated as ${auth.user?.email ?? auth.user?.name ?? 'user'}`)
 
-const reportId = resumeId ?? `qa-browser-${mode}-${Date.now()}`
+const reportId = arg('--report-id', resumeId ?? `qa-browser-${mode}-${Date.now()}`)
+const cellOffset = explicitOffset != null ? parseInt(explicitOffset, 10) : resumeOffset
 
 try {
   const result = await runPlaywrightMatrix({
@@ -80,24 +154,19 @@ try {
     questions,
     duration,
     maxCells,
+    offset: cellOffset,
+    cellRetry,
+    priorReport,
     headless,
     reportId,
   })
 
-  if (generateReport) {
-    const reportJson = join(result.outDir, 'matrix-report.json')
-    const gen = spawnSync('node', ['scripts/generate-qa-browser-report.mjs', reportJson], {
-      cwd: root,
-      stdio: 'inherit',
-      shell: process.platform === 'win32',
-    })
-    if (gen.status !== 0) process.exit(gen.status ?? 1)
-  }
-
   const runPost = process.argv.includes('--observe') || process.argv.includes('--infra')
   if (runPost) {
     if (process.argv.includes('--observe')) {
-      const obs = spawnSync('node', ['scripts/qa-v3-observe.mjs', result.reportId], {
+      const obsArgs = ['scripts/qa-v3-observe.mjs', result.reportId]
+      if (process.argv.includes('--llm')) obsArgs.push('--llm')
+      const obs = spawnSync('node', obsArgs, {
         cwd: root,
         stdio: 'inherit',
         shell: process.platform === 'win32',
@@ -114,6 +183,29 @@ try {
       })
       if (infra.status !== 0) console.warn('Infra verifier reported issues')
     }
+  }
+
+  if (generateReport || process.argv.includes('--triage')) {
+    const postArgs = ['scripts/qa-v3-triage.mjs', result.reportId]
+    const baseline = arg('--baseline', null)
+    if (baseline) postArgs.push('--baseline', baseline)
+    if (process.argv.includes('--linear')) postArgs.push('--linear')
+    const triage = spawnSync('node', postArgs, {
+      cwd: root,
+      stdio: 'inherit',
+      shell: process.platform === 'win32',
+    })
+    handleTriageExit(triage)
+  }
+
+  if (generateReport) {
+    const reportJson = join(result.outDir, 'matrix-report.json')
+    const gen = spawnSync('node', ['scripts/generate-qa-browser-report.mjs', reportJson], {
+      cwd: root,
+      stdio: 'inherit',
+      shell: process.platform === 'win32',
+    })
+    if (gen.status !== 0) process.exit(gen.status ?? 1)
   }
 
   console.log(`\nReport ID: ${result.reportId}`)

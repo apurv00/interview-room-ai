@@ -1,4 +1,4 @@
-import { SHORT_FORM_MIN_ANSWERS } from '@interview/services/eval/completionAdjustment'
+import { getShortFormMinAnswers } from '@interview/services/eval/sessionScoringPolicy'
 
 /** Client poll window — retry may reclaim pending jobs stuck longer than this. */
 export const PATHWAY_CLIENT_STUCK_MS = 120_000
@@ -18,6 +18,8 @@ export type PathwayUpdateReason =
 
 export interface PathwayUpdateEligibilityInput {
   answeredCount: number
+  /** Session interview type — lowers min answers for coding / system-design. */
+  interviewType?: string
   pathwayPlannerEnabled: boolean
   feedback?: {
     overall_score?: number | null
@@ -43,9 +45,10 @@ const SHORT_FORM_FLAG =
 function hasScoredFeedback(
   feedback: PathwayUpdateEligibilityInput['feedback'],
   answeredCount: number,
+  minAnswers: number,
 ): boolean {
   if (!feedback) return false
-  if (answeredCount < SHORT_FORM_MIN_ANSWERS) return false
+  if (answeredCount < minAnswers) return false
   const flags = feedback.red_flags ?? []
   if (flags.some((f) => SHORT_FORM_FLAG.test(f))) return false
   if (typeof feedback.overall_score !== 'number') return false
@@ -57,9 +60,10 @@ function hasDegradedPathwayInput(
   feedback: PathwayUpdateEligibilityInput['feedback'],
   evaluationCount: number,
   answeredCount: number,
+  minAnswers: number,
 ): boolean {
   return (
-    answeredCount >= SHORT_FORM_MIN_ANSWERS &&
+    answeredCount >= minAnswers &&
     evaluationCount > 0 &&
     feedback?.degraded === true
   )
@@ -71,6 +75,7 @@ export function getPathwayUpdateEligibility(
   const answeredCount = Math.max(0, Number(input.answeredCount) || 0)
   const evaluationCount = Math.max(0, Number(input.evaluationCount) ?? 0)
   const status = input.pathwayGenerationStatus ?? null
+  const minAnswers = getShortFormMinAnswers(input.interviewType)
 
   if (!input.pathwayPlannerEnabled) {
     return {
@@ -81,7 +86,7 @@ export function getPathwayUpdateEligibility(
     }
   }
 
-  if (answeredCount < SHORT_FORM_MIN_ANSWERS) {
+  if (answeredCount < minAnswers) {
     return {
       reason: 'insufficient_answers',
       canEnqueue: false,
@@ -102,8 +107,8 @@ export function getPathwayUpdateEligibility(
   }
 
   const hasPathwayInput =
-    hasScoredFeedback(input.feedback, answeredCount) ||
-    hasDegradedPathwayInput(input.feedback, evaluationCount, answeredCount) ||
+    hasScoredFeedback(input.feedback, answeredCount, minAnswers) ||
+    hasDegradedPathwayInput(input.feedback, evaluationCount, answeredCount, minAnswers) ||
     (input.useSynthesizedFeedback === true && evaluationCount > 0)
 
   if (!hasPathwayInput) {

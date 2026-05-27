@@ -556,4 +556,28 @@ describe('POST /api/generate-question — JD overlay wiring', () => {
     // Retry call still carries the expanded maxTokens from Work Item A
     expect(mockCompletion.mock.calls[1][0].maxTokens).toBe(500)
   })
+
+  it('returns flowHints with slotId and competencyBucket for QA harness routing', async () => {
+    mockGetSessionConfig.mockResolvedValue({
+      domain: null,
+      depth: null,
+      rubric: null,
+      userProfile: null,
+      parsedJD: null,
+    })
+    mockResolveFlow.mockReturnValue(makeResolvedFlow())
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.flowHints).toMatchObject({
+      slotId: 'warm-up-a',
+      competencyBucket: 'motivation',
+      slotLabel: 'Warm-up A',
+      slotIndex: 0,
+      domain: 'pm',
+      depth: 'behavioral',
+      maxProbes: 0,
+      phase: 'warm-up',
+    })
+  })
 })

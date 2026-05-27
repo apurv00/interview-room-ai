@@ -7,7 +7,7 @@ import { aiLogger } from '@shared/logger'
 import type { AnswerEvaluation, FeedbackData, SpeechMetrics } from '@shared/types'
 import { aggregateMetrics, communicationScore } from '@interview/config/speechMetrics'
 import { computePerQAverage } from '@interview/services/eval/perQAggregation'
-import { SHORT_FORM_MIN_ANSWERS } from '@interview/services/eval/completionAdjustment'
+import { getShortFormMinAnswers } from '@interview/services/eval/sessionScoringPolicy'
 
 /**
  * Mongo filter matching pathway statuses where a fresh enqueue is safe.
@@ -90,6 +90,7 @@ export function canEnqueuePathwayRegeneration(
   sessionId: string | undefined,
   evaluations: unknown[] | undefined,
   answeredCount?: number,
+  interviewType?: string,
 ): sessionId is string {
   const count =
     typeof answeredCount === 'number' && answeredCount >= 0
@@ -97,12 +98,13 @@ export function canEnqueuePathwayRegeneration(
       : Array.isArray(evaluations)
         ? evaluations.length
         : 0
+  const minAnswers = getShortFormMinAnswers(interviewType)
   return Boolean(
     sessionId &&
       isFeatureEnabled('pathway_planner') &&
       Array.isArray(evaluations) &&
       evaluations.length > 0 &&
-      count >= SHORT_FORM_MIN_ANSWERS,
+      count >= minAnswers,
   )
 }
 
@@ -120,6 +122,7 @@ export async function enqueuePathwayRegeneration(
   const $set: Record<string, unknown> = {
     pathwayGenerationStatus: 'pending',
     pathwayGenerationUseSynthesizedFeedback: opts?.useSynthesizedFeedback === true,
+    pathwayGenerationStartedAt: new Date(),
   }
 
   // Atomic claim — combine the retryability check and the status flip into

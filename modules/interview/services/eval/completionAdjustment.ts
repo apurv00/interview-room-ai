@@ -25,10 +25,12 @@
  * helper always applies the logic when invoked.
  */
 
+import { getShortFormMinAnswers } from '@interview/services/eval/sessionScoringPolicy'
+
 /** Below this ratio we start penalizing the overall_score linearly. */
 export const FULL_CREDIT_COMPLETION_RATIO = 0.6
 
-/** Absolute minimum answers before a session can produce a scored report. */
+/** Absolute minimum answers before a scored behavioral session (legacy export). */
 export const SHORT_FORM_MIN_ANSWERS = 3
 
 export type EndReason = 'normal' | 'time_up' | 'user_ended' | 'usage_limit' | 'abandoned'
@@ -40,6 +42,8 @@ export interface CompletionInput {
   answeredCount: number
   /** How the interview ended. Shapes the user-facing red_flag copy. */
   endReason?: EndReason
+  /** When `coding` or `system-design`, short-form min is 1 substantive submission. */
+  interviewType?: string
 }
 
 export interface CompletionAdjustment {
@@ -74,7 +78,8 @@ export function computeCompletionAdjustment(input: CompletionInput): CompletionA
   const ratioRaw = planned > 0 ? answered / planned : 1
   const completionRatio = Math.round(ratioRaw * 100) / 100
 
-  const shouldReturnShortForm = answered < SHORT_FORM_MIN_ANSWERS
+  const minAnswers = getShortFormMinAnswers(input.interviewType)
+  const shouldReturnShortForm = answered < minAnswers
 
   // Short-form case: score should not be produced. Return early with
   // the signal the caller uses to skip scoring entirely.
@@ -84,7 +89,7 @@ export function computeCompletionAdjustment(input: CompletionInput): CompletionA
       shouldReturnShortForm: true,
       clampConfidenceTo: 'Low',
       redFlags: [
-        `Interview ended after ${answered} of ${planned} planned question${planned === 1 ? '' : 's'} — at least ${SHORT_FORM_MIN_ANSWERS} answers are required for a scored report.`,
+        `Interview ended after ${answered} of ${planned} planned question${planned === 1 ? '' : 's'} — at least ${minAnswers} answer${minAnswers === 1 ? '' : 's'} are required for a scored report.`,
       ],
       completionRatio,
     }

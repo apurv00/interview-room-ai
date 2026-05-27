@@ -42,6 +42,33 @@ describe('computeCompletionAdjustment (G.10)', () => {
       })
       expect(r.shouldReturnShortForm).toBe(false)
     })
+
+    it('allows 1 answer for coding interviews', () => {
+      const r = computeCompletionAdjustment({
+        plannedQuestionCount: 1,
+        answeredCount: 1,
+        interviewType: 'coding',
+      })
+      expect(r.shouldReturnShortForm).toBe(false)
+    })
+
+    it('allows 1 answer for system-design interviews', () => {
+      const r = computeCompletionAdjustment({
+        plannedQuestionCount: 1,
+        answeredCount: 1,
+        interviewType: 'system-design',
+      })
+      expect(r.shouldReturnShortForm).toBe(false)
+    })
+
+    it('still flags 0 answers for coding interviews', () => {
+      const r = computeCompletionAdjustment({
+        plannedQuestionCount: 1,
+        answeredCount: 0,
+        interviewType: 'coding',
+      })
+      expect(r.shouldReturnShortForm).toBe(true)
+    })
   })
 
   describe('completion multiplier', () => {
