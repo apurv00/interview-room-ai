@@ -67,12 +67,8 @@ export function measureResumeSections(templateRoot: HTMLElement): SectionMeasure
 
   const children = Array.from(templateRoot.children) as HTMLElement[]
   return children.map(child => {
-    const skillsEl =
-      child.getAttribute('data-resume-section') === 'skills'
-        ? child
-        : (child.querySelector('[data-resume-section="skills"]') as HTMLElement | null)
-    if (skillsEl) {
-      return measureSkillsBlock(skillsEl, templateRoot)
+    if (child.getAttribute('data-resume-section') === 'skills') {
+      return measureSkillsBlock(child, templateRoot)
     }
     return measureBlock(child, templateRoot)
   })
