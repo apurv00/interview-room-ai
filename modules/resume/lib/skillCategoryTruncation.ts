@@ -77,3 +77,44 @@ export function skillsMatchTruncationRatios(
     return cat.items.length === keptSkillItemCount(sourceCount, ratio)
   })
 }
+
+export function isFullSkillsMeasure(
+  measureSkills: NonNullable<ResumeData['skills']> | undefined,
+  sourceSkills: NonNullable<ResumeData['skills']> | undefined,
+): boolean {
+  if (!sourceSkills?.length) return true
+  if (!measureSkills?.length) return false
+  return sourceSkills.every(
+    (cat, index) => cat.items.length === (measureSkills[index]?.items.length ?? cat.items.length),
+  )
+}
+
+/**
+ * After truncating items, category chrome (+N more, labels) can still exceed one page.
+ * Refine ratios by dropping one more item — never re-derive ratios from truncated DOM heights.
+ */
+export function refineSkillRatiosIfStillOversized(
+  skillsSection: SkillsSectionMeasurement,
+  pageContentHeight: number,
+  ratios: Record<number, number>,
+  sourceSkills: NonNullable<ResumeData['skills']>,
+  currentSkills: NonNullable<ResumeData['skills']>,
+): Record<number, number> | null {
+  const maxAllowed = Math.max(1, pageContentHeight - skillsSection.header.offsetHeight)
+  const next = { ...ratios }
+  let changed = false
+
+  for (const category of skillsSection.categories) {
+    if (category.offsetHeight <= maxAllowed) continue
+
+    const index = category.categoryIndex
+    const sourceCount = sourceSkills[index]?.items.length ?? 0
+    const currentKept = currentSkills[index]?.items.length ?? sourceCount
+    if (currentKept <= 1) continue
+
+    next[index] = (currentKept - 1) / sourceCount
+    changed = true
+  }
+
+  return changed ? next : null
+}

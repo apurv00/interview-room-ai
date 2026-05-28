@@ -14,6 +14,8 @@ import {
   applySkillsTruncationToData,
   computeOmittedSkillCounts,
   computeSkillCategoryRatios,
+  isFullSkillsMeasure,
+  refineSkillRatiosIfStillOversized,
   skillsMatchTruncationRatios,
 } from '../lib/skillCategoryTruncation'
 
@@ -32,6 +34,7 @@ interface Props {
 export default function ResumePreview({ data, templateId = 'professional' }: Props) {
   const TemplateComponent = useMemo(() => getTemplate(templateId), [templateId])
   const [measureData, setMeasureData] = useState(data)
+  const stableSkillRatiosRef = useRef<Record<number, number>>({})
   const contentRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [pageBreaks, setPageBreaks] = useState<number[]>([0])
@@ -86,35 +89,55 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
   const contentHeight = PAGE_HEIGHT - PAGE_PADDING * 2
 
   useEffect(() => {
+    stableSkillRatiosRef.current = {}
     setMeasureData(data)
-  }, [data])
+  }, [data, templateId])
 
-  // Two-pass layout: measure full skills for ratios, re-measure truncated DOM for page breaks.
+  // Convergent layout: ratios from full DOM only; refine by item count if truncated DOM is still tall.
   const measureLayout = useCallback(() => {
     if (contentRef.current) {
       const templateRoot = contentRef.current.firstElementChild as HTMLElement | null
       if (templateRoot) {
         const sections = measureResumeSections(templateRoot)
         const skillsSection = sections.find(section => section.kind === 'skills')
-        const ratios =
+        const measuringFull = isFullSkillsMeasure(measureData.skills, data.skills)
+
+        let ratios = stableSkillRatiosRef.current
+
+        if (measuringFull && skillsSection?.kind === 'skills') {
+          ratios = computeSkillCategoryRatios(skillsSection, contentHeight)
+          stableSkillRatiosRef.current = ratios
+        } else if (
           skillsSection?.kind === 'skills'
-            ? computeSkillCategoryRatios(skillsSection, contentHeight)
-            : {}
+          && data.skills?.length
+          && measureData.skills?.length
+        ) {
+          const refined = refineSkillRatiosIfStillOversized(
+            skillsSection,
+            contentHeight,
+            ratios,
+            data.skills,
+            measureData.skills,
+          )
+          if (refined) {
+            stableSkillRatiosRef.current = refined
+            setMeasureData(applySkillsTruncationToData(data, refined))
+            return
+          }
+        }
 
-        const measureSkillsDifferFromSource = data.skills?.some(
-          (cat, index) => cat.items.length !== (measureData.skills?.[index]?.items.length ?? cat.items.length),
-        )
+        const needsTruncation = Object.keys(ratios).length > 0
+        const targetMeasureData = needsTruncation
+          ? applySkillsTruncationToData(data, ratios)
+          : data
 
-        if (Object.keys(ratios).length === 0 && measureSkillsDifferFromSource) {
-          setMeasureData(data)
+        if (needsTruncation && !skillsMatchTruncationRatios(measureData.skills, ratios, data.skills)) {
+          setMeasureData(targetMeasureData)
           return
         }
 
-        if (
-          Object.keys(ratios).length > 0
-          && !skillsMatchTruncationRatios(measureData.skills, ratios, data.skills)
-        ) {
-          setMeasureData(applySkillsTruncationToData(data, ratios))
+        if (!needsTruncation && !measuringFull) {
+          setMeasureData(data)
           return
         }
 
