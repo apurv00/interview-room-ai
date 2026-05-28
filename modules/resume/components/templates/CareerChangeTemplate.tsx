@@ -38,7 +38,7 @@ export default function CareerChangeTemplate({ data }: TemplateProps) {
               <div className="text-[8px] font-semibold text-cyan-700">{cat.category}</div>
               <div className="grid grid-cols-3 gap-x-3 gap-y-1 mt-1">
                 {cat.items.map((skill, i) => (
-                  <div key={i} className="text-gray-700 flex items-center gap-1" data-resume-section-unit>
+                  <div key={i} className="text-gray-700 flex items-center gap-1">
                     <span className="w-1 h-1 bg-cyan-600 rounded-full shrink-0" />
                     <span>{skill}</span>
                   </div>

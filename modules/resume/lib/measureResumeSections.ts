@@ -7,6 +7,14 @@ function relativeTop(el: HTMLElement, root: HTMLElement): number {
 
 const UNIT_SELECTOR = '[data-resume-section-unit], [data-resume-skills-category]'
 
+/** Skill categories are atomic units; ignore nested per-item unit markers inside a category. */
+function collectSectionUnits(sectionEl: HTMLElement): HTMLElement[] {
+  return (Array.from(sectionEl.querySelectorAll(UNIT_SELECTOR)) as HTMLElement[]).filter(el => {
+    const categoryRow = el.closest('[data-resume-skills-category]')
+    return !categoryRow || categoryRow === el
+  })
+}
+
 function measureSplittableSection(
   sectionEl: HTMLElement,
   templateRoot: HTMLElement,
@@ -16,7 +24,7 @@ function measureSplittableSection(
   const headerEl = sectionEl.querySelector(
     '[data-resume-section-header], [data-resume-skills-header]',
   ) as HTMLElement | null
-  const unitEls = Array.from(sectionEl.querySelectorAll(UNIT_SELECTOR)) as HTMLElement[]
+  const unitEls = collectSectionUnits(sectionEl)
 
   const header = headerEl
     ? {
@@ -57,7 +65,7 @@ function measureBlock(
 }
 
 function isSplittableSection(el: HTMLElement): boolean {
-  return el.querySelector(UNIT_SELECTOR) != null
+  return collectSectionUnits(el).length > 0
 }
 
 /** Leaf markers only — ignore a parent marker when a nested section marker exists inside it. */
@@ -141,7 +149,7 @@ export function readContinuationHeaderAtBreak(
   templateRoot: HTMLElement,
   breakTop: number,
 ): SectionHeaderMetrics | null {
-  const unitEls = Array.from(templateRoot.querySelectorAll(UNIT_SELECTOR)) as HTMLElement[]
+  const unitEls = collectSectionUnits(templateRoot)
   let matchedUnit: HTMLElement | null = null
 
   for (const unit of unitEls) {

@@ -162,10 +162,17 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
 
       const UNIT_SELECTOR = '[data-resume-section-unit], [data-resume-skills-category]';
 
+      function collectSectionUnits(sectionEl) {
+        return Array.from(sectionEl.querySelectorAll(UNIT_SELECTOR)).filter(el => {
+          const categoryRow = el.closest('[data-resume-skills-category]');
+          return !categoryRow || categoryRow === el;
+        });
+      }
+
       function measureSplittable(sectionEl, templateRoot, sectionId) {
         const sectionTop = relativeTop(sectionEl, templateRoot);
         const headerEl = sectionEl.querySelector('[data-resume-section-header], [data-resume-skills-header]');
-        const unitEls = Array.from(sectionEl.querySelectorAll(UNIT_SELECTOR));
+        const unitEls = collectSectionUnits(sectionEl);
         const header = headerEl ? {
           offsetTop: relativeTop(headerEl, templateRoot) - sectionTop,
           offsetHeight: headerEl.offsetHeight,
@@ -197,7 +204,7 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
       }
 
       function isSplittable(el) {
-        return el.querySelector(UNIT_SELECTOR) != null;
+        return collectSectionUnits(el).length > 0;
       }
 
       function measureSections(templateRoot) {
@@ -338,7 +345,10 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
       }
 
       function readContinuationHeaderAtBreak(templateRoot, breakTop) {
-        const unitEls = Array.from(templateRoot.querySelectorAll(UNIT_SELECTOR));
+        const unitEls = Array.from(templateRoot.querySelectorAll(UNIT_SELECTOR)).filter(el => {
+          const categoryRow = el.closest('[data-resume-skills-category]');
+          return !categoryRow || categoryRow === el;
+        });
         let matchedUnit = null;
 
         for (const unit of unitEls) {
