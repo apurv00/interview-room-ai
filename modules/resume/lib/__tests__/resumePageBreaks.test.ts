@@ -193,7 +193,23 @@ describe('computePageLayoutPlan — section pagination', () => {
     expect(plan.continuationHeaders[1]).toBe(false)
   })
 
-  it('does not slice inside an oversized unit (avoids duplicate subsection on next page)', () => {
+  it('paginates oversized experience units across pages instead of clipping', () => {
+    const pageH = 200
+    const headerH = 20
+    const plan = computePageLayoutPlan(
+      [
+        splittable('experience', 0, 500, headerH, [
+          { offsetTop: 24, height: 450 },
+        ]),
+      ],
+      pageH,
+    )
+    expect(plan.breaks).toEqual([0, 200, 380])
+    expect(plan.continuationHeaders).toEqual([false, true, true])
+    expect(plan.truncatedUnits).toEqual([])
+  })
+
+  it('does not slice inside an oversized skills unit (avoids duplicate subsection on next page)', () => {
     const plan = computePageLayoutPlan(
       [
         block(0, 100),

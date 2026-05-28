@@ -205,9 +205,6 @@ function layoutSplittableSection(
     const unitBottomAbs = unitBottom(sectionTop, unit)
 
     const maxUnitHeightWithHeader = pageHeight - header.offsetHeight
-    if (unit.offsetHeight > maxUnitHeightWithHeader) {
-      truncatedUnits.push({ sectionId: section.sectionId, unitIndex: unit.unitIndex })
-    }
 
     if (!fits(unitBottomAbs, pageStartLocal, pageHeight, reservedTopOnPage)
       && unitBreakTop > pageStartLocal) {
@@ -226,8 +223,22 @@ function layoutSplittableSection(
       }
     }
 
-    // Units stay atomic — never slice mid-job / mid-category. Oversized units are
-    // truncated in preview (truncatedUnits) instead of duplicated across pages.
+    if (unit.offsetHeight > maxUnitHeightWithHeader) {
+      if (section.sectionId === 'skills') {
+        // Skill categories: truncate in preview/PDF — never slice mid-category.
+        truncatedUnits.push({ sectionId: section.sectionId, unitIndex: unit.unitIndex })
+      } else {
+        // Experience/project/etc.: paginate inside the unit so tail content is not
+        // clipped when index===0 moved the section start (Codex r3320360766).
+        let next = pageEnd(pageStartLocal, pageHeight, reservedTopOnPage)
+        while (next < unitBottomAbs) {
+          pushBreak(breaks, continuation, next, true)
+          pageStartLocal = next
+          reservedTopOnPage = header.offsetHeight
+          next = pageEnd(pageStartLocal, pageHeight, reservedTopOnPage)
+        }
+      }
+    }
   }
 
   return pageStartLocal

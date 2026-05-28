@@ -305,6 +305,7 @@ export function renderResumeHTML(
           const unit = units[index];
           const unitBreakTop = sectionTop + unit.offsetTop;
           const unitBottomPx = unitBottomAbs(sectionTop, unit);
+          const maxUnitHeightWithHeader = pageHeight - header.offsetHeight;
 
           if (!fits(unitBottomPx, pageStartLocal, pageHeight, reservedTop) && unitBreakTop > pageStartLocal) {
             if (index === 0) {
@@ -317,6 +318,16 @@ export function renderResumeHTML(
               pushBreak(breaks, continuation, unitBreakTop, true);
               pageStartLocal = unitBreakTop;
               reservedTop = header.offsetHeight;
+            }
+          }
+
+          if (unit.offsetHeight > maxUnitHeightWithHeader && section.sectionId !== 'skills') {
+            let next = pageEnd(pageStartLocal, pageHeight, reservedTop);
+            while (next < unitBottomPx) {
+              pushBreak(breaks, continuation, next, true);
+              pageStartLocal = next;
+              reservedTop = header.offsetHeight;
+              next = pageEnd(pageStartLocal, pageHeight, reservedTop);
             }
           }
         }
