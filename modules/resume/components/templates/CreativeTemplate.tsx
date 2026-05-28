@@ -10,7 +10,7 @@ export default function CreativeTemplate({ data }: TemplateProps) {
         {/* Left Sidebar */}
         <div className="w-[20%] bg-[#2563eb] text-white p-3 min-h-full">
           {/* Contact */}
-          <div className="mb-4" data-resume-section="block">
+          <div className="mb-4">
             <h2 className="font-bold uppercase tracking-widest border-b border-white/30 pb-0.5 mb-1">Contact</h2>
             {contact.email && <div className="text-[8px] mb-0.5">{contact.email}</div>}
             {contact.phone && <div className="text-[8px] mb-0.5">{contact.phone}</div>}
@@ -39,7 +39,7 @@ export default function CreativeTemplate({ data }: TemplateProps) {
 
           {/* Certifications */}
           {data.certifications && data.certifications.length > 0 && (
-            <div className="mb-4" data-resume-section="block">
+            <div className="mb-4">
               <h2 className="font-bold uppercase tracking-widest border-b border-white/30 pb-0.5 mb-1">Certifications</h2>
               {data.certifications.map((cert, i) => (
                 <div key={i} className="text-[8px] mb-1">
@@ -53,7 +53,7 @@ export default function CreativeTemplate({ data }: TemplateProps) {
         </div>
 
         {/* Right Main Area */}
-        <div className="w-[80%] p-3" data-resume-section="block">
+        <div className="w-[80%] p-3">
           {/* Header */}
           <div className="mb-3">
             <h1 className="font-bold text-[#2563eb] tracking-wide" style={{ fontSize: 'var(--r-title, 18px)' }}>{contact.fullName || 'Your Name'}</h1>

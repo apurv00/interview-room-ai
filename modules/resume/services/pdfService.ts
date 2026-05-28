@@ -247,6 +247,7 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
             const category = section.categories[i];
             const categoryBreakTop = skillsTop + category.offsetTop;
             const categoryBottomAbs = skillsTop + bottom(category);
+            const maxCategoryHeightWithHeader = pageHeight - section.header.offsetHeight;
 
             if (i === 0) {
               // Match preview planner: keep first category on current page only if it fits.
@@ -254,11 +255,21 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
                 pushBreak(breaks, continuation, categoryBreakTop, false);
                 pageStart = categoryBreakTop;
               }
-              continue;
+            } else {
+              pushBreak(breaks, continuation, categoryBreakTop, true);
+              pageStart = categoryBreakTop;
             }
 
-            pushBreak(breaks, continuation, categoryBreakTop, true);
-            pageStart = categoryBreakTop;
+            // Prevent clipping when one category is taller than a single page
+            // (minus duplicated section header on continuation pages).
+            if (category.offsetHeight > maxCategoryHeightWithHeader) {
+              let next = pageStart + pageHeight;
+              while (next < categoryBottomAbs) {
+                pushBreak(breaks, continuation, next, true);
+                pageStart = next;
+                next += pageHeight;
+              }
+            }
           }
         }
 
