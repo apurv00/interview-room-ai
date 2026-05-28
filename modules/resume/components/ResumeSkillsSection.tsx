@@ -16,6 +16,14 @@ interface Props {
   renderCategory: (cat: SkillCategory, index: number) => ReactNode
 }
 
+function extractGridSpanClass(className?: string): string | undefined {
+  if (!className) return undefined
+  const spans = className
+    .split(/\s+/)
+    .filter(token => token.startsWith('col-span-') || token.startsWith('md:col-span-') || token.startsWith('lg:col-span-'))
+  return spans.length > 0 ? spans.join(' ') : undefined
+}
+
 /**
  * Measurable Skills block for resume pagination.
  * Each category is a separate break unit; the header is measured independently.
@@ -30,10 +38,11 @@ export default function ResumeSkillsSection({
 }: Props) {
   if (!skills.length) return null
   const previewPage = useResumePreviewPage()
+  const headerItemClassName = extractGridSpanClass(headerClassName)
 
   return (
     <div data-resume-section="skills" className={sectionClassName}>
-      <div data-resume-skills-header={title}>
+      <div data-resume-skills-header={title} className={headerItemClassName}>
         {renderHeader ? renderHeader() : <h2 className={headerClassName}>{title}</h2>}
       </div>
       {skills.map((cat, index) => {

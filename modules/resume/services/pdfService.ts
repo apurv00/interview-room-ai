@@ -181,7 +181,10 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
         }
 
         return Array.from(templateRoot.children).map(child => {
-          const skillsEl = child.querySelector('[data-resume-section="skills"]');
+          const skillsEl =
+            child.getAttribute('data-resume-section') === 'skills'
+              ? child
+              : child.querySelector('[data-resume-section="skills"]');
           return skillsEl ? measureSkills(skillsEl) : measureBlock(child);
         });
       }
