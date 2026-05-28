@@ -209,15 +209,8 @@ function layoutSplittableSection(
       reservedTopOnPage = repeatHeader ? header.offsetHeight : 0
     }
 
-    if (unit.offsetHeight > maxUnitHeightWithHeader) {
-      let next = pageEnd(pageStartLocal, pageHeight, reservedTopOnPage)
-      while (next < unitBottomAbs) {
-        pushBreak(breaks, continuation, next, true)
-        pageStartLocal = next
-        reservedTopOnPage = header.offsetHeight
-        next = pageEnd(pageStartLocal, pageHeight, reservedTopOnPage)
-      }
-    }
+    // Units stay atomic — never slice mid-job / mid-category. Oversized units are
+    // truncated in preview (truncatedUnits) instead of duplicated across pages.
   }
 
   return pageStartLocal
