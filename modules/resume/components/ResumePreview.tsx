@@ -4,7 +4,7 @@ import { useMemo, useEffect, useLayoutEffect, useRef, useState, useCallback } fr
 import type { ResumeData } from '../validators/resume'
 import { getTemplate } from './templates'
 import { getFontStack, getFontSizes, getCustomFontSizes, getGoogleFontUrl, DEFAULT_HEADING_SIZE, DEFAULT_BODY_SIZE } from '../config/fontConfig'
-import { computePageLayoutPlan } from '../lib/resumePageBreaks'
+import { computePageLayoutPlan, pageClipHeight } from '../lib/resumePageBreaks'
 import {
   measureResumeSections,
   readContinuationHeaderAtBreak,
@@ -235,7 +235,9 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
 
         {/* Visible pages */}
         <div className="flex flex-col gap-3">
-          {pages.map((pageIndex) => (
+          {pages.map((pageIndex) => {
+            const clipHeight = pageClipHeight(pageIndex, pageBreaks, contentHeight)
+            return (
             <div key={pageIndex}>
               {/* Page number badge */}
               {pageCount > 1 && (
@@ -270,7 +272,7 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                       className="relative"
                       style={{
                         width: contentWidth,
-                        height: contentHeight,
+                        height: clipHeight,
                         overflow: 'hidden',
                       }}
                     >
@@ -326,7 +328,7 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                 </div>
               )}
             </div>
-          ))}
+          )})}
         </div>
       </div>
     </div>

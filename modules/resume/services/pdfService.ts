@@ -447,6 +447,13 @@ export function renderResumeHTML(
       ));
 
       pagesRoot.innerHTML = '';
+      function pageClipHeight(pageIndex, breaks, pageContentHeight) {
+        const start = breaks[pageIndex];
+        const nextStart = breaks[pageIndex + 1];
+        if (nextStart === undefined) return pageContentHeight;
+        return Math.max(0, nextStart - start);
+      }
+
       plan.breaks.forEach((breakTop, pageIndex) => {
         const page = document.createElement('div');
         page.className = 'resume-page';
@@ -454,6 +461,7 @@ export function renderResumeHTML(
         inner.className = 'resume-page-inner';
         const viewport = document.createElement('div');
         viewport.className = 'resume-page-viewport';
+        viewport.style.height = pageClipHeight(pageIndex, plan.breaks, CONTENT_HEIGHT) + 'px';
 
         const headerMetrics = continuationHeaderMetrics[pageIndex];
         if (plan.continuation[pageIndex] && headerMetrics) {
