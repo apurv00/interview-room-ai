@@ -4,7 +4,7 @@ import { useMemo, useEffect, useLayoutEffect, useRef, useState, useCallback } fr
 import type { ResumeData } from '../validators/resume'
 import { getTemplate } from './templates'
 import { getFontStack, getFontSizes, getCustomFontSizes, getGoogleFontUrl, DEFAULT_HEADING_SIZE, DEFAULT_BODY_SIZE } from '../config/fontConfig'
-import { computePageLayoutPlan } from '../lib/resumePageBreaks'
+import { computePageLayoutPlan, pageClipHeight } from '../lib/resumePageBreaks'
 import {
   measureResumeSections,
   readContinuationHeaderAtBreak,
@@ -215,8 +215,7 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
               * (no re-slice) but the real omitted counts so ResumeSkillsSection
               * still renders the "+N more" row. Without this the measurer is
               * shorter than the rendered page and breaks can clip/duplicate
-              * content (Codex r3320046388). Derived from the stable ratios ref
-              * so it stays in sync with the measureData on this same render. */}
+              * content (Codex r3320046388). */}
             <ResumePreviewPageProvider
               value={{
                 skillsContinuationHeader: false,
@@ -235,7 +234,14 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
 
         {/* Visible pages */}
         <div className="flex flex-col gap-3">
-          {pages.map((pageIndex) => (
+          {pages.map((pageIndex) => {
+            const clipHeight = pageClipHeight(
+              pageIndex,
+              pageBreaks,
+              contentHeight,
+              continuationHeadersByPage[pageIndex]?.height ?? 0,
+            )
+            return (
             <div key={pageIndex}>
               {/* Page number badge */}
               {pageCount > 1 && (
@@ -270,7 +276,7 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                       className="relative"
                       style={{
                         width: contentWidth,
-                        height: contentHeight,
+                        height: clipHeight,
                         overflow: 'hidden',
                       }}
                     >
@@ -309,7 +315,7 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                             truncatedSkillCategoryOmittedCounts,
                           }}
                         >
-                          <TemplateComponent data={data} />
+                          <TemplateComponent data={measureData} />
                         </ResumePreviewPageProvider>
                       </div>
                     </div>
@@ -326,7 +332,7 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                 </div>
               )}
             </div>
-          ))}
+          )})}
         </div>
       </div>
     </div>

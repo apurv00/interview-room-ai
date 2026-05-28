@@ -308,13 +308,20 @@ export function renderResumeHTML(
           const maxUnitHeightWithHeader = pageHeight - header.offsetHeight;
 
           if (!fits(unitBottomPx, pageStartLocal, pageHeight, reservedTop) && unitBreakTop > pageStartLocal) {
-            const repeatHeader = index > 0;
-            pushBreak(breaks, continuation, unitBreakTop, repeatHeader);
-            pageStartLocal = unitBreakTop;
-            reservedTop = repeatHeader ? header.offsetHeight : 0;
+            if (index === 0) {
+              if (sectionTop > pageStartLocal) {
+                pushBreak(breaks, continuation, sectionTop, false);
+                pageStartLocal = sectionTop;
+                reservedTop = 0;
+              }
+            } else {
+              pushBreak(breaks, continuation, unitBreakTop, true);
+              pageStartLocal = unitBreakTop;
+              reservedTop = header.offsetHeight;
+            }
           }
 
-          if (unit.offsetHeight > maxUnitHeightWithHeader) {
+          if (unit.offsetHeight > maxUnitHeightWithHeader && section.sectionId !== 'skills') {
             let next = pageEnd(pageStartLocal, pageHeight, reservedTop);
             while (next < unitBottomPx) {
               pushBreak(breaks, continuation, next, true);
@@ -447,6 +454,15 @@ export function renderResumeHTML(
       ));
 
       pagesRoot.innerHTML = '';
+      function pageClipHeight(pageIndex, breaks, pageContentHeight, continuationHeaderHeight) {
+        const start = breaks[pageIndex];
+        const nextStart = breaks[pageIndex + 1];
+        if (nextStart === undefined) return pageContentHeight;
+        const span = nextStart - start;
+        const withHeader = span + Math.max(0, continuationHeaderHeight || 0);
+        return Math.min(pageContentHeight, Math.max(0, withHeader));
+      }
+
       plan.breaks.forEach((breakTop, pageIndex) => {
         const page = document.createElement('div');
         page.className = 'resume-page';
@@ -456,6 +472,10 @@ export function renderResumeHTML(
         viewport.className = 'resume-page-viewport';
 
         const headerMetrics = continuationHeaderMetrics[pageIndex];
+        const continuationHeaderHeight =
+          plan.continuation[pageIndex] && headerMetrics ? headerMetrics.height : 0;
+        viewport.style.height =
+          pageClipHeight(pageIndex, plan.breaks, CONTENT_HEIGHT, continuationHeaderHeight) + 'px';
         if (plan.continuation[pageIndex] && headerMetrics) {
           const header = document.createElement('div');
           header.className = 'resume-continuation-header';

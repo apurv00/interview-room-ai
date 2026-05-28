@@ -73,6 +73,31 @@ export function fits(
   return bottom <= pageEnd(pageStart, pageHeight, reservedTop)
 }
 
+/**
+ * Viewport height for a rendered page. When the next page starts at `breaks[i+1]`,
+ * page i must clip at that offset — otherwise content between breaks appears on both
+ * pages (e.g. half a Skills header on page 1 and the full section again on page 2).
+ *
+ * When this page repeats a continuation header, content is shifted down by
+ * `continuationHeaderHeight` (`marginTop = -breakTop + headerHeight`). The clip must
+ * include that reserved band so the slice up to the next break is not truncated
+ * (Codex r3320336750).
+ */
+export function pageClipHeight(
+  pageIndex: number,
+  breaks: number[],
+  pageContentHeight: number,
+  continuationHeaderHeight = 0,
+): number {
+  if (pageIndex < 0 || pageIndex >= breaks.length) return pageContentHeight
+  const start = breaks[pageIndex]
+  const nextStart = breaks[pageIndex + 1]
+  if (nextStart === undefined) return pageContentHeight
+  const span = nextStart - start
+  const withHeader = span + Math.max(0, continuationHeaderHeight)
+  return Math.min(pageContentHeight, Math.max(0, withHeader))
+}
+
 function pushBreak(
   breaks: number[],
   continuation: boolean[],
@@ -180,25 +205,38 @@ function layoutSplittableSection(
     const unitBottomAbs = unitBottom(sectionTop, unit)
 
     const maxUnitHeightWithHeader = pageHeight - header.offsetHeight
-    if (unit.offsetHeight > maxUnitHeightWithHeader) {
-      truncatedUnits.push({ sectionId: section.sectionId, unitIndex: unit.unitIndex })
-    }
 
     if (!fits(unitBottomAbs, pageStartLocal, pageHeight, reservedTopOnPage)
       && unitBreakTop > pageStartLocal) {
-      const repeatHeader = index > 0
-      pushBreak(breaks, continuation, unitBreakTop, repeatHeader)
-      pageStartLocal = unitBreakTop
-      reservedTopOnPage = repeatHeader ? header.offsetHeight : 0
+      if (index === 0) {
+        // Move the whole section — breaking at unitBreakTop leaves the section
+        // header and a clipped first unit on the prior page (duplicate SKILLS).
+        if (sectionTop > pageStartLocal) {
+          pushBreak(breaks, continuation, sectionTop, false)
+          pageStartLocal = sectionTop
+          reservedTopOnPage = 0
+        }
+      } else {
+        pushBreak(breaks, continuation, unitBreakTop, true)
+        pageStartLocal = unitBreakTop
+        reservedTopOnPage = header.offsetHeight
+      }
     }
 
     if (unit.offsetHeight > maxUnitHeightWithHeader) {
-      let next = pageEnd(pageStartLocal, pageHeight, reservedTopOnPage)
-      while (next < unitBottomAbs) {
-        pushBreak(breaks, continuation, next, true)
-        pageStartLocal = next
-        reservedTopOnPage = header.offsetHeight
-        next = pageEnd(pageStartLocal, pageHeight, reservedTopOnPage)
+      if (section.sectionId === 'skills') {
+        // Skill categories: truncate in preview/PDF — never slice mid-category.
+        truncatedUnits.push({ sectionId: section.sectionId, unitIndex: unit.unitIndex })
+      } else {
+        // Experience/project/etc.: paginate inside the unit so tail content is not
+        // clipped when index===0 moved the section start (Codex r3320360766).
+        let next = pageEnd(pageStartLocal, pageHeight, reservedTopOnPage)
+        while (next < unitBottomAbs) {
+          pushBreak(breaks, continuation, next, true)
+          pageStartLocal = next
+          reservedTopOnPage = header.offsetHeight
+          next = pageEnd(pageStartLocal, pageHeight, reservedTopOnPage)
+        }
       }
     }
   }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computePageLayoutPlan, type SectionMeasurement } from '../resumePageBreaks'
+import { computePageLayoutPlan, pageClipHeight, type SectionMeasurement } from '../resumePageBreaks'
 
 const PAGE = 800
 
@@ -155,6 +155,73 @@ describe('computePageLayoutPlan — section pagination', () => {
     )
     expect(plan.breaks.length).toBeGreaterThanOrEqual(3)
     expect(plan.continuationHeaders[2]).toBe(true)
+  })
+
+  it('clips page 0 at next break so moved sections do not peek on the prior page', () => {
+    const breaks = [0, 750]
+    expect(pageClipHeight(0, breaks, PAGE)).toBe(750)
+    expect(pageClipHeight(1, breaks, PAGE)).toBe(PAGE)
+  })
+
+  it('clips intermediate pages between consecutive breaks', () => {
+    const breaks = [0, 782, 1200]
+    expect(pageClipHeight(0, breaks, PAGE)).toBe(782)
+    // Middle page repeats a 20px header; clip must include that band (Codex r3320336750).
+    expect(pageClipHeight(1, breaks, PAGE, 20)).toBe(438)
+  })
+
+  it('extends clip by continuation header height on middle pages of tall blocks', () => {
+    const breaks = [0, 200, 380]
+    const pageH = 200
+    const headerH = 20
+    expect(pageClipHeight(0, breaks, pageH)).toBe(200)
+    expect(pageClipHeight(1, breaks, pageH, headerH)).toBe(200)
+    expect(pageClipHeight(2, breaks, pageH)).toBe(200)
+  })
+
+  it('moves the whole section when the first unit does not fit (not mid-section unit offset)', () => {
+    const plan = computePageLayoutPlan(
+      [
+        block(0, 720),
+        splittable('skills', 720, 200, 20, [
+          { offsetTop: 24, height: 150 },
+        ]),
+      ],
+      PAGE,
+    )
+    expect(plan.breaks).toEqual([0, 720])
+    expect(plan.continuationHeaders[1]).toBe(false)
+  })
+
+  it('paginates oversized experience units across pages instead of clipping', () => {
+    const pageH = 200
+    const headerH = 20
+    const plan = computePageLayoutPlan(
+      [
+        splittable('experience', 0, 500, headerH, [
+          { offsetTop: 24, height: 450 },
+        ]),
+      ],
+      pageH,
+    )
+    expect(plan.breaks).toEqual([0, 200, 380])
+    expect(plan.continuationHeaders).toEqual([false, true, true])
+    expect(plan.truncatedUnits).toEqual([])
+  })
+
+  it('does not slice inside an oversized skills unit (avoids duplicate subsection on next page)', () => {
+    const plan = computePageLayoutPlan(
+      [
+        block(0, 100),
+        splittable('skills', 100, 280, 20, [
+          { offsetTop: 24, height: 250 },
+        ]),
+      ],
+      200,
+    )
+    const breaksInsideUnit = plan.breaks.filter(b => b > 124 && b < 350)
+    expect(breaksInsideUnit).toEqual([])
+    expect(plan.truncatedUnits).toContainEqual({ sectionId: 'skills', unitIndex: 0 })
   })
 
   it('marks oversized units for safe truncation', () => {
