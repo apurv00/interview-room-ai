@@ -243,10 +243,22 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
           // do not force per-category continuation breaks.
           if (fits(skillsBottom, pageStart, pageHeight)) continue;
 
-          for (let i = 1; i < section.categories.length; i++) {
-            const nextBreak = skillsTop + section.categories[i].offsetTop;
-            pushBreak(breaks, continuation, nextBreak, true);
-            pageStart = nextBreak;
+          for (let i = 0; i < section.categories.length; i++) {
+            const category = section.categories[i];
+            const categoryBreakTop = skillsTop + category.offsetTop;
+            const categoryBottomAbs = skillsTop + bottom(category);
+
+            if (i === 0) {
+              // Match preview planner: keep first category on current page only if it fits.
+              if (!fits(categoryBottomAbs, pageStart, pageHeight) && categoryBreakTop > pageStart) {
+                pushBreak(breaks, continuation, categoryBreakTop, false);
+                pageStart = categoryBreakTop;
+              }
+              continue;
+            }
+
+            pushBreak(breaks, continuation, categoryBreakTop, true);
+            pageStart = categoryBreakTop;
           }
         }
 
