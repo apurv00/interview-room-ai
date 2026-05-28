@@ -20,7 +20,9 @@ export function ResumePreviewPageProvider({
   children,
 }: {
   value: ResumePreviewPageContextValue
-  children: React.ReactNode
+  // Optional so `React.createElement(Provider, { value }, child)` (the variadic
+  // form used by the PDF SSR path) typechecks without passing children as a prop.
+  children?: React.ReactNode
 }) {
   return (
     <ResumePreviewPageContext.Provider value={value}>

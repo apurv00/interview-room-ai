@@ -86,6 +86,21 @@ function collectLeafMarkedSections(templateRoot: HTMLElement): HTMLElement[] {
 
 function measureMarkedSection(el: HTMLElement, templateRoot: HTMLElement): SectionMeasurement {
   const sectionId = el.getAttribute('data-resume-section') || 'section'
+  // Multi-column regions (e.g. the Creative sidebar + main flex container)
+  // cannot be paginated as a linear stack — their child sections live in
+  // parallel columns, so sorting markers by top offset and advancing a single
+  // pageStart double-counts heights and slices the columns at the wrong
+  // offsets (Codex r3319377021 / r3319417932). Treat the whole region as one
+  // atomic block sliced by height, with no single header to repeat.
+  if (el.hasAttribute('data-resume-columns')) {
+    return {
+      kind: 'block',
+      sectionId,
+      offsetTop: relativeTop(el, templateRoot),
+      offsetHeight: el.offsetHeight,
+      headerHeight: 0,
+    }
+  }
   if (isSplittableSection(el)) {
     return measureSplittableSection(el, templateRoot, sectionId)
   }

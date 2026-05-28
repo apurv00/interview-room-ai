@@ -52,9 +52,14 @@ export default function ResumeSkillsSection({
         const omittedCount =
           previewPage?.truncatedSkillCategoryOmittedCounts?.[index]
           ?? omittedSkillItemCount(cat.items.length, ratio)
-        const shouldTruncateInPreview = omittedCount > 0 && ratio < 1
-        const renderedCat = shouldTruncateInPreview ? sliceSkillCategory(cat, ratio) : cat
-        const shouldAnnotate = shouldTruncateInPreview
+        // Re-slice the items only when a ratio < 1 is supplied (visible pages
+        // and PDF export). The hidden measurer passes already-truncated items
+        // with ratio = 1 plus a real omitted count, so it must render the same
+        // "+N more" row WITHOUT slicing again — otherwise the measured
+        // coordinate space is shorter than what is actually rendered and breaks
+        // can clip/duplicate content (Codex r3320046388 / r3319666174).
+        const renderedCat = ratio < 1 ? sliceSkillCategory(cat, ratio) : cat
+        const shouldAnnotate = omittedCount > 0
 
         return (
         <div

@@ -210,7 +210,26 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
           }}
         >
           <div ref={contentRef} style={wrapperStyle}>
-            <TemplateComponent data={measureData} />
+            {/* Measure the SAME layout the visible pages render: measureData
+              * already carries the truncated items, so we pass ratios = {}
+              * (no re-slice) but the real omitted counts so ResumeSkillsSection
+              * still renders the "+N more" row. Without this the measurer is
+              * shorter than the rendered page and breaks can clip/duplicate
+              * content (Codex r3320046388). Derived from the stable ratios ref
+              * so it stays in sync with the measureData on this same render. */}
+            <ResumePreviewPageProvider
+              value={{
+                skillsContinuationHeader: false,
+                truncatedSkillCategoryIndices: [],
+                truncatedSkillCategoryRatios: {},
+                truncatedSkillCategoryOmittedCounts: computeOmittedSkillCounts(
+                  data.skills || [],
+                  stableSkillRatiosRef.current,
+                ),
+              }}
+            >
+              <TemplateComponent data={measureData} />
+            </ResumePreviewPageProvider>
           </div>
         </div>
 

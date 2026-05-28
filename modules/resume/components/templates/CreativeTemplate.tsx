@@ -6,7 +6,10 @@ export default function CreativeTemplate({ data }: TemplateProps) {
 
   return (
     <div className="text-gray-900 leading-snug" style={{ fontSize: 'var(--r-body, 9px)' }}>
-      <div className="flex">
+      {/* Two-column layout: paginated as one atomic height-sliced block so the
+        * sidebar and main column advance together instead of being flattened
+        * into a single linear marker list (Codex r3319377021 / r3319417932). */}
+      <div className="flex" data-resume-section="body" data-resume-columns>
         {/* Left Sidebar */}
         <div className="w-[20%] bg-[#2563eb] text-white p-3 min-h-full">
           {/* Contact */}
