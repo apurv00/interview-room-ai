@@ -144,40 +144,41 @@ function headerMetricsFromElement(
   }
 }
 
-/** Header overlay for a continuation page starting at `breakTop`. */
+/**
+ * Header overlay for a continuation page starting at `breakTop`.
+ *
+ * A continuation page belongs to whichever section's vertical range
+ * [top, top+height) straddles `breakTop` — NOT to the nearest unit. The old
+ * unit-only lookup had two failure modes:
+ *   1. Block sections (long Summary / custom section) have no units, so the
+ *      lookup returned null and the repeated header the planner reserved space
+ *      for was never rendered (Codex r3319929068).
+ *   2. When no unit sat exactly at the break, a ±4px nearest-unit fallback
+ *      could attach an adjacent section's header to the continuation page.
+ * Range containment fixes both: it resolves the section directly and never
+ * crosses into a neighbour. For overlapping sections (e.g. the two Creative
+ * columns) we prefer the section that starts latest at/above the break.
+ */
 export function readContinuationHeaderAtBreak(
   templateRoot: HTMLElement,
   breakTop: number,
 ): SectionHeaderMetrics | null {
-  const unitEls = collectSectionUnits(templateRoot)
-  let matchedUnit: HTMLElement | null = null
+  const sections = collectLeafMarkedSections(templateRoot)
+  let matched: HTMLElement | null = null
+  let matchedTop = -Infinity
 
-  for (const unit of unitEls) {
-    const unitTop = relativeTop(unit, templateRoot)
-    if (unitTop === breakTop || (breakTop > unitTop && breakTop < unitTop + unit.offsetHeight)) {
-      matchedUnit = unit
-      break
+  for (const section of sections) {
+    const top = relativeTop(section, templateRoot)
+    const sectionBottom = top + section.offsetHeight
+    if (breakTop >= top && breakTop < sectionBottom && top > matchedTop) {
+      matched = section
+      matchedTop = top
     }
   }
 
-  if (!matchedUnit && unitEls.length > 0) {
-    let best: HTMLElement | null = null
-    let bestDelta = Infinity
-    for (const unit of unitEls) {
-      const unitTop = relativeTop(unit, templateRoot)
-      const delta = Math.abs(unitTop - breakTop)
-      if (delta < bestDelta) {
-        bestDelta = delta
-        best = unit
-      }
-    }
-    if (best && bestDelta <= 4) matchedUnit = best
-  }
+  if (!matched) return null
 
-  const section = (matchedUnit?.closest('[data-resume-section]') ?? null) as HTMLElement | null
-  if (!section) return null
-
-  const header = section.querySelector(
+  const header = matched.querySelector(
     '[data-resume-section-header], [data-resume-skills-header]',
   ) as HTMLElement | null
   if (!header) return null

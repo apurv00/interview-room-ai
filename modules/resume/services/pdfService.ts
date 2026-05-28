@@ -345,35 +345,24 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
       }
 
       function readContinuationHeaderAtBreak(templateRoot, breakTop) {
-        const unitEls = Array.from(templateRoot.querySelectorAll(UNIT_SELECTOR)).filter(el => {
-          const categoryRow = el.closest('[data-resume-skills-category]');
-          return !categoryRow || categoryRow === el;
-        });
-        let matchedUnit = null;
+        // Mirror modules/resume/lib/measureResumeSections.ts: resolve the
+        // continuation header by the section whose vertical range straddles
+        // breakTop, not by the nearest unit. Handles block sections (no units)
+        // and never attaches a neighbouring section's header.
+        const sections = collectLeafMarked(templateRoot);
+        let matched = null;
+        let matchedTop = -Infinity;
 
-        for (const unit of unitEls) {
-          const unitTop = relativeTop(unit, templateRoot);
-          if (unitTop === breakTop || (breakTop > unitTop && breakTop < unitTop + unit.offsetHeight)) {
-            matchedUnit = unit;
-            break;
+        for (const section of sections) {
+          const top = relativeTop(section, templateRoot);
+          const sectionBottom = top + section.offsetHeight;
+          if (breakTop >= top && breakTop < sectionBottom && top > matchedTop) {
+            matched = section;
+            matchedTop = top;
           }
         }
 
-        if (!matchedUnit && unitEls.length > 0) {
-          let best = null;
-          let bestDelta = Infinity;
-          for (const unit of unitEls) {
-            const unitTop = relativeTop(unit, templateRoot);
-            const delta = Math.abs(unitTop - breakTop);
-            if (delta < bestDelta) {
-              bestDelta = delta;
-              best = unit;
-            }
-          }
-          if (best && bestDelta <= 4) matchedUnit = best;
-        }
-
-        const section = matchedUnit ? matchedUnit.closest('[data-resume-section]') : null;
+        const section = matched;
         if (!section) return null;
 
         const header = section.querySelector('[data-resume-section-header], [data-resume-skills-header]');
