@@ -38,7 +38,15 @@ export default function ResumeSkillsSection({
       </div>
       {skills.map((cat, index) => {
         const omittedCount = previewPage?.truncatedSkillCategoryOmittedCounts?.[index] ?? 0
-        const shouldAnnotate = omittedCount > 0 && cat.items.includes('…')
+        const ratio = previewPage?.truncatedSkillCategoryRatios?.[index] ?? 1
+        const shouldTruncateInPreview = omittedCount > 0 && ratio < 1
+        const keptCount = shouldTruncateInPreview
+          ? Math.max(1, Math.min(cat.items.length, Math.floor(cat.items.length * ratio)))
+          : cat.items.length
+        const renderedCat = shouldTruncateInPreview
+          ? { ...cat, items: cat.items.slice(0, keptCount) }
+          : cat
+        const shouldAnnotate = shouldTruncateInPreview
 
         return (
         <div
@@ -46,7 +54,7 @@ export default function ResumeSkillsSection({
           data-resume-skills-category
           data-category-index={index}
         >
-          {renderCategory(cat, index)}
+          {renderCategory(renderedCat, index)}
           {shouldAnnotate && (
             <div className="text-[7px] text-slate-400 mt-0.5">
               +{omittedCount} more

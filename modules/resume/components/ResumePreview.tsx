@@ -10,7 +10,6 @@ import {
   readSkillsHeaderMetrics,
 } from '../lib/measureResumeSections'
 import { ResumePreviewPageProvider } from './ResumePreviewPageContext'
-import { normalizeSkillsForPagination } from '../lib/normalizeSkillsForPagination'
 
 // A4 at 72dpi: 595 × 842 px
 const PAGE_WIDTH = 595
@@ -25,7 +24,6 @@ interface Props {
 }
 
 export default function ResumePreview({ data, templateId = 'professional' }: Props) {
-  const normalizedData = useMemo(() => normalizeSkillsForPagination(data), [data])
   const TemplateComponent = useMemo(() => getTemplate(templateId), [templateId])
   const contentRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -113,16 +111,14 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
 
         const omittedCounts: Record<number, number> = {}
         const originalSkills = data.skills || []
-        const normalizedSkills = normalizedData.skills || []
-        const maxLen = Math.max(originalSkills.length, normalizedSkills.length)
-        for (let i = 0; i < maxLen; i++) {
-          const originalCount = originalSkills[i]?.items?.length || 0
-          const normalizedItems = normalizedSkills[i]?.items || []
-          const normalizedRealCount = normalizedItems.filter(item => item !== '…').length
-          const omitted = Math.max(0, originalCount - normalizedRealCount)
-          if (omitted > 0) {
-            omittedCounts[i] = omitted
-          }
+        const ratios = skillsSection?.kind === 'skills' ? nextRatiosFromSection(skillsSection, contentHeight) : {}
+        for (const [indexKey, ratio] of Object.entries(ratios)) {
+          const index = Number(indexKey)
+          const originalCount = originalSkills[index]?.items?.length || 0
+          if (originalCount <= 1) continue
+          const kept = Math.max(1, Math.floor(originalCount * ratio))
+          const omitted = Math.max(0, originalCount - kept)
+          if (omitted > 0) omittedCounts[index] = omitted
         }
         setTruncatedSkillCategoryOmittedCounts(omittedCounts)
       }
@@ -134,7 +130,7 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
 
   useEffect(() => {
     measure()
-  }, [normalizedData, templateId, headingSize, bodySize, fontFamily, fontSize, measure])
+  }, [data, templateId, headingSize, bodySize, fontFamily, fontSize, measure])
 
   useEffect(() => {
     const el = containerRef.current
@@ -173,7 +169,7 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
           }}
         >
           <div ref={contentRef} style={wrapperStyle}>
-            <TemplateComponent data={normalizedData} />
+            <TemplateComponent data={data} />
           </div>
         </div>
 
@@ -250,7 +246,7 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                             truncatedSkillCategoryOmittedCounts,
                           }}
                         >
-                          <TemplateComponent data={normalizedData} />
+                          <TemplateComponent data={data} />
                         </ResumePreviewPageProvider>
                       </div>
                     </div>
@@ -272,4 +268,18 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
       </div>
     </div>
   )
+}
+
+function nextRatiosFromSection(
+  skillsSection: Extract<ReturnType<typeof measureResumeSections>[number], { kind: 'skills' }>,
+  contentHeight: number,
+): Record<number, number> {
+  const ratios: Record<number, number> = {}
+  for (const category of skillsSection.categories) {
+    const maxAllowed = Math.max(1, contentHeight - skillsSection.header.offsetHeight)
+    if (category.offsetHeight > maxAllowed) {
+      ratios[category.categoryIndex] = maxAllowed / category.offsetHeight
+    }
+  }
+  return ratios
 }
