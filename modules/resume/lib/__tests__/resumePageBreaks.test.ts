@@ -26,7 +26,7 @@ function skills(
   }
 }
 
-describe('computePageLayoutPlan — skills categories', () => {
+describe('computePageLayoutPlan — section pagination', () => {
   it('keeps entire skills section on page 1 when it fits', () => {
     const plan = computePageLayoutPlan(
       [
@@ -56,7 +56,7 @@ describe('computePageLayoutPlan — skills categories', () => {
     expect(plan.skillsContinuationHeader[1]).toBe(false)
   })
 
-  it('splits after first category and enforces one category per continuation page', () => {
+  it('breaks before a later skills category only when it cannot fit on the page', () => {
     const plan = computePageLayoutPlan(
       [
         block(0, 700),
@@ -68,9 +68,22 @@ describe('computePageLayoutPlan — skills categories', () => {
       ],
       PAGE,
     )
-    expect(plan.breaks).toEqual([0, 782, 850])
+    expect(plan.breaks).toEqual([0, 782])
     expect(plan.skillsContinuationHeader[1]).toBe(true)
-    expect(plan.skillsContinuationHeader[2]).toBe(true)
+  })
+
+  it('keeps a skills category on the current page when it fits in the remainder', () => {
+    const plan = computePageLayoutPlan(
+      [
+        block(0, 700),
+        skills(700, 100, 20, [
+          { offsetTop: 24, height: 50 },
+          { offsetTop: 82, height: 18 },
+        ]),
+      ],
+      PAGE,
+    )
+    expect(plan.breaks).toEqual([0])
   })
 
   it('does not split categories across pages', () => {

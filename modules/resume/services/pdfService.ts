@@ -267,14 +267,8 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
             const categoryBottomAbs = skillsTop + bottom(category);
             const maxCategoryHeightWithHeader = pageHeight - section.header.offsetHeight;
 
-            if (i === 0) {
-              // Match preview planner: keep first category on current page only if it fits.
-              if (!fits(categoryBottomAbs, pageStart, pageHeight) && categoryBreakTop > pageStart) {
-                pushBreak(breaks, continuation, categoryBreakTop, false);
-                pageStart = categoryBreakTop;
-              }
-            } else {
-              pushBreak(breaks, continuation, categoryBreakTop, true);
+            if (!fits(categoryBottomAbs, pageStart, pageHeight) && categoryBreakTop > pageStart) {
+              pushBreak(breaks, continuation, categoryBreakTop, i > 0);
               pageStart = categoryBreakTop;
             }
 

@@ -1,9 +1,14 @@
 /**
- * Section-aware A4 page breaks with Skills category rules:
- * - If header + first category cannot fit on the current page, move the entire Skills section to the next page.
- * - If the first category fits, keep header + fitting categories on that page.
- * - When a later category does not fit, break before it; the next page shows the section title again + that category.
- * - Categories are never split across pages and never appear twice on one page.
+ * Section-aware A4 page breaks for preview and PDF.
+ *
+ * All sections (summary, experience, education, skills, …):
+ * - If a section cannot fit in the remaining space on the current page, start it on the next page.
+ * - Block sections move as a whole unit unless taller than one page (then slice by page height).
+ *
+ * Skills additionally splits by measured category sub-units:
+ * - If header + first category cannot fit on the current page, move the entire Skills section.
+ * - Break before a category only when that category cannot fit on the current page (never unconditional).
+ * - Continuation pages repeat the Skills heading; categories are not split across pages.
  */
 
 export interface MeasurableUnit {
@@ -144,8 +149,6 @@ function layoutSkillsSection(
       if (wholeSectionFits()) return pageStartLocal
     }
 
-    // One category per page maximum when section is split.
-    // First category stays on current page; each next category starts a new page.
     for (let index = 0; index < categories.length; index++) {
       const category = categories[index]
       const categoryBreakTop = skillsTop + category.offsetTop
@@ -156,17 +159,11 @@ function layoutSkillsSection(
         truncatedSkillCategoryIndices.push(category.categoryIndex)
       }
 
-      if (index === 0) {
-        // Keep first category on current page if it fits, otherwise section was already moved above.
-        if (!fits(categoryBottomAbs, pageStartLocal, pageHeight) && categoryBreakTop > pageStartLocal) {
-          pushBreak(breaks, continuation, categoryBreakTop, false)
-          pageStartLocal = categoryBreakTop
-        }
-        continue
+      // Same page-end rule as block sections: break only when this category cannot fit.
+      if (!fits(categoryBottomAbs, pageStartLocal, pageHeight) && categoryBreakTop > pageStartLocal) {
+        pushBreak(breaks, continuation, categoryBreakTop, index > 0)
+        pageStartLocal = categoryBreakTop
       }
-
-      pushBreak(breaks, continuation, categoryBreakTop, true)
-      pageStartLocal = categoryBreakTop
     }
 
     return pageStartLocal
