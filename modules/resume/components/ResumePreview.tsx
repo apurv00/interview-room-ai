@@ -126,7 +126,7 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
     if (containerRef.current) {
       setScale(containerRef.current.clientWidth / PAGE_WIDTH)
     }
-  }, [contentHeight, contentWidth])
+  }, [contentHeight, contentWidth, data])
 
   useEffect(() => {
     measure()
