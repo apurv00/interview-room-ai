@@ -2,6 +2,7 @@
 
 import type { ReactNode } from 'react'
 import type { ResumeData } from '../validators/resume'
+import { omittedSkillItemCount, sliceSkillCategory } from '../lib/skillCategoryTruncation'
 import { useResumePreviewPage } from './ResumePreviewPageContext'
 
 type SkillCategory = NonNullable<ResumeData['skills']>[number]
@@ -46,15 +47,12 @@ export default function ResumeSkillsSection({
         {renderHeader ? renderHeader() : <h2 className={headerClassName}>{title}</h2>}
       </div>
       {skills.map((cat, index) => {
-        const omittedCount = previewPage?.truncatedSkillCategoryOmittedCounts?.[index] ?? 0
         const ratio = previewPage?.truncatedSkillCategoryRatios?.[index] ?? 1
+        const omittedCount =
+          previewPage?.truncatedSkillCategoryOmittedCounts?.[index]
+          ?? omittedSkillItemCount(cat.items.length, ratio)
         const shouldTruncateInPreview = omittedCount > 0 && ratio < 1
-        const keptCount = shouldTruncateInPreview
-          ? Math.max(1, Math.min(cat.items.length, Math.floor(cat.items.length * ratio)))
-          : cat.items.length
-        const renderedCat = shouldTruncateInPreview
-          ? { ...cat, items: cat.items.slice(0, keptCount) }
-          : cat
+        const renderedCat = shouldTruncateInPreview ? sliceSkillCategory(cat, ratio) : cat
         const shouldAnnotate = shouldTruncateInPreview
 
         return (
