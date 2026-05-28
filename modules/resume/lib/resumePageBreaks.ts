@@ -71,6 +71,18 @@ function layoutBlockSection(
 
   if (fits(blockBottom, pageStart, pageHeight)) return pageStart
 
+  const pageEndPx = pageEnd(pageStart, pageHeight)
+  const startsOnCurrentPage =
+    section.offsetTop >= pageStart && section.offsetTop < pageEndPx
+
+  // Same page-end rule as Skills: if the whole section cannot fit in the remaining
+  // space on the current page, start it on a fresh page.
+  if (startsOnCurrentPage && section.offsetTop > pageStart) {
+    pushBreak(breaks, continuation, section.offsetTop, false)
+    pageStart = section.offsetTop
+    if (fits(blockBottom, pageStart, pageHeight)) return pageStart
+  }
+
   if (section.offsetHeight > pageHeight) {
     if (section.offsetTop > pageStart) {
       pushBreak(breaks, continuation, section.offsetTop, false)

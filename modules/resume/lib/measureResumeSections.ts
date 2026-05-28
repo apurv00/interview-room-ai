@@ -42,19 +42,30 @@ function measureBlock(el: HTMLElement, templateRoot: HTMLElement): SectionMeasur
   }
 }
 
+/** Leaf markers only — ignore a parent marker when a nested section marker exists inside it. */
+function collectLeafMarkedSections(templateRoot: HTMLElement): HTMLElement[] {
+  const marked = Array.from(
+    templateRoot.querySelectorAll('[data-resume-section]'),
+  ) as HTMLElement[]
+
+  return marked.filter(el => {
+    let parent = el.parentElement
+    while (parent && parent !== templateRoot) {
+      if (parent.hasAttribute('data-resume-section')) return false
+      parent = parent.parentElement
+    }
+    return true
+  })
+}
+
 /**
  * Measure resume sections for pagination. Uses `data-resume-section` markers when present
  * (supports nested layouts like Creative sidebar); otherwise top-level template children.
  */
 export function measureResumeSections(templateRoot: HTMLElement): SectionMeasurement[] {
-  const marked = Array.from(
-    templateRoot.querySelectorAll('[data-resume-section]'),
-  ) as HTMLElement[]
-  const hasNonSkillsMarker = marked.some(
-    el => el.getAttribute('data-resume-section') !== 'skills',
-  )
+  const marked = collectLeafMarkedSections(templateRoot)
 
-  if (marked.length > 0 && hasNonSkillsMarker) {
+  if (marked.length > 0) {
     return marked
       .sort((a, b) => relativeTop(a, templateRoot) - relativeTop(b, templateRoot))
       .map(el => {
@@ -67,8 +78,9 @@ export function measureResumeSections(templateRoot: HTMLElement): SectionMeasure
 
   const children = Array.from(templateRoot.children) as HTMLElement[]
   return children.map(child => {
-    if (child.getAttribute('data-resume-section') === 'skills') {
-      return measureSkillsBlock(child, templateRoot)
+    const skillsEl = child.querySelector('[data-resume-section="skills"]') as HTMLElement | null
+    if (skillsEl) {
+      return measureSkillsBlock(skillsEl, templateRoot)
     }
     return measureBlock(child, templateRoot)
   })

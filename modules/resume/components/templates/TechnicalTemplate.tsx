@@ -35,7 +35,7 @@ export default function TechnicalTemplate({ data }: TemplateProps) {
 
       {/* Summary */}
       {data.summary && (
-        <div className="mb-3">
+        <div className="mb-3" data-resume-section="summary">
           <h2 className="font-bold uppercase text-emerald-700 mb-1">Summary</h2>
           <p className="text-gray-700">{data.summary}</p>
         </div>
@@ -43,7 +43,7 @@ export default function TechnicalTemplate({ data }: TemplateProps) {
 
       {/* Experience */}
       {data.experience && data.experience.length > 0 && (
-        <div className="mb-3">
+        <div className="mb-3" data-resume-section="experience">
           <h2 className="font-bold uppercase text-emerald-700 mb-1">Experience</h2>
           {data.experience.map(exp => (
             <div key={exp.id} className="mb-2">
@@ -65,7 +65,7 @@ export default function TechnicalTemplate({ data }: TemplateProps) {
 
       {/* Projects */}
       {data.projects && data.projects.length > 0 && (
-        <div className="mb-3">
+        <div className="mb-3" data-resume-section="projects">
           <h2 className="font-bold uppercase text-emerald-700 mb-1">Projects</h2>
           {data.projects.map(proj => (
             <div key={proj.id} className="mb-1.5">
@@ -82,7 +82,7 @@ export default function TechnicalTemplate({ data }: TemplateProps) {
 
       {/* Education */}
       {data.education && data.education.length > 0 && (
-        <div className="mb-3">
+        <div className="mb-3" data-resume-section="education">
           <h2 className="font-bold uppercase text-emerald-700 mb-1">Education</h2>
           {data.education.map(edu => (
             <div key={edu.id} className="mb-1">
@@ -96,7 +96,7 @@ export default function TechnicalTemplate({ data }: TemplateProps) {
       )}
 
       {data.certifications && data.certifications.length > 0 && (
-        <div className="mb-3">
+        <div className="mb-3" data-resume-section="certifications">
           <h2 className="font-bold uppercase text-emerald-700 mb-1">Certifications</h2>
           {data.certifications.map((c, i) => <div key={i}>{c.name} — {c.issuer} {c.date && `(${c.date})`}</div>)}
         </div>

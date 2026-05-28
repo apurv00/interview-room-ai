@@ -22,7 +22,7 @@ export default function ExecutiveTemplate({ data }: TemplateProps) {
 
       {/* Executive Summary */}
       {data.summary && (
-        <div className="mb-3">
+        <div className="mb-3" data-resume-section="summary">
           <h2 className="font-bold uppercase tracking-[0.2em] text-[#1e293b] border-b-2 border-[#1e293b] pb-0.5 mb-1">Executive Summary</h2>
           <p className="text-gray-700 leading-relaxed italic">{data.summary}</p>
         </div>
@@ -30,7 +30,7 @@ export default function ExecutiveTemplate({ data }: TemplateProps) {
 
       {/* Key Achievements & Experience */}
       {data.experience && data.experience.length > 0 && (
-        <div className="mb-3">
+        <div className="mb-3" data-resume-section="experience">
           <h2 className="font-bold uppercase tracking-[0.2em] text-[#1e293b] border-b-2 border-[#1e293b] pb-0.5 mb-1">Key Achievements &amp; Experience</h2>
           {data.experience.map(exp => (
             <div key={exp.id} className="mb-2">
@@ -59,7 +59,7 @@ export default function ExecutiveTemplate({ data }: TemplateProps) {
 
       {/* Education */}
       {data.education && data.education.length > 0 && (
-        <div className="mb-3">
+        <div className="mb-3" data-resume-section="education">
           <h2 className="font-bold uppercase tracking-[0.2em] text-[#1e293b] border-b-2 border-[#1e293b] pb-0.5 mb-1">Education</h2>
           {data.education.map(edu => (
             <div key={edu.id} className="mb-1.5">
@@ -100,7 +100,7 @@ export default function ExecutiveTemplate({ data }: TemplateProps) {
 
       {/* Projects */}
       {data.projects && data.projects.length > 0 && (
-        <div className="mb-3">
+        <div className="mb-3" data-resume-section="projects">
           <h2 className="font-bold uppercase tracking-[0.2em] text-[#1e293b] border-b-2 border-[#1e293b] pb-0.5 mb-1">Notable Projects</h2>
           {data.projects.map(proj => (
             <div key={proj.id} className="mb-1.5">
@@ -114,7 +114,7 @@ export default function ExecutiveTemplate({ data }: TemplateProps) {
 
       {/* Certifications */}
       {data.certifications && data.certifications.length > 0 && (
-        <div className="mb-3">
+        <div className="mb-3" data-resume-section="certifications">
           <h2 className="font-bold uppercase tracking-[0.2em] text-[#1e293b] border-b-2 border-[#1e293b] pb-0.5 mb-1">Certifications &amp; Credentials</h2>
           {data.certifications.map((cert, i) => (
             <div key={i} className="mb-0.5">
@@ -127,7 +127,7 @@ export default function ExecutiveTemplate({ data }: TemplateProps) {
 
       {/* Custom Sections */}
       {data.customSections?.map(section => (
-        <div key={section.id} className="mb-3">
+        <div key={section.id} className="mb-3" data-resume-section={`custom-${section.id}`}>
           <h2 className="font-bold uppercase tracking-[0.2em] text-[#1e293b] border-b-2 border-[#1e293b] pb-0.5 mb-1">{section.title}</h2>
           <p className="text-gray-700 whitespace-pre-wrap">{section.content}</p>
         </div>

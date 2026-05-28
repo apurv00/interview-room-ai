@@ -88,6 +88,17 @@ describe('computePageLayoutPlan — skills categories', () => {
     expect(plan.skillsContinuationHeader[1]).toBe(true)
   })
 
+  it('moves a block section to the next page when it does not fit in the page remainder', () => {
+    const plan = computePageLayoutPlan(
+      [
+        block(0, 750),
+        block(750, 120),
+      ],
+      PAGE,
+    )
+    expect(plan.breaks).toEqual([0, 750])
+  })
+
   it('marks oversized categories for safe truncation', () => {
     const plan = computePageLayoutPlan(
       [

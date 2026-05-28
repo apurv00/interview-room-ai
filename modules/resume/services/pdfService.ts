@@ -144,10 +144,19 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
         continuation.push(needsHeader);
       }
 
-      function measureSections(templateRoot) {
+      function collectLeafMarked(templateRoot) {
         const marked = Array.from(templateRoot.querySelectorAll('[data-resume-section]'));
-        const hasNonSkillsMarker = marked.some(el => el.getAttribute('data-resume-section') !== 'skills');
+        return marked.filter(el => {
+          let parent = el.parentElement;
+          while (parent && parent !== templateRoot) {
+            if (parent.hasAttribute('data-resume-section')) return false;
+            parent = parent.parentElement;
+          }
+          return true;
+        });
+      }
 
+      function measureSections(templateRoot) {
         const measureSkills = (skillsEl) => {
           const skillsTop = relativeTop(skillsEl, templateRoot);
           const headerEl = skillsEl.querySelector('[data-resume-skills-header]');
@@ -174,16 +183,16 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
           offsetHeight: el.offsetHeight,
         });
 
-        if (marked.length > 0 && hasNonSkillsMarker) {
+        const marked = collectLeafMarked(templateRoot);
+        if (marked.length > 0) {
           return marked
             .sort((a, b) => relativeTop(a, templateRoot) - relativeTop(b, templateRoot))
             .map(el => el.getAttribute('data-resume-section') === 'skills' ? measureSkills(el) : measureBlock(el));
         }
 
         return Array.from(templateRoot.children).map(child => {
-          if (child.getAttribute('data-resume-section') === 'skills') {
-            return measureSkills(child);
-          }
+          const skillsEl = child.querySelector('[data-resume-section="skills"]');
+          if (skillsEl) return measureSkills(skillsEl);
           return measureBlock(child);
         });
       }
@@ -197,6 +206,16 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
           if (section.kind === 'block') {
             const blockBottom = bottom(section);
             if (fits(blockBottom, pageStart, pageHeight)) continue;
+
+            const pageEndPx = pageStart + pageHeight;
+            const startsOnCurrentPage =
+              section.offsetTop >= pageStart && section.offsetTop < pageEndPx;
+            if (startsOnCurrentPage && section.offsetTop > pageStart) {
+              pushBreak(breaks, continuation, section.offsetTop, false);
+              pageStart = section.offsetTop;
+              if (fits(blockBottom, pageStart, pageHeight)) continue;
+            }
+
             if (section.offsetHeight > pageHeight) {
               if (section.offsetTop > pageStart) {
                 pushBreak(breaks, continuation, section.offsetTop, false);

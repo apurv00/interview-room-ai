@@ -21,7 +21,7 @@ export default function AcademicTemplate({ data }: TemplateProps) {
 
       {/* Summary / Research Interests */}
       {data.summary && (
-        <div className="mb-2">
+        <div className="mb-2" data-resume-section="summary">
           <h2 className="font-bold uppercase tracking-widest text-blue-700 border-b border-blue-300 pb-0.5 mb-1">Research Interests</h2>
           <p className="text-gray-700 leading-relaxed">{data.summary}</p>
         </div>
@@ -29,7 +29,7 @@ export default function AcademicTemplate({ data }: TemplateProps) {
 
       {/* Education First */}
       {data.education && data.education.length > 0 && (
-        <div className="mb-2">
+        <div className="mb-2" data-resume-section="education">
           <h2 className="font-bold uppercase tracking-widest text-blue-700 border-b border-blue-300 pb-0.5 mb-1">Education</h2>
           {data.education.map(edu => (
             <div key={edu.id} className="mb-1">
@@ -55,7 +55,7 @@ export default function AcademicTemplate({ data }: TemplateProps) {
 
       {/* Experience (Research Experience) */}
       {data.experience && data.experience.length > 0 && (
-        <div className="mb-2">
+        <div className="mb-2" data-resume-section="experience">
           <h2 className="font-bold uppercase tracking-widest text-blue-700 border-b border-blue-300 pb-0.5 mb-1">Research Experience</h2>
           {data.experience.map(exp => (
             <div key={exp.id} className="mb-1.5">
@@ -99,7 +99,7 @@ export default function AcademicTemplate({ data }: TemplateProps) {
 
       {/* Projects */}
       {data.projects && data.projects.length > 0 && (
-        <div className="mb-2">
+        <div className="mb-2" data-resume-section="projects">
           <h2 className="font-bold uppercase tracking-widest text-blue-700 border-b border-blue-300 pb-0.5 mb-1">Projects</h2>
           {data.projects.map(proj => (
             <div key={proj.id} className="mb-1">
@@ -114,7 +114,7 @@ export default function AcademicTemplate({ data }: TemplateProps) {
 
       {/* Certifications */}
       {data.certifications && data.certifications.length > 0 && (
-        <div className="mb-2">
+        <div className="mb-2" data-resume-section="certifications">
           <h2 className="font-bold uppercase tracking-widest text-blue-700 border-b border-blue-300 pb-0.5 mb-1">Certifications</h2>
           {data.certifications.map((cert, i) => (
             <div key={i} className="mb-0.5">
@@ -127,7 +127,7 @@ export default function AcademicTemplate({ data }: TemplateProps) {
 
       {/* Custom Sections (Publications, Research, etc.) */}
       {data.customSections?.map(section => (
-        <div key={section.id} className="mb-2">
+        <div key={section.id} className="mb-2" data-resume-section={`custom-${section.id}`}>
           <h2 className="font-bold uppercase tracking-widest text-blue-700 border-b border-blue-300 pb-0.5 mb-1">{section.title}</h2>
           <p className="text-gray-700 whitespace-pre-wrap">{section.content}</p>
         </div>
