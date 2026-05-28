@@ -1,4 +1,5 @@
 import type { TemplateProps } from './index'
+import ResumeSkillsSection from '../ResumeSkillsSection'
 
 export default function MinimalistTemplate({ data }: TemplateProps) {
   const contact = data.contactInfo || { fullName: '', email: '' }
@@ -21,19 +22,19 @@ export default function MinimalistTemplate({ data }: TemplateProps) {
 
       {/* Summary */}
       {data.summary && (
-        <div className="mb-4">
-          <h2 className="font-medium uppercase tracking-widest text-gray-400 mb-1.5">Summary</h2>
+        <div className="mb-4" data-resume-section="summary">
+          <h2 data-resume-section-header="Summary" className="font-medium uppercase tracking-widest text-gray-400 mb-1.5">Summary</h2>
           <p className="text-gray-600 leading-relaxed">{data.summary}</p>
         </div>
       )}
 
       {/* Experience */}
       {data.experience && data.experience.length > 0 && (
-        <div className="mb-4">
-          <h2 className="font-medium uppercase tracking-widest text-gray-400 mb-1.5">Experience</h2>
+        <div className="mb-4" data-resume-section="experience">
+          <h2 data-resume-section-header="Experience" className="font-medium uppercase tracking-widest text-gray-400 mb-1.5">Experience</h2>
           <hr className="border-t border-gray-100 mb-2" />
           {data.experience.map(exp => (
-            <div key={exp.id} className="mb-3">
+            <div key={exp.id} className="mb-3" data-resume-section-unit>
               <div className="flex justify-between items-baseline">
                 <div>
                   <span className="font-medium">{exp.title}</span>
@@ -59,11 +60,11 @@ export default function MinimalistTemplate({ data }: TemplateProps) {
 
       {/* Education */}
       {data.education && data.education.length > 0 && (
-        <div className="mb-4">
-          <h2 className="font-medium uppercase tracking-widest text-gray-400 mb-1.5">Education</h2>
+        <div className="mb-4" data-resume-section="education">
+          <h2 data-resume-section-header="Education" className="font-medium uppercase tracking-widest text-gray-400 mb-1.5">Education</h2>
           <hr className="border-t border-gray-100 mb-2" />
           {data.education.map(edu => (
-            <div key={edu.id} className="mb-2">
+            <div key={edu.id} className="mb-2" data-resume-section-unit>
               <div className="flex justify-between items-baseline">
                 <div>
                   <span className="font-medium">{edu.degree}</span>
@@ -84,27 +85,33 @@ export default function MinimalistTemplate({ data }: TemplateProps) {
         </div>
       )}
 
-      {/* Skills */}
       {data.skills && data.skills.length > 0 && (
-        <div className="mb-4">
-          <h2 className="font-medium uppercase tracking-widest text-gray-400 mb-1.5">Skills</h2>
-          <hr className="border-t border-gray-100 mb-2" />
-          {data.skills.map((cat, i) => (
-            <div key={i} className="mb-1">
+        <ResumeSkillsSection
+          skills={data.skills}
+          title="Skills"
+          sectionClassName="mb-4"
+          renderHeader={() => (
+            <>
+              <h2 data-resume-section-header="Skills" className="font-medium uppercase tracking-widest text-gray-400 mb-1.5">Skills</h2>
+              <hr className="border-t border-gray-100 mb-2" />
+            </>
+          )}
+          renderCategory={(cat) => (
+            <div className="mb-1">
               <span className="font-medium">{cat.category}</span>
               <span className="text-gray-500 ml-2">{cat.items.join(', ')}</span>
             </div>
-          ))}
-        </div>
+          )}
+        />
       )}
 
       {/* Projects */}
       {data.projects && data.projects.length > 0 && (
-        <div className="mb-4">
-          <h2 className="font-medium uppercase tracking-widest text-gray-400 mb-1.5">Projects</h2>
+        <div className="mb-4" data-resume-section="projects">
+          <h2 data-resume-section-header="Projects" className="font-medium uppercase tracking-widest text-gray-400 mb-1.5">Projects</h2>
           <hr className="border-t border-gray-100 mb-2" />
           {data.projects.map(proj => (
-            <div key={proj.id} className="mb-2">
+            <div key={proj.id} className="mb-2" data-resume-section-unit>
               <span className="font-medium">{proj.name}</span>
               {proj.technologies?.length ? <span className="text-[8px] text-gray-400 ml-1">{proj.technologies.join(', ')}</span> : null}
               <p className="text-gray-600">{proj.description}</p>
@@ -115,11 +122,11 @@ export default function MinimalistTemplate({ data }: TemplateProps) {
 
       {/* Certifications */}
       {data.certifications && data.certifications.length > 0 && (
-        <div className="mb-4">
-          <h2 className="font-medium uppercase tracking-widest text-gray-400 mb-1.5">Certifications</h2>
+        <div className="mb-4" data-resume-section="certifications">
+          <h2 data-resume-section-header="Certifications" className="font-medium uppercase tracking-widest text-gray-400 mb-1.5">Certifications</h2>
           <hr className="border-t border-gray-100 mb-2" />
           {data.certifications.map((cert, i) => (
-            <div key={i} className="mb-1">
+            <div key={i} className="mb-1" data-resume-section-unit>
               <span className="font-medium">{cert.name}</span>
               <span className="text-gray-500"> — {cert.issuer}</span>
               {cert.date && <span className="text-gray-400"> ({cert.date})</span>}
@@ -130,8 +137,8 @@ export default function MinimalistTemplate({ data }: TemplateProps) {
 
       {/* Custom Sections */}
       {data.customSections?.map(section => (
-        <div key={section.id} className="mb-4">
-          <h2 className="font-medium uppercase tracking-widest text-gray-400 mb-1.5">{section.title}</h2>
+        <div key={section.id} className="mb-4" data-resume-section={`custom-${section.id}`}>
+          <h2 data-resume-section-header={section.title} className="font-medium uppercase tracking-widest text-gray-400 mb-1.5">{section.title}</h2>
           <hr className="border-t border-gray-100 mb-2" />
           <p className="text-gray-600 whitespace-pre-wrap">{section.content}</p>
         </div>

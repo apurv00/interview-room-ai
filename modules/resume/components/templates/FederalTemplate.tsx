@@ -1,4 +1,5 @@
 import type { TemplateProps } from './index'
+import ResumeSkillsSection from '../ResumeSkillsSection'
 
 export default function FederalTemplate({ data }: TemplateProps) {
   const contact = data.contactInfo || { fullName: '', email: '' }
@@ -20,18 +21,18 @@ export default function FederalTemplate({ data }: TemplateProps) {
 
       {/* Summary / Objective */}
       {data.summary && (
-        <div className="mb-2">
-          <h2 className="font-bold uppercase border-b border-gray-300 pb-0.5 mb-1">Summary of Qualifications</h2>
+        <div className="mb-2" data-resume-section="summary">
+          <h2 data-resume-section-header="Summary of Qualifications" className="font-bold uppercase border-b border-gray-300 pb-0.5 mb-1">Summary of Qualifications</h2>
           <p className="text-gray-800 leading-relaxed">{data.summary}</p>
         </div>
       )}
 
       {/* Experience with federal-style detail */}
       {data.experience && data.experience.length > 0 && (
-        <div className="mb-2">
-          <h2 className="font-bold uppercase border-b border-gray-300 pb-0.5 mb-1">Work Experience</h2>
+        <div className="mb-2" data-resume-section="experience">
+          <h2 data-resume-section-header="Work Experience" className="font-bold uppercase border-b border-gray-300 pb-0.5 mb-1">Work Experience</h2>
           {data.experience.map(exp => (
-            <div key={exp.id} className="mb-2">
+            <div key={exp.id} className="mb-2" data-resume-section-unit>
               <div className="font-bold uppercase">{exp.title}</div>
               {exp.company && <div>{exp.company}</div>}
               {exp.location && <div className="text-[8px] text-gray-600">{exp.location}</div>}
@@ -55,10 +56,10 @@ export default function FederalTemplate({ data }: TemplateProps) {
 
       {/* Education */}
       {data.education && data.education.length > 0 && (
-        <div className="mb-2">
-          <h2 className="font-bold uppercase border-b border-gray-300 pb-0.5 mb-1">Education</h2>
+        <div className="mb-2" data-resume-section="education">
+          <h2 data-resume-section-header="Education" className="font-bold uppercase border-b border-gray-300 pb-0.5 mb-1">Education</h2>
           {data.education.map(edu => (
-            <div key={edu.id} className="mb-1">
+            <div key={edu.id} className="mb-1" data-resume-section-unit>
               <div>
                 <span className="font-bold">{edu.degree}</span>
                 {edu.field && <span> in {edu.field}</span>}
@@ -79,23 +80,26 @@ export default function FederalTemplate({ data }: TemplateProps) {
 
       {/* Skills */}
       {data.skills && data.skills.length > 0 && (
-        <div className="mb-2">
-          <h2 className="font-bold uppercase border-b border-gray-300 pb-0.5 mb-1">Job-Related Skills</h2>
-          {data.skills.map((cat, i) => (
-            <div key={i} className="mb-0.5">
+        <ResumeSkillsSection
+          skills={data.skills}
+          title="Job-Related Skills"
+          sectionClassName="mb-2"
+          headerClassName="font-bold uppercase border-b border-gray-300 pb-0.5 mb-1"
+          renderCategory={(cat) => (
+            <div className="mb-0.5">
               <span className="font-semibold">{cat.category}:</span>{' '}
               <span className="text-gray-800">{cat.items.join(', ')}</span>
             </div>
-          ))}
-        </div>
+          )}
+        />
       )}
 
       {/* Projects */}
       {data.projects && data.projects.length > 0 && (
-        <div className="mb-2">
-          <h2 className="font-bold uppercase border-b border-gray-300 pb-0.5 mb-1">Projects</h2>
+        <div className="mb-2" data-resume-section="projects">
+          <h2 data-resume-section-header="Projects" className="font-bold uppercase border-b border-gray-300 pb-0.5 mb-1">Projects</h2>
           {data.projects.map(proj => (
-            <div key={proj.id} className="mb-1">
+            <div key={proj.id} className="mb-1" data-resume-section-unit>
               <span className="font-bold">{proj.name}</span>
               {proj.technologies?.length ? <span className="text-[8px] text-gray-600"> ({proj.technologies.join(', ')})</span> : null}
               <p className="text-gray-800">{proj.description}</p>
@@ -106,10 +110,10 @@ export default function FederalTemplate({ data }: TemplateProps) {
 
       {/* Certifications */}
       {data.certifications && data.certifications.length > 0 && (
-        <div className="mb-2">
-          <h2 className="font-bold uppercase border-b border-gray-300 pb-0.5 mb-1">Certifications &amp; Licenses</h2>
+        <div className="mb-2" data-resume-section="certifications">
+          <h2 data-resume-section-header="Certifications &amp; Licenses" className="font-bold uppercase border-b border-gray-300 pb-0.5 mb-1">Certifications &amp; Licenses</h2>
           {data.certifications.map((cert, i) => (
-            <div key={i} className="mb-0.5">
+            <div key={i} className="mb-0.5" data-resume-section-unit>
               <span className="font-semibold">{cert.name}</span> — {cert.issuer}
               {cert.date && <span className="text-gray-600"> ({cert.date})</span>}
             </div>
@@ -119,8 +123,8 @@ export default function FederalTemplate({ data }: TemplateProps) {
 
       {/* Custom Sections */}
       {data.customSections?.map(section => (
-        <div key={section.id} className="mb-2">
-          <h2 className="font-bold uppercase border-b border-gray-300 pb-0.5 mb-1">{section.title}</h2>
+        <div key={section.id} className="mb-2" data-resume-section={`custom-${section.id}`}>
+          <h2 data-resume-section-header={section.title} className="font-bold uppercase border-b border-gray-300 pb-0.5 mb-1">{section.title}</h2>
           <p className="text-gray-800 whitespace-pre-wrap">{section.content}</p>
         </div>
       ))}

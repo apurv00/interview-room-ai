@@ -1,61 +1,29 @@
 'use client'
 
-import { useMemo, useEffect, useRef, useState, useCallback } from 'react'
+import { useMemo, useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
 import type { ResumeData } from '../validators/resume'
 import { getTemplate } from './templates'
 import { getFontStack, getFontSizes, getCustomFontSizes, getGoogleFontUrl, DEFAULT_HEADING_SIZE, DEFAULT_BODY_SIZE } from '../config/fontConfig'
+import { computePageLayoutPlan } from '../lib/resumePageBreaks'
+import {
+  measureResumeSections,
+  readContinuationHeaderAtBreak,
+  type SectionHeaderMetrics,
+} from '../lib/measureResumeSections'
+import { ResumePreviewPageProvider } from './ResumePreviewPageContext'
+import {
+  applySkillsTruncationToData,
+  computeOmittedSkillCounts,
+  computeSkillCategoryRatios,
+  isFullSkillsMeasure,
+  refineSkillRatiosIfStillOversized,
+  skillsMatchTruncationRatios,
+} from '../lib/skillCategoryTruncation'
 
 // A4 at 72dpi: 595 × 842 px
 const PAGE_WIDTH = 595
 const PAGE_HEIGHT = 842
 const PAGE_PADDING = 24
-
-// ─── Section-aware page break algorithm ─────────────────────────────────────
-// Simulates CSS break-inside:avoid by measuring each top-level section's
-// position and pushing sections that don't fit entirely to the next page.
-
-interface ChildMeasurement {
-  offsetTop: number
-  offsetHeight: number
-}
-
-function computePageBreaks(children: ChildMeasurement[], pageHeight: number): number[] {
-  if (children.length === 0) return [0]
-
-  const breaks: number[] = [0] // Page 1 always starts at offset 0
-  let currentPageStart = 0
-
-  for (const child of children) {
-    const childBottom = child.offsetTop + child.offsetHeight
-    const currentPageBottom = currentPageStart + pageHeight
-
-    // Child fits entirely within current page — no break needed
-    if (childBottom <= currentPageBottom) continue
-
-    // Child is taller than a full page — let it start fresh, then
-    // add breaks at pageHeight intervals (unavoidable split)
-    if (child.offsetHeight > pageHeight) {
-      if (child.offsetTop > currentPageStart) {
-        currentPageStart = child.offsetTop
-        breaks.push(child.offsetTop)
-      }
-      let next = currentPageStart + pageHeight
-      while (next < childBottom) {
-        breaks.push(next)
-        currentPageStart = next
-        next += pageHeight
-      }
-      continue
-    }
-
-    // Normal child that doesn't fit — push entire section to next page
-    // This leaves whitespace at the bottom of the current page (correct behavior)
-    currentPageStart = child.offsetTop
-    breaks.push(child.offsetTop)
-  }
-
-  return breaks
-}
 
 // ─── Component ──────────────────────────────────────────────────────────────
 
@@ -66,9 +34,17 @@ interface Props {
 
 export default function ResumePreview({ data, templateId = 'professional' }: Props) {
   const TemplateComponent = useMemo(() => getTemplate(templateId), [templateId])
+  const [measureData, setMeasureData] = useState(data)
+  const stableSkillRatiosRef = useRef<Record<number, number>>({})
   const contentRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [pageBreaks, setPageBreaks] = useState<number[]>([0])
+  const [continuationHeadersByPage, setContinuationHeadersByPage] = useState<
+    Record<number, SectionHeaderMetrics>
+  >({})
+  const [truncatedSkillCategoryIndices, setTruncatedSkillCategoryIndices] = useState<number[]>([])
+  const [truncatedSkillCategoryRatios, setTruncatedSkillCategoryRatios] = useState<Record<number, number>>({})
+  const [truncatedSkillCategoryOmittedCounts, setTruncatedSkillCategoryOmittedCounts] = useState<Record<number, number>>({})
   const [scale, setScale] = useState(1)
 
   const fontFamily = data.styling?.fontFamily
@@ -110,37 +86,100 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
   const contentWidth = PAGE_WIDTH - PAGE_PADDING * 2
   const contentHeight = PAGE_HEIGHT - PAGE_PADDING * 2
 
-  // Measure section positions and compute natural page breaks
-  const measure = useCallback(() => {
+  // Reset stable skill-truncation ratios whenever anything that changes
+  // category heights changes. Font family/size are included because
+  // `measureLayout` only RE-DERIVES ratios on a "full measure" pass; once a
+  // category is truncated, the refine path can only drop MORE items, never
+  // restore them. Without this, shrinking the font so a category fits again
+  // leaves it stuck truncated (with a phantom "+N more") until `data` changes.
+  useEffect(() => {
+    stableSkillRatiosRef.current = {}
+    setMeasureData(data)
+  }, [data, templateId, headingSize, bodySize, fontFamily, fontSize])
+
+  // Convergent layout: ratios from full DOM only; refine by item count if truncated DOM is still tall.
+  const measureLayout = useCallback(() => {
     if (contentRef.current) {
-      // The template renders a root <div> inside contentRef.
-      // We need to measure the section-level children (header, summary, experience, etc.)
       const templateRoot = contentRef.current.firstElementChild as HTMLElement | null
-      const sectionElements = templateRoot
-        ? (Array.from(templateRoot.children) as HTMLElement[])
-        : (Array.from(contentRef.current.children) as HTMLElement[])
-      const measurements: ChildMeasurement[] = sectionElements.map(child => ({
-        offsetTop: child.offsetTop,
-        offsetHeight: child.offsetHeight,
-      }))
-      setPageBreaks(computePageBreaks(measurements, contentHeight))
+      if (templateRoot) {
+        const sections = measureResumeSections(templateRoot)
+        const skillsSection = sections.find(
+          section => section.kind === 'splittable' && section.sectionId === 'skills',
+        )
+        const measuringFull = isFullSkillsMeasure(measureData.skills, data.skills)
+
+        let ratios = stableSkillRatiosRef.current
+
+        if (measuringFull && skillsSection?.kind === 'splittable') {
+          ratios = computeSkillCategoryRatios(skillsSection, contentHeight)
+          stableSkillRatiosRef.current = ratios
+        } else if (
+          skillsSection?.kind === 'splittable'
+          && data.skills?.length
+          && measureData.skills?.length
+        ) {
+          const refined = refineSkillRatiosIfStillOversized(
+            skillsSection,
+            contentHeight,
+            ratios,
+            data.skills,
+            measureData.skills,
+          )
+          if (refined) {
+            stableSkillRatiosRef.current = refined
+            setMeasureData(applySkillsTruncationToData(data, refined))
+            return
+          }
+        }
+
+        const needsTruncation = Object.keys(ratios).length > 0
+        const targetMeasureData = needsTruncation
+          ? applySkillsTruncationToData(data, ratios)
+          : data
+
+        if (needsTruncation && !skillsMatchTruncationRatios(measureData.skills, ratios, data.skills)) {
+          setMeasureData(targetMeasureData)
+          return
+        }
+
+        if (!needsTruncation && !measuringFull) {
+          setMeasureData(data)
+          return
+        }
+
+        const plan = computePageLayoutPlan(sections, contentHeight)
+        setPageBreaks(plan.breaks)
+        const headersByPage: Record<number, SectionHeaderMetrics> = {}
+        for (let i = 0; i < plan.breaks.length; i++) {
+          if (plan.continuationHeaders[i]) {
+            const metrics = readContinuationHeaderAtBreak(templateRoot, plan.breaks[i])
+            if (metrics) headersByPage[i] = metrics
+          }
+        }
+        setContinuationHeadersByPage(headersByPage)
+        setTruncatedSkillCategoryIndices(plan.truncatedSkillCategoryIndices)
+        setTruncatedSkillCategoryRatios(ratios)
+        setTruncatedSkillCategoryOmittedCounts(
+          computeOmittedSkillCounts(data.skills || [], ratios),
+        )
+      }
     }
     if (containerRef.current) {
       setScale(containerRef.current.clientWidth / PAGE_WIDTH)
     }
-  }, [contentHeight])
+  }, [contentHeight, contentWidth, data, measureData])
 
-  useEffect(() => {
-    measure()
-  }, [data, templateId, headingSize, bodySize, fontFamily, fontSize, measure])
+  useLayoutEffect(() => {
+    measureLayout()
+  }, [data, measureData, templateId, headingSize, bodySize, fontFamily, fontSize, measureLayout])
 
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
-    const observer = new ResizeObserver(() => measure())
+    const observer = new ResizeObserver(() => measureLayout())
     observer.observe(el)
     return () => observer.disconnect()
-  }, [measure])
+  }, [measureLayout])
 
   const pageCount = pageBreaks.length
   const pages = Array.from({ length: pageCount }, (_, i) => i)
@@ -171,7 +210,26 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
           }}
         >
           <div ref={contentRef} style={wrapperStyle}>
-            <TemplateComponent data={data} />
+            {/* Measure the SAME layout the visible pages render: measureData
+              * already carries the truncated items, so we pass ratios = {}
+              * (no re-slice) but the real omitted counts so ResumeSkillsSection
+              * still renders the "+N more" row. Without this the measurer is
+              * shorter than the rendered page and breaks can clip/duplicate
+              * content (Codex r3320046388). Derived from the stable ratios ref
+              * so it stays in sync with the measureData on this same render. */}
+            <ResumePreviewPageProvider
+              value={{
+                skillsContinuationHeader: false,
+                truncatedSkillCategoryIndices: [],
+                truncatedSkillCategoryRatios: {},
+                truncatedSkillCategoryOmittedCounts: computeOmittedSkillCounts(
+                  data.skills || [],
+                  stableSkillRatiosRef.current,
+                ),
+              }}
+            >
+              <TemplateComponent data={measureData} />
+            </ResumePreviewPageProvider>
           </div>
         </div>
 
@@ -209,21 +267,50 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                   <div style={{ padding: PAGE_PADDING }}>
                     {/* Content viewport — clips to usable area */}
                     <div
+                      className="relative"
                       style={{
                         width: contentWidth,
                         height: contentHeight,
                         overflow: 'hidden',
                       }}
                     >
+                      {continuationHeadersByPage[pageIndex] && (
+                        <div
+                          className="absolute z-10"
+                          style={{
+                            top: 0,
+                            left: continuationHeadersByPage[pageIndex].left,
+                            width: continuationHeadersByPage[pageIndex].width || contentWidth,
+                            height: continuationHeadersByPage[pageIndex].height,
+                          }}
+                        >
+                          <div
+                            dangerouslySetInnerHTML={{
+                              __html: continuationHeadersByPage[pageIndex].html
+                                || `<h2>${continuationHeadersByPage[pageIndex].title}</h2>`,
+                            }}
+                          />
+                        </div>
+                      )}
                       <div
                         style={{
                           ...wrapperStyle,
                           width: contentWidth,
-                          // Shift content to the break position for this page
-                          marginTop: -pageBreaks[pageIndex],
+                          marginTop:
+                            -pageBreaks[pageIndex]
+                            + (continuationHeadersByPage[pageIndex]?.height ?? 0),
                         }}
                       >
-                        <TemplateComponent data={data} />
+                        <ResumePreviewPageProvider
+                          value={{
+                            skillsContinuationHeader: Boolean(continuationHeadersByPage[pageIndex]),
+                            truncatedSkillCategoryIndices,
+                            truncatedSkillCategoryRatios,
+                            truncatedSkillCategoryOmittedCounts,
+                          }}
+                        >
+                          <TemplateComponent data={data} />
+                        </ResumePreviewPageProvider>
                       </div>
                     </div>
                   </div>
