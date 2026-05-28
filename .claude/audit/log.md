@@ -1622,3 +1622,10 @@
 - **Root-cause:** `Date.now()` has 1ms resolution and fences on the integer
 - **Tests-added: No-tests-needed-because: this IS a test fix. The change**
 - **Verified-by:** 10 consecutive `vitest run shared/__tests__/modelRouter.test.ts -t "cold-defaults-synthetic"`
+
+### 2026-05-28 18:53:15 +0000 · `24899a4` · Claude
+- **Subject:** fix(resume): resolve continuation header by section range; reset truncation on font change
+- **Files:** 4 changed, 1 test file(s)
+- **Root-cause:** continuation overlay was keyed off nearest pagination unit instead of the section that vertically owns the break offset, so sections without units (block) or with a near-neighbour unit got the wrong/n
+- **Tests-added: modules/resume/lib/__tests__/readContinuationHeaderAtBreak.test.ts**
+- **Verified-by:** ./node_modules/.bin/vitest run modules/resume (10 files, 109 tests pass incl. 4 new); tsc --noEmit clean for resume components/lib/services; next lint introduces no new findings
