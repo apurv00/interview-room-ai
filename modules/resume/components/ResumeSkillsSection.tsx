@@ -37,9 +37,10 @@ export default function ResumeSkillsSection({
   renderHeader,
   renderCategory,
 }: Props) {
-  if (!skills.length) return null
   const previewPage = useResumePreviewPage()
   const headerItemClassName = extractGridSpanClass(headerClassName)
+
+  if (!skills.length) return null
 
   return (
     <div data-resume-section="skills" className={sectionClassName}>
