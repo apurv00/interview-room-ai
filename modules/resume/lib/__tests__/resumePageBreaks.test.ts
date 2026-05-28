@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computePageLayoutPlan, type SectionMeasurement } from '../resumePageBreaks'
+import { computePageLayoutPlan, pageClipHeight, type SectionMeasurement } from '../resumePageBreaks'
 
 const PAGE = 800
 
@@ -155,6 +155,18 @@ describe('computePageLayoutPlan — section pagination', () => {
     )
     expect(plan.breaks.length).toBeGreaterThanOrEqual(3)
     expect(plan.continuationHeaders[2]).toBe(true)
+  })
+
+  it('clips page 0 at next break so moved sections do not peek on the prior page', () => {
+    const breaks = [0, 750]
+    expect(pageClipHeight(0, breaks, PAGE)).toBe(750)
+    expect(pageClipHeight(1, breaks, PAGE)).toBe(PAGE)
+  })
+
+  it('clips intermediate pages between consecutive breaks', () => {
+    const breaks = [0, 782, 1200]
+    expect(pageClipHeight(0, breaks, PAGE)).toBe(782)
+    expect(pageClipHeight(1, breaks, PAGE)).toBe(418)
   })
 
   it('marks oversized units for safe truncation', () => {
