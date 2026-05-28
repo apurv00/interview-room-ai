@@ -1,15 +1,15 @@
 /**
  * Section-aware A4 page breaks for preview and PDF.
  *
- * All sections (summary, experience, education, skills, …):
- * - If a section cannot fit in the remaining space on the current page, start it on the next page.
- * - Block sections move as a whole unit unless taller than one page (then slice by page height).
- * - Continuation pages that repeat a section title reserve `headerHeight` at the top of the viewport.
+ * Splittable sections (experience, education, skills, projects, certifications, …):
+ * - Each `data-resume-section-unit` is an atomic block (e.g. one job, one degree, one skill category).
+ * - If header + first unit cannot fit on the current page, move the whole section to the next page.
+ * - Break before a later unit only when that unit cannot fit on the current page.
+ * - Continuation pages reserve section header height at the top of the viewport.
+ * - Units are never split across pages (job + its bullets stay together).
  *
- * Skills additionally splits by measured category sub-units:
- * - If header + first category cannot fit on the current page, move the entire Skills section.
- * - Break before a category only when that category cannot fit on the current page.
- * - Continuation pages repeat the Skills heading; categories are not split across pages.
+ * Simple sections (summary, single-paragraph custom blocks):
+ * - Move as a whole when they do not fit in the page remainder.
  */
 
 export interface MeasurableUnit {
@@ -17,32 +17,41 @@ export interface MeasurableUnit {
   offsetHeight: number
 }
 
-export interface SkillCategoryUnit extends MeasurableUnit {
-  categoryIndex: number
+export interface SectionUnit extends MeasurableUnit {
+  unitIndex: number
 }
 
-export interface SkillsSectionMeasurement {
-  kind: 'skills'
+export interface SplittableSectionMeasurement {
+  kind: 'splittable'
+  sectionId: string
   offsetTop: number
   offsetHeight: number
   header: MeasurableUnit
-  categories: SkillCategoryUnit[]
+  units: SectionUnit[]
 }
 
 export interface BlockSectionMeasurement {
   kind: 'block'
+  sectionId: string
   offsetTop: number
   offsetHeight: number
-  /** Measured `[data-resume-section-header]` height — reserved on continuation pages. */
   headerHeight: number
 }
 
-export type SectionMeasurement = BlockSectionMeasurement | SkillsSectionMeasurement
+export type SectionMeasurement = BlockSectionMeasurement | SplittableSectionMeasurement
+
+/** @deprecated Use SplittableSectionMeasurement */
+export type SkillsSectionMeasurement = SplittableSectionMeasurement
 
 export interface PageLayoutPlan {
   breaks: number[]
-  /** Per-page: repeat the continuing section title (skills or any marked block section). */
+  /** Per-page: repeat the continuing section title overlay (any splittable section). */
+  continuationHeaders: boolean[]
+  /** Units taller than one page minus header — preview may truncate (skills today). */
+  truncatedUnits: Array<{ sectionId: string; unitIndex: number }>
+  /** @deprecated Use continuationHeaders */
   skillsContinuationHeader: boolean[]
+  /** @deprecated Use truncatedUnits */
   truncatedSkillCategoryIndices: number[]
 }
 
@@ -119,83 +128,92 @@ function layoutBlockSection(
   return section.offsetTop
 }
 
-function categoryBottom(skillsTop: number, cat: SkillCategoryUnit): number {
-  return skillsTop + bottom(cat)
+function unitBottom(sectionTop: number, unit: SectionUnit): number {
+  return sectionTop + bottom(unit)
 }
 
-function layoutSkillsSection(
-  section: SkillsSectionMeasurement,
+function layoutSplittableSection(
+  section: SplittableSectionMeasurement,
   pageStart: number,
   pageHeight: number,
   breaks: number[],
   continuation: boolean[],
-  truncatedSkillCategoryIndices: number[],
+  truncatedUnits: Array<{ sectionId: string; unitIndex: number }>,
 ): number {
-  const skillsTop = section.offsetTop
-  const skillsBottom = bottom(section)
-  const { header, categories } = section
+  const sectionTop = section.offsetTop
+  const sectionBottom = bottom(section)
+  const { header, units } = section
 
-  if (categories.length === 0) {
-    if (!fits(skillsBottom, pageStart, pageHeight)) {
-      pushBreak(breaks, continuation, skillsTop, false)
-      return skillsTop
+  if (units.length === 0) {
+    if (!fits(sectionBottom, pageStart, pageHeight)) {
+      pushBreak(breaks, continuation, sectionTop, false)
+      return sectionTop
     }
     return pageStart
   }
 
-  const run = (start: number): number => {
-    let pageStartLocal = start
-    let reservedTopOnPage = 0
+  let pageStartLocal = pageStart
+  let reservedTopOnPage = 0
 
-    const wholeSectionFits = () => fits(skillsBottom, pageStartLocal, pageHeight, reservedTopOnPage)
+  const wholeSectionFits = () => fits(sectionBottom, pageStartLocal, pageHeight, reservedTopOnPage)
 
+  if (wholeSectionFits()) return pageStartLocal
+
+  const firstUnitBottom = unitBottom(sectionTop, units[0])
+  const firstChunkBottom = Math.max(
+    firstUnitBottom,
+    sectionTop + bottom(header) + units[0].offsetHeight,
+  )
+
+  if (!fits(firstChunkBottom, pageStartLocal, pageHeight, reservedTopOnPage)) {
+    if (sectionTop > pageStartLocal) {
+      pushBreak(breaks, continuation, sectionTop, false)
+      pageStartLocal = sectionTop
+      reservedTopOnPage = 0
+    }
     if (wholeSectionFits()) return pageStartLocal
-
-    const firstCatBottom = categoryBottom(skillsTop, categories[0])
-    const firstChunkBottom = Math.max(firstCatBottom, skillsTop + bottom(header) + categories[0].offsetHeight)
-
-    if (!fits(firstChunkBottom, pageStartLocal, pageHeight, reservedTopOnPage)) {
-      if (skillsTop > pageStartLocal) {
-        pushBreak(breaks, continuation, skillsTop, false)
-        pageStartLocal = skillsTop
-        reservedTopOnPage = 0
-      }
-      if (wholeSectionFits()) return pageStartLocal
-    }
-
-    for (let index = 0; index < categories.length; index++) {
-      const category = categories[index]
-      const categoryBreakTop = skillsTop + category.offsetTop
-      const categoryBottomAbs = categoryBottom(skillsTop, category)
-
-      const maxCategoryHeightWithHeader = pageHeight - header.offsetHeight
-      if (category.offsetHeight > maxCategoryHeightWithHeader) {
-        truncatedSkillCategoryIndices.push(category.categoryIndex)
-      }
-
-      if (!fits(categoryBottomAbs, pageStartLocal, pageHeight, reservedTopOnPage)
-        && categoryBreakTop > pageStartLocal) {
-        const repeatHeader = index > 0
-        pushBreak(breaks, continuation, categoryBreakTop, repeatHeader)
-        pageStartLocal = categoryBreakTop
-        reservedTopOnPage = repeatHeader ? header.offsetHeight : 0
-      }
-
-      if (category.offsetHeight > maxCategoryHeightWithHeader) {
-        let next = pageEnd(pageStartLocal, pageHeight, reservedTopOnPage)
-        while (next < categoryBottomAbs) {
-          pushBreak(breaks, continuation, next, true)
-          pageStartLocal = next
-          reservedTopOnPage = header.offsetHeight
-          next = pageEnd(pageStartLocal, pageHeight, reservedTopOnPage)
-        }
-      }
-    }
-
-    return pageStartLocal
   }
 
-  return run(pageStart)
+  for (let index = 0; index < units.length; index++) {
+    const unit = units[index]
+    const unitBreakTop = sectionTop + unit.offsetTop
+    const unitBottomAbs = unitBottom(sectionTop, unit)
+
+    const maxUnitHeightWithHeader = pageHeight - header.offsetHeight
+    if (unit.offsetHeight > maxUnitHeightWithHeader) {
+      truncatedUnits.push({ sectionId: section.sectionId, unitIndex: unit.unitIndex })
+    }
+
+    if (!fits(unitBottomAbs, pageStartLocal, pageHeight, reservedTopOnPage)
+      && unitBreakTop > pageStartLocal) {
+      const repeatHeader = index > 0
+      pushBreak(breaks, continuation, unitBreakTop, repeatHeader)
+      pageStartLocal = unitBreakTop
+      reservedTopOnPage = repeatHeader ? header.offsetHeight : 0
+    }
+
+    if (unit.offsetHeight > maxUnitHeightWithHeader) {
+      let next = pageEnd(pageStartLocal, pageHeight, reservedTopOnPage)
+      while (next < unitBottomAbs) {
+        pushBreak(breaks, continuation, next, true)
+        pageStartLocal = next
+        reservedTopOnPage = header.offsetHeight
+        next = pageEnd(pageStartLocal, pageHeight, reservedTopOnPage)
+      }
+    }
+  }
+
+  return pageStartLocal
+}
+
+function toLegacyPlan(plan: Omit<PageLayoutPlan, 'skillsContinuationHeader' | 'truncatedSkillCategoryIndices'>): PageLayoutPlan {
+  return {
+    ...plan,
+    skillsContinuationHeader: plan.continuationHeaders,
+    truncatedSkillCategoryIndices: plan.truncatedUnits
+      .filter(u => u.sectionId === 'skills')
+      .map(u => u.unitIndex),
+  }
 }
 
 export function computePageLayoutPlan(
@@ -203,30 +221,34 @@ export function computePageLayoutPlan(
   pageHeight: number,
 ): PageLayoutPlan {
   if (sections.length === 0) {
-    return { breaks: [0], skillsContinuationHeader: [false], truncatedSkillCategoryIndices: [] }
+    return toLegacyPlan({
+      breaks: [0],
+      continuationHeaders: [false],
+      truncatedUnits: [],
+    })
   }
 
   const breaks: number[] = [0]
-  const skillsContinuationHeader: boolean[] = [false]
-  const truncatedSkillCategoryIndices: number[] = []
+  const continuationHeaders: boolean[] = [false]
+  const truncatedUnits: Array<{ sectionId: string; unitIndex: number }> = []
   let pageStart = 0
 
   for (const section of sections) {
-    if (section.kind === 'block') {
-      pageStart = layoutBlockSection(section, pageStart, pageHeight, breaks, skillsContinuationHeader)
-    } else {
-      pageStart = layoutSkillsSection(
+    if (section.kind === 'splittable') {
+      pageStart = layoutSplittableSection(
         section,
         pageStart,
         pageHeight,
         breaks,
-        skillsContinuationHeader,
-        truncatedSkillCategoryIndices,
+        continuationHeaders,
+        truncatedUnits,
       )
+    } else {
+      pageStart = layoutBlockSection(section, pageStart, pageHeight, breaks, continuationHeaders)
     }
   }
 
-  return { breaks, skillsContinuationHeader, truncatedSkillCategoryIndices }
+  return toLegacyPlan({ breaks, continuationHeaders, truncatedUnits })
 }
 
 /** @deprecated Use computePageLayoutPlan — kept for callers that only need marginTop breaks */
@@ -234,6 +256,7 @@ export function computePageBreaks(children: MeasurableUnit[], pageHeight: number
   return computePageLayoutPlan(
     children.map(c => ({
       kind: 'block' as const,
+      sectionId: 'legacy',
       offsetTop: c.offsetTop,
       offsetHeight: c.offsetHeight,
       headerHeight: 0,

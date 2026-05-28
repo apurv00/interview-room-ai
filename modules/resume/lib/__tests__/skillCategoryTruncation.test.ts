@@ -7,7 +7,7 @@ import {
   refineSkillRatiosIfStillOversized,
   skillsMatchTruncationRatios,
 } from '../skillCategoryTruncation'
-import type { SkillsSectionMeasurement } from '../resumePageBreaks'
+import type { SplittableSectionMeasurement } from '../resumePageBreaks'
 import type { ResumeData } from '../../validators/resume'
 
 const baseData: ResumeData = {
@@ -44,12 +44,13 @@ describe('skillCategoryTruncation', () => {
   })
 
   it('refines ratios by item count when truncated DOM is still oversized', () => {
-    const skillsSection: SkillsSectionMeasurement = {
-      kind: 'skills',
+    const skillsSection: SplittableSectionMeasurement = {
+      kind: 'splittable',
+      sectionId: 'skills',
       offsetTop: 0,
       offsetHeight: 900,
       header: { offsetTop: 0, offsetHeight: 20 },
-      categories: [{ categoryIndex: 0, offsetTop: 24, offsetHeight: 850 }],
+      units: [{ unitIndex: 0, offsetTop: 24, offsetHeight: 850 }],
     }
     const truncated = applySkillsTruncationToData(baseData, { 0: 0.4 })
     const refined = refineSkillRatiosIfStillOversized(

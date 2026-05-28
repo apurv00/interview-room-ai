@@ -31,7 +31,7 @@ export default function ProfessionalTemplate({ data }: TemplateProps) {
         <div className="mb-3" data-resume-section="experience">
           <h2 data-resume-section-header="Experience" className="font-bold uppercase tracking-widest border-b border-gray-300 pb-0.5 mb-1">Experience</h2>
           {data.experience.map(exp => (
-            <div key={exp.id} className="mb-2">
+            <div key={exp.id} className="mb-2" data-resume-section-unit>
               <div className="flex justify-between items-baseline">
                 <div>
                   <span className="font-bold">{exp.title}</span>
@@ -60,7 +60,7 @@ export default function ProfessionalTemplate({ data }: TemplateProps) {
         <div className="mb-3" data-resume-section="education">
           <h2 data-resume-section-header="Education" className="font-bold uppercase tracking-widest border-b border-gray-300 pb-0.5 mb-1">Education</h2>
           {data.education.map(edu => (
-            <div key={edu.id} className="mb-1.5">
+            <div key={edu.id} className="mb-1.5" data-resume-section-unit>
               <div className="flex justify-between items-baseline">
                 <div>
                   <span className="font-bold">{edu.degree}</span>
@@ -100,7 +100,7 @@ export default function ProfessionalTemplate({ data }: TemplateProps) {
         <div className="mb-3" data-resume-section="projects">
           <h2 data-resume-section-header="Projects" className="font-bold uppercase tracking-widest border-b border-gray-300 pb-0.5 mb-1">Projects</h2>
           {data.projects.map(proj => (
-            <div key={proj.id} className="mb-1.5">
+            <div key={proj.id} className="mb-1.5" data-resume-section-unit>
               <span className="font-bold">{proj.name}</span>
               {proj.technologies?.length ? <span className="text-[8px] text-gray-500"> ({proj.technologies.join(', ')})</span> : null}
               <p className="text-gray-700">{proj.description}</p>
@@ -114,7 +114,7 @@ export default function ProfessionalTemplate({ data }: TemplateProps) {
         <div className="mb-3" data-resume-section="certifications">
           <h2 data-resume-section-header="Certifications" className="font-bold uppercase tracking-widest border-b border-gray-300 pb-0.5 mb-1">Certifications</h2>
           {data.certifications.map((cert, i) => (
-            <div key={i} className="mb-0.5">
+            <div key={i} className="mb-0.5" data-resume-section-unit>
               <span className="font-semibold">{cert.name}</span> — {cert.issuer}
               {cert.date && <span className="text-gray-500"> ({cert.date})</span>}
             </div>
@@ -125,7 +125,7 @@ export default function ProfessionalTemplate({ data }: TemplateProps) {
       {/* Custom Sections */}
       {data.customSections?.map(section => (
         <div key={section.id} className="mb-3" data-resume-section={`custom-${section.id}`}>
-          <h2 data-resume-section-header="{section.title}" className="font-bold uppercase tracking-widest border-b border-gray-300 pb-0.5 mb-1">{section.title}</h2>
+          <h2 data-resume-section-header={section.title} className="font-bold uppercase tracking-widest border-b border-gray-300 pb-0.5 mb-1">{section.title}</h2>
           <p className="text-gray-700 whitespace-pre-wrap">{section.content}</p>
         </div>
       ))}

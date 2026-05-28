@@ -7,7 +7,8 @@ import { getFontStack, getFontSizes, getCustomFontSizes, getGoogleFontUrl, DEFAU
 import { computePageLayoutPlan } from '../lib/resumePageBreaks'
 import {
   measureResumeSections,
-  readSkillsHeaderMetrics,
+  readContinuationHeaderAtBreak,
+  type SectionHeaderMetrics,
 } from '../lib/measureResumeSections'
 import { ResumePreviewPageProvider } from './ResumePreviewPageContext'
 import {
@@ -38,15 +39,12 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
   const contentRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [pageBreaks, setPageBreaks] = useState<number[]>([0])
-  const [skillsContinuationHeader, setSkillsContinuationHeader] = useState<boolean[]>([false])
+  const [continuationHeadersByPage, setContinuationHeadersByPage] = useState<
+    Record<number, SectionHeaderMetrics>
+  >({})
   const [truncatedSkillCategoryIndices, setTruncatedSkillCategoryIndices] = useState<number[]>([])
   const [truncatedSkillCategoryRatios, setTruncatedSkillCategoryRatios] = useState<Record<number, number>>({})
   const [truncatedSkillCategoryOmittedCounts, setTruncatedSkillCategoryOmittedCounts] = useState<Record<number, number>>({})
-  const [skillsHeaderHeight, setSkillsHeaderHeight] = useState(0)
-  const [skillsHeaderLeft, setSkillsHeaderLeft] = useState(0)
-  const [skillsHeaderWidth, setSkillsHeaderWidth] = useState(0)
-  const [skillsHeaderHtml, setSkillsHeaderHtml] = useState('<h2>Skills</h2>')
-  const [skillsSectionTitle, setSkillsSectionTitle] = useState('Skills')
   const [scale, setScale] = useState(1)
 
   const fontFamily = data.styling?.fontFamily
@@ -99,16 +97,18 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
       const templateRoot = contentRef.current.firstElementChild as HTMLElement | null
       if (templateRoot) {
         const sections = measureResumeSections(templateRoot)
-        const skillsSection = sections.find(section => section.kind === 'skills')
+        const skillsSection = sections.find(
+          section => section.kind === 'splittable' && section.sectionId === 'skills',
+        )
         const measuringFull = isFullSkillsMeasure(measureData.skills, data.skills)
 
         let ratios = stableSkillRatiosRef.current
 
-        if (measuringFull && skillsSection?.kind === 'skills') {
+        if (measuringFull && skillsSection?.kind === 'splittable') {
           ratios = computeSkillCategoryRatios(skillsSection, contentHeight)
           stableSkillRatiosRef.current = ratios
         } else if (
-          skillsSection?.kind === 'skills'
+          skillsSection?.kind === 'splittable'
           && data.skills?.length
           && measureData.skills?.length
         ) {
@@ -143,19 +143,19 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
 
         const plan = computePageLayoutPlan(sections, contentHeight)
         setPageBreaks(plan.breaks)
-        setSkillsContinuationHeader(plan.skillsContinuationHeader)
+        const headersByPage: Record<number, SectionHeaderMetrics> = {}
+        for (let i = 0; i < plan.breaks.length; i++) {
+          if (plan.continuationHeaders[i]) {
+            const metrics = readContinuationHeaderAtBreak(templateRoot, plan.breaks[i])
+            if (metrics) headersByPage[i] = metrics
+          }
+        }
+        setContinuationHeadersByPage(headersByPage)
         setTruncatedSkillCategoryIndices(plan.truncatedSkillCategoryIndices)
         setTruncatedSkillCategoryRatios(ratios)
         setTruncatedSkillCategoryOmittedCounts(
           computeOmittedSkillCounts(data.skills || [], ratios),
         )
-
-        const metrics = readSkillsHeaderMetrics(templateRoot)
-        setSkillsHeaderHeight(metrics.height)
-        setSkillsHeaderLeft(metrics.left)
-        setSkillsHeaderWidth(metrics.width || contentWidth)
-        setSkillsHeaderHtml(metrics.html)
-        setSkillsSectionTitle(metrics.title)
       }
     }
     if (containerRef.current) {
@@ -249,18 +249,21 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                         overflow: 'hidden',
                       }}
                     >
-                      {skillsContinuationHeader[pageIndex] && (
+                      {continuationHeadersByPage[pageIndex] && (
                         <div
                           className="absolute z-10"
                           style={{
                             top: 0,
-                            left: skillsHeaderLeft,
-                            width: skillsHeaderWidth || contentWidth,
-                            height: skillsHeaderHeight,
+                            left: continuationHeadersByPage[pageIndex].left,
+                            width: continuationHeadersByPage[pageIndex].width || contentWidth,
+                            height: continuationHeadersByPage[pageIndex].height,
                           }}
                         >
                           <div
-                            dangerouslySetInnerHTML={{ __html: skillsHeaderHtml || `<h2>${skillsSectionTitle}</h2>` }}
+                            dangerouslySetInnerHTML={{
+                              __html: continuationHeadersByPage[pageIndex].html
+                                || `<h2>${continuationHeadersByPage[pageIndex].title}</h2>`,
+                            }}
                           />
                         </div>
                       )}
@@ -269,13 +272,13 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                           ...wrapperStyle,
                           width: contentWidth,
                           marginTop:
-                            -pageBreaks[pageIndex] +
-                            (skillsContinuationHeader[pageIndex] ? skillsHeaderHeight : 0),
+                            -pageBreaks[pageIndex]
+                            + (continuationHeadersByPage[pageIndex]?.height ?? 0),
                         }}
                       >
                         <ResumePreviewPageProvider
                           value={{
-                            skillsContinuationHeader: skillsContinuationHeader[pageIndex] ?? false,
+                            skillsContinuationHeader: Boolean(continuationHeadersByPage[pageIndex]),
                             truncatedSkillCategoryIndices,
                             truncatedSkillCategoryRatios,
                             truncatedSkillCategoryOmittedCounts,

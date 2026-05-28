@@ -46,7 +46,7 @@ export default function TechnicalTemplate({ data }: TemplateProps) {
         <div className="mb-3" data-resume-section="experience">
           <h2 data-resume-section-header="Experience" className="font-bold uppercase text-emerald-700 mb-1">Experience</h2>
           {data.experience.map(exp => (
-            <div key={exp.id} className="mb-2">
+            <div key={exp.id} className="mb-2" data-resume-section-unit>
               <div className="flex justify-between">
                 <span className="font-bold">{exp.title} @ {exp.company}</span>
                 <span className="text-[8px] text-gray-500">{exp.startDate} - {exp.endDate || 'Present'}</span>
@@ -68,7 +68,7 @@ export default function TechnicalTemplate({ data }: TemplateProps) {
         <div className="mb-3" data-resume-section="projects">
           <h2 data-resume-section-header="Projects" className="font-bold uppercase text-emerald-700 mb-1">Projects</h2>
           {data.projects.map(proj => (
-            <div key={proj.id} className="mb-1.5">
+            <div key={proj.id} className="mb-1.5" data-resume-section-unit>
               <div className="flex items-baseline gap-1">
                 <span className="font-bold">{proj.name}</span>
                 {proj.url && <span className="text-[8px] text-emerald-600">[{proj.url}]</span>}
@@ -85,7 +85,7 @@ export default function TechnicalTemplate({ data }: TemplateProps) {
         <div className="mb-3" data-resume-section="education">
           <h2 data-resume-section-header="Education" className="font-bold uppercase text-emerald-700 mb-1">Education</h2>
           {data.education.map(edu => (
-            <div key={edu.id} className="mb-1">
+            <div key={edu.id} className="mb-1" data-resume-section-unit>
               <span className="font-bold">{edu.degree}</span>
               {edu.field && <span> in {edu.field}</span>}
               {edu.institution && <span> — {edu.institution}</span>}
@@ -98,13 +98,15 @@ export default function TechnicalTemplate({ data }: TemplateProps) {
       {data.certifications && data.certifications.length > 0 && (
         <div className="mb-3" data-resume-section="certifications">
           <h2 data-resume-section-header="Certifications" className="font-bold uppercase text-emerald-700 mb-1">Certifications</h2>
-          {data.certifications.map((c, i) => <div key={i}>{c.name} — {c.issuer} {c.date && `(${c.date})`}</div>)}
+          {data.certifications.map((c, i) => (
+            <div key={i} data-resume-section-unit>{c.name} — {c.issuer} {c.date && `(${c.date})`}</div>
+          ))}
         </div>
       )}
 
       {data.customSections?.map(s => (
         <div key={s.id} className="mb-3" data-resume-section={`custom-${s.id}`}>
-          <h2 data-resume-section-header="{s.title}" className="font-bold uppercase text-emerald-700 mb-1">{s.title}</h2>
+          <h2 data-resume-section-header={s.title} className="font-bold uppercase text-emerald-700 mb-1">{s.title}</h2>
           <p className="text-gray-700 whitespace-pre-wrap">{s.content}</p>
         </div>
       ))}

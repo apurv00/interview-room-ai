@@ -58,6 +58,7 @@ export default function ResumeSkillsSection({
         return (
         <div
           key={`${cat.category}-${index}`}
+          data-resume-section-unit
           data-resume-skills-category
           data-category-index={index}
         >

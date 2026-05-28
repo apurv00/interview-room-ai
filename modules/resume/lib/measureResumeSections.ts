@@ -1,47 +1,63 @@
-import type { SectionMeasurement, SkillsSectionMeasurement } from './resumePageBreaks'
+import type { SectionMeasurement, SplittableSectionMeasurement } from './resumePageBreaks'
 
 function relativeTop(el: HTMLElement, root: HTMLElement): number {
   const rootRect = root.getBoundingClientRect()
   return Math.round(el.getBoundingClientRect().top - rootRect.top)
 }
 
-function measureSkillsBlock(skillsEl: HTMLElement, templateRoot: HTMLElement): SkillsSectionMeasurement {
-  const skillsTop = relativeTop(skillsEl, templateRoot)
-  const headerEl = skillsEl.querySelector('[data-resume-skills-header]') as HTMLElement | null
-  const categoryEls = Array.from(
-    skillsEl.querySelectorAll('[data-resume-skills-category]'),
-  ) as HTMLElement[]
+const UNIT_SELECTOR = '[data-resume-section-unit], [data-resume-skills-category]'
+
+function measureSplittableSection(
+  sectionEl: HTMLElement,
+  templateRoot: HTMLElement,
+  sectionId: string,
+): SplittableSectionMeasurement {
+  const sectionTop = relativeTop(sectionEl, templateRoot)
+  const headerEl = sectionEl.querySelector(
+    '[data-resume-section-header], [data-resume-skills-header]',
+  ) as HTMLElement | null
+  const unitEls = Array.from(sectionEl.querySelectorAll(UNIT_SELECTOR)) as HTMLElement[]
 
   const header = headerEl
     ? {
-        offsetTop: relativeTop(headerEl, templateRoot) - skillsTop,
+        offsetTop: relativeTop(headerEl, templateRoot) - sectionTop,
         offsetHeight: headerEl.offsetHeight,
       }
     : { offsetTop: 0, offsetHeight: 0 }
 
-  const categories = categoryEls.map((el, categoryIndex) => ({
-    categoryIndex,
-    offsetTop: relativeTop(el, templateRoot) - skillsTop,
+  const units = unitEls.map((el, unitIndex) => ({
+    unitIndex,
+    offsetTop: relativeTop(el, templateRoot) - sectionTop,
     offsetHeight: el.offsetHeight,
   }))
 
   return {
-    kind: 'skills',
-    offsetTop: skillsTop,
-    offsetHeight: skillsEl.offsetHeight,
+    kind: 'splittable',
+    sectionId,
+    offsetTop: sectionTop,
+    offsetHeight: sectionEl.offsetHeight,
     header,
-    categories,
+    units,
   }
 }
 
-function measureBlock(el: HTMLElement, templateRoot: HTMLElement): SectionMeasurement {
+function measureBlock(
+  el: HTMLElement,
+  templateRoot: HTMLElement,
+  sectionId: string,
+): SectionMeasurement {
   const headerEl = el.querySelector('[data-resume-section-header]') as HTMLElement | null
   return {
     kind: 'block',
+    sectionId,
     offsetTop: relativeTop(el, templateRoot),
     offsetHeight: el.offsetHeight,
     headerHeight: headerEl?.offsetHeight ?? 0,
   }
+}
+
+function isSplittableSection(el: HTMLElement): boolean {
+  return el.querySelector(UNIT_SELECTOR) != null
 }
 
 /** Leaf markers only — ignore a parent marker when a nested section marker exists inside it. */
@@ -60,9 +76,17 @@ function collectLeafMarkedSections(templateRoot: HTMLElement): HTMLElement[] {
   })
 }
 
+function measureMarkedSection(el: HTMLElement, templateRoot: HTMLElement): SectionMeasurement {
+  const sectionId = el.getAttribute('data-resume-section') || 'section'
+  if (isSplittableSection(el)) {
+    return measureSplittableSection(el, templateRoot, sectionId)
+  }
+  return measureBlock(el, templateRoot, sectionId)
+}
+
 /**
- * Measure resume sections for pagination. Uses `data-resume-section` markers when present
- * (supports nested layouts like Creative sidebar); otherwise top-level template children.
+ * Measure resume sections for pagination. Splittable sections use `data-resume-section-unit`
+ * (experience jobs, education entries, projects, skill categories, …).
  */
 export function measureResumeSections(templateRoot: HTMLElement): SectionMeasurement[] {
   const marked = collectLeafMarkedSections(templateRoot)
@@ -70,22 +94,87 @@ export function measureResumeSections(templateRoot: HTMLElement): SectionMeasure
   if (marked.length > 0) {
     return marked
       .sort((a, b) => relativeTop(a, templateRoot) - relativeTop(b, templateRoot))
-      .map(el => {
-        if (el.getAttribute('data-resume-section') === 'skills') {
-          return measureSkillsBlock(el, templateRoot)
-        }
-        return measureBlock(el, templateRoot)
-      })
+      .map(el => measureMarkedSection(el, templateRoot))
   }
 
   const children = Array.from(templateRoot.children) as HTMLElement[]
   return children.map(child => {
     const skillsEl = child.querySelector('[data-resume-section="skills"]') as HTMLElement | null
     if (skillsEl) {
-      return measureSkillsBlock(skillsEl, templateRoot)
+      return measureSplittableSection(skillsEl, templateRoot, 'skills')
     }
-    return measureBlock(child, templateRoot)
+    return measureBlock(child, templateRoot, 'block')
   })
+}
+
+export interface SectionHeaderMetrics {
+  title: string
+  height: number
+  left: number
+  width: number
+  html: string
+}
+
+function headerMetricsFromElement(
+  header: HTMLElement,
+  templateRoot: HTMLElement,
+): SectionHeaderMetrics {
+  const headerRect = header.getBoundingClientRect()
+  const rootRect = templateRoot.getBoundingClientRect()
+  const title =
+    header.getAttribute('data-resume-section-header')
+    || header.getAttribute('data-resume-skills-header')
+    || header.textContent?.trim()
+    || 'Section'
+
+  return {
+    title,
+    height: header.offsetHeight,
+    left: Math.max(0, Math.round(headerRect.left - rootRect.left)),
+    width: Math.max(0, Math.round(headerRect.width)),
+    html: header.innerHTML,
+  }
+}
+
+/** Header overlay for a continuation page starting at `breakTop`. */
+export function readContinuationHeaderAtBreak(
+  templateRoot: HTMLElement,
+  breakTop: number,
+): SectionHeaderMetrics | null {
+  const unitEls = Array.from(templateRoot.querySelectorAll(UNIT_SELECTOR)) as HTMLElement[]
+  let matchedUnit: HTMLElement | null = null
+
+  for (const unit of unitEls) {
+    const unitTop = relativeTop(unit, templateRoot)
+    if (unitTop === breakTop || (breakTop > unitTop && breakTop < unitTop + unit.offsetHeight)) {
+      matchedUnit = unit
+      break
+    }
+  }
+
+  if (!matchedUnit && unitEls.length > 0) {
+    let best: HTMLElement | null = null
+    let bestDelta = Infinity
+    for (const unit of unitEls) {
+      const unitTop = relativeTop(unit, templateRoot)
+      const delta = Math.abs(unitTop - breakTop)
+      if (delta < bestDelta) {
+        bestDelta = delta
+        best = unit
+      }
+    }
+    if (best && bestDelta <= 4) matchedUnit = best
+  }
+
+  const section = (matchedUnit?.closest('[data-resume-section]') ?? null) as HTMLElement | null
+  if (!section) return null
+
+  const header = section.querySelector(
+    '[data-resume-section-header], [data-resume-skills-header]',
+  ) as HTMLElement | null
+  if (!header) return null
+
+  return headerMetricsFromElement(header, templateRoot)
 }
 
 export function readSkillsSectionTitle(templateRoot: HTMLElement): string {
@@ -98,14 +187,10 @@ export function readSkillsHeaderHeight(templateRoot: HTMLElement): number {
   return header?.offsetHeight ?? 0
 }
 
-export interface SkillsHeaderMetrics {
-  title: string
-  height: number
-  left: number
-  width: number
-  html: string
-}
+/** @deprecated Use readContinuationHeaderAtBreak */
+export interface SkillsHeaderMetrics extends SectionHeaderMetrics {}
 
+/** @deprecated Use readContinuationHeaderAtBreak */
 export function readSkillsHeaderMetrics(templateRoot: HTMLElement): SkillsHeaderMetrics {
   const header = templateRoot.querySelector('[data-resume-skills-header]') as HTMLElement | null
   if (!header) {
@@ -117,15 +202,5 @@ export function readSkillsHeaderMetrics(templateRoot: HTMLElement): SkillsHeader
       html: '<h2>Skills</h2>',
     }
   }
-
-  const headerRect = header.getBoundingClientRect()
-  const rootRect = templateRoot.getBoundingClientRect()
-
-  return {
-    title: header.getAttribute('data-resume-skills-header') || header.textContent?.trim() || 'Skills',
-    height: header.offsetHeight,
-    left: Math.max(0, Math.round(headerRect.left - rootRect.left)),
-    width: Math.max(0, Math.round(headerRect.width)),
-    html: header.innerHTML,
-  }
+  return headerMetricsFromElement(header, templateRoot)
 }

@@ -1,17 +1,17 @@
 import type { ResumeData } from '../validators/resume'
-import type { SkillsSectionMeasurement } from './resumePageBreaks'
+import type { SplittableSectionMeasurement } from './resumePageBreaks'
 
-/** Height ratio (0..1) for categories taller than one page minus the section header. */
+/** Height ratio (0..1) for skill units taller than one page minus the section header. */
 export function computeSkillCategoryRatios(
-  skillsSection: SkillsSectionMeasurement,
+  skillsSection: SplittableSectionMeasurement,
   pageContentHeight: number,
 ): Record<number, number> {
   const ratios: Record<number, number> = {}
   const maxAllowed = Math.max(1, pageContentHeight - skillsSection.header.offsetHeight)
 
-  for (const category of skillsSection.categories) {
-    if (category.offsetHeight > maxAllowed) {
-      ratios[category.categoryIndex] = maxAllowed / category.offsetHeight
+  for (const unit of skillsSection.units) {
+    if (unit.offsetHeight > maxAllowed) {
+      ratios[unit.unitIndex] = maxAllowed / unit.offsetHeight
     }
   }
 
@@ -94,7 +94,7 @@ export function isFullSkillsMeasure(
  * Refine ratios by dropping one more item — never re-derive ratios from truncated DOM heights.
  */
 export function refineSkillRatiosIfStillOversized(
-  skillsSection: SkillsSectionMeasurement,
+  skillsSection: SplittableSectionMeasurement,
   pageContentHeight: number,
   ratios: Record<number, number>,
   sourceSkills: NonNullable<ResumeData['skills']>,
@@ -104,10 +104,10 @@ export function refineSkillRatiosIfStillOversized(
   const next = { ...ratios }
   let changed = false
 
-  for (const category of skillsSection.categories) {
-    if (category.offsetHeight <= maxAllowed) continue
+  for (const unit of skillsSection.units) {
+    if (unit.offsetHeight <= maxAllowed) continue
 
-    const index = category.categoryIndex
+    const index = unit.unitIndex
     const sourceCount = sourceSkills[index]?.items.length ?? 0
     const currentKept = currentSkills[index]?.items.length ?? sourceCount
     if (currentKept <= 1) continue

@@ -160,146 +160,230 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
         });
       }
 
+      const UNIT_SELECTOR = '[data-resume-section-unit], [data-resume-skills-category]';
+
+      function measureSplittable(sectionEl, templateRoot, sectionId) {
+        const sectionTop = relativeTop(sectionEl, templateRoot);
+        const headerEl = sectionEl.querySelector('[data-resume-section-header], [data-resume-skills-header]');
+        const unitEls = Array.from(sectionEl.querySelectorAll(UNIT_SELECTOR));
+        const header = headerEl ? {
+          offsetTop: relativeTop(headerEl, templateRoot) - sectionTop,
+          offsetHeight: headerEl.offsetHeight,
+        } : { offsetTop: 0, offsetHeight: 0 };
+        const units = unitEls.map((el, unitIndex) => ({
+          unitIndex,
+          offsetTop: relativeTop(el, templateRoot) - sectionTop,
+          offsetHeight: el.offsetHeight,
+        }));
+        return {
+          kind: 'splittable',
+          sectionId,
+          offsetTop: sectionTop,
+          offsetHeight: sectionEl.offsetHeight,
+          header,
+          units,
+        };
+      }
+
+      function measureBlock(el, templateRoot, sectionId) {
+        const headerEl = el.querySelector('[data-resume-section-header]');
+        return {
+          kind: 'block',
+          sectionId,
+          offsetTop: relativeTop(el, templateRoot),
+          offsetHeight: el.offsetHeight,
+          headerHeight: headerEl ? headerEl.offsetHeight : 0,
+        };
+      }
+
+      function isSplittable(el) {
+        return el.querySelector(UNIT_SELECTOR) != null;
+      }
+
       function measureSections(templateRoot) {
-        const measureSkills = (skillsEl) => {
-          const skillsTop = relativeTop(skillsEl, templateRoot);
-          const headerEl = skillsEl.querySelector('[data-resume-skills-header]');
-          const categoryEls = Array.from(skillsEl.querySelectorAll('[data-resume-skills-category]'));
-          return {
-            kind: 'skills',
-            offsetTop: skillsTop,
-            offsetHeight: skillsEl.offsetHeight,
-            header: headerEl ? {
-              offsetTop: relativeTop(headerEl, templateRoot) - skillsTop,
-              offsetHeight: headerEl.offsetHeight,
-            } : { offsetTop: 0, offsetHeight: 0 },
-            categories: categoryEls.map((el, index) => ({
-              categoryIndex: index,
-              offsetTop: relativeTop(el, templateRoot) - skillsTop,
-              offsetHeight: el.offsetHeight,
-            })),
-          };
-        };
-
-        const measureBlock = (el) => {
-          const headerEl = el.querySelector('[data-resume-section-header]');
-          return {
-            kind: 'block',
-            offsetTop: relativeTop(el, templateRoot),
-            offsetHeight: el.offsetHeight,
-            headerHeight: headerEl ? headerEl.offsetHeight : 0,
-          };
-        };
-
         const marked = collectLeafMarked(templateRoot);
         if (marked.length > 0) {
           return marked
             .sort((a, b) => relativeTop(a, templateRoot) - relativeTop(b, templateRoot))
-            .map(el => el.getAttribute('data-resume-section') === 'skills' ? measureSkills(el) : measureBlock(el));
+            .map(el => {
+              const sectionId = el.getAttribute('data-resume-section') || 'section';
+              return isSplittable(el)
+                ? measureSplittable(el, templateRoot, sectionId)
+                : measureBlock(el, templateRoot, sectionId);
+            });
         }
 
         return Array.from(templateRoot.children).map(child => {
           const skillsEl = child.querySelector('[data-resume-section="skills"]');
-          if (skillsEl) return measureSkills(skillsEl);
-          return measureBlock(child);
+          if (skillsEl) return measureSplittable(skillsEl, templateRoot, 'skills');
+          return measureBlock(child, templateRoot, 'block');
         });
+      }
+
+      function unitBottomAbs(sectionTop, unit) {
+        return sectionTop + bottom(unit);
+      }
+
+      function layoutSplittable(section, pageStart, pageHeight, breaks, continuation) {
+        const sectionTop = section.offsetTop;
+        const sectionBottom = bottom(section);
+        const header = section.header;
+        const units = section.units;
+        let pageStartLocal = pageStart;
+        let reservedTop = 0;
+
+        if (units.length === 0) {
+          if (!fits(sectionBottom, pageStartLocal, pageHeight, reservedTop)) {
+            pushBreak(breaks, continuation, sectionTop, false);
+            return sectionTop;
+          }
+          return pageStartLocal;
+        }
+
+        const wholeFits = () => fits(sectionBottom, pageStartLocal, pageHeight, reservedTop);
+        if (wholeFits()) return pageStartLocal;
+
+        const firstUnitBottom = unitBottomAbs(sectionTop, units[0]);
+        const firstChunkBottom = Math.max(
+          firstUnitBottom,
+          sectionTop + bottom(header) + units[0].offsetHeight,
+        );
+
+        if (!fits(firstChunkBottom, pageStartLocal, pageHeight, reservedTop)) {
+          if (sectionTop > pageStartLocal) {
+            pushBreak(breaks, continuation, sectionTop, false);
+            pageStartLocal = sectionTop;
+            reservedTop = 0;
+          }
+          if (wholeFits()) return pageStartLocal;
+        }
+
+        for (let index = 0; index < units.length; index++) {
+          const unit = units[index];
+          const unitBreakTop = sectionTop + unit.offsetTop;
+          const unitBottomPx = unitBottomAbs(sectionTop, unit);
+          const maxUnitHeightWithHeader = pageHeight - header.offsetHeight;
+
+          if (!fits(unitBottomPx, pageStartLocal, pageHeight, reservedTop) && unitBreakTop > pageStartLocal) {
+            const repeatHeader = index > 0;
+            pushBreak(breaks, continuation, unitBreakTop, repeatHeader);
+            pageStartLocal = unitBreakTop;
+            reservedTop = repeatHeader ? header.offsetHeight : 0;
+          }
+
+          if (unit.offsetHeight > maxUnitHeightWithHeader) {
+            let next = pageEnd(pageStartLocal, pageHeight, reservedTop);
+            while (next < unitBottomPx) {
+              pushBreak(breaks, continuation, next, true);
+              pageStartLocal = next;
+              reservedTop = header.offsetHeight;
+              next = pageEnd(pageStartLocal, pageHeight, reservedTop);
+            }
+          }
+        }
+
+        return pageStartLocal;
+      }
+
+      function layoutBlock(section, pageStart, pageHeight, breaks, continuation) {
+        const blockBottom = bottom(section);
+        let reservedTop = 0;
+        if (fits(blockBottom, pageStart, pageHeight, reservedTop)) return pageStart;
+
+        const pageEndPx = pageEnd(pageStart, pageHeight, reservedTop);
+        const startsOnCurrentPage =
+          section.offsetTop >= pageStart && section.offsetTop < pageEndPx;
+        if (startsOnCurrentPage && section.offsetTop > pageStart) {
+          pushBreak(breaks, continuation, section.offsetTop, false);
+          pageStart = section.offsetTop;
+          reservedTop = 0;
+          if (fits(blockBottom, pageStart, pageHeight, reservedTop)) return pageStart;
+        }
+
+        if (section.offsetHeight > pageHeight - reservedTop) {
+          if (section.offsetTop > pageStart) {
+            pushBreak(breaks, continuation, section.offsetTop, false);
+            pageStart = section.offsetTop;
+            reservedTop = 0;
+          }
+          let next = pageEnd(pageStart, pageHeight, reservedTop);
+          while (next < blockBottom) {
+            const repeatHeader = section.headerHeight > 0;
+            pushBreak(breaks, continuation, next, repeatHeader);
+            pageStart = next;
+            reservedTop = repeatHeader ? section.headerHeight : 0;
+            next = pageEnd(pageStart, pageHeight, reservedTop);
+          }
+          return pageStart;
+        }
+
+        pushBreak(breaks, continuation, section.offsetTop, false);
+        return section.offsetTop;
       }
 
       function computePlan(sections, pageHeight) {
         const breaks = [0];
         const continuation = [false];
-
         let pageStart = 0;
+
         for (const section of sections) {
-          if (section.kind === 'block') {
-            const blockBottom = bottom(section);
-            let reservedTop = 0;
-            if (fits(blockBottom, pageStart, pageHeight, reservedTop)) continue;
-
-            const pageEndPx = pageEnd(pageStart, pageHeight, reservedTop);
-            const startsOnCurrentPage =
-              section.offsetTop >= pageStart && section.offsetTop < pageEndPx;
-            if (startsOnCurrentPage && section.offsetTop > pageStart) {
-              pushBreak(breaks, continuation, section.offsetTop, false);
-              pageStart = section.offsetTop;
-              reservedTop = 0;
-              if (fits(blockBottom, pageStart, pageHeight, reservedTop)) continue;
-            }
-
-            if (section.offsetHeight > pageHeight - reservedTop) {
-              if (section.offsetTop > pageStart) {
-                pushBreak(breaks, continuation, section.offsetTop, false);
-                pageStart = section.offsetTop;
-                reservedTop = 0;
-              }
-              let next = pageEnd(pageStart, pageHeight, reservedTop);
-              while (next < blockBottom) {
-                const repeatHeader = section.headerHeight > 0;
-                pushBreak(breaks, continuation, next, repeatHeader);
-                pageStart = next;
-                reservedTop = repeatHeader ? section.headerHeight : 0;
-                next = pageEnd(pageStart, pageHeight, reservedTop);
-              }
-            } else {
-              pushBreak(breaks, continuation, section.offsetTop, false);
-              pageStart = section.offsetTop;
-            }
-            continue;
-          }
-
-          const skillsTop = section.offsetTop;
-          const skillsBottom = bottom(section);
-          let reservedTop = 0;
-          if (section.categories.length === 0) {
-            if (!fits(skillsBottom, pageStart, pageHeight, reservedTop)) {
-              pushBreak(breaks, continuation, skillsTop, false);
-              pageStart = skillsTop;
-            }
-            continue;
-          }
-
-          if (fits(skillsBottom, pageStart, pageHeight, reservedTop)) continue;
-
-          const firstCategoryBottom = skillsTop + bottom(section.categories[0]);
-          const firstChunkBottom = Math.max(
-            firstCategoryBottom,
-            skillsTop + bottom(section.header) + section.categories[0].offsetHeight
-          );
-
-          if (!fits(firstChunkBottom, pageStart, pageHeight, reservedTop) && skillsTop > pageStart) {
-            pushBreak(breaks, continuation, skillsTop, false);
-            pageStart = skillsTop;
-            reservedTop = 0;
-          }
-
-          if (fits(skillsBottom, pageStart, pageHeight, reservedTop)) continue;
-
-          for (let i = 0; i < section.categories.length; i++) {
-            const category = section.categories[i];
-            const categoryBreakTop = skillsTop + category.offsetTop;
-            const categoryBottomAbs = skillsTop + bottom(category);
-            const maxCategoryHeightWithHeader = pageHeight - section.header.offsetHeight;
-
-            if (!fits(categoryBottomAbs, pageStart, pageHeight, reservedTop) && categoryBreakTop > pageStart) {
-              const repeatHeader = i > 0;
-              pushBreak(breaks, continuation, categoryBreakTop, repeatHeader);
-              pageStart = categoryBreakTop;
-              reservedTop = repeatHeader ? section.header.offsetHeight : 0;
-            }
-
-            if (category.offsetHeight > maxCategoryHeightWithHeader) {
-              let next = pageEnd(pageStart, pageHeight, reservedTop);
-              while (next < categoryBottomAbs) {
-                pushBreak(breaks, continuation, next, true);
-                pageStart = next;
-                reservedTop = section.header.offsetHeight;
-                next = pageEnd(pageStart, pageHeight, reservedTop);
-              }
-            }
+          if (section.kind === 'splittable') {
+            pageStart = layoutSplittable(section, pageStart, pageHeight, breaks, continuation);
+          } else {
+            pageStart = layoutBlock(section, pageStart, pageHeight, breaks, continuation);
           }
         }
 
         return { breaks, continuation };
+      }
+
+      function readContinuationHeaderAtBreak(templateRoot, breakTop) {
+        const unitEls = Array.from(templateRoot.querySelectorAll(UNIT_SELECTOR));
+        let matchedUnit = null;
+
+        for (const unit of unitEls) {
+          const unitTop = relativeTop(unit, templateRoot);
+          if (unitTop === breakTop || (breakTop > unitTop && breakTop < unitTop + unit.offsetHeight)) {
+            matchedUnit = unit;
+            break;
+          }
+        }
+
+        if (!matchedUnit && unitEls.length > 0) {
+          let best = null;
+          let bestDelta = Infinity;
+          for (const unit of unitEls) {
+            const unitTop = relativeTop(unit, templateRoot);
+            const delta = Math.abs(unitTop - breakTop);
+            if (delta < bestDelta) {
+              bestDelta = delta;
+              best = unit;
+            }
+          }
+          if (best && bestDelta <= 4) matchedUnit = best;
+        }
+
+        const section = matchedUnit ? matchedUnit.closest('[data-resume-section]') : null;
+        if (!section) return null;
+
+        const header = section.querySelector('[data-resume-section-header], [data-resume-skills-header]');
+        if (!header) return null;
+
+        const rootRect = templateRoot.getBoundingClientRect();
+        const headerRect = header.getBoundingClientRect();
+        const title =
+          header.getAttribute('data-resume-section-header')
+          || header.getAttribute('data-resume-skills-header')
+          || (header.textContent || '').trim()
+          || 'Section';
+
+        return {
+          title,
+          height: header.offsetHeight,
+          left: Math.max(0, Math.round(headerRect.left - rootRect.left)),
+          width: Math.max(0, Math.round(headerRect.width)),
+          html: header.innerHTML,
+        };
       }
 
       const measureRoot = document.getElementById('resume-measure-root');
@@ -313,15 +397,11 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
       const sections = measureSections(templateRoot);
       const plan = computePlan(sections, CONTENT_HEIGHT);
       const templateHTML = templateRoot.outerHTML;
-      const headerEl = templateRoot.querySelector('[data-resume-skills-header]');
-      const rootRect = templateRoot.getBoundingClientRect();
-      const headerRect = headerEl ? headerEl.getBoundingClientRect() : null;
-      const headerMetrics = {
-        left: headerRect ? Math.max(0, Math.round(headerRect.left - rootRect.left)) : 0,
-        width: headerRect ? Math.max(0, Math.round(headerRect.width)) : 547,
-        height: headerEl ? headerEl.offsetHeight : 0,
-        html: headerEl ? headerEl.innerHTML : '<h2>Skills</h2>',
-      };
+      const continuationHeaderMetrics = plan.breaks.map((breakTop, pageIndex) => (
+        plan.continuation[pageIndex]
+          ? readContinuationHeaderAtBreak(templateRoot, breakTop)
+          : null
+      ));
 
       pagesRoot.innerHTML = '';
       plan.breaks.forEach((breakTop, pageIndex) => {
@@ -332,7 +412,8 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
         const viewport = document.createElement('div');
         viewport.className = 'resume-page-viewport';
 
-        if (plan.continuation[pageIndex]) {
+        const headerMetrics = continuationHeaderMetrics[pageIndex];
+        if (plan.continuation[pageIndex] && headerMetrics) {
           const header = document.createElement('div');
           header.className = 'resume-continuation-header';
           header.style.left = headerMetrics.left + 'px';
@@ -344,7 +425,7 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
 
         const content = document.createElement('div');
         content.className = 'resume-wrapper resume-page-content';
-        content.style.marginTop = (-breakTop + (plan.continuation[pageIndex] ? headerMetrics.height : 0)) + 'px';
+        content.style.marginTop = (-breakTop + (headerMetrics ? headerMetrics.height : 0)) + 'px';
         content.innerHTML = templateHTML;
 
         viewport.appendChild(content);

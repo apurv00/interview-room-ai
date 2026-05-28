@@ -34,7 +34,7 @@ export default function MinimalistTemplate({ data }: TemplateProps) {
           <h2 data-resume-section-header="Experience" className="font-medium uppercase tracking-widest text-gray-400 mb-1.5">Experience</h2>
           <hr className="border-t border-gray-100 mb-2" />
           {data.experience.map(exp => (
-            <div key={exp.id} className="mb-3">
+            <div key={exp.id} className="mb-3" data-resume-section-unit>
               <div className="flex justify-between items-baseline">
                 <div>
                   <span className="font-medium">{exp.title}</span>
@@ -64,7 +64,7 @@ export default function MinimalistTemplate({ data }: TemplateProps) {
           <h2 data-resume-section-header="Education" className="font-medium uppercase tracking-widest text-gray-400 mb-1.5">Education</h2>
           <hr className="border-t border-gray-100 mb-2" />
           {data.education.map(edu => (
-            <div key={edu.id} className="mb-2">
+            <div key={edu.id} className="mb-2" data-resume-section-unit>
               <div className="flex justify-between items-baseline">
                 <div>
                   <span className="font-medium">{edu.degree}</span>
@@ -111,7 +111,7 @@ export default function MinimalistTemplate({ data }: TemplateProps) {
           <h2 data-resume-section-header="Projects" className="font-medium uppercase tracking-widest text-gray-400 mb-1.5">Projects</h2>
           <hr className="border-t border-gray-100 mb-2" />
           {data.projects.map(proj => (
-            <div key={proj.id} className="mb-2">
+            <div key={proj.id} className="mb-2" data-resume-section-unit>
               <span className="font-medium">{proj.name}</span>
               {proj.technologies?.length ? <span className="text-[8px] text-gray-400 ml-1">{proj.technologies.join(', ')}</span> : null}
               <p className="text-gray-600">{proj.description}</p>
@@ -126,7 +126,7 @@ export default function MinimalistTemplate({ data }: TemplateProps) {
           <h2 data-resume-section-header="Certifications" className="font-medium uppercase tracking-widest text-gray-400 mb-1.5">Certifications</h2>
           <hr className="border-t border-gray-100 mb-2" />
           {data.certifications.map((cert, i) => (
-            <div key={i} className="mb-1">
+            <div key={i} className="mb-1" data-resume-section-unit>
               <span className="font-medium">{cert.name}</span>
               <span className="text-gray-500"> — {cert.issuer}</span>
               {cert.date && <span className="text-gray-400"> ({cert.date})</span>}
@@ -138,7 +138,7 @@ export default function MinimalistTemplate({ data }: TemplateProps) {
       {/* Custom Sections */}
       {data.customSections?.map(section => (
         <div key={section.id} className="mb-4" data-resume-section={`custom-${section.id}`}>
-          <h2 data-resume-section-header="{section.title}" className="font-medium uppercase tracking-widest text-gray-400 mb-1.5">{section.title}</h2>
+          <h2 data-resume-section-header={section.title} className="font-medium uppercase tracking-widest text-gray-400 mb-1.5">{section.title}</h2>
           <hr className="border-t border-gray-100 mb-2" />
           <p className="text-gray-600 whitespace-pre-wrap">{section.content}</p>
         </div>
