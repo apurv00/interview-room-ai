@@ -203,10 +203,19 @@ function layoutSplittableSection(
 
     if (!fits(unitBottomAbs, pageStartLocal, pageHeight, reservedTopOnPage)
       && unitBreakTop > pageStartLocal) {
-      const repeatHeader = index > 0
-      pushBreak(breaks, continuation, unitBreakTop, repeatHeader)
-      pageStartLocal = unitBreakTop
-      reservedTopOnPage = repeatHeader ? header.offsetHeight : 0
+      if (index === 0) {
+        // Move the whole section — breaking at unitBreakTop leaves the section
+        // header and a clipped first unit on the prior page (duplicate SKILLS).
+        if (sectionTop > pageStartLocal) {
+          pushBreak(breaks, continuation, sectionTop, false)
+          pageStartLocal = sectionTop
+          reservedTopOnPage = 0
+        }
+      } else {
+        pushBreak(breaks, continuation, unitBreakTop, true)
+        pageStartLocal = unitBreakTop
+        reservedTopOnPage = header.offsetHeight
+      }
     }
 
     // Units stay atomic — never slice mid-job / mid-category. Oversized units are

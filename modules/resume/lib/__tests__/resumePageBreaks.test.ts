@@ -169,6 +169,20 @@ describe('computePageLayoutPlan — section pagination', () => {
     expect(pageClipHeight(1, breaks, PAGE)).toBe(418)
   })
 
+  it('moves the whole section when the first unit does not fit (not mid-section unit offset)', () => {
+    const plan = computePageLayoutPlan(
+      [
+        block(0, 720),
+        splittable('skills', 720, 200, 20, [
+          { offsetTop: 24, height: 150 },
+        ]),
+      ],
+      PAGE,
+    )
+    expect(plan.breaks).toEqual([0, 720])
+    expect(plan.continuationHeaders[1]).toBe(false)
+  })
+
   it('does not slice inside an oversized unit (avoids duplicate subsection on next page)', () => {
     const plan = computePageLayoutPlan(
       [
