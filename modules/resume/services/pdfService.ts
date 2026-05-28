@@ -272,10 +272,17 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
           const maxUnitHeightWithHeader = pageHeight - header.offsetHeight;
 
           if (!fits(unitBottomPx, pageStartLocal, pageHeight, reservedTop) && unitBreakTop > pageStartLocal) {
-            const repeatHeader = index > 0;
-            pushBreak(breaks, continuation, unitBreakTop, repeatHeader);
-            pageStartLocal = unitBreakTop;
-            reservedTop = repeatHeader ? header.offsetHeight : 0;
+            if (index === 0) {
+              if (sectionTop > pageStartLocal) {
+                pushBreak(breaks, continuation, sectionTop, false);
+                pageStartLocal = sectionTop;
+                reservedTop = 0;
+              }
+            } else {
+              pushBreak(breaks, continuation, unitBreakTop, true);
+              pageStartLocal = unitBreakTop;
+              reservedTop = header.offsetHeight;
+            }
           }
 
         }
