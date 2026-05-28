@@ -103,7 +103,7 @@ export default function TechnicalTemplate({ data }: TemplateProps) {
       )}
 
       {data.customSections?.map(s => (
-        <div key={s.id} className="mb-3">
+        <div key={s.id} className="mb-3" data-resume-section={`custom-${s.id}`}>
           <h2 className="font-bold uppercase text-emerald-700 mb-1">{s.title}</h2>
           <p className="text-gray-700 whitespace-pre-wrap">{s.content}</p>
         </div>
