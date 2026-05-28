@@ -1,4 +1,5 @@
 import type { TemplateProps } from './index'
+import ResumeSkillsSection from '../ResumeSkillsSection'
 
 export default function FederalTemplate({ data }: TemplateProps) {
   const contact = data.contactInfo || { fullName: '', email: '' }
@@ -79,15 +80,18 @@ export default function FederalTemplate({ data }: TemplateProps) {
 
       {/* Skills */}
       {data.skills && data.skills.length > 0 && (
-        <div className="mb-2">
-          <h2 className="font-bold uppercase border-b border-gray-300 pb-0.5 mb-1">Job-Related Skills</h2>
-          {data.skills.map((cat, i) => (
-            <div key={i} className="mb-0.5">
+        <ResumeSkillsSection
+          skills={data.skills}
+          title="Job-Related Skills"
+          sectionClassName="mb-2"
+          headerClassName="font-bold uppercase border-b border-gray-300 pb-0.5 mb-1"
+          renderCategory={(cat) => (
+            <div className="mb-0.5">
               <span className="font-semibold">{cat.category}:</span>{' '}
               <span className="text-gray-800">{cat.items.join(', ')}</span>
             </div>
-          ))}
-        </div>
+          )}
+        />
       )}
 
       {/* Projects */}

@@ -1,4 +1,5 @@
 import type { TemplateProps } from './index'
+import ResumeSkillsSection from '../ResumeSkillsSection'
 
 export default function MinimalistTemplate({ data }: TemplateProps) {
   const contact = data.contactInfo || { fullName: '', email: '' }
@@ -84,18 +85,24 @@ export default function MinimalistTemplate({ data }: TemplateProps) {
         </div>
       )}
 
-      {/* Skills */}
       {data.skills && data.skills.length > 0 && (
-        <div className="mb-4">
-          <h2 className="font-medium uppercase tracking-widest text-gray-400 mb-1.5">Skills</h2>
-          <hr className="border-t border-gray-100 mb-2" />
-          {data.skills.map((cat, i) => (
-            <div key={i} className="mb-1">
+        <ResumeSkillsSection
+          skills={data.skills}
+          title="Skills"
+          sectionClassName="mb-4"
+          renderHeader={() => (
+            <>
+              <h2 className="font-medium uppercase tracking-widest text-gray-400 mb-1.5">Skills</h2>
+              <hr className="border-t border-gray-100 mb-2" />
+            </>
+          )}
+          renderCategory={(cat) => (
+            <div className="mb-1">
               <span className="font-medium">{cat.category}</span>
               <span className="text-gray-500 ml-2">{cat.items.join(', ')}</span>
             </div>
-          ))}
-        </div>
+          )}
+        />
       )}
 
       {/* Projects */}

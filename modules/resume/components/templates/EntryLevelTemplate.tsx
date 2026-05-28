@@ -1,4 +1,5 @@
 import type { TemplateProps } from './index'
+import ResumeSkillsSection from '../ResumeSkillsSection'
 
 export default function EntryLevelTemplate({ data }: TemplateProps) {
   const contact = data.contactInfo || { fullName: '', email: '' }
@@ -69,17 +70,18 @@ export default function EntryLevelTemplate({ data }: TemplateProps) {
         </div>
       )}
 
-      {/* Skills */}
       {data.skills && data.skills.length > 0 && (
-        <div className="mb-3">
-          <h2 className="font-bold uppercase tracking-widest text-rose-500 border-b border-rose-200 pb-0.5 mb-1">Skills</h2>
-          {data.skills.map((cat, i) => (
-            <div key={i} className="mb-0.5">
+        <ResumeSkillsSection
+          skills={data.skills}
+          title="Skills"
+          headerClassName="font-bold uppercase tracking-widest text-rose-500 border-b border-rose-200 pb-0.5 mb-1"
+          renderCategory={(cat) => (
+            <div className="mb-0.5">
               <span className="font-semibold">{cat.category}:</span>{' '}
               <span className="text-gray-700">{cat.items.join(', ')}</span>
             </div>
-          ))}
-        </div>
+          )}
+        />
       )}
 
       {/* Experience */}

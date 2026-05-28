@@ -1,4 +1,5 @@
 import type { TemplateProps } from './index'
+import ResumeSkillsSection from '../ResumeSkillsSection'
 
 export default function StartupTemplate({ data }: TemplateProps) {
   const contact = data.contactInfo || { fullName: '', email: '' }
@@ -43,31 +44,36 @@ export default function StartupTemplate({ data }: TemplateProps) {
         </div>
       )}
 
-      {/* Skills as colorful pills */}
       {data.skills && data.skills.length > 0 && (
-        <div className="mb-3">
-          <h2 className="font-bold uppercase tracking-widest text-orange-500 mb-1">Skills</h2>
-          <div className="flex flex-wrap gap-1">
-            {data.skills.flatMap((cat, ci) =>
-              cat.items.map((item, ii) => {
-                const colors = [
-                  'bg-orange-100 text-orange-700',
-                  'bg-pink-100 text-pink-700',
-                  'bg-purple-100 text-purple-700',
-                  'bg-blue-100 text-blue-700',
-                  'bg-green-100 text-green-700',
-                  'bg-yellow-100 text-yellow-700',
-                ]
-                const color = colors[(ci + ii) % colors.length]
-                return (
-                  <span key={`${ci}-${ii}`} className={`text-[8px] px-1.5 py-0.5 rounded-full ${color}`}>
-                    {item}
-                  </span>
-                )
-              })
-            )}
-          </div>
-        </div>
+        <ResumeSkillsSection
+          skills={data.skills}
+          title="Skills"
+          sectionClassName="mb-3"
+          headerClassName="font-bold uppercase tracking-widest text-orange-500 mb-1"
+          renderCategory={(cat, ci) => (
+            <div className="mb-1.5">
+              <div className="text-[8px] font-semibold text-gray-600 mb-0.5">{cat.category}</div>
+              <div className="flex flex-wrap gap-1">
+                {cat.items.map((item, ii) => {
+                  const colors = [
+                    'bg-orange-100 text-orange-700',
+                    'bg-pink-100 text-pink-700',
+                    'bg-purple-100 text-purple-700',
+                    'bg-blue-100 text-blue-700',
+                    'bg-green-100 text-green-700',
+                    'bg-yellow-100 text-yellow-700',
+                  ]
+                  const color = colors[(ci + ii) % colors.length]
+                  return (
+                    <span key={`${ci}-${ii}`} className={`text-[8px] px-1.5 py-0.5 rounded-full ${color}`}>
+                      {item}
+                    </span>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+        />
       )}
 
       {/* Experience */}

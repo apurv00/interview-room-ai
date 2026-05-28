@@ -1,4 +1,5 @@
 import type { TemplateProps } from './index'
+import ResumeSkillsSection from '../ResumeSkillsSection'
 
 export default function CareerChangeTemplate({ data }: TemplateProps) {
   const contact = data.contactInfo || { fullName: '', email: '' }
@@ -26,19 +27,26 @@ export default function CareerChangeTemplate({ data }: TemplateProps) {
         </div>
       )}
 
-      {/* Core Competencies Grid */}
       {data.skills && data.skills.length > 0 && (
-        <div className="mb-3">
-          <h2 className="font-bold uppercase tracking-widest text-cyan-600 border-b border-cyan-200 pb-0.5 mb-1">Core Competencies</h2>
-          <div className="grid grid-cols-3 gap-x-3 gap-y-1 mt-1">
-            {data.skills.flatMap(cat => cat.items).map((skill, i) => (
-              <div key={i} className="text-gray-700 flex items-center gap-1">
-                <span className="w-1 h-1 bg-cyan-600 rounded-full shrink-0" />
-                <span>{skill}</span>
+        <ResumeSkillsSection
+          skills={data.skills}
+          title="Core Competencies"
+          sectionClassName="mb-3"
+          headerClassName="font-bold uppercase tracking-widest text-cyan-600 border-b border-cyan-200 pb-0.5 mb-1"
+          renderCategory={(cat) => (
+            <div className="mb-1.5">
+              <div className="text-[8px] font-semibold text-cyan-700">{cat.category}</div>
+              <div className="grid grid-cols-3 gap-x-3 gap-y-1 mt-1">
+                {cat.items.map((skill, i) => (
+                  <div key={i} className="text-gray-700 flex items-center gap-1">
+                    <span className="w-1 h-1 bg-cyan-600 rounded-full shrink-0" />
+                    <span>{skill}</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        </div>
+            </div>
+          )}
+        />
       )}
 
       {/* Relevant Experience */}

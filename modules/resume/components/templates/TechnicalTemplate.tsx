@@ -1,4 +1,5 @@
 import type { TemplateProps } from './index'
+import ResumeSkillsSection from '../ResumeSkillsSection'
 
 export default function TechnicalTemplate({ data }: TemplateProps) {
   const contact = data.contactInfo || { fullName: '', email: '' }
@@ -17,19 +18,19 @@ export default function TechnicalTemplate({ data }: TemplateProps) {
         </div>
       </div>
 
-      {/* Skills first for technical template */}
       {data.skills && data.skills.length > 0 && (
-        <div className="mb-3">
-          <h2 className="font-bold uppercase text-emerald-700 mb-1">Technical Skills</h2>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
-            {data.skills.map((cat, i) => (
-              <div key={i}>
-                <span className="font-semibold">{cat.category}:</span>{' '}
-                <span className="text-gray-700">{cat.items.join(', ')}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+        <ResumeSkillsSection
+          skills={data.skills}
+          title="Technical Skills"
+          sectionClassName="mb-3 grid grid-cols-2 gap-x-4 gap-y-0.5"
+          headerClassName="font-bold uppercase text-emerald-700 mb-1 col-span-2"
+          renderCategory={(cat) => (
+            <div>
+              <span className="font-semibold">{cat.category}:</span>{' '}
+              <span className="text-gray-700">{cat.items.join(', ')}</span>
+            </div>
+          )}
+        />
       )}
 
       {/* Summary */}
