@@ -22,7 +22,7 @@ export default function CareerChangeTemplate({ data }: TemplateProps) {
       {/* Career Objective (instead of Summary) */}
       {data.summary && (
         <div className="mb-3" data-resume-section="summary">
-          <h2 className="font-bold uppercase tracking-widest text-cyan-600 border-b border-cyan-200 pb-0.5 mb-1">Career Objective</h2>
+          <h2 data-resume-section-header="Career Objective" className="font-bold uppercase tracking-widest text-cyan-600 border-b border-cyan-200 pb-0.5 mb-1">Career Objective</h2>
           <p className="text-gray-700 leading-relaxed">{data.summary}</p>
         </div>
       )}
@@ -52,7 +52,7 @@ export default function CareerChangeTemplate({ data }: TemplateProps) {
       {/* Relevant Experience */}
       {data.experience && data.experience.length > 0 && (
         <div className="mb-3" data-resume-section="experience">
-          <h2 className="font-bold uppercase tracking-widest text-cyan-600 border-b border-cyan-200 pb-0.5 mb-1">Relevant Experience</h2>
+          <h2 data-resume-section-header="Relevant Experience" className="font-bold uppercase tracking-widest text-cyan-600 border-b border-cyan-200 pb-0.5 mb-1">Relevant Experience</h2>
           {data.experience.map(exp => (
             <div key={exp.id} className="mb-2">
               <div className="flex justify-between items-baseline">
@@ -81,7 +81,7 @@ export default function CareerChangeTemplate({ data }: TemplateProps) {
       {/* Education */}
       {data.education && data.education.length > 0 && (
         <div className="mb-3" data-resume-section="education">
-          <h2 className="font-bold uppercase tracking-widest text-cyan-600 border-b border-cyan-200 pb-0.5 mb-1">Education &amp; Training</h2>
+          <h2 data-resume-section-header="Education &amp; Training" className="font-bold uppercase tracking-widest text-cyan-600 border-b border-cyan-200 pb-0.5 mb-1">Education &amp; Training</h2>
           {data.education.map(edu => (
             <div key={edu.id} className="mb-1.5">
               <div className="flex justify-between items-baseline">
@@ -107,7 +107,7 @@ export default function CareerChangeTemplate({ data }: TemplateProps) {
       {/* Projects */}
       {data.projects && data.projects.length > 0 && (
         <div className="mb-3" data-resume-section="projects">
-          <h2 className="font-bold uppercase tracking-widest text-cyan-600 border-b border-cyan-200 pb-0.5 mb-1">Projects</h2>
+          <h2 data-resume-section-header="Projects" className="font-bold uppercase tracking-widest text-cyan-600 border-b border-cyan-200 pb-0.5 mb-1">Projects</h2>
           {data.projects.map(proj => (
             <div key={proj.id} className="mb-1.5">
               <span className="font-bold">{proj.name}</span>
@@ -122,7 +122,7 @@ export default function CareerChangeTemplate({ data }: TemplateProps) {
       {/* Certifications */}
       {data.certifications && data.certifications.length > 0 && (
         <div className="mb-3" data-resume-section="certifications">
-          <h2 className="font-bold uppercase tracking-widest text-cyan-600 border-b border-cyan-200 pb-0.5 mb-1">Certifications</h2>
+          <h2 data-resume-section-header="Certifications" className="font-bold uppercase tracking-widest text-cyan-600 border-b border-cyan-200 pb-0.5 mb-1">Certifications</h2>
           {data.certifications.map((cert, i) => (
             <div key={i} className="mb-0.5">
               <span className="font-semibold">{cert.name}</span> — {cert.issuer}
@@ -135,7 +135,7 @@ export default function CareerChangeTemplate({ data }: TemplateProps) {
       {/* Custom Sections */}
       {data.customSections?.map(section => (
         <div key={section.id} className="mb-3" data-resume-section={`custom-${section.id}`}>
-          <h2 className="font-bold uppercase tracking-widest text-cyan-600 border-b border-cyan-200 pb-0.5 mb-1">{section.title}</h2>
+          <h2 data-resume-section-header="{section.title}" className="font-bold uppercase tracking-widest text-cyan-600 border-b border-cyan-200 pb-0.5 mb-1">{section.title}</h2>
           <p className="text-gray-700 whitespace-pre-wrap">{section.content}</p>
         </div>
       ))}

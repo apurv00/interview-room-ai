@@ -35,10 +35,12 @@ function measureSkillsBlock(skillsEl: HTMLElement, templateRoot: HTMLElement): S
 }
 
 function measureBlock(el: HTMLElement, templateRoot: HTMLElement): SectionMeasurement {
+  const headerEl = el.querySelector('[data-resume-section-header]') as HTMLElement | null
   return {
     kind: 'block',
     offsetTop: relativeTop(el, templateRoot),
     offsetHeight: el.offsetHeight,
+    headerHeight: headerEl?.offsetHeight ?? 0,
   }
 }
 

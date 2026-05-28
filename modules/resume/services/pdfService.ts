@@ -134,8 +134,12 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
         return unit.offsetTop + unit.offsetHeight;
       }
 
-      function fits(bottomPx, pageStart, pageHeight) {
-        return bottomPx <= pageStart + pageHeight;
+      function pageEnd(pageStart, pageHeight, reservedTop) {
+        return pageStart + pageHeight - (reservedTop || 0);
+      }
+
+      function fits(bottomPx, pageStart, pageHeight, reservedTop) {
+        return bottomPx <= pageEnd(pageStart, pageHeight, reservedTop);
       }
 
       function pushBreak(breaks, continuation, at, needsHeader) {
@@ -177,11 +181,15 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
           };
         };
 
-        const measureBlock = (el) => ({
-          kind: 'block',
-          offsetTop: relativeTop(el, templateRoot),
-          offsetHeight: el.offsetHeight,
-        });
+        const measureBlock = (el) => {
+          const headerEl = el.querySelector('[data-resume-section-header]');
+          return {
+            kind: 'block',
+            offsetTop: relativeTop(el, templateRoot),
+            offsetHeight: el.offsetHeight,
+            headerHeight: headerEl ? headerEl.offsetHeight : 0,
+          };
+        };
 
         const marked = collectLeafMarked(templateRoot);
         if (marked.length > 0) {
@@ -205,27 +213,32 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
         for (const section of sections) {
           if (section.kind === 'block') {
             const blockBottom = bottom(section);
-            if (fits(blockBottom, pageStart, pageHeight)) continue;
+            let reservedTop = 0;
+            if (fits(blockBottom, pageStart, pageHeight, reservedTop)) continue;
 
-            const pageEndPx = pageStart + pageHeight;
+            const pageEndPx = pageEnd(pageStart, pageHeight, reservedTop);
             const startsOnCurrentPage =
               section.offsetTop >= pageStart && section.offsetTop < pageEndPx;
             if (startsOnCurrentPage && section.offsetTop > pageStart) {
               pushBreak(breaks, continuation, section.offsetTop, false);
               pageStart = section.offsetTop;
-              if (fits(blockBottom, pageStart, pageHeight)) continue;
+              reservedTop = 0;
+              if (fits(blockBottom, pageStart, pageHeight, reservedTop)) continue;
             }
 
-            if (section.offsetHeight > pageHeight) {
+            if (section.offsetHeight > pageHeight - reservedTop) {
               if (section.offsetTop > pageStart) {
                 pushBreak(breaks, continuation, section.offsetTop, false);
                 pageStart = section.offsetTop;
+                reservedTop = 0;
               }
-              let next = pageStart + pageHeight;
+              let next = pageEnd(pageStart, pageHeight, reservedTop);
               while (next < blockBottom) {
-                pushBreak(breaks, continuation, next, false);
+                const repeatHeader = section.headerHeight > 0;
+                pushBreak(breaks, continuation, next, repeatHeader);
                 pageStart = next;
-                next += pageHeight;
+                reservedTop = repeatHeader ? section.headerHeight : 0;
+                next = pageEnd(pageStart, pageHeight, reservedTop);
               }
             } else {
               pushBreak(breaks, continuation, section.offsetTop, false);
@@ -236,15 +249,16 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
 
           const skillsTop = section.offsetTop;
           const skillsBottom = bottom(section);
+          let reservedTop = 0;
           if (section.categories.length === 0) {
-            if (!fits(skillsBottom, pageStart, pageHeight)) {
+            if (!fits(skillsBottom, pageStart, pageHeight, reservedTop)) {
               pushBreak(breaks, continuation, skillsTop, false);
               pageStart = skillsTop;
             }
             continue;
           }
 
-          if (fits(skillsBottom, pageStart, pageHeight)) continue;
+          if (fits(skillsBottom, pageStart, pageHeight, reservedTop)) continue;
 
           const firstCategoryBottom = skillsTop + bottom(section.categories[0]);
           const firstChunkBottom = Math.max(
@@ -252,14 +266,13 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
             skillsTop + bottom(section.header) + section.categories[0].offsetHeight
           );
 
-          if (!fits(firstChunkBottom, pageStart, pageHeight) && skillsTop > pageStart) {
+          if (!fits(firstChunkBottom, pageStart, pageHeight, reservedTop) && skillsTop > pageStart) {
             pushBreak(breaks, continuation, skillsTop, false);
             pageStart = skillsTop;
+            reservedTop = 0;
           }
 
-          // Match preview planner: if the whole section now fits on the fresh page,
-          // do not force per-category continuation breaks.
-          if (fits(skillsBottom, pageStart, pageHeight)) continue;
+          if (fits(skillsBottom, pageStart, pageHeight, reservedTop)) continue;
 
           for (let i = 0; i < section.categories.length; i++) {
             const category = section.categories[i];
@@ -267,19 +280,20 @@ export function renderResumeHTML(data: ResumeData, templateId: string): string {
             const categoryBottomAbs = skillsTop + bottom(category);
             const maxCategoryHeightWithHeader = pageHeight - section.header.offsetHeight;
 
-            if (!fits(categoryBottomAbs, pageStart, pageHeight) && categoryBreakTop > pageStart) {
-              pushBreak(breaks, continuation, categoryBreakTop, i > 0);
+            if (!fits(categoryBottomAbs, pageStart, pageHeight, reservedTop) && categoryBreakTop > pageStart) {
+              const repeatHeader = i > 0;
+              pushBreak(breaks, continuation, categoryBreakTop, repeatHeader);
               pageStart = categoryBreakTop;
+              reservedTop = repeatHeader ? section.header.offsetHeight : 0;
             }
 
-            // Prevent clipping when one category is taller than a single page
-            // (minus duplicated section header on continuation pages).
             if (category.offsetHeight > maxCategoryHeightWithHeader) {
-              let next = pageStart + pageHeight;
+              let next = pageEnd(pageStart, pageHeight, reservedTop);
               while (next < categoryBottomAbs) {
                 pushBreak(breaks, continuation, next, true);
                 pageStart = next;
-                next += pageHeight;
+                reservedTop = section.header.offsetHeight;
+                next = pageEnd(pageStart, pageHeight, reservedTop);
               }
             }
           }

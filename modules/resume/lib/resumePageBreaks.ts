@@ -4,10 +4,11 @@
  * All sections (summary, experience, education, skills, …):
  * - If a section cannot fit in the remaining space on the current page, start it on the next page.
  * - Block sections move as a whole unit unless taller than one page (then slice by page height).
+ * - Continuation pages that repeat a section title reserve `headerHeight` at the top of the viewport.
  *
  * Skills additionally splits by measured category sub-units:
  * - If header + first category cannot fit on the current page, move the entire Skills section.
- * - Break before a category only when that category cannot fit on the current page (never unconditional).
+ * - Break before a category only when that category cannot fit on the current page.
  * - Continuation pages repeat the Skills heading; categories are not split across pages.
  */
 
@@ -32,12 +33,15 @@ export interface BlockSectionMeasurement {
   kind: 'block'
   offsetTop: number
   offsetHeight: number
+  /** Measured `[data-resume-section-header]` height — reserved on continuation pages. */
+  headerHeight: number
 }
 
 export type SectionMeasurement = BlockSectionMeasurement | SkillsSectionMeasurement
 
 export interface PageLayoutPlan {
   breaks: number[]
+  /** Per-page: repeat the continuing section title (skills or any marked block section). */
   skillsContinuationHeader: boolean[]
   truncatedSkillCategoryIndices: number[]
 }
@@ -46,23 +50,29 @@ function bottom(unit: { offsetTop: number; offsetHeight: number }): number {
   return unit.offsetTop + unit.offsetHeight
 }
 
-function pageEnd(pageStart: number, pageHeight: number): number {
-  return pageStart + pageHeight
+function pageEnd(pageStart: number, pageHeight: number, reservedTop = 0): number {
+  return pageStart + pageHeight - reservedTop
 }
 
-function fits(bottom: number, pageStart: number, pageHeight: number): boolean {
-  return bottom <= pageEnd(pageStart, pageHeight)
+/** Whether content up to `bottom` fits on the page that starts at `pageStart`. */
+export function fits(
+  bottom: number,
+  pageStart: number,
+  pageHeight: number,
+  reservedTop = 0,
+): boolean {
+  return bottom <= pageEnd(pageStart, pageHeight, reservedTop)
 }
 
 function pushBreak(
   breaks: number[],
   continuation: boolean[],
   at: number,
-  needsSkillsHeader: boolean,
+  repeatSectionHeader: boolean,
 ): void {
   if (breaks[breaks.length - 1] === at) return
   breaks.push(at)
-  continuation.push(needsSkillsHeader)
+  continuation.push(repeatSectionHeader)
 }
 
 function layoutBlockSection(
@@ -73,31 +83,34 @@ function layoutBlockSection(
   continuation: boolean[],
 ): number {
   const blockBottom = bottom(section)
+  let reservedTopOnPage = 0
 
-  if (fits(blockBottom, pageStart, pageHeight)) return pageStart
+  if (fits(blockBottom, pageStart, pageHeight, reservedTopOnPage)) return pageStart
 
-  const pageEndPx = pageEnd(pageStart, pageHeight)
+  const pageEndPx = pageEnd(pageStart, pageHeight, reservedTopOnPage)
   const startsOnCurrentPage =
     section.offsetTop >= pageStart && section.offsetTop < pageEndPx
 
-  // Same page-end rule as Skills: if the whole section cannot fit in the remaining
-  // space on the current page, start it on a fresh page.
   if (startsOnCurrentPage && section.offsetTop > pageStart) {
     pushBreak(breaks, continuation, section.offsetTop, false)
     pageStart = section.offsetTop
-    if (fits(blockBottom, pageStart, pageHeight)) return pageStart
+    reservedTopOnPage = 0
+    if (fits(blockBottom, pageStart, pageHeight, reservedTopOnPage)) return pageStart
   }
 
-  if (section.offsetHeight > pageHeight) {
+  if (section.offsetHeight > pageHeight - reservedTopOnPage) {
     if (section.offsetTop > pageStart) {
       pushBreak(breaks, continuation, section.offsetTop, false)
       pageStart = section.offsetTop
+      reservedTopOnPage = 0
     }
-    let next = pageEnd(pageStart, pageHeight)
+    let next = pageEnd(pageStart, pageHeight, reservedTopOnPage)
     while (next < blockBottom) {
-      pushBreak(breaks, continuation, next, false)
+      const repeatHeader = section.headerHeight > 0
+      pushBreak(breaks, continuation, next, repeatHeader)
       pageStart = next
-      next += pageHeight
+      reservedTopOnPage = repeatHeader ? section.headerHeight : 0
+      next = pageEnd(pageStart, pageHeight, reservedTopOnPage)
     }
     return pageStart
   }
@@ -132,19 +145,20 @@ function layoutSkillsSection(
 
   const run = (start: number): number => {
     let pageStartLocal = start
+    let reservedTopOnPage = 0
 
-    const wholeSectionFits = () => fits(skillsBottom, pageStartLocal, pageHeight)
+    const wholeSectionFits = () => fits(skillsBottom, pageStartLocal, pageHeight, reservedTopOnPage)
 
     if (wholeSectionFits()) return pageStartLocal
 
     const firstCatBottom = categoryBottom(skillsTop, categories[0])
-    // Use absolute category bottom for fit check (robust to DOM gaps)
     const firstChunkBottom = Math.max(firstCatBottom, skillsTop + bottom(header) + categories[0].offsetHeight)
 
-    if (!fits(firstChunkBottom, pageStartLocal, pageHeight)) {
+    if (!fits(firstChunkBottom, pageStartLocal, pageHeight, reservedTopOnPage)) {
       if (skillsTop > pageStartLocal) {
         pushBreak(breaks, continuation, skillsTop, false)
         pageStartLocal = skillsTop
+        reservedTopOnPage = 0
       }
       if (wholeSectionFits()) return pageStartLocal
     }
@@ -159,10 +173,22 @@ function layoutSkillsSection(
         truncatedSkillCategoryIndices.push(category.categoryIndex)
       }
 
-      // Same page-end rule as block sections: break only when this category cannot fit.
-      if (!fits(categoryBottomAbs, pageStartLocal, pageHeight) && categoryBreakTop > pageStartLocal) {
-        pushBreak(breaks, continuation, categoryBreakTop, index > 0)
+      if (!fits(categoryBottomAbs, pageStartLocal, pageHeight, reservedTopOnPage)
+        && categoryBreakTop > pageStartLocal) {
+        const repeatHeader = index > 0
+        pushBreak(breaks, continuation, categoryBreakTop, repeatHeader)
         pageStartLocal = categoryBreakTop
+        reservedTopOnPage = repeatHeader ? header.offsetHeight : 0
+      }
+
+      if (category.offsetHeight > maxCategoryHeightWithHeader) {
+        let next = pageEnd(pageStartLocal, pageHeight, reservedTopOnPage)
+        while (next < categoryBottomAbs) {
+          pushBreak(breaks, continuation, next, true)
+          pageStartLocal = next
+          reservedTopOnPage = header.offsetHeight
+          next = pageEnd(pageStartLocal, pageHeight, reservedTopOnPage)
+        }
       }
     }
 
@@ -206,7 +232,12 @@ export function computePageLayoutPlan(
 /** @deprecated Use computePageLayoutPlan — kept for callers that only need marginTop breaks */
 export function computePageBreaks(children: MeasurableUnit[], pageHeight: number): number[] {
   return computePageLayoutPlan(
-    children.map(c => ({ kind: 'block' as const, offsetTop: c.offsetTop, offsetHeight: c.offsetHeight })),
+    children.map(c => ({
+      kind: 'block' as const,
+      offsetTop: c.offsetTop,
+      offsetHeight: c.offsetHeight,
+      headerHeight: 0,
+    })),
     pageHeight,
   ).breaks
 }

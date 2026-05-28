@@ -3,8 +3,8 @@ import { computePageLayoutPlan, type SectionMeasurement } from '../resumePageBre
 
 const PAGE = 800
 
-function block(top: number, height: number): SectionMeasurement {
-  return { kind: 'block', offsetTop: top, offsetHeight: height }
+function block(top: number, height: number, headerHeight = 0): SectionMeasurement {
+  return { kind: 'block', offsetTop: top, offsetHeight: height, headerHeight }
 }
 
 function skills(
@@ -110,6 +110,34 @@ describe('computePageLayoutPlan — section pagination', () => {
       PAGE,
     )
     expect(plan.breaks).toEqual([0, 750])
+  })
+
+  it('breaks skills category on continuation page when it does not fit below reserved header', () => {
+    const pageH = 200
+    const headerH = 20
+    const plan = computePageLayoutPlan(
+      [
+        block(0, 100),
+        skills(100, 300, headerH, [
+          { offsetTop: 24, height: 70 },
+          { offsetTop: 100, height: 95 },
+        ]),
+      ],
+      pageH,
+    )
+    expect(plan.breaks).toEqual([0, 200])
+    expect(plan.skillsContinuationHeader[1]).toBe(true)
+  })
+
+  it('splits tall block sections with reserved header height on continuation slices', () => {
+    const pageH = 200
+    const headerH = 20
+    const plan = computePageLayoutPlan(
+      [block(0, 450, headerH)],
+      pageH,
+    )
+    expect(plan.breaks.length).toBeGreaterThanOrEqual(3)
+    expect(plan.skillsContinuationHeader[2]).toBe(true)
   })
 
   it('marks oversized categories for safe truncation', () => {
