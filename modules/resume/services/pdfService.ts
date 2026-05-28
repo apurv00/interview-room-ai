@@ -443,11 +443,13 @@ export function renderResumeHTML(
       ));
 
       pagesRoot.innerHTML = '';
-      function pageClipHeight(pageIndex, breaks, pageContentHeight) {
+      function pageClipHeight(pageIndex, breaks, pageContentHeight, continuationHeaderHeight) {
         const start = breaks[pageIndex];
         const nextStart = breaks[pageIndex + 1];
         if (nextStart === undefined) return pageContentHeight;
-        return Math.max(0, nextStart - start);
+        const span = nextStart - start;
+        const withHeader = span + Math.max(0, continuationHeaderHeight || 0);
+        return Math.min(pageContentHeight, Math.max(0, withHeader));
       }
 
       plan.breaks.forEach((breakTop, pageIndex) => {
@@ -457,9 +459,12 @@ export function renderResumeHTML(
         inner.className = 'resume-page-inner';
         const viewport = document.createElement('div');
         viewport.className = 'resume-page-viewport';
-        viewport.style.height = pageClipHeight(pageIndex, plan.breaks, CONTENT_HEIGHT) + 'px';
 
         const headerMetrics = continuationHeaderMetrics[pageIndex];
+        const continuationHeaderHeight =
+          plan.continuation[pageIndex] && headerMetrics ? headerMetrics.height : 0;
+        viewport.style.height =
+          pageClipHeight(pageIndex, plan.breaks, CONTENT_HEIGHT, continuationHeaderHeight) + 'px';
         if (plan.continuation[pageIndex] && headerMetrics) {
           const header = document.createElement('div');
           header.className = 'resume-continuation-header';

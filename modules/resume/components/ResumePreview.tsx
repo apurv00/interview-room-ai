@@ -235,7 +235,12 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
         {/* Visible pages */}
         <div className="flex flex-col gap-3">
           {pages.map((pageIndex) => {
-            const clipHeight = pageClipHeight(pageIndex, pageBreaks, contentHeight)
+            const clipHeight = pageClipHeight(
+              pageIndex,
+              pageBreaks,
+              contentHeight,
+              continuationHeadersByPage[pageIndex]?.height ?? 0,
+            )
             return (
             <div key={pageIndex}>
               {/* Page number badge */}

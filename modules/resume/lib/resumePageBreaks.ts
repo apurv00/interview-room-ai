@@ -77,17 +77,25 @@ export function fits(
  * Viewport height for a rendered page. When the next page starts at `breaks[i+1]`,
  * page i must clip at that offset — otherwise content between breaks appears on both
  * pages (e.g. half a Skills header on page 1 and the full section again on page 2).
+ *
+ * When this page repeats a continuation header, content is shifted down by
+ * `continuationHeaderHeight` (`marginTop = -breakTop + headerHeight`). The clip must
+ * include that reserved band so the slice up to the next break is not truncated
+ * (Codex r3320336750).
  */
 export function pageClipHeight(
   pageIndex: number,
   breaks: number[],
   pageContentHeight: number,
+  continuationHeaderHeight = 0,
 ): number {
   if (pageIndex < 0 || pageIndex >= breaks.length) return pageContentHeight
   const start = breaks[pageIndex]
   const nextStart = breaks[pageIndex + 1]
   if (nextStart === undefined) return pageContentHeight
-  return Math.max(0, nextStart - start)
+  const span = nextStart - start
+  const withHeader = span + Math.max(0, continuationHeaderHeight)
+  return Math.min(pageContentHeight, Math.max(0, withHeader))
 }
 
 function pushBreak(

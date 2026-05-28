@@ -166,7 +166,17 @@ describe('computePageLayoutPlan — section pagination', () => {
   it('clips intermediate pages between consecutive breaks', () => {
     const breaks = [0, 782, 1200]
     expect(pageClipHeight(0, breaks, PAGE)).toBe(782)
-    expect(pageClipHeight(1, breaks, PAGE)).toBe(418)
+    // Middle page repeats a 20px header; clip must include that band (Codex r3320336750).
+    expect(pageClipHeight(1, breaks, PAGE, 20)).toBe(438)
+  })
+
+  it('extends clip by continuation header height on middle pages of tall blocks', () => {
+    const breaks = [0, 200, 380]
+    const pageH = 200
+    const headerH = 20
+    expect(pageClipHeight(0, breaks, pageH)).toBe(200)
+    expect(pageClipHeight(1, breaks, pageH, headerH)).toBe(200)
+    expect(pageClipHeight(2, breaks, pageH)).toBe(200)
   })
 
   it('moves the whole section when the first unit does not fit (not mid-section unit offset)', () => {
