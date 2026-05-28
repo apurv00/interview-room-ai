@@ -86,16 +86,10 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
   const contentWidth = PAGE_WIDTH - PAGE_PADDING * 2
   const contentHeight = PAGE_HEIGHT - PAGE_PADDING * 2
 
-  // Reset stable skill-truncation ratios whenever anything that changes
-  // category heights changes. Font family/size are included because
-  // `measureLayout` only RE-DERIVES ratios on a "full measure" pass; once a
-  // category is truncated, the refine path can only drop MORE items, never
-  // restore them. Without this, shrinking the font so a category fits again
-  // leaves it stuck truncated (with a phantom "+N more") until `data` changes.
   useEffect(() => {
     stableSkillRatiosRef.current = {}
     setMeasureData(data)
-  }, [data, templateId, headingSize, bodySize, fontFamily, fontSize])
+  }, [data, templateId])
 
   // Convergent layout: ratios from full DOM only; refine by item count if truncated DOM is still tall.
   const measureLayout = useCallback(() => {
@@ -210,26 +204,7 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
           }}
         >
           <div ref={contentRef} style={wrapperStyle}>
-            {/* Measure the SAME layout the visible pages render: measureData
-              * already carries the truncated items, so we pass ratios = {}
-              * (no re-slice) but the real omitted counts so ResumeSkillsSection
-              * still renders the "+N more" row. Without this the measurer is
-              * shorter than the rendered page and breaks can clip/duplicate
-              * content (Codex r3320046388). Derived from the stable ratios ref
-              * so it stays in sync with the measureData on this same render. */}
-            <ResumePreviewPageProvider
-              value={{
-                skillsContinuationHeader: false,
-                truncatedSkillCategoryIndices: [],
-                truncatedSkillCategoryRatios: {},
-                truncatedSkillCategoryOmittedCounts: computeOmittedSkillCounts(
-                  data.skills || [],
-                  stableSkillRatiosRef.current,
-                ),
-              }}
-            >
-              <TemplateComponent data={measureData} />
-            </ResumePreviewPageProvider>
+            <TemplateComponent data={measureData} />
           </div>
         </div>
 
@@ -311,7 +286,7 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                             truncatedSkillCategoryOmittedCounts,
                           }}
                         >
-                          <TemplateComponent data={data} />
+                          <TemplateComponent data={measureData} />
                         </ResumePreviewPageProvider>
                       </div>
                     </div>

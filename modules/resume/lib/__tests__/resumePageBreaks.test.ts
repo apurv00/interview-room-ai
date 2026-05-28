@@ -169,6 +169,21 @@ describe('computePageLayoutPlan — section pagination', () => {
     expect(pageClipHeight(1, breaks, PAGE)).toBe(418)
   })
 
+  it('does not slice inside an oversized unit (avoids duplicate subsection on next page)', () => {
+    const plan = computePageLayoutPlan(
+      [
+        block(0, 100),
+        splittable('skills', 100, 280, 20, [
+          { offsetTop: 24, height: 250 },
+        ]),
+      ],
+      200,
+    )
+    const breaksInsideUnit = plan.breaks.filter(b => b > 124 && b < 350)
+    expect(breaksInsideUnit).toEqual([])
+    expect(plan.truncatedUnits).toContainEqual({ sectionId: 'skills', unitIndex: 0 })
+  })
+
   it('marks oversized units for safe truncation', () => {
     const plan = computePageLayoutPlan(
       [
