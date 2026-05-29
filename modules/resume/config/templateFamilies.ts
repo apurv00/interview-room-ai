@@ -1,5 +1,6 @@
 export type ResumeTemplateFamilyId =
   | 'classic'
+  | 'modern'
   | 'technical'
   | 'sidebar'
   | 'executive'
@@ -24,6 +25,11 @@ export const TEMPLATE_FAMILIES: TemplateFamilyConfig[] = [
     id: 'classic',
     label: 'Classic',
     description: 'Single-column, corporate-first layouts.',
+  },
+  {
+    id: 'modern',
+    label: 'Modern',
+    description: 'Single-column with an accent header band and bold section bars.',
   },
   {
     id: 'technical',
@@ -69,6 +75,24 @@ export const TEMPLATE_VARIANTS: Record<string, TemplateVariantConfig> = {
     id: 'classic-navy',
     familyId: 'classic',
     variantLabel: 'Classic Navy',
+    isLegacyTemplateId: false,
+  },
+  'modern-indigo': {
+    id: 'modern-indigo',
+    familyId: 'modern',
+    variantLabel: 'Modern Indigo',
+    isLegacyTemplateId: false,
+  },
+  'modern-emerald': {
+    id: 'modern-emerald',
+    familyId: 'modern',
+    variantLabel: 'Modern Emerald',
+    isLegacyTemplateId: false,
+  },
+  'modern-rose': {
+    id: 'modern-rose',
+    familyId: 'modern',
+    variantLabel: 'Modern Rose',
     isLegacyTemplateId: false,
   },
   technical: {
