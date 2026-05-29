@@ -1664,3 +1664,10 @@
 - **Root-cause:** layouts hardcoded section order in JSX and never read data.sectionOrder; the editor stored order against the global default while each family renders a different order, so even a wired-up order would 
 - **Tests-added: modules/resume/config/__tests__/sectionOrders.test.ts, modules/resume/components/templates/__tests__/sectionOrderRender.test.tsx**
 - **Verified-by:** legacyTemplateParity still 10/10 byte-identical; vitest run modules/resume (19 files, 152 tests pass); tsc --noEmit clean; next lint no warnings/errors
+
+### 2026-05-29 15:40:14 +0000 · `22711dc` · Claude
+- **Subject:** chore(ci): bump modules/resume file budget for the family template system
+- **Files:** 2 changed, 0 test file(s)
+- **Root-cause:** the refactor deliberately trades many small reusable files (7 layouts + ~12 primitives + per-family theme configs + legacy shims) for the duplication that previously caused the pagination-marker bug c
+- **No-tests-needed-because: module-size is a CI tripwire config; correctness is verified by re-running the check, not by unit tests.**
+- **Verified-by:** node scripts/check-module-size.mjs passes (resume 88/100); full CI reproduced locally — npm run lint clean, tsc --noEmit clean, npm run test:run 3318/3318 pass, npm run build succeeds
