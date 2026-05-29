@@ -1692,3 +1692,10 @@
 - **Root-cause:** n/a (additive feature). New family slots into the existing architecture as config + one thin layout; no paginator, schema, or legacy-template changes.
 - **Tests-added: modules/resume/components/templates/__tests__/modernFamily.test.tsx (markers contract, distinct-look, sectionOrder, geometry-identical variants, snapshot baseline)**
 - **Verified-by:** vitest run modules/resume 157 pass (incl. legacy parity gate intact + 5 Modern tests); tsc --noEmit clean; next lint clean; npm run build succeeds; module-size 93/100; PDF CSS regenerated with Modern 
+
+### 2026-05-29 17:55:34 +0000 · `7f305d0` · Claude
+- **Subject:** fix(resume): keep Modern variants out of the wizard's first-6 window
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** the wizard picker is positional (slice(0,6)) and a mid-array insertion displaced existing choices out of that window.
+- **Tests-added: modules/resume/config/__tests__/wizardTemplateWindow.test.ts**
+- **Verified-by:** vitest run modules/resume 158 pass (incl. legacy parity gate + Modern suite + new wizard-window guard); tsc --noEmit clean
