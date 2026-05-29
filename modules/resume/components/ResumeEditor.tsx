@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from 'react'
 import type { ResumeData } from '../validators/resume'
-import { useResume, DEFAULT_SECTION_ORDER } from '../hooks/useResume'
+import { useResume } from '../hooks/useResume'
+import { getTemplateSectionOrder } from '../config/sectionOrders'
 import { RESUME_TEMPLATES } from '../config/templates'
 import { TEMPLATE_FAMILIES, TEMPLATE_VARIANTS } from '../config/templateFamilies'
 import ResumePreview from './ResumePreview'
@@ -436,11 +437,11 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
 
           {/* Section editors — drag to reorder */}
           <SortableList
-            items={resume.sectionOrder || DEFAULT_SECTION_ORDER}
+            items={resume.sectionOrder || getTemplateSectionOrder(resume.template || 'professional')}
             onReorder={reorderSections}
           >
             <div className="space-y-5">
-              {(resume.sectionOrder || DEFAULT_SECTION_ORDER).map(sectionId => (
+              {(resume.sectionOrder || getTemplateSectionOrder(resume.template || 'professional')).map(sectionId => (
                 <SortableItem key={sectionId} id={sectionId}>
                   {({ listeners, attributes }) => (
                     <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">

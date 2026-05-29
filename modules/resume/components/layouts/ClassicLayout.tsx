@@ -1,6 +1,8 @@
+import { Fragment, type ReactNode } from 'react'
 import type { ResumeData } from '../../validators/resume'
 import type { ClassicVariantId } from '../../config/classicThemes'
 import { getClassicTheme } from '../../config/classicThemes'
+import { CLASSIC_ORDER, resolveSectionOrder, type BodySectionId } from '../../config/sectionOrders'
 import TemplateRoot from '../template-primitives/TemplateRoot'
 import ClassicContactHeader from '../template-primitives/ClassicContactHeader'
 import FederalContactHeader from '../template-primitives/FederalContactHeader'
@@ -24,6 +26,56 @@ export default function ClassicLayout({ data, variantId }: Props) {
   const contact = data.contactInfo || { fullName: '', email: '' }
   const isFederal = theme.layoutMode === 'federal'
 
+  const blocks: Partial<Record<BodySectionId, ReactNode>> = {
+    summary: data.summary ? (
+      <SectionBlock sectionId="summary" title={theme.summaryTitle} theme={theme} hideDivider>
+        <p className={theme.bodyText}>{data.summary}</p>
+      </SectionBlock>
+    ) : undefined,
+    experience:
+      data.experience && data.experience.length > 0
+        ? isFederal
+          ? (
+            <FederalExperienceSection
+              experience={data.experience}
+              theme={theme}
+              sectionTitle={theme.sectionLabels.experience}
+            />
+          )
+          : <ExperienceSection experience={data.experience} theme={theme} />
+        : undefined,
+    education:
+      data.education && data.education.length > 0
+        ? isFederal
+          ? (
+            <FederalEducationSection
+              education={data.education}
+              theme={theme}
+              sectionTitle={theme.sectionLabels.education}
+            />
+          )
+          : <EducationSection education={data.education} theme={theme} />
+        : undefined,
+    skills:
+      data.skills && data.skills.length > 0
+        ? <ClassicSkillsBlock skills={data.skills} theme={theme} />
+        : undefined,
+    projects:
+      data.projects && data.projects.length > 0
+        ? <ProjectsSection projects={data.projects} theme={theme} />
+        : undefined,
+    certifications:
+      data.certifications && data.certifications.length > 0
+        ? <CertificationsSection certifications={data.certifications} theme={theme} />
+        : undefined,
+    customSections:
+      data.customSections && data.customSections.length > 0
+        ? <CustomSections sections={data.customSections} theme={theme} />
+        : undefined,
+  }
+
+  const order = resolveSectionOrder(data.sectionOrder, CLASSIC_ORDER)
+
   return (
     <TemplateRoot className={theme.rootClass}>
       {isFederal ? (
@@ -31,52 +83,7 @@ export default function ClassicLayout({ data, variantId }: Props) {
       ) : (
         <ClassicContactHeader contact={contact} theme={theme} />
       )}
-
-      {data.summary && (
-        <SectionBlock sectionId="summary" title={theme.summaryTitle} theme={theme} hideDivider>
-          <p className={theme.bodyText}>{data.summary}</p>
-        </SectionBlock>
-      )}
-
-      {data.experience && data.experience.length > 0 && (
-        isFederal ? (
-          <FederalExperienceSection
-            experience={data.experience}
-            theme={theme}
-            sectionTitle={theme.sectionLabels.experience}
-          />
-        ) : (
-          <ExperienceSection experience={data.experience} theme={theme} />
-        )
-      )}
-
-      {data.education && data.education.length > 0 && (
-        isFederal ? (
-          <FederalEducationSection
-            education={data.education}
-            theme={theme}
-            sectionTitle={theme.sectionLabels.education}
-          />
-        ) : (
-          <EducationSection education={data.education} theme={theme} />
-        )
-      )}
-
-      {data.skills && data.skills.length > 0 && (
-        <ClassicSkillsBlock skills={data.skills} theme={theme} />
-      )}
-
-      {data.projects && data.projects.length > 0 && (
-        <ProjectsSection projects={data.projects} theme={theme} />
-      )}
-
-      {data.certifications && data.certifications.length > 0 && (
-        <CertificationsSection certifications={data.certifications} theme={theme} />
-      )}
-
-      {data.customSections && data.customSections.length > 0 && (
-        <CustomSections sections={data.customSections} theme={theme} />
-      )}
+      {order.map(id => (blocks[id] ? <Fragment key={id}>{blocks[id]}</Fragment> : null))}
     </TemplateRoot>
   )
 }

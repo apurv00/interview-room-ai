@@ -1,6 +1,13 @@
+import { Fragment, type ReactNode } from 'react'
 import type { ResumeData } from '../../validators/resume'
 import type { EarlyCareerVariantId } from '../../config/earlyCareerThemes'
 import { getEarlyCareerTheme } from '../../config/earlyCareerThemes'
+import {
+  EARLY_CAREER_ACADEMIC_ORDER,
+  EARLY_CAREER_GRADUATE_ORDER,
+  resolveSectionOrder,
+  type BodySectionId,
+} from '../../config/sectionOrders'
 import TemplateRoot from '../template-primitives/TemplateRoot'
 import ResumeSkillsSection from '../ResumeSkillsSection'
 
@@ -206,33 +213,33 @@ export default function EarlyCareerLayout({ data, variantId }: Props) {
       </div>
     ) : null
 
-  const customBlocks = data.customSections?.map(section => (
-    <div key={section.id} className={gap} data-resume-section={`custom-${section.id}`}>
-      <h2 data-resume-section-header={section.title} className={titleClass}>
-        {section.title}
-      </h2>
-      <p className="text-gray-700 whitespace-pre-wrap">{section.content}</p>
-    </div>
-  ))
+  const customBlock =
+    data.customSections && data.customSections.length > 0 ? (
+      <>
+        {data.customSections.map(section => (
+          <div key={section.id} className={gap} data-resume-section={`custom-${section.id}`}>
+            <h2 data-resume-section-header={section.title} className={titleClass}>
+              {section.title}
+            </h2>
+            <p className="text-gray-700 whitespace-pre-wrap">{section.content}</p>
+          </div>
+        ))}
+      </>
+    ) : undefined
 
-  const mainSections = isGraduate ? (
-    <>
-      {educationBlock}
-      {projectsBlock}
-      {skillsBlock}
-      {experienceBlock}
-      {customBlocks}
-      {certificationsBlock}
-    </>
-  ) : (
-    <>
-      {educationBlock}
-      {experienceBlock}
-      {skillsBlock}
-      {projectsBlock}
-      {certificationsBlock}
-      {customBlocks}
-    </>
+  const blocks: Partial<Record<BodySectionId, ReactNode>> = {
+    summary: summaryBlock ?? undefined,
+    education: educationBlock ?? undefined,
+    projects: projectsBlock ?? undefined,
+    skills: skillsBlock ?? undefined,
+    experience: experienceBlock ?? undefined,
+    certifications: certificationsBlock ?? undefined,
+    customSections: customBlock,
+  }
+
+  const order = resolveSectionOrder(
+    data.sectionOrder,
+    isGraduate ? EARLY_CAREER_GRADUATE_ORDER : EARLY_CAREER_ACADEMIC_ORDER,
   )
 
   return (
@@ -243,8 +250,7 @@ export default function EarlyCareerLayout({ data, variantId }: Props) {
         </h1>
         <ContactRow contact={contact} rowClass={theme.contactRowClass} />
       </div>
-      {summaryBlock}
-      {mainSections}
+      {order.map(id => (blocks[id] ? <Fragment key={id}>{blocks[id]}</Fragment> : null))}
     </TemplateRoot>
   )
 }

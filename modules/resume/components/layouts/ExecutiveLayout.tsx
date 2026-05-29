@@ -1,6 +1,8 @@
+import { Fragment, type ReactNode } from 'react'
 import type { ResumeData } from '../../validators/resume'
 import type { ExecutiveVariantId } from '../../config/executiveThemes'
 import { getExecutiveTheme } from '../../config/executiveThemes'
+import { EXECUTIVE_ORDER, resolveSectionOrder, type BodySectionId } from '../../config/sectionOrders'
 import TemplateRoot from '../template-primitives/TemplateRoot'
 import ResumeSkillsSection from '../ResumeSkillsSection'
 
@@ -54,31 +56,19 @@ export default function ExecutiveLayout({ data, variantId }: Props) {
   const contact = data.contactInfo || { fullName: '', email: '' }
   const titleClass = theme.sectionTitleClass
 
-  return (
-    <TemplateRoot className="text-gray-900 leading-snug">
-      <div className="text-center mb-3">
-        <h1
-          className={`font-bold ${theme.nameColorClass} tracking-widest uppercase`}
-          style={{ fontSize: theme.nameSize }}
-        >
-          {contact.fullName || 'Your Name'}
-        </h1>
-        <hr className="my-1.5 border-t border-[#1e293b]" />
-        <ContactRow contact={contact} />
+  const blocks: Partial<Record<BodySectionId, ReactNode>> = {
+    summary: data.summary ? (
+      <div className="mb-3" data-resume-section="summary">
+        <h2 data-resume-section-header={theme.summaryTitle} className={titleClass}>
+          {theme.summaryTitle}
+        </h2>
+        <p className={`text-gray-700 leading-relaxed ${theme.summaryItalic ? 'italic' : ''}`}>
+          {data.summary}
+        </p>
       </div>
-
-      {data.summary && (
-        <div className="mb-3" data-resume-section="summary">
-          <h2 data-resume-section-header={theme.summaryTitle} className={titleClass}>
-            {theme.summaryTitle}
-          </h2>
-          <p className={`text-gray-700 leading-relaxed ${theme.summaryItalic ? 'italic' : ''}`}>
-            {data.summary}
-          </p>
-        </div>
-      )}
-
-      {data.experience && data.experience.length > 0 && (
+    ) : undefined,
+    experience:
+      data.experience && data.experience.length > 0 ? (
         <div className="mb-3" data-resume-section="experience">
           <h2 data-resume-section-header={theme.experienceTitle} className={titleClass}>
             {theme.experienceTitle}
@@ -112,9 +102,9 @@ export default function ExecutiveLayout({ data, variantId }: Props) {
             </div>
           ))}
         </div>
-      )}
-
-      {data.education && data.education.length > 0 && (
+      ) : undefined,
+    education:
+      data.education && data.education.length > 0 ? (
         <div className="mb-3" data-resume-section="education">
           <h2 data-resume-section-header="Education" className={titleClass}>
             Education
@@ -143,9 +133,9 @@ export default function ExecutiveLayout({ data, variantId }: Props) {
             </div>
           ))}
         </div>
-      )}
-
-      {data.skills && data.skills.length > 0 && (
+      ) : undefined,
+    skills:
+      data.skills && data.skills.length > 0 ? (
         <ResumeSkillsSection
           skills={data.skills}
           title={theme.skillsTitle}
@@ -160,9 +150,9 @@ export default function ExecutiveLayout({ data, variantId }: Props) {
             </div>
           )}
         />
-      )}
-
-      {data.projects && data.projects.length > 0 && (
+      ) : undefined,
+    projects:
+      data.projects && data.projects.length > 0 ? (
         <div className="mb-3" data-resume-section="projects">
           <h2 data-resume-section-header={theme.projectsTitle} className={titleClass}>
             {theme.projectsTitle}
@@ -180,9 +170,9 @@ export default function ExecutiveLayout({ data, variantId }: Props) {
             </div>
           ))}
         </div>
-      )}
-
-      {data.certifications && data.certifications.length > 0 && (
+      ) : undefined,
+    certifications:
+      data.certifications && data.certifications.length > 0 ? (
         <div className="mb-3" data-resume-section="certifications">
           <h2 data-resume-section-header={theme.certificationsTitle} className={titleClass}>
             {theme.certificationsTitle}
@@ -194,16 +184,37 @@ export default function ExecutiveLayout({ data, variantId }: Props) {
             </div>
           ))}
         </div>
-      )}
+      ) : undefined,
+    customSections:
+      data.customSections && data.customSections.length > 0 ? (
+        <>
+          {data.customSections.map(section => (
+            <div key={section.id} className="mb-3" data-resume-section={`custom-${section.id}`}>
+              <h2 data-resume-section-header={section.title} className={titleClass}>
+                {section.title}
+              </h2>
+              <p className="text-gray-700 whitespace-pre-wrap">{section.content}</p>
+            </div>
+          ))}
+        </>
+      ) : undefined,
+  }
 
-      {data.customSections?.map(section => (
-        <div key={section.id} className="mb-3" data-resume-section={`custom-${section.id}`}>
-          <h2 data-resume-section-header={section.title} className={titleClass}>
-            {section.title}
-          </h2>
-          <p className="text-gray-700 whitespace-pre-wrap">{section.content}</p>
-        </div>
-      ))}
+  const order = resolveSectionOrder(data.sectionOrder, EXECUTIVE_ORDER)
+
+  return (
+    <TemplateRoot className="text-gray-900 leading-snug">
+      <div className="text-center mb-3">
+        <h1
+          className={`font-bold ${theme.nameColorClass} tracking-widest uppercase`}
+          style={{ fontSize: theme.nameSize }}
+        >
+          {contact.fullName || 'Your Name'}
+        </h1>
+        <hr className="my-1.5 border-t border-[#1e293b]" />
+        <ContactRow contact={contact} />
+      </div>
+      {order.map(id => (blocks[id] ? <Fragment key={id}>{blocks[id]}</Fragment> : null))}
     </TemplateRoot>
   )
 }
