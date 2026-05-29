@@ -156,6 +156,22 @@ export const RESUME_TEMPLATES: ResumeTemplate[] = [
     industries: ['C-Suite', 'VP+', 'Director'],
     color: 'amber',
   },
+  {
+    id: 'early-career-teal',
+    name: 'Early Career Teal',
+    desc: 'Education/projects-forward graduate layout with a fresh teal accent.',
+    sections: ['Objective', 'Education', 'Projects', 'Skills'],
+    industries: ['New Grad', 'Internship', 'Entry Level'],
+    color: 'teal',
+  },
+  {
+    id: 'career-change-emerald',
+    name: 'Career Change Emerald',
+    desc: 'Competency-first career-change layout with an emerald accent.',
+    sections: ['Career Objective', 'Core Competencies', 'Relevant Experience', 'Education'],
+    industries: ['All Industries'],
+    color: 'emerald',
+  },
 ]
 
 // Sample data used for template previews
@@ -237,6 +253,7 @@ export const TEMPLATE_COLOR_MAP: Record<string, { bg: string; border: string; te
   indigo: { bg: 'bg-indigo-500/10', border: 'border-indigo-500/20', text: 'text-indigo-400' },
   amber: { bg: 'bg-amber-500/10', border: 'border-amber-500/20', text: 'text-amber-400' },
   cyan: { bg: 'bg-cyan-500/10', border: 'border-cyan-500/20', text: 'text-cyan-400' },
+  teal: { bg: 'bg-teal-500/10', border: 'border-teal-500/20', text: 'text-teal-400' },
   rose: { bg: 'bg-rose-500/10', border: 'border-rose-500/20', text: 'text-rose-400' },
   slate: { bg: 'bg-[#eff3f4]', border: 'border-[#e1e8ed]', text: 'text-[#8b98a5]' },
   red: { bg: 'bg-red-500/10', border: 'border-red-500/20', text: 'text-red-400' },

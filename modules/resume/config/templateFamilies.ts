@@ -173,6 +173,18 @@ export const TEMPLATE_VARIANTS: Record<string, TemplateVariantConfig> = {
     variantLabel: 'Executive Gold',
     isLegacyTemplateId: false,
   },
+  'early-career-teal': {
+    id: 'early-career-teal',
+    familyId: 'early-career',
+    variantLabel: 'Early Career Teal',
+    isLegacyTemplateId: false,
+  },
+  'career-change-emerald': {
+    id: 'career-change-emerald',
+    familyId: 'career-change',
+    variantLabel: 'Career Change Emerald',
+    isLegacyTemplateId: false,
+  },
 }
 
 export function getTemplateFamilyConfig(templateId: string): TemplateFamilyConfig | null {

@@ -1,4 +1,4 @@
-export type EarlyCareerVariantId = 'entry-level' | 'academic'
+export type EarlyCareerVariantId = 'entry-level' | 'academic' | 'early-career-teal'
 
 export interface EarlyCareerTheme {
   headerBorderClass: string
@@ -50,6 +50,22 @@ export const EARLY_CAREER_THEMES: Record<EarlyCareerVariantId, EarlyCareerTheme>
     projectUrlClass: 'text-[8px] text-blue-700 ml-1',
     educationUnitGap: 'mb-1',
     layoutMode: 'academic',
+  },
+  'early-career-teal': {
+    headerBorderClass: 'text-center border-b-2 border-teal-500 pb-2 mb-3',
+    nameClass: 'font-bold text-teal-600',
+    nameSize: 'var(--r-title, 18px)',
+    contactRowClass: 'flex items-center justify-center gap-2 text-[8px] text-gray-600 mt-0.5 flex-wrap',
+    sectionTitleClass:
+      'font-bold uppercase tracking-widest text-teal-600 border-b border-teal-200 pb-0.5 mb-1',
+    sectionGap: 'mb-3',
+    summaryTitle: 'Objective',
+    experienceTitle: 'Experience',
+    skillsTitle: 'Skills',
+    bulletDotClass: 'bg-teal-500',
+    projectUrlClass: 'text-[8px] text-teal-500',
+    educationUnitGap: 'mb-1.5',
+    layoutMode: 'graduate',
   },
 }
 

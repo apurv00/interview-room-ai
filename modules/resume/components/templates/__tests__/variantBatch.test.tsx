@@ -13,6 +13,8 @@ const CASES = [
   { id: 'technical-slate', accent: 'text-slate-700', skillsCategory: true },
   { id: 'executive-gold', accent: 'text-amber-700', skillsCategory: true },
   { id: 'sidebar-violet', accent: 'bg-violet-700', skillsCategory: true },
+  { id: 'early-career-teal', accent: 'text-teal-600', skillsCategory: true },
+  { id: 'career-change-emerald', accent: 'text-emerald-600', skillsCategory: true },
 ] as const
 
 describe('new color variants', () => {
