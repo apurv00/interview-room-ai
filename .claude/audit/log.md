@@ -1678,3 +1678,10 @@
 - **Root-cause:** P1 — the precompiled PDF CSS is generated from a static content glob that was never widened when template markup moved out of templates/ into the new layout/primitive/theme files. P2 — family filt
 - **Tests-added: No-tests-needed-because: P1 verified by regenerating resume-pdf-css.json and asserting previously-absent layout/theme classes (border-emerald-600, 2563eb, 1e293b, 0.2em) are now present; **
 - **Verified-by:** node scripts/build-resume-css.js regenerates a 22.6KB bundle now containing the extracted classes; tsc --noEmit clean; next lint clean; node scripts/check-module-size.mjs passes
+
+### 2026-05-29 16:30:30 +0000 · `fbf9d16` · Claude
+- **Subject:** fix(resume): honor explicit section orders that equal the global default
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** the migration heuristic conflated "saved as global default" with "never meaningfully reordered", which is false for a deliberate global-order arrangement on a family whose default differs from global.
+- **Tests-added: updated modules/resume/config/__tests__/sectionOrders.test.ts to assert an explicit global order is honored on a non-Classic family**
+- **Verified-by:** vitest run sectionOrders + legacyTemplateParity (still 10/10) + sectionOrderRender = 20 pass; tsc --noEmit clean; next lint clean
