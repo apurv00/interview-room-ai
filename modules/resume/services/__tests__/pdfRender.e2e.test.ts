@@ -44,11 +44,16 @@ interface PageMetrics {
   sectionHeaderFontWeight: string
   sectionHeaderTextTransform: string
   bandBackgroundColor: string | null
-  containsText: (needle: string) => boolean
-  text: string
+  /** Whether `visibleText` (if supplied) actually lands inside a page viewport's
+   * visible band — not merely present in the (clipped) DOM. */
+  needleVisible: boolean
 }
 
-async function renderAndMeasure(data: ResumeData, templateId: string): Promise<PageMetrics> {
+async function renderAndMeasure(
+  data: ResumeData,
+  templateId: string,
+  visibleText?: string,
+): Promise<PageMetrics> {
   const html = renderResumeHTML(data, templateId)
   const page = await browser.newPage()
   try {
@@ -58,28 +63,47 @@ async function renderAndMeasure(data: ResumeData, templateId: string): Promise<P
       () => (window as { __resumePagesReady?: boolean }).__resumePagesReady === true,
       { timeout: 15000 },
     )
-    return page.evaluate(() => {
+    return page.evaluate((needle: string | null) => {
       const root = document.getElementById('resume-pages-root')!
       const pages = root.querySelectorAll('.resume-page')
       const header = root.querySelector('[data-resume-section-header]') as HTMLElement | null
       const band = root.querySelector('[data-resume-section="contact"], [data-resume-section="body"]') as HTMLElement | null
-      // Heuristic for accent-band families (Modern/Sidebar): first colored block.
       const colored = band || (root.querySelector('h1')?.parentElement as HTMLElement | null)
       const hs = header ? getComputedStyle(header) : null
       const cs = colored ? getComputedStyle(colored) : null
-      const text = (root as HTMLElement).innerText
+
+      // Each .resume-page duplicates the full template and clips it with the
+      // viewport's overflow:hidden, so DOM-text presence proves nothing. A text
+      // is genuinely visible only if a leaf element containing it has a bounding
+      // rect that falls WITHIN some page viewport's visible band (no clip).
+      let needleVisible = needle === null
+      if (needle !== null) {
+        for (const page of Array.from(pages)) {
+          const vp = page.querySelector('.resume-page-viewport') as HTMLElement | null
+          if (!vp) continue
+          const vpRect = vp.getBoundingClientRect()
+          const leaves = Array.from(vp.querySelectorAll('*')).filter(
+            el => el.children.length === 0 && (el.textContent || '').includes(needle),
+          )
+          for (const el of leaves) {
+            const r = el.getBoundingClientRect()
+            if (r.height > 0 && r.top >= vpRect.top - 1 && r.bottom <= vpRect.bottom + 1) {
+              needleVisible = true
+              break
+            }
+          }
+          if (needleVisible) break
+        }
+      }
+
       return {
         pageCount: pages.length,
         sectionHeaderFontWeight: hs?.fontWeight ?? '',
         sectionHeaderTextTransform: hs?.textTransform ?? '',
         bandBackgroundColor: cs?.backgroundColor ?? null,
-        text,
-        // serialized below; reattach helper on the node side
-      } as unknown as PageMetrics
-    }).then((m: PageMetrics) => ({
-      ...m,
-      containsText: (needle: string) => m.text.includes(needle),
-    }))
+        needleVisible,
+      }
+    }, visibleText ?? null)
   } finally {
     await page.close()
   }
@@ -133,9 +157,10 @@ describe.skipIf(!ENABLED)('PDF render (headless Chromium)', () => {
 
   it('paginates a long resume across multiple pages without dropping content', async (ctx) => {
     if (!browser) return ctx.skip()
-    const m = await renderAndMeasure(longResume(), 'professional')
+    // The last experience entry must be VISIBLE on a page (within a viewport's
+    // clip band), not merely present in the duplicated/clipped DOM.
+    const m = await renderAndMeasure(longResume(), 'professional', 'Senior Engineer 9')
     expect(m.pageCount).toBeGreaterThan(1)
-    // The last experience entry must survive pagination.
-    expect(m.containsText('Senior Engineer 9')).toBe(true)
+    expect(m.needleVisible).toBe(true)
   }, 30000)
 })
