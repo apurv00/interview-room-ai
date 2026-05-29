@@ -59,7 +59,7 @@ export default function TechnicalLayout({ data, variantId }: Props) {
                   {exp.bullets.filter(b => b.trim()).map((bullet, i) => (
                     <li
                       key={i}
-                      className="text-gray-700 before:content-['▸'] before:mr-1 before:text-emerald-500"
+                      className={`text-gray-700 before:content-['▸'] before:mr-1 ${theme.bulletAccentClass}`}
                     >
                       {bullet}
                     </li>
@@ -79,7 +79,7 @@ export default function TechnicalLayout({ data, variantId }: Props) {
               <div className="flex items-baseline gap-1">
                 <span className="font-bold">{proj.name}</span>
                 {proj.url && (
-                  <span className="text-[8px] text-emerald-600">[{proj.url}]</span>
+                  <span className={theme.projectUrlClass}>[{proj.url}]</span>
                 )}
               </div>
               {proj.technologies?.length ? (

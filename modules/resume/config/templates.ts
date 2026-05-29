@@ -131,6 +131,31 @@ export const RESUME_TEMPLATES: ResumeTemplate[] = [
     industries: ['Startups', 'Tech', 'Innovation'],
     color: 'orange',
   },
+  // New color variants kept after the first-6 wizard window (Codex r3326001350).
+  {
+    id: 'technical-slate',
+    name: 'Technical Slate',
+    desc: 'Technical layout with a neutral slate accent — alternative to emerald.',
+    sections: ['Technical Skills', 'Experience', 'Projects', 'Education'],
+    industries: ['Tech', 'Engineering', 'Data Science'],
+    color: 'slate',
+  },
+  {
+    id: 'sidebar-violet',
+    name: 'Sidebar Violet',
+    desc: 'Two-column layout with a violet sidebar — design and marketing roles.',
+    sections: ['Profile', 'Experience', 'Skills', 'Education'],
+    industries: ['Design', 'Marketing', 'Product'],
+    color: 'violet',
+  },
+  {
+    id: 'executive-gold',
+    name: 'Executive Gold',
+    desc: 'Executive layout with a gold accent — distinguished and senior.',
+    sections: ['Executive Summary', 'Key Achievements', 'Experience', 'Board & Advisory'],
+    industries: ['C-Suite', 'VP+', 'Director'],
+    color: 'amber',
+  },
 ]
 
 // Sample data used for template previews
