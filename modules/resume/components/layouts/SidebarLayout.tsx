@@ -69,8 +69,8 @@ export default function SidebarLayout({ data, variantId }: Props) {
         <div className={`${theme.mainWidth} p-3`}>
           <div className="mb-3">
             <h1
-              className="font-bold tracking-wide"
-              style={{ fontSize: 'var(--r-title, 18px)', color: theme.accentColor }}
+              className={`font-bold ${theme.accentClass} tracking-wide`}
+              style={{ fontSize: 'var(--r-title, 18px)' }}
             >
               {contact.fullName || 'Your Name'}
             </h1>
@@ -96,7 +96,7 @@ export default function SidebarLayout({ data, variantId }: Props) {
                     <div>
                       <span className="font-bold">{exp.title}</span>
                       {exp.company && (
-                        <span style={{ color: theme.accentColor }}>
+                        <span className={theme.accentClass}>
                           {theme.companyJoiner === 'pipe' ? ` | ${exp.company}` : ` @ ${exp.company}`}
                         </span>
                       )}

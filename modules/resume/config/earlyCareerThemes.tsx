@@ -12,6 +12,8 @@ export interface EarlyCareerTheme {
   skillsTitle: string
   bulletDotClass: string
   projectUrlClass: string
+  /** Per-variant education entry spacing (legacy academic uses mb-1, entry-level mb-1.5). */
+  educationUnitGap: string
   /** graduate: edu → projects → skills → experience; academic: edu → experience → skills → projects */
   layoutMode: 'graduate' | 'academic'
 }
@@ -30,6 +32,7 @@ export const EARLY_CAREER_THEMES: Record<EarlyCareerVariantId, EarlyCareerTheme>
     skillsTitle: 'Skills',
     bulletDotClass: 'bg-rose-500',
     projectUrlClass: 'text-[8px] text-rose-500',
+    educationUnitGap: 'mb-1.5',
     layoutMode: 'graduate',
   },
   academic: {
@@ -45,6 +48,7 @@ export const EARLY_CAREER_THEMES: Record<EarlyCareerVariantId, EarlyCareerTheme>
     skillsTitle: 'Technical Skills',
     bulletDotClass: 'bg-blue-700',
     projectUrlClass: 'text-[8px] text-blue-700 ml-1',
+    educationUnitGap: 'mb-1',
     layoutMode: 'academic',
   },
 }

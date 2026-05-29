@@ -78,7 +78,7 @@ export default function EarlyCareerLayout({ data, variantId }: Props) {
           Education
         </h2>
         {data.education.map(edu => (
-          <div key={edu.id} className="mb-1.5" data-resume-section-unit>
+          <div key={edu.id} className={theme.educationUnitGap} data-resume-section-unit>
             <div className="flex justify-between items-baseline">
               <div>
                 <span className="font-bold">{edu.degree}</span>

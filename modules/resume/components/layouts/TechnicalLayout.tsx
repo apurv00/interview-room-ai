@@ -62,7 +62,7 @@ export default function TechnicalLayout({ data, variantId }: Props) {
                 <span className="font-bold">
                   {exp.title} @ {exp.company}
                 </span>
-                <span className={`${theme.metaText} shrink-0 ml-2`}>
+                <span className={theme.metaText}>
                   {exp.startDate} - {exp.endDate || 'Present'}
                 </span>
               </div>

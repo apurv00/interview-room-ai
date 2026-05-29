@@ -54,10 +54,14 @@ export interface ClassicTheme {
     nameClass: string
     techStyle: 'parens' | 'suffix'
     descriptionClass: string
+    /** Override for the parenthesised tech list color (legacy Federal uses gray-600). */
+    techParensClass?: string
   }
   certifications: {
     unitGap: string
     nameClass: string
+    /** Override for the non-minimal date color (legacy Federal uses gray-600). */
+    dateClass?: string
   }
   custom: {
     contentClass: string
@@ -249,10 +253,12 @@ export const CLASSIC_THEMES: Record<ClassicVariantId, ClassicTheme> = {
       nameClass: 'font-bold',
       techStyle: 'parens',
       descriptionClass: 'text-gray-800',
+      techParensClass: 'text-[8px] text-gray-600',
     },
     certifications: {
       unitGap: 'mb-0.5',
       nameClass: 'font-semibold',
+      dateClass: 'text-gray-600',
     },
     custom: {
       contentClass: 'text-gray-800 whitespace-pre-wrap',

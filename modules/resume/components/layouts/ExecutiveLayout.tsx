@@ -58,8 +58,8 @@ export default function ExecutiveLayout({ data, variantId }: Props) {
     <TemplateRoot className="text-gray-900 leading-snug">
       <div className="text-center mb-3">
         <h1
-          className="font-bold tracking-widest uppercase"
-          style={{ fontSize: theme.nameSize, color: theme.nameColor }}
+          className={`font-bold ${theme.nameColorClass} tracking-widest uppercase`}
+          style={{ fontSize: theme.nameSize }}
         >
           {contact.fullName || 'Your Name'}
         </h1>

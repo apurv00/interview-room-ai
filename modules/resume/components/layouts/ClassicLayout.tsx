@@ -33,7 +33,7 @@ export default function ClassicLayout({ data, variantId }: Props) {
       )}
 
       {data.summary && (
-        <SectionBlock sectionId="summary" title={theme.summaryTitle} theme={theme}>
+        <SectionBlock sectionId="summary" title={theme.summaryTitle} theme={theme} hideDivider>
           <p className={theme.bodyText}>{data.summary}</p>
         </SectionBlock>
       )}

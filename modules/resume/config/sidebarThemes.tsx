@@ -8,7 +8,8 @@ export interface SidebarTheme {
   sidebarItemClass: string
   sidebarMutedClass: string
   sidebarFaintClass: string
-  accentColor: string
+  /** Tailwind text-color class for the name + company accent (kept as a class so it ships in the precompiled PDF CSS). */
+  accentClass: string
   mainSectionTitleClass: string
   summaryTitle: string
   companyJoiner: 'pipe' | 'at'
@@ -26,7 +27,7 @@ export const SIDEBAR_THEMES: Record<SidebarVariantId, SidebarTheme> = {
     sidebarItemClass: 'text-[8px] mb-0.5',
     sidebarMutedClass: 'text-white/80',
     sidebarFaintClass: 'text-white/60',
-    accentColor: '#2563eb',
+    accentClass: 'text-[#2563eb]',
     mainSectionTitleClass:
       'font-bold uppercase tracking-widest text-[#2563eb] border-b border-gray-200 pb-0.5 mb-1',
     summaryTitle: 'About Me',
@@ -43,7 +44,7 @@ export const SIDEBAR_THEMES: Record<SidebarVariantId, SidebarTheme> = {
     sidebarItemClass: 'text-[8px] mb-0.5',
     sidebarMutedClass: 'text-slate-300',
     sidebarFaintClass: 'text-slate-400',
-    accentColor: '#334155',
+    accentClass: 'text-slate-700',
     mainSectionTitleClass:
       'font-bold uppercase tracking-widest text-slate-700 border-b border-slate-200 pb-0.5 mb-1',
     summaryTitle: 'Profile',

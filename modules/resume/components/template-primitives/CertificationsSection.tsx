@@ -23,7 +23,7 @@ export default function CertificationsSection({ certifications, theme, sectionTi
             <> — {cert.issuer}</>
           )}
           {cert.date && (
-            <span className={isMinimal ? 'text-gray-400' : 'text-gray-500'}> ({cert.date})</span>
+            <span className={isMinimal ? 'text-gray-400' : (certTheme.dateClass ?? 'text-gray-500')}> ({cert.date})</span>
           )}
         </div>
       ))}

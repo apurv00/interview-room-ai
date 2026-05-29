@@ -18,7 +18,7 @@ export default function ProjectsSection({ projects, theme, sectionTitle }: Props
           <span className={projTheme.nameClass}>{proj.name}</span>
           {proj.technologies?.length ? (
             projTheme.techStyle === 'parens' ? (
-              <span className="text-[8px] text-gray-500"> ({proj.technologies.join(', ')})</span>
+              <span className={projTheme.techParensClass ?? 'text-[8px] text-gray-500'}> ({proj.technologies.join(', ')})</span>
             ) : (
               <span className="text-[8px] text-gray-400 ml-1">{proj.technologies.join(', ')}</span>
             )

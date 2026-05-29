@@ -19,13 +19,11 @@ export default function ExperienceSection({ experience, theme, sectionTitle }: P
             <div>
               <span className={expTheme.titleClass}>{exp.title}</span>
               {exp.company && (
-                <span>
-                  {expTheme.companyJoiner === 'at' ? (
-                    <span className="text-gray-500"> at {exp.company}</span>
-                  ) : (
-                    <span> — {exp.company}</span>
-                  )}
-                </span>
+                expTheme.companyJoiner === 'at' ? (
+                  <span className="text-gray-500"> at {exp.company}</span>
+                ) : (
+                  <span> — {exp.company}</span>
+                )
               )}
             </div>
             <span className={`${metaText} shrink-0 ml-2`}>
