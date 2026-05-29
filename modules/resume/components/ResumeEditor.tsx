@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import type { ResumeData } from '../validators/resume'
 import { useResume, DEFAULT_SECTION_ORDER } from '../hooks/useResume'
 import { RESUME_TEMPLATES } from '../config/templates'
+import { TEMPLATE_FAMILIES, TEMPLATE_VARIANTS } from '../config/templateFamilies'
 import ResumePreview from './ResumePreview'
 import ContactInfoEditor from './sections/ContactInfoEditor'
 import SummaryEditor from './sections/SummaryEditor'
@@ -377,23 +378,38 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
               </div>
             </div>
 
-            {/* Template selector */}
+            {/* Template selector — grouped by family */}
             <div>
               <label className="text-[10px] text-slate-400 uppercase tracking-wider">Template</label>
-              <div className="flex flex-wrap gap-1.5 mt-1">
-                {RESUME_TEMPLATES.map(t => (
-                  <button
-                    key={t.id}
-                    onClick={() => update('template', t.id)}
-                    className={`px-2.5 py-1 rounded-lg text-[10px] font-medium transition-colors ${
-                      resume.template === t.id
-                        ? 'bg-emerald-600 text-white'
-                        : 'bg-slate-100 text-slate-500 hover:text-slate-900'
-                    }`}
-                  >
-                    {t.name}
-                  </button>
-                ))}
+              <div className="space-y-2 mt-1">
+                {TEMPLATE_FAMILIES.map(family => {
+                  const familyTemplates = RESUME_TEMPLATES.filter(
+                    t => TEMPLATE_VARIANTS[t.id]?.familyId === family.id,
+                  )
+                  if (familyTemplates.length === 0) return null
+                  return (
+                    <div key={family.id}>
+                      <div className="text-[9px] text-slate-400 font-medium uppercase tracking-wider mb-1">
+                        {family.label}
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {familyTemplates.map(t => (
+                          <button
+                            key={t.id}
+                            onClick={() => update('template', t.id)}
+                            className={`px-2.5 py-1 rounded-lg text-[10px] font-medium transition-colors ${
+                              resume.template === t.id
+                                ? 'bg-emerald-600 text-white'
+                                : 'bg-slate-100 text-slate-500 hover:text-slate-900'
+                            }`}
+                          >
+                            {t.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             </div>
 

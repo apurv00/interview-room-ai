@@ -1,8 +1,10 @@
 import type { ComponentType } from 'react'
 import type { ResumeData } from '../../validators/resume'
 import ProfessionalTemplate from './ProfessionalTemplate'
+import ClassicNavyTemplate from './ClassicNavyTemplate'
 import TechnicalTemplate from './TechnicalTemplate'
 import CreativeTemplate from './CreativeTemplate'
+import SidebarSlateTemplate from './SidebarSlateTemplate'
 import ExecutiveTemplate from './ExecutiveTemplate'
 import CareerChangeTemplate from './CareerChangeTemplate'
 import EntryLevelTemplate from './EntryLevelTemplate'
@@ -17,8 +19,10 @@ export interface TemplateProps {
 
 export const TEMPLATE_REGISTRY: Record<string, ComponentType<TemplateProps>> = {
   professional: ProfessionalTemplate,
+  'classic-navy': ClassicNavyTemplate,
   technical: TechnicalTemplate,
   creative: CreativeTemplate,
+  'sidebar-slate': SidebarSlateTemplate,
   executive: ExecutiveTemplate,
   'career-change': CareerChangeTemplate,
   'entry-level': EntryLevelTemplate,

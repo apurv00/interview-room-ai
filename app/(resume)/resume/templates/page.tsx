@@ -1,15 +1,41 @@
 'use client'
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import Link from 'next/link'
 import { RESUME_TEMPLATES, TEMPLATE_COLOR_MAP, SAMPLE_RESUME_DATA } from '@resume/config/templates'
+import {
+  TEMPLATE_FAMILIES,
+  TEMPLATE_VARIANTS,
+  getTemplateFamilyConfig,
+} from '@resume/config/templateFamilies'
 import ResumePreview from '@resume/components/ResumePreview'
 import type { ResumeData } from '@resume/validators/resume'
 
+type FamilyFilter = 'all' | string
+
 export default function ResumeTemplatesPage() {
   const [selectedId, setSelectedId] = useState(RESUME_TEMPLATES[0].id)
+  const [familyFilter, setFamilyFilter] = useState<FamilyFilter>('all')
   const selected = RESUME_TEMPLATES.find(t => t.id === selectedId) || RESUME_TEMPLATES[0]
   const colors = TEMPLATE_COLOR_MAP[selected.color] || TEMPLATE_COLOR_MAP.blue
+  const selectedFamily = getTemplateFamilyConfig(selectedId)
+
+  // Only show family tabs that actually have at least one template mapped to them.
+  const visibleFamilies = useMemo(
+    () =>
+      TEMPLATE_FAMILIES.filter(family =>
+        RESUME_TEMPLATES.some(t => TEMPLATE_VARIANTS[t.id]?.familyId === family.id),
+      ),
+    [],
+  )
+
+  const filteredTemplates = useMemo(
+    () =>
+      familyFilter === 'all'
+        ? RESUME_TEMPLATES
+        : RESUME_TEMPLATES.filter(t => TEMPLATE_VARIANTS[t.id]?.familyId === familyFilter),
+    [familyFilter],
+  )
 
   const sampleData: ResumeData = {
     ...SAMPLE_RESUME_DATA,
@@ -25,12 +51,41 @@ export default function ResumeTemplatesPage() {
         </p>
       </div>
 
+      {/* Family filter tabs */}
+      <div className="flex flex-wrap gap-1.5">
+        <button
+          onClick={() => setFamilyFilter('all')}
+          className={`px-3 py-1 rounded-full text-[11px] font-medium transition-colors ${
+            familyFilter === 'all'
+              ? 'bg-slate-900 text-white'
+              : 'bg-slate-100 text-slate-500 hover:text-slate-900'
+          }`}
+        >
+          All
+        </button>
+        {visibleFamilies.map(family => (
+          <button
+            key={family.id}
+            onClick={() => setFamilyFilter(family.id)}
+            title={family.description}
+            className={`px-3 py-1 rounded-full text-[11px] font-medium transition-colors ${
+              familyFilter === family.id
+                ? 'bg-slate-900 text-white'
+                : 'bg-slate-100 text-slate-500 hover:text-slate-900'
+            }`}
+          >
+            {family.label}
+          </button>
+        ))}
+      </div>
+
       <div className="flex gap-6">
         {/* Template list - left side */}
         <div className="w-[340px] shrink-0 space-y-2 overflow-y-auto max-h-[calc(100vh-180px)] pr-1">
-          {RESUME_TEMPLATES.map(t => {
+          {filteredTemplates.map(t => {
             const tColors = TEMPLATE_COLOR_MAP[t.color] || TEMPLATE_COLOR_MAP.blue
             const isSelected = t.id === selectedId
+            const family = getTemplateFamilyConfig(t.id)
             return (
               <button
                 key={t.id}
@@ -49,6 +104,11 @@ export default function ResumeTemplatesPage() {
                     {t.industries[0]}
                   </span>
                 </div>
+                {family && (
+                  <span className="inline-block mb-1 text-[9px] font-medium text-slate-400 uppercase tracking-wider">
+                    {family.label} family
+                  </span>
+                )}
                 <p className="text-[11px] text-slate-500 leading-relaxed">{t.desc}</p>
                 <div className="flex flex-wrap gap-1 mt-2">
                   {t.sections.slice(0, 4).map(s => (
@@ -69,6 +129,11 @@ export default function ResumeTemplatesPage() {
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-3">
                 <h2 className="text-lg font-semibold text-slate-900">{selected.name}</h2>
+                {selectedFamily && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-500">
+                    {selectedFamily.label} family
+                  </span>
+                )}
                 <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${colors.bg} border ${colors.border} ${colors.text}`}>
                   {selected.industries.join(', ')}
                 </span>

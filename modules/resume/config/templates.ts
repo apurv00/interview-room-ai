@@ -17,6 +17,14 @@ export const RESUME_TEMPLATES: ResumeTemplate[] = [
     color: 'blue',
   },
   {
+    id: 'classic-navy',
+    name: 'Classic Navy',
+    desc: 'Professional layout with a deep navy accent — corporate and finance-friendly.',
+    sections: ['Summary', 'Experience', 'Education', 'Skills'],
+    industries: ['Finance', 'Consulting', 'Law'],
+    color: 'blue',
+  },
+  {
     id: 'technical',
     name: 'Technical',
     desc: 'Skills-forward layout ideal for engineering roles.',
@@ -31,6 +39,14 @@ export const RESUME_TEMPLATES: ResumeTemplate[] = [
     sections: ['Portfolio', 'Experience', 'Skills', 'Education'],
     industries: ['Design', 'Marketing', 'Media'],
     color: 'violet',
+  },
+  {
+    id: 'sidebar-slate',
+    name: 'Sidebar Slate',
+    desc: 'Two-column layout with a slate sidebar — consulting and product roles.',
+    sections: ['Profile', 'Experience', 'Skills', 'Education'],
+    industries: ['Consulting', 'Product', 'Operations'],
+    color: 'slate',
   },
   {
     id: 'executive',

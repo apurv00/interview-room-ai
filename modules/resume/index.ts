@@ -15,6 +15,16 @@ export type {
 // Config
 export { RESUME_TEMPLATES, TEMPLATE_COLOR_MAP } from './config/templates'
 export type { ResumeTemplate } from './config/templates'
+export {
+  TEMPLATE_FAMILIES,
+  TEMPLATE_VARIANTS,
+  getTemplateFamilyConfig,
+} from './config/templateFamilies'
+export type {
+  ResumeTemplateFamilyId,
+  TemplateFamilyConfig,
+  TemplateVariantConfig,
+} from './config/templateFamilies'
 
 // Wizard
 export {
