@@ -1685,3 +1685,10 @@
 - **Root-cause:** the migration heuristic conflated "saved as global default" with "never meaningfully reordered", which is false for a deliberate global-order arrangement on a family whose default differs from global.
 - **Tests-added: updated modules/resume/config/__tests__/sectionOrders.test.ts to assert an explicit global order is honored on a non-Classic family**
 - **Verified-by:** vitest run sectionOrders + legacyTemplateParity (still 10/10) + sectionOrderRender = 20 pass; tsc --noEmit clean; next lint clean
+
+### 2026-05-29 17:05:41 +0000 · `e70229d` · Claude
+- **Subject:** feat(resume): add Modern template family + family→variant picker
+- **Files:** 12 changed, 2 test file(s)
+- **Root-cause:** n/a (additive feature). New family slots into the existing architecture as config + one thin layout; no paginator, schema, or legacy-template changes.
+- **Tests-added: modules/resume/components/templates/__tests__/modernFamily.test.tsx (markers contract, distinct-look, sectionOrder, geometry-identical variants, snapshot baseline)**
+- **Verified-by:** vitest run modules/resume 157 pass (incl. legacy parity gate intact + 5 Modern tests); tsc --noEmit clean; next lint clean; npm run build succeeds; module-size 93/100; PDF CSS regenerated with Modern 
