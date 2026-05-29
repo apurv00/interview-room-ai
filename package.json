@@ -23,6 +23,8 @@
     "test:pipeline": "vitest run modules/interview/__tests__/deepgramRecognition.test.ts modules/interview/__tests__/conversationalResponses.test.ts modules/interview/__tests__/interviewPipeline.test.ts modules/interview/__tests__/ttsCache.test.ts",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
+    "pretest:pdf": "node scripts/build-resume-css.js",
+    "test:pdf": "RESUME_PDF_E2E=1 vitest run modules/resume/services/__tests__/pdfRender.e2e.test.ts",
     "eval:harness": "npx tsx scripts/runEvalHarness.ts",
     "eval:load-fixtures": "npx tsx scripts/loadBenchmarkFixtures.ts",
     "check:links": "npx tsx scripts/check-internal-links.ts",
