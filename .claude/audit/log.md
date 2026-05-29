@@ -1671,3 +1671,10 @@
 - **Root-cause:** the refactor deliberately trades many small reusable files (7 layouts + ~12 primitives + per-family theme configs + legacy shims) for the duplication that previously caused the pagination-marker bug c
 - **No-tests-needed-because: module-size is a CI tripwire config; correctness is verified by re-running the check, not by unit tests.**
 - **Verified-by:** node scripts/check-module-size.mjs passes (resume 88/100); full CI reproduced locally — npm run lint clean, tsc --noEmit clean, npm run test:run 3318/3318 pass, npm run build succeeds
+
+### 2026-05-29 15:58:27 +0000 · `48c4945` · Claude
+- **Subject:** fix(resume): scan extracted files for PDF CSS; keep template selection in-family
+- **Files:** 2 changed, 0 test file(s)
+- **Root-cause:** P1 — the precompiled PDF CSS is generated from a static content glob that was never widened when template markup moved out of templates/ into the new layout/primitive/theme files. P2 — family filt
+- **Tests-added: No-tests-needed-because: P1 verified by regenerating resume-pdf-css.json and asserting previously-absent layout/theme classes (border-emerald-600, 2563eb, 1e293b, 0.2em) are now present; **
+- **Verified-by:** node scripts/build-resume-css.js regenerates a 22.6KB bundle now containing the extracted classes; tsc --noEmit clean; next lint clean; node scripts/check-module-size.mjs passes
