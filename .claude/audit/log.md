@@ -1643,3 +1643,24 @@
 - **Root-cause:** (1) the PDF path never applied the preview's category truncation because it rendered raw data with no page-context provider and computed its plan from the untruncated DOM; (2) measureResumeSections fl
 - **Tests-added: modules/resume/services/__tests__/pdfTruncationParity.test.ts, modules/resume/lib/__tests__/measureColumns.test.ts**
 - **Verified-by:** ./node_modules/.bin/vitest run modules/resume (12 files, 113 tests incl. new parity + columns tests); tsc --noEmit clean; next lint introduces no new findings. Note: full puppeteer PDF round-trip not 
+
+### 2026-05-29 15:03:31 +0000 · `d00d8e8` · Claude
+- **Subject:** fix(resume): restore byte-identical legacy template parity + add parity gate
+- **Files:** 16 changed, 3 test file(s)
+- **Root-cause:** hand+Cursor extraction of 10 templates into shared primitives/themes silently changed class names, spacing, wrapper structure, and color application; the only existing tests asserted marker presence, 
+- **Tests-added: modules/resume/components/templates/__tests__/legacyTemplateParity.test.tsx (+ parityFixture.ts + baseline snapshot from pre-refactor origin/main)**
+- **Verified-by:** legacyTemplateParity 10/10 byte-identical to pre-refactor; vitest run modules/resume (17 files, 141 tests pass); tsc --noEmit clean; next lint no warnings/errors
+
+### 2026-05-29 15:05:59 +0000 · `7af4290` · Claude
+- **Subject:** chore(resume): remove dead normalize helper, add pagination contract doc
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** dead code — the helper was orphaned by the refactor and never wired in; removing it eliminates the data-loss footgun. Doc + test are additive guardrails.
+- **Tests-added: render-marker case in modules/resume/lib/__tests__/partitionStartupCustomSections.test.ts**
+- **Verified-by:** git grep confirms zero callers of the deleted helper; vitest run modules/resume (17 files, 142 tests pass)
+
+### 2026-05-29 15:22:46 +0000 · `86c5de3` · Claude
+- **Subject:** feat(resume): honor data.sectionOrder in single-column templates
+- **Files:** 10 changed, 2 test file(s)
+- **Root-cause:** layouts hardcoded section order in JSX and never read data.sectionOrder; the editor stored order against the global default while each family renders a different order, so even a wired-up order would 
+- **Tests-added: modules/resume/config/__tests__/sectionOrders.test.ts, modules/resume/components/templates/__tests__/sectionOrderRender.test.tsx**
+- **Verified-by:** legacyTemplateParity still 10/10 byte-identical; vitest run modules/resume (19 files, 152 tests pass); tsc --noEmit clean; next lint no warnings/errors
