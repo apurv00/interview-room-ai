@@ -18,6 +18,8 @@ import StartupTemplate from './StartupTemplate'
 import ExecutiveGoldTemplate from './ExecutiveGoldTemplate'
 import TechnicalSlateTemplate from './TechnicalSlateTemplate'
 import SidebarVioletTemplate from './SidebarVioletTemplate'
+import EarlyCareerTealTemplate from './EarlyCareerTealTemplate'
+import CareerChangeEmeraldTemplate from './CareerChangeEmeraldTemplate'
 
 export interface TemplateProps {
   data: ResumeData
@@ -37,7 +39,9 @@ export const TEMPLATE_REGISTRY: Record<string, ComponentType<TemplateProps>> = {
   executive: ExecutiveTemplate,
   'executive-gold': ExecutiveGoldTemplate,
   'career-change': CareerChangeTemplate,
+  'career-change-emerald': CareerChangeEmeraldTemplate,
   'entry-level': EntryLevelTemplate,
+  'early-career-teal': EarlyCareerTealTemplate,
   minimalist: MinimalistTemplate,
   academic: AcademicTemplate,
   federal: FederalTemplate,

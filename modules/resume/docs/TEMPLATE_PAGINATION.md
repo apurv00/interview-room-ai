@@ -13,7 +13,7 @@ this contract and content clips, duplicates across pages, or silently drops.
 
 ## DOM marker contract
 
-### Single-column families (Classic, Technical, Executive, Early Career, Career Change)
+### Single-column families (Classic, Modern, Technical, Executive, Early Career, Career Change)
 - Each logical section is a **leaf** `data-resume-section="<id>"` — never nest a
   `data-resume-section` inside another `data-resume-section`.
 - The section title carries `data-resume-section-header="<visible title>"` with the
@@ -67,14 +67,64 @@ this contract and content clips, duplicates across pages, or silently drops.
 2. **Markers** — a render test asserts the marker contract above for the family
    (see `lib/__tests__/*LayoutMarkers.test.tsx`).
 3. **Full suite** — `npm run test:run -- modules/resume`.
-4. **Manual PDF** — export a long resume (long skills after education; a long
-   single experience entry; a long summary) and confirm the **PDF page count and
-   section boundaries match the preview** — no clipping, no duplicated headers. For
-   a sidebar variant, confirm the columns advance together. (No automated headless
-   render exists yet; this step is manual.)
+4. **PDF render** — `npm run test:pdf` (opt-in, real Chromium) renders the exported
+   PDF HTML and asserts template styling is applied + page count + that content is
+   visible within a page viewport (not clipped). Runs in the `e2e-tests` workflow
+   (browser-capable job), not the browser-free main `ci`. For a brand-new family,
+   also eyeball a long resume on the Vercel preview (long skills after education; a
+   long single experience entry; a long summary) and, for a sidebar variant, that
+   the columns advance together.
 
 ## How the legacy parity baseline was made
 `legacyTemplateParity.test.tsx` renders each legacy ID via `renderToStaticMarkup`
 with the inlined `parityFixture`, normalizes Tailwind class-token order, and
 snapshots it. The committed snapshot was generated from `origin/main` *before* the
 family refactor, so it is the ground truth for "unchanged".
+
+## Current catalog (20 templates · 7 families)
+
+| Family | Layout | Variants |
+|---|---|---|
+| Classic | single-column | `professional`*, `classic-navy`, `minimalist`*, `federal`* |
+| Modern | single-column (accent band) | `modern-indigo`, `modern-emerald`, `modern-rose` |
+| Technical | single-column (skills-first) | `technical`*, `technical-slate`, `startup`* |
+| Sidebar | two-column (`data-resume-columns`) | `creative`*, `sidebar-slate`, `sidebar-violet` |
+| Executive | single-column | `executive`*, `executive-gold` |
+| Early Career | single-column | `entry-level`*, `academic`*, `early-career-teal` |
+| Career Change | single-column | `career-change`*, `career-change-emerald` |
+
+`*` = legacy ID locked by the parity gate. Every ID maps to a family in
+`config/templateFamilies.ts` (`TEMPLATE_VARIANTS`); the editor, `/resume/templates`,
+and the wizard export step all render grouped by that family — a guard test
+(`config/__tests__/wizardTemplateWindow.test.ts`) fails if any ID is unmapped.
+
+## Adding a color variant to an existing family
+
+Pure config when the family layout is fully theme-driven (Sidebar, Early Career,
+Career Change, Classic, Modern). Executive/Technical hardcoded one or two accent
+spots — those are now theme fields (`bulletColorClass`/`ruleBorderClass`,
+`bulletAccentClass`/`projectUrlClass`); keep the default value unchanged so the
+parity gate stays green.
+
+1. `config/<family>Themes.tsx` — extend the `…VariantId` union, add a theme
+   entry, ensure the getter looks it up by `variantId`. **Change only color
+   tokens** (Tailwind *classes*, never inline `style`, so they ship in the
+   precompiled PDF CSS). Keep geometry identical to siblings.
+2. `components/templates/<Name>Template.tsx` — a ~6-line shim →
+   `<FamilyLayout data={data} variantId="…" />`.
+3. `components/templates/index.ts` — register the id in `TEMPLATE_REGISTRY`.
+4. `config/templates.ts` — append picker metadata to `RESUME_TEMPLATES` (append,
+   don't insert), and add the badge color to `TEMPLATE_COLOR_MAP` if it's new.
+5. `config/templateFamilies.ts` — add the `TEMPLATE_VARIANTS` entry (familyId).
+6. `config/sectionOrders.ts` — single-column variants: add the id to
+   `TEMPLATE_BODY_ORDER` (→ the family's order). Sidebar/columnar variants are
+   omitted (their layout ignores `sectionOrder`).
+7. Add a case to `components/templates/__tests__/variantBatch.test.tsx`.
+8. The PDF CSS auto-includes the new classes (the Tailwind scan covers
+   `config/**` + `components/layouts/**` + `template-primitives/**`); run
+   `npm run test:pdf` to confirm styling renders.
+
+## Adding a new family
+New layout + theme config + family entry + a fresh parity snapshot + a markers
+test. The **Modern** family (`ModernLayout` + `modernThemes` produced by one
+factory so the variants are geometry-identical) is the reference implementation.

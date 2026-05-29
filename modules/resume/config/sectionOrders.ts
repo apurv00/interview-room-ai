@@ -82,8 +82,10 @@ export const TEMPLATE_BODY_ORDER: Record<string, BodySectionId[]> = {
   executive: EXECUTIVE_ORDER,
   'executive-gold': EXECUTIVE_ORDER,
   'career-change': CAREER_CHANGE_ORDER,
+  'career-change-emerald': CAREER_CHANGE_ORDER,
   'entry-level': EARLY_CAREER_GRADUATE_ORDER,
   academic: EARLY_CAREER_ACADEMIC_ORDER,
+  'early-career-teal': EARLY_CAREER_GRADUATE_ORDER,
 }
 
 /**
