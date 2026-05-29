@@ -37,6 +37,18 @@ export default function ResumeTemplatesPage() {
     [familyFilter],
   )
 
+  // Changing the family tab must keep the previewed/selected template inside the
+  // visible list — otherwise the preview + "Use This Template" CTA point at a
+  // hidden template from another family (Codex r3325416604).
+  const selectFamily = (filter: FamilyFilter) => {
+    setFamilyFilter(filter)
+    if (filter === 'all') return
+    const inFamily = RESUME_TEMPLATES.filter(t => TEMPLATE_VARIANTS[t.id]?.familyId === filter)
+    if (inFamily.length > 0 && !inFamily.some(t => t.id === selectedId)) {
+      setSelectedId(inFamily[0].id)
+    }
+  }
+
   const sampleData: ResumeData = {
     ...SAMPLE_RESUME_DATA,
     template: selectedId,
@@ -54,7 +66,7 @@ export default function ResumeTemplatesPage() {
       {/* Family filter tabs */}
       <div className="flex flex-wrap gap-1.5">
         <button
-          onClick={() => setFamilyFilter('all')}
+          onClick={() => selectFamily('all')}
           className={`px-3 py-1 rounded-full text-[11px] font-medium transition-colors ${
             familyFilter === 'all'
               ? 'bg-slate-900 text-white'
@@ -66,7 +78,7 @@ export default function ResumeTemplatesPage() {
         {visibleFamilies.map(family => (
           <button
             key={family.id}
-            onClick={() => setFamilyFilter(family.id)}
+            onClick={() => selectFamily(family.id)}
             title={family.description}
             className={`px-3 py-1 rounded-full text-[11px] font-medium transition-colors ${
               familyFilter === family.id
