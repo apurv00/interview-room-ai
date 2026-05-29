@@ -1720,3 +1720,10 @@
 - **Root-cause:** the wizard export step rendered only RESUME_TEMPLATES.slice(0, 6), hiding most templates (and the root of Codex r3326001350 on #412 — new templates pushed existing ones out of the window). Replaced 
 - **Tests-updated: modules/resume/config/__tests__/wizardTemplateWindow.test.ts — repurposed from the now-obsolete first-six-window guard to assert every template maps to a known family (so the grouped **
 - **Verified-by:** vitest run modules/resume 163 pass; tsc --noEmit clean; npm run lint clean; npm run build ok
+
+### 2026-05-29 20:45:12 +0000 · `152f0bc` · Claude
+- **Subject:** docs(resume): refresh template catalog + variant-add recipe
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** doc drift — the contract doc predated Modern, the PDF harness, and the grouped-picker model.
+- **No-tests-needed-because: documentation-only change (no executable code).**
+- **Verified-by:** catalog table cross-checked against TEMPLATE_VARIANTS/RESUME_TEMPLATES (20 ids, 7 families); recipe steps mirror this PR's actual changes
