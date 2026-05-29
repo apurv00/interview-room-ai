@@ -25,30 +25,6 @@ export const RESUME_TEMPLATES: ResumeTemplate[] = [
     color: 'blue',
   },
   {
-    id: 'modern-indigo',
-    name: 'Modern Indigo',
-    desc: 'Accent header band with bold section bars — contemporary and ATS-safe.',
-    sections: ['Summary', 'Experience', 'Education', 'Skills'],
-    industries: ['Tech', 'Startup', 'Product'],
-    color: 'indigo',
-  },
-  {
-    id: 'modern-emerald',
-    name: 'Modern Emerald',
-    desc: 'Modern accent-band layout in emerald — fresh and approachable.',
-    sections: ['Summary', 'Experience', 'Education', 'Skills'],
-    industries: ['Tech', 'Marketing', 'Operations'],
-    color: 'emerald',
-  },
-  {
-    id: 'modern-rose',
-    name: 'Modern Rose',
-    desc: 'Modern accent-band layout in rose — bold and distinctive.',
-    sections: ['Summary', 'Experience', 'Education', 'Skills'],
-    industries: ['Design', 'Marketing', 'Media'],
-    color: 'rose',
-  },
-  {
     id: 'technical',
     name: 'Technical',
     desc: 'Skills-forward layout ideal for engineering roles.',
@@ -79,6 +55,33 @@ export const RESUME_TEMPLATES: ResumeTemplate[] = [
     sections: ['Executive Summary', 'Key Achievements', 'Experience', 'Board & Advisory'],
     industries: ['C-Suite', 'VP+', 'Director'],
     color: 'amber',
+  },
+  // Modern family kept after the first 6 so the wizard export picker
+  // (RESUME_TEMPLATES.slice(0, 6)) still surfaces the original templates — see
+  // Codex r3326001350. The /resume/templates grid groups by family regardless.
+  {
+    id: 'modern-indigo',
+    name: 'Modern Indigo',
+    desc: 'Accent header band with bold section bars — contemporary and ATS-safe.',
+    sections: ['Summary', 'Experience', 'Education', 'Skills'],
+    industries: ['Tech', 'Startup', 'Product'],
+    color: 'indigo',
+  },
+  {
+    id: 'modern-emerald',
+    name: 'Modern Emerald',
+    desc: 'Modern accent-band layout in emerald — fresh and approachable.',
+    sections: ['Summary', 'Experience', 'Education', 'Skills'],
+    industries: ['Tech', 'Marketing', 'Operations'],
+    color: 'emerald',
+  },
+  {
+    id: 'modern-rose',
+    name: 'Modern Rose',
+    desc: 'Modern accent-band layout in rose — bold and distinctive.',
+    sections: ['Summary', 'Experience', 'Education', 'Skills'],
+    industries: ['Design', 'Marketing', 'Media'],
+    color: 'rose',
   },
   {
     id: 'career-change',
