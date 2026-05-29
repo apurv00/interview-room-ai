@@ -13,9 +13,14 @@ import type { ResumeData } from '@resume/validators/resume'
 
 type FamilyFilter = 'all' | string
 
+const FIRST_FAMILY: FamilyFilter =
+  TEMPLATE_VARIANTS[RESUME_TEMPLATES[0].id]?.familyId ?? 'all'
+
 export default function ResumeTemplatesPage() {
+  // Two-step browse: pick a family, then a variant within it. Default to the
+  // first template's family so the page opens already showing a variant grid.
+  const [familyFilter, setFamilyFilter] = useState<FamilyFilter>(FIRST_FAMILY)
   const [selectedId, setSelectedId] = useState(RESUME_TEMPLATES[0].id)
-  const [familyFilter, setFamilyFilter] = useState<FamilyFilter>('all')
   const selected = RESUME_TEMPLATES.find(t => t.id === selectedId) || RESUME_TEMPLATES[0]
   const colors = TEMPLATE_COLOR_MAP[selected.color] || TEMPLATE_COLOR_MAP.blue
   const selectedFamily = getTemplateFamilyConfig(selectedId)
@@ -36,6 +41,12 @@ export default function ResumeTemplatesPage() {
         : RESUME_TEMPLATES.filter(t => TEMPLATE_VARIANTS[t.id]?.familyId === familyFilter),
     [familyFilter],
   )
+
+  const activeFamily = familyFilter === 'all' ? null : getTemplateFamilyConfig(selectedId)
+  const activeFamilyConfig =
+    familyFilter === 'all'
+      ? null
+      : TEMPLATE_FAMILIES.find(f => f.id === familyFilter) ?? null
 
   // Changing the family tab must keep the previewed/selected template inside the
   // visible list — otherwise the preview + "Use This Template" CTA point at a
@@ -59,11 +70,11 @@ export default function ResumeTemplatesPage() {
       <div>
         <h1 className="text-2xl font-bold text-slate-900">Resume Templates</h1>
         <p className="text-sm text-slate-500 mt-1">
-          Choose a template that matches your career stage and industry. Click any template to preview it.
+          Pick a family, choose a look, then preview it. Your content replaces the sample when you build.
         </p>
       </div>
 
-      {/* Family filter tabs */}
+      {/* Step 1 — family selector */}
       <div className="flex flex-wrap gap-1.5">
         <button
           onClick={() => selectFamily('all')}
@@ -91,77 +102,80 @@ export default function ResumeTemplatesPage() {
         ))}
       </div>
 
+      {activeFamilyConfig && (
+        <p className="-mt-3 text-[12px] text-slate-500">{activeFamilyConfig.description}</p>
+      )}
+
       <div className="flex gap-6">
-        {/* Template list - left side */}
-        <div className="w-[340px] shrink-0 space-y-2 overflow-y-auto max-h-[calc(100vh-180px)] pr-1">
-          {filteredTemplates.map(t => {
-            const tColors = TEMPLATE_COLOR_MAP[t.color] || TEMPLATE_COLOR_MAP.blue
-            const isSelected = t.id === selectedId
-            const family = getTemplateFamilyConfig(t.id)
-            return (
-              <button
-                key={t.id}
-                onClick={() => setSelectedId(t.id)}
-                className={`w-full text-left p-4 rounded-xl border transition-all ${
-                  isSelected
-                    ? `bg-slate-50 border-emerald-500/40 ring-1 ring-emerald-500/20`
-                    : 'bg-white border-slate-200 hover:border-slate-400'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <h3 className={`text-sm font-semibold ${isSelected ? 'text-emerald-600' : 'text-slate-900'}`}>
-                    {t.name}
-                  </h3>
-                  <span className={`px-2 py-0.5 rounded-full text-[9px] font-semibold ${tColors.bg} border ${tColors.border} ${tColors.text}`}>
-                    {t.industries[0]}
-                  </span>
-                </div>
-                {family && (
-                  <span className="inline-block mb-1 text-[9px] font-medium text-slate-400 uppercase tracking-wider">
-                    {family.label} family
-                  </span>
-                )}
-                <p className="text-[11px] text-slate-500 leading-relaxed">{t.desc}</p>
-                <div className="flex flex-wrap gap-1 mt-2">
-                  {t.sections.slice(0, 4).map(s => (
-                    <span key={s} className="px-1.5 py-0.5 bg-slate-50 rounded text-[9px] text-slate-500">
-                      {s}
+        {/* Step 2 — variant grid for the selected family */}
+        <div className="flex-1 min-w-0">
+          <div className="grid grid-cols-2 gap-3">
+            {filteredTemplates.map(t => {
+              const tColors = TEMPLATE_COLOR_MAP[t.color] || TEMPLATE_COLOR_MAP.blue
+              const isSelected = t.id === selectedId
+              const family = getTemplateFamilyConfig(t.id)
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => setSelectedId(t.id)}
+                  className={`text-left p-4 rounded-xl border transition-all ${
+                    isSelected
+                      ? 'bg-slate-50 border-emerald-500/40 ring-1 ring-emerald-500/20'
+                      : 'bg-white border-slate-200 hover:border-slate-400'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1 gap-2">
+                    <h3 className={`text-sm font-semibold ${isSelected ? 'text-emerald-600' : 'text-slate-900'}`}>
+                      {t.name}
+                    </h3>
+                    <span className={`shrink-0 px-2 py-0.5 rounded-full text-[9px] font-semibold ${tColors.bg} border ${tColors.border} ${tColors.text}`}>
+                      {t.industries[0]}
                     </span>
-                  ))}
-                </div>
-              </button>
-            )
-          })}
+                  </div>
+                  {familyFilter === 'all' && family && (
+                    <span className="inline-block mb-1 text-[9px] font-medium text-slate-400 uppercase tracking-wider">
+                      {family.label} family
+                    </span>
+                  )}
+                  <p className="text-[11px] text-slate-500 leading-relaxed">{t.desc}</p>
+                  <div className="flex flex-wrap gap-1 mt-2">
+                    {t.sections.slice(0, 4).map(s => (
+                      <span key={s} className="px-1.5 py-0.5 bg-slate-50 rounded text-[9px] text-slate-500">
+                        {s}
+                      </span>
+                    ))}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
         </div>
 
         {/* Preview - right side */}
-        <div className="flex-1 min-w-0">
+        <div className="w-[420px] shrink-0">
           <div className="sticky top-4">
-            {/* Template info header */}
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-3">
-                <h2 className="text-lg font-semibold text-slate-900">{selected.name}</h2>
-                {selectedFamily && (
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-500">
-                    {selectedFamily.label} family
+            <div className="flex items-center justify-between mb-3 gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <h2 className="text-lg font-semibold text-slate-900 truncate">{selected.name}</h2>
+                {(activeFamily || selectedFamily) && (
+                  <span className="shrink-0 px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-500">
+                    {(activeFamily || selectedFamily)?.label} family
                   </span>
                 )}
-                <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${colors.bg} border ${colors.border} ${colors.text}`}>
-                  {selected.industries.join(', ')}
-                </span>
               </div>
               <Link
                 href={`/resume/builder?template=${selected.id}`}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm rounded-xl font-medium transition-colors"
+                className="shrink-0 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm rounded-xl font-medium transition-colors"
               >
                 Use This Template
               </Link>
             </div>
 
-            {/* Live preview */}
-            <div className="max-w-[520px] mx-auto">
-              <ResumePreview data={sampleData} templateId={selectedId} />
-            </div>
+            <span className={`inline-block mb-2 px-2 py-0.5 rounded-full text-[10px] font-semibold ${colors.bg} border ${colors.border} ${colors.text}`}>
+              {selected.industries.join(', ')}
+            </span>
+
+            <ResumePreview data={sampleData} templateId={selectedId} />
 
             <p className="text-center text-[10px] text-slate-400 mt-3">
               Preview uses sample data. Your content will replace this when you build your resume.

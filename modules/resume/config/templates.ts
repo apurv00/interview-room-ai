@@ -56,6 +56,33 @@ export const RESUME_TEMPLATES: ResumeTemplate[] = [
     industries: ['C-Suite', 'VP+', 'Director'],
     color: 'amber',
   },
+  // Modern family kept after the first 6 so the wizard export picker
+  // (RESUME_TEMPLATES.slice(0, 6)) still surfaces the original templates — see
+  // Codex r3326001350. The /resume/templates grid groups by family regardless.
+  {
+    id: 'modern-indigo',
+    name: 'Modern Indigo',
+    desc: 'Accent header band with bold section bars — contemporary and ATS-safe.',
+    sections: ['Summary', 'Experience', 'Education', 'Skills'],
+    industries: ['Tech', 'Startup', 'Product'],
+    color: 'indigo',
+  },
+  {
+    id: 'modern-emerald',
+    name: 'Modern Emerald',
+    desc: 'Modern accent-band layout in emerald — fresh and approachable.',
+    sections: ['Summary', 'Experience', 'Education', 'Skills'],
+    industries: ['Tech', 'Marketing', 'Operations'],
+    color: 'emerald',
+  },
+  {
+    id: 'modern-rose',
+    name: 'Modern Rose',
+    desc: 'Modern accent-band layout in rose — bold and distinctive.',
+    sections: ['Summary', 'Experience', 'Education', 'Skills'],
+    industries: ['Design', 'Marketing', 'Media'],
+    color: 'rose',
+  },
   {
     id: 'career-change',
     name: 'Career Change',
@@ -182,6 +209,7 @@ export const TEMPLATE_COLOR_MAP: Record<string, { bg: string; border: string; te
   blue: { bg: 'bg-blue-500/10', border: 'border-blue-500/20', text: 'text-blue-400' },
   emerald: { bg: 'bg-emerald-500/10', border: 'border-emerald-500/20', text: 'text-emerald-400' },
   violet: { bg: 'bg-violet-500/10', border: 'border-violet-500/20', text: 'text-violet-400' },
+  indigo: { bg: 'bg-indigo-500/10', border: 'border-indigo-500/20', text: 'text-indigo-400' },
   amber: { bg: 'bg-amber-500/10', border: 'border-amber-500/20', text: 'text-amber-400' },
   cyan: { bg: 'bg-cyan-500/10', border: 'border-cyan-500/20', text: 'text-cyan-400' },
   rose: { bg: 'bg-rose-500/10', border: 'border-rose-500/20', text: 'text-rose-400' },
