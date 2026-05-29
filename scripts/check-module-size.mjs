@@ -33,7 +33,14 @@ const BUDGETS = {
   'modules/interview': { maxLOC: 30_000, maxFiles: 140 },
   'modules/feedback':  { maxLOC: 10_000, maxFiles: 60 },
   'modules/learn':     { maxLOC: 25_000, maxFiles: 80 },
-  'modules/resume':    { maxLOC: 20_000, maxFiles: 70 },
+  // Bumped maxFiles 70 → 100 on 2026-05-29 (PR #411): the flat 10-template
+  // catalog was refactored into a family → layout → theme → primitive system
+  // (7 layouts + ~12 shared primitives + per-family theme configs + thin legacy
+  // shims). This deliberately trades many small files for reuse — LOC is still
+  // well under budget (~10.6k/20k). +12 headroom covers near-term config-only
+  // variants; a bump past ~100 should move themes to a subdir, not re-bump.
+  // See docs/adr/0008-resume-module-budget-bump-template-families.md.
+  'modules/resume':    { maxLOC: 20_000, maxFiles: 100 },
   'modules/b2b':       { maxLOC: 5_000,  maxFiles: 20 },
   'modules/cms':       { maxLOC: 5_000,  maxFiles: 20 },
   // Bumped maxFiles 130 → 132 on 2026-05-23 (PR #402): added

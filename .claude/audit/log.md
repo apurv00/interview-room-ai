@@ -1643,3 +1643,45 @@
 - **Root-cause:** (1) the PDF path never applied the preview's category truncation because it rendered raw data with no page-context provider and computed its plan from the untruncated DOM; (2) measureResumeSections fl
 - **Tests-added: modules/resume/services/__tests__/pdfTruncationParity.test.ts, modules/resume/lib/__tests__/measureColumns.test.ts**
 - **Verified-by:** ./node_modules/.bin/vitest run modules/resume (12 files, 113 tests incl. new parity + columns tests); tsc --noEmit clean; next lint introduces no new findings. Note: full puppeteer PDF round-trip not 
+
+### 2026-05-29 15:03:31 +0000 · `d00d8e8` · Claude
+- **Subject:** fix(resume): restore byte-identical legacy template parity + add parity gate
+- **Files:** 16 changed, 3 test file(s)
+- **Root-cause:** hand+Cursor extraction of 10 templates into shared primitives/themes silently changed class names, spacing, wrapper structure, and color application; the only existing tests asserted marker presence, 
+- **Tests-added: modules/resume/components/templates/__tests__/legacyTemplateParity.test.tsx (+ parityFixture.ts + baseline snapshot from pre-refactor origin/main)**
+- **Verified-by:** legacyTemplateParity 10/10 byte-identical to pre-refactor; vitest run modules/resume (17 files, 141 tests pass); tsc --noEmit clean; next lint no warnings/errors
+
+### 2026-05-29 15:05:59 +0000 · `7af4290` · Claude
+- **Subject:** chore(resume): remove dead normalize helper, add pagination contract doc
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** dead code — the helper was orphaned by the refactor and never wired in; removing it eliminates the data-loss footgun. Doc + test are additive guardrails.
+- **Tests-added: render-marker case in modules/resume/lib/__tests__/partitionStartupCustomSections.test.ts**
+- **Verified-by:** git grep confirms zero callers of the deleted helper; vitest run modules/resume (17 files, 142 tests pass)
+
+### 2026-05-29 15:22:46 +0000 · `86c5de3` · Claude
+- **Subject:** feat(resume): honor data.sectionOrder in single-column templates
+- **Files:** 10 changed, 2 test file(s)
+- **Root-cause:** layouts hardcoded section order in JSX and never read data.sectionOrder; the editor stored order against the global default while each family renders a different order, so even a wired-up order would 
+- **Tests-added: modules/resume/config/__tests__/sectionOrders.test.ts, modules/resume/components/templates/__tests__/sectionOrderRender.test.tsx**
+- **Verified-by:** legacyTemplateParity still 10/10 byte-identical; vitest run modules/resume (19 files, 152 tests pass); tsc --noEmit clean; next lint no warnings/errors
+
+### 2026-05-29 15:40:14 +0000 · `22711dc` · Claude
+- **Subject:** chore(ci): bump modules/resume file budget for the family template system
+- **Files:** 2 changed, 0 test file(s)
+- **Root-cause:** the refactor deliberately trades many small reusable files (7 layouts + ~12 primitives + per-family theme configs + legacy shims) for the duplication that previously caused the pagination-marker bug c
+- **No-tests-needed-because: module-size is a CI tripwire config; correctness is verified by re-running the check, not by unit tests.**
+- **Verified-by:** node scripts/check-module-size.mjs passes (resume 88/100); full CI reproduced locally — npm run lint clean, tsc --noEmit clean, npm run test:run 3318/3318 pass, npm run build succeeds
+
+### 2026-05-29 15:58:27 +0000 · `48c4945` · Claude
+- **Subject:** fix(resume): scan extracted files for PDF CSS; keep template selection in-family
+- **Files:** 2 changed, 0 test file(s)
+- **Root-cause:** P1 — the precompiled PDF CSS is generated from a static content glob that was never widened when template markup moved out of templates/ into the new layout/primitive/theme files. P2 — family filt
+- **Tests-added: No-tests-needed-because: P1 verified by regenerating resume-pdf-css.json and asserting previously-absent layout/theme classes (border-emerald-600, 2563eb, 1e293b, 0.2em) are now present; **
+- **Verified-by:** node scripts/build-resume-css.js regenerates a 22.6KB bundle now containing the extracted classes; tsc --noEmit clean; next lint clean; node scripts/check-module-size.mjs passes
+
+### 2026-05-29 16:30:30 +0000 · `fbf9d16` · Claude
+- **Subject:** fix(resume): honor explicit section orders that equal the global default
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** the migration heuristic conflated "saved as global default" with "never meaningfully reordered", which is false for a deliberate global-order arrangement on a family whose default differs from global.
+- **Tests-added: updated modules/resume/config/__tests__/sectionOrders.test.ts to assert an explicit global order is honored on a non-Classic family**
+- **Verified-by:** vitest run sectionOrders + legacyTemplateParity (still 10/10) + sectionOrderRender = 20 pass; tsc --noEmit clean; next lint clean

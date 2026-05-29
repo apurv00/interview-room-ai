@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo } from 'react'
 import { arrayMove } from '@dnd-kit/sortable'
 import type { ResumeData, ResumeContactInfo, ResumeExperience, ResumeEducation, ResumeSkillCategory, ResumeProject, ResumeCertification, ResumeCustomSection } from '../validators/resume'
+import { getTemplateSectionOrder } from '../config/sectionOrders'
 
 function reorderByIds<T extends { id: string }>(items: T[], activeId: string, overId: string): T[] {
   const oldIndex = items.findIndex(i => i.id === activeId)
@@ -178,7 +179,7 @@ export function useResume(initial?: Partial<ResumeData>) {
   // Section-level reordering
   const reorderSections = useCallback((activeId: string, overId: string) => {
     setResume(prev => {
-      const sectionOrder = prev.sectionOrder || DEFAULT_SECTION_ORDER
+      const sectionOrder = prev.sectionOrder || getTemplateSectionOrder(prev.template || 'professional')
       const oldIndex = sectionOrder.indexOf(activeId)
       const newIndex = sectionOrder.indexOf(overId)
       if (oldIndex === -1 || newIndex === -1) return prev
