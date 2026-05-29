@@ -81,32 +81,30 @@ export const TEMPLATE_BODY_ORDER: Record<string, BodySectionId[]> = {
   academic: EARLY_CAREER_ACADEMIC_ORDER,
 }
 
-function arraysEqual(a: readonly string[], b: readonly string[]): boolean {
-  return a.length === b.length && a.every((v, i) => v === b[i])
-}
-
 /**
  * Resolve the body order a layout should render in.
  *
- * - No persisted order, OR a persisted order equal to the GLOBAL default →
- *   the family default (this is the migration guard: every existing resume that
- *   never reordered, or was saved with the old global-default order, renders
- *   exactly as before).
- * - A genuinely-reordered order → honor it, reconciled against the family's
- *   section set (drop unknown ids, append any family section the user omitted).
+ * - No persisted order → the family default. This is the migration guarantee:
+ *   the old editor only persisted `sectionOrder` on an explicit drag, so every
+ *   untouched resume has no order and renders exactly as before.
+ * - A persisted order → honor it, reconciled against the family's section set
+ *   (drop unknown ids, append any family section the user omitted).
+ *
+ * We do NOT special-case an order that happens to equal the global default: a
+ * user on a non-Classic family (e.g. Technical) may deliberately arrange the
+ * sections into that order, and silently snapping back to the family default
+ * would make that valid arrangement impossible to render while the editor still
+ * shows it (Codex r3325509679).
  */
 export function resolveSectionOrder(
   userOrder: string[] | undefined,
   familyDefault: BodySectionId[],
 ): BodySectionId[] {
   if (!userOrder) return familyDefault
-  const userBody = userOrder.filter((id): id is BodySectionId =>
+
+  const ordered: BodySectionId[] = userOrder.filter((id): id is BodySectionId =>
     (familyDefault as string[]).includes(id),
   )
-  const userBodyRaw = userOrder.filter(id => id !== 'contactInfo')
-  if (arraysEqual(userBodyRaw, DEFAULT_BODY_ORDER)) return familyDefault
-
-  const ordered: BodySectionId[] = [...userBody]
   for (const id of familyDefault) {
     if (!ordered.includes(id)) ordered.push(id)
   }

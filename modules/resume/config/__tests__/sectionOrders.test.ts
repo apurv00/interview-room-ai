@@ -14,10 +14,11 @@ describe('resolveSectionOrder', () => {
     expect(resolveSectionOrder(undefined, TECHNICAL_ORDER)).toEqual(TECHNICAL_ORDER)
   })
 
-  it('returns the family default when the persisted order equals the GLOBAL default (migration guard)', () => {
-    // An existing resume saved with the old global default must NOT reflow to the
-    // global order — it renders in its family order, exactly as before.
-    expect(resolveSectionOrder(GLOBAL_DEFAULT, TECHNICAL_ORDER)).toEqual(TECHNICAL_ORDER)
+  it('honors an explicit global-default order on a non-Classic family (Codex r3325509679)', () => {
+    // A Technical user who deliberately arranges sections into the global order
+    // must get exactly that — not have it snapped back to the family default,
+    // which would make a valid arrangement impossible to render.
+    expect(resolveSectionOrder(GLOBAL_DEFAULT, TECHNICAL_ORDER)).toEqual(DEFAULT_BODY_ORDER)
   })
 
   it('honors a genuinely reordered order', () => {
