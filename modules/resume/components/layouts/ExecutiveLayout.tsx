@@ -91,7 +91,7 @@ export default function ExecutiveLayout({ data, variantId }: Props) {
                 <ul className="mt-0.5 space-y-0.5">
                   {exp.bullets.filter(b => b.trim()).map((bullet, i) => (
                     <li key={i} className="text-gray-700 flex items-start gap-1">
-                      <span className="shrink-0 mt-[2px] text-[#1e293b] font-bold text-[7px]">
+                      <span className={`shrink-0 mt-[2px] ${theme.bulletColorClass} font-bold text-[7px]`}>
                         &#9654;
                       </span>
                       <span>{bullet}</span>
@@ -211,7 +211,7 @@ export default function ExecutiveLayout({ data, variantId }: Props) {
         >
           {contact.fullName || 'Your Name'}
         </h1>
-        <hr className="my-1.5 border-t border-[#1e293b]" />
+        <hr className={`my-1.5 border-t ${theme.ruleBorderClass}`} />
         <ContactRow contact={contact} />
       </div>
       {order.map(id => (blocks[id] ? <Fragment key={id}>{blocks[id]}</Fragment> : null))}

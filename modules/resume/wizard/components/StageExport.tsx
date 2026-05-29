@@ -3,6 +3,7 @@
 import { motion } from 'framer-motion'
 import Button from '@shared/ui/Button'
 import { RESUME_TEMPLATES } from '@resume/config/templates'
+import { TEMPLATE_FAMILIES, TEMPLATE_VARIANTS } from '@resume/config/templateFamilies'
 import FontStyleControls from '@resume/components/FontStyleControls'
 
 interface Props {
@@ -67,27 +68,40 @@ export default function StageExport({
         </div>
       </div>
 
-      {/* Template Selector */}
-      <div className="space-y-3">
+      {/* Template Selector — all templates, grouped by family */}
+      <div className="space-y-4">
         <h3 className="text-sm font-semibold text-slate-500">Choose Template</h3>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-          {RESUME_TEMPLATES.slice(0, 6).map(template => (
-            <button
-              key={template.id}
-              onClick={() => onSelectTemplate(template.id)}
-              className={`p-3 rounded-xl border text-left transition-all ${
-                selectedTemplate === template.id
-                  ? 'border-blue-600/50 bg-blue-600/10 ring-1 ring-blue-600/20'
-                  : 'border-slate-200 bg-slate-50 hover:border-slate-200'
-              }`}
-            >
-              <div className="w-full h-12 rounded bg-card mb-2 flex items-center justify-center">
-                <span className="text-[8px] text-slate-400 uppercase tracking-wider">{template.id}</span>
+        {TEMPLATE_FAMILIES.map(family => {
+          const familyTemplates = RESUME_TEMPLATES.filter(
+            t => TEMPLATE_VARIANTS[t.id]?.familyId === family.id,
+          )
+          if (familyTemplates.length === 0) return null
+          return (
+            <div key={family.id} className="space-y-1.5">
+              <span className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">
+                {family.label}
+              </span>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {familyTemplates.map(template => (
+                  <button
+                    key={template.id}
+                    onClick={() => onSelectTemplate(template.id)}
+                    className={`p-3 rounded-xl border text-left transition-all ${
+                      selectedTemplate === template.id
+                        ? 'border-blue-600/50 bg-blue-600/10 ring-1 ring-blue-600/20'
+                        : 'border-slate-200 bg-slate-50 hover:border-slate-200'
+                    }`}
+                  >
+                    <div className="w-full h-12 rounded bg-card mb-2 flex items-center justify-center">
+                      <span className="text-[8px] text-slate-400 uppercase tracking-wider">{template.id}</span>
+                    </div>
+                    <p className="text-xs font-medium text-slate-900 truncate">{template.name}</p>
+                  </button>
+                ))}
               </div>
-              <p className="text-xs font-medium text-slate-900 truncate">{template.name}</p>
-            </button>
-          ))}
-        </div>
+            </div>
+          )
+        })}
       </div>
 
       {/* Font & Size */}

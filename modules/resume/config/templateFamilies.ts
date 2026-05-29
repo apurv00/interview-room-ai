@@ -155,6 +155,24 @@ export const TEMPLATE_VARIANTS: Record<string, TemplateVariantConfig> = {
     variantLabel: 'Startup',
     isLegacyTemplateId: true,
   },
+  'technical-slate': {
+    id: 'technical-slate',
+    familyId: 'technical',
+    variantLabel: 'Technical Slate',
+    isLegacyTemplateId: false,
+  },
+  'sidebar-violet': {
+    id: 'sidebar-violet',
+    familyId: 'sidebar',
+    variantLabel: 'Sidebar Violet',
+    isLegacyTemplateId: false,
+  },
+  'executive-gold': {
+    id: 'executive-gold',
+    familyId: 'executive',
+    variantLabel: 'Executive Gold',
+    isLegacyTemplateId: false,
+  },
 }
 
 export function getTemplateFamilyConfig(templateId: string): TemplateFamilyConfig | null {

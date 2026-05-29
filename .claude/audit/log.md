@@ -1699,3 +1699,24 @@
 - **Root-cause:** the wizard picker is positional (slice(0,6)) and a mid-array insertion displaced existing choices out of that window.
 - **Tests-added: modules/resume/config/__tests__/wizardTemplateWindow.test.ts**
 - **Verified-by:** vitest run modules/resume 158 pass (incl. legacy parity gate + Modern suite + new wizard-window guard); tsc --noEmit clean
+
+### 2026-05-29 19:01:58 +0000 · `fce0511` · Claude
+- **Subject:** test(resume): headless-browser PDF render harness
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** n/a — new test infrastructure closing the PDF-rendering verification gap.
+- **Tests-added: modules/resume/services/__tests__/pdfRender.e2e.test.ts**
+- **Verified-by:** npm run test:pdf → 3/3 pass against real Chromium (professional headers bold+uppercase; modern-indigo band rgb(79,70,229); long resume paginates >1 page with last entry retained); vitest run without
+
+### 2026-05-29 19:08:34 +0000 · `1e0a849` · Claude
+- **Subject:** test(resume): assert PDF content visibility by bounding rect, not DOM text
+- **Files:** 1 changed, 1 test file(s)
+- **Root-cause:** the long-resume assertion used root.innerText.includes(), but renderResumeHTML duplicates the full template into every .resume-page and clips it with the viewport's overflow:hidden — so clipped/off-
+- **Tests-updated: modules/resume/services/__tests__/pdfRender.e2e.test.ts (visibility-by-geometry)**
+- **Verified-by:** npm run test:pdf → 3/3 pass against real Chromium; the long-resume case now requires the last entry's rect to sit inside a viewport clip band (genuinely visible), not merely present in DOM
+
+### 2026-05-29 19:18:27 +0000 · `f6debc9` · Claude
+- **Subject:** feat(resume): wizard export picker shows all templates grouped by family
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** the wizard export step rendered only RESUME_TEMPLATES.slice(0, 6), hiding most templates (and the root of Codex r3326001350 on #412 — new templates pushed existing ones out of the window). Replaced 
+- **Tests-updated: modules/resume/config/__tests__/wizardTemplateWindow.test.ts — repurposed from the now-obsolete first-six-window guard to assert every template maps to a known family (so the grouped **
+- **Verified-by:** vitest run modules/resume 163 pass; tsc --noEmit clean; npm run lint clean; npm run build ok

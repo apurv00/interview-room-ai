@@ -1,4 +1,4 @@
-export type SidebarVariantId = 'creative' | 'sidebar-slate'
+export type SidebarVariantId = 'creative' | 'sidebar-slate' | 'sidebar-violet'
 
 export interface SidebarTheme {
   sidebarWidth: string
@@ -51,6 +51,23 @@ export const SIDEBAR_THEMES: Record<SidebarVariantId, SidebarTheme> = {
     companyJoiner: 'pipe',
     bulletDotClass: 'bg-slate-600',
     projectUrlClass: 'text-[8px] text-slate-600 ml-1',
+  },
+  'sidebar-violet': {
+    sidebarWidth: 'w-[22%]',
+    mainWidth: 'w-[78%]',
+    sidebarBg: 'bg-violet-700 text-white',
+    sidebarHeaderClass:
+      'font-bold uppercase tracking-widest border-b border-white/20 pb-0.5 mb-1',
+    sidebarItemClass: 'text-[8px] mb-0.5',
+    sidebarMutedClass: 'text-violet-100',
+    sidebarFaintClass: 'text-violet-200',
+    accentClass: 'text-violet-700',
+    mainSectionTitleClass:
+      'font-bold uppercase tracking-widest text-violet-700 border-b border-violet-200 pb-0.5 mb-1',
+    summaryTitle: 'Profile',
+    companyJoiner: 'pipe',
+    bulletDotClass: 'bg-violet-600',
+    projectUrlClass: 'text-[8px] text-violet-600 ml-1',
   },
 }
 
