@@ -1727,3 +1727,10 @@
 - **Root-cause:** doc drift — the contract doc predated Modern, the PDF harness, and the grouped-picker model.
 - **No-tests-needed-because: documentation-only change (no executable code).**
 - **Verified-by:** catalog table cross-checked against TEMPLATE_VARIANTS/RESUME_TEMPLATES (20 ids, 7 families); recipe steps mirror this PR's actual changes
+
+### 2026-05-30 05:32:40 +0000 · `c5f3832` · Claude
+- **Subject:** fix(resume): polish — wizard heading/counter, tailor progress, dashboard header
+- **Files:** 5 changed, 1 test file(s)
+- **Root-cause:** StageContact used a stray text-white token; WizardProgressBar
+- **Tests-added: modules/resume/wizard/components/__tests__/WizardProgressBar.test.tsx (asserts 1-indexed "Stage 1 of N" counter + node label)**
+- **Verified-by:** vitest run modules/resume/wizard (31 pass); tsc --noEmit clean; next lint clean on all four files
