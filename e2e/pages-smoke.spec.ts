@@ -71,6 +71,22 @@ test.describe('Content regression checks', () => {
     expect(body).toContain('Enterprise')
   })
 
+  test('resume templates page shows the full catalog (every family) on load', async ({ page }) => {
+    // Regression: the page used to default its family filter to the first
+    // template's family (Classic), hiding 16 of 20 templates until the user
+    // discovered the family tabs. It now defaults to "All". Assert template
+    // names from multiple distinct families are visible without any clicks.
+    await page.goto('/resume/templates')
+    await page.waitForLoadState('domcontentloaded')
+    const body = (await page.locator('body').textContent()) ?? ''
+    expect(body).toContain('Professional') // Classic family
+    expect(body).toContain('Technical')    // Technical family
+    expect(body).toContain('Creative')     // Sidebar family
+    expect(body).toContain('Executive')    // Executive family
+    expect(body).toContain('Startup')      // Technical family (columnar)
+    expect(body).toContain('Federal')      // Classic family
+  })
+
   test('signin page shows both OAuth provider buttons', async ({ page }) => {
     await page.goto('/signin')
     await expect(page.getByRole('button', { name: /Continue with Google/i })).toBeVisible()
