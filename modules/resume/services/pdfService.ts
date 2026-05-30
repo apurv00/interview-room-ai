@@ -605,9 +605,17 @@ async function renderPdfFromHtml(
       ]
     }
     executablePath = await chromium.executablePath()
-  } catch {
-    executablePath =
-      process.env.CHROMIUM_PATH || '/usr/bin/chromium-browser'
+  } catch (err) {
+    // Only fall back to a system Chromium when one is EXPLICITLY configured
+    // (local dev via CHROMIUM_PATH). On serverless, @sparticuz/chromium failing
+    // means its binary wasn't bundled — re-throw so the route logs the real
+    // stack instead of pointing puppeteer at a path that doesn't exist, which
+    // produced opaque "Browser was not found" 500s on every export.
+    if (process.env.CHROMIUM_PATH) {
+      executablePath = process.env.CHROMIUM_PATH
+    } else {
+      throw err
+    }
   }
 
   const browser = await puppeteer.launch({

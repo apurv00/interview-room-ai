@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import type { ResumeData } from '../validators/resume'
 import { useResume } from '../hooks/useResume'
-import { getTemplateSectionOrder } from '../config/sectionOrders'
+import { getTemplateSectionOrder, templateHonorsSectionOrder } from '../config/sectionOrders'
 import { RESUME_TEMPLATES } from '../config/templates'
 import { TEMPLATE_FAMILIES, TEMPLATE_VARIANTS } from '../config/templateFamilies'
 import ResumePreview from './ResumePreview'
@@ -195,8 +195,14 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
     const printWindow = window.open('', '_blank')
     if (!printWindow) { setError('Pop-up blocked. Please allow pop-ups and try again.'); return }
 
-    // Clone the preview content and render in a print-friendly window
-    const content = previewEl.innerHTML
+    // Clone the preview content and render in a print-friendly window.
+    // #resume-preview-container holds BOTH the visible paginated pages AND an
+    // aria-hidden off-screen measurer (the full untruncated template used to
+    // compute page breaks). Printing innerHTML directly duplicated the whole
+    // resume; strip the measurer (and screen-only chrome) before printing.
+    const clone = previewEl.cloneNode(true) as HTMLElement
+    clone.querySelectorAll('[aria-hidden="true"]').forEach(el => el.remove())
+    const content = clone.innerHTML
     printWindow.document.write(`<!DOCTYPE html>
 <html>
 <head>
@@ -273,8 +279,84 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
     setDownloading(false)
   }
 
+  const honorsSectionOrder = templateHonorsSectionOrder(resume.template || 'professional')
+  const sectionIds = resume.sectionOrder || getTemplateSectionOrder(resume.template || 'professional')
+
+  function renderSectionEditor(sectionId: string) {
+    return (
+      <>
+        {sectionId === 'contactInfo' && (
+          <ContactInfoEditor
+            data={resume.contactInfo || { fullName: '', email: '' }}
+            onChange={setContactInfo}
+          />
+        )}
+        {sectionId === 'summary' && (
+          <SummaryEditor
+            value={resume.summary || ''}
+            onChange={v => update('summary', v)}
+            onEnhance={handleEnhanceSummary}
+            enhancing={enhancingSection === 'summary'}
+          />
+        )}
+        {sectionId === 'experience' && (
+          <ExperienceEditor
+            items={resume.experience || []}
+            onAdd={addExperience}
+            onUpdate={updateExperience}
+            onRemove={removeExperience}
+            onEnhanceBullets={handleEnhanceBullets}
+            enhancingId={enhancingSection}
+            onReorder={reorderExperience}
+            onReorderBullets={reorderBullets}
+          />
+        )}
+        {sectionId === 'education' && (
+          <EducationEditor
+            items={resume.education || []}
+            onAdd={addEducation}
+            onUpdate={updateEducation}
+            onRemove={removeEducation}
+            onReorder={reorderEducation}
+          />
+        )}
+        {sectionId === 'skills' && (
+          <SkillsEditor
+            items={resume.skills || []}
+            onChange={setSkills}
+          />
+        )}
+        {sectionId === 'projects' && (
+          <ProjectsEditor
+            items={resume.projects || []}
+            onAdd={addProject}
+            onUpdate={updateProject}
+            onRemove={removeProject}
+            onReorder={reorderProjects}
+          />
+        )}
+        {sectionId === 'certifications' && (
+          <CertificationsEditor
+            items={resume.certifications || []}
+            onChange={setCertifications}
+          />
+        )}
+        {sectionId === 'customSections' && (
+          <CustomSectionEditor
+            items={resume.customSections || []}
+            onAdd={addCustomSection}
+            onUpdate={updateCustomSection}
+            onRemove={removeCustomSection}
+            onReorder={reorderCustomSections}
+          />
+        )}
+      </>
+    )
+  }
+
   return (
     <div>
+      <h1 className="sr-only">Resume Builder</h1>
       {isAnonymous && (
         <div className="mb-4">
           <AnonymousDraftBanner />
@@ -292,9 +374,9 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
         >Preview</button>
       </div>
 
-      <div className="flex gap-6">
-        {/* Editor Panel - 50% */}
-        <div className={`w-1/2 shrink-0 space-y-5 pr-2 ${mobileTab === 'preview' ? 'hidden md:block' : ''}`}>
+      <div className="flex flex-col md:flex-row gap-6">
+        {/* Editor Panel - full width on mobile, 50% on desktop */}
+        <div className={`w-full md:w-1/2 md:shrink-0 space-y-5 md:pr-2 ${mobileTab === 'preview' ? 'hidden md:block' : ''}`}>
           {/* Top bar: name, actions */}
           <div className="flex items-center justify-between">
             <input
@@ -435,98 +517,48 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
             )}
           </div>
 
-          {/* Section editors — drag to reorder */}
-          <SortableList
-            items={resume.sectionOrder || getTemplateSectionOrder(resume.template || 'professional')}
-            onReorder={reorderSections}
-          >
-            <div className="space-y-5">
-              {(resume.sectionOrder || getTemplateSectionOrder(resume.template || 'professional')).map(sectionId => (
-                <SortableItem key={sectionId} id={sectionId}>
-                  {({ listeners, attributes }) => (
-                    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
-                      <div className="flex items-start gap-2">
-                        <div className="pt-1">
-                          <DragHandle listeners={listeners} attributes={attributes} />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          {sectionId === 'contactInfo' && (
-                            <ContactInfoEditor
-                              data={resume.contactInfo || { fullName: '', email: '' }}
-                              onChange={setContactInfo}
-                            />
-                          )}
-                          {sectionId === 'summary' && (
-                            <SummaryEditor
-                              value={resume.summary || ''}
-                              onChange={v => update('summary', v)}
-                              onEnhance={handleEnhanceSummary}
-                              enhancing={enhancingSection === 'summary'}
-                            />
-                          )}
-                          {sectionId === 'experience' && (
-                            <ExperienceEditor
-                              items={resume.experience || []}
-                              onAdd={addExperience}
-                              onUpdate={updateExperience}
-                              onRemove={removeExperience}
-                              onEnhanceBullets={handleEnhanceBullets}
-                              enhancingId={enhancingSection}
-                              onReorder={reorderExperience}
-                              onReorderBullets={reorderBullets}
-                            />
-                          )}
-                          {sectionId === 'education' && (
-                            <EducationEditor
-                              items={resume.education || []}
-                              onAdd={addEducation}
-                              onUpdate={updateEducation}
-                              onRemove={removeEducation}
-                              onReorder={reorderEducation}
-                            />
-                          )}
-                          {sectionId === 'skills' && (
-                            <SkillsEditor
-                              items={resume.skills || []}
-                              onChange={setSkills}
-                            />
-                          )}
-                          {sectionId === 'projects' && (
-                            <ProjectsEditor
-                              items={resume.projects || []}
-                              onAdd={addProject}
-                              onUpdate={updateProject}
-                              onRemove={removeProject}
-                              onReorder={reorderProjects}
-                            />
-                          )}
-                          {sectionId === 'certifications' && (
-                            <CertificationsEditor
-                              items={resume.certifications || []}
-                              onChange={setCertifications}
-                            />
-                          )}
-                          {sectionId === 'customSections' && (
-                            <CustomSectionEditor
-                              items={resume.customSections || []}
-                              onAdd={addCustomSection}
-                              onUpdate={updateCustomSection}
-                              onRemove={removeCustomSection}
-                              onReorder={reorderCustomSections}
-                            />
-                          )}
+          {/* Section editors — drag to reorder (single-column templates only) */}
+          {honorsSectionOrder ? (
+            <SortableList items={sectionIds} onReorder={reorderSections}>
+              <div className="space-y-5">
+                {sectionIds.map(sectionId => (
+                  <SortableItem key={sectionId} id={sectionId}>
+                    {({ listeners, attributes }) => (
+                      <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                        <div className="flex items-start gap-2">
+                          <div className="pt-1">
+                            <DragHandle listeners={listeners} attributes={attributes} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            {renderSectionEditor(sectionId)}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  )}
-                </SortableItem>
+                    )}
+                  </SortableItem>
+                ))}
+              </div>
+            </SortableList>
+          ) : (
+            <div className="space-y-5">
+              {/* Columnar templates (Sidebar/Creative, Startup) render a fixed
+                  two-column layout, so section order can't be changed — hide the
+                  drag affordance rather than show a no-op handle. */}
+              <p className="text-[11px] text-slate-400">
+                This template uses a fixed layout — section order can&apos;t be changed.
+                Switch to a single-column template to reorder sections.
+              </p>
+              {sectionIds.map(sectionId => (
+                <div key={sectionId} className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                  {renderSectionEditor(sectionId)}
+                </div>
               ))}
             </div>
-          </SortableList>
+          )}
         </div>
 
-        {/* Preview Panel - 50% */}
-        <div className={`w-1/2 shrink-0 sticky top-4 self-start ${mobileTab === 'edit' ? 'hidden md:block' : ''}`}>
+        {/* Preview Panel - full width on mobile, 50% on desktop */}
+        <div className={`w-full md:w-1/2 md:shrink-0 md:sticky md:top-4 self-start ${mobileTab === 'edit' ? 'hidden md:block' : ''}`}>
           <div className="text-[10px] text-slate-400 uppercase tracking-wider mb-2 font-semibold">Live Preview</div>
           <ResumePreview data={resume} templateId={resume.template || 'professional'} />
         </div>

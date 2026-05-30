@@ -1734,3 +1734,16 @@
 - **Root-cause:** StageContact used a stray text-white token; WizardProgressBar
 - **Tests-added: modules/resume/wizard/components/__tests__/WizardProgressBar.test.tsx (asserts 1-indexed "Stage 1 of N" counter + node label)**
 - **Verified-by:** vitest run modules/resume/wizard (31 pass); tsc --noEmit clean; next lint clean on all four files
+### 2026-05-30 06:55:27 +0000 · `d5bfb1c` · Claude
+- **Subject:** fix(resume): also trace Chromium into the wizard PDF export bundle
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the trace-include allowlist enumerated only one of the two
+- **No-tests-needed-because: serverless file-tracing is build/bundling config only verifiable on a Vercel deploy (no headless-Vercel in CI); it mirrors the already-reviewed /api/resume/pdf entry.**
+- **Verified-by:** npm run build exit 0, "Compiled successfully", build output lists both functions: ƒ /api/resume/pdf and ƒ /api/resume-wizard/export; next.config require() returns both keys under outputFileTracingIn
+
+### 2026-05-30 06:55:27 +0000 · `d5bfb1c` · Claude
+- **Subject:** fix(resume): also trace Chromium into the wizard PDF export bundle
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the trace-include allowlist enumerated only one of the two
+- **No-tests-needed-because: serverless file-tracing is build/bundling config only verifiable on a Vercel deploy (no headless-Vercel in CI); it mirrors the already-reviewed /api/resume/pdf entry.**
+- **Verified-by:** npm run build exit 0, "Compiled successfully", build output lists both functions: ƒ /api/resume/pdf and ƒ /api/resume-wizard/export; next.config require() returns both keys under outputFileTracingIn

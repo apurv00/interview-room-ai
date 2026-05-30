@@ -13,13 +13,12 @@ import type { ResumeData } from '@resume/validators/resume'
 
 type FamilyFilter = 'all' | string
 
-const FIRST_FAMILY: FamilyFilter =
-  TEMPLATE_VARIANTS[RESUME_TEMPLATES[0].id]?.familyId ?? 'all'
-
 export default function ResumeTemplatesPage() {
-  // Two-step browse: pick a family, then a variant within it. Default to the
-  // first template's family so the page opens already showing a variant grid.
-  const [familyFilter, setFamilyFilter] = useState<FamilyFilter>(FIRST_FAMILY)
+  // Two-step browse: pick a family, then a variant within it. Default to "All"
+  // so the full catalog (every family + variant) is discoverable on first load
+  // — opening on a single family hid 16 of 20 templates. Each card carries a
+  // family-label badge in the "all" view, so grouping is still legible.
+  const [familyFilter, setFamilyFilter] = useState<FamilyFilter>('all')
   const [selectedId, setSelectedId] = useState(RESUME_TEMPLATES[0].id)
   const selected = RESUME_TEMPLATES.find(t => t.id === selectedId) || RESUME_TEMPLATES[0]
   const colors = TEMPLATE_COLOR_MAP[selected.color] || TEMPLATE_COLOR_MAP.blue
@@ -106,10 +105,10 @@ export default function ResumeTemplatesPage() {
         <p className="-mt-3 text-[12px] text-slate-500">{activeFamilyConfig.description}</p>
       )}
 
-      <div className="flex gap-6">
+      <div className="flex flex-col lg:flex-row gap-6">
         {/* Step 2 — variant grid for the selected family */}
         <div className="flex-1 min-w-0">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {filteredTemplates.map(t => {
               const tColors = TEMPLATE_COLOR_MAP[t.color] || TEMPLATE_COLOR_MAP.blue
               const isSelected = t.id === selectedId
@@ -151,9 +150,9 @@ export default function ResumeTemplatesPage() {
           </div>
         </div>
 
-        {/* Preview - right side */}
-        <div className="w-[420px] shrink-0">
-          <div className="sticky top-4">
+        {/* Preview - right side on desktop, stacked below the grid on mobile */}
+        <div className="w-full lg:w-[420px] lg:shrink-0">
+          <div className="lg:sticky lg:top-4">
             <div className="flex items-center justify-between mb-3 gap-2">
               <div className="flex items-center gap-2 min-w-0">
                 <h2 className="text-lg font-semibold text-slate-900 truncate">{selected.name}</h2>

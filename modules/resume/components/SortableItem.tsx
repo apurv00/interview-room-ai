@@ -17,11 +17,12 @@ export function DragHandle({ listeners, attributes }: { listeners?: any; attribu
   return (
     <button
       type="button"
+      aria-label="Drag to reorder section"
       className="cursor-grab active:cursor-grabbing text-slate-400 hover:text-slate-500 transition-colors touch-none"
       {...attributes}
       {...listeners}
     >
-      <GripVertical className="w-4 h-4" />
+      <GripVertical className="w-4 h-4" aria-hidden="true" />
     </button>
   )
 }
