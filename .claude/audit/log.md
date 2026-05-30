@@ -1728,6 +1728,12 @@
 - **No-tests-needed-because: documentation-only change (no executable code).**
 - **Verified-by:** catalog table cross-checked against TEMPLATE_VARIANTS/RESUME_TEMPLATES (20 ids, 7 families); recipe steps mirror this PR's actual changes
 
+### 2026-05-30 05:32:40 +0000 · `c5f3832` · Claude
+- **Subject:** fix(resume): polish — wizard heading/counter, tailor progress, dashboard header
+- **Files:** 5 changed, 1 test file(s)
+- **Root-cause:** StageContact used a stray text-white token; WizardProgressBar
+- **Tests-added: modules/resume/wizard/components/__tests__/WizardProgressBar.test.tsx (asserts 1-indexed "Stage 1 of N" counter + node label)**
+- **Verified-by:** vitest run modules/resume/wizard (31 pass); tsc --noEmit clean; next lint clean on all four files
 ### 2026-05-30 06:55:27 +0000 · `d5bfb1c` · Claude
 - **Subject:** fix(resume): also trace Chromium into the wizard PDF export bundle
 - **Files:** 1 changed, 0 test file(s)
@@ -1741,3 +1747,10 @@
 - **Root-cause:** the trace-include allowlist enumerated only one of the two
 - **No-tests-needed-because: serverless file-tracing is build/bundling config only verifiable on a Vercel deploy (no headless-Vercel in CI); it mirrors the already-reviewed /api/resume/pdf entry.**
 - **Verified-by:** npm run build exit 0, "Compiled successfully", build output lists both functions: ƒ /api/resume/pdf and ƒ /api/resume-wizard/export; next.config require() returns both keys under outputFileTracingIn
+
+### 2026-05-30 07:38:47 +0000 · `7c03ca6` · Claude
+- **Subject:** Merge remote-tracking branch 'origin/main' into fix/resume-polish
+- **Files:** 9 changed, 2 test file(s)
+- **Root-cause:** main advanced past this branch's base while it was open (three
+- **No-tests-needed-because: a no-conflict integration merge introduces no new code of its own; both sides were independently verified before merging.**
+- **Verified-by:** post-merge npx tsc --noEmit clean; npx vitest run modules/resume = 171 passed / 3 skipped; npm run build exit 0 ("Compiled successfully").

@@ -130,8 +130,8 @@ export default function ResumeDashboardPage() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold text-slate-900">My Resumes</h1>
           <p className="text-sm text-slate-500 mt-1">
             Create and manage your resumes
@@ -143,13 +143,13 @@ export default function ResumeDashboardPage() {
           </p>
         </div>
         {atLimit ? (
-          <span className="px-4 py-2 bg-slate-50 text-slate-500 text-sm rounded-xl font-medium cursor-not-allowed">
+          <span className="shrink-0 px-4 py-2 bg-slate-50 text-slate-500 text-sm rounded-xl font-medium cursor-not-allowed">
             Limit Reached
           </span>
         ) : (
           <Link
             href="/resume/builder"
-            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm rounded-xl font-medium transition-colors"
+            className="shrink-0 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm rounded-xl font-medium transition-colors"
           >
             New Resume
           </Link>
@@ -213,8 +213,9 @@ export default function ResumeDashboardPage() {
                   disabled={deleting === r.id}
                   className="text-slate-400 hover:text-red-400 transition-colors disabled:opacity-50"
                   title="Delete resume"
+                  aria-label={`Delete ${r.name}`}
                 >
-                  <Trash2 className="w-4 h-4" strokeWidth={2} />
+                  <Trash2 className="w-4 h-4" strokeWidth={2} aria-hidden="true" />
                 </button>
               </div>
             </div>
