@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   resolveSectionOrder,
   getTemplateSectionOrder,
+  templateHonorsSectionOrder,
   CLASSIC_ORDER,
   TECHNICAL_ORDER,
   DEFAULT_BODY_ORDER,
@@ -52,5 +53,29 @@ describe('getTemplateSectionOrder', () => {
   it('falls back to the global default for columnar templates (sidebar/startup)', () => {
     expect(getTemplateSectionOrder('creative')).toEqual(GLOBAL_DEFAULT)
     expect(getTemplateSectionOrder('startup')).toEqual(GLOBAL_DEFAULT)
+  })
+})
+
+describe('templateHonorsSectionOrder', () => {
+  it('returns true for single-column families (drag-to-reorder works)', () => {
+    for (const id of [
+      'professional', 'classic-navy', 'minimalist', 'federal',
+      'modern-indigo', 'modern-emerald', 'modern-rose',
+      'technical', 'technical-slate', 'executive', 'executive-gold',
+      'career-change', 'career-change-emerald', 'entry-level', 'academic',
+      'early-career-teal',
+    ]) {
+      expect(templateHonorsSectionOrder(id)).toBe(true)
+    }
+  })
+
+  it('returns false for columnar families where reorder is a no-op (sidebar/creative, startup)', () => {
+    for (const id of ['creative', 'sidebar-slate', 'sidebar-violet', 'startup']) {
+      expect(templateHonorsSectionOrder(id)).toBe(false)
+    }
+  })
+
+  it('returns false for an unknown template id', () => {
+    expect(templateHonorsSectionOrder('does-not-exist')).toBe(false)
   })
 })
