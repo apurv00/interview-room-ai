@@ -1727,3 +1727,17 @@
 - **Root-cause:** doc drift — the contract doc predated Modern, the PDF harness, and the grouped-picker model.
 - **No-tests-needed-because: documentation-only change (no executable code).**
 - **Verified-by:** catalog table cross-checked against TEMPLATE_VARIANTS/RESUME_TEMPLATES (20 ids, 7 families); recipe steps mirror this PR's actual changes
+
+### 2026-05-30 06:55:27 +0000 · `d5bfb1c` · Claude
+- **Subject:** fix(resume): also trace Chromium into the wizard PDF export bundle
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the trace-include allowlist enumerated only one of the two
+- **No-tests-needed-because: serverless file-tracing is build/bundling config only verifiable on a Vercel deploy (no headless-Vercel in CI); it mirrors the already-reviewed /api/resume/pdf entry.**
+- **Verified-by:** npm run build exit 0, "Compiled successfully", build output lists both functions: ƒ /api/resume/pdf and ƒ /api/resume-wizard/export; next.config require() returns both keys under outputFileTracingIn
+
+### 2026-05-30 06:55:27 +0000 · `d5bfb1c` · Claude
+- **Subject:** fix(resume): also trace Chromium into the wizard PDF export bundle
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the trace-include allowlist enumerated only one of the two
+- **No-tests-needed-because: serverless file-tracing is build/bundling config only verifiable on a Vercel deploy (no headless-Vercel in CI); it mirrors the already-reviewed /api/resume/pdf entry.**
+- **Verified-by:** npm run build exit 0, "Compiled successfully", build output lists both functions: ƒ /api/resume/pdf and ƒ /api/resume-wizard/export; next.config require() returns both keys under outputFileTracingIn
