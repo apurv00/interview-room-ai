@@ -118,6 +118,17 @@ export function resolveSectionOrder(
   return ordered
 }
 
+/**
+ * Whether a template's layout honors `data.sectionOrder`. Only single-column
+ * families do (they render via `resolveSectionOrder`); columnar families
+ * (Sidebar/Creative, Startup) keep a fixed positional layout and are absent
+ * from `TEMPLATE_BODY_ORDER`. The editor uses this to hide the drag-to-reorder
+ * affordance for templates where it would be a silent no-op.
+ */
+export function templateHonorsSectionOrder(templateId: string): boolean {
+  return TEMPLATE_BODY_ORDER[templateId] !== undefined
+}
+
 /** Full section order (incl. contactInfo) for the editor's reorder list. */
 export function getTemplateSectionOrder(templateId: string): string[] {
   const body = TEMPLATE_BODY_ORDER[templateId]
