@@ -1747,3 +1747,10 @@
 - **Root-cause:** the trace-include allowlist enumerated only one of the two
 - **No-tests-needed-because: serverless file-tracing is build/bundling config only verifiable on a Vercel deploy (no headless-Vercel in CI); it mirrors the already-reviewed /api/resume/pdf entry.**
 - **Verified-by:** npm run build exit 0, "Compiled successfully", build output lists both functions: ƒ /api/resume/pdf and ƒ /api/resume-wizard/export; next.config require() returns both keys under outputFileTracingIn
+
+### 2026-05-30 07:38:47 +0000 · `7c03ca6` · Claude
+- **Subject:** Merge remote-tracking branch 'origin/main' into fix/resume-polish
+- **Files:** 9 changed, 2 test file(s)
+- **Root-cause:** main advanced past this branch's base while it was open (three
+- **No-tests-needed-because: a no-conflict integration merge introduces no new code of its own; both sides were independently verified before merging.**
+- **Verified-by:** post-merge npx tsc --noEmit clean; npx vitest run modules/resume = 171 passed / 3 skipped; npm run build exit 0 ("Compiled successfully").
