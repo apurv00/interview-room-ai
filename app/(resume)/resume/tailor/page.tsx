@@ -243,7 +243,17 @@ export default function TailorPage() {
             disabled={tailoring || !resumeText || !jobDescription}
             className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-medium transition-colors disabled:opacity-50"
           >
-            {tailoring ? 'Tailoring resume...' : 'Tailor My Resume'}
+            {tailoring ? (
+              <span className="flex items-center justify-center gap-2">
+                <span
+                  aria-hidden="true"
+                  className="w-4 h-4 rounded-full border-2 border-white/40 border-t-white animate-spin"
+                />
+                Tailoring resume… this can take ~15s
+              </span>
+            ) : (
+              'Tailor My Resume'
+            )}
           </button>
         </div>
       ) : (

@@ -39,7 +39,7 @@ export default function WizardProgressBar({ currentStage, strengthScore }: Props
                   {isCompleted ? (
                     <Check className="w-3.5 h-3.5" strokeWidth={3} />
                   ) : (
-                    i
+                    i + 1
                   )}
                 </motion.div>
                 <span className={`text-[9px] mt-1 hidden sm:block ${isCurrent ? 'text-blue-600 font-medium' : 'text-slate-400'}`}>
@@ -66,7 +66,7 @@ export default function WizardProgressBar({ currentStage, strengthScore }: Props
       {/* Strength score badge */}
       <div className="flex items-center justify-between">
         <span className="text-[10px] text-slate-400">
-          Stage {currentStage} of {WIZARD_STAGES.length - 1}
+          Stage {currentStage + 1} of {WIZARD_STAGES.length}
         </span>
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-slate-400">Strength</span>
