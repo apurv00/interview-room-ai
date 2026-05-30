@@ -19,6 +19,15 @@ const nextConfig = {
       '@sparticuz/chromium',
       'puppeteer-core',
     ],
+    // The @sparticuz/chromium brotli binary is loaded at runtime via
+    // chromium.executablePath() (not a static require), so Next/Vercel's file
+    // tracer doesn't follow it — the function shipped WITHOUT the binary, so
+    // executablePath() threw and the launch fell back to a non-existent system
+    // Chromium ("Browser was not found" → 500 on every PDF). Force-include the
+    // package's files for the PDF route so the binary is present at runtime.
+    outputFileTracingIncludes: {
+      '/api/resume/pdf': ['./node_modules/@sparticuz/chromium/**'],
+    },
   },
   async redirects() {
     return [

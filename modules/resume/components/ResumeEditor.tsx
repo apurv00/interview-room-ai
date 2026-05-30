@@ -195,8 +195,14 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
     const printWindow = window.open('', '_blank')
     if (!printWindow) { setError('Pop-up blocked. Please allow pop-ups and try again.'); return }
 
-    // Clone the preview content and render in a print-friendly window
-    const content = previewEl.innerHTML
+    // Clone the preview content and render in a print-friendly window.
+    // #resume-preview-container holds BOTH the visible paginated pages AND an
+    // aria-hidden off-screen measurer (the full untruncated template used to
+    // compute page breaks). Printing innerHTML directly duplicated the whole
+    // resume; strip the measurer (and screen-only chrome) before printing.
+    const clone = previewEl.cloneNode(true) as HTMLElement
+    clone.querySelectorAll('[aria-hidden="true"]').forEach(el => el.remove())
+    const content = clone.innerHTML
     printWindow.document.write(`<!DOCTYPE html>
 <html>
 <head>
