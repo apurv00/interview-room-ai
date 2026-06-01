@@ -90,18 +90,36 @@ async function straddlingRows(templateId: string): Promise<Array<{ page: number;
         if (!viewport || !content) return
         const vTop = viewport.getBoundingClientRect().top
         const vH = viewport.getBoundingClientRect().height
-        // Inspect leaf text rows (bullets, spans, headings)
-        const rows = Array.from(content.querySelectorAll('li, span, h2, p')) as HTMLElement[]
-        for (const r of rows) {
-          if (r.querySelector('*')) continue // leaf-ish only, avoid double counting containers
-          const rect = r.getBoundingClientRect()
-          const top = rect.top - vTop
-          const bottom = rect.bottom - vTop
-          // A row whose box straddles the TOP edge of the viewport = a line cut
-          // in half by the break (the exact bug). Allow a 2px AA tolerance.
-          if (top < -2 && bottom > 2 && bottom < vH) {
-            bad.push({ page: i, txt: (r.textContent || '').trim().slice(0, 40), top: Math.round(top) })
+        const isLastPage = i === pages.length - 1
+        // Measure at LINE granularity (one rect per visual line via Range), not
+        // element boxes: a multi-line bullet may legitimately split BETWEEN its
+        // own wrapped lines across a page (no line cut), which a box-level check
+        // would falsely flag. The real defect is an individual LINE bisected by
+        // the viewport top (the reported overlap) or bottom (a clipped tail).
+        const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT)
+        let node = walker.nextNode()
+        while (node) {
+          const txt = (node.textContent || '').trim()
+          if (txt.length > 0) {
+            const range = document.createRange()
+            range.selectNodeContents(node)
+            const rects = Array.from(range.getClientRects())
+            for (const rc of rects) {
+              if (rc.height <= 0) continue
+              const top = rc.top - vTop
+              const bottom = rc.bottom - vTop
+              // A single line bisected by the TOP edge (reported overlap).
+              if (top < -2 && bottom > 2 && bottom < vH - 2) {
+                bad.push({ page: i, txt: txt.slice(0, 40), top: Math.round(top) })
+              }
+              // A single line bisected by the BOTTOM edge of a non-final page
+              // (tail clipped after a snapped boundary break — Codex r3333970641).
+              if (!isLastPage && top > 2 && top < vH - 2 && bottom > vH + 2) {
+                bad.push({ page: i, txt: txt.slice(0, 40), top: Math.round(top) })
+              }
+            }
           }
+          node = walker.nextNode()
         }
       })
       return bad

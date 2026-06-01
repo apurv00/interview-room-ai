@@ -361,7 +361,14 @@ export function renderResumeHTML(
             }
           }
 
-          if (unit.offsetHeight > maxUnitHeightWithHeader && section.sectionId !== 'skills') {
+          // Split when the unit is taller than a page OR simply does not fit
+          // from the current (possibly snapped) page start, so a snapped boundary
+          // break can't leave a near-page-height unit's tail clipped (mirror of
+          // lib/resumePageBreaks.ts — Codex r3333970641).
+          var unitOverflowsPage =
+            unit.offsetHeight > maxUnitHeightWithHeader
+            || !fits(unitBottomPx, pageStartLocal, pageHeight, reservedTop);
+          if (unitOverflowsPage && section.sectionId !== 'skills') {
             let next = snapToLine(pageEnd(pageStartLocal, pageHeight, reservedTop), pageStartLocal, section.lineTops);
             while (next < unitBottomPx) {
               pushBreak(breaks, continuation, next, true);

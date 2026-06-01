@@ -266,7 +266,16 @@ function layoutSplittableSection(
       }
     }
 
-    if (unit.offsetHeight > maxUnitHeightWithHeader) {
+    // Split a unit across pages when it is intrinsically taller than a page OR
+    // when it simply does not fit from the CURRENT page start. The latter case
+    // matters after a snapped boundary break moved pageStart slightly earlier:
+    // a normal-height unit can then overflow the page bottom even though its own
+    // height is within the max, and without this its tail would be clipped
+    // (Codex r3333970641). Re-evaluating fit from pageStartLocal covers both.
+    const unitOverflowsPage =
+      unit.offsetHeight > maxUnitHeightWithHeader
+      || !fits(unitBottomAbs, pageStartLocal, pageHeight, reservedTopOnPage)
+    if (unitOverflowsPage) {
       if (section.sectionId === 'skills') {
         // Skill categories: truncate in preview/PDF — never slice mid-category.
         truncatedUnits.push({ sectionId: section.sectionId, unitIndex: unit.unitIndex })
