@@ -1754,3 +1754,10 @@
 - **Root-cause:** main advanced past this branch's base while it was open (three
 - **No-tests-needed-because: a no-conflict integration merge introduces no new code of its own; both sides were independently verified before merging.**
 - **Verified-by:** post-merge npx tsc --noEmit clean; npx vitest run modules/resume = 171 passed / 3 skipped; npm run build exit 0 ("Compiled successfully").
+
+### 2026-06-01 07:58:34 +0000 · `1105244` · Claude
+- **Subject:** fix(resume): raise PDF function memory to 3 GB so Chromium can render
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** serverless function memory defaulted to 1024 MB (no vercel.json
+- **No-tests-needed-because: serverless memory allocation is a platform config only verifiable on a Vercel deploy; the render code is already covered by the npm run test:pdf harness and was reproduced pas**
+- **Verified-by:** pending Vercel preview deploy — will confirm POST /api/resume/pdf returns 200 (currently 500) on the preview; local generatePDF already produces valid PDFs for professional/technical/creative/execut
