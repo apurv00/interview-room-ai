@@ -131,13 +131,10 @@ export function renderResumeHTML(
       position: absolute;
       top: 0;
       left: 0;
-      /* Full-width opaque band so the repeated header masks the re-shown
-         [breakTop-headerHeight, breakTop] slice. A transparent overlay let the
-         prior unit's trailing line (a few px below its measured box) show
-         through — the reported header/content overlap. Mirrors ResumePreview. */
       width: 547px;
       background: #ffffff;
       z-index: 10;
+      overflow: hidden;
     }
     .resume-page-content-band {
       position: absolute;
@@ -239,13 +236,18 @@ export function renderResumeHTML(
         });
       }
 
+      function headerBlockHeight(headerEl) {
+        const rectH = headerEl.getBoundingClientRect().height;
+        return Math.max(headerEl.offsetHeight, Math.ceil(rectH));
+      }
+
       function measureSplittable(sectionEl, templateRoot, sectionId) {
         const sectionTop = relativeTop(sectionEl, templateRoot);
         const headerEl = sectionEl.querySelector('[data-resume-section-header], [data-resume-skills-header]');
         const unitEls = collectSectionUnits(sectionEl);
         const header = headerEl ? {
           offsetTop: relativeTop(headerEl, templateRoot) - sectionTop,
-          offsetHeight: headerEl.offsetHeight,
+          offsetHeight: headerBlockHeight(headerEl),
         } : { offsetTop: 0, offsetHeight: 0 };
         const units = unitEls.map((el, unitIndex) => ({
           unitIndex,
@@ -479,10 +481,11 @@ export function renderResumeHTML(
 
         return {
           title,
-          height: header.offsetHeight,
+          height: headerBlockHeight(header),
           left: Math.max(0, Math.round(headerRect.left - rootRect.left)),
           width: Math.max(0, Math.round(headerRect.width)),
           html: header.innerHTML,
+          sectionId: section.getAttribute('data-resume-section') || 'section',
         };
       }
 
@@ -554,8 +557,23 @@ export function renderResumeHTML(
 
         const content = document.createElement('div');
         content.className = 'resume-wrapper resume-page-content';
-        content.style.marginTop = (-breakTop) + 'px';
-        content.innerHTML = templateHTML;
+        const suppressSectionId =
+          plan.continuation[pageIndex] && headerMetrics ? headerMetrics.sectionId : null;
+        const headerH = headerMetrics ? headerMetrics.height : 0;
+        content.style.marginTop = (-breakTop + (suppressSectionId ? headerH : 0)) + 'px';
+        if (suppressSectionId) {
+          content.setAttribute('data-suppress-section', suppressSectionId);
+          const suppressStyle = document.createElement('style');
+          const sid = suppressSectionId;
+          suppressStyle.textContent =
+            '[data-resume-page-content][data-suppress-section="' + sid + '"] [data-resume-section="' + sid + '"] [data-resume-section-header],'
+            + '[data-resume-page-content][data-suppress-section="' + sid + '"] [data-resume-section="' + sid + '"] [data-resume-skills-header],'
+            + '[data-resume-page-content][data-suppress-section="' + sid + '"] [data-resume-section="' + sid + '"] > hr{display:none!important}';
+          content.appendChild(suppressStyle);
+        }
+        const templateMount = document.createElement('div');
+        templateMount.innerHTML = templateHTML;
+        content.appendChild(templateMount);
 
         contentBand.appendChild(content);
         viewport.appendChild(contentBand);

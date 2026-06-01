@@ -235,7 +235,9 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
         {/* Visible pages */}
         <div className="flex flex-col gap-3">
           {pages.map((pageIndex) => {
-            const contHeaderH = continuationHeadersByPage[pageIndex]?.height ?? 0
+            const contMeta = continuationHeadersByPage[pageIndex]
+            const contHeaderH = contMeta?.height ?? 0
+            const suppressSectionId = contMeta?.sectionId
             const clipHeight = pageClipHeight(
               pageIndex,
               pageBreaks,
@@ -283,10 +285,10 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                         overflow: 'hidden',
                       }}
                     >
-                      {continuationHeadersByPage[pageIndex] && (
+                      {contMeta && (
                         <div
                           data-resume-continuation-header
-                          className="absolute z-10"
+                          className="absolute z-10 overflow-hidden"
                           style={{
                             top: 0,
                             left: 0,
@@ -297,8 +299,8 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                         >
                           <div
                             dangerouslySetInnerHTML={{
-                              __html: continuationHeadersByPage[pageIndex].html
-                                || `<h2>${continuationHeadersByPage[pageIndex].title}</h2>`,
+                              __html: contMeta.html
+                                || `<h2>${contMeta.title}</h2>`,
                             }}
                           />
                         </div>
@@ -313,12 +315,25 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                       >
                         <div
                           data-resume-page-content
+                          data-suppress-section={suppressSectionId}
                           style={{
                             ...wrapperStyle,
                             width: contentWidth,
-                            marginTop: -pageBreaks[pageIndex],
+                            // Measurer layout includes the in-flow section header; hiding it
+                            // with display:none on continuation pages removes that block from
+                            // flow here only — add header height back so unit offsets match.
+                            marginTop:
+                              -pageBreaks[pageIndex]
+                              + (suppressSectionId ? contHeaderH : 0),
                           }}
                         >
+                          {suppressSectionId ? (
+                            <style
+                              dangerouslySetInnerHTML={{
+                                __html: `[data-resume-page-content][data-suppress-section="${suppressSectionId}"] [data-resume-section="${suppressSectionId}"] [data-resume-section-header],[data-resume-page-content][data-suppress-section="${suppressSectionId}"] [data-resume-section="${suppressSectionId}"] [data-resume-skills-header],[data-resume-page-content][data-suppress-section="${suppressSectionId}"] [data-resume-section="${suppressSectionId}"] > hr{display:none!important}`,
+                              }}
+                            />
+                          ) : null}
                           <ResumePreviewPageProvider
                             value={{
                               skillsContinuationHeader: Boolean(continuationHeadersByPage[pageIndex]),

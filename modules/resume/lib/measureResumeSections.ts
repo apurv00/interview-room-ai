@@ -5,6 +5,12 @@ function relativeTop(el: HTMLElement, root: HTMLElement): number {
   return Math.round(el.getBoundingClientRect().top - rootRect.top)
 }
 
+/** Visual block height for section headers (borders, line-height, not just offsetHeight). */
+export function headerBlockHeight(headerEl: HTMLElement): number {
+  const rectH = headerEl.getBoundingClientRect().height
+  return Math.max(headerEl.offsetHeight, Math.ceil(rectH))
+}
+
 const UNIT_SELECTOR = '[data-resume-section-unit], [data-resume-skills-category]'
 
 /**
@@ -64,7 +70,7 @@ function measureSplittableSection(
   const header = headerEl
     ? {
         offsetTop: relativeTop(headerEl, templateRoot) - sectionTop,
-        offsetHeight: headerEl.offsetHeight,
+        offsetHeight: headerBlockHeight(headerEl),
       }
     : { offsetTop: 0, offsetHeight: 0 }
 
@@ -178,6 +184,7 @@ export interface SectionHeaderMetrics {
   left: number
   width: number
   html: string
+  sectionId: string
 }
 
 function headerMetricsFromElement(
@@ -192,12 +199,15 @@ function headerMetricsFromElement(
     || header.textContent?.trim()
     || 'Section'
 
+  const sectionEl = header.closest('[data-resume-section]')
+
   return {
     title,
-    height: header.offsetHeight,
+    height: headerBlockHeight(header),
     left: Math.max(0, Math.round(headerRect.left - rootRect.left)),
     width: Math.max(0, Math.round(headerRect.width)),
     html: header.innerHTML,
+    sectionId: sectionEl?.getAttribute('data-resume-section') || 'section',
   }
 }
 
@@ -266,6 +276,7 @@ export function readSkillsHeaderMetrics(templateRoot: HTMLElement): SkillsHeader
       left: 0,
       width: 0,
       html: '<h2>Skills</h2>',
+      sectionId: 'skills',
     }
   }
   return headerMetricsFromElement(header, templateRoot)
