@@ -173,6 +173,18 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
     measureLayout()
   }, [data, measureData, templateId, headingSize, bodySize, fontFamily, fontSize, measureLayout])
 
+  // Re-measure after webfonts load — initial layout can under-reserve header height.
+  useEffect(() => {
+    if (typeof document === 'undefined' || !document.fonts?.ready) return
+    let cancelled = false
+    document.fonts.ready.then(() => {
+      if (!cancelled) measureLayout()
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [measureLayout])
+
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
@@ -278,7 +290,7 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                     {/* Content viewport — clips to usable area */}
                     <div
                       data-resume-page-viewport
-                      className="relative flex flex-col overflow-hidden"
+                      className="relative overflow-hidden"
                       style={{
                         width: contentWidth,
                         height: clipHeight,
@@ -287,10 +299,11 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                       {contMeta && (
                         <div
                           data-resume-continuation-header
-                          className="shrink-0 z-10 box-border [&_h2]:m-0"
+                          className="absolute top-0 left-0 z-20 box-border [&_h2]:mt-0 [&_h2]:mx-0 [&_h2]:mb-0 [&_h2]:pb-1"
                           style={{
                             width: contMeta.width > 0 ? contMeta.width : contentWidth,
                             marginLeft: contMeta.left,
+                            height: contHeaderH,
                             minHeight: contHeaderH,
                             background: '#ffffff',
                             fontSize: sizes.body,
@@ -304,21 +317,27 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                         />
                       )}
                       <div
-                        className="min-h-0 flex-1 overflow-hidden"
+                        className="absolute inset-0 z-0 overflow-hidden"
                         style={{
                           width: contentWidth,
-                          height: contMeta ? undefined : contentBandHeight,
+                          clipPath: contMeta ? `inset(${contHeaderH}px 0 0 0)` : undefined,
                         }}
                       >
+                        <div
+                          className="min-h-0 overflow-hidden"
+                          style={{
+                            width: contentWidth,
+                            height: contMeta ? undefined : contentBandHeight,
+                          }}
+                        >
                         <div
                           data-resume-page-content
                           data-suppress-section={suppressSectionId}
                           style={{
                             ...wrapperStyle,
                             width: contentWidth,
-                            // Measurer layout includes the in-flow section header; hiding it
-                            // with display:none on continuation pages removes that block from
-                            // flow here only — add header height back so unit offsets match.
+                            // Hiding the in-flow header on continuation pages removes its block
+                            // from flow — add header height back so unit offsets match measurer.
                             marginTop:
                               -pageBreaks[pageIndex]
                               + (suppressSectionId ? contHeaderH : 0),
@@ -341,6 +360,7 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                           >
                             <TemplateComponent data={measureData} />
                           </ResumePreviewPageProvider>
+                        </div>
                         </div>
                       </div>
                     </div>

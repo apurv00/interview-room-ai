@@ -11,25 +11,21 @@ describe('continuation page viewport mapping', () => {
   const span = 400
   const pageContentHeight = 794
 
-  it('legacy clip+marginTop exposes document above breakTop in the header band (bleed)', () => {
-    const marginTop = -breakTop + headerHeight
+  it('viewport height includes continuation header band in the clip', () => {
     const clipHeight = pageClipHeight(1, [0, breakTop, breakTop + span], pageContentHeight, headerHeight)
     expect(clipHeight).toBe(span + headerHeight)
-
-    const docYAtViewportTop = -marginTop
-    expect(docYAtViewportTop).toBe(breakTop - headerHeight)
-    expect(docYAtViewportTop).toBeLessThan(breakTop)
   })
 
-  it('content band uses marginTop -breakTop only when header stays in flow', () => {
-    const marginTop = -breakTop
-    const docYAtInnerViewportTop = -marginTop
-    expect(docYAtInnerViewportTop).toBe(breakTop)
-  })
-
-  it('adds header height to marginTop when in-flow header is display:none', () => {
+  it('marginTop adds header height when in-flow header is display:none', () => {
     const marginTop = -breakTop + headerHeight
     const docYAtContentBandTop = -marginTop
     expect(docYAtContentBandTop).toBe(breakTop - headerHeight)
+  })
+
+  it('clip-path inset clears the header band from painted content bleed', () => {
+    const clipInsetTop = headerHeight
+    const marginTop = -breakTop + headerHeight
+    const docYAtFirstPaintedPixelBelowClip = breakTop - headerHeight + clipInsetTop
+    expect(docYAtFirstPaintedPixelBelowClip).toBe(breakTop)
   })
 })
