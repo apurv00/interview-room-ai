@@ -1789,3 +1789,10 @@
 - **Root-cause:** in-content page breaks were raw pixel offsets, not snapped to text
 - **Tests-added: modules/resume/services/__tests__/paginationLineSnap.e2e.test.ts (real-Chromium; 6 single-column families assert ZERO straddling rows at any continuation page top; creative/columnar asser**
 - **Verified-by:** paginationLineSnap.e2e 7/7; legacyTemplateParity 10/10 (markup byte-identical — measurement-only change); pdfRender.e2e 3/3; vitest run modules/resume 187 passed/12 skipped; npx tsc --noEmit clean; 
+
+### 2026-06-01 12:12:13 +0000 · `19f6c01` · Claude
+- **Subject:** fix(resume): split a unit that overflows from a snapped page start (Codex r3333970641)
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** the unit-split trigger tested intrinsic unit height only, not actual
+- **Tests-added: extended paginationLineSnap.e2e.test.ts — line-granular detector (Range rects) now also flags a line bisected by a non-final page's BOTTOM edge (the clipped-tail case), in addition to t**
+- **Verified-by:** paginationLineSnap.e2e 7/7 (top + bottom line-clip checks, all families); vitest run modules/resume 187 passed/12 skipped; legacy parity still 10/10; tsc clean; npm run build exit 0
