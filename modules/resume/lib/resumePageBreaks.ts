@@ -113,10 +113,11 @@ export function snapToLine(
  * page i must clip at that offset — otherwise content between breaks appears on both
  * pages (e.g. half a Skills header on page 1 and the full section again on page 2).
  *
- * When this page repeats a continuation header, content is shifted down by
- * `continuationHeaderHeight` (`marginTop = -breakTop + headerHeight`). The clip must
- * include that reserved band so the slice up to the next break is not truncated
- * (Codex r3320336750).
+ * When this page repeats a continuation header, the viewport height is
+ * `span + continuationHeaderHeight`. The header sits in the top band; the content
+ * band below uses `marginTop = -breakTop` only (see ResumePreview / pdfService).
+ * Total height must include the header band so the slice up to the next break is
+ * not truncated (Codex r3320336750).
  */
 export function pageClipHeight(
   pageIndex: number,

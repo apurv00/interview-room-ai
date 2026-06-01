@@ -235,12 +235,14 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
         {/* Visible pages */}
         <div className="flex flex-col gap-3">
           {pages.map((pageIndex) => {
+            const contHeaderH = continuationHeadersByPage[pageIndex]?.height ?? 0
             const clipHeight = pageClipHeight(
               pageIndex,
               pageBreaks,
               contentHeight,
-              continuationHeadersByPage[pageIndex]?.height ?? 0,
+              contHeaderH,
             )
+            const contentBandHeight = Math.max(0, clipHeight - contHeaderH)
             return (
             <div key={pageIndex}>
               {/* Page number badge */}
@@ -273,6 +275,7 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                   <div style={{ padding: PAGE_PADDING }}>
                     {/* Content viewport — clips to usable area */}
                     <div
+                      data-resume-page-viewport
                       className="relative"
                       style={{
                         width: contentWidth,
@@ -282,18 +285,13 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                     >
                       {continuationHeadersByPage[pageIndex] && (
                         <div
+                          data-resume-continuation-header
                           className="absolute z-10"
                           style={{
                             top: 0,
-                            // Span the FULL content width with an opaque white
-                            // background so the repeated header masks the
-                            // re-shown [breakTop−headerHeight, breakTop] band.
-                            // Without an opaque fill the prior unit's trailing
-                            // line (a few px below its measured box) shows
-                            // THROUGH the header — the reported overlap.
                             left: 0,
                             width: contentWidth,
-                            height: continuationHeadersByPage[pageIndex].height,
+                            height: contHeaderH,
                             background: '#ffffff',
                           }}
                         >
@@ -306,24 +304,32 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                         </div>
                       )}
                       <div
+                        className="absolute left-0 overflow-hidden"
                         style={{
-                          ...wrapperStyle,
+                          top: contHeaderH,
                           width: contentWidth,
-                          marginTop:
-                            -pageBreaks[pageIndex]
-                            + (continuationHeadersByPage[pageIndex]?.height ?? 0),
+                          height: contentBandHeight,
                         }}
                       >
-                        <ResumePreviewPageProvider
-                          value={{
-                            skillsContinuationHeader: Boolean(continuationHeadersByPage[pageIndex]),
-                            truncatedSkillCategoryIndices,
-                            truncatedSkillCategoryRatios,
-                            truncatedSkillCategoryOmittedCounts,
+                        <div
+                          data-resume-page-content
+                          style={{
+                            ...wrapperStyle,
+                            width: contentWidth,
+                            marginTop: -pageBreaks[pageIndex],
                           }}
                         >
-                          <TemplateComponent data={measureData} />
-                        </ResumePreviewPageProvider>
+                          <ResumePreviewPageProvider
+                            value={{
+                              skillsContinuationHeader: Boolean(continuationHeadersByPage[pageIndex]),
+                              truncatedSkillCategoryIndices,
+                              truncatedSkillCategoryRatios,
+                              truncatedSkillCategoryOmittedCounts,
+                            }}
+                          >
+                            <TemplateComponent data={measureData} />
+                          </ResumePreviewPageProvider>
+                        </div>
                       </div>
                     </div>
                   </div>
