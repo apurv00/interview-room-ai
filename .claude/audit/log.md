@@ -1803,3 +1803,10 @@
 - **Root-cause:** (1) boundary breaks were snapped backward into the previous atomic
 - **Tests-added: paginationLineSnap.e2e.test.ts now accounts for the opaque mask — a top-bisected line counts as an overlap only if its visible bottom falls BELOW the masked band; still strict for 6 sin**
 - **Verified-by:** paginationLineSnap.e2e 7/7; legacy parity 10/10 (markup byte-identical); pdfRender.e2e 3/3; vitest run modules/resume 187 passed/12 skipped; tsc clean; npm run build exit 0
+
+### 2026-06-01 13:24:11 +0000 · `c67e1c2` · Claude
+- **Subject:** test(resume): lock strict no-clipped-line guarantee for all Sidebar variants
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** n/a — verification + contract tightening only.
+- **Tests-added: paginationLineSnap.e2e.test.ts — COLUMNAR_FAMILIES now [creative, sidebar-slate, sidebar-violet] asserted strict (bad === []) instead of a ≤1-line bound**
+- **Verified-by:** paginationLineSnap.e2e 9/9 (6 single-column + 3 Sidebar, all strict); vitest run modules/resume 187 passed/14 skipped; tsc clean
