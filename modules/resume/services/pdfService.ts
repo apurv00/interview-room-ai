@@ -132,9 +132,15 @@ export function renderResumeHTML(
       top: 0;
       left: 0;
       width: 547px;
+      font-family: ${fontStack};
+      --r-title: ${sizes.title};
+      --r-body: ${sizes.body};
+      --r-section: ${sizes.section};
+      --r-meta: ${sizes.meta};
       background: #ffffff;
       z-index: 10;
       overflow: hidden;
+      box-sizing: border-box;
     }
     .resume-page-content-band {
       position: absolute;
@@ -484,7 +490,7 @@ export function renderResumeHTML(
           height: headerBlockHeight(header),
           left: Math.max(0, Math.round(headerRect.left - rootRect.left)),
           width: Math.max(0, Math.round(headerRect.width)),
-          html: header.innerHTML,
+          html: header.outerHTML,
           sectionId: section.getAttribute('data-resume-section') || 'section',
         };
       }

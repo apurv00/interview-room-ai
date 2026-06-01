@@ -168,4 +168,37 @@ describe.runIf(ENABLED)('continuation header gap — overlay clears first job li
       expect(row.headerGapPx!).toBeGreaterThanOrEqual(6)
     }
   }, 60000)
+
+  it('executive: education continuation header keeps template title classes', async () => {
+    if (!browser) {
+      expect(true).toBe(true)
+      return
+    }
+    const page = await browser.newPage()
+    try {
+      await page.setViewport({ width: 794, height: 1123 })
+      await page.setContent(renderResumeHTML({ ...data, template: 'executive' }, 'executive'), {
+        waitUntil: 'networkidle0',
+      })
+      await page.waitForFunction(() => (window as any).__resumePagesReady === true, { timeout: 15000 })
+      const styled = await page.evaluate(() => {
+        const hdr = document.querySelector(
+          '.resume-page .resume-continuation-header [data-resume-section-header]',
+        ) as HTMLElement | null
+        if (!hdr) return null
+        const cs = getComputedStyle(hdr)
+        return {
+          text: hdr.textContent?.trim(),
+          uppercase: cs.textTransform,
+          hasBorder: cs.borderBottomWidth !== '0px',
+        }
+      })
+      expect(styled).not.toBeNull()
+      expect(styled?.text?.toLowerCase()).toContain('education')
+      expect(styled?.uppercase).toBe('uppercase')
+      expect(styled?.hasBorder).toBe(true)
+    } finally {
+      await page.close()
+    }
+  }, 60000)
 })
