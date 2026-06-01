@@ -1,6 +1,4 @@
 import { NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@shared/auth/authOptions'
 import { PDFGenerateSchema } from '@resume/validators/resume'
 import { renderResumeHTML } from '@resume/services/pdfService'
 
@@ -53,11 +51,10 @@ const PRINT_AUGMENT = `
 `
 
 export async function POST(req: Request) {
-  const session = await getServerSession(authOptions)
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
+  // Intentionally NOT auth-gated. This endpoint only renders the resume data the
+  // client posts into self-contained HTML (no DB reads, no Chromium, no other
+  // user's data), and the "Print PDF" button is available to anonymous draft
+  // editors. Gating it would regress the previously client-only print path.
   const body = await req.json()
   const parsed = PDFGenerateSchema.safeParse(body)
   if (!parsed.success) {
