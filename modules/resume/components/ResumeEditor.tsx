@@ -187,66 +187,48 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
     setEnhancingSection(null)
   }
 
-  function handlePrintPDF() {
-    // Client-side PDF via browser print dialog
-    const previewEl = document.getElementById('resume-preview-container')
-    if (!previewEl) { setError('Preview not found'); return }
-
+  async function handlePrintPDF() {
+    // Open a print window synchronously (inside the click handler) so the
+    // browser doesn't treat the later programmatic open as a blocked popup.
     const printWindow = window.open('', '_blank')
     if (!printWindow) { setError('Pop-up blocked. Please allow pop-ups and try again.'); return }
+    printWindow.document.write(
+      '<!doctype html><title>Preparing…</title><body style="font:14px sans-serif;color:#475569;padding:32px">Preparing your resume…</body>',
+    )
 
-    // Clone the preview content and render in a print-friendly window.
-    // #resume-preview-container holds BOTH the visible paginated pages AND an
-    // aria-hidden off-screen measurer (the full untruncated template used to
-    // compute page breaks). Printing innerHTML directly duplicated the whole
-    // resume; strip the measurer (and screen-only chrome) before printing.
-    const clone = previewEl.cloneNode(true) as HTMLElement
-    clone.querySelectorAll('[aria-hidden="true"]').forEach(el => el.remove())
-    const content = clone.innerHTML
-    printWindow.document.write(`<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>${resume.name || 'Resume'}</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    @page { size: A4; margin: 0; }
-    body {
-      font-family: 'Georgia', 'Times New Roman', serif;
-      -webkit-print-color-adjust: exact;
-      print-color-adjust: exact;
+    try {
+      // Fetch the SAME fully-styled, Tailwind-inlined, paginated HTML the server
+      // PDF renderer uses — but with no Puppeteer/Chromium (so it can't hit the
+      // serverless memory ceiling). The returned document auto-prints once its
+      // pagination script has built the pages, so the output matches the
+      // template for every format instead of the old unstyled DOM clone.
+      const res = await fetch('/api/resume/pdf-html', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          resumeData: resume,
+          templateId: resume.template || 'professional',
+        }),
+      })
+      if (!res.ok) throw new Error(`pdf-html ${res.status}`)
+      const html = await res.text()
+      printWindow.document.open()
+      printWindow.document.write(html)
+      printWindow.document.close()
+    } catch {
+      printWindow.close()
+      setError('Could not prepare the resume for printing. Please try again.')
     }
-    .resume-print-wrapper {
-      width: 210mm;
-      min-height: 297mm;
-      padding: 12mm 14mm;
-      background: white;
-    }
-    @media print {
-      body { margin: 0; }
-      .resume-print-wrapper { padding: 10mm 12mm; }
-    }
-  </style>
-</head>
-<body>
-  <div class="resume-print-wrapper">${content}</div>
-  <script>
-    window.onload = function() {
-      setTimeout(function() { window.print(); window.close(); }, 300);
-    };
-  </script>
-</body>
-</html>`)
-    printWindow.document.close()
   }
 
   async function handleDownloadPDF() {
     if (isAnonymous) { requireAuth('download_resume'); return }
     setDownloading(true)
     try {
-      // The server renders the same React template the preview uses, inlines
-      // a pre-compiled Tailwind bundle, and runs puppeteer. No DOM extraction
-      // or CSS scraping — the client only sends resume data + template id.
+      // Primary path: the server renders the same React template the preview
+      // uses, inlines a pre-compiled Tailwind bundle, and runs puppeteer for a
+      // one-click file download. If that fails (e.g. serverless Chromium), fall
+      // back to the styled browser-print path, which produces the same layout.
       const res = await fetch('/api/resume/pdf', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -256,7 +238,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
         }),
       })
       if (!res.ok) {
-        handlePrintPDF()
+        await handlePrintPDF()
         return
       }
 
@@ -274,9 +256,12 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
         file_type: 'pdf',
       })
     } catch {
-      handlePrintPDF()
+      await handlePrintPDF()
+    } finally {
+      // Always reset — the old early-return on the fallback path left the
+      // button stuck on "Generating…" forever.
+      setDownloading(false)
     }
-    setDownloading(false)
   }
 
   const honorsSectionOrder = templateHonorsSectionOrder(resume.template || 'professional')
