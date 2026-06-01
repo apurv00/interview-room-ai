@@ -165,6 +165,41 @@ export function renderResumeHTML(
         return bottomPx <= pageEnd(pageStart, pageHeight, reservedTop);
       }
 
+      // Mirror of lib/resumePageBreaks.ts snapToLine — keep identical so the PDF
+      // paginates exactly like the live preview (pagination contract).
+      function snapToLine(rawBreak, pageStart, lineTops) {
+        if (!lineTops || lineTops.length === 0) return rawBreak;
+        var best = -Infinity;
+        for (var i = 0; i < lineTops.length; i++) {
+          var top = lineTops[i];
+          if (top <= rawBreak && top > pageStart && top > best) best = top;
+        }
+        return best === -Infinity ? rawBreak : best;
+      }
+
+      // Mirror of lib/measureResumeSections.ts collectLineTops — one offset per
+      // visual text line inside the element, relative to templateRoot.
+      function collectLineTops(el, templateRoot) {
+        var rootTop = templateRoot.getBoundingClientRect().top;
+        var tops = {};
+        var walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+        var node = walker.nextNode();
+        while (node) {
+          if ((node.textContent || '').trim().length > 0) {
+            try {
+              var range = document.createRange();
+              range.selectNodeContents(node);
+              var rects = range.getClientRects();
+              for (var i = 0; i < rects.length; i++) {
+                if (rects[i].height > 0) tops[Math.round(rects[i].top - rootTop)] = true;
+              }
+            } catch (e) { /* ignore */ }
+          }
+          node = walker.nextNode();
+        }
+        return Object.keys(tops).map(Number).sort(function (a, b) { return a - b; });
+      }
+
       function pushBreak(breaks, continuation, at, needsHeader) {
         if (breaks[breaks.length - 1] === at) return;
         breaks.push(at);
@@ -212,6 +247,7 @@ export function renderResumeHTML(
           offsetHeight: sectionEl.offsetHeight,
           header,
           units,
+          lineTops: collectLineTops(sectionEl, templateRoot),
         };
       }
 
@@ -223,6 +259,7 @@ export function renderResumeHTML(
           offsetTop: relativeTop(el, templateRoot),
           offsetHeight: el.offsetHeight,
           headerHeight: headerEl ? headerEl.offsetHeight : 0,
+          lineTops: collectLineTops(el, templateRoot),
         };
       }
 
@@ -246,6 +283,7 @@ export function renderResumeHTML(
                   offsetTop: relativeTop(el, templateRoot),
                   offsetHeight: el.offsetHeight,
                   headerHeight: 0,
+                  lineTops: collectLineTops(el, templateRoot),
                 };
               }
               return isSplittable(el)
@@ -313,19 +351,23 @@ export function renderResumeHTML(
                 reservedTop = 0;
               }
             } else {
-              pushBreak(breaks, continuation, unitBreakTop, true);
-              pageStartLocal = unitBreakTop;
+              // Snap to a line boundary: a unit's trailing line can extend past
+              // its measured box, so breaking at the next unit's top would clip
+              // that line and re-show it under the continuation header.
+              const snapped = snapToLine(unitBreakTop, pageStartLocal, section.lineTops);
+              pushBreak(breaks, continuation, snapped, true);
+              pageStartLocal = snapped;
               reservedTop = header.offsetHeight;
             }
           }
 
           if (unit.offsetHeight > maxUnitHeightWithHeader && section.sectionId !== 'skills') {
-            let next = pageEnd(pageStartLocal, pageHeight, reservedTop);
+            let next = snapToLine(pageEnd(pageStartLocal, pageHeight, reservedTop), pageStartLocal, section.lineTops);
             while (next < unitBottomPx) {
               pushBreak(breaks, continuation, next, true);
               pageStartLocal = next;
               reservedTop = header.offsetHeight;
-              next = pageEnd(pageStartLocal, pageHeight, reservedTop);
+              next = snapToLine(pageEnd(pageStartLocal, pageHeight, reservedTop), pageStartLocal, section.lineTops);
             }
           }
         }
@@ -354,13 +396,13 @@ export function renderResumeHTML(
             pageStart = section.offsetTop;
             reservedTop = 0;
           }
-          let next = pageEnd(pageStart, pageHeight, reservedTop);
+          let next = snapToLine(pageEnd(pageStart, pageHeight, reservedTop), pageStart, section.lineTops);
           while (next < blockBottom) {
             const repeatHeader = section.headerHeight > 0;
             pushBreak(breaks, continuation, next, repeatHeader);
             pageStart = next;
             reservedTop = repeatHeader ? section.headerHeight : 0;
-            next = pageEnd(pageStart, pageHeight, reservedTop);
+            next = snapToLine(pageEnd(pageStart, pageHeight, reservedTop), pageStart, section.lineTops);
           }
           return pageStart;
         }

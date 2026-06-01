@@ -28,6 +28,9 @@ export interface SplittableSectionMeasurement {
   offsetHeight: number
   header: MeasurableUnit
   units: SectionUnit[]
+  /** Text-line top offsets (relative to template root) for line-snapping a
+   *  break inside an oversized unit. Optional for backward compatibility. */
+  lineTops?: number[]
 }
 
 export interface BlockSectionMeasurement {
@@ -36,6 +39,9 @@ export interface BlockSectionMeasurement {
   offsetTop: number
   offsetHeight: number
   headerHeight: number
+  /** Text-line top offsets (relative to template root) for line-snapping a
+   *  break inside an oversized block (e.g. a very long summary). Optional. */
+  lineTops?: number[]
 }
 
 export type SectionMeasurement = BlockSectionMeasurement | SplittableSectionMeasurement
@@ -71,6 +77,35 @@ export function fits(
   reservedTop = 0,
 ): boolean {
   return bottom <= pageEnd(pageStart, pageHeight, reservedTop)
+}
+
+/**
+ * Snap an in-content break offset DOWN to the nearest text-line top so a page
+ * break never bisects a line. `lineTops` are line-box top offsets (relative to
+ * the template root) gathered by `collectLineTops`. We pick the greatest line
+ * top that is ≤ the raw break AND strictly below `pageStart` floor (so the page
+ * still makes progress); the bisected line then moves WHOLE onto the next page.
+ *
+ * Without this, a too-tall unit (e.g. an experience entry with several long
+ * bullets) is cut at a raw pixel offset that lands mid-line — the half-line
+ * bleeds onto the prior page and reappears clipped under the repeated section
+ * header on the continuation page. This is template- and section-agnostic.
+ *
+ * Falls back to `rawBreak` when no usable line boundary exists (e.g. lineTops
+ * not supplied, or a single line taller than the page) so progress is
+ * guaranteed and the loop can never stall.
+ */
+export function snapToLine(
+  rawBreak: number,
+  pageStart: number,
+  lineTops?: number[],
+): number {
+  if (!lineTops || lineTops.length === 0) return rawBreak
+  let best = -Infinity
+  for (const top of lineTops) {
+    if (top <= rawBreak && top > pageStart && top > best) best = top
+  }
+  return best === -Infinity ? rawBreak : best
 }
 
 /**
@@ -138,13 +173,15 @@ function layoutBlockSection(
       pageStart = section.offsetTop
       reservedTopOnPage = 0
     }
-    let next = pageEnd(pageStart, pageHeight, reservedTopOnPage)
+    const rawBlock0 = pageEnd(pageStart, pageHeight, reservedTopOnPage)
+    let next = snapToLine(rawBlock0, pageStart, section.lineTops)
     while (next < blockBottom) {
       const repeatHeader = section.headerHeight > 0
       pushBreak(breaks, continuation, next, repeatHeader)
       pageStart = next
       reservedTopOnPage = repeatHeader ? section.headerHeight : 0
-      next = pageEnd(pageStart, pageHeight, reservedTopOnPage)
+      const rawBlock = pageEnd(pageStart, pageHeight, reservedTopOnPage)
+      next = snapToLine(rawBlock, pageStart, section.lineTops)
     }
     return pageStart
   }
@@ -217,8 +254,14 @@ function layoutSplittableSection(
           reservedTopOnPage = 0
         }
       } else {
-        pushBreak(breaks, continuation, unitBreakTop, true)
-        pageStartLocal = unitBreakTop
+        // Snap the unit-boundary break to a line boundary too: a unit's last
+        // line can extend a few px past the unit's measured offsetHeight
+        // (line-height / descenders), so breaking exactly at the next unit's top
+        // would clip that trailing line on the prior page and re-show it under
+        // the continuation header. Snapping down moves the whole line forward.
+        const snapped = snapToLine(unitBreakTop, pageStartLocal, section.lineTops)
+        pushBreak(breaks, continuation, snapped, true)
+        pageStartLocal = snapped
         reservedTopOnPage = header.offsetHeight
       }
     }
@@ -230,12 +273,17 @@ function layoutSplittableSection(
       } else {
         // Experience/project/etc.: paginate inside the unit so tail content is not
         // clipped when index===0 moved the section start (Codex r3320360766).
-        let next = pageEnd(pageStartLocal, pageHeight, reservedTopOnPage)
+        // Snap each break DOWN to a line boundary so a text line is never cut in
+        // half (which would bleed onto the prior page and overlap the repeated
+        // header on the continuation page).
+        const raw0 = pageEnd(pageStartLocal, pageHeight, reservedTopOnPage)
+        let next = snapToLine(raw0, pageStartLocal, section.lineTops)
         while (next < unitBottomAbs) {
           pushBreak(breaks, continuation, next, true)
           pageStartLocal = next
           reservedTopOnPage = header.offsetHeight
-          next = pageEnd(pageStartLocal, pageHeight, reservedTopOnPage)
+          const raw = pageEnd(pageStartLocal, pageHeight, reservedTopOnPage)
+          next = snapToLine(raw, pageStartLocal, section.lineTops)
         }
       }
     }

@@ -45,6 +45,25 @@ this contract and content clips, duplicates across pages, or silently drops.
   preview and the PDF in sync (`applySkillTruncationForPdf` + the page-context
   provider). Hand-rolling breaks truncation parity.
 
+## Line-boundary break snapping
+
+Page breaks inside content are **snapped to a text-line boundary** so a break
+never bisects a visual line. The planner (`resumePageBreaks.ts`) calls
+`snapToLine(rawBreak, pageStart, lineTops)`; `lineTops` are per-line top offsets
+gathered by `collectLineTops` (via `Range.getClientRects`) in
+`measureResumeSections.ts`, and the same logic is mirrored in the inline PDF
+script in `pdfService.ts`. This applies to every in-content break:
+oversized-unit slices, unit-boundary breaks (a unit's trailing line can extend a
+few px past its measured box), and block-section slices.
+
+- **Single-column families**: strict — no line is ever cut, so no content row
+  straddles a continuation page's top edge.
+- **Sidebar (columnar)**: best-effort. The two columns' line boundaries don't
+  align, so one break offset can't clear a line in both columns; clipping is
+  reduced to ≤ ~1 line but not eliminated (consistent with the coarser-pagination
+  note above). Regression-locked by `services/__tests__/paginationLineSnap.e2e.test.ts`
+  (strict for single-column families, bounded for columnar).
+
 ## Theme / variant rules
 - A variant is a **config object**, not a new file. Add layout structure to the
   family layout; add look to the theme.

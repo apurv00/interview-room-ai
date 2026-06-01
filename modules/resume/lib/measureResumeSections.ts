@@ -7,6 +7,41 @@ function relativeTop(el: HTMLElement, root: HTMLElement): number {
 
 const UNIT_SELECTOR = '[data-resume-section-unit], [data-resume-skills-category]'
 
+/**
+ * Collect text-LINE top offsets (relative to `templateRoot`) for every wrapped
+ * line of every text node inside `el`. Uses Range.getClientRects(), which returns
+ * one rect per visual line — so this is content-agnostic (bullets, paragraphs,
+ * summary, custom blocks all work) and lets the paginator snap a break to a line
+ * boundary instead of cutting a line in half. De-duplicated + sorted ascending.
+ */
+function collectLineTops(el: HTMLElement, templateRoot: HTMLElement): number[] {
+  const rootTop = templateRoot.getBoundingClientRect().top
+  const tops = new Set<number>()
+  // Guard for non-DOM environments (jsdom lacks layout / createRange rects).
+  const doc = el.ownerDocument
+  if (!doc || typeof doc.createRange !== 'function') return []
+  const walker = doc.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+  let node = walker.nextNode()
+  while (node) {
+    const text = node.textContent ?? ''
+    if (text.trim().length > 0) {
+      try {
+        const range = doc.createRange()
+        range.selectNodeContents(node)
+        const rects = range.getClientRects()
+        for (let i = 0; i < rects.length; i++) {
+          const top = Math.round(rects[i].top - rootTop)
+          if (rects[i].height > 0) tops.add(top)
+        }
+      } catch {
+        /* ignore unsupported nodes */
+      }
+    }
+    node = walker.nextNode()
+  }
+  return Array.from(tops).sort((a, b) => a - b)
+}
+
 /** Skill categories are atomic units; ignore nested per-item unit markers inside a category. */
 function collectSectionUnits(sectionEl: HTMLElement): HTMLElement[] {
   return (Array.from(sectionEl.querySelectorAll(UNIT_SELECTOR)) as HTMLElement[]).filter(el => {
@@ -46,6 +81,7 @@ function measureSplittableSection(
     offsetHeight: sectionEl.offsetHeight,
     header,
     units,
+    lineTops: collectLineTops(sectionEl, templateRoot),
   }
 }
 
@@ -61,6 +97,7 @@ function measureBlock(
     offsetTop: relativeTop(el, templateRoot),
     offsetHeight: el.offsetHeight,
     headerHeight: headerEl?.offsetHeight ?? 0,
+    lineTops: collectLineTops(el, templateRoot),
   }
 }
 
@@ -99,6 +136,11 @@ function measureMarkedSection(el: HTMLElement, templateRoot: HTMLElement): Secti
       offsetTop: relativeTop(el, templateRoot),
       offsetHeight: el.offsetHeight,
       headerHeight: 0,
+      // Even though a columnar region is height-sliced as one block, snapping
+      // the slice to a line boundary still reduces mid-line clipping. The two
+      // columns' lines won't perfectly align, so this is best-effort (coarser
+      // pagination is expected for Sidebar per TEMPLATE_PAGINATION.md).
+      lineTops: collectLineTops(el, templateRoot),
     }
   }
   if (isSplittableSection(el)) {
