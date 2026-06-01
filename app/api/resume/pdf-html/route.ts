@@ -56,6 +56,12 @@ export async function POST(req: Request) {
   // user's data), and the "Print PDF" button is available to anonymous draft
   // editors. Gating it would regress the previously client-only print path.
   const body = await req.json()
+  // An untitled draft (cleared name field) posts name: '' which ResumeSchema
+  // rejects (min(1)). The old client-only print path used `name || 'Resume'` and
+  // still printed, so default an empty name rather than 400 a printable draft.
+  if (body?.resumeData && !body.resumeData.name) {
+    body.resumeData = { ...body.resumeData, name: 'Resume' }
+  }
   const parsed = PDFGenerateSchema.safeParse(body)
   if (!parsed.success) {
     return NextResponse.json({ error: 'Invalid data' }, { status: 400 })
