@@ -130,6 +130,13 @@ export function renderResumeHTML(
     .resume-continuation-header {
       position: absolute;
       top: 0;
+      left: 0;
+      /* Full-width opaque band so the repeated header masks the re-shown
+         [breakTop-headerHeight, breakTop] slice. A transparent overlay let the
+         prior unit's trailing line (a few px below its measured box) show
+         through — the reported header/content overlap. Mirrors ResumePreview. */
+      width: 547px;
+      background: #ffffff;
       z-index: 10;
     }
     .resume-page-content {
@@ -163,6 +170,41 @@ export function renderResumeHTML(
 
       function fits(bottomPx, pageStart, pageHeight, reservedTop) {
         return bottomPx <= pageEnd(pageStart, pageHeight, reservedTop);
+      }
+
+      // Mirror of lib/resumePageBreaks.ts snapToLine — keep identical so the PDF
+      // paginates exactly like the live preview (pagination contract).
+      function snapToLine(rawBreak, pageStart, lineTops) {
+        if (!lineTops || lineTops.length === 0) return rawBreak;
+        var best = -Infinity;
+        for (var i = 0; i < lineTops.length; i++) {
+          var top = lineTops[i];
+          if (top <= rawBreak && top > pageStart && top > best) best = top;
+        }
+        return best === -Infinity ? rawBreak : best;
+      }
+
+      // Mirror of lib/measureResumeSections.ts collectLineTops — one offset per
+      // visual text line inside the element, relative to templateRoot.
+      function collectLineTops(el, templateRoot) {
+        var rootTop = templateRoot.getBoundingClientRect().top;
+        var tops = {};
+        var walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+        var node = walker.nextNode();
+        while (node) {
+          if ((node.textContent || '').trim().length > 0) {
+            try {
+              var range = document.createRange();
+              range.selectNodeContents(node);
+              var rects = range.getClientRects();
+              for (var i = 0; i < rects.length; i++) {
+                if (rects[i].height > 0) tops[Math.round(rects[i].top - rootTop)] = true;
+              }
+            } catch (e) { /* ignore */ }
+          }
+          node = walker.nextNode();
+        }
+        return Object.keys(tops).map(Number).sort(function (a, b) { return a - b; });
       }
 
       function pushBreak(breaks, continuation, at, needsHeader) {
@@ -212,6 +254,7 @@ export function renderResumeHTML(
           offsetHeight: sectionEl.offsetHeight,
           header,
           units,
+          lineTops: collectLineTops(sectionEl, templateRoot),
         };
       }
 
@@ -223,6 +266,7 @@ export function renderResumeHTML(
           offsetTop: relativeTop(el, templateRoot),
           offsetHeight: el.offsetHeight,
           headerHeight: headerEl ? headerEl.offsetHeight : 0,
+          lineTops: collectLineTops(el, templateRoot),
         };
       }
 
@@ -246,6 +290,7 @@ export function renderResumeHTML(
                   offsetTop: relativeTop(el, templateRoot),
                   offsetHeight: el.offsetHeight,
                   headerHeight: 0,
+                  lineTops: collectLineTops(el, templateRoot),
                 };
               }
               return isSplittable(el)
@@ -313,19 +358,29 @@ export function renderResumeHTML(
                 reservedTop = 0;
               }
             } else {
+              // Break exactly at the next unit's top — never snap backward into
+              // the previous unit (would split an atomic entry). Mirror of
+              // lib/resumePageBreaks.ts (Codex r3334027893).
               pushBreak(breaks, continuation, unitBreakTop, true);
               pageStartLocal = unitBreakTop;
               reservedTop = header.offsetHeight;
             }
           }
 
-          if (unit.offsetHeight > maxUnitHeightWithHeader && section.sectionId !== 'skills') {
-            let next = pageEnd(pageStartLocal, pageHeight, reservedTop);
+          // Split when the unit is taller than a page OR simply does not fit
+          // from the current (possibly snapped) page start, so a snapped boundary
+          // break can't leave a near-page-height unit's tail clipped (mirror of
+          // lib/resumePageBreaks.ts — Codex r3333970641).
+          var unitOverflowsPage =
+            unit.offsetHeight > maxUnitHeightWithHeader
+            || !fits(unitBottomPx, pageStartLocal, pageHeight, reservedTop);
+          if (unitOverflowsPage && section.sectionId !== 'skills') {
+            let next = snapToLine(pageEnd(pageStartLocal, pageHeight, reservedTop), pageStartLocal, section.lineTops);
             while (next < unitBottomPx) {
               pushBreak(breaks, continuation, next, true);
               pageStartLocal = next;
               reservedTop = header.offsetHeight;
-              next = pageEnd(pageStartLocal, pageHeight, reservedTop);
+              next = snapToLine(pageEnd(pageStartLocal, pageHeight, reservedTop), pageStartLocal, section.lineTops);
             }
           }
         }
@@ -354,13 +409,13 @@ export function renderResumeHTML(
             pageStart = section.offsetTop;
             reservedTop = 0;
           }
-          let next = pageEnd(pageStart, pageHeight, reservedTop);
+          let next = snapToLine(pageEnd(pageStart, pageHeight, reservedTop), pageStart, section.lineTops);
           while (next < blockBottom) {
             const repeatHeader = section.headerHeight > 0;
             pushBreak(breaks, continuation, next, repeatHeader);
             pageStart = next;
             reservedTop = repeatHeader ? section.headerHeight : 0;
-            next = pageEnd(pageStart, pageHeight, reservedTop);
+            next = snapToLine(pageEnd(pageStart, pageHeight, reservedTop), pageStart, section.lineTops);
           }
           return pageStart;
         }
@@ -477,9 +532,13 @@ export function renderResumeHTML(
         if (plan.continuation[pageIndex] && headerMetrics) {
           const header = document.createElement('div');
           header.className = 'resume-continuation-header';
-          header.style.left = headerMetrics.left + 'px';
-          header.style.width = headerMetrics.width + 'px';
+          // Full-width opaque band (left:0, full content width) so it masks the
+          // re-shown slice; the inner header html keeps its own left offset.
+          header.style.left = '0px';
+          header.style.width = '547px';
           header.style.height = headerMetrics.height + 'px';
+          header.style.paddingLeft = headerMetrics.left + 'px';
+          header.style.boxSizing = 'border-box';
           header.innerHTML = headerMetrics.html;
           viewport.appendChild(header);
         }

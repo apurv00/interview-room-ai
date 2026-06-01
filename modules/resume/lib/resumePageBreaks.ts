@@ -28,6 +28,9 @@ export interface SplittableSectionMeasurement {
   offsetHeight: number
   header: MeasurableUnit
   units: SectionUnit[]
+  /** Text-line top offsets (relative to template root) for line-snapping a
+   *  break inside an oversized unit. Optional for backward compatibility. */
+  lineTops?: number[]
 }
 
 export interface BlockSectionMeasurement {
@@ -36,6 +39,9 @@ export interface BlockSectionMeasurement {
   offsetTop: number
   offsetHeight: number
   headerHeight: number
+  /** Text-line top offsets (relative to template root) for line-snapping a
+   *  break inside an oversized block (e.g. a very long summary). Optional. */
+  lineTops?: number[]
 }
 
 export type SectionMeasurement = BlockSectionMeasurement | SplittableSectionMeasurement
@@ -71,6 +77,35 @@ export function fits(
   reservedTop = 0,
 ): boolean {
   return bottom <= pageEnd(pageStart, pageHeight, reservedTop)
+}
+
+/**
+ * Snap an in-content break offset DOWN to the nearest text-line top so a page
+ * break never bisects a line. `lineTops` are line-box top offsets (relative to
+ * the template root) gathered by `collectLineTops`. We pick the greatest line
+ * top that is ≤ the raw break AND strictly below `pageStart` floor (so the page
+ * still makes progress); the bisected line then moves WHOLE onto the next page.
+ *
+ * Without this, a too-tall unit (e.g. an experience entry with several long
+ * bullets) is cut at a raw pixel offset that lands mid-line — the half-line
+ * bleeds onto the prior page and reappears clipped under the repeated section
+ * header on the continuation page. This is template- and section-agnostic.
+ *
+ * Falls back to `rawBreak` when no usable line boundary exists (e.g. lineTops
+ * not supplied, or a single line taller than the page) so progress is
+ * guaranteed and the loop can never stall.
+ */
+export function snapToLine(
+  rawBreak: number,
+  pageStart: number,
+  lineTops?: number[],
+): number {
+  if (!lineTops || lineTops.length === 0) return rawBreak
+  let best = -Infinity
+  for (const top of lineTops) {
+    if (top <= rawBreak && top > pageStart && top > best) best = top
+  }
+  return best === -Infinity ? rawBreak : best
 }
 
 /**
@@ -138,13 +173,15 @@ function layoutBlockSection(
       pageStart = section.offsetTop
       reservedTopOnPage = 0
     }
-    let next = pageEnd(pageStart, pageHeight, reservedTopOnPage)
+    const rawBlock0 = pageEnd(pageStart, pageHeight, reservedTopOnPage)
+    let next = snapToLine(rawBlock0, pageStart, section.lineTops)
     while (next < blockBottom) {
       const repeatHeader = section.headerHeight > 0
       pushBreak(breaks, continuation, next, repeatHeader)
       pageStart = next
       reservedTopOnPage = repeatHeader ? section.headerHeight : 0
-      next = pageEnd(pageStart, pageHeight, reservedTopOnPage)
+      const rawBlock = pageEnd(pageStart, pageHeight, reservedTopOnPage)
+      next = snapToLine(rawBlock, pageStart, section.lineTops)
     }
     return pageStart
   }
@@ -217,25 +254,47 @@ function layoutSplittableSection(
           reservedTopOnPage = 0
         }
       } else {
+        // Break exactly at the next unit's top — atomic units are never split
+        // across pages by a boundary break (skills categories and normal-size
+        // entries must stay whole). We do NOT snap this break backward to a line
+        // boundary: a line below unitBreakTop belongs to the PREVIOUS unit, so
+        // snapping back would split that prior unit (Codex r3334027893). The
+        // tail-line bleed that motivated snapping is instead prevented by the
+        // fit-aware in-unit split below, which paginates a unit that genuinely
+        // does not fit from this page start.
         pushBreak(breaks, continuation, unitBreakTop, true)
         pageStartLocal = unitBreakTop
         reservedTopOnPage = header.offsetHeight
       }
     }
 
-    if (unit.offsetHeight > maxUnitHeightWithHeader) {
+    // Split a unit across pages when it is intrinsically taller than a page OR
+    // when it simply does not fit from the CURRENT page start. The latter case
+    // matters after a snapped boundary break moved pageStart slightly earlier:
+    // a normal-height unit can then overflow the page bottom even though its own
+    // height is within the max, and without this its tail would be clipped
+    // (Codex r3333970641). Re-evaluating fit from pageStartLocal covers both.
+    const unitOverflowsPage =
+      unit.offsetHeight > maxUnitHeightWithHeader
+      || !fits(unitBottomAbs, pageStartLocal, pageHeight, reservedTopOnPage)
+    if (unitOverflowsPage) {
       if (section.sectionId === 'skills') {
         // Skill categories: truncate in preview/PDF — never slice mid-category.
         truncatedUnits.push({ sectionId: section.sectionId, unitIndex: unit.unitIndex })
       } else {
         // Experience/project/etc.: paginate inside the unit so tail content is not
         // clipped when index===0 moved the section start (Codex r3320360766).
-        let next = pageEnd(pageStartLocal, pageHeight, reservedTopOnPage)
+        // Snap each break DOWN to a line boundary so a text line is never cut in
+        // half (which would bleed onto the prior page and overlap the repeated
+        // header on the continuation page).
+        const raw0 = pageEnd(pageStartLocal, pageHeight, reservedTopOnPage)
+        let next = snapToLine(raw0, pageStartLocal, section.lineTops)
         while (next < unitBottomAbs) {
           pushBreak(breaks, continuation, next, true)
           pageStartLocal = next
           reservedTopOnPage = header.offsetHeight
-          next = pageEnd(pageStartLocal, pageHeight, reservedTopOnPage)
+          const raw = pageEnd(pageStartLocal, pageHeight, reservedTopOnPage)
+          next = snapToLine(raw, pageStartLocal, section.lineTops)
         }
       }
     }

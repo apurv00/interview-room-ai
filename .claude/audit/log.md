@@ -1782,3 +1782,24 @@
 - **Root-cause:** a server-rendered component (and the context hook it used) carried a
 - **Tests-added: none new; renderResumeHtmlStyled.test.ts already guards styled output; 2 server-side-truncation parity cases skipped with a tracking note (feature deferred to prop-threading)**
 - **Verified-by:** invoked the built production route handler in-process -> HTTP 200 with resume-pages-root + skills + 27 KB inlined Tailwind (was 500 "Element type is invalid"); vitest run modules/resume = 187 passed /
+
+### 2026-06-01 12:03:50 +0000 · `5e665b6` · Claude
+- **Subject:** fix(resume): snap page breaks to line boundaries so no template clips a line at the page break
+- **Files:** 5 changed, 1 test file(s)
+- **Root-cause:** in-content page breaks were raw pixel offsets, not snapped to text
+- **Tests-added: modules/resume/services/__tests__/paginationLineSnap.e2e.test.ts (real-Chromium; 6 single-column families assert ZERO straddling rows at any continuation page top; creative/columnar asser**
+- **Verified-by:** paginationLineSnap.e2e 7/7; legacyTemplateParity 10/10 (markup byte-identical — measurement-only change); pdfRender.e2e 3/3; vitest run modules/resume 187 passed/12 skipped; npx tsc --noEmit clean; 
+
+### 2026-06-01 12:12:13 +0000 · `19f6c01` · Claude
+- **Subject:** fix(resume): split a unit that overflows from a snapped page start (Codex r3333970641)
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** the unit-split trigger tested intrinsic unit height only, not actual
+- **Tests-added: extended paginationLineSnap.e2e.test.ts — line-granular detector (Range rects) now also flags a line bisected by a non-final page's BOTTOM edge (the clipped-tail case), in addition to t**
+- **Verified-by:** paginationLineSnap.e2e 7/7 (top + bottom line-clip checks, all families); vitest run modules/resume 187 passed/12 skipped; legacy parity still 10/10; tsc clean; npm run build exit 0
+
+### 2026-06-01 12:26:20 +0000 · `9703643` · Claude
+- **Subject:** fix(resume): atomic boundary breaks + opaque continuation-header band (Codex r3334027893)
+- **Files:** 4 changed, 1 test file(s)
+- **Root-cause:** (1) boundary breaks were snapped backward into the previous atomic
+- **Tests-added: paginationLineSnap.e2e.test.ts now accounts for the opaque mask — a top-bisected line counts as an overlap only if its visible bottom falls BELOW the masked band; still strict for 6 sin**
+- **Verified-by:** paginationLineSnap.e2e 7/7; legacy parity 10/10 (markup byte-identical); pdfRender.e2e 3/3; vitest run modules/resume 187 passed/12 skipped; tsc clean; npm run build exit 0

@@ -285,9 +285,16 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                           className="absolute z-10"
                           style={{
                             top: 0,
-                            left: continuationHeadersByPage[pageIndex].left,
-                            width: continuationHeadersByPage[pageIndex].width || contentWidth,
+                            // Span the FULL content width with an opaque white
+                            // background so the repeated header masks the
+                            // re-shown [breakTop−headerHeight, breakTop] band.
+                            // Without an opaque fill the prior unit's trailing
+                            // line (a few px below its measured box) shows
+                            // THROUGH the header — the reported overlap.
+                            left: 0,
+                            width: contentWidth,
                             height: continuationHeadersByPage[pageIndex].height,
+                            background: '#ffffff',
                           }}
                         >
                           <div
