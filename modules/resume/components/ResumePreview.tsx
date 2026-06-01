@@ -278,41 +278,36 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                     {/* Content viewport — clips to usable area */}
                     <div
                       data-resume-page-viewport
-                      className="relative"
+                      className="relative flex flex-col overflow-hidden"
                       style={{
                         width: contentWidth,
                         height: clipHeight,
-                        overflow: 'hidden',
                       }}
                     >
                       {contMeta && (
                         <div
                           data-resume-continuation-header
-                          className="absolute z-10 overflow-hidden"
+                          className="shrink-0 z-10 box-border [&_h2]:m-0"
                           style={{
-                            top: 0,
-                            left: 0,
-                            width: contentWidth,
-                            height: contHeaderH,
+                            width: contMeta.width > 0 ? contMeta.width : contentWidth,
+                            marginLeft: contMeta.left,
+                            minHeight: contHeaderH,
                             background: '#ffffff',
+                            fontSize: sizes.body,
                             ...wrapperStyle,
                           }}
-                        >
-                          <div
-                            dangerouslySetInnerHTML={{
-                              __html:
-                                contMeta.html
-                                || `<h2 data-resume-section-header="${contMeta.title}">${contMeta.title}</h2>`,
-                            }}
-                          />
-                        </div>
+                          dangerouslySetInnerHTML={{
+                            __html:
+                              contMeta.html
+                              || `<h2 data-resume-section-header="${contMeta.title}">${contMeta.title}</h2>`,
+                          }}
+                        />
                       )}
                       <div
-                        className="absolute left-0 overflow-hidden"
+                        className="min-h-0 flex-1 overflow-hidden"
                         style={{
-                          top: contHeaderH,
                           width: contentWidth,
-                          height: contentBandHeight,
+                          height: contMeta ? undefined : contentBandHeight,
                         }}
                       >
                         <div
