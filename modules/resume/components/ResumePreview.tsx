@@ -295,12 +295,14 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                             width: contentWidth,
                             height: contHeaderH,
                             background: '#ffffff',
+                            ...wrapperStyle,
                           }}
                         >
                           <div
                             dangerouslySetInnerHTML={{
-                              __html: contMeta.html
-                                || `<h2>${contMeta.title}</h2>`,
+                              __html:
+                                contMeta.html
+                                || `<h2 data-resume-section-header="${contMeta.title}">${contMeta.title}</h2>`,
                             }}
                           />
                         </div>

@@ -206,7 +206,8 @@ function headerMetricsFromElement(
     height: headerBlockHeight(header),
     left: Math.max(0, Math.round(headerRect.left - rootRect.left)),
     width: Math.max(0, Math.round(headerRect.width)),
-    html: header.innerHTML,
+    // outerHTML keeps section title classes (font, uppercase, borders); innerHTML is text-only for <h2>.
+    html: header.outerHTML,
     sectionId: sectionEl?.getAttribute('data-resume-section') || 'section',
   }
 }

@@ -55,6 +55,7 @@ describe('readContinuationHeaderAtBreak', () => {
     expect(metrics?.title).toBe('Summary')
     expect(metrics?.height).toBe(20)
     expect(metrics?.sectionId).toBe('summary')
+    expect(metrics?.html).toMatch(/<h2[^>]*data-resume-section-header/)
   })
 
   it('resolves the section whose range contains the break, not a neighbour', () => {
