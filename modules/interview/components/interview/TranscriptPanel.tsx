@@ -4,10 +4,16 @@ import { useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { InterviewState, Duration } from '@shared/types'
 import { getQuestionCount } from '@interview/config/interviewConfig'
+import type { QuestionDisplay } from '@interview/utils/questionDisplay'
+import {
+  clampProgressIndex,
+  questionDisplayLabel,
+  questionDisplayProgressIndex,
+} from '@interview/utils/questionDisplay'
 
 interface TranscriptPanelProps {
   phase: InterviewState
-  questionIndex: number
+  questionDisplay: QuestionDisplay
   duration: Duration
   currentQuestion: string
   liveAnswer: string
@@ -15,7 +21,7 @@ interface TranscriptPanelProps {
 
 export default function TranscriptPanel({
   phase,
-  questionIndex,
+  questionDisplay,
   duration,
   currentQuestion,
   liveAnswer,
@@ -23,7 +29,16 @@ export default function TranscriptPanel({
   const answerRef = useRef<HTMLDivElement>(null)
   const totalQuestions = getQuestionCount(duration)
   const isActive = phase === 'LISTENING' || phase === 'FOLLOW_UP'
-  const progressPct = totalQuestions > 0 ? ((questionIndex + 1) / totalQuestions) * 100 : 0
+  const label = questionDisplayLabel(questionDisplay)
+  const progressIndex = clampProgressIndex(questionDisplayProgressIndex(questionDisplay), totalQuestions)
+  const isWrapUp = questionDisplay.kind === 'wrap_up'
+  const showDots = progressIndex != null && !isWrapUp
+  const activeDotIndex = progressIndex != null ? progressIndex - 1 : -1
+  const progressPct = isWrapUp
+    ? 100
+    : progressIndex != null && totalQuestions > 0
+    ? (progressIndex / totalQuestions) * 100
+    : 0
 
   // Auto-scroll answer text to bottom as it grows
   useEffect(() => {
@@ -49,27 +64,23 @@ export default function TranscriptPanel({
           {/* Question header row */}
           <div className="flex items-center justify-between">
             <p className="text-[11px] text-[#8b98a5] font-semibold uppercase tracking-widest">
-              {phase === 'WRAP_UP'
-                ? 'Wrap-up'
-                : phase === 'FOLLOW_UP'
-                ? 'Follow-up'
-                : `Question ${questionIndex + 1} of ${totalQuestions}`}
+              {label}
             </p>
 
             {/* Question dots */}
-            {phase !== 'WRAP_UP' && (
+            {showDots && (
               <div className="flex items-center gap-1">
                 {Array.from({ length: totalQuestions }).map((_, i) => (
                   <motion.div
                     key={i}
                     className="rounded-full"
                     animate={{
-                      width: i === questionIndex ? 12 : 4,
+                      width: i === activeDotIndex ? 12 : 4,
                       height: 4,
                       backgroundColor:
-                        i < questionIndex
+                        i < activeDotIndex
                           ? 'rgb(37,99,235)'
-                          : i === questionIndex
+                          : i === activeDotIndex
                           ? 'rgb(96,165,250)'
                           : 'rgb(225,232,237)',
                     }}
