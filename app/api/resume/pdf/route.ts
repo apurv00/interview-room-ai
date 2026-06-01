@@ -21,6 +21,11 @@ export async function POST(req: Request) {
   }
 
   const body = await req.json()
+  // An untitled draft posts name: '' which ResumeSchema rejects (min(1));
+  // default it so a printable resume isn't 400'd just for a cleared title.
+  if (body?.resumeData && !body.resumeData.name) {
+    body.resumeData = { ...body.resumeData, name: 'Resume' }
+  }
   const parsed = PDFGenerateSchema.safeParse(body)
   if (!parsed.success) {
     return NextResponse.json({ error: 'Invalid data' }, { status: 400 })

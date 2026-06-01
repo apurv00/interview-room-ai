@@ -1754,3 +1754,24 @@
 - **Root-cause:** main advanced past this branch's base while it was open (three
 - **No-tests-needed-because: a no-conflict integration merge introduces no new code of its own; both sides were independently verified before merging.**
 - **Verified-by:** post-merge npx tsc --noEmit clean; npx vitest run modules/resume = 171 passed / 3 skipped; npm run build exit 0 ("Compiled successfully").
+
+### 2026-06-01 08:35:41 +0000 · `f0017de` · Claude
+- **Subject:** fix(resume): styled print/download fallback for all templates + unstuck button
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** the browser-print fallback rendered Tailwind-classed markup with no
+- **Tests-added: modules/resume/services/__tests__/renderResumeHtmlStyled.test.ts (asserts the fallback HTML inlines a substantial Tailwind stylesheet + pagination structure + A4 page for 6 families — t**
+- **Verified-by:** vitest run modules/resume = 189 passed / 3 skipped (incl. 18 new); tsc --noEmit clean; next lint clean on both changed files; npm run build exit 0 with ƒ /api/resume/pdf-html compiled.
+
+### 2026-06-01 08:41:52 +0000 · `39c5a39` · Claude
+- **Subject:** fix(resume): allow anonymous print via /api/resume/pdf-html (Codex r3332771135)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the route copied the auth gate from /api/resume/pdf, but unlike the
+- **No-tests-needed-because: the change only removes an auth check; the endpoint's HTML output is already covered by renderResumeHtmlStyled.test.ts (renderResumeHTML), and route-level auth removal has no **
+- **Verified-by:** tsc --noEmit clean; next lint clean; npm run build exit 0 with ƒ /api/resume/pdf-html compiled.
+
+### 2026-06-01 08:50:16 +0000 · `c3869dc` · Claude
+- **Subject:** fix(resume): allow untitled drafts in PDF/print routes (Codex r3332814374)
+- **Files:** 2 changed, 0 test file(s)
+- **Root-cause:** the routes validate the posted resume with the strict ResumeSchema
+- **No-tests-needed-because: a one-line defensive default ahead of existing schema validation; the rendering it guards is covered by renderResumeHtmlStyled.test.ts and the schema's min(1) is unchanged.**
+- **Verified-by:** tsc --noEmit clean; next lint clean on both routes; npm run build exit 0 ("Compiled successfully").
