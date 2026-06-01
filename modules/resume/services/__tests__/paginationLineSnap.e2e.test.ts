@@ -56,7 +56,8 @@ const data = {
 } as unknown as ResumeData
 
 // Single-column families get the STRICT guarantee: a break never bisects a
-// line, so zero rows may straddle a continuation page top.
+// VISIBLE line, so no content row straddles a continuation page top (a line
+// hidden behind the opaque continuation-header band does not count).
 const SINGLE_COLUMN_FAMILIES = [
   'technical',       // Technical family (originally reported)
   'professional',    // Classic
@@ -66,13 +67,12 @@ const SINGLE_COLUMN_FAMILIES = [
   'entry-level',     // Early Career
 ]
 
-// Columnar Sidebar (Creative + variants) is height-sliced as one atomic block
-// per TEMPLATE_PAGINATION.md ("coarser pagination ... is expected"): the two
-// columns' line boundaries don't align, so a single break offset can't clear a
-// line in BOTH columns. Line-snapping still reduces the clip; we assert it is
-// bounded (≤ one line) rather than zero, and track perfect columnar line-snap
-// as a follow-up.
-const COLUMNAR_FAMILIES = ['creative']
+// Columnar Sidebar (Creative + variants). Each is height-sliced as one atomic
+// block, so a single break offset can't be a line boundary in BOTH columns —
+// but the opaque continuation-header band masks the re-shown pre-break slice,
+// so the residual mid-line clip is hidden and no VISIBLE line straddles the
+// page top. We now assert the SAME strict guarantee as single-column.
+const COLUMNAR_FAMILIES = ['creative', 'sidebar-slate', 'sidebar-violet']
 
 async function straddlingRows(templateId: string): Promise<Array<{ page: number; txt: string; top: number }>> {
   const page = await browser.newPage()
@@ -156,20 +156,17 @@ describe.runIf(ENABLED)('pagination line-snap — no row straddles a page top (a
   }
 
   for (const templateId of COLUMNAR_FAMILIES) {
-    it(`${templateId} (columnar): clipping is bounded to at most one line`, async () => {
+    it(`${templateId} (columnar): no VISIBLE half-clipped line (masked by header band)`, async () => {
       if (!browser) { expect(true).toBe(true); return }
       const bad = await straddlingRows(templateId)
       if (bad.length) {
         // eslint-disable-next-line no-console
         console.log(`STRADDLE ${templateId}`, JSON.stringify(bad))
       }
-      // Height-sliced columns can't align both columns' lines; assert the clip
-      // is small (≤ ~1.5 lines ≈ 36px) rather than the old raw-pixel cut, and
-      // never more than one straddling row.
-      expect(bad.length).toBeLessThanOrEqual(1)
-      for (const row of bad) {
-        expect(Math.abs(row.top)).toBeLessThanOrEqual(36)
-      }
+      // The opaque continuation-header band masks the re-shown slice, so even
+      // though the two columns' lines can't both align to one break offset, no
+      // VISIBLE line straddles the page top.
+      expect(bad).toEqual([])
     }, 60000)
   }
 })

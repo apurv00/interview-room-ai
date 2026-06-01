@@ -53,16 +53,28 @@ never bisects a visual line. The planner (`resumePageBreaks.ts`) calls
 gathered by `collectLineTops` (via `Range.getClientRects`) in
 `measureResumeSections.ts`, and the same logic is mirrored in the inline PDF
 script in `pdfService.ts`. This applies to every in-content break:
-oversized-unit slices, unit-boundary breaks (a unit's trailing line can extend a
-few px past its measured box), and block-section slices.
+oversized-unit slices and block-section slices. Unit-boundary breaks are NOT
+snapped — they stay at the next unit's top so an atomic entry is never split
+across pages; the few-px trailing-line leak that produces is masked instead (see
+below).
 
-- **Single-column families**: strict — no line is ever cut, so no content row
-  straddles a continuation page's top edge.
-- **Sidebar (columnar)**: best-effort. The two columns' line boundaries don't
-  align, so one break offset can't clear a line in both columns; clipping is
-  reduced to ≤ ~1 line but not eliminated (consistent with the coarser-pagination
-  note above). Regression-locked by `services/__tests__/paginationLineSnap.e2e.test.ts`
-  (strict for single-column families, bounded for columnar).
+Two complementary mechanisms keep a continuation page from showing a half-line:
+
+1. **Line-snap** (`snapToLine`) for in-content slices (oversized units, block
+   sections incl. the columnar Sidebar body) — the break lands on a line top.
+2. **Opaque continuation-header band** — the repeated header overlay is a
+   full-width opaque white band, so the re-shown `[breakTop−headerHeight,
+   breakTop]` slice is masked rather than bleeding through.
+
+- **Single-column families**: strict — no VISIBLE line straddles a continuation
+  page top.
+- **Sidebar (columnar)**: also strict in practice. The body is one height-sliced
+  block with no repeated header; the block-loop `snapToLine` lands the slice on a
+  line boundary, so no visible line is cut. (The two columns' lines need not
+  align because there is no header band to leak through here — the slice itself is
+  the page boundary.) Regression-locked for **all three Sidebar variants**
+  (`creative`, `sidebar-slate`, `sidebar-violet`) by
+  `services/__tests__/paginationLineSnap.e2e.test.ts`.
 
 ## Theme / variant rules
 - A variant is a **config object**, not a new file. Add layout structure to the
