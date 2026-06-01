@@ -133,6 +133,12 @@ export function renderResumeHTML(
       position: absolute;
       top: 0;
       z-index: 10;
+      background: #fff;
+    }
+    .resume-page-content-band {
+      position: absolute;
+      left: 0;
+      overflow: hidden;
     }
     .resume-page-content {
       width: 547px;
@@ -474,8 +480,8 @@ export function renderResumeHTML(
         const headerMetrics = continuationHeaderMetrics[pageIndex];
         const continuationHeaderHeight =
           plan.continuation[pageIndex] && headerMetrics ? headerMetrics.height : 0;
-        viewport.style.height =
-          pageClipHeight(pageIndex, plan.breaks, CONTENT_HEIGHT, continuationHeaderHeight) + 'px';
+        const clipHeight = pageClipHeight(pageIndex, plan.breaks, CONTENT_HEIGHT, continuationHeaderHeight);
+        viewport.style.height = clipHeight + 'px';
         if (plan.continuation[pageIndex] && headerMetrics) {
           const header = document.createElement('div');
           header.className = 'resume-continuation-header';
@@ -486,12 +492,19 @@ export function renderResumeHTML(
           viewport.appendChild(header);
         }
 
+        const contentBand = document.createElement('div');
+        contentBand.className = 'resume-page-content-band';
+        contentBand.style.top = continuationHeaderHeight + 'px';
+        contentBand.style.width = '547px';
+        contentBand.style.height = Math.max(0, clipHeight - continuationHeaderHeight) + 'px';
+
         const content = document.createElement('div');
         content.className = 'resume-wrapper resume-page-content';
-        content.style.marginTop = (-breakTop + (headerMetrics ? headerMetrics.height : 0)) + 'px';
+        content.style.marginTop = (-breakTop) + 'px';
         content.innerHTML = templateHTML;
 
-        viewport.appendChild(content);
+        contentBand.appendChild(content);
+        viewport.appendChild(contentBand);
         inner.appendChild(viewport);
         page.appendChild(inner);
         pagesRoot.appendChild(page);
