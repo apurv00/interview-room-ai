@@ -1,1 +1,12 @@
-{}
+{
+  "functions": {
+    "app/api/resume/pdf/route.ts": {
+      "memory": 3008,
+      "maxDuration": 60
+    },
+    "app/api/resume-wizard/export/route.ts": {
+      "memory": 3008,
+      "maxDuration": 60
+    }
+  }
+}
