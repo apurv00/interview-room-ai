@@ -54,6 +54,7 @@ describe('readContinuationHeaderAtBreak', () => {
     expect(metrics).not.toBeNull()
     expect(metrics?.title).toBe('Summary')
     expect(metrics?.height).toBe(20)
+    expect(metrics?.sectionId).toBe('summary')
   })
 
   it('resolves the section whose range contains the break, not a neighbour', () => {
@@ -80,6 +81,7 @@ describe('readContinuationHeaderAtBreak', () => {
     // Skills section's first unit starts only 2px away at 760.
     const metrics = readContinuationHeaderAtBreak(root, 758)
     expect(metrics?.title).toBe('Experience')
+    expect(metrics?.sectionId).toBe('experience')
   })
 
   it('returns the Skills header for a break inside the Skills range', () => {

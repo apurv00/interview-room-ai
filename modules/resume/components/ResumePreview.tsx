@@ -157,6 +157,9 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
           }
         }
         setContinuationHeadersByPage(headersByPage)
+        // #region agent log
+        fetch('http://127.0.0.1:7793/ingest/6a1fba93-9642-4533-95c7-c37abb25703e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'a20dd7'},body:JSON.stringify({sessionId:'a20dd7',runId:'post-fix-2',hypothesisId:'G,H',location:'ResumePreview.tsx:measureLayout',message:'continuation headers',data:{breaks:plan.breaks,continuation:plan.continuationHeaders,headersByPage},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion
         setTruncatedSkillCategoryIndices(plan.truncatedSkillCategoryIndices)
         setTruncatedSkillCategoryRatios(ratios)
         setTruncatedSkillCategoryOmittedCounts(
@@ -235,7 +238,9 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
         {/* Visible pages */}
         <div className="flex flex-col gap-3">
           {pages.map((pageIndex) => {
-            const contHeaderH = continuationHeadersByPage[pageIndex]?.height ?? 0
+            const contMeta = continuationHeadersByPage[pageIndex]
+            const contHeaderH = contMeta?.height ?? 0
+            const suppressSectionId = contMeta?.sectionId
             const clipHeight = pageClipHeight(
               pageIndex,
               pageBreaks,
@@ -283,10 +288,10 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                         overflow: 'hidden',
                       }}
                     >
-                      {continuationHeadersByPage[pageIndex] && (
+                      {contMeta && (
                         <div
                           data-resume-continuation-header
-                          className="absolute z-10"
+                          className="absolute z-10 overflow-hidden"
                           style={{
                             top: 0,
                             left: 0,
@@ -297,8 +302,8 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                         >
                           <div
                             dangerouslySetInnerHTML={{
-                              __html: continuationHeadersByPage[pageIndex].html
-                                || `<h2>${continuationHeadersByPage[pageIndex].title}</h2>`,
+                              __html: contMeta.html
+                                || `<h2>${contMeta.title}</h2>`,
                             }}
                           />
                         </div>
@@ -313,12 +318,20 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                       >
                         <div
                           data-resume-page-content
+                          data-suppress-section={suppressSectionId}
                           style={{
                             ...wrapperStyle,
                             width: contentWidth,
                             marginTop: -pageBreaks[pageIndex],
                           }}
                         >
+                          {suppressSectionId ? (
+                            <style
+                              dangerouslySetInnerHTML={{
+                                __html: `[data-resume-page-content][data-suppress-section="${suppressSectionId}"] [data-resume-section="${suppressSectionId}"] [data-resume-section-header],[data-resume-page-content][data-suppress-section="${suppressSectionId}"] [data-resume-section="${suppressSectionId}"] [data-resume-skills-header],[data-resume-page-content][data-suppress-section="${suppressSectionId}"] [data-resume-section="${suppressSectionId}"] > hr{display:none!important}`,
+                              }}
+                            />
+                          ) : null}
                           <ResumePreviewPageProvider
                             value={{
                               skillsContinuationHeader: Boolean(continuationHeadersByPage[pageIndex]),
