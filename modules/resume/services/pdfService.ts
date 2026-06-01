@@ -557,11 +557,14 @@ export function renderResumeHTML(
 
         const content = document.createElement('div');
         content.className = 'resume-wrapper resume-page-content';
-        content.style.marginTop = (-breakTop) + 'px';
-        if (headerMetrics && headerMetrics.sectionId) {
-          content.setAttribute('data-suppress-section', headerMetrics.sectionId);
+        const suppressSectionId =
+          plan.continuation[pageIndex] && headerMetrics ? headerMetrics.sectionId : null;
+        const headerH = headerMetrics ? headerMetrics.height : 0;
+        content.style.marginTop = (-breakTop + (suppressSectionId ? headerH : 0)) + 'px';
+        if (suppressSectionId) {
+          content.setAttribute('data-suppress-section', suppressSectionId);
           const suppressStyle = document.createElement('style');
-          const sid = headerMetrics.sectionId;
+          const sid = suppressSectionId;
           suppressStyle.textContent =
             '[data-resume-page-content][data-suppress-section="' + sid + '"] [data-resume-section="' + sid + '"] [data-resume-section-header],'
             + '[data-resume-page-content][data-suppress-section="' + sid + '"] [data-resume-section="' + sid + '"] [data-resume-skills-header],'

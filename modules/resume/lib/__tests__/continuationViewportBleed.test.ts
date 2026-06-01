@@ -21,9 +21,15 @@ describe('continuation page viewport mapping', () => {
     expect(docYAtViewportTop).toBeLessThan(breakTop)
   })
 
-  it('nested content band maps breakTop to inner y=0 (no document above breakTop)', () => {
+  it('content band uses marginTop -breakTop only when header stays in flow', () => {
     const marginTop = -breakTop
     const docYAtInnerViewportTop = -marginTop
     expect(docYAtInnerViewportTop).toBe(breakTop)
+  })
+
+  it('adds header height to marginTop when in-flow header is display:none', () => {
+    const marginTop = -breakTop + headerHeight
+    const docYAtContentBandTop = -marginTop
+    expect(docYAtContentBandTop).toBe(breakTop - headerHeight)
   })
 })
