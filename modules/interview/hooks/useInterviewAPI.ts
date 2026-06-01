@@ -30,6 +30,9 @@ export interface PreviousAnswerSummary {
 
 export const EVALUATE_ANSWER_BLOCKING_TIMEOUT_MS = 10_000
 export const EVALUATE_ANSWER_BACKGROUND_TIMEOUT_MS = 15_000
+export const ANSWER_CANDIDATE_QUESTION_TIMEOUT_MS = 8_000
+
+export type CandidateQuestionContext = 'wrap_up' | 'mid_interview'
 
 type EvaluationFallbackScores = Pick<AnswerEvaluation, 'relevance' | 'structure' | 'specificity' | 'ownership'>
 
@@ -116,6 +119,18 @@ export interface UseInterviewAPIReturn {
     signal?: AbortSignal
     interruptContext?: { interruptSpeech: string; interruptedUtterance: string; spokenPortion: string }
   }) => Promise<TurnRouterResult>
+  answerCandidateQuestion: (
+    candidateQuestion: string,
+    context: CandidateQuestionContext,
+    signal?: AbortSignal,
+  ) => Promise<string>
+}
+
+export function fallbackCandidateQuestionAnswer(context: CandidateQuestionContext): string {
+  if (context === 'mid_interview') {
+    return "I don't have the exact company-specific details here, but generally that depends on the role and hiring team."
+  }
+  return "I don't have the exact company-specific details here, but generally the recruiter or hiring team will share the confirmed process and timing after the interview."
 }
 
 /**
@@ -326,5 +341,72 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
     [], // no deps — pure fetch
   )
 
-  return { generateQuestion, evaluateAnswer, callTurnRouter, flowHintsRef }
+  const answerCandidateQuestion = useCallback(
+    async (
+      candidateQuestion: string,
+      context: CandidateQuestionContext,
+      signal?: AbortSignal,
+    ): Promise<string> => {
+      if (!config) return fallbackCandidateQuestionAnswer(context)
+
+      const timeoutController = new AbortController()
+      let didTimeout = false
+      const timeoutId = setTimeout(() => {
+        didTimeout = true
+        timeoutController.abort()
+      }, ANSWER_CANDIDATE_QUESTION_TIMEOUT_MS)
+
+      let externalAbortListener: (() => void) | undefined
+      if (signal && !AbortSignal.any) {
+        externalAbortListener = () => timeoutController.abort()
+        signal.addEventListener('abort', externalAbortListener, { once: true })
+      }
+
+      try {
+        const combinedSignal = signal && AbortSignal.any
+          ? AbortSignal.any([signal, timeoutController.signal])
+          : timeoutController.signal
+        const res = await fetch('/api/interview/answer-candidate-question', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: combinedSignal,
+          body: JSON.stringify({
+            candidateQuestion,
+            config,
+            sessionId: getSessionId?.() ?? undefined,
+            context,
+          }),
+        })
+
+        if (!res.ok) {
+          console.warn('[answerCandidateQuestion] API returned non-OK', {
+            status: res.status,
+            context,
+          })
+          return fallbackCandidateQuestionAnswer(context)
+        }
+
+        const data = await res.json() as { answer?: unknown }
+        return typeof data.answer === 'string' && data.answer.trim()
+          ? data.answer.trim()
+          : fallbackCandidateQuestionAnswer(context)
+      } catch (err) {
+        if (!signal?.aborted) {
+          console.warn(didTimeout ? '[answerCandidateQuestion] timed out' : '[answerCandidateQuestion] fetch failed', {
+            context,
+            error: errorDetails(err),
+          })
+        }
+        return fallbackCandidateQuestionAnswer(context)
+      } finally {
+        clearTimeout(timeoutId)
+        if (signal && externalAbortListener) {
+          signal.removeEventListener('abort', externalAbortListener)
+        }
+      }
+    },
+    [config, getSessionId],
+  )
+
+  return { generateQuestion, evaluateAnswer, callTurnRouter, answerCandidateQuestion, flowHintsRef }
 }

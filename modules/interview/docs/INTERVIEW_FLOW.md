@@ -999,3 +999,48 @@ CLAUDE.md Known Issues.
 4. Safari 17 (if available): complete one full interview. AudioWorklet
    is supported since Safari 14.1 but has had quirks; confirm audio
    flows end-to-end.
+
+### 2026-06-02 · Wrap-up labels, stuck wrap-up, and Safe Q&A · PR #431
+
+**Symptoms reported:** Production screenshots/HAR logs showed internal
+probe turns rendering as `Question 12 of 11` and `Question 13 of 11`.
+The wrap-up prompt briefly appeared, then the UI reverted to the
+follow-up question while listening. A wrap-up answer like "I don't have
+any questions at the moment" was longer than 5 characters, so the client
+treated it as a candidate question and played the hardcoded "That's a
+great question" close.
+
+**Fixes in PR #431:**
+- UI labels now come from `questionDisplay`, not raw `questionIndex`.
+  Main turns render as `Question N`; probes/re-anchors/deferred turns
+  render as `Follow-up N`; intro hides the counter; wrap-up stays
+  `Wrap-up` with complete progress.
+- The three interview-mode wrap-up paths share one wrap-up sequence.
+  It sets the visible question to the wrap-up line before TTS and keeps
+  the wrap-up display while `listenForAnswer()` moves the phase to
+  `LISTENING`.
+- Wrap-up answers are classified deterministically as empty,
+  no-questions, thank-you-only, or has-question. Only real questions call
+  the Safe Q&A route; no-question and thank-you closes never say "great
+  question".
+- Mid-interview candidate questions now use the same Safe Q&A route and
+  then redirect back to the active interview question. Because this adds
+  an LLM round-trip to a live path, the client immediately shows
+  "Sure - let me answer that briefly." and plays a short ack before the
+  await.
+
+**Safety constraint:** Safe Q&A is intentionally conservative. It may
+personalize from role, interview type, experience, target company name,
+JD-derived context, and public company-profile style context, but it
+must not invent exact timelines, compensation, benefits, visa policy,
+team structure, headcount, internal tools, manager names, or other
+company-specific facts. Unsupported exact-detail questions get generic
+guidance and should point candidates to the recruiter or next interviewer;
+details explicitly grounded in the JD/trusted context may route through
+Safe Q&A.
+
+**Verification note:** Unit/API checks cover classifier behavior,
+TranscriptPanel labels, Safe Q&A safety/fallbacks, wrap-up no-LLM paths,
+wrap-up question paths, and mid-interview redirect behavior. A full
+browser interview with real Deepgram/TTS/model keys remains the manual
+post-deploy verification for this hot path.
