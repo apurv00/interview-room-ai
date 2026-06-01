@@ -1768,3 +1768,10 @@
 - **Root-cause:** the route copied the auth gate from /api/resume/pdf, but unlike the
 - **No-tests-needed-because: the change only removes an auth check; the endpoint's HTML output is already covered by renderResumeHtmlStyled.test.ts (renderResumeHTML), and route-level auth removal has no **
 - **Verified-by:** tsc --noEmit clean; next lint clean; npm run build exit 0 with ƒ /api/resume/pdf-html compiled.
+
+### 2026-06-01 08:50:16 +0000 · `c3869dc` · Claude
+- **Subject:** fix(resume): allow untitled drafts in PDF/print routes (Codex r3332814374)
+- **Files:** 2 changed, 0 test file(s)
+- **Root-cause:** the routes validate the posted resume with the strict ResumeSchema
+- **No-tests-needed-because: a one-line defensive default ahead of existing schema validation; the rendering it guards is covered by renderResumeHtmlStyled.test.ts and the schema's min(1) is unchanged.**
+- **Verified-by:** tsc --noEmit clean; next lint clean on both routes; npm run build exit 0 ("Compiled successfully").
