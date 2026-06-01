@@ -91,6 +91,12 @@ async function straddlingRows(templateId: string): Promise<Array<{ page: number;
         const vTop = viewport.getBoundingClientRect().top
         const vH = viewport.getBoundingClientRect().height
         const isLastPage = i === pages.length - 1
+        // The continuation-header overlay is an OPAQUE band that masks the
+        // re-shown [breakTop−headerHeight, breakTop] slice at the top of the
+        // page. A line whose bottom falls within that masked band is not
+        // visible to the user, so it must not count as an overlap.
+        const hdr = pg.querySelector('.resume-continuation-header') as HTMLElement | null
+        const maskBottom = hdr ? hdr.getBoundingClientRect().bottom - vTop : 0
         // Measure at LINE granularity (one rect per visual line via Range), not
         // element boxes: a multi-line bullet may legitimately split BETWEEN its
         // own wrapped lines across a page (no line cut), which a box-level check
@@ -108,8 +114,10 @@ async function straddlingRows(templateId: string): Promise<Array<{ page: number;
               if (rc.height <= 0) continue
               const top = rc.top - vTop
               const bottom = rc.bottom - vTop
-              // A single line bisected by the TOP edge (reported overlap).
-              if (top < -2 && bottom > 2 && bottom < vH - 2) {
+              // A single line bisected by the TOP edge (reported overlap) AND
+              // not hidden behind the opaque continuation-header band. If the
+              // line's visible bottom is within the mask, the user never sees it.
+              if (top < -2 && bottom > maskBottom + 2 && bottom < vH - 2) {
                 bad.push({ page: i, txt: txt.slice(0, 40), top: Math.round(top) })
               }
               // A single line bisected by the BOTTOM edge of a non-final page

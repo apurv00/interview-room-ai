@@ -130,6 +130,13 @@ export function renderResumeHTML(
     .resume-continuation-header {
       position: absolute;
       top: 0;
+      left: 0;
+      /* Full-width opaque band so the repeated header masks the re-shown
+         [breakTop-headerHeight, breakTop] slice. A transparent overlay let the
+         prior unit's trailing line (a few px below its measured box) show
+         through — the reported header/content overlap. Mirrors ResumePreview. */
+      width: 547px;
+      background: #ffffff;
       z-index: 10;
     }
     .resume-page-content {
@@ -351,12 +358,11 @@ export function renderResumeHTML(
                 reservedTop = 0;
               }
             } else {
-              // Snap to a line boundary: a unit's trailing line can extend past
-              // its measured box, so breaking at the next unit's top would clip
-              // that line and re-show it under the continuation header.
-              const snapped = snapToLine(unitBreakTop, pageStartLocal, section.lineTops);
-              pushBreak(breaks, continuation, snapped, true);
-              pageStartLocal = snapped;
+              // Break exactly at the next unit's top — never snap backward into
+              // the previous unit (would split an atomic entry). Mirror of
+              // lib/resumePageBreaks.ts (Codex r3334027893).
+              pushBreak(breaks, continuation, unitBreakTop, true);
+              pageStartLocal = unitBreakTop;
               reservedTop = header.offsetHeight;
             }
           }
@@ -526,9 +532,13 @@ export function renderResumeHTML(
         if (plan.continuation[pageIndex] && headerMetrics) {
           const header = document.createElement('div');
           header.className = 'resume-continuation-header';
-          header.style.left = headerMetrics.left + 'px';
-          header.style.width = headerMetrics.width + 'px';
+          // Full-width opaque band (left:0, full content width) so it masks the
+          // re-shown slice; the inner header html keeps its own left offset.
+          header.style.left = '0px';
+          header.style.width = '547px';
           header.style.height = headerMetrics.height + 'px';
+          header.style.paddingLeft = headerMetrics.left + 'px';
+          header.style.boxSizing = 'border-box';
           header.innerHTML = headerMetrics.html;
           viewport.appendChild(header);
         }

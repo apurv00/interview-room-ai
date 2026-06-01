@@ -254,14 +254,16 @@ function layoutSplittableSection(
           reservedTopOnPage = 0
         }
       } else {
-        // Snap the unit-boundary break to a line boundary too: a unit's last
-        // line can extend a few px past the unit's measured offsetHeight
-        // (line-height / descenders), so breaking exactly at the next unit's top
-        // would clip that trailing line on the prior page and re-show it under
-        // the continuation header. Snapping down moves the whole line forward.
-        const snapped = snapToLine(unitBreakTop, pageStartLocal, section.lineTops)
-        pushBreak(breaks, continuation, snapped, true)
-        pageStartLocal = snapped
+        // Break exactly at the next unit's top — atomic units are never split
+        // across pages by a boundary break (skills categories and normal-size
+        // entries must stay whole). We do NOT snap this break backward to a line
+        // boundary: a line below unitBreakTop belongs to the PREVIOUS unit, so
+        // snapping back would split that prior unit (Codex r3334027893). The
+        // tail-line bleed that motivated snapping is instead prevented by the
+        // fit-aware in-unit split below, which paginates a unit that genuinely
+        // does not fit from this page start.
+        pushBreak(breaks, continuation, unitBreakTop, true)
+        pageStartLocal = unitBreakTop
         reservedTopOnPage = header.offsetHeight
       }
     }
