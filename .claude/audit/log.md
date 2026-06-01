@@ -1782,3 +1782,10 @@
 - **Root-cause:** a server-rendered component (and the context hook it used) carried a
 - **Tests-added: none new; renderResumeHtmlStyled.test.ts already guards styled output; 2 server-side-truncation parity cases skipped with a tracking note (feature deferred to prop-threading)**
 - **Verified-by:** invoked the built production route handler in-process -> HTTP 200 with resume-pages-root + skills + 27 KB inlined Tailwind (was 500 "Element type is invalid"); vitest run modules/resume = 187 passed /
+
+### 2026-06-01 12:03:50 +0000 · `5e665b6` · Claude
+- **Subject:** fix(resume): snap page breaks to line boundaries so no template clips a line at the page break
+- **Files:** 5 changed, 1 test file(s)
+- **Root-cause:** in-content page breaks were raw pixel offsets, not snapped to text
+- **Tests-added: modules/resume/services/__tests__/paginationLineSnap.e2e.test.ts (real-Chromium; 6 single-column families assert ZERO straddling rows at any continuation page top; creative/columnar asser**
+- **Verified-by:** paginationLineSnap.e2e 7/7; legacyTemplateParity 10/10 (markup byte-identical — measurement-only change); pdfRender.e2e 3/3; vitest run modules/resume 187 passed/12 skipped; npx tsc --noEmit clean; 
