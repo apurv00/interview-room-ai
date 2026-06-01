@@ -230,7 +230,9 @@ async function experienceContinuationStyle(templateId: string) {
           const el = node as HTMLElement
           const r = el.getBoundingClientRect()
           if (r.height < 1) return
-          if (r.top >= contBottom - 1 && r.top < viewportRect.bottom - 1) {
+          if (r.top >= contBottom && r.top < viewportRect.bottom - 1) {
+            const gap = Math.round(r.top - contBottom)
+            if (gap < 0) return
             if (firstTop === null || r.top < firstTop) firstTop = r.top
           }
         })
@@ -286,8 +288,10 @@ async function continuationGaps(templateId: string): Promise<ContinuationGapRow[
             const el = node as HTMLElement
             const r = el.getBoundingClientRect()
             if (r.height < 1) return
-            if (r.top >= contBottom - 1 && r.top < viewportRect.bottom - 1) {
+            // Strictly below the overlay — do not admit 1px overlaps that round to gap < 0.
+            if (r.top >= contBottom && r.top < viewportRect.bottom - 1) {
               const gap = Math.round(r.top - contBottom)
+              if (gap < 0) return
               if (headerGapPx === null || gap < headerGapPx) headerGapPx = gap
             }
           })
