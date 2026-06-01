@@ -106,6 +106,41 @@ interface ContinuationGapRow {
   suppress: string | null
 }
 
+async function experienceContinuationStyle(templateId: string) {
+  const page = await browser.newPage()
+  try {
+    await page.setViewport({ width: 794, height: 1123 })
+    await page.setContent(renderResumeHTML({ ...data, template: templateId }, templateId), {
+      waitUntil: 'networkidle0',
+    })
+    await page.waitForFunction(() => (window as any).__resumePagesReady === true, { timeout: 15000 })
+    return await page.evaluate(() => {
+      const hdr = document.querySelector(
+        '.resume-page .resume-continuation-header [data-resume-section-header]',
+      ) as HTMLElement | null
+      const band = document.querySelector('.resume-page-content-band') as HTMLElement | null
+      const unit = document.querySelector(
+        '.resume-page-content [data-resume-section="experience"] [data-resume-section-unit]',
+      ) as HTMLElement | null
+      if (!hdr || !band || !unit) return null
+      const hRect = hdr.getBoundingClientRect()
+      const uRect = unit.getBoundingClientRect()
+      const hCs = getComputedStyle(hdr)
+      const bandCs = getComputedStyle(band)
+      return {
+        headerFontPx: parseFloat(hCs.fontSize),
+        bodyFontPx: parseFloat(bandCs.fontSize),
+        gapPx: Math.round(uRect.top - hRect.bottom),
+        headerHeightPx: Math.round(hRect.height),
+        overlayMinHeight: (document.querySelector('.resume-continuation-header') as HTMLElement | null)
+          ?.style.minHeight,
+      }
+    })
+  } finally {
+    await page.close()
+  }
+}
+
 async function continuationGaps(templateId: string): Promise<ContinuationGapRow[]> {
   const page = await browser.newPage()
   try {
@@ -167,6 +202,10 @@ describe.runIf(ENABLED)('continuation header gap — overlay clears first job li
       expect(row.headerGapPx).not.toBeNull()
       expect(row.headerGapPx!).toBeGreaterThanOrEqual(6)
     }
+    const exp = await experienceContinuationStyle('executive')
+    expect(exp).not.toBeNull()
+    expect(exp!.headerFontPx).toBeLessThanOrEqual(exp!.bodyFontPx + 1)
+    expect(exp!.gapPx).toBeGreaterThanOrEqual(0)
   }, 60000)
 
   it('executive: education continuation header keeps template title classes', async () => {
@@ -185,18 +224,24 @@ describe.runIf(ENABLED)('continuation header gap — overlay clears first job li
         const hdr = document.querySelector(
           '.resume-page .resume-continuation-header [data-resume-section-header]',
         ) as HTMLElement | null
-        if (!hdr) return null
-        const cs = getComputedStyle(hdr)
+        const body = document.querySelector('.resume-page-content') as HTMLElement | null
+        if (!hdr || !body) return null
+        const hCs = getComputedStyle(hdr)
+        const bCs = getComputedStyle(body)
         return {
           text: hdr.textContent?.trim(),
-          uppercase: cs.textTransform,
-          hasBorder: cs.borderBottomWidth !== '0px',
+          uppercase: hCs.textTransform,
+          hasBorder: hCs.borderBottomWidth !== '0px',
+          headerFontPx: parseFloat(hCs.fontSize),
+          bodyFontPx: parseFloat(bCs.fontSize),
         }
       })
       expect(styled).not.toBeNull()
       expect(styled?.text?.toLowerCase()).toContain('education')
       expect(styled?.uppercase).toBe('uppercase')
       expect(styled?.hasBorder).toBe(true)
+      expect(styled!.headerFontPx).toBeLessThanOrEqual(styled!.bodyFontPx + 1)
+      expect(styled!.headerFontPx).toBeGreaterThan(6)
     } finally {
       await page.close()
     }

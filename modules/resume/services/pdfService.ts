@@ -126,26 +126,32 @@ export function renderResumeHTML(
       height: 794px;
       overflow: hidden;
       position: relative;
+      display: flex;
+      flex-direction: column;
     }
     .resume-continuation-header {
-      position: absolute;
-      top: 0;
-      left: 0;
+      flex-shrink: 0;
       width: 547px;
       font-family: ${fontStack};
+      font-size: ${sizes.body};
       --r-title: ${sizes.title};
       --r-body: ${sizes.body};
       --r-section: ${sizes.section};
       --r-meta: ${sizes.meta};
       background: #ffffff;
       z-index: 10;
-      overflow: hidden;
       box-sizing: border-box;
     }
+    .resume-continuation-header h2 {
+      margin: 0;
+      font-size: inherit;
+      line-height: inherit;
+    }
     .resume-page-content-band {
-      position: absolute;
-      left: 0;
+      flex: 1;
+      min-height: 0;
       overflow: hidden;
+      position: relative;
     }
     .resume-page-content {
       width: 547px;
@@ -546,20 +552,16 @@ export function renderResumeHTML(
         if (plan.continuation[pageIndex] && headerMetrics) {
           const header = document.createElement('div');
           header.className = 'resume-continuation-header';
-          header.style.left = '0px';
-          header.style.width = '547px';
-          header.style.height = headerMetrics.height + 'px';
-          header.style.paddingLeft = headerMetrics.left + 'px';
-          header.style.boxSizing = 'border-box';
+          header.style.width = (headerMetrics.width > 0 ? headerMetrics.width : 547) + 'px';
+          header.style.marginLeft = headerMetrics.left + 'px';
+          header.style.minHeight = headerMetrics.height + 'px';
           header.innerHTML = headerMetrics.html;
           viewport.appendChild(header);
         }
 
         const contentBand = document.createElement('div');
         contentBand.className = 'resume-page-content-band';
-        contentBand.style.top = continuationHeaderHeight + 'px';
         contentBand.style.width = '547px';
-        contentBand.style.height = Math.max(0, clipHeight - continuationHeaderHeight) + 'px';
 
         const content = document.createElement('div');
         content.className = 'resume-wrapper resume-page-content';
