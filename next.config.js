@@ -59,6 +59,27 @@ const nextConfig = {
     ]
   },
   async headers() {
+    // Next dev (react-refresh / webpack) needs eval(); production CSP stays strict.
+    const scriptSrc = [
+      "'self'",
+      "'unsafe-inline'",
+      "'wasm-unsafe-eval'",
+      ...(process.env.NODE_ENV !== 'production' ? ["'unsafe-eval'"] : []),
+      'https://cdn.jsdelivr.net',
+      'https://www.googletagmanager.com',
+    ].join(' ')
+    const contentSecurityPolicy = [
+      "default-src 'self'",
+      `script-src ${scriptSrc}`,
+      "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+      "img-src 'self' data: https:",
+      "font-src 'self' data:",
+      "connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com https://api.deepgram.com wss://api.deepgram.com https://*.r2.cloudflarestorage.com https://*.google-analytics.com https://*.analytics.google.com https://us.i.posthog.com",
+      "media-src 'self' blob: https://*.r2.cloudflarestorage.com",
+      "worker-src 'self' blob:",
+      "frame-ancestors 'none'",
+    ].join('; ')
+
     return [
       {
         source: '/(.*)',
@@ -68,18 +89,7 @@ const nextConfig = {
           { key: 'X-XSS-Protection', value: '1; mode=block' },
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
           { key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains' },
-          // Analytics origins:
-          //   script-src: googletagmanager.com hosts the gtag.js loader.
-          //     The inline init in <GoogleAnalyticsScripts> piggybacks on
-          //     'unsafe-inline' (already present for Next runtime + jsdelivr).
-          //   connect-src: GA event/pageview hits go to *.google-analytics.com
-          //     (covers www. and region1./region5./etc. regional collect hosts;
-          //     gtag picks the regional one based on the user's location, so
-          //     a www-only allowance silently drops a chunk of hits) and
-          //     *.analytics.google.com (newer GA4 measurement protocol hosts).
-          //     us.i.posthog.com is the PostHog Cloud US capture host that
-          //     shared/analytics/track.ts POSTs to as the second sink.
-          { key: 'Content-Security-Policy', value: "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net https://www.googletagmanager.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com https://api.deepgram.com wss://api.deepgram.com https://*.r2.cloudflarestorage.com https://*.google-analytics.com https://*.analytics.google.com https://us.i.posthog.com; media-src 'self' blob: https://*.r2.cloudflarestorage.com; worker-src 'self' blob:; frame-ancestors 'none'" },
+          { key: 'Content-Security-Policy', value: contentSecurityPolicy },
         ],
       },
       {

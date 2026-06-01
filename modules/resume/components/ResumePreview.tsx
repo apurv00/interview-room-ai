@@ -173,54 +173,6 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
     measureLayout()
   }, [data, measureData, templateId, headingSize, bodySize, fontFamily, fontSize, measureLayout])
 
-  // #region agent log
-  useLayoutEffect(() => {
-    if (pageBreaks.length < 2) return
-    const root = containerRef.current
-    if (!root) return
-    requestAnimationFrame(() => {
-      root.querySelectorAll('[data-resume-page-viewport]').forEach((viewport, pageIndex) => {
-        const contMeta = continuationHeadersByPage[pageIndex]
-        if (!contMeta) return
-        const v = viewport as HTMLElement
-        const vRect = v.getBoundingClientRect()
-        const band = v.querySelector('.absolute.left-0.overflow-hidden') as HTMLElement | null
-        const content = v.querySelector('[data-resume-page-content]') as HTMLElement | null
-        const exp = v.querySelector('[data-resume-section="experience"]')
-        const h2 = exp?.querySelector('[data-resume-section-header]') as HTMLElement | null
-        const unit = exp?.querySelector('[data-resume-section-unit]') as HTMLElement | null
-        const overlay = v.querySelector('[data-resume-continuation-header]') as HTMLElement | null
-        const h2Display = h2 ? getComputedStyle(h2).display : null
-        const gap = overlay && unit
-          ? Math.round(unit.getBoundingClientRect().top - overlay.getBoundingClientRect().bottom)
-          : null
-        fetch('http://127.0.0.1:7793/ingest/6a1fba93-9642-4533-95c7-c37abb25703e', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'a20dd7' },
-          body: JSON.stringify({
-            sessionId: 'a20dd7',
-            runId: 'post-fix-3',
-            hypothesisId: 'I',
-            location: 'ResumePreview.tsx:postRender',
-            message: 'continuation overlap probe',
-            data: {
-              pageIndex,
-              breakTop: pageBreaks[pageIndex],
-              contHeaderH: contMeta.height,
-              marginTop: content ? getComputedStyle(content).marginTop : null,
-              bandTop: band ? Math.round(band.getBoundingClientRect().top - vRect.top) : null,
-              h2Display,
-              headerGapPx: gap,
-              overlap: gap != null && gap < 4,
-            },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {})
-      })
-    })
-  }, [pageBreaks, continuationHeadersByPage])
-  // #endregion
-
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
