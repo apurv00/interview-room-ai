@@ -126,11 +126,11 @@ export function renderResumeHTML(
       height: 794px;
       overflow: hidden;
       position: relative;
-      display: flex;
-      flex-direction: column;
     }
     .resume-continuation-header {
-      flex-shrink: 0;
+      position: absolute;
+      top: 0;
+      left: 0;
       width: 547px;
       font-family: ${fontStack};
       font-size: ${sizes.body};
@@ -139,19 +139,20 @@ export function renderResumeHTML(
       --r-section: ${sizes.section};
       --r-meta: ${sizes.meta};
       background: #ffffff;
-      z-index: 10;
+      z-index: 20;
       box-sizing: border-box;
     }
     .resume-continuation-header h2 {
       margin: 0;
+      padding-bottom: 0.25rem;
       font-size: inherit;
       line-height: inherit;
     }
     .resume-page-content-band {
-      flex: 1;
-      min-height: 0;
+      position: absolute;
+      inset: 0;
       overflow: hidden;
-      position: relative;
+      z-index: 0;
     }
     .resume-page-content {
       width: 547px;
@@ -249,8 +250,35 @@ export function renderResumeHTML(
       }
 
       function headerBlockHeight(headerEl) {
-        const rectH = headerEl.getBoundingClientRect().height;
-        return Math.max(headerEl.offsetHeight, Math.ceil(rectH));
+        const rootRect = headerEl.getBoundingClientRect();
+        const titled = headerEl.querySelector(':scope > h2') || (headerEl.matches('h2') ? headerEl : null);
+        let extentBottom = rootRect.bottom;
+        if (titled) {
+          const tRect = titled.getBoundingClientRect();
+          const marginBottom = parseFloat(getComputedStyle(titled).marginBottom) || 0;
+          extentBottom = Math.max(extentBottom, tRect.bottom + marginBottom);
+        } else {
+          const marginBottom = parseFloat(getComputedStyle(headerEl).marginBottom) || 0;
+          extentBottom = rootRect.bottom + marginBottom;
+        }
+        return Math.max(headerEl.offsetHeight, Math.ceil(extentBottom - rootRect.top));
+      }
+
+      function sectionHeaderReserveHeight(sectionEl, headerEl, templateRoot) {
+        const headerTop = relativeTop(headerEl, templateRoot);
+        const fallback = headerBlockHeight(headerEl);
+        const firstUnit = collectSectionUnits(sectionEl)[0];
+        let reserve = fallback;
+        if (firstUnit) {
+          reserve = Math.max(fallback, relativeTop(firstUnit, templateRoot) - headerTop);
+        } else {
+          let next = headerEl.nextElementSibling;
+          while (next && next.tagName === 'STYLE') next = next.nextElementSibling;
+          if (next) {
+            reserve = Math.max(fallback, relativeTop(next, templateRoot) - headerTop);
+          }
+        }
+        return reserve + 4;
       }
 
       function measureSplittable(sectionEl, templateRoot, sectionId) {
@@ -259,7 +287,7 @@ export function renderResumeHTML(
         const unitEls = collectSectionUnits(sectionEl);
         const header = headerEl ? {
           offsetTop: relativeTop(headerEl, templateRoot) - sectionTop,
-          offsetHeight: headerBlockHeight(headerEl),
+          offsetHeight: sectionHeaderReserveHeight(sectionEl, headerEl, templateRoot),
         } : { offsetTop: 0, offsetHeight: 0 };
         const units = unitEls.map((el, unitIndex) => ({
           unitIndex,
@@ -284,7 +312,7 @@ export function renderResumeHTML(
           sectionId,
           offsetTop: relativeTop(el, templateRoot),
           offsetHeight: el.offsetHeight,
-          headerHeight: headerEl ? headerEl.offsetHeight : 0,
+          headerHeight: headerEl ? sectionHeaderReserveHeight(el, headerEl, templateRoot) : 0,
           lineTops: collectLineTops(el, templateRoot),
         };
       }
@@ -493,7 +521,7 @@ export function renderResumeHTML(
 
         return {
           title,
-          height: headerBlockHeight(header),
+          height: sectionHeaderReserveHeight(section, header, templateRoot),
           left: Math.max(0, Math.round(headerRect.left - rootRect.left)),
           width: Math.max(0, Math.round(headerRect.width)),
           html: header.outerHTML,
@@ -554,6 +582,7 @@ export function renderResumeHTML(
           header.className = 'resume-continuation-header';
           header.style.width = (headerMetrics.width > 0 ? headerMetrics.width : 547) + 'px';
           header.style.marginLeft = headerMetrics.left + 'px';
+          header.style.height = headerMetrics.height + 'px';
           header.style.minHeight = headerMetrics.height + 'px';
           header.innerHTML = headerMetrics.html;
           viewport.appendChild(header);
@@ -562,6 +591,9 @@ export function renderResumeHTML(
         const contentBand = document.createElement('div');
         contentBand.className = 'resume-page-content-band';
         contentBand.style.width = '547px';
+        if (continuationHeaderHeight > 0) {
+          contentBand.style.clipPath = 'inset(' + continuationHeaderHeight + 'px 0 0 0)';
+        }
 
         const content = document.createElement('div');
         content.className = 'resume-wrapper resume-page-content';

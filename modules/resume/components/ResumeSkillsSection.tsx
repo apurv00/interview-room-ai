@@ -55,7 +55,10 @@ export default function ResumeSkillsSection({
 
   return (
     <div data-resume-section="skills" className={sectionClassName}>
-      <div data-resume-skills-header={title} className={headerItemClassName}>
+      <div
+        data-resume-skills-header={title}
+        className={[headerItemClassName, 'pb-1'].filter(Boolean).join(' ')}
+      >
         {renderHeader ? renderHeader() : <h2 className={headerClassName}>{title}</h2>}
       </div>
       {skills.map((cat, index) => {

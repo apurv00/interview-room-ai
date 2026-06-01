@@ -80,7 +80,20 @@ const data = {
       bullets: [
         'Developed e-SDCD, an innovative licensing system for medicine manufacturing.',
         'Led Single Window System API integration for the e-SDCD portal.',
+        'Extended delivery scope with additional compliance and audit workflows across multiple regions.',
+        'Coordinated cross-team releases and maintained platform reliability during peak registration periods.',
       ],
+    },
+    {
+      id: 'e5',
+      company: 'Earlier Role Co',
+      title: 'Software Engineer',
+      location: 'Remote',
+      startDate: 'Jan 2015',
+      endDate: 'May 2017',
+      bullets: Array.from({ length: 5 }, (_, b) =>
+        `Delivered platform milestone ${b + 1} with measurable impact on reliability, performance, and stakeholder reporting across multiple product lines.`,
+      ),
     },
   ],
   education: [
@@ -157,11 +170,15 @@ async function continuationGaps(templateId: string): Promise<ContinuationGapRow[
         const content = pg.querySelector('.resume-page-content') as HTMLElement | null
         const hdr = pg.querySelector('.resume-continuation-header') as HTMLElement | null
         if (!viewport || !content || !hdr) return
+        const contBottom = hdr.getBoundingClientRect().bottom
         const exp = content.querySelector('[data-resume-section="experience"]')
         const h2 = exp?.querySelector('[data-resume-section-header]') as HTMLElement | null
-        const unit = exp?.querySelector('[data-resume-section-unit]') as HTMLElement | null
+        const units = exp
+          ? Array.from(exp.querySelectorAll('[data-resume-section-unit]') as NodeListOf<HTMLElement>)
+          : []
+        const unit = units.find(u => u.getBoundingClientRect().top >= contBottom - 1)
         const gap = unit
-          ? Math.round(unit.getBoundingClientRect().top - hdr.getBoundingClientRect().bottom)
+          ? Math.round(unit.getBoundingClientRect().top - contBottom)
           : null
         rows.push({
           page: i,

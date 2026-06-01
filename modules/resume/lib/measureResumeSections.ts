@@ -5,10 +5,73 @@ function relativeTop(el: HTMLElement, root: HTMLElement): number {
   return Math.round(el.getBoundingClientRect().top - rootRect.top)
 }
 
-/** Visual block height for section headers (borders, line-height, not just offsetHeight). */
+/**
+ * Visual block height for section headers (borders, line-height, trailing margin).
+ * Skills headers wrap an `<h2>` in `[data-resume-skills-header]`; the h2's
+ * `mb-*` gap before the first category is NOT part of the wrapper's
+ * offsetHeight but IS part of the layout the paginator must preserve on
+ * continuation pages — include it here so marginTop compensation does not
+ * pull the first unit up into the header underline.
+ */
 export function headerBlockHeight(headerEl: HTMLElement): number {
-  const rectH = headerEl.getBoundingClientRect().height
-  return Math.max(headerEl.offsetHeight, Math.ceil(rectH))
+  const rootRect = headerEl.getBoundingClientRect()
+  const view = headerEl.ownerDocument?.defaultView
+
+  const titled =
+    (headerEl.querySelector(':scope > h2') as HTMLElement | null)
+    ?? (headerEl.matches('h2') ? headerEl : null)
+
+  let extentBottom = rootRect.bottom
+
+  if (titled && view) {
+    const tRect = titled.getBoundingClientRect()
+    const marginBottom = parseFloat(view.getComputedStyle(titled).marginBottom) || 0
+    extentBottom = Math.max(extentBottom, tRect.bottom + marginBottom)
+  } else if (view) {
+    const marginBottom = parseFloat(view.getComputedStyle(headerEl).marginBottom) || 0
+    extentBottom = rootRect.bottom + marginBottom
+  }
+
+  return Math.max(headerEl.offsetHeight, Math.ceil(extentBottom - rootRect.top))
+}
+
+/**
+ * Height to reserve when repeating a section header on a continuation page:
+ * from the header top through the live layout gap before the first body item.
+ * Captures margin-collapse, grid row gaps, and wrapper padding the way the
+ * browser actually laid out the measurer DOM — one path for all sections.
+ */
+export function sectionHeaderReserveHeight(
+  sectionEl: HTMLElement,
+  headerEl: HTMLElement,
+  templateRoot: HTMLElement,
+): number {
+  const headerTop = relativeTop(headerEl, templateRoot)
+  const fallback = headerBlockHeight(headerEl)
+
+  const firstUnit = collectSectionUnits(sectionEl)[0]
+  if (firstUnit) {
+    return Math.max(fallback, relativeTop(firstUnit, templateRoot) - headerTop)
+  }
+
+  let next: Element | null = headerEl.nextElementSibling
+  while (next && next.tagName === 'STYLE') next = next.nextElementSibling
+  if (next instanceof HTMLElement) {
+    return Math.max(fallback, relativeTop(next, templateRoot) - headerTop)
+  }
+
+  return fallback
+}
+
+/** Extra px below measured header reserve — guards sub-pixel collapse / overlay bleed. */
+export const SECTION_HEADER_GAP_BUFFER_PX = 4
+
+export function sectionHeaderReserveHeightWithBuffer(
+  sectionEl: HTMLElement,
+  headerEl: HTMLElement,
+  templateRoot: HTMLElement,
+): number {
+  return sectionHeaderReserveHeight(sectionEl, headerEl, templateRoot) + SECTION_HEADER_GAP_BUFFER_PX
 }
 
 const UNIT_SELECTOR = '[data-resume-section-unit], [data-resume-skills-category]'
@@ -70,7 +133,7 @@ function measureSplittableSection(
   const header = headerEl
     ? {
         offsetTop: relativeTop(headerEl, templateRoot) - sectionTop,
-        offsetHeight: headerBlockHeight(headerEl),
+        offsetHeight: sectionHeaderReserveHeightWithBuffer(sectionEl, headerEl, templateRoot),
       }
     : { offsetTop: 0, offsetHeight: 0 }
 
@@ -102,7 +165,7 @@ function measureBlock(
     sectionId,
     offsetTop: relativeTop(el, templateRoot),
     offsetHeight: el.offsetHeight,
-    headerHeight: headerEl?.offsetHeight ?? 0,
+    headerHeight: headerEl ? sectionHeaderReserveHeightWithBuffer(el, headerEl, templateRoot) : 0,
     lineTops: collectLineTops(el, templateRoot),
   }
 }
@@ -203,7 +266,10 @@ function headerMetricsFromElement(
 
   return {
     title,
-    height: headerBlockHeight(header),
+    height:
+      sectionEl instanceof HTMLElement
+        ? sectionHeaderReserveHeightWithBuffer(sectionEl, header, templateRoot)
+        : headerBlockHeight(header),
     left: Math.max(0, Math.round(headerRect.left - rootRect.left)),
     width: Math.max(0, Math.round(headerRect.width)),
     // outerHTML keeps section title classes (font, uppercase, borders); innerHTML is text-only for <h2>.
@@ -260,8 +326,12 @@ export function readSkillsSectionTitle(templateRoot: HTMLElement): string {
 }
 
 export function readSkillsHeaderHeight(templateRoot: HTMLElement): number {
+  const section = templateRoot.querySelector('[data-resume-section="skills"]') as HTMLElement | null
   const header = templateRoot.querySelector('[data-resume-skills-header]') as HTMLElement | null
-  return header?.offsetHeight ?? 0
+  if (section && header) {
+    return sectionHeaderReserveHeightWithBuffer(section, header, templateRoot)
+  }
+  return header ? headerBlockHeight(header) : 0
 }
 
 /** @deprecated Use readContinuationHeaderAtBreak */
