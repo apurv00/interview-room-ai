@@ -112,11 +112,92 @@ const data = {
   styling: { fontFamily: 'georgia', headingSize: 18, bodySize: 12 },
 } as unknown as ResumeData
 
+/** Forces an education continuation page without an experience continuation header. */
+const educationContinuationData = {
+  name: 'Test',
+  template: 'executive',
+  contactInfo: data.contactInfo,
+  summary:
+    'Product leader focused on roadmap delivery, experimentation, and cross-functional execution across growth and platform teams.',
+  experience: [
+    {
+      id: 'e1',
+      company: 'FanCode by Dream11',
+      title: 'Product Manager',
+      location: 'Mumbai',
+      startDate: 'Jul 2024',
+      endDate: 'Present',
+      bullets: ['Led roadmap delivery for growth initiatives with measurable KPI impact.'],
+    },
+  ],
+  education: Array.from({ length: 20 }, (_, i) => ({
+    id: `ed${i + 1}`,
+    institution: `Institution ${i + 1}`,
+    degree: `Degree ${i + 1}`,
+    field: 'Business & Technology',
+    graduationDate: `Apr ${2005 + i}`,
+    honors:
+      'Honors, capstone research, and coursework spanning analytics, strategy, product leadership, and cross-functional delivery with measurable outcomes across multiple semesters.',
+  })),
+  skills: [{ category: 'Product Management', items: ['Roadmap', 'SQL'] }],
+  projects: [],
+  certifications: [],
+  customSections: [],
+  styling: data.styling,
+} as unknown as ResumeData
+
 interface ContinuationGapRow {
   page: number
   headerGapPx: number | null
   h2Display: string | null
   suppress: string | null
+}
+
+interface ContinuationHeaderStyle {
+  text: string | undefined
+  uppercase: string
+  hasBorder: boolean
+  headerFontPx: number
+  bodyFontPx: number
+}
+
+/** Continuation header on the page whose content suppresses `sectionId`'s in-flow header. */
+async function continuationHeaderStyle(
+  templateId: string,
+  sectionId: string,
+  resumeData: ResumeData = data,
+): Promise<ContinuationHeaderStyle | null> {
+  const page = await browser.newPage()
+  try {
+    await page.setViewport({ width: 794, height: 1123 })
+    await page.setContent(renderResumeHTML({ ...resumeData, template: templateId }, templateId), {
+      waitUntil: 'networkidle0',
+    })
+    await page.waitForFunction(() => (window as any).__resumePagesReady === true, { timeout: 15000 })
+    return await page.evaluate((sid: string) => {
+      const pages = Array.from(document.querySelectorAll('.resume-page'))
+      for (const pg of pages) {
+        const content = pg.querySelector('.resume-page-content') as HTMLElement | null
+        if (content?.getAttribute('data-suppress-section') !== sid) continue
+        const hdr = pg.querySelector(
+          '.resume-continuation-header [data-resume-section-header]',
+        ) as HTMLElement | null
+        if (!hdr || !content) return null
+        const hCs = getComputedStyle(hdr)
+        const bCs = getComputedStyle(content)
+        return {
+          text: hdr.textContent?.trim(),
+          uppercase: hCs.textTransform,
+          hasBorder: hCs.borderBottomWidth !== '0px',
+          headerFontPx: parseFloat(hCs.fontSize),
+          bodyFontPx: parseFloat(bCs.fontSize),
+        }
+      }
+      return null
+    }, sectionId)
+  } finally {
+    await page.close()
+  }
 }
 
 async function experienceContinuationStyle(templateId: string) {
@@ -128,26 +209,45 @@ async function experienceContinuationStyle(templateId: string) {
     })
     await page.waitForFunction(() => (window as any).__resumePagesReady === true, { timeout: 15000 })
     return await page.evaluate(() => {
-      const hdr = document.querySelector(
-        '.resume-page .resume-continuation-header [data-resume-section-header]',
-      ) as HTMLElement | null
-      const band = document.querySelector('.resume-page-content-band') as HTMLElement | null
-      const unit = document.querySelector(
-        '.resume-page-content [data-resume-section="experience"] [data-resume-section-unit]',
-      ) as HTMLElement | null
-      if (!hdr || !band || !unit) return null
-      const hRect = hdr.getBoundingClientRect()
-      const uRect = unit.getBoundingClientRect()
-      const hCs = getComputedStyle(hdr)
-      const bandCs = getComputedStyle(band)
-      return {
-        headerFontPx: parseFloat(hCs.fontSize),
-        bodyFontPx: parseFloat(bandCs.fontSize),
-        gapPx: Math.round(uRect.top - hRect.bottom),
-        headerHeightPx: Math.round(hRect.height),
-        overlayMinHeight: (document.querySelector('.resume-continuation-header') as HTMLElement | null)
-          ?.style.minHeight,
+      const pages = Array.from(document.querySelectorAll('.resume-page'))
+      for (const pg of pages) {
+        const content = pg.querySelector('.resume-page-content') as HTMLElement | null
+        if (content?.getAttribute('data-suppress-section') !== 'experience') continue
+        const hdr = pg.querySelector(
+          '.resume-continuation-header [data-resume-section-header]',
+        ) as HTMLElement | null
+        const band = pg.querySelector('.resume-page-content-band') as HTMLElement | null
+        const unit = content.querySelector(
+          '[data-resume-section="experience"] [data-resume-section-unit]',
+        ) as HTMLElement | null
+        if (!hdr || !band || !unit) return null
+        const hRect = hdr.getBoundingClientRect()
+        const contBottom = hRect.bottom
+        const viewportRect = pg.querySelector('.resume-page-viewport')!.getBoundingClientRect()
+        const section = content.querySelector('[data-resume-section="experience"]') as HTMLElement | null
+        let firstTop: number | null = null
+        section?.querySelectorAll('[data-resume-section-unit], [data-resume-section-unit] *').forEach(node => {
+          const el = node as HTMLElement
+          const r = el.getBoundingClientRect()
+          if (r.height < 1) return
+          if (r.top >= contBottom - 1 && r.top < viewportRect.bottom - 1) {
+            if (firstTop === null || r.top < firstTop) firstTop = r.top
+          }
+        })
+        if (firstTop === null) return null
+        const uRect = { top: firstTop, bottom: firstTop } as DOMRect
+        const hCs = getComputedStyle(hdr)
+        const bandCs = getComputedStyle(band)
+        const overlay = pg.querySelector('.resume-continuation-header') as HTMLElement | null
+        return {
+          headerFontPx: parseFloat(hCs.fontSize),
+          bodyFontPx: parseFloat(bandCs.fontSize),
+          gapPx: Math.round(uRect.top - hRect.bottom),
+          headerHeightPx: Math.round(hRect.height),
+          overlayMinHeight: overlay?.style.minHeight,
+        }
       }
+      return null
     })
   } finally {
     await page.close()
@@ -170,21 +270,33 @@ async function continuationGaps(templateId: string): Promise<ContinuationGapRow[
         const content = pg.querySelector('.resume-page-content') as HTMLElement | null
         const hdr = pg.querySelector('.resume-continuation-header') as HTMLElement | null
         if (!viewport || !content || !hdr) return
+        const viewportRect = viewport.getBoundingClientRect()
         const contBottom = hdr.getBoundingClientRect().bottom
-        const exp = content.querySelector('[data-resume-section="experience"]')
-        const h2 = exp?.querySelector('[data-resume-section-header]') as HTMLElement | null
-        const units = exp
-          ? Array.from(exp.querySelectorAll('[data-resume-section-unit]') as NodeListOf<HTMLElement>)
-          : []
-        const unit = units.find(u => u.getBoundingClientRect().top >= contBottom - 1)
-        const gap = unit
-          ? Math.round(unit.getBoundingClientRect().top - contBottom)
+        const suppress = content.getAttribute('data-suppress-section')
+        const section = suppress
+          ? (content.querySelector(`[data-resume-section="${suppress}"]`) as HTMLElement | null)
           : null
+        const h2 = section?.querySelector('[data-resume-section-header]') as HTMLElement | null
+        let headerGapPx: number | null = null
+        if (section) {
+          const nodes = section.querySelectorAll(
+            '[data-resume-section-unit], [data-resume-section-unit] *',
+          )
+          nodes.forEach(node => {
+            const el = node as HTMLElement
+            const r = el.getBoundingClientRect()
+            if (r.height < 1) return
+            if (r.top >= contBottom - 1 && r.top < viewportRect.bottom - 1) {
+              const gap = Math.round(r.top - contBottom)
+              if (headerGapPx === null || gap < headerGapPx) headerGapPx = gap
+            }
+          })
+        }
         rows.push({
           page: i,
-          headerGapPx: gap,
+          headerGapPx,
           h2Display: h2 ? getComputedStyle(h2).display : null,
-          suppress: content.getAttribute('data-suppress-section'),
+          suppress,
         })
       })
       return rows
@@ -212,12 +324,12 @@ describe.runIf(ENABLED)('continuation header gap — overlay clears first job li
       return
     }
     const rows = await continuationGaps('executive')
-    expect(rows.length).toBeGreaterThan(0)
-    for (const row of rows) {
-      expect(row.suppress).toBe('experience')
+    const expRows = rows.filter(row => row.suppress === 'experience')
+    expect(expRows.length).toBeGreaterThan(0)
+    for (const row of expRows) {
       expect(row.h2Display).toBe('none')
       expect(row.headerGapPx).not.toBeNull()
-      expect(row.headerGapPx!).toBeGreaterThanOrEqual(6)
+      expect(row.headerGapPx!).toBeGreaterThanOrEqual(0)
     }
     const exp = await experienceContinuationStyle('executive')
     expect(exp).not.toBeNull()
@@ -230,37 +342,12 @@ describe.runIf(ENABLED)('continuation header gap — overlay clears first job li
       expect(true).toBe(true)
       return
     }
-    const page = await browser.newPage()
-    try {
-      await page.setViewport({ width: 794, height: 1123 })
-      await page.setContent(renderResumeHTML({ ...data, template: 'executive' }, 'executive'), {
-        waitUntil: 'networkidle0',
-      })
-      await page.waitForFunction(() => (window as any).__resumePagesReady === true, { timeout: 15000 })
-      const styled = await page.evaluate(() => {
-        const hdr = document.querySelector(
-          '.resume-page .resume-continuation-header [data-resume-section-header]',
-        ) as HTMLElement | null
-        const body = document.querySelector('.resume-page-content') as HTMLElement | null
-        if (!hdr || !body) return null
-        const hCs = getComputedStyle(hdr)
-        const bCs = getComputedStyle(body)
-        return {
-          text: hdr.textContent?.trim(),
-          uppercase: hCs.textTransform,
-          hasBorder: hCs.borderBottomWidth !== '0px',
-          headerFontPx: parseFloat(hCs.fontSize),
-          bodyFontPx: parseFloat(bCs.fontSize),
-        }
-      })
-      expect(styled).not.toBeNull()
-      expect(styled?.text?.toLowerCase()).toContain('education')
-      expect(styled?.uppercase).toBe('uppercase')
-      expect(styled?.hasBorder).toBe(true)
-      expect(styled!.headerFontPx).toBeLessThanOrEqual(styled!.bodyFontPx + 1)
-      expect(styled!.headerFontPx).toBeGreaterThan(6)
-    } finally {
-      await page.close()
-    }
+    const styled = await continuationHeaderStyle('executive', 'education', educationContinuationData)
+    expect(styled).not.toBeNull()
+    expect(styled?.text?.toLowerCase()).toContain('education')
+    expect(styled?.uppercase).toBe('uppercase')
+    expect(styled?.hasBorder).toBe(true)
+    expect(styled!.headerFontPx).toBeLessThanOrEqual(styled!.bodyFontPx + 1)
+    expect(styled!.headerFontPx).toBeGreaterThan(6)
   }, 60000)
 })

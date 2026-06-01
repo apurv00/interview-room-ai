@@ -597,6 +597,7 @@ export function renderResumeHTML(
 
         const content = document.createElement('div');
         content.className = 'resume-wrapper resume-page-content';
+        content.setAttribute('data-resume-page-content', '');
         const suppressSectionId =
           plan.continuation[pageIndex] && headerMetrics ? headerMetrics.sectionId : null;
         const headerH = headerMetrics ? headerMetrics.height : 0;
