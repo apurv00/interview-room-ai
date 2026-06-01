@@ -1,9 +1,16 @@
-'use client'
-
+// IMPORTANT: this component must stay server-renderable. It is rendered via
+// renderToStaticMarkup in the PDF/print path (services/pdfService.ts), so it
+// must NOT be 'use client' and must NOT import any value from a 'use client'
+// module — in the Next production build that turns it (or the hook) into a
+// client *reference* that renderToStaticMarkup can't render ("Element type is
+// invalid... got: undefined"), which silently broke PDF export for every resume.
+// Truncation cues therefore arrive as a PROP (the preview passes its context
+// value down) rather than via useContext. The `import type` below is erased at
+// build time, so it creates no runtime dependency on the client context module.
 import type { ReactNode } from 'react'
 import type { ResumeData } from '../validators/resume'
 import { omittedSkillItemCount, sliceSkillCategory } from '../lib/skillCategoryTruncation'
-import { useResumePreviewPage } from './ResumePreviewPageContext'
+import type { ResumePreviewPageContextValue } from './ResumePreviewPageContext'
 
 type SkillCategory = NonNullable<ResumeData['skills']>[number]
 
@@ -15,6 +22,9 @@ interface Props {
   /** Override default &lt;h2&gt; (e.g. minimalist template adds an &lt;hr&gt;) */
   renderHeader?: () => ReactNode
   renderCategory: (cat: SkillCategory, index: number) => ReactNode
+  /** Per-page truncation cues. Supplied by the preview; absent in the PDF/print
+   *  render, where it safely defaults to "no truncation" (renders all items). */
+  pageContext?: ResumePreviewPageContextValue
 }
 
 function extractGridSpanClass(className?: string): string | undefined {
@@ -36,8 +46,9 @@ export default function ResumeSkillsSection({
   headerClassName,
   renderHeader,
   renderCategory,
+  pageContext,
 }: Props) {
-  const previewPage = useResumePreviewPage()
+  const previewPage = pageContext
   const headerItemClassName = extractGridSpanClass(headerClassName)
 
   if (!skills.length) return null

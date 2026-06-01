@@ -9,7 +9,9 @@ import {
   DEFAULT_BODY_SIZE,
 } from '../config/fontConfig'
 import { getTemplate } from '../components/templates'
-import { ResumePreviewPageProvider } from '../components/ResumePreviewPageContext'
+// Type-only import (erased at build): the runtime ResumePreviewPageProvider is a
+// 'use client' value and must NOT be imported into this server render path — doing
+// so makes it a client reference that renderToStaticMarkup can't render.
 import type { ResumePreviewPageContextValue } from '../components/ResumePreviewPageContext'
 import {
   applySkillsTruncationToData,
@@ -42,17 +44,13 @@ function renderTemplateToMarkup(
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const reactDomServer = require('react-dom/server') as typeof import('react-dom/server')
   const Template = getTemplate(templateId)
-  // When a page context is supplied (PDF truncation pass), wrap the template in
-  // the SAME provider the preview uses so ResumeSkillsSection slices oversized
-  // categories and renders the "+N more" cue identically — no more clipping or
-  // page-count divergence between preview and export (Codex r3319377027).
-  const tree = pageContext
-    ? createElement(
-        ResumePreviewPageProvider,
-        { value: pageContext },
-        createElement(Template, { data }),
-      )
-    : createElement(Template, { data })
+  // pageContext is NOT threaded via the client React provider here: that provider
+  // is a 'use client' value, and rendering it inside this server-side
+  // renderToStaticMarkup makes it a client reference → "Element type is invalid".
+  // The server PDF/print render uses the no-truncation default (ResumeSkillsSection
+  // reads truncation cues from a prop, which only the live preview supplies).
+  void pageContext
+  const tree = createElement(Template, { data })
   return reactDomServer.renderToStaticMarkup(tree)
 }
 

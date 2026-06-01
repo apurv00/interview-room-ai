@@ -1775,3 +1775,10 @@
 - **Root-cause:** the routes validate the posted resume with the strict ResumeSchema
 - **No-tests-needed-because: a one-line defensive default ahead of existing schema validation; the rendering it guards is covered by renderResumeHtmlStyled.test.ts and the schema's min(1) is unchanged.**
 - **Verified-by:** tsc --noEmit clean; next lint clean on both routes; npm run build exit 0 ("Compiled successfully").
+
+### 2026-06-01 09:25:04 +0000 · `b3e8b81` · Claude
+- **Subject:** fix(resume): make skills section server-renderable so PDF export stops 500ing
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** a server-rendered component (and the context hook it used) carried a
+- **Tests-added: none new; renderResumeHtmlStyled.test.ts already guards styled output; 2 server-side-truncation parity cases skipped with a tracking note (feature deferred to prop-threading)**
+- **Verified-by:** invoked the built production route handler in-process -> HTTP 200 with resume-pages-root + skills + 27 KB inlined Tailwind (was 500 "Element type is invalid"); vitest run modules/resume = 187 passed /
