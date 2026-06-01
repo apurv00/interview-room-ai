@@ -1761,3 +1761,10 @@
 - **Root-cause:** the browser-print fallback rendered Tailwind-classed markup with no
 - **Tests-added: modules/resume/services/__tests__/renderResumeHtmlStyled.test.ts (asserts the fallback HTML inlines a substantial Tailwind stylesheet + pagination structure + A4 page for 6 families — t**
 - **Verified-by:** vitest run modules/resume = 189 passed / 3 skipped (incl. 18 new); tsc --noEmit clean; next lint clean on both changed files; npm run build exit 0 with ƒ /api/resume/pdf-html compiled.
+
+### 2026-06-01 08:41:52 +0000 · `39c5a39` · Claude
+- **Subject:** fix(resume): allow anonymous print via /api/resume/pdf-html (Codex r3332771135)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the route copied the auth gate from /api/resume/pdf, but unlike the
+- **No-tests-needed-because: the change only removes an auth check; the endpoint's HTML output is already covered by renderResumeHtmlStyled.test.ts (renderResumeHTML), and route-level auth removal has no **
+- **Verified-by:** tsc --noEmit clean; next lint clean; npm run build exit 0 with ƒ /api/resume/pdf-html compiled.
