@@ -19,12 +19,15 @@ divergent implementations of filler detection:
 The fix extracts a single source of truth, **`config/fillerMetrics.ts`**
 (`computeFillerMetrics`), consumed by both call sites: punctuation
 normalization, contextual `"like"` detection (pause-/neighbor-aware), and
-word-weighted aggregation. Its accompanying suite lands at
-`__tests__/speechMetrics.test.ts`.
+word-weighted aggregation. Its tests land at `__tests__/speechMetrics.test.ts`.
 
-Adding those two files takes `modules/interview` to **141 of 140 files**,
-tripping the file-count budget. **LOC is unaffected** (~28.0k of 30k) — this is
-a count-shape change (de-duplication into one small module), not size growth.
+The file-count budget counts **non-test source only**: `countFiles()` in
+`scripts/check-module-size.mjs` skips `__tests__/`, and the LOC `find` greps it
+out. So of the PR's two new files, exactly **one is counted** —
+`config/fillerMetrics.ts`; the test file is invisible to the budget. The module
+already sat at the 140 cap, so that single new source file takes it to **141 of
+140**, tripping the gate. **LOC is unaffected** (~28.0k of 30k) — a count-shape
+change (de-duplication into one small module), not size growth.
 
 ## Decision
 
