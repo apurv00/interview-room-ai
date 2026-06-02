@@ -333,6 +333,7 @@ export default function InterviewPage() {
   const {
     phase,
     questionIndex,
+    questionDisplay,
     currentQuestion,
     avatarEmotion,
     isAvatarTalking,
@@ -859,7 +860,7 @@ export default function InterviewPage() {
       {/* ── Transcript panel ── */}
       <TranscriptPanel
         phase={phase}
-        questionIndex={questionIndex}
+        questionDisplay={questionDisplay}
         duration={config.duration}
         currentQuestion={currentQuestion}
         liveAnswer={displayAnswer}

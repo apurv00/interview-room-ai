@@ -191,10 +191,15 @@ end while
 
 ```
 → [A] transitionTo('WRAP_UP')
+→ [A] questionDisplay = { kind: 'wrap_up' }
+→ [A] setCurrentQuestion(WRAP_UP_LINE)
 → [A] avatarSpeak(WRAP_UP_LINE)
 → [A] listenForAnswer(15000)
-→ [C] wrapUpAnswer > 5 chars → avatarSpeak(closing)
-→ [C] !wrapUpAnswer → avatarSpeak(noQuestionsClose)
+→ [A] classifyWrapUpAnswer(answer)
+→ [C] has_question → POST /api/interview/answer-candidate-question
+      → avatarSpeak(safeAnswer + client-owned sign-off)
+→ [C] no_questions → avatarSpeak(noQuestionsClose)
+→ [C] thank_you_only → avatarSpeak(neutralClose)
 → [A] finishInterview()
 ```
 

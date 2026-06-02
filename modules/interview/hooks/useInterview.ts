@@ -46,6 +46,14 @@ import {
 import { useAvatarSpeech } from './useAvatarSpeech'
 import { EVALUATE_ANSWER_BACKGROUND_TIMEOUT_MS, useInterviewAPI } from './useInterviewAPI'
 import { createDbSession, persistSession, type CreateDbSessionResult } from './interviewPersistence'
+import {
+  buildWrapUpClosingLine,
+  classifyWrapUpAnswer,
+  shouldAnswerWrapUpWithLLM,
+} from '@interview/utils/classifyWrapUpAnswer'
+import type { QuestionDisplay } from '@interview/utils/questionDisplay'
+import { INITIAL_QUESTION_DISPLAY } from '@interview/utils/questionDisplay'
+import type { CandidateQuestionContext } from './useInterviewAPI'
 
 // ─── Hook options ─────────────────────────────────────────────────────────────
 
@@ -160,6 +168,7 @@ function designEvaluationToAnswerEvaluation(
 export interface UseInterviewReturn {
   phase: InterviewState
   questionIndex: number
+  questionDisplay: QuestionDisplay
   currentQuestion: string
   avatarEmotion: AvatarEmotion
   isAvatarTalking: boolean
@@ -289,7 +298,13 @@ export function useInterview({
   // ── API calls (extracted to useInterviewAPI) ──
   // Pass a lazy getter for sessionId so the fetch body sends the latest value
   // once createDbSession resolves — without forcing a re-render of this hook.
-  const { generateQuestion: apiGenerateQuestion, evaluateAnswer: apiEvaluateAnswer, callTurnRouter: apiCallTurnRouter, flowHintsRef } = useInterviewAPI({
+  const {
+    generateQuestion: apiGenerateQuestion,
+    evaluateAnswer: apiEvaluateAnswer,
+    callTurnRouter: apiCallTurnRouter,
+    answerCandidateQuestion: apiAnswerCandidateQuestion,
+    flowHintsRef,
+  } = useInterviewAPI({
     config,
     getSessionId: () => sessionIdRef.current,
   })
@@ -297,7 +312,9 @@ export function useInterview({
   // ── Interview content ──
   const [currentQuestion, setCurrentQuestion] = useState('')
   const [questionIndex, setQuestionIndex] = useState(0)
+  const [questionDisplay, setQuestionDisplay] = useState<QuestionDisplay>(INITIAL_QUESTION_DISPLAY)
   const questionIndexRef = useRef(0)
+  const mainQuestionNumberRef = useRef(0)
   const transcriptRef = useRef<TranscriptEntry[]>([])
   const evaluationsRef = useRef<AnswerEvaluation[]>([])
   const pendingEvaluationsRef = useRef<Set<Promise<void>>>(new Set())
@@ -406,6 +423,38 @@ export function useInterview({
   const currentProbeDepthRef = useRef(0)
   const currentThreadRef = useRef<ThreadEntry[]>([])
   const completedThreadsRef = useRef<ThreadSummary[]>([])
+
+  function showIntroDisplay() {
+    setQuestionDisplay({ kind: 'intro' })
+  }
+
+  function showNextMainQuestionDisplay() {
+    const number = mainQuestionNumberRef.current + 1
+    mainQuestionNumberRef.current = number
+    setQuestionDisplay({
+      kind: 'question',
+      number,
+      progressIndex: number,
+    })
+  }
+
+  function showQuestionDisplay(number: number, progressIndex = number) {
+    mainQuestionNumberRef.current = Math.max(mainQuestionNumberRef.current, number)
+    setQuestionDisplay({ kind: 'question', number, progressIndex })
+  }
+
+  function showFollowUpDisplay(number = Math.max(1, currentProbeDepthRef.current)) {
+    setQuestionDisplay({
+      kind: 'follow_up',
+      number,
+      parentNumber: mainQuestionNumberRef.current || undefined,
+      progressIndex: mainQuestionNumberRef.current || undefined,
+    })
+  }
+
+  function showWrapUpDisplay() {
+    setQuestionDisplay({ kind: 'wrap_up' })
+  }
 
   // ── Thinking pause mode (TM1) — suspends silence timeout while candidate thinks ──
   const isThinkingPauseRef = useRef(false)
@@ -660,6 +709,12 @@ export function useInterview({
       )
     },
     [apiEvaluateAnswer]
+  )
+
+  const answerCandidateQuestion = useCallback(
+    (candidateQuestion: string, context: CandidateQuestionContext): Promise<string> =>
+      apiAnswerCandidateQuestion(candidateQuestion, context, getAbortSignal()),
+    [apiAnswerCandidateQuestion],
   )
 
   // ─── Shared helpers (DRY: listening + evaluation + coaching) ──────────────
@@ -1427,6 +1482,38 @@ export function useInterview({
     currentProbeDepthRef.current = 0
   }
 
+  async function runWrapUpSequence(): Promise<void> {
+    checkAbort()
+    if (isInterviewOver()) return
+
+    wrapUpActiveRef.current = true
+    transitionTo('WRAP_UP')
+    showWrapUpDisplay()
+    setCurrentQuestion(WRAP_UP_LINE)
+    addToTranscript('interviewer', WRAP_UP_LINE)
+    await avatarSpeak(WRAP_UP_LINE, 'friendly')
+
+    setLiveAnswer('')
+    const wrapUpAnswer = await listenForAnswer(true, 15000, () => transitionTo('LISTENING'))
+    if (isInterviewOver()) return
+
+    const wrapUpIntent = classifyWrapUpAnswer(wrapUpAnswer)
+    if (wrapUpIntent !== 'empty' && wrapUpAnswer.trim()) {
+      addToTranscript('candidate', wrapUpAnswer)
+    }
+
+    const safeAnswer = shouldAnswerWrapUpWithLLM(wrapUpIntent)
+      ? await answerCandidateQuestion(wrapUpAnswer, 'wrap_up')
+      : undefined
+    const closingLine = buildWrapUpClosingLine(wrapUpIntent, safeAnswer)
+
+    checkAbort()
+    showWrapUpDisplay()
+    setCurrentQuestion(closingLine)
+    addToTranscript('interviewer', closingLine)
+    await avatarSpeak(closingLine, 'friendly')
+  }
+
   // ─── Main interview loop ───────────────────────────────────────────────────
 
   const runInterviewLoop = useCallback(
@@ -1455,6 +1542,7 @@ export function useInterview({
         const topicQuestion = question // Save for thread summary
         questionIndexRef.current = qIdx
         setQuestionIndex(qIdx)
+        showNextMainQuestionDisplay()
         // Eagerly show the question text and log it to the transcript so
         // the user sees the UI advance immediately. With streaming TTS
         // restored (see `/api/tts/stream`), the text-to-voice gap is
@@ -1688,24 +1776,21 @@ export function useInterview({
           }
 
           if (intent === 'question') {
-            // Proactive candidate question — canned response.
-            // The previous implementation called completion() directly from
-            // this client hook, but completion() routes to Anthropic's SDK
-            // which throws in the browser without dangerouslyAllowBrowser
-            // (and we don't set that because ANTHROPIC_API_KEY is server-
-            // only). The catch block was the only path users ever reached
-            // — confirmed by ".next/static/chunks/app/interview/page-*.js"
-            // shipping the Anthropic SDK + fallback string but no user ever
-            // reporting a real AI answer here. If product wants real AI
-            // answers for this flow later, add a dedicated
-            // /api/interview/answer-candidate-question server route and
-            // fetch() it from here — do NOT reintroduce completion()
-            // imports in a client hook.
+            // Proactive candidate question — answer through the server-side
+            // Safe Q&A route, then redirect back to the active interview turn.
             clarifyingQCountRef.current++
-            const fallback = "Great question! For the purposes of this interview, let's assume a standard scenario. Now, back to my question —"
-            addToTranscript('interviewer', fallback, qIdx)
+            setCurrentQuestion('Sure - let me answer that briefly.')
+            void playAck('Sure.')
+            const safeAnswer = await answerCandidateQuestion(speech, 'mid_interview')
+            checkAbort()
+            if (isInterviewOver()) return
+            cancelAck()
+            const reply = `${safeAnswer} Coming back to the interview question, ${simplifyQuestion(question)}`
+            addToTranscript('interviewer', reply, qIdx)
+            setCurrentQuestion(reply)
             warmUpListening?.()
-            await avatarSpeak(fallback, 'friendly')
+            await avatarSpeak(reply, 'friendly')
+            setCurrentQuestion(question)
             continue
           }
         }
@@ -1797,6 +1882,7 @@ export function useInterview({
           transitionTo('ASK_QUESTION')
           questionIndexRef.current = qIdx
           setQuestionIndex(qIdx)
+          showFollowUpDisplay(currentProbeDepthRef.current)
           warmUpListening?.()
           // BUG-7 fix: defer text + transcript until audio starts
           await avatarSpeak(reAnchorQ, 'curious', () => {
@@ -1855,6 +1941,7 @@ export function useInterview({
           transitionTo('ASK_QUESTION')
           questionIndexRef.current = qIdx
           setQuestionIndex(qIdx)
+          showFollowUpDisplay(currentProbeDepthRef.current)
           warmUpListening?.()
           await avatarSpeak(probeQ, routerResult.style !== 'neutral' ? toneToEmotion(routerResult.style) : 'curious', () => {
             setCurrentQuestion(probeQ)
@@ -1916,6 +2003,7 @@ export function useInterview({
           const deferredTopic = deferredTopicsRef.current.shift()!
           const bridgeMsg = `Earlier you mentioned something interesting — "${deferredTopic}". I'd love to hear more about that.`
           checkAbort()
+          showFollowUpDisplay(1)
           addToTranscript('interviewer', bridgeMsg, qIdx)
           setCurrentQuestion(bridgeMsg)
           warmUpListening?.()
@@ -1947,6 +2035,8 @@ export function useInterview({
           const remaining = deferredTopicsRef.current.splice(0, 2)
           for (const topic of remaining) {
             const followUp = `Before we wrap up — you raised an interesting point earlier about "${topic}". Can you tell me more?`
+            showFollowUpDisplay(1)
+            setCurrentQuestion(followUp)
             addToTranscript('interviewer', followUp)
             warmUpListening?.()
             const { interrupted: wrapUpInterrupted } = await avatarSpeak(followUp, 'curious')
@@ -1963,32 +2053,7 @@ export function useInterview({
         }
       }
 
-      // Wrap-up — listen for user questions and respond
-      checkAbort()
-      if (isInterviewOver()) return
-      wrapUpActiveRef.current = true
-      transitionTo('WRAP_UP')
-      addToTranscript('interviewer', WRAP_UP_LINE)
-      await avatarSpeak(WRAP_UP_LINE, 'friendly')
-
-      // Listen for user's wrap-up questions (15s timeout)
-      setLiveAnswer('')
-      const wrapUpAnswer = await listenForAnswer(true, 15000, () => transitionTo('LISTENING'))
-
-      if (wrapUpAnswer && wrapUpAnswer.trim().length > 5) {
-        addToTranscript('candidate', wrapUpAnswer)
-        // Generate a brief closing response
-        checkAbort()
-        const closingLine = "That's a great question! I appreciate your curiosity. We'll be in touch with next steps. Thank you so much for your time today — it was a pleasure speaking with you!"
-        addToTranscript('interviewer', closingLine)
-        await avatarSpeak(closingLine, 'friendly')
-      } else {
-        // No questions — graceful close
-        const noQuestionsClose = "No worries at all! Thank you so much for your time today — it was a pleasure speaking with you. We'll be in touch!"
-        addToTranscript('interviewer', noQuestionsClose)
-        await avatarSpeak(noQuestionsClose, 'friendly')
-      }
-
+      await runWrapUpSequence()
       finishInterview(timerExpiredDuringWrapUpRef.current ? 'time_up' : 'normal')
       } catch (err) {
         // Silently catch abort errors — interview was intentionally ended
@@ -2005,6 +2070,8 @@ export function useInterview({
     if (!config || !voicesReady) return
 
     interviewAbortRef.current = new AbortController()
+    mainQuestionNumberRef.current = 0
+    showIntroDisplay()
 
     const start = async () => {
       try {
@@ -2026,6 +2093,7 @@ export function useInterview({
         transitionTo('ASK_QUESTION')
         questionIndexRef.current = 1
         setQuestionIndex(1)
+        showQuestionDisplay(1)
         setCurrentQuestion(problemText)
         addToTranscript('interviewer', problemText, 1)
         await avatarSpeak(problemText, 'curious')
@@ -2096,6 +2164,7 @@ export function useInterview({
           transitionTo('ASK_QUESTION')
           questionIndexRef.current = 2
           setQuestionIndex(2)
+          showFollowUpDisplay(1)
           setCurrentQuestion(followUp)
           addToTranscript('interviewer', followUp, 2)
           warmUpListening?.()
@@ -2111,27 +2180,8 @@ export function useInterview({
           }
         }
 
-        // Wrap up — listen for user questions
         if (!isInterviewOver()) {
-          wrapUpActiveRef.current = true
-          transitionTo('WRAP_UP')
-          addToTranscript('interviewer', WRAP_UP_LINE)
-          await avatarSpeak(WRAP_UP_LINE, 'friendly')
-
-          setLiveAnswer('')
-          const codingWrapUpAnswer = await listenForAnswer(true, 15000, () => transitionTo('LISTENING'))
-
-          if (codingWrapUpAnswer && codingWrapUpAnswer.trim().length > 5) {
-            addToTranscript('candidate', codingWrapUpAnswer)
-            const closingLine = "That's a great question! I appreciate your curiosity. We'll be in touch with next steps. Thank you so much for your time today — it was a pleasure speaking with you!"
-            addToTranscript('interviewer', closingLine)
-            await avatarSpeak(closingLine, 'friendly')
-          } else {
-            const noQuestionsClose = "No worries at all! Thank you so much for your time today — it was a pleasure speaking with you. We'll be in touch!"
-            addToTranscript('interviewer', noQuestionsClose)
-            await avatarSpeak(noQuestionsClose, 'friendly')
-          }
-
+          await runWrapUpSequence()
           finishInterview(timerExpiredDuringWrapUpRef.current ? 'time_up' : 'normal')
         }
         return
@@ -2154,6 +2204,7 @@ export function useInterview({
         transitionTo('ASK_QUESTION')
         questionIndexRef.current = 1
         setQuestionIndex(1)
+        showQuestionDisplay(1)
         setCurrentQuestion(problemText)
         addToTranscript('interviewer', problemText, 1)
         await avatarSpeak(problemText, 'curious')
@@ -2230,6 +2281,7 @@ export function useInterview({
           transitionTo('ASK_QUESTION')
           questionIndexRef.current = 2
           setQuestionIndex(2)
+          showFollowUpDisplay(1)
           setCurrentQuestion(followUp)
           addToTranscript('interviewer', followUp, 2)
           warmUpListening?.()
@@ -2251,6 +2303,7 @@ export function useInterview({
           transitionTo('ASK_QUESTION')
           questionIndexRef.current = 3
           setQuestionIndex(3)
+          showFollowUpDisplay(2)
           setCurrentQuestion(tradeOffQ)
           addToTranscript('interviewer', tradeOffQ, 3)
           warmUpListening?.()
@@ -2266,27 +2319,8 @@ export function useInterview({
           }
         }
 
-        // Wrap up — listen for user questions
         if (!isInterviewOver()) {
-          wrapUpActiveRef.current = true
-          transitionTo('WRAP_UP')
-          addToTranscript('interviewer', WRAP_UP_LINE)
-          await avatarSpeak(WRAP_UP_LINE, 'friendly')
-
-          setLiveAnswer('')
-          const designWrapUpAnswer = await listenForAnswer(true, 15000, () => transitionTo('LISTENING'))
-
-          if (designWrapUpAnswer && designWrapUpAnswer.trim().length > 5) {
-            addToTranscript('candidate', designWrapUpAnswer)
-            const closingLine = "That's a great question! I appreciate your curiosity. We'll be in touch with next steps. Thank you so much for your time today — it was a pleasure speaking with you!"
-            addToTranscript('interviewer', closingLine)
-            await avatarSpeak(closingLine, 'friendly')
-          } else {
-            const noQuestionsClose = "No worries at all! Thank you so much for your time today — it was a pleasure speaking with you. We'll be in touch!"
-            addToTranscript('interviewer', noQuestionsClose)
-            await avatarSpeak(noQuestionsClose, 'friendly')
-          }
-
+          await runWrapUpSequence()
           finishInterview(timerExpiredDuringWrapUpRef.current ? 'time_up' : 'normal')
         }
         return
@@ -2294,6 +2328,7 @@ export function useInterview({
 
       // ── Standard interview flow ──
       const intro = getInterviewIntro(config.role, config.interviewType, config.targetCompany)
+      showIntroDisplay()
       setCurrentQuestion(intro)
       addToTranscript('interviewer', intro, 0)
       checkAbort()
@@ -2365,6 +2400,7 @@ export function useInterview({
   return {
     phase,
     questionIndex,
+    questionDisplay,
     currentQuestion,
     avatarEmotion,
     isAvatarTalking,
