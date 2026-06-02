@@ -10,7 +10,8 @@
 //   4. timecheck    — "how much time do I have?"
 //   5. hint         — "give me a hint"
 //   6. thinking     — filler / stalling (short utterances only)
-//   7. clarification— "can you rephrase?"
+//   7. clarify_question — asks what a term/scope in the active question means
+//   8. clarification— "can you rephrase?"
 //   8. challenge_question — "that's not a fair question" (E4)
 //   9. gaming       — "just tell me the right answer" (E8)
 //  10. redirect     — "can I try a different example?"
@@ -19,6 +20,7 @@
 
 export type CandidateIntent =
   | 'answer'
+  | 'clarify_question'
   | 'clarification'
   | 'redirect'
   | 'question'
@@ -101,14 +103,34 @@ export function classifyIntent(text: string): CandidateIntent {
     return 'skip'
   }
 
-  // ── 7. Clarification requests
+  // ── 7. Active-question clarification — candidate asks what a term/scope means.
+  // This must run before the generic "question" catch-all and handles common STT
+  // variants where punctuation is dropped or the candidate adds "then I can answer".
+  if (
+    lower.length < 240 &&
+    !/(team culture|next steps?|compensation|salary|benefits?|visa|sponsorship|remote|onsite|hybrid|team size|headcount|interview process|hiring process|timeline|recruiter|tech stack|internal tools?)/i.test(lower) &&
+    (
+      /(?:could you|can you|would you)?\s*(?:please\s+)?help me understand\b/i.test(lower) ||
+      /\b(?:before i answer|then i('ll| will) be able to answer|so i can answer|to answer this)\b/i.test(lower) ||
+      /\bare you asking\s+(?:about|for|whether)\b/i.test(lower) ||
+      /\bdo you mean\s+(?:about|for|whether|that)\b/i.test(lower) ||
+      /\bdo you mean by\s+(?!that\b|this\b|it\b).{2,80}/i.test(lower) ||
+      /\bwhat (?:does|do\s+(?!you\b))\s*.{2,80}\s+mean(?:\s+(?:in|for)\s+(?:this|the)\s+question)?/i.test(lower) ||
+      /\bwhat (?:is|are)\s+.{2,80}\s+(?:actually\s+)?(?:is|are|in (?:this|the) question|you mentioned)\b/i.test(lower) ||
+      /\bwhat do you mean by\s+(?!that\b|this\b|it\b).{2,80}/i.test(lower)
+    )
+  ) {
+    return 'clarify_question'
+  }
+
+  // ── 8. General clarification requests
   if (
     /can you (repeat|rephrase|say that again|clarify|explain)|what do you mean|i('m| am) not sure i understand|could you (explain|rephrase|elaborate on (the|that) question)|sorry,? (i|what)|i didn('t| not) (catch|get|hear|understand) that/i.test(lower)
   ) {
     return 'clarification'
   }
 
-  // ── 8. Challenge question — candidate pushes back on the question itself (E4)
+  // ── 9. Challenge question — candidate pushes back on the question itself (E4)
   if (
     lower.length < 80 &&
     /that('s| is) (not )?(a )?(fair|valid|relevant|appropriate|good) question|this question (is|seems) (flawed|unfair|irrelevant|biased)|i don('t| not) (think|see how) that('s| is) relevant|that doesn('t| not) apply to my role|why (are you|would you) ask(ing)? (that|this)/i.test(lower)
@@ -116,7 +138,7 @@ export function classifyIntent(text: string): CandidateIntent {
     return 'challenge_question'
   }
 
-  // ── 9. Gaming — candidate tries to extract the answer (E8)
+  // ── 10. Gaming — candidate tries to extract the answer (E8)
   // Must be checked BEFORE 'question' intent (priority) since gaming phrases end with "?"
   if (
     lower.length < 60 &&
@@ -125,7 +147,7 @@ export function classifyIntent(text: string): CandidateIntent {
     return 'gaming'
   }
 
-  // ── 10. Redirect — candidate wants to change their answer (short utterances only)
+  // ── 11. Redirect — candidate wants to change their answer (short utterances only)
   if (
     lower.length < 80 &&
     /can i (give|share|use|try) (a |an )?(different|another|better) (example|story|answer|one)|let me (try|start) (again|over|fresh)|actually,? (can i|let me|i('d| would) like to)/i.test(lower)
@@ -133,7 +155,7 @@ export function classifyIntent(text: string): CandidateIntent {
     return 'redirect'
   }
 
-  // ── 9. Proactive candidate question — short, ends with "?", not a rhetorical STAR answer
+  // ── 12. Proactive candidate question — short, ends with "?", not a rhetorical STAR answer
   // Exclude sentences that start with personal pronouns (likely part of an answer)
   if (
     lower.endsWith('?') &&
@@ -152,7 +174,7 @@ export const CONVERSATION_RESPONSES = {
   clarification: [
     "Of course! Let me put it differently —",
     "Sure, let me rephrase that —",
-    "Great question. What I'm really asking is —",
+    "Of course — let me put the question another way —",
     "Absolutely. Let me frame it another way —",
   ],
   redirect: [

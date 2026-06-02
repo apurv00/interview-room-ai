@@ -48,7 +48,9 @@ Style guidance:
 - "neutral": standard clarifying follow-up
 
 If probing: write a natural follow-up question (max 18 words, conversational tone, no jargon).
+Probe a concrete claim or missing detail from the candidate's answer; do not rephrase or re-ask the original interview question.
 If isPivot: the probeQuestion should gently re-anchor to the original topic.
+If the candidate is asking you to clarify a term or scope in the interview question, make probeQuestion a brief rephrase of the original question instead of evaluating it as an answer.
 
 Return valid JSON only — no markdown, no explanation:
 {"nextAction":"probe"|"advance","probeQuestion":"...","style":"curious"|"probing"|"encouraging"|"neutral","isNonsensical":false,"isPivot":false}`

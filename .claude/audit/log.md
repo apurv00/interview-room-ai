@@ -1810,3 +1810,10 @@
 - **Root-cause:** n/a — verification + contract tightening only.
 - **Tests-added: paginationLineSnap.e2e.test.ts — COLUMNAR_FAMILIES now [creative, sidebar-slate, sidebar-violet] asserted strict (bad === []) instead of a ≤1-line bound**
 - **Verified-by:** paginationLineSnap.e2e 9/9 (6 single-column + 3 Sidebar, all strict); vitest run modules/resume 187 passed/14 skipped; tsc clean
+
+### 2026-06-02 17:41:02 +0000 · `3885b97` · Claude
+- **Subject:** chore(ci): bump interview file budget 140→142 for shared fillerMetrics (ADR 0009)
+- **Files:** 2 changed, 0 test file(s)
+- **Root-cause:** check-module-size.mjs caps modules/interview at 140 files; PR
+- **No-tests-needed-because: config/data + documentation only; no runtime code**
+- **Verified-by:** reproduced the full `ci` job locally on this branch —

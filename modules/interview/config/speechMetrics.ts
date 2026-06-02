@@ -1,21 +1,11 @@
 import type { SpeechMetrics } from '@shared/types'
-
-// ─── Filler word list ─────────────────────────────────────────────────────────
-
-const FILLER_WORDS_SINGLE = new Set([
-  'um', 'uh', 'er', 'ah', 'like',
-])
-
-const FILLER_WORDS_BIGRAM = new Set([
-  'you know', 'i mean', 'sort of', 'kind of',
-])
+import { computeFillerMetrics } from './fillerMetrics'
 
 // ─── Analyze a transcript text segment ────────────────────────────────────────
 
 export function analyzeSpeech(text: string, durationMinutes: number): SpeechMetrics {
-  const cleaned = text.trim().toLowerCase()
-  const words = cleaned.split(/\s+/).filter(Boolean)
-  const totalWords = words.length
+  const fillerMetrics = computeFillerMetrics(text)
+  const totalWords = fillerMetrics.totalWords
 
   if (totalWords === 0 || durationMinutes === 0) {
     return {
@@ -32,23 +22,8 @@ export function analyzeSpeech(text: string, durationMinutes: number): SpeechMetr
   // WPM
   const wpm = Math.round(totalWords / durationMinutes)
 
-  // Filler word count — check bigrams first, skip matched words to avoid double-counting
-  let fillerWordCount = 0
-  for (let i = 0; i < words.length; i++) {
-    if (i < words.length - 1) {
-      const bigram = `${words[i]} ${words[i + 1]}`
-      if (FILLER_WORDS_BIGRAM.has(bigram)) {
-        fillerWordCount++
-        i++ // Skip next word — it's part of the bigram
-        continue
-      }
-    }
-    if (FILLER_WORDS_SINGLE.has(words[i])) {
-      fillerWordCount++
-    }
-  }
-
-  const fillerRate = parseFloat((fillerWordCount / totalWords).toFixed(3))
+  const fillerWordCount = fillerMetrics.fillerWordCount
+  const fillerRate = fillerMetrics.fillerRate
 
   // Pause score: ideal WPM is 120–160. Penalize too fast (>180) or too slow (<100).
   let pauseScore: number
@@ -93,14 +68,16 @@ export function aggregateMetrics(metrics: SpeechMetrics[]): SpeechMetrics {
   }
 
   const avg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length
+  const totalWords = metrics.reduce((a, m) => a + m.totalWords, 0)
+  const fillerWordCount = metrics.reduce((a, m) => a + m.fillerWordCount, 0)
 
   return {
     wpm: Math.round(avg(metrics.map(m => m.wpm))),
-    fillerRate: parseFloat(avg(metrics.map(m => m.fillerRate)).toFixed(3)),
+    fillerRate: totalWords > 0 ? parseFloat((fillerWordCount / totalWords).toFixed(3)) : 0,
     pauseScore: Math.round(avg(metrics.map(m => m.pauseScore))),
     ramblingIndex: parseFloat(avg(metrics.map(m => m.ramblingIndex)).toFixed(2)),
-    totalWords: metrics.reduce((a, m) => a + m.totalWords, 0),
-    fillerWordCount: metrics.reduce((a, m) => a + m.fillerWordCount, 0),
+    totalWords,
+    fillerWordCount,
     durationMinutes: metrics.reduce((a, m) => a + m.durationMinutes, 0),
   }
 }

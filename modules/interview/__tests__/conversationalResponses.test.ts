@@ -24,6 +24,21 @@ describe('classifyIntent', () => {
     expect(classifyIntent('Can you explain that?')).toBe('clarification')
   })
 
+  it('detects active question clarifications even when STT drops punctuation', () => {
+    expect(classifyIntent(
+      "Could you please help me understand what Nykaa Superstore actually is? Then I'll be able to answer this."
+    )).toBe('clarify_question')
+    expect(classifyIntent(
+      'Could you please help me understand what Nykaa Superstore actually is'
+    )).toBe('clarify_question')
+    expect(classifyIntent(
+      'Before I answer, what does Superstore mean in this question?'
+    )).toBe('clarify_question')
+    expect(classifyIntent(
+      'Are you asking about partner onboarding or the KPI outcome?'
+    )).toBe('clarify_question')
+  })
+
   it('detects redirect requests', () => {
     expect(classifyIntent('Can I give a different example?')).toBe('redirect')
     // Note: "Let me start over" now matches 'correction' (higher priority)
@@ -34,6 +49,8 @@ describe('classifyIntent', () => {
   it('detects proactive questions', () => {
     expect(classifyIntent("What's the team size?")).toBe('question')
     expect(classifyIntent('Is this a remote role?')).toBe('question')
+    expect(classifyIntent('Could you help me understand the team culture?')).toBe('question')
+    expect(classifyIntent('What are next steps?')).toBe('question')
   })
 
   it('detects thinking starters (short)', () => {
