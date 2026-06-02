@@ -30,7 +30,12 @@ const BUDGETS = {
   // 30k chosen empirically — post-split actual is ~27.3k, leaving ~10% headroom.
   // Next bump-pressure should carve out services/analysis/ + jobs/analysisJob.ts
   // (post-interview pipeline) rather than re-bumping. See ADR 0006.
-  'modules/interview': { maxLOC: 30_000, maxFiles: 140 },
+  // Bumped files 140→142 on 2026-06-02 (PR #432): shared config/fillerMetrics.ts
+  // (single-source filler tokenizer de-duplicating speechMetrics + prosodyService)
+  // + its __tests__/speechMetrics.test.ts. LOC unaffected (~28k/30k) — a count-shape
+  // change, not bloat. Tight +1 headroom keeps the tripwire close per ADR 0006.
+  // See docs/adr/0009-interview-module-budget-bump-filler-metrics.md.
+  'modules/interview': { maxLOC: 30_000, maxFiles: 142 },
   'modules/feedback':  { maxLOC: 10_000, maxFiles: 60 },
   'modules/learn':     { maxLOC: 25_000, maxFiles: 80 },
   // Bumped maxFiles 70 → 100 on 2026-05-29 (PR #411): the flat 10-template
