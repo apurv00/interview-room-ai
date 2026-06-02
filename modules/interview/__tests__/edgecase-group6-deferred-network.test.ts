@@ -23,7 +23,7 @@ describe('Group 6: Deferred Topics', () => {
 
     const shouldSurface = deferredTopics.length > 0 && timeRemaining > 90
     expect(shouldSurface).toBe(false)
-    // Topic stays in ref → checked during wrap-up surface
+    // Topic stays in ref, but the wrap-up fast path also skips low-time drains.
   })
 
   it('6.3 Deferred topic skipped when qIdx >= maxQ', () => {
@@ -34,7 +34,7 @@ describe('Group 6: Deferred Topics', () => {
 
     const shouldSurface = deferredTopics.length > 0 && timeRemaining > 90 && qIdx < maxQ
     expect(shouldSurface).toBe(false)
-    // Wrap-up surface handles it
+    // After the final planned topic, wrap-up should not add another 30s listen window.
   })
 
   it('6.4 MEDIUM: Deferred topic bridge interrupted — no handler', () => {
@@ -61,7 +61,7 @@ describe('Group 6: Deferred Topics', () => {
     // Mismatch — but acceptable since the evaluation is adaptive
   })
 
-  it('6.5 Three deferred topics → all surfaced', () => {
+  it('6.5 Wrap-up deferred topics surface only with real spare time', () => {
     const topics = ['topic A', 'topic B', 'topic C']
 
     // Between questions: shift() pops first
@@ -69,10 +69,26 @@ describe('Group 6: Deferred Topics', () => {
     expect(betweenQ).toBe('topic A')
     expect(topics).toEqual(['topic B', 'topic C'])
 
-    // Wrap-up: splice(0, 2) takes remaining
-    const wrapUp = topics.splice(0, 2)
+    const timeRemaining = 240
+    const qIdx = 5
+    const maxQ = 8
+    const shouldSurfaceDuringWrapUp = topics.length > 0 && timeRemaining > 180 && qIdx < maxQ
+    expect(shouldSurfaceDuringWrapUp).toBe(true)
+
+    // Wrap-up: splice(0, 2) takes remaining only when the fast-path guard passes.
+    const wrapUp = shouldSurfaceDuringWrapUp ? topics.splice(0, 2) : []
     expect(wrapUp).toEqual(['topic B', 'topic C'])
     expect(topics).toEqual([]) // all consumed
+  })
+
+  it('6.6 Wrap-up deferred topics skipped after final planned topic', () => {
+    const topics = ['topic B', 'topic C']
+    const timeRemaining = 240
+    const qIdx = 8
+    const maxQ = 8
+
+    const shouldSurfaceDuringWrapUp = topics.length > 0 && timeRemaining > 180 && qIdx < maxQ
+    expect(shouldSurfaceDuringWrapUp).toBe(false)
   })
 })
 

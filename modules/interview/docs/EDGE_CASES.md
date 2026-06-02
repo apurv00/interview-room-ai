@@ -116,11 +116,11 @@ Timing constants extracted from code. Mocked API latencies based on production o
 | # | Scenario | Timeline | Expected | Risk |
 |---|----------|----------|----------|------|
 | 6.1 | One deferred topic, time > 90s | Between questions → deferredTopicsRef.length=1 → timeRemaining=120 → AI speaks bridge → listens → evaluates → qIdx++ | Topic surfaced and evaluated. | LOW |
-| 6.2 | Deferred topic but time <= 90s | deferredTopicsRef.length=1 → timeRemaining=60 → condition fails → topic stays in ref → checked again during wrap-up surface | Topic surfaces during wrap-up (no eval, just transcript). | LOW |
-| 6.3 | Deferred topic but qIdx >= maxQ | deferredTopicsRef.length=1 → qIdx=maxQ → `qIdx < maxQ` fails → skipped → wrap-up surface handles it | Topic surfaces during wrap-up. | LOW |
+| 6.2 | Deferred topic but time <= 90s | deferredTopicsRef.length=1 → timeRemaining=60 → condition fails → topic stays in ref → wrap-up fast-path also skips low-time drains | Topic is not surfaced during close. | LOW |
+| 6.3 | Deferred topic but qIdx >= maxQ | deferredTopicsRef.length=1 → qIdx=maxQ → `qIdx < maxQ` fails → skipped → wrap-up fast-path also requires `qIdx < maxQ` | Topic is not surfaced after the final planned topic. | LOW |
 | 6.4 | **NEW** Deferred topic avatarSpeak interrupted | AI says "Earlier you mentioned..." → candidate interrupts → avatarSpeak returns {interrupted:true} → BUT no interrupt handling after this avatarSpeak! Code just proceeds to listenForAnswer. | **ISSUE**: The deferred topic bridge at line 1469 doesn't check `interrupted`. If interrupted, `listenForAnswer` starts with interruptPrefix, which may contain words unrelated to the deferred topic. The answer gets evaluated against the bridge question but the candidate was responding to something else. | MEDIUM |
-| 6.5 | 3 deferred topics accumulated | Topics pushed over multiple interrupts. Between-question injection pops one (line 1463 `shift()`). Wrap-up `splice(0,2)` takes up to 2 more. Total: all 3 surfaced. | All surfaced. Max 1 between questions per cycle, max 2 during wrap-up. | LOW |
-| 6.6 | **NEW** Wrap-up deferred topic but isInterviewOver mid-loop | First deferred topic during wrap-up → avatarSpeak → isInterviewOver() → false → listenForAnswer → answer → second topic → timer fires during this → isInterviewOver() → true → break | Second topic cut short but first is captured. Acceptable. | LOW |
+| 6.5 | 3 deferred topics accumulated | Topics pushed over multiple interrupts. Between-question injection pops one (`shift()`). Wrap-up `splice(0,2)` only runs when timeRemaining > 180 and qIdx < maxQ. | Wrap-up deferred topics surface only with real spare time. | LOW |
+| 6.6 | **NEW** Wrap-up deferred topic after final planned topic | deferredTopicsRef.length=1 → qIdx=maxQ → wrap-up guard fails before avatarSpeak/listenForAnswer | Close proceeds directly to wrap-up prompt. | LOW |
 
 ### Group 7: WebSocket + Network Failures
 

@@ -1749,7 +1749,7 @@ export function useInterview({
 
           conversationTurns++
 
-          if (intent === 'clarification') {
+          if (intent === 'clarification' || intent === 'clarify_question') {
             const rephrase = pickRandom(CONVERSATION_RESPONSES.clarification) + ' ' + simplifyQuestion(question)
             addToTranscript('interviewer', rephrase, qIdx)
             warmUpListening?.()
@@ -1977,6 +1977,11 @@ export function useInterview({
           nextProbeQ = buildProbeQuestion(
             probeEval.probeDecision?.probeType,
             probeEval.probeDecision?.probeTarget,
+            {
+              question: topicQuestion,
+              answer: probeAnswer,
+              previousProbe: probeQ,
+            },
           )
           nextProbeType = probeEval.probeDecision?.probeType ?? 'expand'
         }
@@ -2028,8 +2033,17 @@ export function useInterview({
         }
       }
 
-      // ── Surface remaining deferred topics during wrap-up ──
-      if (deferredTopicsRef.current.length > 0) {
+      // ── Surface remaining deferred topics only when there is real slack ──
+      // This used to run unconditionally before wrap-up and could add two
+      // 30s listening windows after the final main answer. Keep the expensive
+      // deferred-topic path out of the close unless the interview ended before
+      // the planned topic count and there is enough time for a full exchange.
+      const shouldSurfaceDeferredDuringWrapUp =
+        deferredTopicsRef.current.length > 0 &&
+        timeRemainingRef.current > 180 &&
+        qIdx < maxQ
+
+      if (shouldSurfaceDeferredDuringWrapUp) {
         checkAbort()
         if (!isInterviewOver()) {
           const remaining = deferredTopicsRef.current.splice(0, 2)

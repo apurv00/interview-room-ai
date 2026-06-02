@@ -113,6 +113,12 @@ describe('classifyIntent integration with pipeline', () => {
     expect(classifyIntent("I didn't catch that, could you explain the question?")).toBe('clarification')
   })
 
+  it('identifies active question clarifications so they are not evaluated as answers', () => {
+    expect(classifyIntent(
+      "Could you please help me understand what Nykaa Superstore actually is? Then I'll be able to answer this."
+    )).toBe('clarify_question')
+  })
+
   it('identifies thinking to give candidate space', () => {
     expect(classifyIntent("That's a great question")).toBe('thinking')
   })

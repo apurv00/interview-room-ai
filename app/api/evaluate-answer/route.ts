@@ -272,7 +272,7 @@ You are an expert interview coach evaluating candidates for ${domainLabel} roles
     let probeDepthContext = ''
     if (probeDepth != null && probeDepth > 0) {
       const funnelGuidance: Record<number, string> = {
-        1: 'This is probe depth 1. PREFERRED probe type: "clarify" or "quantify" — drill into specifics (numbers, names, timelines, concrete details). Avoid broad "expand" probes at this depth.',
+        1: 'This is probe depth 1. PREFERRED probe type: "quantify" or "challenge" — drill into measurable outcomes, concrete details, or trade-offs. Use "clarify" only when the candidate used ambiguous wording in their own answer. Never clarify interviewer wording, rubric labels, or a phrase copied from the question.',
         2: 'This is probe depth 2. PREFERRED probe type: "challenge" — test assumptions, ask "what would you do differently?", or surface trade-offs. Only recommend further probing if genuinely new insight is possible.',
       }
       probeDepthContext = `\n${funnelGuidance[probeDepth] || `This is probe depth ${probeDepth}. Strongly prefer to move on — only probe if critical information is missing.`}`
@@ -323,7 +323,7 @@ Also determine:
 Probing decision:
 - shouldProbe: true if the answer is vague, too short (<30 words), surface-level, evasive, missing key info, think-aloud rambling, or exceptionally interesting and worth exploring deeper
 - probeType: "clarify" (ambiguous/unclear), "challenge" (logical gaps or untested assumptions), "expand" (worth exploring deeper), or "quantify" (lacks metrics/impact)
-- probeTarget: a short phrase (3–8 words) naming what to probe — the specific gap, claim, or topic to follow up on (e.g. "the team's specific contribution", "the 20% improvement claim", "what you did after the pivot"). This is used to construct the follow-up question.
+- probeTarget: a short phrase (3–8 words) naming what to probe — the specific gap, claim, or topic from the candidate's answer (e.g. "the team's specific contribution", "the 20% improvement claim", "what you did after the pivot"). Do not copy interviewer question wording, rubric labels, or prior probe wording. Do not return a question clause starting with "what", "how", "why", or "which". This is used to construct the follow-up question.
 - isPivot: true ONLY if the answer has essentially nothing to do with the question asked (not just weak or partial).${probeDepthContext}${wasTruncatedByTimer ? `
 
 NOTE: This answer was cut off when the interview timer expired — the candidate did NOT choose to stop. Score what was actually said on its own merits; do NOT penalize structure, specificity, or completeness for the parts the candidate didn't get to finish. Use primaryGap / shouldProbe based on content quality only.` : ''}

@@ -1,14 +1,5 @@
 import type { WhisperSegment, ProsodySegment } from '@shared/types/multimodal'
-
-// ─── Filler Words (reuses list from speechMetrics.ts) ───────────────────────
-
-const FILLER_WORDS_SINGLE = new Set([
-  'um', 'uh', 'er', 'ah', 'like',
-])
-
-const FILLER_WORDS_BIGRAM = new Set([
-  'you know', 'i mean', 'sort of', 'kind of',
-])
+import { computeFillerMetrics } from '@interview/config/fillerMetrics'
 
 // Minimum gap between words to count as a pause (seconds)
 const PAUSE_THRESHOLD_SEC = 0.5
@@ -34,11 +25,20 @@ export function extractProsody(
     return []
   }
 
-  // Build time windows from question boundaries
+  // Build time windows from question boundaries. Clamp to recording duration
+  // and skip invalid windows; otherwise a boundary after the final word can
+  // produce endSec < startSec in per-question prosody.
   const windows: Array<{ startSec: number; endSec: number; questionIndex: number }> = []
-  for (let i = 0; i < questionBoundaries.length; i++) {
-    const start = questionBoundaries[i]
-    const end = i < questionBoundaries.length - 1 ? questionBoundaries[i + 1] : totalDurationSec
+  const sortedBoundaries = [...questionBoundaries]
+    .filter((boundary) => Number.isFinite(boundary))
+    .sort((a, b) => a - b)
+  const durationSec = Math.max(0, totalDurationSec)
+
+  for (let i = 0; i < sortedBoundaries.length; i++) {
+    const start = Math.max(0, sortedBoundaries[i])
+    const rawEnd = i < sortedBoundaries.length - 1 ? sortedBoundaries[i + 1] : durationSec
+    const end = Math.min(durationSec, Math.max(0, rawEnd))
+    if (end <= start) continue
     windows.push({ startSec: start, endSec: end, questionIndex: i })
   }
 
@@ -64,26 +64,11 @@ export function extractProsody(
     const speechSpanSec = windowWords[windowWords.length - 1].end - windowWords[0].start
     const wpm = speechSpanSec > 0 ? Math.round((windowWords.length / speechSpanSec) * 60) : 0
 
-    // Filler word detection
-    const fillerWords: ProsodySegment['fillerWords'] = []
-    for (let i = 0; i < windowWords.length; i++) {
-      const word = windowWords[i].word.toLowerCase().replace(/[^a-z]/g, '')
-
-      // Check bigrams first
-      if (i < windowWords.length - 1) {
-        const nextWord = windowWords[i + 1].word.toLowerCase().replace(/[^a-z]/g, '')
-        const bigram = `${word} ${nextWord}`
-        if (FILLER_WORDS_BIGRAM.has(bigram)) {
-          fillerWords.push({ word: bigram, timestampSec: windowWords[i].start })
-          i++ // Skip next word
-          continue
-        }
-      }
-
-      if (FILLER_WORDS_SINGLE.has(word)) {
-        fillerWords.push({ word, timestampSec: windowWords[i].start })
-      }
-    }
+    const fillerMetrics = computeFillerMetrics(windowWords)
+    const fillerWords: ProsodySegment['fillerWords'] = fillerMetrics.fillerWords.map((filler) => ({
+      word: filler.word,
+      timestampSec: filler.timestampSec ?? windowWords[filler.index]?.start ?? window.startSec,
+    }))
 
     // Pause detection: sum gaps between consecutive words > threshold
     let pauseDurationSec = 0

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  buildProbeQuestion,
   computePerformanceSignal,
   shouldProbeOrAdvance,
   buildThreadSummary,
@@ -182,6 +183,40 @@ describe('shouldProbeOrAdvance', () => {
   it('returns advance when minimum topics not met for 30-min', () => {
     // 30-min: MINIMUM_TOPICS = 10, 3 completed, 7 needed, 7*90=630 > 300
     expect(shouldProbeOrAdvance(probeEval, 300, 3, 30)).toBe('advance')
+  })
+})
+
+// ─── buildProbeQuestion ─────────────────────────────────────────────────────
+
+describe('buildProbeQuestion', () => {
+  it('does not emit self-clarifying wording for weak clarify targets', () => {
+    const badTargets = [
+      'the tradeoff rationale',
+      'which integrations were shipped first',
+      'exact partner and KPI',
+    ]
+
+    for (const target of badTargets) {
+      const question = buildProbeQuestion('clarify', target)
+      expect(question).not.toContain('What exactly do you mean by')
+      expect(question).not.toContain(target)
+      expect(question).toContain('specific example')
+    }
+  })
+
+  it('keeps valid answer-derived clarify probes concrete', () => {
+    expect(buildProbeQuestion('clarify', 'the 20% churn reduction')).toBe(
+      'Can you clarify the 20% churn reduction with a specific example?'
+    )
+  })
+
+  it('rejects targets copied from the original question but missing from the answer', () => {
+    const question = buildProbeQuestion('clarify', 'partner onboarding KPI', {
+      question: 'How would you define the partner onboarding KPI for this marketplace?',
+      answer: 'I would start by interviewing sellers and mapping the workflow.',
+    })
+
+    expect(question).toBe('Can you make that more concrete with a specific example?')
   })
 })
 

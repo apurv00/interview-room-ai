@@ -42,10 +42,10 @@ describe('prosodyService', () => {
       { word: 'so', start: 0, end: 0.3 },
       { word: 'um', start: 0.5, end: 0.7 },
       { word: 'I', start: 1, end: 1.1 },
-      { word: 'like', start: 1.3, end: 1.5 },
-      { word: 'worked', start: 1.7, end: 2 },
-      { word: 'you', start: 2.2, end: 2.4 },
-      { word: 'know', start: 2.5, end: 2.7 },
+      { word: 'like', start: 1.6, end: 1.8 },
+      { word: 'worked', start: 2.3, end: 2.6 },
+      { word: 'you', start: 2.8, end: 3.0 },
+      { word: 'know', start: 3.1, end: 3.3 },
     ]
     const segments = makeSegments(words)
     const result = extractProsody(segments, [0], 10)
@@ -54,6 +54,21 @@ describe('prosodyService', () => {
     const fillerTexts = result[0].fillerWords.map((f) => f.word)
     expect(fillerTexts).toContain('um')
     expect(fillerTexts).toContain('like')
+  })
+
+  it('does not count semantic like as a filler', () => {
+    const words = [
+      { word: 'a', start: 0, end: 0.1 },
+      { word: 'marketplace', start: 0.2, end: 0.6 },
+      { word: 'like', start: 0.7, end: 0.9 },
+      { word: 'this', start: 1.0, end: 1.2 },
+      { word: 'needs', start: 1.3, end: 1.5 },
+      { word: 'trust', start: 1.6, end: 1.8 },
+    ]
+    const segments = makeSegments(words)
+    const result = extractProsody(segments, [0], 3)
+
+    expect(result[0].fillerWords.map((f) => f.word)).not.toContain('like')
   })
 
   it('detects pauses between words', () => {
@@ -83,6 +98,18 @@ describe('prosodyService', () => {
     expect(result).toHaveLength(2)
     expect(result[0].questionIndex).toBe(0)
     expect(result[1].questionIndex).toBe(1)
+  })
+
+  it('skips invalid windows when a boundary is after the recording duration', () => {
+    const words = [
+      { word: 'answer', start: 0.5, end: 0.9 },
+      { word: 'done', start: 1.0, end: 1.3 },
+    ]
+    const segments = makeSegments(words)
+    const result = extractProsody(segments, [0, 5], 2)
+
+    expect(result).toHaveLength(1)
+    expect(result[0].startSec).toBeLessThan(result[0].endSec)
   })
 
   it('assigns confidence markers based on metrics', () => {

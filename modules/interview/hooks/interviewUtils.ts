@@ -2,6 +2,7 @@ import type {
   AnswerEvaluation,
   AvatarEmotion,
   PerformanceSignal,
+  ProbeType,
   PushbackTone,
   ThreadEntry,
   ThreadSummary,
@@ -43,21 +44,106 @@ export function shouldProbeOrAdvance(
   return 'probe'
 }
 
+type ProbeQuestionContext = {
+  question?: string
+  answer?: string
+  previousProbe?: string
+}
+
+const PROBE_TARGET_STOP_WORDS = new Set([
+  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from', 'how',
+  'in', 'is', 'it', 'of', 'on', 'or', 'that', 'the', 'this', 'to', 'was',
+  'were', 'what', 'when', 'where', 'which', 'who', 'why', 'with', 'you',
+  'your',
+])
+
+function normalizeProbeTarget(target?: string | null): string {
+  return (target ?? '').replace(/\s+/g, ' ').replace(/[?.!,;:]+$/g, '').trim()
+}
+
+function significantTokens(text?: string | null): string[] {
+  const tokens = (text ?? '').toLowerCase().match(/[a-z0-9]+/g) ?? []
+  return Array.from(new Set(tokens.filter((token) =>
+    token.length > 2 && !PROBE_TARGET_STOP_WORDS.has(token)
+  )))
+}
+
+function overlapRatio(targetTokens: string[], sourceText?: string | null): number {
+  if (targetTokens.length === 0 || !sourceText) return 0
+  const source = new Set(significantTokens(sourceText))
+  if (source.size === 0) return 0
+  const overlap = targetTokens.filter((token) => source.has(token)).length
+  return overlap / targetTokens.length
+}
+
+function isWeakProbeTarget(target: string, context?: ProbeQuestionContext): boolean {
+  if (!target) return true
+
+  const lower = target.toLowerCase()
+  if (/^(that|this|it|thing|the question|the answer|the example|the details?|details?|specifics?|more details|the point|the topic)$/i.test(lower)) {
+    return true
+  }
+  if (/^(what|why|how|which|when|where|who)\b/i.test(lower)) {
+    return true
+  }
+  if (/\b(?:tradeoff rationale|rationale|rubric|criterion|criteria|competenc(?:y|ies))\b/i.test(lower)) {
+    return true
+  }
+  if (/\bexact\b/i.test(lower) && /\b(?:partner|partners|kpi|kpis|metric|metrics)\b/i.test(lower)) {
+    return true
+  }
+
+  const targetTokens = significantTokens(target)
+  if (targetTokens.length < 2) return true
+
+  const questionOverlap = overlapRatio(targetTokens, context?.question)
+  const answerOverlap = overlapRatio(targetTokens, context?.answer)
+  const previousProbeOverlap = overlapRatio(targetTokens, context?.previousProbe)
+
+  if (targetTokens.length >= 3 && questionOverlap >= 0.67 && answerOverlap < 0.5) {
+    return true
+  }
+  if (targetTokens.length >= 3 && previousProbeOverlap >= 0.67) {
+    return true
+  }
+
+  return false
+}
+
+function fallbackProbeQuestion(probeType: ProbeType | null | undefined): string {
+  switch (probeType) {
+    case 'quantify':
+      return 'Can you share the measurable outcome or scale?'
+    case 'challenge':
+      return 'What trade-off did you consider, and how did you decide?'
+    case 'clarify':
+      return 'Can you make that more concrete with a specific example?'
+    case 'expand':
+    default:
+      return 'Can you walk me through the specific example?'
+  }
+}
+
 /**
  * Construct a natural probe question from the evaluator's intent fields.
  * The evaluator provides *what* to probe (probeType + probeTarget);
  * this function provides the conversational *wording*.
  */
 export function buildProbeQuestion(
-  probeType: import('@shared/types').ProbeType | null | undefined,
+  probeType: ProbeType | null | undefined,
   probeTarget?: string | null,
+  context?: ProbeQuestionContext,
 ): string {
-  const t = probeTarget?.trim() || 'that'
+  const t = normalizeProbeTarget(probeTarget)
+  if (isWeakProbeTarget(t, context)) {
+    return fallbackProbeQuestion(probeType)
+  }
+
   switch (probeType) {
     case 'expand':    return `Can you tell me more about ${t}?`
-    case 'clarify':   return `What exactly do you mean by ${t}?`
+    case 'clarify':   return `Can you clarify ${t} with a specific example?`
     case 'challenge': return `How did you specifically approach ${t}?`
-    case 'quantify':  return `Can you put a number on ${t} — what was the measurable outcome?`
+    case 'quantify':  return `Can you quantify ${t} — what changed measurably?`
     default:          return `Can you elaborate on ${t}?`
   }
 }
