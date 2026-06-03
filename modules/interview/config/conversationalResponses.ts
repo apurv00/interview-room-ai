@@ -51,6 +51,12 @@ export function classifyIntent(text: string, interviewType?: string): CandidateI
   const lower = text.toLowerCase().trim()
   if (!lower) return 'answer'
   const isCaseOrDesignInterview = interviewType === 'case-study' || interviewType === 'system-design'
+  const startsWithQuestionLead =
+    /^(?:what(?:'s|\s+(?:is|are|do|does|should|can|could|would|about|data|numbers?|users?|mau|dau|qps|scale|constraints?|scope|goal|metric))|which\b|where\b|when\b|who\b|why\b|how\s+(?:many|much|long|big|does|do|is|are|would|should|can|could)|(?:is|are|do|does|did|can|could|should|would|may)\b|(?:could|can|would)\s+you\b)/i.test(lower)
+  const hasQuestionShape =
+    lower.endsWith('?') ||
+    startsWithQuestionLead ||
+    /^(?:quick question|one question|i was wondering|i wanted to ask)\b/i.test(lower)
 
   // ── 1. Distress — emotional signals (short utterances only to avoid false positives)
   if (
@@ -132,6 +138,7 @@ export function classifyIntent(text: string, interviewType?: string): CandidateI
   // This runs before the generic clarification/question catch-alls so
   // "Could you explain the hiring process?" does not trigger a rephrase.
   if (
+    hasQuestionShape &&
     lower.length < 180 &&
     /\b(?:team culture|company culture|values|next steps?|compensation|salary|pay|benefits?|visa|sponsorship|remote|onsite|hybrid|team size|headcount|interview process|hiring process|recruiter|offer process|work authorization|tech stack|internal tools?)\b/i.test(lower)
   ) {
@@ -139,16 +146,19 @@ export function classifyIntent(text: string, interviewType?: string): CandidateI
   }
 
   // ── 9. Case/system-design scoping — candidate asks for assumptions.
+  const hasScopingKeyword =
+    /\b(?:mau|dau|qps|read\/write|read write|rps|throughput|latency|scale|traffic|users?|customers?|budget|timeline|constraints?|scope|platform|mobile|web|b2b|b2c|goal|objective|kpi|metrics?|success metric|retention|growth|monetization|revenue)\b/i.test(lower)
+  const hasScopingQuestionShape =
+    hasQuestionShape ||
+    /\b(?:can|could|should|may)\s+i\s+assume\b/i.test(lower) ||
+    /\b(?:is it|would it be|is this)\s+fair to assume\b/i.test(lower) ||
+    /\b(?:before i (?:structure|dive in|start)|to frame this|for this case|for this design)\b/i.test(lower) &&
+      /\b(?:what|which|how many|how much|can|could|should|assume|clarify)\b/i.test(lower)
   if (
     isCaseOrDesignInterview &&
     lower.length < 260 &&
-    (
-      /\b(?:can|could|should|may)\s+i\s+assume\b/i.test(lower) ||
-      /\bfair to assume\b/i.test(lower) ||
-      /\b(?:before i (?:structure|dive in|start)|to frame this|for this case|for this design)\b/i.test(lower) ||
-      /\b(?:mau|dau|qps|read\/write|read write|rps|throughput|latency|scale|traffic|users?|customers?|budget|timeline|constraints?|scope|platform|mobile|web|b2b|b2c|goal|objective|kpi|metrics?|success metric|retention|growth|monetization|revenue)\b/i.test(lower) &&
-        /\b(?:what|which|how many|how much|can|could|should|assume|clarify|is this|are we)\b/i.test(lower)
-    )
+    hasScopingKeyword &&
+    hasScopingQuestionShape
   ) {
     return 'clarify_case_context'
   }

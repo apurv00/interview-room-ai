@@ -71,6 +71,20 @@ describe('classifyIntent', () => {
     expect(classifyIntent('What are next steps?', 'system-design')).toBe('ask_interviewer')
   })
 
+  it('does not deflect short declarative answers containing recruiter keywords', () => {
+    expect(classifyIntent('The main benefit was faster delivery.')).toBe('answer')
+    expect(classifyIntent('I led a remote team of five engineers.')).toBe('answer')
+    expect(classifyIntent('We pay down tech debt every sprint.')).toBe('answer')
+    expect(classifyIntent('Our team values fast iteration.')).toBe('answer')
+  })
+
+  it('does not treat case/design think-aloud answers as scoping questions', () => {
+    expect(classifyIntent('We should scale the cache layer for traffic spikes.', 'system-design')).toBe('answer')
+    expect(classifyIntent('I can scale this to millions of users.', 'system-design')).toBe('answer')
+    expect(classifyIntent("What I'd optimize is latency at scale.", 'system-design')).toBe('answer')
+    expect(classifyIntent('I would shard the database and add a read replica.', 'system-design')).toBe('answer')
+  })
+
   it('detects thinking starters (short)', () => {
     expect(classifyIntent('Let me think about that')).toBe('thinking')
     expect(classifyIntent('Good question')).toBe('thinking')
