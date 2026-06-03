@@ -1286,7 +1286,6 @@ export function useInterview({
           // so it can skip Whisper entirely. Empty array for Web Speech
           // API fallback users.
           liveTranscriptWords: liveWordsRef.current,
-          interviewLatencyTelemetry: latencyTelemetryRef.current,
           // G.7: completion shape. `answeredCount` denormalized from the
           // evaluations array (generate-feedback could derive it, but the
           // field enables analytic queries without joining). `endReason`
@@ -2336,8 +2335,8 @@ export function useInterview({
           if (!scopingSpeech) break
 
           const scopingIntent = classifyIntent(scopingSpeech, 'system-design')
-          addToTranscript('candidate', scopingSpeech, 1)
           if (scopingIntent !== 'clarify_case_context') break
+          addToTranscript('candidate', scopingSpeech, 1)
 
           setCurrentQuestion('Sure - let me clarify the setup.')
           void playAck('Sure.')
