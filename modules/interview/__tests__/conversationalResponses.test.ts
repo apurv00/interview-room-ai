@@ -46,11 +46,29 @@ describe('classifyIntent', () => {
     expect(classifyIntent('Can I try a different answer?')).toBe('redirect')
   })
 
-  it('detects proactive questions', () => {
-    expect(classifyIntent("What's the team size?")).toBe('question')
-    expect(classifyIntent('Is this a remote role?')).toBe('question')
-    expect(classifyIntent('Could you help me understand the team culture?')).toBe('question')
-    expect(classifyIntent('What are next steps?')).toBe('question')
+  it('detects recruiter questions for wrap-up deferral', () => {
+    expect(classifyIntent("What's the team size?")).toBe('ask_interviewer')
+    expect(classifyIntent('Is this a remote role?')).toBe('ask_interviewer')
+    expect(classifyIntent('Could you help me understand the team culture?')).toBe('ask_interviewer')
+    expect(classifyIntent('What are next steps?')).toBe('ask_interviewer')
+    expect(classifyIntent('Could you explain the hiring process?')).toBe('ask_interviewer')
+  })
+
+  it('detects generic proactive questions', () => {
+    expect(classifyIntent('How large is the customer base?')).toBe('question')
+    expect(classifyIntent('Is there a specific product area I should use?')).toBe('question')
+  })
+
+  it('detects case-study scoping questions only for case/design interviews', () => {
+    expect(classifyIntent('Can I assume 10M MAU and a retention goal?', 'case-study')).toBe('clarify_case_context')
+    expect(classifyIntent('What QPS and read write split should I assume?', 'system-design')).toBe('clarify_case_context')
+    expect(classifyIntent('Is this B2B or B2C, mobile or web?', 'case-study')).toBe('clarify_case_context')
+    expect(classifyIntent('Can I assume 10M MAU and a retention goal?', 'behavioral')).toBe('question')
+  })
+
+  it('keeps recruiter questions higher priority than case scoping', () => {
+    expect(classifyIntent("What's the team culture?", 'case-study')).toBe('ask_interviewer')
+    expect(classifyIntent('What are next steps?', 'system-design')).toBe('ask_interviewer')
   })
 
   it('detects thinking starters (short)', () => {

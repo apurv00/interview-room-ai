@@ -181,6 +181,22 @@ export const EvaluateAnswerSchema = z.object({
   wasTruncatedByTimer: z.boolean().optional(),
 })
 
+export const ClarifyCaseContextRequestSchema = z.object({
+  candidateQuestion: z.string().min(1).max(1000),
+  activeQuestion: z.string().min(1).max(5000),
+  config: InterviewConfigSchema,
+  sessionId: z.string().optional(),
+  questionIndex: z.number().int().min(0).max(100).optional(),
+  threadSummary: z.string().max(2000).optional(),
+})
+
+export const ClarifyCaseContextResponseSchema = z.object({
+  answer: z.string().min(1).max(900),
+})
+
+export type ClarifyCaseContextRequest = z.infer<typeof ClarifyCaseContextRequestSchema>
+export type ClarifyCaseContextResponse = z.infer<typeof ClarifyCaseContextResponseSchema>
+
 export const GenerateFeedbackSchema = z.object({
   config: InterviewConfigSchema,
   transcript: z.array(TranscriptEntrySchema),
@@ -248,6 +264,7 @@ export const UpdateSessionSchema = z.object({
   answeredCount: z.number().int().min(0).max(100).optional(),
   endReason: z.enum(['normal', 'time_up', 'user_ended', 'usage_limit', 'abandoned']).optional(),
   wasTruncatedByTimer: z.array(z.boolean()).max(100).optional(),
+  interviewLatencyTelemetry: z.record(z.string(), z.unknown()).optional(),
 })
 
 // ─── LLM response schemas (Work Item G.2) ──────────────────────────────────

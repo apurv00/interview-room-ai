@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildProbeQuestion,
+  sanitizeProbeQuestion,
   computePerformanceSignal,
   shouldProbeOrAdvance,
   buildThreadSummary,
@@ -217,6 +218,34 @@ describe('buildProbeQuestion', () => {
     })
 
     expect(question).toBe('Can you make that more concrete with a specific example?')
+  })
+})
+
+describe('sanitizeProbeQuestion', () => {
+  it('blocks first-router probes that self-clarify the original question', () => {
+    const sanitized = sanitizeProbeQuestion(
+      'What exactly do you mean by partner onboarding KPI?',
+      {
+        question: 'How would you define the partner onboarding KPI for this marketplace?',
+        answer: 'I would interview sellers and map the onboarding workflow.',
+      },
+      'expand',
+    )
+
+    expect(sanitized).toBe('Can you walk me through the specific example?')
+  })
+
+  it('keeps concrete answer-derived first probes', () => {
+    const sanitized = sanitizeProbeQuestion(
+      'Can you quantify the 20% churn reduction?',
+      {
+        question: 'Tell me about a retention initiative.',
+        answer: 'We reduced churn by 20% after improving onboarding.',
+      },
+      'quantify',
+    )
+
+    expect(sanitized).toBe('Can you quantify the 20% churn reduction?')
   })
 })
 
