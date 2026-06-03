@@ -37,6 +37,8 @@ describe('classifyIntent', () => {
     expect(classifyIntent(
       'Are you asking about partner onboarding or the KPI outcome?'
     )).toBe('clarify_question')
+    expect(classifyIntent('What is OAuth?')).toBe('clarify_question')
+    expect(classifyIntent('What is OAuth in this question?')).toBe('clarify_question')
   })
 
   it('detects redirect requests', () => {
@@ -63,7 +65,12 @@ describe('classifyIntent', () => {
     expect(classifyIntent('Can I assume 10M MAU and a retention goal?', 'case-study')).toBe('clarify_case_context')
     expect(classifyIntent('What QPS and read write split should I assume?', 'system-design')).toBe('clarify_case_context')
     expect(classifyIntent('Is this B2B or B2C, mobile or web?', 'case-study')).toBe('clarify_case_context')
+    expect(classifyIntent('What tech stack should I assume?', 'system-design')).toBe('clarify_case_context')
     expect(classifyIntent('Can I assume 10M MAU and a retention goal?', 'behavioral')).toBe('question')
+  })
+
+  it('keeps non-assumption tech stack questions as recruiter questions', () => {
+    expect(classifyIntent('What tech stack do you use?', 'system-design')).toBe('ask_interviewer')
   })
 
   it('keeps recruiter questions higher priority than case scoping', () => {

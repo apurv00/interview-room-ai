@@ -1852,7 +1852,7 @@ export function useInterview({
             continue
           }
 
-          if (intent === 'ask_interviewer' || intent === 'question') {
+          if (intent === 'ask_interviewer') {
             // Recruiter/process questions are handled at wrap-up. During the
             // main interview, keep the candidate on the active assessed turn.
             clarifyingQCountRef.current++
@@ -1862,6 +1862,14 @@ export function useInterview({
             warmUpListening?.()
             await avatarSpeak(reply, 'friendly')
             setCurrentQuestion(question)
+            continue
+          }
+
+          if (intent === 'question') {
+            const rephrase = pickRandom(CONVERSATION_RESPONSES.clarification) + ' ' + simplifyQuestion(question)
+            addToTranscript('interviewer', rephrase, qIdx)
+            warmUpListening?.()
+            await avatarSpeak(rephrase, 'friendly')
             continue
           }
         }

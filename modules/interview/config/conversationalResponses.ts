@@ -11,8 +11,8 @@
 //   5. hint         — "give me a hint"
 //   6. thinking     — filler / stalling (short utterances only)
 //   7. clarify_question — asks what a term/scope in the active question means
-//   8. ask_interviewer — recruiter/process/company question for wrap-up
-//   9. clarify_case_context — case/design scoping assumptions
+//   8. clarify_case_context — case/design scoping assumptions
+//   9. ask_interviewer — recruiter/process/company question for wrap-up
 //  10. clarification— "can you rephrase?"
 //  11. challenge_question — "that's not a fair question" (E4)
 //  12. gaming       — "just tell me the right answer" (E8)
@@ -128,26 +128,21 @@ export function classifyIntent(text: string, interviewType?: string): CandidateI
       /\bdo you mean by\s+(?!that\b|this\b|it\b).{2,80}/i.test(lower) ||
       /\bwhat (?:does|do\s+(?!you\b))\s*.{2,80}\s+mean(?:\s+(?:in|for)\s+(?:this|the)\s+question)?/i.test(lower) ||
       /\bwhat (?:is|are)\s+.{2,80}\s+(?:actually\s+)?(?:is|are|in (?:this|the) question|you mentioned)\b/i.test(lower) ||
+      /\bwhat (?:is|are)\s+(?!you\s+looking\s+for\b|the\s+(?:team|timeline|process|salary|compensation|benefits?|culture|next steps?)\b).{2,80}\??$/i.test(lower) ||
       /\bwhat do you mean by\s+(?!that\b|this\b|it\b).{2,80}/i.test(lower)
     )
   ) {
     return 'clarify_question'
   }
 
-  // ── 8. Recruiter/process/company questions — save these for wrap-up.
-  // This runs before the generic clarification/question catch-alls so
-  // "Could you explain the hiring process?" does not trigger a rephrase.
-  if (
-    hasQuestionShape &&
-    lower.length < 180 &&
-    /\b(?:team culture|company culture|values|next steps?|compensation|salary|pay|benefits?|visa|sponsorship|remote|onsite|hybrid|team size|headcount|interview process|hiring process|recruiter|offer process|work authorization|tech stack|internal tools?)\b/i.test(lower)
-  ) {
-    return 'ask_interviewer'
-  }
-
-  // ── 9. Case/system-design scoping — candidate asks for assumptions.
+  // ── 8. Case/system-design scoping — candidate asks for assumptions.
   const hasScopingKeyword =
     /\b(?:mau|dau|qps|read\/write|read write|rps|throughput|latency|scale|traffic|users?|customers?|budget|timeline|constraints?|scope|platform|mobile|web|b2b|b2c|goal|objective|kpi|metrics?|success metric|retention|growth|monetization|revenue)\b/i.test(lower)
+  const hasAssumptionFraming =
+    /\b(?:assume|assuming|should i|can i|could i|may i|are we|is this|for this case|for this design|for this mock)\b/i.test(lower)
+  const hasTechStackScoping =
+    /\b(?:tech stack|technolog(?:y|ies)|tools?|frameworks?|languages?|platforms?)\b/i.test(lower) &&
+    hasAssumptionFraming
   const hasScopingQuestionShape =
     hasQuestionShape ||
     /\b(?:can|could|should|may)\s+i\s+assume\b/i.test(lower) ||
@@ -157,10 +152,21 @@ export function classifyIntent(text: string, interviewType?: string): CandidateI
   if (
     isCaseOrDesignInterview &&
     lower.length < 260 &&
-    hasScopingKeyword &&
+    (hasScopingKeyword || hasTechStackScoping) &&
     hasScopingQuestionShape
   ) {
     return 'clarify_case_context'
+  }
+
+  // ── 9. Recruiter/process/company questions — save these for wrap-up.
+  // This runs before the generic clarification/question catch-alls so
+  // "Could you explain the hiring process?" does not trigger a rephrase.
+  if (
+    hasQuestionShape &&
+    lower.length < 180 &&
+    /\b(?:team culture|company culture|values|next steps?|compensation|salary|pay|benefits?|visa|sponsorship|remote|onsite|hybrid|team size|headcount|interview process|hiring process|recruiter|offer process|work authorization|tech stack|internal tools?)\b/i.test(lower)
+  ) {
+    return 'ask_interviewer'
   }
 
   // ── 10. General clarification requests
