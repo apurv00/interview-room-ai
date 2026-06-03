@@ -61,7 +61,15 @@ describe('updateSession — recording artifact persistence', () => {
     mockFindByIdAndUpdate.mockResolvedValue({ _id: { toString: () => 'session-1' } })
   })
 
-  it('persists audio, screen, live transcript, and completion artifact fields', async () => {
+  it('persists audio, screen, live transcript, completion, and latency telemetry fields', async () => {
+    const interviewLatencyTelemetry = {
+      wrapUpListenMs: 15004,
+      wrapUpSafeQaMs: 812,
+      closingTtsMs: 2300,
+      persistMs: 940,
+      finalTopicFastPath: true,
+    }
+
     await updateSession('session-1', 'user-1', 'candidate', undefined, {
       audioRecordingR2Key: 'recordings/user-1/session-1-audio.webm',
       audioRecordingSizeBytes: 12345,
@@ -70,6 +78,7 @@ describe('updateSession — recording artifact persistence', () => {
       liveTranscriptWords: [{ word: 'hello', start: 0, end: 0.4, confidence: 0.99 }],
       answeredCount: 3,
       endReason: 'normal',
+      interviewLatencyTelemetry,
     })
 
     expect(mockFindByIdAndUpdate).toHaveBeenCalledWith(
@@ -82,6 +91,7 @@ describe('updateSession — recording artifact persistence', () => {
         liveTranscriptWords: [{ word: 'hello', start: 0, end: 0.4, confidence: 0.99 }],
         answeredCount: 3,
         endReason: 'normal',
+        interviewLatencyTelemetry,
       }),
       { returnDocument: 'after' }
     )

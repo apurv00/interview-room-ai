@@ -64,6 +64,7 @@ interface UpdateSessionInput {
   answeredCount?: number
   endReason?: 'normal' | 'time_up' | 'user_ended' | 'usage_limit' | 'abandoned'
   wasTruncatedByTimer?: boolean[]
+  interviewLatencyTelemetry?: Record<string, unknown>
 }
 
 interface ListSessionsInput {
@@ -354,6 +355,7 @@ export async function updateSession(
   if (input.answeredCount !== undefined) updateFields.answeredCount = input.answeredCount
   if (input.endReason) updateFields.endReason = input.endReason
   if (input.wasTruncatedByTimer) updateFields.wasTruncatedByTimer = input.wasTruncatedByTimer
+  if (input.interviewLatencyTelemetry) updateFields.interviewLatencyTelemetry = input.interviewLatencyTelemetry
 
   const updated = await InterviewSession.findByIdAndUpdate(sessionId, updateFields, { returnDocument: 'after' })
   if (!updated) throw new NotFoundError('Interview session')
