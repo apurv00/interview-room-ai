@@ -127,8 +127,8 @@ export function classifyIntent(text: string, interviewType?: string): CandidateI
       /\bdo you mean\s+(?:about|for|whether|that)\b/i.test(lower) ||
       /\bdo you mean by\s+(?!that\b|this\b|it\b).{2,80}/i.test(lower) ||
       /\bwhat (?:does|do\s+(?!you\b))\s*.{2,80}\s+mean(?:\s+(?:in|for)\s+(?:this|the)\s+question)?/i.test(lower) ||
-      /\bwhat (?:is|are)\s+.{2,80}\s+(?:actually\s+)?(?:is|are|in (?:this|the) question|you mentioned)\b/i.test(lower) ||
-      /\bwhat (?:is|are)\s+(?!you\s+looking\s+for\b|the\s+(?:team|timeline|process|salary|compensation|benefits?|culture|next steps?)\b).{2,80}\??$/i.test(lower) ||
+      /\bwhat (?:is|are)\s+.{2,80}\s+(?:in (?:this|the) question|you mentioned)\b/i.test(lower) ||
+      /\bwhat (?:is|are)\s+(?!you\s+looking\s+for\b|the\s+(?:team|timeline|process|salary|compensation|benefits?|culture|next steps?)\b).{2,80}\?$/i.test(lower) ||
       /\bwhat do you mean by\s+(?!that\b|this\b|it\b).{2,80}/i.test(lower)
     )
   ) {
@@ -144,7 +144,7 @@ export function classifyIntent(text: string, interviewType?: string): CandidateI
     /\b(?:tech stack|technolog(?:y|ies)|tools?|frameworks?|languages?|platforms?)\b/i.test(lower) &&
     hasAssumptionFraming
   const hasScopingQuestionShape =
-    hasQuestionShape ||
+    lower.endsWith('?') ||
     /\b(?:can|could|should|may)\s+i\s+assume\b/i.test(lower) ||
     /\b(?:is it|would it be|is this)\s+fair to assume\b/i.test(lower) ||
     /\b(?:before i (?:structure|dive in|start)|to frame this|for this case|for this design)\b/i.test(lower) &&

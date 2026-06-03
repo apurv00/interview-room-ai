@@ -41,6 +41,12 @@ describe('classifyIntent', () => {
     expect(classifyIntent('What is OAuth in this question?')).toBe('clarify_question')
   })
 
+  it('does not treat rhetorical what-is answer openers as clarifications', () => {
+    expect(classifyIntent('What are the tradeoffs here.')).toBe('answer')
+    expect(classifyIntent('What is interesting is the scale.')).toBe('answer')
+    expect(classifyIntent('What is hard is the latency.', 'system-design')).toBe('answer')
+  })
+
   it('detects redirect requests', () => {
     expect(classifyIntent('Can I give a different example?')).toBe('redirect')
     // Note: "Let me start over" now matches 'correction' (higher priority)
