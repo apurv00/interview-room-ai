@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server'
 import { completion, parseClaudeJSON } from '@shared/services/modelRouter'
-import { composeApiRoute } from '@shared/middleware/composeApiRoute'
+import { composeApiRoute, type AuthUser } from '@shared/middleware/composeApiRoute'
 import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
 import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
+import { connectDB } from '@shared/db/connection'
+import { InterviewSession } from '@shared/db/models'
 import { getDomainLabel } from '@interview/config/interviewConfig'
 import { getOrLoadJDContext } from '@interview/services/persona/documentContextCache'
 import {
@@ -51,7 +53,27 @@ function fallbackAnswer(interviewType: string | undefined): string {
   return 'For this mock case, assume a realistic growth-stage product with clear customer needs, a measurable business goal, and practical constraints around timeline and resources. Take a moment to structure your approach, then walk me through it.'
 }
 
-async function buildTrustedContext(body: ClarifyCaseContextRequest): Promise<string> {
+async function getOwnedSessionIdForJDContext(
+  sessionId: string | undefined,
+  user: AuthUser,
+): Promise<string | null> {
+  if (!sessionId) return null
+  try {
+    await connectDB()
+    const session = await InterviewSession.findById(sessionId).select('userId').lean()
+    const ownerId = session?.userId?.toString?.()
+    if (ownerId === user.id) return sessionId
+    aiLogger.warn(
+      { sessionId, userId: user.id },
+      'clarify-case-context: ignoring unowned session JD cache'
+    )
+  } catch (err) {
+    aiLogger.warn({ err, sessionId, userId: user.id }, 'clarify-case-context: session ownership lookup failed')
+  }
+  return null
+}
+
+async function buildTrustedContext(body: ClarifyCaseContextRequest, user: AuthUser): Promise<string> {
   const { config, sessionId, activeQuestion, threadSummary } = body
   const lines: string[] = [
     `Role: ${getDomainLabel(config.role) || config.role}`,
@@ -66,7 +88,10 @@ async function buildTrustedContext(body: ClarifyCaseContextRequest): Promise<str
 
   if (config.jobDescription) {
     try {
-      const jdContext = sessionId ? await getOrLoadJDContext(sessionId, config.jobDescription) : null
+      const ownedSessionId = await getOwnedSessionIdForJDContext(sessionId, user)
+      const jdContext = ownedSessionId
+        ? await getOrLoadJDContext(ownedSessionId, config.jobDescription)
+        : null
       lines.push(jdContext
         ? `JD-derived context:\n${jdContext}`
         : `Job description excerpt:\n${config.jobDescription.slice(0, 1800)}`)
@@ -94,7 +119,7 @@ export const POST = composeApiRoute<ClarifyCaseContextRequest>({
       )
     }
 
-    const trustedContext = await buildTrustedContext(body)
+    const trustedContext = await buildTrustedContext(body, user)
     const userPrompt = `${trustedContext}
 
 <active_question>

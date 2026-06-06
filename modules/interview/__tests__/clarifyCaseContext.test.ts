@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 
-const { mockCompletion, mockTrackUsage, mockGetJDContext } = vi.hoisted(() => ({
+const { mockCompletion, mockTrackUsage, mockGetJDContext, mockFindById } = vi.hoisted(() => ({
   mockCompletion: vi.fn(),
   mockTrackUsage: vi.fn(),
   mockGetJDContext: vi.fn(),
+  mockFindById: vi.fn(),
 }))
 
 vi.mock('@shared/middleware/composeApiRoute', () => ({
@@ -37,6 +38,16 @@ vi.mock('@shared/services/modelRouter', () => ({
 
 vi.mock('@shared/services/usageTracking', () => ({
   trackUsage: mockTrackUsage,
+}))
+
+vi.mock('@shared/db/connection', () => ({
+  connectDB: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('@shared/db/models', () => ({
+  InterviewSession: {
+    findById: (...args: unknown[]) => mockFindById(...args),
+  },
 }))
 
 vi.mock('@shared/logger', () => ({
@@ -86,12 +97,22 @@ function makeRequest(overrides: Record<string, unknown> = {}) {
   })
 }
 
+function mockSessionOwner(userId: string | null) {
+  mockFindById.mockReturnValue({
+    select: vi.fn().mockReturnValue({
+      lean: vi.fn().mockResolvedValue(userId ? { userId: { toString: () => userId } } : null),
+    }),
+  })
+}
+
 beforeEach(() => {
   mockCompletion.mockReset()
   mockTrackUsage.mockReset()
   mockTrackUsage.mockResolvedValue(undefined)
   mockGetJDContext.mockReset()
   mockGetJDContext.mockResolvedValue(null)
+  mockFindById.mockReset()
+  mockSessionOwner('test-user-1')
 })
 
 describe('clarify-case-context route', () => {
@@ -147,6 +168,35 @@ describe('clarify-case-context route', () => {
     expect(call.messages[0].content).toContain('<candidate_question>')
     expect(call.messages[0].content).toContain('B2C mobile retention')
     expect(call.messages[0].content).toContain('marketplace growth')
+    expect(mockGetJDContext).toHaveBeenCalledWith('sess_123', 'Marketplace growth PM role.')
+  })
+
+  it('falls back to provided JD text when sessionId is not owned by the caller', async () => {
+    mockSessionOwner('different-user')
+    mockGetJDContext.mockResolvedValue('Victim cached context: confidential requirements.')
+    mockCompletion.mockResolvedValue({
+      text: JSON.stringify({
+        answer: 'For this mock case, assume a retention-focused marketplace scenario. Take a moment to structure your approach, then walk me through it.',
+      }),
+      inputTokens: 20,
+      outputTokens: 10,
+      model: 'gpt-5.4-mini',
+      provider: 'openai',
+      usedFallback: false,
+    })
+
+    await POST(makeRequest({
+      config: {
+        ...baseConfig,
+        jobDescription: 'Caller supplied marketplace growth PM role.',
+      },
+    }))
+
+    const call = mockCompletion.mock.calls[0][0]
+    expect(mockGetJDContext).not.toHaveBeenCalled()
+    expect(call.messages[0].content).toContain('Job description excerpt:')
+    expect(call.messages[0].content).toContain('Caller supplied marketplace growth PM role.')
+    expect(call.messages[0].content).not.toContain('Victim cached context')
   })
 
   it('returns fallback when called outside case-study/system-design', async () => {
