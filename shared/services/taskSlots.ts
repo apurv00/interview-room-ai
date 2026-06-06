@@ -37,6 +37,8 @@ export const TASK_SLOTS = [
   'interview.evaluation-engine-v2',
   // Conversational — answering candidate's proactive questions
   'interview.answer-candidate-question',
+  // Conversational — case-study/system-design scoping assumptions
+  'interview.clarify-case-context',
   // Fast turn router — probe-vs-advance decision in the critical conversation path
   'interview.turn-router',
 ] as const
@@ -84,5 +86,6 @@ export const TASK_SLOT_DEFAULTS: Record<
   'onboarding.extract-profile':     { model: 'claude-sonnet-4-6', maxTokens: 2000, provider: 'anthropic' },
   'interview.evaluation-engine-v2': { model: 'gpt-5.4-mini', maxTokens: 2000, provider: 'openai' },
   'interview.answer-candidate-question': { model: 'gpt-5.4-mini', maxTokens: 200, provider: 'openai' },
+  'interview.clarify-case-context':       { model: 'gpt-5.4-mini', maxTokens: 240, provider: 'openai' },
   'interview.turn-router':               { model: 'gpt-5.4-mini', maxTokens: 150, provider: 'openai' },
 }

@@ -127,6 +127,16 @@ describe('classifyIntent integration with pipeline', () => {
     expect(classifyIntent('How large is the engineering team?')).toBe('question')
   })
 
+  it('identifies recruiter questions for mid-interview deferral', () => {
+    expect(classifyIntent("What's the team culture?")).toBe('ask_interviewer')
+    expect(classifyIntent('What are next steps?')).toBe('ask_interviewer')
+  })
+
+  it('identifies case and design scoping questions before evaluation', () => {
+    expect(classifyIntent('Can I assume 10M MAU and a retention goal?', 'case-study')).toBe('clarify_case_context')
+    expect(classifyIntent('What QPS should I design for?', 'system-design')).toBe('clarify_case_context')
+  })
+
   it('identifies redirect for re-attempt', () => {
     expect(classifyIntent('Can I use a different example?')).toBe('redirect')
   })

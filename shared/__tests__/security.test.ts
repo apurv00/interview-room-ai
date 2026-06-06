@@ -162,6 +162,52 @@ describe('SpeechMetricsSchema — rejects invalid data', () => {
   })
 })
 
+describe('UpdateSessionSchema — interview latency telemetry validation', () => {
+  const validTelemetry = {
+    lastCandidateTranscriptAt: 1780000000000,
+    lastMainAnswerAt: 1780000000100,
+    wrapUpPromptAt: 1780000000200,
+    wrapUpListenMs: 15000,
+    wrapUpSafeQaMs: 800,
+    closingTtsMs: 2300,
+    finishStartedAt: 1780000003000,
+    pendingEvalWaitMs: 120,
+    persistStartedAt: 1780000003100,
+    persistMs: 940,
+    lastCandidateToScoringMs: 4100,
+    finalTopicFastPath: true,
+  }
+
+  it('accepts the bounded latency telemetry payload produced at interview close', () => {
+    expect(UpdateSessionSchema.safeParse({ interviewLatencyTelemetry: validTelemetry }).success).toBe(true)
+  })
+
+  it('rejects unknown telemetry keys', () => {
+    expect(UpdateSessionSchema.safeParse({
+      interviewLatencyTelemetry: {
+        ...validTelemetry,
+        arbitraryPayload: 123,
+      },
+    }).success).toBe(false)
+  })
+
+  it('rejects nested telemetry values', () => {
+    expect(UpdateSessionSchema.safeParse({
+      interviewLatencyTelemetry: {
+        wrapUpListenMs: { nested: true },
+      },
+    }).success).toBe(false)
+  })
+
+  it('rejects oversized telemetry values', () => {
+    expect(UpdateSessionSchema.safeParse({
+      interviewLatencyTelemetry: {
+        wrapUpListenMs: Number.MAX_SAFE_INTEGER,
+      },
+    }).success).toBe(false)
+  })
+})
+
 // ─── CMS Validation Tests ───────────────────────────────────────────────────
 
 describe('CreateDomainSchema — CMS input validation', () => {

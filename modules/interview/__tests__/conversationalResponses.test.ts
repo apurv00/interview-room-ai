@@ -37,6 +37,20 @@ describe('classifyIntent', () => {
     expect(classifyIntent(
       'Are you asking about partner onboarding or the KPI outcome?'
     )).toBe('clarify_question')
+    expect(classifyIntent('What is OAuth?')).toBe('clarify_question')
+    expect(classifyIntent('What is OAuth in this question?')).toBe('clarify_question')
+  })
+
+  it('does not treat rhetorical what-is answer openers as clarifications', () => {
+    expect(classifyIntent('What are the tradeoffs here.')).toBe('answer')
+    expect(classifyIntent('What is interesting is the scale.')).toBe('answer')
+    expect(classifyIntent('What is hard is the latency.', 'system-design')).toBe('answer')
+  })
+
+  it('does not treat answer-framing openers as clarifications', () => {
+    expect(classifyIntent('To answer this, I would first segment the users.')).toBe('answer')
+    expect(classifyIntent('Before I answer, I would map the constraints and then prioritize.')).toBe('answer')
+    expect(classifyIntent('To answer this, what does OAuth mean?')).toBe('clarify_question')
   })
 
   it('detects redirect requests', () => {
@@ -46,11 +60,50 @@ describe('classifyIntent', () => {
     expect(classifyIntent('Can I try a different answer?')).toBe('redirect')
   })
 
-  it('detects proactive questions', () => {
-    expect(classifyIntent("What's the team size?")).toBe('question')
-    expect(classifyIntent('Is this a remote role?')).toBe('question')
-    expect(classifyIntent('Could you help me understand the team culture?')).toBe('question')
-    expect(classifyIntent('What are next steps?')).toBe('question')
+  it('detects recruiter questions for wrap-up deferral', () => {
+    expect(classifyIntent("What's the team size?")).toBe('ask_interviewer')
+    expect(classifyIntent('Is this a remote role?')).toBe('ask_interviewer')
+    expect(classifyIntent('Could you help me understand the team culture?')).toBe('ask_interviewer')
+    expect(classifyIntent('What are next steps?')).toBe('ask_interviewer')
+    expect(classifyIntent('Could you explain the hiring process?')).toBe('ask_interviewer')
+  })
+
+  it('detects generic proactive questions', () => {
+    expect(classifyIntent('How large is the customer base?')).toBe('question')
+    expect(classifyIntent('Is there a specific product area I should use?')).toBe('question')
+  })
+
+  it('detects case-study scoping questions only for case/design interviews', () => {
+    expect(classifyIntent('Can I assume 10M MAU and a retention goal?', 'case-study')).toBe('clarify_case_context')
+    expect(classifyIntent('What QPS and read write split should I assume?', 'system-design')).toBe('clarify_case_context')
+    expect(classifyIntent('Is this B2B or B2C, mobile or web?', 'case-study')).toBe('clarify_case_context')
+    expect(classifyIntent('What tech stack should I assume?', 'system-design')).toBe('clarify_case_context')
+    expect(classifyIntent('What QPS should I design for', 'system-design')).toBe('clarify_case_context')
+    expect(classifyIntent('Which platform should I assume', 'case-study')).toBe('clarify_case_context')
+    expect(classifyIntent('Can I assume 10M MAU and a retention goal?', 'behavioral')).toBe('question')
+  })
+
+  it('keeps non-assumption tech stack questions as recruiter questions', () => {
+    expect(classifyIntent('What tech stack do you use?', 'system-design')).toBe('ask_interviewer')
+  })
+
+  it('keeps recruiter questions higher priority than case scoping', () => {
+    expect(classifyIntent("What's the team culture?", 'case-study')).toBe('ask_interviewer')
+    expect(classifyIntent('What are next steps?', 'system-design')).toBe('ask_interviewer')
+  })
+
+  it('does not deflect short declarative answers containing recruiter keywords', () => {
+    expect(classifyIntent('The main benefit was faster delivery.')).toBe('answer')
+    expect(classifyIntent('I led a remote team of five engineers.')).toBe('answer')
+    expect(classifyIntent('We pay down tech debt every sprint.')).toBe('answer')
+    expect(classifyIntent('Our team values fast iteration.')).toBe('answer')
+  })
+
+  it('does not treat case/design think-aloud answers as scoping questions', () => {
+    expect(classifyIntent('We should scale the cache layer for traffic spikes.', 'system-design')).toBe('answer')
+    expect(classifyIntent('I can scale this to millions of users.', 'system-design')).toBe('answer')
+    expect(classifyIntent("What I'd optimize is latency at scale.", 'system-design')).toBe('answer')
+    expect(classifyIntent('I would shard the database and add a read replica.', 'system-design')).toBe('answer')
   })
 
   it('detects thinking starters (short)', () => {

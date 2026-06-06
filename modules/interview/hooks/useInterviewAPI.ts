@@ -31,6 +31,7 @@ export interface PreviousAnswerSummary {
 export const EVALUATE_ANSWER_BLOCKING_TIMEOUT_MS = 10_000
 export const EVALUATE_ANSWER_BACKGROUND_TIMEOUT_MS = 15_000
 export const ANSWER_CANDIDATE_QUESTION_TIMEOUT_MS = 8_000
+export const CLARIFY_CASE_CONTEXT_TIMEOUT_MS = 8_000
 
 export type CandidateQuestionContext = 'wrap_up' | 'mid_interview'
 
@@ -124,6 +125,13 @@ export interface UseInterviewAPIReturn {
     context: CandidateQuestionContext,
     signal?: AbortSignal,
   ) => Promise<string>
+  clarifyCaseContext: (
+    candidateQuestion: string,
+    activeQuestion: string,
+    questionIndex?: number,
+    threadSummary?: string,
+    signal?: AbortSignal,
+  ) => Promise<string>
 }
 
 export function fallbackCandidateQuestionAnswer(context: CandidateQuestionContext): string {
@@ -131,6 +139,13 @@ export function fallbackCandidateQuestionAnswer(context: CandidateQuestionContex
     return "I don't have the exact company-specific details here, but generally that depends on the role and hiring team."
   }
   return "I don't have the exact company-specific details here, but generally the recruiter or hiring team will share the confirmed process and timing after the interview."
+}
+
+export function fallbackCaseContextAnswer(interviewType?: string): string {
+  if (interviewType === 'system-design') {
+    return 'For this mock design, assume a mid-scale product with enough traffic to require scalable components and standard constraints around latency, reliability, and cost. Take a moment to structure your approach, then walk me through it.'
+  }
+  return 'For this mock case, assume a realistic product scenario with a measurable goal, clear customer segment, and practical timeline and resource constraints. Take a moment to structure your approach, then walk me through it.'
 }
 
 /**
@@ -408,5 +423,76 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
     [config, getSessionId],
   )
 
-  return { generateQuestion, evaluateAnswer, callTurnRouter, answerCandidateQuestion, flowHintsRef }
+  const clarifyCaseContext = useCallback(
+    async (
+      candidateQuestion: string,
+      activeQuestion: string,
+      questionIndex?: number,
+      threadSummary?: string,
+      signal?: AbortSignal,
+    ): Promise<string> => {
+      if (!config) return fallbackCaseContextAnswer()
+
+      const timeoutController = new AbortController()
+      let didTimeout = false
+      const timeoutId = setTimeout(() => {
+        didTimeout = true
+        timeoutController.abort()
+      }, CLARIFY_CASE_CONTEXT_TIMEOUT_MS)
+
+      let externalAbortListener: (() => void) | undefined
+      if (signal && !AbortSignal.any) {
+        externalAbortListener = () => timeoutController.abort()
+        signal.addEventListener('abort', externalAbortListener, { once: true })
+      }
+
+      try {
+        const combinedSignal = signal && AbortSignal.any
+          ? AbortSignal.any([signal, timeoutController.signal])
+          : timeoutController.signal
+        const res = await fetch('/api/interview/clarify-case-context', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: combinedSignal,
+          body: JSON.stringify({
+            candidateQuestion,
+            activeQuestion,
+            config,
+            sessionId: getSessionId?.() ?? undefined,
+            questionIndex,
+            threadSummary,
+          }),
+        })
+
+        if (!res.ok) {
+          console.warn('[clarifyCaseContext] API returned non-OK', {
+            status: res.status,
+            questionIndex,
+          })
+          return fallbackCaseContextAnswer(config.interviewType)
+        }
+
+        const data = await res.json() as { answer?: unknown }
+        return typeof data.answer === 'string' && data.answer.trim()
+          ? data.answer.trim()
+          : fallbackCaseContextAnswer(config.interviewType)
+      } catch (err) {
+        if (!signal?.aborted) {
+          console.warn(didTimeout ? '[clarifyCaseContext] timed out' : '[clarifyCaseContext] fetch failed', {
+            questionIndex,
+            error: errorDetails(err),
+          })
+        }
+        return fallbackCaseContextAnswer(config.interviewType)
+      } finally {
+        clearTimeout(timeoutId)
+        if (signal && externalAbortListener) {
+          signal.removeEventListener('abort', externalAbortListener)
+        }
+      }
+    },
+    [config, getSessionId],
+  )
+
+  return { generateQuestion, evaluateAnswer, callTurnRouter, answerCandidateQuestion, clarifyCaseContext, flowHintsRef }
 }

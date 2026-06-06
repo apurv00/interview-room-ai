@@ -41,7 +41,9 @@ import {
   shouldProbeOrAdvance as probeOrAdvance,
   buildThreadSummary as buildSummary,
   buildProbeQuestion,
+  sanitizeProbeQuestion,
   toneToEmotion,
+  createDesignSubmissionGate,
 } from './interviewUtils'
 import { useAvatarSpeech } from './useAvatarSpeech'
 import { EVALUATE_ANSWER_BACKGROUND_TIMEOUT_MS, useInterviewAPI } from './useInterviewAPI'
@@ -54,6 +56,21 @@ import {
 import type { QuestionDisplay } from '@interview/utils/questionDisplay'
 import { INITIAL_QUESTION_DISPLAY } from '@interview/utils/questionDisplay'
 import type { CandidateQuestionContext } from './useInterviewAPI'
+
+type InterviewLatencyTelemetry = {
+  lastCandidateTranscriptAt?: number
+  lastMainAnswerAt?: number
+  wrapUpPromptAt?: number
+  wrapUpListenMs?: number
+  wrapUpSafeQaMs?: number
+  closingTtsMs?: number
+  finishStartedAt?: number
+  pendingEvalWaitMs?: number
+  persistStartedAt?: number
+  persistMs?: number
+  lastCandidateToScoringMs?: number
+  finalTopicFastPath?: boolean
+}
 
 // ─── Hook options ─────────────────────────────────────────────────────────────
 
@@ -303,6 +320,7 @@ export function useInterview({
     evaluateAnswer: apiEvaluateAnswer,
     callTurnRouter: apiCallTurnRouter,
     answerCandidateQuestion: apiAnswerCandidateQuestion,
+    clarifyCaseContext: apiClarifyCaseContext,
     flowHintsRef,
   } = useInterviewAPI({
     config,
@@ -318,6 +336,7 @@ export function useInterview({
   const transcriptRef = useRef<TranscriptEntry[]>([])
   const evaluationsRef = useRef<AnswerEvaluation[]>([])
   const pendingEvaluationsRef = useRef<Set<Promise<void>>>(new Set())
+  const latencyTelemetryRef = useRef<InterviewLatencyTelemetry>({})
   /**
    * G.12: latched true when the interview timer hits 0 while the
    * candidate is still in LISTENING. The next evaluateAnswer call (for
@@ -376,15 +395,14 @@ export function useInterview({
   }
 
   // ── Design submission (system design interviews) ──
-  const designSubmitResolverRef = useRef<((data: import('@shared/types').DesignSubmission) => void) | null>(null)
+  // Gate buffers an early Submit (clicked during the pre-canvas scoping window)
+  // so it isn't dropped before waitForDesignSubmission installs its resolver.
+  const designSubmissionGateRef = useRef(createDesignSubmissionGate())
   const currentDesignProblemRef = useRef(currentDesignProblem)
   currentDesignProblemRef.current = currentDesignProblem
 
   const onDesignSubmit = useCallback((data: import('@shared/types').DesignSubmission) => {
-    if (designSubmitResolverRef.current) {
-      designSubmitResolverRef.current(data)
-      designSubmitResolverRef.current = null
-    }
+    designSubmissionGateRef.current.submit(data)
   }, [])
 
   function waitForDesignSubmission(): Promise<import('@shared/types').DesignSubmission> {
@@ -393,7 +411,14 @@ export function useInterview({
         reject(new InterviewAbortError())
         return
       }
-      designSubmitResolverRef.current = resolve
+      // If the candidate already clicked Submit before we started waiting,
+      // resolve with the buffered submission instead of blocking for a re-click.
+      const buffered = designSubmissionGateRef.current.takePending()
+      if (buffered) {
+        resolve(buffered)
+        return
+      }
+      designSubmissionGateRef.current.setResolver(resolve)
       interviewAbortRef.current?.signal.addEventListener('abort', () => {
         reject(new InterviewAbortError())
       }, { once: true })
@@ -657,8 +682,12 @@ export function useInterview({
 
   const addToTranscript = useCallback(
     (speaker: 'interviewer' | 'candidate', text: string, qIdx?: number) => {
-      const entry: TranscriptEntry = { speaker, text, timestamp: Date.now(), questionIndex: qIdx }
+      const timestamp = Date.now()
+      const entry: TranscriptEntry = { speaker, text, timestamp, questionIndex: qIdx }
       transcriptRef.current = [...transcriptRef.current, entry]
+      if (speaker === 'candidate') {
+        latencyTelemetryRef.current.lastCandidateTranscriptAt = timestamp
+      }
     },
     []
   )
@@ -715,6 +744,12 @@ export function useInterview({
     (candidateQuestion: string, context: CandidateQuestionContext): Promise<string> =>
       apiAnswerCandidateQuestion(candidateQuestion, context, getAbortSignal()),
     [apiAnswerCandidateQuestion],
+  )
+
+  const clarifyCaseContext = useCallback(
+    (candidateQuestion: string, activeQuestion: string, qIdx?: number, threadSummary?: string): Promise<string> =>
+      apiClarifyCaseContext(candidateQuestion, activeQuestion, qIdx, threadSummary, getAbortSignal()),
+    [apiClarifyCaseContext],
   )
 
   // ─── Shared helpers (DRY: listening + evaluation + coaching) ──────────────
@@ -1193,6 +1228,12 @@ export function useInterview({
   const finishInterview = useCallback(async (endReason: 'normal' | 'time_up' | 'user_ended' | 'usage_limit' | 'abandoned' = 'normal') => {
     // Idempotency guard: timer=0 and End button can both fire this.
     if (phaseRef.current === 'SCORING' || phaseRef.current === 'ENDED') return
+    const finishStartedAt = Date.now()
+    latencyTelemetryRef.current.finishStartedAt = finishStartedAt
+    const lastCandidateAt = latencyTelemetryRef.current.lastCandidateTranscriptAt
+    if (lastCandidateAt) {
+      latencyTelemetryRef.current.lastCandidateToScoringMs = finishStartedAt - lastCandidateAt
+    }
     // CRITICAL: cancel everything BEFORE the state transition so any in-flight
     // avatarSpeak / question generation / coaching sleep is interrupted
     // synchronously. Without these the loop can fire one more question after
@@ -1212,11 +1253,13 @@ export function useInterview({
     // Wait for in-flight background evaluations to settle so evaluationsRef
     // includes recently answered questions' scores when they finish in time.
     if (pendingEvaluationsRef.current.size > 0) {
+      const pendingEvalWaitStartedAt = Date.now()
       const pending = Array.from(pendingEvaluationsRef.current)
       await Promise.race([
         Promise.allSettled(pending).then(() => undefined),
         new Promise<void>((r) => setTimeout(r, 3000)),
       ])
+      latencyTelemetryRef.current.pendingEvalWaitMs = Date.now() - pendingEvalWaitStartedAt
     }
 
     const data = {
@@ -1236,6 +1279,8 @@ export function useInterview({
     // Persist to DB before navigating (with 10s timeout guard — must be long enough
     // for fetchWithRetry's 3 attempts with exponential backoff: ~7s total)
     if (sid) {
+      const persistStartedAt = Date.now()
+      latencyTelemetryRef.current.persistStartedAt = persistStartedAt
       await Promise.race([
         persistSession(sid, {
           status: 'completed',
@@ -1258,6 +1303,15 @@ export function useInterview({
         }),
         new Promise((r) => setTimeout(r, 10000)),
       ])
+      latencyTelemetryRef.current.persistMs = Date.now() - persistStartedAt
+      void persistSession(sid, {
+        interviewLatencyTelemetry: latencyTelemetryRef.current,
+      }).catch((err) => {
+        console.warn('[interview] latency telemetry persist failed', {
+          sessionId: sid,
+          err: err instanceof Error ? err.message : String(err),
+        })
+      })
 
       // G.15d: client-side XP write removed. /api/generate-feedback
       // now owns practiceStats updates server-side using the
@@ -1486,6 +1540,7 @@ export function useInterview({
     checkAbort()
     if (isInterviewOver()) return
 
+    latencyTelemetryRef.current.wrapUpPromptAt = Date.now()
     wrapUpActiveRef.current = true
     transitionTo('WRAP_UP')
     showWrapUpDisplay()
@@ -1494,7 +1549,9 @@ export function useInterview({
     await avatarSpeak(WRAP_UP_LINE, 'friendly')
 
     setLiveAnswer('')
+    const wrapUpListenStartedAt = Date.now()
     const wrapUpAnswer = await listenForAnswer(true, 15000, () => transitionTo('LISTENING'))
+    latencyTelemetryRef.current.wrapUpListenMs = Date.now() - wrapUpListenStartedAt
     if (isInterviewOver()) return
 
     const wrapUpIntent = classifyWrapUpAnswer(wrapUpAnswer)
@@ -1502,16 +1559,22 @@ export function useInterview({
       addToTranscript('candidate', wrapUpAnswer)
     }
 
+    const wrapUpSafeQaStartedAt = Date.now()
     const safeAnswer = shouldAnswerWrapUpWithLLM(wrapUpIntent)
       ? await answerCandidateQuestion(wrapUpAnswer, 'wrap_up')
       : undefined
+    if (shouldAnswerWrapUpWithLLM(wrapUpIntent)) {
+      latencyTelemetryRef.current.wrapUpSafeQaMs = Date.now() - wrapUpSafeQaStartedAt
+    }
     const closingLine = buildWrapUpClosingLine(wrapUpIntent, safeAnswer)
 
     checkAbort()
     showWrapUpDisplay()
     setCurrentQuestion(closingLine)
     addToTranscript('interviewer', closingLine)
+    const closingTtsStartedAt = Date.now()
     await avatarSpeak(closingLine, 'friendly')
+    latencyTelemetryRef.current.closingTtsMs = Date.now() - closingTtsStartedAt
   }
 
   // ─── Main interview loop ───────────────────────────────────────────────────
@@ -1628,7 +1691,7 @@ export function useInterview({
             break
           }
 
-          const intent = classifyIntent(speech)
+          const intent = classifyIntent(speech, config.interviewType)
 
           if (intent === 'answer') {
             // Check for "I don't know" pattern (E3)
@@ -1757,6 +1820,26 @@ export function useInterview({
             continue
           }
 
+          if (intent === 'clarify_case_context') {
+            clarifyingQCountRef.current++
+            setCurrentQuestion('Sure - let me clarify the setup.')
+            void playAck('Sure.')
+            const threadSummary = currentThreadRef.current
+              .map((turn) => `${turn.role}: ${turn.text}`)
+              .slice(-4)
+              .join('\n')
+            const reply = await clarifyCaseContext(speech, question, qIdx, threadSummary)
+            checkAbort()
+            if (isInterviewOver()) return
+            cancelAck()
+            addToTranscript('interviewer', reply, qIdx)
+            setCurrentQuestion(reply)
+            warmUpListening?.()
+            await avatarSpeak(reply, 'friendly')
+            setCurrentQuestion(question)
+            continue
+          }
+
           if (intent === 'redirect') {
             const redirectReply = pickRandom(CONVERSATION_RESPONSES.redirect)
             addToTranscript('interviewer', redirectReply, qIdx)
@@ -1775,22 +1858,24 @@ export function useInterview({
             continue
           }
 
-          if (intent === 'question') {
-            // Proactive candidate question — answer through the server-side
-            // Safe Q&A route, then redirect back to the active interview turn.
+          if (intent === 'ask_interviewer') {
+            // Recruiter/process questions are handled at wrap-up. During the
+            // main interview, keep the candidate on the active assessed turn.
             clarifyingQCountRef.current++
-            setCurrentQuestion('Sure - let me answer that briefly.')
-            void playAck('Sure.')
-            const safeAnswer = await answerCandidateQuestion(speech, 'mid_interview')
-            checkAbort()
-            if (isInterviewOver()) return
-            cancelAck()
-            const reply = `${safeAnswer} Coming back to the interview question, ${simplifyQuestion(question)}`
+            const reply = `Happy to cover that at the end. For now — ${simplifyQuestion(question)}`
             addToTranscript('interviewer', reply, qIdx)
             setCurrentQuestion(reply)
             warmUpListening?.()
             await avatarSpeak(reply, 'friendly')
             setCurrentQuestion(question)
+            continue
+          }
+
+          if (intent === 'question') {
+            const rephrase = pickRandom(CONVERSATION_RESPONSES.clarification) + ' ' + simplifyQuestion(question)
+            addToTranscript('interviewer', rephrase, qIdx)
+            warmUpListening?.()
+            await avatarSpeak(rephrase, 'friendly')
             continue
           }
         }
@@ -1806,14 +1891,23 @@ export function useInterview({
           continue
         }
 
+        const nextQIdx = qIdx + 1
+        const isFinalTopicFastPath = nextQIdx >= maxQ || timeRemainingRef.current < 60
+
         // ── Intentional silence: give short answers a chance to elaborate ──
         let finalAnswer = answer
-        const silenceElaboration = await maybeIntentionalSilence(answer, false)
+        const silenceElaboration = isFinalTopicFastPath
+          ? null
+          : await maybeIntentionalSilence(answer, false)
         if (silenceElaboration) {
           finalAnswer = `${answer} ${silenceElaboration}`
         }
 
         addToTranscript('candidate', finalAnswer, qIdx)
+        latencyTelemetryRef.current.lastMainAnswerAt = Date.now()
+        if (isFinalTopicFastPath) {
+          latencyTelemetryRef.current.finalTopicFastPath = true
+        }
         currentThreadRef.current.push({
           role: 'candidate', text: finalAnswer, isProbe: false, probeDepth: 0,
         })
@@ -1822,8 +1916,7 @@ export function useInterview({
         // Full evaluation runs concurrently in the background (see evaluateMainAnswer).
         // Coaching tip overlay fires when the bg eval resolves — non-blocking.
         checkAbort()
-        const nextQIdx = qIdx + 1
-        const shouldPrefetch = nextQIdx < maxQ && timeRemainingRef.current > 60
+        const shouldPrefetch = !isFinalTopicFastPath && nextQIdx < maxQ && timeRemainingRef.current > 60
         // Build a snapshot that includes the current (not-yet-finalized) thread so
         // the next question's deduplication prompt sees ALL topics including this one.
         // Without this, completedThreadsRef is stale — missing the current topic —
@@ -1840,13 +1933,25 @@ export function useInterview({
           prefetchTTS(prefetchedQ)
         }
 
+        const effectiveRouterResult = isFinalTopicFastPath
+          ? { ...routerResult, nextAction: 'advance' as const, probeQuestion: undefined, isPivot: false }
+          : routerResult
+        const firstProbeType: ProbeType | undefined =
+          effectiveRouterResult.style === 'probing' ? 'challenge' : 'expand'
+        const firstProbeQ = effectiveRouterResult.nextAction === 'probe'
+          ? sanitizeProbeQuestion(effectiveRouterResult.probeQuestion, {
+              question: topicQuestion,
+              answer: finalAnswer,
+            }, firstProbeType)
+          : undefined
+
         // Pre-fetch TTS for probe question the moment the router decides to probe
-        if (routerResult.nextAction === 'probe' && routerResult.probeQuestion) {
-          prefetchTTS(routerResult.probeQuestion)
+        if (effectiveRouterResult.nextAction === 'probe' && firstProbeQ) {
+          prefetchTTS(firstProbeQ)
         }
 
         // ── E7: Nonsensical/joke answer — re-ask without breaking character ──
-        if (routerResult.isNonsensical && currentProbeDepthRef.current === 0) {
+        if (effectiveRouterResult.isNonsensical && currentProbeDepthRef.current === 0) {
           const reaskMsg = "I want to make sure I understand you correctly. Could you walk me through that more seriously?"
           addToTranscript('interviewer', reaskMsg, qIdx)
           warmUpListening?.()
@@ -1869,8 +1974,8 @@ export function useInterview({
 
         // ── P6: Pivot re-anchoring — if candidate dodged the question, re-ask ──
         // Use re-anchor question from router (it detects topic drift) or generate one.
-        if (routerResult.isPivot && currentProbeDepthRef.current === 0 && timeRemainingRef.current >= 60) {
-          const reAnchorQ = routerResult.probeQuestion
+        if (effectiveRouterResult.isPivot && currentProbeDepthRef.current === 0 && timeRemainingRef.current >= 60) {
+          const reAnchorQ = effectiveRouterResult.probeQuestion
             || `Let me bring us back to the original question. ${question}`
           currentProbeDepthRef.current++
           qIdx++
@@ -1919,9 +2024,9 @@ export function useInterview({
         const MAX_PROBES_PER_TOPIC = flowMaxProbes ?? probeLimit[config?.interviewType || 'screening'] ?? 2
 
         // First-level probe: driven by turn-router (TTS can start as soon as router returns)
-        let nextProbeAction: 'probe' | 'advance' = routerResult.nextAction
-        let nextProbeQ: string | undefined = routerResult.probeQuestion
-        let nextProbeType: ProbeType | undefined = routerResult.style === 'probing' ? 'challenge' : 'expand'
+        let nextProbeAction: 'probe' | 'advance' = effectiveRouterResult.nextAction
+        let nextProbeQ: string | undefined = firstProbeQ
+        let nextProbeType: ProbeType | undefined = firstProbeType
 
         while (nextProbeAction === 'probe' && nextProbeQ && currentProbeDepthRef.current < MAX_PROBES_PER_TOPIC) {
           if (isInterviewOver()) return
@@ -1943,7 +2048,7 @@ export function useInterview({
           setQuestionIndex(qIdx)
           showFollowUpDisplay(currentProbeDepthRef.current)
           warmUpListening?.()
-          await avatarSpeak(probeQ, routerResult.style !== 'neutral' ? toneToEmotion(routerResult.style) : 'curious', () => {
+          await avatarSpeak(probeQ, effectiveRouterResult.style !== 'neutral' ? toneToEmotion(effectiveRouterResult.style) : 'curious', () => {
             setCurrentQuestion(probeQ)
             addToTranscript('interviewer', probeQ, qIdx)
           })
@@ -2204,6 +2309,9 @@ export function useInterview({
       // ── System design interview: special flow ──
       if (config.interviewType === 'system-design' && currentDesignProblemRef.current) {
         const problem = currentDesignProblemRef.current
+        // Reset the submission gate so a buffered submit from a prior run can't
+        // auto-resolve this run's wait.
+        designSubmissionGateRef.current.clear()
         const designIntro = `Hi! I'm Alex, and today we'll work through a system design challenge together. I'll present you with a problem, and you can build your architecture diagram using the design canvas on the right. Feel free to think out loud as you design — I'm interested in your reasoning and trade-off analysis as much as the final architecture. Let's get started!`
         setCurrentQuestion(designIntro)
         addToTranscript('interviewer', designIntro, 0)
@@ -2224,6 +2332,58 @@ export function useInterview({
         await avatarSpeak(problemText, 'curious')
 
         checkAbort()
+
+        const activeDesignQuestion = [
+          `System design challenge: ${problem.title}`,
+          problem.description,
+          `Requirements: ${problem.requirements.join('; ')}`,
+        ].join('\n')
+        for (let scopingTurn = 0; scopingTurn < 2; scopingTurn++) {
+          setLiveAnswer('')
+          const scopingSpeech = await listenForAnswer(true, 6000, () => transitionTo('LISTENING'))
+          if (isInterviewOver()) return
+          if (!scopingSpeech) break
+
+          const scopingIntent = classifyIntent(scopingSpeech, 'system-design')
+
+          // Don't swallow common conversational requests on the way to the
+          // canvas — answer them in character, then keep listening for scoping.
+          if (scopingIntent === 'repetition') {
+            addToTranscript('candidate', scopingSpeech, 1)
+            const repeatMsg = pickRandom(CONVERSATION_RESPONSES.repetition) + ' ' + problemText
+            addToTranscript('interviewer', repeatMsg, 1)
+            warmUpListening?.()
+            await avatarSpeak(repeatMsg, 'friendly')
+            continue
+          }
+          if (scopingIntent === 'timecheck') {
+            addToTranscript('candidate', scopingSpeech, 1)
+            const minutesLeft = Math.floor(timeRemainingRef.current / 60)
+            const timeMsg = CONVERSATION_RESPONSES.timecheck(minutesLeft, performanceSignalRef.current === 'strong')
+            addToTranscript('interviewer', timeMsg, 1)
+            warmUpListening?.()
+            await avatarSpeak(timeMsg, 'friendly')
+            continue
+          }
+          if (scopingIntent !== 'clarify_case_context') break
+          addToTranscript('candidate', scopingSpeech, 1)
+
+          setCurrentQuestion('Sure - let me clarify the setup.')
+          void playAck('Sure.')
+          const clarification = await clarifyCaseContext(
+            scopingSpeech,
+            activeDesignQuestion,
+            1,
+            `Design problem: ${problem.title}`,
+          )
+          checkAbort()
+          if (isInterviewOver()) return
+          cancelAck()
+          setCurrentQuestion(clarification)
+          addToTranscript('interviewer', clarification, 1)
+          warmUpListening?.()
+          await avatarSpeak(clarification, 'friendly')
+        }
 
         // Transition to DESIGN_CANVAS — user designs
         transitionTo('DESIGN_CANVAS')

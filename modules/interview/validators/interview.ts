@@ -1,5 +1,35 @@
 import { z } from 'zod'
 
+const MAX_LATENCY_TELEMETRY_BYTES = 2048
+const MAX_LATENCY_TIMESTAMP_MS = 4_102_444_800_000 // 2100-01-01T00:00:00.000Z
+const MAX_LATENCY_DURATION_MS = 3_600_000
+
+const LatencyDurationMsSchema = z.number().finite().min(0).max(MAX_LATENCY_DURATION_MS)
+const LatencyTimestampMsSchema = z.number().finite().min(0).max(MAX_LATENCY_TIMESTAMP_MS)
+
+export const InterviewLatencyTelemetrySchema = z
+  .object({
+    lastCandidateTranscriptAt: LatencyTimestampMsSchema.optional(),
+    lastMainAnswerAt: LatencyTimestampMsSchema.optional(),
+    wrapUpPromptAt: LatencyTimestampMsSchema.optional(),
+    wrapUpListenMs: LatencyDurationMsSchema.optional(),
+    wrapUpSafeQaMs: LatencyDurationMsSchema.optional(),
+    closingTtsMs: LatencyDurationMsSchema.optional(),
+    finishStartedAt: LatencyTimestampMsSchema.optional(),
+    pendingEvalWaitMs: LatencyDurationMsSchema.optional(),
+    persistStartedAt: LatencyTimestampMsSchema.optional(),
+    persistMs: LatencyDurationMsSchema.optional(),
+    lastCandidateToScoringMs: LatencyDurationMsSchema.optional(),
+    finalTopicFastPath: z.boolean().optional(),
+  })
+  .strict()
+  .refine(
+    (value) => JSON.stringify(value).length <= MAX_LATENCY_TELEMETRY_BYTES,
+    { message: `interviewLatencyTelemetry must be ${MAX_LATENCY_TELEMETRY_BYTES} bytes or less` }
+  )
+
+export type InterviewLatencyTelemetryInput = z.infer<typeof InterviewLatencyTelemetrySchema>
+
 export const InterviewConfigSchema = z.object({
   role: z.string().min(1).max(50),
   interviewType: z.string().min(1).max(50).optional().default('screening'),
@@ -181,6 +211,22 @@ export const EvaluateAnswerSchema = z.object({
   wasTruncatedByTimer: z.boolean().optional(),
 })
 
+export const ClarifyCaseContextRequestSchema = z.object({
+  candidateQuestion: z.string().min(1).max(1000),
+  activeQuestion: z.string().min(1).max(5000),
+  config: InterviewConfigSchema,
+  sessionId: z.string().optional(),
+  questionIndex: z.number().int().min(0).max(100).optional(),
+  threadSummary: z.string().max(2000).optional(),
+})
+
+export const ClarifyCaseContextResponseSchema = z.object({
+  answer: z.string().min(1).max(900),
+})
+
+export type ClarifyCaseContextRequest = z.infer<typeof ClarifyCaseContextRequestSchema>
+export type ClarifyCaseContextResponse = z.infer<typeof ClarifyCaseContextResponseSchema>
+
 export const GenerateFeedbackSchema = z.object({
   config: InterviewConfigSchema,
   transcript: z.array(TranscriptEntrySchema),
@@ -248,6 +294,7 @@ export const UpdateSessionSchema = z.object({
   answeredCount: z.number().int().min(0).max(100).optional(),
   endReason: z.enum(['normal', 'time_up', 'user_ended', 'usage_limit', 'abandoned']).optional(),
   wasTruncatedByTimer: z.array(z.boolean()).max(100).optional(),
+  interviewLatencyTelemetry: InterviewLatencyTelemetrySchema.optional(),
 })
 
 // ─── LLM response schemas (Work Item G.2) ──────────────────────────────────

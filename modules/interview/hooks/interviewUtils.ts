@@ -1,6 +1,7 @@
 import type {
   AnswerEvaluation,
   AvatarEmotion,
+  DesignSubmission,
   PerformanceSignal,
   ProbeType,
   PushbackTone,
@@ -124,6 +125,35 @@ function fallbackProbeQuestion(probeType: ProbeType | null | undefined): string 
   }
 }
 
+function targetFromProbeQuestion(question: string): string {
+  const normalized = normalizeProbeTarget(question)
+  const exactClarify = normalized.match(/^what exactly do you mean by\s+(.+)$/i)
+  if (exactClarify?.[1]) return normalizeProbeTarget(exactClarify[1])
+
+  const anchored = normalized.match(
+    /(?:about|by|approach|quantify|clarify|walk me through|share)\s+(.+)$/i
+  )
+  if (anchored?.[1]) return normalizeProbeTarget(anchored[1])
+
+  return normalized
+}
+
+export function sanitizeProbeQuestion(
+  probeQuestion: string | null | undefined,
+  context?: ProbeQuestionContext,
+  probeType?: ProbeType | null,
+): string | undefined {
+  const normalized = normalizeProbeTarget(probeQuestion)
+  if (!normalized) return undefined
+
+  const target = targetFromProbeQuestion(normalized)
+  if (/^what exactly do you mean by\b/i.test(normalized) || isWeakProbeTarget(target, context)) {
+    return fallbackProbeQuestion(probeType)
+  }
+
+  return normalized.endsWith('?') ? normalized : `${normalized}?`
+}
+
 /**
  * Construct a natural probe question from the evaluator's intent fields.
  * The evaluator provides *what* to probe (probeType + probeTarget);
@@ -208,5 +238,54 @@ export function toneToEmotion(tone: PushbackTone): AvatarEmotion {
     case 'curious': return 'curious'
     case 'probing': return 'skeptical'
     case 'encouraging': return 'friendly'
+  }
+}
+
+/**
+ * Resolver-or-buffer gate for system-design submissions.
+ *
+ * In the system-design flow the candidate can click Submit during the
+ * pre-canvas scoping window — before `waitForDesignSubmission()` has installed
+ * a resolver. Without buffering, that early submission is dropped on the floor
+ * and the later wait blocks forever, leaving the interview stuck until the
+ * candidate submits a second time. This gate buffers the most recent early
+ * submission so the wait resolves with it instead of hanging.
+ */
+export interface DesignSubmissionGate {
+  /** UI Submit handler: resolves an active waiter, else buffers the latest. */
+  submit(data: DesignSubmission): void
+  /** Return (and clear) a buffered early submission, or null if none. */
+  takePending(): DesignSubmission | null
+  /** Install the resolver to be invoked by the next `submit`. */
+  setResolver(resolve: (data: DesignSubmission) => void): void
+  /** Drop any installed resolver and buffered submission (reset between runs). */
+  clear(): void
+}
+
+export function createDesignSubmissionGate(): DesignSubmissionGate {
+  let resolver: ((data: DesignSubmission) => void) | null = null
+  let pending: DesignSubmission | null = null
+  return {
+    submit(data) {
+      if (resolver) {
+        const resolve = resolver
+        resolver = null
+        resolve(data)
+      } else {
+        pending = data
+      }
+    },
+    takePending() {
+      const buffered = pending
+      pending = null
+      return buffered
+    },
+    setResolver(resolve) {
+      resolver = resolve
+    },
+    clear() {
+      resolver = null
+      pending = null
+    },
   }
 }

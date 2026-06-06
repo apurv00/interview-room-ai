@@ -11,16 +11,20 @@
 //   5. hint         — "give me a hint"
 //   6. thinking     — filler / stalling (short utterances only)
 //   7. clarify_question — asks what a term/scope in the active question means
-//   8. clarification— "can you rephrase?"
-//   8. challenge_question — "that's not a fair question" (E4)
-//   9. gaming       — "just tell me the right answer" (E8)
-//  10. redirect     — "can I try a different example?"
-//  11. question     — candidate asks interviewer something
-//  12. answer       — default: everything else goes to evaluation
+//   8. clarify_case_context — case/design scoping assumptions
+//   9. ask_interviewer — recruiter/process/company question for wrap-up
+//  10. clarification— "can you rephrase?"
+//  11. challenge_question — "that's not a fair question" (E4)
+//  12. gaming       — "just tell me the right answer" (E8)
+//  13. redirect     — "can I try a different example?"
+//  14. question     — candidate asks interviewer something
+//  15. answer       — default: everything else goes to evaluation
 
 export type CandidateIntent =
   | 'answer'
   | 'clarify_question'
+  | 'ask_interviewer'
+  | 'clarify_case_context'
   | 'clarification'
   | 'redirect'
   | 'question'
@@ -43,9 +47,16 @@ export type CandidateIntent =
  * (>80 chars) skip most non-answer intents to avoid intercepting real answers
  * that happen to contain trigger phrases.
  */
-export function classifyIntent(text: string): CandidateIntent {
+export function classifyIntent(text: string, interviewType?: string): CandidateIntent {
   const lower = text.toLowerCase().trim()
   if (!lower) return 'answer'
+  const isCaseOrDesignInterview = interviewType === 'case-study' || interviewType === 'system-design'
+  const startsWithQuestionLead =
+    /^(?:what(?:'s|\s+(?:is|are|do|does|should|can|could|would|about|data|numbers?|users?|mau|dau|qps|scale|constraints?|scope|goal|metric))|which\b|where\b|when\b|who\b|why\b|how\s+(?:many|much|long|big|does|do|is|are|would|should|can|could)|(?:is|are|do|does|did|can|could|should|would|may)\b|(?:could|can|would)\s+you\b)/i.test(lower)
+  const hasQuestionShape =
+    lower.endsWith('?') ||
+    startsWithQuestionLead ||
+    /^(?:quick question|one question|i was wondering|i wanted to ask)\b/i.test(lower)
 
   // ── 1. Distress — emotional signals (short utterances only to avoid false positives)
   if (
@@ -111,26 +122,70 @@ export function classifyIntent(text: string): CandidateIntent {
     !/(team culture|next steps?|compensation|salary|benefits?|visa|sponsorship|remote|onsite|hybrid|team size|headcount|interview process|hiring process|timeline|recruiter|tech stack|internal tools?)/i.test(lower) &&
     (
       /(?:could you|can you|would you)?\s*(?:please\s+)?help me understand\b/i.test(lower) ||
-      /\b(?:before i answer|then i('ll| will) be able to answer|so i can answer|to answer this)\b/i.test(lower) ||
+      (
+        /\b(?:before i answer|then i('ll| will) be able to answer|so i can answer|to answer this)\b/i.test(lower) &&
+        /(?:\?|help me understand|what (?:does|do\s+(?!you\b)|is|are)\b|do you mean|are you asking|clarify|explain)/i.test(lower)
+      ) ||
       /\bare you asking\s+(?:about|for|whether)\b/i.test(lower) ||
       /\bdo you mean\s+(?:about|for|whether|that)\b/i.test(lower) ||
       /\bdo you mean by\s+(?!that\b|this\b|it\b).{2,80}/i.test(lower) ||
       /\bwhat (?:does|do\s+(?!you\b))\s*.{2,80}\s+mean(?:\s+(?:in|for)\s+(?:this|the)\s+question)?/i.test(lower) ||
-      /\bwhat (?:is|are)\s+.{2,80}\s+(?:actually\s+)?(?:is|are|in (?:this|the) question|you mentioned)\b/i.test(lower) ||
+      /\bwhat (?:is|are)\s+.{2,80}\s+(?:in (?:this|the) question|you mentioned)\b/i.test(lower) ||
+      /\bwhat (?:is|are)\s+(?!you\s+looking\s+for\b|the\s+(?:team|timeline|process|salary|compensation|benefits?|culture|next steps?)\b).{2,80}\?$/i.test(lower) ||
       /\bwhat do you mean by\s+(?!that\b|this\b|it\b).{2,80}/i.test(lower)
     )
   ) {
     return 'clarify_question'
   }
 
-  // ── 8. General clarification requests
+  // ── 8. Case/system-design scoping — candidate asks for assumptions.
+  const hasScopingKeyword =
+    /\b(?:mau|dau|qps|read\/write|read write|rps|throughput|latency|scale|traffic|users?|customers?|budget|timeline|constraints?|scope|platform|mobile|web|b2b|b2c|goal|objective|kpi|metrics?|success metric|retention|growth|monetization|revenue)\b/i.test(lower)
+  const hasAssumptionFraming =
+    /\b(?:assume|assuming|should i|can i|could i|may i|are we|is this|for this case|for this design|for this mock)\b/i.test(lower)
+  const hasTechStackScoping =
+    /\b(?:tech stack|technolog(?:y|ies)|tools?|frameworks?|languages?|platforms?)\b/i.test(lower) &&
+    hasAssumptionFraming
+  const hasRhetoricalWhatCopula =
+    /^what\s+(?:is|are)\b.+\b(?:is|are)\b/i.test(lower)
+  const hasWhScopingQuestionLead =
+    (/^(?:what\s+(?!i(?:'d|'ll|'m|'ve|\s)|we(?:'d|'ll|'re|\s))|which\b|where\b)/i.test(lower) || /^how\s+(?:many|much|big|large|long)\b/i.test(lower)) &&
+    !hasRhetoricalWhatCopula
+  const hasScopingQuestionShape =
+    lower.endsWith('?') ||
+    hasWhScopingQuestionLead ||
+    /\b(?:can|could|should|may)\s+i\s+assume\b/i.test(lower) ||
+    /\b(?:is it|would it be|is this)\s+fair to assume\b/i.test(lower) ||
+    /\b(?:before i (?:structure|dive in|start)|to frame this|for this case|for this design)\b/i.test(lower) &&
+      /\b(?:what|which|how many|how much|can|could|should|assume|clarify)\b/i.test(lower)
+  if (
+    isCaseOrDesignInterview &&
+    lower.length < 260 &&
+    (hasScopingKeyword || hasTechStackScoping) &&
+    hasScopingQuestionShape
+  ) {
+    return 'clarify_case_context'
+  }
+
+  // ── 9. Recruiter/process/company questions — save these for wrap-up.
+  // This runs before the generic clarification/question catch-alls so
+  // "Could you explain the hiring process?" does not trigger a rephrase.
+  if (
+    hasQuestionShape &&
+    lower.length < 180 &&
+    /\b(?:team culture|company culture|values|next steps?|compensation|salary|pay|benefits?|visa|sponsorship|remote|onsite|hybrid|team size|headcount|interview process|hiring process|recruiter|offer process|work authorization|tech stack|internal tools?)\b/i.test(lower)
+  ) {
+    return 'ask_interviewer'
+  }
+
+  // ── 10. General clarification requests
   if (
     /can you (repeat|rephrase|say that again|clarify|explain)|what do you mean|i('m| am) not sure i understand|could you (explain|rephrase|elaborate on (the|that) question)|sorry,? (i|what)|i didn('t| not) (catch|get|hear|understand) that/i.test(lower)
   ) {
     return 'clarification'
   }
 
-  // ── 9. Challenge question — candidate pushes back on the question itself (E4)
+  // ── 11. Challenge question — candidate pushes back on the question itself (E4)
   if (
     lower.length < 80 &&
     /that('s| is) (not )?(a )?(fair|valid|relevant|appropriate|good) question|this question (is|seems) (flawed|unfair|irrelevant|biased)|i don('t| not) (think|see how) that('s| is) relevant|that doesn('t| not) apply to my role|why (are you|would you) ask(ing)? (that|this)/i.test(lower)
@@ -138,7 +193,7 @@ export function classifyIntent(text: string): CandidateIntent {
     return 'challenge_question'
   }
 
-  // ── 10. Gaming — candidate tries to extract the answer (E8)
+  // ── 12. Gaming — candidate tries to extract the answer (E8)
   // Must be checked BEFORE 'question' intent (priority) since gaming phrases end with "?"
   if (
     lower.length < 60 &&
@@ -147,7 +202,7 @@ export function classifyIntent(text: string): CandidateIntent {
     return 'gaming'
   }
 
-  // ── 11. Redirect — candidate wants to change their answer (short utterances only)
+  // ── 13. Redirect — candidate wants to change their answer (short utterances only)
   if (
     lower.length < 80 &&
     /can i (give|share|use|try) (a |an )?(different|another|better) (example|story|answer|one)|let me (try|start) (again|over|fresh)|actually,? (can i|let me|i('d| would) like to)/i.test(lower)
@@ -155,7 +210,7 @@ export function classifyIntent(text: string): CandidateIntent {
     return 'redirect'
   }
 
-  // ── 12. Proactive candidate question — short, ends with "?", not a rhetorical STAR answer
+  // ── 14. Proactive candidate question — short, ends with "?", not a rhetorical STAR answer
   // Exclude sentences that start with personal pronouns (likely part of an answer)
   if (
     lower.endsWith('?') &&

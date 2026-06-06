@@ -32,6 +32,7 @@ export interface IInterviewSession extends Document {
   startedAt?: Date
   completedAt?: Date
   durationActualSeconds?: number
+  interviewLatencyTelemetry?: Record<string, unknown>
 
   transcript: TranscriptEntry[]
   evaluations: AnswerEvaluation[]
@@ -204,6 +205,7 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
     startedAt: { type: Date },
     completedAt: { type: Date },
     durationActualSeconds: { type: Number },
+    interviewLatencyTelemetry: { type: Schema.Types.Mixed },
 
     transcript: { type: Schema.Types.Mixed, default: [] },
     evaluations: { type: Schema.Types.Mixed, default: [] },

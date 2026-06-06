@@ -13,6 +13,7 @@ import { parseAndCacheResume, buildParsedResumeContext } from '../persona/resume
 import { setCachedJDContext, setCachedResumeContext } from '../persona/documentContextCache'
 import { warmSessionConfigCache } from './sessionConfigCache'
 import { getQuestionCount } from '../../config/interviewConfig'
+import type { InterviewLatencyTelemetryInput } from '../../validators/interview'
 import type { Duration } from '@shared/types'
 
 interface CreateSessionInput {
@@ -64,6 +65,7 @@ interface UpdateSessionInput {
   answeredCount?: number
   endReason?: 'normal' | 'time_up' | 'user_ended' | 'usage_limit' | 'abandoned'
   wasTruncatedByTimer?: boolean[]
+  interviewLatencyTelemetry?: InterviewLatencyTelemetryInput
 }
 
 interface ListSessionsInput {
@@ -354,6 +356,7 @@ export async function updateSession(
   if (input.answeredCount !== undefined) updateFields.answeredCount = input.answeredCount
   if (input.endReason) updateFields.endReason = input.endReason
   if (input.wasTruncatedByTimer) updateFields.wasTruncatedByTimer = input.wasTruncatedByTimer
+  if (input.interviewLatencyTelemetry) updateFields.interviewLatencyTelemetry = input.interviewLatencyTelemetry
 
   const updated = await InterviewSession.findByIdAndUpdate(sessionId, updateFields, { returnDocument: 'after' })
   if (!updated) throw new NotFoundError('Interview session')
