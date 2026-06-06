@@ -13,6 +13,7 @@ import { parseAndCacheResume, buildParsedResumeContext } from '../persona/resume
 import { setCachedJDContext, setCachedResumeContext } from '../persona/documentContextCache'
 import { warmSessionConfigCache } from './sessionConfigCache'
 import { getQuestionCount } from '../../config/interviewConfig'
+import type { InterviewLatencyTelemetryInput } from '../../validators/interview'
 import type { Duration } from '@shared/types'
 
 interface CreateSessionInput {
@@ -64,7 +65,7 @@ interface UpdateSessionInput {
   answeredCount?: number
   endReason?: 'normal' | 'time_up' | 'user_ended' | 'usage_limit' | 'abandoned'
   wasTruncatedByTimer?: boolean[]
-  interviewLatencyTelemetry?: Record<string, unknown>
+  interviewLatencyTelemetry?: InterviewLatencyTelemetryInput
 }
 
 interface ListSessionsInput {
