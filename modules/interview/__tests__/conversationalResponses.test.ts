@@ -72,6 +72,8 @@ describe('classifyIntent', () => {
     expect(classifyIntent('What QPS and read write split should I assume?', 'system-design')).toBe('clarify_case_context')
     expect(classifyIntent('Is this B2B or B2C, mobile or web?', 'case-study')).toBe('clarify_case_context')
     expect(classifyIntent('What tech stack should I assume?', 'system-design')).toBe('clarify_case_context')
+    expect(classifyIntent('What QPS should I design for', 'system-design')).toBe('clarify_case_context')
+    expect(classifyIntent('Which platform should I assume', 'case-study')).toBe('clarify_case_context')
     expect(classifyIntent('Can I assume 10M MAU and a retention goal?', 'behavioral')).toBe('question')
   })
 

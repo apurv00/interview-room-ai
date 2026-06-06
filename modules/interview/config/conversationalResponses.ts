@@ -143,8 +143,14 @@ export function classifyIntent(text: string, interviewType?: string): CandidateI
   const hasTechStackScoping =
     /\b(?:tech stack|technolog(?:y|ies)|tools?|frameworks?|languages?|platforms?)\b/i.test(lower) &&
     hasAssumptionFraming
+  const hasRhetoricalWhatCopula =
+    /^what\s+(?:is|are)\b.+\b(?:is|are)\b/i.test(lower)
+  const hasWhScopingQuestionLead =
+    (/^(?:what\s+(?!i(?:'d|'ll|'m|'ve|\s)|we(?:'d|'ll|'re|\s))|which\b|where\b)/i.test(lower) || /^how\s+(?:many|much|big|large|long)\b/i.test(lower)) &&
+    !hasRhetoricalWhatCopula
   const hasScopingQuestionShape =
     lower.endsWith('?') ||
+    hasWhScopingQuestionLead ||
     /\b(?:can|could|should|may)\s+i\s+assume\b/i.test(lower) ||
     /\b(?:is it|would it be|is this)\s+fair to assume\b/i.test(lower) ||
     /\b(?:before i (?:structure|dive in|start)|to frame this|for this case|for this design)\b/i.test(lower) &&
