@@ -43,6 +43,7 @@ import {
   buildProbeQuestion,
   sanitizeProbeQuestion,
   toneToEmotion,
+  createDesignSubmissionGate,
 } from './interviewUtils'
 import { useAvatarSpeech } from './useAvatarSpeech'
 import { EVALUATE_ANSWER_BACKGROUND_TIMEOUT_MS, useInterviewAPI } from './useInterviewAPI'
@@ -394,15 +395,14 @@ export function useInterview({
   }
 
   // ── Design submission (system design interviews) ──
-  const designSubmitResolverRef = useRef<((data: import('@shared/types').DesignSubmission) => void) | null>(null)
+  // Gate buffers an early Submit (clicked during the pre-canvas scoping window)
+  // so it isn't dropped before waitForDesignSubmission installs its resolver.
+  const designSubmissionGateRef = useRef(createDesignSubmissionGate())
   const currentDesignProblemRef = useRef(currentDesignProblem)
   currentDesignProblemRef.current = currentDesignProblem
 
   const onDesignSubmit = useCallback((data: import('@shared/types').DesignSubmission) => {
-    if (designSubmitResolverRef.current) {
-      designSubmitResolverRef.current(data)
-      designSubmitResolverRef.current = null
-    }
+    designSubmissionGateRef.current.submit(data)
   }, [])
 
   function waitForDesignSubmission(): Promise<import('@shared/types').DesignSubmission> {
@@ -411,7 +411,14 @@ export function useInterview({
         reject(new InterviewAbortError())
         return
       }
-      designSubmitResolverRef.current = resolve
+      // If the candidate already clicked Submit before we started waiting,
+      // resolve with the buffered submission instead of blocking for a re-click.
+      const buffered = designSubmissionGateRef.current.takePending()
+      if (buffered) {
+        resolve(buffered)
+        return
+      }
+      designSubmissionGateRef.current.setResolver(resolve)
       interviewAbortRef.current?.signal.addEventListener('abort', () => {
         reject(new InterviewAbortError())
       }, { once: true })
@@ -2302,6 +2309,9 @@ export function useInterview({
       // ── System design interview: special flow ──
       if (config.interviewType === 'system-design' && currentDesignProblemRef.current) {
         const problem = currentDesignProblemRef.current
+        // Reset the submission gate so a buffered submit from a prior run can't
+        // auto-resolve this run's wait.
+        designSubmissionGateRef.current.clear()
         const designIntro = `Hi! I'm Alex, and today we'll work through a system design challenge together. I'll present you with a problem, and you can build your architecture diagram using the design canvas on the right. Feel free to think out loud as you design — I'm interested in your reasoning and trade-off analysis as much as the final architecture. Let's get started!`
         setCurrentQuestion(designIntro)
         addToTranscript('interviewer', designIntro, 0)
@@ -2335,6 +2345,26 @@ export function useInterview({
           if (!scopingSpeech) break
 
           const scopingIntent = classifyIntent(scopingSpeech, 'system-design')
+
+          // Don't swallow common conversational requests on the way to the
+          // canvas — answer them in character, then keep listening for scoping.
+          if (scopingIntent === 'repetition') {
+            addToTranscript('candidate', scopingSpeech, 1)
+            const repeatMsg = pickRandom(CONVERSATION_RESPONSES.repetition) + ' ' + problemText
+            addToTranscript('interviewer', repeatMsg, 1)
+            warmUpListening?.()
+            await avatarSpeak(repeatMsg, 'friendly')
+            continue
+          }
+          if (scopingIntent === 'timecheck') {
+            addToTranscript('candidate', scopingSpeech, 1)
+            const minutesLeft = Math.floor(timeRemainingRef.current / 60)
+            const timeMsg = CONVERSATION_RESPONSES.timecheck(minutesLeft, performanceSignalRef.current === 'strong')
+            addToTranscript('interviewer', timeMsg, 1)
+            warmUpListening?.()
+            await avatarSpeak(timeMsg, 'friendly')
+            continue
+          }
           if (scopingIntent !== 'clarify_case_context') break
           addToTranscript('candidate', scopingSpeech, 1)
 

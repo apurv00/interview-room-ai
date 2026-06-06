@@ -6,8 +6,9 @@ import {
   shouldProbeOrAdvance,
   buildThreadSummary,
   toneToEmotion,
+  createDesignSubmissionGate,
 } from '../hooks/interviewUtils'
-import type { AnswerEvaluation, ThreadEntry } from '@shared/types'
+import type { AnswerEvaluation, DesignSubmission, ThreadEntry } from '@shared/types'
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -344,5 +345,61 @@ describe('toneToEmotion', () => {
 
   it('maps encouraging to friendly', () => {
     expect(toneToEmotion('encouraging')).toBe('friendly')
+  })
+})
+
+// ─── createDesignSubmissionGate ──────────────────────────────────────────────
+
+describe('createDesignSubmissionGate', () => {
+  const makeSubmission = (submittedAt: number): DesignSubmission => ({
+    components: [],
+    connections: [],
+    questionIndex: 1,
+    submittedAt,
+  })
+
+  it('resolves the installed waiter when submit happens after wait', () => {
+    const gate = createDesignSubmissionGate()
+    let received: DesignSubmission | undefined
+    expect(gate.takePending()).toBeNull()
+    gate.setResolver((d) => { received = d })
+    gate.submit(makeSubmission(1))
+    expect(received).toEqual(makeSubmission(1))
+  })
+
+  it('buffers an early submit so a later wait resolves with it (no hang)', () => {
+    const gate = createDesignSubmissionGate()
+    // Candidate clicks Submit during the pre-canvas scoping window, before any
+    // resolver is installed.
+    gate.submit(makeSubmission(42))
+    // waitForDesignSubmission() checks the buffer first and resolves with it.
+    expect(gate.takePending()).toEqual(makeSubmission(42))
+    // Buffer is consumed once.
+    expect(gate.takePending()).toBeNull()
+  })
+
+  it('keeps only the most recent early submit', () => {
+    const gate = createDesignSubmissionGate()
+    gate.submit(makeSubmission(1))
+    gate.submit(makeSubmission(2))
+    expect(gate.takePending()).toEqual(makeSubmission(2))
+  })
+
+  it('does not double-fire: a buffered submit is not also delivered to a later resolver', () => {
+    const gate = createDesignSubmissionGate()
+    gate.submit(makeSubmission(1))
+    expect(gate.takePending()).toEqual(makeSubmission(1)) // consumed by the wait
+    let received: DesignSubmission | undefined
+    gate.setResolver((d) => { received = d })
+    expect(received).toBeUndefined() // resolver not invoked by the already-taken buffer
+    gate.submit(makeSubmission(2))
+    expect(received).toEqual(makeSubmission(2))
+  })
+
+  it('clear() drops a buffered submit so it cannot auto-resolve the next run', () => {
+    const gate = createDesignSubmissionGate()
+    gate.submit(makeSubmission(99))
+    gate.clear()
+    expect(gate.takePending()).toBeNull()
   })
 })
