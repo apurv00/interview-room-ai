@@ -53,7 +53,7 @@ function fallbackAnswer(interviewType: string | undefined): string {
   return 'For this mock case, assume a realistic growth-stage product with clear customer needs, a measurable business goal, and practical constraints around timeline and resources. Take a moment to structure your approach, then walk me through it.'
 }
 
-async function getOwnedSessionIdForJDContext(
+async function getOwnedSessionIdForRequest(
   sessionId: string | undefined,
   user: AuthUser,
 ): Promise<string | null> {
@@ -65,7 +65,7 @@ async function getOwnedSessionIdForJDContext(
     if (ownerId === user.id) return sessionId
     aiLogger.warn(
       { sessionId, userId: user.id },
-      'clarify-case-context: ignoring unowned session JD cache'
+      'clarify-case-context: ignoring unowned session id'
     )
   } catch (err) {
     aiLogger.warn({ err, sessionId, userId: user.id }, 'clarify-case-context: session ownership lookup failed')
@@ -73,8 +73,11 @@ async function getOwnedSessionIdForJDContext(
   return null
 }
 
-async function buildTrustedContext(body: ClarifyCaseContextRequest, user: AuthUser): Promise<string> {
-  const { config, sessionId, activeQuestion, threadSummary } = body
+async function buildTrustedContext(
+  body: ClarifyCaseContextRequest,
+  ownedSessionId: string | null,
+): Promise<string> {
+  const { config, activeQuestion, threadSummary } = body
   const lines: string[] = [
     `Role: ${getDomainLabel(config.role) || config.role}`,
     `Interview type: ${config.interviewType || 'case-study'}`,
@@ -88,7 +91,6 @@ async function buildTrustedContext(body: ClarifyCaseContextRequest, user: AuthUs
 
   if (config.jobDescription) {
     try {
-      const ownedSessionId = await getOwnedSessionIdForJDContext(sessionId, user)
       const jdContext = ownedSessionId
         ? await getOrLoadJDContext(ownedSessionId, config.jobDescription)
         : null
@@ -96,7 +98,7 @@ async function buildTrustedContext(body: ClarifyCaseContextRequest, user: AuthUs
         ? `JD-derived context:\n${jdContext}`
         : `Job description excerpt:\n${config.jobDescription.slice(0, 1800)}`)
     } catch (err) {
-      aiLogger.warn({ err, sessionId }, 'clarify-case-context: failed to load JD context')
+      aiLogger.warn({ err, sessionId: ownedSessionId }, 'clarify-case-context: failed to load JD context')
       lines.push(`Job description excerpt:\n${config.jobDescription.slice(0, 1800)}`)
     }
   }
@@ -119,7 +121,9 @@ export const POST = composeApiRoute<ClarifyCaseContextRequest>({
       )
     }
 
-    const trustedContext = await buildTrustedContext(body, user)
+    const ownedSessionId = await getOwnedSessionIdForRequest(sessionId, user)
+    const usageSessionId = ownedSessionId ?? undefined
+    const trustedContext = await buildTrustedContext(body, ownedSessionId)
     const userPrompt = `${trustedContext}
 
 <active_question>
@@ -143,7 +147,7 @@ Return JSON only.`
       trackUsage({
         user,
         type: 'api_call_question',
-        sessionId,
+        sessionId: usageSessionId,
         inputTokens: result.inputTokens ?? 0,
         outputTokens: result.outputTokens ?? 0,
         modelUsed: result.model ?? 'gpt-5.4-mini',
@@ -165,7 +169,7 @@ Return JSON only.`
       trackUsage({
         user,
         type: 'api_call_question',
-        sessionId,
+        sessionId: usageSessionId,
         inputTokens: 0,
         outputTokens: 0,
         modelUsed: 'gpt-5.4-mini',

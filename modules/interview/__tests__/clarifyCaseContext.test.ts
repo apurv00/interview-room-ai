@@ -137,6 +137,7 @@ describe('clarify-case-context route', () => {
     }))
     expect(mockTrackUsage).toHaveBeenCalledWith(expect.objectContaining({
       type: 'api_call_question',
+      sessionId: 'sess_123',
       success: true,
     }))
   })
@@ -197,6 +198,22 @@ describe('clarify-case-context route', () => {
     expect(call.messages[0].content).toContain('Job description excerpt:')
     expect(call.messages[0].content).toContain('Caller supplied marketplace growth PM role.')
     expect(call.messages[0].content).not.toContain('Victim cached context')
+    expect(mockTrackUsage.mock.calls[0][0].sessionId).toBeUndefined()
+  })
+
+  it('omits unowned sessionId from failed usage tracking', async () => {
+    mockSessionOwner('different-user')
+    mockCompletion.mockRejectedValue(new Error('model unavailable'))
+
+    const res = await POST(makeRequest())
+    const data = await res.json()
+
+    expect(data.answer).toContain('Take a moment to structure your approach')
+    expect(mockTrackUsage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'api_call_question',
+      success: false,
+    }))
+    expect(mockTrackUsage.mock.calls[0][0].sessionId).toBeUndefined()
   })
 
   it('returns fallback when called outside case-study/system-design', async () => {
