@@ -47,6 +47,12 @@ describe('classifyIntent', () => {
     expect(classifyIntent('What is hard is the latency.', 'system-design')).toBe('answer')
   })
 
+  it('does not treat answer-framing openers as clarifications', () => {
+    expect(classifyIntent('To answer this, I would first segment the users.')).toBe('answer')
+    expect(classifyIntent('Before I answer, I would map the constraints and then prioritize.')).toBe('answer')
+    expect(classifyIntent('To answer this, what does OAuth mean?')).toBe('clarify_question')
+  })
+
   it('detects redirect requests', () => {
     expect(classifyIntent('Can I give a different example?')).toBe('redirect')
     // Note: "Let me start over" now matches 'correction' (higher priority)

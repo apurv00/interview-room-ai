@@ -122,7 +122,10 @@ export function classifyIntent(text: string, interviewType?: string): CandidateI
     !/(team culture|next steps?|compensation|salary|benefits?|visa|sponsorship|remote|onsite|hybrid|team size|headcount|interview process|hiring process|timeline|recruiter|tech stack|internal tools?)/i.test(lower) &&
     (
       /(?:could you|can you|would you)?\s*(?:please\s+)?help me understand\b/i.test(lower) ||
-      /\b(?:before i answer|then i('ll| will) be able to answer|so i can answer|to answer this)\b/i.test(lower) ||
+      (
+        /\b(?:before i answer|then i('ll| will) be able to answer|so i can answer|to answer this)\b/i.test(lower) &&
+        /(?:\?|help me understand|what (?:does|do\s+(?!you\b)|is|are)\b|do you mean|are you asking|clarify|explain)/i.test(lower)
+      ) ||
       /\bare you asking\s+(?:about|for|whether)\b/i.test(lower) ||
       /\bdo you mean\s+(?:about|for|whether|that)\b/i.test(lower) ||
       /\bdo you mean by\s+(?!that\b|this\b|it\b).{2,80}/i.test(lower) ||
