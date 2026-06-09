@@ -47,3 +47,24 @@ export const STATIC_DEPTHS: StaticDepth[] = [
   { slug: 'system-design', label: 'System Design', icon: '🏗️', description: 'Architecture and system design — scalability, trade-offs, component design, and technical breadth.', applicableDomains: ['backend', 'frontend', 'data-science', 'sdet', 'general'] },
   { slug: 'coding', label: 'Coding Challenge', icon: '💻', description: 'Live coding problem-solving — algorithm design, implementation, testing, and optimization.', applicableDomains: ['backend', 'frontend', 'data-science', 'sdet'] },
 ]
+
+export interface StaticCategory {
+  slug: string
+  label: string
+  icon: string
+  description: string
+  sortOrder: number
+}
+
+// Instant-render mirror of BUILT_IN_CATEGORIES (shared/db/seed.ts), replaced by
+// the /api/categories fetch. 'general' is the search-fallback escape (sortOrder
+// 99) — the category grid renders it as an escape, not a browseable card.
+export const STATIC_CATEGORIES: StaticCategory[] = [
+  { slug: 'programming', label: 'Programming', icon: '💻', description: 'Software & web engineering roles', sortOrder: 1 },
+  { slug: 'data-ai', label: 'Data & AI', icon: '📊', description: 'Data science, ML, and analytics', sortOrder: 2 },
+  { slug: 'core-engineering', label: 'Core Engineering', icon: '⚙️', description: 'Mechanical, civil, electrical & more', sortOrder: 3 },
+  { slug: 'business', label: 'Business', icon: '📈', description: 'Strategy, finance, ops, marketing', sortOrder: 4 },
+  { slug: 'product', label: 'Product', icon: '🎯', description: 'Product management & analytics', sortOrder: 5 },
+  { slug: 'design', label: 'Design', icon: '🎨', description: 'UX, UI, and product design', sortOrder: 6 },
+  { slug: 'general', label: 'General / Other', icon: '🧭', description: 'Any role — versatile practice', sortOrder: 99 },
+]
