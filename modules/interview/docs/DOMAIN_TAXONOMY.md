@@ -235,7 +235,10 @@ serves fallback instead of silently filtering — acceptable and clearer.
 **Goal:** Category-grid → role-list as two screens inside the existing first
 wizard step. Hides irrelevant roles; adds search + escape hatch.
 
-**Changes** (behind `FEATURE_FLAG_TAXONOMY_V2`)
+**Changes** — shipped as PR #439. **No feature flag**: `CategoryDomainPicker` is the
+default setup selector. (As shipped this added a *new* `CategoryDomainPicker` rather
+than refactoring `DomainSelector`, which — with its `CATEGORY_TABS` — is retained for
+the home + /hire/invite surfaces.) Original plan:
 - New `CategoryGrid.tsx` (icon cards 3×2 + one-line descriptor, role counts) and
   refactor `DomainSelector.tsx` into the **role-list screen** (filtered to the
   chosen category; no category tabs; no "All").
@@ -263,8 +266,8 @@ wizard step. Hides irrelevant roles; adds search + escape hatch.
 - Update e2e `e2e/setup-wizard.spec.ts` + `e2e/lobby-config.spec.ts` for the
   two-screen flow (these currently assert the single-grid flow — they WILL fail
   until updated; that's the canary).
-- Flag-off test: with `FEATURE_FLAG_TAXONOMY_V2=false`, the old single-grid
-  selector renders unchanged.
+- (No flag, so no flag-off test. The legacy single-grid `DomainSelector` still
+  renders on the home + /hire/invite surfaces, which were not migrated.)
 - Manual: complete a full interview start from the new flow (per CLAUDE.md
   hot-path discipline, since setup feeds the live pipeline).
 
@@ -460,10 +463,10 @@ in parallel with Phase 3/4. Phase 6 is continuous.
 
 ## 7. Open items to confirm before coding
 
-- Exact starter role roster per category (curation list) — drives Phase 4 seed.
-- `Category` collection vs. a single config doc — recommend collection.
-- Feature-flag name + rollout cohorts for `FEATURE_FLAG_TAXONOMY_V2`.
-- Whether to retire the legacy `category` field in this initiative or defer.
+- ✅ Roster → shipped (Phase 4, §8.3). ✅ `Category` collection → built.
+- ✅ **No feature flag** — `CategoryDomainPicker` is the default (non-breaking drop-in).
+- Legacy `category` field → **deferred / kept**: the flat `DomainSelector` (home +
+  /hire/invite) still reads it. Retire only if those two surfaces migrate too.
 
 ---
 

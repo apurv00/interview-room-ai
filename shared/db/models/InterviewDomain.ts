@@ -9,9 +9,10 @@ export interface IInterviewDomain extends Document {
   description: string
   color: string
   /**
-   * Legacy free-form category label. Retained for backward compatibility
-   * (the current DomainSelector still reads it) until the UI migrates to
-   * `categorySlug`. No longer enum-constrained — the old enum was dead
+   * Legacy free-form category label. Retained because the flat DomainSelector
+   * (still used on the authenticated home + /hire/invite) filters by it. The
+   * interview-setup UI already migrated to `categorySlug`; this stays until those
+   * two surfaces do too. No longer enum-constrained — the old enum was dead
    * (findOneAndUpdate upserts skip validators) and disagreed with the data.
    */
   category: string
@@ -49,7 +50,7 @@ const InterviewDomainSchema = new Schema<IInterviewDomain>(
     icon: { type: String, required: true },
     description: { type: String, required: true },
     color: { type: String, default: 'indigo' },
-    // Legacy label, kept until the UI migrates to categorySlug. Enum removed:
+    // Legacy label, kept for the flat DomainSelector (home + /hire/invite). Enum removed:
     // it was inert (no runValidators on the seed upserts) and excluded the
     // 'product'/'general' values actually in use.
     category: { type: String, required: true },

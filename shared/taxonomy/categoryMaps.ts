@@ -36,10 +36,10 @@ export const CATEGORY_SLUG_FOR_LEGACY: Record<string, string> = {
 }
 
 /**
- * Map a new category slug back to a legacy `category` value the *current*
+ * Map a new category slug back to a legacy `category` value the flat
  * DomainSelector tabs (engineering/product/business/general) understand, so a
- * newly created role stays visible under a tab until that reader migrates to
- * `categorySlug` (Phase 2).
+ * newly created role stays visible under a tab on the surfaces that still use
+ * that selector — the authenticated home + /hire/invite.
  */
 export const LEGACY_FOR_CATEGORY_SLUG: Record<string, string> = {
   programming: 'engineering',

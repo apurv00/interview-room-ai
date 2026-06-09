@@ -53,8 +53,8 @@ export default function NewDomainPage() {
         body: JSON.stringify({
           ...form,
           // form.category holds the new category slug; write categorySlug from
-          // it, and keep a legacy-compatible `category` so the current
-          // DomainSelector tabs still place the role until Phase 2.
+          // it, and keep a legacy-compatible `category` so the flat DomainSelector
+          // tabs (home + /hire/invite) still place the role.
           categorySlug: form.category,
           category: legacyCategoryFor(form.category),
           sortOrder: parseInt(form.sortOrder) || 0,

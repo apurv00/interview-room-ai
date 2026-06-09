@@ -9,7 +9,7 @@ export interface StaticDomain {
   icon: string
   description: string
   color: string
-  /** Legacy free-form category label (kept until UI migrates to categorySlug). */
+  /** Legacy free-form category label (used by the flat DomainSelector on home + /hire/invite). */
   category: string
   /** Data-driven taxonomy bucket → Category.slug. */
   categorySlug?: string
