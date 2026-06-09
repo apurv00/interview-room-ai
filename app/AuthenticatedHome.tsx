@@ -6,7 +6,7 @@ import { useSession } from 'next-auth/react'
 import Link from 'next/link'
 import { CheckCircle2, Video } from 'lucide-react'
 import FileDropzone from '@shared/ui/FileDropzone'
-import DomainSelector from '@interview/components/DomainSelector'
+import CategoryDomainPicker from '@interview/components/CategoryDomainPicker'
 import DepthSelector from '@interview/components/DepthSelector'
 import SelectionGroup from '@shared/ui/SelectionGroup'
 import Button from '@shared/ui/Button'
@@ -459,7 +459,7 @@ export default function AuthenticatedHome() {
         {/* Domain selector */}
         <div id="step-3">
           <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-[0.12em] mb-2">Interview Domain <span className="text-[#f4212e]">*</span></p>
-          <DomainSelector selectedDomain={role} onSelect={(slug) => { setRole(slug); setInterviewType(null) }} />
+          <CategoryDomainPicker selectedDomain={role} onSelect={(slug) => { setRole(slug); setInterviewType(null) }} />
         </div>
 
         {/* Interview Type + Experience + Duration — 3 columns */}

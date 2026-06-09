@@ -36,10 +36,10 @@ export const CATEGORY_SLUG_FOR_LEGACY: Record<string, string> = {
 }
 
 /**
- * Map a new category slug back to a legacy `category` value the flat
- * DomainSelector tabs (engineering/product/business/general) understand, so a
- * newly created role stays visible under a tab on the surfaces that still use
- * that selector — the authenticated home + /hire/invite.
+ * Map a new category slug back to a legacy `category` value
+ * (engineering/product/business/general). The flat DomainSelector that read these
+ * is gone; this now only fills the schema-required, back-compat `category` field
+ * on domain writes (and feeds `resolveCategorySlug`'s fallback for old rows).
  */
 export const LEGACY_FOR_CATEGORY_SLUG: Record<string, string> = {
   programming: 'engineering',

@@ -24,7 +24,6 @@ import Link from 'next/link'
 import {
   ArrowRight,
   ArrowLeft,
-  Check,
   CheckCircle2,
   Edit3,
   Sparkles,
@@ -1162,8 +1161,3 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
     </div>
   )
 }
-
-// Silence unused-import warning — Check is used by DomainSelector indirectly
-// but we also keep it here in case we add a selected-state checkmark later.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const _Check = Check

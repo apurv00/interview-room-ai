@@ -71,37 +71,28 @@ test.describe('UAT-013 — domain label rendering', () => {
 
     await page.goto('/interview/setup')
 
-    // Wait for the DomainSelector to populate. It hits /api/domains
-    // and renders cards as role="option"; first card is the canary.
-    const domainList = page.getByRole('listbox', { name: /Interview domains/i })
-    await expect(domainList).toBeVisible({ timeout: 10_000 })
+    // The CategoryDomainPicker mounts on the category grid. Roles live behind
+    // categories/search, so we use the search box (which hits the same
+    // /api/domains data) to surface each role and assert it renders under its
+    // FULL label — never the title-cased slug the bug produced ("Pm", "Devops").
+    await expect(page.getByRole('listbox', { name: /Interview fields/i })).toBeVisible({ timeout: 10_000 })
+    const search = page.getByLabel('Search roles')
 
-    // The visible domain catalog must never display "Pm" / "Swe" / etc.
-    // — those are the title-cased fallbacks the bug produced. We check
-    // a few of the most-common candidates explicitly so any reintroduced
-    // bypass fails loudly.
-    const bannedTitleCases = ['Pm', 'Swe', 'Mba', 'Hr', 'Devops']
-    for (const banned of bannedTitleCases) {
-      // Use a strict, anchored regex so substrings like "Pm" inside
-      // longer copy ("Performance metric") never false-positive. The
-      // domain card itself wraps its label in a stable element with
-      // role="option"; we scope the search to the listbox.
-      const offender = domainList.getByRole('option', {
-        name: new RegExp(`^${banned}$`, 'i'),
-      })
+    // Searching a role's slug must surface the full-name option. If a label
+    // regressed to its raw title-cased slug, the full name would not appear and
+    // these assertions would fail loudly.
+    const cases = [
+      { query: 'pm', label: /Product Manager/i },
+      { query: 'devops', label: /DevOps/i },
+      { query: 'frontend', label: /Frontend Engineer/i },
+    ]
+    for (const c of cases) {
+      await search.fill(c.query)
       await expect(
-        offender,
-        `Domain card should never render the raw slug "${banned}"`,
-      ).toHaveCount(0)
+        page.getByRole('option', { name: c.label }),
+        `Searching "${c.query}" should surface the full role label, not a raw slug`,
+      ).toBeVisible({ timeout: 10_000 })
     }
-
-    // Sanity: at least one well-known full label should be visible
-    // (proves the catalog actually rendered, not just that the negative
-    // assertions ran against an empty list).
-    const productManagerCard = domainList.getByRole('option', {
-      name: /Product Manager/i,
-    })
-    await expect(productManagerCard).toBeVisible()
 
     networkTracker.assertNoServerErrors()
     consoleTracker.assertNoErrors()

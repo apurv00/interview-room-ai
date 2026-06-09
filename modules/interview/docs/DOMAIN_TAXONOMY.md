@@ -18,13 +18,15 @@ implemented). This doc is the single source of truth for the taxonomy work.
 > - ✅ **Phase 2** — `CategoryDomainPicker` two-screen UI (PR #439).
 > - ✅ **Phase 3** — CMS Category CRUD + write-time `categorySlug` 400 (PR #440).
 > - ✅ **Phase 4** — 17 freshers' roles seeded + category-aware depths (PR #441).
-> - ✅ **Flag removed** — `CategoryDomainPicker` is the **default** setup picker;
->   there is no `NEXT_PUBLIC_FEATURE_TAXONOMY_V2`. The change is a non-breaking
->   drop-in (same props, `config.role` unchanged), so a flag added only complexity.
->   The legacy flat `DomainSelector` remains only on the authenticated home and the
->   `/hire/invite` page. **Deploy = merge; no env flag.** Optional: `POST /api/db/seed`
->   (platform_admin) so `/api/domains` lists the new roles — until then the picker
->   uses `STATIC_DOMAINS` and the AI uses `FALLBACK_DOMAINS` (both already carry them).
+> - ✅ **Flag removed + selector unified** — `CategoryDomainPicker` is the **only**
+>   domain selector. There is no `NEXT_PUBLIC_FEATURE_TAXONOMY_V2`; it's a
+>   non-breaking drop-in (same props, `config.role` unchanged), so the flag added
+>   only complexity. The legacy flat `DomainSelector` (and its `CATEGORY_TABS`) was
+>   **deleted** — the authenticated home and `/hire/invite` now use the picker too.
+>   The legacy `category` field stays only as a `resolveCategorySlug` fallback for
+>   pre-`categorySlug` rows. **Deploy = merge; no env flag.** Optional: `POST
+>   /api/db/seed` (platform_admin) so `/api/domains` lists the new roles — until then
+>   the picker uses `STATIC_DOMAINS` and the AI uses `FALLBACK_DOMAINS` (both carry them).
 
 ---
 
@@ -237,8 +239,8 @@ wizard step. Hides irrelevant roles; adds search + escape hatch.
 
 **Changes** — shipped as PR #439. **No feature flag**: `CategoryDomainPicker` is the
 default setup selector. (As shipped this added a *new* `CategoryDomainPicker` rather
-than refactoring `DomainSelector`, which — with its `CATEGORY_TABS` — is retained for
-the home + /hire/invite surfaces.) Original plan:
+than refactoring `DomainSelector`; the home + /hire/invite surfaces were later moved
+onto the picker too and `DomainSelector` + `CATEGORY_TABS` were deleted.) Original plan:
 - New `CategoryGrid.tsx` (icon cards 3×2 + one-line descriptor, role counts) and
   refactor `DomainSelector.tsx` into the **role-list screen** (filtered to the
   chosen category; no category tabs; no "All").
@@ -266,8 +268,8 @@ the home + /hire/invite surfaces.) Original plan:
 - Update e2e `e2e/setup-wizard.spec.ts` + `e2e/lobby-config.spec.ts` for the
   two-screen flow (these currently assert the single-grid flow — they WILL fail
   until updated; that's the canary).
-- (No flag, so no flag-off test. The legacy single-grid `DomainSelector` still
-  renders on the home + /hire/invite surfaces, which were not migrated.)
+- (No flag, so no flag-off test. `DomainSelector` was deleted — every surface
+  uses `CategoryDomainPicker`.)
 - Manual: complete a full interview start from the new flow (per CLAUDE.md
   hot-path discipline, since setup feeds the live pipeline).
 
@@ -417,7 +419,7 @@ analytics group by category.
 - [x] `seed.ts` category strings → re-cut + single-source (Phase 0 ✅)
 - [x] `staticData.ts` `STATIC_DOMAINS` categories → `categorySlug` added (Phase 0 ✅)
 - [x] `FALLBACK_DOMAINS` + `/api/domains` whitelist → de-gated (Phase 1 ✅)
-- [ ] `CATEGORY_TABS` in `DomainSelector.tsx` → derive from `/api/categories` (Phase 2 — pending)
+- [x] `CATEGORY_TABS` in `DomainSelector.tsx` → retired (DomainSelector deleted; all surfaces use CategoryDomainPicker)
 - [x] CMS form `<option>` list (new + edit pages) → dynamic select (Phase 1 ✅, was Phase 3)
 - [x] `cms.ts` validators → `categorySlug` accepted/persisted (Phase 1 ✅, was Phase 3)
 
@@ -465,8 +467,9 @@ in parallel with Phase 3/4. Phase 6 is continuous.
 
 - ✅ Roster → shipped (Phase 4, §8.3). ✅ `Category` collection → built.
 - ✅ **No feature flag** — `CategoryDomainPicker` is the default (non-breaking drop-in).
-- Legacy `category` field → **deferred / kept**: the flat `DomainSelector` (home +
-  /hire/invite) still reads it. Retire only if those two surfaces migrate too.
+- Legacy `category` field → **kept (no UI reads it)**: now only a
+  `resolveCategorySlug` fallback for rows that predate `categorySlug` + the
+  schema-required value. Fully retiring it is a separate data migration.
 
 ---
 
