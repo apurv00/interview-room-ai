@@ -40,7 +40,14 @@ const BUDGETS = {
   // close per ADR 0006. See docs/adr/0009-interview-module-budget-bump-filler-metrics.md.
   'modules/interview': { maxLOC: 30_000, maxFiles: 142 },
   'modules/feedback':  { maxLOC: 10_000, maxFiles: 60 },
-  'modules/learn':     { maxLOC: 25_000, maxFiles: 80 },
+  // Bumped maxFiles 80 → 82 on 2026-06-09 (PR #435): adds ONE counted file —
+  // services/resolvePathwayNextHref.ts, the server-side CTA next-step resolver
+  // that decouples the homepage hero CTA from the heavy /api/learn/pathway
+  // fetch (fixes the "Loading your next step…" stall). The paired test is not
+  // counted (countFiles skips __tests__/). LOC stays well under budget
+  // (~14k/25k) — a small-util add, not bloat. +1 headroom keeps the tripwire
+  // tight. See docs/adr/0010-learn-module-budget-bump-cta-resolver.md.
+  'modules/learn':     { maxLOC: 25_000, maxFiles: 82 },
   // Bumped maxFiles 70 → 100 on 2026-05-29 (PR #411): the flat 10-template
   // catalog was refactored into a family → layout → theme → primitive system
   // (7 layouts + ~12 shared primitives + per-family theme configs + thin legacy

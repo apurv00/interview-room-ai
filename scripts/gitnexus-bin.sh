@@ -13,6 +13,70 @@
 
 set -euo pipefail
 
+# ── Ensure `node` is resolvable ────────────────────────────────────────
+# gitnexus is a Node CLI; every resolution path below (the gitnexus shim,
+# `npx`, and the unpacked npx-cache binary) needs `node` on PATH to run.
+# This wrapper is invoked by pre-edit-hotpath.sh, which the harness can
+# spawn with a stripped PATH that omits version-manager shims (nvm/n/
+# volta). When that happens `node` is missing and gitnexus dies with
+# "env: node: No such file or directory" — silently failing the hook's
+# new-file symbol verification and blocking the creation of ANY new source
+# file. Discover node from common version-manager / package-manager
+# locations and prepend it so the wrapper works in stripped envs too.
+# Purely additive: a no-op when `node` is already on PATH.
+if ! command -v node >/dev/null 2>&1; then
+  _node_dir=""
+  # Pick the highest SEMVER version among version-managed installs (nvm / n).
+  # Two constraints, both learned the hard way:
+  #   - NOT lexical/glob order: `v18.20.0` sorts before `v9.11.2`, so naive
+  #     "last glob match" would choose the OLDER node and may run gitnexus
+  #     under an unsupported version.
+  #   - NOT GNU `sort -V`: that flag is absent on BSD/macOS `sort` and would
+  #     drop every candidate in the stripped-PATH+nvm case this block exists
+  #     to recover.
+  # Portable approach: emit "<major> <minor> <patch> <dir>" per candidate and
+  # take the max via a POSIX numeric `sort` (-k…n). Non-numeric / pre-release
+  # segments collapse to 0. Globbing covers BSD, macOS, and Linux; unmatched
+  # globs stay literal and are filtered by the `-x` test.
+  _best="$(
+    for _d in \
+      "${NVM_DIR:-$HOME/.nvm}"/versions/node/*/bin \
+      "$HOME"/.nvm/versions/node/*/bin \
+      /usr/local/n/versions/node/*/bin
+    do
+      [ -x "$_d/node" ] || continue
+      _v="${_d%/bin}"; _v="${_v##*/}"; _v="${_v#v}"   # → "18.20.0"
+      _maj="${_v%%.*}"
+      _rest="${_v#*.}"; _min="${_rest%%.*}"
+      _pat="${_rest#*.}"
+      # Keep only the leading digit run of each field (strips "-nightly",
+      # build suffixes, stray text); an empty result → 0. Parameter
+      # expansion only — NO `case`, which breaks inside $() on bash 3.2
+      # (macOS /bin/bash).
+      _maj="${_maj%%[!0-9]*}"; _min="${_min%%[!0-9]*}"; _pat="${_pat%%[!0-9]*}"
+      [ -n "$_maj" ] || _maj=0
+      [ -n "$_min" ] || _min=0
+      [ -n "$_pat" ] || _pat=0
+      printf '%s %s %s %s\n' "$_maj" "$_min" "$_pat" "$_d"
+    done | sort -k1,1n -k2,2n -k3,3n | tail -n 1
+  )"
+  # Drop the three numeric sort keys, leaving the dir (which may contain spaces).
+  if [ -n "$_best" ]; then
+    _node_dir="${_best#* }"; _node_dir="${_node_dir#* }"; _node_dir="${_node_dir#* }"
+  fi
+  # Fixed-location fallbacks (volta / Homebrew / local) only if no
+  # version-managed node was found.
+  if [ -z "$_node_dir" ]; then
+    for _cand in "$HOME"/.volta/bin /opt/homebrew/bin /usr/local/bin; do
+      if [ -x "$_cand/node" ]; then _node_dir="$_cand"; break; fi
+    done
+  fi
+  if [ -n "$_node_dir" ]; then
+    PATH="$_node_dir:$PATH"
+    export PATH
+  fi
+fi
+
 if [ -n "${GITNEXUS_BIN:-}" ] && [ -x "$GITNEXUS_BIN" ]; then
   exec "$GITNEXUS_BIN" "$@"
 fi
