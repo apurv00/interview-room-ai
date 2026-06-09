@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { connectDB } from '@shared/db/connection'
 import { InterviewDomain } from '@shared/db/models'
-import { FALLBACK_DOMAINS, categorySlugFor } from '@shared/db/seed'
+import { FALLBACK_DOMAINS, resolveCategorySlug } from '@shared/db/seed'
 
 export const dynamic = 'force-dynamic'
 
@@ -24,7 +24,7 @@ export async function GET() {
       // doc that predates the seed backfill so the shape stays seed-independent.
       const withCategory = domains.map(d => ({
         ...d,
-        categorySlug: d.categorySlug ?? categorySlugFor(d.slug),
+        categorySlug: resolveCategorySlug(d),
       }))
       return NextResponse.json(withCategory, { headers: CACHE_HEADERS })
     }

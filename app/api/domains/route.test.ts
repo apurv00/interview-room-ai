@@ -57,6 +57,21 @@ describe('GET /api/domains — categorySlug contract', () => {
     expect(body.find((d: { slug: string }) => d.slug === 'mechanical').categorySlug).toBe('core-engineering')
   })
 
+  it('buckets a CMS domain with only a legacy category (no categorySlug) via the legacy map', async () => {
+    // Codex P2: a CMS role written through the old path has `category` but no
+    // `categorySlug`. It must bucket by the legacy category, not flat 'general'.
+    mockLean.mockResolvedValue([
+      {
+        slug: 'consulting', label: 'Strategy Consultant', shortLabel: 'CON', icon: '📈',
+        description: 'Case interviews.', color: 'indigo', category: 'business',
+        // categorySlug intentionally omitted (legacy CMS write)
+      },
+    ])
+    const res = await GET()
+    const body = await res.json()
+    expect(body.find((d: { slug: string }) => d.slug === 'consulting').categorySlug).toBe('business')
+  })
+
   it('derives categorySlug on the DB path when docs predate the seed backfill', async () => {
     // Deploy-before-seed race: DB has every slug (hasAll passes) but the docs
     // have no categorySlug yet. Response must still carry a derived value.

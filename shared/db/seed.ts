@@ -30,9 +30,45 @@ const CATEGORY_SLUG_BY_DOMAIN: Record<string, string> = {
   design: 'design',
   business: 'business',
 }
-// Exported so read paths (e.g. /api/domains) can derive a categorySlug for
-// domains that predate the seed backfill, or CMS domains that omit it.
+// Exact categorySlug for a known built-in domain slug; 'general' otherwise.
+// Used by the seed itself (built-in slugs are always known).
 export const categorySlugFor = (slug: string): string => CATEGORY_SLUG_BY_DOMAIN[slug] ?? 'general'
+
+// Best-effort mapping of a legacy free-form `category` label onto a new
+// category slug. Lets the read path bucket CMS-created domains (which write
+// only the legacy `category`) better than a flat 'general' fallback. Coarse by
+// nature — 'engineering' can't distinguish programming vs core-engineering — so
+// the authoritative source remains a stored `categorySlug`.
+const LEGACY_CATEGORY_TO_SLUG: Record<string, string> = {
+  programming: 'programming',
+  'data-ai': 'data-ai',
+  'core-engineering': 'core-engineering',
+  product: 'product',
+  design: 'design',
+  business: 'business',
+  general: 'general',
+  engineering: 'programming', // legacy 'engineering' meant software
+  operations: 'business',     // legacy phantom enum value
+}
+
+/**
+ * Resolve a domain's category slug from the best available source, in order:
+ *   1. stored `categorySlug` (authoritative — CMS or seed)
+ *   2. exact built-in slug mapping (precise for seeded domains)
+ *   3. legacy `category` label mapping (best-effort for CMS domains)
+ *   4. 'general'
+ * Used by /api/domains so the response is always correctly-bucketed regardless
+ * of whether the seed backfill has run or how a CMS domain was written.
+ */
+export const resolveCategorySlug = (d: {
+  slug: string
+  category?: string | null
+  categorySlug?: string | null
+}): string =>
+  d.categorySlug ||
+  CATEGORY_SLUG_BY_DOMAIN[d.slug] ||
+  (d.category ? LEGACY_CATEGORY_TO_SLUG[d.category] : undefined) ||
+  'general'
 
 const BUILT_IN_DOMAINS = [
   // ─── General ───────────────────────────────────────────────────────────────
