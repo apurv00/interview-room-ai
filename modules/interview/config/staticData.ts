@@ -9,7 +9,10 @@ export interface StaticDomain {
   icon: string
   description: string
   color: string
+  /** Legacy free-form category label (kept until UI migrates to categorySlug). */
   category: string
+  /** Data-driven taxonomy bucket → Category.slug. */
+  categorySlug?: string
 }
 
 export interface StaticDepth {
@@ -21,18 +24,20 @@ export interface StaticDepth {
 }
 
 export const STATIC_DOMAINS: StaticDomain[] = [
-  // Engineering
-  { slug: 'frontend', label: 'Frontend Engineer', shortLabel: 'FE', icon: '🖥', color: 'indigo', category: 'engineering', description: 'UI development, React/Angular/Vue, web performance, accessibility, and responsive design.' },
-  { slug: 'backend', label: 'Backend / Infra Engineer', shortLabel: 'BE', icon: '🔧', color: 'indigo', category: 'engineering', description: 'APIs, databases, system design, microservices, scalability, infrastructure, CI/CD, and cloud platforms.' },
-  { slug: 'sdet', label: 'SDET / QA', shortLabel: 'QA', icon: '🧪', color: 'indigo', category: 'engineering', description: 'Test automation, quality strategy, CI/CD testing, performance testing, and reliability.' },
-  { slug: 'data-science', label: 'Data Science / ML', shortLabel: 'DS', icon: '📊', color: 'indigo', category: 'engineering', description: 'ML models, statistics, experimentation, data storytelling, and business impact.' },
-  // Product & Design
-  { slug: 'pm', label: 'Product Manager', shortLabel: 'PM', icon: '🗂', color: 'indigo', category: 'product', description: 'Product strategy, roadmaps, stakeholder management, and user-centric thinking.' },
-  { slug: 'design', label: 'Design / UX', shortLabel: 'UX', icon: '🎨', color: 'indigo', category: 'product', description: 'User research, design thinking, prototyping, and design system expertise.' },
+  // Programming
+  { slug: 'frontend', label: 'Frontend Engineer', shortLabel: 'FE', icon: '🖥', color: 'indigo', category: 'engineering', categorySlug: 'programming', description: 'UI development, React/Angular/Vue, web performance, accessibility, and responsive design.' },
+  { slug: 'backend', label: 'Backend / Infra Engineer', shortLabel: 'BE', icon: '🔧', color: 'indigo', category: 'engineering', categorySlug: 'programming', description: 'APIs, databases, system design, microservices, scalability, infrastructure, CI/CD, and cloud platforms.' },
+  { slug: 'sdet', label: 'SDET / QA', shortLabel: 'QA', icon: '🧪', color: 'indigo', category: 'engineering', categorySlug: 'programming', description: 'Test automation, quality strategy, CI/CD testing, performance testing, and reliability.' },
+  // Data & AI
+  { slug: 'data-science', label: 'Data Science / ML', shortLabel: 'DS', icon: '📊', color: 'indigo', category: 'engineering', categorySlug: 'data-ai', description: 'ML models, statistics, experimentation, data storytelling, and business impact.' },
+  // Product
+  { slug: 'pm', label: 'Product Manager', shortLabel: 'PM', icon: '🗂', color: 'indigo', category: 'product', categorySlug: 'product', description: 'Product strategy, roadmaps, stakeholder management, and user-centric thinking.' },
+  // Design
+  { slug: 'design', label: 'Design / UX', shortLabel: 'UX', icon: '🎨', color: 'indigo', category: 'product', categorySlug: 'design', description: 'User research, design thinking, prototyping, and design system expertise.' },
   // Business
-  { slug: 'business', label: 'Business & Strategy', shortLabel: 'BIZ', icon: '🎓', color: 'indigo', category: 'business', description: 'Strategy, consulting, finance, marketing, sales, leadership, and cross-functional impact.' },
+  { slug: 'business', label: 'Business & Strategy', shortLabel: 'BIZ', icon: '🎓', color: 'indigo', category: 'business', categorySlug: 'business', description: 'Strategy, consulting, finance, marketing, sales, leadership, and cross-functional impact.' },
   // General — fallback when no domain fits, shown last
-  { slug: 'general', label: 'General / Any Role', shortLabel: 'GEN', icon: '🎯', color: 'indigo', category: 'general', description: 'General interview practice — problem-solving, communication, leadership, teamwork, and adaptability.' },
+  { slug: 'general', label: 'General / Any Role', shortLabel: 'GEN', icon: '🎯', color: 'indigo', category: 'general', categorySlug: 'general', description: 'General interview practice — problem-solving, communication, leadership, teamwork, and adaptability.' },
 ]
 
 export const STATIC_DEPTHS: StaticDepth[] = [

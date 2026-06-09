@@ -41,6 +41,9 @@ export type { IInterviewSession, SessionStatus } from './InterviewSession'
 export { InterviewTemplate } from './InterviewTemplate'
 export type { IInterviewTemplate } from './InterviewTemplate'
 
+export { Category } from './Category'
+export type { ICategory } from './Category'
+
 export { InterviewDomain } from './InterviewDomain'
 export type { IInterviewDomain } from './InterviewDomain'
 
