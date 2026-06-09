@@ -1,0 +1,61 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
+import CategoryDomainPicker from '@interview/components/CategoryDomainPicker'
+
+// Force the component onto its static fallback (deterministic) by failing the
+// background /api fetches; STATIC_CATEGORIES + STATIC_DOMAINS drive the render.
+beforeEach(() => {
+  vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('no network'))))
+})
+
+describe('CategoryDomainPicker', () => {
+  it('shows browseable category cards, hiding the empty Core Engineering and the General escape', () => {
+    render(<CategoryDomainPicker selectedDomain={null} onSelect={() => {}} />)
+    expect(screen.getByText('Programming')).toBeTruthy()
+    expect(screen.getByText('Data & AI')).toBeTruthy()
+    expect(screen.getByText('Design')).toBeTruthy()
+    // Core Engineering has 0 seeded domains → not shown as a card
+    expect(screen.queryByText('Core Engineering')).toBeNull()
+    // General is the escape, not a browse card
+    expect(screen.queryByRole('button', { name: /^General \/ Other/ })).toBeNull()
+    // role counts
+    expect(screen.getByText('3 roles')).toBeTruthy() // Programming = frontend/backend/sdet
+  })
+
+  it('drills into a category and selecting a role calls onSelect with the slug', () => {
+    const onSelect = vi.fn()
+    render(<CategoryDomainPicker selectedDomain={null} onSelect={onSelect} />)
+    fireEvent.click(screen.getByRole('button', { name: /Programming/ }))
+    // role screen now shows only Programming roles
+    expect(screen.getByText('Frontend Engineer')).toBeTruthy()
+    expect(screen.getByText('Backend / Infra Engineer')).toBeTruthy()
+    expect(screen.queryByText('Product Manager')).toBeNull() // a Business/Product role is NOT here
+    fireEvent.click(screen.getByRole('option', { name: /Frontend Engineer/ }))
+    expect(onSelect).toHaveBeenCalledWith('frontend')
+  })
+
+  it('search bypasses the grid and matches roles across categories', () => {
+    const onSelect = vi.fn()
+    render(<CategoryDomainPicker selectedDomain={null} onSelect={onSelect} />)
+    fireEvent.change(screen.getByLabelText('Search roles'), { target: { value: 'manager' } })
+    // 'Product Manager' surfaces even though we never picked the Product category
+    const result = screen.getByRole('option', { name: /Product Manager/ })
+    fireEvent.click(result)
+    expect(onSelect).toHaveBeenCalledWith('pm')
+  })
+
+  it('the "can\'t find" escape selects general', () => {
+    const onSelect = vi.fn()
+    render(<CategoryDomainPicker selectedDomain={null} onSelect={onSelect} />)
+    fireEvent.click(screen.getByText(/Can't find your field\? Use General/))
+    expect(onSelect).toHaveBeenCalledWith('general')
+  })
+
+  it('skip-for-known: a pre-selected role opens straight into its category role list', () => {
+    render(<CategoryDomainPicker selectedDomain="backend" onSelect={() => {}} />)
+    // Starts on the role screen (Programming), not the category grid
+    expect(screen.getByRole('option', { name: /Backend \/ Infra Engineer/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Programming/ })).toBeTruthy() // back affordance
+    expect(screen.queryByLabelText('Search roles')).toBeNull() // not the grid screen
+  })
+})
