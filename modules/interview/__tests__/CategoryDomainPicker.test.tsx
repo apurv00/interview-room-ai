@@ -32,16 +32,6 @@ describe('CategoryDomainPicker', () => {
     expect(onSelect).toHaveBeenCalledWith('frontend')
   })
 
-  it('search bypasses the grid and matches roles across categories', () => {
-    const onSelect = vi.fn()
-    render(<CategoryDomainPicker selectedDomain={null} onSelect={onSelect} />)
-    fireEvent.change(screen.getByLabelText('Search roles'), { target: { value: 'manager' } })
-    // 'Product Manager' surfaces even though we never picked the Product category
-    const result = screen.getByRole('option', { name: /Product Manager/ })
-    fireEvent.click(result)
-    expect(onSelect).toHaveBeenCalledWith('pm')
-  })
-
   it('the "can\'t find" escape selects general', () => {
     const onSelect = vi.fn()
     render(<CategoryDomainPicker selectedDomain={null} onSelect={onSelect} />)
@@ -54,17 +44,17 @@ describe('CategoryDomainPicker', () => {
     // Starts on the role screen (Programming), not the category grid
     expect(screen.getByRole('option', { name: /Backend \/ Infra Engineer/ })).toBeTruthy()
     expect(screen.getByRole('button', { name: /Programming/ })).toBeTruthy() // back affordance
-    expect(screen.queryByLabelText('Search roles')).toBeNull() // not the grid screen
+    expect(screen.queryByRole('listbox', { name: 'Interview fields' })).toBeNull() // not the grid screen
   })
 
   it('skip-for-known also works when selectedDomain hydrates AFTER first render', () => {
     // Mirrors the real form: retake/pathway/onboarding set role via an effect.
     const { rerender } = render(<CategoryDomainPicker selectedDomain={null} onSelect={() => {}} />)
-    expect(screen.getByLabelText('Search roles')).toBeTruthy() // grid first (role still null)
+    expect(screen.getByRole('listbox', { name: 'Interview fields' })).toBeTruthy() // grid first (role still null)
     rerender(<CategoryDomainPicker selectedDomain="backend" onSelect={() => {}} />)
     // now opens straight into the role's category list
     expect(screen.getByRole('option', { name: /Backend \/ Infra Engineer/ })).toBeTruthy()
-    expect(screen.queryByLabelText('Search roles')).toBeNull()
+    expect(screen.queryByRole('listbox', { name: 'Interview fields' })).toBeNull()
   })
 
   it('resets to the category grid when the role is cleared (Start over)', () => {
@@ -72,7 +62,7 @@ describe('CategoryDomainPicker', () => {
     expect(screen.getByRole('option', { name: /Backend \/ Infra Engineer/ })).toBeTruthy() // role screen
     rerender(<CategoryDomainPicker selectedDomain={null} onSelect={() => {}} />)
     // cleared role (known → null) returns to the grid, not the stale role list
-    expect(screen.getByLabelText('Search roles')).toBeTruthy()
+    expect(screen.getByRole('listbox', { name: 'Interview fields' })).toBeTruthy()
     expect(screen.queryByRole('option', { name: /Backend \/ Infra Engineer/ })).toBeNull()
   })
 
