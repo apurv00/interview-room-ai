@@ -5,8 +5,7 @@ import { FALLBACK_DOMAINS, categorySlugFor } from '@shared/db/seed'
 
 export const dynamic = 'force-dynamic'
 
-// Canonical set of active domain slugs — source of truth
-const ACTIVE_DOMAIN_SLUGS = new Set(FALLBACK_DOMAINS.map(d => d.slug))
+const CACHE_HEADERS = { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=3600' }
 
 export async function GET() {
   try {
@@ -17,31 +16,23 @@ export async function GET() {
       .lean()
 
     if (domains.length > 0) {
-      // Filter to only current slugs
-      const filtered = domains.filter(d => ACTIVE_DOMAIN_SLUGS.has(d.slug))
-      // Only use DB data if it covers ALL expected domains (otherwise it's stale)
-      const dbSlugs = new Set(filtered.map(d => d.slug))
-      const hasAll = Array.from(ACTIVE_DOMAIN_SLUGS).every(s => dbSlugs.has(s))
-      if (hasAll) {
-        // Guarantee a categorySlug even for docs that predate the seed backfill
-        // (deploy-before-seed race) or CMS domains that omit it — derive by slug
-        // so the response shape never depends on whether the migration has run.
-        const withCategory = filtered.map(d => ({
-          ...d,
-          categorySlug: d.categorySlug ?? categorySlugFor(d.slug),
-        }))
-        return NextResponse.json(withCategory, {
-          headers: { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=3600' },
-        })
-      }
+      // Taxonomy Phase 1 — the DB is the source of truth: return ALL active
+      // domains, including CMS-added roles that aren't in the seed. The old
+      // ACTIVE_DOMAIN_SLUGS whitelist + hasAll gate silently dropped any
+      // non-seed slug, so CMS-created roles never reached users (adding a role
+      // required editing seed.ts + redeploying). Derive a categorySlug for any
+      // doc that predates the seed backfill so the shape stays seed-independent.
+      const withCategory = domains.map(d => ({
+        ...d,
+        categorySlug: d.categorySlug ?? categorySlugFor(d.slug),
+      }))
+      return NextResponse.json(withCategory, { headers: CACHE_HEADERS })
     }
   } catch {
     // DB not available — fall through to fallback
   }
 
-  // Strip internal prompt fields from fallback data
+  // DB unavailable or empty — strip internal prompt fields from fallback data
   const safeFallback = FALLBACK_DOMAINS.map(({ systemPromptContext, ...rest }) => rest)
-  return NextResponse.json(safeFallback, {
-    headers: { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=3600' },
-  })
+  return NextResponse.json(safeFallback, { headers: CACHE_HEADERS })
 }

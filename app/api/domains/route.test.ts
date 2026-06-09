@@ -40,6 +40,23 @@ describe('GET /api/domains — categorySlug contract', () => {
     }
   })
 
+  it('returns CMS-added domains that are not in the seed (de-gated in Phase 1)', async () => {
+    // Pre-Phase-1 the ACTIVE_DOMAIN_SLUGS whitelist dropped any non-seed slug,
+    // so this domain would never have reached the client. Now the DB is the
+    // source of truth and it appears.
+    mockLean.mockResolvedValue([
+      {
+        slug: 'mechanical', label: 'Mechanical Engineer', shortLabel: 'ME', icon: '⚙️',
+        description: 'Thermodynamics, CAD, manufacturing.', color: 'indigo',
+        category: 'core-engineering', categorySlug: 'core-engineering',
+      },
+    ])
+    const res = await GET()
+    const body = await res.json()
+    expect(body.map((d: { slug: string }) => d.slug)).toContain('mechanical')
+    expect(body.find((d: { slug: string }) => d.slug === 'mechanical').categorySlug).toBe('core-engineering')
+  })
+
   it('derives categorySlug on the DB path when docs predate the seed backfill', async () => {
     // Deploy-before-seed race: DB has every slug (hasAll passes) but the docs
     // have no categorySlug yet. Response must still carry a derived value.
