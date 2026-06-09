@@ -21,6 +21,7 @@ export interface StaticDepth {
   icon: string
   description: string
   applicableDomains?: string[]
+  applicableCategories?: string[]
 }
 
 export const STATIC_DOMAINS: StaticDomain[] = [
@@ -61,9 +62,9 @@ export const STATIC_DOMAINS: StaticDomain[] = [
 export const STATIC_DEPTHS: StaticDepth[] = [
   { slug: 'behavioral', label: 'Behavioral Interview', icon: '🧠', description: 'Behavioral probing — motivation, leadership, conflict resolution, self-awareness, and culture fit.' },
   { slug: 'technical', label: 'Technical Deep Dive', icon: '⚙️', description: 'Domain-specific technical depth — knowledge, problem-solving, trends, and practical application.' },
-  { slug: 'case-study', label: 'Case Study', icon: '📋', description: 'Scenario-based problem-solving — structured thinking, frameworks, and business reasoning.', applicableDomains: ['pm', 'business', 'data-science', 'design', 'general'] },
-  { slug: 'system-design', label: 'System Design', icon: '🏗️', description: 'Architecture and system design — scalability, trade-offs, component design, and technical breadth.', applicableDomains: ['backend', 'frontend', 'data-science', 'sdet', 'general'] },
-  { slug: 'coding', label: 'Coding Challenge', icon: '💻', description: 'Live coding problem-solving — algorithm design, implementation, testing, and optimization.', applicableDomains: ['backend', 'frontend', 'data-science', 'sdet'] },
+  { slug: 'case-study', label: 'Case Study', icon: '📋', description: 'Scenario-based problem-solving — structured thinking, frameworks, and business reasoning.', applicableDomains: ['pm', 'business', 'data-science', 'design', 'general'], applicableCategories: ['product', 'business', 'data-ai', 'design'] },
+  { slug: 'system-design', label: 'System Design', icon: '🏗️', description: 'Architecture and system design — scalability, trade-offs, component design, and technical breadth.', applicableDomains: ['backend', 'frontend', 'data-science', 'sdet', 'general'], applicableCategories: ['programming', 'data-ai'] },
+  { slug: 'coding', label: 'Coding Challenge', icon: '💻', description: 'Live coding problem-solving — algorithm design, implementation, testing, and optimization.', applicableDomains: ['backend', 'frontend', 'data-science', 'sdet'], applicableCategories: ['programming', 'data-ai'] },
 ]
 
 export interface StaticCategory {
