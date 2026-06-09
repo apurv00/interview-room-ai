@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, FormEvent } from 'react'
+import { useEffect, useState, FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 
@@ -16,12 +16,23 @@ export default function NewDomainPage() {
     icon: '',
     description: '',
     color: 'indigo',
-    category: 'engineering' as string,
+    category: 'programming' as string,
     systemPromptContext: '',
     sampleQuestions: '',
     evaluationEmphasis: '',
     sortOrder: '0',
   })
+
+  // Data-driven category options — the form writes a real categorySlug instead
+  // of a hardcoded legacy label, so CMS-created roles land in the correct
+  // taxonomy bucket (e.g. Mechanical -> core-engineering, not programming).
+  const [categories, setCategories] = useState<{ slug: string; label: string }[]>([])
+  useEffect(() => {
+    fetch('/api/categories')
+      .then((r) => r.json())
+      .then((cats) => setCategories(Array.isArray(cats) ? cats : []))
+      .catch(() => {})
+  }, [])
 
   function updateField(field: string, value: string) {
     setForm((prev) => ({ ...prev, [field]: value }))
@@ -38,6 +49,7 @@ export default function NewDomainPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...form,
+          categorySlug: form.category,
           sortOrder: parseInt(form.sortOrder) || 0,
           sampleQuestions: form.sampleQuestions
             .split('\n')
@@ -159,10 +171,9 @@ export default function NewDomainPage() {
               onChange={(e) => updateField('category', e.target.value)}
               className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
             >
-              <option value="engineering">Engineering</option>
-              <option value="business">Business</option>
-              <option value="design">Design</option>
-              <option value="operations">Operations</option>
+              {categories.map((c) => (
+                <option key={c.slug} value={c.slug}>{c.label}</option>
+              ))}
             </select>
           </div>
         </div>
