@@ -53,11 +53,11 @@ export default function EditDomainPage() {
           icon: d.icon || '',
           description: d.description || '',
           color: d.color || 'indigo',
-          // Normalize to a valid new category slug: a legacy-only domain
-          // (category='engineering', no categorySlug) becomes a real slug so the
-          // select shows a valid option and a blind save can't persist an
-          // invalid categorySlug.
-          category: toFormCategorySlug(d.categorySlug, d.category),
+          // Trust a stored categorySlug as-is — it may be a custom DB category
+          // (outside the built-in seven) that /api/domains honors from the live
+          // Category set, and a blind save must not clobber it. Only a
+          // legacy-only domain (no categorySlug) is normalized to a valid slug.
+          category: d.categorySlug || toFormCategorySlug(undefined, d.category),
           systemPromptContext: d.systemPromptContext || '',
           sampleQuestions: (d.sampleQuestions || []).join('\n'),
           evaluationEmphasis: (d.evaluationEmphasis || []).join('\n'),
