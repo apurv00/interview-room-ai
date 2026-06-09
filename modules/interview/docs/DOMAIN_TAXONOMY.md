@@ -50,7 +50,7 @@ audience, this collapses.
      ([InterviewDomain.ts:46](../../../shared/db/models/InterviewDomain.ts#L46))
    - seed strings `engineering/product/business/general`
      ([seed.ts](../../../shared/db/seed.ts))
-   - `CATEGORY_TABS` in [DomainSelector.tsx:17](../components/DomainSelector.tsx#L17)
+   - `CATEGORY_TABS` (formerly in `DomainSelector.tsx`, now deleted)
    - the CMS form `<option>` list ([domains/new/page.tsx:162](<../../../app/(cms)/cms/domains/new/page.tsx#L162>))
    The enum allows `design`/`operations` (used by no domain) but **not**
    `product`/`general` (used by real domains) → a **latent data bug**: those
@@ -214,9 +214,9 @@ categories to clients.
 - Keep a thin `FALLBACK_CATEGORIES` for DB-down resilience.
 
 **Blast radius:** route handlers are framework-invoked (no in-code callers);
-`DomainSelector` consumes `/api/domains` and must tolerate unknown slugs (it
-already title-cases via `getDomainLabel`). The **only behavioral change** is
-that the response can now contain roles beyond the seed set — intended.
+the setup domain picker consumes `/api/domains` and must tolerate unknown slugs
+(labels come from the API). The **only behavioral change** is that the response
+can now contain roles beyond the seed set — intended.
 
 **Tests**
 - API route tests (vitest): (a) DB has a non-seed slug → it now appears
@@ -273,8 +273,8 @@ onto the picker too and `DomainSelector` + `CATEGORY_TABS` were deleted.) Origin
 - Manual: complete a full interview start from the new flow (per CLAUDE.md
   hot-path discipline, since setup feeds the live pipeline).
 
-**Rollout:** flag on for internal → % rollout → default on. Old `DomainSelector`
-path kept until flag retired.
+**Rollout (as shipped):** no flag — `CategoryDomainPicker` shipped as the default
+selector and `DomainSelector` was deleted once all surfaces moved onto it.
 
 **Acceptance:** a "Business" user never sees Frontend; search finds "mechanical"
 in <1 keystroke-burst; known users skip the grid.

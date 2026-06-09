@@ -16,7 +16,7 @@ describe('categoryMaps', () => {
     expect(isKnownCategorySlug(undefined)).toBe(false)
   })
 
-  it('legacyCategoryFor maps new slugs to legacy DomainSelector tab values', () => {
+  it('legacyCategoryFor maps new slugs to legacy category values', () => {
     expect(legacyCategoryFor('programming')).toBe('engineering')
     expect(legacyCategoryFor('data-ai')).toBe('engineering')
     expect(legacyCategoryFor('core-engineering')).toBe('engineering')

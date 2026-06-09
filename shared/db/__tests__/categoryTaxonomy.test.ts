@@ -50,7 +50,8 @@ describe('taxonomy seed data integrity', () => {
   })
 
   it('keeps the legacy `category` field intact (no UI break in Phase 0)', () => {
-    // Legacy values are unchanged so the current DomainSelector still works.
+    // Legacy values are unchanged — they remain the resolveCategorySlug fallback
+    // for rows that predate categorySlug.
     const frontend = FALLBACK_DOMAINS.find((d) => d.slug === 'frontend')
     expect(frontend?.category).toBe('engineering')
   })

@@ -4,8 +4,8 @@ import mongoose, { Schema, Document, Model } from 'mongoose'
  * Category — first-class top-level bucket for the interview-domain taxonomy.
  *
  * Replaces the four hardcoded, drifting `category` lists (the dead Mongoose
- * enum on InterviewDomain, the seed strings, DomainSelector's CATEGORY_TABS,
- * and the CMS form options) with one storage source of truth. A domain points
+ * enum on InterviewDomain, the seed strings, the since-removed DomainSelector
+ * CATEGORY_TABS, and the CMS form options) with one storage source of truth. A domain points
  * at a category via `InterviewDomain.categorySlug`.
  *
  * `parentSlug` is reserved for future sub-categories (e.g. Engineering →

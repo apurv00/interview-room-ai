@@ -42,7 +42,7 @@ modules/
   interview/                # Core interview engine (@interview/*)
     services/               # interviewService, evaluationEngine, personalizationEngine
     hooks/                  # useInterview, useSpeechRecognition, useMediaRecorder, useCoachingNudge
-    components/             # Avatar, TranscriptPanel, Controls, DomainSelector, DepthSelector
+    components/             # Avatar, TranscriptPanel, Controls, CategoryDomainPicker, DepthSelector
     config/                 # coachingNudges, coachingTips, feedbackConfig, speechMetrics
     avatar/                 # EmotionEngine, LipSyncEngine, IdleAnimations
     validators/             # Zod schemas for interview API routes

@@ -625,7 +625,7 @@ modules/interview/
 │   ├── Avatar.tsx                # SVG interviewer avatar
 │   ├── TranscriptPanel.tsx       # Live conversation display
 │   ├── Controls.tsx              # Mic toggle, timer, phase indicator
-│   ├── DomainSelector.tsx        # Interview domain picker (homepage)
+│   ├── CategoryDomainPicker.tsx  # Two-screen category→domain picker (setup + home + hire)
 │   ├── DepthSelector.tsx         # Interview depth picker (homepage)
 │   └── FileDropzone.tsx          # JD/Resume upload component
 │
