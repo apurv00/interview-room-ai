@@ -42,40 +42,39 @@ export default function MarketingHomepage() {
   const router = useRouter()
   const { requireAuth } = useAuthGate()
 
-  // UAT-021: signed-in visitors should land where their Pathway says
-  // to go next, not on the generic /interview/setup. Anonymous users
-  // keep the existing auth-gated flow. This hook shares its
-  // /api/learn/pathway fetch with PathwayStatusBanner above the hero
-  // via deduplicatedFetchJSON — no extra network call.
+  // The hero CTA must NEVER await a network call. It targets
+  // /interview/next — a server-side redirect interstitial that resolves
+  // the per-user pathway destination at click time (see
+  // app/interview/next/page.tsx + resolvePathwayNextHref) and forwards to
+  // the right place. The button is therefore interactive from first paint.
   //
-  // UAT-021 follow-up (review fix): while `pathway.status === 'loading'`
-  // we don't yet know whether the visitor is anonymous or authed-with-
-  // pathway. The previous fix fell through to /interview/setup during
-  // this window, which let a fast click bypass the per-user pathway
-  // routing. Block the click + label the button explicitly while we
-  // wait — usually <200 ms on warm sessions.
+  // This replaces UAT-021's blocking behavior, which disabled the button
+  // and showed "Loading your next step…" until a client-side
+  // /api/learn/pathway fetch resolved — a heavy, force-dynamic endpoint
+  // that stalled the primary conversion action for 1-3 s on cold
+  // serverless starts. Correctness of the destination is preserved because
+  // the server redirect (not the client) owns routing, so even a click
+  // before the label resolves lands on the right page.
+  //
+  // usePathwayNextAction is kept ONLY to optimistically upgrade the visible
+  // label (e.g. "Continue Lesson 2") once it resolves; it never gates the
+  // click. It also shares its fetch with PathwayStatusBanner via
+  // deduplicatedFetchJSON, so this adds no extra network call.
+  const CTA_TARGET = '/interview/next'
   const pathway = usePathwayNextAction()
-  const isCtaLoading = pathway.status === 'loading'
-  const signedInCtaHref =
-    pathway.status === 'ready' && pathway.nextAction?.href
-      ? pathway.nextAction.href
-      : '/interview/setup'
-  const signedInCtaLabel = isCtaLoading
-    ? 'Loading your next step…'
-    : pathway.status === 'ready' && pathway.nextAction?.ctaLabel
+  const signedInCtaLabel =
+    pathway.status === 'ready' && pathway.nextAction?.ctaLabel
       ? pathway.nextAction.ctaLabel
       : 'Take Your First Interview — Free'
 
   // Single hero/CTA click handler. Anonymous users see the auth modal
-  // first; signed-in users go straight to whatever the pathway says is
-  // next (signedInCtaHref). Defensive short-circuit when pathway is
-  // still loading — paired with `disabled` on the button to cover both
-  // the keyboard and the pointer paths.
+  // first; on success (and for already-signed-in users) we navigate to the
+  // server redirect interstitial. No loading gate — the click is always
+  // honored.
   const handleStartCta = useCallback(() => {
-    if (isCtaLoading) return
     track('cta_clicked', { cta: 'start_interview', location: 'marketing_home' })
-    requireAuth('start_interview', () => router.push(signedInCtaHref))
-  }, [requireAuth, router, signedInCtaHref, isCtaLoading])
+    requireAuth('start_interview', () => router.push(CTA_TARGET))
+  }, [requireAuth, router])
 
   // Sentinel used inside the JourneyStep array below to mark steps that
   // should trigger handleStartCta instead of a normal navigation.
@@ -117,9 +116,7 @@ export default function MarketingHomepage() {
               <button
                 type="button"
                 onClick={handleStartCta}
-                disabled={isCtaLoading}
-                aria-busy={isCtaLoading}
-                className="inline-block px-8 py-3.5 text-[15px] font-semibold rounded-full bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-600/20 transition-all text-center disabled:opacity-70 disabled:cursor-wait disabled:hover:bg-blue-600"
+                className="inline-block px-8 py-3.5 text-[15px] font-semibold rounded-full bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-600/20 transition-all text-center"
               >
                 {signedInCtaLabel}
               </button>

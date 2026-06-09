@@ -307,6 +307,11 @@ InterviewSessionSchema.index({ organizationId: 1, candidateEmail: 1 })
 InterviewSessionSchema.index({ status: 1, createdAt: -1 })
 InterviewSessionSchema.index({ status: 1, 'config.role': 1, 'config.experience': 1 })
 InterviewSessionSchema.index({ userId: 1, status: 1 })
+// "Most recent completed session for this user" — used by the pathway
+// next-action resolver (resolvePathwayNextHref) and /api/learn/pathway.
+// Without completedAt in the index those queries filter on {userId,status}
+// then sort completedAt in memory; this makes the sort index-backed.
+InterviewSessionSchema.index({ userId: 1, status: 1, completedAt: -1 })
 // Retake chain lookup — all retakes of a given root session
 InterviewSessionSchema.index({ userId: 1, parentSessionId: 1 })
 
