@@ -26,20 +26,44 @@ set -euo pipefail
 # Purely additive: a no-op when `node` is already on PATH.
 if ! command -v node >/dev/null 2>&1; then
   _node_dir=""
-  # Version-managed installs first (nvm / n). We rely on plain shell glob
-  # expansion (ascending) and keep the LAST executable match to prefer a
-  # newer version — deliberately NO `sort -V`: that flag is GNU-only and
-  # errors on BSD/macOS `sort`, which would drop every nvm candidate in the
-  # exact stripped-PATH+nvm case this block exists to recover. Globbing is
-  # portable across BSD, macOS, and Linux. Unmatched globs stay literal and
-  # are filtered out by the `-x` test.
-  for _cand in \
-    "${NVM_DIR:-$HOME/.nvm}"/versions/node/*/bin \
-    "$HOME"/.nvm/versions/node/*/bin \
-    /usr/local/n/versions/node/*/bin
-  do
-    if [ -x "$_cand/node" ]; then _node_dir="$_cand"; fi
-  done
+  # Pick the highest SEMVER version among version-managed installs (nvm / n).
+  # Two constraints, both learned the hard way:
+  #   - NOT lexical/glob order: `v18.20.0` sorts before `v9.11.2`, so naive
+  #     "last glob match" would choose the OLDER node and may run gitnexus
+  #     under an unsupported version.
+  #   - NOT GNU `sort -V`: that flag is absent on BSD/macOS `sort` and would
+  #     drop every candidate in the stripped-PATH+nvm case this block exists
+  #     to recover.
+  # Portable approach: emit "<major> <minor> <patch> <dir>" per candidate and
+  # take the max via a POSIX numeric `sort` (-k…n). Non-numeric / pre-release
+  # segments collapse to 0. Globbing covers BSD, macOS, and Linux; unmatched
+  # globs stay literal and are filtered by the `-x` test.
+  _best="$(
+    for _d in \
+      "${NVM_DIR:-$HOME/.nvm}"/versions/node/*/bin \
+      "$HOME"/.nvm/versions/node/*/bin \
+      /usr/local/n/versions/node/*/bin
+    do
+      [ -x "$_d/node" ] || continue
+      _v="${_d%/bin}"; _v="${_v##*/}"; _v="${_v#v}"   # → "18.20.0"
+      _maj="${_v%%.*}"
+      _rest="${_v#*.}"; _min="${_rest%%.*}"
+      _pat="${_rest#*.}"
+      # Keep only the leading digit run of each field (strips "-nightly",
+      # build suffixes, stray text); an empty result → 0. Parameter
+      # expansion only — NO `case`, which breaks inside $() on bash 3.2
+      # (macOS /bin/bash).
+      _maj="${_maj%%[!0-9]*}"; _min="${_min%%[!0-9]*}"; _pat="${_pat%%[!0-9]*}"
+      [ -n "$_maj" ] || _maj=0
+      [ -n "$_min" ] || _min=0
+      [ -n "$_pat" ] || _pat=0
+      printf '%s %s %s %s\n' "$_maj" "$_min" "$_pat" "$_d"
+    done | sort -k1,1n -k2,2n -k3,3n | tail -n 1
+  )"
+  # Drop the three numeric sort keys, leaving the dir (which may contain spaces).
+  if [ -n "$_best" ]; then
+    _node_dir="${_best#* }"; _node_dir="${_node_dir#* }"; _node_dir="${_node_dir#* }"
+  fi
   # Fixed-location fallbacks (volta / Homebrew / local) only if no
   # version-managed node was found.
   if [ -z "$_node_dir" ]; then
