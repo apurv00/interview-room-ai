@@ -30,7 +30,9 @@ const CATEGORY_SLUG_BY_DOMAIN: Record<string, string> = {
   design: 'design',
   business: 'business',
 }
-const categorySlugFor = (slug: string): string => CATEGORY_SLUG_BY_DOMAIN[slug] ?? 'general'
+// Exported so read paths (e.g. /api/domains) can derive a categorySlug for
+// domains that predate the seed backfill, or CMS domains that omit it.
+export const categorySlugFor = (slug: string): string => CATEGORY_SLUG_BY_DOMAIN[slug] ?? 'general'
 
 const BUILT_IN_DOMAINS = [
   // ─── General ───────────────────────────────────────────────────────────────

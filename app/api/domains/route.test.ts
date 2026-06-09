@@ -40,6 +40,23 @@ describe('GET /api/domains — categorySlug contract', () => {
     }
   })
 
+  it('derives categorySlug on the DB path when docs predate the seed backfill', async () => {
+    // Deploy-before-seed race: DB has every slug (hasAll passes) but the docs
+    // have no categorySlug yet. Response must still carry a derived value.
+    mockLean.mockResolvedValue(
+      FALLBACK_DOMAINS.map((d) => ({
+        slug: d.slug, label: d.label, shortLabel: d.shortLabel, icon: d.icon,
+        description: d.description, color: d.color, category: d.category,
+        // categorySlug intentionally omitted
+      })),
+    )
+    const res = await GET()
+    const body = await res.json()
+    const fe = body.find((d: { slug: string }) => d.slug === 'frontend')
+    expect(fe.categorySlug).toBe('programming') // derived by slug, not undefined
+    for (const d of body) expect(d.categorySlug).toBeTruthy()
+  })
+
   it('includes categorySlug on the fallback path (DB error)', async () => {
     mockLean.mockRejectedValue(new Error('db down'))
     const res = await GET()
