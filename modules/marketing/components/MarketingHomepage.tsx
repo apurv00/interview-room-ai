@@ -9,9 +9,10 @@ import { PLANS } from '@shared/services/stripe'
 import { usePathwayNextAction } from '@learn/hooks/usePathwayNextAction'
 import {
   Play, Eye, Mic, Brain, Activity,
-  ChevronRight, CheckCircle2, User,
+  ChevronRight, ChevronDown, CheckCircle2, User,
   AlertTriangle, TrendingDown, TrendingUp, BarChart3,
-  MonitorPlay, Sparkles, FileText, BookOpen, RotateCcw, ArrowRight
+  MonitorPlay, Sparkles, FileText, BookOpen, RotateCcw, ArrowRight,
+  ShieldCheck, Lock, Clock, Trash2
 } from 'lucide-react'
 
 interface HeroTab {
@@ -39,6 +40,9 @@ interface JourneyStep {
 
 export default function MarketingHomepage() {
   const [activeTab, setActiveTab] = useState(0)
+  // Data-policy panel on the second scroll (FOLD 2). Default collapsed —
+  // single toggle reveals all three points at once (not per-item FAQ).
+  const [dataPanelOpen, setDataPanelOpen] = useState(false)
   const router = useRouter()
   const { requireAuth } = useAuthGate()
 
@@ -485,6 +489,71 @@ export default function MarketingHomepage() {
             >
               Experience a free interview with replay <ChevronRight className="w-4 h-4" />
             </button>
+          </div>
+        </div>
+      </section>
+
+      {/* ── FOLD 3.5: DATA POLICY ── single collapsible reassurance panel,
+          placed between the Replay section and "More Than Mock Interviews".
+          Default-collapsed; the header bar itself states all three assurances
+          so it reassures without a click. Copy verified against the code:
+          recordingRetention.ts (30d) / analysisCleanup.ts (10-cap) /
+          accountDeletion.ts (one-click purge). Avoids the inaccurate
+          "runs in your browser / nothing leaves your device" claim. */}
+      <section className="py-14 bg-white border-t border-slate-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="bg-slate-50 border border-slate-200 rounded-2xl overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setDataPanelOpen((v) => !v)}
+              aria-expanded={dataPanelOpen}
+              className="w-full flex items-center gap-4 px-6 py-5 text-left hover:bg-slate-100/60 transition-colors"
+            >
+              <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center flex-shrink-0">
+                <ShieldCheck className="w-5 h-5 text-blue-600" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <span className="block text-base font-bold text-slate-800">Your data is private, and is always under your control</span>
+                <span className="block text-[14px] text-slate-500 mt-0.5">Auto-deleted after 30 days · never shared to anyone · one-click permanent deletion</span>
+              </div>
+              <ChevronDown
+                className={`w-5 h-5 text-slate-400 flex-shrink-0 transition-transform ${dataPanelOpen ? 'rotate-180' : ''}`}
+              />
+            </button>
+
+            {dataPanelOpen && (
+              <div className="px-6 pb-6 border-t border-slate-200">
+                <div className="grid md:grid-cols-3 gap-6 pt-6">
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <Lock className="w-4 h-4 text-blue-600" />
+                      <span className="text-[14px] font-semibold text-slate-800">Private</span>
+                    </div>
+                    <p className="text-[14px] text-slate-500 leading-relaxed">
+                      Your interviews are never shared with anyone and never sold. The data stays yours.
+                    </p>
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <Clock className="w-4 h-4 text-blue-600" />
+                      <span className="text-[14px] font-semibold text-slate-800">Auto-cleaned</span>
+                    </div>
+                    <p className="text-[14px] text-slate-500 leading-relaxed">
+                      Video recordings delete after 30 days. We keep your 10 most recent analyses so you can track progress, and clear older ones automatically.
+                    </p>
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <Trash2 className="w-4 h-4 text-blue-600" />
+                      <span className="text-[14px] font-semibold text-slate-800">You&apos;re in control</span>
+                    </div>
+                    <p className="text-[14px] text-slate-500 leading-relaxed">
+                      Delete everything yourself, anytime. One click in your History permanently erases the session, recording, transcript, and feedback.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </section>
