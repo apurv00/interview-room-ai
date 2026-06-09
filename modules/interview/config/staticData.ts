@@ -36,6 +36,24 @@ export const STATIC_DOMAINS: StaticDomain[] = [
   { slug: 'design', label: 'Design / UX', shortLabel: 'UX', icon: '🎨', color: 'indigo', category: 'product', categorySlug: 'design', description: 'User research, design thinking, prototyping, and design system expertise.' },
   // Business
   { slug: 'business', label: 'Business & Strategy', shortLabel: 'BIZ', icon: '🎓', color: 'indigo', category: 'business', categorySlug: 'business', description: 'Strategy, consulting, finance, marketing, sales, leadership, and cross-functional impact.' },
+  // Phase 4 — freshers' roster (§8.3)
+  { slug: 'mechanical', label: "Mechanical Engineer", shortLabel: 'ME', icon: '🔩', color: 'indigo', category: 'engineering', categorySlug: 'core-engineering', description: "Thermodynamics, mechanics, CAD/FEA, materials, and manufacturing." },
+  { slug: 'civil', label: "Civil Engineer", shortLabel: 'CE', icon: '🏗', color: 'indigo', category: 'engineering', categorySlug: 'core-engineering', description: "Structural analysis, geotechnical, RCC/steel design, and construction." },
+  { slug: 'electrical', label: "Electrical Engineer", shortLabel: 'EE', icon: '⚡', color: 'indigo', category: 'engineering', categorySlug: 'core-engineering', description: "Circuits, power systems, control systems, and power electronics." },
+  { slug: 'electronics', label: "Electronics & Communication Engineer", shortLabel: 'ECE', icon: '📡', color: 'indigo', category: 'engineering', categorySlug: 'core-engineering', description: "Analog/digital electronics, signals, communications, and embedded." },
+  { slug: 'fullstack', label: "Full-stack Engineer", shortLabel: 'FS', icon: '🧩', color: 'indigo', category: 'engineering', categorySlug: 'programming', description: "End-to-end web — frontend, backend, APIs, and databases." },
+  { slug: 'devops', label: "DevOps / SRE", shortLabel: 'DevOps', icon: '🔁', color: 'indigo', category: 'engineering', categorySlug: 'programming', description: "CI/CD, Docker/Kubernetes, IaC, cloud, and reliability." },
+  { slug: 'mobile', label: "Mobile Engineer", shortLabel: 'Mobile', icon: '📱', color: 'indigo', category: 'engineering', categorySlug: 'programming', description: "iOS/Android & cross-platform apps, lifecycle, and performance." },
+  { slug: 'ml-engineer', label: "ML Engineer", shortLabel: 'MLE', icon: '🤖', color: 'indigo', category: 'engineering', categorySlug: 'data-ai', description: "ML modeling, training pipelines, MLOps, and deployment." },
+  { slug: 'data-analyst', label: "Data Analyst", shortLabel: 'DA', icon: '📈', color: 'indigo', category: 'engineering', categorySlug: 'data-ai', description: "SQL, analytics, experimentation, dashboards, and storytelling." },
+  { slug: 'strategy', label: "Strategy / Consulting", shortLabel: 'STR', icon: '♟', color: 'indigo', category: 'business', categorySlug: 'business', description: "Consulting frameworks, problem structuring, and market analysis." },
+  { slug: 'finance', label: "Finance", shortLabel: 'FIN', icon: '💰', color: 'indigo', category: 'business', categorySlug: 'business', description: "Financial statements, valuation, modeling, and capital budgeting." },
+  { slug: 'operations', label: "Operations", shortLabel: 'OPS', icon: '🛠', color: 'indigo', category: 'business', categorySlug: 'business', description: "Process optimization, supply chain, KPIs, and execution." },
+  { slug: 'marketing', label: "Marketing", shortLabel: 'MKT', icon: '📣', color: 'indigo', category: 'business', categorySlug: 'business', description: "Campaigns, channels, funnel optimization, and metrics." },
+  { slug: 'sales', label: "Sales", shortLabel: 'SLS', icon: '🤝', color: 'indigo', category: 'business', categorySlug: 'business', description: "Prospecting, discovery, objection handling, and closing." },
+  { slug: 'product-analyst', label: "Product Analyst", shortLabel: 'PA', icon: '📊', color: 'indigo', category: 'product', categorySlug: 'product', description: "Product metrics, experimentation, and data-driven decisions." },
+  { slug: 'ui-designer', label: "UI Designer", shortLabel: 'UI', icon: '🎨', color: 'indigo', category: 'product', categorySlug: 'design', description: "Visual design, design systems, prototyping, and accessibility." },
+  { slug: 'product-designer', label: "Product Designer", shortLabel: 'PD', icon: '✏', color: 'indigo', category: 'product', categorySlug: 'design', description: "End-to-end UX — research, IA, interaction, and prototyping." },
   // General — fallback when no domain fits, shown last
   { slug: 'general', label: 'General / Any Role', shortLabel: 'GEN', icon: '🎯', color: 'indigo', category: 'general', categorySlug: 'general', description: 'General interview practice — problem-solving, communication, leadership, teamwork, and adaptability.' },
 ]

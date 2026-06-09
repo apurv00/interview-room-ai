@@ -14,12 +14,10 @@ describe('CategoryDomainPicker', () => {
     expect(screen.getByText('Programming')).toBeTruthy()
     expect(screen.getByText('Data & AI')).toBeTruthy()
     expect(screen.getByText('Design')).toBeTruthy()
-    // Core Engineering has 0 seeded domains → not shown as a card
-    expect(screen.queryByText('Core Engineering')).toBeNull()
-    // General is the escape, not a browse card
+    // Phase 4 seeded the Core Engineering roster — it now renders as a browseable card
+    expect(screen.getByText('Core Engineering')).toBeTruthy()
+    // General remains the escape, never a browse card
     expect(screen.queryByRole('button', { name: /^General \/ Other/ })).toBeNull()
-    // role counts
-    expect(screen.getByText('3 roles')).toBeTruthy() // Programming = frontend/backend/sdet
   })
 
   it('drills into a category and selecting a role calls onSelect with the slug', () => {

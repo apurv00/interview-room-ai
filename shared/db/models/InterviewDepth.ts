@@ -25,8 +25,12 @@ export interface IInterviewDepth extends Document {
   // Scoring overrides
   scoringDimensions: ScoringDimension[]
 
-  // Domain applicability (empty = all)
+  // Applicability. A depth applies to a domain when BOTH lists are empty (=all),
+  // OR the domain slug is in applicableDomains, OR the domain's categorySlug is
+  // in applicableCategories. Categories let e.g. all Programming roles inherit
+  // coding/system-design without listing each slug.
   applicableDomains: string[]
+  applicableCategories: string[]
 
   // Phase 1: Extended config
   defaultRubricId?: string                          // links to EvaluationRubric
@@ -61,6 +65,7 @@ const InterviewDepthSchema = new Schema<IInterviewDepth>(
     }],
 
     applicableDomains: [{ type: String }],
+    applicableCategories: [{ type: String }],
 
     // Phase 1: Extended config
     defaultRubricId: { type: String },

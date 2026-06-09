@@ -30,6 +30,24 @@ const CATEGORY_SLUG_BY_DOMAIN: Record<string, string> = {
   pm: 'product',
   design: 'design',
   business: 'business',
+  // Phase 4 — freshers' roster (§8.3)
+  mechanical: 'core-engineering',
+  civil: 'core-engineering',
+  electrical: 'core-engineering',
+  electronics: 'core-engineering',
+  fullstack: 'programming',
+  devops: 'programming',
+  mobile: 'programming',
+  'ml-engineer': 'data-ai',
+  'data-analyst': 'data-ai',
+  strategy: 'business',
+  finance: 'business',
+  operations: 'business',
+  marketing: 'business',
+  sales: 'business',
+  'product-analyst': 'product',
+  'ui-designer': 'design',
+  'product-designer': 'design',
 }
 // Exact categorySlug for a known built-in domain slug; 'general' otherwise.
 // Used by the seed itself (built-in slugs are always known).
@@ -140,6 +158,126 @@ const BUILT_IN_DOMAINS = [
     sampleQuestions: ['Tell me about a time you influenced strategy without direct authority.', 'How would you structure an analysis for a client entering a new market?', 'Describe a campaign or deal you led that exceeded expectations.'],
     evaluationEmphasis: ['strategic_thinking', 'structured_thinking', 'leadership', 'analytical_rigor'],
   },
+  // ─── Phase 4 — freshers' roster (§8.3) ─────────────────────────────────────
+  {
+    slug: 'mechanical', label: "Mechanical Engineer", shortLabel: 'ME', icon: '🔩', category: 'engineering' as const, sortOrder: 10,
+    description: "Thermodynamics, mechanics, CAD/FEA, materials, and manufacturing.",
+    systemPromptContext: "The candidate is interviewing for a Mechanical Engineer role. Probe thermodynamics, heat transfer, fluid mechanics, statics and dynamics, strength of materials and stress analysis, mechanical design and machine elements, GD&T and tolerancing, CAD modeling (SolidWorks/CATIA/Creo), FEA and CFD simulation, materials selection, manufacturing processes (machining, casting, injection molding, additive), and design-for-manufacturing/assembly tradeoffs.",
+    sampleQuestions: ["Walk me through a mechanical part or assembly you designed. How did you choose the material and validate that it would survive the loads?", "How would you approach calculating whether a shaft or bracket will fail under a given load? What factor of safety would you target and why?", "Explain how you would apply GD&T or tolerance stack-up analysis to ensure a part assembles correctly in production.", "Describe a time you used FEA or hand calculations to reduce weight or cost without compromising performance. What tradeoffs did you make?"],
+    evaluationEmphasis: ["engineering_fundamentals", "design_tradeoffs", "analytical_rigor", "manufacturing_awareness"],
+  },
+  {
+    slug: 'civil', label: "Civil Engineer", shortLabel: 'CE', icon: '🏗', category: 'engineering' as const, sortOrder: 11,
+    description: "Structural analysis, geotechnical, RCC/steel design, and construction.",
+    systemPromptContext: "The candidate is interviewing for a Civil Engineer role (Core Engineering). Probe structural analysis (load paths, bending moments, shear, deflection), geotechnical fundamentals (soil bearing capacity, settlement, foundation selection), reinforced concrete and steel design per relevant codes (IS 456 / ACI 318 / AISC), hydraulics and water resources, transportation and pavement design, surveying, construction materials and concrete mix design, and project execution (estimation, BOQ, scheduling, site supervision). Expect fluency with AutoCAD, STAAD.Pro/ETABS, and adherence to applicable design codes and safety/serviceability limit states.",
+    sampleQuestions: ["Walk me through how you would analyze a simply supported beam under a uniformly distributed load. How do you determine the maximum bending moment and check it against the section capacity?", "How do you decide between a shallow footing and a pile foundation for a structure? What soil properties drive that decision?", "Describe a project where you used STAAD.Pro or ETABS. What loads did you model and what design checks did you run?", "How would you design a concrete mix for a given target strength, and what factors affect workability and durability on site?"],
+    evaluationEmphasis: ["technical_depth", "structural_analysis", "code_compliance", "practical_application"],
+  },
+  {
+    slug: 'electrical', label: "Electrical Engineer", shortLabel: 'EE', icon: '⚡', category: 'engineering' as const, sortOrder: 12,
+    description: "Circuits, power systems, control systems, and power electronics.",
+    systemPromptContext: "The candidate is interviewing for an Electrical Engineer role. Probe circuit analysis (Ohm's/Kirchhoff's laws, Thevenin/Norton, RLC transients), analog and digital electronics, power systems (three-phase, transformers, load flow, power factor correction), control systems (transfer functions, PID, stability, Bode plots), electrical machines and motor drives, signal and power electronics (rectifiers, inverters, converters), PCB design and schematic capture, electromagnetics, and instrumentation, along with practical lab/measurement experience and relevant safety and standards knowledge.",
+    sampleQuestions: ["Walk me through how you would analyze a series RLC circuit's transient response. What determines whether it is underdamped, critically damped, or overdamped?", "Explain the difference between a BJT and a MOSFET. When would you choose one over the other in a design?", "How does a PID controller work, and how would you tune it to stabilize a system that keeps oscillating?", "Describe a circuit or hardware project you built or simulated. What design tradeoffs did you make and how did you test it?"],
+    evaluationEmphasis: ["circuit_analysis", "technical_depth", "problem_solving", "practical_application"],
+  },
+  {
+    slug: 'electronics', label: "Electronics & Communication Engineer", shortLabel: 'ECE', icon: '📡', category: 'engineering' as const, sortOrder: 13,
+    description: "Analog/digital electronics, signals, communications, and embedded.",
+    systemPromptContext: "The candidate is interviewing for an Electronics & Communication Engineer role. Probe analog and digital circuit design, signal processing (sampling, filters, Fourier/Laplace analysis), communication systems (modulation schemes like AM/FM/QAM, channel capacity, antennas), embedded systems and microcontroller programming, digital logic and HDL (Verilog/VHDL), control systems, semiconductor device physics, PCB design, and lab/measurement skills with oscilloscopes and spectrum analyzers.",
+    sampleQuestions: ["Walk me through how you would design a low-pass filter for a given cutoff frequency. What components and topology would you choose?", "Explain the difference between AM and FM modulation. When would you prefer one over the other, and how does each affect bandwidth and noise immunity?", "Describe an embedded systems project you built. How did you interface the microcontroller with sensors, and how did you debug timing or communication issues?", "What is the Nyquist sampling theorem, and what happens if you sample below the Nyquist rate? How would you prevent aliasing in a real system?"],
+    evaluationEmphasis: ["technical_depth", "signal_processing", "circuit_design", "problem_solving"],
+  },
+  {
+    slug: 'fullstack', label: "Full-stack Engineer", shortLabel: 'FS', icon: '🧩', category: 'engineering' as const, sortOrder: 14,
+    description: "End-to-end web — frontend, backend, APIs, and databases.",
+    systemPromptContext: "The candidate is interviewing for a Full-stack Engineer role. Probe frontend skills (HTML/CSS, JavaScript/TypeScript, React or similar component frameworks, state management, responsive UI, accessibility), backend skills (REST/GraphQL API design, server-side frameworks like Node/Express, authentication/authorization, database modeling with SQL and NoSQL), and the glue between them (client-server data flow, API integration, caching, performance optimization). Also assess testing, debugging across the stack, version control with Git, and basic deployment/CI awareness.",
+    sampleQuestions: ["Walk me through what happens from the moment a user submits a login form to when they see their dashboard — covering both the frontend and backend.", "How would you design the API and data model for a simple to-do app with users, lists, and shared collaborators?", "Describe a time you debugged an issue that spanned both the client and the server. How did you isolate where the problem was?", "How do you manage state in a React app, and when would you reach for a library versus built-in hooks?"],
+    evaluationEmphasis: ["full_stack_breadth", "api_design", "frontend_proficiency", "problem_solving"],
+  },
+  {
+    slug: 'devops', label: "DevOps / SRE", shortLabel: 'DevOps', icon: '🔁', category: 'engineering' as const, sortOrder: 15,
+    description: "CI/CD, Docker/Kubernetes, IaC, cloud, and reliability.",
+    systemPromptContext: "The candidate is interviewing for a DevOps/SRE (Site Reliability Engineer) role. Probe CI/CD pipeline design, containerization and orchestration (Docker, Kubernetes), infrastructure-as-code (Terraform, Ansible, CloudFormation), cloud platforms (AWS/GCP/Azure), Linux systems and networking fundamentals, observability (metrics, logging, tracing, Prometheus/Grafana), incident response and on-call practices, SLIs/SLOs and error budgets, automation and scripting, and capacity, scalability, and reliability engineering. Favor concrete examples of systems they have deployed, monitored, or kept running over textbook definitions.",
+    sampleQuestions: ["Walk me through how you would design a CI/CD pipeline to deploy a service to production safely.", "Describe a production incident you helped resolve. How did you detect it, and what did you do to prevent a recurrence?", "How would you set up monitoring and alerting for a new web service? What SLIs and SLOs would you choose?", "Explain how you would containerize an application and deploy it on Kubernetes."],
+    evaluationEmphasis: ["technical_depth", "reliability_engineering", "automation_proficiency", "incident_response"],
+  },
+  {
+    slug: 'mobile', label: "Mobile Engineer", shortLabel: 'Mobile', icon: '📱', category: 'engineering' as const, sortOrder: 16,
+    description: "iOS/Android & cross-platform apps, lifecycle, and performance.",
+    systemPromptContext: "The candidate is interviewing for a Mobile Engineer role. Probe native iOS (Swift/SwiftUI/UIKit) and Android (Kotlin/Jetpack Compose) development, cross-platform frameworks (React Native, Flutter), app lifecycle and state management, UI layout and responsive design, REST/GraphQL API integration, local persistence (Core Data, Room, SQLite), offline-first patterns and caching, push notifications, performance and memory profiling, battery and network efficiency, and app store release and deployment processes.",
+    sampleQuestions: ["Walk me through how you'd architect a mobile app that needs to work offline and sync data when the connection returns.", "How do you manage state in a mobile app, and what patterns have you used (e.g., MVVM, Redux, or platform-native approaches)?", "Describe a time you diagnosed and fixed a performance or memory issue on a mobile app. What tools did you use?", "How would you handle API calls and image loading in a scrollable list to keep the UI smooth?"],
+    evaluationEmphasis: ["technical_depth", "mobile_architecture", "performance_optimization", "problem_solving"],
+  },
+  {
+    slug: 'ml-engineer', label: "ML Engineer", shortLabel: 'MLE', icon: '🤖', category: 'engineering' as const, sortOrder: 17,
+    description: "ML modeling, training pipelines, MLOps, and deployment.",
+    systemPromptContext: "The candidate is interviewing for a Machine Learning Engineer role focused on building and shipping ML systems in production. Probe the ML lifecycle end to end: data and feature pipelines, model training and evaluation (loss functions, train/validation/test splits, overfitting, regularization, cross-validation), the bias-variance tradeoff, and choosing the right model and metrics (precision/recall, ROC-AUC) for a problem. Also probe the engineering side — model deployment and serving, MLOps and CI/CD for models, monitoring for data drift and model decay, retraining strategies, latency/throughput tradeoffs, and hands-on experience with frameworks like PyTorch, TensorFlow, or scikit-learn.",
+    sampleQuestions: ["Walk me through an ML project you built end to end — how did you go from raw data to a deployed model?", "How would you detect and handle overfitting in a model you trained?", "A model that performed well offline is giving worse predictions in production. How would you debug it?", "Which evaluation metric would you pick for a fraud-detection classifier on an imbalanced dataset, and why?"],
+    evaluationEmphasis: ["ml_fundamentals", "model_deployment", "problem_solving", "data_pipeline_skills"],
+  },
+  {
+    slug: 'data-analyst', label: "Data Analyst", shortLabel: 'DA', icon: '📈', category: 'engineering' as const, sortOrder: 18,
+    description: "SQL, analytics, experimentation, dashboards, and storytelling.",
+    systemPromptContext: "The candidate is interviewing for a Data Analyst role. Probe SQL querying (joins, window functions, aggregations), data cleaning and wrangling, exploratory data analysis, descriptive and inferential statistics, A/B testing and hypothesis testing, building dashboards in tools like Tableau/Power BI, Excel/spreadsheet modeling, Python or R for analysis (pandas, numpy), defining and tracking business metrics and KPIs, and translating data findings into clear, actionable recommendations for stakeholders.",
+    sampleQuestions: ["Walk me through how you would investigate a sudden 20% drop in weekly active users using the data available to you.", "Write a SQL query to find the top 3 products by revenue in each region, and explain how you'd handle ties.", "How would you design and analyze an A/B test to measure whether a new checkout button increases conversions?", "Describe a time you turned a messy dataset into an insight that influenced a decision. What was your analysis process?"],
+    evaluationEmphasis: ["sql_proficiency", "statistical_reasoning", "data_storytelling", "analytical_rigor"],
+  },
+  {
+    slug: 'strategy', label: "Strategy / Consulting", shortLabel: 'STR', icon: '♟', category: 'business' as const, sortOrder: 20,
+    description: "Consulting frameworks, problem structuring, and market analysis.",
+    systemPromptContext: "The candidate is interviewing for a Strategy/Consulting role. Probe case-cracking ability, problem structuring with MECE issue trees, hypothesis-driven analysis, market sizing and estimation, profitability and growth frameworks, competitive and market-entry analysis, quantitative reasoning, synthesis into actionable client recommendations, executive-level communication, and stakeholder management. Push for structured thinking, clearly stated assumptions, and a clear so-what behind every number.",
+    sampleQuestions: ["How would you estimate the annual market size for electric scooters in a major city?", "A retail client's profits are declining despite steady revenue. How would you structure your approach to find the cause?", "Walk me through how you'd advise a consumer goods company deciding whether to enter a new international market.", "Tell me about a time you used data to structure an ambiguous problem and convince others of your recommendation."],
+    evaluationEmphasis: ["structured_thinking", "problem_structuring", "quantitative_reasoning", "client_communication"],
+  },
+  {
+    slug: 'finance', label: "Finance", shortLabel: 'FIN', icon: '💰', category: 'business' as const, sortOrder: 21,
+    description: "Financial statements, valuation, modeling, and capital budgeting.",
+    systemPromptContext: "The candidate is interviewing for a Finance role. Probe financial statement analysis (income statement, balance sheet, cash flow linkages), valuation methods (DCF, comparable companies, precedent transactions), three-statement and LBO modeling, accounting fundamentals, capital budgeting and time value of money (NPV, IRR), ratio and variance analysis, forecasting and budgeting, working-capital management, capital markets awareness, Excel proficiency, and the ability to explain assumptions and communicate financial insights clearly to stakeholders.",
+    sampleQuestions: ["Walk me through a discounted cash flow (DCF) valuation. What are the key assumptions that most affect the output?", "How do the three financial statements connect? If depreciation increases by $10, walk me through the impact on each statement.", "Tell me about a time you analyzed a company or investment. How did you structure your analysis and what did you conclude?", "How would you decide whether a company should pursue a capital project? Which metrics would you rely on?"],
+    evaluationEmphasis: ["financial_acumen", "analytical_rigor", "valuation_modeling", "communication_clarity"],
+  },
+  {
+    slug: 'operations', label: "Operations", shortLabel: 'OPS', icon: '🛠', category: 'business' as const, sortOrder: 22,
+    description: "Process optimization, supply chain, KPIs, and execution.",
+    systemPromptContext: "The candidate is interviewing for an Operations role. Probe process optimization and standardization, supply chain and inventory management, demand forecasting and capacity planning, vendor and supplier coordination, logistics and fulfillment, KPI tracking and operational dashboards (throughput, SLA, cycle time, cost-per-unit), root-cause analysis and process-improvement methods (Lean, Six Sigma, Kaizen, SOPs), cross-functional stakeholder coordination, and using data to identify and resolve operational bottlenecks.",
+    sampleQuestions: ["Describe a process you improved. How did you identify the bottleneck and measure the impact?", "How would you track and report the operational health of a team or workflow? Which KPIs would you choose and why?", "Tell me about a time you coordinated across multiple teams or vendors to hit a deadline.", "Walk me through how you'd diagnose the root cause of a sudden drop in fulfillment or on-time delivery."],
+    evaluationEmphasis: ["process_optimization", "analytical_rigor", "stakeholder_coordination", "execution_ownership"],
+  },
+  {
+    slug: 'marketing', label: "Marketing", shortLabel: 'MKT', icon: '📣', category: 'business' as const, sortOrder: 23,
+    description: "Campaigns, channels, funnel optimization, and metrics.",
+    systemPromptContext: "The candidate is interviewing for a Marketing role. Probe campaign strategy and execution, audience segmentation and targeting, channel mix (SEO, SEM, paid social, email, content, organic), funnel and conversion-rate optimization, marketing analytics and attribution, A/B testing, KPIs and metrics (CAC, ROAS, CTR, engagement, retention), brand positioning and messaging, content and social strategy, and the ability to translate data into actionable campaign decisions.",
+    sampleQuestions: ["Walk me through a marketing campaign you ran end to end. How did you set goals and measure success?", "A campaign's click-through rate is high but conversions are low. How would you diagnose and fix it?", "How would you decide how to split a limited budget across paid social, SEM, and email?", "How do you define and segment a target audience for a new product launch?"],
+    evaluationEmphasis: ["campaign_strategy", "analytical_rigor", "channel_knowledge", "metrics_thinking"],
+  },
+  {
+    slug: 'sales', label: "Sales", shortLabel: 'SLS', icon: '🤝', category: 'business' as const, sortOrder: 24,
+    description: "Prospecting, discovery, objection handling, and closing.",
+    systemPromptContext: "The candidate is interviewing for a Sales role. Probe prospecting and lead qualification (BANT/MEDDIC), discovery and needs analysis, building a value proposition, objection handling, negotiation and closing techniques, pipeline and CRM management, quota attainment, consultative and solution selling, cold outreach, relationship building, and post-sale account growth.",
+    sampleQuestions: ["Walk me through how you would qualify a new lead and decide whether it's worth pursuing.", "A prospect says your product is too expensive compared to a competitor. How do you respond?", "Describe a time you turned a 'no' into a 'yes'. What changed the prospect's mind?", "How would you structure your day to hit an aggressive monthly quota with a full pipeline?"],
+    evaluationEmphasis: ["persuasion_and_objection_handling", "consultative_selling", "resilience_and_drive", "pipeline_management"],
+  },
+  {
+    slug: 'product-analyst', label: "Product Analyst", shortLabel: 'PA', icon: '📊', category: 'product' as const, sortOrder: 25,
+    description: "Product metrics, experimentation, and data-driven decisions.",
+    systemPromptContext: "The candidate is interviewing for a Product Analyst role. Probe product metric definition (activation, retention, funnels, North Star), SQL and data querying, event instrumentation and tracking plans, A/B test design and statistical-significance reasoning, cohort and funnel analysis, dashboarding (Amplitude, Mixpanel, Looker, Tableau), and translating data into product recommendations and stakeholder-ready insights.",
+    sampleQuestions: ["A key feature's weekly active users dropped 15%. How would you investigate the cause?", "How would you define and measure success for a new onboarding flow?", "Walk me through how you'd design and read out an A/B test for a checkout change.", "Tell me about an analysis you ran that changed a product decision."],
+    evaluationEmphasis: ["analytical_rigor", "metrics_thinking", "sql_proficiency", "product_sense"],
+  },
+  {
+    slug: 'ui-designer', label: "UI Designer", shortLabel: 'UI', icon: '🎨', category: 'product' as const, sortOrder: 26,
+    description: "Visual design, design systems, prototyping, and accessibility.",
+    systemPromptContext: "The candidate is interviewing for a UI Designer role. Probe visual design fundamentals (typography, color theory, layout, spacing, visual hierarchy), interaction and component design, design systems and reusable component libraries, Figma proficiency and prototyping, responsive and mobile-first design, accessibility (WCAG, contrast, keyboard navigation), design-to-developer handoff, and how they iterate on a UI based on user feedback and usability testing.",
+    sampleQuestions: ["Walk me through a UI you designed end to end. How did you establish the visual hierarchy and what tradeoffs did you make?", "How would you design a consistent component library, and how do you decide when to create a new component versus reuse an existing one?", "A stakeholder says your screen 'looks cluttered.' How would you diagnose and fix the problem?", "How do you make sure your designs are accessible and translate cleanly when you hand them off to engineers?"],
+    evaluationEmphasis: ["visual_design_fundamentals", "interaction_design", "design_systems", "attention_to_detail"],
+  },
+  {
+    slug: 'product-designer', label: "Product Designer", shortLabel: 'PD', icon: '✏', category: 'product' as const, sortOrder: 27,
+    description: "End-to-end UX — research, IA, interaction, and prototyping.",
+    systemPromptContext: "The candidate is interviewing for a Product Designer role. Probe end-to-end UX process, user research and usability testing, persona and journey mapping, information architecture, wireframing and prototyping (Figma), interaction and visual design, design systems and component libraries, accessibility (WCAG), responsive/mobile patterns, design critique and iteration based on feedback, cross-functional collaboration with PMs and engineers, and how design decisions are validated against user needs and product metrics.",
+    sampleQuestions: ["Walk me through a project in your portfolio from initial problem to final design. What user research informed your decisions?", "How would you redesign a checkout flow that has a high drop-off rate? What would you measure to know it improved?", "Tell me about a time stakeholder or engineering feedback conflicted with your design vision. How did you handle it?", "How do you approach designing for accessibility and across different screen sizes?"],
+    evaluationEmphasis: ["user_centered_thinking", "design_process", "visual_communication", "cross_functional_collaboration"],
+  },
 ]
 
 const BUILT_IN_DEPTHS = [
@@ -158,6 +296,7 @@ const BUILT_IN_DEPTHS = [
       { name: 'self_awareness', label: 'Self-Awareness', weight: 0.20 },
     ],
     applicableDomains: [],
+    applicableCategories: [],
   },
   {
     slug: 'technical', label: 'Technical Deep Dive', icon: '⚙️', sortOrder: 2,
@@ -173,6 +312,7 @@ const BUILT_IN_DEPTHS = [
       { name: 'communication', label: 'Technical Communication', weight: 0.25 },
     ],
     applicableDomains: [],
+    applicableCategories: [],
   },
   {
     slug: 'case-study', label: 'Case Study', icon: '📋', sortOrder: 3,
@@ -188,6 +328,7 @@ const BUILT_IN_DEPTHS = [
       { name: 'recommendation_quality', label: 'Recommendation Quality', weight: 0.25 },
     ],
     applicableDomains: ['pm', 'business', 'data-science', 'design', 'general'],
+    applicableCategories: ['product', 'business', 'data-ai', 'design'],
   },
   {
     slug: 'system-design', label: 'System Design', icon: '🏗️', sortOrder: 4,
@@ -204,6 +345,7 @@ const BUILT_IN_DEPTHS = [
       { name: 'communication', label: 'Design Communication', weight: 0.15 },
     ],
     applicableDomains: ['backend', 'frontend', 'sdet', 'data-science', 'general'],
+    applicableCategories: ['programming', 'data-ai'],
   },
   {
     slug: 'coding', label: 'Coding Challenge', icon: '💻', sortOrder: 5,
@@ -220,6 +362,7 @@ const BUILT_IN_DEPTHS = [
       { name: 'edge_cases', label: 'Edge Cases & Testing', weight: 0.10 },
     ],
     applicableDomains: ['backend', 'frontend', 'data-science', 'sdet'],
+    applicableCategories: ['programming', 'data-ai'],
   },
 ]
 
@@ -308,4 +451,5 @@ export const FALLBACK_DEPTHS = BUILT_IN_DEPTHS.map(d => ({
   evaluationCriteria: d.evaluationCriteria,
   avatarPersona: d.avatarPersona,
   applicableDomains: d.applicableDomains as string[],
+  applicableCategories: (d.applicableCategories ?? []) as string[],
 }))
