@@ -13,7 +13,7 @@ export async function GET() {
     await connectDB()
     const domains = await InterviewDomain.find({ isActive: true })
       .sort({ sortOrder: 1 })
-      .select('slug label shortLabel icon description color category')
+      .select('slug label shortLabel icon description color category categorySlug')
       .lean()
 
     if (domains.length > 0) {
