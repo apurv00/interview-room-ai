@@ -55,12 +55,20 @@ export const resolveCategorySlug = (
 ): string => {
   const isValid = (s?: string | null): boolean =>
     knownSlugs ? !!s && knownSlugs.has(s) : isKnownCategorySlug(s)
-  return (
-    (isValid(d.categorySlug) ? d.categorySlug! : undefined) ||
-    CATEGORY_SLUG_BY_DOMAIN[d.slug] ||
-    (d.category ? CATEGORY_SLUG_FOR_LEGACY[d.category] : undefined) ||
-    'general'
-  )
+  // Try each candidate in priority order and return the first VALID (active)
+  // category. Validating the DERIVED candidates too — not just the stored
+  // categorySlug — means /api/domains never emits a bucket /api/categories
+  // doesn't return, even when a built-in category was deactivated while its
+  // domains stayed active.
+  const candidates = [
+    d.categorySlug,
+    CATEGORY_SLUG_BY_DOMAIN[d.slug],
+    d.category ? CATEGORY_SLUG_FOR_LEGACY[d.category] : undefined,
+  ]
+  for (const c of candidates) {
+    if (isValid(c)) return c as string
+  }
+  return 'general'
 }
 
 const BUILT_IN_DOMAINS = [

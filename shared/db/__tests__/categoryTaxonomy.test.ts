@@ -104,4 +104,19 @@ describe('resolveCategorySlug — read-path bucket resolution', () => {
     expect(resolveCategorySlug({ slug: 'solar', category: 'engineering', categorySlug: 'renewable-energy' }, known))
       .toBe('programming') // falls to legacy 'engineering' -> programming
   })
+
+  it('never emits a DERIVED slug that is inactive in the live set', () => {
+    // 'design' category deactivated, but the built-in design domain is active.
+    // Both the stored categorySlug AND the slug-derived 'design' must be
+    // rejected; falls to the legacy-mapped active bucket ('product').
+    const known = new Set(['programming', 'data-ai', 'core-engineering', 'business', 'product', 'general'])
+    expect(resolveCategorySlug({ slug: 'design', category: 'product', categorySlug: 'design' }, known))
+      .toBe('product')
+  })
+
+  it('falls to general when no candidate is active', () => {
+    const known = new Set(['programming']) // almost everything deactivated
+    expect(resolveCategorySlug({ slug: 'design', category: 'design', categorySlug: 'design' }, known))
+      .toBe('general')
+  })
 })
