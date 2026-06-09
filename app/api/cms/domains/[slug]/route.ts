@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
-import { InterviewDomain } from '@shared/db/models'
+import { InterviewDomain, Category } from '@shared/db/models'
 import { UpdateDomainSchema } from '@cms/validators/cms'
 import { logger } from '@shared/logger'
 
@@ -55,6 +55,18 @@ export async function PUT(
         { error: 'Validation failed', details: parsed.error.issues.map(e => ({ path: e.path.join('.'), message: e.message })) },
         { status: 400 }
       )
+    }
+
+    // Write-time taxonomy validation: a categorySlug must reference an existing
+    // active Category before we persist it (see POST /api/cms/domains).
+    if (parsed.data.categorySlug) {
+      const exists = await Category.exists({ slug: parsed.data.categorySlug, isActive: true })
+      if (!exists) {
+        return NextResponse.json(
+          { error: `Unknown category "${parsed.data.categorySlug}". Create it first or pick an existing category.` },
+          { status: 400 }
+        )
+      }
     }
 
     const domain = await InterviewDomain.findOneAndUpdate(

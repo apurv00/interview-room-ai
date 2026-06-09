@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
-import { InterviewDomain } from '@shared/db/models'
+import { InterviewDomain, Category } from '@shared/db/models'
 import { CreateDomainSchema } from '@cms/validators/cms'
 import { logger } from '@shared/logger'
 
@@ -48,6 +48,19 @@ export async function POST(req: NextRequest) {
       )
     }
     const body = parsed.data
+
+    // Write-time taxonomy validation: a categorySlug must reference an existing
+    // active Category. Otherwise /api/domains would silently re-bucket the role
+    // (read-path resolution) instead of telling the admin the slug is wrong.
+    if (body.categorySlug) {
+      const exists = await Category.exists({ slug: body.categorySlug, isActive: true })
+      if (!exists) {
+        return NextResponse.json(
+          { error: `Unknown category "${body.categorySlug}". Create it first or pick an existing category.` },
+          { status: 400 }
+        )
+      }
+    }
 
     const domain = await InterviewDomain.create({
       slug: body.slug,
