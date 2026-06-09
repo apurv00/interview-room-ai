@@ -3,6 +3,7 @@
 import { useEffect, useState, FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { legacyCategoryFor } from '@shared/taxonomy/categoryMaps'
 
 export default function NewDomainPage() {
   const router = useRouter()
@@ -49,7 +50,11 @@ export default function NewDomainPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...form,
+          // form.category holds the new category slug; write categorySlug from
+          // it, and keep a legacy-compatible `category` so the current
+          // DomainSelector tabs still place the role until Phase 2.
           categorySlug: form.category,
+          category: legacyCategoryFor(form.category),
           sortOrder: parseInt(form.sortOrder) || 0,
           sampleQuestions: form.sampleQuestions
             .split('\n')

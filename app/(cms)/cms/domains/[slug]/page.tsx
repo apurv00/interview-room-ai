@@ -3,6 +3,7 @@
 import { useEffect, useState, FormEvent } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
+import { legacyCategoryFor, toFormCategorySlug } from '@shared/taxonomy/categoryMaps'
 
 export default function EditDomainPage() {
   const router = useRouter()
@@ -52,7 +53,11 @@ export default function EditDomainPage() {
           icon: d.icon || '',
           description: d.description || '',
           color: d.color || 'indigo',
-          category: d.categorySlug || d.category || 'programming',
+          // Normalize to a valid new category slug: a legacy-only domain
+          // (category='engineering', no categorySlug) becomes a real slug so the
+          // select shows a valid option and a blind save can't persist an
+          // invalid categorySlug.
+          category: toFormCategorySlug(d.categorySlug, d.category),
           systemPromptContext: d.systemPromptContext || '',
           sampleQuestions: (d.sampleQuestions || []).join('\n'),
           evaluationEmphasis: (d.evaluationEmphasis || []).join('\n'),
@@ -84,6 +89,7 @@ export default function EditDomainPage() {
         body: JSON.stringify({
           ...form,
           categorySlug: form.category,
+          category: legacyCategoryFor(form.category),
           sortOrder: parseInt(form.sortOrder) || 0,
           sampleQuestions: form.sampleQuestions
             .split('\n')

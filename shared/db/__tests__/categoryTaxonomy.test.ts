@@ -84,4 +84,12 @@ describe('resolveCategorySlug — read-path bucket resolution', () => {
     expect(resolveCategorySlug({ slug: 'totally-unknown' })).toBe('general')
     expect(resolveCategorySlug({ slug: 'x', category: 'made-up-label' })).toBe('general')
   })
+
+  it('ignores an INVALID stored categorySlug so no bogus bucket is emitted', () => {
+    // A legacy value mistakenly saved into categorySlug must not pass through.
+    expect(resolveCategorySlug({ slug: 'frontend', category: 'engineering', categorySlug: 'engineering' }))
+      .toBe('programming') // falls to the exact built-in slug mapping
+    expect(resolveCategorySlug({ slug: 'unknown', category: 'business', categorySlug: 'not-a-category' }))
+      .toBe('business') // falls to the legacy-category mapping
+  })
 })
