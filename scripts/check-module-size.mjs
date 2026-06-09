@@ -64,7 +64,12 @@ const BUDGETS = {
   // @learn/ResourceLinks — must live in shared/ to avoid a module
   // cycle). Net +1 file; +2 headroom slot intentional. See
   // docs/adr/0007-shared-budget-bump-onboarding-hook.md.
-  'shared':            { maxLOC: 25_000, maxFiles: 132 },
+  // Bumped maxFiles 132 → 134 on 2026-06-09 (PR #437): adds ONE counted file —
+  // shared/taxonomy/categoryMaps.ts, the client-safe legacy<->new category
+  // translation shared by the seed (server) and the CMS domain forms (client)
+  // so they cannot drift. The paired test is not counted. LOC well under budget
+  // (~13k/25k). +1 headroom. See docs/adr/0011-shared-budget-bump-category-maps.md.
+  'shared':            { maxLOC: 25_000, maxFiles: 134 },
 }
 
 const TS_EXTENSIONS = new Set(['.ts', '.tsx'])
