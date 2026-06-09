@@ -15,7 +15,7 @@ export async function GET() {
         .sort({ sortOrder: 1 })
         .select('slug label shortLabel icon description color category categorySlug')
         .lean(),
-      Category.find({ isActive: true }).select('slug').lean<{ slug: string }[]>(),
+      Category.find({ isActive: true }).sort({ sortOrder: 1 }).select('slug').lean<{ slug: string }[]>(),
     ])
 
     if (domains.length > 0) {

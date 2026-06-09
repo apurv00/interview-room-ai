@@ -114,9 +114,17 @@ describe('resolveCategorySlug — read-path bucket resolution', () => {
       .toBe('product')
   })
 
-  it('falls to general when no candidate is active', () => {
-    const known = new Set(['programming']) // almost everything deactivated
+  it('uses general as the final fallback when general is active', () => {
+    const known = new Set(['programming', 'general'])
     expect(resolveCategorySlug({ slug: 'design', category: 'design', categorySlug: 'design' }, known))
       .toBe('general')
+  })
+
+  it('falls to an active category when even general is inactive (no orphan bucket)', () => {
+    // Pathological: general + design both deactivated. Must still emit a LIVE
+    // bucket (the first active category), never the inactive 'general'.
+    const known = new Set(['programming', 'data-ai'])
+    expect(resolveCategorySlug({ slug: 'design', category: 'design', categorySlug: 'design' }, known))
+      .toBe('programming')
   })
 })

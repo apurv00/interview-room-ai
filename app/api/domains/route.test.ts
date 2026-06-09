@@ -15,7 +15,7 @@ vi.mock('@shared/db/models', () => ({
     find: () => ({ sort: () => ({ select: () => ({ lean: (...a: unknown[]) => mockLean(...a) }) }) }),
   },
   Category: {
-    find: () => ({ select: () => ({ lean: (...a: unknown[]) => mockCatLean(...a) }) }),
+    find: () => ({ sort: () => ({ select: () => ({ lean: (...a: unknown[]) => mockCatLean(...a) }) }) }),
   },
 }))
 

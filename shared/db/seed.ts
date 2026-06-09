@@ -68,6 +68,14 @@ export const resolveCategorySlug = (
   for (const c of candidates) {
     if (isValid(c)) return c as string
   }
+  // Final fallback: 'general' when it's an active bucket; otherwise the first
+  // active category (deterministic — the route fetches categories sorted by
+  // sortOrder), so even a domain whose categories were all deactivated still
+  // maps to a live bucket /api/categories returns.
+  if (isValid('general')) return 'general'
+  if (knownSlugs && knownSlugs.size > 0) {
+    return Array.from(knownSlugs)[0]
+  }
   return 'general'
 }
 
