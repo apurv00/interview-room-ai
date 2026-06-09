@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
-import { ArrowLeft, Search } from 'lucide-react'
+import { ArrowLeft } from 'lucide-react'
 import {
   STATIC_DOMAINS,
   STATIC_CATEGORIES,
@@ -12,9 +12,9 @@ import {
 /**
  * Two-screen Category → Domain picker — the app's only domain selector (setup,
  * authenticated home, and /hire/invite). Screen 1 is a category grid; screen 2 is
- * the roles within the chosen category. A persistent search bypasses the grid, and
- * a "can't find your role" escape routes to General. Props are just
- * `selectedDomain` + `onSelect`, and the downstream `config.role` slug is untouched.
+ * the roles within the chosen category. A "can't find your role" escape routes to
+ * General. Props are just `selectedDomain` + `onSelect`, and the downstream
+ * `config.role` slug is untouched.
  */
 
 type Domain = StaticDomain // /api/domains returns this shape (incl. categorySlug)
@@ -35,7 +35,6 @@ interface Props {
 export default function CategoryDomainPicker({ selectedDomain, onSelect }: Props) {
   const [domains, setDomains] = useState<Domain[]>(domainCache || (STATIC_DOMAINS as Domain[]))
   const [categories, setCategories] = useState<Category[]>(categoryCache || STATIC_CATEGORIES)
-  const [search, setSearch] = useState('')
 
   // Skip-for-known: if a role is already chosen (pathway / retake / prior step),
   // open straight into its category's role list rather than the grid.
@@ -127,19 +126,6 @@ export default function CategoryDomainPicker({ selectedDomain, onSelect }: Props
     [domains, activeCategory],
   )
 
-  const searchResults = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    if (!q) return []
-    return domains
-      .filter(
-        (d) =>
-          d.label.toLowerCase().includes(q) ||
-          d.slug.toLowerCase().includes(q) ||
-          (d.shortLabel || '').toLowerCase().includes(q),
-      )
-      .slice(0, 12)
-  }, [domains, search])
-
   const activeCategoryLabel = useMemo(
     () => categories.find((c) => c.slug === activeCategory)?.label ?? 'Roles',
     [categories, activeCategory],
@@ -155,19 +141,7 @@ export default function CategoryDomainPicker({ selectedDomain, onSelect }: Props
     hydratedRef.current = true
     setActiveCategory(slug)
     setView('role')
-    setSearch('')
   }, [])
-
-  const pickSearchResult = useCallback(
-    (d: Domain) => {
-      hydratedRef.current = true
-      onSelect(d.slug)
-      setActiveCategory(catOf(d))
-      setView('role')
-      setSearch('')
-    },
-    [onSelect],
-  )
 
   // "Can't find your role?" → General now. Phase 6 adds a free-text role-request
   // capture here to drive the backfill queue.
@@ -176,7 +150,6 @@ export default function CategoryDomainPicker({ selectedDomain, onSelect }: Props
     onSelect(GENERAL)
     setActiveCategory(GENERAL)
     setView('role')
-    setSearch('')
   }, [onSelect])
 
   const backToGrid = useCallback(() => {
@@ -240,74 +213,32 @@ export default function CategoryDomainPicker({ selectedDomain, onSelect }: Props
     )
   }
 
-  // ── Category screen (with search) ────────────────────────────────────────
+  // ── Category screen ──────────────────────────────────────────────────────
   return (
     <div className="space-y-3">
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search all roles (e.g. backend, mechanical)…"
-          aria-label="Search roles"
-          className="w-full bg-white border border-slate-200 rounded-lg pl-9 pr-3 py-2.5 text-sm text-slate-900 focus:border-blue-500 focus:outline-none"
-        />
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3" role="listbox" aria-label="Interview fields">
+        {browseCategories.map((c) => (
+          <button
+            key={c.slug}
+            type="button"
+            onClick={() => openCategory(c.slug)}
+            className="rounded-xl bg-white border border-slate-200 hover:border-[#2563eb] hover:shadow-sm p-4 text-left transition-all duration-[120ms]"
+          >
+            <div className="text-2xl mb-1.5">{c.icon}</div>
+            <div className="text-subheading font-semibold text-slate-900">{c.label}</div>
+            <div className="text-caption text-slate-500 mt-0.5 leading-snug">{c.description}</div>
+            <div className="text-[11px] text-slate-400 mt-1.5">{countByCat[c.slug]} {countByCat[c.slug] === 1 ? 'role' : 'roles'}</div>
+          </button>
+        ))}
       </div>
 
-      {search.trim() ? (
-        <div className="space-y-1" role="listbox" aria-label="Search results">
-          {searchResults.length === 0 ? (
-            <button
-              type="button"
-              onClick={cantFind}
-              className="w-full text-left px-3 py-3 rounded-lg text-sm text-slate-500 hover:bg-slate-50"
-            >
-              No roles match “{search.trim()}”. Use <span className="text-[#2563eb] font-medium">General</span> →
-            </button>
-          ) : (
-            searchResults.map((d) => (
-              <button
-                key={d.slug}
-                type="button"
-                role="option"
-                aria-selected={d.slug === selectedDomain}
-                onClick={() => pickSearchResult(d)}
-                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left hover:bg-slate-50 transition-colors"
-              >
-                <span className="text-lg flex-shrink-0">{d.icon}</span>
-                <span className="text-sm font-medium text-slate-900">{d.label}</span>
-              </button>
-            ))
-          )}
-        </div>
-      ) : (
-        <>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3" role="listbox" aria-label="Interview fields">
-            {browseCategories.map((c) => (
-              <button
-                key={c.slug}
-                type="button"
-                onClick={() => openCategory(c.slug)}
-                className="rounded-xl bg-white border border-slate-200 hover:border-[#2563eb] hover:shadow-sm p-4 text-left transition-all duration-[120ms]"
-              >
-                <div className="text-2xl mb-1.5">{c.icon}</div>
-                <div className="text-subheading font-semibold text-slate-900">{c.label}</div>
-                <div className="text-caption text-slate-500 mt-0.5 leading-snug">{c.description}</div>
-                <div className="text-[11px] text-slate-400 mt-1.5">{countByCat[c.slug]} {countByCat[c.slug] === 1 ? 'role' : 'roles'}</div>
-              </button>
-            ))}
-          </div>
-
-          <button
-            type="button"
-            onClick={cantFind}
-            className="text-sm text-slate-400 hover:text-[#2563eb] transition-colors"
-          >
-            Can&apos;t find your field? Use General →
-          </button>
-        </>
-      )}
+      <button
+        type="button"
+        onClick={cantFind}
+        className="text-sm text-slate-400 hover:text-[#2563eb] transition-colors"
+      >
+        Can&apos;t find your field? Use General →
+      </button>
     </div>
   )
 }

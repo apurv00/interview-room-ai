@@ -71,27 +71,22 @@ test.describe('UAT-013 — domain label rendering', () => {
 
     await page.goto('/interview/setup')
 
-    // The CategoryDomainPicker mounts on the category grid. Roles live behind
-    // categories/search, so we use the search box (which hits the same
-    // /api/domains data) to surface each role and assert it renders under its
-    // FULL label — never the title-cased slug the bug produced ("Pm", "Devops").
+    // The CategoryDomainPicker mounts on the category grid; roles live behind a
+    // category. Drill into Programming and assert the role cards render under
+    // their FULL labels — never the title-cased slug the bug produced ("Pm",
+    // "Swe"). The labels come straight from /api/domains, so this still guards
+    // the same regression.
     await expect(page.getByRole('listbox', { name: /Interview fields/i })).toBeVisible({ timeout: 10_000 })
-    const search = page.getByLabel('Search roles')
+    await page.getByRole('button', { name: /Programming/i }).first().click()
 
-    // Searching a role's slug must surface the full-name option. If a label
-    // regressed to its raw title-cased slug, the full name would not appear and
-    // these assertions would fail loudly.
-    const cases = [
-      { query: 'pm', label: /Product Manager/i },
-      { query: 'devops', label: /DevOps/i },
-      { query: 'frontend', label: /Frontend Engineer/i },
-    ]
-    for (const c of cases) {
-      await search.fill(c.query)
-      await expect(
-        page.getByRole('option', { name: c.label }),
-        `Searching "${c.query}" should surface the full role label, not a raw slug`,
-      ).toBeVisible({ timeout: 10_000 })
+    const roleList = page.getByRole('listbox', { name: /Programming roles/i })
+    await expect(roleList).toBeVisible({ timeout: 10_000 })
+    await expect(roleList.getByRole('option', { name: /Frontend Engineer/i })).toBeVisible()
+    await expect(roleList.getByRole('option', { name: /Backend \/ Infra Engineer/i })).toBeVisible()
+
+    // Negative guard: never a bare title-cased slug ("Swe", "Fe", "Be") as a card.
+    for (const banned of ['Swe', 'Fe', 'Be']) {
+      await expect(roleList.getByRole('option', { name: new RegExp(`^${banned}$`, 'i') })).toHaveCount(0)
     }
 
     networkTracker.assertNoServerErrors()
