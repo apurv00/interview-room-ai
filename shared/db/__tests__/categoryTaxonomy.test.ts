@@ -55,9 +55,13 @@ describe('taxonomy seed data integrity', () => {
     expect(frontend?.category).toBe('engineering')
   })
 
-  it('core-engineering is seeded but starts empty (roles land in Phase 4)', () => {
+  it('core-engineering is populated by the Phase 4 roster', () => {
     expect(categorySlugs.has('core-engineering')).toBe(true)
-    expect(FALLBACK_DOMAINS.some((d) => d.categorySlug === 'core-engineering')).toBe(false)
+    const coreEng = FALLBACK_DOMAINS.filter((d) => d.categorySlug === 'core-engineering')
+    expect(coreEng.length).toBeGreaterThanOrEqual(4)
+    expect(coreEng.map((d) => d.slug)).toEqual(
+      expect.arrayContaining(['mechanical', 'civil', 'electrical', 'electronics']),
+    )
   })
 })
 

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { ChevronDown } from 'lucide-react'
-import { STATIC_DEPTHS, type StaticDepth } from '../config/staticData'
+import { STATIC_DEPTHS, STATIC_DOMAINS, type StaticDepth } from '../config/staticData'
 
 interface InterviewDepth {
   slug: string
@@ -20,9 +20,18 @@ interface DepthSelectorProps {
 // Module-level cache keyed by domain slug
 const depthCache: Record<string, InterviewDepth[]> = {}
 
+// Category-aware so new category-only roles (e.g. fullstack → programming) inherit
+// coding/system-design on the FIRST render, before the /api/interview-types fetch.
 function filterDepthsByDomain(depths: StaticDepth[], domain: string | null): InterviewDepth[] {
   if (!domain) return depths as InterviewDepth[]
-  return depths.filter(d => !d.applicableDomains || d.applicableDomains.length === 0 || d.applicableDomains.includes(domain)) as InterviewDepth[]
+  const category = STATIC_DOMAINS.find(d => d.slug === domain)?.categorySlug
+  return depths.filter(d => {
+    const domains = d.applicableDomains ?? []
+    const cats = d.applicableCategories ?? []
+    if (domains.length === 0 && cats.length === 0) return true
+    if (domains.includes(domain)) return true
+    return !!category && cats.includes(category)
+  }) as InterviewDepth[]
 }
 
 export default function DepthSelector({ selectedDomain, selectedDepth, onSelect }: DepthSelectorProps) {
