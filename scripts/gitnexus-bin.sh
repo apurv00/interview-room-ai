@@ -13,6 +13,32 @@
 
 set -euo pipefail
 
+# ── Ensure `node` is resolvable ────────────────────────────────────────
+# gitnexus is a Node CLI; every resolution path below (the gitnexus shim,
+# `npx`, and the unpacked npx-cache binary) needs `node` on PATH to run.
+# This wrapper is invoked by pre-edit-hotpath.sh, which the harness can
+# spawn with a stripped PATH that omits version-manager shims (nvm/n/
+# volta). When that happens `node` is missing and gitnexus dies with
+# "env: node: No such file or directory" — silently failing the hook's
+# new-file symbol verification and blocking the creation of ANY new source
+# file. Discover node from common version-manager / package-manager
+# locations and prepend it so the wrapper works in stripped envs too.
+# Purely additive: a no-op when `node` is already on PATH.
+if ! command -v node >/dev/null 2>&1; then
+  for _cand in $(
+    { ls -d "${NVM_DIR:-$HOME/.nvm}"/versions/node/*/bin 2>/dev/null
+      ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null
+      ls -d /usr/local/n/versions/node/*/bin 2>/dev/null; } | sort -Vr
+    printf '%s\n' "$HOME/.volta/bin" /opt/homebrew/bin /usr/local/bin
+  ); do
+    if [ -x "$_cand/node" ]; then
+      PATH="$_cand:$PATH"
+      export PATH
+      break
+    fi
+  done
+fi
+
 if [ -n "${GITNEXUS_BIN:-}" ] && [ -x "$GITNEXUS_BIN" ]; then
   exec "$GITNEXUS_BIN" "$@"
 fi
