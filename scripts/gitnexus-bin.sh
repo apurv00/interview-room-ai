@@ -25,18 +25,32 @@ set -euo pipefail
 # locations and prepend it so the wrapper works in stripped envs too.
 # Purely additive: a no-op when `node` is already on PATH.
 if ! command -v node >/dev/null 2>&1; then
-  for _cand in $(
-    { ls -d "${NVM_DIR:-$HOME/.nvm}"/versions/node/*/bin 2>/dev/null
-      ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null
-      ls -d /usr/local/n/versions/node/*/bin 2>/dev/null; } | sort -Vr
-    printf '%s\n' "$HOME/.volta/bin" /opt/homebrew/bin /usr/local/bin
-  ); do
-    if [ -x "$_cand/node" ]; then
-      PATH="$_cand:$PATH"
-      export PATH
-      break
-    fi
+  _node_dir=""
+  # Version-managed installs first (nvm / n). We rely on plain shell glob
+  # expansion (ascending) and keep the LAST executable match to prefer a
+  # newer version — deliberately NO `sort -V`: that flag is GNU-only and
+  # errors on BSD/macOS `sort`, which would drop every nvm candidate in the
+  # exact stripped-PATH+nvm case this block exists to recover. Globbing is
+  # portable across BSD, macOS, and Linux. Unmatched globs stay literal and
+  # are filtered out by the `-x` test.
+  for _cand in \
+    "${NVM_DIR:-$HOME/.nvm}"/versions/node/*/bin \
+    "$HOME"/.nvm/versions/node/*/bin \
+    /usr/local/n/versions/node/*/bin
+  do
+    if [ -x "$_cand/node" ]; then _node_dir="$_cand"; fi
   done
+  # Fixed-location fallbacks (volta / Homebrew / local) only if no
+  # version-managed node was found.
+  if [ -z "$_node_dir" ]; then
+    for _cand in "$HOME"/.volta/bin /opt/homebrew/bin /usr/local/bin; do
+      if [ -x "$_cand/node" ]; then _node_dir="$_cand"; break; fi
+    done
+  fi
+  if [ -n "$_node_dir" ]; then
+    PATH="$_node_dir:$PATH"
+    export PATH
+  fi
 fi
 
 if [ -n "${GITNEXUS_BIN:-}" ] && [ -x "$GITNEXUS_BIN" ]; then
