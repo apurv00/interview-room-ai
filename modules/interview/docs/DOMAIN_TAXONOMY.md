@@ -1,10 +1,19 @@
 # Domain Taxonomy & Setup Redesign — Implementation Plan
 
-**Status:** Approved direction, ready to implement
+**Status:** Phases 0 + 1 merged (PR #436, #437). Phase 2 (two-screen UI) is next.
 **Owner:** TBD
 **Supersedes:** the domain-selection sections of `REDESIGN-PLAN-v2.md` and the
 `CmsTaxonomy` design in `CMS_PLAN.md §4.6` (both March 2026, never fully
 implemented). This doc is the single source of truth for the taxonomy work.
+
+> **Progress (2026-06-09)**
+> - ✅ **Phase 0** — `Category` collection + `categorySlug` re-cut (PR #436).
+> - ✅ **Phase 1** — de-gated `/api/domains` + new `/api/categories` (PR #437).
+>   Over a 7-round review cycle, Phase 1 **absorbed Phase 3's domain-form
+>   taxonomy work** (dynamic category dropdown, `categorySlug` writes, the shared
+>   legacy↔new maps, and fully live-set-validated read resolution). **Net effect:
+>   Phase 3 is now reduced to the Category *CRUD* surface only** — see the Phase 1
+>   and Phase 3 notes below.
 
 ---
 
@@ -119,7 +128,7 @@ Each phase is independently shippable and reversible. Feature flags gate
 user-visible changes. Test commands: `npm run test:run` (vitest),
 `npm run build`, and the Playwright e2e specs under `e2e/`.
 
-### Phase 0 — Data foundation (no user-visible change)
+### Phase 0 — Data foundation (no user-visible change) ✅ MERGED (PR #436)
 
 **Goal:** Introduce the `Category` bucket and make `category` consistent across
 the codebase, fixing the latent enum mismatch. Behavior identical for users.
@@ -162,10 +171,24 @@ compiles against the reconciled shape.
 
 ---
 
-### Phase 1 — De-gate the read path + categories API
+### Phase 1 — De-gate the read path + categories API ✅ MERGED (PR #437)
 
 **Goal:** Make the DB the source of truth so CMS-added roles reach users; expose
 categories to clients.
+
+> **As shipped, Phase 1 grew beyond this plan.** During review (7 Codex rounds,
+> each a valid consequence of de-gating exposing the CMS path) it also took on the
+> **domain-form taxonomy work originally slated for Phase 3**:
+> - both CMS domain forms source the category dropdown from `/api/categories` and
+>   write `categorySlug` (+ a legacy-compatible `category` for the current tabs);
+> - `CreateDomainSchema` / `UpdateDomainSchema` accept `categorySlug`, persisted
+>   on create/update;
+> - new client-safe `shared/taxonomy/categoryMaps.ts` holds the legacy↔new
+>   translation as one source of truth (shared by the seed and the CMS forms);
+> - the read path (`resolveCategorySlug`) validates **every** candidate — stored,
+>   built-in-derived, legacy-derived, and the final fallback — against the **live
+>   `Category` set** (`/api/domains` passes it in), so no code path can emit a
+>   bucket `/api/categories` doesn't return.
 
 **Changes**
 - `/api/domains`: **remove** the `ACTIVE_DOMAIN_SLUGS` filter and the `hasAll`
@@ -242,25 +265,40 @@ in <1 keystroke-burst; known users skip the grid.
 
 ---
 
-### Phase 3 — CMS category & domain management (no-deploy adds)
+### Phase 3 — CMS **category** management (reduced — domain-form half shipped in Phase 1)
 
-**Goal:** Admin creates categories and roles through the CMS; no code change.
+**Goal:** Admin creates/edits **categories** through the CMS; no code change.
 
-**Changes**
+> **Scope reduced by Phase 1.** The *domain-form* half of the original Phase 3 —
+> the dynamic category `<select>` from `/api/categories` and `categorySlug` on
+> `CreateDomainSchema`/`UpdateDomainSchema` — **already shipped in Phase 1**.
+> What remains here is the **Category CRUD** surface itself.
+
+**Changes (remaining)**
 - New `app/(cms)/cms/categories/` pages (list / new / edit) + `app/api/cms/categories/`
   routes (CRUD, `platform_admin`-gated, mirroring the domains CMS).
-- Domain form: replace the hardcoded category `<option>` list with a dynamic
-  `<select>` populated from `/api/categories`
-  ([domains/new/page.tsx:162](<../../../app/(cms)/cms/domains/new/page.tsx#L162>),
-  and the edit page).
-- Validators (`modules/cms/validators/cms.ts`): `CreateCategorySchema`;
-  change `CreateDomainSchema.category` from free-string to **validated against
-  existing category slugs** (server-side check), and add `categorySlug`.
+- `CreateCategorySchema` / `UpdateCategorySchema` validators.
+- **Write-time `categorySlug` validation (NOT yet shipped):** the domain
+  create/update path currently checks only slug *shape* and persists. Add a
+  server-side check that `categorySlug` references an existing **active**
+  `Category` and return a clear **400** on mismatch. Today an unknown/stale slug
+  is silently re-bucketed by `/api/domains` at read time, not rejected at write —
+  so this acceptance test (valid-vs-invalid `categorySlug` → clear error) still
+  belongs to Phase 3.
 - Cache invalidation: `revalidate`/bust on category & domain writes so new
   entries surface immediately (today there's no invalidation — 5-min staleness).
 
-**Blast radius:** CMS routes (`platform_admin` only) + the domain form. Public
-read path already de-gated (Phase 1), so CMS writes now reach users.
+**Already shipped in Phase 1 (was Phase 3):**
+- ✅ Domain form dynamic category `<select>` sourced from `/api/categories` (new + edit).
+- ✅ `categorySlug` accepted (slug-*shape* only) by `CreateDomainSchema` /
+  `UpdateDomainSchema` and persisted on create/update.
+- ✅ Read-path **resolution**: `/api/domains` validates each `categorySlug` against
+  the live `Category` set and emits a valid bucket — honoring admin-created custom
+  categories and silently re-bucketing unknown/stale ones. This is *resolution*,
+  **not** write-time *rejection* (the clear-400 check above is still pending).
+
+**Blast radius:** CMS routes (`platform_admin` only). Public read path already
+de-gated (Phase 1), so CMS writes reach users.
 
 **Tests**
 - CMS route tests: create/update/delete category; create domain with a valid vs
@@ -361,13 +399,13 @@ analytics group by category.
 
 ### Blast-radius checklist (every hardcoded "category" site to retire)
 
-- [ ] Mongoose enum on `InterviewDomain.category` → drop (Phase 0)
-- [ ] `seed.ts` category strings → re-cut + single-source (Phase 0)
-- [ ] `staticData.ts` `STATIC_DOMAINS` categories → generated from source (Phase 0)
-- [ ] `FALLBACK_DOMAINS` → generated; de-gated in `/api/domains` (Phase 0/1)
-- [ ] `CATEGORY_TABS` in `DomainSelector.tsx` → derive from `/api/categories` (Phase 2)
-- [ ] CMS form `<option>` list (new + edit pages) → dynamic select (Phase 3)
-- [ ] `cms.ts` validators → `categorySlug` validated (Phase 3)
+- [x] Mongoose enum on `InterviewDomain.category` → dropped (Phase 0 ✅)
+- [x] `seed.ts` category strings → re-cut + single-source (Phase 0 ✅)
+- [x] `staticData.ts` `STATIC_DOMAINS` categories → `categorySlug` added (Phase 0 ✅)
+- [x] `FALLBACK_DOMAINS` + `/api/domains` whitelist → de-gated (Phase 1 ✅)
+- [ ] `CATEGORY_TABS` in `DomainSelector.tsx` → derive from `/api/categories` (Phase 2 — pending)
+- [x] CMS form `<option>` list (new + edit pages) → dynamic select (Phase 1 ✅, was Phase 3)
+- [x] `cms.ts` validators → `categorySlug` accepted/persisted (Phase 1 ✅, was Phase 3)
 
 ### Unrelated "category" namespaces — DO NOT touch
 
