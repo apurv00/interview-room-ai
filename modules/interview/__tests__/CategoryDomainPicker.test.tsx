@@ -69,6 +69,15 @@ describe('CategoryDomainPicker', () => {
     expect(screen.queryByLabelText('Search roles')).toBeNull()
   })
 
+  it('resets to the category grid when the role is cleared (Start over)', () => {
+    const { rerender } = render(<CategoryDomainPicker selectedDomain="backend" onSelect={() => {}} />)
+    expect(screen.getByRole('option', { name: /Backend \/ Infra Engineer/ })).toBeTruthy() // role screen
+    rerender(<CategoryDomainPicker selectedDomain={null} onSelect={() => {}} />)
+    // cleared role (known → null) returns to the grid, not the stale role list
+    expect(screen.getByLabelText('Search roles')).toBeTruthy()
+    expect(screen.queryByRole('option', { name: /Backend \/ Infra Engineer/ })).toBeNull()
+  })
+
   it('does not override the user after they manually navigate, even if role hydrates', () => {
     const { rerender } = render(<CategoryDomainPicker selectedDomain={null} onSelect={() => {}} />)
     // user opens Design before any role hydrates

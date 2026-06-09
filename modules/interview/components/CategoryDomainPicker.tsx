@@ -57,8 +57,23 @@ export default function CategoryDomainPicker({ selectedDomain, onSelect }: Props
   // role's category list — and only once, so the user's later manual navigation
   // is never overridden.
   const hydratedRef = useRef<boolean>(initialCategory != null)
+  const prevSelectedRef = useRef<string | null>(selectedDomain)
   useEffect(() => {
-    if (hydratedRef.current || !selectedDomain) return
+    const prev = prevSelectedRef.current
+    prevSelectedRef.current = selectedDomain
+    if (!selectedDomain) {
+      // A known→null transition is a "Start over" / cleared role: return to the
+      // category grid and re-arm hydration. A *persistent* null (the user is
+      // browsing categories without having picked a role yet) leaves the view
+      // untouched, so we never yank them off a category they opened.
+      if (prev) {
+        hydratedRef.current = false
+        setActiveCategory(null)
+        setView('category')
+      }
+      return
+    }
+    if (hydratedRef.current) return
     const d = domains.find((x) => x.slug === selectedDomain)
     if (!d) return
     hydratedRef.current = true
