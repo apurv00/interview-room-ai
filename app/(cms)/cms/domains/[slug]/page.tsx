@@ -33,7 +33,9 @@ export default function EditDomainPage() {
   // role buckets correctly under the new taxonomy (not a legacy label).
   const [categories, setCategories] = useState<{ slug: string; label: string }[]>([])
   useEffect(() => {
-    fetch('/api/categories')
+    // no-store: an admin who just created a category must see it immediately
+    // (public /api/categories is CDN-cached for the candidate picker).
+    fetch('/api/categories', { cache: 'no-store' })
       .then((r) => r.json())
       .then((cats) => setCategories(Array.isArray(cats) ? cats : []))
       .catch(() => {})

@@ -6,6 +6,7 @@ import { ReactNode } from 'react'
 
 const navItems = [
   { href: '/cms', label: 'Dashboard', icon: '📊' },
+  { href: '/cms/categories', label: 'Categories', icon: '🗂️' },
   { href: '/cms/domains', label: 'Domains', icon: '🏷️' },
   { href: '/cms/interview-types', label: 'Interview Types', icon: '🎯' },
   { href: '/cms/skills', label: 'Skills', icon: '📝' },

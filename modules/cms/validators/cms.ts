@@ -32,6 +32,25 @@ export const UpdateDomainSchema = z.object({
   sortOrder: z.number().int().min(0).max(1000).optional(),
 })
 
+// ─── Category (taxonomy) ─────────────────────────────────────────────────────
+export const CreateCategorySchema = z.object({
+  slug: z.string().min(1).max(100).regex(slugPattern, 'Slug must be lowercase alphanumeric with hyphens'),
+  label: z.string().min(1).max(100),
+  icon: z.string().max(10).optional(),
+  description: z.string().max(500).optional(),
+  parentSlug: z.string().max(100).regex(slugPattern, 'parentSlug must be a category slug').optional(),
+  sortOrder: z.number().int().min(0).max(1000).optional(),
+})
+
+export const UpdateCategorySchema = z.object({
+  label: z.string().min(1).max(100).optional(),
+  icon: z.string().max(10).optional(),
+  description: z.string().max(500).optional(),
+  parentSlug: z.string().max(100).regex(slugPattern, 'parentSlug must be a category slug').optional(),
+  isActive: z.boolean().optional(),
+  sortOrder: z.number().int().min(0).max(1000).optional(),
+})
+
 const ScoringDimensionSchema = z.object({
   name: z.string().min(1).max(50),
   label: z.string().min(1).max(100),
