@@ -10,11 +10,10 @@ import {
 } from '../config/staticData'
 
 /**
- * Phase 2 — two-screen Category → Domain picker (behind
- * NEXT_PUBLIC_FEATURE_TAXONOMY_V2). Screen 1 is a category grid; screen 2 is the
- * roles within the chosen category. A persistent search bypasses the grid, and
- * a "can't find your role" escape routes to General. Same prop contract as the
- * legacy DomainSelector, so it drops into InterviewSetupForm unchanged and the
+ * Two-screen Category → Domain picker — the interview-setup domain selector.
+ * Screen 1 is a category grid; screen 2 is the roles within the chosen category.
+ * A persistent search bypasses the grid, and a "can't find your role" escape
+ * routes to General. Same prop contract as the older flat DomainSelector, so the
  * downstream `config.role` slug is untouched.
  */
 

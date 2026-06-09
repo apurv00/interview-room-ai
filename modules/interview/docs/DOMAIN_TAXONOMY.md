@@ -1,6 +1,7 @@
 # Domain Taxonomy & Setup Redesign — Implementation Plan
 
-**Status:** Phases 0 + 1 merged (PR #436, #437). Phase 2 (two-screen UI) is next.
+**Status:** Phases 0-4 merged. The new picker is the **default** setup selector
+(no feature flag).
 **Owner:** TBD
 **Supersedes:** the domain-selection sections of `REDESIGN-PLAN-v2.md` and the
 `CmsTaxonomy` design in `CMS_PLAN.md §4.6` (both March 2026, never fully
@@ -14,6 +15,16 @@ implemented). This doc is the single source of truth for the taxonomy work.
 >   legacy↔new maps, and fully live-set-validated read resolution). **Net effect:
 >   Phase 3 is now reduced to the Category *CRUD* surface only** — see the Phase 1
 >   and Phase 3 notes below.
+> - ✅ **Phase 2** — `CategoryDomainPicker` two-screen UI (PR #439).
+> - ✅ **Phase 3** — CMS Category CRUD + write-time `categorySlug` 400 (PR #440).
+> - ✅ **Phase 4** — 17 freshers' roles seeded + category-aware depths (PR #441).
+> - ✅ **Flag removed** — `CategoryDomainPicker` is the **default** setup picker;
+>   there is no `NEXT_PUBLIC_FEATURE_TAXONOMY_V2`. The change is a non-breaking
+>   drop-in (same props, `config.role` unchanged), so a flag added only complexity.
+>   The legacy flat `DomainSelector` remains only on the authenticated home and the
+>   `/hire/invite` page. **Deploy = merge; no env flag.** Optional: `POST /api/db/seed`
+>   (platform_admin) so `/api/domains` lists the new roles — until then the picker
+>   uses `STATIC_DOMAINS` and the AI uses `FALLBACK_DOMAINS` (both already carry them).
 
 ---
 
