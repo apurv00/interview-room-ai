@@ -3,6 +3,7 @@
 import { useEffect, useState, FormEvent } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
+import { legacyCategoryFor, toFormCategorySlug } from '@shared/taxonomy/categoryMaps'
 
 export default function EditDomainPage() {
   const router = useRouter()
@@ -28,6 +29,16 @@ export default function EditDomainPage() {
     isActive: true,
   })
 
+  // Data-driven category options — the form writes a real categorySlug so the
+  // role buckets correctly under the new taxonomy (not a legacy label).
+  const [categories, setCategories] = useState<{ slug: string; label: string }[]>([])
+  useEffect(() => {
+    fetch('/api/categories')
+      .then((r) => r.json())
+      .then((cats) => setCategories(Array.isArray(cats) ? cats : []))
+      .catch(() => {})
+  }, [])
+
   useEffect(() => {
     async function fetchDomain() {
       try {
@@ -42,7 +53,11 @@ export default function EditDomainPage() {
           icon: d.icon || '',
           description: d.description || '',
           color: d.color || 'indigo',
-          category: d.category || 'engineering',
+          // Trust a stored categorySlug as-is — it may be a custom DB category
+          // (outside the built-in seven) that /api/domains honors from the live
+          // Category set, and a blind save must not clobber it. Only a
+          // legacy-only domain (no categorySlug) is normalized to a valid slug.
+          category: d.categorySlug || toFormCategorySlug(undefined, d.category),
           systemPromptContext: d.systemPromptContext || '',
           sampleQuestions: (d.sampleQuestions || []).join('\n'),
           evaluationEmphasis: (d.evaluationEmphasis || []).join('\n'),
@@ -73,6 +88,8 @@ export default function EditDomainPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...form,
+          categorySlug: form.category,
+          category: legacyCategoryFor(form.category),
           sortOrder: parseInt(form.sortOrder) || 0,
           sampleQuestions: form.sampleQuestions
             .split('\n')
@@ -205,10 +222,9 @@ export default function EditDomainPage() {
               onChange={(e) => updateField('category', e.target.value)}
               className="w-full bg-white border border-[#e1e8ed] rounded-lg px-3 py-2 text-sm text-[#0f1419] focus:border-blue-500 focus:outline-none"
             >
-              <option value="engineering">Engineering</option>
-              <option value="business">Business</option>
-              <option value="design">Design</option>
-              <option value="operations">Operations</option>
+              {categories.map((c) => (
+                <option key={c.slug} value={c.slug}>{c.label}</option>
+              ))}
             </select>
           </div>
           <div>

@@ -2,6 +2,7 @@ import { connectDB } from './connection'
 import { Category } from './models/Category'
 import { InterviewDomain } from './models/InterviewDomain'
 import { InterviewDepth } from './models/InterviewDepth'
+import { isKnownCategorySlug, CATEGORY_SLUG_FOR_LEGACY } from '../taxonomy/categoryMaps'
 
 // ─── Categories (data-driven taxonomy buckets) ───────────────────────────────
 // Single source of truth for the top-level Category→Domain hierarchy. See
@@ -30,9 +31,53 @@ const CATEGORY_SLUG_BY_DOMAIN: Record<string, string> = {
   design: 'design',
   business: 'business',
 }
-// Exported so read paths (e.g. /api/domains) can derive a categorySlug for
-// domains that predate the seed backfill, or CMS domains that omit it.
+// Exact categorySlug for a known built-in domain slug; 'general' otherwise.
+// Used by the seed itself (built-in slugs are always known).
 export const categorySlugFor = (slug: string): string => CATEGORY_SLUG_BY_DOMAIN[slug] ?? 'general'
+
+/**
+ * Resolve a domain's category slug from the best available source, in order:
+ *   1. stored `categorySlug` — but only if it is a VALID category. Validity is
+ *      checked against `knownSlugs` (the live Category set) when the caller
+ *      supplies it, so admin-created custom categories are honored; otherwise it
+ *      falls back to the built-in seven. A stale/legacy value (e.g.
+ *      'engineering') is rejected so /api/domains never emits a bucket
+ *      /api/categories doesn't return.
+ *   2. exact built-in slug mapping (precise for seeded domains)
+ *   3. legacy `category` label mapping (best-effort for CMS domains)
+ *   4. 'general'
+ * The legacy<->new maps live in shared/taxonomy/categoryMaps so the seed and the
+ * CMS forms share one source of truth.
+ */
+export const resolveCategorySlug = (
+  d: { slug: string; category?: string | null; categorySlug?: string | null },
+  knownSlugs?: Set<string>,
+): string => {
+  const isValid = (s?: string | null): boolean =>
+    knownSlugs ? !!s && knownSlugs.has(s) : isKnownCategorySlug(s)
+  // Try each candidate in priority order and return the first VALID (active)
+  // category. Validating the DERIVED candidates too — not just the stored
+  // categorySlug — means /api/domains never emits a bucket /api/categories
+  // doesn't return, even when a built-in category was deactivated while its
+  // domains stayed active.
+  const candidates = [
+    d.categorySlug,
+    CATEGORY_SLUG_BY_DOMAIN[d.slug],
+    d.category ? CATEGORY_SLUG_FOR_LEGACY[d.category] : undefined,
+  ]
+  for (const c of candidates) {
+    if (isValid(c)) return c as string
+  }
+  // Final fallback: 'general' when it's an active bucket; otherwise the first
+  // active category (deterministic — the route fetches categories sorted by
+  // sortOrder), so even a domain whose categories were all deactivated still
+  // maps to a live bucket /api/categories returns.
+  if (isValid('general')) return 'general'
+  if (knownSlugs && knownSlugs.size > 0) {
+    return Array.from(knownSlugs)[0]
+  }
+  return 'general'
+}
 
 const BUILT_IN_DOMAINS = [
   // ─── General ───────────────────────────────────────────────────────────────

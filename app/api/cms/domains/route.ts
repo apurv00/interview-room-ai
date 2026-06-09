@@ -57,6 +57,7 @@ export async function POST(req: NextRequest) {
       description: body.description,
       color: body.color || 'indigo',
       category: body.category,
+      categorySlug: body.categorySlug,
       systemPromptContext: body.systemPromptContext || '',
       sampleQuestions: body.sampleQuestions || [],
       evaluationEmphasis: body.evaluationEmphasis || [],

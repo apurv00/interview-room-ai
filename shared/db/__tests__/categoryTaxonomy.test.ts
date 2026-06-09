@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { Category } from '../models/Category'
-import { FALLBACK_DOMAINS, FALLBACK_CATEGORIES } from '../seed'
+import { FALLBACK_DOMAINS, FALLBACK_CATEGORIES, resolveCategorySlug } from '../seed'
 
 describe('Category model', () => {
   it('validates a minimal category and applies defaults', () => {
@@ -58,5 +58,73 @@ describe('taxonomy seed data integrity', () => {
   it('core-engineering is seeded but starts empty (roles land in Phase 4)', () => {
     expect(categorySlugs.has('core-engineering')).toBe(true)
     expect(FALLBACK_DOMAINS.some((d) => d.categorySlug === 'core-engineering')).toBe(false)
+  })
+})
+
+describe('resolveCategorySlug — read-path bucket resolution', () => {
+  it('prefers a stored categorySlug over everything (authoritative)', () => {
+    // A CMS mechanical role tagged with the legacy 'engineering' category but
+    // given an explicit categorySlug must keep the explicit bucket.
+    expect(resolveCategorySlug({ slug: 'mechanical', category: 'engineering', categorySlug: 'core-engineering' }))
+      .toBe('core-engineering')
+  })
+
+  it('uses the exact built-in slug mapping before the legacy category', () => {
+    // data-science is legacy-categorized 'engineering' but must bucket as data-ai.
+    expect(resolveCategorySlug({ slug: 'data-science', category: 'engineering' })).toBe('data-ai')
+  })
+
+  it('falls back to the legacy category for non-seed CMS domains', () => {
+    expect(resolveCategorySlug({ slug: 'consulting', category: 'business' })).toBe('business')
+    expect(resolveCategorySlug({ slug: 'qa-lead', category: 'engineering' })).toBe('programming')
+    expect(resolveCategorySlug({ slug: 'ops-mgr', category: 'operations' })).toBe('business')
+  })
+
+  it('falls back to general when nothing resolves', () => {
+    expect(resolveCategorySlug({ slug: 'totally-unknown' })).toBe('general')
+    expect(resolveCategorySlug({ slug: 'x', category: 'made-up-label' })).toBe('general')
+  })
+
+  it('ignores an INVALID stored categorySlug so no bogus bucket is emitted', () => {
+    // A legacy value mistakenly saved into categorySlug must not pass through.
+    expect(resolveCategorySlug({ slug: 'frontend', category: 'engineering', categorySlug: 'engineering' }))
+      .toBe('programming') // falls to the exact built-in slug mapping
+    expect(resolveCategorySlug({ slug: 'unknown', category: 'business', categorySlug: 'not-a-category' }))
+      .toBe('business') // falls to the legacy-category mapping
+  })
+
+  it('honors a custom categorySlug when it is in the supplied live Category set', () => {
+    const known = new Set(['programming', 'data-ai', 'renewable-energy'])
+    expect(resolveCategorySlug({ slug: 'solar', category: 'engineering', categorySlug: 'renewable-energy' }, known))
+      .toBe('renewable-energy')
+  })
+
+  it('rejects a categorySlug absent from the supplied live Category set', () => {
+    const known = new Set(['programming', 'data-ai']) // 'renewable-energy' not active
+    expect(resolveCategorySlug({ slug: 'solar', category: 'engineering', categorySlug: 'renewable-energy' }, known))
+      .toBe('programming') // falls to legacy 'engineering' -> programming
+  })
+
+  it('never emits a DERIVED slug that is inactive in the live set', () => {
+    // 'design' category deactivated, but the built-in design domain is active.
+    // Both the stored categorySlug AND the slug-derived 'design' must be
+    // rejected; falls to the legacy-mapped active bucket ('product').
+    const known = new Set(['programming', 'data-ai', 'core-engineering', 'business', 'product', 'general'])
+    expect(resolveCategorySlug({ slug: 'design', category: 'product', categorySlug: 'design' }, known))
+      .toBe('product')
+  })
+
+  it('uses general as the final fallback when general is active', () => {
+    const known = new Set(['programming', 'general'])
+    expect(resolveCategorySlug({ slug: 'design', category: 'design', categorySlug: 'design' }, known))
+      .toBe('general')
+  })
+
+  it('falls to an active category when even general is inactive (no orphan bucket)', () => {
+    // Pathological: general + design both deactivated. Must still emit a LIVE
+    // bucket (the first active category), never the inactive 'general'.
+    const known = new Set(['programming', 'data-ai'])
+    expect(resolveCategorySlug({ slug: 'design', category: 'design', categorySlug: 'design' }, known))
+      .toBe('programming')
   })
 })

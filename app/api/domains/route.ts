@@ -1,47 +1,47 @@
 import { NextResponse } from 'next/server'
 import { connectDB } from '@shared/db/connection'
-import { InterviewDomain } from '@shared/db/models'
-import { FALLBACK_DOMAINS, categorySlugFor } from '@shared/db/seed'
+import { InterviewDomain, Category } from '@shared/db/models'
+import { FALLBACK_DOMAINS, FALLBACK_CATEGORIES, resolveCategorySlug } from '@shared/db/seed'
 
 export const dynamic = 'force-dynamic'
 
-// Canonical set of active domain slugs — source of truth
-const ACTIVE_DOMAIN_SLUGS = new Set(FALLBACK_DOMAINS.map(d => d.slug))
+const CACHE_HEADERS = { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=3600' }
 
 export async function GET() {
   try {
     await connectDB()
-    const domains = await InterviewDomain.find({ isActive: true })
-      .sort({ sortOrder: 1 })
-      .select('slug label shortLabel icon description color category categorySlug')
-      .lean()
+    const [domains, categoryDocs] = await Promise.all([
+      InterviewDomain.find({ isActive: true })
+        .sort({ sortOrder: 1 })
+        .select('slug label shortLabel icon description color category categorySlug')
+        .lean(),
+      Category.find({ isActive: true }).sort({ sortOrder: 1 }).select('slug').lean<{ slug: string }[]>(),
+    ])
 
     if (domains.length > 0) {
-      // Filter to only current slugs
-      const filtered = domains.filter(d => ACTIVE_DOMAIN_SLUGS.has(d.slug))
-      // Only use DB data if it covers ALL expected domains (otherwise it's stale)
-      const dbSlugs = new Set(filtered.map(d => d.slug))
-      const hasAll = Array.from(ACTIVE_DOMAIN_SLUGS).every(s => dbSlugs.has(s))
-      if (hasAll) {
-        // Guarantee a categorySlug even for docs that predate the seed backfill
-        // (deploy-before-seed race) or CMS domains that omit it — derive by slug
-        // so the response shape never depends on whether the migration has run.
-        const withCategory = filtered.map(d => ({
-          ...d,
-          categorySlug: d.categorySlug ?? categorySlugFor(d.slug),
-        }))
-        return NextResponse.json(withCategory, {
-          headers: { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=3600' },
-        })
-      }
+      // Taxonomy Phase 1 — the DB is the source of truth: return ALL active
+      // domains, including CMS-added roles that aren't in the seed. The old
+      // ACTIVE_DOMAIN_SLUGS whitelist + hasAll gate silently dropped any
+      // non-seed slug, so CMS-created roles never reached users (adding a role
+      // required editing seed.ts + redeploying).
+      //
+      // Validate each domain's categorySlug against the LIVE Category set (not a
+      // hardcoded list) so admin-created custom categories are honored; derive a
+      // valid slug for any doc that predates the seed backfill.
+      const knownSlugs = new Set(
+        (categoryDocs.length ? categoryDocs : FALLBACK_CATEGORIES).map(c => c.slug),
+      )
+      const withCategory = domains.map(d => ({
+        ...d,
+        categorySlug: resolveCategorySlug(d, knownSlugs),
+      }))
+      return NextResponse.json(withCategory, { headers: CACHE_HEADERS })
     }
   } catch {
     // DB not available — fall through to fallback
   }
 
-  // Strip internal prompt fields from fallback data
+  // DB unavailable or empty — strip internal prompt fields from fallback data
   const safeFallback = FALLBACK_DOMAINS.map(({ systemPromptContext, ...rest }) => rest)
-  return NextResponse.json(safeFallback, {
-    headers: { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=3600' },
-  })
+  return NextResponse.json(safeFallback, { headers: CACHE_HEADERS })
 }
