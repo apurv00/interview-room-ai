@@ -51,6 +51,19 @@ export async function PUT(req: NextRequest, { params }: { params: { slug: string
       )
     }
 
+    // Don't orphan on deactivation either (DELETE already guards this): refuse to
+    // set isActive:false while active roles still reference the category, since
+    // /api/domains would then re-bucket them away from the intended category.
+    if (parsed.data.isActive === false) {
+      const inUse = await InterviewDomain.countDocuments({ categorySlug: params.slug, isActive: true })
+      if (inUse > 0) {
+        return NextResponse.json(
+          { error: `Cannot deactivate: ${inUse} active ${inUse === 1 ? 'role' : 'roles'} still use this category. Reassign them first.` },
+          { status: 409 }
+        )
+      }
+    }
+
     const category = await Category.findOneAndUpdate(
       { slug: params.slug },
       { $set: parsed.data },
