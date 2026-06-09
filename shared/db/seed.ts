@@ -1,6 +1,38 @@
 import { connectDB } from './connection'
+import { Category } from './models/Category'
 import { InterviewDomain } from './models/InterviewDomain'
 import { InterviewDepth } from './models/InterviewDepth'
+
+// ─── Categories (data-driven taxonomy buckets) ───────────────────────────────
+// Single source of truth for the top-level Category→Domain hierarchy. See
+// modules/interview/docs/DOMAIN_TAXONOMY.md. `core-engineering` seeds empty
+// (its roles land in Phase 4); the setup grid hides 0-domain categories.
+const BUILT_IN_CATEGORIES = [
+  { slug: 'programming', label: 'Programming', icon: '💻', description: 'Software & web engineering roles', sortOrder: 1 },
+  { slug: 'data-ai', label: 'Data & AI', icon: '📊', description: 'Data science, ML, and analytics', sortOrder: 2 },
+  { slug: 'core-engineering', label: 'Core Engineering', icon: '⚙️', description: 'Mechanical, civil, electrical & more', sortOrder: 3 },
+  { slug: 'business', label: 'Business', icon: '📈', description: 'Strategy, finance, ops, marketing', sortOrder: 4 },
+  { slug: 'product', label: 'Product', icon: '🎯', description: 'Product management & analytics', sortOrder: 5 },
+  { slug: 'design', label: 'Design', icon: '🎨', description: 'UX, UI, and product design', sortOrder: 6 },
+  // General is the search-fallback escape (not shown as a grid card); sorts last.
+  { slug: 'general', label: 'General / Other', icon: '🧭', description: 'Any role — versatile practice', sortOrder: 99 },
+]
+
+// Re-cut of each existing domain's legacy `category` onto the new categories.
+// (legacy `category` field is left untouched so the current UI is unaffected.)
+const CATEGORY_SLUG_BY_DOMAIN: Record<string, string> = {
+  general: 'general',
+  frontend: 'programming',
+  backend: 'programming',
+  sdet: 'programming',
+  'data-science': 'data-ai',
+  pm: 'product',
+  design: 'design',
+  business: 'business',
+}
+// Exported so read paths (e.g. /api/domains) can derive a categorySlug for
+// domains that predate the seed backfill, or CMS domains that omit it.
+export const categorySlugFor = (slug: string): string => CATEGORY_SLUG_BY_DOMAIN[slug] ?? 'general'
 
 const BUILT_IN_DOMAINS = [
   // ─── General ───────────────────────────────────────────────────────────────
@@ -149,14 +181,30 @@ const BUILT_IN_DEPTHS = [
 export async function seedDatabase() {
   await connectDB()
 
+  const currentCategorySlugs = BUILT_IN_CATEGORIES.map(c => c.slug)
   const currentDomainSlugs = BUILT_IN_DOMAINS.map(d => d.slug)
   const currentDepthSlugs = BUILT_IN_DEPTHS.map(d => d.slug)
 
-  // Upsert domains
+  // Upsert categories
+  for (const category of BUILT_IN_CATEGORIES) {
+    await Category.findOneAndUpdate(
+      { slug: category.slug },
+      { ...category, isBuiltIn: true, isActive: true },
+      { upsert: true, returnDocument: 'after' }
+    )
+  }
+
+  // Deactivate old built-in categories no longer in the list
+  await Category.updateMany(
+    { isBuiltIn: true, slug: { $nin: currentCategorySlugs } },
+    { isActive: false }
+  )
+
+  // Upsert domains (inject the data-driven categorySlug; legacy `category` kept)
   for (const domain of BUILT_IN_DOMAINS) {
     await InterviewDomain.findOneAndUpdate(
       { slug: domain.slug },
-      { ...domain, isBuiltIn: true, isActive: true },
+      { ...domain, categorySlug: categorySlugFor(domain.slug), isBuiltIn: true, isActive: true },
       { upsert: true, returnDocument: 'after' }
     )
   }
@@ -182,10 +230,16 @@ export async function seedDatabase() {
     { isActive: false }
   )
 
-  return { domains: BUILT_IN_DOMAINS.length, depths: BUILT_IN_DEPTHS.length }
+  return {
+    categories: BUILT_IN_CATEGORIES.length,
+    domains: BUILT_IN_DOMAINS.length,
+    depths: BUILT_IN_DEPTHS.length,
+  }
 }
 
 // Fallback data for when DB is not available (used by public APIs)
+export const FALLBACK_CATEGORIES = BUILT_IN_CATEGORIES.map(c => ({ ...c }))
+
 export const FALLBACK_DOMAINS = BUILT_IN_DOMAINS.map(d => ({
   slug: d.slug,
   label: d.label,
@@ -194,6 +248,7 @@ export const FALLBACK_DOMAINS = BUILT_IN_DOMAINS.map(d => ({
   description: d.description,
   color: 'indigo',
   category: d.category,
+  categorySlug: categorySlugFor(d.slug),
   systemPromptContext: d.systemPromptContext,
 }))
 

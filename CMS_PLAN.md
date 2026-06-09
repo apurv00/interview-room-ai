@@ -1,5 +1,11 @@
 # CMS Platform Plan — Interview Prep Guru
 
+> ⚠️ **PARTIALLY SUPERSEDED (2026-06)** — §4.6 `CmsTaxonomy` (categories/tags) is
+> superseded for interview-domain taxonomy by
+> [`modules/interview/docs/DOMAIN_TAXONOMY.md`](modules/interview/docs/DOMAIN_TAXONOMY.md).
+> Its `parentId` hierarchy pattern informed that plan's `Category` model. The
+> rest of this CMS doc is historical reference.
+>
 > Scalable, subdomain-based Content Management System for the Interview Prep Guru platform.
 > Subdomain: `cms.interviewprep.guru` (admin) / `content.interviewprep.guru` (public content delivery)
 

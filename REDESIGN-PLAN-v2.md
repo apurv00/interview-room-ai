@@ -1,5 +1,11 @@
 # Interview Prep Guru — Redesign Plan v2
 
+> ⚠️ **SUPERSEDED (2026-06)** — the domain/category selection sections of this
+> doc are superseded by [`modules/interview/docs/DOMAIN_TAXONOMY.md`](modules/interview/docs/DOMAIN_TAXONOMY.md),
+> which is the authoritative plan for the hierarchical Category→Domain taxonomy
+> and the two-screen setup redesign. The `SelectionGroup` curation ideas below
+> were harvested into that plan; the rest is historical.
+>
 > **Version**: 2.0 — Revision after critical analysis
 > **Date**: March 12, 2026
 > **Supersedes**: REDESIGN-PLAN.md (v1)

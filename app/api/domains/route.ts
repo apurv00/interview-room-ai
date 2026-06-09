@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { connectDB } from '@shared/db/connection'
 import { InterviewDomain } from '@shared/db/models'
-import { FALLBACK_DOMAINS } from '@shared/db/seed'
+import { FALLBACK_DOMAINS, categorySlugFor } from '@shared/db/seed'
 
 export const dynamic = 'force-dynamic'
 
@@ -13,7 +13,7 @@ export async function GET() {
     await connectDB()
     const domains = await InterviewDomain.find({ isActive: true })
       .sort({ sortOrder: 1 })
-      .select('slug label shortLabel icon description color category')
+      .select('slug label shortLabel icon description color category categorySlug')
       .lean()
 
     if (domains.length > 0) {
@@ -23,7 +23,14 @@ export async function GET() {
       const dbSlugs = new Set(filtered.map(d => d.slug))
       const hasAll = Array.from(ACTIVE_DOMAIN_SLUGS).every(s => dbSlugs.has(s))
       if (hasAll) {
-        return NextResponse.json(filtered, {
+        // Guarantee a categorySlug even for docs that predate the seed backfill
+        // (deploy-before-seed race) or CMS domains that omit it — derive by slug
+        // so the response shape never depends on whether the migration has run.
+        const withCategory = filtered.map(d => ({
+          ...d,
+          categorySlug: d.categorySlug ?? categorySlugFor(d.slug),
+        }))
+        return NextResponse.json(withCategory, {
           headers: { 'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=3600' },
         })
       }
