@@ -3,9 +3,9 @@
 /**
  * InterviewSetupForm — progressive 4-step interview setup screen.
  *
- * Used by /interview/setup. Produces the exact same `InterviewConfig` as the
- * flat homepage form (app/AuthenticatedHome.tsx), so downstream lobby/AI code
- * is unchanged. Preserves all production behaviors: resume requirement with
+ * Used by /interview/setup. Produces the canonical `InterviewConfig` that the
+ * lobby/AI pipeline consumes, so downstream code is unchanged. Preserves all
+ * production behaviors: resume requirement with
  * saved-resume + quick-profile escape hatches, JD context extraction, JD
  * auto-generation from company+role, onboarding pre-fill, session-scoped
  * localStorage, cross-user leakage scrub.
@@ -104,7 +104,7 @@ export default function InterviewSetupForm() {
   // ─── Step state ────────────────────────────────────────────────────────
   const [step, setStep] = useState(0)
 
-  // ─── Interview config state (mirrors AuthenticatedHome) ────────────────
+  // ─── Interview config state ────────────────────────────────────────────
   const [role, setRole] = useState<Role | null>(null)
   const [interviewType, setInterviewType] = useState<InterviewType | null>(null)
   const [experience, setExperience] = useState<ExperienceLevel | null>(null)

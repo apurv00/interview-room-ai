@@ -568,7 +568,7 @@ export default function MarketingHomepage() {
             {([
               { step: '1', title: 'Resume gets you in', desc: 'AI-powered resume builder with 10 templates, ATS scoring, and JD-specific tailoring.', icon: <FileText className="w-5 h-5 text-amber-600" />, iconBg: 'bg-amber-50 border-amber-100', href: '/resume', label: 'Resume Tools' },
               { step: '2', title: 'Guides prep your mind', desc: 'Company-specific guides for Google, Amazon, McKinsey, and 8 more. STAR frameworks, negotiation scripts — all free.', icon: <BookOpen className="w-5 h-5 text-sky-600" />, iconBg: 'bg-sky-50 border-sky-100', href: '/resources', label: '26+ Guides' },
-              { step: '3', title: 'Live AI coaching', desc: 'Voice conversation with an AI that watches your face, listens to your voice, and scores your answers. Real-time nudges. 12+ domains.', icon: <Mic className="w-5 h-5 text-blue-600" />, iconBg: 'bg-blue-50 border-blue-100', href: CTA_SENTINEL, label: 'Try Free', core: true },
+              { step: '3', title: 'Live AI coaching', desc: 'Voice conversation with an AI that watches your face, listens to your voice, and scores your answers. Real-time nudges. 20+ roles across 6 fields.', icon: <Mic className="w-5 h-5 text-blue-600" />, iconBg: 'bg-blue-50 border-blue-100', href: CTA_SENTINEL, label: 'Try Free', core: true },
               { step: '4', title: 'Replay the truth', desc: 'Synchronized video + transcript + signal timeline. See the exact second you lost confidence.', icon: <MonitorPlay className="w-5 h-5 text-emerald-600" />, iconBg: 'bg-emerald-50 border-emerald-100', href: CTA_SENTINEL, label: 'View Replays' },
               { step: '5', title: 'Track and repeat', desc: 'Session comparison. Score trends. Competency tracking showing which skills improve and which decay.', icon: <RotateCcw className="w-5 h-5 text-teal-600" />, iconBg: 'bg-teal-50 border-teal-100', href: '/learn/progress', label: 'Progress' },
             ] as JourneyStep[]).map((s, i) => {
@@ -628,14 +628,14 @@ export default function MarketingHomepage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
           <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400 mb-6">Calibrated for your field</p>
           <div className="flex flex-wrap justify-center gap-2.5 mb-12">
-            {['Software Engineering', 'Data Science', 'Product Management', 'Design / UX', 'Finance & Banking', 'Management Consulting'].map((d, i) => (
+            {['Programming', 'Data & AI', 'Core Engineering', 'Business', 'Product', 'Design'].map((d, i) => (
               <div key={i} className="px-5 py-2.5 bg-slate-50 border border-slate-200 rounded-full text-[13px] font-medium text-slate-600 hover:border-slate-300 transition-colors cursor-pointer">
                 {d}
               </div>
             ))}
           </div>
           <p className="text-[13px] text-slate-400 mb-14">
-            + 8 more including Marketing, DevOps, HR, and Legal. <Link href="/resources" className="text-blue-600 hover:underline">See all domains →</Link>
+            From full-stack and ML to mechanical, civil, finance, and product design — 20+ roles across 6 fields. <Link href="/resources" className="text-blue-600 hover:underline">See all →</Link>
           </p>
 
           <div className="pt-12 border-t border-slate-100">
@@ -700,7 +700,7 @@ export default function MarketingHomepage() {
                   'Real-time face + voice + content coaching',
                   '5-dimension scoring per question',
                   '1 detailed video replay with full analysis per month',
-                  '12+ career domains',
+                  '20+ roles across 6 fields',
                 ].map((f, i) => (
                   <li key={i} className="flex items-start gap-2.5 text-[14px] text-slate-600">
                     <CheckCircle2 className="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5" /> {f}

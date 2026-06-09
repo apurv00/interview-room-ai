@@ -11,7 +11,7 @@ Resume, Learn, Settings, and sharing are covered in `03-*.md` and `04-*.md`.
 After Google/GitHub OAuth (or credentials) completes:
 
 1. NextAuth sets the JWT cookie and upserts the `User` row with `role: 'candidate'`, `plan: 'free'`, and the default monthly interview limit.
-2. The user is redirected to `callbackUrl` (default `/`) — there is **no separate onboarding gate**. Profile capture happens inline on the home page (`AuthenticatedHome`).
+2. The user is redirected to `callbackUrl` (default `/`) — there is **no separate onboarding gate**. Domain/resume/profile capture happens in the `/interview/setup` wizard (`InterviewSetupForm`).
 3. On home, the user can upload a resume (AI extracts `currentTitle`, `currentIndustry`, `experienceLevel`, `inferredRole`) or enter a quick profile (job title + skills). Each save PATCHes `/api/onboarding` with the captured fields.
 4. Once a resume + role + experience + duration are set, the **"Enter Interview Room →"** CTA becomes active and routes to `/lobby`.
 

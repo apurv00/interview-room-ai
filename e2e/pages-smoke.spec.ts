@@ -62,6 +62,19 @@ test.describe('Content regression checks', () => {
     consoleTracker.assertNoErrors()
   })
 
+  test('homepage surfaces the field taxonomy (incl. Core Engineering)', async ({ page }) => {
+    const { consoleTracker, networkTracker } = await gotoAndTrack(page, '/')
+    await page.waitForLoadState('domcontentloaded')
+    // Phase 5: the "Calibrated for your field" showcase reflects the category
+    // taxonomy — Core Engineering in particular (the freshers/engineering angle
+    // this initiative was built for). A product requirement, not design copy.
+    const body = (await page.locator('body').textContent()) ?? ''
+    expect(body).toContain('Core Engineering')
+    expect(body).toContain('Data & AI')
+    networkTracker.assertNoServerErrors()
+    consoleTracker.assertNoErrors()
+  })
+
   test('pricing page shows all three tiers', async ({ page }) => {
     await page.goto('/pricing')
     await page.waitForLoadState('domcontentloaded')
