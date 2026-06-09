@@ -1001,6 +1001,17 @@ export function getProblemById(id: string): CodingProblem | undefined {
   return CODING_PROBLEMS.find((p) => p.id === id)
 }
 
+// Roles whose category gained `coding` in Phase 4 but that have no problems of
+// their own borrow a representative pool, so the coding UI always has a problem
+// even if the dynamic generator (/api/code/generate-problem) is unavailable.
+const PROBLEM_POOL_FALLBACK: Record<string, string> = {
+  fullstack: 'backend',
+  devops: 'backend',
+  mobile: 'frontend',
+  'ml-engineer': 'data-science',
+  'data-analyst': 'data-science',
+}
+
 export function selectProblem(domain: string, experience: string, usedIds: string[] = []): CodingProblem | null {
   const primaryDifficulty = experience === '7+' ? 'hard' : experience === '3-6' ? 'medium' : 'easy'
 
@@ -1010,17 +1021,31 @@ export function selectProblem(domain: string, experience: string, usedIds: strin
     primaryDifficulty === 'hard' ? ['hard', 'medium'] :
     ['medium', 'easy', 'hard']
 
-  for (const diff of difficultyOrder) {
-    const candidates = CODING_PROBLEMS.filter(
-      (p) => p.difficulty === diff &&
-      p.applicableDomains.includes(domain) &&
-      !usedIds.includes(p.id)
-    )
-    if (candidates.length > 0) {
-      return candidates[Math.floor(Math.random() * candidates.length)]
+  const pickForDomain = (dom: string): CodingProblem | null => {
+    for (const diff of difficultyOrder) {
+      const candidates = CODING_PROBLEMS.filter(
+        (p) => p.difficulty === diff &&
+        p.applicableDomains.includes(dom) &&
+        !usedIds.includes(p.id)
+      )
+      if (candidates.length > 0) {
+        return candidates[Math.floor(Math.random() * candidates.length)]
+      }
     }
+    return null
   }
 
-  // All problems in pool exhausted for this domain — return null (triggers AI generation)
+  const exact = pickForDomain(domain)
+  if (exact) return exact
+
+  // New category-only roles have no pool of their own — borrow a representative
+  // one so the coding UI is never left empty if the AI generator also fails.
+  const fallbackDomain = PROBLEM_POOL_FALLBACK[domain]
+  if (fallbackDomain) {
+    const borrowed = pickForDomain(fallbackDomain)
+    if (borrowed) return borrowed
+  }
+
+  // Pool exhausted for this domain — return null (triggers AI generation)
   return null
 }
