@@ -37,26 +37,31 @@ export const categorySlugFor = (slug: string): string => CATEGORY_SLUG_BY_DOMAIN
 
 /**
  * Resolve a domain's category slug from the best available source, in order:
- *   1. stored `categorySlug` — but only if it is a KNOWN category slug. A stale
- *      or legacy value (e.g. 'engineering') is ignored so /api/domains never
- *      emits a bucket /api/categories doesn't return.
+ *   1. stored `categorySlug` — but only if it is a VALID category. Validity is
+ *      checked against `knownSlugs` (the live Category set) when the caller
+ *      supplies it, so admin-created custom categories are honored; otherwise it
+ *      falls back to the built-in seven. A stale/legacy value (e.g.
+ *      'engineering') is rejected so /api/domains never emits a bucket
+ *      /api/categories doesn't return.
  *   2. exact built-in slug mapping (precise for seeded domains)
  *   3. legacy `category` label mapping (best-effort for CMS domains)
  *   4. 'general'
- * Used by /api/domains so the response is always a valid, correctly-bucketed
- * category regardless of whether the seed backfill has run or how a CMS domain
- * was written. The legacy<->new maps live in shared/taxonomy/categoryMaps so
- * the seed and the CMS forms share one source of truth.
+ * The legacy<->new maps live in shared/taxonomy/categoryMaps so the seed and the
+ * CMS forms share one source of truth.
  */
-export const resolveCategorySlug = (d: {
-  slug: string
-  category?: string | null
-  categorySlug?: string | null
-}): string =>
-  (isKnownCategorySlug(d.categorySlug) ? d.categorySlug! : undefined) ||
-  CATEGORY_SLUG_BY_DOMAIN[d.slug] ||
-  (d.category ? CATEGORY_SLUG_FOR_LEGACY[d.category] : undefined) ||
-  'general'
+export const resolveCategorySlug = (
+  d: { slug: string; category?: string | null; categorySlug?: string | null },
+  knownSlugs?: Set<string>,
+): string => {
+  const isValid = (s?: string | null): boolean =>
+    knownSlugs ? !!s && knownSlugs.has(s) : isKnownCategorySlug(s)
+  return (
+    (isValid(d.categorySlug) ? d.categorySlug! : undefined) ||
+    CATEGORY_SLUG_BY_DOMAIN[d.slug] ||
+    (d.category ? CATEGORY_SLUG_FOR_LEGACY[d.category] : undefined) ||
+    'general'
+  )
+}
 
 const BUILT_IN_DOMAINS = [
   // ─── General ───────────────────────────────────────────────────────────────

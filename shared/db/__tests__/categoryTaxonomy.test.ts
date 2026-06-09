@@ -92,4 +92,16 @@ describe('resolveCategorySlug — read-path bucket resolution', () => {
     expect(resolveCategorySlug({ slug: 'unknown', category: 'business', categorySlug: 'not-a-category' }))
       .toBe('business') // falls to the legacy-category mapping
   })
+
+  it('honors a custom categorySlug when it is in the supplied live Category set', () => {
+    const known = new Set(['programming', 'data-ai', 'renewable-energy'])
+    expect(resolveCategorySlug({ slug: 'solar', category: 'engineering', categorySlug: 'renewable-energy' }, known))
+      .toBe('renewable-energy')
+  })
+
+  it('rejects a categorySlug absent from the supplied live Category set', () => {
+    const known = new Set(['programming', 'data-ai']) // 'renewable-energy' not active
+    expect(resolveCategorySlug({ slug: 'solar', category: 'engineering', categorySlug: 'renewable-energy' }, known))
+      .toBe('programming') // falls to legacy 'engineering' -> programming
+  })
 })
