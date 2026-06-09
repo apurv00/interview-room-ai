@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { ArrowLeft, Search } from 'lucide-react'
 import {
   STATIC_DOMAINS,
@@ -44,11 +44,27 @@ export default function CategoryDomainPicker({ selectedDomain, onSelect }: Props
     if (!selectedDomain) return null
     const d = (domainCache || (STATIC_DOMAINS as Domain[])).find((x) => x.slug === selectedDomain)
     return d ? catOf(d) : null
-    // mount-only — deliberately not reacting to later selection changes
+    // first-render lookup only (no flash when the role is already known); later
+    // async hydration is handled by the effect below
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   const [activeCategory, setActiveCategory] = useState<string | null>(initialCategory)
   const [view, setView] = useState<'category' | 'role'>(initialCategory ? 'role' : 'category')
+
+  // Skip-for-known across ASYNC hydration: retake / last-config / pathway /
+  // onboarding set `selectedDomain` from effects, *after* this picker has already
+  // rendered with `null`. React to that null→known transition once — open the
+  // role's category list — and only once, so the user's later manual navigation
+  // is never overridden.
+  const hydratedRef = useRef<boolean>(initialCategory != null)
+  useEffect(() => {
+    if (hydratedRef.current || !selectedDomain) return
+    const d = domains.find((x) => x.slug === selectedDomain)
+    if (!d) return
+    hydratedRef.current = true
+    setActiveCategory(catOf(d))
+    setView('role')
+  }, [selectedDomain, domains])
 
   // Background fetch — pick up CMS-added roles/categories without a flash.
   useEffect(() => {
@@ -119,7 +135,10 @@ export default function CategoryDomainPicker({ selectedDomain, onSelect }: Props
     [domains, selectedDomain],
   )
 
+  // Any manual navigation "settles" the view, so a later async role-hydration
+  // won't yank the user away from where they chose to be.
   const openCategory = useCallback((slug: string) => {
+    hydratedRef.current = true
     setActiveCategory(slug)
     setView('role')
     setSearch('')
@@ -127,6 +146,7 @@ export default function CategoryDomainPicker({ selectedDomain, onSelect }: Props
 
   const pickSearchResult = useCallback(
     (d: Domain) => {
+      hydratedRef.current = true
       onSelect(d.slug)
       setActiveCategory(catOf(d))
       setView('role')
@@ -138,11 +158,17 @@ export default function CategoryDomainPicker({ selectedDomain, onSelect }: Props
   // "Can't find your role?" → General now. Phase 6 adds a free-text role-request
   // capture here to drive the backfill queue.
   const cantFind = useCallback(() => {
+    hydratedRef.current = true
     onSelect(GENERAL)
     setActiveCategory(GENERAL)
     setView('role')
     setSearch('')
   }, [onSelect])
+
+  const backToGrid = useCallback(() => {
+    hydratedRef.current = true
+    setView('category')
+  }, [])
 
   // ── Role screen ──────────────────────────────────────────────────────────
   if (view === 'role') {
@@ -150,7 +176,7 @@ export default function CategoryDomainPicker({ selectedDomain, onSelect }: Props
       <div className="space-y-3">
         <button
           type="button"
-          onClick={() => setView('category')}
+          onClick={backToGrid}
           className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-900 transition-colors"
         >
           <ArrowLeft className="w-4 h-4" /> {activeCategoryLabel}

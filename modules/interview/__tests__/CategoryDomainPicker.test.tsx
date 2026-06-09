@@ -58,4 +58,25 @@ describe('CategoryDomainPicker', () => {
     expect(screen.getByRole('button', { name: /Programming/ })).toBeTruthy() // back affordance
     expect(screen.queryByLabelText('Search roles')).toBeNull() // not the grid screen
   })
+
+  it('skip-for-known also works when selectedDomain hydrates AFTER first render', () => {
+    // Mirrors the real form: retake/pathway/onboarding set role via an effect.
+    const { rerender } = render(<CategoryDomainPicker selectedDomain={null} onSelect={() => {}} />)
+    expect(screen.getByLabelText('Search roles')).toBeTruthy() // grid first (role still null)
+    rerender(<CategoryDomainPicker selectedDomain="backend" onSelect={() => {}} />)
+    // now opens straight into the role's category list
+    expect(screen.getByRole('option', { name: /Backend \/ Infra Engineer/ })).toBeTruthy()
+    expect(screen.queryByLabelText('Search roles')).toBeNull()
+  })
+
+  it('does not override the user after they manually navigate, even if role hydrates', () => {
+    const { rerender } = render(<CategoryDomainPicker selectedDomain={null} onSelect={() => {}} />)
+    // user opens Design before any role hydrates
+    fireEvent.click(screen.getByRole('button', { name: /Design/ }))
+    expect(screen.getByRole('option', { name: /Design \/ UX/ })).toBeTruthy()
+    // role hydrates to backend — must NOT yank the user to Programming
+    rerender(<CategoryDomainPicker selectedDomain="backend" onSelect={() => {}} />)
+    expect(screen.getByRole('option', { name: /Design \/ UX/ })).toBeTruthy()
+    expect(screen.queryByRole('option', { name: /Backend \/ Infra Engineer/ })).toBeNull()
+  })
 })
