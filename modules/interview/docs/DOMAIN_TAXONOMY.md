@@ -278,14 +278,24 @@ in <1 keystroke-burst; known users skip the grid.
 - New `app/(cms)/cms/categories/` pages (list / new / edit) + `app/api/cms/categories/`
   routes (CRUD, `platform_admin`-gated, mirroring the domains CMS).
 - `CreateCategorySchema` / `UpdateCategorySchema` validators.
+- **Write-time `categorySlug` validation (NOT yet shipped):** the domain
+  create/update path currently checks only slug *shape* and persists. Add a
+  server-side check that `categorySlug` references an existing **active**
+  `Category` and return a clear **400** on mismatch. Today an unknown/stale slug
+  is silently re-bucketed by `/api/domains` at read time, not rejected at write —
+  so this acceptance test (valid-vs-invalid `categorySlug` → clear error) still
+  belongs to Phase 3.
 - Cache invalidation: `revalidate`/bust on category & domain writes so new
   entries surface immediately (today there's no invalidation — 5-min staleness).
 
 **Already shipped in Phase 1 (was Phase 3):**
 - ✅ Domain form dynamic category `<select>` sourced from `/api/categories` (new + edit).
-- ✅ `categorySlug` accepted by `CreateDomainSchema`/`UpdateDomainSchema` and persisted.
-- ✅ Server-side validity: the read path rejects categorySlugs not in the live set
-  (rather than a create-time enum) — admin-created custom categories are honored.
+- ✅ `categorySlug` accepted (slug-*shape* only) by `CreateDomainSchema` /
+  `UpdateDomainSchema` and persisted on create/update.
+- ✅ Read-path **resolution**: `/api/domains` validates each `categorySlug` against
+  the live `Category` set and emits a valid bucket — honoring admin-created custom
+  categories and silently re-bucketing unknown/stale ones. This is *resolution*,
+  **not** write-time *rejection* (the clear-400 check above is still pending).
 
 **Blast radius:** CMS routes (`platform_admin` only). Public read path already
 de-gated (Phase 1), so CMS writes reach users.
