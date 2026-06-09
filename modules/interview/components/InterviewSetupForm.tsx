@@ -24,7 +24,6 @@ import Link from 'next/link'
 import {
   ArrowRight,
   ArrowLeft,
-  Check,
   CheckCircle2,
   Edit3,
   Sparkles,
@@ -33,7 +32,6 @@ import {
   Video,
 } from 'lucide-react'
 import FileDropzone from '@shared/ui/FileDropzone'
-import DomainSelector from '@interview/components/DomainSelector'
 import CategoryDomainPicker from '@interview/components/CategoryDomainPicker'
 import DepthSelector from '@interview/components/DepthSelector'
 import RepeatSetupConfirmModal, { type RepeatSetupStep } from '@interview/components/RepeatSetupConfirmModal'
@@ -782,11 +780,7 @@ function InterviewSetupFormView(p: ViewProps) {
                 <h3 className="text-[11px] font-semibold text-slate-400 uppercase tracking-[0.12em] mb-2.5">
                   Interview Domain <span className="text-red-500">*</span>
                 </h3>
-                {process.env.NEXT_PUBLIC_FEATURE_TAXONOMY_V2 === 'true' ? (
-                  <CategoryDomainPicker selectedDomain={p.role} onSelect={p.setRole} />
-                ) : (
-                  <DomainSelector selectedDomain={p.role} onSelect={p.setRole} />
-                )}
+                <CategoryDomainPicker selectedDomain={p.role} onSelect={p.setRole} />
               </section>
 
               <section>
@@ -1167,8 +1161,3 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
     </div>
   )
 }
-
-// Silence unused-import warning — Check is used by DomainSelector indirectly
-// but we also keep it here in case we add a selected-state checkmark later.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const _Check = Check

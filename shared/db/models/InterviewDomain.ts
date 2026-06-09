@@ -9,10 +9,11 @@ export interface IInterviewDomain extends Document {
   description: string
   color: string
   /**
-   * Legacy free-form category label. Retained for backward compatibility
-   * (the current DomainSelector still reads it) until the UI migrates to
-   * `categorySlug`. No longer enum-constrained — the old enum was dead
-   * (findOneAndUpdate upserts skip validators) and disagreed with the data.
+   * Legacy free-form category label. No UI reads it anymore — every selector now
+   * uses `categorySlug`. Retained as a `resolveCategorySlug` fallback for stored
+   * rows that predate `categorySlug`, and because the schema still requires it.
+   * No longer enum-constrained — the old enum was dead (findOneAndUpdate upserts
+   * skip validators) and disagreed with the data.
    */
   category: string
   /** References Category.slug — the data-driven taxonomy bucket. */
@@ -49,7 +50,7 @@ const InterviewDomainSchema = new Schema<IInterviewDomain>(
     icon: { type: String, required: true },
     description: { type: String, required: true },
     color: { type: String, default: 'indigo' },
-    // Legacy label, kept until the UI migrates to categorySlug. Enum removed:
+    // Legacy label, kept as a resolveCategorySlug fallback for pre-categorySlug rows. Enum removed:
     // it was inert (no runValidators on the seed upserts) and excluded the
     // 'product'/'general' values actually in use.
     category: { type: String, required: true },

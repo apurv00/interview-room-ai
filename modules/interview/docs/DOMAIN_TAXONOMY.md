@@ -1,6 +1,7 @@
 # Domain Taxonomy & Setup Redesign — Implementation Plan
 
-**Status:** Phases 0 + 1 merged (PR #436, #437). Phase 2 (two-screen UI) is next.
+**Status:** Phases 0-4 merged. The new picker is the **default** setup selector
+(no feature flag).
 **Owner:** TBD
 **Supersedes:** the domain-selection sections of `REDESIGN-PLAN-v2.md` and the
 `CmsTaxonomy` design in `CMS_PLAN.md §4.6` (both March 2026, never fully
@@ -14,6 +15,18 @@ implemented). This doc is the single source of truth for the taxonomy work.
 >   legacy↔new maps, and fully live-set-validated read resolution). **Net effect:
 >   Phase 3 is now reduced to the Category *CRUD* surface only** — see the Phase 1
 >   and Phase 3 notes below.
+> - ✅ **Phase 2** — `CategoryDomainPicker` two-screen UI (PR #439).
+> - ✅ **Phase 3** — CMS Category CRUD + write-time `categorySlug` 400 (PR #440).
+> - ✅ **Phase 4** — 17 freshers' roles seeded + category-aware depths (PR #441).
+> - ✅ **Flag removed + selector unified** — `CategoryDomainPicker` is the **only**
+>   domain selector. There is no `NEXT_PUBLIC_FEATURE_TAXONOMY_V2`; it's a
+>   non-breaking drop-in (same props, `config.role` unchanged), so the flag added
+>   only complexity. The legacy flat `DomainSelector` (and its `CATEGORY_TABS`) was
+>   **deleted** — the authenticated home and `/hire/invite` now use the picker too.
+>   The legacy `category` field stays only as a `resolveCategorySlug` fallback for
+>   pre-`categorySlug` rows. **Deploy = merge; no env flag.** Optional: `POST
+>   /api/db/seed` (platform_admin) so `/api/domains` lists the new roles — until then
+>   the picker uses `STATIC_DOMAINS` and the AI uses `FALLBACK_DOMAINS` (both carry them).
 
 ---
 
@@ -37,7 +50,7 @@ audience, this collapses.
      ([InterviewDomain.ts:46](../../../shared/db/models/InterviewDomain.ts#L46))
    - seed strings `engineering/product/business/general`
      ([seed.ts](../../../shared/db/seed.ts))
-   - `CATEGORY_TABS` in [DomainSelector.tsx:17](../components/DomainSelector.tsx#L17)
+   - `CATEGORY_TABS` (formerly in `DomainSelector.tsx`, now deleted)
    - the CMS form `<option>` list ([domains/new/page.tsx:162](<../../../app/(cms)/cms/domains/new/page.tsx#L162>))
    The enum allows `design`/`operations` (used by no domain) but **not**
    `product`/`general` (used by real domains) → a **latent data bug**: those
@@ -201,9 +214,9 @@ categories to clients.
 - Keep a thin `FALLBACK_CATEGORIES` for DB-down resilience.
 
 **Blast radius:** route handlers are framework-invoked (no in-code callers);
-`DomainSelector` consumes `/api/domains` and must tolerate unknown slugs (it
-already title-cases via `getDomainLabel`). The **only behavioral change** is
-that the response can now contain roles beyond the seed set — intended.
+the setup domain picker consumes `/api/domains` and must tolerate unknown slugs
+(labels come from the API). The **only behavioral change** is that the response
+can now contain roles beyond the seed set — intended.
 
 **Tests**
 - API route tests (vitest): (a) DB has a non-seed slug → it now appears
@@ -224,7 +237,10 @@ serves fallback instead of silently filtering — acceptable and clearer.
 **Goal:** Category-grid → role-list as two screens inside the existing first
 wizard step. Hides irrelevant roles; adds search + escape hatch.
 
-**Changes** (behind `FEATURE_FLAG_TAXONOMY_V2`)
+**Changes** — shipped as PR #439. **No feature flag**: `CategoryDomainPicker` is the
+default setup selector. (As shipped this added a *new* `CategoryDomainPicker` rather
+than refactoring `DomainSelector`; the home + /hire/invite surfaces were later moved
+onto the picker too and `DomainSelector` + `CATEGORY_TABS` were deleted.) Original plan:
 - New `CategoryGrid.tsx` (icon cards 3×2 + one-line descriptor, role counts) and
   refactor `DomainSelector.tsx` into the **role-list screen** (filtered to the
   chosen category; no category tabs; no "All").
@@ -252,13 +268,13 @@ wizard step. Hides irrelevant roles; adds search + escape hatch.
 - Update e2e `e2e/setup-wizard.spec.ts` + `e2e/lobby-config.spec.ts` for the
   two-screen flow (these currently assert the single-grid flow — they WILL fail
   until updated; that's the canary).
-- Flag-off test: with `FEATURE_FLAG_TAXONOMY_V2=false`, the old single-grid
-  selector renders unchanged.
+- (No flag, so no flag-off test. `DomainSelector` was deleted — every surface
+  uses `CategoryDomainPicker`.)
 - Manual: complete a full interview start from the new flow (per CLAUDE.md
   hot-path discipline, since setup feeds the live pipeline).
 
-**Rollout:** flag on for internal → % rollout → default on. Old `DomainSelector`
-path kept until flag retired.
+**Rollout (as shipped):** no flag — `CategoryDomainPicker` shipped as the default
+selector and `DomainSelector` was deleted once all surfaces moved onto it.
 
 **Acceptance:** a "Business" user never sees Frontend; search finds "mechanical"
 in <1 keystroke-burst; known users skip the grid.
@@ -403,7 +419,7 @@ analytics group by category.
 - [x] `seed.ts` category strings → re-cut + single-source (Phase 0 ✅)
 - [x] `staticData.ts` `STATIC_DOMAINS` categories → `categorySlug` added (Phase 0 ✅)
 - [x] `FALLBACK_DOMAINS` + `/api/domains` whitelist → de-gated (Phase 1 ✅)
-- [ ] `CATEGORY_TABS` in `DomainSelector.tsx` → derive from `/api/categories` (Phase 2 — pending)
+- [x] `CATEGORY_TABS` in `DomainSelector.tsx` → retired (DomainSelector deleted; all surfaces use CategoryDomainPicker)
 - [x] CMS form `<option>` list (new + edit pages) → dynamic select (Phase 1 ✅, was Phase 3)
 - [x] `cms.ts` validators → `categorySlug` accepted/persisted (Phase 1 ✅, was Phase 3)
 
@@ -449,10 +465,11 @@ in parallel with Phase 3/4. Phase 6 is continuous.
 
 ## 7. Open items to confirm before coding
 
-- Exact starter role roster per category (curation list) — drives Phase 4 seed.
-- `Category` collection vs. a single config doc — recommend collection.
-- Feature-flag name + rollout cohorts for `FEATURE_FLAG_TAXONOMY_V2`.
-- Whether to retire the legacy `category` field in this initiative or defer.
+- ✅ Roster → shipped (Phase 4, §8.3). ✅ `Category` collection → built.
+- ✅ **No feature flag** — `CategoryDomainPicker` is the default (non-breaking drop-in).
+- Legacy `category` field → **kept (no UI reads it)**: now only a
+  `resolveCategorySlug` fallback for rows that predate `categorySlug` + the
+  schema-required value. Fully retiring it is a separate data migration.
 
 ---
 

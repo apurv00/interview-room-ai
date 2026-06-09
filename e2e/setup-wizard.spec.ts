@@ -1,6 +1,20 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import { attachConsoleTracking } from './helpers/console-tracker'
 import { attachNetworkTracking } from './helpers/network-tracker'
+
+/**
+ * Pick the Frontend Engineer domain via the two-screen CategoryDomainPicker:
+ * the "Interview fields" grid → the Programming category → the Frontend Engineer
+ * role. (CategoryDomainPicker fetches /api/categories + /api/domains; we wait for
+ * the role option to be visible before clicking to avoid a re-render race.)
+ */
+async function selectFrontendDomain(page: Page) {
+  await expect(page.getByRole('listbox', { name: /Interview fields/i })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: /Programming/i }).first().click()
+  const role = page.getByRole('option', { name: /Frontend Engineer/i })
+  await expect(role).toBeVisible({ timeout: 10_000 })
+  await role.click()
+}
 
 /**
  * Interview Setup wizard (the 4-step flow at /interview/setup).
@@ -17,7 +31,7 @@ import { attachNetworkTracking } from './helpers/network-tracker'
  *   4. Selecting a domain + completing quick profile enables advancement to
  *      Step 1, which reveals the experience + context UI.
  *
- * The tests intentionally stop at Step 1 because DomainSelector /
+ * The tests intentionally stop at Step 1 because CategoryDomainPicker /
  * DepthSelector / duration pickers churn frequently; a Step 0 → Step 1
  * transition is the minimum that proves the wizard state machine is wired
  * end-to-end without over-coupling to every UI element downstream.
@@ -26,7 +40,7 @@ import { attachNetworkTracking } from './helpers/network-tracker'
  *   - modules/interview/components/InterviewSetupForm.tsx (wizard component)
  *   - modules/interview/components/InterviewSetupForm.tsx:625-630 (step titles)
  *   - modules/interview/components/InterviewSetupForm.tsx:1057 "Enter Interview Room"
- *   - modules/interview/components/DomainSelector.tsx (role="listbox" + options)
+ *   - modules/interview/components/CategoryDomainPicker.tsx (two-screen field→role picker)
  *   - middleware.ts:148 (deferred-auth whitelist)
  */
 
@@ -93,17 +107,8 @@ test.describe('Interview Setup wizard — step progression', () => {
 
     await page.goto('/interview/setup')
 
-    // 1) Pick a domain. DomainSelector renders cards as role="option"
-    //    (see DomainSelector.tsx:203). "Frontend Engineer" is a stable label.
-    //    DomainSelector does a background fetch to /api/domains on mount
-    //    (DomainSelector.tsx:62) and may re-render the carousel after first
-    //    paint — wait for the specific option to be visible before clicking
-    //    to avoid a stale-element race.
-    const domainCarousel = page.getByRole('listbox', { name: /Interview domains/i })
-    await expect(domainCarousel).toBeVisible()
-    const frontendOption = domainCarousel.getByRole('option', { name: /Frontend Engineer/i })
-    await expect(frontendOption).toBeVisible({ timeout: 10_000 })
-    await frontendOption.click()
+    // 1) Pick a domain via the two-screen picker (see selectFrontendDomain).
+    await selectFrontendDomain(page)
 
     // 2) Take the quick-profile path for the resume requirement.
     await page.getByRole('button', { name: /I don.?t have a resume/i }).click()

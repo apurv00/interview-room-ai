@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { CheckCircle, Copy } from 'lucide-react'
-import DomainSelector from '@interview/components/DomainSelector'
+import CategoryDomainPicker from '@interview/components/CategoryDomainPicker'
 import DepthSelector from '@interview/components/DepthSelector'
 import Input from '@shared/ui/Input'
 import Button from '@shared/ui/Button'
@@ -211,7 +211,7 @@ export default function InvitePage() {
           {/* Interview config */}
           <div className="space-y-1.5">
             <label className="text-caption text-[var(--foreground-secondary)]">Interview Domain *</label>
-            <DomainSelector selectedDomain={role} onSelect={slug => { setRole(slug); setInterviewType(null) }} />
+            <CategoryDomainPicker selectedDomain={role} onSelect={slug => { setRole(slug); setInterviewType(null) }} />
           </div>
 
           <div className="space-y-1.5">

@@ -52,9 +52,9 @@ export default function NewDomainPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...form,
-          // form.category holds the new category slug; write categorySlug from
-          // it, and keep a legacy-compatible `category` so the current
-          // DomainSelector tabs still place the role until Phase 2.
+          // form.category holds the new category slug; write categorySlug from it,
+          // and keep a legacy-compatible `category` (schema-required + a
+          // resolveCategorySlug fallback for rows that predate categorySlug).
           categorySlug: form.category,
           category: legacyCategoryFor(form.category),
           sortOrder: parseInt(form.sortOrder) || 0,
