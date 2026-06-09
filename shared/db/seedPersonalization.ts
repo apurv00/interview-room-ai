@@ -1,6 +1,7 @@
 import { connectDB } from './connection'
 import { EvaluationRubric } from './models/EvaluationRubric'
 import { QuestionBank } from './models/QuestionBank'
+import backfillQuestions from './data/questionBankBackfill.json'
 import { CompanyPattern } from './models/CompanyPattern'
 import { BenchmarkCase } from './models/BenchmarkCase'
 
@@ -392,7 +393,18 @@ export async function seedQuestionBank() {
       { upsert: true, returnDocument: 'after' }
     )
   }
-  return { questions: BUILT_IN_QUESTIONS.length }
+  // Phase 6 — per (domain × interviewType) backfill (shared/db/data). Keyed by
+  // domain+interviewType+question so the same prompt under a different type is a
+  // distinct row; $setOnInsert keeps re-runs idempotent (existing rows + their
+  // usageCount untouched).
+  for (const q of backfillQuestions) {
+    await QuestionBank.updateOne(
+      { domain: q.domain, interviewType: q.interviewType, question: q.question },
+      { $setOnInsert: { ...q, isActive: true, usageCount: 0 } },
+      { upsert: true }
+    )
+  }
+  return { questions: BUILT_IN_QUESTIONS.length + backfillQuestions.length }
 }
 
 export async function seedCompanyPatterns() {
