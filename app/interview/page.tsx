@@ -466,14 +466,15 @@ export default function InterviewPage() {
           // Try pool first (excluding solved problems)
           let problem = selectProblem(parsed.role, parsed.experience, solvedProblemIds)
 
-          // If pool exhausted, generate a fresh problem via AI through the
-          // server route. Previously this dynamically imported the generator
-          // directly, which dragged modelRouter (and its mongoose+ioredis
-          // deps) into the client bundle — forcing modelRouter to use a
-          // broken `eval('require')` workaround that silently failed in
-          // production. The fetch boundary keeps modelRouter server-only
-          // and lets it use plain static imports.
-          if (!problem) {
+          // Prefer an AI-generated problem (role + resume aware) when we can
+          // personalize to the candidate's resume, OR when the static pool has
+          // no NATIVE problem for this role — otherwise selectProblem borrows a
+          // generic puzzle (the QA gap where ml-engineer/data-analyst both got
+          // Two Sum). The server route keeps modelRouter (and its mongoose+
+          // ioredis deps) out of the client bundle; on failure we keep the
+          // static result so problem-load never blocks.
+          const nativeStatic = !!problem?.applicableDomains?.includes(parsed.role)
+          if (parsed.resumeText || !nativeStatic) {
             try {
               const res = await fetch('/api/code/generate-problem', {
                 method: 'POST',
@@ -482,19 +483,20 @@ export default function InterviewPage() {
                   domain: parsed.role,
                   experience: parsed.experience,
                   solvedProblemIds,
+                  resumeText: parsed.resumeText,
                 }),
               })
               if (res.ok) {
                 const data = (await res.json()) as { problem: typeof problem }
-                problem = data.problem
+                if (data.problem) problem = data.problem
               }
             } catch {
-              // network blip / route 500 → fall through to pool repeat below
+              // network blip / route 500 → keep the static result below
             }
-            if (!problem) {
-              // Fall back to any problem from pool (allow repeats as last resort)
-              problem = selectProblem(parsed.role, parsed.experience)
-            }
+          }
+          if (!problem) {
+            // Last resort: any problem from pool (allow repeats)
+            problem = selectProblem(parsed.role, parsed.experience)
           }
 
           if (problem) setCurrentProblem(problem)
@@ -510,8 +512,36 @@ export default function InterviewPage() {
       // Fetch user's previously used design problem IDs to avoid repeats
       fetch('/api/design/history')
         .then((r) => r.ok ? r.json() : { solvedProblemIds: [] })
-        .then(({ solvedProblemIds = [] }) => {
-          const problem = selectDesignProblem(parsed.role, parsed.experience, solvedProblemIds)
+        .then(async ({ solvedProblemIds = [] }) => {
+          let problem = selectDesignProblem(parsed.role, parsed.experience, solvedProblemIds)
+
+          // Same rule as coding: personalize to the resume, or replace a
+          // borrowed generic problem for roles the static pool doesn't cover
+          // (ml-engineer, data-analyst, devops, mobile…). The static pool only
+          // tags backend/frontend/sdet/data-science, so every other role used to
+          // get a generic web design (URL Shortener). On failure, keep static.
+          const nativeStatic = !!problem?.applicableDomains?.includes(parsed.role)
+          if (parsed.resumeText || !nativeStatic) {
+            try {
+              const res = await fetch('/api/design/generate-problem', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  domain: parsed.role,
+                  experience: parsed.experience,
+                  solvedProblemIds,
+                  resumeText: parsed.resumeText,
+                }),
+              })
+              if (res.ok) {
+                const data = (await res.json()) as { problem: typeof problem }
+                if (data.problem) problem = data.problem
+              }
+            } catch {
+              // network blip / route 500 → keep the static result
+            }
+          }
+          if (!problem) problem = selectDesignProblem(parsed.role, parsed.experience)
           if (problem) setCurrentDesignProblem(problem)
           setConfig(parsed)
         })
