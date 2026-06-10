@@ -86,7 +86,10 @@ English only.`,
       const parsed = JSON.parse(jsonMatch[0])
 
       const problem: DesignProblem = {
-        id: `ai-${parsed.id || `design-${body.domain}`}`,
+        // Timestamp the fallback id so repeated generations for the same role
+        // stay distinct — /api/design/history dedupes on designProblemId, and a
+        // constant `ai-design-<role>` would make fresh problems read as already-used.
+        id: `ai-${parsed.id || `design-${body.domain}-${Date.now()}`}`,
         title: sanitizeGeneratedText(parsed.title) || 'System Design Problem',
         description: sanitizeGeneratedText(parsed.description) || '',
         requirements: Array.isArray(parsed.requirements) ? parsed.requirements.map(sanitizeGeneratedText) : [],
