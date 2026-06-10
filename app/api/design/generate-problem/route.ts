@@ -14,9 +14,11 @@ const BodySchema = z.object({
   domain: z.string().min(1).max(64),
   experience: z.string().min(1).max(32),
   solvedProblemIds: z.array(z.string().max(MAX_PROBLEM_ID_LEN)).max(200).default([]),
-  // Candidate-provided resume text (client already holds it). Capped to bound
-  // prompt size; sliced again before injection. Optional → role-only generation.
-  resumeText: z.string().max(10_000).optional(),
+  // Candidate-provided resume text (client holds it in the interview config).
+  // Accept up to 50k (the setup flow persists resumes that large) and TRUNCATE to
+  // the prompt budget rather than reject — a too-strict max silently 400s
+  // long-resume candidates into the generic static problem. Absent → role-only.
+  resumeText: z.string().max(50_000).transform((s) => s.slice(0, 1200)).optional(),
 })
 type Body = z.infer<typeof BodySchema>
 
@@ -51,7 +53,7 @@ export const POST = composeApiRoute<Body>({
       body.experience === '7+' ? 'hard' : body.experience === '0-2' ? 'easy' : 'medium'
     const focus = DESIGN_FOCUS[body.domain] || 'a realistic system relevant to the role'
     try {
-      const resumeContext = body.resumeText?.slice(0, 1200)
+      const resumeContext = body.resumeText
       const result = await completion({
         taskSlot: 'interview.coding-problem-gen',
         system: `You are an expert system-design interview problem designer. Generate ONE realistic, open-ended design problem the candidate can drive (requirements -> architecture -> deep-dive -> scaling -> tradeoffs).
