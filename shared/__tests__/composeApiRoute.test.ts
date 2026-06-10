@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { NextRequest } from 'next/server'
 import { z } from 'zod'
 
@@ -53,6 +53,11 @@ describe('composeApiRoute', () => {
     vi.restoreAllMocks()
     vi.mocked(redis.incr).mockResolvedValue(1)
     vi.mocked(redis.pexpire).mockResolvedValue(true)
+  })
+
+  afterEach(() => {
+    delete process.env.QA_AUTOMATION_ENABLED
+    delete process.env.QA_AUTOMATION_EMAIL
   })
 
   it('returns 401 when no session and auth required', async () => {
@@ -341,5 +346,41 @@ describe('composeApiRoute', () => {
 
     const ctx = mockHandler.mock.calls[0][1]
     expect(ctx.body).toEqual({ name: 'hello', value: 42 })
+  })
+
+  it('exempts the QA automation user from rate limiting when enabled (skips Redis)', async () => {
+    process.env.QA_AUTOMATION_ENABLED = 'true'
+    process.env.QA_AUTOMATION_EMAIL = 'qa-bot@interviewprep.guru'
+    vi.mocked(getServerSession).mockResolvedValue({
+      // email case differs from env on purpose — match is case-insensitive
+      user: { id: 'qa-user', role: 'candidate', plan: 'free', email: 'QA-Bot@interviewprep.guru' },
+      expires: '',
+    })
+    vi.mocked(redis.incr).mockClear() // assert only calls from THIS request
+    vi.mocked(redis.incr).mockResolvedValue(9999) // would be far over any limit
+
+    const mockHandler = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 })
+    )
+    const handler = composeApiRoute({ ...defaultOptions, handler: mockHandler })
+
+    const res = await handler(createRequest({ name: 'test', value: 1 }))
+    expect(res.status).toBe(200)
+    expect(mockHandler).toHaveBeenCalledTimes(1)
+    expect(redis.incr).not.toHaveBeenCalled() // entire rate-limit block skipped
+  })
+
+  it('does NOT exempt the QA email when QA automation is disabled', async () => {
+    process.env.QA_AUTOMATION_EMAIL = 'qa-bot@interviewprep.guru'
+    // QA_AUTOMATION_ENABLED unset → bypass inert; normal limiting applies
+    vi.mocked(getServerSession).mockResolvedValue({
+      user: { id: 'qa-user', role: 'candidate', plan: 'free', email: 'qa-bot@interviewprep.guru' },
+      expires: '',
+    })
+    vi.mocked(redis.incr).mockResolvedValue(11) // over the limit of 10
+
+    const handler = composeApiRoute({ ...defaultOptions, handler: vi.fn() })
+    const res = await handler(createRequest({ name: 'test', value: 1 }))
+    expect(res.status).toBe(429)
   })
 })
