@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const { mockCompletion } = vi.hoisted(() => ({ mockCompletion: vi.fn() }))
 vi.mock('@shared/services/modelRouter', () => ({ completion: mockCompletion }))
-vi.mock('@shared/services/promptSecurity', () => ({ JSON_OUTPUT_RULE: 'JSON_RULE' }))
+vi.mock('@shared/services/promptSecurity', () => ({ JSON_OUTPUT_RULE: 'JSON_RULE', DATA_BOUNDARY_RULE: 'BOUNDARY_RULE' }))
 vi.mock('@shared/logger', () => ({
   aiLogger: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
 }))
