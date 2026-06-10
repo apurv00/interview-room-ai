@@ -21,6 +21,11 @@ const BodySchema = z.object({
   domain: z.string().min(1).max(64),
   experience: z.string().min(1).max(32),
   solvedProblemIds: z.array(z.string().max(MAX_PROBLEM_ID_LEN)).max(200).default([]),
+  // Candidate-provided resume text (the client holds it in the interview config).
+  // Accept up to 50k (the setup flow persists resumes that large) and TRUNCATE to
+  // the prompt budget rather than reject — a too-strict max silently 400s
+  // long-resume candidates into the generic static problem. Absent → role-only.
+  resumeText: z.string().max(50_000).transform((s) => s.slice(0, 1200)).optional(),
 })
 
 type Body = z.infer<typeof BodySchema>
@@ -51,7 +56,7 @@ export const POST = composeApiRoute<Body>({
 
   async handler(_req, { body }) {
     try {
-      const problem = await generateCodingProblem(body.domain, body.experience, body.solvedProblemIds)
+      const problem = await generateCodingProblem(body.domain, body.experience, body.solvedProblemIds, body.resumeText)
       return NextResponse.json({ problem })
     } catch (err) {
       aiLogger.error({ err, domain: body.domain }, '/api/code/generate-problem failed')
