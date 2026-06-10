@@ -74,6 +74,18 @@ export function composeApiRoute<T>(options: ComposeOptions<T>) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
       }
 
+      // QA automation bypass: a synthetic matrix run fires hundreds of
+      // generate-question / evaluate-answer calls as ONE user, which trips the
+      // per-user limiter and masks product behaviour with 429s (the failure the
+      // prod QA matrix surfaced). Exempt that single user, gated by the same flag
+      // that enables /api/qa/automation-login so it is inert in normal operation.
+      const qaEmail = process.env.QA_AUTOMATION_EMAIL?.toLowerCase()
+      const isQaAutomation =
+        process.env.QA_AUTOMATION_ENABLED === 'true' &&
+        !!qaEmail &&
+        !!user.email &&
+        user.email.toLowerCase() === qaEmail
+
       // 2. Rate limit — scale maxRequests by plan tier
       const rateLimitKey =
         user.id !== 'anonymous'
@@ -84,7 +96,7 @@ export function composeApiRoute<T>(options: ComposeOptions<T>) {
       const planScale = planLimits.rateLimitPerMin / 15 // Normalize: free=1x, pro=2x, enterprise=4x
       const effectiveMax = Math.ceil(options.rateLimit.maxRequests * planScale)
 
-      try {
+      if (!isQaAutomation) try {
         const key = `${options.rateLimit.keyPrefix}:${rateLimitKey}`
         const current = await redis.incr(key)
         if (current === 1) {
