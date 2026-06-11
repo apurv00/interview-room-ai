@@ -37,7 +37,24 @@ function getClientPromise(): Promise<MongoClient> {
   // creating a new TCP connection on every serverless invocation.
   if (!globalWithMongo._mongoClientPromise) {
     const client = new MongoClient(MONGODB_URI, options)
-    globalWithMongo._mongoClientPromise = client.connect()
+    const pending = client.connect()
+    // Guard the cached promise the same way connection.ts (Mongoose) does:
+    //   1. A no-op `.catch` so a connection rejection — e.g. a
+    //      MongoServerSelectionError / `secureConnect` timeout, common when this
+    //      cached promise spans a Vercel Lambda freeze/thaw and the socket dies —
+    //      is never an UNHANDLED rejection. Node >=15 crashes the process on an
+    //      unhandled rejection, which in a shared serverless host kills co-located
+    //      work. The real rejection still reaches awaiters (NextAuth adapter) via
+    //      their own await.
+    //   2. Clear the cache on failure so the next call retries a FRESH connection
+    //      instead of returning the same rejected promise forever — otherwise a
+    //      single cold-start/freeze failure bricks auth until the Lambda recycles.
+    pending.catch(() => {
+      if (globalWithMongo._mongoClientPromise === pending) {
+        globalWithMongo._mongoClientPromise = undefined
+      }
+    })
+    globalWithMongo._mongoClientPromise = pending
   }
   return globalWithMongo._mongoClientPromise
 }
