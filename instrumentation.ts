@@ -44,9 +44,18 @@ export async function register(): Promise<void> {
   })
 
   process.on('uncaughtException', (err: Error) => {
-    log.error(
+    // A genuine uncaught (synchronous) exception can leave shared DB / queue
+    // clients or in-flight Inngest work half-mutated; resuming would serve later
+    // invocations from a corrupted process. So unlike unhandledRejection above,
+    // we log the full stack for diagnosis and then EXIT, letting the platform
+    // recycle a clean worker. The crash this PR targets is an unhandled
+    // rejection (handled above with survive-and-log). Codex P2 on PR #450.
+    // In production pino writes synchronously to stdout, so the log flushes
+    // before exit.
+    log.fatal(
       { err, kind: 'uncaughtException' },
-      'process: uncaught exception captured — process kept alive',
+      'process: uncaught exception — logging and exiting',
     )
+    process.exit(1)
   })
 }
