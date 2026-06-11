@@ -1061,7 +1061,10 @@ const GENERIC_STARTER: Record<CodeLanguage, string> = {
   python: 'def solution():\n    pass\n',
   javascript: 'function solution() {\n  \n}\n',
   typescript: 'function solution(): void {\n  \n}\n',
-  java: 'public class Solution {\n    public void solution() {\n        \n    }\n}\n',
+  // Must be runnable as-is via the Run button (posted raw to the Piston sandbox),
+  // so it needs a `main` entry point and a `Main` class — `public class Solution`
+  // with only an instance method errors with "Main method not found" (Codex P2).
+  java: 'public class Main {\n    static void solution() {\n        // Write your solution here\n    }\n\n    public static void main(String[] args) {\n        solution();\n    }\n}\n',
   cpp: '#include <bits/stdc++.h>\nusing namespace std;\n\nint main() {\n    \n    return 0;\n}\n',
 }
 

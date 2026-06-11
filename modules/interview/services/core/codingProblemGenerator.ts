@@ -50,11 +50,11 @@ ${JSON_OUTPUT_RULE}
   "examples": [{"input": "example input", "output": "expected output", "explanation": "optional"}],
   "constraints": ["constraint 1", "constraint 2"],
   "hints": ["hint 1", "hint 2"],
-  "starterCode": {"python": "def solution():\\n    pass", "javascript": "function solution() {\\n  \\n}", "typescript": "function solution(): void {\\n  \\n}", "java": "public class Solution {\\n    \\n}", "cpp": "#include <bits/stdc++.h>\\nusing namespace std;\\n\\nint main() {\\n    \\n    return 0;\\n}"},
+  "starterCode": {"python": "def solution():\\n    pass", "javascript": "function solution() {\\n  \\n}", "typescript": "function solution(): void {\\n  \\n}", "java": "public class Main {\\n    static void solution() {\\n        \\n    }\\n\\n    public static void main(String[] args) {\\n        solution();\\n    }\\n}", "cpp": "#include <bits/stdc++.h>\\nusing namespace std;\\n\\nint main() {\\n    \\n    return 0;\\n}"},
   "tags": ["relevant", "tags"]
 }
 
-Provide starterCode for ALL FIVE languages (python, javascript, typescript, java, cpp), each with the correct function/method signature for THIS problem — candidates may pick any of them and must never see an empty editor.`,
+Provide starterCode for ALL FIVE languages (python, javascript, typescript, java, cpp), each with the correct signature for THIS problem — candidates may pick any of them and must never see an empty editor. The starter MUST be runnable as-is in a bare sandbox: Java uses "public class Main" with a "public static void main", and C++ includes a "int main()" entry point (so the candidate's first Run does not error before they have written anything).`,
       messages: [{
         role: 'user',
         content: `Generate a ${difficulty} coding problem for a ${domain} candidate (${experience} years experience).

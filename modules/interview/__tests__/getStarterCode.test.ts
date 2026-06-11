@@ -50,4 +50,11 @@ describe('getStarterCode', () => {
     expect(getStarterCode(null, 'cpp')).toContain('#include')
     expect(getStarterCode(null, 'python')).toContain('def')
   })
+
+  it('java/cpp skeletons are runnable as-is (have a main entry point — Codex P2)', () => {
+    // The Run button posts these raw to the Piston sandbox, so they must execute
+    // without a "Main method not found" / missing-entry-point error.
+    expect(getStarterCode(null, 'java')).toMatch(/public\s+static\s+void\s+main/)
+    expect(getStarterCode(null, 'cpp')).toMatch(/int\s+main\s*\(/)
+  })
 })
