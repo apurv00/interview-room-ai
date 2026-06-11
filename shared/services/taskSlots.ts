@@ -61,7 +61,7 @@ export const TASK_SLOT_DEFAULTS: Record<
   'interview.evaluate-code':        { model: 'gpt-5.4-mini', maxTokens: 1000, provider: 'openai' },
   'interview.evaluate-design':      { model: 'gpt-5.4-mini', maxTokens: 1500, provider: 'openai' },
   'interview.clarify-coding':       { model: 'gpt-5.4-mini', maxTokens: 500, provider: 'openai' },
-  'interview.coding-problem-gen':   { model: 'gpt-5.4-mini', maxTokens: 1000, provider: 'openai' },
+  'interview.coding-problem-gen':   { model: 'gpt-5.4-mini', maxTokens: 2000, provider: 'openai' },
   'interview.coach-notes':          { model: 'gpt-5.4-mini', maxTokens: 500, provider: 'openai' },
   'interview.jd-extract':           { model: 'gpt-5.4-mini', maxTokens: 2500, provider: 'openai' },
   'interview.fusion-analysis':      { model: 'gpt-5.4-mini', maxTokens: 3000, provider: 'openai' },
