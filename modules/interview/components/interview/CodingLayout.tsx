@@ -90,8 +90,6 @@ export default function CodingLayout({
     questionCountRef.current += 1
     setIsFollowUp(questionCountRef.current > 1)
     setQuestionHighlight(true)
-    // On mobile, surface the panel that contains the conversation.
-    setMobileTab('problem')
     const t = setTimeout(() => setQuestionHighlight(false), 6000)
     return () => clearTimeout(t)
   }, [currentQuestion])
@@ -254,6 +252,21 @@ export default function CodingLayout({
               </button>
             ))}
           </div>
+
+          {/* Mobile follow-up banner — surfaces a new question ABOVE the editor
+              so it stays visible (the problem panel is desktop-only). Codex P2. */}
+          {questionHighlight && currentQuestion && (
+            <div className="md:hidden mb-2 rounded-md bg-blue-500/15 ring-2 ring-blue-400/70 px-3 py-2 animate-pulse shrink-0">
+              <span className="inline-flex items-center gap-1 mb-1 px-1.5 py-0.5 rounded-full bg-blue-500/30 text-blue-100 text-[10px] font-semibold uppercase tracking-wide">
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-300 animate-ping" />
+                {isFollowUp ? 'Follow-up question' : 'New question'}
+              </span>
+              <p className="text-sm text-blue-200">
+                <span className="font-semibold">Alex: </span>
+                {currentQuestion}
+              </p>
+            </div>
+          )}
 
           {/* Code editor */}
           <div className={`flex-1 min-h-0 ${mobileTab !== 'code' ? 'hidden md:flex md:flex-col' : 'flex flex-col'}`}>
