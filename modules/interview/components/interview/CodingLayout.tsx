@@ -276,6 +276,11 @@ export default function CodingLayout({
               onLanguageChange={onLanguageChange}
               onSubmit={onCodeSubmit}
               disabled={editorDisabled}
+              // The interview loop only installs its submission resolver during
+              // CODE_EDITING; submitting earlier (while the problem is being read
+              // in ASK_QUESTION) is silently dropped. Gate Submit to that phase so
+              // an early click can't lock the button as "Submitted". Codex P2.
+              canSubmit={phase === 'CODE_EDITING'}
             />
           </div>
         </div>

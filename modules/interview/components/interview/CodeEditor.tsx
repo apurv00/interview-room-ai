@@ -137,6 +137,13 @@ interface CodeEditorProps {
   onLanguageChange: (lang: CodeLanguage) => void
   onSubmit: (code: string) => void
   disabled?: boolean
+  /**
+   * Whether the interview is actually ready to receive a submission. The parent
+   * sets this false while the interviewer is still presenting the problem
+   * (ASK_QUESTION) — submitting then is silently dropped by the interview loop,
+   * so Submit must stay disabled until the editing phase. Defaults to true.
+   */
+  canSubmit?: boolean
 }
 
 export default function CodeEditor({
@@ -145,6 +152,7 @@ export default function CodeEditor({
   onLanguageChange,
   onSubmit,
   disabled = false,
+  canSubmit = true,
 }: CodeEditorProps) {
   const [code, setCode] = useState(initialCode ?? '')
   const [showLangDropdown, setShowLangDropdown] = useState(false)
@@ -162,6 +170,9 @@ export default function CodeEditor({
   const editorRef = useRef<MonacoEditorType.IStandaloneCodeEditor | null>(null)
   const themeDefinedRef = useRef(false)
   const prevLanguageRef = useRef(language)
+  // Latest canSubmit for the Monaco Ctrl+Enter action (mount-time closure).
+  const canSubmitRef = useRef(canSubmit)
+  canSubmitRef.current = canSubmit
 
   const currentLang = LANGUAGES.find((l) => l.value === language) || LANGUAGES[0]
 
@@ -203,10 +214,13 @@ export default function CodeEditor({
   )
 
   const handleSubmit = useCallback(() => {
-    if (disabled || submittedRef.current) return
+    // canSubmit guards against submitting before the interview installs its
+    // submission resolver (early clicks are otherwise dropped, yet would lock
+    // the button as "Submitted" — Codex P2).
+    if (disabled || submittedRef.current || !canSubmit) return
     markSubmitted(true)
     onSubmit(code)
-  }, [code, disabled, onSubmit, markSubmitted])
+  }, [code, disabled, canSubmit, onSubmit, markSubmitted])
 
   // #4 — execute the current code in the sandbox and show stdout/stderr inline,
   // so candidates can test before committing to a Submit.
@@ -273,7 +287,7 @@ export default function CodeEditor({
         2048 | 3, // CtrlCmd + Enter
       ],
       run: () => {
-        if (disabled || submittedRef.current) return
+        if (disabled || submittedRef.current || !canSubmitRef.current) return
         markSubmitted(true)
         onSubmit(editor.getValue())
       },
@@ -355,9 +369,15 @@ export default function CodeEditor({
           </button>
           <button
             onClick={handleSubmit}
-            disabled={disabled || submitted}
+            disabled={disabled || submitted || !canSubmit}
             className="flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded-md transition-all shadow-sm hover:shadow-emerald-500/20"
-            title={submitted ? 'Already submitted — edit your code to submit again' : 'Submit code (Ctrl+Enter)'}
+            title={
+              submitted
+                ? 'Already submitted — edit your code to submit again'
+                : !canSubmit
+                  ? 'Wait until the interviewer finishes presenting the problem'
+                  : 'Submit code (Ctrl+Enter)'
+            }
           >
             {submitted ? <Check className="w-3.5 h-3.5" /> : <Send className="w-3.5 h-3.5" />}
             {submitted ? 'Submitted' : 'Submit'}
