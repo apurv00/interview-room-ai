@@ -1,12 +1,12 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { FileText, Code2, MessageSquare } from 'lucide-react'
 import Avatar from '@interview/components/Avatar'
 import CodeEditor from './CodeEditor'
 import ClarificationsPanel from './ClarificationsPanel'
 import type { AvatarEmotion, InterviewState, CodeLanguage } from '@shared/types'
-import type { CodingProblem } from '@interview/config/codingProblems'
+import { getStarterCode, type CodingProblem } from '@interview/config/codingProblems'
 import type { CodingClarificationRecord } from '@interview/validators/clarifyCoding'
 
 type MobileTab = 'problem' | 'code' | 'chat'
@@ -61,7 +61,9 @@ export default function CodingLayout({
   children,
 }: CodingLayoutProps) {
   const [mobileTab, setMobileTab] = useState<MobileTab>('code')
-  const starterCode = problem?.starterCode?.[language] || ''
+  // Always resolve to a non-empty per-language skeleton so Java/C++/TS never
+  // open an empty editor (getStarterCode falls back to a generic skeleton).
+  const starterCode = getStarterCode(problem, language)
   const editorDisabled = EDITOR_DISABLED_PHASES.has(phase)
 
   // ── Clarifications: append-only Q&A about the current problem ──
@@ -70,6 +72,36 @@ export default function CodingLayout({
   // Reset clarifications when the problem changes
   useEffect(() => {
     setClarifications([])
+  }, [problem?.id])
+
+  // ── Follow-up highlight: when the interviewer asks a NEW question while the
+  // candidate is heads-down in the editor, briefly highlight the conversation so
+  // it isn't missed. The first question (the problem brief) isn't a "follow-up";
+  // anything after it is flagged as one. (Candidate feedback, 2026-06-11.)
+  const prevQuestionRef = useRef('')
+  const questionCountRef = useRef(0)
+  const [questionHighlight, setQuestionHighlight] = useState(false)
+  const [isFollowUp, setIsFollowUp] = useState(false)
+
+  useEffect(() => {
+    const q = (currentQuestion || '').trim()
+    if (!q || q === prevQuestionRef.current) return
+    prevQuestionRef.current = q
+    questionCountRef.current += 1
+    setIsFollowUp(questionCountRef.current > 1)
+    setQuestionHighlight(true)
+    // On mobile, surface the panel that contains the conversation.
+    setMobileTab('problem')
+    const t = setTimeout(() => setQuestionHighlight(false), 6000)
+    return () => clearTimeout(t)
+  }, [currentQuestion])
+
+  // A brand-new problem resets the follow-up counter (next brief is question #1).
+  useEffect(() => {
+    prevQuestionRef.current = ''
+    questionCountRef.current = 0
+    setQuestionHighlight(false)
+    setIsFollowUp(false)
   }, [problem?.id])
 
   const askClarification = useCallback(
@@ -171,10 +203,24 @@ export default function CodingLayout({
               {(currentQuestion || liveAnswer) && (
                 <div className="border-t border-gray-700 pt-3 mt-3 space-y-2">
                   {currentQuestion && (
-                    <p className="text-sm text-blue-300">
-                      <span className="font-semibold text-blue-200">Alex: </span>
-                      {currentQuestion}
-                    </p>
+                    <div
+                      className={`rounded-md transition-all duration-500 ${
+                        questionHighlight
+                          ? 'bg-blue-500/15 ring-2 ring-blue-400/70 animate-pulse px-3 py-2 -mx-1'
+                          : 'px-0 py-0'
+                      }`}
+                    >
+                      {questionHighlight && (
+                        <span className="inline-flex items-center gap-1 mb-1 px-1.5 py-0.5 rounded-full bg-blue-500/30 text-blue-100 text-[10px] font-semibold uppercase tracking-wide">
+                          <span className="w-1.5 h-1.5 rounded-full bg-blue-300 animate-ping" />
+                          {isFollowUp ? 'Follow-up question' : 'New question'}
+                        </span>
+                      )}
+                      <p className="text-sm text-blue-300">
+                        <span className="font-semibold text-blue-200">Alex: </span>
+                        {currentQuestion}
+                      </p>
+                    </div>
                   )}
                   {liveAnswer && (
                     <p className="text-sm text-gray-200">

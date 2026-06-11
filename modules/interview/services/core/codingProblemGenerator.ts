@@ -50,9 +50,11 @@ ${JSON_OUTPUT_RULE}
   "examples": [{"input": "example input", "output": "expected output", "explanation": "optional"}],
   "constraints": ["constraint 1", "constraint 2"],
   "hints": ["hint 1", "hint 2"],
-  "starterCode": {"python": "def solution():\\n    pass", "javascript": "function solution() {\\n  \\n}"},
+  "starterCode": {"python": "def solution():\\n    pass", "javascript": "function solution() {\\n  \\n}", "typescript": "function solution(): void {\\n  \\n}", "java": "public class Solution {\\n    \\n}", "cpp": "#include <bits/stdc++.h>\\nusing namespace std;\\n\\nint main() {\\n    \\n    return 0;\\n}"},
   "tags": ["relevant", "tags"]
-}`,
+}
+
+Provide starterCode for ALL FIVE languages (python, javascript, typescript, java, cpp), each with the correct function/method signature for THIS problem — candidates may pick any of them and must never see an empty editor.`,
       messages: [{
         role: 'user',
         content: `Generate a ${difficulty} coding problem for a ${domain} candidate (${experience} years experience).

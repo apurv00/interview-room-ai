@@ -1049,3 +1049,30 @@ export function selectProblem(domain: string, experience: string, usedIds: strin
   // Pool exhausted for this domain — return null (triggers AI generation)
   return null
 }
+
+/**
+ * Generic per-language function skeleton, used when a problem has no
+ * language-specific starter. Many curated problems (and some AI-generated ones)
+ * only ship `python`/`javascript` starter code, so selecting Java/C++/TypeScript
+ * left the editor completely empty (reported by a candidate, 2026-06-11). These
+ * skeletons guarantee a non-empty, idiomatic starting point for every language.
+ */
+const GENERIC_STARTER: Record<CodeLanguage, string> = {
+  python: 'def solution():\n    pass\n',
+  javascript: 'function solution() {\n  \n}\n',
+  typescript: 'function solution(): void {\n  \n}\n',
+  java: 'public class Solution {\n    public void solution() {\n        \n    }\n}\n',
+  cpp: '#include <bits/stdc++.h>\nusing namespace std;\n\nint main() {\n    \n    return 0;\n}\n',
+}
+
+/**
+ * Resolve the starter code for a problem in a given language. Falls back to a
+ * generic per-language skeleton when the problem has no starter for that
+ * language, so the editor is never empty regardless of which language the
+ * candidate picks. Always returns a non-empty string.
+ */
+export function getStarterCode(problem: CodingProblem | null | undefined, language: CodeLanguage): string {
+  const specific = problem?.starterCode?.[language]
+  if (specific && specific.trim()) return specific
+  return GENERIC_STARTER[language] ?? GENERIC_STARTER.python
+}
