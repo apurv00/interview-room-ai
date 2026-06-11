@@ -10,6 +10,11 @@ const nextConfig = {
     ],
   },
   experimental: {
+    // Enable instrumentation.ts (register() at server startup) — installs
+    // process-level unhandledRejection / uncaughtException handlers so a floating
+    // promise can't crash the /api/inngest function host and kill co-located jobs.
+    // Stable in Next 15; requires this flag on Next 14.
+    instrumentationHook: true,
     // @sparticuz/chromium ships a brotli-compressed Chromium archive that is
     // extracted at runtime. Webpack bundling mangles the non-JS assets, so
     // we must mark it as an external serverless dependency. puppeteer-core
