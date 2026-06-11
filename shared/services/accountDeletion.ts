@@ -26,7 +26,7 @@
 
 import mongoose from 'mongoose'
 import { connectDB } from '@shared/db/connection'
-import mongoClientPromise from '@shared/db/mongoClient'
+import { getClientPromise } from '@shared/db/mongoClient'
 import { logger } from '@shared/logger'
 import { deleteFromR2 } from '@shared/storage/r2'
 
@@ -225,7 +225,7 @@ export async function deleteUserAccount(
   // 4. NextAuth MongoDB adapter collections live outside the Mongoose models
   //    (accounts, sessions, verification_tokens). Drop them via the raw client.
   try {
-    const client = await mongoClientPromise
+    const client = await getClientPromise()
     const db = client.db()
     const accountsRes = await db.collection('accounts').deleteMany({ userId: userObjectId })
     const sessionsRes = await db.collection('sessions').deleteMany({ userId: userObjectId })

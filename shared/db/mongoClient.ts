@@ -26,7 +26,7 @@ const globalWithMongo = global as typeof globalThis & {
   _mongoClientPromise?: Promise<MongoClient>
 }
 
-function getClientPromise(): Promise<MongoClient> {
+export function getClientPromise(): Promise<MongoClient> {
   const MONGODB_URI = process.env.MONGODB_URI
   if (!MONGODB_URI) {
     // Return a promise that rejects lazily so it doesn't crash at build time
@@ -59,6 +59,12 @@ function getClientPromise(): Promise<MongoClient> {
   return globalWithMongo._mongoClientPromise
 }
 
-const clientPromise = getClientPromise()
-
-export default clientPromise
+// Export the FUNCTION (not a pre-resolved promise). Codex P1 on PR #451: a
+// module-level `const clientPromise = getClientPromise()` froze callers onto a
+// single promise — once it rejected (cold-start / Lambda-freeze connect timeout)
+// every consumer kept awaiting that same rejected promise, so auth stayed broken
+// until the module reloaded. Calling getClientPromise() per use re-reads the
+// (cache-cleared-on-failure) slot and reconnects. MongoDBAdapter accepts a
+// `() => Promise<MongoClient>`, so passing this function makes the adapter
+// self-heal too; direct callers must invoke it (`await getClientPromise()`).
+export default getClientPromise
