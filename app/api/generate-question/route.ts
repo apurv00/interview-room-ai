@@ -7,7 +7,7 @@ import { getPressureQuestionIndex, getQuestionCount, getDomainLabel } from '@int
 import { getSkillSections, selectSkillQuestions } from '@interview/services/core/skillLoader'
 import { findCompanyProfile, buildCompanyPromptContext } from '@interview/config/companyProfiles'
 import { connectDB, connectDBIfNeeded } from '@shared/db/connection'
-import { User, InterviewDomain, InterviewDepth } from '@shared/db/models'
+import { User, InterviewDomain, InterviewDepth, InterviewSession } from '@shared/db/models'
 import { FALLBACK_DOMAINS, FALLBACK_DEPTHS } from '@shared/db/seed'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { generateSessionBrief, briefToPromptContext } from '@interview/services/persona/personalizationEngine'
@@ -20,6 +20,7 @@ import { DATA_BOUNDARY_RULE } from '@shared/services/promptSecurity'
 import {
   resolveFlow,
   buildFlowPromptContext,
+  buildAntiRepeatBlock,
   buildJDOverlayWithObservability,
   TEMPLATE_REGISTRY,
   makeTemplateKey,
@@ -396,6 +397,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     // Personalization Engine: generate session brief for enhanced context
     let personalizationBlock = ''
     let ragBlock = ''
+    let antiRepeatBlock = ''
     if (isFeatureEnabled('personalization_engine') && questionIndex <= 1) {
       try {
         const brief = await generateSessionBrief({
@@ -422,6 +424,29 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
       } catch { /* RAG failed — continue without it */ }
     }
 
+    // Cross-session ANTI-REPEAT: questions this candidate was asked in PRIOR
+    // completed interviews of the SAME role × type, so a repeated "same domain ×
+    // type" interview produces fresh scenarios instead of reusing them. Gated to
+    // the first (scenario-setting) questions; degrades silently on any DB issue.
+    if (questionIndex <= 1) {
+      try {
+        await connectDB()
+        const prior = await InterviewSession.find({
+          userId: user.id,
+          status: 'completed',
+          'config.role': config.role,
+          'config.interviewType': interviewType,
+          ...(sessionId ? { _id: { $ne: sessionId } } : {}),
+        })
+          .sort({ createdAt: -1 })
+          .limit(6)
+          .select('evaluations.question')
+          .lean<{ evaluations?: { question?: string }[] }[]>()
+        const priorQuestions = prior.flatMap((s) => (s.evaluations || []).map((e) => e.question || ''))
+        antiRepeatBlock = buildAntiRepeatBlock(priorQuestions, domainLabel, interviewType)
+      } catch { /* anti-repeat history unavailable — continue without it */ }
+    }
+
     // Build base prompt — interview-type-aware with format-specific instructions
     const typeLabels: Record<string, string> = {
       screening: 'HR screening interview',
@@ -440,7 +465,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
       screening: 'Ask about motivation, culture fit, career trajectory, and basic competencies. Mix behavioral (STAR) and situational questions.',
       behavioral: 'Ask exclusively about PAST experiences using behavioral prompts ("Tell me about a time when...", "Describe a situation where..."). Every question must probe a real event the candidate lived through. Never ask hypothetical scenarios.',
       technical: 'Ask domain-specific technical questions that test depth of knowledge, problem-solving approach, and system thinking. Include trade-off analysis.',
-      'case-study': 'Present a realistic SCENARIO or business problem for the candidate to solve. Frame it as a case: "Imagine you are the PM for X. How would you approach Y?" Guide them through framework → analysis → recommendation. Never ask about past experiences — every question must be a forward-looking scenario.',
+      'case-study': `Present a realistic forward-looking SCENARIO for the candidate to solve, seated in THEIR OWN role. Frame it as: "Imagine you are a ${domainLabel} and [a realistic situation a ${domainLabel} would face]. How would you approach it?" — ground the scenario's specifics and industry in the candidate's résumé, the job description, and the DOMAIN CONTEXT above. Do NOT seat the candidate as a Product Manager or "the PM for a media app" unless the role itself IS product management. Vary the company/industry context across questions; do not default to a media/streaming app. Guide them through framework → analysis → recommendation. Never ask about past experiences — every question must be a forward-looking scenario.`,
     }
     const basePrompt = `You are Alex Chen, a ${roleLabels[interviewType] || 'senior interviewer'}. You are conducting a ${config.duration}-minute ${typeLabels[interviewType] || interviewType + ' interview'} for a ${domainLabel} role (${config.experience} years experience).
 
@@ -538,7 +563,7 @@ Do this only when a genuine link exists (roughly 1 in 3 questions). Do NOT force
     // allowing Anthropic's prompt caching to reuse the KV-cache and cut TTFT.
     const staticSystemPrompt = `${basePrompt}
 
-Your interview style is warm but professional. You ask ONE focused question at a time. Questions should feel conversational and natural — not robotic or overly formal.${depthStrategy || defaultStrategy}${domainContext}${personaBlock}${companyBlock}${contextBlock}${profileBlock}${personalizationBlock}${ragBlock}
+Your interview style is warm but professional. You ask ONE focused question at a time. Questions should feel conversational and natural — not robotic or overly formal.${depthStrategy || defaultStrategy}${domainContext}${personaBlock}${companyBlock}${contextBlock}${profileBlock}${personalizationBlock}${ragBlock}${antiRepeatBlock}
 
 ${DATA_BOUNDARY_RULE}`
 

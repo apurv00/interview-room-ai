@@ -18,7 +18,7 @@ export type {
 
 export { makeTemplateKey, PHASE_WEIGHTS } from './types'
 export { resolveFlow } from './resolver'
-export { buildFlowPromptContext } from './promptBuilder'
+export { buildFlowPromptContext, buildAntiRepeatBlock } from './promptBuilder'
 export { shouldProbeOrAdvanceWithFlow } from './coveragePressure'
 export {
   buildJDOverlay,
