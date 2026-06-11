@@ -90,12 +90,24 @@ export async function executeCode(
     }
 
     const data = await response.json()
+    const compile = data.compile || {}
     const run = data.run || {}
+
+    // Compiled languages (java, c++, typescript) report syntax/compile errors on
+    // `compile.stderr` with a non-zero `compile.code`, and the `run` stage is then
+    // empty. Surface those diagnostics so a compile failure shows the actual
+    // compiler message instead of just "exit 1 / No output" (Codex P2). Interpreted
+    // languages have no compile stage, so this is a no-op for them.
+    const compileFailed = typeof compile.code === 'number' && compile.code !== 0
+    const stderr = compileFailed
+      ? compile.stderr || compile.output || 'Compilation failed'
+      : run.stderr || ''
+    const exitCode = compileFailed ? compile.code : run.code ?? 1
 
     return {
       stdout: (run.stdout || '').slice(0, MAX_OUTPUT_LENGTH),
-      stderr: (run.stderr || '').slice(0, MAX_OUTPUT_LENGTH),
-      exitCode: run.code ?? 1,
+      stderr: stderr.slice(0, MAX_OUTPUT_LENGTH),
+      exitCode,
       executionTimeMs: run.wall_time ? Math.round(run.wall_time * 1000) : 0,
       timedOut: run.signal === 'SIGKILL',
     }

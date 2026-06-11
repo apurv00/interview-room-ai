@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react'
 import dynamic from 'next/dynamic'
-import { Send, ChevronDown, RotateCcw, Copy, Check } from 'lucide-react'
+import { Send, ChevronDown, RotateCcw, Copy, Check, Play, Loader2, X } from 'lucide-react'
 import type { CodeLanguage } from '@shared/types'
 import type { editor as MonacoEditorType } from 'monaco-editor'
 
@@ -137,6 +137,13 @@ interface CodeEditorProps {
   onLanguageChange: (lang: CodeLanguage) => void
   onSubmit: (code: string) => void
   disabled?: boolean
+  /**
+   * Whether the interview is actually ready to receive a submission. The parent
+   * sets this false while the interviewer is still presenting the problem
+   * (ASK_QUESTION) — submitting then is silently dropped by the interview loop,
+   * so Submit must stay disabled until the editing phase. Defaults to true.
+   */
+  canSubmit?: boolean
 }
 
 export default function CodeEditor({
@@ -145,16 +152,34 @@ export default function CodeEditor({
   onLanguageChange,
   onSubmit,
   disabled = false,
+  canSubmit = true,
 }: CodeEditorProps) {
   const [code, setCode] = useState(initialCode ?? '')
   const [showLangDropdown, setShowLangDropdown] = useState(false)
   const [copied, setCopied] = useState(false)
   const [lineCount, setLineCount] = useState(1)
+  // #3 — once submitted, lock Submit (show "Submitted") until the candidate
+  // edits the code again, so a stray click can't double-submit. A ref mirrors it
+  // for the Monaco Ctrl+Enter action, whose closure is captured at mount.
+  const [submitted, setSubmitted] = useState(false)
+  const submittedRef = useRef(false)
+  // #4 — Run code against the sandbox (/api/code/run) without submitting.
+  const [running, setRunning] = useState(false)
+  const [runResult, setRunResult] = useState<{ stdout: string; stderr: string; exitCode: number } | null>(null)
+  const [showOutput, setShowOutput] = useState(false)
   const editorRef = useRef<MonacoEditorType.IStandaloneCodeEditor | null>(null)
   const themeDefinedRef = useRef(false)
   const prevLanguageRef = useRef(language)
+  // Latest canSubmit for the Monaco Ctrl+Enter action (mount-time closure).
+  const canSubmitRef = useRef(canSubmit)
+  canSubmitRef.current = canSubmit
 
   const currentLang = LANGUAGES.find((l) => l.value === language) || LANGUAGES[0]
+
+  const markSubmitted = useCallback((value: boolean) => {
+    submittedRef.current = value
+    setSubmitted(value)
+  }, [])
 
   // Reset editor contents when the user switches language (new starter code)
   // or when the parent swaps the underlying problem.
@@ -162,8 +187,12 @@ export default function CodeEditor({
     if (prevLanguageRef.current !== language) {
       setCode(initialCode ?? '')
       prevLanguageRef.current = language
+      // New language/problem → fresh submission + clear stale run output.
+      markSubmitted(false)
+      setRunResult(null)
+      setShowOutput(false)
     }
-  }, [language, initialCode])
+  }, [language, initialCode, markSubmitted])
 
   // First-time hydration of starter code if it loads after mount
   useEffect(() => {
@@ -185,8 +214,43 @@ export default function CodeEditor({
   )
 
   const handleSubmit = useCallback(() => {
-    if (!disabled) onSubmit(code)
-  }, [code, disabled, onSubmit])
+    // canSubmit guards against submitting before the interview installs its
+    // submission resolver (early clicks are otherwise dropped, yet would lock
+    // the button as "Submitted" — Codex P2).
+    if (disabled || submittedRef.current || !canSubmit) return
+    markSubmitted(true)
+    onSubmit(code)
+  }, [code, disabled, canSubmit, onSubmit, markSubmitted])
+
+  // #4 — execute the current code in the sandbox and show stdout/stderr inline,
+  // so candidates can test before committing to a Submit.
+  const handleRun = useCallback(async () => {
+    if (running || disabled) return
+    setRunning(true)
+    setShowOutput(true)
+    setRunResult(null)
+    try {
+      const res = await fetch('/api/code/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, language }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setRunResult({ stdout: '', stderr: data?.error || `Runner error (${res.status})`, exitCode: 1 })
+      } else {
+        setRunResult({
+          stdout: typeof data.stdout === 'string' ? data.stdout : '',
+          stderr: typeof data.stderr === 'string' ? data.stderr : '',
+          exitCode: typeof data.exitCode === 'number' ? data.exitCode : 0,
+        })
+      }
+    } catch {
+      setRunResult({ stdout: '', stderr: 'Could not reach the code runner. Check your connection and try again.', exitCode: 1 })
+    } finally {
+      setRunning(false)
+    }
+  }, [code, language, running, disabled])
 
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(code).then(() => {
@@ -223,10 +287,12 @@ export default function CodeEditor({
         2048 | 3, // CtrlCmd + Enter
       ],
       run: () => {
-        if (!disabled) onSubmit(editor.getValue())
+        if (disabled || submittedRef.current || !canSubmitRef.current) return
+        markSubmitted(true)
+        onSubmit(editor.getValue())
       },
     })
-  }, [disabled, onSubmit])
+  }, [disabled, onSubmit, markSubmitted])
 
   const handleBeforeMount = useCallback((monaco: typeof import('monaco-editor')) => {
     if (!themeDefinedRef.current) {
@@ -291,14 +357,30 @@ export default function CodeEditor({
             <RotateCcw className="w-3.5 h-3.5" />
           </button>
           <div className="w-px h-5 bg-gray-700/50 mx-1" />
+          {/* #4 — Run (test) before Submit */}
+          <button
+            onClick={handleRun}
+            disabled={disabled || running}
+            className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-100 bg-gray-700/80 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 rounded-md transition-all"
+            title="Run code without submitting"
+          >
+            {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+            {running ? 'Running' : 'Run'}
+          </button>
           <button
             onClick={handleSubmit}
-            disabled={disabled}
+            disabled={disabled || submitted || !canSubmit}
             className="flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded-md transition-all shadow-sm hover:shadow-emerald-500/20"
-            title="Submit code (Ctrl+Enter)"
+            title={
+              submitted
+                ? 'Already submitted — edit your code to submit again'
+                : !canSubmit
+                  ? 'Wait until the interviewer finishes presenting the problem'
+                  : 'Submit code (Ctrl+Enter)'
+            }
           >
-            <Send className="w-3.5 h-3.5" />
-            Submit
+            {submitted ? <Check className="w-3.5 h-3.5" /> : <Send className="w-3.5 h-3.5" />}
+            {submitted ? 'Submitted' : 'Submit'}
           </button>
         </div>
       </div>
@@ -310,7 +392,11 @@ export default function CodeEditor({
           height="100%"
           language={currentLang.monacoId}
           value={code ?? ''}
-          onChange={(value) => setCode(value ?? '')}
+          onChange={(value) => {
+            setCode(value ?? '')
+            // Editing after a submit re-arms Submit (#3).
+            if (submittedRef.current) markSubmitted(false)
+          }}
           theme="interview-monokai"
           beforeMount={handleBeforeMount}
           onMount={handleEditorMount}
@@ -394,6 +480,54 @@ export default function CodeEditor({
           }}
         />
       </div>
+
+      {/* #4 — Run output panel */}
+      {showOutput && (
+        <div className="shrink-0 max-h-[35%] flex flex-col bg-[#15161f] border-t border-gray-700/50">
+          <div className="flex items-center justify-between px-4 py-1.5 border-b border-gray-700/40">
+            <div className="flex items-center gap-2 text-xs font-medium text-gray-300">
+              <span>Output</span>
+              {runResult && (
+                <span
+                  className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                    runResult.exitCode === 0
+                      ? 'bg-emerald-500/20 text-emerald-300'
+                      : 'bg-red-500/20 text-red-300'
+                  }`}
+                >
+                  exit {runResult.exitCode}
+                </span>
+              )}
+            </div>
+            <button
+              onClick={() => setShowOutput(false)}
+              className="text-gray-500 hover:text-white transition-colors"
+              title="Close output"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto px-4 py-2 font-mono text-xs leading-relaxed">
+            {running ? (
+              <span className="text-gray-400 inline-flex items-center gap-2">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" /> Running…
+              </span>
+            ) : runResult ? (
+              <>
+                {runResult.stdout && (
+                  <pre className="text-gray-100 whitespace-pre-wrap break-words">{runResult.stdout}</pre>
+                )}
+                {runResult.stderr && (
+                  <pre className="text-red-400 whitespace-pre-wrap break-words">{runResult.stderr}</pre>
+                )}
+                {!runResult.stdout && !runResult.stderr && (
+                  <span className="text-gray-500">No output.</span>
+                )}
+              </>
+            ) : null}
+          </div>
+        </div>
+      )}
 
       {/* Status bar */}
       <div className="flex items-center justify-between px-4 py-1.5 bg-[#1e1f2e] border-t border-gray-700/50 text-[11px] text-gray-500">
