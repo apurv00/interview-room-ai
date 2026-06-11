@@ -149,3 +149,34 @@ function buildAdaptiveDeepDiveGuidance(
   // Fallback: use the slot's default guidance
   return slot.guidance
 }
+
+/**
+ * Build the cross-session ANTI-REPEAT block for the generate-question system prompt.
+ *
+ * Given the questions a candidate was asked in PRIOR completed interviews of the
+ * same role × interviewType, instruct the generator to avoid reusing them, so a
+ * repeated "same domain × type" interview produces fresh scenarios/topics. Pure +
+ * deterministic: dedupes case-insensitively, caps the list, and truncates long
+ * questions. Returns '' when there is no prior history (no block injected).
+ */
+export function buildAntiRepeatBlock(
+  priorQuestions: string[],
+  roleLabel: string,
+  interviewType: string,
+  max = 12,
+): string {
+  const seen = new Set<string>()
+  const unique: string[] = []
+  for (const raw of priorQuestions) {
+    const q = (raw || '').trim().replace(/\s+/g, ' ')
+    if (!q) continue
+    const key = q.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    unique.push(q.length > 180 ? q.slice(0, 177) + '…' : q)
+    if (unique.length >= max) break
+  }
+  if (unique.length === 0) return ''
+  const list = unique.map((q) => `- ${q}`).join('\n')
+  return `\n\nALREADY ASKED (cross-session — do NOT repeat): In previous ${roleLabel} ${interviewType} interviews this candidate was already asked the questions below. Ask about NOTABLY DIFFERENT scenarios, competencies, and angles; do not reuse or lightly reword any of these:\n${list}`
+}

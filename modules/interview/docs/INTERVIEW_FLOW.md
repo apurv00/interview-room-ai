@@ -1044,3 +1044,44 @@ TranscriptPanel labels, Safe Q&A safety/fallbacks, wrap-up no-LLM paths,
 wrap-up question paths, and mid-interview redirect behavior. A full
 browser interview with real Deepgram/TTS/model keys remains the manual
 post-deploy verification for this hot path.
+
+### 2026-06-11 · Case-study "you're the PM" seat + cross-session repeats
+
+**Symptom (prod QA matrix, two runs):** every case-study question seated the
+candidate as *"Imagine you are the PM for a media app…"* regardless of the actual
+role (finance, data-analyst, mechanical, designer…), and repeated interviews of
+the same domain × type re-used the same scenarios. Behavioral/technical were
+already role-authentic after the QA résumé fix; case-study was not.
+
+**Root cause:**
+1. **Seat** — `generate-question`'s case-study `typeInstructions` literally hardcoded
+   the example *"Imagine you are the PM for X."* The LLM copied that seat. Behavioral/
+   technical carry no seat ("tell me about a time *you*…"), which is why the résumé
+   personalized those but not case-study.
+2. **Repeats** — no cross-session question history existed anywhere; the generator
+   only saw within-session `previousQA`, so nothing forced variety across repeated
+   same-domain×type interviews.
+
+**Fix:**
+1. The case-study instruction now seats the candidate AS `${domainLabel}` (the role
+   being interviewed for), grounded in their résumé + JD + DOMAIN CONTEXT, explicitly
+   forbids the "PM / media app" default unless the role IS product management, and
+   asks the generator to vary the company/industry context.
+2. New cross-session **ANTI-REPEAT** block: at `questionIndex <= 1` the route queries
+   the candidate's prior COMPLETED sessions for the same `config.role` ×
+   `config.interviewType`, pulls `evaluations[].question`, and injects an
+   "already asked — do not repeat" list (built by `buildAntiRepeatBlock` in
+   `modules/interview/flow/promptBuilder.ts`). Query is `.limit(6).select(...).lean()`,
+   gated to the first two questions, wrapped in try/catch → degrades to no block on
+   any DB issue.
+
+**Latency:** the anti-repeat query adds one lean read to generate-question at Q0–Q1
+only (~10–50ms typical; the DB connection is already open from the profile block).
+Well within the ≤1500ms p95 budget; later questions are unaffected (within-session
+`previousQA` + thread context handle variety there).
+
+**Verification:** `buildAntiRepeatBlock` unit tests (dedup/cap/truncate/empty),
+`tsc --noEmit` clean, `npm run build` green. The seat source was confirmed against QA
+report `qa-browser-full-1781116704635`. A full browser interview with real keys —
+including a *repeat* of the same domain×type to confirm non-repetition — remains the
+manual post-deploy verification for this hot path.
