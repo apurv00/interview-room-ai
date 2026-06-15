@@ -86,13 +86,17 @@ Simulate running this program and return the JSON described in the rules.`
         simulated: true,
       }
     } catch (err) {
-      // Model didn't return clean JSON — surface its raw text as stdout rather than
-      // failing, so the candidate still sees something useful.
+      // The model violated the "return ONLY JSON" contract — usually it replied in
+      // prose (e.g. describing a compile error) or its JSON was truncated at the
+      // token limit. Surface the raw text, but do NOT report a clean exit 0: a prose
+      // explanation of a failure must not render under a green "success" badge, and
+      // a truncated response is itself incomplete. exitCode 1 + a stderr note makes
+      // the UI show the uncertain/failed cue instead.
       aiLogger.warn({ err, raw: (result.text || '').slice(0, 300) }, 'code-run simulation: JSON parse failed')
       return {
         stdout: (result.text || '').slice(0, MAX_OUTPUT_LENGTH),
-        stderr: '',
-        exitCode: 0,
+        stderr: 'Output could not be fully simulated — it may be incomplete, or the program may have errored.',
+        exitCode: 1,
         simulated: true,
       }
     }

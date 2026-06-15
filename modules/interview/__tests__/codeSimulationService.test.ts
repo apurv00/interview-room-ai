@@ -43,10 +43,13 @@ describe('simulateCodeRun (LLM-based Run)', () => {
   // service's outer try/catch but isn't unit-tested here — vitest 4.x records any
   // error thrown through a spy and fails the test even when the SUT catches it.
 
-  it('falls back to raw text as stdout when the model returns non-JSON', async () => {
-    mockedCompletion.mockResolvedValue({ text: 'Hello, world!' } as never)
-    const r = await simulateCodeRun('print("Hello, world!")', 'python')
-    expect(r.stdout).toContain('Hello, world!')
+  it('falls back to raw text on non-JSON but does NOT report a clean exit 0', async () => {
+    // A prose reply (or truncated JSON) must not render under a green success badge.
+    mockedCompletion.mockResolvedValue({ text: 'This code has a SyntaxError on line 1' } as never)
+    const r = await simulateCodeRun('def (', 'python')
+    expect(r.stdout).toContain('SyntaxError')
     expect(r.simulated).toBe(true)
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr).toMatch(/could not be fully simulated|incomplete/i)
   })
 })

@@ -19,7 +19,10 @@ type RunCodePayload = z.infer<typeof RunCodeSchema>
 
 export const POST = composeApiRoute<RunCodePayload>({
   schema: RunCodeSchema,
-  rateLimit: { windowMs: 60_000, maxRequests: 20, keyPrefix: 'rl:code-run' },
+  // 10/min — every Run is now an LLM call (it was a free sandbox before), so this is
+  // sized like sibling LLM routes (evaluate-code 10, clarify-coding 8) rather than the
+  // old sandbox-era 20. composeApiRoute still scales this by plan.
+  rateLimit: { windowMs: 60_000, maxRequests: 10, keyPrefix: 'rl:code-run' },
 
   async handler(_req, { body }) {
     const { code, language, stdin } = body
