@@ -47,6 +47,17 @@ Rules:
 - Cap very long or non-terminating output rather than looping forever.`
 
 /**
+ * Neutralize the boundary delimiters inside untrusted input so a literal `</code>`
+ * or `</stdin>` in the candidate's code/stdin (e.g. a program that prints HTML, or a
+ * deliberate injection) can't close the tag early and smuggle text outside the
+ * DATA_BOUNDARY_RULE boundary. A zero-width space breaks the closing sequence while
+ * leaving the content readable to the simulator. Codex P2 on PR #455.
+ */
+function neutralizeFences(s: string): string {
+  return s.replace(/<(\/(?:code|stdin)>)/gi, '<\u200B$1')
+}
+
+/**
  * Simulate running `code` (with optional `stdin`) and return its predicted output.
  * Never throws — failures degrade to a friendly message so the candidate can still
  * write and Submit (the Run button is a convenience, not the scoring path).
@@ -62,10 +73,10 @@ export async function simulateCodeRun(
 
   const userMessage = `Language: ${language}
 <stdin>
-${stdin.slice(0, 10000)}
+${neutralizeFences(stdin.slice(0, 10000))}
 </stdin>
 <code>
-${code.slice(0, 50000)}
+${neutralizeFences(code.slice(0, 50000))}
 </code>
 
 Simulate running this program and return the JSON described in the rules.`
