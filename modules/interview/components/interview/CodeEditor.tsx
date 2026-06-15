@@ -163,7 +163,8 @@ export default function CodeEditor({
   // for the Monaco Ctrl+Enter action, whose closure is captured at mount.
   const [submitted, setSubmitted] = useState(false)
   const submittedRef = useRef(false)
-  // #4 — Run code against the sandbox (/api/code/run) without submitting.
+  // #4 — Run: AI-SIMULATED execution (/api/code/run predicts output via the model;
+  // there is no real sandbox). Lets the candidate sanity-check without submitting.
   const [running, setRunning] = useState(false)
   const [runResult, setRunResult] = useState<{ stdout: string; stderr: string; exitCode: number } | null>(null)
   const [showOutput, setShowOutput] = useState(false)
@@ -222,8 +223,8 @@ export default function CodeEditor({
     onSubmit(code)
   }, [code, disabled, canSubmit, onSubmit, markSubmitted])
 
-  // #4 — execute the current code in the sandbox and show stdout/stderr inline,
-  // so candidates can test before committing to a Submit.
+  // #4 — ask the model to simulate running the code and show the predicted
+  // stdout/stderr inline, so candidates can sanity-check before they Submit.
   const handleRun = useCallback(async () => {
     if (running || disabled) return
     setRunning(true)
@@ -362,7 +363,7 @@ export default function CodeEditor({
             onClick={handleRun}
             disabled={disabled || running}
             className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-100 bg-gray-700/80 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 rounded-md transition-all"
-            title="Run code without submitting"
+            title="Run — AI-estimated output (predicted by the model, not a real sandbox)"
           >
             {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
             {running ? 'Running' : 'Run'}
@@ -487,6 +488,10 @@ export default function CodeEditor({
           <div className="flex items-center justify-between px-4 py-1.5 border-b border-gray-700/40">
             <div className="flex items-center gap-2 text-xs font-medium text-gray-300">
               <span>Output</span>
+              {/* The Run button predicts output with the model, not a real sandbox. */}
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-300" title="Output is predicted by AI, not a sandboxed execution — it can differ from a real run.">
+                AI-estimated
+              </span>
               {runResult && (
                 <span
                   className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
@@ -526,6 +531,12 @@ export default function CodeEditor({
               </>
             ) : null}
           </div>
+          {/* Always-visible honesty caveat — not just the badge's hover tooltip. */}
+          {runResult && !running && (
+            <div className="px-4 py-1 border-t border-gray-700/40 text-[10px] text-amber-300/80 shrink-0">
+              Predicted by AI — may differ from a real run (timing, randomness, edge cases).
+            </div>
+          )}
         </div>
       )}
 

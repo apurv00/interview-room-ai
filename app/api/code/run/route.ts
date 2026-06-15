@@ -1,43 +1,32 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
-import { executeCode, runTestCases } from '@interview/services/core/codeSandboxService'
+import { simulateCodeRun } from '@interview/services/core/codeSimulationService'
 
 export const dynamic = 'force-dynamic'
 
+// The coding interview is LLM-driven end to end (problem gen, clarifications, and
+// submission scoring via /api/evaluate-code), so the convenience "Run" button
+// predicts output with the model rather than executing in a sandbox. The response
+// carries `simulated: true` so the UI labels it "AI-estimated".
 const RunCodeSchema = z.object({
   code: z.string().min(1).max(50000),
   language: z.enum(['python', 'javascript', 'typescript', 'java', 'cpp']),
   stdin: z.string().max(10000).optional(),
-  testCases: z.array(z.object({
-    input: z.string().max(10000),
-    expectedOutput: z.string().max(10000),
-  })).max(20).optional(),
 })
 
 type RunCodePayload = z.infer<typeof RunCodeSchema>
 
 export const POST = composeApiRoute<RunCodePayload>({
   schema: RunCodeSchema,
-  rateLimit: { windowMs: 60_000, maxRequests: 20, keyPrefix: 'rl:code-run' },
+  // 10/min — every Run is now an LLM call (it was a free sandbox before), so this is
+  // sized like sibling LLM routes (evaluate-code 10, clarify-coding 8) rather than the
+  // old sandbox-era 20. composeApiRoute still scales this by plan.
+  rateLimit: { windowMs: 60_000, maxRequests: 10, keyPrefix: 'rl:code-run' },
 
   async handler(_req, { body }) {
-    const { code, language, stdin, testCases } = body
-
-    // If test cases provided, run against them
-    if (testCases?.length) {
-      const results = await runTestCases(code, language, testCases)
-      const allPassed = results.every(r => r.passed)
-      return NextResponse.json({
-        testResults: results,
-        allPassed,
-        passedCount: results.filter(r => r.passed).length,
-        totalCount: results.length,
-      })
-    }
-
-    // Otherwise, just execute with optional stdin
-    const result = await executeCode(code, language, stdin || '')
+    const { code, language, stdin } = body
+    const result = await simulateCodeRun(code, language, stdin || '')
     return NextResponse.json(result)
   },
 })
