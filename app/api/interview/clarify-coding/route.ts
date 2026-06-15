@@ -40,10 +40,13 @@ export const POST = composeApiRoute<ClarifyCodingRequest>({
     keyPrefix: 'rl:clarify-coding',
   },
   handler: async (_req, ctx) => {
-    const { sessionId, problemId, candidateQuestion, currentCode, language } = ctx.body
+    const { sessionId, problemId, candidateQuestion, currentCode, language, problem: problemFromBody } = ctx.body
     const startTime = Date.now()
 
-    const problem = getProblemById(problemId)
+    // Prefer the authoritative static problem; fall back to the client-sent
+    // context for AI-generated problems (not in the static pool). Without this,
+    // every clarification on a generated problem failed with "Problem not found".
+    const problem = getProblemById(problemId) ?? problemFromBody
     if (!problem) {
       return NextResponse.json({ error: 'Problem not found' }, { status: 404 })
     }

@@ -29,7 +29,14 @@ const PISTON_LANGUAGES: Record<CodeLanguage, { language: string; version: string
   cpp: { language: 'c++', version: '10.2' },
 }
 
+// Point this at a self-hosted Piston instance. The public emkc.org Piston API
+// became whitelist-only on 2026-02-15 and now returns 401 on /execute, so the
+// default below will NOT work in production — set PISTON_API_URL to your own
+// Piston (e.g. `docker run -p 2000:2000 ghcr.io/engineer-man/piston`). Optionally
+// set PISTON_API_KEY if your instance sits behind an auth proxy; its value is sent
+// verbatim as the Authorization header (e.g. "Bearer <token>").
 const PISTON_API_URL = process.env.PISTON_API_URL || 'https://emkc.org/api/v2/piston'
+const PISTON_API_KEY = process.env.PISTON_API_KEY || ''
 const DEFAULT_TIMEOUT_MS = 10000
 const MAX_OUTPUT_LENGTH = 10000
 
@@ -62,7 +69,10 @@ export async function executeCode(
 
     const response = await fetch(`${PISTON_API_URL}/execute`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(PISTON_API_KEY ? { Authorization: PISTON_API_KEY } : {}),
+      },
       signal: controller.signal,
       body: JSON.stringify({
         language: langConfig.language,
@@ -80,9 +90,19 @@ export async function executeCode(
     if (!response.ok) {
       const errText = await response.text()
       logger.error({ status: response.status, errText }, 'Piston API error')
+      // Degrade gracefully — the candidate can still write and Submit; Run is an
+      // optional convenience. 401/403 means the configured runner rejected us
+      // (e.g. the public emkc Piston is now whitelist-only) → tell the candidate
+      // it's a service issue, not their code.
+      const friendly =
+        response.status === 401 || response.status === 403
+          ? 'Code execution is temporarily unavailable (sandbox not configured). You can still write your solution and click Submit.'
+          : response.status === 429
+            ? 'Too many runs right now — wait a few seconds and try again.'
+            : `Code execution service error (${response.status}). You can still Submit your solution.`
       return {
         stdout: '',
-        stderr: `Execution service error: ${response.status}`,
+        stderr: friendly,
         exitCode: 1,
         executionTimeMs: 0,
         timedOut: false,
