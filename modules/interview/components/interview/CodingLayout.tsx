@@ -184,14 +184,34 @@ export default function CodingLayout({
           <button
             key={tab.key}
             onClick={() => setMobileTab(tab.key)}
-            className={`flex items-center gap-1.5 px-3 py-2 text-sm rounded-md transition-colors ${
+            className={`relative flex items-center gap-1.5 px-3 py-2 text-sm rounded-md transition-colors ${
               mobileTab === tab.key ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-white'
             }`}
           >
             {tab.icon} {tab.label}
+            {/* Unread cue: a new question arrived while the candidate is on another tab */}
+            {tab.key === 'chat' && questionHighlight && mobileTab !== 'chat' && (
+              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-blue-400 animate-ping" />
+            )}
           </button>
         ))}
       </div>
+
+      {/* Follow-up banner — mobile only, ABOVE the panels on any tab EXCEPT Chat
+          (where the conversation is already visible). Lives here (not inside the
+          Code panel) so a new question is seen on the Problem tab too. Review P1. */}
+      {questionHighlight && currentQuestion && mobileTab !== 'chat' && (
+        <div className="md:hidden m-2 rounded-md bg-blue-500/15 ring-2 ring-blue-400/70 px-3 py-2 animate-pulse shrink-0">
+          <span className="inline-flex items-center gap-1 mb-1 px-1.5 py-0.5 rounded-full bg-blue-500/30 text-blue-100 text-[10px] font-semibold uppercase tracking-wide">
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-300 animate-ping" />
+            {isFollowUp ? 'Follow-up question' : 'New question'}
+          </span>
+          <p className="text-sm text-blue-200">
+            <span className="font-semibold">Alex: </span>
+            {currentQuestion}
+          </p>
+        </div>
+      )}
 
       {/* Split layout: both panels on desktop; one at a time on mobile via tabs */}
       <div className="flex-1 flex min-h-0">
@@ -292,20 +312,8 @@ export default function CodingLayout({
         {/* Right panel: Code Editor. Full-width on mobile when the Code tab is
             active; 60% on desktop. */}
         <div className={`${mobileTab === 'code' ? 'flex' : 'hidden'} md:flex flex-1 flex-col p-3 min-h-0`}>
-          {/* Mobile follow-up banner — surfaces a new question ABOVE the editor so
-              it stays visible while coding. Codex P2. */}
-          {questionHighlight && currentQuestion && (
-            <div className="md:hidden mb-2 rounded-md bg-blue-500/15 ring-2 ring-blue-400/70 px-3 py-2 animate-pulse shrink-0">
-              <span className="inline-flex items-center gap-1 mb-1 px-1.5 py-0.5 rounded-full bg-blue-500/30 text-blue-100 text-[10px] font-semibold uppercase tracking-wide">
-                <span className="w-1.5 h-1.5 rounded-full bg-blue-300 animate-ping" />
-                {isFollowUp ? 'Follow-up question' : 'New question'}
-              </span>
-              <p className="text-sm text-blue-200">
-                <span className="font-semibold">Alex: </span>
-                {currentQuestion}
-              </p>
-            </div>
-          )}
+          {/* (Follow-up banner now lives above the panels so it shows on every
+              mobile tab, not just Code — Review P1.) */}
 
           {/* Code editor */}
           <div className="flex-1 min-h-0 flex flex-col">
