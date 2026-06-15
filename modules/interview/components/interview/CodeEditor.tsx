@@ -487,6 +487,10 @@ export default function CodeEditor({
           <div className="flex items-center justify-between px-4 py-1.5 border-b border-gray-700/40">
             <div className="flex items-center gap-2 text-xs font-medium text-gray-300">
               <span>Output</span>
+              {/* The Run button predicts output with the model, not a real sandbox. */}
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-300" title="Output is predicted by AI, not a sandboxed execution — it can differ from a real run.">
+                AI-estimated
+              </span>
               {runResult && (
                 <span
                   className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${

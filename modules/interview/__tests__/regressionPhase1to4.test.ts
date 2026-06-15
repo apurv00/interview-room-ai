@@ -109,14 +109,16 @@ describe('Phase 4 Regression — Embedding Service', () => {
   })
 })
 
-// ─── Phase 4: Code Sandbox Service ──────────────────────────────────────────
+// ─── Phase 4: Code Run (LLM simulation) ──────────────────────────────────────
+// The Piston sandbox was replaced by LLM-simulated execution (the public emkc
+// Piston went whitelist-only); the "Run" button now predicts output via the model.
 
-describe('Phase 4 Regression — Code Sandbox', () => {
-  it('executeCode returns error for unsupported language', async () => {
-    const { executeCode } = await import('@interview/services/core/codeSandboxService')
-    const result = await executeCode('print("hello")', 'ruby' as any)
+describe('Phase 4 Regression — Code Run (LLM simulation)', () => {
+  it('simulateCodeRun guards empty code without calling the model', async () => {
+    const { simulateCodeRun } = await import('@interview/services/core/codeSimulationService')
+    const result = await simulateCodeRun('   ', 'python')
+    expect(result.simulated).toBe(true)
     expect(result.exitCode).toBe(1)
-    expect(result.stderr).toContain('Unsupported language')
   })
 })
 
