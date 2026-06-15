@@ -8,21 +8,30 @@ import { z } from 'zod'
  * when the static lookup misses; lengths are capped defensively.
  */
 export const ClarifyProblemContextSchema = z.object({
-  title: z.string().min(1).max(300),
+  // These bounds TRUNCATE rather than reject. The client sends the problem the
+  // candidate is already looking at, and AI-generated problems carry no length cap
+  // — a hard `.max()` would 400 the whole clarify request on a verbose problem and
+  // re-break the very thing this field fixes. (Same lesson as the resumeText
+  // `.transform(slice)` guard on the generate-problem route.)
+  title: z.string().transform((s) => s.slice(0, 300)),
   difficulty: z.enum(['easy', 'medium', 'hard']),
-  description: z.string().max(8000),
+  description: z.string().transform((s) => s.slice(0, 8000)),
   examples: z
     .array(
       z.object({
-        input: z.string().max(2000),
-        output: z.string().max(2000),
-        explanation: z.string().max(2000).optional(),
+        input: z.string().transform((s) => s.slice(0, 2000)),
+        output: z.string().transform((s) => s.slice(0, 2000)),
+        explanation: z.string().transform((s) => s.slice(0, 2000)).optional(),
       }),
     )
-    .max(12)
+    .transform((a) => a.slice(0, 12))
     .optional()
     .default([]),
-  constraints: z.array(z.string().max(500)).max(30).optional().default([]),
+  constraints: z
+    .array(z.string().transform((s) => s.slice(0, 500)))
+    .transform((a) => a.slice(0, 30))
+    .optional()
+    .default([]),
 })
 
 export const ClarifyCodingRequestSchema = z.object({
