@@ -19,6 +19,20 @@ describe('executeCode — Piston response parsing', () => {
     }) as unknown as typeof fetch
   }
 
+  it('degrades gracefully on a 401 (whitelisted/unconfigured runner) instead of a raw error code', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => 'Public Piston API is now whitelist only',
+    }) as unknown as typeof fetch
+    const r = await executeCode('print(1)', 'python')
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr).toMatch(/unavailable/i)
+    expect(r.stderr).not.toContain('401')
+    // Candidate is told they can still submit.
+    expect(r.stderr).toMatch(/submit/i)
+  })
+
   it('surfaces compile stderr for a compiled-language compile failure', async () => {
     mockPiston({
       compile: { stdout: '', stderr: "Main.java:1: error: reached end of file while parsing", code: 1 },
