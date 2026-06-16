@@ -190,6 +190,8 @@ export interface UseInterviewReturn {
   avatarEmotion: AvatarEmotion
   isAvatarTalking: boolean
   timeRemaining: number
+  /** Seconds left in a timed verbal-answer window (0 when none is active). */
+  answerSecondsLeft: number
   liveAnswer: string
   sessionId: string | null
   coachingTip: string | null
@@ -494,6 +496,10 @@ export function useInterview({
   // ── Timer ──
   const [timeRemaining, setTimeRemaining] = useState(0)
   const timeRemainingRef = useRef(0)
+  // Visible countdown for a timed verbal answer window (e.g. the post-submit coding
+  // follow-up). 0 when no answer-timer is running. Candidate feedback 2026-06-16:
+  // "if I don't answer there should be a timer."
+  const [answerSecondsLeft, setAnswerSecondsLeft] = useState(0)
 
   // ── DB session ──
   // Note: sessionIdRef is declared above (near useInterviewAPI) so it can be
@@ -2235,9 +2241,14 @@ export function useInterview({
 
         let feedbackText = 'Good effort! Let me share some thoughts.'
         try {
+          // Bound the eval so a slow/hung LLM can't stall the interview (a top
+          // "takes too long" driver). On timeout we fall through to default feedback.
+          const evalController = new AbortController()
+          const evalTimeout = setTimeout(() => evalController.abort(), 12000)
           const evalRes = await fetch('/api/evaluate-code', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            signal: evalController.signal,
             body: JSON.stringify({
               code: submission.code,
               language: submission.language,
@@ -2247,6 +2258,7 @@ export function useInterview({
               sessionId: sessionIdRef.current,
             }),
           })
+          clearTimeout(evalTimeout)
           if (evalRes.ok) {
             const evaluation = (await evalRes.json()) as Record<string, unknown>
             const feedback = typeof evaluation.feedback === 'string' ? evaluation.feedback : undefined
@@ -2274,7 +2286,9 @@ export function useInterview({
         addToTranscript('interviewer', feedbackText, 1)
         await avatarSpeak(feedbackText, avatarEmotion)
 
-        await new Promise<void>((r) => setTimeout(r, 2000))
+        // Brief beat so the candidate can read the feedback (was 2000ms — trimmed
+        // as part of cutting overall coding-interview wall-clock).
+        await new Promise<void>((r) => setTimeout(r, 600))
         checkAbort()
 
         // Follow-up: ask about approach
@@ -2291,7 +2305,18 @@ export function useInterview({
 
           checkAbort()
           setLiveAnswer('')
-          const answer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
+          // Visible countdown so the candidate knows there's a limit and it won't
+          // hang if they stay silent (auto-advances when it elapses). 25s window.
+          const FOLLOWUP_MS = 25000
+          setAnswerSecondsLeft(Math.ceil(FOLLOWUP_MS / 1000))
+          const countdown = setInterval(() => setAnswerSecondsLeft((s) => Math.max(s - 1, 0)), 1000)
+          let answer = ''
+          try {
+            answer = await listenForAnswer(true, FOLLOWUP_MS, () => transitionTo('LISTENING'))
+          } finally {
+            clearInterval(countdown)
+            setAnswerSecondsLeft(0)
+          }
 
           if (answer && !isInterviewOver()) {
             addToTranscript('candidate', answer, 2)
@@ -2579,6 +2604,7 @@ export function useInterview({
     avatarEmotion,
     isAvatarTalking,
     timeRemaining,
+    answerSecondsLeft,
     liveAnswer,
     sessionId: sessionIdRef.current,
     coachingTip,

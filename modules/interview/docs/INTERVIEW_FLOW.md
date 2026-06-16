@@ -1085,3 +1085,39 @@ Well within the ≤1500ms p95 budget; later questions are unaffected (within-ses
 report `qa-browser-full-1781116704635`. A full browser interview with real keys —
 including a *repeat* of the same domain×type to confirm non-repetition — remains the
 manual post-deploy verification for this hot path.
+
+---
+
+### 8.x — Coding interview v2: difficulty calibration, runnable example tests, pacing (2026-06-16)
+
+**Symptom (candidate feedback):** (1) a problem "given for 10 min" was barely solvable
+in 25; (2) the runner wasn't interactive and examples weren't runnable ("I can't tell
+how input/output works"); (3) after Submit, Alex asks a verbal follow-up but there was
+no visible timer if the candidate stayed silent; (4) the whole thing took too long.
+
+**Root cause:** difficulty was derived from EXPERIENCE only (duration ignored); the
+generator had no time-awareness; examples were display-only with a function-starter vs
+program-Run mismatch; the post-submit follow-up used a 30s `listenForAnswer` timeout
+with no surfaced countdown; and the eval fetch + a hard-coded 2000ms pause added
+unbounded/extra wall-clock.
+
+**Fix (hot-path `useInterview.ts` coding branch + supporting files):**
+- **Difficulty ⇄ time** — `resolveCodingTimeBudget(duration, problemCount)` +
+  `resolveCodingDifficulty(experience, budget)` (the *easier* of the two caps); threaded
+  through `selectProblem`/`generateCodingProblem`/`page.tsx`; generator prompt now
+  scopes to the budget; `expectedTimeMinutes = budget` shown as a "⏱ ~N min" badge.
+- **Runnable examples** — `runExampleTests()` (LLM-judged) behind `/api/code/run` when
+  `examples` are sent; CodeEditor "Run" shows per-case expected/actual + pass/fail.
+- **Pacing + timer** — eval fetch bounded by a **12s AbortController** (falls back to
+  default feedback); the post-feedback pause trimmed **2000ms → 600ms**; the post-submit
+  follow-up listen reduced **30s → 25s** with a new `answerSecondsLeft` state driving a
+  visible "Ns to answer" countdown (auto-advances on elapse).
+
+**Latency:** the eval timeout only *shortens* the worst case; the countdown is a 1s
+interval local to the follow-up (cleared in `finally`). No added cost on the
+generate-question/evaluate-answer hot loops.
+
+**Verification:** `resolveCodingDifficulty`/`runExampleTests` unit tests; `tsc --noEmit`
+clean; `npm run build` green. A full browser coding interview with real keys — confirming
+a right-sized problem, Run-against-examples pass/fail, and the visible post-submit
+countdown auto-advancing on silence — remains the manual post-deploy verification.

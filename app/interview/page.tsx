@@ -338,6 +338,7 @@ export default function InterviewPage() {
     avatarEmotion,
     isAvatarTalking,
     timeRemaining,
+    answerSecondsLeft,
     liveAnswer,
     coachingTip,
     finishInterview,
@@ -808,6 +809,7 @@ export default function InterviewPage() {
           sessionId={interview.sessionId ?? undefined}
           currentQuestion={currentQuestion}
           liveAnswer={displayAnswer}
+          answerSecondsLeft={answerSecondsLeft}
         >
           <div className="px-4 pb-1 flex flex-col gap-1.5">
             {isCoachMode && <CoachOverlay state={coachModeState} />}

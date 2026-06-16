@@ -34,6 +34,8 @@ interface CodingLayoutProps {
   // Transcript
   currentQuestion: string
   liveAnswer: string
+  /** Seconds left to answer the post-submit verbal question (0 when none active). */
+  answerSecondsLeft?: number
 
   // Children (coaching layer)
   children?: React.ReactNode
@@ -58,6 +60,7 @@ export default function CodingLayout({
   sessionId,
   currentQuestion,
   liveAnswer,
+  answerSecondsLeft = 0,
   children,
 }: CodingLayoutProps) {
   const [mobileTab, setMobileTab] = useState<MobileTab>('code')
@@ -138,9 +141,21 @@ export default function CodingLayout({
   // and the mobile Chat tab (its own full-height view), so the Problem and Chat
   // tabs stay distinct and a long problem can't bury the conversation. Codex P2.
   const renderConversation = () => {
-    if (!currentQuestion && !liveAnswer) return null
+    if (!currentQuestion && !liveAnswer && answerSecondsLeft <= 0) return null
     return (
       <div className="space-y-2">
+        {/* Visible answer countdown — so the candidate knows there's a time limit
+            and it auto-advances if they stay silent. Candidate feedback 2026-06-16. */}
+        {answerSecondsLeft > 0 && (
+          <div
+            className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold ${
+              answerSecondsLeft <= 5 ? 'bg-red-500/25 text-red-300 animate-pulse' : 'bg-amber-500/20 text-amber-300'
+            }`}
+          >
+            <Clock className="w-3 h-3" />
+            {answerSecondsLeft}s to answer
+          </div>
+        )}
         {currentQuestion && (
           <div
             className={`rounded-md transition-all duration-500 ${
