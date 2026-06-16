@@ -470,9 +470,19 @@ export default function InterviewPage() {
       // dividing made 'hard' unreachable + the badge wrong for 30-min slots).
       const codingBudget = resolveCodingTimeBudget(parsed.duration, 1)
       const codingDifficulty = resolveCodingDifficulty(parsed.experience, codingBudget)
-      // Copy (don't mutate the shared static-pool object) and stamp the budget.
-      const withBudget = (p: CodingProblem | null): CodingProblem | null =>
-        p ? { ...p, expectedTimeMinutes: codingBudget } : p
+      const DIFF_RANK = { easy: 0, medium: 1, hard: 2 } as const
+      // selectProblem falls back to ADJACENT (harder) difficulties when the target
+      // pool is exhausted. Stamp the short budget ONLY when the problem isn't harder
+      // than the calibrated target — otherwise we'd label a medium problem as a
+      // 6-min task and re-create the mismatch this fixes. A harder fallback keeps its
+      // own (honest, longer) expectedTimeMinutes. (Codex P2 on PR #456.)
+      const withBudget = (p: CodingProblem | null): CodingProblem | null => {
+        if (!p) return p
+        if (DIFF_RANK[p.difficulty] > DIFF_RANK[codingDifficulty]) return p
+        return { ...p, expectedTimeMinutes: codingBudget }
+      }
+      const isOverScoped = (p: CodingProblem | null): boolean =>
+        !!p && DIFF_RANK[p.difficulty] > DIFF_RANK[codingDifficulty]
 
       // Fetch user's previously solved problem IDs
       fetch('/api/code/history')
@@ -489,7 +499,10 @@ export default function InterviewPage() {
           // ioredis deps) out of the client bundle; on failure we keep the
           // static result so problem-load never blocks.
           const nativeStatic = !!problem?.applicableDomains?.includes(parsed.role)
-          if (parsed.resumeText || !nativeStatic) {
+          // Also generate when the static pick is HARDER than the calibrated target
+          // (the pool fell back to an adjacent difficulty) — the AI problem is sized
+          // to the budget, so the short slot gets a right-scoped problem. Codex P2.
+          if (parsed.resumeText || !nativeStatic || isOverScoped(problem)) {
             try {
               const res = await fetch('/api/code/generate-problem', {
                 method: 'POST',
