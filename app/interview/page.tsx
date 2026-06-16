@@ -96,12 +96,6 @@ export default function InterviewPage() {
   // ── Camera ──
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
-  const screenStreamRef = useRef<MediaStream | null>(null)
-
-  // Screen capture is gated to coding & system-design — those interviews
-  // produce work that lives on screen (IDE / canvas) and the camera-only
-  // recording can't replay it.
-  const wantsScreenCapture = isCodingMode || isDesignMode
 
   const cameraVideoConstraints: MediaTrackConstraints = {
     width: { ideal: 1280, max: 1280 },
@@ -118,11 +112,6 @@ export default function InterviewPage() {
     audioBitsPerSecond: 64_000,
   }
 
-  const screenRecorderOptions: MediaRecorderOptions = {
-    videoBitsPerSecond: 800_000,
-    audioBitsPerSecond: 64_000,
-  }
-
   // ── Voices loaded ──
   const [voicesReady, setVoicesReady] = useState(false)
 
@@ -131,8 +120,6 @@ export default function InterviewPage() {
 
   // ── Recording (camera track) ──
   const { isRecording, recordingDuration, startRecording, stopRecording } = useMediaRecorder()
-  // ── Recording (screen track for coding / system-design) ──
-  const screenRecorder = useMediaRecorder()
   // ── Recording (audio-only track — what Whisper transcribes). Kept
   //    separate from the camera webm because Groq Whisper rejects files
   //    >25MB and a multi-minute HD camera recording easily exceeds that.
@@ -155,15 +142,10 @@ export default function InterviewPage() {
     async (
       blob: Blob,
       sessionId: string,
-      kind: 'camera' | 'screen' | 'audio'
+      kind: 'camera' | 'audio'
     ): Promise<boolean> => {
       try {
-        const presignType =
-          kind === 'screen'
-            ? 'screen-recording'
-            : kind === 'audio'
-            ? 'audio-recording'
-            : 'recording'
+        const presignType = kind === 'audio' ? 'audio-recording' : 'recording'
         const presignRes = await fetch('/api/storage/presign', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -194,9 +176,7 @@ export default function InterviewPage() {
         }
 
         const patchBody =
-          kind === 'screen'
-            ? { screenRecordingR2Key: key, screenRecordingSizeBytes: blob.size }
-            : kind === 'audio'
+          kind === 'audio'
             ? { audioRecordingR2Key: key, audioRecordingSizeBytes: blob.size }
             : { recordingR2Key: key, recordingSizeBytes: blob.size }
 
@@ -220,20 +200,12 @@ export default function InterviewPage() {
 
   // Handle recording stop
   const handleRecordingStop = useCallback(async () => {
-    // Stop all three recorders in parallel — the screen recorder is a
-    // no-op when no screen track was ever started; the audio recorder
-    // runs for every interview.
-    const [cameraBlob, screenBlob, audioBlob] = await Promise.all([
+    // Stop the camera + audio recorders in parallel (audio runs for every
+    // interview; camera unless privacy mode).
+    const [cameraBlob, audioBlob] = await Promise.all([
       stopRecording(),
-      screenRecorder.stopRecording(),
       audioRecorder.stopRecording(),
     ])
-
-    // Release any active screen capture tracks
-    if (screenStreamRef.current) {
-      screenStreamRef.current.getTracks().forEach((t) => t.stop())
-      screenStreamRef.current = null
-    }
 
     const criticalUploads: Promise<unknown>[] = []
 
@@ -265,16 +237,13 @@ export default function InterviewPage() {
     // client-derived and tiny) hit R2.
     const privacyMode = config?.privacyMode === true
 
-    // Upload audio/landmarks as small analysis artifacts. Camera/screen
-    // recordings are replay-only and must not block feedback or analysis.
+    // Upload audio/landmarks as small analysis artifacts. The camera
+    // recording is replay-only and must not block feedback or analysis.
     const replayUploads: Promise<ReplayUploadResult>[] = []
     if (cameraBlob && !privacyMode) {
       replayUploads.push(uploadReplayRecording(sessionId, 'camera', cameraBlob))
     }
     if (audioBlob) criticalUploads.push(uploadRecordingBlob(audioBlob, sessionId, 'audio'))
-    if (screenBlob && !privacyMode) {
-      replayUploads.push(uploadReplayRecording(sessionId, 'screen', screenBlob))
-    }
 
     if (replayUploads.length > 0) {
       Promise.allSettled(replayUploads).then((results) => {
@@ -305,7 +274,7 @@ export default function InterviewPage() {
         new Promise<void>((resolve) => setTimeout(resolve, 8_000)),
       ])
     }
-  }, [stopRecording, screenRecorder, audioRecorder, isMultimodalEnabled, stopCapture, uploadRecordingBlob, config?.privacyMode])
+  }, [stopRecording, audioRecorder, isMultimodalEnabled, stopCapture, uploadRecordingBlob, config?.privacyMode])
 
   // ── Interview engine ──
   const interview = useInterview({
@@ -653,47 +622,6 @@ export default function InterviewPage() {
         const audioOnlyStream = new MediaStream(audioTracks)
         audioRecorder.startRecording(audioOnlyStream, audioRecorderOptions)
       }
-
-      // Coding & system-design: also capture the screen so the candidate's
-      // work surface is replayable. Best-effort — if the user denies the
-      // browser prompt or screen capture is unsupported (iOS Safari), we
-      // continue with camera-only.
-      if (wantsScreenCapture && typeof navigator.mediaDevices.getDisplayMedia === 'function') {
-        try {
-          const screenStream = await navigator.mediaDevices.getDisplayMedia({
-            video: { frameRate: 10 },
-            audio: false,
-          })
-          if (cancelled) {
-            screenStream.getTracks().forEach((t) => t.stop())
-            return
-          }
-          screenStreamRef.current = screenStream
-
-          // If the user clicks the browser "Stop sharing" button, the
-          // video track ends — drop the recorder gracefully.
-          screenStream.getVideoTracks().forEach((track) => {
-            track.addEventListener('ended', () => {
-              screenRecorder.stopRecording().catch(() => {})
-              screenStreamRef.current = null
-            })
-          })
-
-          // Reuse the same mixed audio so the screen track also has both
-          // sides of the conversation. Falls back to silent screen track.
-          const screenRecordingStream = mixedAudio
-            ? new MediaStream([
-                ...screenStream.getVideoTracks(),
-                ...mixedAudio.getAudioTracks(),
-              ])
-            : new MediaStream([...screenStream.getVideoTracks()])
-
-          screenRecorder.startRecording(screenRecordingStream, screenRecorderOptions)
-        } catch (err) {
-          // User cancelled or capture unavailable — continue with camera only.
-          console.warn('Screen capture unavailable, continuing without it:', err)
-        }
-      }
     }
 
     initCapture()
@@ -704,19 +632,14 @@ export default function InterviewPage() {
         streamRef.current.getTracks().forEach((t) => t.stop())
         streamRef.current = null
       }
-      if (screenStreamRef.current) {
-        screenStreamRef.current.getTracks().forEach((t) => t.stop())
-        screenStreamRef.current = null
-      }
       resetVoiceMixer()
       resetRecordingClock()
     }
-    // Hook return objects (screenRecorder, etc.) hold stable functions but
-    // are themselves a fresh reference each render — listing them would
-    // re-prompt the user for screen-share on every render. Re-run only when
-    // the underlying interview config or capture mode changes.
+    // Hook return objects hold stable functions but are themselves a fresh
+    // reference each render — listing them would re-prompt for camera on every
+    // render. Re-run only when the underlying interview config changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config, wantsScreenCapture])
+  }, [config])
 
   // ─── Load TTS voices ──────────────────────────────────────────────────────
   useEffect(() => {
