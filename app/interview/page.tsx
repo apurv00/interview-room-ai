@@ -32,7 +32,7 @@ import { useCoachMode } from '@interview/hooks/useCoachMode'
 import CoachOverlay from '@interview/components/interview/CoachOverlay'
 import CodingLayout from '@interview/components/interview/CodingLayout'
 import DesignLayout from '@interview/components/interview/DesignLayout'
-import { selectProblem, type CodingProblem } from '@interview/config/codingProblems'
+import { selectProblem, resolveCodingTimeBudget, resolveCodingDifficulty, type CodingProblem } from '@interview/config/codingProblems'
 import { selectDesignProblem, type DesignProblem } from '@interview/config/designProblems'
 import type { InterviewConfig, DesignSubmission } from '@shared/types'
 import { AVATAR_NAME, getAvatarTitle } from '@interview/config/interviewConfig'
@@ -338,6 +338,7 @@ export default function InterviewPage() {
     avatarEmotion,
     isAvatarTalking,
     timeRemaining,
+    answerSecondsLeft,
     liveAnswer,
     coachingTip,
     finishInterview,
@@ -459,12 +460,36 @@ export default function InterviewPage() {
     // IMPORTANT: Defer setConfig until problem is loaded so useInterview doesn't
     // start the standard flow before the problem is available.
     if (parsed.interviewType === 'coding') {
+      // Size the problem to the coding time actually available (candidate feedback
+      // 2026-06-16: a "10-min" problem was unsolvable in 25). Difficulty is the
+      // easier of what experience warrants and what the budget allows; the budget
+      // becomes expectedTimeMinutes so the UI shows an honest, finishable target.
+      // The coding flow presents ONE problem (see the useInterview coding branch),
+      // so the whole usable time is that single problem's budget — do NOT divide by
+      // getCodingQuestionCount (multi-problem isn't wired into the interview loop, and
+      // dividing made 'hard' unreachable + the badge wrong for 30-min slots).
+      const codingBudget = resolveCodingTimeBudget(parsed.duration, 1)
+      const codingDifficulty = resolveCodingDifficulty(parsed.experience, codingBudget)
+      const DIFF_RANK = { easy: 0, medium: 1, hard: 2 } as const
+      // selectProblem falls back to ADJACENT (harder) difficulties when the target
+      // pool is exhausted. Stamp the short budget ONLY when the problem isn't harder
+      // than the calibrated target — otherwise we'd label a medium problem as a
+      // 6-min task and re-create the mismatch this fixes. A harder fallback keeps its
+      // own (honest, longer) expectedTimeMinutes. (Codex P2 on PR #456.)
+      const withBudget = (p: CodingProblem | null): CodingProblem | null => {
+        if (!p) return p
+        if (DIFF_RANK[p.difficulty] > DIFF_RANK[codingDifficulty]) return p
+        return { ...p, expectedTimeMinutes: codingBudget }
+      }
+      const isOverScoped = (p: CodingProblem | null): boolean =>
+        !!p && DIFF_RANK[p.difficulty] > DIFF_RANK[codingDifficulty]
+
       // Fetch user's previously solved problem IDs
       fetch('/api/code/history')
         .then((r) => r.ok ? r.json() : { solvedProblemIds: [] })
         .then(async ({ solvedProblemIds = [] }) => {
-          // Try pool first (excluding solved problems)
-          let problem = selectProblem(parsed.role, parsed.experience, solvedProblemIds)
+          // Try pool first (excluding solved problems), at the calibrated difficulty
+          let problem = selectProblem(parsed.role, parsed.experience, solvedProblemIds, codingDifficulty)
 
           // Prefer an AI-generated problem (role + resume aware) when we can
           // personalize to the candidate's resume, OR when the static pool has
@@ -474,7 +499,10 @@ export default function InterviewPage() {
           // ioredis deps) out of the client bundle; on failure we keep the
           // static result so problem-load never blocks.
           const nativeStatic = !!problem?.applicableDomains?.includes(parsed.role)
-          if (parsed.resumeText || !nativeStatic) {
+          // Also generate when the static pick is HARDER than the calibrated target
+          // (the pool fell back to an adjacent difficulty) — the AI problem is sized
+          // to the budget, so the short slot gets a right-scoped problem. Codex P2.
+          if (parsed.resumeText || !nativeStatic || isOverScoped(problem)) {
             try {
               const res = await fetch('/api/code/generate-problem', {
                 method: 'POST',
@@ -484,6 +512,8 @@ export default function InterviewPage() {
                   experience: parsed.experience,
                   solvedProblemIds,
                   resumeText: parsed.resumeText,
+                  difficulty: codingDifficulty,
+                  budgetMinutes: codingBudget,
                 }),
               })
               if (res.ok) {
@@ -496,16 +526,16 @@ export default function InterviewPage() {
           }
           if (!problem) {
             // Last resort: any problem from pool (allow repeats)
-            problem = selectProblem(parsed.role, parsed.experience)
+            problem = selectProblem(parsed.role, parsed.experience, [], codingDifficulty)
           }
 
-          if (problem) setCurrentProblem(problem)
+          if (problem) setCurrentProblem(withBudget(problem))
           setConfig(parsed)
         })
         .catch(() => {
           // Offline fallback — just pick from pool without history
-          const problem = selectProblem(parsed.role, parsed.experience)
-          if (problem) setCurrentProblem(problem)
+          const problem = selectProblem(parsed.role, parsed.experience, [], codingDifficulty)
+          if (problem) setCurrentProblem(withBudget(problem))
           setConfig(parsed)
         })
     } else if (parsed.interviewType === 'system-design') {
@@ -795,6 +825,7 @@ export default function InterviewPage() {
           sessionId={interview.sessionId ?? undefined}
           currentQuestion={currentQuestion}
           liveAnswer={displayAnswer}
+          answerSecondsLeft={answerSecondsLeft}
         >
           <div className="px-4 pb-1 flex flex-col gap-1.5">
             {isCoachMode && <CoachOverlay state={coachModeState} />}

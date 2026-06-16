@@ -1012,8 +1012,15 @@ const PROBLEM_POOL_FALLBACK: Record<string, string> = {
   'data-analyst': 'data-science',
 }
 
-export function selectProblem(domain: string, experience: string, usedIds: string[] = []): CodingProblem | null {
-  const primaryDifficulty = experience === '7+' ? 'hard' : experience === '3-6' ? 'medium' : 'easy'
+export function selectProblem(
+  domain: string,
+  experience: string,
+  usedIds: string[] = [],
+  difficultyOverride?: CodingProblem['difficulty'],
+): CodingProblem | null {
+  // difficultyOverride (time-calibrated) wins; otherwise fall back to experience.
+  const primaryDifficulty: CodingProblem['difficulty'] =
+    difficultyOverride ?? (experience === '7+' ? 'hard' : experience === '3-6' ? 'medium' : 'easy')
 
   // Try primary difficulty first, then adjacent difficulties
   const difficultyOrder: Array<CodingProblem['difficulty']> =
@@ -1078,4 +1085,35 @@ export function getStarterCode(problem: CodingProblem | null | undefined, langua
   const specific = problem?.starterCode?.[language]
   if (specific && specific.trim()) return specific
   return GENERIC_STARTER[language] ?? GENERIC_STARTER.python
+}
+
+// ─── Difficulty ⇄ time calibration ──────────────────────────────────────────
+// Candidate feedback (2026-06-16): a problem "given for 10 min" was barely
+// solvable in 25 min. Root cause: difficulty was derived from EXPERIENCE only,
+// ignoring how much time the interview actually allows. These helpers size the
+// problem to the real coding budget so it's finishable in the time.
+
+type Difficulty = CodingProblem['difficulty']
+const DIFFICULTY_RANK: Record<Difficulty, number> = { easy: 0, medium: 1, hard: 2 }
+
+/**
+ * Minutes actually available to solve ONE problem, after interview overhead
+ * (intro, problem read, feedback, one follow-up ≈ 4 min) and dividing across the
+ * number of problems. Floored at 4 so it's never absurdly small.
+ */
+export function resolveCodingTimeBudget(durationMinutes: number, problemCount: number): number {
+  const OVERHEAD_MIN = 4
+  const usable = Math.max(durationMinutes - OVERHEAD_MIN, 4)
+  return Math.max(Math.round(usable / Math.max(problemCount, 1)), 4)
+}
+
+/**
+ * Choose difficulty as the EASIER of what the candidate's experience warrants and
+ * what the time budget allows — so a senior in a 10-min slot gets a quick problem,
+ * and nobody gets a 25-min "hard" with 7 minutes on the clock.
+ */
+export function resolveCodingDifficulty(experience: string, budgetMinutes: number): Difficulty {
+  const byExperience: Difficulty = experience === '7+' ? 'hard' : experience === '3-6' ? 'medium' : 'easy'
+  const byTime: Difficulty = budgetMinutes <= 12 ? 'easy' : budgetMinutes <= 22 ? 'medium' : 'hard'
+  return DIFFICULTY_RANK[byExperience] <= DIFFICULTY_RANK[byTime] ? byExperience : byTime
 }

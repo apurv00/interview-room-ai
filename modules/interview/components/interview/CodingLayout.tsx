@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { FileText, Code2, MessageSquare } from 'lucide-react'
+import { FileText, Code2, MessageSquare, Clock } from 'lucide-react'
 import Avatar from '@interview/components/Avatar'
 import CodeEditor from './CodeEditor'
 import ClarificationsPanel from './ClarificationsPanel'
@@ -34,6 +34,8 @@ interface CodingLayoutProps {
   // Transcript
   currentQuestion: string
   liveAnswer: string
+  /** Seconds left to answer the post-submit verbal question (0 when none active). */
+  answerSecondsLeft?: number
 
   // Children (coaching layer)
   children?: React.ReactNode
@@ -58,6 +60,7 @@ export default function CodingLayout({
   sessionId,
   currentQuestion,
   liveAnswer,
+  answerSecondsLeft = 0,
   children,
 }: CodingLayoutProps) {
   const [mobileTab, setMobileTab] = useState<MobileTab>('code')
@@ -138,9 +141,21 @@ export default function CodingLayout({
   // and the mobile Chat tab (its own full-height view), so the Problem and Chat
   // tabs stay distinct and a long problem can't bury the conversation. Codex P2.
   const renderConversation = () => {
-    if (!currentQuestion && !liveAnswer) return null
+    if (!currentQuestion && !liveAnswer && answerSecondsLeft <= 0) return null
     return (
       <div className="space-y-2">
+        {/* Visible answer countdown — so the candidate knows there's a time limit
+            and it auto-advances if they stay silent. Candidate feedback 2026-06-16. */}
+        {answerSecondsLeft > 0 && (
+          <div
+            className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold ${
+              answerSecondsLeft <= 5 ? 'bg-red-500/25 text-red-300 animate-pulse' : 'bg-amber-500/20 text-amber-300'
+            }`}
+          >
+            <Clock className="w-3 h-3" />
+            {answerSecondsLeft}s to answer
+          </div>
+        )}
         {currentQuestion && (
           <div
             className={`rounded-md transition-all duration-500 ${
@@ -213,6 +228,19 @@ export default function CodingLayout({
         </div>
       )}
 
+      {/* Mobile answer countdown — shown on EVERY mobile tab (incl. Code) so the
+          candidate sees the timer wherever they are during the verbal follow-up.
+          Independent of the 6s question-highlight banner above. Review P2. */}
+      {answerSecondsLeft > 0 && (
+        <div className="md:hidden mx-2 mb-1 flex justify-center shrink-0">
+          <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold ${
+            answerSecondsLeft <= 5 ? 'bg-red-500/25 text-red-300 animate-pulse' : 'bg-amber-500/20 text-amber-300'
+          }`}>
+            <Clock className="w-3 h-3" />{answerSecondsLeft}s to answer
+          </span>
+        </div>
+      )}
+
       {/* Split layout: both panels on desktop; one at a time on mobile via tabs */}
       <div className="flex-1 flex min-h-0">
         {/* Left panel: Avatar + Problem + Conversation. Full-width on mobile when
@@ -242,6 +270,14 @@ export default function CodingLayout({
                 }`}>
                   {problem.difficulty.charAt(0).toUpperCase() + problem.difficulty.slice(1)}
                 </span>
+                {problem.expectedTimeMinutes > 0 && (
+                  <span
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-700/60 text-gray-300"
+                    title="Suggested time for this problem"
+                  >
+                    <Clock className="w-3 h-3" />~{problem.expectedTimeMinutes} min
+                  </span>
+                )}
               </div>
 
               {/* Description */}
@@ -249,7 +285,10 @@ export default function CodingLayout({
 
               {/* Examples */}
               <div className="space-y-2">
-                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Examples</p>
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Examples</p>
+                  <span className="text-[10px] text-emerald-400/80">Press <span className="font-semibold">Run</span> to test against these →</span>
+                </div>
                 {problem.examples.map((ex, i) => (
                   <div key={i} className="bg-gray-800/80 rounded-md p-3 space-y-1">
                     <div>
@@ -328,6 +367,9 @@ export default function CodingLayout({
               // in ASK_QUESTION) is silently dropped. Gate Submit to that phase so
               // an early click can't lock the button as "Submitted". Codex P2.
               canSubmit={phase === 'CODE_EDITING'}
+              // LeetCode-style: Run executes the candidate's code against these
+              // example test cases and shows expected-vs-actual + pass/fail.
+              runContext={problem ? { title: problem.title, description: problem.description, examples: problem.examples } : undefined}
             />
           </div>
         </div>

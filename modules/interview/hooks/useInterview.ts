@@ -134,6 +134,7 @@ function codeEvaluationToAnswerEvaluation(
   evaluation: Record<string, unknown>,
   problem: { title: string; description: string },
   submission: { code: string; language: string },
+  status: AnswerEvaluation['status'] = 'ok',
 ): AnswerEvaluation {
   const feedback = typeof evaluation.feedback === 'string' ? evaluation.feedback : undefined
   return {
@@ -148,7 +149,10 @@ function codeEvaluationToAnswerEvaluation(
     primaryStrength: 'code_quality',
     answerSummary: feedback || `Submitted ${submission.language} solution for ${problem.title}.`,
     flags: feedbackFlags(evaluation.flags),
-    status: 'ok',
+    // 'failed' (e.g. the eval timed out) still counts as answered but is excluded
+    // from score aggregation (G.4) — so a slow eval can't drop a real submission to
+    // an unscored/short-form interview. Codex P1 on PR #456.
+    status,
     probeDecision: { shouldProbe: false },
   }
 }
@@ -190,6 +194,8 @@ export interface UseInterviewReturn {
   avatarEmotion: AvatarEmotion
   isAvatarTalking: boolean
   timeRemaining: number
+  /** Seconds left in a timed verbal-answer window (0 when none is active). */
+  answerSecondsLeft: number
   liveAnswer: string
   sessionId: string | null
   coachingTip: string | null
@@ -494,6 +500,10 @@ export function useInterview({
   // ── Timer ──
   const [timeRemaining, setTimeRemaining] = useState(0)
   const timeRemainingRef = useRef(0)
+  // Visible countdown for a timed verbal answer window (e.g. the post-submit coding
+  // follow-up). 0 when no answer-timer is running. Candidate feedback 2026-06-16:
+  // "if I don't answer there should be a timer."
+  const [answerSecondsLeft, setAnswerSecondsLeft] = useState(0)
 
   // ── DB session ──
   // Note: sessionIdRef is declared above (near useInterviewAPI) so it can be
@@ -2234,10 +2244,19 @@ export function useInterview({
         addToTranscript('candidate', `[Code submitted in ${submission.language}]`, 1)
 
         let feedbackText = 'Good effort! Let me share some thoughts.'
+        let codeEvalRecorded = false
         try {
+          // Bound the eval so a slow/hung LLM can't stall the interview (a top
+          // "takes too long" driver). On timeout we fall through to default feedback.
+          // Also abort if the candidate ends the interview mid-eval, so End bails
+          // immediately instead of waiting out the 12s.
+          const evalController = new AbortController()
+          const evalTimeout = setTimeout(() => evalController.abort(), 12000)
+          interviewAbortRef.current?.signal.addEventListener('abort', () => evalController.abort(), { once: true })
           const evalRes = await fetch('/api/evaluate-code', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            signal: evalController.signal,
             body: JSON.stringify({
               code: submission.code,
               language: submission.language,
@@ -2247,6 +2266,7 @@ export function useInterview({
               sessionId: sessionIdRef.current,
             }),
           })
+          clearTimeout(evalTimeout)
           if (evalRes.ok) {
             const evaluation = (await evalRes.json()) as Record<string, unknown>
             const feedback = typeof evaluation.feedback === 'string' ? evaluation.feedback : undefined
@@ -2255,6 +2275,7 @@ export function useInterview({
               ...evaluationsRef.current,
               codeEvaluationToAnswerEvaluation(evaluation, problem, submission),
             ]
+            codeEvalRecorded = true
             performanceSignalRef.current = computePerformanceSignal()
             const avgScore = (
               boundedScore(evaluation.correctness) +
@@ -2265,6 +2286,17 @@ export function useInterview({
           }
         } catch { /* continue with default feedback */ }
 
+        // The candidate DID submit code — make sure that's recorded even if the eval
+        // timed out / failed, so answeredCount reflects the submission instead of
+        // dropping to an unscored/short-form coding interview. 'failed' status keeps
+        // it out of score aggregation (G.4). Codex P1 on PR #456.
+        if (!codeEvalRecorded) {
+          evaluationsRef.current = [
+            ...evaluationsRef.current,
+            codeEvaluationToAnswerEvaluation({}, problem, submission, 'failed'),
+          ]
+        }
+
         checkAbort()
 
         // Show feedback
@@ -2274,7 +2306,9 @@ export function useInterview({
         addToTranscript('interviewer', feedbackText, 1)
         await avatarSpeak(feedbackText, avatarEmotion)
 
-        await new Promise<void>((r) => setTimeout(r, 2000))
+        // Brief beat so the candidate can read the feedback (was 2000ms — trimmed
+        // as part of cutting overall coding-interview wall-clock).
+        await new Promise<void>((r) => setTimeout(r, 600))
         checkAbort()
 
         // Follow-up: ask about approach
@@ -2291,7 +2325,32 @@ export function useInterview({
 
           checkAbort()
           setLiveAnswer('')
-          const answer = await listenForAnswer(true, 30000, () => transitionTo('LISTENING'))
+          // Visible countdown that ACTUALLY advances when it hits 0. Note:
+          // listenForAnswer's timeoutMs is only the POST-speech inactivity window;
+          // its PRE-speech (never-spoke) window is timeoutMs + 30s (~55s), so for a
+          // silent candidate the listen wouldn't end at 25s on its own. We therefore
+          // drive a hard stop at FOLLOWUP_MS via stopListening so the real deadline
+          // matches the badge. The interval + hard-stop are cleared on the interview
+          // abort (End/unmount) too, not just on the listen resolving.
+          const FOLLOWUP_MS = 25000
+          setAnswerSecondsLeft(Math.ceil(FOLLOWUP_MS / 1000))
+          const countdown = setInterval(() => setAnswerSecondsLeft((s) => Math.max(s - 1, 0)), 1000)
+          const hardStop = setTimeout(() => stopListening('inactivityPostSpeech'), FOLLOWUP_MS)
+          const onFollowUpAbort = () => {
+            clearInterval(countdown)
+            clearTimeout(hardStop)
+            setAnswerSecondsLeft(0)
+          }
+          interviewAbortRef.current?.signal.addEventListener('abort', onFollowUpAbort, { once: true })
+          let answer = ''
+          try {
+            answer = await listenForAnswer(true, FOLLOWUP_MS, () => transitionTo('LISTENING'))
+          } finally {
+            clearInterval(countdown)
+            clearTimeout(hardStop)
+            setAnswerSecondsLeft(0)
+            interviewAbortRef.current?.signal.removeEventListener('abort', onFollowUpAbort)
+          }
 
           if (answer && !isInterviewOver()) {
             addToTranscript('candidate', answer, 2)
@@ -2579,6 +2638,7 @@ export function useInterview({
     avatarEmotion,
     isAvatarTalking,
     timeRemaining,
+    answerSecondsLeft,
     liveAnswer,
     sessionId: sessionIdRef.current,
     coachingTip,

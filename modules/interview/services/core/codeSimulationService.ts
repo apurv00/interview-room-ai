@@ -121,3 +121,101 @@ Simulate running this program and return the JSON described in the rules.`
     }
   }
 }
+
+// ─── Run against example test cases (LeetCode-style) ─────────────────────────
+// Candidate feedback (2026-06-16): "the runner should be interactive with sample
+// test cases like LeetCode, and I can't tell how input/output works." Examples were
+// display-only. This runs the candidate's code against each example via the model
+// and reports actual vs expected + pass/fail — AI-judged (no real sandbox), so the
+// UI labels it estimated, but it makes the I/O contract concrete.
+
+export interface ExampleTestResult {
+  input: string
+  expected: string
+  actual: string
+  passed: boolean
+}
+export interface ExampleRunResult {
+  results: ExampleTestResult[]
+  passedCount: number
+  totalCount: number
+  /** Always true — pass/fail is predicted by the model, not a real run. */
+  simulated: true
+}
+
+const TestJudgmentsSchema = z.object({
+  results: z.array(z.object({ actual: z.string(), passed: z.boolean() })),
+})
+
+const TEST_SYSTEM_PROMPT = `You are a code-execution simulator acting as a test harness for an interview practice tool. The candidate wrote a solution; for EACH test case you predict what THEIR code produces for that input and whether it matches the expected output.
+
+${DATA_BOUNDARY_RULE}
+
+Rules:
+- Return ONLY JSON: {"results": [{"actual": string, "passed": boolean}, ...]} — exactly one entry per test case, IN THE SAME ORDER.
+- "actual": what the candidate's code would output/return for that input. Be faithful to THEIR code, INCLUDING bugs — do not fix or solve the problem for them.
+- "passed": true iff "actual" matches the expected output in meaning (ignore trivial formatting like surrounding whitespace or quote style when the value is equivalent).
+- If the code is empty / unimplemented / won't compile, mark every case passed=false with "actual" briefly stating the issue (e.g. "function not implemented", "SyntaxError").
+- Do not add commentary or markdown fences.`
+
+export async function runExampleTests(
+  code: string,
+  language: CodeLanguage,
+  examples: Array<{ input: string; output: string }>,
+  problem: { title: string; description: string },
+): Promise<ExampleRunResult> {
+  const cases = examples.slice(0, 12).map((e) => ({
+    input: (e.input || '').slice(0, 2000),
+    output: (e.output || '').slice(0, 2000),
+  }))
+
+  const fail = (actual: string): ExampleRunResult => ({
+    results: cases.map((c) => ({ input: c.input, expected: c.output, actual, passed: false })),
+    passedCount: 0,
+    totalCount: cases.length,
+    simulated: true,
+  })
+
+  if (!code.trim()) return fail('Editor is empty — nothing to test.')
+  if (cases.length === 0) return fail('No example test cases for this problem.')
+
+  const userMessage = `Language: ${language}
+Problem: ${neutralizeFences(problem.title.slice(0, 300))}
+${neutralizeFences(problem.description.slice(0, 4000))}
+
+<code>
+${neutralizeFences(code.slice(0, 50000))}
+</code>
+
+Test cases (predict the candidate's output for each, in order):
+${cases.map((c, i) => `Case ${i + 1}: input = ${neutralizeFences(c.input)} | expected = ${neutralizeFences(c.output)}`).join('\n')}
+
+Return the JSON described in the rules.`
+
+  try {
+    const result = await completion({
+      taskSlot: 'interview.code-run',
+      system: TEST_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: userMessage }],
+    })
+    const parsed = parseClaudeJSON(result.text || '{}', TestJudgmentsSchema)
+    const results: ExampleTestResult[] = cases.map((c, i) => {
+      const j = parsed.results[i]
+      return {
+        input: c.input,
+        expected: c.output,
+        actual: (j?.actual ?? 'No result').slice(0, MAX_OUTPUT_LENGTH),
+        passed: Boolean(j?.passed),
+      }
+    })
+    return {
+      results,
+      passedCount: results.filter((r) => r.passed).length,
+      totalCount: results.length,
+      simulated: true,
+    }
+  } catch (err) {
+    aiLogger.warn({ err, language }, 'runExampleTests failed')
+    return fail('Could not run the example tests right now. You can still Submit.')
+  }
+}

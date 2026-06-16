@@ -144,7 +144,22 @@ interface CodeEditorProps {
    * so Submit must stay disabled until the editing phase. Defaults to true.
    */
   canSubmit?: boolean
+  /**
+   * When set, "Run" acts as a LeetCode-style harness: it runs the candidate's code
+   * against these example test cases and shows expected-vs-actual + pass/fail
+   * (AI-judged). Without it, Run does a free-form simulated execution.
+   */
+  runContext?: {
+    title: string
+    description: string
+    examples: Array<{ input: string; output: string }>
+  }
 }
+
+type TestResult = { input: string; expected: string; actual: string; passed: boolean }
+type RunState =
+  | { kind: 'run'; stdout: string; stderr: string; exitCode: number }
+  | { kind: 'tests'; results: TestResult[]; passedCount: number; totalCount: number }
 
 export default function CodeEditor({
   initialCode = '',
@@ -153,6 +168,7 @@ export default function CodeEditor({
   onSubmit,
   disabled = false,
   canSubmit = true,
+  runContext,
 }: CodeEditorProps) {
   const [code, setCode] = useState(initialCode ?? '')
   const [showLangDropdown, setShowLangDropdown] = useState(false)
@@ -166,7 +182,7 @@ export default function CodeEditor({
   // #4 — Run: AI-SIMULATED execution (/api/code/run predicts output via the model;
   // there is no real sandbox). Lets the candidate sanity-check without submitting.
   const [running, setRunning] = useState(false)
-  const [runResult, setRunResult] = useState<{ stdout: string; stderr: string; exitCode: number } | null>(null)
+  const [runResult, setRunResult] = useState<RunState | null>(null)
   const [showOutput, setShowOutput] = useState(false)
   const editorRef = useRef<MonacoEditorType.IStandaloneCodeEditor | null>(null)
   const themeDefinedRef = useRef(false)
@@ -223,35 +239,47 @@ export default function CodeEditor({
     onSubmit(code)
   }, [code, disabled, canSubmit, onSubmit, markSubmitted])
 
-  // #4 — ask the model to simulate running the code and show the predicted
-  // stdout/stderr inline, so candidates can sanity-check before they Submit.
+  // #4 — Run: when the problem has example test cases, run against them
+  // (LeetCode-style, AI-judged pass/fail); otherwise free-form simulated output.
+  const hasExamples = (runContext?.examples?.length ?? 0) > 0
   const handleRun = useCallback(async () => {
     if (running || disabled) return
     setRunning(true)
     setShowOutput(true)
     setRunResult(null)
     try {
+      const payload = hasExamples
+        ? { code, language, examples: runContext!.examples, problem: { title: runContext!.title, description: runContext!.description } }
+        : { code, language }
       const res = await fetch('/api/code/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, language }),
+        body: JSON.stringify(payload),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        setRunResult({ stdout: '', stderr: data?.error || `Runner error (${res.status})`, exitCode: 1 })
+        setRunResult({ kind: 'run', stdout: '', stderr: data?.error || `Runner error (${res.status})`, exitCode: 1 })
+      } else if (Array.isArray(data.results)) {
+        setRunResult({
+          kind: 'tests',
+          results: data.results as TestResult[],
+          passedCount: typeof data.passedCount === 'number' ? data.passedCount : 0,
+          totalCount: typeof data.totalCount === 'number' ? data.totalCount : data.results.length,
+        })
       } else {
         setRunResult({
+          kind: 'run',
           stdout: typeof data.stdout === 'string' ? data.stdout : '',
           stderr: typeof data.stderr === 'string' ? data.stderr : '',
           exitCode: typeof data.exitCode === 'number' ? data.exitCode : 0,
         })
       }
     } catch {
-      setRunResult({ stdout: '', stderr: 'Could not reach the code runner. Check your connection and try again.', exitCode: 1 })
+      setRunResult({ kind: 'run', stdout: '', stderr: 'Could not reach the code runner. Check your connection and try again.', exitCode: 1 })
     } finally {
       setRunning(false)
     }
-  }, [code, language, running, disabled])
+  }, [code, language, running, disabled, hasExamples, runContext])
 
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(code).then(() => {
@@ -363,7 +391,9 @@ export default function CodeEditor({
             onClick={handleRun}
             disabled={disabled || running}
             className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-100 bg-gray-700/80 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 rounded-md transition-all"
-            title="Run — AI-estimated output (predicted by the model, not a real sandbox)"
+            title={hasExamples
+              ? 'Run your code against the example test cases (AI-estimated pass/fail)'
+              : 'Run — AI-estimated output (predicted by the model, not a real sandbox)'}
           >
             {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
             {running ? 'Running' : 'Run'}
@@ -487,12 +517,23 @@ export default function CodeEditor({
         <div className="shrink-0 max-h-[35%] flex flex-col bg-[#15161f] border-t border-gray-700/50">
           <div className="flex items-center justify-between px-4 py-1.5 border-b border-gray-700/40">
             <div className="flex items-center gap-2 text-xs font-medium text-gray-300">
-              <span>Output</span>
+              <span>{runResult?.kind === 'tests' ? 'Example tests' : 'Output'}</span>
               {/* The Run button predicts output with the model, not a real sandbox. */}
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-300" title="Output is predicted by AI, not a sandboxed execution — it can differ from a real run.">
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-300" title="Predicted by AI, not a sandboxed execution — it can differ from a real run.">
                 AI-estimated
               </span>
-              {runResult && (
+              {runResult?.kind === 'tests' && (
+                <span
+                  className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                    runResult.passedCount === runResult.totalCount
+                      ? 'bg-emerald-500/20 text-emerald-300'
+                      : 'bg-red-500/20 text-red-300'
+                  }`}
+                >
+                  {runResult.passedCount}/{runResult.totalCount} passed
+                </span>
+              )}
+              {runResult?.kind === 'run' && (
                 <span
                   className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
                     runResult.exitCode === 0
@@ -515,9 +556,25 @@ export default function CodeEditor({
           <div className="flex-1 overflow-y-auto px-4 py-2 font-mono text-xs leading-relaxed">
             {running ? (
               <span className="text-gray-400 inline-flex items-center gap-2">
-                <Loader2 className="w-3.5 h-3.5 animate-spin" /> Running…
+                <Loader2 className="w-3.5 h-3.5 animate-spin" /> {hasExamples ? 'Running tests…' : 'Running…'}
               </span>
-            ) : runResult ? (
+            ) : runResult?.kind === 'tests' ? (
+              <div className="space-y-2">
+                {runResult.results.map((t, i) => (
+                  <div key={i} className={`rounded-md border px-2 py-1.5 ${t.passed ? 'border-emerald-700/40 bg-emerald-500/5' : 'border-red-700/40 bg-red-500/5'}`}>
+                    <div className={`flex items-center gap-1.5 font-semibold ${t.passed ? 'text-emerald-300' : 'text-red-300'}`}>
+                      {t.passed ? <Check className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5" />}
+                      Case {i + 1} {t.passed ? 'Passed' : 'Failed'}
+                    </div>
+                    <div className="mt-1 grid gap-0.5 text-gray-300">
+                      <div><span className="text-gray-500">Input:&nbsp;&nbsp;&nbsp;</span>{t.input}</div>
+                      <div><span className="text-gray-500">Expected:</span> <span className="text-emerald-200/90">{t.expected}</span></div>
+                      <div><span className="text-gray-500">Got:&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span className={t.passed ? 'text-gray-200' : 'text-red-300'}>{t.actual}</span></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : runResult?.kind === 'run' ? (
               <>
                 {runResult.stdout && (
                   <pre className="text-gray-100 whitespace-pre-wrap break-words">{runResult.stdout}</pre>
