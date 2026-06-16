@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { simulateCodeRun } from '@interview/services/core/codeSimulationService'
+import { simulateCodeRun, runExampleTests } from '@interview/services/core/codeSimulationService'
 import { completion } from '@shared/services/modelRouter'
 
 vi.mock('@shared/services/modelRouter', async (importOriginal) => {
@@ -62,5 +62,39 @@ describe('simulateCodeRun (LLM-based Run)', () => {
     expect(r.simulated).toBe(true)
     expect(r.exitCode).toBe(1)
     expect(r.stderr).toMatch(/could not be fully simulated|incomplete/i)
+  })
+})
+
+describe('runExampleTests (LeetCode-style harness)', () => {
+  beforeEach(() => mockedCompletion.mockReset())
+  const examples = [
+    { input: 'nums=[2,7], target=9', output: '[0,1]' },
+    { input: 'nums=[3,3], target=6', output: '[0,1]' },
+  ]
+  const problem = { title: 'Two Sum', description: 'Return indices.' }
+
+  it('maps model judgments to per-example results + passedCount', async () => {
+    mockedCompletion.mockResolvedValue({
+      text: '{"results":[{"actual":"[0,1]","passed":true},{"actual":"[1,0]","passed":false}]}',
+    } as never)
+    const r = await runExampleTests('def two_sum(): ...', 'python', examples, problem)
+    expect(r.simulated).toBe(true)
+    expect(r.totalCount).toBe(2)
+    expect(r.passedCount).toBe(1)
+    expect(r.results[0]).toMatchObject({ input: examples[0].input, expected: '[0,1]', actual: '[0,1]', passed: true })
+    expect(r.results[1].passed).toBe(false)
+  })
+
+  it('fails all cases (no model call) for empty code', async () => {
+    const r = await runExampleTests('   ', 'python', examples, problem)
+    expect(r.passedCount).toBe(0)
+    expect(r.results.every((t) => !t.passed)).toBe(true)
+    expect(mockedCompletion).not.toHaveBeenCalled()
+  })
+
+  it('returns an empty harness result when there are no examples', async () => {
+    const r = await runExampleTests('code', 'python', [], problem)
+    expect(r.totalCount).toBe(0)
+    expect(mockedCompletion).not.toHaveBeenCalled()
   })
 })

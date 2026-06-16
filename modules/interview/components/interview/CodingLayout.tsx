@@ -257,7 +257,10 @@ export default function CodingLayout({
 
               {/* Examples */}
               <div className="space-y-2">
-                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Examples</p>
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Examples</p>
+                  <span className="text-[10px] text-emerald-400/80">Press <span className="font-semibold">Run</span> to test against these →</span>
+                </div>
                 {problem.examples.map((ex, i) => (
                   <div key={i} className="bg-gray-800/80 rounded-md p-3 space-y-1">
                     <div>
@@ -336,6 +339,9 @@ export default function CodingLayout({
               // in ASK_QUESTION) is silently dropped. Gate Submit to that phase so
               // an early click can't lock the button as "Submitted". Codex P2.
               canSubmit={phase === 'CODE_EDITING'}
+              // LeetCode-style: Run executes the candidate's code against these
+              // example test cases and shows expected-vs-actual + pass/fail.
+              runContext={problem ? { title: problem.title, description: problem.description, examples: problem.examples } : undefined}
             />
           </div>
         </div>
