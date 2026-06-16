@@ -35,3 +35,26 @@ describe('resolveCodingDifficulty', () => {
     expect(resolveCodingDifficulty('3-6', 16)).toBe('medium')
   })
 })
+
+// Drive the REAL pipeline the product uses (ONE problem presented; budget is NOT
+// divided). Guards against the band being unreachable / non-monotonic (review P1).
+describe('real pipeline — single-problem budget across offered durations', () => {
+  const diffFor = (duration: number, experience = '7+') =>
+    resolveCodingDifficulty(experience, resolveCodingTimeBudget(duration, 1))
+
+  it('spans easy → medium → hard for a senior across the 10/20/30 options', () => {
+    expect(diffFor(10)).toBe('easy') // budget 6
+    expect(diffFor(20)).toBe('medium') // budget 16
+    expect(diffFor(30)).toBe('hard') // budget 26 — hard is reachable, not dead
+  })
+
+  it('is monotonic in duration (a longer interview is never EASIER)', () => {
+    const rank = { easy: 0, medium: 1, hard: 2 } as const
+    let prev = -1
+    for (const d of [10, 15, 20, 25, 30, 45, 60]) {
+      const r = rank[diffFor(d)]
+      expect(r).toBeGreaterThanOrEqual(prev)
+      prev = r
+    }
+  })
+})

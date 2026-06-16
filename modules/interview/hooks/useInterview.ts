@@ -2243,8 +2243,11 @@ export function useInterview({
         try {
           // Bound the eval so a slow/hung LLM can't stall the interview (a top
           // "takes too long" driver). On timeout we fall through to default feedback.
+          // Also abort if the candidate ends the interview mid-eval, so End bails
+          // immediately instead of waiting out the 12s.
           const evalController = new AbortController()
           const evalTimeout = setTimeout(() => evalController.abort(), 12000)
+          interviewAbortRef.current?.signal.addEventListener('abort', () => evalController.abort(), { once: true })
           const evalRes = await fetch('/api/evaluate-code', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2305,17 +2308,31 @@ export function useInterview({
 
           checkAbort()
           setLiveAnswer('')
-          // Visible countdown so the candidate knows there's a limit and it won't
-          // hang if they stay silent (auto-advances when it elapses). 25s window.
+          // Visible countdown that ACTUALLY advances when it hits 0. Note:
+          // listenForAnswer's timeoutMs is only the POST-speech inactivity window;
+          // its PRE-speech (never-spoke) window is timeoutMs + 30s (~55s), so for a
+          // silent candidate the listen wouldn't end at 25s on its own. We therefore
+          // drive a hard stop at FOLLOWUP_MS via stopListening so the real deadline
+          // matches the badge. The interval + hard-stop are cleared on the interview
+          // abort (End/unmount) too, not just on the listen resolving.
           const FOLLOWUP_MS = 25000
           setAnswerSecondsLeft(Math.ceil(FOLLOWUP_MS / 1000))
           const countdown = setInterval(() => setAnswerSecondsLeft((s) => Math.max(s - 1, 0)), 1000)
+          const hardStop = setTimeout(() => stopListening('inactivityPostSpeech'), FOLLOWUP_MS)
+          const onFollowUpAbort = () => {
+            clearInterval(countdown)
+            clearTimeout(hardStop)
+            setAnswerSecondsLeft(0)
+          }
+          interviewAbortRef.current?.signal.addEventListener('abort', onFollowUpAbort, { once: true })
           let answer = ''
           try {
             answer = await listenForAnswer(true, FOLLOWUP_MS, () => transitionTo('LISTENING'))
           } finally {
             clearInterval(countdown)
+            clearTimeout(hardStop)
             setAnswerSecondsLeft(0)
+            interviewAbortRef.current?.signal.removeEventListener('abort', onFollowUpAbort)
           }
 
           if (answer && !isInterviewOver()) {

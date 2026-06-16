@@ -228,6 +228,19 @@ export default function CodingLayout({
         </div>
       )}
 
+      {/* Mobile answer countdown — shown on EVERY mobile tab (incl. Code) so the
+          candidate sees the timer wherever they are during the verbal follow-up.
+          Independent of the 6s question-highlight banner above. Review P2. */}
+      {answerSecondsLeft > 0 && (
+        <div className="md:hidden mx-2 mb-1 flex justify-center shrink-0">
+          <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold ${
+            answerSecondsLeft <= 5 ? 'bg-red-500/25 text-red-300 animate-pulse' : 'bg-amber-500/20 text-amber-300'
+          }`}>
+            <Clock className="w-3 h-3" />{answerSecondsLeft}s to answer
+          </span>
+        </div>
+      )}
+
       {/* Split layout: both panels on desktop; one at a time on mobile via tabs */}
       <div className="flex-1 flex min-h-0">
         {/* Left panel: Avatar + Problem + Conversation. Full-width on mobile when

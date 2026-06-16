@@ -35,7 +35,7 @@ import DesignLayout from '@interview/components/interview/DesignLayout'
 import { selectProblem, resolveCodingTimeBudget, resolveCodingDifficulty, type CodingProblem } from '@interview/config/codingProblems'
 import { selectDesignProblem, type DesignProblem } from '@interview/config/designProblems'
 import type { InterviewConfig, DesignSubmission } from '@shared/types'
-import { AVATAR_NAME, getAvatarTitle, getCodingQuestionCount } from '@interview/config/interviewConfig'
+import { AVATAR_NAME, getAvatarTitle } from '@interview/config/interviewConfig'
 import { STORAGE_KEYS } from '@shared/storageKeys'
 import {
   drainQueuedReplayUploads,
@@ -464,8 +464,11 @@ export default function InterviewPage() {
       // 2026-06-16: a "10-min" problem was unsolvable in 25). Difficulty is the
       // easier of what experience warrants and what the budget allows; the budget
       // becomes expectedTimeMinutes so the UI shows an honest, finishable target.
-      const codingProblemCount = getCodingQuestionCount(parsed.duration)
-      const codingBudget = resolveCodingTimeBudget(parsed.duration, codingProblemCount)
+      // The coding flow presents ONE problem (see the useInterview coding branch),
+      // so the whole usable time is that single problem's budget — do NOT divide by
+      // getCodingQuestionCount (multi-problem isn't wired into the interview loop, and
+      // dividing made 'hard' unreachable + the badge wrong for 30-min slots).
+      const codingBudget = resolveCodingTimeBudget(parsed.duration, 1)
       const codingDifficulty = resolveCodingDifficulty(parsed.experience, codingBudget)
       // Copy (don't mutate the shared static-pool object) and stamp the budget.
       const withBudget = (p: CodingProblem | null): CodingProblem | null =>
