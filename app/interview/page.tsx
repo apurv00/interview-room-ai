@@ -32,10 +32,10 @@ import { useCoachMode } from '@interview/hooks/useCoachMode'
 import CoachOverlay from '@interview/components/interview/CoachOverlay'
 import CodingLayout from '@interview/components/interview/CodingLayout'
 import DesignLayout from '@interview/components/interview/DesignLayout'
-import { selectProblem, type CodingProblem } from '@interview/config/codingProblems'
+import { selectProblem, resolveCodingTimeBudget, resolveCodingDifficulty, type CodingProblem } from '@interview/config/codingProblems'
 import { selectDesignProblem, type DesignProblem } from '@interview/config/designProblems'
 import type { InterviewConfig, DesignSubmission } from '@shared/types'
-import { AVATAR_NAME, getAvatarTitle } from '@interview/config/interviewConfig'
+import { AVATAR_NAME, getAvatarTitle, getCodingQuestionCount } from '@interview/config/interviewConfig'
 import { STORAGE_KEYS } from '@shared/storageKeys'
 import {
   drainQueuedReplayUploads,
@@ -459,12 +459,23 @@ export default function InterviewPage() {
     // IMPORTANT: Defer setConfig until problem is loaded so useInterview doesn't
     // start the standard flow before the problem is available.
     if (parsed.interviewType === 'coding') {
+      // Size the problem to the coding time actually available (candidate feedback
+      // 2026-06-16: a "10-min" problem was unsolvable in 25). Difficulty is the
+      // easier of what experience warrants and what the budget allows; the budget
+      // becomes expectedTimeMinutes so the UI shows an honest, finishable target.
+      const codingProblemCount = getCodingQuestionCount(parsed.duration)
+      const codingBudget = resolveCodingTimeBudget(parsed.duration, codingProblemCount)
+      const codingDifficulty = resolveCodingDifficulty(parsed.experience, codingBudget)
+      // Copy (don't mutate the shared static-pool object) and stamp the budget.
+      const withBudget = (p: CodingProblem | null): CodingProblem | null =>
+        p ? { ...p, expectedTimeMinutes: codingBudget } : p
+
       // Fetch user's previously solved problem IDs
       fetch('/api/code/history')
         .then((r) => r.ok ? r.json() : { solvedProblemIds: [] })
         .then(async ({ solvedProblemIds = [] }) => {
-          // Try pool first (excluding solved problems)
-          let problem = selectProblem(parsed.role, parsed.experience, solvedProblemIds)
+          // Try pool first (excluding solved problems), at the calibrated difficulty
+          let problem = selectProblem(parsed.role, parsed.experience, solvedProblemIds, codingDifficulty)
 
           // Prefer an AI-generated problem (role + resume aware) when we can
           // personalize to the candidate's resume, OR when the static pool has
@@ -484,6 +495,8 @@ export default function InterviewPage() {
                   experience: parsed.experience,
                   solvedProblemIds,
                   resumeText: parsed.resumeText,
+                  difficulty: codingDifficulty,
+                  budgetMinutes: codingBudget,
                 }),
               })
               if (res.ok) {
@@ -496,16 +509,16 @@ export default function InterviewPage() {
           }
           if (!problem) {
             // Last resort: any problem from pool (allow repeats)
-            problem = selectProblem(parsed.role, parsed.experience)
+            problem = selectProblem(parsed.role, parsed.experience, [], codingDifficulty)
           }
 
-          if (problem) setCurrentProblem(problem)
+          if (problem) setCurrentProblem(withBudget(problem))
           setConfig(parsed)
         })
         .catch(() => {
           // Offline fallback — just pick from pool without history
-          const problem = selectProblem(parsed.role, parsed.experience)
-          if (problem) setCurrentProblem(problem)
+          const problem = selectProblem(parsed.role, parsed.experience, [], codingDifficulty)
+          if (problem) setCurrentProblem(withBudget(problem))
           setConfig(parsed)
         })
     } else if (parsed.interviewType === 'system-design') {

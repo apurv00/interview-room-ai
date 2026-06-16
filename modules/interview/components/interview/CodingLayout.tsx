@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { FileText, Code2, MessageSquare } from 'lucide-react'
+import { FileText, Code2, MessageSquare, Clock } from 'lucide-react'
 import Avatar from '@interview/components/Avatar'
 import CodeEditor from './CodeEditor'
 import ClarificationsPanel from './ClarificationsPanel'
@@ -242,6 +242,14 @@ export default function CodingLayout({
                 }`}>
                   {problem.difficulty.charAt(0).toUpperCase() + problem.difficulty.slice(1)}
                 </span>
+                {problem.expectedTimeMinutes > 0 && (
+                  <span
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-700/60 text-gray-300"
+                    title="Suggested time for this problem"
+                  >
+                    <Clock className="w-3 h-3" />~{problem.expectedTimeMinutes} min
+                  </span>
+                )}
               </div>
 
               {/* Description */}

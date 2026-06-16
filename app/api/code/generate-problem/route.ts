@@ -26,6 +26,10 @@ const BodySchema = z.object({
   // the prompt budget rather than reject — a too-strict max silently 400s
   // long-resume candidates into the generic static problem. Absent → role-only.
   resumeText: z.string().max(50_000).transform((s) => s.slice(0, 1200)).optional(),
+  // Time-calibrated difficulty + per-problem minute budget (computed client-side
+  // from the interview duration). Optional → generator falls back to experience.
+  difficulty: z.enum(['easy', 'medium', 'hard']).optional(),
+  budgetMinutes: z.number().int().min(3).max(60).optional(),
 })
 
 type Body = z.infer<typeof BodySchema>
@@ -56,7 +60,14 @@ export const POST = composeApiRoute<Body>({
 
   async handler(_req, { body }) {
     try {
-      const problem = await generateCodingProblem(body.domain, body.experience, body.solvedProblemIds, body.resumeText)
+      const problem = await generateCodingProblem(
+        body.domain,
+        body.experience,
+        body.solvedProblemIds,
+        body.resumeText,
+        body.difficulty,
+        body.budgetMinutes,
+      )
       return NextResponse.json({ problem })
     } catch (err) {
       aiLogger.error({ err, domain: body.domain }, '/api/code/generate-problem failed')
