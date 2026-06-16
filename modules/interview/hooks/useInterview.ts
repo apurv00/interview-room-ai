@@ -134,6 +134,7 @@ function codeEvaluationToAnswerEvaluation(
   evaluation: Record<string, unknown>,
   problem: { title: string; description: string },
   submission: { code: string; language: string },
+  status: AnswerEvaluation['status'] = 'ok',
 ): AnswerEvaluation {
   const feedback = typeof evaluation.feedback === 'string' ? evaluation.feedback : undefined
   return {
@@ -148,7 +149,10 @@ function codeEvaluationToAnswerEvaluation(
     primaryStrength: 'code_quality',
     answerSummary: feedback || `Submitted ${submission.language} solution for ${problem.title}.`,
     flags: feedbackFlags(evaluation.flags),
-    status: 'ok',
+    // 'failed' (e.g. the eval timed out) still counts as answered but is excluded
+    // from score aggregation (G.4) — so a slow eval can't drop a real submission to
+    // an unscored/short-form interview. Codex P1 on PR #456.
+    status,
     probeDecision: { shouldProbe: false },
   }
 }
@@ -2240,6 +2244,7 @@ export function useInterview({
         addToTranscript('candidate', `[Code submitted in ${submission.language}]`, 1)
 
         let feedbackText = 'Good effort! Let me share some thoughts.'
+        let codeEvalRecorded = false
         try {
           // Bound the eval so a slow/hung LLM can't stall the interview (a top
           // "takes too long" driver). On timeout we fall through to default feedback.
@@ -2270,6 +2275,7 @@ export function useInterview({
               ...evaluationsRef.current,
               codeEvaluationToAnswerEvaluation(evaluation, problem, submission),
             ]
+            codeEvalRecorded = true
             performanceSignalRef.current = computePerformanceSignal()
             const avgScore = (
               boundedScore(evaluation.correctness) +
@@ -2279,6 +2285,17 @@ export function useInterview({
             setAvatarEmotion(avgScore >= 70 ? 'impressed' : avgScore >= 40 ? 'friendly' : 'curious')
           }
         } catch { /* continue with default feedback */ }
+
+        // The candidate DID submit code — make sure that's recorded even if the eval
+        // timed out / failed, so answeredCount reflects the submission instead of
+        // dropping to an unscored/short-form coding interview. 'failed' status keeps
+        // it out of score aggregation (G.4). Codex P1 on PR #456.
+        if (!codeEvalRecorded) {
+          evaluationsRef.current = [
+            ...evaluationsRef.current,
+            codeEvaluationToAnswerEvaluation({}, problem, submission, 'failed'),
+          ]
+        }
 
         checkAbort()
 
