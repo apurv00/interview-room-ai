@@ -143,7 +143,15 @@ async function getParsedSections(domain: string, depth: string): Promise<Map<Ski
 export async function getSkillContent(domain: string, depth: string): Promise<string | null> {
   const dbContent = await loadSkillFromDB(domain, depth)
   if (dbContent) return dbContent
-  return loadSkillFromFile(domain, depth)
+  const fileContent = loadSkillFromFile(domain, depth)
+  if (fileContent) return fileContent
+  // Backstop: a domain with no skill file (a CMS-added domain absent from skills/)
+  // falls back to the general skill — matching resolveFlow's general flow backstop so
+  // the CMS-backstop path gets BOTH general topic sequencing AND general skill prompt,
+  // not general flow with empty skill. Covered domains (skillFlowCoverage guard) never
+  // reach this. See INTERVIEW_FLOW.md §8 (2026-06-17).
+  if (domain !== 'general') return loadSkillFromFile('general', depth)
+  return null
 }
 
 /**

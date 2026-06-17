@@ -45,8 +45,9 @@ describe('getSkillContent', () => {
     }
   })
 
-  it('returns null for unknown domain', async () => {
-    expect(await getSkillContent('nonexistent', 'behavioral')).toBeNull()
+  it('falls back to the general skill for an unknown domain', async () => {
+    // Backstop for CMS-added domains, coherent with resolveFlow's general flow backstop.
+    expect(await getSkillContent('nonexistent', 'behavioral')).toContain('General')
   })
 })
 
@@ -112,8 +113,9 @@ describe('getSkillSections', () => {
     expect(combined).toContain('Cannot')
   })
 
-  it('returns empty string for unknown domain', async () => {
-    expect(await getSkillSections('nonexistent', 'behavioral', ['question-strategy'])).toBe('')
+  it('falls back to general sections for an unknown domain', async () => {
+    const sections = await getSkillSections('nonexistent', 'behavioral', ['question-strategy'])
+    expect(sections.length).toBeGreaterThan(0)
   })
 
   it('technical depths have depth-meaning section', async () => {
@@ -140,8 +142,9 @@ describe('selectSkillQuestions', () => {
     expect(unique.size).toBeGreaterThanOrEqual(2)
   })
 
-  it('returns empty string for unknown domain', async () => {
-    expect(await selectSkillQuestions('nonexistent', 'behavioral', '0-2')).toBe('')
+  it('falls back to general sample questions for an unknown domain', async () => {
+    const questions = await selectSkillQuestions('nonexistent', 'behavioral', '0-2')
+    expect(questions.length).toBeGreaterThan(0)
   })
 
   // Content quality checks — updated for merged domains

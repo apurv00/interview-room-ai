@@ -80,22 +80,25 @@ function poolFor(domain?: string): readonly string[] {
 }
 
 /**
- * Returns the next unused fallback question, scoped to the candidate's domain when
- * known so a degraded interview stays role-appropriate. Tracks used questions via the
- * provided Set (keyed by the resolved pool) to avoid repetition; resets when exhausted.
+ * Returns the next unused fallback question, scoped to the candidate's domain when known
+ * so a degraded interview stays role-appropriate. Tracks used questions by their TEXT
+ * (not pool index) so the set stays correct even if the resolved pool changes between
+ * calls — e.g. the first failure fires before `config.role` has hydrated (universal pool)
+ * and later calls resolve a domain pool. Resets only when the current pool is exhausted.
  */
-export function getNextFallbackQuestion(usedIndices: Set<number>, domain?: string): string {
+export function getNextFallbackQuestion(used: Set<string>, domain?: string): string {
   const pool = poolFor(domain)
 
-  // Reset if every question in this pool has been used.
-  if (usedIndices.size >= pool.length) {
-    usedIndices.clear()
+  // Reset once every question in the CURRENT pool has been served. (A pool change needs
+  // no special handling: the new pool's questions simply aren't in `used` yet.)
+  if (pool.every((q) => used.has(q))) {
+    used.clear()
   }
 
-  for (let i = 0; i < pool.length; i++) {
-    if (!usedIndices.has(i)) {
-      usedIndices.add(i)
-      return pool[i]
+  for (const q of pool) {
+    if (!used.has(q)) {
+      used.add(q)
+      return q
     }
   }
 

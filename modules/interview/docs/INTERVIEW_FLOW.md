@@ -1139,12 +1139,12 @@ QuestionBank backfill (the one layer that *was* extended) made the gap look fill
 for the 4 regressed; workflow fan-out for the rest). Added `skillFlowCoverage.test.ts`,
 which derives the live cell set from `STATIC_DOMAINS × STATIC_DEPTHS` and fails if any
 cell lacks a skill file or registered flow template — so this cannot silently recur.
-Also wired a `general` backstop in `resolveFlow`: a domain with no template falls back to
-the fully-covered `general` domain for the same depth+experience, so an interview always
-gets structural topic sequencing. This branch is **unreachable for every domain in the
-taxonomy** (the coverage guard proves it); it only protects CMS-added domains absent from
-`STATIC_DOMAINS`. (`getSkillContent` deliberately keeps its `null`-on-miss contract — the
-skill layer is supplementary, and callers already degrade gracefully on an empty section.)
+Also wired a `general` backstop in BOTH `resolveFlow` and `getSkillContent`: a domain with
+no template/skill falls back to the fully-covered `general` domain for the same
+depth+experience, so an interview always gets general topic sequencing AND general skill
+prompt (not general flow with empty skill — caught in QA review). This branch is
+**unreachable for every domain in the taxonomy** (the coverage guard proves it); it only
+protects CMS-added domains absent from `STATIC_DOMAINS`.
 
 **Verification.** `tsc --noEmit` clean; full suite green (`skillFlowCoverage` +
 `rubricCoverage` guards, 4533+ tests). `resolver.ts` is hot-path: the change is additive

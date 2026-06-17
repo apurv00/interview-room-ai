@@ -152,7 +152,7 @@ export function fallbackCaseContextAnswer(interviewType?: string): string {
  * Encapsulates API calls for question generation and answer evaluation.
  */
 export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions): UseInterviewAPIReturn {
-  const usedFallbackIndicesRef = useRef(new Set<number>())
+  const usedFallbackIndicesRef = useRef(new Set<string>())
   const flowHintsRef = useRef<FlowHints | null>(null)
 
   const generateQuestion = useCallback(
