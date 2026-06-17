@@ -7,7 +7,7 @@ import { BenchmarkCase } from './models/BenchmarkCase'
 
 // ─── Built-in Evaluation Rubrics ────────────────────────────────────────────
 
-const BUILT_IN_RUBRICS = [
+export const BUILT_IN_RUBRICS = [
   {
     rubricId: 'rubric_universal_hr_v1',
     domain: '*',
@@ -160,6 +160,240 @@ const BUILT_IN_RUBRICS = [
           good: 'Generally clear, may be overly technical at times',
           adequate: 'Somewhat unclear explanations',
           weak: 'Cannot articulate technical concepts clearly',
+        },
+      },
+    ],
+  },
+  // ─── Generic per-type rubrics (domain '*') ────────────────────────────────
+  // Calibrated scoring bands for every interview type, for ALL domains. Domain
+  // flavor is layered on at eval time from each domain's skill-file
+  // scoring-emphasis / red-flags / experience-calibration sections. These fill
+  // the gap where non-behavioral rounds previously had NO rubric (only behavioral
+  // had a '*' rubric), so they fell back to bare dimension names with no bands.
+  {
+    rubricId: 'rubric_generic_technical_v1',
+    domain: '*',
+    interviewType: 'technical',
+    seniorityBand: '*',
+    version: 1,
+    passThreshold: 60,
+    strongPassThreshold: 80,
+    competencies: ['technical_accuracy', 'depth', 'problem_solving', 'communication'],
+    dimensions: [
+      {
+        name: 'technical_accuracy', label: 'Technical Accuracy', weight: 0.30,
+        description: 'Correctness of technical claims and reasoning',
+        scoringGuide: {
+          excellent: 'All claims correct; demonstrates genuine expertise',
+          good: 'Mostly correct with minor inaccuracies',
+          adequate: 'Some correct concepts but notable gaps',
+          weak: 'Significant technical inaccuracies',
+        },
+      },
+      {
+        name: 'depth', label: 'Depth of Knowledge', weight: 0.30,
+        description: 'How deeply the candidate understands the topic, including tradeoffs and edge cases',
+        scoringGuide: {
+          excellent: 'Discusses tradeoffs, edge cases, and alternatives at depth',
+          good: 'Solid depth on the core concepts',
+          adequate: 'Surface-level understanding',
+          weak: 'Superficial or incorrect understanding',
+        },
+      },
+      {
+        name: 'problem_solving', label: 'Problem Solving', weight: 0.20,
+        description: 'Approach to breaking down and reasoning through problems',
+        scoringGuide: {
+          excellent: 'Systematic approach; considers multiple options with clear tradeoff analysis',
+          good: 'Reasonable approach with some alternatives considered',
+          adequate: 'Basic problem-solving with limited analysis',
+          weak: 'No structured approach',
+        },
+      },
+      {
+        name: 'communication', label: 'Technical Communication', weight: 0.20,
+        description: 'Clarity in explaining technical concepts',
+        scoringGuide: {
+          excellent: 'Crystal-clear explanations at the right abstraction level',
+          good: 'Generally clear, occasionally too low-level',
+          adequate: 'Somewhat unclear explanations',
+          weak: 'Cannot articulate concepts clearly',
+        },
+      },
+    ],
+  },
+  {
+    rubricId: 'rubric_generic_case_study_v1',
+    domain: '*',
+    interviewType: 'case-study',
+    seniorityBand: '*',
+    version: 1,
+    passThreshold: 60,
+    strongPassThreshold: 80,
+    competencies: ['structuring', 'analysis', 'recommendation', 'communication'],
+    dimensions: [
+      {
+        name: 'structuring', label: 'Problem Structuring', weight: 0.30,
+        description: 'Frames and scopes the problem before diving in',
+        scoringGuide: {
+          excellent: 'Clarifies scope, lays out a clear framework, identifies the key questions',
+          good: 'Reasonable structure with most key elements',
+          adequate: 'Some structure but jumps ahead or misses key parts',
+          weak: 'Unstructured; dives in without framing',
+        },
+      },
+      {
+        name: 'analysis', label: 'Analytical Rigor', weight: 0.30,
+        description: 'Quality and rigor of the reasoning and use of data',
+        scoringGuide: {
+          excellent: 'Rigorous, quantified where possible, identifies key drivers and assumptions',
+          good: 'Sound analysis with some quantification',
+          adequate: 'Basic analysis, mostly qualitative or shallow',
+          weak: 'Little real analysis; assertions without support',
+        },
+      },
+      {
+        name: 'recommendation', label: 'Recommendation Quality', weight: 0.25,
+        description: 'Reaches a clear, defensible recommendation with tradeoffs',
+        scoringGuide: {
+          excellent: 'Clear, well-defended recommendation with risks and tradeoffs',
+          good: 'Clear recommendation with some justification',
+          adequate: 'A recommendation but weakly supported',
+          weak: 'No clear recommendation, or hedges entirely',
+        },
+      },
+      {
+        name: 'communication', label: 'Communication', weight: 0.15,
+        description: 'Clear, structured, and persuasive delivery',
+        scoringGuide: {
+          excellent: 'Crisp, well-organized, persuasive',
+          good: 'Clear and organized',
+          adequate: 'Somewhat disorganized or hard to follow',
+          weak: 'Rambling or confusing',
+        },
+      },
+    ],
+  },
+  {
+    rubricId: 'rubric_generic_system_design_v1',
+    domain: '*',
+    interviewType: 'system-design',
+    seniorityBand: '*',
+    version: 1,
+    passThreshold: 60,
+    strongPassThreshold: 80,
+    competencies: ['requirements', 'architecture', 'tradeoffs', 'scalability', 'communication'],
+    dimensions: [
+      {
+        name: 'requirements', label: 'Requirements & Scoping', weight: 0.20,
+        description: 'Clarifies requirements and constraints before designing',
+        scoringGuide: {
+          excellent: 'Thoroughly clarifies functional and non-functional requirements and constraints',
+          good: 'Clarifies the main requirements',
+          adequate: 'Minimal clarification, assumes too much',
+          weak: 'Designs without understanding the requirements',
+        },
+      },
+      {
+        name: 'architecture', label: 'Architecture & Components', weight: 0.25,
+        description: 'Sound high-level design and component decomposition',
+        scoringGuide: {
+          excellent: 'Clean decomposition, sensible components, clear data flow',
+          good: 'Reasonable architecture with minor gaps',
+          adequate: 'Basic design with unclear boundaries',
+          weak: 'Incoherent or missing core components',
+        },
+      },
+      {
+        name: 'tradeoffs', label: 'Tradeoff Reasoning', weight: 0.25,
+        description: 'Justifies technology and design choices with tradeoffs',
+        scoringGuide: {
+          excellent: 'Explicit, well-reasoned tradeoffs for each key choice',
+          good: 'Some tradeoffs articulated',
+          adequate: 'Choices made with little justification',
+          weak: 'No tradeoff awareness; picks "the best" option blindly',
+        },
+      },
+      {
+        name: 'scalability', label: 'Scalability & Failure', weight: 0.20,
+        description: 'Reasons about scale, bottlenecks, and failure modes',
+        scoringGuide: {
+          excellent: 'Quantifies scale, identifies bottlenecks, handles failure modes',
+          good: 'Addresses scaling and some failure handling',
+          adequate: 'Mentions scale but vaguely',
+          weak: 'Ignores scale and failure entirely',
+        },
+      },
+      {
+        name: 'communication', label: 'Communication', weight: 0.10,
+        description: 'Clear articulation of the design',
+        scoringGuide: {
+          excellent: 'Clear narrative, easy to follow',
+          good: 'Generally clear',
+          adequate: 'Somewhat unclear',
+          weak: 'Hard to follow',
+        },
+      },
+    ],
+  },
+  {
+    rubricId: 'rubric_generic_coding_v1',
+    domain: '*',
+    interviewType: 'coding',
+    seniorityBand: '*',
+    version: 1,
+    passThreshold: 60,
+    strongPassThreshold: 80,
+    competencies: ['correctness', 'efficiency', 'code_quality', 'edge_cases', 'communication'],
+    dimensions: [
+      {
+        name: 'correctness', label: 'Correctness', weight: 0.35,
+        description: 'Does the solution produce correct results?',
+        scoringGuide: {
+          excellent: 'Fully correct solution that handles the core cases',
+          good: 'Mostly correct with a minor bug',
+          adequate: 'Partially working with logic gaps',
+          weak: 'Incorrect or non-functional',
+        },
+      },
+      {
+        name: 'efficiency', label: 'Efficiency & Complexity', weight: 0.25,
+        description: 'Time/space complexity and optimization',
+        scoringGuide: {
+          excellent: 'Optimal or near-optimal; analyzes complexity correctly',
+          good: 'Reasonable efficiency; aware of complexity',
+          adequate: 'Works but inefficient; weak complexity awareness',
+          weak: 'No regard for efficiency or complexity',
+        },
+      },
+      {
+        name: 'code_quality', label: 'Code Quality', weight: 0.20,
+        description: 'Readability, structure, and naming',
+        scoringGuide: {
+          excellent: 'Clean, well-structured, well-named, modular',
+          good: 'Readable with minor issues',
+          adequate: 'Works but messy or poorly named',
+          weak: 'Unreadable or unstructured',
+        },
+      },
+      {
+        name: 'edge_cases', label: 'Edge Cases', weight: 0.10,
+        description: 'Identifies and handles edge cases',
+        scoringGuide: {
+          excellent: 'Proactively identifies and handles edge cases',
+          good: 'Handles the obvious edge cases',
+          adequate: 'Misses some edge cases',
+          weak: 'Ignores edge cases entirely',
+        },
+      },
+      {
+        name: 'communication', label: 'Communication', weight: 0.10,
+        description: 'Explains approach and reasoning while coding',
+        scoringGuide: {
+          excellent: 'Clearly explains approach, tradeoffs, and decisions',
+          good: 'Explains the approach adequately',
+          adequate: 'Limited explanation',
+          weak: 'Codes silently; cannot explain',
         },
       },
     ],
