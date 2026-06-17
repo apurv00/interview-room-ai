@@ -15,16 +15,35 @@ export const UNIVERSAL_COMPETENCIES = [
 export const DOMAIN_COMPETENCIES: Record<string, string[]> = {
   // General
   general: ['communication', 'problem_solving', 'leadership', 'teamwork', 'adaptability'],
-  // Engineering
+  // Engineering — Programming
   frontend: ['ui_architecture', 'css_mastery', 'web_performance', 'accessibility', 'component_design', 'collaboration'],
   backend: ['technical_accuracy', 'system_design', 'problem_solving', 'debugging', 'code_quality', 'collaboration', 'infrastructure_knowledge', 'reliability_thinking'],
   sdet: ['test_strategy', 'automation_depth', 'quality_mindset', 'ci_cd_expertise', 'debugging', 'collaboration'],
+  fullstack: ['frontend_proficiency', 'backend_proficiency', 'api_design', 'system_design', 'full_stack_breadth', 'collaboration'],
+  devops: ['reliability_engineering', 'automation', 'ci_cd_expertise', 'cloud_architecture', 'observability', 'incident_response'],
+  mobile: ['mobile_architecture', 'performance_optimization', 'platform_knowledge', 'state_management', 'offline_handling', 'collaboration'],
+  // Engineering — Data & AI
   'data-science': ['statistical_knowledge', 'ml_depth', 'experiment_design', 'data_storytelling', 'business_impact'],
+  'ml-engineer': ['ml_engineering', 'model_deployment', 'pipeline_design', 'mlops', 'technical_accuracy', 'business_impact'],
+  'data-analyst': ['sql_proficiency', 'data_analysis', 'experiment_design', 'data_storytelling', 'dashboard_design', 'business_impact'],
+  // Engineering — Core
+  mechanical: ['thermodynamics', 'mechanics', 'materials_knowledge', 'cad_fea', 'manufacturing_processes', 'problem_solving'],
+  civil: ['structural_analysis', 'geotechnical', 'design_codes', 'construction_management', 'safety_awareness', 'problem_solving'],
+  electrical: ['circuit_analysis', 'power_systems', 'control_systems', 'electronics_fundamentals', 'safety_awareness', 'problem_solving'],
+  electronics: ['analog_design', 'digital_design', 'signals_systems', 'communication_systems', 'embedded_systems', 'problem_solving'],
   // Product & Design
   pm: ['product_sense', 'prioritization', 'metrics_thinking', 'stakeholder_management', 'execution', 'tradeoff_reasoning'],
+  'product-analyst': ['product_metrics', 'experiment_design', 'sql_proficiency', 'data_storytelling', 'product_sense', 'business_impact'],
   design: ['design_thinking', 'user_empathy', 'craft', 'prototyping', 'accessibility'],
+  'ui-designer': ['visual_design', 'design_systems', 'prototyping', 'accessibility', 'craft', 'collaboration'],
+  'product-designer': ['design_thinking', 'user_research', 'interaction_design', 'prototyping', 'user_empathy', 'craft'],
   // Business
   business: ['strategic_thinking', 'structured_thinking', 'leadership', 'analytical_skills', 'framework_usage', 'client_management', 'persuasion', 'financial_modeling'],
+  strategy: ['strategic_thinking', 'problem_structuring', 'market_analysis', 'framework_usage', 'quantitative_reasoning', 'communication'],
+  finance: ['financial_modeling', 'valuation', 'financial_analysis', 'risk_assessment', 'capital_allocation', 'communication'],
+  operations: ['process_optimization', 'supply_chain', 'execution', 'analytical_skills', 'kpi_management', 'problem_solving'],
+  marketing: ['marketing_strategy', 'analytics_attribution', 'channel_expertise', 'growth_thinking', 'brand_thinking', 'creativity'],
+  sales: ['prospecting', 'discovery', 'objection_handling', 'closing', 'pipeline_management', 'relationship_building'],
 }
 
 export function getCompetenciesForDomain(domain: string): string[] {
