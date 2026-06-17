@@ -152,7 +152,7 @@ export function fallbackCaseContextAnswer(interviewType?: string): string {
  * Encapsulates API calls for question generation and answer evaluation.
  */
 export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions): UseInterviewAPIReturn {
-  const usedFallbackIndicesRef = useRef(new Set<number>())
+  const usedFallbackIndicesRef = useRef(new Set<string>())
   const flowHintsRef = useRef<FlowHints | null>(null)
 
   const generateQuestion = useCallback(
@@ -188,14 +188,14 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
         })
         if (!res.ok) {
           console.error(`[generateQuestion] API returned ${res.status}`, await res.text().catch(() => ''))
-          return getNextFallbackQuestion(usedFallbackIndicesRef.current)
+          return getNextFallbackQuestion(usedFallbackIndicesRef.current, config?.role)
         }
         const data = await res.json()
         if (data.flowHints) flowHintsRef.current = data.flowHints as FlowHints
         return data.question as string
       } catch (err) {
         console.error('[generateQuestion] fetch failed', err)
-        return getNextFallbackQuestion(usedFallbackIndicesRef.current)
+        return getNextFallbackQuestion(usedFallbackIndicesRef.current, config?.role)
       }
     },
     [config, getSessionId]

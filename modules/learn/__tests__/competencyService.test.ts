@@ -35,6 +35,7 @@ vi.mock('@shared/db/models', () => ({
 
 import { getCompetenciesForDomain, DOMAIN_COMPETENCIES, UNIVERSAL_COMPETENCIES } from '@learn/services/competencyService'
 import { isFeatureEnabled } from '@shared/featureFlags'
+import { STATIC_DOMAINS } from '@interview/config/staticData'
 
 describe('competencyService', () => {
   beforeEach(() => {
@@ -87,6 +88,15 @@ describe('competencyService', () => {
         expect(DOMAIN_COMPETENCIES).toHaveProperty(domain)
         expect(DOMAIN_COMPETENCIES[domain].length).toBeGreaterThan(0)
       }
+    })
+
+    it('has a domain-specific entry for EVERY selectable interview domain (parity guard)', () => {
+      // Derived from the taxonomy so a new STATIC_DOMAINS entry without competencies
+      // (the gap this fixes) fails CI instead of silently degrading to universal-only.
+      const missing = STATIC_DOMAINS.map(d => d.slug).filter(
+        slug => !DOMAIN_COMPETENCIES[slug] || DOMAIN_COMPETENCIES[slug].length === 0,
+      )
+      expect(missing, `Domains with no DOMAIN_COMPETENCIES entry: ${missing.join(', ')}`).toEqual([])
     })
   })
 

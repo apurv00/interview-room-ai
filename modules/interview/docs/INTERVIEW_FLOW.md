@@ -1121,3 +1121,32 @@ generate-question/evaluate-answer hot loops.
 clean; `npm run build` green. A full browser coding interview with real keys — confirming
 a right-sized problem, Run-against-examples pass/fail, and the visible post-submit
 countdown auto-advancing on silence — remains the manual post-deploy verification.
+
+### 2026-06-17 · Domain coverage gap: 17 selectable domains had no skill/flow; `general` backstop added
+
+**Symptom.** The taxonomy expansion (Phases 4–6) made 24 domains selectable but only
+authored skill files + flow templates for 7. For the other 17, `resolveFlow` returned
+`null` (no topic sequencing, no `experienceAngle`) and `getSkillContent` returned `''`
+(no domain scoring-emphasis / sample questions) — interviews ran on the base prompt only,
+and 4 domains (devops/finance/marketing/sales) had *regressed* from deleted pre-migration
+content.
+
+**Root cause.** No test tied "selectable domain" to "has skill + flow." Coverage was
+authored by hand for the original 7 and never extended when the catalog grew; the
+QuestionBank backfill (the one layer that *was* extended) made the gap look filled.
+
+**Fix.** Authored banded skill files + flow templates for all 17 (recovered git content
+for the 4 regressed; workflow fan-out for the rest). Added `skillFlowCoverage.test.ts`,
+which derives the live cell set from `STATIC_DOMAINS × STATIC_DEPTHS` and fails if any
+cell lacks a skill file or registered flow template — so this cannot silently recur.
+Also wired a `general` backstop in BOTH `resolveFlow` and `getSkillContent`: a domain with
+no template/skill falls back to the fully-covered `general` domain for the same
+depth+experience, so an interview always gets general topic sequencing AND general skill
+prompt (not general flow with empty skill — caught in QA review). This branch is
+**unreachable for every domain in the taxonomy** (the coverage guard proves it); it only
+protects CMS-added domains absent from `STATIC_DOMAINS`.
+
+**Verification.** `tsc --noEmit` clean; full suite green (`skillFlowCoverage` +
+`rubricCoverage` guards, 4533+ tests). `resolver.ts` is hot-path: the change is additive
+and provably cannot alter resolution for any covered domain, but a full browser interview
+on a real domain confirming unchanged flow remains the manual post-deploy check.

@@ -36,6 +36,16 @@ const nextConfig = {
     outputFileTracingIncludes: {
       '/api/resume/pdf': ['./node_modules/@sparticuz/chromium/**'],
       '/api/resume-wizard/export': ['./node_modules/@sparticuz/chromium/**'],
+      // Interview skill files (modules/interview/skills/*.md) are read at runtime via a
+      // DYNAMIC fs path in skillLoader (`${domain}-${depth}.md`). Next.js file-tracing
+      // (nft) can't statically detect a dynamic read, so without these the .md files are
+      // absent from the serverless bundle and skill content is empty in production for
+      // EVERY domain. Flow templates are static TS imports and bundle automatically.
+      '/api/generate-question': ['./modules/interview/skills/**'],
+      '/api/evaluate-answer': ['./modules/interview/skills/**'],
+      '/api/generate-feedback': ['./modules/interview/skills/**'],
+      '/api/cms/skills/[domain]/[depth]': ['./modules/interview/skills/**'],
+      '/api/cms/skills/[domain]/[depth]/reset': ['./modules/interview/skills/**'],
     },
   },
   async redirects() {
