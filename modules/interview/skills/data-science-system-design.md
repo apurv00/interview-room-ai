@@ -34,10 +34,24 @@ Evaluate ML pipeline architecture thinking, data engineering awareness, model se
 
 ## Sample Questions
 
+### Entry Level (0-2 years)
+1. "Design a nightly batch pipeline that scores a churn model and stores the predictions."
+   - Targets: ml_pipeline → follow up on: data freshness, monitoring the job
+2. "How would you design an A/B test to evaluate a new model against the current one in production?"
+   - Targets: experimentation → follow up on: success metrics, guardrail metrics
+
 ### Mid Level (3-6 years)
 1. "Design a product recommendation system for an e-commerce platform with 10M users."
    - Targets: ml_pipeline, serving → follow up on: cold start, real-time personalization
+2. "Design a feature pipeline that serves the same features to training and online inference."
+   - Targets: feature_engineering → follow up on: train/serve skew, point-in-time correctness
 
 ### Senior (7+ years)
 1. "Design an ML platform that enables 50 data scientists to train, deploy, and monitor models independently."
    - Targets: platform_design, governance → follow up on: resource allocation, experiment tracking
+2. "Design a real-time fraud-detection system that must return a decision in under 100ms at 50K TPS."
+   - Targets: realtime_ml → follow up on: latency budget, model-update strategy
+
+### All Levels
+1. "Design model monitoring that catches data drift and performance degradation in production."
+   - Targets: ml_monitoring → follow up on: drift detection, retraining triggers

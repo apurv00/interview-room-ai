@@ -103,9 +103,19 @@ describe('resolveFlow', () => {
     expect(flow!.slots.length).toBeGreaterThan(0)
   })
 
-  it('returns null for an unknown combination', () => {
+  it('falls back to the general domain for an unknown domain (was null pre-backstop)', () => {
     const flow = resolveFlow({
       domain: 'unknown-domain', depth: 'behavioral', experience: '0-2', duration: 20,
+    })
+    // An unknown domain now resolves to general:behavioral:0-2 instead of null, so an
+    // interview always gets structural topic sequencing. See INTERVIEW_FLOW.md §8 (2026-06-17).
+    expect(flow).not.toBeNull()
+    expect(flow!.slots.length).toBeGreaterThan(4)
+  })
+
+  it('returns null when even the general domain cannot cover the depth', () => {
+    const flow = resolveFlow({
+      domain: 'unknown-domain', depth: 'nonexistent-depth', experience: '0-2', duration: 20,
     })
     expect(flow).toBeNull()
   })

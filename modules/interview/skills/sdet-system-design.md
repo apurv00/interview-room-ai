@@ -34,6 +34,24 @@ Evaluate test strategy thinking, automation architecture decisions, CI/CD integr
 
 ## Sample Questions
 
+### Entry Level (0-2 years)
+1. "Design a test strategy for a simple REST API — what would you test and at which layers?"
+   - Targets: test_strategy → follow up on: test pyramid, what to automate first
+2. "How would you set up CI to run the test suite automatically on every pull request?"
+   - Targets: ci_integration → follow up on: fast feedback, handling a failing run
+
 ### Mid Level (3-6 years)
 1. "Design an end-to-end test automation framework for a microservices application."
    - Targets: test_architecture, ci_integration → follow up on: flaky test management, parallel execution
+2. "Design a data-driven test framework that runs the same suites across multiple environments."
+   - Targets: test_architecture → follow up on: test-data management, environment config
+
+### Senior (7+ years)
+1. "Design a quality strategy and test infrastructure for an org shipping 100+ deploys a day."
+   - Targets: quality_at_scale → follow up on: shift-left, release gating, risk-based testing
+2. "Design a system to detect, quarantine, and triage flaky tests across hundreds of suites."
+   - Targets: flaky_management → follow up on: signal vs noise, ownership model
+
+### All Levels
+1. "Design an approach to measure test coverage that the team will actually trust and act on."
+   - Targets: coverage_strategy → follow up on: coverage vs confidence, gaming the metric

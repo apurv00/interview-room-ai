@@ -23,9 +23,14 @@ export function resolveFlow(params: {
 }): ResolvedFlow | null {
   const { domain, depth, experience, duration, jdOverlay } = params
 
-  // 1. Look up template
+  // 1. Look up template — fall back to the fully-covered `general` domain for the
+  // same depth+experience when this domain has no template. For every domain in the
+  // taxonomy this never fires (the skillFlowCoverage guard proves every live cell is
+  // registered); it is a backstop for CMS-added domains absent from STATIC_DOMAINS, so
+  // an interview still gets structural topic sequencing instead of none.
   const key = makeTemplateKey(domain, depth, experience)
-  const template = TEMPLATE_REGISTRY.get(key)
+  const template =
+    TEMPLATE_REGISTRY.get(key) ?? TEMPLATE_REGISTRY.get(makeTemplateKey('general', depth, experience))
   if (!template) return null
 
   // 2. Build resolved slots from template
