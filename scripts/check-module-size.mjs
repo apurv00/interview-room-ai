@@ -38,6 +38,9 @@ const BUDGETS = {
   // __tests__/ (see below) and the LOC find greps it out. LOC unaffected
   // (~28k/30k): a count-shape change, not bloat. +1 headroom keeps the tripwire
   // close per ADR 0006. See docs/adr/0009-interview-module-budget-bump-filler-metrics.md.
+  // 2026-06-17: flow/templates/ now excluded from the count as declarative content
+  // (see EXCLUDED_PATHS + ADR 0012). Budget unchanged at 30k/142 — it now governs the
+  // interview ENGINE/UI code only (~25.2k/107 post-exclusion), not the domain catalog.
   'modules/interview': { maxLOC: 30_000, maxFiles: 142 },
   'modules/feedback':  { maxLOC: 10_000, maxFiles: 60 },
   // Bumped maxFiles 80 → 82 on 2026-06-09 (PR #435): adds ONE counted file —
@@ -74,6 +77,14 @@ const BUDGETS = {
 
 const TS_EXTENSIONS = new Set(['.ts', '.tsx'])
 
+// Directories excluded from the size budget because they are declarative interview
+// CONTENT, not application logic — the .ts analogue of the skills/*.md files the count
+// already skips by extension. The flow ENGINE (slotBuilder, resolver, promptBuilder,
+// coveragePressure, jdOverlayBuilder, types) lives outside this dir and stays counted.
+// Content grows linearly with the domain catalog; it must not trip a code-sprawl
+// tripwire. See docs/adr/0012-exclude-flow-templates-from-size-budget.md.
+const EXCLUDED_PATHS = new Set(['modules/interview/flow/templates'])
+
 function countFiles(dir) {
   let count = 0
   try {
@@ -81,6 +92,7 @@ function countFiles(dir) {
       const fullPath = join(dir, entry.name)
       if (entry.isDirectory()) {
         if (entry.name === 'node_modules' || entry.name === '__tests__') continue
+        if (EXCLUDED_PATHS.has(fullPath)) continue
         count += countFiles(fullPath)
       } else if (TS_EXTENSIONS.has(extname(entry.name))) {
         count++
@@ -93,7 +105,7 @@ function countFiles(dir) {
 function countLOC(dir) {
   try {
     const output = execSync(
-      `find "${dir}" -name '*.ts' -o -name '*.tsx' | grep -v __tests__ | grep -v node_modules | xargs wc -l 2>/dev/null | tail -1`,
+      `find "${dir}" -name '*.ts' -o -name '*.tsx' | grep -v __tests__ | grep -v node_modules | grep -v 'modules/interview/flow/templates/' | xargs wc -l 2>/dev/null | tail -1`,
       { encoding: 'utf-8' }
     ).trim()
     const match = output.match(/^\s*(\d+)/)
