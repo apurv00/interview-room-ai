@@ -1037,7 +1037,12 @@ export function useInterview({
   async function showCoachingTip(evaluation: AnswerEvaluation): Promise<void> {
     transitionTo('COACHING')
     const tip = deriveCoachingTip(evaluation, config?.role, config?.interviewType, evaluation.primaryGap)
-    setCoachingTip(tip)
+    // Live coaching silenced (in-room switch off) → don't surface the coaching
+    // tip at all. The shared `coachingTip` channel ALSO carries STATUS notices
+    // (time warnings, "time is up", usage limit) set elsewhere, so we gate the
+    // COACHING source here, NOT at the render — status messages stay visible.
+    const coachingVisible = liveCoachingEnabledRef.current
+    if (coachingVisible) setCoachingTip(tip)
 
     // BUG 5 fix: scale dismissal time to tip length so longer STAR-style
     // tips (100+ chars) don't disappear before the candidate can read them.
@@ -1046,7 +1051,7 @@ export function useInterview({
     const normalDismissMs = tipLength > 100 ? 6000 : tipLength > 50 ? 4000 : 2000
     const coachDismissMs = Math.max(3000, normalDismissMs)
 
-    if (shouldBlockForCoaching(config?.coachMode, liveCoachingEnabledRef.current)) {
+    if (shouldBlockForCoaching(config?.coachMode, coachingVisible)) {
       // Coach mode (and live coaching not silenced): block so the candidate
       // can read the full tip. When the in-room switch is off we fall through
       // to the non-blocking branch — no dead air after hiding the tip.
@@ -1063,7 +1068,7 @@ export function useInterview({
       if (!abortCtrl.signal.aborted) {
         setCoachingTip(null)
       }
-    } else {
+    } else if (coachingVisible) {
       // Normal mode: don't block — auto-dismiss after the length-aware delay.
       // The tip is also cleared on next transitionTo('ASK_QUESTION').
       setTimeout(() => {
@@ -1139,6 +1144,11 @@ export function useInterview({
   function appendEvaluationAndMaybeCoach(evaluation: AnswerEvaluation, question: string, answer: string): void {
     evaluationsRef.current = [...evaluationsRef.current, { ...evaluation, question, answer }]
     performanceSignalRef.current = computePerformanceSignal()
+    // Live coaching silenced → skip the coaching tip. The scoring writes above
+    // MUST still run (they feed the final feedback); only the visible tip is
+    // gated. Status notices use the same channel and are set elsewhere, so they
+    // remain visible.
+    if (!liveCoachingEnabledRef.current) return
     const tip = deriveCoachingTip(evaluation, config?.role, config?.interviewType, evaluation.primaryGap)
     if (tip) {
       setCoachingTip(tip)

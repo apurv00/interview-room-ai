@@ -202,6 +202,26 @@ describe('useInterview', () => {
     expect(result.current.coachingTip).toContain('monthly interview limit')
   })
 
+  it('keeps STATUS notices visible even when live coaching is disabled (Codex P2)', async () => {
+    // The `coachingTip` channel is shared between silenceable coaching tips and
+    // non-silenceable status notices. With the in-room switch OFF, status
+    // notices (here: usage-limit) must still surface — only coaching tips are
+    // gated. Regression guard for the Codex re-review finding on PR #459.
+    ;(global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: false,
+      status: 402,
+      json: () => Promise.resolve({ error: 'Monthly interview limit reached' }),
+    })
+
+    const { result } = renderHook(() => useInterview(makeOptions({ liveCoachingEnabled: false })))
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100)
+    })
+
+    expect(result.current.coachingTip).toContain('monthly interview limit')
+  })
+
   // ── No config ──
 
   it('does not start timer when config is null', () => {

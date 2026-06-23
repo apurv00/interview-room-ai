@@ -1182,3 +1182,17 @@ switch-off → no block); full `useInterview` suite + interview module green; `t
 the coach-on + switch-on path is provably unchanged (identical predicate result), but a
 full browser interview in coach mode toggling the switch mid-answer remains the manual
 post-deploy check (no Deepgram/Anthropic keys in CI).
+
+**Follow-up (same review cycle, PR #459).** Codex's re-review of the dead-air fix caught
+a second, related bug: feedback #1 render-gated the `<CoachingTip>` component on
+`liveCoachingEnabled`, but the `coachingTip` state channel is **overloaded** — besides
+STAR coaching tips it also carries STATUS notices (usage-limit at `useInterview.ts:585`,
+time warnings `623`/`628`, "Time is up" `666`/`686`, and the coding/design feedback text
+`2329`/`2528` which is also spoken by the avatar). Hiding the whole channel meant a
+candidate who silenced coaching also lost the "Time is up, please finish your current
+thought" notice — the only on-screen reason the interview was ending. **Fix:** un-gate the
+`<CoachingTip>` render (restores the original ungated render) and instead gate ONLY the
+two real coaching producers at the source (`showCoachingTip` and
+`appendEvaluationAndMaybeCoach`) on `liveCoachingEnabledRef`. Status notices and the
+coding/design spoken feedback share the channel and stay visible. Regression guard:
+`useInterview.test.ts` "keeps STATUS notices visible even when live coaching is disabled".
