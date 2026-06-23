@@ -68,7 +68,8 @@ export default function RepeatSetupConfirmModal({
   const rows: Row[] = []
   rows.push({ label: 'Domain', value: getDomainLabel(config.role), step: 0 })
   if (resumeFileName || config.resumeFileName) {
-    rows.push({ label: 'Resume', value: resumeFileName || config.resumeFileName || 'Resume', step: 0 })
+    // Resume moved onto the merged background step (step 1) in the 3-step wizard.
+    rows.push({ label: 'Resume', value: resumeFileName || config.resumeFileName || 'Resume', step: 1 })
   }
   rows.push({ label: 'Experience', value: EXPERIENCE_LABELS[config.experience], step: 1 })
   if (config.targetCompany) {

@@ -1,7 +1,7 @@
 'use client'
 
 /**
- * InterviewSetupForm — progressive 4-step interview setup screen.
+ * InterviewSetupForm — progressive 3-step interview setup screen.
  *
  * Used by /interview/setup. Produces the canonical `InterviewConfig` that the
  * lobby/AI pipeline consumes, so downstream code is unchanged. Preserves all
@@ -11,10 +11,9 @@
  * localStorage, cross-user leakage scrub.
  *
  * Steps:
- *   0 — Domain + Resume
- *   1 — Experience + Context (JD upload/paste OR company+role)
- *   2 — Interview Type + Duration
- *   3 — Review & Start
+ *   0 — Domain
+ *   1 — Experience + Resume + Context (JD upload/paste OR company+role)
+ *   2 — Interview Type + Duration (+ recap + start)
  */
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
@@ -25,7 +24,6 @@ import {
   ArrowRight,
   ArrowLeft,
   CheckCircle2,
-  Edit3,
   Sparkles,
   Building2,
   Briefcase,
@@ -37,10 +35,11 @@ import DepthSelector from '@interview/components/DepthSelector'
 import RepeatSetupConfirmModal, { type RepeatSetupStep } from '@interview/components/RepeatSetupConfirmModal'
 import RecommendedFocusChips from '@interview/components/RecommendedFocusChips'
 import PreInterviewCoachCard from '@interview/components/PreInterviewCoachCard'
-// eslint-disable-next-line no-restricted-imports -- @learn barrel transitively
-// pulls server-only Redis (ioredis → dns/net) into this client component.
-// Pathway P2 Wave 5 extracted readPathwaySetupContext here so the Drill page
-// can share the parser without duplicating it (or its security gates).
+// The @learn barrel transitively pulls server-only Redis (ioredis → dns/net)
+// into this client component. Pathway P2 Wave 5 extracted readPathwaySetupContext
+// here so the Drill page can share the parser without duplicating it (or its
+// security gates). Disable must sit directly above the import to apply.
+// eslint-disable-next-line no-restricted-imports
 import {
   readPathwaySetupContext,
   type PathwaySetupContext,
@@ -65,7 +64,7 @@ import { useAuthGate } from '@shared/providers/AuthGateProvider'
 
 const EXPERIENCES: ExperienceLevel[] = ['0-2', '3-6', '7+']
 const DURATIONS: Duration[] = [10, 20, 30]
-const TOTAL_STEPS = 4
+const TOTAL_STEPS = 3
 
 interface SavedResumeMeta {
   id: string
@@ -291,9 +290,14 @@ export default function InterviewSetupForm() {
   const progress = ((step + 1) / TOTAL_STEPS) * 100
 
   const canGoNext = useMemo(() => {
-    if (step === 0) return !!(role && hasResume)
+    // Step 0 is domain only — resume moved onto the merged step 1.
+    if (step === 0) return !!role
     if (step === 1) {
-      if (!experience) return false
+      if (!experience || !hasResume) return false
+      // Wait for resume/JD parsing to settle before enabling Next: resume
+      // upload auto-infers role, which can flip the General context requirement
+      // mid-click. Blocking until parse resolves avoids a Next that toggles off.
+      if (resumeUploading || jdUploading || extractingContext) return false
       // General domain requires concrete company/role (or a JD that implies them)
       if (role === 'general') {
         const hasContext =
@@ -307,7 +311,7 @@ export default function InterviewSetupForm() {
     if (step === 2) return !!(interviewType && duration)
     return true
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, role, hasResume, experience, jdText, jdCompany, jdRole, targetCompany, interviewType, duration])
+  }, [step, role, hasResume, experience, resumeUploading, jdUploading, extractingContext, jdText, jdCompany, jdRole, targetCompany, interviewType, duration])
 
   const ready = hasResume && role && experience && duration && interviewType
 
@@ -613,8 +617,6 @@ export default function InterviewSetupForm() {
     setInterviewType={setInterviewType}
     duration={duration}
     setDuration={setDuration}
-    // Step 3
-    onJumpToStep={setStep}
     uploadError={uploadError}
     // Pathway P2 Wave 1
     recommendedFocus={pathwayContext?.focus}
@@ -685,8 +687,6 @@ interface ViewProps {
   setInterviewType: (v: InterviewType) => void
   duration: Duration | null
   setDuration: (v: Duration) => void
-  // Step 3
-  onJumpToStep: (n: number) => void
   uploadError: string
   // Pathway P2 Wave 1 — surfaced at top of Step 0 only.
   // `recommendedFocus` comes from URL params (?focus=…) when the user
@@ -699,34 +699,32 @@ interface ViewProps {
 
 function InterviewSetupFormView(p: ViewProps) {
   const stepHints = [
-    'Pick your target domain and add a resume so we can tailor questions.',
-    'Tell us your experience level and (optionally) the company and role.',
-    'Choose the round type and how long you want to practice.',
-    'Review everything and enter the interview room.',
+    'Pick the domain you want to practice — we tailor questions to it.',
+    'Your experience, resume, and (optionally) the company and role you\'re targeting.',
+    'Choose the round type and length, then enter the interview room.',
   ]
   const stepTitles = [
-    'Start with your domain and resume',
-    'Add your experience and context',
-    'Pick the round type',
-    'Ready when you are',
+    'Choose your interview domain',
+    'Your background & context',
+    'Round type & duration',
   ]
 
   const ctaHint = (() => {
     if (p.step === 0) {
       if (!p.role) return 'Select a domain to continue'
-      if (!p.hasResume) return 'Add a resume to continue'
       return 'Looking good — continue'
     }
     if (p.step === 1) {
       if (!p.experience) return 'Select your experience level'
+      if (!p.hasResume) return 'Add a resume to continue'
+      if (p.resumeUploading || p.jdUploading || p.extractingContext) return 'Reading your document…'
       if (p.role === 'general' && !p.canGoNext)
         return 'Company & role are required for General'
-      return 'Optional: add JD or company for tailored questions'
+      return 'Optional: add a JD or company for tailored questions'
     }
-    if (p.step === 2) {
-      if (!p.interviewType) return 'Pick an interview type'
-      return 'Almost there'
-    }
+    // Step 2 — final step (Enter Interview Room)
+    if (!p.interviewType) return 'Pick an interview type'
+    if (!p.duration) return 'Pick a duration'
     return p.ready ? 'All set — enter the interview room' : 'Complete earlier steps'
   })()
 
@@ -761,7 +759,7 @@ function InterviewSetupFormView(p: ViewProps) {
         </Link>
       </div>
 
-      <main className="flex-1 flex flex-col items-center px-4 sm:px-6 pb-32 pt-2">
+      <main className="flex-1 flex flex-col items-center px-4 sm:px-6 pb-24 pt-2">
         <div className="w-full max-w-[1100px] animate-fade-in">
           <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 mb-1.5 leading-tight">
             {stepTitles[p.step]}
@@ -771,16 +769,39 @@ function InterviewSetupFormView(p: ViewProps) {
           {/* ── Step 0: Domain + Resume ───────────────────────────────── */}
           {p.step === 0 && (
             <div className="space-y-7">
-              {/* Pathway P2 Wave 1 — action-anchored coaching surfaces here
-                  at the moment the user is configuring their next interview.
-                  Both cards self-hide when their data isn't present. */}
-              <RecommendedFocusChips focus={p.recommendedFocus ?? []} />
-              <PreInterviewCoachCard domain={p.role} />
               <section>
                 <h3 className="text-[11px] font-semibold text-slate-400 uppercase tracking-[0.12em] mb-2.5">
                   Interview Domain <span className="text-red-500">*</span>
                 </h3>
                 <CategoryDomainPicker selectedDomain={p.role} onSelect={p.setRole} />
+              </section>
+              {/* Pathway P2 Wave 1 — action-anchored coaching, BELOW the picker
+                  so its async load can't push the picker down. Both cards
+                  self-hide when their data isn't present. */}
+              <RecommendedFocusChips focus={p.recommendedFocus ?? []} />
+              <PreInterviewCoachCard domain={p.role} />
+            </div>
+          )}
+
+          {/* ── Step 1: Experience + Context ──────────────────────────── */}
+          {p.step === 1 && (
+            <div className="space-y-7">
+              <section>
+                <h3 className="text-[11px] font-semibold text-slate-400 uppercase tracking-[0.12em] mb-2.5">
+                  Experience Level <span className="text-red-500">*</span>
+                </h3>
+                <SelectionGroup<ExperienceLevel>
+                  items={EXPERIENCES}
+                  value={p.experience}
+                  onChange={(v) => p.setExperience(v as ExperienceLevel)}
+                  getKey={(e) => e}
+                  layout="inline"
+                  renderItem={(e, selected) => (
+                    <div className={`py-3 px-2 text-center ${selected ? 'text-blue-600' : ''}`}>
+                      <span className="text-sm font-semibold">{EXPERIENCE_LABELS[e]}</span>
+                    </div>
+                  )}
+                />
               </section>
 
               <section>
@@ -882,29 +903,6 @@ function InterviewSetupFormView(p: ViewProps) {
                 {p.uploadError && (
                   <p className="mt-2 text-xs text-red-500">{p.uploadError}</p>
                 )}
-              </section>
-            </div>
-          )}
-
-          {/* ── Step 1: Experience + Context ──────────────────────────── */}
-          {p.step === 1 && (
-            <div className="space-y-7">
-              <section>
-                <h3 className="text-[11px] font-semibold text-slate-400 uppercase tracking-[0.12em] mb-2.5">
-                  Experience Level <span className="text-red-500">*</span>
-                </h3>
-                <SelectionGroup<ExperienceLevel>
-                  items={EXPERIENCES}
-                  value={p.experience}
-                  onChange={(v) => p.setExperience(v as ExperienceLevel)}
-                  getKey={(e) => e}
-                  layout="inline"
-                  renderItem={(e, selected) => (
-                    <div className={`py-3 px-2 text-center ${selected ? 'text-blue-600' : ''}`}>
-                      <span className="text-sm font-semibold">{EXPERIENCE_LABELS[e]}</span>
-                    </div>
-                  )}
-                />
               </section>
 
               <section>
@@ -1061,22 +1059,9 @@ function InterviewSetupFormView(p: ViewProps) {
                   )}
                 />
               </section>
-            </div>
-          )}
 
-          {/* ── Step 3: Review & Start ────────────────────────────────── */}
-          {p.step === 3 && (
-            <div className="space-y-4">
-              <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-                <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-100">
-                  <h3 className="text-sm font-semibold text-slate-900">Interview Summary</h3>
-                  <button
-                    onClick={() => p.onJumpToStep(0)}
-                    className="text-xs font-medium text-blue-600 hover:text-blue-700 flex items-center gap-1 transition-colors"
-                  >
-                    <Edit3 className="w-3 h-3" /> Edit
-                  </button>
-                </div>
+              {/* Compact recap, folded in from the old review step (step 4) */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
                 <div className="grid grid-cols-2 gap-x-6 gap-y-3">
                   <SummaryItem label="Domain" value={p.role ? getDomainLabel(p.role) : '—'} />
                   <SummaryItem
@@ -1091,25 +1076,17 @@ function InterviewSetupFormView(p: ViewProps) {
                   {(p.targetCompany || p.jdCompany) && (
                     <SummaryItem label="Company" value={p.targetCompany || p.jdCompany} />
                   )}
-                  {p.jdRole && <SummaryItem label="Role" value={p.jdRole} />}
                   {(p.jdText || p.jdFileName) && (
-                    <SummaryItem
-                      label="Job Description"
-                      value={p.jdFileName || 'Pasted'}
-                    />
+                    <SummaryItem label="Job Description" value={p.jdFileName || 'Pasted'} />
                   )}
                 </div>
               </div>
 
-              <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-center">
-                <p className="text-sm text-blue-700 font-medium flex items-center justify-center gap-1.5">
-                  <Video className="w-4 h-4" />
-                  Camera &amp; microphone will be requested in the lobby
-                </p>
-                <p className="text-xs text-blue-500 mt-1">
-                  Works best in Chrome or Edge
-                </p>
-              </div>
+              {/* Camera/browser reassurance, kept as a one-line footnote */}
+              <p className="text-xs text-slate-400 text-center flex items-center justify-center gap-1.5">
+                <Video className="w-3.5 h-3.5" />
+                Camera &amp; mic are requested in the lobby · works best in Chrome or Edge
+              </p>
             </div>
           )}
         </div>
