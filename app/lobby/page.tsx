@@ -401,15 +401,21 @@ function LobbyPageInner() {
       if (Object.keys(patch).length > 0) {
         const updated = { ...config, ...patch }
         setConfig(updated)
-        // Best-effort: the live-coaching assignment makes `patch` non-empty on
-        // every join, so this write runs every time. A failure (quota / private
-        // browsing) must NOT strand the candidate in the lobby — swallow it.
-        // The room then falls back to the already-stored config (coaching
-        // defaults on in that rare case) instead of blocking entry.
+        // The live-coaching assignment makes `patch` non-empty on every join,
+        // so this write runs every time. Failure handling differs by setting:
+        //   - Live coaching / company are best-effort — a write failure (quota /
+        //     private browsing) must NOT strand the candidate (the room falls
+        //     back to the stored config; coaching just defaults on).
+        //   - Privacy mode is a HARD guarantee: if the opt-out can't be
+        //     persisted, the room rebuilds config from stale storage and would
+        //     upload camera video despite the opt-out. Fail CLOSED there
+        //     (rethrow → the join does not proceed) rather than silently violate
+        //     the privacy promise.
         try {
           localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(updated))
-        } catch {
-          /* storage unavailable — config patch is best-effort */
+        } catch (err) {
+          if (updated.privacyMode) throw err
+          /* non-privacy patch — best-effort, storage failure is non-fatal */
         }
       }
     }
