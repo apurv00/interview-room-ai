@@ -9,7 +9,6 @@ import { getDomainLabel } from '@interview/config/interviewConfig'
 import { STORAGE_KEYS } from '@shared/storageKeys'
 import { useAuthGate } from '@shared/providers/AuthGateProvider'
 import { COMPANY_PROFILES } from '@interview/config/companyProfiles'
-import PrepChecklist from '@interview/components/PrepChecklist'
 import { track } from '@shared/analytics/track'
 import { readLiveCoachingPreference, writeLiveCoachingPreference } from '@interview/config/liveCoachingPreference'
 
@@ -495,24 +494,17 @@ function LobbyPageInner() {
                 {' '}· {config.experience} yrs · {config.duration} min session
               </p>
 
-              {/* Document badges */}
+              {/* Document confirmation — one compact line */}
               {(config.jdFileName || config.resumeFileName) && (
-                <div className="flex items-center justify-center gap-2.5 flex-wrap">
-                  {config.jdFileName && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-xs text-emerald-600">
-                      <DocIcon />
-                      JD: {config.jdFileName}
-                    </span>
-                  )}
-                  {config.resumeFileName && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-xs text-emerald-600">
-                      <DocIcon />
-                      Resume: {config.resumeFileName}
-                    </span>
-                  )}
+                <div className="flex items-center justify-center gap-1.5 flex-wrap text-xs text-[#71767b]">
+                  <DocIcon />
+                  {config.jdFileName && <span>JD: {config.jdFileName}</span>}
+                  {config.jdFileName && config.resumeFileName && <span aria-hidden>·</span>}
+                  {config.resumeFileName && <span>Resume: {config.resumeFileName}</span>}
+                  <span aria-hidden>·</span>
                   <button
                     onClick={() => router.push('/')}
-                    className="text-xs text-[#71767b] hover:text-[#2563eb] transition underline underline-offset-2"
+                    className="hover:text-[#2563eb] transition underline underline-offset-2"
                   >
                     Change
                   </button>
@@ -607,14 +599,46 @@ function LobbyPageInner() {
               ))}
             </div>
 
-            {/* Interview Prep Checklist */}
-            {config && (
-              <PrepChecklist
-                domainSlug={config.role}
-                domainLabel={getDomainLabel(config.role)}
-                duration={config.duration}
-              />
-            )}
+            {/* Join — primary action, directly under the readiness gate it depends on */}
+            <AnimatePresence mode="wait">
+              {!joining ? (
+                <motion.button
+                  key="join-btn"
+                  onClick={enterRoom}
+                  disabled={!allOk}
+                  whileHover={allOk ? { scale: 1.01 } : {}}
+                  whileTap={allOk ? { scale: 0.99 } : {}}
+                  className={`
+                    w-full py-4 rounded-2xl font-semibold text-sm transition-colors
+                    ${allOk
+                      ? 'bg-[#2563eb] hover:bg-blue-500 text-white btn-glow'
+                      : 'bg-[#f8fafc] text-[#8b98a5] cursor-not-allowed border border-[#e1e8ed]'
+                    }
+                  `}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                >
+                  {allOk
+                    ? (checks.some(c => c.label === 'Speech recognition' && c.status === 'error')
+                        ? 'Join in Text Mode'
+                        : 'Join Interview Room')
+                    : 'Waiting for checks...'}
+                </motion.button>
+              ) : (
+                <motion.div
+                  key="joining-state"
+                  className="w-full py-4 rounded-2xl bg-[#2563eb]/10 border border-[#2563eb]/20 flex items-center justify-center gap-3"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                >
+                  <div className="w-4 h-4 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
+                  <span className="text-[#2563eb] text-sm font-medium">Interviewer joining...</span>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* ── Optional session settings below (sensible defaults) ── */}
 
             {/* Optional company input with autocomplete (when no JD-extracted company) */}
             {config && !config.targetCompany && (
@@ -699,45 +723,6 @@ function LobbyPageInner() {
                 </div>
               </div>
             </label>
-
-            {/* CTA */}
-            <AnimatePresence mode="wait">
-              {!joining ? (
-                <motion.button
-                  key="join-btn"
-                  onClick={enterRoom}
-                  disabled={!allOk}
-                  whileHover={allOk ? { scale: 1.01 } : {}}
-                  whileTap={allOk ? { scale: 0.99 } : {}}
-                  className={`
-                    w-full py-4 rounded-2xl font-semibold text-sm transition-colors
-                    ${allOk
-                      ? 'bg-[#2563eb] hover:bg-blue-500 text-white btn-glow'
-                      : 'bg-[#f8fafc] text-[#8b98a5] cursor-not-allowed border border-[#e1e8ed]'
-                    }
-                  `}
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -4 }}
-                >
-                  {allOk
-                    ? (checks.some(c => c.label === 'Speech recognition' && c.status === 'error')
-                        ? 'Join in Text Mode'
-                        : 'Join Interview Room')
-                    : 'Waiting for checks...'}
-                </motion.button>
-              ) : (
-                <motion.div
-                  key="joining-state"
-                  className="w-full py-4 rounded-2xl bg-[#2563eb]/10 border border-[#2563eb]/20 flex items-center justify-center gap-3"
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                >
-                  <div className="w-4 h-4 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
-                  <span className="text-[#2563eb] text-sm font-medium">Interviewer joining...</span>
-                </motion.div>
-              )}
-            </AnimatePresence>
           </motion.div>
         </div>
 
