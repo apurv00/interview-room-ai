@@ -3,10 +3,15 @@
  * interview — i.e. the real-time nudges ("detected long pause", "speed up",
  * filler/eye-contact warnings) plus the STAR coach overlay and coaching tips.
  *
- * Candidate feedback: mid-answer suggestions can be distracting, so the
- * interview room exposes a single master switch to silence all of them. This
- * is purely a DISPLAY gate — it never touches the live transcript, the AI
- * interviewer/TTS, or the post-interview scored feedback.
+ * Candidate feedback: mid-answer suggestions can be distracting, so the lobby
+ * exposes a single switch (chosen before the interview starts) to silence all
+ * of them. This is purely a DISPLAY gate — it never touches the live
+ * transcript, the AI interviewer/TTS, or the post-interview scored feedback.
+ *
+ * NOTE: this helper is the device-wide DEFAULT that seeds the lobby toggle and
+ * remembers the choice across sessions. The value that actually reaches the
+ * interview room rides `InterviewConfig.liveCoachingEnabled` (see the lobby's
+ * enterRoom), not this flag.
  *
  * Stored as a plain localStorage flag that is intentionally NOT user- or
  * session-scoped: it carries no PII, so it survives sign-out and applies as the

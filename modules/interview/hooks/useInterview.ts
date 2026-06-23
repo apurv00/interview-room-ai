@@ -104,9 +104,10 @@ interface UseInterviewOptions {
   onRecordingStop?: () => void | Promise<void>
   currentProblem?: { id: string; title: string; description: string } | null
   currentDesignProblem?: { id: string; title: string; description: string; requirements: string[] } | null
-  /** In-room master switch for live coaching (feedback #1). When false, the
-   *  post-answer STAR coaching pause is skipped so coach-mode candidates who
-   *  silence coaching don't sit through dead air. Defaults to true (on). */
+  /** Live-coaching preference (feedback #1), chosen in the lobby and immutable
+   *  during the interview. When false, coaching tips are suppressed and the
+   *  post-answer STAR read-pause is skipped (no dead air); status notices stay
+   *  visible. Defaults to true (on). */
   liveCoachingEnabled?: boolean
 }
 
@@ -1031,7 +1032,7 @@ export function useInterview({
   async function showCoachingTip(evaluation: AnswerEvaluation): Promise<void> {
     transitionTo('COACHING')
     const tip = deriveCoachingTip(evaluation, config?.role, config?.interviewType, evaluation.primaryGap)
-    // Live coaching silenced (in-room switch off) → don't surface the coaching
+    // Live coaching silenced (lobby switch off) → don't surface the coaching
     // tip at all. The shared `coachingTip` channel ALSO carries STATUS notices
     // (time warnings, "time is up", usage limit) set elsewhere, so we gate the
     // COACHING source here, NOT at the render — status messages stay visible.
@@ -1047,7 +1048,7 @@ export function useInterview({
 
     if (shouldBlockForCoaching(config?.coachMode, coachingVisible)) {
       // Coach mode (and live coaching not silenced): block so the candidate
-      // can read the full tip. When the in-room switch is off we fall through
+      // can read the full tip. When live coaching is off we fall through
       // to the non-blocking branch — no dead air after hiding the tip.
       const abortCtrl = new AbortController()
       coachingAbortRef.current = abortCtrl
