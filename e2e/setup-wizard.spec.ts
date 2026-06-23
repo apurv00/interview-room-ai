@@ -60,11 +60,13 @@ test.describe('Interview Setup wizard — Step 0 (domain)', () => {
       page.getByRole('heading', { name: /Choose your interview domain/i }),
     ).toBeVisible()
 
-    // Domain section is present.
-    await expect(page.getByText(/^Interview Domain/i).first()).toBeVisible()
+    // Domain section is present. Scope to the section heading (role=heading)
+    // so it can't collide with the global AppShell nav links.
+    await expect(page.getByRole('heading', { name: /^Interview Domain/i })).toBeVisible()
 
-    // Resume now lives on Step 1 — it must NOT render on Step 0.
-    await expect(page.getByText(/^Resume/i)).toHaveCount(0)
+    // Resume now lives on Step 1 — its section heading must NOT render on
+    // Step 0. (heading role excludes the AppShell nav's "Resume" link.)
+    await expect(page.getByRole('heading', { name: /^Resume/i })).toHaveCount(0)
 
     // Back button exists but is disabled on Step 0.
     const backButton = page.getByRole('button', { name: /^Back$/i })
@@ -109,8 +111,8 @@ test.describe('Interview Setup wizard — step progression', () => {
     await expect(
       page.getByRole('heading', { name: /Your background & context/i }),
     ).toBeVisible()
-    await expect(page.getByText(/^Experience Level/i).first()).toBeVisible()
-    await expect(page.getByText(/^Resume/i).first()).toBeVisible()
+    await expect(page.getByRole('heading', { name: /^Experience Level/i })).toBeVisible()
+    await expect(page.getByRole('heading', { name: /^Resume/i })).toBeVisible()
 
     // Back button should now be enabled (we're past step 0).
     await expect(page.getByRole('button', { name: /^Back$/i })).toBeEnabled()
