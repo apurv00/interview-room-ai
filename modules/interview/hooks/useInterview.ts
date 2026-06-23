@@ -23,6 +23,7 @@ import {
 } from '@interview/config/interviewConfig'
 import { getPlannedQuestionCountForFeedback } from '@interview/services/eval/sessionScoringPolicy'
 import { deriveCoachingTip } from '@interview/config/coachingTips'
+import { shouldBlockForCoaching } from '@interview/hooks/coachingGate'
 import { isThinkingHeavyDepth, computeIntentionalSilenceWindow } from '@interview/config/silenceWindow'
 import { STORAGE_KEYS, sessionScopedKey } from '@shared/storageKeys'
 import type { SpeechRecognitionResult } from './useSpeechRecognition'
@@ -103,6 +104,10 @@ interface UseInterviewOptions {
   onRecordingStop?: () => void | Promise<void>
   currentProblem?: { id: string; title: string; description: string } | null
   currentDesignProblem?: { id: string; title: string; description: string; requirements: string[] } | null
+  /** In-room master switch for live coaching (feedback #1). When false, the
+   *  post-answer STAR coaching pause is skipped so coach-mode candidates who
+   *  silence coaching don't sit through dead air. Defaults to true (on). */
+  liveCoachingEnabled?: boolean
 }
 
 function boundedScore(value: unknown): number {
@@ -225,6 +230,7 @@ export function useInterview({
   onRecordingStop,
   currentProblem,
   currentDesignProblem,
+  liveCoachingEnabled,
 }: UseInterviewOptions): UseInterviewReturn {
   const router = useRouter()
 
@@ -239,6 +245,23 @@ export function useInterview({
   useEffect(() => {
     liveTranscriptRef.current = liveTranscript ?? ''
   }, [liveTranscript])
+
+  /** Mirror of the in-room live-coaching master switch. The coaching
+   *  block-decision at `showCoachingTip` runs from a stale `runInterviewLoop`
+   *  closure, so a primitive prop would not reflect a mid-interview toggle —
+   *  read it from this always-current ref instead (same reason as
+   *  `liveTranscriptRef` above). Defaults on. */
+  const liveCoachingEnabledRef = useRef(true)
+  useEffect(() => {
+    liveCoachingEnabledRef.current = liveCoachingEnabled ?? true
+    // If the candidate silences coaching mid-block, cut the in-flight 3-6s
+    // read-pause short — otherwise they sit through dead air with no visible
+    // tip (it's render-gated off the instant they toggle). Reuses the abort
+    // path already wired for interrupts / end-of-interview.
+    if (liveCoachingEnabled === false) {
+      coachingAbortRef.current?.abort()
+    }
+  }, [liveCoachingEnabled])
 
   // ── State machine ──
   const [phase, setPhase] = useState<InterviewState>('INTERVIEW_START')
@@ -1023,8 +1046,10 @@ export function useInterview({
     const normalDismissMs = tipLength > 100 ? 6000 : tipLength > 50 ? 4000 : 2000
     const coachDismissMs = Math.max(3000, normalDismissMs)
 
-    if (config?.coachMode) {
-      // Coach mode: block so the candidate can read the full tip
+    if (shouldBlockForCoaching(config?.coachMode, liveCoachingEnabledRef.current)) {
+      // Coach mode (and live coaching not silenced): block so the candidate
+      // can read the full tip. When the in-room switch is off we fall through
+      // to the non-blocking branch — no dead air after hiding the tip.
       const abortCtrl = new AbortController()
       coachingAbortRef.current = abortCtrl
       await new Promise<void>((resolve) => {

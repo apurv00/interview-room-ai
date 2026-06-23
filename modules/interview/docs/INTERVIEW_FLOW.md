@@ -1150,3 +1150,35 @@ protects CMS-added domains absent from `STATIC_DOMAINS`.
 `rubricCoverage` guards, 4533+ tests). `resolver.ts` is hot-path: the change is additive
 and provably cannot alter resolution for any covered domain, but a full browser interview
 on a real domain confirming unchanged flow remains the manual post-deploy check.
+
+### 2026-06-23 · Coach-mode dead air when the live-coaching switch is off · PR #459
+
+**Symptom.** Feedback #1 added an in-room "Coaching on/off" master switch that
+render-gates the live nudges + STAR overlay/tips (`app/interview/page.tsx`). For a
+candidate with `coachMode` ON, turning the switch OFF hid the visible `CoachingTip`
+but the engine still entered `COACHING` and **blocked 3-6s after every answer**
+(`showCoachingTip`, `useInterview.ts`) — dead air with nothing on screen. Caught by
+the Codex PR review, not by unit/type/lint (it's a state-machine timing interaction).
+
+**Root cause.** The feedback-#1 change was render-gate-only and never told the engine.
+`showCoachingTip`'s blocking branch was gated solely on `config.coachMode`, independent
+of the new preference. Hiding the UI without skipping the engine pause left the wait.
+
+**Fix.** Threaded `liveCoachingEnabled` into `useInterview` via an always-current ref
+(`liveCoachingEnabledRef`, mirroring the `liveTranscriptRef` pattern — the block runs
+from a stale `runInterviewLoop` closure, so a primitive prop would not reflect a
+mid-interview toggle). The blocking branch now uses a pure predicate
+`shouldBlockForCoaching(coachMode, liveCoachingEnabled)` (`hooks/coachingGate.ts`):
+block only when coach mode is on AND coaching is not silenced, else fall through to the
+existing non-blocking branch (no dead air). Also fires the existing `coachingAbortRef`
+when the switch flips off mid-block, so a candidate escaping coaching doesn't eat the
+remaining pause. The two other `transitionTo('COACHING')` sites (coding/design feedback
+beats, ~2303/2502) are NOT on this path and were left untouched; the main-answer eval
+path is already non-blocking.
+
+**Verification.** `coachingGate.test.ts` (4 cases; load-bearing one = coach-on +
+switch-off → no block); full `useInterview` suite + interview module green; `tsc
+--noEmit` clean; lint clean. `useInterview.ts` is hot-path: the change is additive and
+the coach-on + switch-on path is provably unchanged (identical predicate result), but a
+full browser interview in coach mode toggling the switch mid-answer remains the manual
+post-deploy check (no Deepgram/Anthropic keys in CI).

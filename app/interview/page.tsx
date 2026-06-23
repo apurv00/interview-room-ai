@@ -277,6 +277,23 @@ export default function InterviewPage() {
     }
   }, [stopRecording, audioRecorder, isMultimodalEnabled, stopCapture, uploadRecordingBlob, config?.privacyMode])
 
+  // Feedback #1: candidate-controlled master switch to silence ALL live
+  // coaching mid-interview (nudges + STAR overlay + tips) AND skip the
+  // coach-mode read-pause in the engine. Declared above the engine so it can
+  // be threaded into useInterview. Seeded to the server-rendered default (on)
+  // to avoid a hydration mismatch, then hydrated from the saved preference.
+  const [liveCoachingEnabled, setLiveCoachingEnabled] = useState(true)
+  useEffect(() => {
+    setLiveCoachingEnabled(readLiveCoachingPreference())
+  }, [])
+  const toggleLiveCoaching = useCallback(() => {
+    setLiveCoachingEnabled(prev => {
+      const next = !prev
+      writeLiveCoachingPreference(next)
+      return next
+    })
+  }, [])
+
   // ── Interview engine ──
   const interview = useInterview({
     config,
@@ -295,6 +312,7 @@ export default function InterviewPage() {
     onRecordingStop: handleRecordingStop,
     currentProblem,
     currentDesignProblem,
+    liveCoachingEnabled,
   })
 
   const interviewRef = useRef(interview)
@@ -338,21 +356,6 @@ export default function InterviewPage() {
 
   // ── Live coaching nudges ──
   const isCoachMode = config?.coachMode ?? false
-  // Feedback #1: a candidate-controlled master switch to silence ALL live
-  // coaching mid-interview (nudges + STAR overlay + tips). Seeded to the
-  // server-rendered default (on) to avoid a hydration mismatch, then hydrated
-  // from the device-wide saved preference after mount.
-  const [liveCoachingEnabled, setLiveCoachingEnabled] = useState(true)
-  useEffect(() => {
-    setLiveCoachingEnabled(readLiveCoachingPreference())
-  }, [])
-  const toggleLiveCoaching = useCallback(() => {
-    setLiveCoachingEnabled(prev => {
-      const next = !prev
-      writeLiveCoachingPreference(next)
-      return next
-    })
-  }, [])
   const speechNudge = useCoachingNudge({ phase, liveTranscript, pollIntervalMs: isCoachMode ? 2000 : undefined })
   const facialNudge = useRealtimeFacialCoaching({
     phase,
