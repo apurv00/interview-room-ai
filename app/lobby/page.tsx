@@ -401,7 +401,16 @@ function LobbyPageInner() {
       if (Object.keys(patch).length > 0) {
         const updated = { ...config, ...patch }
         setConfig(updated)
-        localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(updated))
+        // Best-effort: the live-coaching assignment makes `patch` non-empty on
+        // every join, so this write runs every time. A failure (quota / private
+        // browsing) must NOT strand the candidate in the lobby — swallow it.
+        // The room then falls back to the already-stored config (coaching
+        // defaults on in that rare case) instead of blocking entry.
+        try {
+          localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(updated))
+        } catch {
+          /* storage unavailable — config patch is best-effort */
+        }
       }
     }
 
