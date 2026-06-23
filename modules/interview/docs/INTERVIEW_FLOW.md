@@ -1196,3 +1196,11 @@ two real coaching producers at the source (`showCoachingTip` and
 `appendEvaluationAndMaybeCoach`) on `liveCoachingEnabledRef`. Status notices and the
 coding/design spoken feedback share the channel and stay visible. Regression guard:
 `useInterview.test.ts` "keeps STATUS notices visible even when live coaching is disabled".
+
+**Follow-up 2 (same review cycle).** Codex's third pass caught the interaction between
+the two prior fixes: toggling coaching off mid read-pause aborts the sleep, but
+`showCoachingTip`'s abort branch intentionally skips `setCoachingTip(null)` (for
+interrupt/end), and since the render is now unconditional (Follow-up 1) the silenced
+coaching card lingered into the next question. **Fix:** the toggle-off effect now also
+clears the tip — guarded by `coachingAbortRef.current` (set ONLY during the coaching
+read-pause), so it clears an active coaching tip but never a status notice.

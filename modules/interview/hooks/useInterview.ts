@@ -254,12 +254,17 @@ export function useInterview({
   const liveCoachingEnabledRef = useRef(true)
   useEffect(() => {
     liveCoachingEnabledRef.current = liveCoachingEnabled ?? true
-    // If the candidate silences coaching mid-block, cut the in-flight 3-6s
-    // read-pause short — otherwise they sit through dead air with no visible
-    // tip (it's render-gated off the instant they toggle). Reuses the abort
-    // path already wired for interrupts / end-of-interview.
-    if (liveCoachingEnabled === false) {
-      coachingAbortRef.current?.abort()
+    // If the candidate silences coaching while a post-answer read-pause is in
+    // flight, cut the 3-6s pause short AND clear the now-stale coaching tip.
+    // coachingAbortRef is set ONLY during showCoachingTip's blocking read-pause,
+    // so this fires only for an active COACHING tip — never a status notice.
+    // The explicit clear is required because showCoachingTip's abort branch
+    // intentionally skips setCoachingTip(null) (for the interrupt/end cases) and
+    // page.tsx now renders coachingTip unconditionally (so status notices stay
+    // visible) — without it the silenced tip would linger into the next question.
+    if (liveCoachingEnabled === false && coachingAbortRef.current) {
+      coachingAbortRef.current.abort()
+      setCoachingTip(null)
     }
   }, [liveCoachingEnabled])
 
