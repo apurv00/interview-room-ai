@@ -246,26 +246,15 @@ export function useInterview({
     liveTranscriptRef.current = liveTranscript ?? ''
   }, [liveTranscript])
 
-  /** Mirror of the in-room live-coaching master switch. The coaching
-   *  block-decision at `showCoachingTip` runs from a stale `runInterviewLoop`
-   *  closure, so a primitive prop would not reflect a mid-interview toggle —
-   *  read it from this always-current ref instead (same reason as
-   *  `liveTranscriptRef` above). Defaults on. */
+  /** Mirror of the lobby-set live-coaching preference. It is immutable during
+   *  the interview (chosen in the lobby), but flips once at mount when the saved
+   *  value hydrates; `showCoachingTip` runs from a stale `runInterviewLoop`
+   *  closure, so reading the value from this always-current ref guarantees the
+   *  engine sees the post-hydration value (same reason as `liveTranscriptRef`
+   *  above). Defaults on. */
   const liveCoachingEnabledRef = useRef(true)
   useEffect(() => {
     liveCoachingEnabledRef.current = liveCoachingEnabled ?? true
-    // If the candidate silences coaching while a post-answer read-pause is in
-    // flight, cut the 3-6s pause short AND clear the now-stale coaching tip.
-    // coachingAbortRef is set ONLY during showCoachingTip's blocking read-pause,
-    // so this fires only for an active COACHING tip — never a status notice.
-    // The explicit clear is required because showCoachingTip's abort branch
-    // intentionally skips setCoachingTip(null) (for the interrupt/end cases) and
-    // page.tsx now renders coachingTip unconditionally (so status notices stay
-    // visible) — without it the silenced tip would linger into the next question.
-    if (liveCoachingEnabled === false && coachingAbortRef.current) {
-      coachingAbortRef.current.abort()
-      setCoachingTip(null)
-    }
   }, [liveCoachingEnabled])
 
   // ── State machine ──

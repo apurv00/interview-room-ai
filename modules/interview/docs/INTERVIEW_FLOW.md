@@ -1204,3 +1204,17 @@ interrupt/end), and since the render is now unconditional (Follow-up 1) the sile
 coaching card lingered into the next question. **Fix:** the toggle-off effect now also
 clears the tip — guarded by `coachingAbortRef.current` (set ONLY during the coaching
 read-pause), so it clears an active coaching tip but never a status notice.
+
+**Design supersession — toggle moved to the lobby.** After the three follow-ups above,
+the root cause became clear: every one of them stemmed from the toggle being *mutable
+mid-interview*, racing the async state machine. The control was therefore moved to the
+**lobby** (`app/lobby/page.tsx`, alongside the `privacyMode` opt-in), where it is chosen
+before the room loads and is **immutable for the session**. This deletes the entire
+mid-toggle interaction class: the abort-on-toggle effect and the active-tip clearing in
+`useInterview.ts` were **removed** (the effect now only mirrors the value into
+`liveCoachingEnabledRef`), and the in-room toggle UI in `InterviewControls.tsx` was
+reverted to End-only. What REMAINS load-bearing — and applies equally to a lobby-set
+"off" — is the source-gating: `showCoachingTip` / `appendEvaluationAndMaybeCoach` skip the
+coaching tip (and the 3-6s read-pause) when coaching is off, while the `<CoachingTip>`
+render stays ungated so status notices remain visible. Net: coaching-off is now a simple
+constant the engine reads once, not a live signal it must react to.

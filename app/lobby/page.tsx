@@ -11,6 +11,7 @@ import { useAuthGate } from '@shared/providers/AuthGateProvider'
 import { COMPANY_PROFILES } from '@interview/config/companyProfiles'
 import PrepChecklist from '@interview/components/PrepChecklist'
 import { track } from '@shared/analytics/track'
+import { readLiveCoachingPreference, writeLiveCoachingPreference } from '@interview/config/liveCoachingPreference'
 
 type CheckStatus = 'pending' | 'ok' | 'error'
 
@@ -85,6 +86,14 @@ function LobbyPageInner() {
   // where the feature has been explicitly enabled.
   const privacyModeFeatureEnabled = process.env.NEXT_PUBLIC_FEATURE_PRIVACY_MODE === 'true'
   const [privacyMode, setPrivacyMode] = useState(false)
+  // Live coaching (feedback #1): chosen here in the lobby and frozen for the
+  // session — immutable once the interview starts, which keeps the engine's
+  // coaching decision a simple constant (no mid-interview toggle races).
+  // Seeded from and persisted to the device-wide preference (remembered across
+  // sessions). Default ON. Initialised to the SSR-safe default, hydrated after
+  // mount to avoid a markup mismatch.
+  const [liveCoachingEnabled, setLiveCoachingEnabled] = useState(true)
+  useEffect(() => { setLiveCoachingEnabled(readLiveCoachingPreference()) }, [])
   const [checks, setChecks] = useState<Check[]>([
     { label: 'Camera', status: 'pending' },
     { label: 'Microphone', status: 'pending' },
@@ -656,6 +665,25 @@ function LobbyPageInner() {
                 </div>
               </label>
             )}
+
+            {/* Live coaching — set here in the lobby; immutable once the interview starts */}
+            <label className="bg-white border border-[#e1e8ed] rounded-2xl p-4 flex items-start gap-3 cursor-pointer hover:border-[#2563eb]/30 transition-colors">
+              <input
+                type="checkbox"
+                checked={liveCoachingEnabled}
+                onChange={(e) => { setLiveCoachingEnabled(e.target.checked); writeLiveCoachingPreference(e.target.checked) }}
+                className="mt-0.5 w-4 h-4 accent-[#2563eb]"
+              />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-[#0f1419]">Live coaching</div>
+                <div className="text-xs text-[#71767b] mt-0.5 leading-relaxed">
+                  Show real-time tips during the interview — pacing, filler words, eye contact
+                  and STAR coaching cues. Turn this off for a distraction-free session; status
+                  messages like the time-up warning still appear. This can&apos;t be changed once
+                  the interview starts, and we&apos;ll remember your choice next time.
+                </div>
+              </div>
+            </label>
 
             {/* CTA */}
             <AnimatePresence mode="wait">

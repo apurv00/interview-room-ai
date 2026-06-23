@@ -30,7 +30,7 @@ import {
 } from '@interview/audio/recordingClock'
 import { useCoachMode } from '@interview/hooks/useCoachMode'
 import CoachOverlay from '@interview/components/interview/CoachOverlay'
-import { readLiveCoachingPreference, writeLiveCoachingPreference } from '@interview/config/liveCoachingPreference'
+import { readLiveCoachingPreference } from '@interview/config/liveCoachingPreference'
 import CodingLayout from '@interview/components/interview/CodingLayout'
 import DesignLayout from '@interview/components/interview/DesignLayout'
 import { selectProblem, resolveCodingTimeBudget, resolveCodingDifficulty, type CodingProblem } from '@interview/config/codingProblems'
@@ -277,21 +277,14 @@ export default function InterviewPage() {
     }
   }, [stopRecording, audioRecorder, isMultimodalEnabled, stopCapture, uploadRecordingBlob, config?.privacyMode])
 
-  // Feedback #1: candidate-controlled master switch to silence ALL live
-  // coaching mid-interview (nudges + STAR overlay + tips) AND skip the
-  // coach-mode read-pause in the engine. Declared above the engine so it can
-  // be threaded into useInterview. Seeded to the server-rendered default (on)
-  // to avoid a hydration mismatch, then hydrated from the saved preference.
+  // Feedback #1: live coaching is chosen in the lobby and frozen for the
+  // session — there is NO in-room toggle. Read the saved preference here and
+  // thread it into the engine; the value only flips once at mount when the
+  // saved value hydrates (seeded to the SSR default `on` to avoid a hydration
+  // mismatch), well before any coaching fires.
   const [liveCoachingEnabled, setLiveCoachingEnabled] = useState(true)
   useEffect(() => {
     setLiveCoachingEnabled(readLiveCoachingPreference())
-  }, [])
-  const toggleLiveCoaching = useCallback(() => {
-    setLiveCoachingEnabled(prev => {
-      const next = !prev
-      writeLiveCoachingPreference(next)
-      return next
-    })
   }, [])
 
   // ── Interview engine ──
@@ -896,8 +889,6 @@ export default function InterviewPage() {
         }}
         isScoring={phase === 'SCORING'}
         darkMode={isCodingMode || isDesignMode}
-        liveCoachingEnabled={liveCoachingEnabled}
-        onToggleLiveCoaching={toggleLiveCoaching}
       />
     </motion.div>
   )
