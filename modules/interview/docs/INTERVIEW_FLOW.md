@@ -1218,3 +1218,10 @@ reverted to End-only. What REMAINS load-bearing — and applies equally to a lob
 coaching tip (and the 3-6s read-pause) when coaching is off, while the `<CoachingTip>`
 render stays ungated so status notices remain visible. Net: coaching-off is now a simple
 constant the engine reads once, not a live signal it must react to.
+
+The lobby→room handoff carries the choice in `InterviewConfig.liveCoachingEnabled`
+(written atomically on room entry, the `privacyMode` pattern) rather than a standalone
+localStorage flag — a separate write could fail (quota / private browsing) and silently
+lose an "off" selection while the room re-read the default. The device-wide preference
+(`liveCoachingPreference.ts`) is now only a cross-session default that seeds the lobby
+toggle; it is not on the path that reaches the room.

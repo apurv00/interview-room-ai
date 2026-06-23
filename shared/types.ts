@@ -33,6 +33,17 @@ export interface InterviewConfig {
    * and fusion scores. Gated behind `NEXT_PUBLIC_FEATURE_PRIVACY_MODE`.
    */
   privacyMode?: boolean
+  /**
+   * Live coaching (feedback #1) — chosen in the lobby, frozen for the session.
+   * When false, the interview room suppresses all live coaching (nudges, STAR
+   * overlay, coaching tips, and the post-answer read-pause) while keeping
+   * status notices visible. Carried HERE (not a standalone localStorage flag)
+   * so the choice rides the same atomic config write that gates room entry —
+   * a separate write could fail (quota/private browsing) and silently lose it.
+   * Absent ⇒ default on. The device-wide preference is a separate cross-session
+   * default that only seeds the lobby toggle.
+   */
+  liveCoachingEnabled?: boolean
 }
 
 // ─── State Machine ────────────────────────────────────────────────────────────

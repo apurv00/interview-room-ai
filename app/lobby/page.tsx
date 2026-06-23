@@ -393,6 +393,11 @@ function LobbyPageInner() {
       if (lobbyCompany.trim()) patch.targetCompany = lobbyCompany.trim()
       if (srFailed) patch.degraded = true
       if (privacyModeFeatureEnabled && privacyMode) patch.privacyMode = true
+      // Carry the live-coaching choice in the config so it rides the same
+      // atomic write that gates room entry (a separate localStorage write could
+      // fail and silently lose an "off" selection). Always set it so the room
+      // reads an explicit value rather than inferring from a stale flag.
+      patch.liveCoachingEnabled = liveCoachingEnabled
       if (Object.keys(patch).length > 0) {
         const updated = { ...config, ...patch }
         setConfig(updated)

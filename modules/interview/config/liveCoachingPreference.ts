@@ -32,9 +32,14 @@ export function readLiveCoachingPreference(): boolean {
 }
 
 /**
- * Persist the preference as the device-wide default for future interviews.
- * Best-effort: a write failure (private browsing / quota) is swallowed so a
- * non-persistent toggle still works for the current session.
+ * Persist the device-wide DEFAULT that seeds the lobby toggle for future
+ * interviews. Best-effort: a write failure (private browsing / quota) is
+ * swallowed.
+ *
+ * This is NOT the channel that carries the choice into the interview room — the
+ * per-interview value rides `InterviewConfig.liveCoachingEnabled`, written
+ * atomically on room entry. So a failed write here only means the lobby won't
+ * pre-check the box next time; the current interview still honors the selection.
  */
 export function writeLiveCoachingPreference(enabled: boolean): void {
   if (typeof window === 'undefined') return

@@ -30,7 +30,6 @@ import {
 } from '@interview/audio/recordingClock'
 import { useCoachMode } from '@interview/hooks/useCoachMode'
 import CoachOverlay from '@interview/components/interview/CoachOverlay'
-import { readLiveCoachingPreference } from '@interview/config/liveCoachingPreference'
 import CodingLayout from '@interview/components/interview/CodingLayout'
 import DesignLayout from '@interview/components/interview/DesignLayout'
 import { selectProblem, resolveCodingTimeBudget, resolveCodingDifficulty, type CodingProblem } from '@interview/config/codingProblems'
@@ -277,15 +276,12 @@ export default function InterviewPage() {
     }
   }, [stopRecording, audioRecorder, isMultimodalEnabled, stopCapture, uploadRecordingBlob, config?.privacyMode])
 
-  // Feedback #1: live coaching is chosen in the lobby and frozen for the
-  // session — there is NO in-room toggle. Read the saved preference here and
-  // thread it into the engine; the value only flips once at mount when the
-  // saved value hydrates (seeded to the SSR default `on` to avoid a hydration
-  // mismatch), well before any coaching fires.
-  const [liveCoachingEnabled, setLiveCoachingEnabled] = useState(true)
-  useEffect(() => {
-    setLiveCoachingEnabled(readLiveCoachingPreference())
-  }, [])
+  // Feedback #1: live coaching is chosen in the lobby and carried in the
+  // interview config (frozen for the session — no in-room toggle). Derive it
+  // from config so it rides the same write that gates room entry. `config` is
+  // null until the load effect resolves, so this is SSR-safe (both sides start
+  // at the `on` default) and flips once when config loads, before any coaching.
+  const liveCoachingEnabled = config?.liveCoachingEnabled ?? true
 
   // ── Interview engine ──
   const interview = useInterview({
