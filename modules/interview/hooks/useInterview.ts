@@ -23,6 +23,7 @@ import {
 } from '@interview/config/interviewConfig'
 import { getPlannedQuestionCountForFeedback } from '@interview/services/eval/sessionScoringPolicy'
 import { deriveCoachingTip } from '@interview/config/coachingTips'
+import { shouldBlockForCoaching } from '@interview/hooks/coachingGate'
 import { isThinkingHeavyDepth, computeIntentionalSilenceWindow } from '@interview/config/silenceWindow'
 import { STORAGE_KEYS, sessionScopedKey } from '@shared/storageKeys'
 import type { SpeechRecognitionResult } from './useSpeechRecognition'
@@ -103,6 +104,11 @@ interface UseInterviewOptions {
   onRecordingStop?: () => void | Promise<void>
   currentProblem?: { id: string; title: string; description: string } | null
   currentDesignProblem?: { id: string; title: string; description: string; requirements: string[] } | null
+  /** Live-coaching preference (feedback #1), chosen in the lobby and immutable
+   *  during the interview. When false, coaching tips are suppressed and the
+   *  post-answer STAR read-pause is skipped (no dead air); status notices stay
+   *  visible. Defaults to true (on). */
+  liveCoachingEnabled?: boolean
 }
 
 function boundedScore(value: unknown): number {
@@ -225,6 +231,7 @@ export function useInterview({
   onRecordingStop,
   currentProblem,
   currentDesignProblem,
+  liveCoachingEnabled,
 }: UseInterviewOptions): UseInterviewReturn {
   const router = useRouter()
 
@@ -239,6 +246,17 @@ export function useInterview({
   useEffect(() => {
     liveTranscriptRef.current = liveTranscript ?? ''
   }, [liveTranscript])
+
+  /** Mirror of the lobby-set live-coaching preference. It is immutable during
+   *  the interview (chosen in the lobby), but flips once at mount when the saved
+   *  value hydrates; `showCoachingTip` runs from a stale `runInterviewLoop`
+   *  closure, so reading the value from this always-current ref guarantees the
+   *  engine sees the post-hydration value (same reason as `liveTranscriptRef`
+   *  above). Defaults on. */
+  const liveCoachingEnabledRef = useRef(true)
+  useEffect(() => {
+    liveCoachingEnabledRef.current = liveCoachingEnabled ?? true
+  }, [liveCoachingEnabled])
 
   // ── State machine ──
   const [phase, setPhase] = useState<InterviewState>('INTERVIEW_START')
@@ -1014,7 +1032,12 @@ export function useInterview({
   async function showCoachingTip(evaluation: AnswerEvaluation): Promise<void> {
     transitionTo('COACHING')
     const tip = deriveCoachingTip(evaluation, config?.role, config?.interviewType, evaluation.primaryGap)
-    setCoachingTip(tip)
+    // Live coaching silenced (lobby switch off) → don't surface the coaching
+    // tip at all. The shared `coachingTip` channel ALSO carries STATUS notices
+    // (time warnings, "time is up", usage limit) set elsewhere, so we gate the
+    // COACHING source here, NOT at the render — status messages stay visible.
+    const coachingVisible = liveCoachingEnabledRef.current
+    if (coachingVisible) setCoachingTip(tip)
 
     // BUG 5 fix: scale dismissal time to tip length so longer STAR-style
     // tips (100+ chars) don't disappear before the candidate can read them.
@@ -1023,8 +1046,10 @@ export function useInterview({
     const normalDismissMs = tipLength > 100 ? 6000 : tipLength > 50 ? 4000 : 2000
     const coachDismissMs = Math.max(3000, normalDismissMs)
 
-    if (config?.coachMode) {
-      // Coach mode: block so the candidate can read the full tip
+    if (shouldBlockForCoaching(config?.coachMode, coachingVisible)) {
+      // Coach mode (and live coaching not silenced): block so the candidate
+      // can read the full tip. When live coaching is off we fall through
+      // to the non-blocking branch — no dead air after hiding the tip.
       const abortCtrl = new AbortController()
       coachingAbortRef.current = abortCtrl
       await new Promise<void>((resolve) => {
@@ -1038,7 +1063,7 @@ export function useInterview({
       if (!abortCtrl.signal.aborted) {
         setCoachingTip(null)
       }
-    } else {
+    } else if (coachingVisible) {
       // Normal mode: don't block — auto-dismiss after the length-aware delay.
       // The tip is also cleared on next transitionTo('ASK_QUESTION').
       setTimeout(() => {
@@ -1114,6 +1139,11 @@ export function useInterview({
   function appendEvaluationAndMaybeCoach(evaluation: AnswerEvaluation, question: string, answer: string): void {
     evaluationsRef.current = [...evaluationsRef.current, { ...evaluation, question, answer }]
     performanceSignalRef.current = computePerformanceSignal()
+    // Live coaching silenced → skip the coaching tip. The scoring writes above
+    // MUST still run (they feed the final feedback); only the visible tip is
+    // gated. Status notices use the same channel and are set elsewhere, so they
+    // remain visible.
+    if (!liveCoachingEnabledRef.current) return
     const tip = deriveCoachingTip(evaluation, config?.role, config?.interviewType, evaluation.primaryGap)
     if (tip) {
       setCoachingTip(tip)

@@ -30,7 +30,6 @@ import {
 } from '@interview/audio/recordingClock'
 import { useCoachMode } from '@interview/hooks/useCoachMode'
 import CoachOverlay from '@interview/components/interview/CoachOverlay'
-import { readLiveCoachingPreference, writeLiveCoachingPreference } from '@interview/config/liveCoachingPreference'
 import CodingLayout from '@interview/components/interview/CodingLayout'
 import DesignLayout from '@interview/components/interview/DesignLayout'
 import { selectProblem, resolveCodingTimeBudget, resolveCodingDifficulty, type CodingProblem } from '@interview/config/codingProblems'
@@ -277,6 +276,19 @@ export default function InterviewPage() {
     }
   }, [stopRecording, audioRecorder, isMultimodalEnabled, stopCapture, uploadRecordingBlob, config?.privacyMode])
 
+  // Feedback #1: live coaching is chosen in the lobby and frozen for the session
+  // (no in-room toggle). The lobby passes the choice via the room URL (?lc=0 when
+  // off) — a storage-independent channel, so it can't be lost to a failed
+  // localStorage write. Read it client-side (effect → state) to stay SSR-safe;
+  // default on (absent param / non-lobby entry).
+  const [urlCoachingOff, setUrlCoachingOff] = useState(false)
+  useEffect(() => {
+    try {
+      setUrlCoachingOff(new URLSearchParams(window.location.search).get('lc') === '0')
+    } catch { /* URL unavailable — default on */ }
+  }, [])
+  const liveCoachingEnabled = !urlCoachingOff
+
   // ── Interview engine ──
   const interview = useInterview({
     config,
@@ -295,6 +307,7 @@ export default function InterviewPage() {
     onRecordingStop: handleRecordingStop,
     currentProblem,
     currentDesignProblem,
+    liveCoachingEnabled,
   })
 
   const interviewRef = useRef(interview)
@@ -338,21 +351,6 @@ export default function InterviewPage() {
 
   // ── Live coaching nudges ──
   const isCoachMode = config?.coachMode ?? false
-  // Feedback #1: a candidate-controlled master switch to silence ALL live
-  // coaching mid-interview (nudges + STAR overlay + tips). Seeded to the
-  // server-rendered default (on) to avoid a hydration mismatch, then hydrated
-  // from the device-wide saved preference after mount.
-  const [liveCoachingEnabled, setLiveCoachingEnabled] = useState(true)
-  useEffect(() => {
-    setLiveCoachingEnabled(readLiveCoachingPreference())
-  }, [])
-  const toggleLiveCoaching = useCallback(() => {
-    setLiveCoachingEnabled(prev => {
-      const next = !prev
-      writeLiveCoachingPreference(next)
-      return next
-    })
-  }, [])
   const speechNudge = useCoachingNudge({ phase, liveTranscript, pollIntervalMs: isCoachMode ? 2000 : undefined })
   const facialNudge = useRealtimeFacialCoaching({
     phase,
@@ -773,7 +771,7 @@ export default function InterviewPage() {
           <div className="px-4 pb-1 flex flex-col gap-1.5">
             {showCoachOverlay && <CoachOverlay state={coachModeState} />}
             <CoachingNudge nudge={activeNudge} />
-            {liveCoachingEnabled && <CoachingTip tip={coachingTip} coachMode={isCoachMode} />}
+            <CoachingTip tip={coachingTip} coachMode={isCoachMode} />
           </div>
         </CodingLayout>
       ) : isDesignMode ? (
@@ -793,7 +791,7 @@ export default function InterviewPage() {
           <div className="px-4 pb-1 flex flex-col gap-1.5">
             {showCoachOverlay && <CoachOverlay state={coachModeState} />}
             <CoachingNudge nudge={activeNudge} />
-            {liveCoachingEnabled && <CoachingTip tip={coachingTip} coachMode={isCoachMode} />}
+            <CoachingTip tip={coachingTip} coachMode={isCoachMode} />
           </div>
         </DesignLayout>
       ) : (
@@ -874,7 +872,7 @@ export default function InterviewPage() {
       <div className="px-4 pb-1 flex flex-col gap-1.5">
         {showCoachOverlay && <CoachOverlay state={coachModeState} />}
         <CoachingNudge nudge={activeNudge} />
-        {liveCoachingEnabled && <CoachingTip tip={coachingTip} coachMode={isCoachMode} />}
+        <CoachingTip tip={coachingTip} coachMode={isCoachMode} />
       </div>
       </>
       )}
@@ -893,8 +891,6 @@ export default function InterviewPage() {
         }}
         isScoring={phase === 'SCORING'}
         darkMode={isCodingMode || isDesignMode}
-        liveCoachingEnabled={liveCoachingEnabled}
-        onToggleLiveCoaching={toggleLiveCoaching}
       />
     </motion.div>
   )

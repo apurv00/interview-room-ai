@@ -1150,3 +1150,80 @@ protects CMS-added domains absent from `STATIC_DOMAINS`.
 `rubricCoverage` guards, 4533+ tests). `resolver.ts` is hot-path: the change is additive
 and provably cannot alter resolution for any covered domain, but a full browser interview
 on a real domain confirming unchanged flow remains the manual post-deploy check.
+
+### 2026-06-23 · Coach-mode dead air when the live-coaching switch is off · PR #459
+
+**Symptom.** Feedback #1 added an in-room "Coaching on/off" master switch that
+render-gates the live nudges + STAR overlay/tips (`app/interview/page.tsx`). For a
+candidate with `coachMode` ON, turning the switch OFF hid the visible `CoachingTip`
+but the engine still entered `COACHING` and **blocked 3-6s after every answer**
+(`showCoachingTip`, `useInterview.ts`) — dead air with nothing on screen. Caught by
+the Codex PR review, not by unit/type/lint (it's a state-machine timing interaction).
+
+**Root cause.** The feedback-#1 change was render-gate-only and never told the engine.
+`showCoachingTip`'s blocking branch was gated solely on `config.coachMode`, independent
+of the new preference. Hiding the UI without skipping the engine pause left the wait.
+
+**Fix.** Threaded `liveCoachingEnabled` into `useInterview` via an always-current ref
+(`liveCoachingEnabledRef`, mirroring the `liveTranscriptRef` pattern — the block runs
+from a stale `runInterviewLoop` closure, so a primitive prop would not reflect a
+mid-interview toggle). The blocking branch now uses a pure predicate
+`shouldBlockForCoaching(coachMode, liveCoachingEnabled)` (`hooks/coachingGate.ts`):
+block only when coach mode is on AND coaching is not silenced, else fall through to the
+existing non-blocking branch (no dead air). Also fires the existing `coachingAbortRef`
+when the switch flips off mid-block, so a candidate escaping coaching doesn't eat the
+remaining pause. The two other `transitionTo('COACHING')` sites (coding/design feedback
+beats, ~2303/2502) are NOT on this path and were left untouched; the main-answer eval
+path is already non-blocking.
+
+**Verification.** `coachingGate.test.ts` (4 cases; load-bearing one = coach-on +
+switch-off → no block); full `useInterview` suite + interview module green; `tsc
+--noEmit` clean; lint clean. `useInterview.ts` is hot-path: the change is additive and
+the coach-on + switch-on path is provably unchanged (identical predicate result), but a
+full browser interview in coach mode toggling the switch mid-answer remains the manual
+post-deploy check (no Deepgram/Anthropic keys in CI).
+
+**Follow-up (same review cycle, PR #459).** Codex's re-review of the dead-air fix caught
+a second, related bug: feedback #1 render-gated the `<CoachingTip>` component on
+`liveCoachingEnabled`, but the `coachingTip` state channel is **overloaded** — besides
+STAR coaching tips it also carries STATUS notices (usage-limit at `useInterview.ts:585`,
+time warnings `623`/`628`, "Time is up" `666`/`686`, and the coding/design feedback text
+`2329`/`2528` which is also spoken by the avatar). Hiding the whole channel meant a
+candidate who silenced coaching also lost the "Time is up, please finish your current
+thought" notice — the only on-screen reason the interview was ending. **Fix:** un-gate the
+`<CoachingTip>` render (restores the original ungated render) and instead gate ONLY the
+two real coaching producers at the source (`showCoachingTip` and
+`appendEvaluationAndMaybeCoach`) on `liveCoachingEnabledRef`. Status notices and the
+coding/design spoken feedback share the channel and stay visible. Regression guard:
+`useInterview.test.ts` "keeps STATUS notices visible even when live coaching is disabled".
+
+**Follow-up 2 (same review cycle).** Codex's third pass caught the interaction between
+the two prior fixes: toggling coaching off mid read-pause aborts the sleep, but
+`showCoachingTip`'s abort branch intentionally skips `setCoachingTip(null)` (for
+interrupt/end), and since the render is now unconditional (Follow-up 1) the silenced
+coaching card lingered into the next question. **Fix:** the toggle-off effect now also
+clears the tip — guarded by `coachingAbortRef.current` (set ONLY during the coaching
+read-pause), so it clears an active coaching tip but never a status notice.
+
+**Design supersession — toggle moved to the lobby.** After the three follow-ups above,
+the root cause became clear: every one of them stemmed from the toggle being *mutable
+mid-interview*, racing the async state machine. The control was therefore moved to the
+**lobby** (`app/lobby/page.tsx`, alongside the `privacyMode` opt-in), where it is chosen
+before the room loads and is **immutable for the session**. This deletes the entire
+mid-toggle interaction class: the abort-on-toggle effect and the active-tip clearing in
+`useInterview.ts` were **removed** (the effect now only mirrors the value into
+`liveCoachingEnabledRef`), and the in-room toggle UI in `InterviewControls.tsx` was
+reverted to End-only. What REMAINS load-bearing — and applies equally to a lobby-set
+"off" — is the source-gating: `showCoachingTip` / `appendEvaluationAndMaybeCoach` skip the
+coaching tip (and the 3-6s read-pause) when coaching is off, while the `<CoachingTip>`
+render stays ungated so status notices remain visible. Net: coaching-off is now a simple
+constant the engine reads once, not a live signal it must react to.
+
+The lobby→room handoff passes the choice via the room URL (`?lc=0` when off) on the join
+navigation — a storage-independent channel, so it cannot be lost to a failed localStorage
+write (quota / private browsing) the way a config/flag write could, and it forces no
+write on the common "on" path. The room reads `?lc` client-side (effect, SSR-safe);
+default on. The device-wide preference (`liveCoachingPreference.ts`) is only a
+cross-session default that seeds the lobby toggle; it is not on the path that reaches the
+room. (Earlier iterations routed this through `InterviewConfig.liveCoachingEnabled` —
+that field was removed when the URL channel replaced it.)
