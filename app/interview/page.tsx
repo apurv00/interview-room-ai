@@ -276,12 +276,18 @@ export default function InterviewPage() {
     }
   }, [stopRecording, audioRecorder, isMultimodalEnabled, stopCapture, uploadRecordingBlob, config?.privacyMode])
 
-  // Feedback #1: live coaching is chosen in the lobby and carried in the
-  // interview config (frozen for the session — no in-room toggle). Derive it
-  // from config so it rides the same write that gates room entry. `config` is
-  // null until the load effect resolves, so this is SSR-safe (both sides start
-  // at the `on` default) and flips once when config loads, before any coaching.
-  const liveCoachingEnabled = config?.liveCoachingEnabled ?? true
+  // Feedback #1: live coaching is chosen in the lobby and frozen for the session
+  // (no in-room toggle). The lobby passes the choice via the room URL (?lc=0 when
+  // off) — a storage-independent channel, so it can't be lost to a failed
+  // localStorage write. Read it client-side (effect → state) to stay SSR-safe;
+  // default on (absent param / non-lobby entry).
+  const [urlCoachingOff, setUrlCoachingOff] = useState(false)
+  useEffect(() => {
+    try {
+      setUrlCoachingOff(new URLSearchParams(window.location.search).get('lc') === '0')
+    } catch { /* URL unavailable — default on */ }
+  }, [])
+  const liveCoachingEnabled = !urlCoachingOff
 
   // ── Interview engine ──
   const interview = useInterview({

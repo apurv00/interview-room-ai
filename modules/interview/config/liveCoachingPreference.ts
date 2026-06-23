@@ -10,8 +10,8 @@
  *
  * NOTE: this helper is the device-wide DEFAULT that seeds the lobby toggle and
  * remembers the choice across sessions. The value that actually reaches the
- * interview room rides `InterviewConfig.liveCoachingEnabled` (see the lobby's
- * enterRoom), not this flag.
+ * interview room is passed via the room URL (?lc=0 when off) by the lobby's join
+ * navigation — a storage-independent channel — not this flag.
  *
  * Stored as a plain localStorage flag that is intentionally NOT user- or
  * session-scoped: it carries no PII, so it survives sign-out and applies as the
@@ -42,15 +42,15 @@ export function readLiveCoachingPreference(): boolean {
  * swallowed.
  *
  * This is NOT the channel that carries the choice into the interview room — the
- * per-interview value rides `InterviewConfig.liveCoachingEnabled`, written
- * atomically on room entry. So a failed write here only means the lobby won't
- * pre-check the box next time; the current interview still honors the selection.
+ * per-interview value is passed via the room URL (?lc=0 when off) by the lobby's
+ * join navigation. So a failed write here only means the lobby won't pre-check
+ * the box next time; the current interview still honors the selection.
  */
 export function writeLiveCoachingPreference(enabled: boolean): void {
   if (typeof window === 'undefined') return
   try {
     window.localStorage.setItem(LIVE_COACHING_STORAGE_KEY, enabled ? 'true' : 'false')
   } catch {
-    // localStorage unavailable — preference applies to this session only.
+    // localStorage unavailable — the cross-session default just isn't updated.
   }
 }

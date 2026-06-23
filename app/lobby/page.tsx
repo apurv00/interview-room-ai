@@ -94,6 +94,11 @@ function LobbyPageInner() {
   // mount to avoid a markup mismatch.
   const [liveCoachingEnabled, setLiveCoachingEnabled] = useState(true)
   useEffect(() => { setLiveCoachingEnabled(readLiveCoachingPreference()) }, [])
+  // Latest-value ref so the join-countdown effect reads the current choice at
+  // navigation time without listing it as a dep (which would reset the countdown
+  // if toggled mid-count).
+  const liveCoachingEnabledRef = useRef(liveCoachingEnabled)
+  liveCoachingEnabledRef.current = liveCoachingEnabled
   const [checks, setChecks] = useState<Check[]>([
     { label: 'Camera', status: 'pending' },
     { label: 'Microphone', status: 'pending' },
@@ -369,7 +374,10 @@ function LobbyPageInner() {
       setJoinCountdown(prev => {
         if (prev <= 1) {
           clearInterval(interval)
-          router.push('/interview')
+          // Carry an "off" choice via the URL too, so it survives even if the
+          // room-entry config write failed (quota / private browsing). The room
+          // treats ?lc=0 as a storage-independent override.
+          router.push(liveCoachingEnabledRef.current ? '/interview' : '/interview?lc=0')
           return 0
         }
         return prev - 1
@@ -393,30 +401,17 @@ function LobbyPageInner() {
       if (lobbyCompany.trim()) patch.targetCompany = lobbyCompany.trim()
       if (srFailed) patch.degraded = true
       if (privacyModeFeatureEnabled && privacyMode) patch.privacyMode = true
-      // Carry the live-coaching choice in the config so it rides the same
-      // atomic write that gates room entry (a separate localStorage write could
-      // fail and silently lose an "off" selection). Always set it so the room
-      // reads an explicit value rather than inferring from a stale flag.
-      patch.liveCoachingEnabled = liveCoachingEnabled
+      // NOTE: live coaching is NOT persisted here — it's passed to the room via
+      // the URL (?lc=0 when off) on the join navigation below, a
+      // storage-independent channel. This write therefore only runs when the
+      // user actually set company / degraded / privacy, and stays unguarded so a
+      // privacy-mode persistence failure fails CLOSED (throws → the join does
+      // not proceed) rather than entering with a stale config that would store
+      // video despite the opt-out.
       if (Object.keys(patch).length > 0) {
         const updated = { ...config, ...patch }
         setConfig(updated)
-        // The live-coaching assignment makes `patch` non-empty on every join,
-        // so this write runs every time. Failure handling differs by setting:
-        //   - Live coaching / company are best-effort — a write failure (quota /
-        //     private browsing) must NOT strand the candidate (the room falls
-        //     back to the stored config; coaching just defaults on).
-        //   - Privacy mode is a HARD guarantee: if the opt-out can't be
-        //     persisted, the room rebuilds config from stale storage and would
-        //     upload camera video despite the opt-out. Fail CLOSED there
-        //     (rethrow → the join does not proceed) rather than silently violate
-        //     the privacy promise.
-        try {
-          localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(updated))
-        } catch (err) {
-          if (updated.privacyMode) throw err
-          /* non-privacy patch — best-effort, storage failure is non-fatal */
-        }
+        localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(updated))
       }
     }
 

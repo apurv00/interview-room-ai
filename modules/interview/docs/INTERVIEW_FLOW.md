@@ -1219,9 +1219,11 @@ coaching tip (and the 3-6s read-pause) when coaching is off, while the `<Coachin
 render stays ungated so status notices remain visible. Net: coaching-off is now a simple
 constant the engine reads once, not a live signal it must react to.
 
-The lobby→room handoff carries the choice in `InterviewConfig.liveCoachingEnabled`
-(written atomically on room entry, the `privacyMode` pattern) rather than a standalone
-localStorage flag — a separate write could fail (quota / private browsing) and silently
-lose an "off" selection while the room re-read the default. The device-wide preference
-(`liveCoachingPreference.ts`) is now only a cross-session default that seeds the lobby
-toggle; it is not on the path that reaches the room.
+The lobby→room handoff passes the choice via the room URL (`?lc=0` when off) on the join
+navigation — a storage-independent channel, so it cannot be lost to a failed localStorage
+write (quota / private browsing) the way a config/flag write could, and it forces no
+write on the common "on" path. The room reads `?lc` client-side (effect, SSR-safe);
+default on. The device-wide preference (`liveCoachingPreference.ts`) is only a
+cross-session default that seeds the lobby toggle; it is not on the path that reaches the
+room. (Earlier iterations routed this through `InterviewConfig.liveCoachingEnabled` —
+that field was removed when the URL channel replaced it.)
