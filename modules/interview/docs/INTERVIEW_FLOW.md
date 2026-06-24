@@ -1305,3 +1305,47 @@ rate-limit Redis (region not in the hostname) is on the critical path — if it'
 adds an RTT to EVERY TTS request. Measure bom1 vs iad1 (the JWT-cookie harness against a
 preview deploy works without login; also check `process.env.VERCEL_REGION` to confirm the
 function actually landed in bom1) and revert the pin if the default path or rate-limit regresses.
+
+### 2026-06-24 · Adaptive grace — clean answers close ~2s faster (turn-latency feedback)
+
+**Symptom (owner feedback).** Too long between the candidate going silent and the AI asking the
+next question. Measured budget: **~5.5s just to CLOSE the listening state** on a clean answer =
+Deepgram `utterance_end_ms=2500` (server VAD) + `GRACE_MS_BY_INTENT.complete=3000` (client grace).
+The processing→next-question side is already optimized (fast turn-router + prefetched question +
+background eval), so it is NOT where the seconds are.
+
+**Root cause.** The 3000ms `complete` grace is a uniform belt-and-suspenders buffer applied to
+EVERY complete answer — even one that has already had 2500ms of true silence AND ends in terminal
+punctuation / Deepgram `speech_final` (endpoint-confident). For those, the extra 3s is dead air.
+
+**Fix (flag-gated, `NEXT_PUBLIC_FEATURE_ADAPTIVE_GRACE`, `useDeepgramRecognition.ts`).**
+- Wired up the previously-unused `speech_final` signal (`sawSpeechFinalRef`, set per is_final,
+  reset per turn) — it was parsed for diagnostics but never drove control flow.
+- New pure helper `selectGraceMs(intent, text, sawSpeechFinal, adaptive)`: a CONFIDENTLY-complete
+  answer (intent 'complete' AND (speech_final OR terminal punctuation)) closes in
+  `COMPLETE_CONFIDENT_GRACE_MS=1100` instead of 3000. **Ambiguous / incomplete / 'let me think'
+  answers keep their full `GRACE_MS_BY_INTENT` window** — so there is NO added mid-pause cutoff
+  risk. Flag OFF ⇒ `selectGraceMs` returns exactly the legacy window. Grace stays cancellable by
+  any interim/is_final.
+- Single-sourced the duplicated Deepgram WS URL into `DEEPGRAM_LISTEN_URL` — `utterance_end_ms`
+  was hardcoded in two literals (warmUp + connectWebSocket); editing one silently desynced warm
+  vs cold sessions. **`utterance_end_ms` left at 2500** (NOT lowered — that's the retired
+  `earlyQuestion` cutoff territory, close code 4002).
+- Net: a clean confident answer closes in ~2500 + 1100 ≈ **3.6s (down from 5.5s)**.
+
+**Phase 2 (probe-path prefetch) — investigated, NOT shipped.** The brainstorm proposed priming R2
+TTS for probe questions + reusing the prefetched main question. On implementation both fell
+through: (a) the reuse is ALREADY done — `prefetchedQuestionRef` is consumed at the top of every
+topic, including after a probe loop (`useInterview.ts:1639-1641`); (b) there is no prewarm window
+— every probe question is computed synchronously from that answer's eval (`buildProbeQuestion`,
+`useInterview.ts:2122`) and spoken immediately, with no `await` before `avatarSpeak`. Priming R2
+there fires microseconds before playback (zero benefit, wasted double-synth). The only remaining
+probe-path lever is backgrounding the deep-probe `evaluate-answer` (a behavioral change to probe
+cadence) — deferred as its own change.
+
+**Verification.** `selectGraceMs.test.ts` 6/6 (safety property: only complete+confident is
+shortened; incomplete/thinking/flag-off keep their full window). tsc 0, eslint clean. HOT-PATH e2e
+OUTSTANDING (CLAUDE.md rule #3): ship dark, then measure in a REAL interview via
+`window.__deepgramDebug` — p95 last-word→close, **mid-answer cutoff rate** (candidate resumed
+within old-grace-but-not-new), ≥3-word interrupt still fires, one-word noise does NOT close. Flip
+the flag only after the cutoff rate stays flat.

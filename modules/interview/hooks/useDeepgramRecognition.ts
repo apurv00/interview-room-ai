@@ -226,6 +226,25 @@ const GRACE_MS_BY_INTENT: Record<UtteranceIntent, number> = {
   thinkingRequest: 30000,
 }
 
+/** Adaptive grace (turn-latency feedback). When ON, a CONFIDENTLY-complete answer —
+ *  classified 'complete' AND Deepgram-endpoint-confident (speech_final) or ending in
+ *  terminal punctuation — uses COMPLETE_CONFIDENT_GRACE_MS instead of the full 3s window.
+ *  We've already waited the full utterance_end_ms of true silence, so the extra window is
+ *  dead air for a clean answer. Ambiguous / 'incomplete' / 'let me think' answers keep
+ *  their full GRACE_MS_BY_INTENT window — so there is NO added mid-pause cutoff risk. The
+ *  grace stays fully cancellable by any interim/is_final. Flag-gated; ships dark until
+ *  measured in real interviews (INTERVIEW_FLOW.md §8). */
+const ADAPTIVE_GRACE = process.env.NEXT_PUBLIC_FEATURE_ADAPTIVE_GRACE === 'true'
+const COMPLETE_CONFIDENT_GRACE_MS = 1100
+/** Terminal sentence punctuation at end-of-text (tolerates trailing quotes/brackets). */
+const TERMINAL_PUNCTUATION = /[.?!]["')\]]*\s*$/
+
+/** Deepgram Nova-2 streaming listen URL — single-sourced. It was duplicated at the warmUp
+ *  and connectWebSocket call sites; editing one (e.g. utterance_end_ms) without the other
+ *  silently desynced warm vs cold sessions (a class of bug invisible to unit tests). */
+const DEEPGRAM_LISTEN_URL =
+  'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&filler_words=true&utterance_end_ms=2500&interim_results=true&language=en&encoding=linear16&sample_rate=16000'
+
 /** Regex patterns that signal the candidate is explicitly asking for
  *  more thinking time. Anchored to end-of-utterance so phrases buried
  *  mid-sentence ("I'd need to think about trade-offs, then I'd...")
@@ -294,6 +313,33 @@ export function classifyUtteranceIntent(text: string): UtteranceIntent {
   return 'complete'
 }
 
+/** Pick the grace window after UtteranceEnd. Exported for testing — pure function.
+ *  The adaptive fast-path ONLY shortens a confidently-complete answer (endpoint-confident
+ *  via speech_final OR ending in terminal punctuation); every other case keeps its full
+ *  GRACE_MS_BY_INTENT window, so this can never raise the mid-pause cutoff risk. With the
+ *  flag off it returns exactly the legacy GRACE_MS_BY_INTENT[intent]. */
+export function selectGraceMs(
+  intent: UtteranceIntent,
+  text: string,
+  sawSpeechFinal: boolean,
+  adaptive: boolean,
+): number {
+  if (!adaptive || intent !== 'complete') return GRACE_MS_BY_INTENT[intent]
+  // Guard against a conjunction/preposition tail that smart-format punctuated (e.g.
+  // "because." / "and."): classifyUtteranceIntent labels it 'complete' because its
+  // incomplete-ending regexes don't tolerate the added terminal '.', but it's really
+  // mid-thought. Re-check the punctuation-stripped text and refuse the fast-path if it is
+  // incomplete — so neither speech_final NOR punctuation can shorten an ambiguous tail
+  // (Codex P2). With the flag off this function already returned above, so flag-off behavior
+  // is unchanged; under the flag this tail falls back to the full 'complete' window.
+  const trimmed = text.trim()
+  const tailIncomplete =
+    classifyUtteranceIntent(trimmed.replace(TERMINAL_PUNCTUATION, '')) === 'incomplete'
+  const confidentComplete =
+    !tailIncomplete && (sawSpeechFinal || TERMINAL_PUNCTUATION.test(trimmed))
+  return confidentComplete ? COMPLETE_CONFIDENT_GRACE_MS : GRACE_MS_BY_INTENT[intent]
+}
+
 /**
  * Deepgram Nova-2 streaming speech recognition via WebSocket.
  * Same interface as useSpeechRecognition for drop-in replacement.
@@ -327,6 +373,9 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   /** Grace period timer — delays finalization after UtteranceEnd to allow
    *  users with natural thinking pauses to continue speaking. */
   const graceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Whether Deepgram flagged the latest is_final segment as endpoint-confident
+   *  (speech_final). Drives the adaptive-grace fast path; reset per turn. */
+  const sawSpeechFinalRef = useRef(false)
   /** Capture-ready callback — fired once after audio processing starts. */
   const onCaptureReadyRef = useRef<(() => void) | null>(null)
   /** Interrupt callback — fired when speech is detected while avatar is speaking. */
@@ -499,6 +548,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       onCompleteRef.current = onComplete
       onCaptureReadyRef.current = options?.onCaptureReady ?? null
       finalTextRef.current = ''
+      sawSpeechFinalRef.current = false
       // Reset diagnostic counters per turn so each answer's log starts
       // at frame 0. Ring buffer keeps prior turns' packets until capped.
       audioFrameCountRef.current = 0
@@ -804,7 +854,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     const promise = fetchTokenCached()
       .then((token) => {
         return new Promise<void>((resolve) => {
-          const wsUrl = 'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&filler_words=true&utterance_end_ms=2500&interim_results=true&language=en&encoding=linear16&sample_rate=16000'
+          const wsUrl = DEEPGRAM_LISTEN_URL
           const ws = new WebSocket(wsUrl, ['token', token])
           // Publish the CONNECTING socket to wsRef eagerly (was previously
           // deferred to ws.onopen at the bottom of this block). Rationale:
@@ -1185,6 +1235,10 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           }
 
           if (isFinal && transcript) {
+            // Track Deepgram's endpoint confidence (speech_final) for the adaptive-grace
+            // fast path. Latest is_final wins, so a resume (a fresh non-endpoint segment)
+            // lowers confidence and restores the full grace window.
+            sawSpeechFinalRef.current = data.speech_final === true
 
             finalTextRef.current = finalTextRef.current
               ? `${finalTextRef.current} ${transcript}`
@@ -1252,7 +1306,14 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             // continuations are caught by grace-cancellation without
             // the useInterview-level inactivity net having to fire.
             const intent = classifyUtteranceIntent(finalTextRef.current)
-            const graceMs = GRACE_MS_BY_INTENT[intent]
+            // Adaptive fast-path: a confidently-complete answer closes in
+            // COMPLETE_CONFIDENT_GRACE_MS instead of the full window (flag-gated). We've
+            // already waited the full utterance_end_ms of true silence; ambiguous /
+            // incomplete / thinking answers keep their full window. selectGraceMs is pure
+            // + unit-tested; grace stays cancellable by any interim/is_final above.
+            const graceMs = selectGraceMs(
+              intent, finalTextRef.current, sawSpeechFinalRef.current, ADAPTIVE_GRACE,
+            )
             graceTimerRef.current = setTimeout(() => {
               graceTimerRef.current = null
               // Double-guard: if the tab was hidden between scheduling and
@@ -1279,7 +1340,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       return
     }
 
-    const wsUrl = 'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&filler_words=true&utterance_end_ms=2500&interim_results=true&language=en&encoding=linear16&sample_rate=16000'
+    const wsUrl = DEEPGRAM_LISTEN_URL
     // Use auth via websocket subprotocol so transient token is not logged in the URL.
     const ws = new WebSocket(wsUrl, ['token', token]) as WebSocket & {
       __reconnectOnCloseWrapped?: boolean
