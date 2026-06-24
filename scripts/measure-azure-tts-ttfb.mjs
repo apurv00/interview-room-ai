@@ -32,7 +32,7 @@ loadEnvLocal()
 
 const KEY = process.env.AZURE_SPEECH_KEY
 const REGION = process.env.AZURE_SPEECH_REGION
-const VOICE = process.env.AZURE_SPEECH_VOICE || 'en-IN-NeerjaNeural'
+const VOICE = process.env.AZURE_SPEECH_VOICE || 'en-IN-Aarti:DragonHDLatestNeural'
 if (!KEY || !REGION) {
   console.error('AZURE_SPEECH_KEY and AZURE_SPEECH_REGION must be set (add them to .env.local).')
   process.exit(1)

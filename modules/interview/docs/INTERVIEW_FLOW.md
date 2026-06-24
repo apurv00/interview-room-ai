@@ -1227,3 +1227,58 @@ default on. The device-wide preference (`liveCoachingPreference.ts`) is only a
 cross-session default that seeds the lobby toggle; it is not on the path that reaches the
 room. (Earlier iterations routed this through `InterviewConfig.liveCoachingEnabled` —
 that field was removed when the URL channel replaced it.)
+
+### 2026-06-24 · Opt-in Indian-accent interviewer voice via Azure AI Speech (feedback #4)
+
+**What.** Deepgram Aura has **no Indian-English voice** (only US/UK/AU/IE/PH). Added
+Azure AI Speech as an **opt-in second TTS provider** so candidates can pick a natural
+en-IN interviewer voice (default `en-IN-Aarti:DragonHDLatestNeural` — Azure's most
+realistic "Dragon HD" tier, confirmed GA in `centralindia` via the voices/list endpoint).
+
+**Design (purely additive — the Deepgram hot path is untouched).** Azure's
+`cognitiveservices/v1` REST endpoint returns a **chunked MP3** stream, the same shape
+Deepgram returns, so it plugs straight into the existing `tee()` + R2 pipeline and the
+client's MediaSource plays it with **zero playback changes**. The Azure branch in
+`/api/tts/stream` + `/api/tts` only fires when the request carries `?voice=indian` **AND**
+Azure is configured (`isAzureTTSConfigured()`); otherwise the route is byte-for-byte the
+Deepgram path. The lobby picker (gated by `NEXT_PUBLIC_FEATURE_VOICE_PICKER`) carries the
+choice to the room via a **`?voice=indian` URL handoff** (same storage-independent channel
+as `?lc`); `useAvatarSpeech` reads `?voice` once on mount and appends it to all four TTS
+fetches (stream / buffered / prefetch / ack). R2 cache is keyed by `model=azure-<voice>`
+(`ttsCacheKey` already partitions by model) so Azure and Deepgram audio can never collide.
+New adapter: `shared/services/providers/azureTTS.ts` (`azureSynthesize` / `buildSsml`
+with XML escaping / `isAzureTTSConfigured` / `AZURE_TTS_MODEL`).
+
+**Failure modes (all hit during bring-up — documented so they aren't rediscovered):**
+1. **401 from the wrong key.** The Azure **AI Foundry project** "API key" (from
+   `ai.azure.com`) is NOT a Speech key — it only authenticates `services.ai.azure.com` /
+   `openai.azure.com`. Speech TTS needs **KEY 1/KEY 2 from a dedicated "Speech service"
+   resource** (`portal.azure.com` → Keys and Endpoint). Diagnosis: a key rejected by the
+   data-plane voices/list across *all* regions ⇒ wrong key (not a Speech key at all). The
+   key is a clean 32-char value in both cases, so length doesn't disambiguate — probe it.
+2. **401 from region mismatch.** A Speech key only authenticates its **own** region's
+   `{region}.tts.speech.microsoft.com`. `AZURE_SPEECH_REGION` must equal the resource's
+   region (centralindia here). Azure's own 401 body says "use a correct regional API
+   endpoint for your resource."
+3. **TTFB is geography-bound — do NOT benchmark it from a laptop.** Measured locally,
+   Azure TTFB was 0.75–2.5s, but that is dominated by the dev machine's **~1.5s RTT floor**
+   to `centralindia` (baseline TLS handshake, before any synthesis) — not Azure's speed.
+   The real ≤600ms budget check (§5) must be run from a **datacenter** (Vercel
+   preview/prod). For the India launch the TTS function should run near the Azure region
+   (Vercel `bom1`/Mumbai), where Azure neural TTS streams first-byte in ~250–450ms.
+   Mitigations that hide most of the cost in a real interview: the **R2 cache** (the fixed
+   intro greeting + repeated acks are cached after first synthesis → R2 fetch on repeat)
+   and **prefetch** of the upcoming question while the candidate answers.
+
+**Status: merged DARK.** `NEXT_PUBLIC_FEATURE_VOICE_PICKER` is unset in production, so the
+picker is hidden, no `?voice` is ever sent, and the live path is **Deepgram-only** — zero
+risk. Flip the flag on for users only after a datacenter TTFB measurement passes.
+
+**Verification.** `azureTTS.test.ts` (SSML build + XML escaping, 3/3); voices/list
+confirmed Aarti Dragon HD is GA in centralindia; Aarti HD synthesized 49–56KB of valid MP3
+through the streaming path; `tsc --noEmit` 0, eslint clean, `next build` green, interview
+suite 2811/2811; `detect_changes` confined to the two TTS `POST` handlers + `useAvatarSpeech`
++ `LobbyPageInner`; the Deepgram path is provably unchanged when `?voice` is absent. Local
+TTFB was deliberately NOT used as the gate (network-bound). `scripts/measure-azure-tts-ttfb.mjs`
+added for the datacenter measurement; the live in-interview listen-test on a preview is the
+remaining manual step before flipping the flag.

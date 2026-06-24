@@ -14,10 +14,12 @@
 
 const AZURE_KEY = process.env.AZURE_SPEECH_KEY
 const AZURE_REGION = process.env.AZURE_SPEECH_REGION
-// Default to a GA standard-neural en-IN voice. For the most realistic
-// (Dragon HD) voices, set AZURE_SPEECH_VOICE to e.g. 'en-IN-Aarti:DragonHDLatestNeural'
-// or 'en-IN-Arjun:DragonHDLatestNeural' once confirmed GA in your region.
-const AZURE_VOICE = process.env.AZURE_SPEECH_VOICE || 'en-IN-NeerjaNeural'
+// Default to Aarti — Azure's most realistic "Dragon HD" en-IN voice (confirmed
+// GA in centralindia via the voices/list endpoint). Other en-IN Dragon HD voices:
+// en-IN-Diya / en-IN-Meera / en-IN-Neerja:DragonHDLatestNeural (female),
+// en-IN-Arjun:DragonHDLatestNeural (male). For a lighter/cheaper standard-neural
+// voice, set AZURE_SPEECH_VOICE to e.g. 'en-IN-NeerjaNeural'.
+const AZURE_VOICE = process.env.AZURE_SPEECH_VOICE || 'en-IN-Aarti:DragonHDLatestNeural'
 
 /**
  * Cache-key "model" id for the Azure voice. `ttsCacheKey` strips non-alphanumeric
