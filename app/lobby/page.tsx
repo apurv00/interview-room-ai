@@ -526,7 +526,7 @@ function LobbyPageInner() {
           )}
         </motion.div>
 
-        <div className="grid md:grid-cols-2 gap-5">
+        <div className="grid md:grid-cols-2 md:grid-rows-[auto_1fr] md:items-start gap-5">
           {/* Camera preview */}
           <motion.div className="space-y-3" variants={itemVariants}>
             <div className="relative aspect-video rounded-2xl overflow-hidden bg-[#f8fafc] border border-[#e1e8ed]">
@@ -585,8 +585,11 @@ function LobbyPageInner() {
             </div>
           </motion.div>
 
-          {/* Checks + tips */}
-          <motion.div className="space-y-4" variants={itemVariants}>
+          {/* Checks + tips — readiness → voice → Join. md:row-span-2 lets the optional
+              settings (3rd grid child below) sit in column 1 under the camera on desktop,
+              while on mobile everything stacks in DOM order: camera → checks/voice/Join →
+              optional, so Join stays above the optional controls on phones. */}
+          <motion.div className="space-y-4 md:row-span-2" variants={itemVariants}>
             {/* System checks */}
             <div className="bg-white backdrop-blur-sm border border-[#e1e8ed] rounded-2xl p-5 space-y-4">
               <h2 className="text-sm font-semibold text-[#0f1419]">System checks</h2>
@@ -689,9 +692,12 @@ function LobbyPageInner() {
                 </motion.div>
               )}
             </AnimatePresence>
+          </motion.div>
 
-            {/* ── Optional session settings below (sensible defaults) ── */}
-
+          {/* Optional session settings — 3rd grid child. Desktop: auto-places into column 1,
+              row 2 (under the camera, filling the old blank space). Mobile (single column):
+              stacks AFTER the Join column in DOM order, so Join stays above these controls. */}
+          <motion.div className="space-y-3" variants={itemVariants}>
             {/* Optional company input with autocomplete (when no JD-extracted company) */}
             {config && !config.targetCompany && (
               <div className="bg-white border border-[#e1e8ed] rounded-2xl p-4">
