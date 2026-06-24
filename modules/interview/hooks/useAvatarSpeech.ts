@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AvatarEmotion } from '@shared/types'
 import { useStreamingAudio } from './useStreamingAudio'
 import { tapAudioElement } from '@interview/audio/voiceMixer'
@@ -77,6 +77,23 @@ export function useAvatarSpeech({
   // Streaming audio playback (MediaSource API)
   const { streamAndPlay, cancel: cancelStream, softCancel: softCancelStream, isSupported: isStreamingSupported } = useStreamingAudio()
 
+  // Indian-voice personality (feedback #4): read ?voice from the room URL once
+  // (carried from the lobby, like ?lc) and append it to every TTS fetch so the
+  // routes pick the Azure voice. Self-contained here so useInterview and the
+  // room stay untouched; empty string ⇒ default Deepgram, the streaming path
+  // and playback are byte-for-byte unchanged.
+  const voiceQueryRef = useRef('')
+  useEffect(() => {
+    try {
+      voiceQueryRef.current =
+        new URLSearchParams(window.location.search).get('voice') === 'indian'
+          ? '?voice=indian'
+          : ''
+    } catch {
+      /* SSR / no window — default to Deepgram */
+    }
+  }, [])
+
   /**
    * Pre-fetch TTS audio for a question so it's ready when needed (buffered).
    *
@@ -116,7 +133,7 @@ export function useAvatarSpeech({
         const firstKey = ttsCacheRef.current.keys().next().value
         if (firstKey) ttsCacheRef.current.delete(firstKey)
       }
-      const promise = fetch('/api/tts', {
+      const promise = fetch('/api/tts' + voiceQueryRef.current, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
@@ -252,7 +269,7 @@ export function useAvatarSpeech({
           // Priority 2: Streaming playback via MediaSource (low latency)
           if (isStreamingSupported) {
             try {
-              const res = await fetch('/api/tts/stream', {
+              const res = await fetch('/api/tts/stream' + voiceQueryRef.current, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text }),

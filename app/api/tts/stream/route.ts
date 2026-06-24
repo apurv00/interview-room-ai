@@ -4,6 +4,7 @@ import { authOptions } from '@shared/auth/authOptions'
 import { aiLogger } from '@shared/logger'
 import { getCachedTTS, cacheTTS } from '@shared/services/ttsCache'
 import { checkRateLimit } from '@shared/middleware/checkRateLimit'
+import { azureSynthesize, isAzureTTSConfigured, AZURE_TTS_MODEL } from '@shared/services/providers/azureTTS'
 
 export const dynamic = 'force-dynamic'
 
@@ -54,10 +55,17 @@ export async function POST(req: NextRequest) {
     }
 
     const encoding = req.nextUrl.searchParams.get('encoding') === 'opus' ? 'opus' : 'mp3'
-    const contentType = encoding === 'opus' ? 'audio/opus' : 'audio/mpeg'
+    // Indian-voice personality → Azure. Purely additive: only when the request
+    // carries ?voice=indian AND Azure is configured; the Deepgram path below is
+    // otherwise byte-for-byte unchanged. Azure emits MP3, so force mp3 there.
+    const useAzure = req.nextUrl.searchParams.get('voice') === 'indian' && isAzureTTSConfigured()
+    const enc = useAzure ? 'mp3' : encoding
+    const ttsModel = useAzure ? AZURE_TTS_MODEL : TTS_MODEL
+    const contentType = enc === 'opus' ? 'audio/opus' : 'audio/mpeg'
 
-    // Check R2 cache first — serves cached audio without Deepgram call
-    const cached = await getCachedTTS(text, encoding, TTS_MODEL)
+    // Check R2 cache first — serves cached audio without a provider call.
+    // Keyed by ttsModel so Azure and Deepgram audio never collide.
+    const cached = await getCachedTTS(text, enc, ttsModel)
     if (cached) {
       return new Response(new Uint8Array(cached), {
         headers: {
@@ -75,21 +83,23 @@ export async function POST(req: NextRequest) {
     processedText = processedText.replace(/--/g, ',')     // double-hyphen
     processedText = processedText.replace(/\b(So,|Now,|Alright,|Great,|Okay,|Well,) /g, '$1... ')
 
-    const response = await fetch(
-      `https://api.deepgram.com/v1/speak?model=${TTS_MODEL}&encoding=${encoding}`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Token ${DEEPGRAM_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ text: processedText }),
-      }
-    )
+    const response = useAzure
+      ? await azureSynthesize(processedText)
+      : await fetch(
+          `https://api.deepgram.com/v1/speak?model=${TTS_MODEL}&encoding=${enc}`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Token ${DEEPGRAM_API_KEY}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ text: processedText }),
+          }
+        )
 
     if (!response.ok || !response.body) {
       const errorText = await response.text()
-      aiLogger.error({ status: response.status, error: errorText }, 'Deepgram TTS stream failed')
+      aiLogger.error({ status: response.status, error: errorText, provider: useAzure ? 'azure' : 'deepgram' }, 'TTS stream failed')
       return new Response(JSON.stringify({ error: 'TTS generation failed' }), { status: 502 })
     }
 
@@ -112,7 +122,7 @@ export async function POST(req: NextRequest) {
           if (value) chunks.push(value)
         }
         if (chunks.length > 0) {
-          await cacheTTS(text, Buffer.concat(chunks), encoding, TTS_MODEL)
+          await cacheTTS(text, Buffer.concat(chunks), enc, ttsModel)
         }
       } catch (err) {
         aiLogger.warn({ err }, 'TTS cache branch drain failed — non-fatal')

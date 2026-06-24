@@ -98,6 +98,14 @@ function LobbyPageInner() {
   // if toggled mid-count).
   const liveCoachingEnabledRef = useRef(liveCoachingEnabled)
   liveCoachingEnabledRef.current = liveCoachingEnabled
+  // Indian-accent voice (feedback #4): opt-in Azure voice, chosen here and
+  // carried to the room via ?voice=indian (a storage-independent URL handoff,
+  // like ?lc). Gated behind NEXT_PUBLIC_FEATURE_VOICE_PICKER so it only appears
+  // where Azure is configured. Default OFF — Deepgram is the fast, proven path.
+  const voicePickerEnabled = process.env.NEXT_PUBLIC_FEATURE_VOICE_PICKER === 'true'
+  const [indianVoice, setIndianVoice] = useState(false)
+  const indianVoiceRef = useRef(indianVoice)
+  indianVoiceRef.current = indianVoice
   const [checks, setChecks] = useState<Check[]>([
     { label: 'Camera', status: 'pending' },
     { label: 'Microphone', status: 'pending' },
@@ -373,10 +381,14 @@ function LobbyPageInner() {
       setJoinCountdown(prev => {
         if (prev <= 1) {
           clearInterval(interval)
-          // Carry an "off" choice via the URL too, so it survives even if the
-          // room-entry config write failed (quota / private browsing). The room
-          // treats ?lc=0 as a storage-independent override.
-          router.push(liveCoachingEnabledRef.current ? '/interview' : '/interview?lc=0')
+          // Carry runtime choices via the URL (storage-independent handoff):
+          // ?lc=0 = live coaching off, ?voice=indian = Azure Indian voice. The
+          // room reads these on mount; ?lc survives even a failed config write.
+          const params = new URLSearchParams()
+          if (!liveCoachingEnabledRef.current) params.set('lc', '0')
+          if (indianVoiceRef.current) params.set('voice', 'indian')
+          const qs = params.toString()
+          router.push(qs ? `/interview?${qs}` : '/interview')
           return 0
         }
         return prev - 1
@@ -700,6 +712,25 @@ function LobbyPageInner() {
                     Don&apos;t store a video recording of this interview. We&apos;ll still capture
                     facial landmarks and audio on-device for analysis, and the post-interview
                     replay will show your signal timeline without video.
+                  </div>
+                </div>
+              </label>
+            )}
+
+            {/* Interviewer voice — opt-in Indian-accent personality (feedback #4) */}
+            {voicePickerEnabled && (
+              <label className="bg-white border border-[#e1e8ed] rounded-2xl p-4 flex items-start gap-3 cursor-pointer hover:border-[#2563eb]/30 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={indianVoice}
+                  onChange={(e) => setIndianVoice(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 accent-[#2563eb]"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-[#0f1419]">Indian-accent interviewer voice</div>
+                  <div className="text-xs text-[#71767b] mt-0.5 leading-relaxed">
+                    Use a natural Indian-English voice for the AI interviewer instead of the
+                    default. You can change this each interview.
                   </div>
                 </div>
               </label>
