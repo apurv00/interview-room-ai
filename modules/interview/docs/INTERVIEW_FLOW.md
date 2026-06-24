@@ -1282,3 +1282,14 @@ suite 2811/2811; `detect_changes` confined to the two TTS `POST` handlers + `use
 TTFB was deliberately NOT used as the gate (network-bound). `scripts/measure-azure-tts-ttfb.mjs`
 added for the datacenter measurement; the live in-interview listen-test on a preview is the
 remaining manual step before flipping the flag.
+
+**Region pin (2026-06-24, follow-up PR).** Acting on the bom1 note above: both TTS routes
+now set `runtime = 'nodejs'` + `preferredRegion = 'bom1'` (Mumbai) — the function runs next
+to India users AND the Azure centralindia endpoint. Requires Vercel Pro (per-function
+regions); the rest of the app stays in iad1 for Mongo Atlas proximity, and TTS uses no Mongo
+so the split is safe. TWO things to confirm with a real post-deploy TTFB measurement before
+trusting it: (1) the Deepgram DEFAULT voice is US-side, so bom1 adds a hop to the non-Indian
+path; (2) the Upstash rate-limit Redis (region not encoded in the hostname) is on the critical
+path — if it's US-East, bom1 adds an RTT to EVERY TTS request. Measure bom1 vs iad1 (the
+JWT-cookie harness against a preview deploy works without login) and revert the pin if the
+default path or rate-limit regresses.
