@@ -293,7 +293,7 @@ export function useAvatarSpeech({
           }
 
           // Priority 3: Buffered fetch (for browsers without MediaSource)
-          const res = await fetch('/api/tts', {
+          const res = await fetch('/api/tts' + voiceQueryRef.current, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text }),
@@ -424,7 +424,7 @@ export function useAvatarSpeech({
       const fetchAbort = new AbortController()
       currentAckFetchAbortRef.current = fetchAbort
 
-      return fetch('/api/tts', {
+      return fetch('/api/tts' + voiceQueryRef.current, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),

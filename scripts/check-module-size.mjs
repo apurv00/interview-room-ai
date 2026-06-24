@@ -72,7 +72,14 @@ const BUDGETS = {
   // translation shared by the seed (server) and the CMS domain forms (client)
   // so they cannot drift. The paired test is not counted. LOC well under budget
   // (~13k/25k). +1 headroom. See docs/adr/0011-shared-budget-bump-category-maps.md.
-  'shared':            { maxLOC: 25_000, maxFiles: 134 },
+  // Bumped maxFiles 134 → 136 on 2026-06-24 (PR #463): adds ONE counted file —
+  // shared/services/providers/azureTTS.ts, the opt-in Azure AI Speech TTS adapter
+  // (Indian-accent interviewer voice; feedback #4), alongside the other provider
+  // adapters. The paired test (__tests__/azureTTS.test.ts) is NOT counted
+  // (countFiles skips __tests__/). LOC unaffected, well under budget (~13.8k/25k)
+  // — a count-shape change, not bloat. +1 headroom. See
+  // docs/adr/0013-shared-budget-bump-azure-tts.md.
+  'shared':            { maxLOC: 25_000, maxFiles: 136 },
 }
 
 const TS_EXTENSIONS = new Set(['.ts', '.tsx'])
