@@ -611,6 +611,46 @@ function LobbyPageInner() {
               ))}
             </div>
 
+            {/* Interviewer voice — prominent Default/Indian choice, set before joining (feedback #4) */}
+            {voicePickerEnabled && (
+              <div className="bg-white border border-[#e1e8ed] rounded-2xl p-4">
+                <div className="text-sm font-semibold text-[#0f1419] mb-0.5">Interviewer voice</div>
+                <div className="text-xs text-[#71767b] mb-3 leading-relaxed">
+                  Pick the AI interviewer&apos;s accent. You can change this each interview.
+                </div>
+                <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Interviewer voice">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={!indianVoice}
+                    onClick={() => setIndianVoice(false)}
+                    className={`rounded-xl px-3 py-2.5 text-sm font-medium border transition-colors text-center ${
+                      !indianVoice
+                        ? 'bg-[#2563eb] text-white border-[#2563eb]'
+                        : 'bg-[#f8fafc] text-[#536471] border-[#e1e8ed] hover:border-[#2563eb]/40'
+                    }`}
+                  >
+                    Default
+                    <span className="block text-[11px] font-normal opacity-80 mt-0.5">US English</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={indianVoice}
+                    onClick={() => setIndianVoice(true)}
+                    className={`rounded-xl px-3 py-2.5 text-sm font-medium border transition-colors text-center ${
+                      indianVoice
+                        ? 'bg-[#2563eb] text-white border-[#2563eb]'
+                        : 'bg-[#f8fafc] text-[#536471] border-[#e1e8ed] hover:border-[#2563eb]/40'
+                    }`}
+                  >
+                    Indian
+                    <span className="block text-[11px] font-normal opacity-80 mt-0.5">en-IN · Aarti</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Join — primary action, directly under the readiness gate it depends on */}
             <AnimatePresence mode="wait">
               {!joining ? (
@@ -712,25 +752,6 @@ function LobbyPageInner() {
                     Don&apos;t store a video recording of this interview. We&apos;ll still capture
                     facial landmarks and audio on-device for analysis, and the post-interview
                     replay will show your signal timeline without video.
-                  </div>
-                </div>
-              </label>
-            )}
-
-            {/* Interviewer voice — opt-in Indian-accent personality (feedback #4) */}
-            {voicePickerEnabled && (
-              <label className="bg-white border border-[#e1e8ed] rounded-2xl p-4 flex items-start gap-3 cursor-pointer hover:border-[#2563eb]/30 transition-colors">
-                <input
-                  type="checkbox"
-                  checked={indianVoice}
-                  onChange={(e) => setIndianVoice(e.target.checked)}
-                  className="mt-0.5 w-4 h-4 accent-[#2563eb]"
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-[#0f1419]">Indian-accent interviewer voice</div>
-                  <div className="text-xs text-[#71767b] mt-0.5 leading-relaxed">
-                    Use a natural Indian-English voice for the AI interviewer instead of the
-                    default. You can change this each interview.
                   </div>
                 </div>
               </label>
