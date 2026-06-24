@@ -7,15 +7,12 @@ import { checkRateLimit } from '@shared/middleware/checkRateLimit'
 import { azureSynthesize, isAzureTTSConfigured, AZURE_TTS_MODEL } from '@shared/services/providers/azureTTS'
 
 export const dynamic = 'force-dynamic'
-export const runtime = 'nodejs'
-// India launch (feedback #4): pin to bom1 (Mumbai) — close to India users AND to the
-// Azure centralindia Speech endpoint, so the opt-in Indian-voice TTFB is ~tens of ms
-// instead of a cross-continent round-trip. TTS touches no MongoDB (Redis rate-limit +
-// R2 cache + Azure/Deepgram only), so it doesn't need the iad1/Atlas proximity the rest
-// of the app keeps. Trade-offs to verify post-deploy (INTERVIEW_FLOW.md §8): the Deepgram
-// DEFAULT path and the Upstash rate-limit are US-side, so measure real TTFB before relying
-// on this — bom1 helps the Indian path but may add latency to the default path.
-export const preferredRegion = 'bom1'
+// Region: this Node function is pinned to bom1 (Mumbai) via vercel.json `functions` —
+// close to India users + the Azure centralindia endpoint. Node functions CANNOT use the
+// `preferredRegion` route export (that is Edge-only; it compiled to nothing here — it left
+// /api/tts as {} in functions-config-manifest.json). The region lives in vercel.json.
+// Verify post-deploy (INTERVIEW_FLOW.md §8): the Deepgram default path + Upstash rate-limit
+// are US-side, so measure real TTFB before relying on this.
 
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY
 const TTS_MODEL = process.env.DEEPGRAM_TTS_MODEL || 'aura-2-luna-en'

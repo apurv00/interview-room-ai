@@ -1,1 +1,8 @@
-{}
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["iad1"],
+  "functions": {
+    "app/api/tts/route.ts": { "regions": ["bom1"] },
+    "app/api/tts/stream/route.ts": { "regions": ["bom1"] }
+  }
+}
