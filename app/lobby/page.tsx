@@ -98,6 +98,14 @@ function LobbyPageInner() {
   // if toggled mid-count).
   const liveCoachingEnabledRef = useRef(liveCoachingEnabled)
   liveCoachingEnabledRef.current = liveCoachingEnabled
+  // Indian-accent voice (feedback #4): opt-in Azure voice, chosen here and
+  // carried to the room via ?voice=indian (a storage-independent URL handoff,
+  // like ?lc). Gated behind NEXT_PUBLIC_FEATURE_VOICE_PICKER so it only appears
+  // where Azure is configured. Default OFF — Deepgram is the fast, proven path.
+  const voicePickerEnabled = process.env.NEXT_PUBLIC_FEATURE_VOICE_PICKER === 'true'
+  const [indianVoice, setIndianVoice] = useState(false)
+  const indianVoiceRef = useRef(indianVoice)
+  indianVoiceRef.current = indianVoice
   const [checks, setChecks] = useState<Check[]>([
     { label: 'Camera', status: 'pending' },
     { label: 'Microphone', status: 'pending' },
@@ -373,10 +381,14 @@ function LobbyPageInner() {
       setJoinCountdown(prev => {
         if (prev <= 1) {
           clearInterval(interval)
-          // Carry an "off" choice via the URL too, so it survives even if the
-          // room-entry config write failed (quota / private browsing). The room
-          // treats ?lc=0 as a storage-independent override.
-          router.push(liveCoachingEnabledRef.current ? '/interview' : '/interview?lc=0')
+          // Carry runtime choices via the URL (storage-independent handoff):
+          // ?lc=0 = live coaching off, ?voice=indian = Azure Indian voice. The
+          // room reads these on mount; ?lc survives even a failed config write.
+          const params = new URLSearchParams()
+          if (!liveCoachingEnabledRef.current) params.set('lc', '0')
+          if (indianVoiceRef.current) params.set('voice', 'indian')
+          const qs = params.toString()
+          router.push(qs ? `/interview?${qs}` : '/interview')
           return 0
         }
         return prev - 1
@@ -598,6 +610,46 @@ function LobbyPageInner() {
                 </div>
               ))}
             </div>
+
+            {/* Interviewer voice — prominent Default/Indian choice, set before joining (feedback #4) */}
+            {voicePickerEnabled && (
+              <div className="bg-white border border-[#e1e8ed] rounded-2xl p-4">
+                <div className="text-sm font-semibold text-[#0f1419] mb-0.5">Interviewer voice</div>
+                <div className="text-xs text-[#71767b] mb-3 leading-relaxed">
+                  Pick the AI interviewer&apos;s accent. You can change this each interview.
+                </div>
+                <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Interviewer voice">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={!indianVoice}
+                    onClick={() => setIndianVoice(false)}
+                    className={`rounded-xl px-3 py-2.5 text-sm font-medium border transition-colors text-center ${
+                      !indianVoice
+                        ? 'bg-[#2563eb] text-white border-[#2563eb]'
+                        : 'bg-[#f8fafc] text-[#536471] border-[#e1e8ed] hover:border-[#2563eb]/40'
+                    }`}
+                  >
+                    Default
+                    <span className="block text-[11px] font-normal opacity-80 mt-0.5">US English</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={indianVoice}
+                    onClick={() => setIndianVoice(true)}
+                    className={`rounded-xl px-3 py-2.5 text-sm font-medium border transition-colors text-center ${
+                      indianVoice
+                        ? 'bg-[#2563eb] text-white border-[#2563eb]'
+                        : 'bg-[#f8fafc] text-[#536471] border-[#e1e8ed] hover:border-[#2563eb]/40'
+                    }`}
+                  >
+                    Indian
+                    <span className="block text-[11px] font-normal opacity-80 mt-0.5">en-IN · Aarti</span>
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Join — primary action, directly under the readiness gate it depends on */}
             <AnimatePresence mode="wait">
