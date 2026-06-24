@@ -1283,13 +1283,25 @@ TTFB was deliberately NOT used as the gate (network-bound). `scripts/measure-azu
 added for the datacenter measurement; the live in-interview listen-test on a preview is the
 remaining manual step before flipping the flag.
 
-**Region pin (2026-06-24, follow-up PR).** Acting on the bom1 note above: both TTS routes
-now set `runtime = 'nodejs'` + `preferredRegion = 'bom1'` (Mumbai) — the function runs next
-to India users AND the Azure centralindia endpoint. Requires Vercel Pro (per-function
-regions); the rest of the app stays in iad1 for Mongo Atlas proximity, and TTS uses no Mongo
-so the split is safe. TWO things to confirm with a real post-deploy TTFB measurement before
-trusting it: (1) the Deepgram DEFAULT voice is US-side, so bom1 adds a hop to the non-Indian
-path; (2) the Upstash rate-limit Redis (region not encoded in the hostname) is on the critical
-path — if it's US-East, bom1 adds an RTT to EVERY TTS request. Measure bom1 vs iad1 (the
-JWT-cookie harness against a preview deploy works without login) and revert the pin if the
-default path or rate-limit regresses.
+**Region pin (2026-06-24, two PRs).** Goal: run the TTS function near India users + the
+Azure centralindia endpoint (Vercel Pro supports per-function regions; the rest of the app
+stays in iad1 for Mongo Atlas proximity, and TTS uses no Mongo so the split is safe).
+
+- **First attempt was INERT (caught by Codex).** Adding `export const preferredRegion = 'bom1'`
+  to the route did NOTHING: for Next.js/Vercel, `preferredRegion` is an **Edge-runtime-only**
+  knob. On these `runtime = 'nodejs'` handlers it compiled to nothing — confirmed by
+  `.next/server/functions-config-manifest.json`, which listed `/api/tts` and `/api/tts/stream`
+  as `{}`. (The repo's pre-existing `app/api/resume/pdf` `preferredRegion = 'iad1'` is **also**
+  inert for the same reason; it only "works" because iad1 is the default region anyway. Worth a
+  separate cleanup.)
+- **Correct mechanism: `vercel.json`.** Node function regions are set there — a project-level
+  `"regions": ["iad1"]` plus a per-function override `"functions": { "app/api/tts/route.ts":
+  { "regions": ["bom1"] }, "app/api/tts/stream/route.ts": { "regions": ["bom1"] } }`. The route
+  files keep only a breadcrumb comment pointing here.
+
+**Still must verify with a real post-deploy TTFB measurement** before trusting bom1: (1) the
+Deepgram DEFAULT voice is US-side, so bom1 adds a hop to the non-Indian path; (2) the Upstash
+rate-limit Redis (region not in the hostname) is on the critical path — if it's US-East, bom1
+adds an RTT to EVERY TTS request. Measure bom1 vs iad1 (the JWT-cookie harness against a
+preview deploy works without login; also check `process.env.VERCEL_REGION` to confirm the
+function actually landed in bom1) and revert the pin if the default path or rate-limit regresses.
