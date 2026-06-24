@@ -583,6 +583,93 @@ function LobbyPageInner() {
                 {audioLevel > 20 ? 'Mic is picking up audio — you\'re good to go.' : 'Say something to test your microphone.'}
               </p>
             </div>
+
+            {/* ── Optional session settings — placed under the camera preview to fill the
+                left column and keep the right column (checks → voice → Join) above the fold ── */}
+
+            {/* Optional company input with autocomplete (when no JD-extracted company) */}
+            {config && !config.targetCompany && (
+              <div className="bg-white border border-[#e1e8ed] rounded-2xl p-4">
+                <label className="text-xs font-medium text-[#536471] block mb-1.5">
+                  Preparing for a specific company? (optional)
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={lobbyCompany}
+                    onChange={(e) => { setLobbyCompany(e.target.value); setShowSuggestions(true) }}
+                    onFocus={() => setShowSuggestions(true)}
+                    onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+                    placeholder="e.g. Google, Stripe, McKinsey..."
+                    className="w-full text-sm px-3 py-2 border border-[#e1e8ed] rounded-xl bg-[#f8fafc] focus:outline-none focus:ring-2 focus:ring-[#2563eb]/30 focus:border-[#2563eb] transition-colors placeholder:text-[#8b98a5]"
+                  />
+                  {showSuggestions && lobbyCompany.length >= 1 && (
+                    (() => {
+                      const filtered = COMPANY_PROFILES.filter(p =>
+                        p.name.toLowerCase().includes(lobbyCompany.toLowerCase()) ||
+                        p.aliases.some(a => a.toLowerCase().includes(lobbyCompany.toLowerCase()))
+                      ).slice(0, 5)
+                      if (filtered.length === 0 || (filtered.length === 1 && filtered[0].name.toLowerCase() === lobbyCompany.toLowerCase())) return null
+                      return (
+                        <div className="absolute z-10 w-full mt-1 bg-white border border-[#e1e8ed] rounded-xl shadow-lg overflow-hidden">
+                          {filtered.map(p => (
+                            <button
+                              key={p.name}
+                              type="button"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => { setLobbyCompany(p.name); setShowSuggestions(false) }}
+                              className="w-full text-left px-3 py-2 text-sm hover:bg-[#f8fafc] transition-colors flex items-center justify-between"
+                            >
+                              <span className="font-medium text-[#0f1419]">{p.name}</span>
+                              <span className="text-xs text-[#8b98a5]">{p.industry}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )
+                    })()
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Privacy mode — per-interview opt-out of video storage */}
+            {privacyModeFeatureEnabled && (
+              <label className="bg-white border border-[#e1e8ed] rounded-2xl p-4 flex items-start gap-3 cursor-pointer hover:border-[#2563eb]/30 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={privacyMode}
+                  onChange={(e) => setPrivacyMode(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 accent-[#2563eb]"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-[#0f1419]">Privacy mode</div>
+                  <div className="text-xs text-[#71767b] mt-0.5 leading-relaxed">
+                    Don&apos;t store a video recording of this interview. We&apos;ll still capture
+                    facial landmarks and audio on-device for analysis, and the post-interview
+                    replay will show your signal timeline without video.
+                  </div>
+                </div>
+              </label>
+            )}
+
+            {/* Live coaching — set here in the lobby; immutable once the interview starts */}
+            <label className="bg-white border border-[#e1e8ed] rounded-2xl p-4 flex items-start gap-3 cursor-pointer hover:border-[#2563eb]/30 transition-colors">
+              <input
+                type="checkbox"
+                checked={liveCoachingEnabled}
+                onChange={(e) => { setLiveCoachingEnabled(e.target.checked); writeLiveCoachingPreference(e.target.checked) }}
+                className="mt-0.5 w-4 h-4 accent-[#2563eb]"
+              />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-[#0f1419]">Live coaching</div>
+                <div className="text-xs text-[#71767b] mt-0.5 leading-relaxed">
+                  Show real-time tips during the interview — pacing, filler words, eye contact
+                  and STAR coaching cues. Turn this off for a distraction-free session; status
+                  messages like the time-up warning still appear. This can&apos;t be changed once
+                  the interview starts, and we&apos;ll remember your choice next time.
+                </div>
+              </div>
+            </label>
           </motion.div>
 
           {/* Checks + tips */}
@@ -689,92 +776,6 @@ function LobbyPageInner() {
                 </motion.div>
               )}
             </AnimatePresence>
-
-            {/* ── Optional session settings below (sensible defaults) ── */}
-
-            {/* Optional company input with autocomplete (when no JD-extracted company) */}
-            {config && !config.targetCompany && (
-              <div className="bg-white border border-[#e1e8ed] rounded-2xl p-4">
-                <label className="text-xs font-medium text-[#536471] block mb-1.5">
-                  Preparing for a specific company? (optional)
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={lobbyCompany}
-                    onChange={(e) => { setLobbyCompany(e.target.value); setShowSuggestions(true) }}
-                    onFocus={() => setShowSuggestions(true)}
-                    onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
-                    placeholder="e.g. Google, Stripe, McKinsey..."
-                    className="w-full text-sm px-3 py-2 border border-[#e1e8ed] rounded-xl bg-[#f8fafc] focus:outline-none focus:ring-2 focus:ring-[#2563eb]/30 focus:border-[#2563eb] transition-colors placeholder:text-[#8b98a5]"
-                  />
-                  {showSuggestions && lobbyCompany.length >= 1 && (
-                    (() => {
-                      const filtered = COMPANY_PROFILES.filter(p =>
-                        p.name.toLowerCase().includes(lobbyCompany.toLowerCase()) ||
-                        p.aliases.some(a => a.toLowerCase().includes(lobbyCompany.toLowerCase()))
-                      ).slice(0, 5)
-                      if (filtered.length === 0 || (filtered.length === 1 && filtered[0].name.toLowerCase() === lobbyCompany.toLowerCase())) return null
-                      return (
-                        <div className="absolute z-10 w-full mt-1 bg-white border border-[#e1e8ed] rounded-xl shadow-lg overflow-hidden">
-                          {filtered.map(p => (
-                            <button
-                              key={p.name}
-                              type="button"
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={() => { setLobbyCompany(p.name); setShowSuggestions(false) }}
-                              className="w-full text-left px-3 py-2 text-sm hover:bg-[#f8fafc] transition-colors flex items-center justify-between"
-                            >
-                              <span className="font-medium text-[#0f1419]">{p.name}</span>
-                              <span className="text-xs text-[#8b98a5]">{p.industry}</span>
-                            </button>
-                          ))}
-                        </div>
-                      )
-                    })()
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Privacy mode — per-interview opt-out of video storage */}
-            {privacyModeFeatureEnabled && (
-              <label className="bg-white border border-[#e1e8ed] rounded-2xl p-4 flex items-start gap-3 cursor-pointer hover:border-[#2563eb]/30 transition-colors">
-                <input
-                  type="checkbox"
-                  checked={privacyMode}
-                  onChange={(e) => setPrivacyMode(e.target.checked)}
-                  className="mt-0.5 w-4 h-4 accent-[#2563eb]"
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-[#0f1419]">Privacy mode</div>
-                  <div className="text-xs text-[#71767b] mt-0.5 leading-relaxed">
-                    Don&apos;t store a video recording of this interview. We&apos;ll still capture
-                    facial landmarks and audio on-device for analysis, and the post-interview
-                    replay will show your signal timeline without video.
-                  </div>
-                </div>
-              </label>
-            )}
-
-            {/* Live coaching — set here in the lobby; immutable once the interview starts */}
-            <label className="bg-white border border-[#e1e8ed] rounded-2xl p-4 flex items-start gap-3 cursor-pointer hover:border-[#2563eb]/30 transition-colors">
-              <input
-                type="checkbox"
-                checked={liveCoachingEnabled}
-                onChange={(e) => { setLiveCoachingEnabled(e.target.checked); writeLiveCoachingPreference(e.target.checked) }}
-                className="mt-0.5 w-4 h-4 accent-[#2563eb]"
-              />
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium text-[#0f1419]">Live coaching</div>
-                <div className="text-xs text-[#71767b] mt-0.5 leading-relaxed">
-                  Show real-time tips during the interview — pacing, filler words, eye contact
-                  and STAR coaching cues. Turn this off for a distraction-free session; status
-                  messages like the time-up warning still appear. This can&apos;t be changed once
-                  the interview starts, and we&apos;ll remember your choice next time.
-                </div>
-              </div>
-            </label>
           </motion.div>
         </div>
 
