@@ -37,6 +37,16 @@ describe('selectGraceMs — flag ON (adaptive fast-path)', () => {
     expect(selectGraceMs('complete', 'She said "done."', false, true)).toBe(CONFIDENT) // trailing quote tolerated
   })
 
+  it('does NOT shorten a smart-format-punctuated conjunction/preposition tail (Codex P2)', () => {
+    // classifyUtteranceIntent labels "because." / "and." as 'complete' (its incomplete-ending
+    // regexes ignore the added '.'), but they are mid-thought. The guard re-checks the
+    // punctuation-stripped text and refuses the fast-path — even when speech_final is set —
+    // falling back to the full 'complete' window so a resuming candidate isn't cut off.
+    expect(selectGraceMs('complete', 'because.', true, true)).toBe(COMPLETE)
+    expect(selectGraceMs('complete', 'and.', false, true)).toBe(COMPLETE)
+    expect(selectGraceMs('complete', 'I was thinking, so.', true, true)).toBe(COMPLETE)
+  })
+
   it('keeps the FULL window for a complete answer with NO confidence signal (ambiguous → no cutoff risk)', () => {
     expect(selectGraceMs('complete', 'I shipped it', false, true)).toBe(COMPLETE)
   })

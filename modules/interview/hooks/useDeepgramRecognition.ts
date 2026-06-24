@@ -324,10 +324,19 @@ export function selectGraceMs(
   sawSpeechFinal: boolean,
   adaptive: boolean,
 ): number {
+  if (!adaptive || intent !== 'complete') return GRACE_MS_BY_INTENT[intent]
+  // Guard against a conjunction/preposition tail that smart-format punctuated (e.g.
+  // "because." / "and."): classifyUtteranceIntent labels it 'complete' because its
+  // incomplete-ending regexes don't tolerate the added terminal '.', but it's really
+  // mid-thought. Re-check the punctuation-stripped text and refuse the fast-path if it is
+  // incomplete — so neither speech_final NOR punctuation can shorten an ambiguous tail
+  // (Codex P2). With the flag off this function already returned above, so flag-off behavior
+  // is unchanged; under the flag this tail falls back to the full 'complete' window.
+  const trimmed = text.trim()
+  const tailIncomplete =
+    classifyUtteranceIntent(trimmed.replace(TERMINAL_PUNCTUATION, '')) === 'incomplete'
   const confidentComplete =
-    adaptive &&
-    intent === 'complete' &&
-    (sawSpeechFinal || TERMINAL_PUNCTUATION.test(text.trim()))
+    !tailIncomplete && (sawSpeechFinal || TERMINAL_PUNCTUATION.test(trimmed))
   return confidentComplete ? COMPLETE_CONFIDENT_GRACE_MS : GRACE_MS_BY_INTENT[intent]
 }
 
