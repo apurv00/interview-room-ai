@@ -6,8 +6,12 @@ vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockRejectedValue(n
 
 import { GET } from '../route'
 
-const slugsFor = async (domain?: string): Promise<string[]> => {
-  const url = `http://localhost/api/interview-types${domain ? `?domain=${domain}` : ''}`
+const slugsFor = async (domain?: string, experience?: string): Promise<string[]> => {
+  const params = new URLSearchParams()
+  if (domain) params.set('domain', domain)
+  if (experience) params.set('experience', experience)
+  const qs = params.toString()
+  const url = `http://localhost/api/interview-types${qs ? `?${qs}` : ''}`
   const res = await GET(new Request(url))
   const data = await res.json()
   return data.map((d: { slug: string }) => d.slug)
@@ -38,5 +42,32 @@ describe('GET /api/interview-types — category-aware depth filtering', () => {
   it('no domain → all depths', async () => {
     const slugs = await slugsFor()
     expect(slugs).toEqual(expect.arrayContaining(['behavioral', 'technical', 'case-study', 'system-design', 'coding']))
+  })
+})
+
+describe('GET /api/interview-types — experience gating (academics → 0-2 only)', () => {
+  it('shows academics for a 0-2 fresher in an applicable category', async () => {
+    expect(await slugsFor('backend', '0-2')).toContain('academics')
+  })
+
+  it('hides academics for 3-6 / 7+ experience', async () => {
+    expect(await slugsFor('backend', '3-6')).not.toContain('academics')
+    expect(await slugsFor('backend', '7+')).not.toContain('academics')
+  })
+
+  it('hides academics when no experience is provided (a gated depth defaults to hidden)', async () => {
+    expect(await slugsFor('backend')).not.toContain('academics')
+  })
+
+  it('gates academics the same way across all applicable categories', async () => {
+    expect(await slugsFor('mechanical', '0-2')).toContain('academics') // core-engineering
+    expect(await slugsFor('finance', '0-2')).toContain('academics')    // business
+    expect(await slugsFor('data-analyst', '0-2')).toContain('academics') // data-ai
+    expect(await slugsFor('mechanical', '3-6')).not.toContain('academics')
+  })
+
+  it('never offers academics to non-applicable categories, even at 0-2', async () => {
+    expect(await slugsFor('pm', '0-2')).not.toContain('academics')      // product
+    expect(await slugsFor('design', '0-2')).not.toContain('academics')  // design
   })
 })

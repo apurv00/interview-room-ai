@@ -77,11 +77,16 @@ export default function DepthSelector({ selectedDomain, selectedDepth, experienc
       return
     }
 
+    // Stale-response guard: if domain/experience changes while this request is in
+    // flight, its late response must NOT call setTypes — otherwise a 0-2 fetch landing
+    // after a switch to 3-6 would re-expose academics on the wrong band.
+    let cancelled = false
     const params = new URLSearchParams({ domain: selectedDomain })
     if (experience) params.set('experience', experience)
     fetch(`/api/interview-types?${params.toString()}`)
       .then((r) => r.json())
       .then((data: InterviewDepth[]) => {
+        if (cancelled) return
         // Only replace static data if API returns at least as many depth options
         // (domain/experience filtering may legitimately reduce the count)
         if (data?.length > 0) {
@@ -96,6 +101,7 @@ export default function DepthSelector({ selectedDomain, selectedDepth, experienc
       .catch(() => {
         // Static data already shown — silently ignore
       })
+    return () => { cancelled = true }
   }, [selectedDomain, experience])
 
   if (!selectedDomain) {

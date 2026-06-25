@@ -68,7 +68,14 @@ export async function GET(req: Request) {
       // coding/system-design/case-study during the upgrade window.
       const seedExpectsCategories = FALLBACK_DEPTHS.some(d => d.applicableCategories.length > 0)
       const dbHasCategories = filtered.some(d => (d.applicableCategories?.length ?? 0) > 0)
-      if (hasAll && (!seedExpectsCategories || dbHasCategories)) {
+      // Same guard for experience gating: if the seed gates a depth by experience
+      // (academics → 0-2) but the DB rows predate that field, treat the DB as stale and
+      // fall through to FALLBACK_DEPTHS — otherwise experienceApplies sees an empty list
+      // ("all bands") and a gated depth leaks onto the wrong band during the pre-seed
+      // deploy window.
+      const seedExpectsExperience = FALLBACK_DEPTHS.some(d => (d.applicableExperience?.length ?? 0) > 0)
+      const dbHasExperience = filtered.some(d => ((d as { applicableExperience?: string[] }).applicableExperience?.length ?? 0) > 0)
+      if (hasAll && (!seedExpectsCategories || dbHasCategories) && (!seedExpectsExperience || dbHasExperience)) {
         const domainCategory = domain ? resolveDomainCategory(domain, domainDoc) : undefined
         const result = filtered.filter(d =>
           (!domain || depthApplies(d, domain, domainCategory)) && experienceApplies(d, experience)
