@@ -139,6 +139,9 @@ import { TEMPLATES as GEN_CASE } from './general-case-study'
 import { TEMPLATES as GEN_CODE } from './general-coding'
 import { TEMPLATES as GEN_SYS } from './general-system-design'
 
+// ─── Academics / Subject Viva (shared shape × 19 domains × 3 bands) ──────────
+import { TEMPLATES as ACADEMIC } from './academics'
+
 const allTemplates: FlowTemplate[] = [
   ...BACKEND_BEH, ...BACKEND_TECH, ...BACKEND_CASE, ...BACKEND_CODE, ...BACKEND_SYS,
   ...FRONTEND_BEH, ...FRONTEND_TECH, ...FRONTEND_CASE, ...FRONTEND_CODE, ...FRONTEND_SYS,
@@ -165,6 +168,7 @@ const allTemplates: FlowTemplate[] = [
   ...DESIGN_BEH, ...DESIGN_TECH, ...DESIGN_CASE,
   ...BIZ_BEH, ...BIZ_TECH, ...BIZ_CASE,
   ...GEN_BEH, ...GEN_TECH, ...GEN_CASE, ...GEN_CODE, ...GEN_SYS,
+  ...ACADEMIC,
 ]
 
 export const TEMPLATE_REGISTRY: Map<TemplateKey, FlowTemplate> = new Map()

@@ -174,12 +174,20 @@ export function getInterviewIntro(
     'case-study': 'case study session',
     'system-design': 'system design interview',
     coding: 'coding challenge',
+    academics: 'academic subject viva',
   }
   const typeLabel = typeLabels[interviewType || 'behavioral'] || 'behavioral interview'
 
   const companyNote = targetCompany
     ? ` I understand you're preparing for ${targetCompany} — I'll keep that in mind as we go.`
     : ''
+
+  // Academic / subject viva opens like a campus panel — straight to the favourite subject.
+  // The spoken opener IS the subject question, so there's no separate "tell me about
+  // yourself" warm-up; the named subject anchors the rest of the viva.
+  if (interviewType === 'academics') {
+    return `Hi, I'm Alex — thanks for joining today. This is a ${label} ${typeLabel}, so I'll focus on the subjects you know best.${companyNote} Let's start right there: which academic subject are you strongest in, or enjoy the most — and why?`
+  }
 
   return `Hi, I'm Alex — thanks for joining today. We'll be doing a ${label} ${typeLabel}.${companyNote} Let's kick things off: tell me a bit about yourself and what draws you to this field.`
 }
@@ -191,6 +199,7 @@ export function getAvatarTitle(interviewType?: string): string {
     case 'case-study': return 'Strategy & Assessment Lead'
     case 'system-design': return 'Senior Systems Architect'
     case 'coding': return 'Technical Interview Lead'
+    case 'academics': return 'Faculty Panel · Subject Viva'
     default: return 'Senior Recruiter · Talent Acquisition'
   }
 }

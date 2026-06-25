@@ -1039,6 +1039,7 @@ function InterviewSetupFormView(p: ViewProps) {
                 <DepthSelector
                   selectedDomain={p.role}
                   selectedDepth={p.interviewType}
+                  experience={p.experience}
                   onSelect={p.setInterviewType}
                 />
               </section>

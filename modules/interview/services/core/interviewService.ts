@@ -77,8 +77,31 @@ interface ListSessionsInput {
   status?: string
 }
 
+/**
+ * Whether a depth may run at a given experience band. Experience-restricted built-in
+ * depths (e.g. academics → ['0-2']) are gated; depths with no restriction (empty list)
+ * run at any band. Data-driven from FALLBACK_DEPTHS so it tracks the seed automatically.
+ * Unknown (CMS) depths default to allowed.
+ */
+export function isDepthAllowedForExperience(depthSlug: string, experience: string): boolean {
+  const depth = FALLBACK_DEPTHS.find(d => d.slug === depthSlug)
+  const exps = depth?.applicableExperience ?? []
+  return exps.length === 0 || exps.includes(experience)
+}
+
 export async function createSession(input: CreateSessionInput): Promise<IInterviewSession> {
   await connectDB()
+
+  // Server-side experience gate: an experience-restricted depth (academics → 0-2) must
+  // NOT run on the wrong band even if a tampered client config or a direct API call
+  // bypasses the UI gate. Checked before the usage increment so a rejected attempt costs
+  // the user no monthly credit.
+  const requestedDepth = input.config.interviewType || 'behavioral'
+  if (!isDepthAllowedForExperience(requestedDepth, input.config.experience)) {
+    throw new ForbiddenError(
+      `The "${requestedDepth}" interview type is not available for the ${input.config.experience} experience level.`,
+    )
+  }
 
   const now = new Date()
   const currentMonth = now.getMonth()

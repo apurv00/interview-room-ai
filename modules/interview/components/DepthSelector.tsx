@@ -14,18 +14,23 @@ interface InterviewDepth {
 interface DepthSelectorProps {
   selectedDomain: string | null
   selectedDepth: string | null
+  /** Selected experience band — gates freshers-only depths (academics → 0-2). */
+  experience?: string | null
   onSelect: (slug: string) => void
 }
 
-// Module-level cache keyed by domain slug
+// Module-level cache keyed by `${domain}::${experience}` (experience gates academics).
 const depthCache: Record<string, InterviewDepth[]> = {}
 
 // Category-aware so new category-only roles (e.g. fullstack → programming) inherit
 // coding/system-design on the FIRST render, before the /api/interview-types fetch.
-function filterDepthsByDomain(depths: StaticDepth[], domain: string | null): InterviewDepth[] {
-  if (!domain) return depths as InterviewDepth[]
-  const category = STATIC_DOMAINS.find(d => d.slug === domain)?.categorySlug
+// Also applies the experience gate so academics shows only for 0-2 freshers.
+function filterDepths(depths: StaticDepth[], domain: string | null, experience: string | null): InterviewDepth[] {
+  const category = domain ? STATIC_DOMAINS.find(d => d.slug === domain)?.categorySlug : undefined
   return depths.filter(d => {
+    const exps = d.applicableExperience ?? []
+    if (exps.length > 0 && (!experience || !exps.includes(experience))) return false
+    if (!domain) return true
     const domains = d.applicableDomains ?? []
     const cats = d.applicableCategories ?? []
     if (domains.length === 0 && cats.length === 0) return true
@@ -34,16 +39,16 @@ function filterDepthsByDomain(depths: StaticDepth[], domain: string | null): Int
   }) as InterviewDepth[]
 }
 
-export default function DepthSelector({ selectedDomain, selectedDepth, onSelect }: DepthSelectorProps) {
-  // Use static data immediately, filtered by domain — no loading state needed
-  const [types, setTypes] = useState<InterviewDepth[]>(() => filterDepthsByDomain(STATIC_DEPTHS, selectedDomain))
+export default function DepthSelector({ selectedDomain, selectedDepth, experience = null, onSelect }: DepthSelectorProps) {
+  // Use static data immediately, filtered by domain + experience — no loading state needed
+  const [types, setTypes] = useState<InterviewDepth[]>(() => filterDepths(STATIC_DEPTHS, selectedDomain, experience))
 
-  // Re-filter static depths when domain changes, and auto-select behavioral
+  // Re-filter static depths when domain or experience changes, and auto-select behavioral
   useEffect(() => {
-    const filtered = filterDepthsByDomain(STATIC_DEPTHS, selectedDomain)
+    const filtered = filterDepths(STATIC_DEPTHS, selectedDomain, experience)
     setTypes(filtered)
 
-    // If current selection is no longer valid for this domain, reset to behavioral
+    // If current selection is no longer valid for this domain/experience, reset to behavioral
     if (selectedDepth && !filtered.some(t => t.slug === selectedDepth)) {
       const behavioralType = filtered.find((t) => t.slug === 'behavioral')
       onSelect(behavioralType ? behavioralType.slug : filtered[0]?.slug || 'behavioral')
@@ -51,7 +56,7 @@ export default function DepthSelector({ selectedDomain, selectedDepth, onSelect 
       const behavioralType = filtered.find((t) => t.slug === 'behavioral')
       onSelect(behavioralType ? behavioralType.slug : filtered[0].slug)
     }
-  }, [selectedDomain]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedDomain, experience]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-select behavioral on first render if nothing selected
   useEffect(() => {
@@ -62,25 +67,33 @@ export default function DepthSelector({ selectedDomain, selectedDepth, onSelect 
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Background fetch for CMS-managed depths (domain-filtered)
+  // Background fetch for CMS-managed depths (domain- + experience-filtered)
   useEffect(() => {
     if (!selectedDomain) return
 
-    if (depthCache[selectedDomain]) {
-      setTypes(depthCache[selectedDomain])
+    const cacheKey = `${selectedDomain}::${experience ?? ''}`
+    if (depthCache[cacheKey]) {
+      setTypes(depthCache[cacheKey])
       return
     }
 
-    fetch(`/api/interview-types?domain=${encodeURIComponent(selectedDomain)}`)
+    // Stale-response guard: if domain/experience changes while this request is in
+    // flight, its late response must NOT call setTypes — otherwise a 0-2 fetch landing
+    // after a switch to 3-6 would re-expose academics on the wrong band.
+    let cancelled = false
+    const params = new URLSearchParams({ domain: selectedDomain })
+    if (experience) params.set('experience', experience)
+    fetch(`/api/interview-types?${params.toString()}`)
       .then((r) => r.json())
       .then((data: InterviewDepth[]) => {
+        if (cancelled) return
         // Only replace static data if API returns at least as many depth options
-        // (domain filtering may legitimately reduce the count, so compare per-domain)
+        // (domain/experience filtering may legitimately reduce the count)
         if (data?.length > 0) {
           // Verify API data has correct labels by checking at least one expected slug
           const hasSlugs = data.every((d: InterviewDepth) => d.slug && d.label)
           if (hasSlugs) {
-            depthCache[selectedDomain] = data
+            depthCache[cacheKey] = data
             setTypes(data)
           }
         }
@@ -88,7 +101,8 @@ export default function DepthSelector({ selectedDomain, selectedDepth, onSelect 
       .catch(() => {
         // Static data already shown — silently ignore
       })
-  }, [selectedDomain])
+    return () => { cancelled = true }
+  }, [selectedDomain, experience])
 
   if (!selectedDomain) {
     return (

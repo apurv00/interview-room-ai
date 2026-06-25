@@ -216,7 +216,7 @@ export default function InvitePage() {
 
           <div className="space-y-1.5">
             <label className="text-caption text-[var(--foreground-secondary)]">Interview Type *</label>
-            <DepthSelector selectedDomain={role} selectedDepth={interviewType} onSelect={setInterviewType} />
+            <DepthSelector selectedDomain={role} selectedDepth={interviewType} experience={experience} onSelect={setInterviewType} />
           </div>
 
           <div className="grid grid-cols-2 gap-4">

@@ -586,6 +586,23 @@ export function useInterview({
         return
       }
 
+      if (result.forbidden) {
+        // Server-side experience gate rejected this depth for the band (e.g. academics at
+        // 3-6/7+). createDbSession returns no sessionId; without this branch the loop would
+        // keep calling generate/evaluate with the rejected config. Abort and surface it.
+        interviewAbortRef.current?.abort()
+        coachingAbortRef.current?.abort()
+        stopListening('usageLimit')
+        onRecordingStop?.()
+        setCurrentQuestion("This interview type isn't available for your experience level. Please choose a different interview type.")
+        setCoachingTip('The Academic / Subject Viva is only available for the 0-2 (fresher) experience level.')
+        transitionTo('ENDED')
+        localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
+        localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
+        setTimeout(() => router.push('/'), 4000)
+        return
+      }
+
       if (result.sessionId) {
         sessionIdRef.current = result.sessionId
         // Mark session as active to prevent duplicate creation on back navigation

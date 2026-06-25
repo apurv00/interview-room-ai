@@ -22,6 +22,9 @@ export interface StaticDepth {
   description: string
   applicableDomains?: string[]
   applicableCategories?: string[]
+  /** Experience bands this depth is offered for. Empty/undefined = all bands.
+   *  Used to gate freshers-only depths (e.g. academics → ['0-2']). */
+  applicableExperience?: string[]
 }
 
 export const STATIC_DOMAINS: StaticDomain[] = [
@@ -65,6 +68,9 @@ export const STATIC_DEPTHS: StaticDepth[] = [
   { slug: 'case-study', label: 'Case Study', icon: '📋', description: 'Scenario-based problem-solving — structured thinking, frameworks, and business reasoning.', applicableDomains: ['pm', 'business', 'data-science', 'design', 'general'], applicableCategories: ['product', 'business', 'data-ai', 'design'] },
   { slug: 'system-design', label: 'System Design', icon: '🏗️', description: 'Architecture and system design — scalability, trade-offs, component design, and technical breadth.', applicableDomains: ['backend', 'frontend', 'data-science', 'sdet', 'general'], applicableCategories: ['programming', 'data-ai'] },
   { slug: 'coding', label: 'Coding Challenge', icon: '💻', description: 'Live coding problem-solving — algorithm design, implementation, testing, and optimization.', applicableDomains: ['backend', 'frontend', 'data-science', 'sdet'], applicableCategories: ['programming', 'data-ai'] },
+  // Freshers-only campus academic/subject viva — name your strongest subject, then get
+  // grilled on its fundamentals, theorems/frameworks, and adjacent subjects. Gated to 0-2.
+  { slug: 'academics', label: 'Academic / Subject Viva', icon: '📚', description: 'Campus-style oral viva for freshers (0-2 yrs) — name your strongest subject, then get grilled on its fundamentals, theorems/frameworks, and adjacent subjects.', applicableCategories: ['programming', 'data-ai', 'core-engineering', 'business'], applicableExperience: ['0-2'] },
 ]
 
 export interface StaticCategory {
