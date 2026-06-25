@@ -78,6 +78,12 @@ describe('getInterviewIntro', () => {
     expect(intro).toContain('case study session')
   })
 
+  it('labels the academics depth as a subject viva, NOT a behavioral interview', () => {
+    const intro = getInterviewIntro('backend', 'academics')
+    expect(intro).toContain('academic subject viva')
+    expect(intro).not.toContain('behavioral interview')
+  })
+
   it('includes company name when provided', () => {
     const intro = getInterviewIntro('frontend', 'screening', 'Google')
     expect(intro).toContain('Google')
@@ -106,6 +112,10 @@ describe('getAvatarTitle', () => {
 
   it('returns Strategy & Assessment Lead for case-study', () => {
     expect(getAvatarTitle('case-study')).toBe('Strategy & Assessment Lead')
+  })
+
+  it('returns Faculty Panel · Subject Viva for academics', () => {
+    expect(getAvatarTitle('academics')).toBe('Faculty Panel · Subject Viva')
   })
 
   it('returns default recruiter title for screening', () => {
