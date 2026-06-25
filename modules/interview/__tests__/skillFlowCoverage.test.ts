@@ -85,4 +85,24 @@ describe('general backstop', () => {
     expect(flow, 'unknown domain should resolve to general, not null').not.toBeNull()
     expect(flow!.slots.length).toBeGreaterThan(4)
   })
+
+  // academics inherits by category in /api/interview-types, so a CMS-added domain in
+  // programming/data-ai/core-engineering/business can select it — it MUST resolve to
+  // general:academics (and getSkillContent to general-academics.md), like every other depth.
+  it('resolveFlow falls back to general:academics for an unknown (CMS-added) domain', () => {
+    const flow = resolveFlow({
+      domain: 'some-cms-added-programming-role',
+      depth: 'academics',
+      experience: '0-2',
+      duration: 30,
+    } as Parameters<typeof resolveFlow>[0])
+    expect(flow, 'unknown domain + academics should resolve to general:academics, not null').not.toBeNull()
+    expect(flow!.slots.length).toBeGreaterThan(4)
+  })
+
+  it('general-academics.md skill backstop exists and is seniority-banded', () => {
+    const file = path.join(skillsDir, 'general-academics.md')
+    expect(fs.existsSync(file), 'general-academics.md must exist as the CMS skill backstop').toBe(true)
+    expect(skillIsBanded(file), 'general-academics.md must be seniority-banded').toBe(true)
+  })
 })

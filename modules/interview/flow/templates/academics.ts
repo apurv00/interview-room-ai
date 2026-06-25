@@ -51,14 +51,19 @@ const NEVER_ASK = [
   'Grilling a subject the candidate disclaimed as weak as if it were their strength',
 ]
 
-// Domains the academics depth is offered for — mirrors the staticData STATIC_DEPTHS
-// academics gating (categories: programming, data-ai, core-engineering, business).
-// Each gets a per-domain `{domain}-academics.md` skill file with its subject pool.
+// Domains the academics depth is offered for — the 19 taxonomy domains (categories:
+// programming, data-ai, core-engineering, business), each with its own
+// `{domain}-academics.md` skill file, PLUS `general` as the CMS backstop. academics
+// inherits by category in /api/interview-types, so a CMS-added domain in those categories
+// can select it; resolveFlow + getSkillContent then fall back to general:academics /
+// general-academics.md when that domain has no own files — matching every other depth's
+// general backstop (skillLoader.ts:148-154, resolver.ts:31-34).
 const ACADEMIC_DOMAINS = [
   'frontend', 'backend', 'sdet', 'fullstack', 'devops', 'mobile',
   'data-science', 'ml-engineer', 'data-analyst',
   'mechanical', 'civil', 'electrical', 'electronics',
   'marketing', 'finance', 'operations', 'sales', 'strategy', 'business',
+  'general',
 ] as const
 
 // All 3 bands registered (the coverage guard requires it); the depth itself is
