@@ -14,11 +14,13 @@ import {
 } from '../config/silenceWindow'
 
 describe('isThinkingHeavyDepth', () => {
-  it('returns true for the four depths that need extra silence', () => {
+  it('returns true for the thinking-heavy depths that need extra silence', () => {
     expect(isThinkingHeavyDepth('technical')).toBe(true)
     expect(isThinkingHeavyDepth('case-study')).toBe(true)
     expect(isThinkingHeavyDepth('system-design')).toBe(true)
     expect(isThinkingHeavyDepth('coding')).toBe(true)
+    // academics (subject viva): candidates pause to derive/recall — must NOT be cut off
+    expect(isThinkingHeavyDepth('academics')).toBe(true)
   })
 
   it('returns false for conversational depths — the base window is fine there', () => {

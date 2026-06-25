@@ -4,8 +4,9 @@
  *  misfires on two technical-depth questions (Q3 and Q6): the 1500–2500ms
  *  base window expired while the candidate was mid-thought gathering
  *  their next elaboration. On thinking-heavy depths (technical, case-
- *  study, system-design, coding) candidates routinely pause to weigh
- *  tradeoffs or mentally diagram — we give those depths +1500ms. */
+ *  study, system-design, coding, academics) candidates routinely pause to
+ *  weigh tradeoffs, mentally diagram, or derive a result — we give those
+ *  depths +1500ms. */
 
 export const SILENCE_WINDOW_BONUS_MS = 1500
 
@@ -18,6 +19,7 @@ const THINKING_HEAVY_DEPTHS: ReadonlySet<string> = new Set([
   'case-study',
   'system-design',
   'coding',
+  'academics', // subject viva — candidates pause to derive / recall, like technical
 ])
 
 export function isThinkingHeavyDepth(depth: string | undefined | null): boolean {
