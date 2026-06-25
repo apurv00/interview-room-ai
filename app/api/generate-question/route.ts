@@ -26,6 +26,7 @@ import {
   makeTemplateKey,
 } from '@interview/flow'
 import type { ResolvedFlow, JDOverlay } from '@interview/flow'
+import { flowSlotIndex } from '@interview/flow/slotIndex'
 
 export const dynamic = 'force-dynamic'
 
@@ -282,8 +283,9 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
           jdOverlay,
         })
         if (resolvedFlow) {
-          // Current slot index = number of completed threads (each thread = one slot)
-          const currentSlotIndex = completedThreads?.length ?? 0
+          // Current slot index = number of completed flow threads, excluding the intro
+          // (not a flow slot) for academics so its strict viva sequence isn't shifted.
+          const currentSlotIndex = flowSlotIndex(interviewType, completedThreads?.length ?? 0)
           const flowCtx = buildFlowPromptContext({
             flow: resolvedFlow,
             currentSlotIndex,

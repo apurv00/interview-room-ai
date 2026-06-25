@@ -17,11 +17,12 @@ describe('buildScoringGuide', () => {
     expect(buildScoringGuide('academics')).toBe(ACADEMIC_SCORING_GUIDE)
   })
 
-  it('via resolveEvalDepthSlug: the academics index-0 intro gets the default guide, real viva answers the academic guide', () => {
-    // The opening "tell me about yourself" must not be graded on derivation/conceptual
-    // correctness (it would be marked off-topic and drag down the aggregate).
+  it('via resolveEvalDepthSlug: academics warm-ups (index 0 + 1) get the default guide, real viva probes the academic guide', () => {
+    // The intro and the favourite-subject naming must not be graded on derivation/conceptual
+    // correctness (they would be marked off-topic and drag down the aggregate).
     expect(buildScoringGuide(resolveEvalDepthSlug('academics', 0))).toBe(DEFAULT_SCORING_GUIDE)  // intro
-    expect(buildScoringGuide(resolveEvalDepthSlug('academics', 1))).toBe(ACADEMIC_SCORING_GUIDE) // viva
+    expect(buildScoringGuide(resolveEvalDepthSlug('academics', 1))).toBe(DEFAULT_SCORING_GUIDE)  // favourite-subject warm-up
+    expect(buildScoringGuide(resolveEvalDepthSlug('academics', 2))).toBe(ACADEMIC_SCORING_GUIDE) // first real viva probe
   })
 
   it('returns the default STAR-anchored guide for every other depth (and unknowns)', () => {
@@ -58,12 +59,13 @@ describe('buildScoringGuide', () => {
 })
 
 describe('resolveEvalDepthSlug', () => {
-  it('evaluates the academics index-0 intro (self-intro) as behavioral', () => {
+  it('evaluates the academics warm-ups (index 0 intro + index 1 favourite-subject) as behavioral', () => {
     expect(resolveEvalDepthSlug('academics', 0)).toBe('behavioral')
+    expect(resolveEvalDepthSlug('academics', 1)).toBe('behavioral')
   })
 
-  it('keeps the academics depth for real viva answers (index >= 1)', () => {
-    expect(resolveEvalDepthSlug('academics', 1)).toBe('academics')
+  it('keeps the academics depth for real viva probes (index >= 2)', () => {
+    expect(resolveEvalDepthSlug('academics', 2)).toBe('academics')
     expect(resolveEvalDepthSlug('academics', 5)).toBe('academics')
   })
 

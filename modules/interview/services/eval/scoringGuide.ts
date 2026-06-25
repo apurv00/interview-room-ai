@@ -37,14 +37,17 @@ export function buildScoringGuide(depthSlug: string): string {
 
 /**
  * The depth an answer should be EVALUATED as — usually the interview's own depth, but the
- * opening calibration turn ("tell me about yourself", questionIndex 0) of an academics
- * viva is a self-introduction, not a subject answer. Evaluating it as `behavioral` (its
- * dimensions, criteria, skill, and scoring guide) keeps the self-intro from being scored
- * on conceptual correctness / derivation and marked off-topic, while still producing an
- * evaluation so the answered-question count stays accurate. Real viva answers (index ≥ 1)
- * keep the academics depth.
+ * two WARM-UP turns of an academics viva are not subject answers and must not be scored on
+ * conceptual correctness / derivation:
+ *   - questionIndex 0: the intro ("tell me about yourself").
+ *   - questionIndex 1: the favourite-subject slot, where the candidate only NAMES their
+ *     strongest subject and why ("I like DBMS because…") — not yet a probed concept.
+ * Both are evaluated as `behavioral` (its dimensions, criteria, skill, and guide), so they
+ * are scored as warm-ups rather than marked off-topic — while still producing an evaluation
+ * so the answered-question count stays accurate. The first real viva probe (index ≥ 2,
+ * fundamentals) keeps the academics depth.
  */
 export function resolveEvalDepthSlug(interviewType: string, questionIndex?: number): string {
-  if (interviewType === 'academics' && questionIndex === 0) return 'behavioral'
+  if (interviewType === 'academics' && (questionIndex === 0 || questionIndex === 1)) return 'behavioral'
   return interviewType
 }
