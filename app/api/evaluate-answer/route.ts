@@ -13,6 +13,7 @@ import { User, InterviewDepth } from '@shared/db/models'
 import { FALLBACK_DEPTHS } from '@shared/db/seed'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { getScoringDimensions, buildRubricPromptSection } from '@interview/services/eval/evaluationEngine'
+import { buildScoringGuide } from '@interview/services/eval/scoringGuide'
 import { getOrLoadJDContext, getOrLoadResumeContext } from '@interview/services/persona/documentContextCache'
 import { getOrLoadSessionConfig } from '@interview/services/core/sessionConfigCache'
 import type { AnswerEvaluation } from '@shared/types'
@@ -293,14 +294,10 @@ You are an expert interview coach evaluating candidates for ${domainLabel} roles
     // flag definition stays in featureFlags.ts as dead-reference
     // until G.15c. The 41-80 anchor and the "every dimension" gate
     // that compressed scores into a 40-point band are gone for good.
-    const scoringGuide = `SCORING GUIDE — calibrate to the answer in front of you; do not anchor to the middle.
-- 0–20  : Off-topic, fabricated, or a non-answer.
-- 21–40 : Weak. Missing key elements, no specifics, no ownership.
-- 41–60 : Adequate but generic. Lacks depth, structure, or concrete detail.
-- 61–80 : Good. Clear structure, specific examples, visible personal contribution.
-- 81–100: Excellent. STAR-structured, quantified outcomes, clear ownership, strong relevance.
-
-Score distribution is expected to SPREAD across all five bands across a session — do not cluster answers in 55–75. 81–100 is reachable when 3 of 4 dimensions are excellent AND no dimension is below 60. An answer with STAR structure, quantified outcomes, clear ownership, and strong relevance should score 85–92 even if specificity is only "good." Reserve 0–20 for off-topic, fabricated, or non-answers.`
+    // The default guide (above comment) is STAR-anchored; the academics depth is a
+    // subject viva and gets a conceptual-understanding guide instead. Both live in the
+    // pure, unit-tested scoringGuide.ts so this hot-path stays a one-line swap.
+    const scoringGuide = buildScoringGuide(interviewType)
 
     const userPrompt = `Evaluate this interview answer:
 
