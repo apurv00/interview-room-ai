@@ -364,6 +364,23 @@ const BUILT_IN_DEPTHS = [
     applicableDomains: ['backend', 'frontend', 'data-science', 'sdet'],
     applicableCategories: ['programming', 'data-ai'],
   },
+  {
+    slug: 'academics', label: 'Academic / Subject Viva', icon: '📚', sortOrder: 6,
+    description: 'Campus-style oral viva — name your strongest subject, then get grilled on its fundamentals, theorems/frameworks, and adjacent subjects. For freshers (0-2 yrs).',
+    systemPromptTemplate: 'You are Alex Chen, a campus-placement panel interviewer conducting a {duration}-minute academic / subject viva for a {domain} fresher ({experience} years experience). Open by asking which academic subject they are strongest in or enjoy most, then drill that subject\'s fundamentals — definitions, derivations, theorems/frameworks, and the assumptions behind them — before moving to an adjacent subject. Test genuine understanding from first principles, one concept at a time.',
+    questionStrategy: 'Open by asking the candidate to name their favourite / strongest subject and why. Anchor the first third of the viva there: start with a core fundamental, then push to the mechanism, derivation, or "why", then test the edge of their understanding. Ask them to explain or derive — never just define. Once their favourite subject is well explored, bridge to an adjacent subject (per the domain skill map) to test breadth. Stay strictly on the standard, widely-taught syllabus — never obscure trivia or a specific paper. Accept "I would look it up" for a specific constant/value; reward first-principles reasoning over rote recall. When the candidate is wrong, correct gently with the standard result. One concept at a time.',
+    evaluationCriteria: 'Evaluate conceptual correctness (is the fundamental right), depth of understanding (can they explain the mechanism and derive it, not just recite), reasoning / derivation from first principles (with stated assumptions), and breadth across adjacent subjects. Reward intellectual honesty ("I am not sure, but reasoning from first principles…") over confident wrong recall. Do not penalize a minor arithmetic slip if the method is sound; do not reward buzzwords without understanding. This is a subject viva, NOT a behavioral interview — do not expect or reward STAR structure.',
+    avatarPersona: 'A campus viva panelist — equal parts professor and practitioner. Warm but probing; asks "why" and "derive that" rather than accepting a definition. Corrects gently and keeps drilling to find the edge of understanding.',
+    scoringDimensions: [
+      { name: 'correctness', label: 'Conceptual Correctness', weight: 0.35 },
+      { name: 'conceptual_depth', label: 'Depth of Understanding', weight: 0.30 },
+      { name: 'derivation', label: 'Reasoning & Derivation', weight: 0.20 },
+      { name: 'breadth', label: 'Breadth Across Subjects', weight: 0.15 },
+    ],
+    applicableDomains: [],
+    applicableCategories: ['programming', 'data-ai', 'core-engineering', 'business'],
+    applicableExperience: ['0-2'],
+  },
 ]
 
 export async function seedDatabase() {
@@ -452,4 +469,5 @@ export const FALLBACK_DEPTHS = BUILT_IN_DEPTHS.map(d => ({
   avatarPersona: d.avatarPersona,
   applicableDomains: d.applicableDomains as string[],
   applicableCategories: (d.applicableCategories ?? []) as string[],
+  applicableExperience: ((d as { applicableExperience?: string[] }).applicableExperience ?? []) as string[],
 }))

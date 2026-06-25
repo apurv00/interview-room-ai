@@ -1349,3 +1349,44 @@ OUTSTANDING (CLAUDE.md rule #3): ship dark, then measure in a REAL interview via
 `window.__deepgramDebug` — p95 last-word→close, **mid-answer cutoff rate** (candidate resumed
 within old-grace-but-not-new), ≥3-word interrupt still fires, one-word noise does NOT close. Flip
 the flag only after the cutoff rate stays flat.
+
+### 2026-06-25 · Academic / Subject Viva depth for campus freshers (feedback #5)
+
+**Request (owner).** Colleges pitch a campus "academics round": a panel asks a 0-2yr fresher
+"what's your favourite subject?" then grills its fundamentals, theorems/frameworks, and adjacent
+subjects. Wanted as one more interview *type* against the existing domains for the 0-2 experience
+band — same oral format, no separate flow engine, no B2B, no placement tags; accuracy via the model
+plus strong guardrails (NOT a curated KB/RAG).
+
+**Design (per-domain grain preserved).** New `academics` depth alongside behavioral/technical/
+case-study/system-design/coding. A rigorous subject-grain evaluation collapsed the 19 eng/mgmt/IT
+domains into **12 distinct academic content sets** (cs-core shared across the 6 software roles;
+data-ml-core across the 3 data roles; mech/civil/ee/ece distinct; marketing/finance/operations/
+sales/strategy/business each distinct — management does NOT collapse). Authored as 12 sets, written
+out to **19 per-domain `{domain}-academics.md` skill files** (the architecture's per-domain grain).
+One **shared subject-agnostic flow shape** (`flow/templates/academics.ts`, favourite → fundamentals
+→ derive → adjacent → connect → close) is registered for all 19 domains × 3 bands; the per-domain
+subject pool + adjacency + accuracy guardrails live in the skill files.
+
+**Gating.** New `applicableExperience` field on the depth model + `StaticDepth` + `FALLBACK_DEPTHS`.
+academics → `['0-2']`, so it is **hidden outside the 0-2 band** (DepthSelector + `/api/interview-types`
+both filter on it; absent experience hides it). All 3 flow bands are still registered so the
+`skillFlowCoverage` guard passes; only 0-2 is ever resolved live.
+
+**HOT-PATH touch (`app/api/evaluate-answer/route.ts`).** Academic answers are subject
+explanations/derivations, not STAR stories — the single hardcoded STAR-anchored `scoringGuide`
+(G.11) would mis-score them. The scoring *dimensions* are already data-driven from the depth doc
+(academics → correctness / conceptual_depth / derivation / breadth, coerced positionally), so the
+ONLY route change is swapping the inline guide for `buildScoringGuide(interviewType)` — a pure,
+unit-tested helper (`services/eval/scoringGuide.ts`) that returns the academic conceptual-viva guide
+for `academics` and the **byte-for-byte legacy STAR guide for every other depth**. Blast radius for
+existing depths = zero. The favourite-subject opener and subject drilling are carried by the flow +
+skill content + transcript — no `useInterview`/`generate-question` change.
+
+**Verification.** Full suite **4917 passing** (incl. the `skillFlowCoverage` guard now covering all
+19 academic cells, and `scoringGuide.test.ts`), tsc 0, eslint clean, production build clean. One
+anticipatory QA-harness test (`strongAnswerRouter` template scan) caught a regex false-positive on
+the band/comment literals in `academics.ts` — fixed by not embedding a three-element band array
+literal. HOT-PATH live e2e OUTSTANDING (CLAUDE.md rule #3, auth is prod-only): select Academic /
+Subject Viva for a 0-2 fresher on prod, confirm the opener asks the favourite subject, the drill
+stays on-syllabus + accurate, and scores spread on conceptual correctness (not STAR).

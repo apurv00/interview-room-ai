@@ -22,6 +22,14 @@ function depthApplies(d: DepthApplicability, domain: string, domainCategory?: st
   return !!domainCategory && cats.includes(domainCategory)
 }
 
+// A depth gated by experience (e.g. academics → ['0-2']) is offered only for the
+// listed bands. Empty/absent = all bands. Absent experience hides a gated depth.
+function experienceApplies(d: { applicableExperience?: string[] }, experience: string | null): boolean {
+  const exps = d.applicableExperience ?? []
+  if (exps.length === 0) return true
+  return !!experience && exps.includes(experience)
+}
+
 // Resolve a domain's category even when its role doc isn't seeded yet (migration
 // window) — fall back to the seeded FALLBACK_DOMAINS, then to the resolver.
 function resolveDomainCategory(
@@ -35,13 +43,14 @@ function resolveDomainCategory(
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const domain = searchParams.get('domain')
+  const experience = searchParams.get('experience')
 
   try {
     await connectDB()
     const [depths, domainDoc] = await Promise.all([
       InterviewDepth.find({ isActive: true })
         .sort({ sortOrder: 1 })
-        .select('slug label icon description scoringDimensions applicableDomains applicableCategories')
+        .select('slug label icon description scoringDimensions applicableDomains applicableCategories applicableExperience')
         .lean(),
       domain
         ? InterviewDomain.findOne({ slug: domain }).select('slug category categorySlug').lean<{ slug: string; category?: string; categorySlug?: string }>()
@@ -61,7 +70,9 @@ export async function GET(req: Request) {
       const dbHasCategories = filtered.some(d => (d.applicableCategories?.length ?? 0) > 0)
       if (hasAll && (!seedExpectsCategories || dbHasCategories)) {
         const domainCategory = domain ? resolveDomainCategory(domain, domainDoc) : undefined
-        const result = domain ? filtered.filter(d => depthApplies(d, domain, domainCategory)) : filtered
+        const result = filtered.filter(d =>
+          (!domain || depthApplies(d, domain, domainCategory)) && experienceApplies(d, experience)
+        )
         return NextResponse.json(result, { headers: CACHE_HEADERS })
       }
     }
@@ -71,9 +82,9 @@ export async function GET(req: Request) {
 
   // Fallback (DB down/empty/stale): resolve the domain's category from the seed.
   const domainCategory = domain ? resolveDomainCategory(domain, null) : undefined
-  const rawFallback = domain
-    ? FALLBACK_DEPTHS.filter(d => depthApplies(d, domain, domainCategory))
-    : FALLBACK_DEPTHS
+  const rawFallback = FALLBACK_DEPTHS.filter(d =>
+    (!domain || depthApplies(d, domain, domainCategory)) && experienceApplies(d, experience)
+  )
   // Strip internal prompt fields from fallback data
   const safeFallback = rawFallback.map(({ systemPromptTemplate, questionStrategy, evaluationCriteria, avatarPersona, ...rest }) => rest)
   return NextResponse.json(safeFallback, { headers: CACHE_HEADERS })

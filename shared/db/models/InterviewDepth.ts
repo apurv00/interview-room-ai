@@ -32,6 +32,10 @@ export interface IInterviewDepth extends Document {
   applicableDomains: string[]
   applicableCategories: string[]
 
+  // Experience bands this depth is offered for. Empty = all bands. Gates
+  // freshers-only depths (e.g. academics → ['0-2']).
+  applicableExperience: string[]
+
   // Phase 1: Extended config
   defaultRubricId?: string                          // links to EvaluationRubric
   competencyMapping: string[]                       // competencies this depth evaluates
@@ -66,6 +70,7 @@ const InterviewDepthSchema = new Schema<IInterviewDepth>(
 
     applicableDomains: [{ type: String }],
     applicableCategories: [{ type: String }],
+    applicableExperience: [{ type: String }],
 
     // Phase 1: Extended config
     defaultRubricId: { type: String },
