@@ -218,7 +218,13 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
       if (questionIndex <= 3) {
         const inspiration = await selectSkillQuestions(config.role, interviewType, config.experience)
         if (inspiration) {
-          depthStrategy += `\n\nQUESTION INSPIRATION (adapt to context, don't copy verbatim):\n${inspiration}`
+          // For academics the sample questions cover ILLUSTRATIVE subjects (e.g. consumer
+          // behaviour) — copying their topic is exactly the bug we must avoid, so the label
+          // makes "style not subject" explicit. Other depths use the normal inspiration label.
+          const inspirationLabel = interviewType === 'academics'
+            ? `QUESTION STYLE EXAMPLES — these illustrate the FORMAT and DEPTH only. They are for SAMPLE subjects; do NOT copy their subject. Ask about the subject the candidate actually named:`
+            : `QUESTION INSPIRATION (adapt to context, don't copy verbatim):`
+          depthStrategy += `\n\n${inspirationLabel}\n${inspiration}`
         }
       }
     } catch { /* skill file unavailable — continue with DB depth strategy */ }
@@ -563,9 +569,16 @@ Do this only when a genuine link exists (roughly 1 in 3 questions). Do NOT force
     // Split system prompt into static (cacheable) and dynamic (per-turn) parts.
     // The static part is byte-identical across turns in the same interview,
     // allowing Anthropic's prompt caching to reuse the KV-cache and cut TTFT.
+    // Academics: the single most important rule is to drill the EXACT subject the candidate
+    // named, never a different syllabus subject the sample questions happen to illustrate.
+    // Placed before depthStrategy so it frames the skill content + the style examples.
+    const academicGrounding = interviewType === 'academics'
+      ? `\n\nACADEMIC ROUND — SUBJECT GROUNDING (the most important rule): The candidate names their single strongest subject in their FIRST answer. Identify that exact subject and anchor the ENTIRE round to it — every question must probe THAT subject's fundamentals first, and only later subjects DIRECTLY adjacent to it. NEVER switch to a different syllabus subject the candidate did not choose: if they said "digital marketing", ask about digital marketing (funnels, CAC/LTV, attribution, SEO/SEM) — not consumer behaviour or branding. If they said "operating systems", ask about OS — not DBMS. Read their first answer carefully and stay on their subject. Ask specific, well-formed questions that a candidate could answer in 1-2 minutes; one concept at a time.`
+      : ''
+
     const staticSystemPrompt = `${basePrompt}
 
-Your interview style is warm but professional. You ask ONE focused question at a time. Questions should feel conversational and natural — not robotic or overly formal.${depthStrategy || defaultStrategy}${domainContext}${personaBlock}${companyBlock}${contextBlock}${profileBlock}${personalizationBlock}${ragBlock}${antiRepeatBlock}
+Your interview style is warm but professional. You ask ONE focused question at a time. Questions should feel conversational and natural — not robotic or overly formal.${academicGrounding}${depthStrategy || defaultStrategy}${domainContext}${personaBlock}${companyBlock}${contextBlock}${profileBlock}${personalizationBlock}${ragBlock}${antiRepeatBlock}
 
 ${DATA_BOUNDARY_RULE}`
 
