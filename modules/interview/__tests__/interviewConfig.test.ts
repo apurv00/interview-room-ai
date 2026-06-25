@@ -78,10 +78,13 @@ describe('getInterviewIntro', () => {
     expect(intro).toContain('case study session')
   })
 
-  it('labels the academics depth as a subject viva, NOT a behavioral interview', () => {
+  it('academics intro opens directly with the favourite-subject question (campus opener)', () => {
     const intro = getInterviewIntro('backend', 'academics')
     expect(intro).toContain('academic subject viva')
     expect(intro).not.toContain('behavioral interview')
+    // The spoken opener IS the subject question — not a generic "tell me about yourself".
+    expect(intro).toMatch(/strongest in/i)
+    expect(intro).not.toContain('tell me a bit about yourself')
   })
 
   it('includes company name when provided', () => {

@@ -17,12 +17,12 @@ describe('buildScoringGuide', () => {
     expect(buildScoringGuide('academics')).toBe(ACADEMIC_SCORING_GUIDE)
   })
 
-  it('via resolveEvalDepthSlug: academics warm-ups (index 0 + 1) get the default guide, real viva probes the academic guide', () => {
-    // The intro and the favourite-subject naming must not be graded on derivation/conceptual
-    // correctness (they would be marked off-topic and drag down the aggregate).
-    expect(buildScoringGuide(resolveEvalDepthSlug('academics', 0))).toBe(DEFAULT_SCORING_GUIDE)  // intro
-    expect(buildScoringGuide(resolveEvalDepthSlug('academics', 1))).toBe(DEFAULT_SCORING_GUIDE)  // favourite-subject warm-up
-    expect(buildScoringGuide(resolveEvalDepthSlug('academics', 2))).toBe(ACADEMIC_SCORING_GUIDE) // first real viva probe
+  it('via resolveEvalDepthSlug: academics warm-ups (index 0 intro + index 1 roadmap) get the default guide, real probes the academic guide', () => {
+    // The intro (subject naming) and the ease-in roadmap warm-up must not be graded on
+    // derivation/conceptual correctness (they would be marked off-topic and drag the aggregate down).
+    expect(buildScoringGuide(resolveEvalDepthSlug('academics', 0))).toBe(DEFAULT_SCORING_GUIDE)  // intro = subject naming
+    expect(buildScoringGuide(resolveEvalDepthSlug('academics', 1))).toBe(DEFAULT_SCORING_GUIDE)  // ease-in roadmap warm-up
+    expect(buildScoringGuide(resolveEvalDepthSlug('academics', 2))).toBe(ACADEMIC_SCORING_GUIDE) // first real viva probe (fundamentals)
   })
 
   it('returns the default STAR-anchored guide for every other depth (and unknowns)', () => {
@@ -59,7 +59,7 @@ describe('buildScoringGuide', () => {
 })
 
 describe('resolveEvalDepthSlug', () => {
-  it('evaluates the academics warm-ups (index 0 intro + index 1 favourite-subject) as behavioral', () => {
+  it('evaluates the academics warm-ups (index 0 intro + index 1 roadmap) as behavioral', () => {
     expect(resolveEvalDepthSlug('academics', 0)).toBe('behavioral')
     expect(resolveEvalDepthSlug('academics', 1)).toBe('behavioral')
   })

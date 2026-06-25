@@ -29,13 +29,18 @@ const VIVA_DEEP_DIVE_2: CompactSlot = [
  * while keeping the viva structure consistent (favourite → fundamentals → derive →
  * adjacent → connect → close).
  */
+// NOTE: the favourite-subject question is the spoken INTRO (getInterviewIntro for academics),
+// so the viva opens directly on the subject — no generic "tell me about yourself" turn. Slot 0
+// is a LIGHT warm-up (a roadmap of the named subject): the flow engine requires a warm-up slot,
+// and it eases the candidate in before real probing. Slots are worded to work even though Q1 is
+// prefetched before the candidate's intro answer is captured (they reference "their subject").
 const academicSlots: CompactSlot[] = [
-  ['favourite-subject', 'Favourite / strongest subject', 'technical-breadth', 'warm-up', 'must', 0,
-    'Open by asking which academic subject the candidate is strongest in or enjoys most, and why. This NAMES the subject the viva will drill — do not grill yet.',
-    'Surface only — capture the named subject and the reason; it anchors the rest of the viva.',
-    'A clear favourite with a genuine reason matters more than breadth at this level.'],
+  ['subject-warmup', 'Ease into their subject', 'technical-breadth', 'warm-up', 'must', 1,
+    'The candidate has just named their strongest subject in the opening. Warm up by asking them to map out the main topics or areas within it they have studied — a quick roadmap, no deep probing yet. This settles them and surfaces which areas to drill next.',
+    'Surface only — note which areas they are most comfortable with; do NOT push for depth here.',
+    'A confident roadmap of their subject matters more than depth at this first step.'],
   ['fundamentals-of-favourite', 'Fundamentals of their subject', 'technical-depth', 'exploration', 'must', 2,
-    'Probe a core fundamental of the candidate\'s stated favourite subject. Ask them to EXPLAIN or DERIVE a key concept from first principles — not just define it. Stay on the standard, widely-taught syllabus.',
+    'The candidate named their strongest subject in the opening. Have them take THAT subject and explain a core fundamental of it from first principles — let them pick the concept; do NOT assume a specific subject. Push for the mechanism, not just a definition. Stay on the standard, widely-taught syllabus.',
     'Push on the mechanism and the "why"; ask them to justify, derive, or work a simple example. Never demand a memorized constant — accept "I\'d look it up".',
     'Reward clean first-principles reasoning and stated assumptions over recall.'],
   ['derive-or-justify', 'Derive / justify a result', 'problem-solving', 'exploration', 'must', 2,
