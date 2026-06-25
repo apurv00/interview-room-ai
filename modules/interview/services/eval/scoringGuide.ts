@@ -30,7 +30,14 @@ export const ACADEMIC_SCORING_GUIDE = `SCORING GUIDE — calibrate to the answer
 
 Score distribution is expected to SPREAD across all five bands across a session — do not cluster answers in 55–75. 81–100 is reachable when the candidate reasons correctly from first principles AND no dimension is below 60. Reward intellectual honesty ("I'm not sure, but reasoning from first principles…") over confident wrong recall. Accept "I'd look up that exact constant or value" — test understanding, not memorization. Do NOT penalize a minor arithmetic slip if the method is sound. Reserve 0–20 for fabricated or fundamentally wrong concepts.`
 
-/** Returns the scoring-guide block appropriate to the interview depth. */
-export function buildScoringGuide(depthSlug: string): string {
-  return depthSlug === 'academics' ? ACADEMIC_SCORING_GUIDE : DEFAULT_SCORING_GUIDE
+/** Returns the scoring-guide block appropriate to the interview depth.
+ *
+ * The academic conceptual guide applies only to real viva questions. The opening
+ * calibration turn ("tell me about yourself", questionIndex 0) is a self-introduction,
+ * not a subject answer — scoring it on derivation / conceptual correctness would mark it
+ * off-topic and drag the aggregate feedback down before the viva begins, so the intro
+ * keeps the default guide regardless of depth. */
+export function buildScoringGuide(depthSlug: string, isIntroAnswer = false): string {
+  if (depthSlug === 'academics' && !isIntroAnswer) return ACADEMIC_SCORING_GUIDE
+  return DEFAULT_SCORING_GUIDE
 }

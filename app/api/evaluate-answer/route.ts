@@ -295,9 +295,10 @@ You are an expert interview coach evaluating candidates for ${domainLabel} roles
     // until G.15c. The 41-80 anchor and the "every dimension" gate
     // that compressed scores into a 40-point band are gone for good.
     // The default guide (above comment) is STAR-anchored; the academics depth is a
-    // subject viva and gets a conceptual-understanding guide instead. Both live in the
-    // pure, unit-tested scoringGuide.ts so this hot-path stays a one-line swap.
-    const scoringGuide = buildScoringGuide(interviewType)
+    // subject viva and gets a conceptual-understanding guide instead — but NOT for the
+    // index-0 intro ("tell me about yourself"), which is a self-introduction, not a viva
+    // answer. Both guides live in the pure, unit-tested scoringGuide.ts.
+    const scoringGuide = buildScoringGuide(interviewType, questionIndex === 0)
 
     const userPrompt = `Evaluate this interview answer:
 

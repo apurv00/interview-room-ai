@@ -16,6 +16,15 @@ describe('buildScoringGuide', () => {
     expect(buildScoringGuide('academics')).toBe(ACADEMIC_SCORING_GUIDE)
   })
 
+  it('uses the academic guide for real viva answers but NOT the index-0 intro self-intro', () => {
+    // The opening "tell me about yourself" must not be graded on derivation/conceptual
+    // correctness (it would be marked off-topic and drag down the aggregate).
+    expect(buildScoringGuide('academics', false)).toBe(ACADEMIC_SCORING_GUIDE) // viva question
+    expect(buildScoringGuide('academics', true)).toBe(DEFAULT_SCORING_GUIDE)   // intro answer
+    // non-academic depths are unaffected by the intro flag
+    expect(buildScoringGuide('behavioral', true)).toBe(DEFAULT_SCORING_GUIDE)
+  })
+
   it('returns the default STAR-anchored guide for every other depth (and unknowns)', () => {
     for (const depth of ['behavioral', 'technical', 'case-study', 'system-design', 'coding', 'some-cms-depth', '']) {
       expect(buildScoringGuide(depth)).toBe(DEFAULT_SCORING_GUIDE)
