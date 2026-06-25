@@ -70,7 +70,7 @@ export const STATIC_DEPTHS: StaticDepth[] = [
   { slug: 'coding', label: 'Coding Challenge', icon: '💻', description: 'Live coding problem-solving — algorithm design, implementation, testing, and optimization.', applicableDomains: ['backend', 'frontend', 'data-science', 'sdet'], applicableCategories: ['programming', 'data-ai'] },
   // Freshers-only campus academic/subject viva — name your strongest subject, then get
   // grilled on its fundamentals, theorems/frameworks, and adjacent subjects. Gated to 0-2.
-  { slug: 'academics', label: 'Academic / Subject Viva', icon: '📚', description: 'Campus-style oral viva — name your favourite subject, then get grilled on its fundamentals, theorems/frameworks, and adjacent subjects.', applicableCategories: ['programming', 'data-ai', 'core-engineering', 'business'], applicableExperience: ['0-2'] },
+  { slug: 'academics', label: 'Academic / Subject Viva', icon: '📚', description: 'Campus-style oral viva for freshers (0-2 yrs) — name your strongest subject, then get grilled on its fundamentals, theorems/frameworks, and adjacent subjects.', applicableCategories: ['programming', 'data-ai', 'core-engineering', 'business'], applicableExperience: ['0-2'] },
 ]
 
 export interface StaticCategory {

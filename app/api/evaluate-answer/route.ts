@@ -13,7 +13,7 @@ import { User, InterviewDepth } from '@shared/db/models'
 import { FALLBACK_DEPTHS } from '@shared/db/seed'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { getScoringDimensions, buildRubricPromptSection } from '@interview/services/eval/evaluationEngine'
-import { buildScoringGuide } from '@interview/services/eval/scoringGuide'
+import { buildScoringGuide, resolveEvalDepthSlug } from '@interview/services/eval/scoringGuide'
 import { getOrLoadJDContext, getOrLoadResumeContext } from '@interview/services/persona/documentContextCache'
 import { getOrLoadSessionConfig } from '@interview/services/core/sessionConfigCache'
 import type { AnswerEvaluation } from '@shared/types'
@@ -40,6 +40,9 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
     const startTime = Date.now()
     const timings: Record<string, number> = {}
     const interviewType = config.interviewType || 'behavioral'
+    // The academics intro (index 0 self-intro) is evaluated as behavioral so its rubric,
+    // skill, and guide are not the subject-viva ones; real viva answers keep academics.
+    const evalDepthSlug = resolveEvalDepthSlug(interviewType, questionIndex)
     const domainLabel = getDomainLabel(config.role)
 
     // ── Early exit: empty or near-empty answer → score 0 ──
@@ -78,14 +81,17 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
     try {
       // PR C Phase 1: skip connectDB when session cache populated the depth
       // — InterviewDepth.findOne below is the only Mongo read in this block.
+      // Bypass the session-cached depth when evaluating as a different depth than the
+      // interview's own (academics intro → behavioral), so the academic doc isn't used.
+      const useCachedDepth = sessionCfg?.depth != null && evalDepthSlug === interviewType
       await connectDBIfNeeded(
-        sessionCfg?.depth == null,
+        !useCachedDepth,
         'evaluate-answer:depth',
         sessionCfg == null ? 'sessionCfg-null' : 'depth-null',
       )
-      const depthDoc = (sessionCfg?.depth != null
-        ? sessionCfg.depth
-        : await InterviewDepth.findOne({ slug: interviewType, isActive: true }).lean()) as {
+      const depthDoc = (useCachedDepth
+        ? sessionCfg!.depth
+        : await InterviewDepth.findOne({ slug: evalDepthSlug, isActive: true }).lean()) as {
         evaluationCriteria?: string
         scoringDimensions?: { name: string; label: string; weight: number }[]
       } | null
@@ -109,7 +115,7 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
     }
 
     if (!scoringDims.length) {
-      const fallback = FALLBACK_DEPTHS.find(d => d.slug === interviewType)
+      const fallback = FALLBACK_DEPTHS.find(d => d.slug === evalDepthSlug)
       if (fallback) {
         evalCriteria = fallback.evaluationCriteria || ''
         scoringDims = fallback.scoringDimensions || []
@@ -133,7 +139,7 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
         const preloadedRubric = sessionCfg !== null
           ? (sessionCfg.rubric as { dimensions?: import('@shared/db/models').RubricDimension[] } | null)
           : undefined
-        const rubricDims = await getScoringDimensions(config.role, interviewType, config.experience, preloadedRubric)
+        const rubricDims = await getScoringDimensions(config.role, evalDepthSlug, config.experience, preloadedRubric)
         if (rubricDims.length > 0) {
           scoringDims = rubricDims.map(d => ({ name: d.name, label: d.label, weight: d.weight }))
         }
@@ -160,7 +166,7 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
         ).lean()
       })(),
       // 3. Skill file sections
-      getSkillSections(config.role, interviewType, [
+      getSkillSections(config.role, evalDepthSlug, [
         'scoring-emphasis', 'red-flags', 'experience-calibration',
       ]).catch(() => null),
       // 4. Resume context
@@ -295,10 +301,10 @@ You are an expert interview coach evaluating candidates for ${domainLabel} roles
     // until G.15c. The 41-80 anchor and the "every dimension" gate
     // that compressed scores into a 40-point band are gone for good.
     // The default guide (above comment) is STAR-anchored; the academics depth is a
-    // subject viva and gets a conceptual-understanding guide instead — but NOT for the
-    // index-0 intro ("tell me about yourself"), which is a self-introduction, not a viva
-    // answer. Both guides live in the pure, unit-tested scoringGuide.ts.
-    const scoringGuide = buildScoringGuide(interviewType, questionIndex === 0)
+    // subject viva and gets a conceptual-understanding guide instead. evalDepthSlug is
+    // 'behavioral' for the academics intro, so its guide (and dims/criteria/skill above)
+    // are the behavioral ones, not the viva's. Guides live in the unit-tested scoringGuide.ts.
+    const scoringGuide = buildScoringGuide(evalDepthSlug)
 
     const userPrompt = `Evaluate this interview answer:
 

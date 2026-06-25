@@ -1,6 +1,22 @@
-import { template, DEEP_DIVE_1, DEEP_DIVE_2, type CompactSlot } from '../slotBuilder'
+import { template, type CompactSlot } from '../slotBuilder'
 import type { FlowTemplate } from '../types'
 import type { ExperienceLevel } from '@shared/types'
+
+// Viva-toned adaptive deep-dives (the shared DEEP_DIVE_1/2 use behavioral "revisit your
+// weakest area" framing, which clashes with the subject-viva NEVER_ASK). Same ids +
+// 'adaptive' bucket so coverage/competency wiring is unchanged.
+const VIVA_DEEP_DIVE_1: CompactSlot = [
+  'adaptive-deep-dive-1', 'Adaptive Deep-Dive (Weakest subject)', 'adaptive',
+  'deep-dive', 'must', 3,
+  'Return to the subject or concept the candidate was weakest on, with a fresh angle — a simpler sub-question or a different entry point. Do NOT repeat a previous question.',
+  'Probe whether the gap is a real misunderstanding or just nerves; offer a first-principles foothold and see if they can build from it.',
+]
+const VIVA_DEEP_DIVE_2: CompactSlot = [
+  'adaptive-deep-dive-2', 'Adaptive Deep-Dive (Stretch / recover)', 'adaptive',
+  'deep-dive', 'if-time', 3,
+  'If the candidate is strong, stretch them with a harder derivation or a cross-subject connection. If they are struggling, return to their strongest subject so they finish on solid ground.',
+  'For strong candidates, push for a proof, a derivation, or an edge case. For struggling candidates, let them show depth where they are most confident.',
+]
 
 /**
  * Academic / Subject-Viva flow shape (campus-placement "favourite subject?" round).
@@ -36,8 +52,8 @@ const academicSlots: CompactSlot[] = [
   ['breadth-check', 'One more core subject', 'technical-breadth', 'exploration', 'if-time', 1,
     'Briefly probe one more core subject from the standard syllabus to gauge overall breadth.',
     'Surface probe — one fundamental; gauge whether the basics are solid across the syllabus.'],
-  DEEP_DIVE_1,
-  DEEP_DIVE_2,
+  VIVA_DEEP_DIVE_1,
+  VIVA_DEEP_DIVE_2,
   ['closing-curiosity', 'Subject they want to deepen', 'self-awareness', 'closing', 'must', 0,
     'Ask which subject they most want to go deeper into and how they study it.',
     'Surface — wrap up warmly; assess genuine intellectual curiosity.'],

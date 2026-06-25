@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildScoringGuide,
+  resolveEvalDepthSlug,
   DEFAULT_SCORING_GUIDE,
   ACADEMIC_SCORING_GUIDE,
 } from '@interview/services/eval/scoringGuide'
@@ -16,13 +17,11 @@ describe('buildScoringGuide', () => {
     expect(buildScoringGuide('academics')).toBe(ACADEMIC_SCORING_GUIDE)
   })
 
-  it('uses the academic guide for real viva answers but NOT the index-0 intro self-intro', () => {
+  it('via resolveEvalDepthSlug: the academics index-0 intro gets the default guide, real viva answers the academic guide', () => {
     // The opening "tell me about yourself" must not be graded on derivation/conceptual
     // correctness (it would be marked off-topic and drag down the aggregate).
-    expect(buildScoringGuide('academics', false)).toBe(ACADEMIC_SCORING_GUIDE) // viva question
-    expect(buildScoringGuide('academics', true)).toBe(DEFAULT_SCORING_GUIDE)   // intro answer
-    // non-academic depths are unaffected by the intro flag
-    expect(buildScoringGuide('behavioral', true)).toBe(DEFAULT_SCORING_GUIDE)
+    expect(buildScoringGuide(resolveEvalDepthSlug('academics', 0))).toBe(DEFAULT_SCORING_GUIDE)  // intro
+    expect(buildScoringGuide(resolveEvalDepthSlug('academics', 1))).toBe(ACADEMIC_SCORING_GUIDE) // viva
   })
 
   it('returns the default STAR-anchored guide for every other depth (and unknowns)', () => {
@@ -55,5 +54,26 @@ describe('buildScoringGuide', () => {
   it('academic guide carries the accuracy guardrails (accept "look up", reward honesty)', () => {
     expect(ACADEMIC_SCORING_GUIDE).toMatch(/look up/i)
     expect(ACADEMIC_SCORING_GUIDE).toMatch(/honest/i)
+  })
+})
+
+describe('resolveEvalDepthSlug', () => {
+  it('evaluates the academics index-0 intro (self-intro) as behavioral', () => {
+    expect(resolveEvalDepthSlug('academics', 0)).toBe('behavioral')
+  })
+
+  it('keeps the academics depth for real viva answers (index >= 1)', () => {
+    expect(resolveEvalDepthSlug('academics', 1)).toBe('academics')
+    expect(resolveEvalDepthSlug('academics', 5)).toBe('academics')
+  })
+
+  it('never rewrites a non-academics depth, even at index 0', () => {
+    expect(resolveEvalDepthSlug('behavioral', 0)).toBe('behavioral')
+    expect(resolveEvalDepthSlug('technical', 0)).toBe('technical')
+    expect(resolveEvalDepthSlug('coding', 1)).toBe('coding')
+  })
+
+  it('treats a missing questionIndex as a viva answer (academics stays academics)', () => {
+    expect(resolveEvalDepthSlug('academics')).toBe('academics')
   })
 })
