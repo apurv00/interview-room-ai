@@ -340,6 +340,23 @@ describe('hireService', () => {
       expect(html).toContain('&lt;/a&gt;')
       expect(html).toContain('&quot;')
     })
+
+    it('rejects academics on a non-0-2 band with 403, before consuming org quota (PR #468 review P1)', async () => {
+      for (const experience of ['3-6', '7+']) {
+        const result = await createInvite('u1', 'org1', { ...inviteData, interviewType: 'academics', experience })
+        expect(result).toMatchObject({ status: 403 })
+      }
+      // The gate short-circuits BEFORE the quota increment + session create.
+      expect(mockOrgFindOneAndUpdate).not.toHaveBeenCalled()
+      expect(mockSessionCreate).not.toHaveBeenCalled()
+    })
+
+    it('allows academics at the 0-2 band (passes the gate through to session creation)', async () => {
+      mockOrgFindOneAndUpdate.mockResolvedValue({ _id: 'org1' })
+      mockSessionCreate.mockResolvedValue({ _id: { toString: () => 'sess-acad' } })
+      const result = await createInvite('u1', 'org1', { ...inviteData, interviewType: 'academics', experience: '0-2' })
+      expect((result as { success?: boolean }).success).toBe(true)
+    })
   })
 
   describe('verifyInviteToken', () => {

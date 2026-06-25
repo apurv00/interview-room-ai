@@ -1,5 +1,5 @@
 // ── Services: Core ──
-export { createSession, updateSession, getSession, listSessions } from './services/core/interviewService'
+export { createSession, updateSession, getSession, listSessions, isDepthAllowedForExperience } from './services/core/interviewService'
 
 // ── Services: Eval ──
 export { getScoringDimensions, buildRubricPromptSection, evaluateStructured, evaluateSession } from './services/eval/evaluationEngine'

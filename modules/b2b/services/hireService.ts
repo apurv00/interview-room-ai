@@ -4,6 +4,7 @@ import { User, Organization, InterviewSession, InterviewTemplate } from '@shared
 import { sendEmail } from '@shared/services/emailService'
 import { escapeHtml } from '@shared/services/emailTemplates/htmlEscape'
 import type { Duration } from '@shared/types'
+import { isDepthAllowedForExperience } from '@interview'
 import crypto from 'crypto'
 
 type OrgId = mongoose.Types.ObjectId | string
@@ -216,6 +217,17 @@ export async function createInvite(
     jobDescription?: string
   }
 ) {
+  // Server-side experience gate (mirrors createSession): block an experience-restricted
+  // depth (academics → 0-2) on the wrong band before consuming org quota — a recruiter
+  // could otherwise invite academics at 3-6/7+ via a tampered request body, and the
+  // candidate would bootstrap that stored config past the createSession gate.
+  if (!isDepthAllowedForExperience(data.interviewType, data.experience)) {
+    return {
+      error: `The "${data.interviewType}" interview type is not available for the ${data.experience} experience level.`,
+      status: 403,
+    }
+  }
+
   // Atomic quota check + increment (prevents race condition)
   const updatedOrg = await Organization.findOneAndUpdate(
     {

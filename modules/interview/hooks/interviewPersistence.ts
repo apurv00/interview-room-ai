@@ -4,6 +4,8 @@ import { fetchWithRetry } from '@shared/fetchWithRetry'
 export interface CreateDbSessionResult {
   sessionId: string | null
   limitReached?: boolean
+  /** Server rejected the depth for this experience band (403, e.g. academics at 3-6/7+). */
+  forbidden?: boolean
 }
 
 export async function createDbSession(
@@ -20,6 +22,7 @@ export async function createDbSession(
       }),
     })
     if (res.status === 402) return { sessionId: null, limitReached: true }
+    if (res.status === 403) return { sessionId: null, forbidden: true }
     if (!res.ok) return { sessionId: null }
     const data = await res.json()
     return { sessionId: data.sessionId }
