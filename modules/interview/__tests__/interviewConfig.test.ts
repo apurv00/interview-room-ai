@@ -80,7 +80,7 @@ describe('getInterviewIntro', () => {
 
   it('academics intro opens directly with the favourite-subject question (campus opener)', () => {
     const intro = getInterviewIntro('backend', 'academics')
-    expect(intro).toContain('academic subject viva')
+    expect(intro).toContain('academics round')
     expect(intro).not.toContain('behavioral interview')
     // The spoken opener IS the subject question — not a generic "tell me about yourself".
     expect(intro).toMatch(/strongest in/i)
@@ -117,8 +117,8 @@ describe('getAvatarTitle', () => {
     expect(getAvatarTitle('case-study')).toBe('Strategy & Assessment Lead')
   })
 
-  it('returns Faculty Panel · Subject Viva for academics', () => {
-    expect(getAvatarTitle('academics')).toBe('Faculty Panel · Subject Viva')
+  it('returns Academic Examiner for academics', () => {
+    expect(getAvatarTitle('academics')).toBe('Academic Examiner')
   })
 
   it('returns default recruiter title for screening', () => {
