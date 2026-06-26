@@ -174,7 +174,7 @@ export function getInterviewIntro(
     'case-study': 'case study session',
     'system-design': 'system design interview',
     coding: 'coding challenge',
-    academics: 'academic subject viva',
+    academics: 'academics round',
   }
   const typeLabel = typeLabels[interviewType || 'behavioral'] || 'behavioral interview'
 
@@ -199,7 +199,7 @@ export function getAvatarTitle(interviewType?: string): string {
     case 'case-study': return 'Strategy & Assessment Lead'
     case 'system-design': return 'Senior Systems Architect'
     case 'coding': return 'Technical Interview Lead'
-    case 'academics': return 'Faculty Panel · Subject Viva'
+    case 'academics': return 'Academic Examiner'
     default: return 'Senior Recruiter · Talent Acquisition'
   }
 }

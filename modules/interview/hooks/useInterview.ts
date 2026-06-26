@@ -749,9 +749,11 @@ export function useInterview({
     (qIdx: number, completedThreadsOverride?: ThreadSummary[]): Promise<string> =>
       apiGenerateQuestion(
         qIdx,
-        // Cap to last 8 transcript entries (~4 Q&A pairs) to keep prompt size bounded.
+        // Pass the FULL transcript — the windowing (last-10 cap) AND the academics intro-pin
+        // both live in buildPreviousQA (useInterviewAPI). Pre-slicing here would strip the
+        // intro before the pin could run, losing the candidate's named subject mid-round.
         // completedThreadsRef already carries older topic summaries for context diversity.
-        transcriptRef.current.slice(-8),
+        transcriptRef.current,
         performanceSignalRef.current,
         completedThreadsOverride ?? completedThreadsRef.current,
         getAbortSignal(),

@@ -7,8 +7,9 @@ import {
   buildThreadSummary,
   toneToEmotion,
   createDesignSubmissionGate,
+  buildPreviousQA,
 } from '../hooks/interviewUtils'
-import type { AnswerEvaluation, DesignSubmission, ThreadEntry } from '@shared/types'
+import type { AnswerEvaluation, DesignSubmission, ThreadEntry, TranscriptEntry } from '@shared/types'
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -401,5 +402,33 @@ describe('createDesignSubmissionGate', () => {
     gate.submit(makeSubmission(99))
     gate.clear()
     expect(gate.takePending()).toBeNull()
+  })
+})
+
+describe('buildPreviousQA', () => {
+  const mkTranscript = (n: number): TranscriptEntry[] =>
+    Array.from({ length: n }, (_, i) => ({
+      speaker: i % 2 === 0 ? 'interviewer' : 'candidate',
+      text: `t${i}`,
+    })) as TranscriptEntry[]
+
+  it('returns the last 10 entries for non-academics depths', () => {
+    const r = buildPreviousQA(mkTranscript(20), 'behavioral')
+    expect(r).toHaveLength(10)
+    expect(r[0].text).toBe('t10') // window starts at the 11th-from-last
+  })
+
+  it('pins the intro Q&A to the front for academics so the named subject stays in context', () => {
+    const r = buildPreviousQA(mkTranscript(20), 'academics')
+    expect(r).toHaveLength(12)        // pinned intro [t0,t1] + last 10
+    expect(r[0].text).toBe('t0')      // intro question
+    expect(r[1].text).toBe('t1')      // intro answer = the named subject
+    expect(r[r.length - 1].text).toBe('t19')
+  })
+
+  it('does NOT pin for academics while the intro is still inside the last-10 window', () => {
+    const r = buildPreviousQA(mkTranscript(8), 'academics')
+    expect(r).toHaveLength(8)          // slice(-10) = all 8; intro already present, no pin
+    expect(r[0].text).toBe('t0')
   })
 })

@@ -9,6 +9,7 @@ import type {
   ThreadSummary,
 } from '@shared/types'
 import { getNextFallbackQuestion } from '../config/fallbackQuestions'
+import { buildPreviousQA } from './interviewUtils'
 
 interface UseInterviewAPIOptions {
   config: InterviewConfig | null
@@ -179,7 +180,8 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
             // question, avg score, probe count, company). Sending the full
             // transcript caused unbounded input growth: ~11.5K tokens at Q16
             // in a 30-min interview, adding 500-800ms TTFT latency.
-            previousQA: transcript.slice(-10),
+            // Academics also PINS the intro Q&A (the named subject) — see buildPreviousQA.
+            previousQA: buildPreviousQA(transcript, config?.interviewType),
             performanceSignal,
             lastThreadSummary: lastThread,
             completedThreads: completedThreads.length > 0 ? completedThreads : undefined,
