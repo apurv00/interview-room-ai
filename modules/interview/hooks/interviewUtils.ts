@@ -7,9 +7,27 @@ import type {
   PushbackTone,
   ThreadEntry,
   ThreadSummary,
+  TranscriptEntry,
 } from '@shared/types'
 import type { Duration } from '@shared/types'
 import { getMinimumTopics } from '@interview/config/interviewConfig'
+
+/**
+ * The previousQA window sent to generate-question. Normally the last 10 transcript entries
+ * (older topics are summarized in completedThreads). For ACADEMICS the candidate names their
+ * subject in the FIRST answer (the intro), and that subject must stay in the prompt for the
+ * whole round — but it would fall out of the last-10 window after a few topics. So we PIN the
+ * intro Q&A to the front. Without it, the subject-grounding directive loses the named subject
+ * mid-round and the round drifts back to the skill's illustrative sample subjects (PR #469).
+ */
+export function buildPreviousQA(transcript: TranscriptEntry[], interviewType?: string): TranscriptEntry[] {
+  const recent = transcript.slice(-10)
+  // Only pin once the intro (index 0-1) has actually dropped out of the last-10 window.
+  if (interviewType === 'academics' && transcript.length > 11) {
+    return [...transcript.slice(0, 2), ...recent]
+  }
+  return recent
+}
 
 /**
  * Compute a rolling performance signal from all evaluations so far.
