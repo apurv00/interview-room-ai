@@ -42,6 +42,18 @@ describe('matrixQuality — academics favourite-subject opener guard', () => {
     expect(q.academicOpenerCount).toBe(1)
   })
 
+  it('catches the "what subject are you strongest in" wording too (Codex #473 P2)', () => {
+    const variants = [
+      'What subject are you strongest in?',
+      'What academic subject are you strongest in or enjoy most?',
+      'So, what subject do you feel most confident in?',
+    ]
+    for (const text of variants) {
+      const q = computeMatrixQuality(report([run('backend/academics/strong', [text])]))
+      expect(q.academicOpenerCount, text).toBe(1)
+    }
+  })
+
   it('does NOT flag a clean academics Q1 roadmap warm-up', () => {
     const q = computeMatrixQuality(
       report([run('marketing/academics/strong', [

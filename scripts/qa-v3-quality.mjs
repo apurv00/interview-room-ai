@@ -19,7 +19,9 @@ import { runOutputDir } from '../modules/qa/orchestrator/runManifest.mjs'
 loadDotEnvLocal()
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const reportId = process.argv.find((a) => !a.startsWith('-') && a.includes('qa-browser'))
+// First non-flag positional arg is the reportId — accept custom IDs (e.g. --report-id
+// nightly-full-001), not only the default qa-browser-* ones. argv[0]=node, argv[1]=script.
+const reportId = process.argv.slice(2).find((a) => !a.startsWith('-'))
 const strict = process.argv.includes('--strict')
 
 if (!reportId) {
@@ -67,7 +69,9 @@ function runCheck(name, fn) {
 let allOk = true
 
 allOk = runCheck('Domain content audit (question bank)', () => {
-  const r = spawnSync('node', ['scripts/audit-domain-coverage.mjs'], {
+  // In strict mode, propagate --strict so the audit FAILS the gate on coverage gaps
+  // (without it the audit records gaps but exits 0, silently passing the strict check).
+  const r = spawnSync('node', ['scripts/audit-domain-coverage.mjs', ...(strict ? ['--strict'] : [])], {
     cwd: root,
     encoding: 'utf-8',
     shell: process.platform === 'win32',

@@ -9,7 +9,7 @@
     "questions": 6,
     "duration": 10,
     "experience": "0-2",
-    "description": "300 cells — full domain×depth×persona matrix (25 domains × 6 depths × 2 personas; academics over-generated, runner filters to applicable 0-2 cells), 6 questions × 10min per cell, experience 0-2"
+    "description": "206 cells — applicable domain×depth×persona combos (depthApplies-filtered across 25 domains × 6 depths incl. academics; unsupported pairs excluded), 6 questions × 10min per cell, experience 0-2"
   },
   "ci-smoke": {
     "mode": "smoke",

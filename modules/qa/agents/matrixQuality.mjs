@@ -19,7 +19,7 @@ function normQuestion(text) {
  * references to the already-named subject (e.g. "in your strongest subject, derive…").
  */
 const ACADEMIC_OPENER_RE =
-  /which\s+(?:[a-z]+\s+){0,2}subject\s+(?:are|do|is)\s+you|what(?:['’]s| is)\s+your\s+(?:favou?rite|strongest)\s+subject|which\s+subject\s+do\s+you\s+(?:enjoy|prefer|like)|favou?rite\s+or\s+strongest\s+subject/i
+  /(?:which|what)\s+(?:[a-z]+\s+){0,2}subject\s+(?:are|do|is)\s+you|what(?:['’]s| is)\s+your\s+(?:favou?rite|strongest)\s+subject|(?:which|what)\s+subject\s+do\s+you\s+(?:enjoy|prefer|like)|favou?rite\s+or\s+strongest\s+subject/i
 
 /**
  * @param {object} report - matrix-report.json

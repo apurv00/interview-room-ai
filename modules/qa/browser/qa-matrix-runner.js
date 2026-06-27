@@ -278,7 +278,8 @@ location.hash='mode=full&questions=3&autostart=1';
   function buildRuns() {
     const runs = []
     const cells = MODE === 'smoke' ? SMOKE.map(([domain, depth]) => ({ domain, depth }))
-      : DOMAINS.flatMap((domain) => DEPTHS.map((d) => ({ domain, depth: d.slug })))
+      : DOMAINS.flatMap((domain) =>
+          DEPTHS.filter((d) => applicable(domain, d.slug)).map((d) => ({ domain, depth: d.slug })))
     for (const cell of cells) {
       for (const persona of PERSONAS) {
         runs.push({ ...cell, persona, runId: `${cell.domain}__${cell.depth}__${persona}` })

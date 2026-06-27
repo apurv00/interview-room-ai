@@ -31,8 +31,14 @@ export function listMatrixCells(mode) {
   const cells =
     mode === 'smoke'
       ? SMOKE_CELLS.map(([domain, depth]) => ({ domain, depth }))
-      : ROSTER_DOMAINS.flatMap(({ slug: domain }) =>
-          depthSlugs.map((depth) => ({ domain, depth })),
+      : // Full mode: only the domain×depth pairs the product actually offers
+        // (mirrors app/api/interview-types/route.ts depthApplies). Without this the plan
+        // would send unsupported cells (e.g. mechanical/coding, pm/academics) to the APIs
+        // and count them in shards/quality, producing false failures.
+        ROSTER_DOMAINS.flatMap(({ slug: domain, categorySlug }) =>
+          depthSlugs
+            .filter((depth) => depthApplies(domain, depth, categorySlug))
+            .map((depth) => ({ domain, depth })),
         )
 
   const runs = []

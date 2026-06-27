@@ -20,19 +20,33 @@ describe('rosterMatrix', () => {
     }
   })
 
-  it('full matrix has all 25 domains × 6 depths × 2 personas = 300 cells', () => {
-    expect(listDomainDepthCombos('full').length).toBe(ROSTER_DOMAINS.length * ROSTER_DEPTHS.length)
-    expect(matrixCellCount('full')).toBe(300)
+  it('full matrix includes only APPLICABLE domain×depth combos (103 combos × 2 personas = 206 cells)', () => {
+    // Full mode is filtered by depthApplies — it must NOT over-generate unsupported cells
+    // (e.g. mechanical/coding, pm/academics) that users cannot start.
+    const expectedCombos = ROSTER_DOMAINS.flatMap(({ slug, categorySlug }) =>
+      ROSTER_DEPTHS.filter((d) => depthApplies(slug, d.slug, categorySlug)).map((d) => d.slug),
+    )
+    expect(listDomainDepthCombos('full').length).toBe(expectedCombos.length)
+    expect(listDomainDepthCombos('full').length).toBe(103)
+    expect(matrixCellCount('full')).toBe(206)
   })
 
-  it('every domain appears with every depth type in full mode', () => {
-    const depthSlugs = ROSTER_DEPTHS.map((d) => d.slug)
-    for (const { slug } of ROSTER_DOMAINS) {
-      for (const depth of depthSlugs) {
-        const hit = listDomainDepthCombos('full').some((c) => c.domain === slug && c.depth === depth)
-        expect(hit, `${slug}/${depth}`).toBe(true)
+  it('full mode pairs each domain with exactly its applicable depths (no unsupported cells)', () => {
+    const combos = listDomainDepthCombos('full')
+    // every emitted combo is applicable
+    for (const c of combos) {
+      expect(depthApplies(c.domain, c.depth), `unsupported cell ${c.domain}/${c.depth}`).toBe(true)
+    }
+    // and every applicable combo is emitted; inapplicable ones are absent
+    for (const { slug, categorySlug } of ROSTER_DOMAINS) {
+      for (const d of ROSTER_DEPTHS) {
+        const present = combos.some((c) => c.domain === slug && c.depth === d.slug)
+        expect(present, `${slug}/${d.slug}`).toBe(depthApplies(slug, d.slug, categorySlug))
       }
     }
+    // spot-checks: these unsupported cells must NOT appear
+    expect(combos.some((c) => c.domain === 'mechanical' && c.depth === 'coding')).toBe(false)
+    expect(combos.some((c) => c.domain === 'pm' && c.depth === 'academics')).toBe(false)
   })
 
   it('smoke matrix is 9 combos × 2 personas = 18 cells (incl. 3 academics)', () => {
@@ -57,14 +71,14 @@ describe('rosterMatrix', () => {
     expect(depthApplies('general', 'academics')).toBe(false)
   })
 
-  it('3-shard plan splits 300 cells evenly', () => {
+  it('3-shard plan splits 206 cells evenly', () => {
     const { total, plan } = planShards({ mode: 'full', shards: 3 })
-    expect(total).toBe(300)
+    expect(total).toBe(206)
     expect(plan).toHaveLength(3)
-    expect(plan.reduce((n, s) => n + s.count, 0)).toBe(300)
-    expect(plan[0].count).toBe(100)
-    expect(plan[1].count).toBe(100)
-    expect(plan[2].count).toBe(100)
+    expect(plan.reduce((n, s) => n + s.count, 0)).toBe(206)
+    expect(plan[0].count).toBe(69)
+    expect(plan[1].count).toBe(69)
+    expect(plan[2].count).toBe(68)
   })
 
   it('runIds are unique across full matrix', () => {

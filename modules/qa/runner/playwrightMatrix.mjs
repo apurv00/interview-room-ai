@@ -261,7 +261,13 @@ export function loadResumeState(reportId) {
  * @param {string} baseUrl
  */
 export async function verifyAuthSession(storageStatePath, baseUrl) {
-  const { browser, context } = await launchQaBrowser({ headless: true, storageStatePath })
+  // Auth verify only hits /api/auth/session — no Chrome-specific behavior — so allow the
+  // bundled-Chromium fallback for headless/CI containers without system Google Chrome.
+  const { browser, context } = await launchQaBrowser({
+    headless: true,
+    storageStatePath,
+    allowChromiumFallback: true,
+  })
   try {
     const page = await context.newPage()
     const res = await page.goto(`${baseUrl.replace(/\/$/, '')}/api/auth/session`, { timeout: 30_000 })
