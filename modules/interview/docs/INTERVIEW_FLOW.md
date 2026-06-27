@@ -1437,3 +1437,46 @@ audio from the top earpiece = PlayAndRecord routing persists (Context A's mic fo
 Phase-1 native playback may not fully escape. **Phase 2 (only if validated):** consider removing
 the iOS gate for universal native playback — but that drops AI voice from the recording on ALL
 platforms, so it's a product call, not cleanup.
+
+### 2026-06-27 · Academics Q1 re-asked the favourite-subject opener (duplication)
+
+**Symptom.** In a campus Academics viva (0–2 band), the spoken intro asks "which academic
+subject are you strongest in?" and then the *first generated question (Q1)* sometimes asked
+it again ("so, which subject are you strongest in?") — duplicating the opener.
+
+**Root cause (two compounding layers; NOT prefetch timing alone).** Q1 is prefetched during
+the intro speech, *before* the candidate's intro answer is captured (intentional — see
+`d2c04c9`: Q1 is the generic "roadmap" warm-up slot; the intro-pin only feeds Q2+). So at
+Q1-gen time no subject is in context. Meanwhile the `{domain}-academics.md` skill files —
+written *before* `4fc96b9` moved the favourite-subject question into the spoken intro — still
+told the model to *open by asking which subject*, in **three injected places**: the persona
+("You open every viva the same way: 'Which subject are you strongest in?'"), the Question
+Strategy lead, and the **All-Levels / Entry-Level Sample Questions** (which `selectSkillQuestions`
+always merges into the Q0–Q3 inspiration pool). With no named subject in context and the skill
+content nudging it, the model re-asked the opener. The pre-existing `academicGrounding` guard
+only forbade *switching subjects*, not *re-asking which subject*.
+
+**Fix (content + prompt guard — NOT a prefetch change; the prefetch is deliberate).**
+- **Prompt guard (hot-path `app/api/generate-question/route.ts`)** — extracted the academics
+  grounding text into `academicGroundingDirective` (`modules/interview/services/core/academicsPrompt.ts`)
+  and added an explicit *NEVER RE-ASK THE OPENER* rule: the favourite-subject question was the
+  spoken opening; on the first generated question (before the answer is in context) open with a
+  roadmap of the subject they just named, never "which subject."
+- **Content scrub (all 20 `*-academics.md` skill files)** — removed the favourite-subject opener
+  from persona, Question Strategy, and the injectable Sample Questions; replaced sample openers
+  with roadmap/depth questions that *assume the subject is already named*. Also diverged the 6
+  byte-identical cs-core files and 3 byte-identical data files per-domain (adjacent-subject tilt).
+- **QA guard** — `matrixQuality.mjs` now emits `AUTO-ACAD-001` if any generated academics question
+  matches the opener pattern; added `backend/marketing/mechanical × academics` smoke cells + an
+  academics answer fixture to the roster matrix.
+
+**Latency.** Zero change to the hot loop — the Q1 prefetch is preserved (no added wait); the guard
+is static prompt text (cacheable) and the skill files are the same size.
+
+**Verification.** New `academicsPrompt.test.ts` (anti-repeat contract) + `matrixQuality.test.ts`
+(opener detector) + updated `rosterMatrix.test.ts` counts; full vitest suite 4979 passing / 0
+failing; `tsc --noEmit` clean; `npm run build` green. Impact analysis on the route handler: LOW
+(no d=1 callers — framework-invoked; additive prompt string only). **OUTSTANDING (CLAUDE.md rule
+#3): manual prod self-interview** — run a 0–2 Academics viva on two domains (one cs-core, one
+business) with real keys and confirm Q1 is a roadmap/fundamentals question on the named subject,
+never a repeat of the favourite-subject opener.
