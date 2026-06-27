@@ -1390,3 +1390,50 @@ the band/comment literals in `academics.ts` — fixed by not embedding a three-e
 literal. HOT-PATH live e2e OUTSTANDING (CLAUDE.md rule #3, auth is prod-only): select Academic /
 Subject Viva for a 0-2 fresher on prod, confirm the opener asks the favourite subject, the drill
 stays on-syllabus + accurate, and scores spread on conceptual correctness (not STAR).
+
+### 2026-06-27 · Interviewer goes silent after Q1 on iPhone/iPad (not Android, not Mac) · Phase 1
+
+**Report (owner).** Users on small Apple devices (iPhone, iPad, iPad-mini) intermittently
+hear nothing from the interviewer after the first question — both the default Deepgram voice
+and the opt-in Azure voice. **Works on laptops/desktops and on Android**; the user was present
+on-screen the whole time (so NOT screen-lock / backgrounding).
+
+**Investigation (evidence, not theory).** Vercel runtime logs: every `POST /api/tts/stream`
+returns `200` including the 2nd–10th call within a session → server delivers audio for every
+question; the failure is **client-side playback**. Git: the playback code (`voiceMixer.ts`
+2026-04-08, `useStreamingAudio.ts` 2026-04-12) is unchanged for months, and the only June-24
+TTS-path change appends `voiceQueryRef` (`''` for Deepgram) → a literal no-op → recent code
+**exonerated**. The decisive signal: **Android works, iOS doesn't**, on the same WebKit — so it
+is not a Web-Audio/code bug, it is the iOS **`AVAudioSession`** layer.
+
+**Root cause (architecture × iOS).** The live interview stands up **two mic-bound AudioContexts**
+— Deepgram STT (`new AudioContext({sampleRate:16000})` + `createMediaStreamSource(mic)`, rebuilt
+**every turn**) and the voice mixer (`~48kHz`, `createMediaStreamSource(mic)` **and**
+`createMediaElementSource(TTS)` → `ctx.destination`) — plus two `MediaRecorder`s. iOS gives the
+tab ONE shared `AVAudioSession`; a live mic forces it into **PlayAndRecord**, which (a) routes
+Web-Audio output to the **receiver/earpiece** not the speaker and (b) intermittently flips the
+playback context into the iOS-only **`'interrupted'`** state. Because Context A is torn down/up
+each turn, the session renegotiates per question and Context B's TTS playback loses → **silent,
+intermittent, after Q1** (Q1 rides the Start-tap gesture and wins the session first). macOS and
+Android don't arbitrate a single session, so they're fine. `createMediaElementSource` hijacks the
+element so a suspended context yields **silence with no throw** — the existing catch-fallback
+never fires.
+
+**Phase-1 fix (this commit) — HOT PATH `modules/interview/audio/voiceMixer.ts`.** One guard
+inside `tapAudioElement`: `if (isAppleTouchDevice()) return`. On Apple touch devices we **don't**
+route TTS through the mic-bound AudioContext — the `<audio>` element plays **natively** (always
+audible). Covers Deepgram + Azure and all three playback paths (`streamAndPlay`, `playBlob`,
+`playAck`) because the gate is in the single shared helper. `isAppleTouchDevice()` uses
+`maxTouchPoints` to catch iPad-reports-as-Macintosh. **Desktop/Android byte-identical** (still
+tapped + recorded). **Trade-off:** AI voice absent from the recorded webm on iOS only — the
+analysis pipeline already falls back to the live Deepgram transcript, so nothing downstream breaks.
+Impact analysis: LOW, 3 d=1 callers, 0 processes; signature unchanged so callers untouched.
+
+**Verification.** `voiceMixer.test.ts` (5 cases: taps on Windows/Android/Mac, does NOT tap on
+iPhone + iPad-as-Mac) + neighbouring suites green (9 passing), tsc 0, eslint clean. **OUTSTANDING
+(CLAUDE.md rule #3): real-device validation** — run an interview on a physical iPhone/iPad in prod
+and confirm Q2+ is audible; if a question is still silent, hold the device to your ear — faint
+audio from the top earpiece = PlayAndRecord routing persists (Context A's mic forces it), which
+Phase-1 native playback may not fully escape. **Phase 2 (only if validated):** consider removing
+the iOS gate for universal native playback — but that drops AI voice from the recording on ALL
+platforms, so it's a product call, not cleanup.
