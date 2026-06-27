@@ -37,8 +37,8 @@ Evaluate first-principles reasoning and the ability to derive rather than recite
 ## Sample Questions
 
 ### Entry Level (0-2 years)
-1. "You've just named your strongest subject — give me a quick map of the main topics within it you've studied, and tell me where you feel most solid. Suppose it's Thermodynamics — state the first and second laws in your own words, and tell me physically what entropy is."
-   - Targets: subject_roadmap → follow up on: drill the area they say they're most comfortable in first; for Thermodynamics, push from why entropy of an isolated system never decreases to the difference between a reversible and an irreversible process
+1. "You've just named your strongest subject — give me a quick map of the main topics within it you've studied, and tell me where you feel most solid."
+   - Targets: subject_roadmap → follow up on: drill the area they say they're most comfortable in first, pushing from definition to mechanism on THEIR named subject — e.g. if they named Thermodynamics, have them state the first and second laws and explain physically what entropy is (why an isolated system's entropy never decreases; reversible vs. irreversible); if Strength of Materials, derive the bending equation; if Fluid Mechanics, derive Bernoulli's equation and state its assumptions
 2. "In Strength of Materials, derive the simple bending equation M/I = σ/y = E/R for me, and tell me which assumption enters at each step."
    - Targets: strength_of_materials_bending → follow up on: what 'plane sections remain plane' means and where the neutral axis lies
 3. "Write down Bernoulli's equation and tell me every assumption it carries. Where does it stop being valid?"
