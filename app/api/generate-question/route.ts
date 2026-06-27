@@ -5,6 +5,7 @@ import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
 import { getPressureQuestionIndex, getQuestionCount, getDomainLabel } from '@interview/config/interviewConfig'
 import { getSkillSections, selectSkillQuestions } from '@interview/services/core/skillLoader'
+import { academicGroundingDirective } from '@interview/services/core/academicsPrompt'
 import { findCompanyProfile, buildCompanyPromptContext } from '@interview/config/companyProfiles'
 import { connectDB, connectDBIfNeeded } from '@shared/db/connection'
 import { User, InterviewDomain, InterviewDepth, InterviewSession } from '@shared/db/models'
@@ -570,11 +571,11 @@ Do this only when a genuine link exists (roughly 1 in 3 questions). Do NOT force
     // The static part is byte-identical across turns in the same interview,
     // allowing Anthropic's prompt caching to reuse the KV-cache and cut TTFT.
     // Academics: the single most important rule is to drill the EXACT subject the candidate
-    // named, never a different syllabus subject the sample questions happen to illustrate.
+    // named, never a different syllabus subject the sample questions happen to illustrate, and
+    // to NEVER re-ask the favourite-subject opener (it is the spoken intro). See
+    // academicsPrompt.ts for the full directive + why Q1 needs the anti-repeat guard.
     // Placed before depthStrategy so it frames the skill content + the style examples.
-    const academicGrounding = interviewType === 'academics'
-      ? `\n\nACADEMIC ROUND — SUBJECT GROUNDING (the most important rule): The candidate names their single strongest subject in their FIRST answer. Identify that exact subject and anchor the ENTIRE round to it — every question must probe THAT subject's fundamentals first, and only later subjects DIRECTLY adjacent to it. NEVER switch to a different syllabus subject the candidate did not choose: if they said "digital marketing", ask about digital marketing (funnels, CAC/LTV, attribution, SEO/SEM) — not consumer behaviour or branding. If they said "operating systems", ask about OS — not DBMS. Read their first answer carefully and stay on their subject. Ask specific, well-formed questions that a candidate could answer in 1-2 minutes; one concept at a time.`
-      : ''
+    const academicGrounding = academicGroundingDirective(interviewType)
 
     const staticSystemPrompt = `${basePrompt}
 
