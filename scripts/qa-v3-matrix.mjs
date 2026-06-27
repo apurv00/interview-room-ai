@@ -88,6 +88,13 @@ if (postOnlyId) {
       shell: process.platform === 'win32',
     })
   }
+  if (process.argv.includes('--quality')) {
+    const qArgs = ['scripts/qa-v3-quality.mjs', postOnlyId]
+    if (strictTriage) qArgs.push('--strict')
+    const q = spawnSync('node', qArgs, { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' })
+    if (q.status === 2 && strictTriage) process.exit(2)
+    if (q.status !== 0 && q.status !== 2 && strictTriage) process.exit(q.status ?? 1)
+  }
   process.exit(0)
 }
 
@@ -98,6 +105,7 @@ const profile = profileName ? profiles[profileName] : null
 const mode = arg('--mode', profile?.mode ?? 'smoke')
 const questions = parseInt(arg('--questions', String(profile?.questions ?? 6)), 10)
 const duration = parseInt(arg('--duration', String(profile?.duration ?? 10)), 10)
+const experience = arg('--experience', profile?.experience ?? '0-2')
 const maxCells = parseInt(arg('--limit', arg('--max-cells', String(profile?.maxCells ?? 0))), 10)
 const explicitOffset = arg('--offset', null)
 const headless = process.argv.includes('--headless')
@@ -153,6 +161,7 @@ try {
     mode,
     questions,
     duration,
+    experience,
     maxCells,
     offset: cellOffset,
     cellRetry,
@@ -206,6 +215,13 @@ try {
       shell: process.platform === 'win32',
     })
     if (gen.status !== 0) process.exit(gen.status ?? 1)
+  }
+
+  if (process.argv.includes('--quality') || (generateReport && mode === 'full')) {
+    const qArgs = ['scripts/qa-v3-quality.mjs', result.reportId]
+    if (strictTriage) qArgs.push('--strict')
+    const q = spawnSync('node', qArgs, { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' })
+    if (q.status === 2 && strictTriage) process.exit(2)
   }
 
   console.log(`\nReport ID: ${result.reportId}`)

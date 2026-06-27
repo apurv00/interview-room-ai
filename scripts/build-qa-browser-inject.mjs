@@ -6,10 +6,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { bakeStrongAnswersIntoRunner } from '../modules/qa/runner/bakeRunnerStrongAnswers.mjs';
+import { bakeRosterIntoRunner } from '../modules/qa/runner/bakeRosterIntoRunner.mjs';
 
 const dir = path.join(process.cwd(), 'modules/qa/browser');
 const srcPath = path.join(dir, 'qa-matrix-runner.js');
-let code = bakeStrongAnswersIntoRunner(fs.readFileSync(srcPath, 'utf8'));
+let source = bakeRosterIntoRunner(bakeStrongAnswersIntoRunner(fs.readFileSync(srcPath, 'utf8')));
+fs.writeFileSync(srcPath, source, 'utf8');
+let code = source;
 
 const hashPrefix = "location.hash='mode=full&questions=3&autostart=1';\r\n";
 if (!code.startsWith('location.hash')) {

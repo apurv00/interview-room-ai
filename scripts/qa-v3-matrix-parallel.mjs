@@ -36,6 +36,7 @@ if (profileName) forwardArgs.push('--profile', profileName)
 if (arg('--mode', null)) forwardArgs.push('--mode', mode)
 if (arg('--questions', null)) forwardArgs.push('--questions', arg('--questions'))
 if (arg('--duration', null)) forwardArgs.push('--duration', arg('--duration'))
+if (arg('--experience', null)) forwardArgs.push('--experience', arg('--experience'))
 if (process.argv.includes('--headless')) forwardArgs.push('--headless')
 if (process.argv.includes('--llm')) forwardArgs.push('--llm')
 
@@ -120,8 +121,13 @@ const postArgs = ['scripts/qa-v3-matrix.mjs', '--post-only', parentReportId]
 if (prod) postArgs.push('--prod')
 if (process.argv.includes('--observe')) postArgs.push('--observe')
 if (process.argv.includes('--infra')) postArgs.push('--infra')
-if (process.argv.includes('--report')) postArgs.push('--report')
-if (process.argv.includes('--triage')) postArgs.push('--triage')
+if (process.argv.includes('--report')) {
+  postArgs.push('--report', '--triage', '--quality', '--strict-triage')
+} else {
+  if (process.argv.includes('--triage')) postArgs.push('--triage')
+  if (process.argv.includes('--quality')) postArgs.push('--quality')
+  if (process.argv.includes('--strict-triage')) postArgs.push('--strict-triage')
+}
 if (process.argv.includes('--llm')) postArgs.push('--llm')
 const baseline = arg('--baseline', null)
 if (baseline) postArgs.push('--baseline', baseline)

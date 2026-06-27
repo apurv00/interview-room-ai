@@ -11,6 +11,7 @@ import { spawnSync } from 'node:child_process'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadDotEnvLocal } from '../modules/qa/runner/loadEnv.mjs'
+import { matrixCellCount } from '../modules/qa/orchestrator/rosterMatrix.mjs'
 
 loadDotEnvLocal()
 
@@ -58,11 +59,13 @@ if (!skipMini) {
 }
 
 if (withMatrix) {
-  run('Full 60-cell matrix', [
-    'scripts/qa-v3-matrix.mjs',
+  run(`Full roster matrix (${matrixCellCount('full')} cells, 3 shards)`, [
+    'scripts/qa-v3-matrix-parallel.mjs',
     ...(prod ? ['--prod'] : []),
     '--profile',
     'full',
+    '--shards',
+    '3',
     '--report',
     '--observe',
     '--infra',

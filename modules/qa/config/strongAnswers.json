@@ -61,6 +61,7 @@
     "technical": "Situation: We migrated to event-driven microservices on Kafka. Task: Cut latency without data loss. Action: Phased rollout with dual-write, DLQs, and replay tooling. Result: p99 800ms to 120ms with zero data loss.",
     "case-study": "Goal: 15% MAU growth in two quarters. I sized the market, prioritized referral and onboarding, modeled +3.2pp at activation, and would gate rollout on a four-week holdout with a pre-registered primary metric.",
     "system-design": "For 10M DAU: CDN at edge, stateless API behind ALB, Postgres primary with read replicas, Redis cache, SQS workers, OpenTelemetry observability, 99.9% SLA with documented single-region trade-offs.",
-    "coding": "Hash map for O(n) lookup versus O(n²) brute force. Iterate once collecting counts, second pass for the result. Handle empty input, duplicates, and tie-breaking explicitly."
+    "coding": "Hash map for O(n) lookup versus O(n²) brute force. Iterate once collecting counts, second pass for the result. Handle empty input, duplicates, and tie-breaking explicitly.",
+    "academics": "My strongest subject is the core theory of my field, and I'm most comfortable when I can reason about it from first principles rather than just recall a formula. The main areas I've studied are its foundational definitions, the mechanisms behind them, and how they connect to adjacent topics. I'd rather explain why a standard result holds, derive it, and state the assumptions it rests on than quote it from memory; if I don't know an exact constant I'll say so and reason from the relationship instead, then sanity-check the magnitude."
   }
 }
