@@ -87,7 +87,13 @@ export async function runPlaywrightMatrix(options) {
   log(`baseUrl=${baseUrl} harness=${harnessVersion}`)
   log(`Using storageState (OAuth not needed during matrix — cookies only)`)
 
-  const { browser, context } = await launchQaBrowser({ headless, storageStatePath })
+  // The matrix authenticates via storageState cookies, not OAuth, so the bundled-Chromium
+  // fallback is safe — let headless/CI images without system Google Chrome run the matrix.
+  const { browser, context } = await launchQaBrowser({
+    headless,
+    storageStatePath,
+    allowChromiumFallback: true,
+  })
   let report = null
   let fatalError = null
 
