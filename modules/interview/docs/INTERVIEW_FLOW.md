@@ -1505,3 +1505,38 @@ accuracy on Indian-accented speech improves, (b) first-token/interim latency sta
 and critically (c) nova-3's utterance-finalization cadence still matches the `GRACE_MS_BY_INTENT`
 / `utterance_end_ms=2500` interrupt+grace timers (these were calibrated against nova-2; if
 interrupts mis-fire or finals truncate, retune the grace windows alongside the model).
+
+### 2026-06-28 · STT language=en-IN tied to the Indian-English choice + made the default
+
+**Change.** STT `language` is now per-session instead of a hardcoded `en`. The
+single-sourced URL became `buildListenUrl(resolveSttLanguage())` (useDeepgramRecognition.ts):
+`resolveSttLanguage()` reads the same `?voice=indian` choice the TTS path already uses
+(mirrors useAvatarSpeech) → `en-IN` for Indian English, `en` otherwise. The lobby voice
+control now **defaults to Indian English** (`indianVoice` initial state `false → true`,
+app/lobby/page.tsx) — this is an India-first product, so the one choice drives BOTH the Azure
+interviewer voice AND Deepgram `language=en-IN`. US/International users opt out via the picker.
+
+**No feature flag (deliberate).** The gate is the user's explicit lobby choice, not a new
+flag — `?voice=indian` already existed. The existing `NEXT_PUBLIC_FEATURE_VOICE_PICKER` only
+controls whether the opt-out UI renders; **it must stay enabled in prod so non-Indian users
+have a visible way to switch back to en** (with Indian now the default, that picker is the
+only escape hatch).
+
+**Correctness without live telemetry.** US/International is protected *by construction*, proven
+by a unit test: `buildListenUrl('en')` is byte-identical to the prior URL and `en-IN` differs
+*only* in the `language=` param — so any non-Indian session is unchanged. No production A/B
+needed for that guarantee.
+
+**Verification.** `deepgramRecognition.test.ts` adds `buildListenUrl` (en byte-identical / en-IN
+differs only in language / empty→en) and `resolveSttLanguage` (`?voice=indian`→en-IN; else en)
+unit tests; deepgram suite 93 passing; `tsc` clean; `npm run build` green.
+
+**Grace timing: no change needed.** Finalization is driven by `UtteranceEnd` (governed by the
+configured `utterance_end_ms=2500` + word-gap timing — model-independent per Deepgram) and, under
+the already-in-prod `NEXT_PUBLIC_FEATURE_ADAPTIVE_GRACE`, by `speech_final` (VAD/endpointing). That
+VAD-driven `speech_final` mechanism is identical in kind to nova-2 (which has run with adaptive
+grace in prod) — `en` vs `en-IN` is the same nova-3 model with Indian-English tuning and changes
+transcription accuracy, not silence/endpoint detection. So `GRACE_MS_BY_INTENT` /
+`COMPLETE_CONFIDENT_GRACE_MS` / `utterance_end_ms` stay as-is. Nice-to-have (not a blocker): a
+casual prod self-interview on the Indian path; only if clean answers visibly clip at ~1.1s would
+you bump `COMPLETE_CONFIDENT_GRACE_MS` — there is no a-priori reason to.

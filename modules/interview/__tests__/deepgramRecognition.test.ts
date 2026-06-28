@@ -168,7 +168,12 @@ Object.defineProperty(navigator, 'mediaDevices', {
 vi.stubGlobal('requestAnimationFrame', (cb: () => void) => { cb(); return 1 })
 vi.stubGlobal('cancelAnimationFrame', vi.fn())
 
-import { useDeepgramRecognition, classifyUtteranceIntent } from '../hooks/useDeepgramRecognition'
+import {
+  useDeepgramRecognition,
+  classifyUtteranceIntent,
+  buildListenUrl,
+  resolveSttLanguage,
+} from '../hooks/useDeepgramRecognition'
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -199,6 +204,52 @@ function makeUtteranceEnd() {
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────────────
+
+describe('buildListenUrl', () => {
+  const REQUIRED = [
+    'model=nova-3',
+    'smart_format=true',
+    'filler_words=true',
+    'utterance_end_ms=2500',
+    'interim_results=true',
+    'encoding=linear16',
+    'sample_rate=16000',
+  ]
+
+  it('default (en) is byte-identical to the prior URL — protects US/International by construction', () => {
+    expect(buildListenUrl('en')).toBe(
+      'wss://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&filler_words=true&utterance_end_ms=2500&interim_results=true&language=en&encoding=linear16&sample_rate=16000',
+    )
+  })
+
+  it('en-IN differs from en ONLY in the language param (every other param preserved)', () => {
+    const en = buildListenUrl('en')
+    const enIN = buildListenUrl('en-IN')
+    expect(enIN).toContain('language=en-IN')
+    expect(enIN).not.toContain('language=en&') // not the bare en
+    for (const p of REQUIRED) {
+      expect(enIN, `missing ${p}`).toContain(p)
+    }
+    // identical once language is normalized out
+    expect(enIN.replace('language=en-IN', 'language=en')).toBe(en)
+  })
+
+  it('falls back to en for an empty/missing language', () => {
+    expect(buildListenUrl('')).toContain('language=en')
+  })
+})
+
+describe('resolveSttLanguage', () => {
+  it('maps the ?voice=indian choice to en-IN', () => {
+    expect(resolveSttLanguage('?voice=indian')).toBe('en-IN')
+    expect(resolveSttLanguage('?lc=0&voice=indian')).toBe('en-IN')
+  })
+  it('everything else stays en (US/International untouched)', () => {
+    expect(resolveSttLanguage('')).toBe('en')
+    expect(resolveSttLanguage('?voice=us')).toBe('en')
+    expect(resolveSttLanguage('?lc=0')).toBe('en')
+  })
+})
 
 describe('classifyUtteranceIntent', () => {
   describe('thinkingRequest', () => {
