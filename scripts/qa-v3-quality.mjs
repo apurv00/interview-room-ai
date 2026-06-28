@@ -106,6 +106,21 @@ allOk = runCheck('Duplicate questions (domain×depth)', () => {
   }
 }) && allOk
 
+allOk = runCheck('Academics opener (no favourite-subject re-ask)', () => {
+  // Hard regression gate: a generated academics question that re-asks the spoken
+  // favourite-subject opener is the exact bug AUTO-ACAD-001 guards. AUTO-ACAD-001 is only
+  // P1, and the strict gate exits on !allOk / P0 — so without this check the regression
+  // would pass --report/GA. Fail it in any mode (no academics cells ⇒ count 0 ⇒ passes).
+  const ok = quality.academicOpenerCount === 0
+  return {
+    ok,
+    message: ok
+      ? 'No academics cell re-asked the favourite-subject opener'
+      : `${quality.academicOpenerCount} academics cell(s) re-asked the opener — see AUTO-ACAD-001`,
+    academicOpenerCount: quality.academicOpenerCount,
+  }
+}) && allOk
+
 allOk = runCheck('Generate-question health', () => {
   const ok = quality.emptyQuestionCount === 0 && quality.genQ429Cells.length === 0
   return {
