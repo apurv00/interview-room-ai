@@ -26,6 +26,11 @@ export function useSpeechRecognitionAdapter() {
   const base = useSpeechRecognition()
   return {
     ...base,
+    // Web Speech doesn't expose a clean final/interim split — treat its live text as
+    // finalized (rendered solid) with no dimmed tail. Keeps the Deepgram path's richer UI
+    // without changing the fallback's behavior.
+    finalTranscript: base.liveTranscript,
+    interimTranscript: '',
     stopListening: (_reason?: StopListeningReason) => base.stopListening(),
     warmUp: () => {},
     setExternalStream: (_s: MediaStream) => {},

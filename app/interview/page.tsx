@@ -116,7 +116,7 @@ export default function InterviewPage() {
   const [voicesReady, setVoicesReady] = useState(false)
 
   // ── Speech recognition ──
-  const { isListening, liveTranscript, startListening, stopListening, warmUp, setExternalStream, setOnInterrupt, setSuppressInterrupt, getAndClearInterruptAccum } = useSpeechRecognition()
+  const { isListening, liveTranscript, finalTranscript, interimTranscript, startListening, stopListening, warmUp, setExternalStream, setOnInterrupt, setSuppressInterrupt, getAndClearInterruptAccum } = useSpeechRecognition()
 
   // ── Recording (camera track) ──
   const { isRecording, recordingDuration, startRecording, stopRecording } = useMediaRecorder()
@@ -333,7 +333,13 @@ export default function InterviewPage() {
     onDesignSubmit: interviewOnDesignSubmit,
   } = interview
 
+  // Merged live text (interim+final) — used by the coding/design layouts as before.
   const displayAnswer = isListening ? liveTranscript : liveAnswer
+  // Split views for the main TranscriptPanel so it renders finalized text solid and the live
+  // interim tail dimmed. While listening: finalized vs interim from the STT hook. When not
+  // listening (PROCESSING etc.): the committed answer is all "final", no interim tail.
+  const displayAnswerFinal = isListening ? finalTranscript : liveAnswer
+  const displayAnswerInterim = isListening ? interimTranscript : ''
   const phaseColor = PHASE_COLORS[phase] ?? DEFAULT_PHASE_COLOR
   const isProcessing = phase === 'PROCESSING'
 
@@ -865,7 +871,8 @@ export default function InterviewPage() {
         questionDisplay={questionDisplay}
         duration={config.duration}
         currentQuestion={currentQuestion}
-        liveAnswer={displayAnswer}
+        liveAnswer={displayAnswerFinal}
+        liveAnswerInterim={displayAnswerInterim}
       />
 
       {/* ── Coaching layer ── */}

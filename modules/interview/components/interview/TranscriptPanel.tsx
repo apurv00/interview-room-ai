@@ -16,7 +16,10 @@ interface TranscriptPanelProps {
   questionDisplay: QuestionDisplay
   duration: Duration
   currentQuestion: string
+  /** Finalized answer text — rendered solid; never revises. */
   liveAnswer: string
+  /** Current interim (not-yet-finalized) tail — rendered dimmed; may still change. */
+  liveAnswerInterim?: string
 }
 
 export default function TranscriptPanel({
@@ -25,6 +28,7 @@ export default function TranscriptPanel({
   duration,
   currentQuestion,
   liveAnswer,
+  liveAnswerInterim = '',
 }: TranscriptPanelProps) {
   const answerRef = useRef<HTMLDivElement>(null)
   const totalQuestions = getQuestionCount(duration)
@@ -132,9 +136,18 @@ export default function TranscriptPanel({
                     ref={answerRef}
                     className="text-sm text-[#536471] leading-relaxed max-h-24 sm:max-h-20 overflow-y-auto transcript-scroll"
                   >
-                    {liveAnswer ? (
+                    {(liveAnswer || liveAnswerInterim) ? (
                       <span>
                         {liveAnswer}
+                        {liveAnswerInterim && (
+                          // Interim (not-yet-finalized) text — dimmed so a later revision
+                          // reads as "still settling", not a glitch. Solidifies into the line
+                          // above once Deepgram finalizes the segment.
+                          <span className="text-[#8b98a5] italic">
+                            {liveAnswer ? ' ' : ''}
+                            {liveAnswerInterim}
+                          </span>
+                        )}
                         <motion.span
                           className="inline-block w-[2px] h-3.5 bg-emerald-400 ml-0.5 align-text-bottom"
                           animate={{ opacity: [1, 0] }}
