@@ -1480,3 +1480,28 @@ failing; `tsc --noEmit` clean; `npm run build` green. Impact analysis on the rou
 #3): manual prod self-interview** — run a 0–2 Academics viva on two domains (one cs-core, one
 business) with real keys and confirm Q1 is a roadmap/fundamentals question on the named subject,
 never a repeat of the favourite-subject opener.
+
+### 2026-06-28 · Live STT model nova-2 → nova-3 (accent accuracy)
+
+**Change.** Flipped the single-sourced `DEEPGRAM_LISTEN_URL` (useDeepgramRecognition.ts) from
+`model=nova-2` to `model=nova-3`. nova-3 is Deepgram's current GA streaming model and is
+materially more accurate on accented / Indian English (Deepgram cites ~21% relative streaming
+WER reduction vs nova-2, with larger gains on accented speech), and it is the prerequisite for
+`keyterm` prompting we may add next. **Only the model changed** — `language` stays `en` and all
+other params (smart_format, filler_words, utterance_end_ms=2500, interim_results, encoding,
+sample_rate) are nova-3-compatible and unchanged, so the model is isolated as the sole variable.
+`en-IN` and per-interview `keyterm` boosting are deliberate follow-ups, not in this change.
+
+**Why this was safe to scope tightly.** The edit is a string-constant value, not a signature —
+impact analysis on the hook shows the change has no symbol blast radius (the d=1 consumers
+`warmUp`/`connectWebSocket` receive the same string type; only the runtime model differs). No
+caller breaks.
+
+**Verification.** `deepgramRecognition.test.ts` gains an assertion that the opened WS URL carries
+`model=nova-3` (not nova-2) plus the full STT param contract (so a future edit can't silently
+drop a flag); deepgram + grace suites 97 passing; `tsc --noEmit` clean; `npm run build` green.
+**OUTSTANDING (CLAUDE.md rule #3, auth is prod-only): a real prod interview** — confirm (a) STT
+accuracy on Indian-accented speech improves, (b) first-token/interim latency stays within budget,
+and critically (c) nova-3's utterance-finalization cadence still matches the `GRACE_MS_BY_INTENT`
+/ `utterance_end_ms=2500` interrupt+grace timers (these were calibrated against nova-2; if
+interrupts mis-fire or finals truncate, retune the grace windows alongside the model).

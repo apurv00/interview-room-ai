@@ -239,11 +239,18 @@ const COMPLETE_CONFIDENT_GRACE_MS = 1100
 /** Terminal sentence punctuation at end-of-text (tolerates trailing quotes/brackets). */
 const TERMINAL_PUNCTUATION = /[.?!]["')\]]*\s*$/
 
-/** Deepgram Nova-2 streaming listen URL — single-sourced. It was duplicated at the warmUp
+/** Deepgram Nova-3 streaming listen URL — single-sourced. It was duplicated at the warmUp
  *  and connectWebSocket call sites; editing one (e.g. utterance_end_ms) without the other
- *  silently desynced warm vs cold sessions (a class of bug invisible to unit tests). */
+ *  silently desynced warm vs cold sessions (a class of bug invisible to unit tests).
+ *
+ *  model=nova-3 (was nova-2): Deepgram's current GA streaming model, materially more accurate
+ *  on accented / Indian English (and the prerequisite for keyterm prompting we may add next).
+ *  All other params are nova-3-compatible. language stays `en` so this commit isolates the
+ *  model swap as the only variable (en-IN / keyterm are deliberate follow-ups). Re-validate
+ *  utterance_end/VAD timing against GRACE_MS_BY_INTENT on a real prod interview — nova-3 can
+ *  finalize on a slightly different cadence than nova-2. */
 const DEEPGRAM_LISTEN_URL =
-  'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&filler_words=true&utterance_end_ms=2500&interim_results=true&language=en&encoding=linear16&sample_rate=16000'
+  'wss://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&filler_words=true&utterance_end_ms=2500&interim_results=true&language=en&encoding=linear16&sample_rate=16000'
 
 /** Regex patterns that signal the candidate is explicitly asking for
  *  more thinking time. Anchored to end-of-utterance so phrases buried
