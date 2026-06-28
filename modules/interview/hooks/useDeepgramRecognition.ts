@@ -129,7 +129,12 @@ export type StopListeningReason =
 
 export interface UseDeepgramRecognitionReturn {
   isListening: boolean
+  /** Merged finalized + interim text (kept for coaching/word-count consumers). */
   liveTranscript: string
+  /** Only the finalized (is_final) portion — safe to render solid; never revises. */
+  finalTranscript: string
+  /** The current interim tail (not yet finalized) — render dimmed; it can change. */
+  interimTranscript: string
   startListening: (onComplete: (result: SpeechRecognitionResult) => void, options?: StartListeningOptions) => void
   stopListening: (reason?: StopListeningReason) => void
   /** Pre-warm: fetch token + connect WebSocket so startListening is instant. */
@@ -379,6 +384,10 @@ export function selectGraceMs(
 export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   const [isListening, setIsListening] = useState(false)
   const [liveTranscript, setLiveTranscript] = useState('')
+  // Split views of the same stream so the UI can render finalized text solid and the
+  // still-changing interim tail dimmed (no jarring "text rewrote itself" effect).
+  const [finalTranscript, setFinalTranscript] = useState('')
+  const [interimTranscript, setInterimTranscript] = useState('')
 
   const wsRef = useRef<WebSocket | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
@@ -589,6 +598,8 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       isFinishingRef.current = false
       startTimeRef.current = Date.now()
       setLiveTranscript('')
+      setFinalTranscript('')
+      setInterimTranscript('')
       // Reset the PCM pre-open buffer so frames from any prior listening
       // session can't leak into the new ws. clear() also zeros the
       // overflow-dropped counter so per-session telemetry is clean.
@@ -1293,9 +1304,16 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
           const combined = finalTextRef.current + (isFinal ? '' : ` ${transcript}`)
           if (combined !== lastTranscriptRef.current) {
             lastTranscriptRef.current = combined
+            // Capture the split parts for the dimmed-interim UI: finalized text (solid,
+            // stable) vs the current interim tail (dimmed, may revise). liveTranscript stays
+            // the merged string so existing consumers (coaching/word-count) are unchanged.
+            const finalPart = finalTextRef.current.trim()
+            const interimPart = isFinal ? '' : transcript.trim()
             cancelAnimationFrame(rafRef.current)
             rafRef.current = requestAnimationFrame(() => {
               setLiveTranscript(combined.trim())
+              setFinalTranscript(finalPart)
+              setInterimTranscript(interimPart)
             })
           }
         }
@@ -2003,5 +2021,5 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     return text
   }, [])
 
-  return { isListening, liveTranscript, startListening, stopListening, warmUp, setExternalStream, setOnInterrupt, setSuppressInterrupt, getAndClearInterruptAccum }
+  return { isListening, liveTranscript, finalTranscript, interimTranscript, startListening, stopListening, warmUp, setExternalStream, setOnInterrupt, setSuppressInterrupt, getAndClearInterruptAccum }
 }

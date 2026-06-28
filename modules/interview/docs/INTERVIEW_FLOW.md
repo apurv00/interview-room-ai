@@ -1540,3 +1540,23 @@ transcription accuracy, not silence/endpoint detection. So `GRACE_MS_BY_INTENT` 
 `COMPLETE_CONFIDENT_GRACE_MS` / `utterance_end_ms` stay as-is. Nice-to-have (not a blocker): a
 casual prod self-interview on the Indian path; only if clean answers visibly clip at ~1.1s would
 you bump `COMPLETE_CONFIDENT_GRACE_MS` — there is no a-priori reason to.
+
+### 2026-06-28 · Live transcript: dim the interim tail (no "text rewrote itself" flicker)
+
+**Symptom.** The live "Your answer" panel rendered Deepgram's interim + finalized text as one
+undifferentiated string, so when an interim result was revised on finalization it looked like the
+text glitched/rewrote under the candidate.
+
+**Fix (display-layer only — no STT/grace/VAD change).** `useDeepgramRecognition` now exposes
+`finalTranscript` (finalized, solid, never revises) and `interimTranscript` (the current interim
+tail, may change) alongside the unchanged merged `liveTranscript` (coaching/word-count consumers
+untouched). All three are set in the same RAF block. `TranscriptPanel` renders finalized text
+solid + the interim tail in a dimmed italic span, so a revision reads as "still settling," not a
+glitch. The interim tail still feeds `utterance_end_ms`/grace/interrupt exactly as before —
+`interim_results=true` is required for those — only the *rendering* split changed. Coding/Design
+layouts keep the merged string. Web Speech fallback maps `interimTranscript=''` (renders solid).
+
+**Verification.** `TranscriptPanel.test.tsx` (solid final + dimmed-italic interim span; interim-only;
+empty→Listening placeholder) + a `deepgramRecognition.test.ts` hook-shape test (RAF-throttled state
+isn't observable via result.current — same as the long-standing `liveTranscript` — so the live
+update behavior is covered by the panel render). Full vitest 4994 passing; `tsc` clean; build green.

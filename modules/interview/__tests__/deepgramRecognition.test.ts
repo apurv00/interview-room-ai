@@ -374,6 +374,20 @@ describe('useDeepgramRecognition', () => {
     }
   })
 
+  it('exposes the finalTranscript / interimTranscript split on the hook return (dimmed-interim UI)', () => {
+    // The split fields back the solid-final + dimmed-interim render in TranscriptPanel.
+    // They start empty and are strings (the update mechanism mirrors the merged
+    // liveTranscript RAF path — its live behavior is covered by TranscriptPanel.test.tsx;
+    // RAF-throttled state isn't observable via result.current here, same as liveTranscript).
+    const { result } = renderHook(() => useDeepgramRecognition())
+    expect(result.current).toHaveProperty('finalTranscript')
+    expect(result.current).toHaveProperty('interimTranscript')
+    expect(typeof result.current.finalTranscript).toBe('string')
+    expect(typeof result.current.interimTranscript).toBe('string')
+    expect(result.current.finalTranscript).toBe('')
+    expect(result.current.interimTranscript).toBe('')
+  })
+
   it('receives messages after warmUp + fast path startListening', async () => {
     const { result } = renderHook(() => useDeepgramRecognition())
     const onComplete = vi.fn()

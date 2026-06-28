@@ -52,3 +52,44 @@ describe('TranscriptPanel question display', () => {
     expect(screen.queryByText(/13 of 11/i)).toBeNull()
   })
 })
+
+describe('TranscriptPanel live answer — dimmed interim', () => {
+  const qd: QuestionDisplay = { kind: 'question', number: 1, progressIndex: 1 }
+
+  function renderAnswer(liveAnswer: string, liveAnswerInterim: string) {
+    return render(
+      <TranscriptPanel
+        phase={'LISTENING' as InterviewState}
+        questionDisplay={qd}
+        duration={20 as Duration}
+        currentQuestion="Tell me about a project you led."
+        liveAnswer={liveAnswer}
+        liveAnswerInterim={liveAnswerInterim}
+      />,
+    )
+  }
+
+  it('renders finalized text solid and the interim tail in a dimmed italic span', () => {
+    renderAnswer('I led the payments migration', 'and we cut latency')
+    // finalized text is present (solid — not in the dimmed span)
+    const final = screen.getByText(/I led the payments migration/)
+    expect(final.className).not.toContain('italic')
+    // interim text is present in the dimmed/italic span (so a later revision reads as "settling")
+    const interim = screen.getByText(/and we cut latency/)
+    expect(interim.className).toContain('italic')
+    expect(interim.className).toContain('text-[#8b98a5]')
+  })
+
+  it('renders interim-only when nothing is finalized yet', () => {
+    renderAnswer('', 'so the first thing I did')
+    const interim = screen.getByText(/so the first thing I did/)
+    expect(interim.className).toContain('italic')
+    // not the "Listening" placeholder
+    expect(screen.queryByText(/Listening — speak when ready/i)).toBeNull()
+  })
+
+  it('shows the Listening placeholder when both final and interim are empty', () => {
+    renderAnswer('', '')
+    expect(screen.getByText(/Listening — speak when ready/i)).toBeTruthy()
+  })
+})
