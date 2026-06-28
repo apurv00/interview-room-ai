@@ -84,3 +84,55 @@ describe('matrixQuality — academics favourite-subject opener guard', () => {
     expect(q.academicOpenerCount).toBe(0)
   })
 })
+
+describe('matrixQuality — deterministic fixture depths (Codex #474 P1)', () => {
+  const SAME_DESIGN_Q = 'Design a URL shortening service like bit.ly with high read throughput.'
+  it('does NOT flag the static design problem repeated across personas', () => {
+    const q = computeMatrixQuality(
+      report([
+        run('backend/system-design/strong', [SAME_DESIGN_Q]),
+        run('backend/system-design/weak', [SAME_DESIGN_Q]),
+      ]),
+    )
+    expect(q.duplicateCount).toBe(0)
+    expect(matrixQualityToFindings(q).find((x: { id: string }) => x.id === 'AUTO-DUP-001')).toBeUndefined()
+  })
+
+  it('still flags a genuinely repeated generated question for non-fixture depths', () => {
+    const SAME = 'Tell me about a time you led a cross-functional launch and the metrics you owned.'
+    const q = computeMatrixQuality(
+      report([
+        run('backend/behavioral/strong', [SAME]),
+        run('backend/behavioral/weak', [SAME]),
+      ]),
+    )
+    expect(q.duplicateCount).toBe(1)
+    expect(matrixQualityToFindings(q).find((x: { id: string }) => x.id === 'AUTO-DUP-001')).toBeTruthy()
+  })
+})
+
+describe('matrixQuality — 429 check scoped to question generation (Codex #474 P2)', () => {
+  function reportWith(telemetry: unknown[]) {
+    return { mode: 'full', runs: [], telemetry }
+  }
+  it('does NOT count generate-problem-observe 429s as generate-question rate limiting', () => {
+    const q = computeMatrixQuality(
+      reportWith([
+        { stage: 'interview', step: 'generate-problem-observe', matrixKey: 'backend/coding/strong', apiResult: { status: 429 } },
+      ]),
+    )
+    expect(q.genQ429Count).toBe(0)
+    expect(matrixQualityToFindings(q).find((x: { id: string }) => x.id === 'AUTO-GEN-002')).toBeUndefined()
+  })
+
+  it('still counts real generate-question 429s (and retries)', () => {
+    const q = computeMatrixQuality(
+      reportWith([
+        { stage: 'interview', step: 'generate-question', matrixKey: 'backend/technical/strong', apiResult: { status: 429 } },
+        { stage: 'interview', step: 'generate-question-retry', matrixKey: 'pm/case-study/weak', apiResult: { status: 429 } },
+      ]),
+    )
+    expect(q.genQ429Count).toBe(2)
+    expect(matrixQualityToFindings(q).find((x: { id: string }) => x.id === 'AUTO-GEN-002')).toBeTruthy()
+  })
+})

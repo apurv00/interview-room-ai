@@ -21,6 +21,10 @@ function normQuestion(text) {
 const ACADEMIC_OPENER_RE =
   /(?:which|what)\s+(?:[a-z]+\s+){0,2}subject\s+(?:are|do|is)\s+you|what(?:['’]s| is)\s+your\s+(?:favou?rite|strongest)\s+subject|(?:which|what)\s+subject\s+do\s+you\s+(?:enjoy|prefer|like)|favou?rite\s+or\s+strongest\s+subject/i
 
+// Depths whose recorded "question" is a static problem fixture (same for every persona by
+// design), so cross-persona repeats are expected and must not count as duplicate findings.
+const FIXTURE_PROBLEM_DEPTHS = new Set(['system-design', 'coding'])
+
 /**
  * @param {object} report - matrix-report.json
  */
@@ -74,6 +78,11 @@ export function computeMatrixQuality(report) {
 
   const duplicateGroups = []
   for (const [domainDepth, items] of byDomainDepth) {
+    // system-design ("Design a URL Shortener") and coding (static Two Sum) record a
+    // DETERMINISTIC problem fixture, identical across personas by design — a repeat there is
+    // not a generate-question anti-repeat bug, so skip these depths.
+    const depth = domainDepth.split('/')[1] || ''
+    if (FIXTURE_PROBLEM_DEPTHS.has(depth)) continue
     const byNorm = new Map()
     for (const item of items) {
       if (!item.norm || item.norm.length < 20) continue
@@ -97,7 +106,10 @@ export function computeMatrixQuality(report) {
   const genQ429 = telemetry.filter(
     (t) =>
       t.stage === 'interview' &&
-      (t.step === 'generate-question' || String(t.step || '').includes('generate')) &&
+      // Only the interview question generator + its retries — NOT generate-problem-observe.
+      // Coding/system-design problem routes are separately rate-limited (5/min), so a 429
+      // there must not masquerade as a P0 "generate-question rate limited" finding.
+      String(t.step || '').startsWith('generate-question') &&
       (t.apiResult?.status === 429 || String(t.apiResult?.status) === '429'),
   )
   const genQ429Keys = [...new Set(genQ429.map((t) => t.matrixKey).filter(Boolean))]
