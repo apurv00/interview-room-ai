@@ -138,7 +138,17 @@ if (postArgs.length > 3) {
     stdio: 'inherit',
     shell: process.platform === 'win32',
   })
-  if (post.status !== 0 && post.status !== 2) process.exit(post.status ?? 1)
+  // --post-only exits 2 for active P0 triage / strict-quality failures. That is
+  // release-blocking when strict mode was requested (--report implies --strict-triage), so
+  // propagate it then; otherwise exit 2 is informational and tolerated. Any other non-zero
+  // status is always fatal.
+  const strictRequested =
+    process.argv.includes('--report') || process.argv.includes('--strict-triage')
+  if (post.status === 2) {
+    if (strictRequested) process.exit(2)
+  } else if (post.status !== 0) {
+    process.exit(post.status ?? 1)
+  }
 }
 
 console.log(`\nReport ID: ${parentReportId}`)

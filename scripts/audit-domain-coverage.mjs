@@ -19,6 +19,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const strict = process.argv.includes('--strict')
 
 const flowDir = join(root, 'modules/interview/flow/templates')
+const skillsDir = join(root, 'modules/interview/skills')
 const backfillPath = join(root, 'shared/db/data/questionBankBackfill.json')
 
 /** @type {{ domain: string, interviewType: string }[]} */
@@ -39,7 +40,14 @@ for (const { domain, depth } of combos) {
   const key = `${domain}/${depth}`
   const missing = []
 
-  if (domain === 'general') {
+  if (depth === 'academics') {
+    // Academics is a subject viva sourced from per-domain {domain}-academics.md skill files,
+    // NOT the QuestionBank — verify the skill file (with the general-academics.md backstop)
+    // instead of a bank row, or every applicable */academics cell reads as a false gap.
+    const hasOwn = existsSync(join(skillsDir, `${domain}-academics.md`))
+    const hasBackstop = existsSync(join(skillsDir, 'general-academics.md'))
+    if (!hasOwn && !hasBackstop) missing.push('skill-file')
+  } else if (domain === 'general') {
     const flowFile = join(flowDir, `${domain}-${depth}.ts`)
     if (!existsSync(flowFile)) missing.push('flow-template')
   } else {
@@ -53,8 +61,9 @@ for (const { domain, depth } of combos) {
   if (missing.length) gaps.push(`${key}: ${missing.join(', ')}`)
 }
 
+const bankCombos = combos.filter((c) => c.domain !== 'general' && c.depth !== 'academics').length
 console.log(`\nSummary: ${combos.length - gaps.length}/${combos.length} combos fully covered`)
-console.log(`Question bank cells: ${backfillCells.size} (expected ${combos.length - 4} non-general)`)
+console.log(`Question bank cells: ${backfillCells.size} (expected ${bankCombos} non-general non-academics)`)
 console.log(`Gaps: ${gaps.length}`)
 
 if (strict && gaps.length) {
