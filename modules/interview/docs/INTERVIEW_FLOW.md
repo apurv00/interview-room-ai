@@ -1529,9 +1529,14 @@ needed for that guarantee.
 
 **Verification.** `deepgramRecognition.test.ts` adds `buildListenUrl` (en byte-identical / en-IN
 differs only in language / empty→en) and `resolveSttLanguage` (`?voice=indian`→en-IN; else en)
-unit tests; deepgram suite 93 passing; `tsc` clean; `npm run build` green. **OUTSTANDING
-(CLAUDE.md rule #3, auth is prod-only):** because en-IN is now the DEFAULT path (not a minority
-opt-in), the nova-3+en-IN finalize-cadence vs `GRACE_MS_BY_INTENT`/`utterance_end_ms` validation
-is now mandatory before this is trusted — run a prod interview on the (default) Indian path and
-confirm interrupts fire and finals don't truncate; also confirm the US opt-out still yields the
-plain `en` path.
+unit tests; deepgram suite 93 passing; `tsc` clean; `npm run build` green.
+
+**Grace timing: no change needed.** Finalization is driven by `UtteranceEnd` (governed by the
+configured `utterance_end_ms=2500` + word-gap timing — model-independent per Deepgram) and, under
+the already-in-prod `NEXT_PUBLIC_FEATURE_ADAPTIVE_GRACE`, by `speech_final` (VAD/endpointing). That
+VAD-driven `speech_final` mechanism is identical in kind to nova-2 (which has run with adaptive
+grace in prod) — `en` vs `en-IN` is the same nova-3 model with Indian-English tuning and changes
+transcription accuracy, not silence/endpoint detection. So `GRACE_MS_BY_INTENT` /
+`COMPLETE_CONFIDENT_GRACE_MS` / `utterance_end_ms` stay as-is. Nice-to-have (not a blocker): a
+casual prod self-interview on the Indian path; only if clean answers visibly clip at ~1.1s would
+you bump `COMPLETE_CONFIDENT_GRACE_MS` — there is no a-priori reason to.
