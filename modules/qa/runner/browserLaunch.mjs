@@ -18,7 +18,7 @@ export const QA_BROWSER_LAUNCH = {
  * @param {string} [opts.storageStatePath]
  */
 export async function launchQaBrowser(opts = {}) {
-  const { headless = false, storageStatePath } = opts
+  const { headless = false, storageStatePath, allowChromiumFallback = false } = opts
   try {
     const browser = await chromium.launch({ ...QA_BROWSER_LAUNCH, headless })
     const context = await browser.newContext(
@@ -26,7 +26,11 @@ export async function launchQaBrowser(opts = {}) {
     )
     return { browser, context, kind: 'chrome' }
   } catch (err) {
-    if (headless || !String(err.message).includes('chrome')) throw err
+    // Headed OAuth login needs real Chrome, so by default headless callers rethrow rather
+    // than silently fall back. Callers that don't need Chrome-specific behavior (e.g. an
+    // API-only auth check) can opt into the bundled-Chromium fallback so headless/CI
+    // containers without system Chrome still work.
+    if ((headless && !allowChromiumFallback) || !String(err.message).includes('chrome')) throw err
     console.warn('Google Chrome not found — falling back to Chromium (Google OAuth may fail).')
     console.warn('Install Chrome or use: npx playwright codegen --channel=chrome --save-storage=...')
     const browser = await chromium.launch({ headless })

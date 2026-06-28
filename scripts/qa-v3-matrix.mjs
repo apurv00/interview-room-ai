@@ -88,6 +88,15 @@ if (postOnlyId) {
       shell: process.platform === 'win32',
     })
   }
+  if (process.argv.includes('--quality')) {
+    const qArgs = ['scripts/qa-v3-quality.mjs', postOnlyId]
+    if (strictTriage) qArgs.push('--strict')
+    const q = spawnSync('node', qArgs, { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' })
+    // --quality is an explicit gate: ANY non-zero exit (1 failed checks, 2 strict/P0) must
+    // fail the run, otherwise callers (incl. qa-v3-matrix-parallel --report) get exit 0
+    // despite quality failures.
+    if (q.status) process.exit(q.status)
+  }
   process.exit(0)
 }
 
@@ -98,6 +107,7 @@ const profile = profileName ? profiles[profileName] : null
 const mode = arg('--mode', profile?.mode ?? 'smoke')
 const questions = parseInt(arg('--questions', String(profile?.questions ?? 6)), 10)
 const duration = parseInt(arg('--duration', String(profile?.duration ?? 10)), 10)
+const experience = arg('--experience', profile?.experience ?? '0-2')
 const maxCells = parseInt(arg('--limit', arg('--max-cells', String(profile?.maxCells ?? 0))), 10)
 const explicitOffset = arg('--offset', null)
 const headless = process.argv.includes('--headless')
@@ -153,6 +163,7 @@ try {
     mode,
     questions,
     duration,
+    experience,
     maxCells,
     offset: cellOffset,
     cellRetry,
@@ -206,6 +217,18 @@ try {
       shell: process.platform === 'win32',
     })
     if (gen.status !== 0) process.exit(gen.status ?? 1)
+  }
+
+  const qualityRequested = process.argv.includes('--quality')
+  if (qualityRequested || (generateReport && mode === 'full')) {
+    const qArgs = ['scripts/qa-v3-quality.mjs', result.reportId]
+    if (strictTriage) qArgs.push('--strict')
+    const q = spawnSync('node', qArgs, { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' })
+    // Explicit --quality is a gate: any non-zero exit fails the run. The implicit
+    // report-path quality run (generateReport && full, no --quality) stays lenient: only a
+    // strict P0/quality failure (exit 2) is fatal.
+    if (qualityRequested && q.status) process.exit(q.status)
+    else if (q.status === 2 && strictTriage) process.exit(2)
   }
 
   console.log(`\nReport ID: ${result.reportId}`)

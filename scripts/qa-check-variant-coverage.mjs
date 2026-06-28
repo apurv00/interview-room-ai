@@ -25,9 +25,11 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { matrixCellCount } from '../modules/qa/orchestrator/rosterMatrix.mjs'
 
 const DEFAULT_JSON = 'modules/qa/output/qa-browser-full-1779529900005.json'
 const jsonPath = process.argv[2] || DEFAULT_JSON
+const expectedStrongCells = matrixCellCount('full') / 2
 
 if (!fs.existsSync(jsonPath)) {
   console.error(`Report JSON not found: ${jsonPath}`)
@@ -149,7 +151,7 @@ for (const r of runs) {
 
 const cells = Object.keys(byCell).sort()
 console.log(`Source: ${path.basename(jsonPath)}`)
-console.log(`Strong cells found: ${cells.length} (expected 30 for a full matrix run)\n`)
+console.log(`Strong cells found: ${cells.length} (expected ${expectedStrongCells} for a full matrix run)\n`)
 
 let totalQ = 0
 let defaultQ = 0
