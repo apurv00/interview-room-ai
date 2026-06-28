@@ -1505,3 +1505,33 @@ accuracy on Indian-accented speech improves, (b) first-token/interim latency sta
 and critically (c) nova-3's utterance-finalization cadence still matches the `GRACE_MS_BY_INTENT`
 / `utterance_end_ms=2500` interrupt+grace timers (these were calibrated against nova-2; if
 interrupts mis-fire or finals truncate, retune the grace windows alongside the model).
+
+### 2026-06-28 · STT language=en-IN tied to the Indian-English choice + made the default
+
+**Change.** STT `language` is now per-session instead of a hardcoded `en`. The
+single-sourced URL became `buildListenUrl(resolveSttLanguage())` (useDeepgramRecognition.ts):
+`resolveSttLanguage()` reads the same `?voice=indian` choice the TTS path already uses
+(mirrors useAvatarSpeech) → `en-IN` for Indian English, `en` otherwise. The lobby voice
+control now **defaults to Indian English** (`indianVoice` initial state `false → true`,
+app/lobby/page.tsx) — this is an India-first product, so the one choice drives BOTH the Azure
+interviewer voice AND Deepgram `language=en-IN`. US/International users opt out via the picker.
+
+**No feature flag (deliberate).** The gate is the user's explicit lobby choice, not a new
+flag — `?voice=indian` already existed. The existing `NEXT_PUBLIC_FEATURE_VOICE_PICKER` only
+controls whether the opt-out UI renders; **it must stay enabled in prod so non-Indian users
+have a visible way to switch back to en** (with Indian now the default, that picker is the
+only escape hatch).
+
+**Correctness without live telemetry.** US/International is protected *by construction*, proven
+by a unit test: `buildListenUrl('en')` is byte-identical to the prior URL and `en-IN` differs
+*only* in the `language=` param — so any non-Indian session is unchanged. No production A/B
+needed for that guarantee.
+
+**Verification.** `deepgramRecognition.test.ts` adds `buildListenUrl` (en byte-identical / en-IN
+differs only in language / empty→en) and `resolveSttLanguage` (`?voice=indian`→en-IN; else en)
+unit tests; deepgram suite 93 passing; `tsc` clean; `npm run build` green. **OUTSTANDING
+(CLAUDE.md rule #3, auth is prod-only):** because en-IN is now the DEFAULT path (not a minority
+opt-in), the nova-3+en-IN finalize-cadence vs `GRACE_MS_BY_INTENT`/`utterance_end_ms` validation
+is now mandatory before this is trusted — run a prod interview on the (default) Indian path and
+confirm interrupts fire and finals don't truncate; also confirm the US opt-out still yields the
+plain `en` path.

@@ -239,18 +239,40 @@ const COMPLETE_CONFIDENT_GRACE_MS = 1100
 /** Terminal sentence punctuation at end-of-text (tolerates trailing quotes/brackets). */
 const TERMINAL_PUNCTUATION = /[.?!]["')\]]*\s*$/
 
-/** Deepgram Nova-3 streaming listen URL — single-sourced. It was duplicated at the warmUp
- *  and connectWebSocket call sites; editing one (e.g. utterance_end_ms) without the other
- *  silently desynced warm vs cold sessions (a class of bug invisible to unit tests).
+/** Deepgram Nova-3 streaming listen URL — single-sourced via buildListenUrl(). It was
+ *  duplicated at the warmUp and connectWebSocket call sites; editing one (e.g.
+ *  utterance_end_ms) without the other silently desynced warm vs cold sessions (a class of
+ *  bug invisible to unit tests), so BOTH sites must call buildListenUrl(resolveSttLanguage()).
  *
- *  model=nova-3 (was nova-2): Deepgram's current GA streaming model, materially more accurate
- *  on accented / Indian English (and the prerequisite for keyterm prompting we may add next).
- *  All other params are nova-3-compatible. language stays `en` so this commit isolates the
- *  model swap as the only variable (en-IN / keyterm are deliberate follow-ups). Re-validate
- *  utterance_end/VAD timing against GRACE_MS_BY_INTENT on a real prod interview — nova-3 can
- *  finalize on a slightly different cadence than nova-2. */
-const DEEPGRAM_LISTEN_URL =
-  'wss://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&filler_words=true&utterance_end_ms=2500&interim_results=true&language=en&encoding=linear16&sample_rate=16000'
+ *  model=nova-3: Deepgram's GA streaming model, materially more accurate on accented / Indian
+ *  English. The `language` param is now per-session: en-IN when the candidate chose the Indian
+ *  English experience in the lobby (the same `?voice=indian` choice that drives the Azure
+ *  interviewer voice — see useAvatarSpeech), otherwise plain `en`. This keeps the en path
+ *  byte-identical to before for anyone NOT on Indian English (no regression by construction).
+ *  Re-validate utterance_end/VAD timing against GRACE_MS_BY_INTENT on a real prod interview —
+ *  nova-3 + en-IN can finalize on a slightly different cadence. */
+export function buildListenUrl(language: string): string {
+  const lang = language || 'en'
+  return (
+    'wss://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&filler_words=true' +
+    '&utterance_end_ms=2500&interim_results=true' +
+    `&language=${encodeURIComponent(lang)}` +
+    '&encoding=linear16&sample_rate=16000'
+  )
+}
+
+/** Resolve the per-session STT language from the `?voice=indian` URL choice (mirrors the
+ *  TTS path in useAvatarSpeech). `search` is injectable for tests; defaults to the live URL.
+ *  Indian English → en-IN; everything else → en. Stable for the whole interview session. */
+export function resolveSttLanguage(
+  search: string = typeof window !== 'undefined' ? window.location.search : '',
+): 'en' | 'en-IN' {
+  try {
+    return new URLSearchParams(search).get('voice') === 'indian' ? 'en-IN' : 'en'
+  } catch {
+    return 'en'
+  }
+}
 
 /** Regex patterns that signal the candidate is explicitly asking for
  *  more thinking time. Anchored to end-of-utterance so phrases buried
@@ -861,7 +883,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     const promise = fetchTokenCached()
       .then((token) => {
         return new Promise<void>((resolve) => {
-          const wsUrl = DEEPGRAM_LISTEN_URL
+          const wsUrl = buildListenUrl(resolveSttLanguage())
           const ws = new WebSocket(wsUrl, ['token', token])
           // Publish the CONNECTING socket to wsRef eagerly (was previously
           // deferred to ws.onopen at the bottom of this block). Rationale:
@@ -1347,7 +1369,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       return
     }
 
-    const wsUrl = DEEPGRAM_LISTEN_URL
+    const wsUrl = buildListenUrl(resolveSttLanguage())
     // Use auth via websocket subprotocol so transient token is not logged in the URL.
     const ws = new WebSocket(wsUrl, ['token', token]) as WebSocket & {
       __reconnectOnCloseWrapped?: boolean

@@ -98,12 +98,14 @@ function LobbyPageInner() {
   // if toggled mid-count).
   const liveCoachingEnabledRef = useRef(liveCoachingEnabled)
   liveCoachingEnabledRef.current = liveCoachingEnabled
-  // Indian-accent voice (feedback #4): opt-in Azure voice, chosen here and
-  // carried to the room via ?voice=indian (a storage-independent URL handoff,
-  // like ?lc). Gated behind NEXT_PUBLIC_FEATURE_VOICE_PICKER so it only appears
-  // where Azure is configured. Default OFF — Deepgram is the fast, proven path.
+  // Indian English experience: the default for this India-first product. The choice is
+  // carried to the room via ?voice=indian (a storage-independent URL handoff, like ?lc) and
+  // drives BOTH the Azure interviewer voice (useAvatarSpeech / TTS routes) AND the Deepgram
+  // STT language=en-IN (resolveSttLanguage in useDeepgramRecognition). Default ON; candidates
+  // who prefer US/International English opt out via the picker (NEXT_PUBLIC_FEATURE_VOICE_PICKER
+  // — keep it enabled so non-Indian users have a visible way to switch back to en).
   const voicePickerEnabled = process.env.NEXT_PUBLIC_FEATURE_VOICE_PICKER === 'true'
-  const [indianVoice, setIndianVoice] = useState(false)
+  const [indianVoice, setIndianVoice] = useState(true)
   const indianVoiceRef = useRef(indianVoice)
   indianVoiceRef.current = indianVoice
   const [checks, setChecks] = useState<Check[]>([
