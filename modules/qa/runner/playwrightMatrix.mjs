@@ -1,17 +1,18 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { chromium } from '@playwright/test'
 import { createRunManifest, runOutputDir, saveManifest, loadManifest } from '../orchestrator/runManifest.mjs'
 import { writeTelemetryArtifacts } from './telemetry.mjs'
 import { computeResumeOffset, mergeMatrixReports } from '../orchestrator/retryPolicy.mjs'
 import { bakeStrongAnswersIntoRunner } from './bakeRunnerStrongAnswers.mjs'
+import { bakeRosterIntoRunner } from './bakeRosterIntoRunner.mjs'
+import { launchQaBrowser } from './browserLaunch.mjs'
 
 const moduleRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 function loadRunnerSource() {
   let source = readFileSync(join(moduleRoot, 'browser', 'qa-matrix-runner.js'), 'utf-8')
-  source = bakeStrongAnswersIntoRunner(source)
+  source = bakeRosterIntoRunner(bakeStrongAnswersIntoRunner(source))
   // Playwright sets hash via goto URL
   source = source.replace(/^location\.hash=[^\r\n]+\r?\n/, '')
   return source
@@ -29,6 +30,7 @@ function readHarnessVersion(source) {
  * @param {string} [options.mode]
  * @param {number} [options.questions]
  * @param {number} [options.duration]
+ * @param {string} [options.experience]
  * @param {number} [options.maxCells]
  * @param {number} [options.offset]
  * @param {number} [options.cellRetry]
@@ -45,6 +47,7 @@ export async function runPlaywrightMatrix(options) {
     mode = 'smoke',
     questions = 3,
     duration = 10,
+    experience = '0-2',
     maxCells = 0,
     offset = 0,
     cellRetry = 1,
@@ -80,16 +83,21 @@ export async function runPlaywrightMatrix(options) {
   const playwrightNetwork = []
   const consoleLines = []
 
-  log(`QA v3 Playwright — reportId=${reportId} mode=${mode} questions=${questions} duration=${duration}min${maxCells ? ` cells=${maxCells}` : ''}${offset ? ` offset=${offset}` : ''}`)
+  log(`QA v3 Playwright — reportId=${reportId} mode=${mode} questions=${questions} duration=${duration}min experience=${experience}${maxCells ? ` cells=${maxCells}` : ''}${offset ? ` offset=${offset}` : ''}`)
   log(`baseUrl=${baseUrl} harness=${harnessVersion}`)
   log(`Using storageState (OAuth not needed during matrix — cookies only)`)
 
-  const browser = await chromium.launch({ headless })
+  // The matrix authenticates via storageState cookies, not OAuth, so the bundled-Chromium
+  // fallback is safe — let headless/CI images without system Google Chrome run the matrix.
+  const { browser, context } = await launchQaBrowser({
+    headless,
+    storageStatePath,
+    allowChromiumFallback: true,
+  })
   let report = null
   let fatalError = null
 
   try {
-    const context = await browser.newContext({ storageState: storageStatePath })
     const page = await context.newPage()
     page.setDefaultTimeout(timeoutMs)
     page.setDefaultNavigationTimeout(120_000)
@@ -128,6 +136,7 @@ export async function runPlaywrightMatrix(options) {
       `mode=${encodeURIComponent(mode)}`,
       `questions=${questions}`,
       `duration=${duration}`,
+      `experience=${encodeURIComponent(experience)}`,
       'autostart=1',
       `reportId=${encodeURIComponent(reportId)}`,
       `cellRetry=${cellRetry}`,
@@ -258,9 +267,14 @@ export function loadResumeState(reportId) {
  * @param {string} baseUrl
  */
 export async function verifyAuthSession(storageStatePath, baseUrl) {
-  const browser = await chromium.launch({ headless: true })
+  // Auth verify only hits /api/auth/session — no Chrome-specific behavior — so allow the
+  // bundled-Chromium fallback for headless/CI containers without system Google Chrome.
+  const { browser, context } = await launchQaBrowser({
+    headless: true,
+    storageStatePath,
+    allowChromiumFallback: true,
+  })
   try {
-    const context = await browser.newContext({ storageState: storageStatePath })
     const page = await context.newPage()
     const res = await page.goto(`${baseUrl.replace(/\/$/, '')}/api/auth/session`, { timeout: 30_000 })
     const status = res?.status() ?? 0

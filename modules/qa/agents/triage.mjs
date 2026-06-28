@@ -5,10 +5,12 @@ import { readFileSync, readdirSync, existsSync, writeFileSync, mkdirSync } from 
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runOutputDir } from '../orchestrator/runManifest.mjs'
+import { computeMatrixQuality, matrixQualityToFindings } from './matrixQuality.mjs'
 import { computeRunMetrics, computeAutoFindings, loadMatrixReport } from './runMetrics.mjs'
 import { resolveReportJsonPath } from './baselineDiff.mjs'
 import { exportFindingsCsv } from './findingsExporter.mjs'
 import { runBaselineDiff, DEFAULT_BASELINE_ID } from './baselineDiff.mjs'
+import { matrixCellCount } from '../orchestrator/rosterMatrix.mjs'
 
 const qaRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -159,6 +161,8 @@ export async function triageRun(reportId, opts = {}) {
 
   const report = loadMatrixReport(reportPath)
   const metrics = computeRunMetrics(report)
+  const matrixQuality = computeMatrixQuality(report)
+  const qualityFindings = matrixQualityToFindings(matrixQuality)
   const outDir = runOutputDir(reportId)
   mkdirSync(outDir, { recursive: true })
 
@@ -169,7 +173,7 @@ export async function triageRun(reportId, opts = {}) {
   const tel = telemetryToFindings(loadTelemetrySummary(reportId), reportId)
 
   let findings = applyResolutionRules(
-    dedupeFindings([...manual, ...auto, ...obs, ...infra, ...tel]),
+    dedupeFindings([...manual, ...auto, ...qualityFindings, ...obs, ...infra, ...tel]),
     metrics,
   )
 
@@ -198,7 +202,7 @@ export async function triageRun(reportId, opts = {}) {
   let summary = {
     reportId,
     triagedAt: new Date().toISOString(),
-    metrics,
+    metrics: { ...metrics, matrixQuality },
     findings,
     activeP0Count: activeP0.length,
     activeP0Ids: activeP0.map((f) => f.id),
@@ -243,8 +247,11 @@ function buildRecommendations(findings, metrics, activeP0) {
   if (har) {
     recs.push({ action: 'ignore-for-product', reason: 'AUTO-HAR-001 is harness calibration — do not file eval bugs' })
   }
-  if (metrics.mode === 'smoke' && metrics.totalRuns < 60) {
-    recs.push({ action: 'run-full-matrix', reason: 'Smoke sample — run qa:v3:matrix:prod for 60-cell validation' })
+  if (metrics.mode === 'smoke') {
+    recs.push({
+      action: 'run-full-matrix',
+      reason: `Smoke sample complete (${metrics.totalRuns} cells) — run qa:v3:matrix:prod:parallel for full roster validation (${matrixCellCount('full')} cells, 3 shards)`,
+    })
   }
   return recs
 }

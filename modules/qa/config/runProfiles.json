@@ -2,24 +2,26 @@
   "smoke": {
     "mode": "smoke",
     "questions": 3,
-    "description": "12 cells (6 domain×depth × 2 personas) — quick validation"
+    "description": "18 cells (9 domain×depth × 2 personas, incl. 3 academics) — quick validation"
   },
   "full": {
     "mode": "full",
     "questions": 6,
     "duration": 10,
-    "description": "60 cells — full domain×depth×persona matrix, 6 questions × 10min per cell"
+    "experience": "0-2",
+    "description": "206 cells — applicable domain×depth×persona combos (depthApplies-filtered across 25 domains × 6 depths incl. academics; unsupported pairs excluded), 6 questions × 10min per cell, experience 0-2"
   },
   "ci-smoke": {
     "mode": "smoke",
     "questions": 3,
     "duration": 10,
-    "description": "12 cells, 3 questions × 10min — validates pathway (G.10 needs ≥3 answers)"
+    "description": "18 cells, 3 questions × 10min — validates pathway (G.10 needs ≥3 answers)"
   },
   "mini-smoke": {
     "mode": "smoke",
     "questions": 6,
     "duration": 10,
+    "experience": "0-2",
     "maxCells": 3,
     "description": "3 full 10-min interviews × 6 questions each — pathway + scoring validation"
   },
