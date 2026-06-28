@@ -296,6 +296,33 @@ describe('useDeepgramRecognition', () => {
     vi.useRealTimers()
   })
 
+  it('opens the Deepgram socket with model=nova-3 and the required param contract', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+    act(() => {
+      result.current.warmUp()
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10)
+    })
+    expect(mockWsInstance).not.toBeNull()
+    const url = mockWsInstance!.url
+    // Model swap nova-2 → nova-3 (Indian-accent accuracy; keyterm-prompting prerequisite).
+    expect(url).toContain('model=nova-3')
+    expect(url).not.toContain('model=nova-2')
+    // STT param contract — a silently dropped flag here breaks live recognition / VAD timing.
+    for (const p of [
+      'smart_format=true',
+      'filler_words=true',
+      'utterance_end_ms=2500',
+      'interim_results=true',
+      'language=en',
+      'encoding=linear16',
+      'sample_rate=16000',
+    ]) {
+      expect(url, `missing ${p}`).toContain(p)
+    }
+  })
+
   it('receives messages after warmUp + fast path startListening', async () => {
     const { result } = renderHook(() => useDeepgramRecognition())
     const onComplete = vi.fn()
