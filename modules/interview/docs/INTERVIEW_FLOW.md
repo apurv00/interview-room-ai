@@ -1560,3 +1560,93 @@ layouts keep the merged string. Web Speech fallback maps `interimTranscript=''` 
 empty→Listening placeholder) + a `deepgramRecognition.test.ts` hook-shape test (RAF-throttled state
 isn't observable via result.current — same as the long-standing `liveTranscript` — so the live
 update behavior is covered by the panel render). Full vitest 4994 passing; `tsc` clean; build green.
+
+### 2026-06-29 · Academics questions drift to the candidate's résumé, not the named subject · PR #478
+
+**Symptom (internal QA feedback; the example below is synthetic/de-identified).** In a Marketing →
+Academics → 0-2 viva, the candidate names one subject in the spoken intro but the interviewer keeps
+asking about a DIFFERENT area that dominates their résumé. Pattern: the prefetched Q1 asks for a
+roadmap of the résumé's dominant theme rather than the named subject (the candidate has to correct it
+mid-interview), and a later question lifts a specific résumé bullet (e.g. an ad-campaign metric)
+instead of probing the named subject. Net: the viva tracks the *résumé*, not the *named subject*.
+Side damage: the drift also depresses the score — the candidate's correction to the fabricated
+question and their confusion at a vague probe get graded as candidate failures (the system's bad
+questions count against them).
+
+**Root cause (two compounding sources, both feeding `/api/generate-question`).**
+1. **Résumé/JD/profile/domain topic-steering was injected for academics like every other depth.**
+   `contextBlock` (`<candidate_resume_analysis> … Probe the highlighted experiences`), `profileBlock`
+   ("probe their top skills" = the candidate's résumé-derived skills), `personalizationBlock`
+   (résumé/JD session brief), `ragBlock`, and `domainContext` (the marketing `systemPromptContext` =
+   SEO/SEM/CTR/CPC/ROAS/CAC *job* topics) all overrode `academicGroundingDirective`'s "anchor to the
+   named subject, never switch."
+2. **The grounding directive seeded its own wrong answer.** `academicGroundingDirective` hard-coded
+   "digital marketing" TWICE as its worked example. Q1 is prefetched BEFORE the intro answer is
+   captured (d2c04c9 — Q1 is the warm-up slot), so the named subject isn't in context yet; a 300-token
+   gpt-5.4-mini filled the void by copying the directive's OWN example, reinforced by the résumé.
+
+**Fix (prompt-only, two files).**
+- `app/api/generate-question/route.ts`: a subject viva is grounded ONLY on the directive + the
+  per-domain skill file + persona. For academics, **gate every résumé/JD/company-derived builder**
+  (`contextBlock` JD + `<candidate_resume_analysis>`, `profileBlock`, `personalizationBlock` =
+  `generateSessionBrief`, `ragBlock` = question-bank retrieval, `companyBlock` = targetCompany/
+  targetIndustry themes, and the cross-session `antiRepeatBlock`) on `!isAcademics` so the work is
+  never done (no JD/résumé cache reads, no profile read, no session-brief LLM call, no bank
+  retrieval, no prior-session lookup on the hot path — not built-then-discarded). Also suppress the
+  **dynamic** steering: `threadContext`'s `JD COVERAGE CHECK` note, the `EMPLOYER DIVERSITY` note,
+  and the generic `diversityNote` (the "switch to a different competency area — failure handling,
+  data-driven decisions, innovation" nudge after Q3, which is behavioural/job steering that drifts a
+  viva off-subject; subject breadth is the directive's job), and the **JD flow overlay**
+  (`jdOverlay` stays null so `resolveFlow`/`buildFlowPromptContext`
+  emit no JD-derived insertions / `JD ALIGNMENT` even when `FEATURE_FLAG_JD_FLOW_OVERLAY` is on).
+  `domainContext` (the domain `systemPromptContext` job-topics) is built from the shared
+  domain/depth fetch, so it's nulled post-hoc rather than gated. `recallContext` (the candidate's
+  OWN previous answers) is intentionally KEPT (continuity within the subject; carries no résumé
+  once the above are gone). [JD-coverage note, JD overlay, builder-gating, company/anti-repeat
+  gating were three Codex review rounds on PR #478 — `antiRepeatBlock` mattered because at the
+  prefetched Q1 a prior viva's question texts would be the only concrete subject in the prompt.]
+- `academicsPrompt.ts`: de-seed the directive — removed the "digital marketing"/"operating systems"
+  examples; added "NEVER infer, substitute, or guess a subject from the candidate's résumé, work
+  experience, the domain, or any example — use ONLY the subject they explicitly stated"; on the
+  prefetched Q1 (subject not yet visible) "do NOT name, guess, or infer a subject — ask for a roadmap
+  of their strongest subject (let them state it)."
+- **Base framing + escalation (the full sweep — not just the suppressible blocks).** A second pass
+  audited EVERY component feeding the prompt, not only the résumé/JD blocks. Four more injected
+  *workplace-behavioural* content into a viva and are now academics-aware: (a) `basePrompt` framed it
+  as "an interview **for a {domain} role**" → now "an **academic subject viva in the {domain} subject
+  area** (a student)" with academics `roleLabels`/`typeLabels`/`typeInstructions`; (b) `difficultyBlock`
+  ("strong" escalated to "ethical dilemmas, cross-functional conflicts") → `academicDifficultyGuidance`
+  that escalates WITHIN the subject (derivations, edge cases, comparisons); (c) `pressureInstructions`
+  (elevated/high → "cross-functional conflict, defend a trade-off") → `academicPressureInstructions`
+  (justify a definition, prove a result, subtle aspects — on-subject); (d) the **curveball**
+  (workplace hypotheticals like "unlimited budget, 2 weeks" after Q3) is disabled for academics.
+  Lesson: the drift had MANY scattered sources; gating the obvious blocks left the base framing +
+  difficulty/pressure/curveball escalators leaking. The audit (not Codex one-at-a-time) found them.
+- **`flow/promptBuilder.ts` deep-dive guidance (found by an adversarial verification pass, not Codex).**
+  The academics flow template (`academics.ts`) authored viva-toned deep-dive slots (`VIVA_DEEP_DIVE_*`)
+  but deliberately reused the ids `adaptive-deep-dive-1/2` to keep coverage wiring unchanged.
+  `buildFlowPromptContext` rewrites any `phase==='deep-dive' && id.startsWith('adaptive-deep-dive')`
+  slot via `buildAdaptiveDeepDiveGuidance`, which emits SHARED behavioural strings ("force a
+  trade-off, present a constraint", "what would you do differently?", "best example in a domain where
+  they showed comfort") — defeating the authored viva guidance and injecting job framing into the
+  viva's deep-dive slot. Fixed by gating that rewrite on `flow.depth !== 'academics'` (the resolved
+  flow carries `depth`), so academics deep-dives use their authored guidance. Regression tests in
+  `flowEngine.test.ts` (academics keeps viva guidance; non-academics still gets the rewrite).
+
+**Why prompt-only (no Q1-prefetch-timing change).** Removing the résumé + the directive's example
+removes everything Q1 could grab; with no subject in context it now asks a subject-agnostic roadmap
+(the intended warm-up) instead of fabricating one. Re-sequencing the prefetch (useInterview.ts) was
+unnecessary and would add Q1 latency on the hot path.
+
+**Deferred to follow-up PRs (from the same audit).** (4) scoring still penalises the candidate for
+system-caused turns — no off-base-question guard in `evaluate-answer`/`perQAggregation`; (6) the probe
+path (`turn-router` on Haiku + `evaluate-answer`) omits the academic grounding + named subject (latent
+drift on other sessions); (8) `generate-question` `temperature` is uncontrolled (P2). STT accent
+corruption ("learning"→"leadership") was a separate factor already fixed by nova-3 + en-IN (#475/#476).
+
+**Verification.** `academicsPrompt.test.ts` adds de-seed contract tests (directive contains NO
+"digital marketing"/"operating systems"; forbids résumé inference; "only the subject they explicitly
+stated"; "never attribute a subject they did not say") and the existing anti-repeat/anchor assertions
+still pass (8 passing). `tsc` clean; full vitest 4996 passing; build green. End-to-end prod self-interview on
+the academics path pending (auth is prod-only) — to confirm: name a subject UNRELATED to your résumé
+and verify Q1 and every question stays on it.

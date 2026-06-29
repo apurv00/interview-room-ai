@@ -66,8 +66,16 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     // Prefers the Document Intelligence Layer (importance-ranked structured context)
     // when available; falls back to raw .slice() so legacy sessions and parse
     // failures still produce a valid prompt.
+    // Academics is a campus SUBJECT VIVA: grounded ONLY on the subject the candidate names +
+    // the per-domain skill file + persona. Every résumé/JD/profile/domain TOPIC source pulls the
+    // model OFF the named subject (a digital-marketing résumé made it ask "digital marketing" when
+    // the candidate said "consumer behaviour"). So GATE those builders for academics — don't build
+    // then discard: this also avoids the JD/résumé cache reads, profile read, the generateSessionBrief
+    // LLM call, and question-bank retrieval on the hot path. See INTERVIEW_FLOW.md §8 (2026-06-29).
+    const isAcademics = interviewType === 'academics'
+
     let contextBlock = ''
-    if (config.jobDescription) {
+    if (config.jobDescription && !isAcademics) {
       const jdCtx = sessionId ? await getOrLoadJDContext(sessionId, config.jobDescription) : null
       contextBlock += jdCtx
         ? `\n\n<job_description_analysis>\n${jdCtx}\n</job_description_analysis>\nPRIORITY: The job description above defines the requirements this interview MUST assess. At least 60% of your questions should directly probe must-have requirements from the JD. Ask about specific skills, experiences, and qualifications listed in the JD. Use the resume to find evidence for or against JD requirements — not as the primary source of question topics.`
@@ -75,7 +83,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     }
     // Track employer names from structured resume for employer-rotation prompt (Issue #5)
     let employerNames: string[] = []
-    if (config.resumeText) {
+    if (config.resumeText && !isAcademics) {
       const resumeCtx = sessionId ? await getOrLoadResumeContext(sessionId, config.resumeText, config.role) : null
       contextBlock += resumeCtx
         ? `\n\n<candidate_resume_analysis>\n${resumeCtx}\n</candidate_resume_analysis>\nProbe the highlighted experiences. Ask for concrete details and metrics.`
@@ -95,7 +103,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
         }
       }
     }
-    if (config.jobDescription && config.resumeText) {
+    if (config.jobDescription && config.resumeText && !isAcademics) {
       contextBlock += `\n\nCROSS-REFERENCE STRATEGY: Map the candidate's resume experiences to JD requirements. Prioritize probing gaps — areas where the JD requires something the resume doesn't clearly demonstrate. When the resume DOES match a JD requirement, ask for specific evidence, metrics, and depth. Your questions should systematically cover JD requirements, using the resume as a lens to assess fit.`
     }
 
@@ -254,6 +262,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
           isFeatureEnabled('jd_flow_overlay')
           && sessionId
           && sessionCfg?.parsedJD
+          && !isAcademics  // academics is a subject viva — never overlay JD requirements onto the flow
         ) {
           try {
             const template = TEMPLATE_REGISTRY.get(
@@ -307,8 +316,10 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     }
 
     // Build company/industry context block
+    // Academics is a subject viva — company/industry themes (Leadership Principles,
+    // "Googleyness", industry scenarios) would steer it off the named subject, so gate both.
     let companyBlock = ''
-    if (config.targetCompany) {
+    if (config.targetCompany && !isAcademics) {
       const companyProfile = findCompanyProfile(config.targetCompany)
       if (companyProfile) {
         companyBlock += buildCompanyPromptContext(companyProfile)
@@ -317,13 +328,13 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
         companyBlock += ` Adapt question style, difficulty calibration, and cultural expectations to match this company's known interview approach and values.`
       }
     }
-    if (config.targetIndustry) {
+    if (config.targetIndustry && !isAcademics) {
       companyBlock += `\nThe role is in the ${config.targetIndustry} industry. Use industry-relevant scenarios, terminology, and domain examples.`
     }
 
     // Build profile context from onboarding data + extended profile
     let profileBlock = ''
-    try {
+    if (!isAcademics) try {
       // PR C Phase 1: skip connectDB when the session cache populated the
       // user profile — User.findById below is the only Mongo read in this
       // block, and it short-circuits on cache hit.
@@ -407,7 +418,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     let personalizationBlock = ''
     let ragBlock = ''
     let antiRepeatBlock = ''
-    if (isFeatureEnabled('personalization_engine') && questionIndex <= 1) {
+    if (isFeatureEnabled('personalization_engine') && questionIndex <= 1 && !isAcademics) {
       try {
         const brief = await generateSessionBrief({
           userId: user.id,
@@ -422,7 +433,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     }
 
     // RAG: question bank context for inspiration
-    if (isFeatureEnabled('question_bank_rag') && questionIndex <= 1) {
+    if (isFeatureEnabled('question_bank_rag') && questionIndex <= 1 && !isAcademics) {
       try {
         ragBlock = await getQuestionBankContext({
           domain: config.role,
@@ -437,7 +448,10 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     // completed interviews of the SAME role × type, so a repeated "same domain ×
     // type" interview produces fresh scenarios instead of reusing them. Gated to
     // the first (scenario-setting) questions; degrades silently on any DB issue.
-    if (questionIndex <= 1) {
+    // Skipped for academics: at Q1 the spoken subject isn't in context yet, so prior sessions'
+    // question texts (possibly a DIFFERENT subject) would be the only concrete subject examples
+    // in the prompt — reintroducing the off-subject drift this change removes.
+    if (questionIndex <= 1 && !isAcademics) {
       try {
         await connectDB()
         const prior = await InterviewSession.find({
@@ -462,12 +476,14 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
       behavioral: 'behavioral deep-dive interview',
       technical: 'technical interview',
       'case-study': 'case study session',
+      academics: 'academic subject viva',
     }
     const roleLabels: Record<string, string> = {
       screening: 'senior recruiter',
       behavioral: 'senior hiring manager focused on behavioral assessment',
       technical: 'technical interview lead',
       'case-study': 'strategy and case assessment lead',
+      academics: 'an academic subject examiner',
     }
     // Type-specific format instructions ensure fundamentally different question styles
     const typeInstructions: Record<string, string> = {
@@ -475,8 +491,14 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
       behavioral: 'Ask exclusively about PAST experiences using behavioral prompts ("Tell me about a time when...", "Describe a situation where..."). Every question must probe a real event the candidate lived through. Never ask hypothetical scenarios.',
       technical: 'Ask domain-specific technical questions that test depth of knowledge, problem-solving approach, and system thinking. Include trade-off analysis.',
       'case-study': `Present a realistic forward-looking SCENARIO for the candidate to solve, seated in THEIR OWN role. Frame it as: "Imagine you are a ${domainLabel} and [a realistic situation a ${domainLabel} would face]. How would you approach it?" — ground the scenario's specifics and industry in the candidate's résumé, the job description, and the DOMAIN CONTEXT above. Do NOT seat the candidate as a Product Manager or "the PM for a media app" unless the role itself IS product management. Vary the company/industry context across questions; do not default to a media/streaming app. Guide them through framework → analysis → recommendation. Never ask about past experiences — every question must be a forward-looking scenario.`,
+      academics: `Conduct an oral examination of the candidate's STRONGEST academic subject (which they name in their first answer). Ask focused, well-formed questions on THAT subject's fundamentals, theory, and applications — one concept at a time. This is a campus subject viva, NOT a job interview: do not ask about workplace scenarios, employers, or job responsibilities.`,
     }
-    const basePrompt = `You are Alex Chen, a ${roleLabels[interviewType] || 'senior interviewer'}. You are conducting a ${config.duration}-minute ${typeLabels[interviewType] || interviewType + ' interview'} for a ${domainLabel} role (${config.experience} years experience).
+    // Academics is a campus subject VIVA, not a job-role interview — frame the audience as a
+    // student in a subject area, not a candidate "for a {domain} role" (which nudges job framing).
+    const audienceFraming = isAcademics
+      ? `in the ${domainLabel} subject area (a student, ${config.experience} years of study)`
+      : `for a ${domainLabel} role (${config.experience} years experience)`
+    const basePrompt = `You are Alex Chen, a ${roleLabels[interviewType] || 'senior interviewer'}. You are conducting a ${config.duration}-minute ${typeLabels[interviewType] || interviewType + ' interview'} ${audienceFraming}.
 
 QUESTION FORMAT: ${typeInstructions[interviewType] || 'Ask one focused question at a time.'}`
 
@@ -499,10 +521,16 @@ Do NOT use generic transitions like "Great, next question..." or "Moving on...".
       ).join('\n')
       // Detect topic diversity — nudge the interviewer to explore uncovered areas
       const topicCount = completedThreads.length
-      const diversityNote = topicCount >= 3
+      // Skipped for academics: this nudges a switch to a different COMPETENCY area (failure
+      // handling, data-driven decisions, innovation) — behavioural/job steering that drifts a
+      // subject viva off the named subject after Q3. Subject breadth is the directive's job.
+      const diversityNote = topicCount >= 3 && !isAcademics
         ? `\nIMPORTANT: You have already covered ${topicCount} topics. Ensure your next question explores a DIFFERENT competency area (e.g., if past questions focused on leadership and stakeholder management, now ask about technical depth, failure handling, data-driven decisions, or innovation). Variety across competencies is critical for a thorough assessment.`
         : ''
-      const jdCoverageNote = config.jobDescription
+      // Academics is a subject viva — never steer it toward a JD (the JD text itself is
+      // already suppressed below; this drops the dynamic "target an uncovered JD requirement"
+      // instruction so it can't point at an absent JD plan). See INTERVIEW_FLOW.md §8 (2026-06-29).
+      const jdCoverageNote = config.jobDescription && !isAcademics
         ? `\n\nJD COVERAGE CHECK: Review the JD requirements above. Identify which requirements have NOT yet been assessed by the topics already covered. Your next question MUST target an uncovered JD requirement.`
         : ''
       threadContext = `\n\nTOPICS ALREADY COVERED:\n${summaries}\n\nDo NOT repeat these topics.${diversityNote}${jdCoverageNote} You MAY occasionally reference a pattern across topics when a genuine link exists. Use cross-references sparingly.`
@@ -510,7 +538,9 @@ Do NOT use generic transitions like "Great, next question..." or "Moving on...".
       // Employer rotation — prevent fixating on a single company (Issue #5).
       // When we have structured employer names, instruct the AI to distribute
       // questions across the candidate's work history.
-      if (employerNames.length > 1) {
+      // Skipped for academics: a subject viva is grounded on the named subject, not the
+      // candidate's employers (résumé-derived steering — same class as the JD note above).
+      if (employerNames.length > 1 && !isAcademics) {
         // Best-effort: check which companies appear in already-covered topics
         const coveredCompanies = completedThreads
           .map(t => {
@@ -558,7 +588,15 @@ Do this only when a genuine link exists (roughly 1 in 3 questions). Do NOT force
       on_track: '\nCANDIDATE PERFORMANCE: The candidate is performing at expected level. Maintain current difficulty.',
       strong: '\nCANDIDATE PERFORMANCE: The candidate is performing well. Increase difficulty: ask about edge cases, ethical dilemmas, cross-functional conflicts, or "what would you do differently" scenarios. Challenge their thinking.',
     }
-    const difficultyBlock = difficultyGuidance[performanceSignal || 'calibrating'] || ''
+    // Academics escalates WITHIN the named subject (derivations, edge cases of the theory,
+    // comparisons, applications) — never workplace/cross-functional scenarios (a viva, not a job).
+    const academicDifficultyGuidance: Record<string, string> = {
+      calibrating: '',
+      struggling: '\nCANDIDATE PERFORMANCE: The candidate is finding this challenging. Break the concept into smaller steps and ask a more foundational question WITHIN their named subject — keep quality expectations, just make it more approachable.',
+      on_track: '\nCANDIDATE PERFORMANCE: The candidate is performing at expected level. Maintain difficulty; keep probing their named subject.',
+      strong: '\nCANDIDATE PERFORMANCE: The candidate is performing well. Go deeper WITHIN their named subject: ask for a derivation/proof, an edge case of the theory, a comparison between sub-topics, or a concrete application. Stay on the subject — do NOT switch to workplace, cross-functional, or job scenarios.',
+    }
+    const difficultyBlock = (isAcademics ? academicDifficultyGuidance : difficultyGuidance)[performanceSignal || 'calibrating'] || ''
 
     // Interviewer persona from skill file
     let personaBlock = ''
@@ -577,6 +615,25 @@ Do this only when a genuine link exists (roughly 1 in 3 questions). Do NOT force
     // Placed before depthStrategy so it frames the skill content + the style examples.
     const academicGrounding = academicGroundingDirective(interviewType)
 
+    // Academics suppression MANIFEST — the single auditable list of what a subject viva drops.
+    // A viva is grounded ONLY on the directive + skill file (depthStrategy) + persona (+ the
+    // candidate's OWN prior answers via recallContext, kept for continuity). The EXPENSIVE
+    // builders for these blocks (JD/résumé cache reads, profile read, generateSessionBrief LLM,
+    // question-bank + cross-session DB lookups, JD overlay) are ALREADY gated on !isAcademics at
+    // their source above, so no work is wasted; nulling here is a defensive no-op for those (the
+    // actual clear is domainContext, built from the shared domain/depth fetch we keep for
+    // depthStrategy). Belt-and-suspenders: if a future edit drops a source gate, the viva stays
+    // grounded. diversityNote / jdCoverageNote / EMPLOYER DIVERSITY are gated at their source.
+    if (isAcademics) {
+      contextBlock = ''          // JD analysis + <candidate_resume_analysis>
+      profileBlock = ''          // top skills / weak areas / target companies
+      personalizationBlock = ''  // generateSessionBrief (résumé/JD-derived)
+      ragBlock = ''              // question-bank retrieval
+      companyBlock = ''          // targetCompany/targetIndustry themes
+      antiRepeatBlock = ''       // cross-session prior-question texts
+      domainContext = ''         // domain systemPromptContext job-topics (e.g. SEO/CTR/CPC)
+    }
+
     const staticSystemPrompt = `${basePrompt}
 
 Your interview style is warm but professional. You ask ONE focused question at a time. Questions should feel conversational and natural — not robotic or overly formal.${academicGrounding}${depthStrategy || defaultStrategy}${domainContext}${personaBlock}${companyBlock}${contextBlock}${profileBlock}${personalizationBlock}${ragBlock}${antiRepeatBlock}
@@ -591,7 +648,9 @@ ${DATA_BOUNDARY_RULE}`
     // Falls back to config-based seed when sessionId is unavailable (client doesn't always pass it).
     const seedSource = body.sessionId || `${config.role}:${config.duration}:${config.experience}:${user.id}`
     const sessionSeed = seedSource.split('').reduce((a, c) => a + c.charCodeAt(0), 0)
-    const curveballEligible = questionIndex >= 3 && !isLastQuestion && pressureLevel === 'normal'
+    // No curveball for academics — its examples are workplace hypotheticals ("unlimited budget,
+    // 2 weeks") that pull a subject viva off the named subject.
+    const curveballEligible = questionIndex >= 3 && !isLastQuestion && pressureLevel === 'normal' && !isAcademics
     const curveballSlot = (sessionSeed % 7) + 3 // deterministic slot between Q3-Q9
     const isCurveball = curveballEligible && questionIndex === curveballSlot
 
@@ -601,9 +660,15 @@ ${DATA_BOUNDARY_RULE}`
       elevated: '⚠️ PRESSURE LEVEL: ELEVATED. The candidate is performing well. Ask a skeptical or devil\'s advocate question that tests their reasoning under pressure. Challenge an assumption from their previous answer, or present a "what if" scenario that complicates their approach. Stay professional but push them.',
       high: '⚠️ PRESSURE LEVEL: HIGH. The candidate is excelling. Ask a direct challenge: an ethical dilemma, a cross-functional conflict scenario, a "convince me you\'re wrong" question, or a question that forces them to defend a difficult trade-off. Be respectful but don\'t go easy.',
     }
+    // Academics pressure stays WITHIN the named subject — rigour, not workplace conflict.
+    const academicPressureInstructions: Record<string, string> = {
+      normal: '',
+      elevated: '⚠️ PRESSURE LEVEL: ELEVATED. The candidate is performing well. Probe deeper within their named subject: ask them to justify a definition, derive a result, or compare two concepts in the subject. Stay on-subject — no workplace scenarios.',
+      high: '⚠️ PRESSURE LEVEL: HIGH. The candidate is excelling. Challenge them to defend a claim about the subject with rigour, prove a result, or explain a subtle/counter-intuitive aspect of it. Stay strictly within their named subject.',
+    }
 
     const userPrompt = `Generate question ${questionIndex + 1} of ${totalQuestions}.
-${pressureInstructions[pressureLevel]}
+${(isAcademics ? academicPressureInstructions : pressureInstructions)[pressureLevel]}
 ${isCurveball ? '🎯 CURVEBALL: Ask an unexpected question that tests composure and adaptability. Examples: a left-field hypothetical ("If you had unlimited budget but only 2 weeks..."), a deliberately ambiguous scenario, or a question that forces creative thinking outside the candidate\'s comfort zone. Keep it relevant to the domain but surprising in angle.' : ''}
 ${isLastQuestion ? 'This is the FINAL substantive question before wrap-up — make it memorable and forward-looking.' : ''}
 

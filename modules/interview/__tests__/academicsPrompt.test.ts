@@ -42,5 +42,22 @@ describe('academicGroundingDirective', () => {
       expect(directive).toMatch(/anchor the entire round to it/i)
       expect(directive).toMatch(/NEVER switch to a different syllabus subject/i)
     })
+
+    // Résumé-drift fix (2026-06-29): the directive previously hard-coded "digital marketing"
+    // as its worked example, which a 300-token model COPIED as the subject on the prefetched
+    // Q1 (when the real subject isn't in context yet) — producing "You mentioned digital
+    // marketing" for a candidate who named consumer behaviour. The directive must seed NO
+    // concrete example subject, and must forbid inferring the subject from the résumé.
+    it('does NOT seed any concrete example subject (de-seeded)', () => {
+      expect(directive.toLowerCase()).not.toContain('digital marketing')
+      expect(directive.toLowerCase()).not.toContain('operating systems')
+    })
+
+    it('forbids inferring/substituting the subject from the résumé, background, or an example', () => {
+      expect(directive).toMatch(/never infer, substitute, or guess a subject/i)
+      expect(directive).toMatch(/r[ée]sum[ée]/i)
+      expect(directive).toMatch(/only the subject they explicitly stated/i)
+      expect(directive).toMatch(/never attribute a subject to the candidate that they did not say/i)
+    })
   })
 })
