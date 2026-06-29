@@ -35,9 +35,19 @@ export function buildFlowPromptContext(params: {
   const remainingQuestionBudget = flow.totalSlots - coveredCount - 1
   const coveragePressure = remainingMustSlots > 0 && remainingMustSlots >= remainingQuestionBudget
 
-  // Build the adaptive deep-dive guidance if current slot is deep-dive phase
+  // Build the adaptive deep-dive guidance if current slot is deep-dive phase.
+  // Academics is a subject VIVA: its deep-dive slots reuse the 'adaptive-deep-dive-*' ids but carry
+  // authored viva guidance (VIVA_DEEP_DIVE_*). buildAdaptiveDeepDiveGuidance emits SHARED behavioural
+  // strings ("force a trade-off, present a constraint", "what would you do differently?", "best
+  // example in a domain where they showed comfort") — job/competency framing that would drift a
+  // subject viva off the named subject. So for academics, keep the slot's authored guidance as-is.
+  // See INTERVIEW_FLOW.md §8 (2026-06-29 academics résumé-drift sweep).
   let resolvedGuidance = currentSlot.guidance
-  if (currentSlot.phase === 'deep-dive' && currentSlot.id.startsWith('adaptive-deep-dive')) {
+  if (
+    currentSlot.phase === 'deep-dive'
+    && currentSlot.id.startsWith('adaptive-deep-dive')
+    && flow.depth !== 'academics'
+  ) {
     resolvedGuidance = buildAdaptiveDeepDiveGuidance(
       currentSlot,
       completedThreads,

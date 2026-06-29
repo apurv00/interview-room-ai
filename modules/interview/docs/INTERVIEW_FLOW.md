@@ -1622,6 +1622,16 @@ questions count against them).
   (workplace hypotheticals like "unlimited budget, 2 weeks" after Q3) is disabled for academics.
   Lesson: the drift had MANY scattered sources; gating the obvious blocks left the base framing +
   difficulty/pressure/curveball escalators leaking. The audit (not Codex one-at-a-time) found them.
+- **`flow/promptBuilder.ts` deep-dive guidance (found by an adversarial verification pass, not Codex).**
+  The academics flow template (`academics.ts`) authored viva-toned deep-dive slots (`VIVA_DEEP_DIVE_*`)
+  but deliberately reused the ids `adaptive-deep-dive-1/2` to keep coverage wiring unchanged.
+  `buildFlowPromptContext` rewrites any `phase==='deep-dive' && id.startsWith('adaptive-deep-dive')`
+  slot via `buildAdaptiveDeepDiveGuidance`, which emits SHARED behavioural strings ("force a
+  trade-off, present a constraint", "what would you do differently?", "best example in a domain where
+  they showed comfort") — defeating the authored viva guidance and injecting job framing into the
+  viva's deep-dive slot. Fixed by gating that rewrite on `flow.depth !== 'academics'` (the resolved
+  flow carries `depth`), so academics deep-dives use their authored guidance. Regression tests in
+  `flowEngine.test.ts` (academics keeps viva guidance; non-academics still gets the rewrite).
 
 **Why prompt-only (no Q1-prefetch-timing change).** Removing the résumé + the directive's example
 removes everything Q1 could grab; with no subject in context it now asks a subject-agnostic roadmap

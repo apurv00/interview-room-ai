@@ -222,6 +222,51 @@ describe('buildFlowPromptContext', () => {
     // May or may not show pressure — depends on remaining must-slots
     expect(ctx.promptBlock).toContain('INTERVIEW FLOW PLAN')
   })
+
+  // Academics is a subject VIVA: its deep-dive slots reuse the 'adaptive-deep-dive-*' ids but carry
+  // authored viva guidance. buildAdaptiveDeepDiveGuidance must NOT rewrite them with the shared
+  // behavioural framing ("force a trade-off", "what would you do differently", "best example in a
+  // domain") — that would drift the viva off the named subject. (PR #478 adversarial-verify catch.)
+  it('academics deep-dive keeps authored viva guidance (no behavioural rewrite)', () => {
+    const flow = resolveFlow({
+      domain: 'backend', depth: 'academics', experience: '0-2', duration: 20,
+    })!
+    expect(flow.depth).toBe('academics')
+    const ddIdx = flow.slots.findIndex(
+      s => s.phase === 'deep-dive' && s.id.startsWith('adaptive-deep-dive'),
+    )
+    expect(ddIdx).toBeGreaterThanOrEqual(0)
+    const ctx = buildFlowPromptContext({
+      flow,
+      currentSlotIndex: ddIdx,
+      // a weak thread + 'strong' signal — exactly the inputs that trigger the shared rewrite
+      completedThreads: [makeThread('subject fundamentals', 55)],
+      performanceSignal: 'strong',
+    })
+    expect(ctx.promptBlock).not.toMatch(/force a trade-off/i)
+    expect(ctx.promptBlock).not.toMatch(/what would you do differently/i)
+    expect(ctx.promptBlock).not.toMatch(/best example in a domain/i)
+    // It uses the slot's own authored (viva) guidance instead
+    expect(ctx.promptBlock).toContain(flow.slots[ddIdx].guidance)
+  })
+
+  it('non-academics deep-dive still applies the adaptive behavioural rewrite (regression guard)', () => {
+    const flow = resolveFlow({
+      domain: 'backend', depth: 'behavioral', experience: '0-2', duration: 20,
+    })!
+    const ddIdx = flow.slots.findIndex(
+      s => s.phase === 'deep-dive' && s.id.startsWith('adaptive-deep-dive'),
+    )
+    expect(ddIdx).toBeGreaterThanOrEqual(0)
+    const ctx = buildFlowPromptContext({
+      flow,
+      currentSlotIndex: ddIdx,
+      completedThreads: [makeThread('a weak area', 55)],
+      performanceSignal: 'strong',
+    })
+    // The adaptive rewrite still fires for non-academics depths
+    expect(ctx.promptBlock).toMatch(/what would you do differently|force a trade-off|deep-dive/i)
+  })
 })
 
 // ─── shouldProbeOrAdvanceWithFlow ───────────────────────────────────────────
