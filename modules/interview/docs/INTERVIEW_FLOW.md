@@ -1587,19 +1587,21 @@ Side damage: the drift also tanked his score — A1 ("I didn't mention digital m
 
 **Fix (prompt-only, two files).**
 - `app/api/generate-question/route.ts`: a subject viva is grounded ONLY on the directive + the
-  per-domain skill file + persona. For academics, **gate the résumé/JD/profile/RAG builders**
+  per-domain skill file + persona. For academics, **gate every résumé/JD/company-derived builder**
   (`contextBlock` JD + `<candidate_resume_analysis>`, `profileBlock`, `personalizationBlock` =
-  `generateSessionBrief`, `ragBlock` = question-bank retrieval) on `!isAcademics` so the work is
+  `generateSessionBrief`, `ragBlock` = question-bank retrieval, `companyBlock` = targetCompany/
+  targetIndustry themes, and the cross-session `antiRepeatBlock`) on `!isAcademics` so the work is
   never done (no JD/résumé cache reads, no profile read, no session-brief LLM call, no bank
-  retrieval on the hot path — not built-then-discarded). Also suppress the **dynamic** steering:
-  `threadContext`'s `JD COVERAGE CHECK` note and the `EMPLOYER DIVERSITY` note, and the
-  **JD flow overlay** (`jdOverlay` stays null so `resolveFlow`/`buildFlowPromptContext` emit no
-  JD-derived insertions / `JD ALIGNMENT` even when `FEATURE_FLAG_JD_FLOW_OVERLAY` is on).
+  retrieval, no prior-session lookup on the hot path — not built-then-discarded). Also suppress the
+  **dynamic** steering: `threadContext`'s `JD COVERAGE CHECK` note and the `EMPLOYER DIVERSITY`
+  note, and the **JD flow overlay** (`jdOverlay` stays null so `resolveFlow`/`buildFlowPromptContext`
+  emit no JD-derived insertions / `JD ALIGNMENT` even when `FEATURE_FLAG_JD_FLOW_OVERLAY` is on).
   `domainContext` (the domain `systemPromptContext` job-topics) is built from the shared
   domain/depth fetch, so it's nulled post-hoc rather than gated. `recallContext` (the candidate's
   OWN previous answers) is intentionally KEPT (continuity within the subject; carries no résumé
-  once the above are gone). [The first three bullets + JD overlay + builder-gating were Codex
-  review rounds on PR #478.]
+  once the above are gone). [JD-coverage note, JD overlay, builder-gating, company/anti-repeat
+  gating were three Codex review rounds on PR #478 — `antiRepeatBlock` mattered because at the
+  prefetched Q1 a prior viva's question texts would be the only concrete subject in the prompt.]
 - `academicsPrompt.ts`: de-seed the directive — removed the "digital marketing"/"operating systems"
   examples; added "NEVER infer, substitute, or guess a subject from the candidate's résumé, work
   experience, the domain, or any example — use ONLY the subject they explicitly stated"; on the

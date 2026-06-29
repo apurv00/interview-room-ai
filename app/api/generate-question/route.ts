@@ -316,8 +316,10 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     }
 
     // Build company/industry context block
+    // Academics is a subject viva — company/industry themes (Leadership Principles,
+    // "Googleyness", industry scenarios) would steer it off the named subject, so gate both.
     let companyBlock = ''
-    if (config.targetCompany) {
+    if (config.targetCompany && !isAcademics) {
       const companyProfile = findCompanyProfile(config.targetCompany)
       if (companyProfile) {
         companyBlock += buildCompanyPromptContext(companyProfile)
@@ -326,7 +328,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
         companyBlock += ` Adapt question style, difficulty calibration, and cultural expectations to match this company's known interview approach and values.`
       }
     }
-    if (config.targetIndustry) {
+    if (config.targetIndustry && !isAcademics) {
       companyBlock += `\nThe role is in the ${config.targetIndustry} industry. Use industry-relevant scenarios, terminology, and domain examples.`
     }
 
@@ -446,7 +448,10 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     // completed interviews of the SAME role × type, so a repeated "same domain ×
     // type" interview produces fresh scenarios instead of reusing them. Gated to
     // the first (scenario-setting) questions; degrades silently on any DB issue.
-    if (questionIndex <= 1) {
+    // Skipped for academics: at Q1 the spoken subject isn't in context yet, so prior sessions'
+    // question texts (possibly a DIFFERENT subject) would be the only concrete subject examples
+    // in the prompt — reintroducing the off-subject drift this change removes.
+    if (questionIndex <= 1 && !isAcademics) {
       try {
         await connectDB()
         const prior = await InterviewSession.find({
@@ -591,8 +596,9 @@ Do this only when a genuine link exists (roughly 1 in 3 questions). Do NOT force
     // Placed before depthStrategy so it frames the skill content + the style examples.
     const academicGrounding = academicGroundingDirective(interviewType)
 
-    // The résumé/JD/profile/RAG/JD-overlay builders are already gated on !isAcademics above, so
-    // academics pays none of that DB/Redis/LLM cost. domainContext is the one exception: it's
+    // The résumé/JD/profile/RAG/JD-overlay/company/anti-repeat builders are already gated on
+    // !isAcademics above, so academics pays none of that DB/Redis/LLM cost. domainContext is the
+    // one exception: it's
     // built from the shared domain/depth fetch (which we keep for depthStrategy + domainLabel), so
     // it's cheap to null here rather than thread the gate through three assignment sites. The
     // domain systemPromptContext lists job-skill topics (e.g. SEO/CTR/CPC) that would still steer
