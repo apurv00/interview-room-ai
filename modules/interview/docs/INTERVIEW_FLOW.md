@@ -1689,3 +1689,15 @@ weak-but-real 34/8/12/18; failed≠non-answer), `countTrailingNonAnswers` (strea
 `shouldProbeOrAdvance` advances-on-non-answer. `tsc` clean; full vitest green; build green. The
 disengagement `break` is in the `while (qIdx < maxQ)` body (probe loop closed) → reaches
 `runWrapUpSequence()`. End-to-end prod confirmation pending (auth is prod-only).
+
+**Review follow-ups (PR #479).** (1) `evaluationsRef` is appended in eval-COMPLETION order, not
+answer order (the main answer's eval is backgrounded), so `countTrailingNonAnswers` now sorts by
+`questionIndex` (monotonic across main questions AND probes) before counting — a late-landing main
+eval can no longer scramble the streak. (2) On the disengagement `break`, `disengagedRef` is set so
+the close skips the optional "you mentioned earlier…" deferred-topic surfacing (a disengaged
+candidate gets a clean wrap). (3) The duplicate flow-aware `shouldProbeOrAdvanceWithFlow`
+(coveragePressure.ts — tested, not yet wired into production) got the same `isNonAnswer` guard so it
+can't drift if useInterview later switches to it. Known/accepted: the FIRST probe after a main
+answer is still driven by the turn-router (for low latency), so a main answer that is itself a
+non-answer gets ONE clarifying probe before the bound advances — re-probing once is reasonable, and
+gating probe #1 on the (backgrounded) full eval would regress probe-start latency on the hot path.

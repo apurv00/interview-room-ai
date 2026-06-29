@@ -361,6 +361,9 @@ export function useInterview({
   const mainQuestionNumberRef = useRef(0)
   const transcriptRef = useRef<TranscriptEntry[]>([])
   const evaluationsRef = useRef<AnswerEvaluation[]>([])
+  // Set when the topic loop breaks early on candidate disengagement (>=3 trailing non-answers),
+  // so the close skips the optional "you mentioned earlier…" deferred-topic surfacing.
+  const disengagedRef = useRef(false)
   const pendingEvaluationsRef = useRef<Set<Promise<void>>>(new Set())
   const latencyTelemetryRef = useRef<InterviewLatencyTelemetry>({})
   /**
@@ -1647,6 +1650,7 @@ export function useInterview({
       if (!config) return
       const maxQ = getQuestionCount(config.duration)
       let qIdx = startingQIndex
+      disengagedRef.current = false
 
       try {
       while (qIdx < maxQ) {
@@ -2165,6 +2169,7 @@ export function useInterview({
         // interview of any type never reaches — so it is inert for normal candidates.
         const DISENGAGE_WRAP_AFTER_NON_ANSWERS = 3
         if (countTrailingNonAnswers(evaluationsRef.current) >= DISENGAGE_WRAP_AFTER_NON_ANSWERS) {
+          disengagedRef.current = true
           break
         }
 
@@ -2219,7 +2224,8 @@ export function useInterview({
       const shouldSurfaceDeferredDuringWrapUp =
         deferredTopicsRef.current.length > 0 &&
         timeRemainingRef.current > 180 &&
-        qIdx < maxQ
+        qIdx < maxQ &&
+        !disengagedRef.current // a disengaged candidate gets a clean wrap, no extra deferred topics
 
       if (shouldSurfaceDeferredDuringWrapUp) {
         checkAbort()

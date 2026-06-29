@@ -157,19 +157,26 @@ describe('isNonAnswer', () => {
 // ─── countTrailingNonAnswers ─────────────────────────────────────────────────
 
 describe('countTrailingNonAnswers', () => {
-  const nonAns = () => makeEval({ relevance: 5, structure: 0, specificity: 0, ownership: 0 })
-  const good = () => makeEval()
+  const nonAns = (qi: number) => ({ ...makeEval({ relevance: 5, structure: 0, specificity: 0, ownership: 0 }), questionIndex: qi })
+  const good = (qi: number) => ({ ...makeEval(), questionIndex: qi })
 
-  it('counts consecutive non-answers from the end', () => {
-    expect(countTrailingNonAnswers([good(), nonAns(), nonAns(), nonAns()])).toBe(3)
+  it('counts consecutive non-answers from the most recent', () => {
+    expect(countTrailingNonAnswers([good(0), nonAns(1), nonAns(2), nonAns(3)])).toBe(3)
   })
 
-  it('resets when a real answer interrupts the streak', () => {
-    expect(countTrailingNonAnswers([nonAns(), nonAns(), good(), nonAns()])).toBe(1)
+  it('resets when a more recent real answer interrupts the streak', () => {
+    expect(countTrailingNonAnswers([nonAns(0), nonAns(1), good(2), nonAns(3)])).toBe(1)
   })
 
-  it('is 0 when the last answer is real', () => {
-    expect(countTrailingNonAnswers([nonAns(), nonAns(), good()])).toBe(0)
+  it('is 0 when the most recent answer is real', () => {
+    expect(countTrailingNonAnswers([nonAns(0), nonAns(1), good(2)])).toBe(0)
+  })
+
+  it('sorts by questionIndex so completion-order scramble cannot mislead the streak', () => {
+    // The most recent answer (qi=3) is GOOD but was appended BEFORE the earlier probe
+    // non-answers (qi=1,2) — exactly the bg-eval-lands-late race. Sorted, trailing is 0;
+    // a naive end-of-array count would wrongly report 2.
+    expect(countTrailingNonAnswers([good(3), nonAns(1), nonAns(2)])).toBe(0)
   })
 })
 

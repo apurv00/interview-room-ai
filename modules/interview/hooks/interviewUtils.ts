@@ -64,11 +64,17 @@ export function isNonAnswer(evaluation: AnswerEvaluation): boolean {
  * How many of the MOST RECENT evaluations were non-answers, counted consecutively from the end.
  * Used to wrap up gracefully when a candidate has disengaged (several non-answers in a row)
  * rather than dragging them through every remaining planned question.
+ *
+ * NOTE: evaluations are appended in EVAL-COMPLETION order, not answer order — the main answer's
+ * eval runs in the background and can land after the synchronous probe evals. `questionIndex`
+ * increments per main question AND per probe, so we sort by it first to recover true chronological
+ * order before counting the trailing streak (otherwise a late main eval could break the streak).
  */
 export function countTrailingNonAnswers(evals: AnswerEvaluation[]): number {
+  const ordered = [...evals].sort((a, b) => (a.questionIndex ?? 0) - (b.questionIndex ?? 0))
   let n = 0
-  for (let i = evals.length - 1; i >= 0; i--) {
-    if (isNonAnswer(evals[i])) n++
+  for (let i = ordered.length - 1; i >= 0; i--) {
+    if (isNonAnswer(ordered[i])) n++
     else break
   }
   return n
