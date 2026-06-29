@@ -45,6 +45,8 @@ import {
   sanitizeProbeQuestion,
   toneToEmotion,
   createDesignSubmissionGate,
+  isNonAnswer,
+  countTrailingNonAnswers,
 } from './interviewUtils'
 import { useAvatarSpeech } from './useAvatarSpeech'
 import { EVALUATE_ANSWER_BACKGROUND_TIMEOUT_MS, useInterviewAPI } from './useInterviewAPI'
@@ -1541,6 +1543,8 @@ export function useInterview({
     if (hints) {
       const probe = evaluation.probeDecision
       if (!probe?.shouldProbe) return 'advance'
+      // A scored non-answer won't improve by re-probing — advance to a fresh topic.
+      if (isNonAnswer(evaluation)) return 'advance'
       if (timeRemainingRef.current < 60) return 'advance'
 
       // Per-slot maxProbes enforcement
@@ -2153,6 +2157,16 @@ export function useInterview({
         // ── Finalize thread, advance to next topic ──
         finalizeThread(topicQuestion)
         currentTopicIndexRef.current++
+
+        // Disengagement guard (all depths): if the candidate has given several non-answers in a
+        // row, wrap up gracefully instead of dragging them through every remaining planned
+        // question. Breaking the topic loop falls through to runWrapUpSequence() below. Fires
+        // only on genuine collapse (>= N consecutive avg<12 answers) — a condition a real
+        // interview of any type never reaches — so it is inert for normal candidates.
+        const DISENGAGE_WRAP_AFTER_NON_ANSWERS = 3
+        if (countTrailingNonAnswers(evaluationsRef.current) >= DISENGAGE_WRAP_AFTER_NON_ANSWERS) {
+          break
+        }
 
         // Avatar emotion: use the last eval in the ref (bg eval has resolved by now
         // since probe loop / TTS playback covered the 2-3s eval window).
