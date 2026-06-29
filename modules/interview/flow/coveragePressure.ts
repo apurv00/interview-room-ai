@@ -1,6 +1,7 @@
 import type { AnswerEvaluation, Duration } from '@shared/types'
 import type { ResolvedFlow } from './types'
 import { getMinimumTopics } from '@interview/config/interviewConfig'
+import { isNonAnswer } from '@interview/hooks/interviewUtils'
 
 /**
  * Flow-aware probe-or-advance decision.
@@ -25,6 +26,10 @@ export function shouldProbeOrAdvanceWithFlow(params: {
 
   // Hard constraints: never probe if evaluator says no or time is critical
   if (!probe?.shouldProbe) return 'advance'
+  // A scored non-answer won't improve by re-probing — advance instead of grinding the dead topic.
+  // (Mirrors shouldProbeOrAdvance in interviewUtils.ts; kept in sync so a future switch to this
+  // flow-aware variant doesn't silently drop the bound.)
+  if (isNonAnswer(evaluation)) return 'advance'
   if (timeRemaining < 60) return 'advance'
 
   if (flow) {

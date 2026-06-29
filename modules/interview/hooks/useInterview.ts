@@ -45,6 +45,8 @@ import {
   sanitizeProbeQuestion,
   toneToEmotion,
   createDesignSubmissionGate,
+  isNonAnswer,
+  countTrailingNonAnswers,
 } from './interviewUtils'
 import { useAvatarSpeech } from './useAvatarSpeech'
 import { EVALUATE_ANSWER_BACKGROUND_TIMEOUT_MS, useInterviewAPI } from './useInterviewAPI'
@@ -359,6 +361,9 @@ export function useInterview({
   const mainQuestionNumberRef = useRef(0)
   const transcriptRef = useRef<TranscriptEntry[]>([])
   const evaluationsRef = useRef<AnswerEvaluation[]>([])
+  // Set when the topic loop breaks early on candidate disengagement (>=3 trailing non-answers),
+  // so the close skips the optional "you mentioned earlier…" deferred-topic surfacing.
+  const disengagedRef = useRef(false)
   const pendingEvaluationsRef = useRef<Set<Promise<void>>>(new Set())
   const latencyTelemetryRef = useRef<InterviewLatencyTelemetry>({})
   /**
@@ -1541,6 +1546,8 @@ export function useInterview({
     if (hints) {
       const probe = evaluation.probeDecision
       if (!probe?.shouldProbe) return 'advance'
+      // A scored non-answer won't improve by re-probing — advance to a fresh topic.
+      if (isNonAnswer(evaluation)) return 'advance'
       if (timeRemainingRef.current < 60) return 'advance'
 
       // Per-slot maxProbes enforcement
@@ -1643,6 +1650,7 @@ export function useInterview({
       if (!config) return
       const maxQ = getQuestionCount(config.duration)
       let qIdx = startingQIndex
+      disengagedRef.current = false
 
       try {
       while (qIdx < maxQ) {
@@ -2154,6 +2162,17 @@ export function useInterview({
         finalizeThread(topicQuestion)
         currentTopicIndexRef.current++
 
+        // Disengagement guard (all depths): if the candidate has given several non-answers in a
+        // row, wrap up gracefully instead of dragging them through every remaining planned
+        // question. Breaking the topic loop falls through to runWrapUpSequence() below. Fires
+        // only on genuine collapse (>= N consecutive avg<12 answers) — a condition a real
+        // interview of any type never reaches — so it is inert for normal candidates.
+        const DISENGAGE_WRAP_AFTER_NON_ANSWERS = 3
+        if (countTrailingNonAnswers(evaluationsRef.current) >= DISENGAGE_WRAP_AFTER_NON_ANSWERS) {
+          disengagedRef.current = true
+          break
+        }
+
         // Avatar emotion: use the last eval in the ref (bg eval has resolved by now
         // since probe loop / TTS playback covered the 2-3s eval window).
         const lastEval = evaluationsRef.current[evaluationsRef.current.length - 1]
@@ -2205,7 +2224,8 @@ export function useInterview({
       const shouldSurfaceDeferredDuringWrapUp =
         deferredTopicsRef.current.length > 0 &&
         timeRemainingRef.current > 180 &&
-        qIdx < maxQ
+        qIdx < maxQ &&
+        !disengagedRef.current // a disengaged candidate gets a clean wrap, no extra deferred topics
 
       if (shouldSurfaceDeferredDuringWrapUp) {
         checkAbort()

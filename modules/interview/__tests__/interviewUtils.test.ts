@@ -8,6 +8,8 @@ import {
   toneToEmotion,
   createDesignSubmissionGate,
   buildPreviousQA,
+  isNonAnswer,
+  countTrailingNonAnswers,
 } from '../hooks/interviewUtils'
 import type { AnswerEvaluation, DesignSubmission, ThreadEntry, TranscriptEntry } from '@shared/types'
 
@@ -128,6 +130,56 @@ describe('computePerformanceSignal', () => {
   })
 })
 
+// ─── isNonAnswer ─────────────────────────────────────────────────────────────
+
+describe('isNonAnswer', () => {
+  it('flags a near-zero answer as a non-answer (e.g. "It\'s mash law" → 5/0/0/0)', () => {
+    expect(isNonAnswer(makeEval({ relevance: 5, structure: 0, specificity: 0, ownership: 0 }))).toBe(true)
+    // "the master law of hierarchical theory" → 10/5/0/0
+    expect(isNonAnswer(makeEval({ relevance: 10, structure: 5, specificity: 0, ownership: 0 }))).toBe(true)
+  })
+
+  it('does NOT flag a weak-but-real answer (the candidate listed sub-topics → avg ~18)', () => {
+    // "perception, leadership, motivation... strongest in motivation" → 34/8/12/18 (avg 18, spec 12)
+    expect(isNonAnswer(makeEval({ relevance: 34, structure: 8, specificity: 12, ownership: 18 }))).toBe(false)
+  })
+
+  it('does NOT flag a solid answer', () => {
+    expect(isNonAnswer(makeEval())).toBe(false) // defaults are 70 across the board
+  })
+
+  it('treats a failed eval (server error) as NOT a non-answer (not the candidate\'s fault)', () => {
+    const failed = { ...makeEval({ relevance: 0, structure: 0, specificity: 0, ownership: 0 }), status: 'failed' as const }
+    expect(isNonAnswer(failed)).toBe(false)
+  })
+})
+
+// ─── countTrailingNonAnswers ─────────────────────────────────────────────────
+
+describe('countTrailingNonAnswers', () => {
+  const nonAns = (qi: number) => ({ ...makeEval({ relevance: 5, structure: 0, specificity: 0, ownership: 0 }), questionIndex: qi })
+  const good = (qi: number) => ({ ...makeEval(), questionIndex: qi })
+
+  it('counts consecutive non-answers from the most recent', () => {
+    expect(countTrailingNonAnswers([good(0), nonAns(1), nonAns(2), nonAns(3)])).toBe(3)
+  })
+
+  it('resets when a more recent real answer interrupts the streak', () => {
+    expect(countTrailingNonAnswers([nonAns(0), nonAns(1), good(2), nonAns(3)])).toBe(1)
+  })
+
+  it('is 0 when the most recent answer is real', () => {
+    expect(countTrailingNonAnswers([nonAns(0), nonAns(1), good(2)])).toBe(0)
+  })
+
+  it('sorts by questionIndex so completion-order scramble cannot mislead the streak', () => {
+    // The most recent answer (qi=3) is GOOD but was appended BEFORE the earlier probe
+    // non-answers (qi=1,2) — exactly the bg-eval-lands-late race. Sorted, trailing is 0;
+    // a naive end-of-array count would wrongly report 2.
+    expect(countTrailingNonAnswers([good(3), nonAns(1), nonAns(2)])).toBe(0)
+  })
+})
+
 // ─── shouldProbeOrAdvance ───────────────────────────────────────────────────
 
 describe('shouldProbeOrAdvance', () => {
@@ -137,6 +189,13 @@ describe('shouldProbeOrAdvance', () => {
     probeType: 'clarify',
     probeQuestion: 'Can you elaborate?',
   }
+
+  it('advances on a non-answer even when the evaluator said shouldProbe (the new bound)', () => {
+    const nonAnswer = makeEval({ relevance: 5, structure: 0, specificity: 0, ownership: 0 })
+    nonAnswer.probeDecision = { shouldProbe: true, probeType: 'clarify', probeQuestion: 'Clarify?' }
+    // Plenty of time + topics so only the non-answer rule can force advance here.
+    expect(shouldProbeOrAdvance(nonAnswer, 300, 3, 10)).toBe('advance')
+  })
 
   it('returns advance when shouldProbe is false', () => {
     const eval_ = { ...probeEval, probeDecision: { shouldProbe: false } }

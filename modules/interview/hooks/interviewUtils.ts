@@ -45,6 +45,42 @@ export function computePerformanceSignal(evals: AnswerEvaluation[]): Performance
 }
 
 /**
+ * A "non-answer": the candidate gave essentially nothing usable — didn't know, deflected, or
+ * said a few empty words ("It's mash law", "Second question, Again, question"). Scored near-zero
+ * across every dimension. Re-probing a non-answer almost never helps, so the orchestrator
+ * ADVANCES to a fresh topic instead of grinding the dead one (and wraps up if non-answers
+ * persist — see countTrailingNonAnswers). A failed eval (server error, not the candidate's
+ * fault) is NOT a non-answer. Depth-agnostic — applies to every interview type.
+ */
+export function isNonAnswer(evaluation: AnswerEvaluation): boolean {
+  if (evaluation.status === 'failed') return false
+  const avg = (evaluation.relevance + evaluation.structure + evaluation.specificity + evaluation.ownership) / 4
+  // avg < 12 (on the 0-100 dims) is well below even a weak-but-real answer; the specificity
+  // floor guards against a fluent-but-empty answer scoring some relevance with zero substance.
+  return avg < 12 && evaluation.specificity < 10
+}
+
+/**
+ * How many of the MOST RECENT evaluations were non-answers, counted consecutively from the end.
+ * Used to wrap up gracefully when a candidate has disengaged (several non-answers in a row)
+ * rather than dragging them through every remaining planned question.
+ *
+ * NOTE: evaluations are appended in EVAL-COMPLETION order, not answer order — the main answer's
+ * eval runs in the background and can land after the synchronous probe evals. `questionIndex`
+ * increments per main question AND per probe, so we sort by it first to recover true chronological
+ * order before counting the trailing streak (otherwise a late main eval could break the streak).
+ */
+export function countTrailingNonAnswers(evals: AnswerEvaluation[]): number {
+  const ordered = [...evals].sort((a, b) => (a.questionIndex ?? 0) - (b.questionIndex ?? 0))
+  let n = 0
+  for (let i = ordered.length - 1; i >= 0; i--) {
+    if (isNonAnswer(ordered[i])) n++
+    else break
+  }
+  return n
+}
+
+/**
  * Decide whether to probe deeper on the current topic or advance to the next one.
  */
 export function shouldProbeOrAdvance(
@@ -55,6 +91,9 @@ export function shouldProbeOrAdvance(
 ): 'probe' | 'advance' {
   const probe = evaluation.probeDecision
   if (!probe?.shouldProbe) return 'advance'
+  // A scored non-answer won't improve by re-probing — advance to a fresh topic instead of
+  // grinding the dead one (the bound that was missing: only length<5 was caught server-side).
+  if (isNonAnswer(evaluation)) return 'advance'
   if (timeRemaining < 60) return 'advance'
   // Don't probe if we haven't covered minimum topics and are running low on time
   const topicsNeeded = getMinimumTopics(duration) - completedThreadsCount

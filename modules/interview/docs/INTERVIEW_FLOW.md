@@ -1650,3 +1650,54 @@ stated"; "never attribute a subject they did not say") and the existing anti-rep
 still pass (8 passing). `tsc` clean; full vitest 4996 passing; build green. End-to-end prod self-interview on
 the academics path pending (auth is prod-only) — to confirm: name a subject UNRELATED to your résumé
 and verify Q1 and every question stays on it.
+
+### 2026-06-30 · Probe/advance loop wasn't bounded — viva ground 4 probes into one dead topic
+
+**Symptom (academics, but the bug is all-depths).** A candidate named "consumer behaviour", then
+gave escalating non-answers ("the master law of hierarchical theory", "It's mash law", "Second
+question, Again, question" — scored 10/5/0/0, 5/0/0/0, 5/0/0/0). The interviewer kept **re-probing
+the same micro-topic** (expand → clarify → challenge → expand) for Q2–Q5 instead of moving to a
+different sub-topic or wrapping up; the candidate ended the session early. The drift fix (#478) was
+working — questions stayed on-subject — this is a separate *bounding* failure. A later probe also
+degraded to a subject-less generic ("Can you walk me through the specific example?").
+
+**Root cause.** Probing had **no score/content bound**. `probeDecision.shouldProbe` is the LLM's call
+(evaluate-answer/route.ts) with the only hard stop being `answer.length < 5`. The client advance gate
+`shouldProbeOrAdvance` (useInterview.ts flow-aware path + interviewUtils.ts fallback) advanced only on
+`!shouldProbe`, `time < 60`, per-slot `maxProbes`, or coverage pressure — **none of which read the
+scores**. Worse, an academics/no-JD session has `flowHints = null` (flowHints are only set on the JD
+flow-overlay path), so it used the *weakest* fallback (time + topic-count only). So a collapsing
+score trajectory (34→34→10→5→5) and outright non-answers never forced an advance or an early wrap.
+
+**Fix (prompt-free, all depths).**
+- `interviewUtils.ts`: new pure `isNonAnswer(eval)` (avg of the 4 dims < 12 AND specificity < 10;
+  a `status:'failed'` eval is never a non-answer) + `countTrailingNonAnswers(evals)`.
+- **Advance-on-non-answer**: `shouldProbeOrAdvance` (BOTH the flow-aware path in `useInterview.ts`
+  and the `interviewUtils.ts` fallback) now returns `advance` on a non-answer — re-probing a
+  collapsed answer never helps, so it moves to a fresh topic instead of grinding.
+- **Disengagement early-wrap**: after finalizing each topic, if `countTrailingNonAnswers >= 3` the
+  topic loop `break`s, which falls through to `runWrapUpSequence()` — a graceful close instead of
+  dragging a disengaged candidate through all 11 planned questions. Fires only on genuine collapse
+  (≥3 consecutive avg<12 answers), which a normal interview of any depth never reaches → inert for
+  real candidates (so no non-academics regression).
+- Deferred follow-ups: subject-anchored probe *fallback* wording (the generic "specific example"),
+  and wiring the academics flow's `maxProbes` so academics stops using the time-only fallback. The
+  advance/wrap bounds above already cap the grind for every depth.
+
+**Verification.** `interviewUtils.test.ts` adds `isNonAnswer` (flags 5/0/0/0 + 10/5/0/0; spares the
+weak-but-real 34/8/12/18; failed≠non-answer), `countTrailingNonAnswers` (streak/reset), and
+`shouldProbeOrAdvance` advances-on-non-answer. `tsc` clean; full vitest green; build green. The
+disengagement `break` is in the `while (qIdx < maxQ)` body (probe loop closed) → reaches
+`runWrapUpSequence()`. End-to-end prod confirmation pending (auth is prod-only).
+
+**Review follow-ups (PR #479).** (1) `evaluationsRef` is appended in eval-COMPLETION order, not
+answer order (the main answer's eval is backgrounded), so `countTrailingNonAnswers` now sorts by
+`questionIndex` (monotonic across main questions AND probes) before counting — a late-landing main
+eval can no longer scramble the streak. (2) On the disengagement `break`, `disengagedRef` is set so
+the close skips the optional "you mentioned earlier…" deferred-topic surfacing (a disengaged
+candidate gets a clean wrap). (3) The duplicate flow-aware `shouldProbeOrAdvanceWithFlow`
+(coveragePressure.ts — tested, not yet wired into production) got the same `isNonAnswer` guard so it
+can't drift if useInterview later switches to it. Known/accepted: the FIRST probe after a main
+answer is still driven by the turn-router (for low latency), so a main answer that is itself a
+non-answer gets ONE clarifying probe before the bound advances — re-probing once is reasonable, and
+gating probe #1 on the (backgrounded) full eval would regress probe-start latency on the hot path.
