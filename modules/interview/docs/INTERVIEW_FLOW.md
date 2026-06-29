@@ -1560,3 +1560,57 @@ layouts keep the merged string. Web Speech fallback maps `interimTranscript=''` 
 empty→Listening placeholder) + a `deepgramRecognition.test.ts` hook-shape test (RAF-throttled state
 isn't observable via result.current — same as the long-standing `liveTranscript` — so the live
 update behavior is covered by the panel render). Full vitest 4994 passing; `tsc` clean; build green.
+
+### 2026-06-29 · Academics questions drift to the candidate's résumé, not the named subject · PR #478
+
+**Symptom (internal QA feedback).** In a Marketing → Academics → 0-2 viva the candidate named
+"consumer behaviour" in the spoken intro, yet the interviewer kept asking about DIGITAL MARKETING.
+From the reported session (candidate de-identified): **Q1** = "You mentioned digital marketing
+— roadmap of that subject?" (never said — corrected: "I mentioned consumer behaviour");
+**Q5** = "You mentioned improving CTR and lowering CPC in your ads work — how does A/B testing help…?"
+— lifted near-verbatim from a résumé bullet (a digital-marketing internship: paid-ads, A/B testing).
+The candidate's résumé was wall-to-wall digital marketing; the viva tracked the *résumé*, not the *named subject*.
+Side damage: the drift also tanked his score — A1 ("I didn't mention digital marketing") was graded
+10/0/0 and A3 ("I didn't understand") 8/2/0, i.e. the candidate penalised for the system's bad Qs.
+
+**Root cause (two compounding sources, both feeding `/api/generate-question`).**
+1. **Résumé/JD/profile/domain topic-steering was injected for academics like every other depth.**
+   `contextBlock` (`<candidate_resume_analysis> … Probe the highlighted experiences`), `profileBlock`
+   ("probe their top skills" = [digital marketing, Google Ads, A/B testing]), `personalizationBlock`
+   (résumé/JD session brief), `ragBlock`, and `domainContext` (the marketing `systemPromptContext` =
+   SEO/SEM/CTR/CPC/ROAS/CAC *job* topics) all overrode `academicGroundingDirective`'s "anchor to the
+   named subject, never switch."
+2. **The grounding directive seeded its own wrong answer.** `academicGroundingDirective` hard-coded
+   "digital marketing" TWICE as its worked example. Q1 is prefetched BEFORE the intro answer is
+   captured (d2c04c9 — Q1 is the warm-up slot), so the named subject isn't in context yet; a 300-token
+   gpt-5.4-mini filled the void by copying the directive's OWN example, reinforced by the résumé.
+
+**Fix (prompt-only, two files).**
+- `app/api/generate-question/route.ts`: for `interviewType === 'academics'`, suppress `contextBlock` /
+  `profileBlock` / `personalizationBlock` / `ragBlock` / `domainContext` — a subject viva is grounded
+  ONLY on the directive + the per-domain skill file + persona. `recallContext` (the candidate's OWN
+  previous answers) is intentionally KEPT (continuity within the subject; carries no résumé once the
+  above are gone).
+- `academicsPrompt.ts`: de-seed the directive — removed the "digital marketing"/"operating systems"
+  examples; added "NEVER infer, substitute, or guess a subject from the candidate's résumé, work
+  experience, the domain, or any example — use ONLY the subject they explicitly stated"; on the
+  prefetched Q1 (subject not yet visible) "do NOT name, guess, or infer a subject — ask for a roadmap
+  of their strongest subject (let them state it)."
+
+**Why prompt-only (no Q1-prefetch-timing change).** Removing the résumé + the directive's example
+removes everything Q1 could grab; with no subject in context it now asks a subject-agnostic roadmap
+(the intended warm-up) instead of fabricating one. Re-sequencing the prefetch (useInterview.ts) was
+unnecessary and would add Q1 latency on the hot path.
+
+**Deferred to follow-up PRs (from the same audit).** (4) scoring still penalises the candidate for
+system-caused turns — no off-base-question guard in `evaluate-answer`/`perQAggregation`; (6) the probe
+path (`turn-router` on Haiku + `evaluate-answer`) omits the academic grounding + named subject (latent
+drift on other sessions); (8) `generate-question` `temperature` is uncontrolled (P2). STT accent
+corruption ("learning"→"leadership") was a separate factor already fixed by nova-3 + en-IN (#475/#476).
+
+**Verification.** `academicsPrompt.test.ts` adds de-seed contract tests (directive contains NO
+"digital marketing"/"operating systems"; forbids résumé inference; "only the subject they explicitly
+stated"; "never attribute a subject they did not say") and the existing anti-repeat/anchor assertions
+still pass (8 passing). `tsc` clean; full vitest 4996 passing; build green. End-to-end prod self-interview on
+the academics path pending (auth is prod-only) — to confirm: name a subject UNRELATED to your résumé
+and verify Q1 and every question stays on it.

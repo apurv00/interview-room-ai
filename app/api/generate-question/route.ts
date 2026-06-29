@@ -502,7 +502,10 @@ Do NOT use generic transitions like "Great, next question..." or "Moving on...".
       const diversityNote = topicCount >= 3
         ? `\nIMPORTANT: You have already covered ${topicCount} topics. Ensure your next question explores a DIFFERENT competency area (e.g., if past questions focused on leadership and stakeholder management, now ask about technical depth, failure handling, data-driven decisions, or innovation). Variety across competencies is critical for a thorough assessment.`
         : ''
-      const jdCoverageNote = config.jobDescription
+      // Academics is a subject viva — never steer it toward a JD (the JD text itself is
+      // already suppressed below; this drops the dynamic "target an uncovered JD requirement"
+      // instruction so it can't point at an absent JD plan). See INTERVIEW_FLOW.md §8 (2026-06-29).
+      const jdCoverageNote = config.jobDescription && interviewType !== 'academics'
         ? `\n\nJD COVERAGE CHECK: Review the JD requirements above. Identify which requirements have NOT yet been assessed by the topics already covered. Your next question MUST target an uncovered JD requirement.`
         : ''
       threadContext = `\n\nTOPICS ALREADY COVERED:\n${summaries}\n\nDo NOT repeat these topics.${diversityNote}${jdCoverageNote} You MAY occasionally reference a pattern across topics when a genuine link exists. Use cross-references sparingly.`
@@ -510,7 +513,9 @@ Do NOT use generic transitions like "Great, next question..." or "Moving on...".
       // Employer rotation — prevent fixating on a single company (Issue #5).
       // When we have structured employer names, instruct the AI to distribute
       // questions across the candidate's work history.
-      if (employerNames.length > 1) {
+      // Skipped for academics: a subject viva is grounded on the named subject, not the
+      // candidate's employers (résumé-derived steering — same class as the JD note above).
+      if (employerNames.length > 1 && interviewType !== 'academics') {
         // Best-effort: check which companies appear in already-covered topics
         const coveredCompanies = completedThreads
           .map(t => {
@@ -576,6 +581,23 @@ Do this only when a genuine link exists (roughly 1 in 3 questions). Do NOT force
     // academicsPrompt.ts for the full directive + why Q1 needs the anti-repeat guard.
     // Placed before depthStrategy so it frames the skill content + the style examples.
     const academicGrounding = academicGroundingDirective(interviewType)
+
+    // Academics is a campus SUBJECT VIVA grounded ONLY on the subject the candidate names +
+    // the per-domain skill file. Résumé / JD / profile / domain job-topics pull the model OFF
+    // the named subject — a wall-to-wall digital-marketing résumé made it ask "digital
+    // marketing" when the candidate said "consumer behaviour". So for academics, suppress every
+    // résumé/JD/profile/domain TOPIC source; keep only the grounding directive + the skill file
+    // (depthStrategy) + persona. See INTERVIEW_FLOW.md §8 (2026-06-29 academics résumé-drift).
+    if (interviewType === 'academics') {
+      contextBlock = ''          // JD analysis + <candidate_resume_analysis>
+      profileBlock = ''          // "probe their top skills / weave in weak areas / target companies"
+      personalizationBlock = ''  // résumé/JD-derived session brief
+      ragBlock = ''              // question-bank retrieval (academics draws from the skill file)
+      domainContext = ''         // domain systemPromptContext (job-skill topics, e.g. SEO/CTR/CPC)
+      // NOTE: recallContext (the candidate's OWN previous answers) is intentionally kept — it
+      // aids drilling deeper within the named subject and carries no résumé content once the
+      // blocks above are suppressed.
+    }
 
     const staticSystemPrompt = `${basePrompt}
 
