@@ -513,7 +513,10 @@ Do NOT use generic transitions like "Great, next question..." or "Moving on...".
       ).join('\n')
       // Detect topic diversity — nudge the interviewer to explore uncovered areas
       const topicCount = completedThreads.length
-      const diversityNote = topicCount >= 3
+      // Skipped for academics: this nudges a switch to a different COMPETENCY area (failure
+      // handling, data-driven decisions, innovation) — behavioural/job steering that drifts a
+      // subject viva off the named subject after Q3. Subject breadth is the directive's job.
+      const diversityNote = topicCount >= 3 && !isAcademics
         ? `\nIMPORTANT: You have already covered ${topicCount} topics. Ensure your next question explores a DIFFERENT competency area (e.g., if past questions focused on leadership and stakeholder management, now ask about technical depth, failure handling, data-driven decisions, or innovation). Variety across competencies is critical for a thorough assessment.`
         : ''
       // Academics is a subject viva — never steer it toward a JD (the JD text itself is
@@ -596,16 +599,23 @@ Do this only when a genuine link exists (roughly 1 in 3 questions). Do NOT force
     // Placed before depthStrategy so it frames the skill content + the style examples.
     const academicGrounding = academicGroundingDirective(interviewType)
 
-    // The résumé/JD/profile/RAG/JD-overlay/company/anti-repeat builders are already gated on
-    // !isAcademics above, so academics pays none of that DB/Redis/LLM cost. domainContext is the
-    // one exception: it's
-    // built from the shared domain/depth fetch (which we keep for depthStrategy + domainLabel), so
-    // it's cheap to null here rather than thread the gate through three assignment sites. The
-    // domain systemPromptContext lists job-skill topics (e.g. SEO/CTR/CPC) that would still steer
-    // a viva off-subject. recallContext (the candidate's OWN prior answers) is intentionally kept
-    // for continuity — it carries no résumé content once the blocks above are gated.
+    // Academics suppression MANIFEST — the single auditable list of what a subject viva drops.
+    // A viva is grounded ONLY on the directive + skill file (depthStrategy) + persona (+ the
+    // candidate's OWN prior answers via recallContext, kept for continuity). The EXPENSIVE
+    // builders for these blocks (JD/résumé cache reads, profile read, generateSessionBrief LLM,
+    // question-bank + cross-session DB lookups, JD overlay) are ALREADY gated on !isAcademics at
+    // their source above, so no work is wasted; nulling here is a defensive no-op for those (the
+    // actual clear is domainContext, built from the shared domain/depth fetch we keep for
+    // depthStrategy). Belt-and-suspenders: if a future edit drops a source gate, the viva stays
+    // grounded. diversityNote / jdCoverageNote / EMPLOYER DIVERSITY are gated at their source.
     if (isAcademics) {
-      domainContext = ''
+      contextBlock = ''          // JD analysis + <candidate_resume_analysis>
+      profileBlock = ''          // top skills / weak areas / target companies
+      personalizationBlock = ''  // generateSessionBrief (résumé/JD-derived)
+      ragBlock = ''              // question-bank retrieval
+      companyBlock = ''          // targetCompany/targetIndustry themes
+      antiRepeatBlock = ''       // cross-session prior-question texts
+      domainContext = ''         // domain systemPromptContext job-topics (e.g. SEO/CTR/CPC)
     }
 
     const staticSystemPrompt = `${basePrompt}

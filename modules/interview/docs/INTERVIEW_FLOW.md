@@ -1593,8 +1593,11 @@ Side damage: the drift also tanked his score — A1 ("I didn't mention digital m
   targetIndustry themes, and the cross-session `antiRepeatBlock`) on `!isAcademics` so the work is
   never done (no JD/résumé cache reads, no profile read, no session-brief LLM call, no bank
   retrieval, no prior-session lookup on the hot path — not built-then-discarded). Also suppress the
-  **dynamic** steering: `threadContext`'s `JD COVERAGE CHECK` note and the `EMPLOYER DIVERSITY`
-  note, and the **JD flow overlay** (`jdOverlay` stays null so `resolveFlow`/`buildFlowPromptContext`
+  **dynamic** steering: `threadContext`'s `JD COVERAGE CHECK` note, the `EMPLOYER DIVERSITY` note,
+  and the generic `diversityNote` (the "switch to a different competency area — failure handling,
+  data-driven decisions, innovation" nudge after Q3, which is behavioural/job steering that drifts a
+  viva off-subject; subject breadth is the directive's job), and the **JD flow overlay**
+  (`jdOverlay` stays null so `resolveFlow`/`buildFlowPromptContext`
   emit no JD-derived insertions / `JD ALIGNMENT` even when `FEATURE_FLAG_JD_FLOW_OVERLAY` is on).
   `domainContext` (the domain `systemPromptContext` job-topics) is built from the shared
   domain/depth fetch, so it's nulled post-hoc rather than gated. `recallContext` (the candidate's
