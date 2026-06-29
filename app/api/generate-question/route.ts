@@ -476,12 +476,14 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
       behavioral: 'behavioral deep-dive interview',
       technical: 'technical interview',
       'case-study': 'case study session',
+      academics: 'academic subject viva',
     }
     const roleLabels: Record<string, string> = {
       screening: 'senior recruiter',
       behavioral: 'senior hiring manager focused on behavioral assessment',
       technical: 'technical interview lead',
       'case-study': 'strategy and case assessment lead',
+      academics: 'an academic subject examiner',
     }
     // Type-specific format instructions ensure fundamentally different question styles
     const typeInstructions: Record<string, string> = {
@@ -489,8 +491,14 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
       behavioral: 'Ask exclusively about PAST experiences using behavioral prompts ("Tell me about a time when...", "Describe a situation where..."). Every question must probe a real event the candidate lived through. Never ask hypothetical scenarios.',
       technical: 'Ask domain-specific technical questions that test depth of knowledge, problem-solving approach, and system thinking. Include trade-off analysis.',
       'case-study': `Present a realistic forward-looking SCENARIO for the candidate to solve, seated in THEIR OWN role. Frame it as: "Imagine you are a ${domainLabel} and [a realistic situation a ${domainLabel} would face]. How would you approach it?" — ground the scenario's specifics and industry in the candidate's résumé, the job description, and the DOMAIN CONTEXT above. Do NOT seat the candidate as a Product Manager or "the PM for a media app" unless the role itself IS product management. Vary the company/industry context across questions; do not default to a media/streaming app. Guide them through framework → analysis → recommendation. Never ask about past experiences — every question must be a forward-looking scenario.`,
+      academics: `Conduct an oral examination of the candidate's STRONGEST academic subject (which they name in their first answer). Ask focused, well-formed questions on THAT subject's fundamentals, theory, and applications — one concept at a time. This is a campus subject viva, NOT a job interview: do not ask about workplace scenarios, employers, or job responsibilities.`,
     }
-    const basePrompt = `You are Alex Chen, a ${roleLabels[interviewType] || 'senior interviewer'}. You are conducting a ${config.duration}-minute ${typeLabels[interviewType] || interviewType + ' interview'} for a ${domainLabel} role (${config.experience} years experience).
+    // Academics is a campus subject VIVA, not a job-role interview — frame the audience as a
+    // student in a subject area, not a candidate "for a {domain} role" (which nudges job framing).
+    const audienceFraming = isAcademics
+      ? `in the ${domainLabel} subject area (a student, ${config.experience} years of study)`
+      : `for a ${domainLabel} role (${config.experience} years experience)`
+    const basePrompt = `You are Alex Chen, a ${roleLabels[interviewType] || 'senior interviewer'}. You are conducting a ${config.duration}-minute ${typeLabels[interviewType] || interviewType + ' interview'} ${audienceFraming}.
 
 QUESTION FORMAT: ${typeInstructions[interviewType] || 'Ask one focused question at a time.'}`
 
@@ -580,7 +588,15 @@ Do this only when a genuine link exists (roughly 1 in 3 questions). Do NOT force
       on_track: '\nCANDIDATE PERFORMANCE: The candidate is performing at expected level. Maintain current difficulty.',
       strong: '\nCANDIDATE PERFORMANCE: The candidate is performing well. Increase difficulty: ask about edge cases, ethical dilemmas, cross-functional conflicts, or "what would you do differently" scenarios. Challenge their thinking.',
     }
-    const difficultyBlock = difficultyGuidance[performanceSignal || 'calibrating'] || ''
+    // Academics escalates WITHIN the named subject (derivations, edge cases of the theory,
+    // comparisons, applications) — never workplace/cross-functional scenarios (a viva, not a job).
+    const academicDifficultyGuidance: Record<string, string> = {
+      calibrating: '',
+      struggling: '\nCANDIDATE PERFORMANCE: The candidate is finding this challenging. Break the concept into smaller steps and ask a more foundational question WITHIN their named subject — keep quality expectations, just make it more approachable.',
+      on_track: '\nCANDIDATE PERFORMANCE: The candidate is performing at expected level. Maintain difficulty; keep probing their named subject.',
+      strong: '\nCANDIDATE PERFORMANCE: The candidate is performing well. Go deeper WITHIN their named subject: ask for a derivation/proof, an edge case of the theory, a comparison between sub-topics, or a concrete application. Stay on the subject — do NOT switch to workplace, cross-functional, or job scenarios.',
+    }
+    const difficultyBlock = (isAcademics ? academicDifficultyGuidance : difficultyGuidance)[performanceSignal || 'calibrating'] || ''
 
     // Interviewer persona from skill file
     let personaBlock = ''
@@ -632,7 +648,9 @@ ${DATA_BOUNDARY_RULE}`
     // Falls back to config-based seed when sessionId is unavailable (client doesn't always pass it).
     const seedSource = body.sessionId || `${config.role}:${config.duration}:${config.experience}:${user.id}`
     const sessionSeed = seedSource.split('').reduce((a, c) => a + c.charCodeAt(0), 0)
-    const curveballEligible = questionIndex >= 3 && !isLastQuestion && pressureLevel === 'normal'
+    // No curveball for academics — its examples are workplace hypotheticals ("unlimited budget,
+    // 2 weeks") that pull a subject viva off the named subject.
+    const curveballEligible = questionIndex >= 3 && !isLastQuestion && pressureLevel === 'normal' && !isAcademics
     const curveballSlot = (sessionSeed % 7) + 3 // deterministic slot between Q3-Q9
     const isCurveball = curveballEligible && questionIndex === curveballSlot
 
@@ -642,9 +660,15 @@ ${DATA_BOUNDARY_RULE}`
       elevated: '⚠️ PRESSURE LEVEL: ELEVATED. The candidate is performing well. Ask a skeptical or devil\'s advocate question that tests their reasoning under pressure. Challenge an assumption from their previous answer, or present a "what if" scenario that complicates their approach. Stay professional but push them.',
       high: '⚠️ PRESSURE LEVEL: HIGH. The candidate is excelling. Ask a direct challenge: an ethical dilemma, a cross-functional conflict scenario, a "convince me you\'re wrong" question, or a question that forces them to defend a difficult trade-off. Be respectful but don\'t go easy.',
     }
+    // Academics pressure stays WITHIN the named subject — rigour, not workplace conflict.
+    const academicPressureInstructions: Record<string, string> = {
+      normal: '',
+      elevated: '⚠️ PRESSURE LEVEL: ELEVATED. The candidate is performing well. Probe deeper within their named subject: ask them to justify a definition, derive a result, or compare two concepts in the subject. Stay on-subject — no workplace scenarios.',
+      high: '⚠️ PRESSURE LEVEL: HIGH. The candidate is excelling. Challenge them to defend a claim about the subject with rigour, prove a result, or explain a subtle/counter-intuitive aspect of it. Stay strictly within their named subject.',
+    }
 
     const userPrompt = `Generate question ${questionIndex + 1} of ${totalQuestions}.
-${pressureInstructions[pressureLevel]}
+${(isAcademics ? academicPressureInstructions : pressureInstructions)[pressureLevel]}
 ${isCurveball ? '🎯 CURVEBALL: Ask an unexpected question that tests composure and adaptability. Examples: a left-field hypothetical ("If you had unlimited budget but only 2 weeks..."), a deliberately ambiguous scenario, or a question that forces creative thinking outside the candidate\'s comfort zone. Keep it relevant to the domain but surprising in angle.' : ''}
 ${isLastQuestion ? 'This is the FINAL substantive question before wrap-up — make it memorable and forward-looking.' : ''}
 

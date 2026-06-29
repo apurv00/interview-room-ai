@@ -1610,6 +1610,18 @@ Side damage: the drift also tanked his score — A1 ("I didn't mention digital m
   experience, the domain, or any example — use ONLY the subject they explicitly stated"; on the
   prefetched Q1 (subject not yet visible) "do NOT name, guess, or infer a subject — ask for a roadmap
   of their strongest subject (let them state it)."
+- **Base framing + escalation (the full sweep — not just the suppressible blocks).** A second pass
+  audited EVERY component feeding the prompt, not only the résumé/JD blocks. Four more injected
+  *workplace-behavioural* content into a viva and are now academics-aware: (a) `basePrompt` framed it
+  as "an interview **for a {domain} role**" → now "an **academic subject viva in the {domain} subject
+  area** (a student)" with academics `roleLabels`/`typeLabels`/`typeInstructions`; (b) `difficultyBlock`
+  ("strong" escalated to "ethical dilemmas, cross-functional conflicts") → `academicDifficultyGuidance`
+  that escalates WITHIN the subject (derivations, edge cases, comparisons); (c) `pressureInstructions`
+  (elevated/high → "cross-functional conflict, defend a trade-off") → `academicPressureInstructions`
+  (justify a definition, prove a result, subtle aspects — on-subject); (d) the **curveball**
+  (workplace hypotheticals like "unlimited budget, 2 weeks" after Q3) is disabled for academics.
+  Lesson: the drift had MANY scattered sources; gating the obvious blocks left the base framing +
+  difficulty/pressure/curveball escalators leaking. The audit (not Codex one-at-a-time) found them.
 
 **Why prompt-only (no Q1-prefetch-timing change).** Removing the résumé + the directive's example
 removes everything Q1 could grab; with no subject in context it now asks a subject-agnostic roadmap
