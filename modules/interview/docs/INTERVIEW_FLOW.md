@@ -1586,11 +1586,20 @@ Side damage: the drift also tanked his score — A1 ("I didn't mention digital m
    gpt-5.4-mini filled the void by copying the directive's OWN example, reinforced by the résumé.
 
 **Fix (prompt-only, two files).**
-- `app/api/generate-question/route.ts`: for `interviewType === 'academics'`, suppress `contextBlock` /
-  `profileBlock` / `personalizationBlock` / `ragBlock` / `domainContext` — a subject viva is grounded
-  ONLY on the directive + the per-domain skill file + persona. `recallContext` (the candidate's OWN
-  previous answers) is intentionally KEPT (continuity within the subject; carries no résumé once the
-  above are gone).
+- `app/api/generate-question/route.ts`: a subject viva is grounded ONLY on the directive + the
+  per-domain skill file + persona. For academics, **gate the résumé/JD/profile/RAG builders**
+  (`contextBlock` JD + `<candidate_resume_analysis>`, `profileBlock`, `personalizationBlock` =
+  `generateSessionBrief`, `ragBlock` = question-bank retrieval) on `!isAcademics` so the work is
+  never done (no JD/résumé cache reads, no profile read, no session-brief LLM call, no bank
+  retrieval on the hot path — not built-then-discarded). Also suppress the **dynamic** steering:
+  `threadContext`'s `JD COVERAGE CHECK` note and the `EMPLOYER DIVERSITY` note, and the
+  **JD flow overlay** (`jdOverlay` stays null so `resolveFlow`/`buildFlowPromptContext` emit no
+  JD-derived insertions / `JD ALIGNMENT` even when `FEATURE_FLAG_JD_FLOW_OVERLAY` is on).
+  `domainContext` (the domain `systemPromptContext` job-topics) is built from the shared
+  domain/depth fetch, so it's nulled post-hoc rather than gated. `recallContext` (the candidate's
+  OWN previous answers) is intentionally KEPT (continuity within the subject; carries no résumé
+  once the above are gone). [The first three bullets + JD overlay + builder-gating were Codex
+  review rounds on PR #478.]
 - `academicsPrompt.ts`: de-seed the directive — removed the "digital marketing"/"operating systems"
   examples; added "NEVER infer, substitute, or guess a subject from the candidate's résumé, work
   experience, the domain, or any example — use ONLY the subject they explicitly stated"; on the

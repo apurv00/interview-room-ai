@@ -66,8 +66,16 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     // Prefers the Document Intelligence Layer (importance-ranked structured context)
     // when available; falls back to raw .slice() so legacy sessions and parse
     // failures still produce a valid prompt.
+    // Academics is a campus SUBJECT VIVA: grounded ONLY on the subject the candidate names +
+    // the per-domain skill file + persona. Every résumé/JD/profile/domain TOPIC source pulls the
+    // model OFF the named subject (a digital-marketing résumé made it ask "digital marketing" when
+    // the candidate said "consumer behaviour"). So GATE those builders for academics — don't build
+    // then discard: this also avoids the JD/résumé cache reads, profile read, the generateSessionBrief
+    // LLM call, and question-bank retrieval on the hot path. See INTERVIEW_FLOW.md §8 (2026-06-29).
+    const isAcademics = interviewType === 'academics'
+
     let contextBlock = ''
-    if (config.jobDescription) {
+    if (config.jobDescription && !isAcademics) {
       const jdCtx = sessionId ? await getOrLoadJDContext(sessionId, config.jobDescription) : null
       contextBlock += jdCtx
         ? `\n\n<job_description_analysis>\n${jdCtx}\n</job_description_analysis>\nPRIORITY: The job description above defines the requirements this interview MUST assess. At least 60% of your questions should directly probe must-have requirements from the JD. Ask about specific skills, experiences, and qualifications listed in the JD. Use the resume to find evidence for or against JD requirements — not as the primary source of question topics.`
@@ -75,7 +83,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     }
     // Track employer names from structured resume for employer-rotation prompt (Issue #5)
     let employerNames: string[] = []
-    if (config.resumeText) {
+    if (config.resumeText && !isAcademics) {
       const resumeCtx = sessionId ? await getOrLoadResumeContext(sessionId, config.resumeText, config.role) : null
       contextBlock += resumeCtx
         ? `\n\n<candidate_resume_analysis>\n${resumeCtx}\n</candidate_resume_analysis>\nProbe the highlighted experiences. Ask for concrete details and metrics.`
@@ -95,7 +103,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
         }
       }
     }
-    if (config.jobDescription && config.resumeText) {
+    if (config.jobDescription && config.resumeText && !isAcademics) {
       contextBlock += `\n\nCROSS-REFERENCE STRATEGY: Map the candidate's resume experiences to JD requirements. Prioritize probing gaps — areas where the JD requires something the resume doesn't clearly demonstrate. When the resume DOES match a JD requirement, ask for specific evidence, metrics, and depth. Your questions should systematically cover JD requirements, using the resume as a lens to assess fit.`
     }
 
@@ -254,6 +262,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
           isFeatureEnabled('jd_flow_overlay')
           && sessionId
           && sessionCfg?.parsedJD
+          && !isAcademics  // academics is a subject viva — never overlay JD requirements onto the flow
         ) {
           try {
             const template = TEMPLATE_REGISTRY.get(
@@ -323,7 +332,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
 
     // Build profile context from onboarding data + extended profile
     let profileBlock = ''
-    try {
+    if (!isAcademics) try {
       // PR C Phase 1: skip connectDB when the session cache populated the
       // user profile — User.findById below is the only Mongo read in this
       // block, and it short-circuits on cache hit.
@@ -407,7 +416,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     let personalizationBlock = ''
     let ragBlock = ''
     let antiRepeatBlock = ''
-    if (isFeatureEnabled('personalization_engine') && questionIndex <= 1) {
+    if (isFeatureEnabled('personalization_engine') && questionIndex <= 1 && !isAcademics) {
       try {
         const brief = await generateSessionBrief({
           userId: user.id,
@@ -422,7 +431,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     }
 
     // RAG: question bank context for inspiration
-    if (isFeatureEnabled('question_bank_rag') && questionIndex <= 1) {
+    if (isFeatureEnabled('question_bank_rag') && questionIndex <= 1 && !isAcademics) {
       try {
         ragBlock = await getQuestionBankContext({
           domain: config.role,
@@ -505,7 +514,7 @@ Do NOT use generic transitions like "Great, next question..." or "Moving on...".
       // Academics is a subject viva — never steer it toward a JD (the JD text itself is
       // already suppressed below; this drops the dynamic "target an uncovered JD requirement"
       // instruction so it can't point at an absent JD plan). See INTERVIEW_FLOW.md §8 (2026-06-29).
-      const jdCoverageNote = config.jobDescription && interviewType !== 'academics'
+      const jdCoverageNote = config.jobDescription && !isAcademics
         ? `\n\nJD COVERAGE CHECK: Review the JD requirements above. Identify which requirements have NOT yet been assessed by the topics already covered. Your next question MUST target an uncovered JD requirement.`
         : ''
       threadContext = `\n\nTOPICS ALREADY COVERED:\n${summaries}\n\nDo NOT repeat these topics.${diversityNote}${jdCoverageNote} You MAY occasionally reference a pattern across topics when a genuine link exists. Use cross-references sparingly.`
@@ -515,7 +524,7 @@ Do NOT use generic transitions like "Great, next question..." or "Moving on...".
       // questions across the candidate's work history.
       // Skipped for academics: a subject viva is grounded on the named subject, not the
       // candidate's employers (résumé-derived steering — same class as the JD note above).
-      if (employerNames.length > 1 && interviewType !== 'academics') {
+      if (employerNames.length > 1 && !isAcademics) {
         // Best-effort: check which companies appear in already-covered topics
         const coveredCompanies = completedThreads
           .map(t => {
@@ -582,21 +591,15 @@ Do this only when a genuine link exists (roughly 1 in 3 questions). Do NOT force
     // Placed before depthStrategy so it frames the skill content + the style examples.
     const academicGrounding = academicGroundingDirective(interviewType)
 
-    // Academics is a campus SUBJECT VIVA grounded ONLY on the subject the candidate names +
-    // the per-domain skill file. Résumé / JD / profile / domain job-topics pull the model OFF
-    // the named subject — a wall-to-wall digital-marketing résumé made it ask "digital
-    // marketing" when the candidate said "consumer behaviour". So for academics, suppress every
-    // résumé/JD/profile/domain TOPIC source; keep only the grounding directive + the skill file
-    // (depthStrategy) + persona. See INTERVIEW_FLOW.md §8 (2026-06-29 academics résumé-drift).
-    if (interviewType === 'academics') {
-      contextBlock = ''          // JD analysis + <candidate_resume_analysis>
-      profileBlock = ''          // "probe their top skills / weave in weak areas / target companies"
-      personalizationBlock = ''  // résumé/JD-derived session brief
-      ragBlock = ''              // question-bank retrieval (academics draws from the skill file)
-      domainContext = ''         // domain systemPromptContext (job-skill topics, e.g. SEO/CTR/CPC)
-      // NOTE: recallContext (the candidate's OWN previous answers) is intentionally kept — it
-      // aids drilling deeper within the named subject and carries no résumé content once the
-      // blocks above are suppressed.
+    // The résumé/JD/profile/RAG/JD-overlay builders are already gated on !isAcademics above, so
+    // academics pays none of that DB/Redis/LLM cost. domainContext is the one exception: it's
+    // built from the shared domain/depth fetch (which we keep for depthStrategy + domainLabel), so
+    // it's cheap to null here rather than thread the gate through three assignment sites. The
+    // domain systemPromptContext lists job-skill topics (e.g. SEO/CTR/CPC) that would still steer
+    // a viva off-subject. recallContext (the candidate's OWN prior answers) is intentionally kept
+    // for continuity — it carries no résumé content once the blocks above are gated.
+    if (isAcademics) {
+      domainContext = ''
     }
 
     const staticSystemPrompt = `${basePrompt}
