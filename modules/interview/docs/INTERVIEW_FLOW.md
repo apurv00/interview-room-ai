@@ -1563,20 +1563,20 @@ update behavior is covered by the panel render). Full vitest 4994 passing; `tsc`
 
 ### 2026-06-29 · Academics questions drift to the candidate's résumé, not the named subject · PR #478
 
-**Symptom (internal QA feedback).** In a Marketing → Academics → 0-2 viva the candidate named
-"consumer behaviour" in the spoken intro, yet the interviewer kept asking about DIGITAL MARKETING.
-From the reported session (candidate de-identified): **Q1** = "You mentioned digital marketing
-— roadmap of that subject?" (never said — corrected: "I mentioned consumer behaviour");
-**Q5** = "You mentioned improving CTR and lowering CPC in your ads work — how does A/B testing help…?"
-— lifted near-verbatim from a résumé bullet (a digital-marketing internship: paid-ads, A/B testing).
-The candidate's résumé was wall-to-wall digital marketing; the viva tracked the *résumé*, not the *named subject*.
-Side damage: the drift also tanked his score — A1 ("I didn't mention digital marketing") was graded
-10/0/0 and A3 ("I didn't understand") 8/2/0, i.e. the candidate penalised for the system's bad Qs.
+**Symptom (internal QA feedback; the example below is synthetic/de-identified).** In a Marketing →
+Academics → 0-2 viva, the candidate names one subject in the spoken intro but the interviewer keeps
+asking about a DIFFERENT area that dominates their résumé. Pattern: the prefetched Q1 asks for a
+roadmap of the résumé's dominant theme rather than the named subject (the candidate has to correct it
+mid-interview), and a later question lifts a specific résumé bullet (e.g. an ad-campaign metric)
+instead of probing the named subject. Net: the viva tracks the *résumé*, not the *named subject*.
+Side damage: the drift also depresses the score — the candidate's correction to the fabricated
+question and their confusion at a vague probe get graded as candidate failures (the system's bad
+questions count against them).
 
 **Root cause (two compounding sources, both feeding `/api/generate-question`).**
 1. **Résumé/JD/profile/domain topic-steering was injected for academics like every other depth.**
    `contextBlock` (`<candidate_resume_analysis> … Probe the highlighted experiences`), `profileBlock`
-   ("probe their top skills" = [digital marketing, Google Ads, A/B testing]), `personalizationBlock`
+   ("probe their top skills" = the candidate's résumé-derived skills), `personalizationBlock`
    (résumé/JD session brief), `ragBlock`, and `domainContext` (the marketing `systemPromptContext` =
    SEO/SEM/CTR/CPC/ROAS/CAC *job* topics) all overrode `academicGroundingDirective`'s "anchor to the
    named subject, never switch."
