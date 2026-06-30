@@ -38,7 +38,11 @@ const EXP_HEADING_MAP: Record<string, ExperienceLevel | 'all'> = {
 const DB_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
 const dbCache = new Map<string, { content: string; timestamp: number }>()
 const fileCache = new Map<string, string>()
-const parsedCache = new Map<string, { sections: Map<SkillSection, string>; timestamp: number }>()
+// `sections: null` caches a NEGATIVE result (no skill file for this domain×depth) so combos with
+// no skill file — e.g. the default `screening` depth (no *-screening.md) — don't re-run the
+// DB-first lookup on every call and stall the fast turn-router path. TTL'd like positive entries,
+// so a CMS-added skill still appears within DB_CACHE_TTL. (Codex #480 P3.)
+const parsedCache = new Map<string, { sections: Map<SkillSection, string> | null; timestamp: number }>()
 
 function getSkillsDir(): string {
   return path.join(process.cwd(), 'modules', 'interview', 'skills')
@@ -123,11 +127,16 @@ async function getParsedSections(domain: string, depth: string): Promise<Map<Ski
   const key = `${domain}-${depth}`
   const cached = parsedCache.get(key)
   if (cached && Date.now() - cached.timestamp < DB_CACHE_TTL) {
-    return cached.sections
+    return cached.sections // may be null — a cached negative (no skill file for this combo)
   }
 
   const content = await getSkillContent(domain, depth)
-  if (!content) return null
+  if (!content) {
+    // Cache the MISS too (TTL'd): depths with no skill file (e.g. screening) would otherwise
+    // re-hit the DB-first lookup on every call. (Codex #480 P3)
+    parsedCache.set(key, { sections: null, timestamp: Date.now() })
+    return null
+  }
 
   const sections = parseSections(content)
   parsedCache.set(key, { sections, timestamp: Date.now() })

@@ -1748,11 +1748,15 @@ is skipped there and a vague roadmap answer no longer gets a "derive CLV" first 
 evaluate-answer already resolves the depth for those turns (the turn-router is called on the MAIN
 answer, so it gets the main index — verified).
 
-**Turn-router DB-stall guard (Codex #480 P3).** `getSkillSections` is DB-first (CMS override → file
-fallback), so on a cold process the Mongo connect/find could add seconds to — or stall — the fast
-turn-router path (target <400ms). The grounding read is now bounded by a 200 ms `Promise.race`: if it
-doesn't resolve in time, the probe is emitted without grounding (generic) rather than stalling the
-interview. Warm processes hit the in-memory cache (~0 ms) and are grounded as normal.
+**Turn-router DB-stall guard + negative caching (Codex #480 P3).** `getSkillSections` is DB-first
+(CMS override → file fallback), so on a cold process the Mongo connect/find could add seconds to — or
+stall — the fast turn-router path (target <400ms). Two-layer fix: (1) the turn-router's grounding read
+is bounded by a 200 ms `Promise.race` (timeout → generic probe, no stall); (2) **negative caching** in
+`skillLoader.getParsedSections` — the `screening` depth has NO skill files (and is the *default*
+depth), and misses weren't cached, so every screening probe re-ran the DB-first lookup for zero
+grounding. `parsedCache` now stores `null` misses (TTL'd), so a no-skill-file combo is looked up once
+per process, not per probe — fixing both the turn-router and the pre-existing generate-question
+screening waste. (A CMS-added skill still appears within `DB_CACHE_TTL`.)
 
 **Known minor edge, deferred (Codex #480 P2, probe #2+).** evaluate-answer resolves eval depth from
 `questionIndex`, which the probe loop increments — so a *probe of* the academics index-1 roadmap can
