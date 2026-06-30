@@ -1745,9 +1745,22 @@ End-to-end prod confirmation pending (auth is prod-only) — probes should now n
 the academics warm-up turns (index 0 = spoken intro, 1 = "roadmap" ease-in) to `behavioral` — those
 are not concept/derivation probes (the slot says "no deep probing yet"), so the framework grounding
 is skipped there and a vague roadmap answer no longer gets a "derive CLV" first probe. Matches how
-evaluate-answer already resolves the depth for those turns. **Probe #2+ (Codex #480 P2 follow-up):**
-the probe loop bumps `questionIndex` by 1 per probe, so a probe of the warm-up (main index 0/1)
-reached evaluate-answer as index ≥2 and escaped the behavioral remap — letting the framework
-`probeTarget` fire (and, pre-existing, scoring the warm-up probe as a viva concept). Fixed by
-resolving depth from the THREAD's main index — `questionIndex - probeDepth` — so a warm-up probe at
-any depth stays behavioral. Bonus: also corrects the latent mis-scoring of warm-up probe answers.
+evaluate-answer already resolves the depth for those turns (the turn-router is called on the MAIN
+answer, so it gets the main index — verified).
+
+**Turn-router DB-stall guard (Codex #480 P3).** `getSkillSections` is DB-first (CMS override → file
+fallback), so on a cold process the Mongo connect/find could add seconds to — or stall — the fast
+turn-router path (target <400ms). The grounding read is now bounded by a 200 ms `Promise.race`: if it
+doesn't resolve in time, the probe is emitted without grounding (generic) rather than stalling the
+interview. Warm processes hit the in-memory cache (~0 ms) and are grounded as normal.
+
+**Known minor edge, deferred (Codex #480 P2, probe #2+).** evaluate-answer resolves eval depth from
+`questionIndex`, which the probe loop increments — so a *probe of* the academics index-1 roadmap can
+arrive as index ≥2 and resolve to academics, letting the framework `probeTarget` fire on a warm-up
+probe. An earlier "fix" that reconstructed the main index as `questionIndex - probeDepth` was REVERTED
+because it is unsafe: the nonsensical-retry path reuses the same `qIdx` with `probeDepth=1` *without*
+incrementing, so the subtraction mis-resolved real concept retries (a viva answer scored behavioral;
+Q0 retry → index -1). The correct fix is to pass the true topic index from the client; deferred to
+avoid threading a 9th positional arg through the evaluate API (better done as an options-object
+refactor). Real-world impact is low — it only affects probe #2+ of a warm-up, and the framework
+target only fires when a framework actually fits the answer.

@@ -94,11 +94,20 @@ export const POST = composeApiRoute<TurnRouterBody>({
     let probeGrounding = ''
     if (role && resolveEvalDepthSlug(interviewType, questionIndex) === interviewType) {
       try {
-        const skill = await getSkillSections(role, interviewType, ['interviewer-persona', 'question-strategy'])
+        // getSkillSections is DB-first (CMS override → file fallback), so on a cold process the
+        // Mongo connect/find could add seconds to — or stall — the fast turn-router path. Bound it:
+        // if it doesn't resolve within the cap, skip grounding and emit a generic probe rather than
+        // delay the first probe (Codex #480 P2). Warm processes hit the in-memory cache (~0ms).
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const skill = await Promise.race([
+          getSkillSections(role, interviewType, ['interviewer-persona', 'question-strategy']),
+          new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), 200) }),
+        ])
+        if (timer) clearTimeout(timer)
         if (skill) {
           probeGrounding = `\n\nINTERVIEWER PERSONA & PROBE STRATEGY for this round (probe in this voice; push on the framework/mechanism/derivation/distinction it describes):\n${skill}`
         }
-      } catch { /* skill file unavailable — fall back to generic probe */ }
+      } catch { /* skill file unavailable / timed out — fall back to generic probe */ }
     }
 
     let userPrompt = `Interview type: ${interviewType}
