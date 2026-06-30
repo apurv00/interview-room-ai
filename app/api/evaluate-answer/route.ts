@@ -40,9 +40,15 @@ export const POST = composeApiRoute<EvaluateAnswerBody>({
     const startTime = Date.now()
     const timings: Record<string, number> = {}
     const interviewType = config.interviewType || 'behavioral'
-    // The academics intro (index 0 self-intro) is evaluated as behavioral so its rubric,
-    // skill, and guide are not the subject-viva ones; real viva answers keep academics.
-    const evalDepthSlug = resolveEvalDepthSlug(interviewType, questionIndex)
+    // The academics intro (index 0 self-intro) + the index-1 "roadmap" ease-in are evaluated as
+    // behavioral so their rubric/skill/guide are not the subject-viva ones; real viva answers keep
+    // academics. Resolve from the THREAD's MAIN question index, not the probe-incremented index: the
+    // probe loop bumps questionIndex by 1 per probe, so a probe of the warm-up (main index 0/1) would
+    // otherwise arrive as index >=2 and wrongly resolve to academics — scoring it as a viva concept
+    // AND letting the framework-preferring probeTarget fire on a warm-up turn (Codex #480 P2).
+    // probeDepth is how many probes deep we are, so questionIndex - probeDepth recovers the main index.
+    const topicQuestionIndex = questionIndex - (probeDepth ?? 0)
+    const evalDepthSlug = resolveEvalDepthSlug(interviewType, topicQuestionIndex)
     const domainLabel = getDomainLabel(config.role)
 
     // ── Early exit: empty or near-empty answer → score 0 ──

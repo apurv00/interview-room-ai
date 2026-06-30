@@ -1745,4 +1745,9 @@ End-to-end prod confirmation pending (auth is prod-only) — probes should now n
 the academics warm-up turns (index 0 = spoken intro, 1 = "roadmap" ease-in) to `behavioral` — those
 are not concept/derivation probes (the slot says "no deep probing yet"), so the framework grounding
 is skipped there and a vague roadmap answer no longer gets a "derive CLV" first probe. Matches how
-evaluate-answer already resolves the depth for those turns.
+evaluate-answer already resolves the depth for those turns. **Probe #2+ (Codex #480 P2 follow-up):**
+the probe loop bumps `questionIndex` by 1 per probe, so a probe of the warm-up (main index 0/1)
+reached evaluate-answer as index ≥2 and escaped the behavioral remap — letting the framework
+`probeTarget` fire (and, pre-existing, scoring the warm-up probe as a viva concept). Fixed by
+resolving depth from the THREAD's main index — `questionIndex - probeDepth` — so a warm-up probe at
+any depth stays behavioral. Bonus: also corrects the latent mis-scoring of warm-up probe answers.
