@@ -280,6 +280,21 @@ describe('buildProbeQuestion', () => {
 
     expect(question).toBe('Can you make that more concrete with a specific example?')
   })
+
+  // Regression (#481): buildProbeQuestion TEMPLATES the target ("Can you tell me more about <t>?"),
+  // so a full interrogative probeTarget (a non-compliant evaluate-answer output, e.g. on technical /
+  // case-study depths) would render ungrammatically ("...about how does X avoid leakage?"). The
+  // templated path must reject ALL interrogative targets and fall back cleanly. (The verbatim
+  // sanitizeProbeQuestion path keeps full interrogatives — see the asymmetry test below.)
+  it('rejects a full interrogative target so the fixed template never renders ungrammatically', () => {
+    const ctx = {
+      question: 'Walk me through your modeling pipeline.',
+      answer: 'I used cross-validation and a holdout set.',
+    }
+    const q = buildProbeQuestion('expand', 'how does your feature selection avoid leakage', ctx)
+    expect(q).not.toContain('how does')
+    expect(q).toBe('Can you walk me through the specific example?')
+  })
 })
 
 describe('sanitizeProbeQuestion', () => {
@@ -328,6 +343,44 @@ describe('sanitizeProbeQuestion', () => {
   })
   it('still falls back on a BARE interrogative fragment', () => {
     expect(sanitizeProbeQuestion('Why?', academicCtx, 'expand')).toBe('Can you walk me through the specific example?')
+  })
+
+  // Asymmetry (#481): the SAME full interrogative that buildProbeQuestion rejects (it would template
+  // it ungrammatically) is KEPT here, because sanitizeProbeQuestion speaks the probe verbatim.
+  it('keeps a full interrogative probe verbatim (verbatim path, unlike the templated buildProbeQuestion)', () => {
+    const q = 'How does your feature selection avoid leakage?'
+    const ctx = {
+      question: 'Walk me through your modeling pipeline.',
+      answer: 'I used cross-validation and a holdout set.',
+    }
+    expect(sanitizeProbeQuestion(q, ctx, 'expand')).toBe(q)
+  })
+
+  // Regression (#481 clarify-echo): when the candidate ASKS to clarify a term, the turn-router is
+  // prompted to rephrase the question — parroting the question's words back. The clarify request
+  // re-quotes the question (answerOverlap >= 0.5) so the plain re-ask guard misses it; the
+  // clarify-echo guard must catch it and fall back.
+  it('falls back when the candidate asked to clarify and the probe just echoes the question', () => {
+    const sanitized = sanitizeProbeQuestion(
+      'How would you make the marketplace expansion unit economics profitable?',
+      {
+        question: 'How would you make the marketplace expansion unit economics profitable?',
+        answer: 'Sorry, what do you mean by unit economics?',
+      },
+      'expand',
+    )
+    expect(sanitized).toBe('Can you walk me through the specific example?')
+  })
+
+  // The clarify-echo guard is NARROW: a clarify request must NOT strip a probe that introduces a new
+  // angle (low question overlap). Otherwise it would re-create the over-rejection #481 set out to fix.
+  it('does NOT strip a genuinely new probe even when the candidate asked to clarify', () => {
+    const q = 'Can you give a concrete example of unit economics from a business you admire?'
+    const sanitized = sanitizeProbeQuestion(q, {
+      question: 'How would you make the marketplace expansion profitable?',
+      answer: 'What do you mean by unit economics?',
+    }, 'expand')
+    expect(sanitized).toBe(q)
   })
 })
 

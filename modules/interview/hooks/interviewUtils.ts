@@ -134,7 +134,18 @@ function overlapRatio(targetTokens: string[], sourceText?: string | null): numbe
   return overlap / targetTokens.length
 }
 
-function isWeakProbeTarget(target: string, context?: ProbeQuestionContext): boolean {
+// Recognises a candidate utterance that is ASKING the interviewer to clarify (rather than answering).
+// Used to catch the turn-router's clarify-rephrase echo — when a candidate asks what a term means, the
+// router is prompted to rephrase the question, which parrots the question's own words back at them. See
+// isWeakProbeTarget's clarify-echo guard.
+const CLARIFY_REQUEST_RE =
+  /\b(?:what (?:do|does|did|d['’]?you) (?:you )?mean|what'?s (?:that|this|it) mean|(?:can|could|would) you (?:please )?(?:clarify|explain|rephrase)|i (?:don'?t|do not|didn'?t|am not sure i) (?:understand|get|follow|know what)|(?:not sure|unclear) what (?:you|that|this)|mean by that|what (?:do you )?mean by)\b/i
+
+function isWeakProbeTarget(
+  target: string,
+  context?: ProbeQuestionContext,
+  opts?: { templated?: boolean },
+): boolean {
   if (!target) return true
 
   const lower = target.toLowerCase()
@@ -145,13 +156,16 @@ function isWeakProbeTarget(target: string, context?: ProbeQuestionContext): bool
   const targetTokens = significantTokens(target)
   if (targetTokens.length < 2) return true
 
-  // A BARE interrogative ("what", "why", "how come") is a weak target — but a full interrogative
-  // QUESTION ("how does motivation differ from a need?") is a perfectly good probe. sanitizeProbeQuestion
-  // feeds this the WHOLE turn-router question (not a noun phrase), so rejecting EVERY how/why/what-prefixed
-  // string stripped well-formed grounded probes down to the generic "specific example" fallback in prod
-  // (confirmed against live academics transcripts). Only reject SHORT interrogative fragments.
-  if (targetTokens.length <= 3 && /^(what|why|how|which|when|where|who)\b/i.test(lower)) {
-    return true
+  // Interrogative handling depends on how the CALLER uses this target:
+  //  - sanitizeProbeQuestion speaks it VERBATIM, so a full interrogative QUESTION ("how does
+  //    motivation differ from a need?") is a perfectly good probe — only a bare fragment ("what",
+  //    "why", "how come") is weak. Rejecting EVERY how/why/what-prefixed string stripped well-formed
+  //    grounded probes to the generic "specific example" fallback in prod (live academics transcripts).
+  //  - buildProbeQuestion TEMPLATES it ("Can you tell me more about <target>?"), so ANY interrogative
+  //    target renders ungrammatically ("...about how does X work?"). For that path (opts.templated)
+  //    reject all interrogatives — a full-question probe belongs to the verbatim path, not the template.
+  if (/^(what|why|how|which|when|where|who)\b/i.test(lower)) {
+    if (opts?.templated || targetTokens.length <= 3) return true
   }
   if (/\b(?:tradeoff rationale|rationale|rubric|criterion|criteria|competenc(?:y|ies))\b/i.test(lower)) {
     return true
@@ -163,6 +177,16 @@ function isWeakProbeTarget(target: string, context?: ProbeQuestionContext): bool
   const questionOverlap = overlapRatio(targetTokens, context?.question)
   const answerOverlap = overlapRatio(targetTokens, context?.answer)
   const previousProbeOverlap = overlapRatio(targetTokens, context?.previousProbe)
+
+  // CLARIFY-ECHO guard: when the candidate ASKS to clarify a term, the turn-router is prompted to
+  // rephrase the interview question — parroting the question's own words back at someone who just said
+  // they didn't understand them. That echo slips past the re-ask guard below because the clarify request
+  // itself re-quotes the question (pushing answerOverlap >= 0.5). So if the candidate's utterance is a
+  // clarify request AND this probe just re-states the question, treat it as weak (clean fallback).
+  // Narrow by design (gated on an actual clarify request) so it can't strip a genuine grounded probe.
+  if (questionOverlap >= 0.6 && CLARIFY_REQUEST_RE.test(context?.answer ?? '')) {
+    return true
+  }
 
   if (targetTokens.length >= 3 && questionOverlap >= 0.67 && answerOverlap < 0.5) {
     return true
@@ -228,7 +252,11 @@ export function buildProbeQuestion(
   context?: ProbeQuestionContext,
 ): string {
   const t = normalizeProbeTarget(probeTarget)
-  if (isWeakProbeTarget(t, context)) {
+  // templated: true — buildProbeQuestion wraps the target in a fixed template, so a full interrogative
+  // target ("how does X work") would render ungrammatically ("Can you tell me more about how does X
+  // work?"). Reject interrogative targets here; a legitimate full-question probe arrives instead via
+  // sanitizeProbeQuestion (which speaks it verbatim).
+  if (isWeakProbeTarget(t, context, { templated: true })) {
     return fallbackProbeQuestion(probeType)
   }
 

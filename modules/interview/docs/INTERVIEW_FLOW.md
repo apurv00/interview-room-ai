@@ -1802,3 +1802,25 @@ LOW — exactly `sanitizeProbeQuestion` + `buildProbeQuestion` (both probe paths
 re-ran the live-transcript inputs through `sanitizeProbeQuestion` — grounded probes now survive, weak
 ones still fall back. `tsc` clean; full vitest green; build green. NOTE: the warm-up Q1 still doesn't
 name the subject (it's prefetched before the intro answer) — separate, tracked in CLAUDE.md backlog.
+
+**Follow-up (cross-depth review of this PR — two regressions the relaxation introduced, fixed in the
+same PR).** A multi-agent impact review flagged that relaxing `isWeakProbeTarget` for ALL callers was
+too broad — the two probe paths use the target differently:
+- **Grammar regression (probe #2+, `buildProbeQuestion`).** This path TEMPLATES the target
+  (`Can you tell me more about <t>?`), so a full interrogative target ("how does your feature selection
+  avoid leakage", a non-compliant evaluate-answer output most likely on technical/case-study) rendered
+  ungrammatically. Fix: `isWeakProbeTarget` takes `opts.templated`; `buildProbeQuestion` passes
+  `{templated:true}` → rejects ALL interrogative targets (clean fallback, restoring pre-relaxation
+  behavior). `sanitizeProbeQuestion` stays relaxed (it speaks the probe verbatim, so a full
+  interrogative is fine). The relaxation is now correctly scoped to the verbatim path only.
+- **Clarify-echo (probe #1, `sanitizeProbeQuestion`).** When a candidate asks to clarify a term, the
+  turn-router is prompted to rephrase the question — parroting the question's words back at someone who
+  said they didn't understand them. The rephrase has high `questionOverlap` but the clarify request
+  itself re-quotes the question (`answerOverlap >= 0.5`), so the existing re-ask guard missed it. Fix:
+  a NARROW clarify-echo guard — if the candidate's utterance matches `CLARIFY_REQUEST_RE` AND the probe
+  re-states the question (`questionOverlap >= 0.6`), fall back. Gated on an actual clarify request so it
+  cannot strip a genuine grounded probe (verified by a negative test). The deeper fix (turn-router
+  defines the term instead of rephrasing) is a separate turn-router-prompt follow-up.
+
+Verification: `interviewUtils.test.ts` adds tests for the templated rejection, the verbatim/templated
+asymmetry, the clarify-echo, and the narrow-guard negative. `tsc` clean; full vitest green; build green.
