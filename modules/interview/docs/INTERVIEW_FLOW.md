@@ -1739,3 +1739,10 @@ optimisation second, by decision.
 optional); build green. No new unit tests: both routes need full auth+LLM mocking to invoke and the
 effect is LLM-driven probe wording; the change is additive (generic fallback when `role` absent).
 End-to-end prod confirmation pending (auth is prod-only) — probes should now name frameworks per depth.
+
+**Review follow-up (Codex #480 P2).** The grounding fires only on a REAL concept turn: it's gated on
+`resolveEvalDepthSlug(interviewType, questionIndex) === interviewType`. `resolveEvalDepthSlug` remaps
+the academics warm-up turns (index 0 = spoken intro, 1 = "roadmap" ease-in) to `behavioral` — those
+are not concept/derivation probes (the slot says "no deep probing yet"), so the framework grounding
+is skipped there and a vague roadmap answer no longer gets a "derive CLV" first probe. Matches how
+evaluate-answer already resolves the depth for those turns.

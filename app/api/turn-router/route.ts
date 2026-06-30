@@ -4,6 +4,7 @@ import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { trackUsage } from '@shared/services/usageTracking'
 import { TurnRouterLlmSchema } from '@interview/validators/interview'
 import { getSkillSections } from '@interview/services/core/skillLoader'
+import { resolveEvalDepthSlug } from '@interview/services/eval/scoringGuide'
 import { aiLogger } from '@shared/logger'
 import { z } from 'zod'
 
@@ -85,8 +86,13 @@ export const POST = composeApiRoute<TurnRouterBody>({
     // "derive CLV", "positioning vs differentiation") rather than a generic "give an example".
     // Skipped when role is absent (older clients) → unchanged generic behaviour. Adds one cached
     // skill-file read; probe-start latency tuning is tracked as a separate follow-up.
+    // Only ground on a REAL concept turn. resolveEvalDepthSlug remaps the academics warm-up turns
+    // (index 0 = spoken intro, 1 = "roadmap" ease-in) to behavioral because they are not concept/
+    // derivation probes (the flow slot says "no deep probing yet"). On those turns, skip the
+    // framework grounding so a vague roadmap answer doesn't get a "derive CLV" first probe — keep it
+    // light, matching evaluate-answer's own depth resolution. (Codex #480 P2.)
     let probeGrounding = ''
-    if (role) {
+    if (role && resolveEvalDepthSlug(interviewType, questionIndex) === interviewType) {
       try {
         const skill = await getSkillSections(role, interviewType, ['interviewer-persona', 'question-strategy'])
         if (skill) {
