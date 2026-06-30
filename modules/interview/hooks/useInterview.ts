@@ -2687,17 +2687,21 @@ export function useInterview({
           { role: 'candidate', text: introAnswer, isProbe: false, probeDepth: 0 },
         )
         enqueueBackgroundEvaluation(intro, introAnswer, 0, 0)
-        // ACADEMICS: the candidate's named subject is now in the transcript, so prefetch Q1 here.
-        // generateQuestion reads live transcriptRef → buildPreviousQA, so Q1 can NAME the subject
-        // ("a roadmap of consumer behaviour") instead of the generic "that subject". Prefetching now
-        // overlaps finalizeThread + the loop transition, so the added latency vs the standard
-        // pre-intro prefetch is minimal. Non-academics already prefetched above; if the candidate
-        // gave no intro answer, runInterviewLoop falls back to generating Q1 (no subject to name).
-        if (isAcademics) {
-          const q1Promise = generateQuestion(1)
-          q1Promise.then((q) => prefetchTTS(q)).catch(() => {})
-          prefetchedQuestionRef.current = q1Promise
-        }
+      }
+
+      // ACADEMICS: prefetch Q1 now — AFTER capturing the intro answer (so the named subject is in the
+      // transcript and Q1 names it via generateQuestion's live buildPreviousQA) but BEFORE
+      // finalizeThread(intro). This sits OUTSIDE the `if (introAnswer)` block on purpose so it also
+      // covers the SILENT-intro path: if the candidate said nothing we still prefetch here at
+      // completedThreads length 0, so /api/generate-question tags Q1 with slot 0's warm-up flowHints
+      // (probe limits/phase). Otherwise the silent path would skip the prefetch, finalizeThread would
+      // bump the thread count, and runInterviewLoop's on-demand generateQuestion(1) would get slot 1's
+      // fundamentals hints for what is still the warm-up turn (Codex #482 P2). No intro answer → no
+      // subject to name → the directive's generic roadmap fallback applies, but on the correct slot.
+      if (isAcademics) {
+        const q1Promise = generateQuestion(1)
+        q1Promise.then((q) => prefetchTTS(q)).catch(() => {})
+        prefetchedQuestionRef.current = q1Promise
       }
 
       // Finalize intro thread

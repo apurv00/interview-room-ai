@@ -1804,3 +1804,13 @@ candidate gives no intro answer, `runInterviewLoop` falls back to generating Q1 
 live transcript → buildPreviousQA includes intro for short transcripts → directive names subject when
 visible). `tsc` clean; full vitest green; build green. End-to-end prod confirmation pending (auth is
 prod-only — a real academics self-interview is the final check).
+
+**Codex follow-up (silent-intro slot, P2).** The first version put the academics Q1 prefetch INSIDE
+`if (introAnswer)`. If an academics candidate gives NO intro answer, that block is skipped →
+`finalizeThread(intro)` bumps the completed-thread count → `runInterviewLoop(1)`'s on-demand
+`generateQuestion(1)` is computed at thread-count 1, so `/api/generate-question` returns `flowHints`
+from the raw count and tags the warm-up Q1 with slot 1's fundamentals probe limits/phase instead of
+slot 0's warm-up hints. Fix: moved the academics prefetch OUT of the `if (introAnswer)` block to run
+unconditionally (still before `finalizeThread`), so the silent path also prefetches at thread-count 0
+and gets slot 0's warm-up `flowHints`. The answered path is unchanged (the intro answer is already in
+`transcriptRef` before this prefetch, so Q1 still names the subject).
