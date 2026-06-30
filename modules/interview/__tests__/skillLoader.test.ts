@@ -1,10 +1,13 @@
 import { describe, it, expect, vi } from 'vitest'
 
-// Mock DB so skillLoader falls back to filesystem in tests
-vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockRejectedValue(new Error('no db in test')) }))
-vi.mock('@shared/db/models', () => ({ InterviewSkill: { findOne: vi.fn().mockResolvedValue(null) } }))
+// Mock DB so the DB-first lookup returns no doc and skillLoader falls back to the filesystem.
+// connectDB RESOLVES (not rejects): a null findOne is then a CONFIRMED not-found the loader may
+// cache; a rejection would simulate a transient error, which must NOT be cached (Codex #480 P3).
+vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(undefined) }))
+vi.mock('@shared/db/models', () => ({ InterviewSkill: { findOne: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(null) }) } }))
 
 import { getSkillContent, getSkillSections, selectSkillQuestions } from '../services/core/skillLoader'
+import { connectDB } from '@shared/db/connection'
 
 const DOMAINS = [
   'general', 'frontend', 'backend', 'sdet', 'data-science',
@@ -48,6 +51,25 @@ describe('getSkillContent', () => {
   it('falls back to the general skill for an unknown domain', async () => {
     // Backstop for CMS-added domains, coherent with resolveFlow's general flow backstop.
     expect(await getSkillContent('nonexistent', 'behavioral')).toContain('General')
+  })
+})
+
+describe('negative caching (Codex #480 P3)', () => {
+  it('caches a no-skill-file miss so the second lookup skips the DB-first path', async () => {
+    // `screening` has no skill files (no *-screening.md, no general-screening.md), and it is the
+    // DEFAULT depth — so without negative caching every screening probe re-hits the DB lookup on
+    // the fast turn-router path. After the first miss, the parsed-section cache must serve the null
+    // without re-entering getSkillContent (→ no further connectDB).
+    vi.mocked(connectDB).mockClear()
+    const first = await getSkillSections('backend', 'screening', ['interviewer-persona'])
+    expect(first).toBe('') // no skill file → empty grounding
+    const dbCallsAfterFirst = vi.mocked(connectDB).mock.calls.length
+    expect(dbCallsAfterFirst).toBeGreaterThan(0) // the first miss did consult the DB-first path
+
+    const second = await getSkillSections('backend', 'screening', ['question-strategy'])
+    expect(second).toBe('')
+    // The negative is cached → the second lookup must NOT re-enter the DB path.
+    expect(vi.mocked(connectDB).mock.calls.length).toBe(dbCallsAfterFirst)
   })
 })
 

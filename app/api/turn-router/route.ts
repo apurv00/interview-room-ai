@@ -3,6 +3,8 @@ import { completion } from '@shared/services/modelRouter'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { trackUsage } from '@shared/services/usageTracking'
 import { TurnRouterLlmSchema } from '@interview/validators/interview'
+import { getSkillSections } from '@interview/services/core/skillLoader'
+import { resolveEvalDepthSlug } from '@interview/services/eval/scoringGuide'
 import { aiLogger } from '@shared/logger'
 import { z } from 'zod'
 
@@ -14,6 +16,9 @@ const TurnRouterSchema = z.object({
   probeDepth: z.number().int().min(0).max(10).default(0),
   questionIndex: z.number().int().min(0).default(0),
   interviewType: z.string().max(50).default('behavioral'),
+  // Domain slug — lets the router pull the per-domain×depth persona + question strategy so probes
+  // are framework-aware (optional: older clients omit it → generic probe behaviour, unchanged).
+  role: z.string().max(100).optional(),
   interruptContext: z.object({
     interruptSpeech: z.string().max(500),
     interruptedUtterance: z.string().max(2000),
@@ -49,6 +54,7 @@ Style guidance:
 
 If probing: write a natural follow-up question (max 18 words, conversational tone, no jargon).
 Probe a concrete claim or missing detail from the candidate's answer; do not rephrase or re-ask the original interview question.
+When an INTERVIEWER PERSONA & PROBE STRATEGY block is provided below, make the probe reflect it — push on the specific framework, mechanism, derivation, or concept-distinction it calls for, rather than a generic "tell me more" / "give an example". Stay on the subject the candidate's answer is about.
 If isPivot: the probeQuestion should gently re-anchor to the original topic.
 If the candidate is asking you to clarify a term or scope in the interview question, make probeQuestion a brief rephrase of the original question instead of evaluating it as an answer.
 
@@ -60,7 +66,7 @@ export const POST = composeApiRoute<TurnRouterBody>({
   rateLimit: { windowMs: 60_000, maxRequests: 60, keyPrefix: 'rl:turn-router' },
 
   async handler(_req, { user, body }) {
-    const { question, answer, probeDepth, questionIndex, interviewType, interruptContext } = body
+    const { question, answer, probeDepth, questionIndex, interviewType, role, interruptContext } = body
     const startTime = Date.now()
 
     // Empty/very short answer → immediate probe without LLM call
@@ -75,13 +81,42 @@ export const POST = composeApiRoute<TurnRouterBody>({
       })
     }
 
+    // Probe grounding: pull the interviewer persona + question strategy for this domain×depth so the
+    // follow-up probes in the round's voice and pushes on the right frameworks/mechanisms (e.g.
+    // "derive CLV", "positioning vs differentiation") rather than a generic "give an example".
+    // Skipped when role is absent (older clients) → unchanged generic behaviour. Adds one cached
+    // skill-file read; probe-start latency tuning is tracked as a separate follow-up.
+    // Only ground on a REAL concept turn. resolveEvalDepthSlug remaps the academics warm-up turns
+    // (index 0 = spoken intro, 1 = "roadmap" ease-in) to behavioral because they are not concept/
+    // derivation probes (the flow slot says "no deep probing yet"). On those turns, skip the
+    // framework grounding so a vague roadmap answer doesn't get a "derive CLV" first probe — keep it
+    // light, matching evaluate-answer's own depth resolution. (Codex #480 P2.)
+    let probeGrounding = ''
+    if (role && resolveEvalDepthSlug(interviewType, questionIndex) === interviewType) {
+      try {
+        // getSkillSections is DB-first (CMS override → file fallback), so on a cold process the
+        // Mongo connect/find could add seconds to — or stall — the fast turn-router path. Bound it:
+        // if it doesn't resolve within the cap, skip grounding and emit a generic probe rather than
+        // delay the first probe (Codex #480 P2). Warm processes hit the in-memory cache (~0ms).
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const skill = await Promise.race([
+          getSkillSections(role, interviewType, ['interviewer-persona', 'question-strategy']),
+          new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), 200) }),
+        ])
+        if (timer) clearTimeout(timer)
+        if (skill) {
+          probeGrounding = `\n\nINTERVIEWER PERSONA & PROBE STRATEGY for this round (probe in this voice; push on the framework/mechanism/derivation/distinction it describes):\n${skill}`
+        }
+      } catch { /* skill file unavailable / timed out — fall back to generic probe */ }
+    }
+
     let userPrompt = `Interview type: ${interviewType}
 Probe depth: ${probeDepth} (${probeDepth >= 2 ? 'deep — only probe if truly critical' : probeDepth === 1 ? 'mid — prefer specific clarification' : 'first probe — prefer broad expansion'})
 Question index: ${questionIndex}
 
 Question: ${question}
 
-Candidate answer: ${trimmedAnswer}`
+Candidate answer: ${trimmedAnswer}${probeGrounding}`
 
     // When the candidate interrupted AI speech, add context so the model
     // can decide how to handle the interruption.
