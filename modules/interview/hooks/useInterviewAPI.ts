@@ -347,7 +347,9 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal,
-          body: JSON.stringify({ question, answer, probeDepth, questionIndex, interviewType, interruptContext }),
+          // role lets the router pull the per-domain×depth persona + question strategy so probes
+          // are framework-aware (config is stable for the session; null on older/edge cases → generic).
+          body: JSON.stringify({ question, answer, probeDepth, questionIndex, interviewType, role: config?.role, interruptContext }),
         })
         if (!res.ok) return TURN_ROUTER_FALLBACK
         return (await res.json()) as TurnRouterResult
@@ -355,7 +357,7 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
         return TURN_ROUTER_FALLBACK
       }
     },
-    [], // no deps — pure fetch
+    [config], // config for role-based probe grounding
   )
 
   const answerCandidateQuestion = useCallback(

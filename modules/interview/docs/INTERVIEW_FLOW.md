@@ -1701,3 +1701,41 @@ can't drift if useInterview later switches to it. Known/accepted: the FIRST prob
 answer is still driven by the turn-router (for low latency), so a main answer that is itself a
 non-answer gets ONE clarifying probe before the bound advances — re-probing once is reasonable, and
 gating probe #1 on the (backgrounded) full eval would regress probe-start latency on the hot path.
+
+### 2026-06-30 · Probe questions were generic for EVERY depth — grounded the probe path
+
+**Symptom.** Follow-up/probe questions were generic across all depths ("Can you walk me through a
+specific example?", "Can you tell me more?") — most visible in academics, where a viva should be
+framework-dense every turn (no "derive CLV", "positioning vs differentiation", "explain Maslow").
+
+**Root cause (cross-depth, not academics-specific).** The MAIN/flow questions are persona- and
+framework-grounded for all depths (generate-question loads `interviewer-persona` + `question-strategy`
+from the per-domain×depth skill file). But the PROBE path had none of it: (a) the **turn-router**
+(probe #1) is called for every depth with an intentionally minimal payload — *no persona, no
+question-strategy, not even the domain* — so it can only emit generic follow-ups; (b) **evaluate-answer**
+(which supplies `probeTarget` for probe #2+) fetched only scoring sections (`scoring-emphasis`,
+`red-flags`, `experience-calibration`), so its probeTarget was a generic "gap/claim", never a named
+framework. So depths DID use the persona in main questions, but NO depth used it in probes.
+
+**Fix (full grounding, all depths).**
+- **turn-router (probe #1):** accepts `role` (passed from `useInterviewAPI` via `config?.role`), fetches
+  `interviewer-persona` + `question-strategy` for that domain×depth, and injects an "INTERVIEWER
+  PERSONA & PROBE STRATEGY" block so the probe is in-voice and pushes on the framework / mechanism /
+  derivation / distinction the round expects. `role` is optional → older/edge clients fall back to the
+  unchanged generic probe.
+- **evaluate-answer (probe #2+):** the `probeTarget` instruction now PREFERS naming the specific
+  framework/theory/mechanism/derivation/concept-distinction the answer was shallow on (e.g. "the CLV
+  derivation", "positioning vs differentiation", "the post-purchase stage"), falling back to a generic
+  gap only when none fits. This is instruction-only — deliberately NOT added to the scoring criteria,
+  so it changes probe wording without shifting scores for any depth.
+
+**Latency (known, follow-up).** The turn-router now does one (cached) skill-file read + a larger
+prompt, so probe-start is slightly slower. The turn-router exists precisely to keep probe #1 fast
+(<400ms); tuning this (e.g. cache the assembled probe-grounding block per session, or trim the
+injected strategy) is tracked as a deliberate next step — full grounding shipped first, latency
+optimisation second, by decision.
+
+**Verification.** `tsc` clean; full vitest 5007 passing (no regressions — grounding is additive, `role`
+optional); build green. No new unit tests: both routes need full auth+LLM mocking to invoke and the
+effect is LLM-driven probe wording; the change is additive (generic fallback when `role` absent).
+End-to-end prod confirmation pending (auth is prod-only) — probes should now name frameworks per depth.
