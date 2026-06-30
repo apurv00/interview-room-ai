@@ -28,7 +28,7 @@ npm run lint         # ESLint
 | Framework    | Next.js 14.2.5 (App Router), React 18, TypeScript 5 |
 | Auth         | NextAuth v4 — credentials + Google/GitHub OAuth    |
 | Database     | MongoDB (Mongoose), Redis (ioredis)                |
-| AI           | Anthropic Claude (claude-opus-4-6) via @anthropic-ai/sdk |
+| AI           | Model Router → `gpt-5.4-mini` (OpenAI) for `interview.*`, Claude Sonnet/Haiku/Opus for resume/learn — defaults in `shared/services/taskSlots.ts`, CMS-overridable |
 | Payments     | Stripe (free / pro / enterprise plans)             |
 | Styling      | TailwindCSS 3.4 + Framer Motion                   |
 | Testing      | Vitest + React Testing Library + JSDOM             |
@@ -95,7 +95,7 @@ middleware.ts               # Route protection, subdomain rewriting, security he
   - Scheduled functions: `emailDigestJob` (daily 9 AM UTC), `regeneratePlansJob` (monthly). All registered via `/api/inngest`.
   - Local dev: run `npm run dev:inngest` in a second terminal to boot the Inngest dev dashboard at localhost:8288.
 
-- **Model Router** (`shared/services/modelRouter.ts`): All LLM calls go through `completion()` / `completionStream()` which resolve the model+provider from CMS config (ModelConfig collection). 26 task slots cover every AI call site. Fallback chain: CMS primary → CMS fallback → hardcoded Anthropic default. Config cached in-memory for 60s, invalidated on CMS save. OpenRouter integration via Anthropic SDK pointed at `https://openrouter.ai/api/v1`. CMS admin: `/cms/model-config`.
+- **Model Router** (`shared/services/modelRouter.ts`): All LLM calls go through `completion()` / `completionStream()` which resolve the model+provider from CMS config (ModelConfig collection). Task slots cover every AI call site. Fallback chain: CMS primary → CMS fallback → hardcoded per-slot default in `shared/services/taskSlots.ts` (the source of truth, NOT all-Anthropic): **every `interview.*` slot defaults to `gpt-5.4-mini`/OpenAI** — `interview.generate-question` is 300 tokens and is shared by ALL depths incl. academics; resume/learn slots default to Claude Sonnet/Haiku/Opus. Config cached in-memory for 60s, invalidated on CMS save. OpenRouter integration via Anthropic SDK pointed at `https://openrouter.ai/api/v1`. CMS admin: `/cms/model-config`.
 
 ## HOT PATH — DO NOT BREAK
 
@@ -241,7 +241,7 @@ _Update this section each session to carry context forward._
 - **Service-level test safety net** (architecture Phase 0): Added 86 new tests across resume, b2b, and cms module services before touching any code. Total: 819 tests passing across 66 files.
 - **Multimodal interview analysis (Phase 2)**: Post-interview analysis pipeline — Groq Whisper transcription + MediaPipe facial landmarks + Claude Haiku fusion → Interview Replay page with synced video, signal timeline, word-level transcript, coaching tips. Feature-flagged, quota-gated (Free: 1/month, Pro: 10/month, Enterprise: unlimited).
 - **Real-time multimodal coaching**: Client-side MediaPipe facial coaching (eye contact, expression, head stability nudges), reactive avatar (responds to candidate), Deepgram Aura TTS (natural AI voice), Deepgram streaming STT (replaces Web Speech API), real-time prosody coaching.
-- **Performance**: Switched fusion from Sonnet→Haiku (~15s→3-5s), Whisper from OpenAI→Groq (~25s→3s), eval+question gen from Sonnet→Haiku (~4s→1-2s), coaching delay 1500ms→800ms.
+- **Performance**: Switched fusion from Sonnet→Haiku (~15s→3-5s), Whisper from OpenAI→Groq (~25s→3s), eval+question gen Sonnet→Haiku (~4s→1-2s), coaching delay 1500ms→800ms. **(Stale: the interview AI calls — incl. `interview.generate-question` and `interview.evaluate-answer` — have since moved to `gpt-5.4-mini`/OpenAI. The live per-slot model + maxTokens defaults are in `shared/services/taskSlots.ts`, not this changelog. `maxTokens` is per TASK, not per depth — question-gen is 300 for every depth incl. academics.)**
 - **Bug fixes**: history/feedback navigation, login redirect flow, first question timing delay, voice synthesis, branding consistency
 - **Code quality**: DRY extraction of shared utilities, session-scoped localStorage keys, 111 tests passing
 - **SEO phase 1**: Open Graph metadata, JSON-LD structured data, sitemap.ts, favicons, security headers, robots.txt
@@ -326,27 +326,32 @@ _Add items as they arise. Remove when resolved._
 
 - **Tuning experiment: AudioWorklet buffer size (`public/pcm-processor.js` line `CHUNK_SAMPLES = 4096`).** The worklet currently buffers 32 render quanta (32 × 128 = 4096 samples = 256 ms at 16 kHz) before posting to the main thread — chosen to match the previous `ScriptProcessorNode(4096, 1, 1)` cadence so Deepgram's server-side VAD (`utterance_end_ms=2500`) and all client-side grace timers (`GRACE_MS_BY_INTENT` in `useDeepgramRecognition.ts`) continue to work without retuning. AudioWorklet itself has no 4096-sample constraint (unlike the deprecated ScriptProcessor), so smaller buffers are possible and may reduce interim-transcript latency for live coaching feedback. Candidate values to measure: 8 render quanta (1024 samples / 64 ms / 15.6 WS msgs per sec), 16 quanta (2048 / 128 ms / 7.8 msgs/sec), 32 (current). Experiment scope: run 5 interviews per setting with DevTools Network panel recording Deepgram WS frames, measure p95 `time-from-last-spoken-word → speech_final`, confirm no increase in `graceTimer` firings (would indicate the server-side VAD isn't getting enough signal per packet). Gate behind a feature flag before flipping the default. Low-priority win — the migration itself (ScriptProcessor → AudioWorklet, PR with root-cause fix) already buys us the main-thread-throttle immunity that was actually hurting users; chunk size is second-order polish.
 
+- **Backlog (from PR #480 — probe-path grounding): ground probe #2+ (follow-up questions), all depths.** PR #480 grounded **probe #1** (the turn-router's first follow-up) with the per-domain×depth `interviewer-persona` + `question-strategy`, but **probe #2+ is still generic** — its target comes from `evaluate-answer`'s `probeTarget`, which was intentionally left ungrounded. A framework-preferring `probeTarget` was tried and reverted because (a) `buildProbeQuestion`'s `isWeakProbeTarget` overlap filter (`modules/interview/hooks/interviewUtils.ts`) rejects a concept named in the interviewer question (anti-re-ask), so the target fell back to generic anyway, and (b) the probe loop increments `questionIndex`, so a probe of the academics index-1 warm-up resolves to `academics` and would fire a framework probe on a "no deep probing yet" turn. Reconstructing the main index as `questionIndex - probeDepth` is **unsafe** (the nonsensical-retry path reuses `qIdx` with `probeDepth=1` without incrementing). Fix paths: (1) relax `isWeakProbeTarget`'s question-overlap rejection for genuine concept/framework targets (don't treat "going deeper on a named concept" as a re-ask), AND (2) pass the **true topic (main-question) index** from the client to `/api/evaluate-answer` so `resolveEvalDepthSlug` resolves the thread depth correctly for probe evals — best done as an **options-object refactor** of `useInterviewAPI.evaluateAnswer` (currently 8 positional args) rather than threading a 9th positional param. Impact: deeper probes stay generic until done; probe #1 grounding already covers the dominant case.
+
+- **Backlog (from PR #480): `screening` depth has no skill files — it's ungrounded everywhere.** There are zero `modules/interview/skills/*-screening.md` files, yet `screening` is the **default** depth — so screening (HR) interviews get no `interviewer-persona` / `question-strategy` / sample questions in main OR probe questions; they run only on the `basePrompt` "motivation / culture-fit / STAR" instructions in `app/api/generate-question/route.ts`. (PR #480's source-layer negative caching makes the wasted screening skill lookup cheap, but adds no grounding — there's nothing to load.) Fix paths: (a) author `{domain}-screening.md` skill files (higher quality, real content work — mirror the academics/behavioral structure: Interviewer Persona, Question Strategy, Sample Questions, etc.), or (b) map `screening` → the `behavioral` skill (fast: in the grounding callers or `skillLoader`, resolve `screening` to `behavioral` for skill-section loads) so screening inherits a persona/strategy. Option (b) is partial (behavioral ≠ HR-screening framing) but immediate.
+
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **interview-room-ai** (14429 symbols, 21661 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **interview-room-ai** (10990 symbols, 19507 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
-> If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
+> Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 
 ## Always Do
 
-- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `gitnexus_impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
-- **MUST run `gitnexus_detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows.
+- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
+- **MUST run `detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows. For regression review, compare against the default branch: `detect_changes({scope: "compare", base_ref: "main"})`.
 - **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
-- When exploring unfamiliar code, use `gitnexus_query({query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
-- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `gitnexus_context({name: "symbolName"})`.
+- When exploring unfamiliar code, use `query({search_query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
+- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `context({name: "symbolName"})`.
+- For security review, `explain({target: "fileOrSymbol"})` lists taint findings (source→sink flows; needs `analyze --pdg`).
 
 ## Never Do
 
-- NEVER edit a function, class, or method without first running `gitnexus_impact` on it.
+- NEVER edit a function, class, or method without first running `impact` on it.
 - NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
-- NEVER rename symbols with find-and-replace — use `gitnexus_rename` which understands the call graph.
-- NEVER commit changes without running `gitnexus_detect_changes()` to check affected scope.
+- NEVER rename symbols with find-and-replace — use `rename` which understands the call graph.
+- NEVER commit changes without running `detect_changes()` to check affected scope.
 
 ## Resources
 
