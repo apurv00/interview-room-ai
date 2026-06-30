@@ -134,12 +134,22 @@ function overlapRatio(targetTokens: string[], sourceText?: string | null): numbe
   return overlap / targetTokens.length
 }
 
-// Recognises a candidate utterance that is ASKING the interviewer to clarify (rather than answering).
-// Used to catch the turn-router's clarify-rephrase echo — when a candidate asks what a term means, the
-// router is prompted to rephrase the question, which parrots the question's own words back at them. See
-// isWeakProbeTarget's clarify-echo guard.
+// A candidate utterance that is ASKING the interviewer to clarify (rather than answering). Used to
+// catch the turn-router's clarify-rephrase echo — when a candidate asks what a term means, the router
+// is prompted to rephrase the question, parroting its own words back at them. ANCHORED to the start of
+// the utterance (modulo filler) so a narrative mention mid-sentence ("if I don't understand the user,
+// I'd run interviews"; "I didn't know what was causing it, so I checked logs") does NOT count — only an
+// actual, request-shaped clarification does (Codex #481 P2). See isWeakProbeTarget's clarify-echo guard.
 const CLARIFY_REQUEST_RE =
-  /\b(?:what (?:do|does|did|d['’]?you) (?:you )?mean|what'?s (?:that|this|it) mean|(?:can|could|would) you (?:please )?(?:clarify|explain|rephrase)|i (?:don'?t|do not|didn'?t|am not sure i) (?:understand|get|follow|know what)|(?:not sure|unclear) what (?:you|that|this)|mean by that|what (?:do you )?mean by)\b/i
+  /^(?:sorry[,.!\s]+|wait[,.!\s]+|hmm+[,.!\s]+|umm*[,.!\s]+|hold on[,.!\s]+)*(?:(?:can|could|would) you (?:please )?(?:clarify|explain|rephrase|repeat)|what (?:do|does) (?:you|that|this) mean|what'?s (?:that|this|it) mean|what (?:do you )?mean by|i (?:don'?t|do not) (?:really |quite )?(?:understand|follow)|(?:i'?m|i am) not sure (?:what|i)|not sure what you mean|could you be more specific)\b/i
+
+// A clarification is a brief ASK, not a long narrative answer that merely mentions uncertainty — so
+// require both the request shape (anchored regex) AND a short utterance.
+function isClarifyRequest(answer?: string | null): boolean {
+  const a = (answer ?? '').trim()
+  if (!a || a.split(/\s+/).length > 14) return false
+  return CLARIFY_REQUEST_RE.test(a)
+}
 
 function isWeakProbeTarget(
   target: string,
@@ -157,15 +167,17 @@ function isWeakProbeTarget(
   if (targetTokens.length < 2) return true
 
   // Interrogative handling depends on how the CALLER uses this target:
-  //  - sanitizeProbeQuestion speaks it VERBATIM, so a full interrogative QUESTION ("how does
-  //    motivation differ from a need?") is a perfectly good probe — only a bare fragment ("what",
-  //    "why", "how come") is weak. Rejecting EVERY how/why/what-prefixed string stripped well-formed
-  //    grounded probes to the generic "specific example" fallback in prod (live academics transcripts).
+  //  - sanitizeProbeQuestion speaks it VERBATIM. A full interrogative QUESTION is a perfectly good probe
+  //    whether it's long ("how does motivation differ from a need?") or CONCISE ("why does motivation
+  //    matter?", "how does CLV change?"). Bare fragments ("why?", "what about that?") are ALREADY caught
+  //    by the <2-content-token guard above (that's the shape-based bare-fragment test), so the verbatim
+  //    path does NO interrogative-by-shape rejection. A token-count threshold here wrongly stripped
+  //    concise grounded questions back to the generic fallback (Codex #481 P2).
   //  - buildProbeQuestion TEMPLATES it ("Can you tell me more about <target>?"), so ANY interrogative
-  //    target renders ungrammatically ("...about how does X work?"). For that path (opts.templated)
-  //    reject all interrogatives — a full-question probe belongs to the verbatim path, not the template.
-  if (/^(what|why|how|which|when|where|who)\b/i.test(lower)) {
-    if (opts?.templated || targetTokens.length <= 3) return true
+  //    renders ungrammatically there. Reject all interrogatives on that path; a full-question probe
+  //    belongs to the verbatim path, not the template.
+  if (opts?.templated && /^(what|why|how|which|when|where|who)\b/i.test(lower)) {
+    return true
   }
   if (/\b(?:tradeoff rationale|rationale|rubric|criterion|criteria|competenc(?:y|ies))\b/i.test(lower)) {
     return true
@@ -184,7 +196,7 @@ function isWeakProbeTarget(
   // itself re-quotes the question (pushing answerOverlap >= 0.5). So if the candidate's utterance is a
   // clarify request AND this probe just re-states the question, treat it as weak (clean fallback).
   // Narrow by design (gated on an actual clarify request) so it can't strip a genuine grounded probe.
-  if (questionOverlap >= 0.6 && CLARIFY_REQUEST_RE.test(context?.answer ?? '')) {
+  if (questionOverlap >= 0.6 && isClarifyRequest(context?.answer)) {
     return true
   }
 

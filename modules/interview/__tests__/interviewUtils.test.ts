@@ -382,6 +382,30 @@ describe('sanitizeProbeQuestion', () => {
     }, 'expand')
     expect(sanitized).toBe(q)
   })
+
+  // Regression (Codex #481 P2): a CONCISE but complete grounded interrogative ("why does motivation
+  // matter?" = 3 significant tokens) must survive on the verbatim path. The earlier token-count
+  // threshold (<= 3 tokens → weak) wrongly re-created the generic-fallback bug for short valid probes.
+  const conceptCtx = {
+    question: 'Tell me about consumer behaviour fundamentals.',
+    answer: 'Consumer behaviour studies how people choose products.',
+  }
+  it('keeps a CONCISE grounded interrogative probe (3 significant tokens), not just long ones', () => {
+    expect(sanitizeProbeQuestion('Why does motivation matter?', conceptCtx, 'expand')).toBe('Why does motivation matter?')
+    expect(sanitizeProbeQuestion('How does CLV change?', conceptCtx, 'quantify')).toBe('How does CLV change?')
+  })
+
+  // Regression (Codex #481 P2): the clarify-echo guard must NOT fire on NARRATIVE uncertainty inside a
+  // real answer ("if I don't understand user needs, I'd run interviews"). The candidate ANSWERED — a
+  // question-overlapping follow-up must survive, not be stripped to the generic fallback.
+  it('does NOT treat narrative uncertainty in a substantive answer as a clarify request', () => {
+    const ctx = {
+      question: 'How would you understand user needs?',
+      answer: "If I don't understand user needs, I'd run interviews and synthesize the themes.",
+    }
+    const probe = 'How would you understand user needs through customer interviews?'
+    expect(sanitizeProbeQuestion(probe, ctx, 'expand')).toBe(probe)
+  })
 })
 
 // ─── buildThreadSummary ─────────────────────────────────────────────────────

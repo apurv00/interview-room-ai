@@ -1824,3 +1824,19 @@ too broad — the two probe paths use the target differently:
 
 Verification: `interviewUtils.test.ts` adds tests for the templated rejection, the verbatim/templated
 asymmetry, the clarify-echo, and the narrow-guard negative. `tsc` clean; full vitest green; build green.
+
+**Codex review round (two more P2s on the above, both fixed).**
+- **Concise grounded interrogatives were still stripped.** The first fix used `significantTokens <= 3`
+  as the "bare fragment" test, but a complete short question ("why does motivation matter?", "how does
+  CLV change?") also has only 3 content tokens — so it was still routed to the generic fallback (the
+  original bug, for short probes). Root realization: the `< 2` content-token guard ALREADY catches true
+  bare fragments by shape ("why?" → 0 tokens; "what about that?" → 1). So the verbatim path needs NO
+  interrogative-by-shape rejection at all — the token-count threshold was removed; only the templated
+  path (`buildProbeQuestion`) still rejects interrogatives (it can't render them grammatically).
+- **Clarify regex false-positived on narrative uncertainty.** `CLARIFY_REQUEST_RE` matched mid-sentence
+  ("if I don't understand user needs, I'd run interviews"; "I didn't know what was causing it, so…"),
+  so a real answer's question-overlapping follow-up was wrongly stripped. Fixed: the regex is now
+  ANCHORED to the start of the utterance (modulo "sorry/wait/hmm" filler) and gated by a new
+  `isClarifyRequest` that also requires a SHORT utterance (≤14 words). Past-tense "didn't"/"do not
+  follow [metrics]" narrative forms were dropped. Validated against both Codex false-positive examples
+  (now excluded) and six real clarify phrasings (still caught). Two regression tests added.
