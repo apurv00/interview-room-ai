@@ -1723,11 +1723,11 @@ framework. So depths DID use the persona in main questions, but NO depth used it
   PERSONA & PROBE STRATEGY" block so the probe is in-voice and pushes on the framework / mechanism /
   derivation / distinction the round expects. `role` is optional → older/edge clients fall back to the
   unchanged generic probe.
-- **evaluate-answer (probe #2+):** the `probeTarget` instruction now PREFERS naming the specific
-  framework/theory/mechanism/derivation/concept-distinction the answer was shallow on (e.g. "the CLV
-  derivation", "positioning vs differentiation", "the post-purchase stage"), falling back to a generic
-  gap only when none fits. This is instruction-only — deliberately NOT added to the scoring criteria,
-  so it changes probe wording without shifting scores for any depth.
+- **evaluate-answer (probe #2+): NOT grounded — reverted (see below).** An attempt to make
+  `probeTarget` prefer a named framework was reverted: it fought the existing `isWeakProbeTarget`
+  question-overlap filter (a concept named in the question got rejected → generic anyway) and created
+  a warm-up depth-resolution edge. Probe #2+ keeps its original generic target; grounding probe #2+
+  is a focused follow-up. Probe #1 (turn-router) is the grounded path.
 
 **Latency (known, follow-up).** The turn-router now does one (cached) skill-file read + a larger
 prompt, so probe-start is slightly slower. The turn-router exists precisely to keep probe #1 fast
@@ -1748,23 +1748,26 @@ is skipped there and a vague roadmap answer no longer gets a "derive CLV" first 
 evaluate-answer already resolves the depth for those turns (the turn-router is called on the MAIN
 answer, so it gets the main index — verified).
 
-**Turn-router DB-stall guard + negative caching (Codex #480 P3).** `getSkillSections` is DB-first
-(CMS override → file fallback), so on a cold process the Mongo connect/find could add seconds to — or
-stall — the fast turn-router path (target <400ms). Two-layer fix: (1) the turn-router's grounding read
-is bounded by a 200 ms `Promise.race` (timeout → generic probe, no stall); (2) **negative caching** in
-`skillLoader.getParsedSections` — the `screening` depth has NO skill files (and is the *default*
-depth), and misses weren't cached, so every screening probe re-ran the DB-first lookup for zero
-grounding. `parsedCache` now stores `null` misses (TTL'd), so a no-skill-file combo is looked up once
-per process, not per probe — fixing both the turn-router and the pre-existing generate-question
-screening waste. (A CMS-added skill still appears within `DB_CACHE_TTL`.)
+**Turn-router DB-stall guard + source-layer negative caching (Codex #480 P3 + follow-up).**
+`getSkillSections` is DB-first (CMS override → file fallback), so on a cold process the Mongo
+connect/find could add seconds to — or stall — the fast turn-router path (<400ms). Two-layer fix:
+(1) the turn-router's grounding read is bounded by a 200 ms `Promise.race` (timeout → generic probe,
+no stall); (2) **negative caching at the SOURCE layers** — the `screening` depth has NO skill files
+(and is the *default* depth) and misses weren't cached, so every screening probe re-ran the DB-first
+lookup. `loadSkillFromFile` now caches a permanent file-miss (`null`), and `loadSkillFromDB` caches a
+**confirmed not-found** (`content: null`) — but NEVER an error (a caught Mongo failure returns null
+*uncached* and is retried). So a no-skill-file combo is looked up once per process, while a transient
+DB blip can't poison a real CMS skill for the TTL. (An earlier version cached the negative in
+`parsedCache`, which conflated errors with not-found — that was reverted in favour of this.)
 
-**Known minor edge, deferred (Codex #480 P2, probe #2+).** evaluate-answer resolves eval depth from
-`questionIndex`, which the probe loop increments — so a *probe of* the academics index-1 roadmap can
-arrive as index ≥2 and resolve to academics, letting the framework `probeTarget` fire on a warm-up
-probe. An earlier "fix" that reconstructed the main index as `questionIndex - probeDepth` was REVERTED
-because it is unsafe: the nonsensical-retry path reuses the same `qIdx` with `probeDepth=1` *without*
-incrementing, so the subtraction mis-resolved real concept retries (a viva answer scored behavioral;
-Q0 retry → index -1). The correct fix is to pass the true topic index from the client; deferred to
-avoid threading a 9th positional arg through the evaluate API (better done as an options-object
-refactor). Real-world impact is low — it only affects probe #2+ of a warm-up, and the framework
-target only fires when a framework actually fits the answer.
+**Probe #2+ grounding — reverted (resolves Codex #480 P2 and the question-overlap finding).** Making
+`probeTarget` prefer a named framework had two problems: (a) `buildProbeQuestion`'s `isWeakProbeTarget`
+rejects a target whose tokens overlap the interviewer question (anti-re-ask filter), so a concept
+named in the question fell back to a generic probe anyway; (b) the probe loop increments
+`questionIndex`, so a probe of the academics index-1 roadmap resolved to academics and could fire a
+framework probe on a warm-up. The depth-from-`questionIndex - probeDepth` reconstruction was *also*
+unsafe (the nonsensical-retry path reuses `qIdx` with `probeDepth=1` without incrementing → mis-scored
+real retries). Rather than relax the shared probe-quality filter + thread a true topic index through
+the evaluate API, the `probeTarget` nudge was **reverted to its original generic form** — cleanly
+removing both edges. Grounding probe #2+ (filter relaxation + client-passed topic index, ideally an
+options-object refactor of the evaluate API) is a focused follow-up; probe #1 grounding stands.

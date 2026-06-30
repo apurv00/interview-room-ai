@@ -36,13 +36,15 @@ const EXP_HEADING_MAP: Record<string, ExperienceLevel | 'all'> = {
 // ─── Cache (DB content uses TTL, filesystem is permanent) ────────────────────
 
 const DB_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
-const dbCache = new Map<string, { content: string; timestamp: number }>()
-const fileCache = new Map<string, string>()
-// `sections: null` caches a NEGATIVE result (no skill file for this domain×depth) so combos with
-// no skill file — e.g. the default `screening` depth (no *-screening.md) — don't re-run the
-// DB-first lookup on every call and stall the fast turn-router path. TTL'd like positive entries,
-// so a CMS-added skill still appears within DB_CACHE_TTL. (Codex #480 P3.)
-const parsedCache = new Map<string, { sections: Map<SkillSection, string> | null; timestamp: number }>()
+// Negative caching is done at the SOURCE layers so a TRANSIENT DB error is never cached as a
+// "no skill" miss (Codex #480 P3 follow-up): dbCache stores `content: null` only for a CONFIRMED
+// not-found (a successful query that returned no doc), never for a caught error; fileCache stores
+// `null` for a permanent file miss (files don't appear at runtime). This keeps no-skill-file combos
+// (e.g. the default `screening` depth) from re-hitting the DB on every probe, while letting a real
+// skill be retried immediately after a transient Mongo failure.
+const dbCache = new Map<string, { content: string | null; timestamp: number }>()
+const fileCache = new Map<string, string | null>()
+const parsedCache = new Map<string, { sections: Map<SkillSection, string>; timestamp: number }>()
 
 function getSkillsDir(): string {
   return path.join(process.cwd(), 'modules', 'interview', 'skills')
@@ -50,7 +52,7 @@ function getSkillsDir(): string {
 
 function loadSkillFromFile(domain: string, depth: string): string | null {
   const key = `${domain}-${depth}`
-  if (fileCache.has(key)) return fileCache.get(key)!
+  if (fileCache.has(key)) return fileCache.get(key) ?? null
 
   try {
     const filePath = path.join(getSkillsDir(), `${key}.md`)
@@ -58,6 +60,7 @@ function loadSkillFromFile(domain: string, depth: string): string | null {
     fileCache.set(key, content)
     return content
   } catch {
+    fileCache.set(key, null) // permanent miss — files don't appear at runtime, so cache it
     return null
   }
 }
@@ -66,7 +69,7 @@ async function loadSkillFromDB(domain: string, depth: string): Promise<string | 
   const key = `${domain}-${depth}`
   const cached = dbCache.get(key)
   if (cached && Date.now() - cached.timestamp < DB_CACHE_TTL) {
-    return cached.content
+    return cached.content // may be null — a cached CONFIRMED not-found
   }
 
   try {
@@ -75,14 +78,16 @@ async function loadSkillFromDB(domain: string, depth: string): Promise<string | 
     const { InterviewSkill } = await import('@shared/db/models')
     await connectDB()
     const doc = await InterviewSkill.findOne({ domain, depth, isActive: true }).lean()
-    if (doc?.content) {
-      dbCache.set(key, { content: doc.content, timestamp: Date.now() })
-      return doc.content
-    }
+    // The query SUCCEEDED — cache the result, whether a doc was found or confirmed-not-found
+    // (null). This line is unreachable on error, so a transient Mongo failure is never cached as a
+    // miss; it returns null below (uncached) and is retried on the next call. (Codex #480 P3)
+    const content = doc?.content ?? null
+    dbCache.set(key, { content, timestamp: Date.now() })
+    return content
   } catch (err) {
     aiLogger.warn({ err, domain, depth }, 'Skill DB lookup failed, falling back to file')
+    return null // error → do NOT cache; retried next call
   }
-  return null
 }
 
 /**
@@ -127,16 +132,14 @@ async function getParsedSections(domain: string, depth: string): Promise<Map<Ski
   const key = `${domain}-${depth}`
   const cached = parsedCache.get(key)
   if (cached && Date.now() - cached.timestamp < DB_CACHE_TTL) {
-    return cached.sections // may be null — a cached negative (no skill file for this combo)
+    return cached.sections
   }
 
+  // No skill file → null. The repeat-lookup cost for no-skill-file combos (e.g. screening) is
+  // absorbed by the source caches (dbCache confirmed-not-found + fileCache permanent-miss), so we
+  // don't cache a parsed negative here (which would have conflated DB errors with not-found).
   const content = await getSkillContent(domain, depth)
-  if (!content) {
-    // Cache the MISS too (TTL'd): depths with no skill file (e.g. screening) would otherwise
-    // re-hit the DB-first lookup on every call. (Codex #480 P3)
-    parsedCache.set(key, { sections: null, timestamp: Date.now() })
-    return null
-  }
+  if (!content) return null
 
   const sections = parseSections(content)
   parsedCache.set(key, { sections, timestamp: Date.now() })

@@ -1,8 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
 
-// Mock DB so skillLoader falls back to filesystem in tests
-vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockRejectedValue(new Error('no db in test')) }))
-vi.mock('@shared/db/models', () => ({ InterviewSkill: { findOne: vi.fn().mockResolvedValue(null) } }))
+// Mock DB so the DB-first lookup returns no doc and skillLoader falls back to the filesystem.
+// connectDB RESOLVES (not rejects): a null findOne is then a CONFIRMED not-found the loader may
+// cache; a rejection would simulate a transient error, which must NOT be cached (Codex #480 P3).
+vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(undefined) }))
+vi.mock('@shared/db/models', () => ({ InterviewSkill: { findOne: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(null) }) } }))
 
 import { getSkillContent, getSkillSections, selectSkillQuestions } from '../services/core/skillLoader'
 import { connectDB } from '@shared/db/connection'
