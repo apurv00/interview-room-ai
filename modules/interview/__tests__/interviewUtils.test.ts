@@ -308,6 +308,27 @@ describe('sanitizeProbeQuestion', () => {
 
     expect(sanitized).toBe('Can you quantify the 20% churn reduction?')
   })
+
+  // Regression: a full, well-formed interrogative probe (how/why/what...) must NOT be stripped to
+  // the generic fallback. The old isWeakProbeTarget rejected EVERY how/why/what-prefixed string;
+  // because sanitizeProbeQuestion passes it the whole turn-router question, that nulled grounded
+  // probes → "Can you walk me through the specific example?" appeared all over live academics
+  // transcripts. These are real grounded probes and must survive verbatim.
+  const academicCtx = {
+    question: "what is motivation in consumer behaviour, and how does it influence a buyer's decision?",
+    answer: 'motivation is the internal driving force that prompts a person to act to satisfy a need',
+  }
+  it('keeps a full "How does X differ from Y?" grounded probe', () => {
+    const q = 'How does motivation differ from a need in consumer behaviour?'
+    expect(sanitizeProbeQuestion(q, academicCtx, 'expand')).toBe(q)
+  })
+  it('keeps a "Walk me through how X explains Y" grounded probe', () => {
+    const q = "Walk me through how Maslow's hierarchy explains a buyer's motivation?"
+    expect(sanitizeProbeQuestion(q, academicCtx, 'expand')).toBe(q)
+  })
+  it('still falls back on a BARE interrogative fragment', () => {
+    expect(sanitizeProbeQuestion('Why?', academicCtx, 'expand')).toBe('Can you walk me through the specific example?')
+  })
 })
 
 // ─── buildThreadSummary ─────────────────────────────────────────────────────

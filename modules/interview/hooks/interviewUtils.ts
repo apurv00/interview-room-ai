@@ -141,7 +141,16 @@ function isWeakProbeTarget(target: string, context?: ProbeQuestionContext): bool
   if (/^(that|this|it|thing|the question|the answer|the example|the details?|details?|specifics?|more details|the point|the topic)$/i.test(lower)) {
     return true
   }
-  if (/^(what|why|how|which|when|where|who)\b/i.test(lower)) {
+
+  const targetTokens = significantTokens(target)
+  if (targetTokens.length < 2) return true
+
+  // A BARE interrogative ("what", "why", "how come") is a weak target — but a full interrogative
+  // QUESTION ("how does motivation differ from a need?") is a perfectly good probe. sanitizeProbeQuestion
+  // feeds this the WHOLE turn-router question (not a noun phrase), so rejecting EVERY how/why/what-prefixed
+  // string stripped well-formed grounded probes down to the generic "specific example" fallback in prod
+  // (confirmed against live academics transcripts). Only reject SHORT interrogative fragments.
+  if (targetTokens.length <= 3 && /^(what|why|how|which|when|where|who)\b/i.test(lower)) {
     return true
   }
   if (/\b(?:tradeoff rationale|rationale|rubric|criterion|criteria|competenc(?:y|ies))\b/i.test(lower)) {
@@ -150,9 +159,6 @@ function isWeakProbeTarget(target: string, context?: ProbeQuestionContext): bool
   if (/\bexact\b/i.test(lower) && /\b(?:partner|partners|kpi|kpis|metric|metrics)\b/i.test(lower)) {
     return true
   }
-
-  const targetTokens = significantTokens(target)
-  if (targetTokens.length < 2) return true
 
   const questionOverlap = overlapRatio(targetTokens, context?.question)
   const answerOverlap = overlapRatio(targetTokens, context?.answer)

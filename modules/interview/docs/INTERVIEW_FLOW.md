@@ -1771,3 +1771,34 @@ real retries). Rather than relax the shared probe-quality filter + thread a true
 the evaluate API, the `probeTarget` nudge was **reverted to its original generic form** — cleanly
 removing both edges. Grounding probe #2+ (filter relaxation + client-passed topic index, ideally an
 options-object refactor of the evaluate API) is a focused follow-up; probe #1 grounding stands.
+
+### 2026-07-01 · The REAL reason probes were generic in prod: sanitize stripped good probes
+
+**Symptom (live prod, multiple academics interviews).** Despite #480's probe-#1 grounding, probes on
+screen were STILL generic — "Can you walk me through the specific example?" and warm-ups that never
+named the subject. The grounding work was real but **dead on arrival**: something downstream replaced
+the grounded probe with the generic fallback. (This is why the earlier PRs "felt like beating around
+the bush" — they grounded the turn-router's *input* and never traced the probe's *output* path.)
+
+**Root cause (found by mapping the call graph in gitnexus, not grep).** Both probe paths funnel
+through one filter: `runInterviewLoop` → `sanitizeProbeQuestion` (probe #1, the turn-router probe) and
+`buildProbeQuestion` (probe #2+) → **`isWeakProbeTarget`** → on "weak" → `fallbackProbeQuestion`
+("Can you walk me through the specific example?"). `isWeakProbeTarget` rejected **any** target matching
+`/^(what|why|how|which|...)\b/`. That rule was written to reject a bare TARGET PHRASE ("what", "why"),
+but `sanitizeProbeQuestion` passes it the **whole turn-router question** — so every well-formed
+"How does X work?" / "Walk me through how Y…" / "Why does Z…" probe was judged "weak" and stripped to
+the generic fallback. Confirmed empirically: with the real prod question/answer, grounded probes like
+"How does motivation differ from a need?" → stripped to "specific example".
+
+**Fix (one choke point, both paths — `interviewUtils.ts`).** In `isWeakProbeTarget`, only reject the
+interrogative prefix for SHORT fragments (`significantTokens <= 3`) — a bare "why"/"what" stays weak,
+but a full interrogative question is kept. (Also moved the token-count computation above the check.)
+The question/previous-probe OVERLAP rejections are unchanged (they already gate on `answerOverlap`, so
+they distinguish a genuine re-ask from a deeper probe). gitnexus `impact` confirmed the blast radius:
+LOW — exactly `sanitizeProbeQuestion` + `buildProbeQuestion` (both probe paths) in the Hooks module.
+
+**Verification.** `interviewUtils.test.ts` adds regression tests: full "How does X differ from Y?" and
+"Walk me through how X explains Y" probes are KEPT verbatim; a bare "Why?" still falls back. Empirically
+re-ran the live-transcript inputs through `sanitizeProbeQuestion` — grounded probes now survive, weak
+ones still fall back. `tsc` clean; full vitest green; build green. NOTE: the warm-up Q1 still doesn't
+name the subject (it's prefetched before the intro answer) — separate, tracked in CLAUDE.md backlog.
