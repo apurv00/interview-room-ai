@@ -2650,10 +2650,18 @@ export function useInterview({
         await sessionCreationPromiseRef.current
       }
 
-      // Start prefetching Q1 + its TTS in parallel with remaining intro speech
-      const q1Promise = generateQuestion(1)
-      q1Promise.then((q) => prefetchTTS(q)).catch(() => {})
-      prefetchedQuestionRef.current = q1Promise
+      // Start prefetching Q1 + its TTS in parallel with remaining intro speech.
+      // ACADEMICS EXCEPTION: Q1 must NAME the subject the candidate states in their intro answer,
+      // which hasn't been captured yet — so for academics we DON'T prefetch here. We generate Q1
+      // after the intro answer lands in the transcript (below), where generateQuestion's live
+      // buildPreviousQA sees the named subject. Other depths prefetch now (latency win; their Q1
+      // does not depend on the intro answer). See INTERVIEW_FLOW.md §8 (2026-07-01).
+      const isAcademics = config.interviewType === 'academics'
+      if (!isAcademics) {
+        const q1Promise = generateQuestion(1)
+        q1Promise.then((q) => prefetchTTS(q)).catch(() => {})
+        prefetchedQuestionRef.current = q1Promise
+      }
 
       // Wait for intro speech to finish before continuing
       await introSpeechPromise
@@ -2679,6 +2687,17 @@ export function useInterview({
           { role: 'candidate', text: introAnswer, isProbe: false, probeDepth: 0 },
         )
         enqueueBackgroundEvaluation(intro, introAnswer, 0, 0)
+        // ACADEMICS: the candidate's named subject is now in the transcript, so prefetch Q1 here.
+        // generateQuestion reads live transcriptRef → buildPreviousQA, so Q1 can NAME the subject
+        // ("a roadmap of consumer behaviour") instead of the generic "that subject". Prefetching now
+        // overlaps finalizeThread + the loop transition, so the added latency vs the standard
+        // pre-intro prefetch is minimal. Non-academics already prefetched above; if the candidate
+        // gave no intro answer, runInterviewLoop falls back to generating Q1 (no subject to name).
+        if (isAcademics) {
+          const q1Promise = generateQuestion(1)
+          q1Promise.then((q) => prefetchTTS(q)).catch(() => {})
+          prefetchedQuestionRef.current = q1Promise
+        }
       }
 
       // Finalize intro thread
