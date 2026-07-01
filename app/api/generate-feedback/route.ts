@@ -373,7 +373,21 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
     const g10PlannedCount =
       typeof body.plannedQuestionCount === 'number' && body.plannedQuestionCount > 0
         ? body.plannedQuestionCount
-        : (() => {
+        : await (async () => {
+            // Regeneration (feedback page / Retry) doesn't POST plannedQuestionCount. Prefer the value
+            // PERSISTED at session create, so a session scored under the OLD budget isn't re-scored
+            // against the raised getQuestionCount — otherwise an old 16/16 session reads as 16/30 (a
+            // partial-completion red flag + score taper on an interview that WAS complete). Codex #484 P2.
+            if (body.sessionId) {
+              try {
+                const s = (await InterviewSession.findById(body.sessionId)
+                  .select('plannedQuestionCount')
+                  .lean()) as { plannedQuestionCount?: number } | null
+                if (s && typeof s.plannedQuestionCount === 'number' && s.plannedQuestionCount > 0) {
+                  return s.plannedQuestionCount
+                }
+              } catch { /* fall through to the duration-derived default */ }
+            }
             try {
               return getPlannedQuestionCountForFeedback(interviewType, config.duration as Duration)
             } catch {

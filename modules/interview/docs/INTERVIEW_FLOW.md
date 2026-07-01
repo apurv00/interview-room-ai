@@ -1938,3 +1938,18 @@ existing topics via probes / add topics as the evaluator decides — same as bef
 latter-half) still hold; `flowMatrix` invariant #8 (`totalSlots <= getQuestionCount-1`) is now easier to
 satisfy. `tsc` clean; full vitest green; build green. PENDING prod E2E: confirm a 30-min session now
 fills the time and completion still reads ~100% for a full run; dial the 1.0 q/min pace if it's rushed.
+
+**Codex review round (three P2s on the count raise, all fixed).**
+- **Old sessions re-scored against the new count (the important one).** Regenerating feedback from the
+  feedback/Retry page omits `plannedQuestionCount`, so generate-feedback fell back to `getQuestionCount`
+  (now 30) — re-scoring a completed old 16/16 session as 16/30 (partial-completion red flag + taper).
+  Fix: the route now reads the PERSISTED `InterviewSession.plannedQuestionCount` before the
+  duration-derived default (regression test added: a persisted-10 complete session gets no red flag).
+- **Live pressure escalation didn't scale.** generate-question hardcoded `questionIndex >= 3`/`>= 6`, so
+  a 30-question interview went adversarial in its first quarter. Fix: elevated at `getPressureQuestionIndex`
+  (~50%, the midpoint), high at `getQuestionCount * 0.75` (~75%) — scales with the count and aligns the
+  live escalation with the pressure-point marker.
+- **`completedThreads.slice(-20)` froze the server's thread count at 20.** The route derives the flow-slot
+  cursor + coverage from `completedThreads.length`, so long sessions dropped the earliest topics from the
+  anti-repeat context. Fix: `slice(-30)` + `GenerateQuestionSchema.completedThreads.max(30)` (matches the
+  30-question ceiling; still bounds an over-length body).

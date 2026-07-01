@@ -250,7 +250,10 @@ vi.mock('@shared/services/scoreTelemetry', () => ({ recordScoreDelta: vi.fn().mo
 vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@shared/db/models', () => ({
   User: { findById: () => ({ select: () => ({ lean: () => Promise.resolve(null) }) }) },
-  InterviewSession: { findByIdAndUpdate: vi.fn().mockResolvedValue(undefined) },
+  InterviewSession: {
+    findById: vi.fn(() => ({ select: () => ({ lean: () => Promise.resolve(null) }) })),
+    findByIdAndUpdate: vi.fn().mockResolvedValue(undefined),
+  },
 }))
 vi.mock('@shared/featureFlags', () => ({
   isFeatureEnabled: (flag: string) => mockIsFeatureEnabled(flag),
@@ -423,6 +426,24 @@ describe('POST /api/generate-feedback — G.10 flag gate', () => {
       expect(json.overall_score).toBe(78)
       // answered < planned → red_flag still fires
       expect(json.red_flags.length).toBeGreaterThan(0)
+    })
+
+    it('regeneration prefers the PERSISTED plannedQuestionCount over the raised getQuestionCount (Codex #484)', async () => {
+      // A session that was COMPLETE under the old budget (persisted plannedQuestionCount = 10, all 10
+      // answered). On regeneration the body omits plannedQuestionCount; the route must read the stored
+      // value (10) instead of falling back to the raised getQuestionCount (16 in this mock), or a
+      // finished interview gets re-scored as 10/16 = 62.5% with a partial-completion red flag.
+      const { InterviewSession } = await import('@shared/db/models')
+      vi.mocked(InterviewSession.findById).mockReturnValueOnce({
+        select: () => ({ lean: () => Promise.resolve({ plannedQuestionCount: 10 }) }),
+      } as unknown as ReturnType<typeof InterviewSession.findById>)
+      mockCompletion.mockResolvedValueOnce(claudeFeedback)
+
+      const res = await POST(makeReq({ evals: evals(10) })) // plannedQuestionCount omitted (regeneration)
+      const json = await res.json()
+
+      // 10 answered / 10 persisted planned = 100% → complete → NO partial-completion red flag.
+      expect(json.red_flags.length).toBe(0)
     })
   })
 })

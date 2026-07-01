@@ -196,13 +196,13 @@ describe('ThreadSummary validation in GenerateQuestionSchema', () => {
     expect(result.success).toBe(true)
   })
 
-  it('enforces completedThreads max 20 items', () => {
-    const threads = Array.from({ length: 21 }, (_, i) => ({ ...threadSummary, topicIndex: i }))
-    const result = GenerateQuestionSchema.safeParse({
-      ...baseGenerateQuestion,
-      completedThreads: threads,
-    })
-    expect(result.success).toBe(false)
+  it('enforces completedThreads max 30 items', () => {
+    // Cap raised 20 → 30 alongside the question-count bump (client sends slice(-30)).
+    const ok = Array.from({ length: 30 }, (_, i) => ({ ...threadSummary, topicIndex: i }))
+    expect(GenerateQuestionSchema.safeParse({ ...baseGenerateQuestion, completedThreads: ok }).success).toBe(true)
+
+    const tooMany = Array.from({ length: 31 }, (_, i) => ({ ...threadSummary, topicIndex: i }))
+    expect(GenerateQuestionSchema.safeParse({ ...baseGenerateQuestion, completedThreads: tooMany }).success).toBe(false)
   })
 
   it('valid without thread data (backward compat)', () => {

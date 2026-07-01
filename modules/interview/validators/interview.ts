@@ -190,7 +190,7 @@ export const GenerateQuestionSchema = z.object({
   previousQA: z.array(TranscriptEntrySchema),
   performanceSignal: z.enum(['calibrating', 'struggling', 'on_track', 'strong']).optional(),
   lastThreadSummary: ThreadSummarySchema.optional(),
-  completedThreads: z.array(ThreadSummarySchema).max(20).optional(),
+  completedThreads: z.array(ThreadSummarySchema).max(30).optional(), // matches the 30-question ceiling (client sends slice(-30))
   templateId: z.string().optional(),
   sessionId: z.string().optional(),
 })

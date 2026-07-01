@@ -48,12 +48,16 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     // TN3: Progressive pressure escalation for strong candidates
     // Instead of a single binary "pressure question", escalate gradually:
     //  - 'normal': default tone
-    //  - 'elevated': after Q3 for strong performers — skeptical probes, devil's advocate
-    //  - 'high': after Q6 for strong performers — direct challenges, ethical dilemmas
+    //  - 'elevated': from the pressure point (~50%, the midpoint) for strong performers
+    //  - 'high': from ~75% for strong performers — direct challenges, ethical dilemmas
+    // Thresholds SCALE with the question count (was hardcoded Q3/Q6, which put a 30-question interview
+    // under pressure in its first quarter instead of the latter portion). Codex #484 P2.
+    const elevatedAt = getPressureQuestionIndex(config.duration)
+    const highAt = Math.round(getQuestionCount(config.duration) * 0.75)
     let pressureLevel: 'normal' | 'elevated' | 'high' = 'normal'
-    if (performanceSignal === 'strong' && questionIndex >= 6) {
+    if (performanceSignal === 'strong' && questionIndex >= highAt) {
       pressureLevel = 'high'
-    } else if (performanceSignal === 'strong' && questionIndex >= 3) {
+    } else if (performanceSignal === 'strong' && questionIndex >= elevatedAt) {
       pressureLevel = 'elevated'
     }
 
