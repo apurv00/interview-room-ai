@@ -1772,6 +1772,82 @@ the evaluate API, the `probeTarget` nudge was **reverted to its original generic
 removing both edges. Grounding probe #2+ (filter relaxation + client-passed topic index, ideally an
 options-object refactor of the evaluate API) is a focused follow-up; probe #1 grounding stands.
 
+### 2026-07-01 · The REAL reason probes were generic in prod: sanitize stripped good probes
+
+**Symptom (live prod, multiple academics interviews).** Despite #480's probe-#1 grounding, probes on
+screen were STILL generic — "Can you walk me through the specific example?" and warm-ups that never
+named the subject. The grounding work was real but **dead on arrival**: something downstream replaced
+the grounded probe with the generic fallback. (This is why the earlier PRs "felt like beating around
+the bush" — they grounded the turn-router's *input* and never traced the probe's *output* path.)
+
+**Root cause (found by mapping the call graph in gitnexus, not grep).** Both probe paths funnel
+through one filter: `runInterviewLoop` → `sanitizeProbeQuestion` (probe #1, the turn-router probe) and
+`buildProbeQuestion` (probe #2+) → **`isWeakProbeTarget`** → on "weak" → `fallbackProbeQuestion`
+("Can you walk me through the specific example?"). `isWeakProbeTarget` rejected **any** target matching
+`/^(what|why|how|which|...)\b/`. That rule was written to reject a bare TARGET PHRASE ("what", "why"),
+but `sanitizeProbeQuestion` passes it the **whole turn-router question** — so every well-formed
+"How does X work?" / "Walk me through how Y…" / "Why does Z…" probe was judged "weak" and stripped to
+the generic fallback. Confirmed empirically: with the real prod question/answer, grounded probes like
+"How does motivation differ from a need?" → stripped to "specific example".
+
+**Fix (one choke point, both paths — `interviewUtils.ts`).** In `isWeakProbeTarget`, only reject the
+interrogative prefix for SHORT fragments (`significantTokens <= 3`) — a bare "why"/"what" stays weak,
+but a full interrogative question is kept. (Also moved the token-count computation above the check.)
+The question/previous-probe OVERLAP rejections are unchanged (they already gate on `answerOverlap`, so
+they distinguish a genuine re-ask from a deeper probe). gitnexus `impact` confirmed the blast radius:
+LOW — exactly `sanitizeProbeQuestion` + `buildProbeQuestion` (both probe paths) in the Hooks module.
+
+**Verification.** `interviewUtils.test.ts` adds regression tests: full "How does X differ from Y?" and
+"Walk me through how X explains Y" probes are KEPT verbatim; a bare "Why?" still falls back. Empirically
+re-ran the live-transcript inputs through `sanitizeProbeQuestion` — grounded probes now survive, weak
+ones still fall back. `tsc` clean; full vitest green; build green. NOTE: the warm-up Q1 still doesn't
+name the subject (it's prefetched before the intro answer) — separate, tracked in CLAUDE.md backlog.
+
+**Follow-up (cross-depth review of this PR — two regressions the relaxation introduced, fixed in the
+same PR).** A multi-agent impact review flagged that relaxing `isWeakProbeTarget` for ALL callers was
+too broad — the two probe paths use the target differently:
+- **Grammar regression (probe #2+, `buildProbeQuestion`).** This path TEMPLATES the target
+  (`Can you tell me more about <t>?`), so a full interrogative target ("how does your feature selection
+  avoid leakage", a non-compliant evaluate-answer output most likely on technical/case-study) rendered
+  ungrammatically. Fix: `isWeakProbeTarget` takes `opts.templated`; `buildProbeQuestion` passes
+  `{templated:true}` → rejects ALL interrogative targets (clean fallback, restoring pre-relaxation
+  behavior). `sanitizeProbeQuestion` stays relaxed (it speaks the probe verbatim, so a full
+  interrogative is fine). The relaxation is now correctly scoped to the verbatim path only.
+- **Clarify-echo (probe #1, `sanitizeProbeQuestion`).** When a candidate asks to clarify a term, the
+  turn-router is prompted to rephrase the question — parroting the question's words back at someone who
+  said they didn't understand them. The rephrase has high `questionOverlap` but the clarify request
+  itself re-quotes the question (`answerOverlap >= 0.5`), so the existing re-ask guard missed it. Fix:
+  a NARROW clarify-echo guard — if the candidate's utterance matches `CLARIFY_REQUEST_RE` AND the probe
+  re-states the question (`questionOverlap >= 0.6`), fall back. Gated on an actual clarify request so it
+  cannot strip a genuine grounded probe (verified by a negative test). The deeper fix (turn-router
+  defines the term instead of rephrasing) is a separate turn-router-prompt follow-up.
+
+Verification: `interviewUtils.test.ts` adds tests for the templated rejection, the verbatim/templated
+asymmetry, the clarify-echo, and the narrow-guard negative. `tsc` clean; full vitest green; build green.
+
+**Codex review round (two more P2s on the above, both fixed).**
+- **Concise grounded interrogatives were still stripped.** The first fix used `significantTokens <= 3`
+  as the "bare fragment" test, but a complete short question ("why does motivation matter?", "how does
+  CLV change?") also has only 3 content tokens — so it was still routed to the generic fallback (the
+  original bug, for short probes). Root realization: the `< 2` content-token guard ALREADY catches true
+  bare fragments by shape ("why?" → 0 tokens; "what about that?" → 1). So the verbatim path needs NO
+  interrogative-by-shape rejection at all — the token-count threshold was removed; only the templated
+  path (`buildProbeQuestion`) still rejects interrogatives (it can't render them grammatically).
+- **Clarify regex false-positived on narrative uncertainty.** `CLARIFY_REQUEST_RE` matched mid-sentence
+  ("if I don't understand user needs, I'd run interviews"; "I didn't know what was causing it, so…"),
+  so a real answer's question-overlapping follow-up was wrongly stripped. Fixed: the regex is now
+  ANCHORED to the start of the utterance (modulo "sorry/wait/hmm" filler) and gated by a new
+  `isClarifyRequest` that also requires a SHORT utterance (≤14 words). Past-tense "didn't"/"do not
+  follow [metrics]" narrative forms were dropped. Validated against both Codex false-positive examples
+  (now excluded) and six real clarify phrasings (still caught). Two regression tests added.
+- **Term-specific clarifications were then MISSED (over-corrected).** Anchoring narrowed the "mean"
+  branches to `you|that|this`, so "what does unit economics mean?" (a real term clarification) no longer
+  matched → the rephrase parroted the term back. Fixed: the `what does <…> mean` / `what's <…> mean`
+  branches now accept an arbitrary 1–6 word TERM, still start-anchored + short-gated (narrative
+  uncertainty stays excluded; validated). One regression test added. The remaining borderline
+  (rhetorical "what does X mean? it means Y") is protected by the `questionOverlap >= 0.6` conjunct — an
+  answered utterance yields a real probe, not a question-echo, so the guard doesn't fire.
+
 ### 2026-07-01 · Academics warm-up Q1 said "that subject" instead of naming it — prefetch timing
 
 **Symptom.** The academics warm-up Q1 read "give me a roadmap of the main topics within *that subject*"
