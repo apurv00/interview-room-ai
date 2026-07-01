@@ -1905,8 +1905,10 @@ is the obvious one: raise `getQuestionCount`. The loop keeps its original behavi
 OR when time is low, whichever first (a definite limit; time is only the fallback cutoff).
 
 **Change.** `getQuestionCount` 0.5→1.0 q/min (anchors 6/11/16 → **10/20/30** for 10/20/30 min; other
-durations interpolate/extrapolate the same). `getPressureQuestionIndex` scaled in step (4/8/12 →
-**8/15/23**) so pressure still lands in the latter ~75%, not the midpoint. Everything downstream already
+durations interpolate/extrapolate the same). `getPressureQuestionIndex` set to the **midpoint (~50%)**:
+4/8/12 → **5/10/15**. (This drives the post-interview feedback engagement/pressure-point analysis in
+`computeEngagementContext`; the live in-interview escalation is a separate hardcoded Q3/Q6 gate in
+generate-question.) Everything downstream already
 reads `getQuestionCount`, so scoring (`plannedQuestionCount`) and the UI progress follow automatically.
 Two accommodations for the higher count: (1) `TranscriptPanel` caps the dot rail at 15 (proportional
 above that) so it can't overflow the header row — the top progress bar still shows exact %; (2)

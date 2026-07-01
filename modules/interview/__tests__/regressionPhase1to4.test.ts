@@ -16,9 +16,9 @@ describe('P0 Regression — Duration Configuration', () => {
     expect(getMinimumTopics(20)).toBe(7)
     expect(getMinimumTopics(30)).toBe(10)
 
-    expect(getPressureQuestionIndex(10)).toBe(8)
-    expect(getPressureQuestionIndex(20)).toBe(15)
-    expect(getPressureQuestionIndex(30)).toBe(23)
+    expect(getPressureQuestionIndex(10)).toBe(5)
+    expect(getPressureQuestionIndex(20)).toBe(10)
+    expect(getPressureQuestionIndex(30)).toBe(15)
   })
 
   it('interpolation handles custom durations (15, 25, 45 min)', async () => {

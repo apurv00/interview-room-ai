@@ -217,11 +217,10 @@ export const WRAP_UP_LINE =
 // ─── Pressure question triggers (question index where light pressure hits) ────
 
 // Pressure question triggers (question index where light pressure hits)
-// Scaled with the raised question count so pressure still lands in the latter ~75% of the interview
-// (not the midpoint). Anchors: 10min→8, 20min→15, 30min→23.
+// The pressure-point index (~50% of the interview — the midpoint). Anchors: 10min→5, 20min→10, 30min→15.
 export function getPressureQuestionIndex(duration: Duration): number {
-  return interpolate(duration, [[10, 8], [20, 15], [30, 23]])
+  return interpolate(duration, [[10, 5], [20, 10], [30, 15]])
 }
 
 /** @deprecated Use getPressureQuestionIndex() instead */
-export const PRESSURE_QUESTION_INDEX: Record<number, number> = { 10: 8, 20: 15, 30: 23 }
+export const PRESSURE_QUESTION_INDEX: Record<number, number> = { 10: 5, 20: 10, 30: 15 }
