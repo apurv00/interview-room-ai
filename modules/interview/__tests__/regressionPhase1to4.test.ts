@@ -7,18 +7,18 @@ describe('P0 Regression — Duration Configuration', () => {
     const { getQuestionCount, getMinimumTopics, getPressureQuestionIndex } = await import(
       '@interview/config/interviewConfig'
     )
-    // Anchor points should match original values exactly
-    expect(getQuestionCount(10)).toBe(6)
-    expect(getQuestionCount(20)).toBe(11)
-    expect(getQuestionCount(30)).toBe(16)
+    // Anchor points (question count raised 0.5→0.8 q/min; pressure scaled in step)
+    expect(getQuestionCount(10)).toBe(8)
+    expect(getQuestionCount(20)).toBe(16)
+    expect(getQuestionCount(30)).toBe(24)
 
     expect(getMinimumTopics(10)).toBe(4)
     expect(getMinimumTopics(20)).toBe(7)
     expect(getMinimumTopics(30)).toBe(10)
 
-    expect(getPressureQuestionIndex(10)).toBe(4)
-    expect(getPressureQuestionIndex(20)).toBe(8)
-    expect(getPressureQuestionIndex(30)).toBe(12)
+    expect(getPressureQuestionIndex(10)).toBe(6)
+    expect(getPressureQuestionIndex(20)).toBe(12)
+    expect(getPressureQuestionIndex(30)).toBe(18)
   })
 
   it('interpolation handles custom durations (15, 25, 45 min)', async () => {
@@ -27,12 +27,12 @@ describe('P0 Regression — Duration Configuration', () => {
     )
     // 15 min should be between 10 and 20 anchors
     const q15 = getQuestionCount(15)
-    expect(q15).toBeGreaterThan(6)
-    expect(q15).toBeLessThan(11)
+    expect(q15).toBeGreaterThan(8)
+    expect(q15).toBeLessThan(16)
 
     // 45 min should extrapolate beyond 30
     const q45 = getQuestionCount(45)
-    expect(q45).toBeGreaterThan(16)
+    expect(q45).toBeGreaterThan(24)
 
     // Minimum topics always >= 1
     expect(getMinimumTopics(5)).toBeGreaterThanOrEqual(1)

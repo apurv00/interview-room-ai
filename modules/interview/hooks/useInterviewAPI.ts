@@ -184,7 +184,12 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
             previousQA: buildPreviousQA(transcript, config?.interviewType),
             performanceSignal,
             lastThreadSummary: lastThread,
-            completedThreads: completedThreads.length > 0 ? completedThreads : undefined,
+            // Send only the most recent 20 topic summaries. With the raised question count a low-probe
+            // session can complete >20 topics, but GenerateQuestionSchema caps completedThreads at 20 —
+            // an over-cap body 400s and the client silently falls back to generic questions. The recent
+            // 20 carry ample context-diversity signal and keep the prompt bounded (lastThreadSummary
+            // already covers immediate recency).
+            completedThreads: completedThreads.length > 0 ? completedThreads.slice(-20) : undefined,
             sessionId: getSessionId?.() ?? undefined,
           }),
         })

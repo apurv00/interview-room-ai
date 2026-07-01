@@ -17,16 +17,16 @@ describe('QUESTION_COUNT', () => {
     }
   )
 
-  it('10-min has 6 total questions (1 intro + 5 AI)', () => {
-    expect(1 + (QUESTION_COUNT[10] - 1)).toBe(6)
+  it('10-min has 8 total questions (1 intro + 7 AI)', () => {
+    expect(1 + (QUESTION_COUNT[10] - 1)).toBe(8)
   })
 
-  it('20-min has 11 total questions (1 intro + 10 AI)', () => {
-    expect(1 + (QUESTION_COUNT[20] - 1)).toBe(11)
+  it('20-min has 16 total questions (1 intro + 15 AI)', () => {
+    expect(1 + (QUESTION_COUNT[20] - 1)).toBe(16)
   })
 
-  it('30-min has 16 total questions (1 intro + 15 AI)', () => {
-    expect(1 + (QUESTION_COUNT[30] - 1)).toBe(16)
+  it('30-min has 24 total questions (1 intro + 23 AI)', () => {
+    expect(1 + (QUESTION_COUNT[30] - 1)).toBe(24)
   })
 })
 

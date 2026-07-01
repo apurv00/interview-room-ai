@@ -37,7 +37,16 @@ export default function TranscriptPanel({
   const progressIndex = clampProgressIndex(questionDisplayProgressIndex(questionDisplay), totalQuestions)
   const isWrapUp = questionDisplay.kind === 'wrap_up'
   const showDots = progressIndex != null && !isWrapUp
-  const activeDotIndex = progressIndex != null ? progressIndex - 1 : -1
+  // Cap the dot rail so a higher question count doesn't overflow the header row (esp. on mobile). At or
+  // below MAX_DOTS the rail is 1 dot per question; above it, it becomes a fixed proportional bar of
+  // MAX_DOTS and the active dot is mapped by fraction. The top progress bar always shows exact %.
+  const MAX_DOTS = 15
+  const dotCount = Math.min(totalQuestions, MAX_DOTS)
+  const activeDotIndex = progressIndex == null
+    ? -1
+    : totalQuestions <= MAX_DOTS
+      ? progressIndex - 1
+      : Math.round((progressIndex / totalQuestions) * dotCount) - 1
   const progressPct = isWrapUp
     ? 100
     : progressIndex != null && totalQuestions > 0
@@ -74,7 +83,7 @@ export default function TranscriptPanel({
             {/* Question dots */}
             {showDots && (
               <div className="flex items-center gap-1">
-                {Array.from({ length: totalQuestions }).map((_, i) => (
+                {Array.from({ length: dotCount }).map((_, i) => (
                   <motion.div
                     key={i}
                     className="rounded-full"
