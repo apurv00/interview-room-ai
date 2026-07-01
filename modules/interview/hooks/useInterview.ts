@@ -1666,9 +1666,13 @@ export function useInterview({
       while (qIdx < maxQ) {
         checkAbort()
         if (isInterviewOver()) return
-        // Only skip starting a NEW question if very little time remains;
-        // once a question is in progress, let the user finish answering
-        if (timeRemainingRef.current < 15 && qIdx > 0) break
+        // TIME GOVERNS the interview length (the loop ceiling is just headroom). Do NOT start a NEW main
+        // question once inside the final ~60s — reserve that window for a clean runWrapUpSequence() (below
+        // the loop) instead of a question the timer-0 handler would cut off. This is the SINGLE point that
+        // ends the interview for EVERY path (answered, silent/skip, pivot, deferred, retry) since they all
+        // loop back through here. A question already in progress is never interrupted — this only gates
+        // STARTING a new one. Codex #483 P1. See INTERVIEW_FLOW.md §8 (2026-07-01).
+        if (timeRemainingRef.current < 60 && qIdx > 0) break
 
         // ── Generate new topic question (use prefetched if available) ──
         transitionTo('ASK_QUESTION')
@@ -2178,17 +2182,6 @@ export function useInterview({
         // ── Finalize thread, advance to next topic ──
         finalizeThread(topicQuestion)
         currentTopicIndexRef.current++
-
-        // TIME-GOVERNED WRAP-UP. The loop ceiling (getQuestionCeiling) is headroom, so TIME ends the
-        // interview — but the only hard break was the top-of-loop <15s guard, while the <60s "final
-        // topic" fast-path merely disabled probes/prefetch and never broke the loop. So a topic ending
-        // with 15-59s left would START another full question that the timer-0 handler then cut off,
-        // skipping the closing wrap-up. Once inside the final ~60s window, break here so the topic just
-        // completed is the last and runWrapUpSequence() (below the loop) runs cleanly. qIdx>0 always
-        // holds here (a topic just finished). See INTERVIEW_FLOW.md §8 (2026-07-01).
-        if (timeRemainingRef.current < 60) {
-          break
-        }
 
         // Disengagement guard (all depths): if the candidate has given several non-answers in a
         // row, wrap up gracefully instead of dragging them through every remaining planned

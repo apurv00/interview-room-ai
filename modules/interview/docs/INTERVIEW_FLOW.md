@@ -1952,3 +1952,17 @@ free-form tail.
   before any prefetch, and use that snapshot for both probe consumers (`shouldProbeOrAdvance(probeEval,
   currentTopicHints)` and the `maxProbes` limit) instead of the live shared ref. The ref now only carries
   hints from generation → the next iteration's snapshot.
+
+**Codex review round 3 (two more P2s on the same change).**
+- **`completedThreads` overflowed the validator.** The time-governed loop can run past 20 completed
+  topics (ceiling headroom), but `GenerateQuestionSchema` caps `completedThreads` at 20 — so from topic
+  21 on, every `/api/generate-question` body 400s and the client silently falls back to GENERIC
+  questions for the rest of the session (the tail stops using the LLM). Fix: `useInterviewAPI` sends
+  `completedThreads.slice(-20)` — the recent 20 carry ample context-diversity signal and keep the prompt
+  bounded (`lastThreadSummary` covers immediate recency).
+- **The `<60s` wrap-up break missed the skip/silent path.** Round-2's break sat after the answered path,
+  but the `!answer` branch finalizes + `qIdx++` + `continue`s before reaching it, so a silent candidate
+  at 15–59s still started another question. Fix (robust): move the guard to the TOP of the loop —
+  `if (timeRemaining < 60 && qIdx > 0) break` — the single point every path (answered, silent, pivot,
+  deferred, retry) loops back through, and revert the narrower mid-loop break. A question already in
+  progress is never interrupted (the guard only gates STARTING a new one).
