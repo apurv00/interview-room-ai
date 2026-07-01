@@ -280,6 +280,21 @@ describe('buildProbeQuestion', () => {
 
     expect(question).toBe('Can you make that more concrete with a specific example?')
   })
+
+  // Regression (#481): buildProbeQuestion TEMPLATES the target ("Can you tell me more about <t>?"),
+  // so a full interrogative probeTarget (a non-compliant evaluate-answer output, e.g. on technical /
+  // case-study depths) would render ungrammatically ("...about how does X avoid leakage?"). The
+  // templated path must reject ALL interrogative targets and fall back cleanly. (The verbatim
+  // sanitizeProbeQuestion path keeps full interrogatives — see the asymmetry test below.)
+  it('rejects a full interrogative target so the fixed template never renders ungrammatically', () => {
+    const ctx = {
+      question: 'Walk me through your modeling pipeline.',
+      answer: 'I used cross-validation and a holdout set.',
+    }
+    const q = buildProbeQuestion('expand', 'how does your feature selection avoid leakage', ctx)
+    expect(q).not.toContain('how does')
+    expect(q).toBe('Can you walk me through the specific example?')
+  })
 })
 
 describe('sanitizeProbeQuestion', () => {
@@ -307,6 +322,104 @@ describe('sanitizeProbeQuestion', () => {
     )
 
     expect(sanitized).toBe('Can you quantify the 20% churn reduction?')
+  })
+
+  // Regression: a full, well-formed interrogative probe (how/why/what...) must NOT be stripped to
+  // the generic fallback. The old isWeakProbeTarget rejected EVERY how/why/what-prefixed string;
+  // because sanitizeProbeQuestion passes it the whole turn-router question, that nulled grounded
+  // probes → "Can you walk me through the specific example?" appeared all over live academics
+  // transcripts. These are real grounded probes and must survive verbatim.
+  const academicCtx = {
+    question: "what is motivation in consumer behaviour, and how does it influence a buyer's decision?",
+    answer: 'motivation is the internal driving force that prompts a person to act to satisfy a need',
+  }
+  it('keeps a full "How does X differ from Y?" grounded probe', () => {
+    const q = 'How does motivation differ from a need in consumer behaviour?'
+    expect(sanitizeProbeQuestion(q, academicCtx, 'expand')).toBe(q)
+  })
+  it('keeps a "Walk me through how X explains Y" grounded probe', () => {
+    const q = "Walk me through how Maslow's hierarchy explains a buyer's motivation?"
+    expect(sanitizeProbeQuestion(q, academicCtx, 'expand')).toBe(q)
+  })
+  it('still falls back on a BARE interrogative fragment', () => {
+    expect(sanitizeProbeQuestion('Why?', academicCtx, 'expand')).toBe('Can you walk me through the specific example?')
+  })
+
+  // Asymmetry (#481): the SAME full interrogative that buildProbeQuestion rejects (it would template
+  // it ungrammatically) is KEPT here, because sanitizeProbeQuestion speaks the probe verbatim.
+  it('keeps a full interrogative probe verbatim (verbatim path, unlike the templated buildProbeQuestion)', () => {
+    const q = 'How does your feature selection avoid leakage?'
+    const ctx = {
+      question: 'Walk me through your modeling pipeline.',
+      answer: 'I used cross-validation and a holdout set.',
+    }
+    expect(sanitizeProbeQuestion(q, ctx, 'expand')).toBe(q)
+  })
+
+  // Regression (#481 clarify-echo): when the candidate ASKS to clarify a term, the turn-router is
+  // prompted to rephrase the question — parroting the question's words back. The clarify request
+  // re-quotes the question (answerOverlap >= 0.5) so the plain re-ask guard misses it; the
+  // clarify-echo guard must catch it and fall back.
+  it('falls back when the candidate asked to clarify and the probe just echoes the question', () => {
+    const sanitized = sanitizeProbeQuestion(
+      'How would you make the marketplace expansion unit economics profitable?',
+      {
+        question: 'How would you make the marketplace expansion unit economics profitable?',
+        answer: 'Sorry, what do you mean by unit economics?',
+      },
+      'expand',
+    )
+    expect(sanitized).toBe('Can you walk me through the specific example?')
+  })
+
+  // The clarify-echo guard is NARROW: a clarify request must NOT strip a probe that introduces a new
+  // angle (low question overlap). Otherwise it would re-create the over-rejection #481 set out to fix.
+  it('does NOT strip a genuinely new probe even when the candidate asked to clarify', () => {
+    const q = 'Can you give a concrete example of unit economics from a business you admire?'
+    const sanitized = sanitizeProbeQuestion(q, {
+      question: 'How would you make the marketplace expansion profitable?',
+      answer: 'What do you mean by unit economics?',
+    }, 'expand')
+    expect(sanitized).toBe(q)
+  })
+
+  // Regression (Codex #481 P2): a CONCISE but complete grounded interrogative ("why does motivation
+  // matter?" = 3 significant tokens) must survive on the verbatim path. The earlier token-count
+  // threshold (<= 3 tokens → weak) wrongly re-created the generic-fallback bug for short valid probes.
+  const conceptCtx = {
+    question: 'Tell me about consumer behaviour fundamentals.',
+    answer: 'Consumer behaviour studies how people choose products.',
+  }
+  it('keeps a CONCISE grounded interrogative probe (3 significant tokens), not just long ones', () => {
+    expect(sanitizeProbeQuestion('Why does motivation matter?', conceptCtx, 'expand')).toBe('Why does motivation matter?')
+    expect(sanitizeProbeQuestion('How does CLV change?', conceptCtx, 'quantify')).toBe('How does CLV change?')
+  })
+
+  // Regression (Codex #481 P2): the clarify-echo guard must NOT fire on NARRATIVE uncertainty inside a
+  // real answer ("if I don't understand user needs, I'd run interviews"). The candidate ANSWERED — a
+  // question-overlapping follow-up must survive, not be stripped to the generic fallback.
+  it('does NOT treat narrative uncertainty in a substantive answer as a clarify request', () => {
+    const ctx = {
+      question: 'How would you understand user needs?',
+      answer: "If I don't understand user needs, I'd run interviews and synthesize the themes.",
+    }
+    const probe = 'How would you understand user needs through customer interviews?'
+    expect(sanitizeProbeQuestion(probe, ctx, 'expand')).toBe(probe)
+  })
+
+  // Regression (Codex #481 P2 follow-up): a TERM-specific clarification ("what does <term> mean?") must
+  // be caught — the earlier regex only allowed you/that/this before "mean", so a term ask slipped
+  // through and the router's rephrase parroted the term back instead of falling back.
+  it('falls back on a term-specific clarification ask ("What does X mean?") that echoes the question', () => {
+    const sanitized = sanitizeProbeQuestion(
+      'What is unit economics for the marketplace?',
+      {
+        question: 'What is unit economics for the marketplace?',
+        answer: 'What does unit economics mean?',
+      },
+      'expand',
+    )
+    expect(sanitized).toBe('Can you walk me through the specific example?')
   })
 })
 
