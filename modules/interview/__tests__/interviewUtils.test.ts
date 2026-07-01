@@ -406,6 +406,21 @@ describe('sanitizeProbeQuestion', () => {
     const probe = 'How would you understand user needs through customer interviews?'
     expect(sanitizeProbeQuestion(probe, ctx, 'expand')).toBe(probe)
   })
+
+  // Regression (Codex #481 P2 follow-up): a TERM-specific clarification ("what does <term> mean?") must
+  // be caught — the earlier regex only allowed you/that/this before "mean", so a term ask slipped
+  // through and the router's rephrase parroted the term back instead of falling back.
+  it('falls back on a term-specific clarification ask ("What does X mean?") that echoes the question', () => {
+    const sanitized = sanitizeProbeQuestion(
+      'What is unit economics for the marketplace?',
+      {
+        question: 'What is unit economics for the marketplace?',
+        answer: 'What does unit economics mean?',
+      },
+      'expand',
+    )
+    expect(sanitized).toBe('Can you walk me through the specific example?')
+  })
 })
 
 // ─── buildThreadSummary ─────────────────────────────────────────────────────

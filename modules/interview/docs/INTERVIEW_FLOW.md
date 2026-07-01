@@ -1840,3 +1840,10 @@ asymmetry, the clarify-echo, and the narrow-guard negative. `tsc` clean; full vi
   `isClarifyRequest` that also requires a SHORT utterance (≤14 words). Past-tense "didn't"/"do not
   follow [metrics]" narrative forms were dropped. Validated against both Codex false-positive examples
   (now excluded) and six real clarify phrasings (still caught). Two regression tests added.
+- **Term-specific clarifications were then MISSED (over-corrected).** Anchoring narrowed the "mean"
+  branches to `you|that|this`, so "what does unit economics mean?" (a real term clarification) no longer
+  matched → the rephrase parroted the term back. Fixed: the `what does <…> mean` / `what's <…> mean`
+  branches now accept an arbitrary 1–6 word TERM, still start-anchored + short-gated (narrative
+  uncertainty stays excluded; validated). One regression test added. The remaining borderline
+  (rhetorical "what does X mean? it means Y") is protected by the `questionOverlap >= 0.6` conjunct — an
+  answered utterance yields a real probe, not a question-echo, so the guard doesn't fire.

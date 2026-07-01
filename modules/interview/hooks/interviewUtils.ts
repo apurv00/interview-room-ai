@@ -139,9 +139,12 @@ function overlapRatio(targetTokens: string[], sourceText?: string | null): numbe
 // is prompted to rephrase the question, parroting its own words back at them. ANCHORED to the start of
 // the utterance (modulo filler) so a narrative mention mid-sentence ("if I don't understand the user,
 // I'd run interviews"; "I didn't know what was causing it, so I checked logs") does NOT count — only an
-// actual, request-shaped clarification does (Codex #481 P2). See isWeakProbeTarget's clarify-echo guard.
+// actual, request-shaped clarification does (Codex #481 P2). The "what does <…> mean" / "what's <…>
+// mean" branches accept an arbitrary 1–6 word TERM (not just you/that/this) so a term-specific ask
+// ("what does unit economics mean?") is caught too (Codex #481 P2 follow-up). See isWeakProbeTarget's
+// clarify-echo guard.
 const CLARIFY_REQUEST_RE =
-  /^(?:sorry[,.!\s]+|wait[,.!\s]+|hmm+[,.!\s]+|umm*[,.!\s]+|hold on[,.!\s]+)*(?:(?:can|could|would) you (?:please )?(?:clarify|explain|rephrase|repeat)|what (?:do|does) (?:you|that|this) mean|what'?s (?:that|this|it) mean|what (?:do you )?mean by|i (?:don'?t|do not) (?:really |quite )?(?:understand|follow)|(?:i'?m|i am) not sure (?:what|i)|not sure what you mean|could you be more specific)\b/i
+  /^(?:sorry[,.!\s]+|wait[,.!\s]+|hmm+[,.!\s]+|umm*[,.!\s]+|hold on[,.!\s]+)*(?:(?:can|could|would) you (?:please )?(?:clarify|explain|rephrase|repeat)|what (?:do|does) (?:[\w'’-]+\s+){1,6}mean|what'?s (?:[\w'’-]+\s+){1,6}mean|what (?:do you )?mean by|i (?:don'?t|do not) (?:really |quite )?(?:understand|follow)|(?:i'?m|i am) not sure (?:what|i)|not sure what you mean|could you be more specific)\b/i
 
 // A clarification is a brief ASK, not a long narrative answer that merely mentions uncertainty — so
 // require both the request shape (anchored regex) AND a short utterance.
