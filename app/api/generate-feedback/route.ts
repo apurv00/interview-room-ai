@@ -235,7 +235,10 @@ For EACH drill_recommendation, populate \`targetQuestions\` with the 0-based que
         // 4-8 weak-question session needs ~1500-2800 tokens for
         // ideal_answers, plus ~500 for drill_recommendations, plus
         // headroom for the schema-validation buffer.
-        maxTokens: 5000,
+        // 2026-07-01: 5000 → 7000 — the question count rose to 30, so the
+        // weak-question cap (10) now binds far more often, pushing the
+        // enrichment payload near the old ceiling.
+        maxTokens: 7000,
         responseFormat: FEEDBACK_ENRICHMENT_RESPONSE_FORMAT,
       }),
       new Promise<never>((_, reject) => {
@@ -370,12 +373,38 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
     const g10PlannedCount =
       typeof body.plannedQuestionCount === 'number' && body.plannedQuestionCount > 0
         ? body.plannedQuestionCount
-        : (() => {
-            try {
-              return getPlannedQuestionCountForFeedback(interviewType, config.duration as Duration)
-            } catch {
-              return 0
+        : await (async () => {
+            // The type-aware planned count: coding → 1-2 submissions, system-design → 1, else
+            // getQuestionCount(duration).
+            const typeAware = () => {
+              try {
+                return getPlannedQuestionCountForFeedback(interviewType, config.duration as Duration)
+              } catch {
+                return 0
+              }
             }
+            // Regeneration (feedback page / Retry) doesn't POST plannedQuestionCount. For the types where
+            // getQuestionCount IS the denominator, prefer the value PERSISTED at session create so an old
+            // session isn't re-scored against the raised getQuestionCount (old 16/16 → 16/30 red flag +
+            // taper). But coding/system-design persist getQuestionCount too (session create is not
+            // type-aware), so their persisted value is WRONG — a coding retry would score 2 of 30. Use
+            // the type-aware policy for those and never the persisted count. Codex #484 P1 + P2.
+            if (interviewType !== 'coding' && interviewType !== 'system-design' && body.sessionId) {
+              try {
+                // Connect FIRST — with bufferCommands:false a pre-connection read throws on cold
+                // serverless starts, which would hit the catch and wrongly fall back to the raised count.
+                // Owner-scope the read (findOne{_id,userId}) so we only trust a stored count for the
+                // caller's own session. Codex #484 P2.
+                await connectDB()
+                const s = (await InterviewSession.findOne({ _id: body.sessionId, userId: user.id })
+                  .select('plannedQuestionCount')
+                  .lean()) as { plannedQuestionCount?: number } | null
+                if (s && typeof s.plannedQuestionCount === 'number' && s.plannedQuestionCount > 0) {
+                  return s.plannedQuestionCount
+                }
+              } catch { /* fall through to the duration-derived default */ }
+            }
+            return typeAware()
           })()
     const g10AnsweredCount =
       typeof body.answeredCount === 'number' && body.answeredCount >= 0
@@ -548,7 +577,11 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
     const compacted = compactTranscript({
       transcript,
       evaluations: evaluations as unknown as import('@shared/types').AnswerEvaluation[],
-      budgetChars: evaluations.length >= 10 ? 6000 : undefined,
+      // Scale the compaction budget UP with the question count (was a flat 6000 for >=10, which is
+      // BELOW the compactor's own 8000 default and dropped the weakest-answer verbatim block — the
+      // ideal_answers grounding — at ~30 questions). 30 Qs ≈ 30 summary lines (~5.4k) + 2 verbatim
+      // answers, so >=20 needs ~12k. See INTERVIEW_FLOW.md §8 (2026-07-01).
+      budgetChars: evaluations.length >= 20 ? 12000 : evaluations.length >= 10 ? 8000 : undefined,
     })
     const transcriptText: string = compacted.text || fullTranscript
     if (compacted.budgetHit) {
@@ -711,7 +744,11 @@ If no JD was supplied, set jd_match_score to null and jd_requirement_breakdown t
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
         contextData: { evaluationScores: evaluationData },
-        maxTokens: evaluations.length >= 10 ? 3600 : 4200,
+        // Scale the output cap UP with the question count. The old ternary was INVERTED — it gave the
+        // LARGER interview FEWER tokens (>=10 → 3600 < 4200). A 30-question report emits more
+        // Q-referenced content (red_flags, per-Q strengths/weaknesses), so at 3600 the JSON truncated
+        // → repair → degraded fallback. See INTERVIEW_FLOW.md §8 (2026-07-01).
+        maxTokens: evaluations.length >= 20 ? 6000 : evaluations.length >= 10 ? 4800 : 4200,
         responseFormat: FEEDBACK_CORE_RESPONSE_FORMAT,
       })
 
@@ -766,7 +803,9 @@ ${(cause?.result.text ?? result.text ?? '').slice(0, 12000)}
 You repair malformed interview feedback JSON. The output must match the supplied schema exactly.`,
           messages: [{ role: 'user', content: repairPrompt }],
           contextData: { evaluationScores: evaluationData },
-          maxTokens: 3600,
+          // Match the raised core cap — the repair only runs BECAUSE the core call truncated, so a flat
+          // 3600 here would just truncate the same large payload again → degraded fallback (2026-07-01).
+          maxTokens: 6000,
           responseFormat: FEEDBACK_CORE_RESPONSE_FORMAT,
         })
 

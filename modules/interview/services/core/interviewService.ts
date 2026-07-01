@@ -12,7 +12,7 @@ import { parseJobDescription, buildParsedJDContext } from '../persona/jdParserSe
 import { parseAndCacheResume, buildParsedResumeContext } from '../persona/resumeContextService'
 import { setCachedJDContext, setCachedResumeContext } from '../persona/documentContextCache'
 import { warmSessionConfigCache } from './sessionConfigCache'
-import { getQuestionCount } from '../../config/interviewConfig'
+import { getPlannedQuestionCountForFeedback } from '../eval/sessionScoringPolicy'
 import type { InterviewLatencyTelemetryInput } from '../../validators/interview'
 import type { Duration } from '@shared/types'
 
@@ -210,14 +210,17 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
     }
   }
 
-  // G.7: capture the planned question count at creation time so
-  // generate-feedback can later compute answered/planned completion
-  // ratio. getQuestionCount only accepts the canonical Duration values
-  // (10|20|30); fall back gracefully for other values so session
-  // creation never fails on an out-of-band duration.
+  // G.7: capture the planned question count at creation time so generate-feedback can later compute
+  // answered/planned completion ratio. TYPE-AWARE (coding/system-design use their 1-2 submission budget,
+  // not getQuestionCount) so the persisted value matches what feedback scores against — otherwise a
+  // coding session stores 30 and looks incomplete. Falls back gracefully for out-of-band durations so
+  // session creation never fails.
   let plannedQuestionCount: number | undefined
   try {
-    plannedQuestionCount = getQuestionCount(input.config.duration as Duration)
+    plannedQuestionCount = getPlannedQuestionCountForFeedback(
+      input.config.interviewType,
+      input.config.duration as Duration,
+    )
   } catch {
     plannedQuestionCount = undefined
   }

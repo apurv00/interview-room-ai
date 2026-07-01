@@ -196,13 +196,25 @@ describe('ThreadSummary validation in GenerateQuestionSchema', () => {
     expect(result.success).toBe(true)
   })
 
-  it('enforces completedThreads max 20 items', () => {
-    const threads = Array.from({ length: 21 }, (_, i) => ({ ...threadSummary, topicIndex: i }))
+  it('enforces completedThreads max 30 items', () => {
+    // Cap raised 20 → 30 alongside the question-count bump (client sends slice(-30)).
+    const ok = Array.from({ length: 30 }, (_, i) => ({ ...threadSummary, topicIndex: i }))
+    expect(GenerateQuestionSchema.safeParse({ ...baseGenerateQuestion, completedThreads: ok }).success).toBe(true)
+
+    const tooMany = Array.from({ length: 31 }, (_, i) => ({ ...threadSummary, topicIndex: i }))
+    expect(GenerateQuestionSchema.safeParse({ ...baseGenerateQuestion, completedThreads: tooMany }).success).toBe(false)
+  })
+
+  it('accepts a completedThreadCount past the summaries cap (decoupled count for long sessions)', () => {
+    // The summaries array is capped at 30, but the TRUE count is a separate uncapped field so the flow
+    // cursor/coverage stay correct on long (e.g. 60-min → >30 threads) sessions. Codex #484 P2.
+    const summaries = Array.from({ length: 30 }, (_, i) => ({ ...threadSummary, topicIndex: i }))
     const result = GenerateQuestionSchema.safeParse({
       ...baseGenerateQuestion,
-      completedThreads: threads,
+      completedThreads: summaries,
+      completedThreadCount: 55,
     })
-    expect(result.success).toBe(false)
+    expect(result.success).toBe(true)
   })
 
   it('valid without thread data (backward compat)', () => {

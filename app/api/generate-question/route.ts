@@ -38,7 +38,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
   rateLimit: { windowMs: 60_000, maxRequests: 15, keyPrefix: 'rl:gen-q' },
 
   async handler(req, { user, body }) {
-    const { config, questionIndex, previousQA, performanceSignal, lastThreadSummary, completedThreads, sessionId } = body
+    const { config, questionIndex, previousQA, performanceSignal, lastThreadSummary, completedThreads, completedThreadCount, sessionId } = body
     const startTime = Date.now()
     const interviewType = config.interviewType || 'behavioral'
 
@@ -48,12 +48,16 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     // TN3: Progressive pressure escalation for strong candidates
     // Instead of a single binary "pressure question", escalate gradually:
     //  - 'normal': default tone
-    //  - 'elevated': after Q3 for strong performers — skeptical probes, devil's advocate
-    //  - 'high': after Q6 for strong performers — direct challenges, ethical dilemmas
+    //  - 'elevated': from the pressure point (~50%, the midpoint) for strong performers
+    //  - 'high': from ~75% for strong performers — direct challenges, ethical dilemmas
+    // Thresholds SCALE with the question count (was hardcoded Q3/Q6, which put a 30-question interview
+    // under pressure in its first quarter instead of the latter portion). Codex #484 P2.
+    const elevatedAt = getPressureQuestionIndex(config.duration)
+    const highAt = Math.round(getQuestionCount(config.duration) * 0.75)
     let pressureLevel: 'normal' | 'elevated' | 'high' = 'normal'
-    if (performanceSignal === 'strong' && questionIndex >= 6) {
+    if (performanceSignal === 'strong' && questionIndex >= highAt) {
       pressureLevel = 'high'
-    } else if (performanceSignal === 'strong' && questionIndex >= 3) {
+    } else if (performanceSignal === 'strong' && questionIndex >= elevatedAt) {
       pressureLevel = 'elevated'
     }
 
@@ -301,11 +305,17 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
         if (resolvedFlow) {
           // Current slot index = number of completed flow threads, excluding the intro
           // (not a flow slot) for academics so its strict viva sequence isn't shifted.
-          const currentSlotIndex = flowSlotIndex(interviewType, completedThreads?.length ?? 0)
+          // Use the TRUE completed-thread count (sent uncapped as `completedThreadCount`), NOT
+          // `completedThreads.length` — the summaries array is capped (slice(-30)) for prompt size, so on
+          // a long session (durations run to 60 min → >30 threads) its length would freeze the cursor and
+          // coverage at 30. The count is just a number, so it stays exact. Codex #484 P2 (decoupled).
+          const completedCount = completedThreadCount ?? completedThreads?.length ?? 0
+          const currentSlotIndex = flowSlotIndex(interviewType, completedCount)
           const flowCtx = buildFlowPromptContext({
             flow: resolvedFlow,
             currentSlotIndex,
             completedThreads: completedThreads ?? [],
+            completedCount, // true count (not the capped summaries length) for coverage math
             performanceSignal: performanceSignal || 'calibrating',
           })
           flowPromptBlock = flowCtx.promptBlock ? `\n\n${flowCtx.promptBlock}` : ''
@@ -519,8 +529,10 @@ Do NOT use generic transitions like "Great, next question..." or "Moving on...".
       const summaries = completedThreads.map((t, i) =>
         `Topic ${i + 1}: "${t.topicQuestion}" (avg score: ${t.avgScore}, probes: ${t.probeCount})`
       ).join('\n')
-      // Detect topic diversity — nudge the interviewer to explore uncovered areas
-      const topicCount = completedThreads.length
+      // Detect topic diversity — nudge the interviewer to explore uncovered areas.
+      // Use the true count (not the capped summaries length) so the "covered N topics" nudge is
+      // accurate on long sessions.
+      const topicCount = completedThreadCount ?? completedThreads.length
       // Skipped for academics: this nudges a switch to a different COMPETENCY area (failure
       // handling, data-driven decisions, innovation) — behavioural/job steering that drifts a
       // subject viva off the named subject after Q3. Subject breadth is the directive's job.

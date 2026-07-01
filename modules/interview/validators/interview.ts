@@ -149,7 +149,7 @@ const FeedbackDataSchema = z.object({
     matched: z.boolean(),
     evidence: z.string().nullish(),
   })).optional(),
-  red_flags: z.array(z.string()).max(30),
+  red_flags: z.array(z.string()).max(40), // headroom above the 30-question ceiling (model Q-refs + server-appended flags)
   top_3_improvements: z.array(z.string()).max(10),
   // Outer-catch fallback marker — see `FeedbackData.degraded` JSDoc in
   // shared/types.ts. Optional for backwards compatibility; older
@@ -190,7 +190,10 @@ export const GenerateQuestionSchema = z.object({
   previousQA: z.array(TranscriptEntrySchema),
   performanceSignal: z.enum(['calibrating', 'struggling', 'on_track', 'strong']).optional(),
   lastThreadSummary: ThreadSummarySchema.optional(),
-  completedThreads: z.array(ThreadSummarySchema).max(20).optional(),
+  completedThreads: z.array(ThreadSummarySchema).max(30).optional(), // BOUNDED summaries for prompt size (client sends slice(-30))
+  // TRUE completed-thread count, decoupled from the capped summaries above so the server's flow-slot
+  // cursor/coverage reflect the real progress on long sessions (durations run to 60 min → >30 threads).
+  completedThreadCount: z.number().int().min(0).max(200).optional(),
   templateId: z.string().optional(),
   sessionId: z.string().optional(),
 })

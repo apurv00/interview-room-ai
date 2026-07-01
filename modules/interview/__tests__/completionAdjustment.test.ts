@@ -250,7 +250,10 @@ vi.mock('@shared/services/scoreTelemetry', () => ({ recordScoreDelta: vi.fn().mo
 vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@shared/db/models', () => ({
   User: { findById: () => ({ select: () => ({ lean: () => Promise.resolve(null) }) }) },
-  InterviewSession: { findByIdAndUpdate: vi.fn().mockResolvedValue(undefined) },
+  InterviewSession: {
+    findOne: vi.fn(() => ({ select: () => ({ lean: () => Promise.resolve(null) }) })),
+    findByIdAndUpdate: vi.fn().mockResolvedValue(undefined),
+  },
 }))
 vi.mock('@shared/featureFlags', () => ({
   isFeatureEnabled: (flag: string) => mockIsFeatureEnabled(flag),
@@ -260,6 +263,8 @@ vi.mock('@interview/config/interviewConfig', () => ({
   getDomainLabel: () => 'Product Manager',
   getPressureQuestionIndex: () => 99,
   getQuestionCount: (duration: number) => duration === 30 ? 16 : duration === 20 ? 11 : 6,
+  getCodingQuestionCount: () => 2,
+  getSystemDesignQuestionCount: () => 1,
 }))
 vi.mock('@interview/config/speechMetrics', () => ({
   aggregateMetrics: () => ({ wpm: 140, fillerRate: 0.04, pauseScore: 70, ramblingIndex: 0.2 }),
@@ -296,9 +301,10 @@ function makeReq(opts: {
   plannedQuestionCount?: number
   answeredCount?: number
   endReason?: 'normal' | 'time_up' | 'user_ended' | 'usage_limit' | 'abandoned'
+  interviewType?: string
 }) {
   const body: Record<string, unknown> = {
-    config: { role: 'pm', experience: '0-2', duration: 30, interviewType: 'screening' },
+    config: { role: 'pm', experience: '0-2', duration: 30, interviewType: opts.interviewType ?? 'screening' },
     transcript: [],
     evaluations: opts.evals,
     speechMetrics: [],
@@ -423,6 +429,38 @@ describe('POST /api/generate-feedback — G.10 flag gate', () => {
       expect(json.overall_score).toBe(78)
       // answered < planned → red_flag still fires
       expect(json.red_flags.length).toBeGreaterThan(0)
+    })
+
+    it('regeneration prefers the PERSISTED plannedQuestionCount over the raised getQuestionCount (Codex #484)', async () => {
+      // A session that was COMPLETE under the old budget (persisted plannedQuestionCount = 10, all 10
+      // answered). On regeneration the body omits plannedQuestionCount; the route must read the stored
+      // value (10) instead of falling back to the raised getQuestionCount (16 in this mock), or a
+      // finished interview gets re-scored as 10/16 = 62.5% with a partial-completion red flag.
+      const { InterviewSession } = await import('@shared/db/models')
+      vi.mocked(InterviewSession.findOne).mockReturnValueOnce({
+        select: () => ({ lean: () => Promise.resolve({ plannedQuestionCount: 10 }) }),
+      } as unknown as ReturnType<typeof InterviewSession.findOne>)
+      mockCompletion.mockResolvedValueOnce(claudeFeedback)
+
+      const res = await POST(makeReq({ evals: evals(10) })) // plannedQuestionCount omitted (regeneration)
+      const json = await res.json()
+
+      // 10 answered / 10 persisted planned = 100% → complete → NO partial-completion red flag.
+      expect(json.red_flags.length).toBe(0)
+    })
+
+    it('coding retry uses the TYPE-AWARE planned count, not the persisted getQuestionCount (Codex #484 P1)', async () => {
+      // Session create persists getQuestionCount (30) even for coding, but coding is scored against its
+      // 1-2 submissions. On regeneration (no body.plannedQuestionCount) the route must use the type-aware
+      // policy (getCodingQuestionCount = 2 here), NOT the persisted 30 — else 3 answers reads as 3/30
+      // (heavy taper + Low confidence + red flag on a complete coding session).
+      mockCompletion.mockResolvedValueOnce(claudeFeedback)
+      const res = await POST(makeReq({ evals: evals(3), interviewType: 'coding' }))
+      const json = await res.json()
+      // planned=2 (type-aware), answered=3 → 150% capped → complete: no taper, no Low, no red flag.
+      expect(json.overall_score).toBe(78)
+      expect(json.confidence_level).not.toBe('Low')
+      expect(json.red_flags.length).toBe(0)
     })
   })
 })

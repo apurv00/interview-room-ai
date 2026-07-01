@@ -7,18 +7,18 @@ describe('P0 Regression — Duration Configuration', () => {
     const { getQuestionCount, getMinimumTopics, getPressureQuestionIndex } = await import(
       '@interview/config/interviewConfig'
     )
-    // Anchor points should match original values exactly
-    expect(getQuestionCount(10)).toBe(6)
-    expect(getQuestionCount(20)).toBe(11)
-    expect(getQuestionCount(30)).toBe(16)
+    // Anchor points (question count raised to 1.0 q/min; pressure scaled in step)
+    expect(getQuestionCount(10)).toBe(10)
+    expect(getQuestionCount(20)).toBe(20)
+    expect(getQuestionCount(30)).toBe(30)
 
     expect(getMinimumTopics(10)).toBe(4)
     expect(getMinimumTopics(20)).toBe(7)
     expect(getMinimumTopics(30)).toBe(10)
 
-    expect(getPressureQuestionIndex(10)).toBe(4)
-    expect(getPressureQuestionIndex(20)).toBe(8)
-    expect(getPressureQuestionIndex(30)).toBe(12)
+    expect(getPressureQuestionIndex(10)).toBe(5)
+    expect(getPressureQuestionIndex(20)).toBe(10)
+    expect(getPressureQuestionIndex(30)).toBe(15)
   })
 
   it('interpolation handles custom durations (15, 25, 45 min)', async () => {
@@ -27,12 +27,18 @@ describe('P0 Regression — Duration Configuration', () => {
     )
     // 15 min should be between 10 and 20 anchors
     const q15 = getQuestionCount(15)
-    expect(q15).toBeGreaterThan(6)
-    expect(q15).toBeLessThan(11)
+    expect(q15).toBeGreaterThan(10)
+    expect(q15).toBeLessThan(20)
 
     // 45 min should extrapolate beyond 30
     const q45 = getQuestionCount(45)
-    expect(q45).toBeGreaterThan(16)
+    expect(q45).toBeGreaterThan(30)
+
+    // Sub-10-min durations extrapolate DOWN (not clamp): a 5-min interview gets ~5 questions, not the
+    // 10-min budget, so it isn't falsely scored as half-complete. Codex #484 P2.
+    const q5 = getQuestionCount(5)
+    expect(q5).toBeLessThan(getQuestionCount(10))
+    expect(q5).toBeGreaterThanOrEqual(1)
 
     // Minimum topics always >= 1
     expect(getMinimumTopics(5)).toBeGreaterThanOrEqual(1)

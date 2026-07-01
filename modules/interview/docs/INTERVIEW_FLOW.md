@@ -1890,3 +1890,87 @@ slot 0's warm-up hints. Fix: moved the academics prefetch OUT of the `if (introA
 unconditionally (still before `finalizeThread`), so the silent path also prefetches at thread-count 0
 and gets slot 0's warm-up `flowHints`. The answered path is unchanged (the intro answer is already in
 `transcriptRef` before this prefetch, so Q1 still names the subject).
+
+### 2026-07-01 · Raise the question count (simple) — interviews were ending early with time unused
+
+**Symptom.** Interviews exhausted the question count well before the clock across durations —
+candidates finished all questions with time to spare, so the session ended early.
+
+**Decision (why the SIMPLE fix, not a time-governed loop).** An earlier attempt decoupled the loop
+bound from the scoring target so TIME governed and questions kept coming until the timer — but that has
+no definite limit ("questions keep coming") and spawned a long tail of edge cases (numbering,
+flow-hints, wrap-up timing, thread-cap). The interview is COUNT-bound in practice (finishes early), not
+time-bound, so the completion-scoring concern that motivated the decouple doesn't apply. The right fix
+is the obvious one: raise `getQuestionCount`. The loop keeps its original behavior — stop at the count
+OR when time is low, whichever first (a definite limit; time is only the fallback cutoff).
+
+**Change.** `getQuestionCount` 0.5→1.0 q/min (anchors 6/11/16 → **10/20/30** for 10/20/30 min; other
+durations interpolate/extrapolate the same). `getPressureQuestionIndex` set to the **midpoint (~50%)**:
+4/8/12 → **5/10/15**. (This drives the post-interview feedback engagement/pressure-point analysis in
+`computeEngagementContext`; the live in-interview escalation is a separate hardcoded Q3/Q6 gate in
+generate-question.) Everything downstream already
+reads `getQuestionCount`, so scoring (`plannedQuestionCount`) and the UI progress follow automatically.
+Two accommodations for the higher count: (1) `TranscriptPanel` caps the dot rail at 15 (proportional
+above that) so it can't overflow the header row — the top progress bar still shows exact %; (2)
+`useInterviewAPI` sends `completedThreads.slice(-20)` because a low-probe session can now complete >20
+topics and `GenerateQuestionSchema` caps that array at 20 (an over-cap body 400s → generic fallback).
+
+**Feedback token/budget accommodation (gitnexus impact sweep of the count raise).** The generate-feedback
+route's count-scaled budgets were INVERTED — they handed the *larger* interview the *smaller* budget, so
+at ~30 questions the report truncated. Fixed all three: (a) core-feedback `maxTokens` 3600(>=10)/4200 →
+`>=20 ? 6000 : >=10 ? 4800 : 4200`; (b) compaction `budgetChars` 6000(>=10) → `>=20 ? 12000 : >=10 ?
+8000` (the old 6000 was BELOW the compactor's own 8000 default and dropped the weakest-answer verbatim
+block — the ideal_answers grounding — reintroducing the G.13 shallow-feedback regression at high counts);
+(c) the structured-repair `maxTokens` (flat 3600) → 6000 to match the raised core cap (it only runs
+because the core truncated, so it must have room). Also: enrichment `maxTokens` 5000 → 7000 (the weak-
+question cap of 10 binds far more often at 30 Qs) and `FeedbackCoreSchema.red_flags` `.max(30)` → 40
+(headroom above the 30-question ceiling so a full set of Q-referenced flags + server-appended flags can't
+trip the persist-side parse). Confirmed fine-as-is: the GenerateFeedback/Question schemas have no array
+`.max()` that a 30-question body would trip; scoring (`completionAdjustment`/`perQAggregation`) is
+ratio-based; per-turn generation input windows (`buildPreviousQA` slice(-10), `completedThreads`
+slice(-20)) stay bounded — `completedThreads` deliberately kept at 20 (recent-20 covers anti-repeat;
+generate-question is hot-path, so no live-prompt bloat).
+
+**Not touched:** `getMinimumTopics` (a floor, still valid); the flow templates (extra questions deepen
+existing topics via probes / add topics as the evaluator decides — same as before, just more of them).
+
+**Verification.** `interviewConfig.test.ts` updated to 10/20/30; pressure-index invariants (`[1,maxQ)` +
+latter-half) still hold; `flowMatrix` invariant #8 (`totalSlots <= getQuestionCount-1`) is now easier to
+satisfy. `tsc` clean; full vitest green; build green. PENDING prod E2E: confirm a 30-min session now
+fills the time and completion still reads ~100% for a full run; dial the 1.0 q/min pace if it's rushed.
+
+**Codex review round (three P2s on the count raise, all fixed).**
+- **Old sessions re-scored against the new count (the important one).** Regenerating feedback from the
+  feedback/Retry page omits `plannedQuestionCount`, so generate-feedback fell back to `getQuestionCount`
+  (now 30) — re-scoring a completed old 16/16 session as 16/30 (partial-completion red flag + taper).
+  Fix: the route now reads the PERSISTED `InterviewSession.plannedQuestionCount` before the
+  duration-derived default (regression test added: a persisted-10 complete session gets no red flag).
+  **Follow-up P1:** session create persists `getQuestionCount` for ALL types, but coding/system-design
+  are scored against 1-2 submissions — so trusting the persisted value would score a coding retry as
+  2/30. Refined: only read the persisted count for the types where `getQuestionCount` IS the denominator;
+  coding/system-design always use the type-aware `getPlannedQuestionCountForFeedback` (test added).
+- **Live pressure escalation didn't scale.** generate-question hardcoded `questionIndex >= 3`/`>= 6`, so
+  a 30-question interview went adversarial in its first quarter. Fix: elevated at `getPressureQuestionIndex`
+  (~50%, the midpoint), high at `getQuestionCount * 0.75` (~75%) — scales with the count and aligns the
+  live escalation with the pressure-point marker.
+- **`completedThreads` array served two jobs — count AND summaries — so capping it froze the count.** The
+  route derives the flow-slot cursor + coverage from `completedThreads.length`, but the array is capped for
+  prompt size, so any cap (20, then 30) just moved the boundary — durations run to 60 min, where
+  `getQuestionCount` returns >30, so a capped length froze the cursor and dropped early topics from
+  anti-repeat. **Decoupled (the permanent fix):** the client sends the TRUE `completedThreadCount` as its
+  own uncapped number (used for the cursor/coverage — no prompt cost) and only the recent-30 `completedThreads`
+  SUMMARIES (bounded for prompt size + anti-repeat). Route: `flowSlotIndex(type, completedThreadCount ??
+  completedThreads.length)`. Schema adds `completedThreadCount: z.number().max(200)`.
+  **Follow-ups (finish the decouple).** (a) `buildFlowPromptContext` also derived coverage from
+  `completedThreads.length` — now takes an optional `completedCount` (the route passes the true count) so
+  coverage pressure is right on long sessions too. (b) The `topicCount` diversity nudge uses the true
+  count. (c) `interviewService.createSession` now persists the TYPE-AWARE
+  `getPlannedQuestionCountForFeedback` (not `getQuestionCount`) so a coding/system-design session stores
+  its real 1-2-submission budget instead of 30 — the persisted value now matches what feedback scores
+  against (and the regeneration read no longer needs to compensate for a misleading stored value).
+  **Two more P2s:** (d) the persisted-count read ran BEFORE the handler's first `connectDB()` — with
+  `bufferCommands:false` a cold serverless read throws, hits the catch, and wrongly falls back to the
+  raised count; now it `connectDB()`s first and owner-scopes the read (`findOne{_id, userId}`). (e)
+  `interpolate` CLAMPED below the first anchor, so `getQuestionCount(5)` returned the 10-min budget (10)
+  and a valid 5-min interview scored against 10 → false partial-completion penalty; it now EXTRAPOLATES
+  below the first anchor (mirroring the above-last-anchor behavior), so a 5-min interview budgets ~5.

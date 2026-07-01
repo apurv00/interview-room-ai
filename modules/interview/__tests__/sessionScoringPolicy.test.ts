@@ -22,6 +22,6 @@ describe('sessionScoringPolicy', () => {
   it('uses coding question budget for planned count', () => {
     expect(getPlannedQuestionCountForFeedback('coding', 30)).toBe(2)
     expect(getPlannedQuestionCountForFeedback('system-design', 20)).toBe(1)
-    expect(getPlannedQuestionCountForFeedback('behavioral', 20)).toBe(11)
+    expect(getPlannedQuestionCountForFeedback('behavioral', 20)).toBe(20)
   })
 })

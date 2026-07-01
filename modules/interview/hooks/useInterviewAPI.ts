@@ -184,7 +184,12 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
             previousQA: buildPreviousQA(transcript, config?.interviewType),
             performanceSignal,
             lastThreadSummary: lastThread,
-            completedThreads: completedThreads.length > 0 ? completedThreads : undefined,
+            // DECOUPLED (Codex #484 P2): send the TRUE completed-thread count as its own field for the
+            // server's flow-slot cursor/coverage (a number, so no size limit — correct even for 60-min
+            // sessions with >30 threads), and send only the most recent 30 SUMMARIES for prompt size +
+            // anti-repeat. Capping the array alone froze the count and moved the boundary each time.
+            completedThreadCount: completedThreads.length || undefined,
+            completedThreads: completedThreads.length > 0 ? completedThreads.slice(-30) : undefined,
             sessionId: getSessionId?.() ?? undefined,
           }),
         })

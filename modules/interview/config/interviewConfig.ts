@@ -85,9 +85,15 @@ function interpolate(
   // Sort anchors by duration
   const sorted = [...anchors].sort((a, b) => a[0] - b[0])
 
-  // Clamp: if below or above range, extrapolate from nearest two points
+  // Below/above range: extrapolate from the nearest two anchors (NOT clamp). Clamping below the first
+  // anchor over-counted sub-10-min durations — getQuestionCount(5) returned the 10-min budget, so a
+  // 5-minute interview scored against a 10-question denominator (false partial-completion penalty).
+  // minVal keeps very short durations >= 1. Codex #484 P2.
   if (duration <= sorted[0][0]) {
-    const val = sorted[0][1]
+    const [d1, v1] = sorted[0]
+    const [d2, v2] = sorted[1]
+    const slope = (v2 - v1) / (d2 - d1)
+    const val = v1 + slope * (duration - d1)
     return round ? Math.max(minVal, Math.round(val)) : Math.max(minVal, val)
   }
   if (duration >= sorted[sorted.length - 1][0]) {
@@ -114,14 +120,16 @@ function interpolate(
 }
 
 // Upper bound for AI-generated question indices (total interactions including probes).
-// Loop runs from 1..<questionCount>, so actual AI questions = questionCount - 1.
-// Anchors: 10min→6, 20min→11, 30min→16 (0.5 questions per minute)
+// Loop runs from 1..<questionCount>, so actual AI questions = questionCount - 1. The loop still stops
+// at this count OR when time runs low (whichever first) — a definite limit, not "keep asking".
+// Set to 1.0 q/min (was 0.5): interviews were exhausting the old count well before the clock, ending
+// early with time unused. Anchors: 10min→10, 20min→20, 30min→30.
 export function getQuestionCount(duration: Duration): number {
-  return interpolate(duration, [[10, 6], [20, 11], [30, 16]])
+  return interpolate(duration, [[10, 10], [20, 20], [30, 30]])
 }
 
 /** @deprecated Use getQuestionCount() instead */
-export const QUESTION_COUNT: Record<number, number> = { 10: 6, 20: 11, 30: 16 }
+export const QUESTION_COUNT: Record<number, number> = { 10: 10, 20: 20, 30: 30 }
 
 // Minimum distinct topics to cover (reduced from question count since probes use time).
 // Anchors: 10min→4, 20min→7, 30min→10
@@ -215,10 +223,10 @@ export const WRAP_UP_LINE =
 // ─── Pressure question triggers (question index where light pressure hits) ────
 
 // Pressure question triggers (question index where light pressure hits)
-// Anchors: 10min→4, 20min→8, 30min→12
+// The pressure-point index (~50% of the interview — the midpoint). Anchors: 10min→5, 20min→10, 30min→15.
 export function getPressureQuestionIndex(duration: Duration): number {
-  return interpolate(duration, [[10, 4], [20, 8], [30, 12]])
+  return interpolate(duration, [[10, 5], [20, 10], [30, 15]])
 }
 
 /** @deprecated Use getPressureQuestionIndex() instead */
-export const PRESSURE_QUESTION_INDEX: Record<number, number> = { 10: 4, 20: 8, 30: 12 }
+export const PRESSURE_QUESTION_INDEX: Record<number, number> = { 10: 5, 20: 10, 30: 15 }
