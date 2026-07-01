@@ -193,7 +193,12 @@ export function useInterviewAPI({ config, getSessionId }: UseInterviewAPIOptions
           return getNextFallbackQuestion(usedFallbackIndicesRef.current, config?.role)
         }
         const data = await res.json()
-        if (data.flowHints) flowHintsRef.current = data.flowHints as FlowHints
+        // CLEAR the ref when a response carries no flowHints — the time-governed loop can run PAST the
+        // resolved flow slots, where /api/generate-question omits flowHints (empty slot block). Without
+        // clearing, the free-form tail kept applying the LAST slot's hints; closing slots have
+        // maxProbes:0, so the flow-aware probe path suppressed follow-ups on every bonus question.
+        // Null makes shouldProbeOrAdvance + the probe-limit path fall back to normal type-based probing.
+        flowHintsRef.current = (data.flowHints as FlowHints) ?? null
         return data.question as string
       } catch (err) {
         console.error('[generateQuestion] fetch failed', err)

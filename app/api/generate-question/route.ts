@@ -3,7 +3,7 @@ import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { GenerateQuestionSchema } from '@interview/validators/interview'
 import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
-import { getPressureQuestionIndex, getQuestionCount, getDomainLabel } from '@interview/config/interviewConfig'
+import { getPressureQuestionIndex, getQuestionCeiling, getDomainLabel } from '@interview/config/interviewConfig'
 import { getSkillSections, selectSkillQuestions } from '@interview/services/core/skillLoader'
 import { academicGroundingDirective } from '@interview/services/core/academicsPrompt'
 import { findCompanyProfile, buildCompanyPromptContext } from '@interview/config/companyProfiles'
@@ -42,7 +42,14 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
     const startTime = Date.now()
     const interviewType = config.interviewType || 'behavioral'
 
-    const totalQuestions = getQuestionCount(config.duration)
+    // Use the LOOP CEILING (not getQuestionCount, the ~0.5 Q/min scoring target) for generation-facing
+    // numbers. The live loop is time-governed and can ask past the target (getQuestionCeiling headroom),
+    // so basing "question X of Y" / isLastQuestion on the target produced "question 17 of 16" and a
+    // premature "FINAL question before wrap-up" at the target-1 index while the loop kept going. The
+    // ceiling never contradicts the index, and the real wrap-up is driven by the timer (runWrapUpSequence
+    // + the client's timeRemaining<60s final-topic fast-path), not this count. plannedQuestionCount
+    // (completion scoring) stays on getQuestionCount elsewhere. See INTERVIEW_FLOW.md §8 (2026-07-01).
+    const totalQuestions = getQuestionCeiling(config.duration)
     const isLastQuestion = questionIndex === totalQuestions - 1
 
     // TN3: Progressive pressure escalation for strong candidates

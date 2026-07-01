@@ -1924,3 +1924,17 @@ the timer now governs (session fills the time, wraps up ~60s before end) and (b)
 `answeredCount` vs `plannedQuestionCount` to confirm completion still reports 100% for a full session.
 Bonus questions past the target COUNT toward the score (more signal) — revisit if that's unfair for the
 free-form tail.
+
+**Codex review round (two P2s on the bonus tail, both fixed).**
+- **Generator numbering / premature "final question."** `/api/generate-question` derived `totalQuestions`
+  and `isLastQuestion` from `getQuestionCount` (the target). With the higher ceiling the loop asks past
+  the target, so the prompt could say "Generate question 17 of 16" and the target-1 index was framed as
+  "the FINAL substantive question before wrap-up" while the loop continued. Fix: the route now uses
+  `getQuestionCeiling` for those generation-facing numbers (never contradicts; the real wrap-up is the
+  timer's `runWrapUpSequence`, not this count). `plannedQuestionCount` stays on `getQuestionCount`.
+- **Stale flow hints on the free-form tail.** Past the resolved slots the route omits `flowHints`, but
+  `useInterviewAPI` only SET `flowHintsRef.current` when hints were present and never cleared it — so the
+  tail kept the LAST slot's hints. Closing slots carry `maxProbes:0`, so the flow-aware probe path
+  suppressed follow-ups on every bonus question. Fix: `flowHintsRef.current = data.flowHints ?? null`, so
+  the tail falls back to normal type-based probing (verified against both consumers — `shouldProbeOrAdvance`'s
+  `if (hints)` guard and the `?? probeLimit[...]` path).
