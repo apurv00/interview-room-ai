@@ -1938,3 +1938,17 @@ free-form tail.
   suppressed follow-ups on every bonus question. Fix: `flowHintsRef.current = data.flowHints ?? null`, so
   the tail falls back to normal type-based probing (verified against both consumers — `shouldProbeOrAdvance`'s
   `if (hints)` guard and the `?? probeLimit[...]` path).
+
+**Codex review round 2 (a P1 + a P2 on the same change).**
+- **[P1] Loop never broke to wrap-up in the 60s window.** With the ceiling doubled the loop relies on the
+  timer, but only the top-of-loop `<15s` guard broke it; the `<60s` "final-topic" path merely disabled
+  probes/prefetch. So a topic ending with 15–59s left started ANOTHER full question that the timer-0
+  handler cut off, skipping `runWrapUpSequence`. Fix: after finalizing a topic, `if (timeRemaining < 60)
+  break` → the wrap-up runs cleanly (same fall-through the disengagement guard already uses).
+- **[P2] The flow-hint clear raced with prefetch.** `runInterviewLoop` prefetches the next question
+  (hint-less bonus tail → `flowHintsRef = null`) BEFORE the current topic's probe limit is computed, so a
+  closing slot (`maxProbes:0`) reached with time to spare lost its 0-probe rule. Fix: snapshot the current
+  topic's hints (`const currentTopicHints = flowHintsRef.current`) right after the question is determined,
+  before any prefetch, and use that snapshot for both probe consumers (`shouldProbeOrAdvance(probeEval,
+  currentTopicHints)` and the `maxProbes` limit) instead of the live shared ref. The ref now only carries
+  hints from generation → the next iteration's snapshot.

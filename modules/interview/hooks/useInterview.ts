@@ -1538,9 +1538,14 @@ export function useInterview({
 
   /** Decide whether to probe deeper or advance to next topic.
    *  Uses flow-aware logic when flowHints are available from generate-question. */
-  function shouldProbeOrAdvance(evaluation: AnswerEvaluation): 'probe' | 'advance' {
+  function shouldProbeOrAdvance(
+    evaluation: AnswerEvaluation,
+    hints: typeof flowHintsRef.current,
+  ): 'probe' | 'advance' {
     if (!config) return 'advance'
-    const hints = flowHintsRef.current
+    // `hints` is the CURRENT topic's flow hints, snapshotted by the caller BEFORE the next-question
+    // prefetch could overwrite the shared flowHintsRef. Do NOT read flowHintsRef.current here — it may
+    // already hold the prefetched (hint-less) bonus question's value. Codex #483 P2.
 
     // Flow-aware: enforce per-slot maxProbes and phase rules
     if (hints) {
@@ -1675,6 +1680,12 @@ export function useInterview({
           question = await generateQuestion(qIdx)
         }
         const topicQuestion = question // Save for thread summary
+        // Snapshot THIS question's flow hints NOW, before the next-question prefetch below can overwrite
+        // the shared flowHintsRef with the next (possibly hint-less bonus-tail) question's value. The
+        // current topic's probe decisions must use its OWN slot's maxProbes/phase; otherwise a closing
+        // slot (maxProbes:0) reached with time to spare loses its 0-probe rule when the bonus prefetch
+        // clears the ref. null → type-based probing fallback (past the resolved flow slots). Codex #483 P2.
+        const currentTopicHints = flowHintsRef.current
         questionIndexRef.current = qIdx
         setQuestionIndex(qIdx)
         showNextMainQuestionDisplay()
@@ -2091,8 +2102,9 @@ export function useInterview({
           behavioral: 2,
           screening: 2,
         }
-        // Flow-aware: use per-slot maxProbes when available, fall back to type-based limit
-        const flowMaxProbes = flowHintsRef.current?.maxProbes
+        // Flow-aware: use per-slot maxProbes when available, fall back to type-based limit.
+        // Use the CURRENT topic's snapshot (not the live ref, which the prefetch may have overwritten).
+        const flowMaxProbes = currentTopicHints?.maxProbes
         const MAX_PROBES_PER_TOPIC = flowMaxProbes ?? probeLimit[config?.interviewType || 'screening'] ?? 2
 
         // First-level probe: driven by turn-router (TTS can start as soon as router returns)
@@ -2150,7 +2162,7 @@ export function useInterview({
           )
 
           // Next probe decision comes from the full eval (not turn-router)
-          nextProbeAction = shouldProbeOrAdvance(probeEval)
+          nextProbeAction = shouldProbeOrAdvance(probeEval, currentTopicHints)
           nextProbeQ = buildProbeQuestion(
             probeEval.probeDecision?.probeType,
             probeEval.probeDecision?.probeTarget,
@@ -2166,6 +2178,17 @@ export function useInterview({
         // ── Finalize thread, advance to next topic ──
         finalizeThread(topicQuestion)
         currentTopicIndexRef.current++
+
+        // TIME-GOVERNED WRAP-UP. The loop ceiling (getQuestionCeiling) is headroom, so TIME ends the
+        // interview — but the only hard break was the top-of-loop <15s guard, while the <60s "final
+        // topic" fast-path merely disabled probes/prefetch and never broke the loop. So a topic ending
+        // with 15-59s left would START another full question that the timer-0 handler then cut off,
+        // skipping the closing wrap-up. Once inside the final ~60s window, break here so the topic just
+        // completed is the last and runWrapUpSequence() (below the loop) runs cleanly. qIdx>0 always
+        // holds here (a topic just finished). See INTERVIEW_FLOW.md §8 (2026-07-01).
+        if (timeRemainingRef.current < 60) {
+          break
+        }
 
         // Disengagement guard (all depths): if the candidate has given several non-answers in a
         // row, wrap up gracefully instead of dragging them through every remaining planned
