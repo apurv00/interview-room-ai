@@ -1953,7 +1953,11 @@ fills the time and completion still reads ~100% for a full run; dial the 1.0 q/m
   a 30-question interview went adversarial in its first quarter. Fix: elevated at `getPressureQuestionIndex`
   (~50%, the midpoint), high at `getQuestionCount * 0.75` (~75%) — scales with the count and aligns the
   live escalation with the pressure-point marker.
-- **`completedThreads.slice(-20)` froze the server's thread count at 20.** The route derives the flow-slot
-  cursor + coverage from `completedThreads.length`, so long sessions dropped the earliest topics from the
-  anti-repeat context. Fix: `slice(-30)` + `GenerateQuestionSchema.completedThreads.max(30)` (matches the
-  30-question ceiling; still bounds an over-length body).
+- **`completedThreads` array served two jobs — count AND summaries — so capping it froze the count.** The
+  route derives the flow-slot cursor + coverage from `completedThreads.length`, but the array is capped for
+  prompt size, so any cap (20, then 30) just moved the boundary — durations run to 60 min, where
+  `getQuestionCount` returns >30, so a capped length froze the cursor and dropped early topics from
+  anti-repeat. **Decoupled (the permanent fix):** the client sends the TRUE `completedThreadCount` as its
+  own uncapped number (used for the cursor/coverage — no prompt cost) and only the recent-30 `completedThreads`
+  SUMMARIES (bounded for prompt size + anti-repeat). Route: `flowSlotIndex(type, completedThreadCount ??
+  completedThreads.length)`. Schema adds `completedThreadCount: z.number().max(200)`.

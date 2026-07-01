@@ -38,7 +38,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
   rateLimit: { windowMs: 60_000, maxRequests: 15, keyPrefix: 'rl:gen-q' },
 
   async handler(req, { user, body }) {
-    const { config, questionIndex, previousQA, performanceSignal, lastThreadSummary, completedThreads, sessionId } = body
+    const { config, questionIndex, previousQA, performanceSignal, lastThreadSummary, completedThreads, completedThreadCount, sessionId } = body
     const startTime = Date.now()
     const interviewType = config.interviewType || 'behavioral'
 
@@ -305,7 +305,12 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
         if (resolvedFlow) {
           // Current slot index = number of completed flow threads, excluding the intro
           // (not a flow slot) for academics so its strict viva sequence isn't shifted.
-          const currentSlotIndex = flowSlotIndex(interviewType, completedThreads?.length ?? 0)
+          // Use the TRUE completed-thread count (sent uncapped as `completedThreadCount`), NOT
+          // `completedThreads.length` — the summaries array is capped (slice(-30)) for prompt size, so on
+          // a long session (durations run to 60 min → >30 threads) its length would freeze the cursor and
+          // coverage at 30. The count is just a number, so it stays exact. Codex #484 P2 (decoupled).
+          const completedCount = completedThreadCount ?? completedThreads?.length ?? 0
+          const currentSlotIndex = flowSlotIndex(interviewType, completedCount)
           const flowCtx = buildFlowPromptContext({
             flow: resolvedFlow,
             currentSlotIndex,
