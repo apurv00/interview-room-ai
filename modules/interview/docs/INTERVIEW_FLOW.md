@@ -1968,3 +1968,9 @@ fills the time and completion still reads ~100% for a full run; dial the 1.0 q/m
   `getPlannedQuestionCountForFeedback` (not `getQuestionCount`) so a coding/system-design session stores
   its real 1-2-submission budget instead of 30 — the persisted value now matches what feedback scores
   against (and the regeneration read no longer needs to compensate for a misleading stored value).
+  **Two more P2s:** (d) the persisted-count read ran BEFORE the handler's first `connectDB()` — with
+  `bufferCommands:false` a cold serverless read throws, hits the catch, and wrongly falls back to the
+  raised count; now it `connectDB()`s first and owner-scopes the read (`findOne{_id, userId}`). (e)
+  `interpolate` CLAMPED below the first anchor, so `getQuestionCount(5)` returned the 10-min budget (10)
+  and a valid 5-min interview scored against 10 → false partial-completion penalty; it now EXTRAPOLATES
+  below the first anchor (mirroring the above-last-anchor behavior), so a 5-min interview budgets ~5.

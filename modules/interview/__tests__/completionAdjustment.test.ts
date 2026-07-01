@@ -251,7 +251,7 @@ vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(u
 vi.mock('@shared/db/models', () => ({
   User: { findById: () => ({ select: () => ({ lean: () => Promise.resolve(null) }) }) },
   InterviewSession: {
-    findById: vi.fn(() => ({ select: () => ({ lean: () => Promise.resolve(null) }) })),
+    findOne: vi.fn(() => ({ select: () => ({ lean: () => Promise.resolve(null) }) })),
     findByIdAndUpdate: vi.fn().mockResolvedValue(undefined),
   },
 }))
@@ -437,9 +437,9 @@ describe('POST /api/generate-feedback — G.10 flag gate', () => {
       // value (10) instead of falling back to the raised getQuestionCount (16 in this mock), or a
       // finished interview gets re-scored as 10/16 = 62.5% with a partial-completion red flag.
       const { InterviewSession } = await import('@shared/db/models')
-      vi.mocked(InterviewSession.findById).mockReturnValueOnce({
+      vi.mocked(InterviewSession.findOne).mockReturnValueOnce({
         select: () => ({ lean: () => Promise.resolve({ plannedQuestionCount: 10 }) }),
-      } as unknown as ReturnType<typeof InterviewSession.findById>)
+      } as unknown as ReturnType<typeof InterviewSession.findOne>)
       mockCompletion.mockResolvedValueOnce(claudeFeedback)
 
       const res = await POST(makeReq({ evals: evals(10) })) // plannedQuestionCount omitted (regeneration)

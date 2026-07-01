@@ -391,7 +391,12 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
             // the type-aware policy for those and never the persisted count. Codex #484 P1 + P2.
             if (interviewType !== 'coding' && interviewType !== 'system-design' && body.sessionId) {
               try {
-                const s = (await InterviewSession.findById(body.sessionId)
+                // Connect FIRST — with bufferCommands:false a pre-connection read throws on cold
+                // serverless starts, which would hit the catch and wrongly fall back to the raised count.
+                // Owner-scope the read (findOne{_id,userId}) so we only trust a stored count for the
+                // caller's own session. Codex #484 P2.
+                await connectDB()
+                const s = (await InterviewSession.findOne({ _id: body.sessionId, userId: user.id })
                   .select('plannedQuestionCount')
                   .lean()) as { plannedQuestionCount?: number } | null
                 if (s && typeof s.plannedQuestionCount === 'number' && s.plannedQuestionCount > 0) {

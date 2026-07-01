@@ -85,9 +85,15 @@ function interpolate(
   // Sort anchors by duration
   const sorted = [...anchors].sort((a, b) => a[0] - b[0])
 
-  // Clamp: if below or above range, extrapolate from nearest two points
+  // Below/above range: extrapolate from the nearest two anchors (NOT clamp). Clamping below the first
+  // anchor over-counted sub-10-min durations — getQuestionCount(5) returned the 10-min budget, so a
+  // 5-minute interview scored against a 10-question denominator (false partial-completion penalty).
+  // minVal keeps very short durations >= 1. Codex #484 P2.
   if (duration <= sorted[0][0]) {
-    const val = sorted[0][1]
+    const [d1, v1] = sorted[0]
+    const [d2, v2] = sorted[1]
+    const slope = (v2 - v1) / (d2 - d1)
+    const val = v1 + slope * (duration - d1)
     return round ? Math.max(minVal, Math.round(val)) : Math.max(minVal, val)
   }
   if (duration >= sorted[sorted.length - 1][0]) {

@@ -34,6 +34,12 @@ describe('P0 Regression — Duration Configuration', () => {
     const q45 = getQuestionCount(45)
     expect(q45).toBeGreaterThan(30)
 
+    // Sub-10-min durations extrapolate DOWN (not clamp): a 5-min interview gets ~5 questions, not the
+    // 10-min budget, so it isn't falsely scored as half-complete. Codex #484 P2.
+    const q5 = getQuestionCount(5)
+    expect(q5).toBeLessThan(getQuestionCount(10))
+    expect(q5).toBeGreaterThanOrEqual(1)
+
     // Minimum topics always >= 1
     expect(getMinimumTopics(5)).toBeGreaterThanOrEqual(1)
   })
