@@ -2650,10 +2650,18 @@ export function useInterview({
         await sessionCreationPromiseRef.current
       }
 
-      // Start prefetching Q1 + its TTS in parallel with remaining intro speech
-      const q1Promise = generateQuestion(1)
-      q1Promise.then((q) => prefetchTTS(q)).catch(() => {})
-      prefetchedQuestionRef.current = q1Promise
+      // Start prefetching Q1 + its TTS in parallel with remaining intro speech.
+      // ACADEMICS EXCEPTION: Q1 must NAME the subject the candidate states in their intro answer,
+      // which hasn't been captured yet — so for academics we DON'T prefetch here. We generate Q1
+      // after the intro answer lands in the transcript (below), where generateQuestion's live
+      // buildPreviousQA sees the named subject. Other depths prefetch now (latency win; their Q1
+      // does not depend on the intro answer). See INTERVIEW_FLOW.md §8 (2026-07-01).
+      const isAcademics = config.interviewType === 'academics'
+      if (!isAcademics) {
+        const q1Promise = generateQuestion(1)
+        q1Promise.then((q) => prefetchTTS(q)).catch(() => {})
+        prefetchedQuestionRef.current = q1Promise
+      }
 
       // Wait for intro speech to finish before continuing
       await introSpeechPromise
@@ -2679,6 +2687,21 @@ export function useInterview({
           { role: 'candidate', text: introAnswer, isProbe: false, probeDepth: 0 },
         )
         enqueueBackgroundEvaluation(intro, introAnswer, 0, 0)
+      }
+
+      // ACADEMICS: prefetch Q1 now — AFTER capturing the intro answer (so the named subject is in the
+      // transcript and Q1 names it via generateQuestion's live buildPreviousQA) but BEFORE
+      // finalizeThread(intro). This sits OUTSIDE the `if (introAnswer)` block on purpose so it also
+      // covers the SILENT-intro path: if the candidate said nothing we still prefetch here at
+      // completedThreads length 0, so /api/generate-question tags Q1 with slot 0's warm-up flowHints
+      // (probe limits/phase). Otherwise the silent path would skip the prefetch, finalizeThread would
+      // bump the thread count, and runInterviewLoop's on-demand generateQuestion(1) would get slot 1's
+      // fundamentals hints for what is still the warm-up turn (Codex #482 P2). No intro answer → no
+      // subject to name → the directive's generic roadmap fallback applies, but on the correct slot.
+      if (isAcademics) {
+        const q1Promise = generateQuestion(1)
+        q1Promise.then((q) => prefetchTTS(q)).catch(() => {})
+        prefetchedQuestionRef.current = q1Promise
       }
 
       // Finalize intro thread

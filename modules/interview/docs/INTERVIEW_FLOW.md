@@ -1847,3 +1847,46 @@ asymmetry, the clarify-echo, and the narrow-guard negative. `tsc` clean; full vi
   uncertainty stays excluded; validated). One regression test added. The remaining borderline
   (rhetorical "what does X mean? it means Y") is protected by the `questionOverlap >= 0.6` conjunct — an
   answered utterance yields a real probe, not a question-echo, so the guard doesn't fire.
+
+### 2026-07-01 · Academics warm-up Q1 said "that subject" instead of naming it — prefetch timing
+
+**Symptom.** The academics warm-up Q1 read "give me a roadmap of the main topics within *that subject*"
+(generic) instead of "...within *consumer behaviour*" (the subject the candidate just named in their
+intro answer). Reported with prod screenshots.
+
+**Root cause.** `start()` prefetched Q1 (`generateQuestion(1)`) *during* the intro speech — i.e.
+**before** `listenForAnswer` captured the intro answer. So at Q1-gen time the candidate's named
+subject was not yet in the transcript. `academicGroundingDirective` is explicitly written for this:
+when the subject is "NOT yet visible in the conversation above (this happens only on the very first
+question you generate, before their opening answer is in context)", it deliberately falls back to
+"ask them to give a quick roadmap of their strongest subject (let them state it)" — the generic
+wording. The deliberate Q1 prefetch (commit d2c04c9) was the thing keeping the subject out of context.
+
+**Fix (`useInterview.ts`, in `start`).** For academics ONLY, don't prefetch Q1 before the intro
+answer. Instead prefetch it *right after* `addToTranscript('candidate', introAnswer, 0)` — which
+updates `transcriptRef.current` synchronously — so `generateQuestion(1)` (which reads live
+`transcriptRef.current` → `buildPreviousQA`) now sees the named subject, and the directive's MAIN
+rule ("Identify that EXACT subject ... anchor the ENTIRE round to it") names it. Non-academics keep
+the pre-intro prefetch (latency win; their Q1 doesn't depend on the intro answer). The flow-slot index
+is unchanged — academics excludes the intro from `flowSlotIndex`, and both the old and new prefetch
+run before `finalizeThread(intro)`, so Q1 stays the same warm-up roadmap slot, just subject-named.
+The added latency is minimal: the new prefetch overlaps `finalizeThread` + the loop transition. If the
+candidate gives no intro answer, `runInterviewLoop` falls back to generating Q1 (no subject to name).
+
+**Blast radius (gitnexus `impact`).** `start` has 0 upstream callers (entry point via
+`setTimeout(start, 200)`); LOW. `generateQuestion` / `prefetchedQuestionRef` consumers unchanged.
+
+**Verification.** Data path traced symbol-by-symbol (addToTranscript sync ref write → generateQuestion
+live transcript → buildPreviousQA includes intro for short transcripts → directive names subject when
+visible). `tsc` clean; full vitest green; build green. End-to-end prod confirmation pending (auth is
+prod-only — a real academics self-interview is the final check).
+
+**Codex follow-up (silent-intro slot, P2).** The first version put the academics Q1 prefetch INSIDE
+`if (introAnswer)`. If an academics candidate gives NO intro answer, that block is skipped →
+`finalizeThread(intro)` bumps the completed-thread count → `runInterviewLoop(1)`'s on-demand
+`generateQuestion(1)` is computed at thread-count 1, so `/api/generate-question` returns `flowHints`
+from the raw count and tags the warm-up Q1 with slot 1's fundamentals probe limits/phase instead of
+slot 0's warm-up hints. Fix: moved the academics prefetch OUT of the `if (introAnswer)` block to run
+unconditionally (still before `finalizeThread`), so the silent path also prefetches at thread-count 0
+and gets slot 0's warm-up `flowHints`. The answered path is unchanged (the intro answer is already in
+`transcriptRef` before this prefetch, so Q1 still names the subject).
