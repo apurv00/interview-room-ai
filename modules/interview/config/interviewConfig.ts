@@ -116,14 +116,14 @@ function interpolate(
 // Upper bound for AI-generated question indices (total interactions including probes).
 // Loop runs from 1..<questionCount>, so actual AI questions = questionCount - 1. The loop still stops
 // at this count OR when time runs low (whichever first) — a definite limit, not "keep asking".
-// Raised from 0.5→0.8 q/min (was 6/11/16): interviews were exhausting the old count well before the
-// clock, ending early with time unused. Anchors: 10min→8, 20min→16, 30min→24.
+// Set to 1.0 q/min (was 0.5): interviews were exhausting the old count well before the clock, ending
+// early with time unused. Anchors: 10min→10, 20min→20, 30min→30.
 export function getQuestionCount(duration: Duration): number {
-  return interpolate(duration, [[10, 8], [20, 16], [30, 24]])
+  return interpolate(duration, [[10, 10], [20, 20], [30, 30]])
 }
 
 /** @deprecated Use getQuestionCount() instead */
-export const QUESTION_COUNT: Record<number, number> = { 10: 8, 20: 16, 30: 24 }
+export const QUESTION_COUNT: Record<number, number> = { 10: 10, 20: 20, 30: 30 }
 
 // Minimum distinct topics to cover (reduced from question count since probes use time).
 // Anchors: 10min→4, 20min→7, 30min→10
@@ -218,10 +218,10 @@ export const WRAP_UP_LINE =
 
 // Pressure question triggers (question index where light pressure hits)
 // Scaled with the raised question count so pressure still lands in the latter ~75% of the interview
-// (not the midpoint). Anchors: 10min→6, 20min→12, 30min→18.
+// (not the midpoint). Anchors: 10min→8, 20min→15, 30min→23.
 export function getPressureQuestionIndex(duration: Duration): number {
-  return interpolate(duration, [[10, 6], [20, 12], [30, 18]])
+  return interpolate(duration, [[10, 8], [20, 15], [30, 23]])
 }
 
 /** @deprecated Use getPressureQuestionIndex() instead */
-export const PRESSURE_QUESTION_INDEX: Record<number, number> = { 10: 6, 20: 12, 30: 18 }
+export const PRESSURE_QUESTION_INDEX: Record<number, number> = { 10: 8, 20: 15, 30: 23 }

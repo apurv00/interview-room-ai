@@ -82,9 +82,9 @@ describe('G.7 — getQuestionCount returns the canonical planned count', () => {
   // InterviewSession.plannedQuestionCount. If these anchors change in
   // interviewConfig, G.10's completion-ratio math will need to follow.
   it('produces expected counts at each supported duration', () => {
-    expect(getQuestionCount(10)).toBe(8)
-    expect(getQuestionCount(20)).toBe(16)
-    expect(getQuestionCount(30)).toBe(24)
+    expect(getQuestionCount(10)).toBe(10)
+    expect(getQuestionCount(20)).toBe(20)
+    expect(getQuestionCount(30)).toBe(30)
   })
 
   it('produces a positive integer for a mid-range duration', () => {

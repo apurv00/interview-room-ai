@@ -1904,9 +1904,9 @@ time-bound, so the completion-scoring concern that motivated the decouple doesn'
 is the obvious one: raise `getQuestionCount`. The loop keeps its original behavior — stop at the count
 OR when time is low, whichever first (a definite limit; time is only the fallback cutoff).
 
-**Change.** `getQuestionCount` 0.5→0.8 q/min (anchors 6/11/16 → **8/16/24** for 10/20/30 min; other
+**Change.** `getQuestionCount` 0.5→1.0 q/min (anchors 6/11/16 → **10/20/30** for 10/20/30 min; other
 durations interpolate/extrapolate the same). `getPressureQuestionIndex` scaled in step (4/8/12 →
-**6/12/18**) so pressure still lands in the latter ~75%, not the midpoint. Everything downstream already
+**8/15/23**) so pressure still lands in the latter ~75%, not the midpoint. Everything downstream already
 reads `getQuestionCount`, so scoring (`plannedQuestionCount`) and the UI progress follow automatically.
 Two accommodations for the higher count: (1) `TranscriptPanel` caps the dot rail at 15 (proportional
 above that) so it can't overflow the header row — the top progress bar still shows exact %; (2)
@@ -1916,7 +1916,7 @@ topics and `GenerateQuestionSchema` caps that array at 20 (an over-cap body 400s
 **Not touched:** `getMinimumTopics` (a floor, still valid); the flow templates (extra questions deepen
 existing topics via probes / add topics as the evaluator decides — same as before, just more of them).
 
-**Verification.** `interviewConfig.test.ts` updated to 8/16/24; pressure-index invariants (`[1,maxQ)` +
+**Verification.** `interviewConfig.test.ts` updated to 10/20/30; pressure-index invariants (`[1,maxQ)` +
 latter-half) still hold; `flowMatrix` invariant #8 (`totalSlots <= getQuestionCount-1`) is now easier to
 satisfy. `tsc` clean; full vitest green; build green. PENDING prod E2E: confirm a 30-min session now
-fills the time and completion still reads ~100% for a full run; dial the 0.8 q/min pace if it's rushed.
+fills the time and completion still reads ~100% for a full run; dial the 1.0 q/min pace if it's rushed.
