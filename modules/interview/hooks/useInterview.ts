@@ -19,7 +19,7 @@ import type {
 import {
   getInterviewIntro,
   WRAP_UP_LINE,
-  getQuestionCount,
+  getQuestionCeiling,
 } from '@interview/config/interviewConfig'
 import { getPlannedQuestionCountForFeedback } from '@interview/services/eval/sessionScoringPolicy'
 import { deriveCoachingTip } from '@interview/config/coachingTips'
@@ -1648,7 +1648,12 @@ export function useInterview({
   const runInterviewLoop = useCallback(
     async (startingQIndex: number) => {
       if (!config) return
-      const maxQ = getQuestionCount(config.duration)
+      // maxQ is the loop's headroom CEILING, not the scoring target. The loop keeps asking questions
+      // until TIME governs the wrap-up (timeRemaining<60s final-topic fast-path below; <15s hard stop),
+      // instead of ending early when the ~0.5 Q/min target is hit while time remains. plannedQuestionCount
+      // (completion scoring) still uses getQuestionCount — see finishInterview — so answering past the
+      // target clamps completion at 1.0 rather than skewing it. See INTERVIEW_FLOW.md §8 (2026-07-01).
+      const maxQ = getQuestionCeiling(config.duration)
       let qIdx = startingQIndex
       disengagedRef.current = false
 

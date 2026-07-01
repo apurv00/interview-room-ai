@@ -1890,3 +1890,37 @@ slot 0's warm-up hints. Fix: moved the academics prefetch OUT of the `if (introA
 unconditionally (still before `finalizeThread`), so the silent path also prefetches at thread-count 0
 and gets slot 0's warm-up `flowHints`. The answered path is unchanged (the intro answer is already in
 `transcriptRef` before this prefetch, so Q1 still names the subject).
+
+### 2026-07-01 · Interviews ended early with time left — make TIME (not the count) govern the loop
+
+**Symptom.** Interviews frequently ran out of *questions* before the clock — the candidate finished all
+planned questions with minutes to spare and the session ended early, wasting time that could carry more
+signal.
+
+**Root cause.** `runInterviewLoop` bounded itself by `getQuestionCount(duration)` (the ~0.5 Q/min
+target: 10→6, 20→11, 30→16). That same number is ALSO the completion-scoring denominator
+(`plannedQuestionCount`). So the count did two jobs — pacing the loop AND scoring completeness — and any
+candidate faster than 0.5 Q/min hit the count and stopped early. The interview already has a
+time-governor (`timeRemaining < 60s` → final-topic fast-path; `< 15s` → hard stop); it just never fired
+because the count exhausted first.
+
+**Fix — decouple the loop ceiling from the scoring target.** New `getQuestionCeiling(duration)`
+(interviewConfig.ts, anchors 10→11 / 20→21 / 30→31, ~2× the target) is a headroom BACKSTOP; the loop's
+`maxQ` now uses it, so the loop keeps asking until the existing time-governor wraps up ~60s before the
+buzzer. `getQuestionCount` is UNCHANGED and still drives `plannedQuestionCount` (session create +
+`getPlannedQuestionCountForFeedback`). Safe because the completion multiplier clamps at 1.0
+(`completionAdjustment.ts`: `Math.max(0, Math.min(1, tapered))`) — a candidate who now answers MORE than
+the target clamps to 100%, never over- or under-scored; a slow candidate scores exactly as before.
+Questions beyond the ~9 flow-template slots run free-form (persona + domain + subject grounding +
+anti-repeat still apply; `promptBuilder` returns an empty slot block past `totalSlots`).
+
+**Blast radius (gitnexus).** `runInterviewLoop` LOW (1 caller, `start`). `getQuestionCount` and the
+`flowMatrix` invariant #8 (`totalSlots <= getQuestionCount - 1`) untouched.
+
+**Verification.** `interviewConfig.test.ts` adds `getQuestionCeiling` tests (ceiling strictly > target
+per duration; pinned anchors; monotonic). `completionAdjustment`/`flowMatrix` suites still green. `tsc`
+clean; full vitest green; build green. **PENDING — hot-path E2E:** a real 30-min interview to (a) confirm
+the timer now governs (session fills the time, wraps up ~60s before end) and (b) read back
+`answeredCount` vs `plannedQuestionCount` to confirm completion still reports 100% for a full session.
+Bonus questions past the target COUNT toward the score (more signal) — revisit if that's unfair for the
+free-form tail.

@@ -123,6 +123,20 @@ export function getQuestionCount(duration: Duration): number {
 /** @deprecated Use getQuestionCount() instead */
 export const QUESTION_COUNT: Record<number, number> = { 10: 6, 20: 11, 30: 16 }
 
+// UPPER CEILING for the live question loop — a headroom BACKSTOP, not the target. getQuestionCount
+// above is the ~0.5 Q/min TARGET used for completion SCORING (plannedQuestionCount). The live loop
+// (runInterviewLoop) bounds itself by this HIGHER ceiling so that TIME governs when the interview ends
+// (it already wraps up at timeRemaining<60s and hard-stops at <15s) instead of running out of questions
+// early while time remains. answeredCount may exceed the target; the completion ratio clamps at 1.0
+// (completionAdjustment.ts), so bonus questions neither over- nor under-score. Sized ~2x the target (a
+// fast candidate at ~1 Q/min) so time — not the count — is the binding constraint. Questions beyond the
+// ~9 flow-template slots run free-form (persona + domain + subject grounding + anti-repeat still apply;
+// only the slot-specific nudge is absent — promptBuilder returns an empty block past totalSlots).
+// Anchors: 10min→11, 20min→21, 30min→31.
+export function getQuestionCeiling(duration: Duration): number {
+  return interpolate(duration, [[10, 11], [20, 21], [30, 31]])
+}
+
 // Minimum distinct topics to cover (reduced from question count since probes use time).
 // Anchors: 10min→4, 20min→7, 30min→10
 export function getMinimumTopics(duration: Duration): number {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { QUESTION_COUNT, PRESSURE_QUESTION_INDEX, getInterviewIntro, getAvatarTitle } from '../config/interviewConfig'
+import { QUESTION_COUNT, PRESSURE_QUESTION_INDEX, getInterviewIntro, getAvatarTitle, getQuestionCount, getQuestionCeiling } from '../config/interviewConfig'
 import type { Duration } from '@shared/types'
 
 const DURATIONS: Duration[] = [10, 20, 30]
@@ -27,6 +27,29 @@ describe('QUESTION_COUNT', () => {
 
   it('30-min has 16 total questions (1 intro + 15 AI)', () => {
     expect(1 + (QUESTION_COUNT[30] - 1)).toBe(16)
+  })
+})
+
+describe('getQuestionCeiling (loop headroom vs scoring target)', () => {
+  // The live loop bounds itself by the CEILING; completion scoring uses getQuestionCount (the target).
+  // The ceiling MUST sit strictly above the target, otherwise the count still ends the interview early
+  // (before time) — which is the whole thing this decouple exists to fix.
+  it.each(DURATIONS)(
+    '%d-min: ceiling is strictly ABOVE the getQuestionCount target so TIME, not the count, governs',
+    (duration) => {
+      expect(getQuestionCeiling(duration)).toBeGreaterThan(getQuestionCount(duration))
+    }
+  )
+
+  it('pins explicit anchors (10→11, 20→21, 30→31), ~2x the target', () => {
+    expect(getQuestionCeiling(10)).toBe(11)
+    expect(getQuestionCeiling(20)).toBe(21)
+    expect(getQuestionCeiling(30)).toBe(31)
+  })
+
+  it('is monotonically non-decreasing with duration', () => {
+    expect(getQuestionCeiling(20)).toBeGreaterThanOrEqual(getQuestionCeiling(10))
+    expect(getQuestionCeiling(30)).toBeGreaterThanOrEqual(getQuestionCeiling(20))
   })
 })
 
