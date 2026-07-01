@@ -1961,3 +1961,10 @@ fills the time and completion still reads ~100% for a full run; dial the 1.0 q/m
   own uncapped number (used for the cursor/coverage — no prompt cost) and only the recent-30 `completedThreads`
   SUMMARIES (bounded for prompt size + anti-repeat). Route: `flowSlotIndex(type, completedThreadCount ??
   completedThreads.length)`. Schema adds `completedThreadCount: z.number().max(200)`.
+  **Follow-ups (finish the decouple).** (a) `buildFlowPromptContext` also derived coverage from
+  `completedThreads.length` — now takes an optional `completedCount` (the route passes the true count) so
+  coverage pressure is right on long sessions too. (b) The `topicCount` diversity nudge uses the true
+  count. (c) `interviewService.createSession` now persists the TYPE-AWARE
+  `getPlannedQuestionCountForFeedback` (not `getQuestionCount`) so a coding/system-design session stores
+  its real 1-2-submission budget instead of 30 — the persisted value now matches what feedback scores
+  against (and the regeneration read no longer needs to compensate for a misleading stored value).

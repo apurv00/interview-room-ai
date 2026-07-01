@@ -12,8 +12,12 @@ export function buildFlowPromptContext(params: {
   currentSlotIndex: number
   completedThreads: ThreadSummary[]
   performanceSignal: PerformanceSignal
+  /** TRUE completed-thread count for coverage math. Defaults to completedThreads.length, but that array
+   *  is bounded for prompt size (slice(-30)), so pass the real count for accurate coverage on long
+   *  sessions (durations run to 60 min → >30 threads). */
+  completedCount?: number
 }): FlowPromptContext {
-  const { flow, currentSlotIndex, completedThreads, performanceSignal } = params
+  const { flow, currentSlotIndex, completedThreads, performanceSignal, completedCount } = params
 
   // Past all slots — no flow guidance (shouldn't happen but handle gracefully)
   if (currentSlotIndex >= flow.totalSlots) {
@@ -31,7 +35,7 @@ export function buildFlowPromptContext(params: {
 
   // Calculate coverage pressure: are there more remaining must-slots than remaining questions?
   const remainingMustSlots = remainingSlots.filter(s => s.priority === 'must').length
-  const coveredCount = completedThreads.length
+  const coveredCount = completedCount ?? completedThreads.length
   const remainingQuestionBudget = flow.totalSlots - coveredCount - 1
   const coveragePressure = remainingMustSlots > 0 && remainingMustSlots >= remainingQuestionBudget
 

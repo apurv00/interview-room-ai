@@ -315,6 +315,7 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
             flow: resolvedFlow,
             currentSlotIndex,
             completedThreads: completedThreads ?? [],
+            completedCount, // true count (not the capped summaries length) for coverage math
             performanceSignal: performanceSignal || 'calibrating',
           })
           flowPromptBlock = flowCtx.promptBlock ? `\n\n${flowCtx.promptBlock}` : ''
@@ -528,8 +529,10 @@ Do NOT use generic transitions like "Great, next question..." or "Moving on...".
       const summaries = completedThreads.map((t, i) =>
         `Topic ${i + 1}: "${t.topicQuestion}" (avg score: ${t.avgScore}, probes: ${t.probeCount})`
       ).join('\n')
-      // Detect topic diversity — nudge the interviewer to explore uncovered areas
-      const topicCount = completedThreads.length
+      // Detect topic diversity — nudge the interviewer to explore uncovered areas.
+      // Use the true count (not the capped summaries length) so the "covered N topics" nudge is
+      // accurate on long sessions.
+      const topicCount = completedThreadCount ?? completedThreads.length
       // Skipped for academics: this nudges a switch to a different COMPETENCY area (failure
       // handling, data-driven decisions, innovation) — behavioural/job steering that drifts a
       // subject viva off the named subject after Q3. Subject breadth is the directive's job.
