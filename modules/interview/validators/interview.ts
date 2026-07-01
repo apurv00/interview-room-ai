@@ -149,7 +149,7 @@ const FeedbackDataSchema = z.object({
     matched: z.boolean(),
     evidence: z.string().nullish(),
   })).optional(),
-  red_flags: z.array(z.string()).max(30),
+  red_flags: z.array(z.string()).max(40), // headroom above the 30-question ceiling (model Q-refs + server-appended flags)
   top_3_improvements: z.array(z.string()).max(10),
   // Outer-catch fallback marker — see `FeedbackData.degraded` JSDoc in
   // shared/types.ts. Optional for backwards compatibility; older

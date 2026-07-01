@@ -1915,6 +1915,22 @@ above that) so it can't overflow the header row — the top progress bar still s
 `useInterviewAPI` sends `completedThreads.slice(-20)` because a low-probe session can now complete >20
 topics and `GenerateQuestionSchema` caps that array at 20 (an over-cap body 400s → generic fallback).
 
+**Feedback token/budget accommodation (gitnexus impact sweep of the count raise).** The generate-feedback
+route's count-scaled budgets were INVERTED — they handed the *larger* interview the *smaller* budget, so
+at ~30 questions the report truncated. Fixed all three: (a) core-feedback `maxTokens` 3600(>=10)/4200 →
+`>=20 ? 6000 : >=10 ? 4800 : 4200`; (b) compaction `budgetChars` 6000(>=10) → `>=20 ? 12000 : >=10 ?
+8000` (the old 6000 was BELOW the compactor's own 8000 default and dropped the weakest-answer verbatim
+block — the ideal_answers grounding — reintroducing the G.13 shallow-feedback regression at high counts);
+(c) the structured-repair `maxTokens` (flat 3600) → 6000 to match the raised core cap (it only runs
+because the core truncated, so it must have room). Also: enrichment `maxTokens` 5000 → 7000 (the weak-
+question cap of 10 binds far more often at 30 Qs) and `FeedbackCoreSchema.red_flags` `.max(30)` → 40
+(headroom above the 30-question ceiling so a full set of Q-referenced flags + server-appended flags can't
+trip the persist-side parse). Confirmed fine-as-is: the GenerateFeedback/Question schemas have no array
+`.max()` that a 30-question body would trip; scoring (`completionAdjustment`/`perQAggregation`) is
+ratio-based; per-turn generation input windows (`buildPreviousQA` slice(-10), `completedThreads`
+slice(-20)) stay bounded — `completedThreads` deliberately kept at 20 (recent-20 covers anti-repeat;
+generate-question is hot-path, so no live-prompt bloat).
+
 **Not touched:** `getMinimumTopics` (a floor, still valid); the flow templates (extra questions deepen
 existing topics via probes / add topics as the evaluator decides — same as before, just more of them).
 
