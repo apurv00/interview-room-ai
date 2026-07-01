@@ -374,11 +374,22 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
       typeof body.plannedQuestionCount === 'number' && body.plannedQuestionCount > 0
         ? body.plannedQuestionCount
         : await (async () => {
-            // Regeneration (feedback page / Retry) doesn't POST plannedQuestionCount. Prefer the value
-            // PERSISTED at session create, so a session scored under the OLD budget isn't re-scored
-            // against the raised getQuestionCount — otherwise an old 16/16 session reads as 16/30 (a
-            // partial-completion red flag + score taper on an interview that WAS complete). Codex #484 P2.
-            if (body.sessionId) {
+            // The type-aware planned count: coding → 1-2 submissions, system-design → 1, else
+            // getQuestionCount(duration).
+            const typeAware = () => {
+              try {
+                return getPlannedQuestionCountForFeedback(interviewType, config.duration as Duration)
+              } catch {
+                return 0
+              }
+            }
+            // Regeneration (feedback page / Retry) doesn't POST plannedQuestionCount. For the types where
+            // getQuestionCount IS the denominator, prefer the value PERSISTED at session create so an old
+            // session isn't re-scored against the raised getQuestionCount (old 16/16 → 16/30 red flag +
+            // taper). But coding/system-design persist getQuestionCount too (session create is not
+            // type-aware), so their persisted value is WRONG — a coding retry would score 2 of 30. Use
+            // the type-aware policy for those and never the persisted count. Codex #484 P1 + P2.
+            if (interviewType !== 'coding' && interviewType !== 'system-design' && body.sessionId) {
               try {
                 const s = (await InterviewSession.findById(body.sessionId)
                   .select('plannedQuestionCount')
@@ -388,11 +399,7 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
                 }
               } catch { /* fall through to the duration-derived default */ }
             }
-            try {
-              return getPlannedQuestionCountForFeedback(interviewType, config.duration as Duration)
-            } catch {
-              return 0
-            }
+            return typeAware()
           })()
     const g10AnsweredCount =
       typeof body.answeredCount === 'number' && body.answeredCount >= 0

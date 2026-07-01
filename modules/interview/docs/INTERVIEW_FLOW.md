@@ -1945,6 +1945,10 @@ fills the time and completion still reads ~100% for a full run; dial the 1.0 q/m
   (now 30) — re-scoring a completed old 16/16 session as 16/30 (partial-completion red flag + taper).
   Fix: the route now reads the PERSISTED `InterviewSession.plannedQuestionCount` before the
   duration-derived default (regression test added: a persisted-10 complete session gets no red flag).
+  **Follow-up P1:** session create persists `getQuestionCount` for ALL types, but coding/system-design
+  are scored against 1-2 submissions — so trusting the persisted value would score a coding retry as
+  2/30. Refined: only read the persisted count for the types where `getQuestionCount` IS the denominator;
+  coding/system-design always use the type-aware `getPlannedQuestionCountForFeedback` (test added).
 - **Live pressure escalation didn't scale.** generate-question hardcoded `questionIndex >= 3`/`>= 6`, so
   a 30-question interview went adversarial in its first quarter. Fix: elevated at `getPressureQuestionIndex`
   (~50%, the midpoint), high at `getQuestionCount * 0.75` (~75%) — scales with the count and aligns the
