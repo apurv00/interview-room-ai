@@ -169,14 +169,73 @@ SYMBOL_ROWS="$(
       echo '```'
       echo ""
     done <<<"$SYMBOL_ROWS"
+
+    echo "## Name-based textual sweep (barrel-import blind-spot net)"
+    echo ""
+    echo "_The graph does NOT resolve call edges through barrel re-exports"
+    echo "(\`import { x } from '@resume'\`), and this repo's boundary rules"
+    echo "REQUIRE cross-module imports to go through barrels — so cross-module"
+    echo "callers are systematically MISSING from the graph section above"
+    echo "(verified 2026-07-02: the parseAndCacheResume → parseResumeToStructured"
+    echo "edge was absent in both directions). This sweep greps each symbol"
+    echo "name across app/, modules/, shared/ so barrel-mediated consumers are"
+    echo "visible. Generic names (GET/POST/handler/<4 chars) are skipped as"
+    echo "unsearchable — for route files, callers are HTTP clients anyway:"
+    echo "grep for the route PATH separately._"
+    echo ""
+    while IFS=$'\t' read -r sym uid; do
+      [ -z "$sym" ] && continue
+      case "$sym" in
+        GET|POST|PUT|PATCH|DELETE|handler|default|dynamic|constructor) continue ;;
+      esac
+      [ "${#sym}" -lt 4 ] && continue
+      # Self-file exclusion must be FIXED-STRING and anchored: dynamic-route
+      # paths contain [] which a regex grep -v treats as a character class,
+      # so app/feedback/[sessionId]/page.tsx never matched its own filter and
+      # leaked into its consumer list (Codex P2 on #490). awk index()==1 is
+      # an exact prefix match with no metacharacter surface.
+      RAW_HITS="$(grep -rn --include='*.ts' --include='*.tsx' -Fw "$sym" \
+        "$REPO_ROOT/app" "$REPO_ROOT/modules" "$REPO_ROOT/shared" 2>/dev/null \
+        | sed "s|^$REPO_ROOT/||" \
+        | awk -v self="$REL_PATH:" 'index($0, self) != 1')"
+      if [ -n "$RAW_HITS" ]; then
+        HIT_COUNT="$(printf '%s\n' "$RAW_HITS" | grep -c .)"
+        # The consumer FILE list is what the acknowledgement checklist refers
+        # to — it must be COMPLETE, never capped. Hub symbols (e.g.
+        # `completion` in modelRouter) have hundreds of hit LINES but only
+        # dozens of files; capping lines silently dropped later files and
+        # reintroduced the blind spot (Codex P2 on #490). Raw lines are
+        # detail only: bounded, with a LOUD truncation note + repro command.
+        FILE_LIST="$(printf '%s\n' "$RAW_HITS" | cut -d: -f1 | sort | uniq -c | sort -rn)"
+        FILE_COUNT="$(printf '%s\n' "$FILE_LIST" | grep -c .)"
+        echo "### \`$sym\` — $HIT_COUNT hits across $FILE_COUNT files"
+        echo ""
+        echo "_Complete consumer file list (never truncated; count = hits in that file):_"
+        echo ""
+        echo '```'
+        echo "$FILE_LIST"
+        echo '```'
+        echo ""
+        echo "_Hit lines (detail only, first 40):_"
+        echo ""
+        echo '```'
+        printf '%s\n' "$RAW_HITS" | head -40
+        if [ "$HIT_COUNT" -gt 40 ]; then
+          echo "… TRUNCATED: $((HIT_COUNT - 40)) more hit lines not shown. The file list above IS complete;"
+          echo "for every line run: grep -rn --include='*.ts' --include='*.tsx' -w '$sym' app modules shared"
+        fi
+        echo '```'
+        echo ""
+      fi
+    done <<<"$SYMBOL_ROWS"
   fi
 
   echo "## Risk acknowledgement"
   echo ""
   echo "Before proceeding with the edit, the editor must have:"
   echo ""
-  echo "- [ ] Read every d=1 caller above"
-  echo "- [ ] Confirmed the change is backward-compatible OR all d=1 callers are updated in the same commit"
+  echo "- [ ] Read every d=1 caller above AND the textual sweep (barrel-mediated consumers do NOT appear in the graph)"
+  echo "- [ ] Confirmed the change is backward-compatible OR all consumers from BOTH lists are updated in the same commit"
   echo "- [ ] A test that exercises the new behavior (or a justified No-tests-needed-because)"
   echo ""
   echo "_This file is auto-generated. The hook only requires it to exist"
