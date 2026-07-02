@@ -50,7 +50,9 @@ describe('buildCodingSeedBlock', () => {
     const block = await buildCodingSeedBlock('backend', 'medium')
     expect(block).toContain('sliding-window rate limiter')
     expect(block).toContain('a strong answer covers: window bookkeeping; O(1) checks; clock skew')
-    expect(mocks.retrieveQuestions).toHaveBeenCalledWith({ domain: 'backend', interviewType: 'coding', limit: 2 })
+    // trackUsage:false — exemplar reads must not bias the real RAG's
+    // prefer-less-used ordering (Codex P2 on #486).
+    expect(mocks.retrieveQuestions).toHaveBeenCalledWith({ domain: 'backend', interviewType: 'coding', limit: 2, trackUsage: false })
   })
 
   it('degrades to pool-only when bank retrieval throws', async () => {
@@ -65,7 +67,7 @@ describe('buildDesignSeedBlock', () => {
     const block = await buildDesignSeedBlock('backend', 'medium')
     expect(block).toContain('<style_exemplars>')
     expect(block).toContain('Requirements include:')
-    expect(mocks.retrieveQuestions).toHaveBeenCalledWith({ domain: 'backend', interviewType: 'system-design', limit: 2 })
+    expect(mocks.retrieveQuestions).toHaveBeenCalledWith({ domain: 'backend', interviewType: 'system-design', limit: 2, trackUsage: false })
   })
 
   it('falls back to the whole pool for untagged domains', async () => {

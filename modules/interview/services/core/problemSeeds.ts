@@ -49,7 +49,10 @@ async function bankExemplars(domain: string, interviewType: 'coding' | 'system-d
   try {
     // No difficulty filter on purpose: the bank has almost no 'easy' rows for
     // these types, so filtering would starve 0-2 candidates of exemplars.
-    const rows = await retrieveQuestions({ domain, interviewType, limit: 2 })
+    // trackUsage:false — these rows are style references, never served to the
+    // candidate; counting them would bias the real RAG's prefer-less-used
+    // ordering (Codex P2 on #486).
+    const rows = await retrieveQuestions({ domain, interviewType, limit: 2, trackUsage: false })
     return rows.map((q) => {
       const points = q.idealAnswerPoints?.length
         ? ` (a strong answer covers: ${q.idealAnswerPoints.slice(0, 3).join('; ')})`
