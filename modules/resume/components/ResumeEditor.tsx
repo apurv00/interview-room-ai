@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import type { ResumeData } from '../validators/resume'
 import { useResume } from '../hooks/useResume'
+import { buildUploadPrefill } from '../lib/parseSalvage'
 import { getTemplateSectionOrder, templateHonorsSectionOrder } from '../config/sectionOrders'
 import { RESUME_TEMPLATES } from '../config/templates'
 import { TEMPLATE_FAMILIES, TEMPLATE_VARIANTS } from '../config/templateFamilies'
@@ -146,7 +147,10 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
       })
       const parsed = await parseRes.json()
       if (parseRes.ok && parsed.resume && parsed.importedSections?.length) {
-        loadResume(parsed.resume)
+        // Upload = REPLACE: buildUploadPrefill wraps the (intentionally
+        // partial) parse in explicit empties so sections absent from the
+        // uploaded file don't survive as stale draft data in the merge.
+        loadResume(buildUploadPrefill(parsed.resume) as Partial<ResumeData>)
         const summary = `Imported ${parsed.importedSections.length === 1 ? '1 section' : `${parsed.importedSections.length} sections`}: ${parsed.importedSections.join(', ')}. Review before saving.`
         setNotice(parsed.warning ? `${summary} ${parsed.warning}` : summary)
       } else {

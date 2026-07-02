@@ -254,3 +254,26 @@ export function normalizeParsedResume(raw: unknown): NormalizedParseResult {
 
   return { resume: normalized, importedSections, droppedSections }
 }
+
+/**
+ * Prefill payload for uploading a resume INTO the editor. Upload semantics
+ * are REPLACE, not merge: the parse result is intentionally partial and
+ * `loadResume` shallow-merges into existing state — without explicit empties,
+ * uploading over a non-empty draft would keep stale sections (old contact
+ * info under the new experience) that save/export silently. Every
+ * parse-managed section gets an explicit empty default; editor-only fields
+ * (name, template, styling, customSections — which a parse can never
+ * populate) are deliberately absent so they survive the merge.
+ */
+export function buildUploadPrefill(parsedResume: Record<string, unknown>): Record<string, unknown> {
+  return {
+    contactInfo: { fullName: '', email: '' },
+    summary: '',
+    experience: [],
+    education: [],
+    skills: [],
+    projects: [],
+    certifications: [],
+    ...parsedResume,
+  }
+}

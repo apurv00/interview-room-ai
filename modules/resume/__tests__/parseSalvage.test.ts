@@ -6,7 +6,7 @@
  * into editor-safe shapes with per-ITEM (never per-section) junk dropping.
  */
 import { describe, it, expect } from 'vitest'
-import { salvageTruncatedJson, normalizeParsedResume } from '@resume/lib/parseSalvage'
+import { salvageTruncatedJson, normalizeParsedResume, buildUploadPrefill } from '@resume/lib/parseSalvage'
 
 describe('salvageTruncatedJson', () => {
   it('parses valid JSON untouched', () => {
@@ -111,5 +111,34 @@ describe('normalizeParsedResume', () => {
     expect(exp[0].bullets).toEqual([])
     expect((resume.education as Array<Record<string, unknown>>)[0].id).toBe('edu-1')
     expect((resume.projects as Array<Record<string, unknown>>)[0].id).toBe('proj-1')
+  })
+})
+
+describe('buildUploadPrefill', () => {
+  it('wraps a partial parse in explicit empties so stale draft sections are cleared on merge (Codex P2 on #489)', () => {
+    const prefill = buildUploadPrefill({
+      experience: [{ id: 'exp-1', company: 'Acme' }],
+      skills: [{ category: 'Langs', items: ['TS'] }],
+    })
+    // Present sections win…
+    expect((prefill.experience as unknown[])).toHaveLength(1)
+    expect((prefill.skills as unknown[])).toHaveLength(1)
+    // …absent parse-managed sections come back as explicit empties, so a
+    // shallow merge over an existing draft clears them instead of keeping
+    // the old contact info / projects under the new upload.
+    expect(prefill.contactInfo).toEqual({ fullName: '', email: '' })
+    expect(prefill.summary).toBe('')
+    expect(prefill.education).toEqual([])
+    expect(prefill.projects).toEqual([])
+    expect(prefill.certifications).toEqual([])
+  })
+
+  it('leaves editor-only fields absent so name/template/styling/customSections survive the merge', () => {
+    const prefill = buildUploadPrefill({ summary: 'ok' })
+    expect('name' in prefill).toBe(false)
+    expect('template' in prefill).toBe(false)
+    expect('styling' in prefill).toBe(false)
+    expect('customSections' in prefill).toBe(false)
+    expect('targetRole' in prefill).toBe(false)
   })
 })
