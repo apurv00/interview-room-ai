@@ -12,8 +12,10 @@ import { NextRequest } from 'next/server'
 const mocks = vi.hoisted(() => ({
   userId: '69fb49747e70dc410e5a2f12',
   completion: vi.fn(),
-  getServedProblemIds: vi.fn(),
+  getServedProblemSummaries: vi.fn(),
+  countServedProblems: vi.fn(),
   recordServedProblem: vi.fn(),
+  buildDesignSeedBlock: vi.fn(),
 }))
 
 vi.mock('@shared/middleware/composeApiRoute', () => ({
@@ -46,8 +48,17 @@ vi.mock('@interview/services/core/servedProblemLedger', async (importOriginal) =
   const actual = await importOriginal<typeof import('../../../../../modules/interview/services/core/servedProblemLedger')>()
   return {
     ...actual,
-    getServedProblemIds: mocks.getServedProblemIds,
+    getServedProblemSummaries: mocks.getServedProblemSummaries,
+    countServedProblems: mocks.countServedProblems,
     recordServedProblem: mocks.recordServedProblem,
+  }
+})
+
+vi.mock('@interview/services/core/problemSeeds', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../../modules/interview/services/core/problemSeeds')>()
+  return {
+    ...actual,
+    buildDesignSeedBlock: mocks.buildDesignSeedBlock,
   }
 })
 
@@ -71,22 +82,102 @@ const GENERATED = {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  mocks.getServedProblemIds.mockResolvedValue([])
+  mocks.getServedProblemSummaries.mockResolvedValue([])
+  mocks.countServedProblems.mockResolvedValue(0)
   mocks.recordServedProblem.mockResolvedValue(undefined)
+  mocks.buildDesignSeedBlock.mockResolvedValue({ block: '\n<style_exemplars>SEED</style_exemplars>\n', exemplarTitles: [] })
   mocks.completion.mockResolvedValue({ text: JSON.stringify(GENERATED) })
 })
 
+const promptOfCall = (n: number): string =>
+  mocks.completion.mock.calls[n][0].messages[0].content as string
+
 describe('POST /api/design/generate-problem', () => {
-  it('injects the ledger∪client avoid-list into the prompt, ledger first', async () => {
-    mocks.getServedProblemIds.mockResolvedValue(['ledger-a', 'shared-x'])
+  it('injects the titled ledger∪client avoid-list and the seed block into the prompt', async () => {
+    mocks.getServedProblemSummaries.mockResolvedValue([
+      { problemId: 'ledger-a', title: 'Ledger Alpha' },
+      { problemId: 'shared-x' },
+    ])
     await POST(makeReq({
       domain: 'ml-engineer',
       experience: '3-6',
       solvedProblemIds: ['client-b', 'shared-x'],
     }))
-    expect(mocks.getServedProblemIds).toHaveBeenCalledWith(mocks.userId, 'system-design')
-    const promptContent = mocks.completion.mock.calls[0][0].messages[0].content as string
-    expect(promptContent).toContain('ledger-a, shared-x, client-b')
+    expect(mocks.getServedProblemSummaries).toHaveBeenCalledWith(mocks.userId, 'system-design')
+    const promptContent = promptOfCall(0)
+    expect(promptContent).toContain('- Ledger Alpha (ledger-a)')
+    expect(promptContent).toContain('- shared-x')
+    expect(promptContent).toContain('- client-b')
+    expect(promptContent).toContain('<style_exemplars>SEED</style_exemplars>')
+    expect(mocks.buildDesignSeedBlock).toHaveBeenCalledWith('ml-engineer', 'medium')
+  })
+
+  it('honors the client difficulty override', async () => {
+    await POST(makeReq({ domain: 'backend', experience: '0-2', difficulty: 'hard' }))
+    expect(promptOfCall(0)).toContain('Generate a hard system-design problem')
+  })
+
+  it('adds the progression nudge from the 3rd problem in a domain', async () => {
+    mocks.countServedProblems.mockResolvedValue(2)
+    await POST(makeReq({ domain: 'backend', experience: '3-6' }))
+    expect(promptOfCall(0)).toContain('problem #3')
+    expect(promptOfCall(0)).toContain('UPPER END of medium')
+  })
+
+  it('retries once, naming the collision, when the result near-duplicates a served title', async () => {
+    mocks.getServedProblemSummaries.mockResolvedValue([
+      { problemId: 'url-shortener', title: 'Design a URL Shortener' },
+    ])
+    mocks.completion
+      .mockResolvedValueOnce({ text: JSON.stringify({ ...GENERATED, id: 'dup', title: 'URL Shortener at Scale', tags: [] }) })
+      .mockResolvedValueOnce({ text: JSON.stringify(GENERATED) })
+
+    const res = await POST(makeReq({ domain: 'backend', experience: '3-6' }))
+    const data = await res.json()
+    expect(mocks.completion).toHaveBeenCalledTimes(2)
+    expect(promptOfCall(1)).toContain('too similar to "Design a URL Shortener"')
+    expect(data.problem.title).toBe('Design a Feature Store')
+    // Only the final (non-colliding) problem is recorded.
+    expect(mocks.recordServedProblem).toHaveBeenCalledTimes(1)
+    expect(mocks.recordServedProblem).toHaveBeenCalledWith(
+      expect.objectContaining({ problemId: 'ai-feature-store-design' })
+    )
+  })
+
+  it('delivers the near-duplicate first candidate when the retry is unparseable (Codex P2 on #486)', async () => {
+    mocks.getServedProblemSummaries.mockResolvedValue([
+      { problemId: 'url-shortener', title: 'Design a URL Shortener' },
+    ])
+    mocks.completion
+      .mockResolvedValueOnce({ text: JSON.stringify({ ...GENERATED, id: 'dup', title: 'URL Shortener at Scale', tags: [] }) })
+      .mockResolvedValueOnce({ text: 'sorry, no json here' })
+
+    const res = await POST(makeReq({ domain: 'backend', experience: '3-6' }))
+    const data = await res.json()
+    // A duplicate in hand beats no problem — the first candidate ships.
+    expect(data.problem.title).toBe('URL Shortener at Scale')
+    expect(mocks.recordServedProblem).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'URL Shortener at Scale' })
+    )
+  })
+
+  it('delivers the first candidate when the retry call throws', async () => {
+    mocks.getServedProblemSummaries.mockResolvedValue([
+      { problemId: 'url-shortener', title: 'Design a URL Shortener' },
+    ])
+    mocks.completion
+      .mockResolvedValueOnce({ text: JSON.stringify({ ...GENERATED, id: 'dup', title: 'URL Shortener at Scale', tags: [] }) })
+      .mockRejectedValueOnce(new Error('LLM down'))
+
+    const data = await (await POST(makeReq({ domain: 'backend', experience: '3-6' }))).json()
+    expect(data.problem.title).toBe('URL Shortener at Scale')
+  })
+
+  it('still returns null when the FIRST attempt has no JSON (no candidate to fall back on)', async () => {
+    mocks.completion.mockResolvedValue({ text: 'nope' })
+    const data = await (await POST(makeReq({ domain: 'backend', experience: '3-6' }))).json()
+    expect(data).toEqual({ problem: null })
+    expect(mocks.recordServedProblem).not.toHaveBeenCalled()
   })
 
   it('records the generated problem in the ledger before responding', async () => {

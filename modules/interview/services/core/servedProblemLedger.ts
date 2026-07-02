@@ -19,28 +19,85 @@ export interface ServedProblemEntry {
 /** How many ledger rows exclusion reads consider (most recent first). */
 const LEDGER_READ_LIMIT = 300
 
+export interface ServedProblemSummary {
+  problemId: string
+  title?: string
+}
+
 /**
- * Most-recently-served-first problem ids for a user+kind.
+ * Most-recently-served-first {problemId, title} rows for a user+kind.
  * Returns [] on any failure — exclusion must never block problem delivery;
  * callers union this with the client-sent list, so a miss only degrades
  * exclusion back to the client's view, never below it.
  */
-export async function getServedProblemIds(
+export async function getServedProblemSummaries(
   userId: string,
   kind: ServedProblemKind,
-): Promise<string[]> {
+): Promise<ServedProblemSummary[]> {
   try {
     await connectDB()
     const rows = await ServedProblem.find({ userId, kind })
       .sort({ servedAt: -1 })
       .limit(LEDGER_READ_LIMIT)
-      .select('problemId')
+      .select('problemId title')
       .lean()
-    return rows.map((r) => r.problemId).filter(Boolean)
+    return rows
+      .filter((r) => r.problemId)
+      .map((r) => ({ problemId: r.problemId, title: r.title || undefined }))
   } catch (err) {
     aiLogger.warn({ err, kind }, 'servedProblemLedger: read failed — degrading to client exclusion list')
     return []
   }
+}
+
+/** Most-recently-served-first problem ids for a user+kind ([] on failure). */
+export async function getServedProblemIds(
+  userId: string,
+  kind: ServedProblemKind,
+): Promise<string[]> {
+  return (await getServedProblemSummaries(userId, kind)).map((s) => s.problemId)
+}
+
+/**
+ * How many problems this user has been served in a domain — drives the
+ * progressive-difficulty nudge in the generation prompts. 0 on failure.
+ */
+export async function countServedProblems(
+  userId: string,
+  kind: ServedProblemKind,
+  domain: string,
+): Promise<number> {
+  try {
+    await connectDB()
+    return await ServedProblem.countDocuments({ userId, kind, domain })
+  } catch (err) {
+    aiLogger.warn({ err, kind, domain }, 'servedProblemLedger: count failed')
+    return 0
+  }
+}
+
+/**
+ * Union ledger summaries (titled, most-recent-first, authoritative) with
+ * client-sent bare ids into avoid-list entries. Ledger entries first so
+ * downstream prompt caps keep the freshest — and titled — exclusions.
+ */
+export function unionAvoidEntries(
+  ledger: ServedProblemSummary[],
+  clientIds: string[],
+): Array<{ id: string; title?: string }> {
+  const seen = new Set<string>()
+  const out: Array<{ id: string; title?: string }> = []
+  for (const l of ledger) {
+    if (!l.problemId || seen.has(l.problemId)) continue
+    seen.add(l.problemId)
+    out.push({ id: l.problemId, title: l.title })
+  }
+  for (const id of clientIds) {
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    out.push({ id })
+  }
+  return out
 }
 
 /**

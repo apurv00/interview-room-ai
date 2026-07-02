@@ -15,7 +15,8 @@ import { NextRequest } from 'next/server'
 const mocks = vi.hoisted(() => ({
   userId: '69fb49747e70dc410e5a2f12',
   generateCodingProblem: vi.fn(),
-  getServedProblemIds: vi.fn(),
+  getServedProblemSummaries: vi.fn(),
+  countServedProblems: vi.fn(),
   recordServedProblem: vi.fn(),
 }))
 
@@ -41,7 +42,8 @@ vi.mock('@interview/services/core/servedProblemLedger', async (importOriginal) =
   const actual = await importOriginal<typeof import('../../../../../modules/interview/services/core/servedProblemLedger')>()
   return {
     ...actual,
-    getServedProblemIds: mocks.getServedProblemIds,
+    getServedProblemSummaries: mocks.getServedProblemSummaries,
+    countServedProblems: mocks.countServedProblems,
     recordServedProblem: mocks.recordServedProblem,
   }
 })
@@ -66,20 +68,26 @@ const AI_PROBLEM = {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  mocks.getServedProblemIds.mockResolvedValue([])
+  mocks.getServedProblemSummaries.mockResolvedValue([])
+  mocks.countServedProblems.mockResolvedValue(0)
   mocks.recordServedProblem.mockResolvedValue(undefined)
   mocks.generateCodingProblem.mockResolvedValue(AI_PROBLEM)
 })
 
 describe('POST /api/code/generate-problem', () => {
-  it('unions ledger ids (first) with client ids before generating', async () => {
-    mocks.getServedProblemIds.mockResolvedValue(['ledger-1', 'shared-id'])
+  it('unions titled ledger entries (first) with client ids and passes the served count', async () => {
+    mocks.getServedProblemSummaries.mockResolvedValue([
+      { problemId: 'ledger-1', title: 'Ledger One' },
+      { problemId: 'shared-id' },
+    ])
+    mocks.countServedProblems.mockResolvedValue(3)
     await POST(makeReq({
       domain: 'backend',
       experience: '3-6',
       solvedProblemIds: ['client-1', 'shared-id'],
     }))
-    expect(mocks.getServedProblemIds).toHaveBeenCalledWith(mocks.userId, 'coding')
+    expect(mocks.getServedProblemSummaries).toHaveBeenCalledWith(mocks.userId, 'coding')
+    expect(mocks.countServedProblems).toHaveBeenCalledWith(mocks.userId, 'coding', 'backend')
     expect(mocks.generateCodingProblem).toHaveBeenCalledWith(
       'backend',
       '3-6',
@@ -87,6 +95,14 @@ describe('POST /api/code/generate-problem', () => {
       undefined,
       undefined,
       undefined,
+      {
+        avoid: [
+          { id: 'ledger-1', title: 'Ledger One' },
+          { id: 'shared-id' },
+          { id: 'client-1' },
+        ],
+        priorCountInDomain: 3,
+      },
     )
   })
 
