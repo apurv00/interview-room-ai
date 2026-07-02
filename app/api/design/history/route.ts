@@ -39,7 +39,10 @@ export async function GET(_req: NextRequest) {
 
   const sessionIds = sessions.map((s: any) => s.designProblemId).filter(Boolean)
   // Ledger first (most-recent-first, server-authoritative), legacy after; deduped.
-  const uniqueIds = unionMostRecentFirst(ledgerIds, sessionIds)
+  // Capped at 200 — the generate-problem Zod schema rejects larger arrays and
+  // the client posts this list straight back to it (Codex P2 on #485; see
+  // /api/code/history for the full rationale).
+  const uniqueIds = unionMostRecentFirst(ledgerIds, sessionIds).slice(0, 200)
 
   return NextResponse.json({
     solvedProblemIds: uniqueIds,

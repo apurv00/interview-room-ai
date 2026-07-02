@@ -98,6 +98,30 @@ export async function deleteInterviewSession(
     })
   )
 
+  // Redact the served-problem ledger's stored AI problem body for this
+  // session's problem(s). Keyed via the session's own codingProblemId /
+  // designProblemId — the ledger row itself stays (it's the cross-session
+  // no-repeat memory; deleting it would re-enable repeats of a problem the
+  // user already saw), but the generated content is personal-adjacent
+  // (resume-tailored scenarios) and must not outlive the session delete.
+  // Best-effort: a redaction failure never blocks the session delete.
+  // Codex P2 on #485.
+  const redactTargets: Array<['coding' | 'system-design', string | undefined]> = [
+    ['coding', session.codingProblemId],
+    ['system-design', session.designProblemId],
+  ]
+  for (const [kind, problemId] of redactTargets) {
+    if (!problemId) continue
+    try {
+      await ServedProblem.updateOne(
+        { userId: session.userId, kind, problemId },
+        { $unset: { problemBody: 1 } }
+      )
+    } catch (err) {
+      logger.warn({ err, sessionId, kind, problemId }, 'ServedProblem body redaction failed during session delete')
+    }
+  }
+
   // Cascade DB deletes for documents tied to this single session.
   await Promise.all([
     MultimodalAnalysis.deleteOne({ sessionId }),

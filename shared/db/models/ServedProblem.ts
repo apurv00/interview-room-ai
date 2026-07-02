@@ -16,6 +16,12 @@ import mongoose, { Schema, Document, Model } from 'mongoose'
  * `problemBody` persists the full generated problem JSON for AI problems —
  * previously an AI problem's text existed nowhere but a 2000-char-clamped
  * evaluation string, so it could never be rebuilt or semantically deduped.
+ *
+ * Lifecycle: rows are ACCOUNT-scoped (cross-session no-repeat memory), removed
+ * by the deleteUserAccount cascade. Deleting a single session redacts the
+ * matching row's problemBody (deleteInterviewSession keys it via the session's
+ * codingProblemId/designProblemId) but keeps the id row — otherwise a session
+ * delete would silently re-enable repeats of a problem the user already saw.
  */
 export interface IServedProblem extends Document {
   _id: mongoose.Types.ObjectId
@@ -29,7 +35,6 @@ export interface IServedProblem extends Document {
   source: 'static' | 'ai'
   /** Full problem JSON — AI-generated problems only (static bodies live in code) */
   problemBody?: unknown
-  sessionId?: mongoose.Types.ObjectId
   servedAt: Date
 }
 
@@ -43,7 +48,6 @@ const ServedProblemSchema = new Schema<IServedProblem>(
     difficulty: { type: String, enum: ['easy', 'medium', 'hard'] },
     source: { type: String, enum: ['static', 'ai'], required: true },
     problemBody: { type: Schema.Types.Mixed },
-    sessionId: { type: Schema.Types.ObjectId, ref: 'InterviewSession' },
     servedAt: { type: Date, default: Date.now },
   },
   { timestamps: false }

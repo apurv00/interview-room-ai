@@ -63,6 +63,21 @@ describe('GET /api/code/history', () => {
     expect(mocks.getServedProblemIds).toHaveBeenCalledWith(mocks.userId, 'coding')
   })
 
+  it('caps the union at 200 ids — the generate-problem Zod limit the client posts this back to', async () => {
+    mocks.getServedProblemIds.mockResolvedValue(
+      Array.from({ length: 250 }, (_, i) => `ledger-${i}`)
+    )
+    mocks.sessionFind.mockReturnValue(sessionChain(
+      Array.from({ length: 50 }, (_, i) => ({ codingProblemId: `legacy-${i}` }))
+    ))
+
+    const res = await GET(new NextRequest('http://localhost/api/code/history'))
+    const data = await res.json()
+    expect(data.solvedProblemIds).toHaveLength(200)
+    // Most-recent-first preserved — the cap sheds the stalest ids.
+    expect(data.solvedProblemIds[0]).toBe('ledger-0')
+  })
+
   it('still returns legacy ids when the ledger read degrades to []', async () => {
     mocks.getServedProblemIds.mockResolvedValue([])
     mocks.sessionFind.mockReturnValue(sessionChain([{ codingProblemId: 'two-sum' }]))

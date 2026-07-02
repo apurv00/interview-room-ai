@@ -40,7 +40,13 @@ export async function GET(_req: NextRequest) {
 
   const sessionIds = sessions.map((s: any) => s.codingProblemId).filter(Boolean)
   // Ledger first (most-recent-first, server-authoritative), legacy after; deduped.
-  const uniqueIds = unionMostRecentFirst(ledgerIds, sessionIds)
+  // Capped at 200 — the generate-problem Zod schema rejects larger arrays, and
+  // the client posts this list straight back to it; an uncapped union (300
+  // ledger + 100 legacy) would 400 the AI path for heavy users and drop them
+  // to repeat-allowed static picks (Codex P2 on #485). Most-recent-first means
+  // the cap sheds the stalest exclusions; the server-side ledger union inside
+  // the generate routes still sees those independently.
+  const uniqueIds = unionMostRecentFirst(ledgerIds, sessionIds).slice(0, 200)
 
   return NextResponse.json({
     solvedProblemIds: uniqueIds,

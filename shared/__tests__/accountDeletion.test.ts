@@ -19,6 +19,7 @@ const mockSessionFindById = vi.fn()
 const mockSessionDeleteOne = vi.fn()
 const mockSessionFind = vi.fn()
 const mockUserDeleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 })
+const mockServedProblemUpdateOne = vi.fn().mockResolvedValue({ acknowledged: true })
 vi.mock('@shared/db/models/InterviewSession', () => ({
   InterviewSession: {
     findById: (...args: unknown[]) => mockSessionFindById(...args),
@@ -66,7 +67,10 @@ vi.mock('@shared/db/models', () => {
     DailyChallengeAttempt: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     DrillAttempt: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     UserCompetencyState: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
-    ServedProblem: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 2 }) },
+    ServedProblem: {
+      deleteMany: vi.fn().mockResolvedValue({ deletedCount: 2 }),
+      updateOne: (...args: unknown[]) => mockServedProblemUpdateOne(...args),
+    },
   }
   return actual
 })
@@ -132,6 +136,33 @@ describe('accountDeletion – R2 key coverage', () => {
     expect(mockDeleteFromR2).toHaveBeenCalledTimes(1)
     expect(mockDeleteFromR2).toHaveBeenCalledWith('video.webm')
     expect(result.r2KeysDeleted).toBe(1)
+  })
+
+  it('redacts the served-problem body for a coding session, keeping the no-repeat row (Codex P2 on #485)', async () => {
+    mockSessionFindById.mockResolvedValue({
+      _id: 'sess-3',
+      userId: { toString: () => 'user-1' },
+      codingProblemId: 'ai-gen-42',
+    })
+
+    await deleteInterviewSession('507f1f77bcf86cd799439011', 'user-1')
+
+    expect(mockServedProblemUpdateOne).toHaveBeenCalledTimes(1)
+    const [filter, update] = mockServedProblemUpdateOne.mock.calls[0]
+    expect(filter).toMatchObject({ kind: 'coding', problemId: 'ai-gen-42' })
+    // Body redacted, row NOT deleted — the id must survive for no-repeat.
+    expect(update).toEqual({ $unset: { problemBody: 1 } })
+  })
+
+  it('does not touch the ledger for sessions without problem ids', async () => {
+    mockSessionFindById.mockResolvedValue({
+      _id: 'sess-4',
+      userId: { toString: () => 'user-1' },
+    })
+
+    await deleteInterviewSession('507f1f77bcf86cd799439011', 'user-1')
+
+    expect(mockServedProblemUpdateOne).not.toHaveBeenCalled()
   })
 })
 
