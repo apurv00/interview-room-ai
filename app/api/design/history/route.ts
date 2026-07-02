@@ -42,7 +42,11 @@ export async function GET(_req: NextRequest) {
   // Capped at 200 — the generate-problem Zod schema rejects larger arrays and
   // the client posts this list straight back to it (Codex P2 on #485; see
   // /api/code/history for the full rationale).
-  const uniqueIds = unionMostRecentFirst(ledgerIds, sessionIds).slice(0, 200)
+  // Per-item cap mirrors the generate routes' 64-char Zod item limit (see
+  // /api/code/history for the rationale).
+  const uniqueIds = unionMostRecentFirst(ledgerIds, sessionIds)
+    .filter((id) => id.length <= 64)
+    .slice(0, 200)
 
   return NextResponse.json({
     solvedProblemIds: uniqueIds,

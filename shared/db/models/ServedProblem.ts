@@ -44,7 +44,8 @@ const ServedProblemSchema = new Schema<IServedProblem>(
     kind: { type: String, enum: ['coding', 'system-design'], required: true },
     problemId: { type: String, required: true, maxlength: 200 },
     title: { type: String, default: '', maxlength: 200 },
-    domain: { type: String, maxlength: 64 },
+    // 100 matches the CMS domain-slug validator cap.
+    domain: { type: String, maxlength: 100 },
     difficulty: { type: String, enum: ['easy', 'medium', 'hard'] },
     source: { type: String, enum: ['static', 'ai'], required: true },
     problemBody: { type: Schema.Types.Mixed },

@@ -12,7 +12,8 @@ export const dynamic = 'force-dynamic'
 
 const MAX_PROBLEM_ID_LEN = 64
 const BodySchema = z.object({
-  domain: z.string().min(1).max(64),
+  // 100 matches the CMS domain-slug validator (see code generate-problem twin).
+  domain: z.string().min(1).max(100),
   experience: z.string().min(1).max(32),
   solvedProblemIds: z.array(z.string().max(MAX_PROBLEM_ID_LEN)).max(200).default([]),
   // Candidate-provided resume text (client holds it in the interview config).

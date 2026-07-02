@@ -68,6 +68,16 @@ describe('POST /api/problems/served', () => {
     })
   })
 
+  it('accepts a full-length (100-char) CMS domain slug', async () => {
+    const res = await POST(makeReq({
+      kind: 'coding',
+      problemId: 'p',
+      domain: 'x'.repeat(100),
+      source: 'static',
+    }))
+    expect(res.status).toBe(200)
+  })
+
   it('accepts the minimal body (no title/domain/difficulty)', async () => {
     const res = await POST(makeReq({
       kind: 'system-design',

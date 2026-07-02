@@ -22,7 +22,9 @@ const BodySchema = z.object({
   kind: z.enum(['coding', 'system-design']),
   problemId: z.string().min(1).max(200),
   title: z.string().max(200).optional(),
-  domain: z.string().max(64).optional(),
+  // 100 matches the CMS domain-slug validator (modules/cms/validators/cms.ts)
+  // — a 64 cap would silently drop the recording for long-slug CMS domains.
+  domain: z.string().max(100).optional(),
   difficulty: z.enum(['easy', 'medium', 'hard']).optional(),
   source: z.enum(['static', 'ai']),
 })

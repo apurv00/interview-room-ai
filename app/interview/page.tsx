@@ -83,7 +83,7 @@ const DEFAULT_PHASE_COLOR = { text: 'text-[#71767b]', bg: 'bg-[#f8fafc]', border
 
 export default function InterviewPage() {
   const router = useRouter()
-  const { data: authSession } = useSession()
+  const { data: authSession, status: authStatus } = useSession()
 
   // ── Config ──
   const [config, setConfig] = useState<InterviewConfig | null>(null)
@@ -416,6 +416,13 @@ export default function InterviewPage() {
 
   // ─── Load config (with session guard) ──────────────────────────────────────
   useEffect(() => {
+    // Wait for auth to resolve so this effect runs ONCE with the user id
+    // known. On hard loads it used to run first with id=undefined and again
+    // on resolution — each run independently picked (and now ledgers) a
+    // problem, recording a phantom never-shown row and double-spending the
+    // AI generator. /interview is auth-gated in middleware, so 'loading'
+    // always transitions promptly.
+    if (authStatus === 'loading') return
     // UAT-022: missing / cross-user / stale config previously bounced the
     // user to `/` (the marketing homepage), which made bookmarked
     // /interview links look broken. Redirect to the setup wizard instead
@@ -670,7 +677,9 @@ export default function InterviewPage() {
     } else {
       setConfig(parsed)
     }
-  }, [router, authSession?.user?.id])
+    // authStatus in deps: the 'loading' bail above returns early, and the
+    // status flip to authenticated/unauthenticated triggers the single real run.
+  }, [router, authSession?.user?.id, authStatus])
 
   // ─── Camera init + start recording (only after config is loaded) ───────────
   useEffect(() => {

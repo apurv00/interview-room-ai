@@ -46,7 +46,12 @@ export async function GET(_req: NextRequest) {
   // to repeat-allowed static picks (Codex P2 on #485). Most-recent-first means
   // the cap sheds the stalest exclusions; the server-side ledger union inside
   // the generate routes still sees those independently.
-  const uniqueIds = unionMostRecentFirst(ledgerIds, sessionIds).slice(0, 200)
+  // Per-item cap mirrors the generate routes' 64-char Zod item limit — one
+  // over-long (legacy/poisoned) id in the list would 400 every future
+  // generate-problem call this list is posted back to.
+  const uniqueIds = unionMostRecentFirst(ledgerIds, sessionIds)
+    .filter((id) => id.length <= 64)
+    .slice(0, 200)
 
   return NextResponse.json({
     solvedProblemIds: uniqueIds,

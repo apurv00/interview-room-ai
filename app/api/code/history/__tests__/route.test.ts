@@ -63,6 +63,15 @@ describe('GET /api/code/history', () => {
     expect(mocks.getServedProblemIds).toHaveBeenCalledWith(mocks.userId, 'coding')
   })
 
+  it('drops ids over the generate routes 64-char item cap so one poisoned id cannot 400 future generation', async () => {
+    mocks.getServedProblemIds.mockResolvedValue(['ai-' + 'x'.repeat(70), 'two-sum'])
+    mocks.sessionFind.mockReturnValue(sessionChain([]))
+
+    const res = await GET(new NextRequest('http://localhost/api/code/history'))
+    const data = await res.json()
+    expect(data.solvedProblemIds).toEqual(['two-sum'])
+  })
+
   it('caps the union at 200 ids — the generate-problem Zod limit the client posts this back to', async () => {
     mocks.getServedProblemIds.mockResolvedValue(
       Array.from({ length: 250 }, (_, i) => `ledger-${i}`)
