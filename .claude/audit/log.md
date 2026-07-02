@@ -1817,3 +1817,143 @@
 - **Root-cause:** check-module-size.mjs caps modules/interview at 140 files; PR
 - **No-tests-needed-because: config/data + documentation only; no runtime code**
 - **Verified-by:** reproduced the full `ci` job locally on this branch —
+
+### 2026-07-01 23:50:53 +0530 · `9be422f` · Apurv
+- **Subject:** fix(interview): finish the decouple — coverage + topicCount use the true count; createSession type-aware
+- **Files:** 4 changed, 0 test file(s)
+- **Root-cause:** the decouple fixed the slot cursor but two more spots still treated the bounded summaries array's length as the true count, and session create persisted a non-type-aware planned count.
+- **No-tests-needed-because: (1)/(2) default to the prior completedThreads.length when completedCount is absent, so existing flow/generate-question tests are unchanged; (3) changes only the persisted valu**
+- **Verified-by:** gitnexus impact artifacts for interviewService + promptBuilder + generate-question; full vitest 5021 passing + tsc clean + next build green.
+
+### 2026-07-02 00:07:21 +0530 · `c003d30` · Apurv
+- **Subject:** fix(interview): connect+owner-scope the persisted-count read; extrapolate sub-10-min budgets (Codex P2s)
+- **Files:** 5 changed, 2 test file(s)
+- **Root-cause:** (1) a Mongoose read placed above the route's connect step is unsafe on cold starts; (2) the interpolate helper clamped low durations to the first anchor instead of extrapolating, over-counting the sub
+- **Tests-added: regressionPhase1to4.test.ts — getQuestionCount(5) < getQuestionCount(10) (extrapolates down, not clamped); updated completionAdjustment mock/regression test to findOne (owner-scoped read)**
+- **Verified-by:** gitnexus impact artifacts (generate-feedback, interviewConfig); full vitest 5021 passing (incl. useInterview duration:5) + tsc clean + next build green.
+
+### 2026-07-02 14:55:10 +0530 · `f44c09a` · Apurv
+- **Subject:** feat(interview): server-authoritative served-problem ledger for coding/system-design no-repeat (Phase A)
+- **Files:** 18 changed, 7 test file(s)
+- **Root-cause:** the cross-session no-repeat guarantee was client-orchestrated and
+- **Tests-added: modules/interview/config/__tests__/leastRecentlyServed.test.ts, modules/interview/services/core/__tests__/servedProblemLedger.test.ts, app/api/problems/served/__tests__/route.test.ts, app**
+- **Verified-by:** 36 new unit/route tests; full suite 5057 passed / 0 failed; next lint clean; production build clean; gitnexus detect_changes confirms blast radius confined to coding/system-design sourcing paths (no h
+
+### 2026-07-02 15:28:17 +0530 · `2a38c9f` · Apurv
+- **Subject:** feat(interview): exemplar-seeded problem generation with titled avoid-list, near-dup retry, and progression (Phase B)
+- **Files:** 13 changed, 6 test file(s)
+- **Root-cause:** generation-side no-repeat was id-string-only — AI problem ids are
+- **Tests-added: modules/interview/services/core/__tests__/problemFingerprint.test.ts, modules/interview/services/core/__tests__/problemSeeds.test.ts, modules/interview/services/core/__tests__/codingProbl**
+- **Verified-by:** 37 new tests; full suite 5094 passed / 0 failed; next lint clean; production build clean; gitnexus detect_changes confirms blast radius = the two generate routes + generator + config export (no hot-pa
+
+### 2026-07-02 15:38:38 +0530 · `ae5fc54` · Apurv
+- **Subject:** fix(interview): bump servedAt on repeat serves + unload-safe static ledger write (Codex P2s on #485)
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** (1) recordServedProblem wrote servedAt only on insert, so repeat
+- **Tests-added: extended modules/interview/services/core/__tests__/servedProblemLedger.test.ts (servedAt in $set not $setOnInsert)**
+- **Verified-by:** 13 ledger/route tests pass; keepalive is a fetch-init flag with no behavior change in test envs (covered by existing served-route tests)
+
+### 2026-07-02 15:47:38 +0530 · `47150c4` · Apurv
+- **Subject:** fix(shared): cascade ServedProblem ledger on account deletion (Codex P1 on #485)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** PR #485 added a user-keyed collection without registering it in
+- **Tests-added: extended shared/__tests__/accountDeletion.test.ts (ServedProblem cascade assertion)**
+- **Verified-by:** accountDeletion suite 6/6 passing
+
+### 2026-07-02 16:19:17 +0530 · `ff15277` · Apurv
+- **Subject:** feat(interview): flag-gated grounded follow-ups for coding/system-design rounds (Phase C)
+- **Files:** 11 changed, 4 test file(s)
+- **Root-cause:** the scripted coding/SD rounds ask hardcoded, domain- and
+- **Tests-added: modules/interview/__tests__/probeGuidance.test.ts, app/api/evaluate-code/__tests__/route.test.ts, app/api/evaluate-design/__tests__/route.test.ts; extended modules/interview/__tests__/int**
+- **Verified-by:** 34 new tests incl. flag-off byte-identical prompt assertions; full suite 5114 passed / 0 failed; lint clean; production build clean. detect_changes reports critical via the isFeatureEnabled/useIntervi
+
+### 2026-07-02 16:23:26 +0530 · `b480ddd` · Apurv
+- **Subject:** fix(interview): cap history union at the generator Zod limit; redact AI problem bodies on session delete (Codex P2s on #485, round 2)
+- **Files:** 6 changed, 2 test file(s)
+- **Root-cause:** (1) the union could reach 400 ids (300 ledger + 100 legacy)
+- **Tests-added: extended app/api/code/history/__tests__/route.test.ts (200-cap) and shared/__tests__/accountDeletion.test.ts (redaction + no-op cases)**
+- **Verified-by:** 14 tests across the three touched suites, all passing
+
+### 2026-07-02 16:24:49 +0530 · `91042ea` · Apurv
+- **Subject:** fix(interview): score near-duplicates as max(title-only, title∪tags) so tags never dilute a title match (Codex P2 on #486)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** candidate tokens merged title+tags into ONE set compared against
+- **Tests-added: extended modules/interview/services/core/__tests__/problemFingerprint.test.ts (dilution case)**
+- **Verified-by:** core services suites 61 tests passing
+
+### 2026-07-02 16:33:18 +0530 · `e2b1692` · Apurv
+- **Subject:** fix(interview): read-only bank retrieval for seed exemplars (Codex P2 on #486)
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** seed exemplars reused the RAG retrieval helper whose usageCount
+- **Tests-added: extended problemSeeds.test.ts (trackUsage:false call-shape assertions)**
+- **Verified-by:** problemSeeds suite 9 tests passing; default path unchanged (trackUsage omitted → increments as before)
+
+### 2026-07-02 16:36:39 +0530 · `9e46ead` · Apurv
+- **Subject:** fix(interview): accept full-length CMS domain slugs in the eval routes (Codex P2s on #487)
+- **Files:** 4 changed, 2 test file(s)
+- **Root-cause:** the new optional domain field used a 64-char cap while CMS domain
+- **Tests-added: extended both route test suites (100-char domain accepted)**
+- **Verified-by:** 20 tests across both eval route suites passing
+
+### 2026-07-02 16:49:57 +0530 · `288c8f2` · Apurv
+- **Subject:** fix(interview): keep the near-duplicate first candidate when the retry fails; seed instruction outside data-only tags (Codex P2s on #486, round 3)
+- **Files:** 5 changed, 2 test file(s)
+- **Root-cause:** (1) the retry paths treated a retry failure like a first-attempt
+- **Tests-added: extended codingProblemGenerator.test.ts and design generate-problem route tests (retry-unparseable and retry-throws keep-first cases; first-attempt-null case)**
+- **Verified-by:** 58 tests across the six touched suites passing
+
+### 2026-07-02 17:00:07 +0530 · `877bf0c` · Apurv
+- **Subject:** fix(interview): calibration as trusted system text; tolerant expectedComponents (Codex P2s on #487, round 2)
+- **Files:** 6 changed, 3 test file(s)
+- **Root-cause:** (1) instruction text placed inside the XML boundary the system
+- **Tests-added: updated calibration placement assertions across three suites; new oversized/malformed expectedComponents tolerance tests**
+- **Verified-by:** 19 tests across the three touched suites; full suite 5127 passed / 0 failed; production build clean
+
+### 2026-07-02 17:02:25 +0530 · `03b1eb6` · Apurv
+- **Subject:** fix(interview): wrap client-supplied expectedComponents in a data-boundary tag (Codex P2 on #487, round 3)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** untrusted request-body data interpolated into the eval prompt as
+- **Tests-added: updated evaluate-design route tests (tag-wrapped assertion; absence marker)**
+- **Verified-by:** evaluate-design suite 9 tests passing
+
+### 2026-07-02 18:02:20 +0530 · `c1fa41e` · Apurv
+- **Subject:** fix(interview): self-review round on #485 — auth-resolved single run, 100-char domain caps, poisoned-id filter, GDPR export
+- **Files:** 10 changed, 2 test file(s)
+- **Root-cause:** (1) effect keyed on authSession?.user?.id with no loading gate —
+- **Tests-added: extended app/api/code/history and app/api/problems/served route tests (poisoned-id filter; 100-char domain)**
+- **Verified-by:** 20 tests across the five touched suites; lint clean
+
+### 2026-07-02 18:08:58 +0530 · `3c8613a` · Apurv
+- **Subject:** fix(interview): self-review round on #486 — id slugify, boundary-tagged avoid list, exemplar-aware near-dup, design exemplar fallback map
+- **Files:** 7 changed, 3 test file(s)
+- **Root-cause:** (1) LLM output used as a persistent key without bounding; (2/3)
+- **Tests-added: rewritten problemSeeds suite (neutralization, slugify, fallback map, empty-block); generator exemplar-collision test; seed-mock shape updates**
+- **Verified-by:** 65 tests across the six touched suites passing
+
+### 2026-07-02 18:20:07 +0530 · `ca5403a` · Apurv
+- **Subject:** fix(interview): self-review round on #487 — design eval parity, trusted calibration identity, tolerant/sanitized eval inputs+outputs, doc obligations
+- **Files:** 8 changed, 2 test file(s)
+- **Root-cause:** parity fix simply forgotten across three phases; calibration
+- **Tests-added: extended both eval-route suites (requirements clamp, tag-escape neutralization, flag-off prompt-tail byte-identity)**
+- **Verified-by:** full suite 5138 passed / 0 failed; production build clean; detect_changes blast radius = the two eval routes + the type-gated useInterview branches; design timeout/failed-row mirrors the tested coding
+
+### 2026-07-02 · Hash reconciliation note (append-only; no entries above were edited)
+
+The #485–#487 stack was rebased repeatedly during Codex-review and self-review rounds, so several
+entries above reference commit ids that were superseded by the rewrite. Mapping (logged id → id that
+will merge), matched by commit subject:
+
+- `2a38c9f` → `7f9ef90` (Phase B feat: exemplar-seeded problem generation)
+- `91042ea` → `52b7127` (fingerprint max(title-only, title∪tags))
+- `e2b1692` → `da1e9d6` (read-only bank retrieval for seed exemplars)
+- `288c8f2` → `ba2b76f` (keep near-duplicate first candidate; originally committed on the wrong
+  branch and cherry-picked to #486)
+- `ff15277` → `d8fb240` (Phase C feat: flag-gated grounded follow-ups)
+- `9e46ead` → `0a537e0` (CMS-slug domain caps in the eval routes)
+- `877bf0c` → `3a588a1` (calibration as trusted system text)
+- `03b1eb6` → `13cf421` (expectedComponents inside a data-boundary tag)
+
+Unchanged ids: `f44c09a`, `ae5fc54`, `47150c4`, `b480ddd`, `c1fa41e` (#485); `3c8613a` (#486 tip);
+`ca5403a` (#487 tip). Root-cause of the drift: the audit hook logs at commit time, and stacked-PR
+rebases rewrite ids afterward — the entries' content (root-cause, verification, test delta) is the
+durable record; ids are best-effort pointers.
