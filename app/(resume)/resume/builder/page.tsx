@@ -204,7 +204,12 @@ export default function ResumeBuilderPage() {
         })
         const result = await res.json()
         if (!res.ok) {
-          return { error: result.error || 'Save failed', code: result.code }
+          // Field-level validation issues → a message the user can act on,
+          // not the old bare "Invalid data".
+          const detail = Array.isArray(result.issues) && result.issues.length > 0
+            ? `${result.error}: ${result.issues.map((i: { path: string; message: string }) => `${i.path || 'resume'} — ${i.message}`).join('; ')}`
+            : result.error || 'Save failed'
+          return { error: detail, code: result.code }
         }
         if (result.id && !resumeId) {
           setResumeId(result.id)
@@ -243,6 +248,7 @@ export default function ResumeBuilderPage() {
         onSave={handleSave}
         isAnonymous={authStatus !== 'authenticated'}
         onAnonymousChange={persistAnonDraft}
+        draftKey={session?.user?.id ? `resume:draft:${session.user.id}:${resumeId || 'new'}` : undefined}
       />
     </>
   )

@@ -1,60 +1,71 @@
 import { z } from 'zod'
 
+// ─── Clamping helpers ────────────────────────────────────────────────────────
+// Size caps CLAMP instead of reject: a hard .max() on user/AI-shaped content
+// made whole resumes permanently unsavable (one AI-enhanced 1001-char bullet →
+// bare "Invalid data" with no field info). Truncating to the cap loses at most
+// the overflow; rejecting lost the entire save. Structural rules (required
+// fields, enums, numeric ranges) still validate normally.
+
+const clampStr = (max: number) => z.string().transform((s) => s.slice(0, max))
+const clampArr = <T extends z.ZodTypeAny>(item: T, max: number) =>
+  z.array(item).transform((a) => a.slice(0, max))
+
 // ─── Structured Resume Sub-schemas ─────────────────────────────────────────
 
 export const ContactInfoSchema = z.object({
-  fullName: z.string().max(200).default(''),
-  email: z.string().max(200).default(''),
-  phone: z.string().max(30).optional(),
-  location: z.string().max(200).optional(),
-  linkedin: z.string().max(500).optional(),
-  website: z.string().max(500).optional(),
-  github: z.string().max(500).optional(),
+  fullName: clampStr(200).default(''),
+  email: clampStr(200).default(''),
+  phone: clampStr(30).optional(),
+  location: clampStr(200).optional(),
+  linkedin: clampStr(500).optional(),
+  website: clampStr(500).optional(),
+  github: clampStr(500).optional(),
 })
 
 export const ExperienceSchema = z.object({
   id: z.string(),
-  company: z.string().max(200),
-  title: z.string().max(200),
-  location: z.string().max(200).optional(),
-  startDate: z.string().max(50),
-  endDate: z.string().max(50).optional(),
-  bullets: z.array(z.string().max(1000)).max(20),
+  company: clampStr(200),
+  title: clampStr(200),
+  location: clampStr(200).optional(),
+  startDate: clampStr(50),
+  endDate: clampStr(50).optional(),
+  bullets: clampArr(clampStr(1000), 20),
 })
 
 export const EducationSchema = z.object({
   id: z.string(),
-  institution: z.string().max(200),
-  degree: z.string().max(200),
-  field: z.string().max(200).optional(),
-  graduationDate: z.string().max(50).optional(),
-  gpa: z.string().max(10).optional(),
-  honors: z.string().max(200).optional(),
+  institution: clampStr(200),
+  degree: clampStr(200),
+  field: clampStr(200).optional(),
+  graduationDate: clampStr(50).optional(),
+  gpa: clampStr(10).optional(),
+  honors: clampStr(200).optional(),
 })
 
 export const SkillCategorySchema = z.object({
-  category: z.string().max(100),
-  items: z.array(z.string().max(100)).max(50),
+  category: clampStr(100),
+  items: clampArr(clampStr(100), 50),
 })
 
 export const ProjectSchema = z.object({
   id: z.string(),
-  name: z.string().max(200),
-  description: z.string().max(2000),
-  technologies: z.array(z.string().max(100)).max(20).optional(),
-  url: z.string().max(500).optional(),
+  name: clampStr(200),
+  description: clampStr(2000),
+  technologies: clampArr(clampStr(100), 20).optional(),
+  url: clampStr(500).optional(),
 })
 
 export const CertificationSchema = z.object({
-  name: z.string().max(200),
-  issuer: z.string().max(200),
-  date: z.string().max(50).optional(),
+  name: clampStr(200),
+  issuer: clampStr(200),
+  date: clampStr(50).optional(),
 })
 
 export const CustomSectionSchema = z.object({
   id: z.string(),
-  title: z.string().max(200),
-  content: z.string().max(5000),
+  title: clampStr(200),
+  content: clampStr(5000),
 })
 
 // ─── Styling Schema ─────────────────────────────────────────────────────────
@@ -70,26 +81,26 @@ export const ResumeStylingSchema = z.object({
 
 export const ResumeSchema = z.object({
   id: z.string().optional(),
-  name: z.string().min(1).max(200),
-  template: z.string().max(50).optional(),
-  targetRole: z.string().max(200).optional(),
-  targetCompany: z.string().max(200).optional(),
+  name: z.string().min(1).transform((s) => s.slice(0, 200)),
+  template: clampStr(50).optional(),
+  targetRole: clampStr(200).optional(),
+  targetCompany: clampStr(200).optional(),
   atsScore: z.number().min(0).max(100).nullable().optional(),
 
   contactInfo: ContactInfoSchema.optional(),
-  summary: z.string().max(5000).optional(),
-  experience: z.array(ExperienceSchema).max(20).optional(),
-  education: z.array(EducationSchema).max(10).optional(),
-  skills: z.array(SkillCategorySchema).max(20).optional(),
-  projects: z.array(ProjectSchema).max(20).optional(),
-  certifications: z.array(CertificationSchema).max(20).optional(),
-  customSections: z.array(CustomSectionSchema).max(10).optional(),
-  sectionOrder: z.array(z.string()).max(20).optional(),
+  summary: clampStr(5000).optional(),
+  experience: clampArr(ExperienceSchema, 20).optional(),
+  education: clampArr(EducationSchema, 10).optional(),
+  skills: clampArr(SkillCategorySchema, 20).optional(),
+  projects: clampArr(ProjectSchema, 20).optional(),
+  certifications: clampArr(CertificationSchema, 20).optional(),
+  customSections: clampArr(CustomSectionSchema, 10).optional(),
+  sectionOrder: clampArr(clampStr(100), 20).optional(),
   styling: ResumeStylingSchema.optional(),
 
   // Legacy support
   sections: z.record(z.string(), z.string()).optional(),
-  fullText: z.string().max(100000).optional(),
+  fullText: clampStr(100_000).optional(),
 })
 
 // ─── AI Generation Schemas ──────────────────────────────────────────────────

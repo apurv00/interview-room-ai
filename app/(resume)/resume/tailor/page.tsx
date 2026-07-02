@@ -19,6 +19,10 @@ interface TailorResult {
   matchScore: number
   missingKeywords: string[]
   addedKeywords: string[]
+  /** Only part of the resume fit the analysis window. */
+  inputTruncated?: boolean
+  /** The rewrite itself was cut off — saving it would persist the loss. */
+  outputTruncated?: boolean
 }
 
 export default function TailorPage() {
@@ -266,6 +270,16 @@ export default function TailorPage() {
               <p className="text-xs text-red-400">{error}</p>
             </div>
           )}
+          {(result.inputTruncated || result.outputTruncated) && (
+            <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" strokeWidth={2} />
+              <p className="text-xs text-amber-600">
+                {result.outputTruncated
+                  ? 'The tailored rewrite was cut off before completing — saving it would lose the tail of your resume. Try again, or shorten the resume/job description.'
+                  : 'Your resume was longer than the analysis window — only the first part was tailored. The untouched tail is NOT included in the result below.'}
+              </p>
+            </div>
+          )}
           <div className="bg-white border border-slate-200 rounded-2xl p-6 text-center">
             <p className="text-sm text-slate-500 mb-2">Job Match Score</p>
             <p className={`text-4xl font-bold ${result.matchScore >= 80 ? 'text-[#059669]' : result.matchScore >= 60 ? 'text-amber-400' : 'text-red-400'}`}>
@@ -321,7 +335,8 @@ export default function TailorPage() {
                 </button>
                 <button
                   onClick={handleSaveAsCopy}
-                  disabled={savingCopy}
+                  disabled={savingCopy || result.outputTruncated}
+                  title={result.outputTruncated ? 'The rewrite was cut off — saving would persist an incomplete resume.' : undefined}
                   className="px-3 py-1.5 bg-blue-600/10 border border-blue-500/20 text-blue-600 text-[10px] rounded-lg font-medium hover:bg-blue-600/20 transition-colors disabled:opacity-50"
                 >
                   {savingCopy ? 'Parsing & Saving...' : 'Save as New Resume'}

@@ -101,8 +101,11 @@ export async function checkATS(data: { resumeText: string; jobDescription?: stri
     return { ...cached, cached: true as const }
   }
 
+  // 24k/8k (was 5k/3k): a normal 2-page resume exceeds 5,000 chars, so the
+  // check silently analyzed only the first ~page and scored keywords/sections
+  // it never saw. Input tokens are cheap; the output stays small.
   const jdContext = data.jobDescription
-    ? `\n\n<job_description>\n${data.jobDescription.slice(0, 3000)}\n</job_description>\nAlso check keyword alignment with this job description.`
+    ? `\n\n<job_description>\n${data.jobDescription.slice(0, 8000)}\n</job_description>\nAlso check keyword alignment with this job description.`
     : ''
 
   const atsResult = await completion({
@@ -130,7 +133,7 @@ ${JSON_OUTPUT_RULE}
 }`,
     messages: [{
       role: 'user',
-      content: `<resume>\n${data.resumeText.slice(0, 5000)}\n</resume>${jdContext}\n\nAnalyze this resume for ATS compatibility.`,
+      content: `<resume>\n${data.resumeText.slice(0, 24000)}\n</resume>${jdContext}\n\nAnalyze this resume for ATS compatibility.`,
     }],
   })
 
@@ -178,8 +181,17 @@ interface AtsResultShape {
 
 // ─── Tailor Resume ──────────────────────────────────────────────────────────
 
+// 15k/8k (was 5k/3k): the output must contain the FULL rewritten resume, so
+// everything past the input slice vanished from the tailored text — and
+// "Save as New Resume" persisted the amputation. The output budget rises in
+// taskSlots (resume.tailor 3000→8000) to carry the longer rewrite.
+const TAILOR_RESUME_CHARS = 15_000
+const TAILOR_JD_CHARS = 8_000
+const TAILOR_RETRY_MAX_TOKENS = 10_000
+
 export async function tailorResume(data: { resumeText: string; jobDescription: string; companyName?: string }) {
-  const tailorResult = await completion({
+  const runTailor = (maxTokens?: number) => completion({
+    ...(maxTokens ? { maxTokens } : {}),
     taskSlot: 'resume.tailor',
     system: `${DATA_BOUNDARY_RULE}
 
@@ -203,9 +215,16 @@ ${JSON_OUTPUT_RULE}
 }`,
     messages: [{
       role: 'user',
-      content: `<resume>\n${data.resumeText.slice(0, 5000)}\n</resume>\n\n<job_description>\n${data.jobDescription.slice(0, 3000)}\n</job_description>\n\nTailor this resume for the job.`,
+      content: `<resume>\n${data.resumeText.slice(0, TAILOR_RESUME_CHARS)}\n</resume>\n\n<job_description>\n${data.jobDescription.slice(0, TAILOR_JD_CHARS)}\n</job_description>\n\nTailor this resume for the job.`,
     }],
   })
+
+  let tailorResult = await runTailor()
+  if (tailorResult.truncated) {
+    // A truncated rewrite is unparseable AND incomplete — retry once with an
+    // explicit larger budget before giving up.
+    tailorResult = await runTailor(TAILOR_RETRY_MAX_TOKENS)
+  }
 
   const raw = tailorResult.text || '{}'
   const cleaned = extractJSON(raw)
@@ -217,6 +236,10 @@ ${JSON_OUTPUT_RULE}
       matchScore: result.matchScore ?? 0,
       missingKeywords: Array.isArray(result.missingKeywords) ? result.missingKeywords : [],
       addedKeywords: Array.isArray(result.addedKeywords) ? result.addedKeywords : [],
+      // Surfaced by the tailor page: warn when only part of the resume was
+      // analyzed, and block Save-as-New when the rewrite itself is incomplete.
+      inputTruncated: data.resumeText.length > TAILOR_RESUME_CHARS,
+      outputTruncated: !!tailorResult.truncated,
     }
   } catch {
     console.error('tailorResume JSON parse failed. Raw response:', raw.slice(0, 500))

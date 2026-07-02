@@ -15,7 +15,6 @@ import { getTemplate } from '../components/templates'
 import type { ResumePreviewPageContextValue } from '../components/ResumePreviewPageContext'
 import {
   applySkillsTruncationToData,
-  computeOmittedSkillCounts,
   computeSkillCategoryRatios,
   refineSkillRatiosIfStillOversized,
 } from '../lib/skillCategoryTruncation'
@@ -704,13 +703,15 @@ async function applySkillTruncationForPdf(
       ratios = refined
     }
 
-    const pageContext: ResumePreviewPageContextValue = {
-      skillsContinuationHeader: false,
-      truncatedSkillCategoryIndices: [],
-      truncatedSkillCategoryRatios: ratios,
-      truncatedSkillCategoryOmittedCounts: computeOmittedSkillCounts(data.skills || [], ratios),
-    }
-    const truncatedHtml = renderResumeHTML(data, templateId, pageContext)
+    // Apply the ratios to the DATA, not via pageContext: the server render
+    // VOIDS pageContext (the client context provider can't be SSR'd — see
+    // renderTemplateToMarkup), so passing it here re-rendered byte-identical
+    // untruncated HTML on every pass — the loop could never converge and the
+    // exported PDF shipped page-overflowing skills that the preview truncated.
+    // Rendering pre-truncated data actually changes the DOM the next pass
+    // measures. Trade-off: the PDF omits the preview's "+N more" badge (that
+    // count rides the client context) — the items themselves now match.
+    const truncatedHtml = renderResumeHTML(applySkillsTruncationToData(data, ratios), templateId)
     await page.setContent(truncatedHtml, { waitUntil: 'networkidle0' })
     await page.waitForFunction(
       () => (window as { __resumePagesReady?: boolean }).__resumePagesReady === true,

@@ -104,9 +104,13 @@ export interface IUser extends Document {
       content: string
     }>
 
+    /** Drag-reordered section sequence — empty/absent = template default. */
+    sectionOrder?: string[]
     styling?: {
       fontFamily?: string
       fontSize?: string
+      headingSize?: number
+      bodySize?: number
     }
 
     // Legacy field for backward compatibility + ATS/tailor operations
@@ -292,9 +296,15 @@ const UserSchema = new Schema<IUser>(
         content: { type: String, required: true },
       }],
 
+      // sectionOrder + heading/body sizes: the editor supports these and the
+      // save validator accepts them, but the subschema silently stripped them
+      // (Mongoose strict mode) — "Saved!" showed, layout reverted on reload.
+      sectionOrder: [{ type: String }],
       styling: {
         fontFamily: { type: String },
         fontSize: { type: String },
+        headingSize: { type: Number },
+        bodySize: { type: Number },
       },
 
       // Legacy + utility fields
