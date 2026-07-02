@@ -36,18 +36,29 @@ export const NEAR_DUPLICATE_THRESHOLD = 0.6
  * Returns the first served title the candidate is a near-duplicate of, or null.
  * `served` should be most-recent-first so the reported collision is the one
  * the user saw most recently.
+ *
+ * Scores MAX(title-only, title∪tags) against each served title: tags are an
+ * extra signal for title-evasive renames, but they must never DILUTE a plain
+ * title match — a regenerated "Two Sum" with tags [arrays, hash-map] would
+ * otherwise score 0.4 on the merged set and slip past the 0.6 threshold
+ * (Codex P2 on #486).
  */
 export function findNearDuplicate(
   candidate: { title: string; tags?: string[] },
   served: Array<{ title?: string }>,
   threshold: number = NEAR_DUPLICATE_THRESHOLD,
 ): { title: string } | null {
-  const candidateTokens = fingerprintTokens(candidate.title, candidate.tags ?? [])
-  if (candidateTokens.size === 0) return null
+  const titleTokens = fingerprintTokens(candidate.title)
+  const mergedTokens = fingerprintTokens(candidate.title, candidate.tags ?? [])
+  if (titleTokens.size === 0 && mergedTokens.size === 0) return null
   for (const s of served) {
     if (!s.title) continue
     const servedTokens = fingerprintTokens(s.title)
-    if (jaccard(candidateTokens, servedTokens) >= threshold) {
+    const score = Math.max(
+      jaccard(titleTokens, servedTokens),
+      jaccard(mergedTokens, servedTokens),
+    )
+    if (score >= threshold) {
       return { title: s.title }
     }
   }
