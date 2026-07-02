@@ -14,12 +14,13 @@ const mocks = vi.hoisted(() => ({
   connectDB: vi.fn(),
   find: vi.fn(),
   updateOne: vi.fn(),
+  countDocuments: vi.fn(),
   warn: vi.fn(),
 }))
 
 vi.mock('@shared/db/connection', () => ({ connectDB: mocks.connectDB }))
 vi.mock('@shared/db/models/ServedProblem', () => ({
-  ServedProblem: { find: mocks.find, updateOne: mocks.updateOne },
+  ServedProblem: { find: mocks.find, updateOne: mocks.updateOne, countDocuments: mocks.countDocuments },
 }))
 vi.mock('@shared/logger', () => ({
   aiLogger: { warn: mocks.warn, info: vi.fn(), error: vi.fn() },
@@ -27,8 +28,11 @@ vi.mock('@shared/logger', () => ({
 
 import {
   getServedProblemIds,
+  getServedProblemSummaries,
+  countServedProblems,
   recordServedProblem,
   unionMostRecentFirst,
+  unionAvoidEntries,
 } from '../servedProblemLedger'
 
 const chainResolving = (rows: unknown) => ({
@@ -113,6 +117,55 @@ describe('recordServedProblem', () => {
       source: 'static',
     })).resolves.toBeUndefined()
     expect(mocks.warn).toHaveBeenCalled()
+  })
+})
+
+describe('getServedProblemSummaries', () => {
+  it('maps problemId+title, normalizing empty titles to undefined', async () => {
+    mocks.find.mockReturnValue(chainResolving([
+      { problemId: 'two-sum', title: 'Two Sum' },
+      { problemId: 'ai-gen-1', title: '' },
+      { problemId: '' },
+    ]))
+    const rows = await getServedProblemSummaries('user-1', 'coding')
+    expect(rows).toEqual([
+      { problemId: 'two-sum', title: 'Two Sum' },
+      { problemId: 'ai-gen-1', title: undefined },
+    ])
+  })
+})
+
+describe('countServedProblems', () => {
+  it('counts rows for user+kind+domain', async () => {
+    mocks.countDocuments.mockResolvedValue(3)
+    await expect(countServedProblems('user-1', 'coding', 'backend')).resolves.toBe(3)
+    expect(mocks.countDocuments).toHaveBeenCalledWith({ userId: 'user-1', kind: 'coding', domain: 'backend' })
+  })
+
+  it('degrades to 0 on failure (never throws)', async () => {
+    mocks.countDocuments.mockRejectedValue(new Error('mongo down'))
+    await expect(countServedProblems('user-1', 'coding', 'backend')).resolves.toBe(0)
+    expect(mocks.warn).toHaveBeenCalled()
+  })
+})
+
+describe('unionAvoidEntries', () => {
+  it('keeps titled ledger entries first, appends unseen client ids bare', () => {
+    expect(unionAvoidEntries(
+      [{ problemId: 'a', title: 'A' }, { problemId: 'b', title: undefined }],
+      ['c', 'a', '']
+    )).toEqual([
+      { id: 'a', title: 'A' },
+      { id: 'b', title: undefined },
+      { id: 'c' },
+    ])
+  })
+
+  it('dedupes within the ledger list itself', () => {
+    expect(unionAvoidEntries(
+      [{ problemId: 'a', title: 'A' }, { problemId: 'a', title: 'A again' }],
+      []
+    )).toEqual([{ id: 'a', title: 'A' }])
   })
 })
 

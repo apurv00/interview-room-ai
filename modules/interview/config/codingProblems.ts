@@ -1004,7 +1004,8 @@ export function getProblemById(id: string): CodingProblem | undefined {
 // Roles whose category gained `coding` in Phase 4 but that have no problems of
 // their own borrow a representative pool, so the coding UI always has a problem
 // even if the dynamic generator (/api/code/generate-problem) is unavailable.
-const PROBLEM_POOL_FALLBACK: Record<string, string> = {
+// Exported for problemSeeds.ts (exemplar seeding borrows the same pool).
+export const PROBLEM_POOL_FALLBACK: Record<string, string> = {
   fullstack: 'backend',
   devops: 'backend',
   mobile: 'frontend',
