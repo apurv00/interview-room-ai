@@ -4,6 +4,8 @@ import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
 import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
+import { isFeatureEnabled } from '@shared/featureFlags'
+import { buildFollowUpCalibration } from '@interview/flow/probeGuidance'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -31,6 +33,12 @@ const EvaluateDesignSchema = z.object({
   requirements: z.array(z.string()).max(20),
   questionIndex: z.number().int().min(0),
   sessionId: z.string().optional(),
+  // Grounded-follow-up inputs (grounded_followups flag). expectedComponents
+  // comes from the problem definition — previously authored but never
+  // consumed anywhere — and lets the eval aim a probe at an important gap.
+  domain: z.string().max(64).optional(),
+  experience: z.string().max(32).optional(),
+  expectedComponents: z.array(z.string().max(100)).max(30).optional(),
 })
 
 type EvaluateDesignPayload = z.infer<typeof EvaluateDesignSchema>
@@ -75,10 +83,27 @@ export const POST = composeApiRoute<EvaluateDesignPayload>({
     keyPrefix: 'rl:eval-design',
   },
   handler: async (_req, ctx) => {
-    const { components, connections, problemTitle, problemDescription, requirements, questionIndex, sessionId } = ctx.body
+    const { components, connections, problemTitle, problemDescription, requirements, questionIndex, sessionId, domain, experience, expectedComponents } = ctx.body
     const startTime = Date.now()
 
     const designText = serializeDesign(components, connections)
+
+    // Grounded follow-ups (flag-gated): when ON, the eval writes the two
+    // spoken follow-ups the round asks after submission — grounded in THIS
+    // diagram and calibrated to the candidate's band — replacing the client's
+    // hardcoded, experience-blind questions (entry candidates were getting the
+    // CAP-theorem trade-off their templates explicitly forbid). When OFF, the
+    // prompt and response are byte-identical to the pre-flag behavior.
+    const groundedOn = isFeatureEnabled('grounded_followups')
+    const groundedContract = groundedOn
+      ? `,
+  "grounded_follow_up": "ONE short spoken follow-up question (max 2 sentences) that names a SPECIFIC component or connection from the candidate's diagram — aimed at the weakest scored dimension, a flag, or an important missing component",
+  "grounded_follow_up_2": "A second short spoken question probing a trade-off THIS design actually makes (pick the trade-off from their diagram, not a generic one), phrased for this candidate's experience level"`
+      : ''
+    const calibration = groundedOn ? buildFollowUpCalibration(domain, 'system-design', experience) : ''
+    const expectedBlock = groundedOn && expectedComponents?.length
+      ? `\nThe problem author expected components such as: ${expectedComponents.slice(0, 15).join(', ')}. If an important one is missing from the candidate's diagram, consider aiming a follow-up at that gap.\n`
+      : ''
 
     try {
       const result = await completion({
@@ -99,7 +124,7 @@ ${JSON_OUTPUT_RULE}
   "feedback": "3-4 sentences of specific feedback about the design",
   "missing_components": ["list of important components they should consider adding"],
   "follow_up_question": "A probing question about their design choices",
-  "flags": ["specific issues found, e.g. 'single point of failure', 'no caching layer'"]
+  "flags": ["specific issues found, e.g. 'single point of failure', 'no caching layer'"]${groundedContract}
 }`,
         messages: [{
           role: 'user',
@@ -114,7 +139,7 @@ ${requirements.map((r) => `- ${r}`).join('\n')}
 <candidate_design>
 ${designText}
 </candidate_design>
-
+${calibration}${expectedBlock}
 Evaluate this system design.`,
         }],
       })
@@ -126,6 +151,15 @@ Evaluate this system design.`,
       }
 
       const evaluation = JSON.parse(jsonMatch[0])
+      // Kill switch: never leak the grounded fields when the flag is off (or
+      // the model returned non-strings) — absence makes the client fall back
+      // to its hardcoded questions, byte-identical to today.
+      if (!groundedOn || typeof evaluation.grounded_follow_up !== 'string' || !evaluation.grounded_follow_up.trim()) {
+        delete evaluation.grounded_follow_up
+      }
+      if (!groundedOn || typeof evaluation.grounded_follow_up_2 !== 'string' || !evaluation.grounded_follow_up_2.trim()) {
+        delete evaluation.grounded_follow_up_2
+      }
 
       await trackUsage({
         user: ctx.user,

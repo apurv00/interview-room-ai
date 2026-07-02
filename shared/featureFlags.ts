@@ -35,6 +35,7 @@ export type FeatureFlag =
   | 'jd_flow_overlay'
   | 'score_telemetry'
   | 'skip_connectdb_when_cached'
+  | 'grounded_followups'
 
 const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   personalization_engine: true,
@@ -96,6 +97,15 @@ const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   // with source:redis-hit is the common case (PR B's telemetry confirms
   // that). Each bypass emits `event:connectdb_bypass` for observability.
   skip_connectdb_when_cached: false,
+  // Grounded follow-ups for coding/system-design rounds. When true,
+  // evaluate-code / evaluate-design generate `grounded_follow_up` (and a
+  // second trade-off probe for design) referencing the candidate's ACTUAL
+  // submission, calibrated by the flow templates' per-band probeGuidance;
+  // useInterview substitutes them for the hardcoded domain-blind follow-up
+  // strings. OFF = the routes never emit the fields and the client behavior
+  // is byte-identical to today (hardcoded strings). Flip in Vercel env after
+  // a prod self-interview of one coding + one system-design round.
+  grounded_followups: false,
 }
 
 export function isFeatureEnabled(flag: FeatureFlag): boolean {

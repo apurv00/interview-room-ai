@@ -59,8 +59,11 @@ export const TASK_SLOT_DEFAULTS: Record<
   'interview.generate-question':    { model: 'gpt-5.4-mini', maxTokens: 300, provider: 'openai' },
   'interview.evaluate-answer':      { model: 'gpt-5.4-mini', maxTokens: 250, provider: 'openai' },
   'interview.generate-feedback':    { model: 'gpt-5.4-mini', maxTokens: 6000, provider: 'openai' },
-  'interview.evaluate-code':        { model: 'gpt-5.4-mini', maxTokens: 1000, provider: 'openai' },
-  'interview.evaluate-design':      { model: 'gpt-5.4-mini', maxTokens: 1500, provider: 'openai' },
+  // maxTokens headroom sized for the grounded_followups fields: truncated JSON
+  // here 502s the route and converts the MAIN submission eval into a 'failed'
+  // row excluded from aggregation — the added output must never cause that.
+  'interview.evaluate-code':        { model: 'gpt-5.4-mini', maxTokens: 1400, provider: 'openai' },
+  'interview.evaluate-design':      { model: 'gpt-5.4-mini', maxTokens: 1800, provider: 'openai' },
   'interview.clarify-coding':       { model: 'gpt-5.4-mini', maxTokens: 500, provider: 'openai' },
   'interview.coding-problem-gen':   { model: 'gpt-5.4-mini', maxTokens: 2000, provider: 'openai' },
   'interview.code-run':             { model: 'gpt-5.4-mini', maxTokens: 3000, provider: 'openai' },

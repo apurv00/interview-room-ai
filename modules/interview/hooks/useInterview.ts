@@ -47,6 +47,7 @@ import {
   createDesignSubmissionGate,
   isNonAnswer,
   countTrailingNonAnswers,
+  extractGroundedFollowUp,
 } from './interviewUtils'
 import { useAvatarSpeech } from './useAvatarSpeech'
 import { EVALUATE_ANSWER_BACKGROUND_TIMEOUT_MS, useInterviewAPI } from './useInterviewAPI'
@@ -105,7 +106,7 @@ interface UseInterviewOptions {
   getAndClearInterruptAccum?: () => string
   onRecordingStop?: () => void | Promise<void>
   currentProblem?: { id: string; title: string; description: string } | null
-  currentDesignProblem?: { id: string; title: string; description: string; requirements: string[] } | null
+  currentDesignProblem?: { id: string; title: string; description: string; requirements: string[]; expectedComponents?: string[] } | null
   /** Live-coaching preference (feedback #1), chosen in the lobby and immutable
    *  during the interview. When false, coaching tips are suppressed and the
    *  post-answer STAR read-pause is skipped (no dead air); status notices stay
@@ -2313,6 +2314,9 @@ export function useInterview({
         addToTranscript('candidate', `[Code submitted in ${submission.language}]`, 1)
 
         let feedbackText = 'Good effort! Let me share some thoughts.'
+        // Grounded follow-up: the eval route emits this only when the
+        // grounded_followups flag is on; '' → the hardcoded question below.
+        let groundedFollowUp = ''
         let codeEvalRecorded = false
         try {
           // Bound the eval so a slow/hung LLM can't stall the interview (a top
@@ -2333,6 +2337,8 @@ export function useInterview({
               problemDescription: problem.description,
               questionIndex: 1,
               sessionId: sessionIdRef.current,
+              domain: config.role,
+              experience: config.experience,
             }),
           })
           clearTimeout(evalTimeout)
@@ -2340,6 +2346,7 @@ export function useInterview({
             const evaluation = (await evalRes.json()) as Record<string, unknown>
             const feedback = typeof evaluation.feedback === 'string' ? evaluation.feedback : undefined
             feedbackText = feedback || feedbackText
+            groundedFollowUp = extractGroundedFollowUp(evaluation.grounded_follow_up)
             evaluationsRef.current = [
               ...evaluationsRef.current,
               codeEvaluationToAnswerEvaluation(evaluation, problem, submission),
@@ -2380,9 +2387,10 @@ export function useInterview({
         await new Promise<void>((r) => setTimeout(r, 600))
         checkAbort()
 
-        // Follow-up: ask about approach
+        // Follow-up: grounded in the actual submission when the eval provided
+        // one (grounded_followups flag), else the generic approach question.
         if (timeRemainingRef.current > 60) {
-          const followUp = `Can you walk me through your approach? What data structures did you use, and what's the time complexity of your solution?`
+          const followUp = groundedFollowUp || `Can you walk me through your approach? What data structures did you use, and what's the time complexity of your solution?`
           transitionTo('ASK_QUESTION')
           questionIndexRef.current = 2
           setQuestionIndex(2)
@@ -2528,6 +2536,10 @@ export function useInterview({
         addToTranscript('candidate', `[Design submitted: ${submission.components.length} components, ${submission.connections.length} connections]`, 1)
 
         let feedbackText = 'Interesting design! Let me share some thoughts.'
+        // Grounded follow-ups: the eval route emits these only when the
+        // grounded_followups flag is on; '' → the hardcoded questions below.
+        let groundedFollowUp = ''
+        let groundedFollowUp2 = ''
         try {
           const evalRes = await fetch('/api/evaluate-design', {
             method: 'POST',
@@ -2540,6 +2552,9 @@ export function useInterview({
               requirements: problem.requirements,
               questionIndex: 1,
               sessionId: sessionIdRef.current,
+              domain: config.role,
+              experience: config.experience,
+              expectedComponents: problem.expectedComponents,
             }),
           })
           if (evalRes.ok) {
@@ -2558,8 +2573,13 @@ export function useInterview({
             ) / 3
             setAvatarEmotion(avgScore >= 70 ? 'impressed' : avgScore >= 40 ? 'friendly' : 'curious')
 
-            // Add follow-up question if provided
-            if (typeof evaluation.follow_up_question === 'string') {
+            groundedFollowUp = extractGroundedFollowUp(evaluation.grounded_follow_up)
+            groundedFollowUp2 = extractGroundedFollowUp(evaluation.grounded_follow_up_2)
+            // Legacy dangling append — only when the grounded path is off.
+            // It speaks a question the candidate never gets a listen window
+            // for; on the grounded path that question becomes the real,
+            // answered follow-up below instead.
+            if (!groundedFollowUp && typeof evaluation.follow_up_question === 'string') {
               feedbackText += ` ${evaluation.follow_up_question}`
             }
           }
@@ -2577,9 +2597,10 @@ export function useInterview({
         await new Promise<void>((r) => setTimeout(r, 2000))
         checkAbort()
 
-        // Follow-up: ask about design decisions
+        // Follow-up: grounded in the submitted diagram when the eval provided
+        // one (grounded_followups flag), else the generic scaling question.
         if (timeRemainingRef.current > 60) {
-          const followUp = `Can you walk me through the key design decisions you made? Specifically, how would your system handle a 10x increase in traffic, and what are the potential bottlenecks?`
+          const followUp = groundedFollowUp || `Can you walk me through the key design decisions you made? Specifically, how would your system handle a 10x increase in traffic, and what are the potential bottlenecks?`
           transitionTo('ASK_QUESTION')
           questionIndexRef.current = 2
           setQuestionIndex(2)
@@ -2599,9 +2620,10 @@ export function useInterview({
           }
         }
 
-        // Second follow-up on trade-offs if time allows
+        // Second follow-up: a trade-off THIS design makes when grounded, else
+        // the generic (and experience-blind) consistency/availability question.
         if (timeRemainingRef.current > 60 && !isInterviewOver()) {
-          const tradeOffQ = `What trade-offs did you consider in your design? For example, consistency vs availability, or latency vs throughput. What would you change if you had different constraints?`
+          const tradeOffQ = groundedFollowUp2 || `What trade-offs did you consider in your design? For example, consistency vs availability, or latency vs throughput. What would you change if you had different constraints?`
           transitionTo('ASK_QUESTION')
           questionIndexRef.current = 3
           setQuestionIndex(3)
