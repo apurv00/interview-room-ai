@@ -283,3 +283,42 @@ export function selectDesignProblem(
 
   return candidates[Math.floor(Math.random() * candidates.length)]
 }
+
+/**
+ * Last-resort selection when every design problem is exhausted for this user
+ * AND the AI generator failed: instead of a repeat chosen at random, pick the
+ * problem the user saw LONGEST ago. `servedIdsMostRecentFirst` is the
+ * /api/design/history order (ledger + legacy, most recent first), so the
+ * highest index is the oldest; never-served ids rank oldest of all.
+ * Deterministic — ties break on pool order. Mirrors selectDesignProblem's
+ * filters (experience→difficulty map, then drop the domain filter) minus the
+ * exclusion.
+ */
+export function selectLeastRecentlyServedDesign(
+  domain: string,
+  experience: string,
+  servedIdsMostRecentFirst: string[],
+): DesignProblem | null {
+  const difficultyMap: Record<string, DesignProblem['difficulty'][]> = {
+    '0-2': ['easy', 'medium'],
+    '3-6': ['medium', 'hard'],
+    '7+': ['medium', 'hard'],
+  }
+  const targetDifficulties = difficultyMap[experience] || ['easy', 'medium']
+
+  // Higher = older. Never-served → Infinity (best candidate).
+  const age = (id: string): number => {
+    const i = servedIdsMostRecentFirst.indexOf(id)
+    return i === -1 ? Number.POSITIVE_INFINITY : i
+  }
+
+  const inDomain = DESIGN_PROBLEMS.filter(
+    (p) => targetDifficulties.includes(p.difficulty) && p.applicableDomains.includes(domain)
+  )
+  const pool = inDomain.length > 0
+    ? inDomain
+    : DESIGN_PROBLEMS.filter((p) => targetDifficulties.includes(p.difficulty))
+  if (pool.length === 0) return null
+
+  return pool.reduce((oldest, p) => (age(p.id) > age(oldest.id) ? p : oldest))
+}

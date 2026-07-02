@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { generateCodingProblem } from '@interview/services/core/codingProblemGenerator'
+import { getServedProblemIds, recordServedProblem, unionMostRecentFirst } from '@interview/services/core/servedProblemLedger'
 import { aiLogger } from '@shared/logger'
 import { z } from 'zod'
 
@@ -58,16 +59,37 @@ export const POST = composeApiRoute<Body>({
   schema: BodySchema,
   rateLimit: { windowMs: 60_000, maxRequests: 5, keyPrefix: 'rl:code-gen' },
 
-  async handler(_req, { body }) {
+  async handler(_req, { user, body }) {
     try {
+      // Server-authoritative exclusion: union the ServedProblem ledger with the
+      // client-sent list. Closes the fail-open hole where a failed client
+      // /api/code/history fetch sent [] and dropped every exclusion. Ledger ids
+      // come first so the generator's prompt cap keeps the freshest ones.
+      const ledgerIds = await getServedProblemIds(user.id, 'coding')
+      const avoidIds = unionMostRecentFirst(ledgerIds, body.solvedProblemIds)
+
       const problem = await generateCodingProblem(
         body.domain,
         body.experience,
-        body.solvedProblemIds,
+        avoidIds,
         body.resumeText,
         body.difficulty,
         body.budgetMinutes,
       )
+      if (problem) {
+        // Record before responding — a served AI problem can never go
+        // unrecorded by client failure. recordServedProblem swallows DB errors.
+        await recordServedProblem({
+          userId: user.id,
+          kind: 'coding',
+          problemId: problem.id,
+          title: problem.title,
+          domain: body.domain,
+          difficulty: problem.difficulty,
+          source: 'ai',
+          problemBody: problem,
+        })
+      }
       return NextResponse.json({ problem })
     } catch (err) {
       aiLogger.error({ err, domain: body.domain }, '/api/code/generate-problem failed')
