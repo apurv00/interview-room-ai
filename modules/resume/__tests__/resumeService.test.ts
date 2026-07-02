@@ -160,6 +160,31 @@ describe('resumeService', () => {
       expect(update.$set['savedResumes.$.fullText']).toBe('PRE-BUILT TEXT')
     })
 
+    it('regenerates fullText for a projects-only resume (Codex P2: all buildFullText sections count as structure)', async () => {
+      await saveResume('user-1', {
+        id: 'r1',
+        name: 'Resume',
+        projects: [{ id: 'p1', name: 'Sidecar', description: 'A caching proxy' }],
+        fullText: 'STALE UPLOAD TEXT',
+      })
+      const [, update] = mockUpdateOne.mock.calls[0]
+      const fullText = update.$set['savedResumes.$.fullText'] as string
+      expect(fullText).toContain('PROJECTS')
+      expect(fullText).toContain('Sidecar: A caching proxy')
+      expect(fullText).not.toContain('STALE UPLOAD TEXT')
+    })
+
+    it('regenerates fullText when only a contact email exists (not just fullName)', async () => {
+      await saveResume('user-1', {
+        id: 'r1',
+        name: 'Resume',
+        contactInfo: { fullName: '', email: 'only@email.com' },
+        fullText: 'STALE UPLOAD TEXT',
+      })
+      const [, update] = mockUpdateOne.mock.calls[0]
+      expect(update.$set['savedResumes.$.fullText']).toContain('only@email.com')
+    })
+
     it('regenerates fullText from structured content even when a stale fullText is posted', async () => {
       await saveResume('user-1', {
         id: 'r1',
