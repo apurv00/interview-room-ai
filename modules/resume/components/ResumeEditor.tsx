@@ -326,7 +326,11 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
   }
 
   const honorsSectionOrder = templateHonorsSectionOrder(resume.template || 'professional')
-  const sectionIds = resume.sectionOrder || getTemplateSectionOrder(resume.template || 'professional')
+  // ?.length, not ||: saveResume persists `sectionOrder: []` for resumes never
+  // reordered, and [] is truthy — `[] || default` rendered ZERO section editors.
+  const sectionIds = resume.sectionOrder?.length
+    ? resume.sectionOrder
+    : getTemplateSectionOrder(resume.template || 'professional')
 
   function renderSectionEditor(sectionId: string) {
     return (
