@@ -50,13 +50,20 @@ export async function POST(req: NextRequest) {
 
     const result = await parseDocument(buffer, file.name)
 
-    // Scanned/image-only PDFs "parse" to (near-)empty text. Failing here with
-    // an actionable message beats returning 200 and letting downstream
-    // consumers die with a misleading "Validation failed".
-    if (result.wordCount < 20) {
+    // Truly empty extraction fails for EVERY file type; the near-empty
+    // heuristic applies to PDFs ONLY — that is the scanned-image signature.
+    // Short-but-real .txt/.docx uploads must pass: the interview setup
+    // legitimately accepts pasted JDs from 20 CHARACTERS, so a concise JD
+    // file must not 422 as a "scanned image" (Codex P2 on #489). Failing
+    // here with an actionable message beats returning 200 and letting
+    // downstream consumers die with a misleading "Validation failed".
+    const looksScanned = result.docType === 'pdf' && result.wordCount < 20
+    if (result.wordCount === 0 || looksScanned) {
       return NextResponse.json(
         {
-          error: 'No readable text found in this file — it looks like a scanned image or an empty document. Export a text-based PDF or DOCX, or paste the text directly.',
+          error: looksScanned
+            ? 'No readable text found in this PDF — it looks like a scanned image. Export a text-based PDF, or paste the text directly.'
+            : 'This file contains no readable text. Paste the text directly or upload a different file.',
           code: 'EMPTY_TEXT',
         },
         { status: 422 }

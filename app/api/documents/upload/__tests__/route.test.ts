@@ -77,13 +77,30 @@ describe('POST /api/documents/upload', () => {
     expect(data.code).toBe('UNSUPPORTED_TYPE')
   })
 
-  it('rejects scanned/empty documents with 422 and actionable copy', async () => {
-    mocks.parseDocument.mockResolvedValue({ text: '', wordCount: 0, docType: 'pdf' })
+  it('rejects near-empty PDFs with 422 and the scanned-image message', async () => {
+    mocks.parseDocument.mockResolvedValue({ text: 'a b c', wordCount: 3, docType: 'pdf' })
     const res = await POST(makeReq('scanned.pdf'))
     expect(res.status).toBe(422)
     const data = await res.json()
     expect(data.code).toBe('EMPTY_TEXT')
     expect(data.error).toContain('scanned image')
+  })
+
+  it('rejects truly empty non-PDF files with 422 and a generic message', async () => {
+    mocks.parseDocument.mockResolvedValue({ text: '', wordCount: 0, docType: 'docx' })
+    const res = await POST(makeReq('blank.docx'))
+    expect(res.status).toBe(422)
+    const data = await res.json()
+    expect(data.code).toBe('EMPTY_TEXT')
+    expect(data.error).not.toContain('scanned image')
+  })
+
+  it('accepts short-but-real non-PDF text (a concise JD must not 422 as scanned) — Codex P2 on #489', async () => {
+    mocks.parseDocument.mockResolvedValue({ text: 'Senior engineer role at Acme, remote.', wordCount: 6, docType: 'txt' })
+    const res = await POST(makeReq('jd.txt'))
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.wordCount).toBe(6)
   })
 
   it('keeps the generic message for unexpected parser crashes', async () => {
