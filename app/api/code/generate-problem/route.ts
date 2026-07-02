@@ -8,13 +8,13 @@ import { z } from 'zod'
 export const dynamic = 'force-dynamic'
 
 /**
- * Per-item cap on solvedProblemIds. Each ID is injected into the Claude
- * prompt via `slice(0, 20).join(', ')`. Without a string length cap, a
- * crafted client could send 200 × huge strings → oversized prompt →
- * latency spike, higher token cost, possible context-window overflow.
- * 64 chars is comfortably above our existing ID scheme (`ai-generated-<timestamp>`
- * ≈ 25-30 chars, kebab-case ≤ 40) and leaves headroom for future formats.
- * Codex P2 on PR #303.
+ * Per-item cap on solvedProblemIds. Ids/titles reach the Claude prompt via
+ * formatAvoidList (30 most-recent-first "- Title (id)" lines, each field
+ * neutralized and length-capped, inside <already_served_problems>). Without a
+ * per-item cap here, a crafted client could still send 200 × huge strings →
+ * oversized fingerprint scans and ledger churn. 64 matches toAiProblemId's
+ * clamp and the history routes' per-item filter — the round-trip contract.
+ * Originally Codex P2 on PR #303; mechanism updated by the seeded-generation PR.
  */
 const MAX_PROBLEM_ID_LEN = 64
 

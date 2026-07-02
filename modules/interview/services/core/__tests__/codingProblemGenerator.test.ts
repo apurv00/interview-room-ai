@@ -45,7 +45,7 @@ const promptOfCall = (n: number): string =>
 
 beforeEach(() => {
   vi.clearAllMocks()
-  mocks.buildCodingSeedBlock.mockResolvedValue('\n<style_exemplars>SEED</style_exemplars>\n')
+  mocks.buildCodingSeedBlock.mockResolvedValue({ block: '\n<style_exemplars>SEED</style_exemplars>\n', exemplarTitles: [] })
   mocks.completion.mockResolvedValue(llmProblem('Cohort Retention Aggregator'))
 })
 
@@ -139,6 +139,20 @@ describe('generateCodingProblem near-duplicate retry', () => {
 
     const problem = await generateCodingProblem('backend', '3-6', [], undefined, 'medium', 15, { avoid })
     expect(problem!.title).toBe('URL Shortener Service')
+  })
+
+  it('treats the seed exemplar as a collision source — the model copying the shown exemplar triggers the retry', async () => {
+    mocks.buildCodingSeedBlock.mockResolvedValue({
+      block: '\n<style_exemplars>1. "Two Sum" — desc</style_exemplars>\n',
+      exemplarTitles: [{ title: 'Two Sum' }],
+    })
+    mocks.completion
+      .mockResolvedValueOnce(llmProblem('Two Sum'))
+      .mockResolvedValueOnce(llmProblem('Log Batch Deduplicator'))
+
+    const problem = await generateCodingProblem('backend', '3-6', [], undefined, 'medium', 15, {})
+    expect(mocks.completion).toHaveBeenCalledTimes(2)
+    expect(problem!.title).toBe('Log Batch Deduplicator')
   })
 })
 
