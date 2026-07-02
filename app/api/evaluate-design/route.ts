@@ -36,7 +36,10 @@ const EvaluateDesignSchema = z.object({
   // Grounded-follow-up inputs (grounded_followups flag). expectedComponents
   // comes from the problem definition — previously authored but never
   // consumed anywhere — and lets the eval aim a probe at an important gap.
-  domain: z.string().max(64).optional(),
+  // domain cap matches the CMS domain-slug validator (max 100) — a tighter
+  // cap would 400 the WHOLE eval for long CMS slugs and silently drop the
+  // submitted design from scoring (Codex P2 on #487).
+  domain: z.string().max(100).optional(),
   experience: z.string().max(32).optional(),
   expectedComponents: z.array(z.string().max(100)).max(30).optional(),
 })

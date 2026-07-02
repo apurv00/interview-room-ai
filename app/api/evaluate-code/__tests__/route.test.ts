@@ -102,6 +102,11 @@ describe('POST /api/evaluate-code — grounded_followups ON', () => {
     expect(systemOf(0)).toContain('"grounded_follow_up"')
     expect(promptOf(0)).not.toContain('<followup_calibration>')
   })
+
+  it('accepts a full-length (100-char) CMS domain slug — the optional field must never 400 the eval', async () => {
+    const res = await POST(makeReq({ domain: 'x'.repeat(100) }))
+    expect(res.status).toBe(200)
+  })
 })
 
 describe('POST /api/evaluate-code — grounded_followups OFF', () => {

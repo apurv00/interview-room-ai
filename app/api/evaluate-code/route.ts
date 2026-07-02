@@ -19,8 +19,11 @@ const EvaluateCodeSchema = z.object({
   sessionId: z.string().optional(),
   // Band calibration for the grounded follow-up (grounded_followups flag).
   // Optional: absent → follow-up is generated uncalibrated (or not at all
-  // when the flag is off).
-  domain: z.string().max(64).optional(),
+  // when the flag is off). domain cap matches the CMS domain-slug validator
+  // (max 100, modules/cms/validators/cms.ts) — a tighter cap would 400 the
+  // WHOLE eval for CMS domains with 65-100 char slugs and convert the main
+  // submission eval into a 'failed' row (Codex P2 on #487).
+  domain: z.string().max(100).optional(),
   experience: z.string().max(32).optional(),
 })
 

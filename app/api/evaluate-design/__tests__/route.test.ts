@@ -111,6 +111,11 @@ describe('POST /api/evaluate-design — grounded_followups ON', () => {
     expect(data.grounded_follow_up).toBeUndefined()
     expect(data.grounded_follow_up_2).toBe('Still valid?')
   })
+
+  it('accepts a full-length (100-char) CMS domain slug — the optional field must never 400 the eval', async () => {
+    const res = await POST(makeReq({ domain: 'x'.repeat(100) }))
+    expect(res.status).toBe(200)
+  })
 })
 
 describe('POST /api/evaluate-design — grounded_followups OFF', () => {
