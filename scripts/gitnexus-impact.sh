@@ -189,16 +189,36 @@ SYMBOL_ROWS="$(
         GET|POST|PUT|PATCH|DELETE|handler|default|dynamic|constructor) continue ;;
       esac
       [ "${#sym}" -lt 4 ] && continue
-      HITS="$(grep -rn --include='*.ts' --include='*.tsx' -w "$sym" \
+      RAW_HITS="$(grep -rn --include='*.ts' --include='*.tsx' -w "$sym" \
         "$REPO_ROOT/app" "$REPO_ROOT/modules" "$REPO_ROOT/shared" 2>/dev/null \
         | grep -v "^$REPO_ROOT/$REL_PATH:" \
-        | sed "s|^$REPO_ROOT/||" \
-        | head -30)"
-      if [ -n "$HITS" ]; then
-        echo "### \`$sym\` referenced outside this file:"
+        | sed "s|^$REPO_ROOT/||")"
+      if [ -n "$RAW_HITS" ]; then
+        HIT_COUNT="$(printf '%s\n' "$RAW_HITS" | grep -c .)"
+        # The consumer FILE list is what the acknowledgement checklist refers
+        # to — it must be COMPLETE, never capped. Hub symbols (e.g.
+        # `completion` in modelRouter) have hundreds of hit LINES but only
+        # dozens of files; capping lines silently dropped later files and
+        # reintroduced the blind spot (Codex P2 on #490). Raw lines are
+        # detail only: bounded, with a LOUD truncation note + repro command.
+        FILE_LIST="$(printf '%s\n' "$RAW_HITS" | cut -d: -f1 | sort | uniq -c | sort -rn)"
+        FILE_COUNT="$(printf '%s\n' "$FILE_LIST" | grep -c .)"
+        echo "### \`$sym\` — $HIT_COUNT hits across $FILE_COUNT files"
+        echo ""
+        echo "_Complete consumer file list (never truncated; count = hits in that file):_"
         echo ""
         echo '```'
-        echo "$HITS"
+        echo "$FILE_LIST"
+        echo '```'
+        echo ""
+        echo "_Hit lines (detail only, first 40):_"
+        echo ""
+        echo '```'
+        printf '%s\n' "$RAW_HITS" | head -40
+        if [ "$HIT_COUNT" -gt 40 ]; then
+          echo "… TRUNCATED: $((HIT_COUNT - 40)) more hit lines not shown. The file list above IS complete;"
+          echo "for every line run: grep -rn --include='*.ts' --include='*.tsx' -w '$sym' app modules shared"
+        fi
         echo '```'
         echo ""
       fi
