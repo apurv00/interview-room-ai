@@ -418,9 +418,13 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
   const honorsSectionOrder = templateHonorsSectionOrder(resume.template || 'professional')
   // ?.length, not ||: saveResume persists `sectionOrder: []` for resumes never
   // reordered, and [] is truthy — `[] || default` rendered ZERO section editors.
-  const sectionIds = resume.sectionOrder?.length
+  const allSectionIds = resume.sectionOrder?.length
     ? resume.sectionOrder
     : getTemplateSectionOrder(resume.template || 'professional')
+  // Contact info renders as a fixed header in every template — the layouts'
+  // resolveSectionOrder filters it out of the body order — so offering a drag
+  // handle for it was a silent no-op. Pin it above the sortable list instead.
+  const sectionIds = allSectionIds.filter(id => id !== 'contactInfo')
 
   function renderSectionEditor(sectionId: string) {
     return (
@@ -748,6 +752,12 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
                 {enhancingSection === 'full' ? 'Generating...' : 'AI: Generate suggestions for all sections'}
               </button>
             )}
+          </div>
+
+          {/* Contact info — fixed at the top: every template renders it as a
+              header outside the reorderable body, so it never gets a handle. */}
+          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+            {renderSectionEditor('contactInfo')}
           </div>
 
           {/* Section editors — drag to reorder (single-column templates only) */}

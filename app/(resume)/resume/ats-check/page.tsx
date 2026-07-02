@@ -46,6 +46,10 @@ export default function ATSCheckPage() {
    *  check can persist its REAL ATS score back onto the resume (the dashboard
    *  badge reads savedResumes.atsScore, which previously nothing honest set). */
   const [selectedSaved, setSelectedSaved] = useState<Record<string, unknown> | null>(null)
+  /** Controlled value for the saved-resume dropdown. The old uncontrolled
+   *  defaultValue meant that after "Remove", re-selecting the SAME resume
+   *  fired no change event — the dropdown looked selected but did nothing. */
+  const [selectedId, setSelectedId] = useState('')
   const [resumeFileName, setResumeFileName] = useState('')
   const [jobDescription, setJobDescription] = useState('')
   const [checking, setChecking] = useState(false)
@@ -92,6 +96,7 @@ export default function ATSCheckPage() {
         setResumeFileName(data.fileName)
         setResumeSource('upload')
         setSelectedSaved(null)
+        setSelectedId('')
       } else setError(data.error || 'Upload failed')
     } catch { setError('Upload failed') }
     setUploading(false)
@@ -185,9 +190,9 @@ export default function ATSCheckPage() {
               <div>
                 <label className="text-[10px] text-slate-500 uppercase tracking-wider">From Saved Resumes</label>
                 <select
-                  onChange={e => e.target.value && handleSelectSaved(e.target.value)}
+                  value={selectedId}
+                  onChange={e => { setSelectedId(e.target.value); if (e.target.value) handleSelectSaved(e.target.value) }}
                   className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  defaultValue=""
                 >
                   <option value="">Choose a saved resume...</option>
                   {savedResumes.map(r => (
@@ -228,7 +233,7 @@ export default function ATSCheckPage() {
                   <span className="text-sm text-[#059669]">{resumeFileName || 'Resume loaded'}</span>
                   <span className="text-[10px] text-slate-500">({resumeSource === 'saved' ? 'saved' : 'uploaded'})</span>
                 </div>
-                <button onClick={() => { setResumeText(''); setResumeFileName(''); setSelectedSaved(null) }} className="text-xs text-slate-500 hover:text-slate-500">
+                <button onClick={() => { setResumeText(''); setResumeFileName(''); setSelectedSaved(null); setSelectedId('') }} className="text-xs text-slate-500 hover:text-slate-500">
                   Remove
                 </button>
               </div>

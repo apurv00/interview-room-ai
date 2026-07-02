@@ -56,6 +56,9 @@ export default function ResumeBuilderPage() {
   /** True when the user already has the max number of saved resumes and is
    *  building a NEW one — warn upfront instead of failing at save time. */
   const [atResumeCap, setAtResumeCap] = useState<{ count: number; limit: number } | null>(null)
+  /** Set when an edit link (?id=…) couldn't load the resume — the old code
+   *  silently opened a BLANK editor, which read as "my resume was wiped". */
+  const [loadNotice, setLoadNotice] = useState('')
   /** Bumped when we commit a new initialData snapshot (e.g. importing a
    *  pending anonymous draft). React uses this as the ResumeEditor's key
    *  so it fully unmounts/remounts — otherwise `useResume(initial)` would
@@ -64,6 +67,7 @@ export default function ResumeBuilderPage() {
 
   useEffect(() => {
     if (authStatus === 'loading') return
+    setLoadNotice('')
 
     const editId = searchParams.get('id')
     const template = searchParams.get('template')
@@ -123,15 +127,18 @@ export default function ResumeBuilderPage() {
                 setLoading(false)
               })
               .catch(() => {
+                setLoadNotice('Could not load your resume (network error) — your saved copy is unchanged. This editor started blank; reload the page to try again.')
                 setInitialData({ template: template || 'professional' })
                 setLoading(false)
               })
           } else {
+            setLoadNotice('That resume could not be found — it may have been deleted. This editor started blank.')
             setInitialData({ template: template || 'professional' })
             setLoading(false)
           }
         })
         .catch(() => {
+          setLoadNotice('Could not load your resume (network error) — your saved copy is unchanged. This editor started blank; reload the page to try again.')
           setInitialData({ template: template || 'professional' })
           setLoading(false)
         })
@@ -264,6 +271,11 @@ export default function ResumeBuilderPage() {
           onImport={importAnonDraft}
           onDiscard={discardAnonDraft}
         />
+      )}
+      {loadNotice && (
+        <div className="mb-4 bg-red-50 border border-red-200 rounded-xl px-4 py-2.5 text-xs text-red-700">
+          {loadNotice}
+        </div>
       )}
       {atResumeCap && (
         <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 text-xs text-amber-700">

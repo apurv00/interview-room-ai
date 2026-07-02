@@ -41,6 +41,10 @@ export default function TailorPage() {
   const [error, setError] = useState('')
   const [uploading, setUploading] = useState(false)
   const [savingCopy, setSavingCopy] = useState(false)
+  /** Controlled value for the saved-resume dropdown. The old uncontrolled
+   *  defaultValue meant that after "Remove", re-selecting the SAME resume
+   *  fired no change event — the dropdown looked selected but did nothing. */
+  const [selectedId, setSelectedId] = useState('')
 
   useEffect(() => {
     if (authStatus === 'authenticated') {
@@ -79,6 +83,7 @@ export default function TailorPage() {
         setResumeText(data.text)
         setResumeFileName(data.fileName)
         setResumeSource('upload')
+        setSelectedId('')
       } else setError(data.error || 'Upload failed')
     } catch { setError('Upload failed') }
     setUploading(false)
@@ -176,9 +181,9 @@ export default function TailorPage() {
               <div>
                 <label className="text-[10px] text-slate-500 uppercase tracking-wider">From Saved Resumes</label>
                 <select
-                  onChange={e => e.target.value && handleSelectSaved(e.target.value)}
+                  value={selectedId}
+                  onChange={e => { setSelectedId(e.target.value); if (e.target.value) handleSelectSaved(e.target.value) }}
                   className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  defaultValue=""
                 >
                   <option value="">Choose a saved resume...</option>
                   {savedResumes.map(r => (
@@ -219,7 +224,7 @@ export default function TailorPage() {
                   <span className="text-sm text-[#059669]">{resumeFileName || 'Resume loaded'}</span>
                   <span className="text-[10px] text-slate-500">({resumeSource === 'saved' ? 'saved' : 'uploaded'})</span>
                 </div>
-                <button onClick={() => { setResumeText(''); setResumeFileName('') }} className="text-xs text-slate-500 hover:text-slate-500">
+                <button onClick={() => { setResumeText(''); setResumeFileName(''); setSelectedId('') }} className="text-xs text-slate-500 hover:text-slate-500">
                   Remove
                 </button>
               </div>
