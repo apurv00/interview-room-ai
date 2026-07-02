@@ -75,7 +75,9 @@ export const TASK_SLOT_DEFAULTS: Record<
   'resume.generate-full':           { model: 'claude-sonnet-4-6', maxTokens: 3000, provider: 'anthropic' },
   'resume.ats-check':               { model: 'claude-sonnet-4-6', maxTokens: 2000, provider: 'anthropic' },
   'resume.tailor':                   { model: 'claude-sonnet-4-6', maxTokens: 3000, provider: 'anthropic' },
-  'resume.parse':                    { model: 'claude-sonnet-4-6', maxTokens: 3000, provider: 'anthropic' },
+  // 6000: a dense multi-page resume's structured JSON exceeded the old 3000
+  // and the truncated output failed JSON.parse — losing the whole import.
+  'resume.parse':                    { model: 'claude-sonnet-4-6', maxTokens: 6000, provider: 'anthropic' },
   'resume.gap-analysis':            { model: 'claude-sonnet-4-6', maxTokens: 2000, provider: 'anthropic' },
   'resume.wizard-followup':         { model: 'claude-haiku-4-5', maxTokens: 500, provider: 'anthropic' },
   'resume.wizard-enrich':           { model: 'claude-opus-4-6', maxTokens: 4000, provider: 'anthropic' },

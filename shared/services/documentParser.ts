@@ -8,6 +8,19 @@ export interface ParseResult {
   docType: 'pdf' | 'docx' | 'txt'
 }
 
+/**
+ * Thrown for extensions parseDocument cannot handle. Typed so API routes can
+ * surface the actionable message (415) instead of collapsing it into their
+ * generic catch-all — users dropping .doc/.rtf/.odt used to get a bare
+ * "Failed to parse document" with no hint of what to do.
+ */
+export class UnsupportedFileTypeError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'UnsupportedFileTypeError'
+  }
+}
+
 const MAX_WORDS = 8000
 
 function normalizeText(raw: string): string {
@@ -51,7 +64,7 @@ export async function parseDocument(buffer: Buffer, filename: string): Promise<P
       break
     }
     default:
-      throw new Error(`Unsupported file type: ${ext}. Please upload a PDF, DOCX, or TXT file.`)
+      throw new UnsupportedFileTypeError(`Unsupported file type: ${ext}. Please upload a PDF, DOCX, or TXT file.`)
   }
 
   const normalized = normalizeText(rawText)

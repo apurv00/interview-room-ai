@@ -100,7 +100,10 @@ export default function ResumeBuilderPage() {
                       body: JSON.stringify({ text: fullData.fullText }),
                     })
                     if (parseRes.ok) {
-                      const structured = await parseRes.json()
+                      // Partial-tolerant contract: structured sections live
+                      // under `resume` (see /api/resume/parse).
+                      const parsed = await parseRes.json()
+                      const structured = parsed.resume ?? {}
                       const mergedData = { ...fullData, ...structured }
                       setInitialData(mergedData)
                       setResumeId(editId)

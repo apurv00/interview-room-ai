@@ -227,7 +227,7 @@ describe('resumeAIService', () => {
   })
 
   describe('parseResumeToStructured', () => {
-    it('parses structured resume JSON', async () => {
+    it('parses structured resume JSON into the partial-tolerant contract', async () => {
       const payload = {
         contactInfo: { fullName: 'Jane', email: 'j@x.co' },
         summary: 'text',
@@ -239,10 +239,48 @@ describe('resumeAIService', () => {
       }
       mockTextResponse(JSON.stringify(payload))
       const result = await parseResumeToStructured('some resume text')
-      expect(result).toEqual(payload)
+      expect(result).not.toBeNull()
+      expect(result!.resume.contactInfo).toEqual({ fullName: 'Jane', email: 'j@x.co' })
+      expect(result!.resume.summary).toBe('text')
+      expect(result!.importedSections).toEqual(['contact info', 'summary'])
+      expect(result!.truncated).toBe(false)
     })
 
-    it('returns null on unparseable JSON', async () => {
+    it('imports sections even when contactInfo is absent (the old all-or-nothing gate)', async () => {
+      mockTextResponse(JSON.stringify({
+        experience: [{ company: 'Acme', title: 'Eng', bullets: ['did x'] }],
+        skills: [{ category: 'Langs', items: ['TS'] }],
+      }))
+      const result = await parseResumeToStructured('text')
+      expect(result!.importedSections).toEqual(['experience', 'skills'])
+      const exp = result!.resume.experience as Array<Record<string, unknown>>
+      expect(exp[0].id).toBe('exp-1') // id normalized in
+    })
+
+    it('salvages truncated JSON instead of returning null', async () => {
+      // Cut mid-way through the second experience entry — the first survives.
+      const truncated = '{"experience": [{"company": "Acme", "title": "Eng", "bullets": ["a", "b"]}, {"company": "Half'
+      mockTextResponse(truncated)
+      const result = await parseResumeToStructured('text')
+      expect(result).not.toBeNull()
+      const exp = result!.resume.experience as Array<Record<string, unknown>>
+      expect(exp).toHaveLength(1)
+      expect(exp[0].company).toBe('Acme')
+    })
+
+    it('retries once with a larger budget when the completion is truncated', async () => {
+      mockCompletion.mockResolvedValueOnce({
+        text: '{"experience": [{"company": "A', truncated: true,
+        model: 'm', provider: 'anthropic', inputTokens: 1, outputTokens: 1, usedFallback: false,
+      })
+      mockTextResponse(JSON.stringify({ summary: 'retried fine' }))
+      const result = await parseResumeToStructured('text')
+      expect(mockCompletion).toHaveBeenCalledTimes(2)
+      expect(mockCompletion.mock.calls[1][0]).toMatchObject({ maxTokens: 8000 })
+      expect(result!.resume.summary).toBe('retried fine')
+    })
+
+    it('returns null when nothing is salvageable', async () => {
       mockTextResponse('not valid')
       const result = await parseResumeToStructured('text')
       expect(result).toBeNull()

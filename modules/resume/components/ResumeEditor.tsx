@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import type { ResumeData } from '../validators/resume'
 import { useResume } from '../hooks/useResume'
+import { buildUploadPrefill } from '../lib/parseSalvage'
 import { getTemplateSectionOrder, templateHonorsSectionOrder } from '../config/sectionOrders'
 import { RESUME_TEMPLATES } from '../config/templates'
 import { TEMPLATE_FAMILIES, TEMPLATE_VARIANTS } from '../config/templateFamilies'
@@ -51,6 +52,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const [enhancingSection, setEnhancingSection] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [mobileTab, setMobileTab] = useState<'edit' | 'preview'>('edit')
@@ -124,25 +126,35 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
     if (isAnonymous) { requireAuth('parse_resume'); return }
     setUploading(true)
     setError('')
+    setNotice('')
     try {
       const formData = new FormData()
       formData.append('file', file)
       formData.append('docType', 'resume')
       const uploadRes = await fetch('/api/documents/upload', { method: 'POST', body: formData })
       const uploadData = await uploadRes.json()
+      // The route now returns actionable messages (unsupported type: 415,
+      // scanned/empty file: 422) — surface them verbatim.
       if (!uploadRes.ok) { setError(uploadData.error || 'Upload failed'); setUploading(false); return }
 
-      // Parse into structured data
+      // Parse into structured data. Partial-tolerant contract: whatever
+      // sections survived come back under `resume` — prefill ALL of them
+      // (the old code discarded a perfect parse when contactInfo was missing).
       const parseRes = await fetch('/api/resume/parse', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: uploadData.text }),
       })
       const parsed = await parseRes.json()
-      if (parseRes.ok && parsed.contactInfo) {
-        loadResume(parsed)
+      if (parseRes.ok && parsed.resume && parsed.importedSections?.length) {
+        // Upload = REPLACE: buildUploadPrefill wraps the (intentionally
+        // partial) parse in explicit empties so sections absent from the
+        // uploaded file don't survive as stale draft data in the merge.
+        loadResume(buildUploadPrefill(parsed.resume) as Partial<ResumeData>)
+        const summary = `Imported ${parsed.importedSections.length === 1 ? '1 section' : `${parsed.importedSections.length} sections`}: ${parsed.importedSections.join(', ')}. Review before saving.`
+        setNotice(parsed.warning ? `${summary} ${parsed.warning}` : summary)
       } else {
-        setError('Could not parse resume structure. Please fill in sections manually.')
+        setError(parsed.error || 'Could not parse resume structure. Please fill in sections manually.')
       }
     } catch { setError('Upload failed') }
     setUploading(false)
@@ -398,6 +410,12 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
           {error && (
             <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-2.5 text-xs text-red-600">
               {error}
+            </div>
+          )}
+
+          {notice && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 text-xs text-emerald-700">
+              {notice}
             </div>
           )}
 

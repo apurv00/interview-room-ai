@@ -3,6 +3,7 @@ import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSec
 import { getUserProfileContext } from './resumeService'
 import { extractJSON } from '@shared/utils'
 import { buildAtsCacheKey, getCachedAtsResult, setCachedAtsResult } from './atsCheckCache'
+import { salvageTruncatedJson, normalizeParsedResume } from '@resume/lib/parseSalvage'
 
 // ─── Enhance Section ────────────────────────────────────────────────────────
 
@@ -225,10 +226,15 @@ ${JSON_OUTPUT_RULE}
 
 // ─── Parse Resume Text to Structured Data ───────────────────────────────────
 
-export async function parseResumeToStructured(text: string) {
-  const parseResult = await completion({
-    taskSlot: 'resume.parse',
-    system: `Parse the resume into structured JSON. ${JSON_OUTPUT_RULE}
+export interface ParsedResumeResult {
+  /** Editor-safe partial resume data (ids/bullets normalized per section). */
+  resume: Record<string, unknown>
+  importedSections: string[]
+  droppedSections: string[]
+  truncated: boolean
+}
+
+const PARSE_SYSTEM = `Parse the resume into structured JSON. ${JSON_OUTPUT_RULE}
 {contactInfo: {fullName, email, phone?, location?, linkedin?, website?, github?},
 summary: str,
 experience: [{id: "exp-N", company, title, location?, startDate: "Mon YYYY", endDate: "Mon YYYY"|"Present", bullets: [str]}],
@@ -236,18 +242,58 @@ education: [{id: "edu-N", institution, degree, field?, graduationDate?, gpa?, ho
 skills: [{category, items: [str]}],
 projects: [{id: "proj-N", name, description, technologies: [str], url?}],
 certifications: [{name, issuer, date?}]}
-Use "Mon YYYY" dates. Group skills by category. Split experience into bullet points. Empty array for missing sections.`,
-    messages: [{ role: 'user', content: `Parse this resume into structured JSON:\n\n${text.slice(0, 6000)}` }],
-  })
+Use "Mon YYYY" dates. Group skills by category. Split experience into bullet points. Empty array for missing sections.`
+
+// ~24k chars ≈ 6k input tokens — covers a dense 3-page resume. The old 6,000
+// cap silently amputated everything past ~page 1.5 (education/skills/later
+// roles) BEFORE the model saw it.
+const PARSE_INPUT_CHARS = 24_000
+// Explicit retry budget when the first completion truncates. Passing it as an
+// opts override also bypasses any stale CMS slot cap.
+const PARSE_RETRY_MAX_TOKENS = 8_000
+
+/**
+ * Structure raw resume text. Partial-tolerant by design:
+ * - truncated completion → ONE retry with a larger explicit budget;
+ * - malformed/cut-off JSON → salvageTruncatedJson repairs to the last
+ *   complete value instead of discarding everything;
+ * - output is normalized per section (junk dropped per-item) and reported as
+ *   imported/dropped so callers can prefill what survived.
+ * Returns null only when nothing usable could be recovered.
+ */
+export async function parseResumeToStructured(text: string): Promise<ParsedResumeResult | null> {
+  const input = text.slice(0, PARSE_INPUT_CHARS)
+  const messages = [{ role: 'user' as const, content: `Parse this resume into structured JSON:\n\n${input}` }]
+
+  let parseResult = await completion({ taskSlot: 'resume.parse', system: PARSE_SYSTEM, messages })
+  if (parseResult.truncated) {
+    parseResult = await completion({
+      taskSlot: 'resume.parse',
+      system: PARSE_SYSTEM,
+      messages,
+      maxTokens: PARSE_RETRY_MAX_TOKENS,
+    })
+  }
 
   const raw = parseResult.text || '{}'
   const cleaned = extractJSON(raw)
+  let parsed: unknown = null
   try {
-    return JSON.parse(cleaned)
+    parsed = JSON.parse(cleaned)
   } catch {
-    console.error('parseResumeToStructured JSON parse failed. Raw:', raw.slice(0, 500))
-    return null
+    parsed = salvageTruncatedJson(cleaned)
+    if (parsed) {
+      console.error('parseResumeToStructured: salvaged truncated JSON. Raw head:', raw.slice(0, 200))
+    } else {
+      console.error('parseResumeToStructured JSON parse failed. Raw:', raw.slice(0, 500))
+    }
   }
+  if (!parsed || typeof parsed !== 'object') return null
+
+  const normalized = normalizeParsedResume(parsed)
+  if (normalized.importedSections.length === 0) return null
+
+  return { ...normalized, truncated: !!parseResult.truncated }
 }
 
 // ─── Generate STAR Stories ─────────────────────────────────────────────────

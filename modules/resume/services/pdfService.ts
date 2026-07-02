@@ -166,6 +166,12 @@ export function renderResumeHTML(
   <div id="resume-pages-root"></div>
   <script>
     (function paginateForPdf() {
+      // Fonts must be loaded BEFORE measuring: this script used to run at parse
+      // time while the Google webfonts (garamond/calibri/lato/roboto) were still
+      // loading, so every offset/lineTop was measured with fallback-font metrics
+      // and the printed PDF broke pages mid-line. The live preview re-measures on
+      // fonts.ready — the PDF must do the same before signalling readiness.
+      function runPagination() {
       const PAGE_HEIGHT = 842;
       const PAGE_PADDING = 24;
       const CONTENT_HEIGHT = PAGE_HEIGHT - PAGE_PADDING * 2;
@@ -606,10 +612,13 @@ export function renderResumeHTML(
           content.setAttribute('data-suppress-section', suppressSectionId);
           const suppressStyle = document.createElement('style');
           const sid = suppressSectionId;
+          // visibility:hidden, NOT display:none — the header must keep its flow
+          // box or every offset below it shifts up and the page renders content
+          // under the overlay / bisects lines (mirrors ResumePreview).
           suppressStyle.textContent =
             '[data-resume-page-content][data-suppress-section="' + sid + '"] [data-resume-section="' + sid + '"] [data-resume-section-header],'
             + '[data-resume-page-content][data-suppress-section="' + sid + '"] [data-resume-section="' + sid + '"] [data-resume-skills-header],'
-            + '[data-resume-page-content][data-suppress-section="' + sid + '"] [data-resume-section="' + sid + '"] > hr{display:none!important}';
+            + '[data-resume-page-content][data-suppress-section="' + sid + '"] [data-resume-section="' + sid + '"] > hr{visibility:hidden!important}';
           content.appendChild(suppressStyle);
         }
         const templateMount = document.createElement('div');
@@ -625,6 +634,14 @@ export function renderResumeHTML(
 
       measureRoot.remove();
       window.__resumePagesReady = true;
+      }
+      if (document.fonts && document.fonts.ready && typeof document.fonts.ready.then === 'function') {
+        // fonts.ready settles even when individual font files fail to load, so
+        // this cannot hang the puppeteer waitForFunction.
+        document.fonts.ready.then(runPagination, runPagination);
+      } else {
+        runPagination();
+      }
     })();
   </script>
 </body>

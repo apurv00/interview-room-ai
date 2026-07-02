@@ -122,7 +122,9 @@ export default function TailorPage() {
           body: JSON.stringify({ text: result.tailoredResume }),
         })
         if (parseRes.ok) {
-          structured = await parseRes.json()
+          // Partial-tolerant contract: structured sections live under `resume`.
+          const parsed = await parseRes.json()
+          structured = (parsed.resume as Record<string, unknown>) ?? {}
         }
       } catch {
         // Parsing failed — save with fullText only as fallback

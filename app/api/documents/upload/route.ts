@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { parseDocument } from '@shared/services/documentParser'
+import { parseDocument, UnsupportedFileTypeError } from '@shared/services/documentParser'
 import { logger } from '@shared/logger'
 import { uploadToR2, documentKey, isR2Configured } from '@shared/storage/r2'
 import { getServerSession } from 'next-auth'
@@ -50,6 +50,26 @@ export async function POST(req: NextRequest) {
 
     const result = await parseDocument(buffer, file.name)
 
+    // Truly empty extraction fails for EVERY file type; the near-empty
+    // heuristic applies to PDFs ONLY — that is the scanned-image signature.
+    // Short-but-real .txt/.docx uploads must pass: the interview setup
+    // legitimately accepts pasted JDs from 20 CHARACTERS, so a concise JD
+    // file must not 422 as a "scanned image" (Codex P2 on #489). Failing
+    // here with an actionable message beats returning 200 and letting
+    // downstream consumers die with a misleading "Validation failed".
+    const looksScanned = result.docType === 'pdf' && result.wordCount < 20
+    if (result.wordCount === 0 || looksScanned) {
+      return NextResponse.json(
+        {
+          error: looksScanned
+            ? 'No readable text found in this PDF — it looks like a scanned image. Export a text-based PDF, or paste the text directly.'
+            : 'This file contains no readable text. Paste the text directly or upload a different file.',
+          code: 'EMPTY_TEXT',
+        },
+        { status: 422 }
+      )
+    }
+
     // Store original file in R2 if configured
     let r2Key: string | undefined
     if (isR2Configured()) {
@@ -71,6 +91,12 @@ export async function POST(req: NextRequest) {
       r2Key,
     })
   } catch (err) {
+    // Surface the actionable unsupported-type message (drag-and-drop bypasses
+    // the client's accept filter, so .doc/.rtf/.odt land here) — everything
+    // else stays generic.
+    if (err instanceof UnsupportedFileTypeError) {
+      return NextResponse.json({ error: err.message, code: 'UNSUPPORTED_TYPE' }, { status: 415 })
+    }
     logger.error({ err }, 'Document upload/parse error')
     return NextResponse.json({ error: 'Failed to parse document' }, { status: 400 })
   }

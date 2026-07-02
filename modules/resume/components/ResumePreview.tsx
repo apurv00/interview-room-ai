@@ -336,8 +336,14 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                           style={{
                             ...wrapperStyle,
                             width: contentWidth,
-                            // Hiding the in-flow header on continuation pages removes its block
-                            // from flow — add header height back so unit offsets match measurer.
+                            // Continuation pages shift content down by the overlay band height
+                            // so the first unit lands just below the repeated-header overlay.
+                            // The suppressed in-flow header MUST keep its flow box
+                            // (visibility:hidden, NOT display:none) — collapsing it removed
+                            // ~30px of flow above the break, rendering every line on the page
+                            // that much too high: first-entry headings vanished under the
+                            // opaque overlay and page bottoms bisected lines (the reported
+                            // "second-page overlap"). Offsets must match the measurer 1:1.
                             marginTop:
                               -pageBreaks[pageIndex]
                               + (suppressSectionId ? contHeaderH : 0),
@@ -346,7 +352,7 @@ export default function ResumePreview({ data, templateId = 'professional' }: Pro
                           {suppressSectionId ? (
                             <style
                               dangerouslySetInnerHTML={{
-                                __html: `[data-resume-page-content][data-suppress-section="${suppressSectionId}"] [data-resume-section="${suppressSectionId}"] [data-resume-section-header],[data-resume-page-content][data-suppress-section="${suppressSectionId}"] [data-resume-section="${suppressSectionId}"] [data-resume-skills-header],[data-resume-page-content][data-suppress-section="${suppressSectionId}"] [data-resume-section="${suppressSectionId}"] > hr{display:none!important}`,
+                                __html: `[data-resume-page-content][data-suppress-section="${suppressSectionId}"] [data-resume-section="${suppressSectionId}"] [data-resume-section-header],[data-resume-page-content][data-suppress-section="${suppressSectionId}"] [data-resume-section="${suppressSectionId}"] [data-resume-skills-header],[data-resume-page-content][data-suppress-section="${suppressSectionId}"] [data-resume-section="${suppressSectionId}"] > hr{visibility:hidden!important}`,
                               }}
                             />
                           ) : null}

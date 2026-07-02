@@ -217,13 +217,18 @@ describe('resumeContextService', () => {
     })
 
     it('returns normalized ParsedResume on successful parse', async () => {
+      // parseResumeToStructured returns the partial-tolerant envelope:
+      // structured sections live under `resume`.
       mockParseResumeToStructured.mockResolvedValue({
-        contactInfo: { fullName: 'Jane Doe' },
-        summary: 'Senior PM',
-        experience: [{ id: 'exp-1', company: 'Acme', title: 'PM', bullets: ['Led product'] }],
-        education: [],
-        skills: [{ category: 'Product', items: ['roadmap'] }],
-        projects: [],
+        resume: {
+          contactInfo: { fullName: 'Jane Doe' },
+          summary: 'Senior PM',
+          experience: [{ id: 'exp-1', company: 'Acme', title: 'PM', bullets: ['Led product'] }],
+          skills: [{ category: 'Product', items: ['roadmap'] }],
+        },
+        importedSections: ['contact info', 'summary', 'experience', 'skills'],
+        droppedSections: [],
+        truncated: false,
       })
 
       const result = await parseAndCacheResume('sess-1', 'a long enough resume text body here for validation', 'pm')
