@@ -64,7 +64,7 @@ describe('getServedProblemIds', () => {
 })
 
 describe('recordServedProblem', () => {
-  it('upserts with $setOnInsert against the unique key', async () => {
+  it('upserts against the unique key: immutable fields on insert, servedAt bumped on every record', async () => {
     await recordServedProblem({
       userId: 'user-1',
       kind: 'coding',
@@ -85,7 +85,11 @@ describe('recordServedProblem', () => {
       source: 'ai',
       problemBody: { id: 'ai-gen-9' },
     })
-    expect(update.$setOnInsert.servedAt).toBeInstanceOf(Date)
+    // servedAt lives in $set, NOT $setOnInsert: an exhausted-pool repeat must
+    // refresh recency so least-recently-served rotation actually rotates
+    // (Codex P2 on PR #485).
+    expect(update.$set.servedAt).toBeInstanceOf(Date)
+    expect(update.$setOnInsert.servedAt).toBeUndefined()
     expect(opts).toEqual({ upsert: true })
   })
 

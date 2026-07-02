@@ -462,6 +462,11 @@ export default function InterviewPage() {
       fetch('/api/problems/served', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        // keepalive: the browser cancels normal fetches on unload — a candidate
+        // who closes the tab right after seeing the problem would otherwise
+        // leave no static-pick ledger record (Codex P2 on PR #485). The body is
+        // far under the 64KB keepalive cap.
+        keepalive: true,
         body: JSON.stringify({
           kind,
           problemId: problem.id,

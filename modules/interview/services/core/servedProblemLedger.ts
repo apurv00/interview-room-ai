@@ -45,8 +45,12 @@ export async function getServedProblemIds(
 
 /**
  * Record a served problem. Idempotent: upsert against the unique
- * {userId, kind, problemId} index, first write wins ($setOnInsert), so
- * concurrent tabs and redundant client+server records collapse to one row.
+ * {userId, kind, problemId} index — immutable fields first-write-win
+ * ($setOnInsert), so concurrent tabs and redundant client+server records
+ * collapse to one row. `servedAt` is $set on EVERY record: when the pool is
+ * exhausted and selectLeastRecentlyServed repeats a problem, the repeat must
+ * bump its recency so successive exhausted rounds rotate through the pool
+ * instead of replaying the same "oldest" problem (Codex P2 on PR #485).
  * Swallows errors — recording must never block or fail problem delivery.
  */
 export async function recordServedProblem(entry: ServedProblemEntry): Promise<void> {
@@ -55,13 +59,13 @@ export async function recordServedProblem(entry: ServedProblemEntry): Promise<vo
     await ServedProblem.updateOne(
       { userId: entry.userId, kind: entry.kind, problemId: entry.problemId },
       {
+        $set: { servedAt: new Date() },
         $setOnInsert: {
           title: (entry.title ?? '').slice(0, 200),
           domain: entry.domain,
           difficulty: entry.difficulty,
           source: entry.source,
           problemBody: entry.problemBody,
-          servedAt: new Date(),
         },
       },
       { upsert: true },
