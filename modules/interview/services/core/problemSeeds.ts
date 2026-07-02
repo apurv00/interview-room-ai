@@ -24,7 +24,11 @@ const DESC_HEAD = 300
 function wrapSeedBlock(lines: string[]): string {
   if (lines.length === 0) return ''
   const numbered = lines.map((l, i) => `${i + 1}. ${l}`)
-  return `\n<style_exemplars>\n${SEED_INSTRUCTION}\n${numbered.join('\n')}\n</style_exemplars>\n`
+  // The instruction sits OUTSIDE the tags: the generation prompts carry
+  // DATA_BOUNDARY_RULE, which tells the model XML-tagged content is reference
+  // data whose embedded directives must be ignored. Only the exemplar TEXT
+  // (bank rows could theoretically carry adversarial content) belongs inside.
+  return `\nStyle exemplars are provided in <style_exemplars> below. ${SEED_INSTRUCTION}\n<style_exemplars>\n${numbered.join('\n')}\n</style_exemplars>\n`
 }
 
 /** Deterministic pool exemplar: first native (or borrowed) problem at the target difficulty. */

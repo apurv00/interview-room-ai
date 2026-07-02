@@ -144,6 +144,42 @@ describe('POST /api/design/generate-problem', () => {
     )
   })
 
+  it('delivers the near-duplicate first candidate when the retry is unparseable (Codex P2 on #486)', async () => {
+    mocks.getServedProblemSummaries.mockResolvedValue([
+      { problemId: 'url-shortener', title: 'Design a URL Shortener' },
+    ])
+    mocks.completion
+      .mockResolvedValueOnce({ text: JSON.stringify({ ...GENERATED, id: 'dup', title: 'URL Shortener at Scale', tags: [] }) })
+      .mockResolvedValueOnce({ text: 'sorry, no json here' })
+
+    const res = await POST(makeReq({ domain: 'backend', experience: '3-6' }))
+    const data = await res.json()
+    // A duplicate in hand beats no problem — the first candidate ships.
+    expect(data.problem.title).toBe('URL Shortener at Scale')
+    expect(mocks.recordServedProblem).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'URL Shortener at Scale' })
+    )
+  })
+
+  it('delivers the first candidate when the retry call throws', async () => {
+    mocks.getServedProblemSummaries.mockResolvedValue([
+      { problemId: 'url-shortener', title: 'Design a URL Shortener' },
+    ])
+    mocks.completion
+      .mockResolvedValueOnce({ text: JSON.stringify({ ...GENERATED, id: 'dup', title: 'URL Shortener at Scale', tags: [] }) })
+      .mockRejectedValueOnce(new Error('LLM down'))
+
+    const data = await (await POST(makeReq({ domain: 'backend', experience: '3-6' }))).json()
+    expect(data.problem.title).toBe('URL Shortener at Scale')
+  })
+
+  it('still returns null when the FIRST attempt has no JSON (no candidate to fall back on)', async () => {
+    mocks.completion.mockResolvedValue({ text: 'nope' })
+    const data = await (await POST(makeReq({ domain: 'backend', experience: '3-6' }))).json()
+    expect(data).toEqual({ problem: null })
+    expect(mocks.recordServedProblem).not.toHaveBeenCalled()
+  })
+
   it('records the generated problem in the ledger before responding', async () => {
     const res = await POST(makeReq({ domain: 'ml-engineer', experience: '3-6' }))
     expect(res.status).toBe(200)
