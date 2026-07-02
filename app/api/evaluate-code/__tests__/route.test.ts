@@ -116,6 +116,9 @@ describe('POST /api/evaluate-code — grounded_followups OFF', () => {
     await POST(makeReq())
     expect(systemOf(0)).not.toContain('grounded_follow_up')
     expect(systemOf(0)).not.toContain('FOLLOW-UP CALIBRATION')
+    // No trailing residue from the calibration slot — the system prompt must
+    // end exactly where the pre-flag prompt ended.
+    expect(systemOf(0).endsWith('}')).toBe(true)
   })
 
   it('strips the field even if the model volunteers it', async () => {

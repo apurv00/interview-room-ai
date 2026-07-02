@@ -1974,3 +1974,37 @@ fills the time and completion still reads ~100% for a full run; dial the 1.0 q/m
   `interpolate` CLAMPED below the first anchor, so `getQuestionCount(5)` returned the 10-min budget (10)
   and a valid 5-min interview scored against 10 → false partial-completion penalty; it now EXTRAPOLATES
   below the first anchor (mirroring the above-last-anchor behavior), so a 5-min interview budgets ~5.
+
+### 2026-07-02 · Design round asked a follow-up it never listened to (fixed behind `grounded_followups`)
+
+**Symptom.** In the system-design round, evaluate-design's `follow_up_question` — the one probe
+grounded in the candidate's actual diagram — was appended to the spoken feedback text and then
+immediately superseded by the hardcoded "10x traffic" question. The candidate heard a direct question
+they were never given a listen window for: confusing UX and a wasted grounded probe.
+
+**Root cause.** `useInterview.ts`'s design branch appended `evaluation.follow_up_question` to
+`feedbackText` (speak-only path) instead of routing it through an ASK_QUESTION → listen turn. The
+scripted coding/system-design branches predate the follow-up plumbing and had only hardcoded,
+domain- and experience-blind follow-up strings.
+
+**Fix (flag-gated, default OFF).** Behind `grounded_followups`: evaluate-code/evaluate-design generate
+`grounded_follow_up` (+`grounded_follow_up_2` for design) referencing the actual submission, calibrated
+by the flow templates' per-band probeGuidance/neverAsk (rendered as trusted SYSTEM text — NOT inside
+XML tags, which `DATA_BOUNDARY_RULE` declares instruction-inert). The client substitutes them for the
+hardcoded follow-ups via `extractGroundedFollowUp` (absence/malformed → hardcoded fallback, so flag-off
+is byte-identical). The legacy speak-only append is kept when the grounded path is off OR when <60s
+remain (no follow-up window will run — a spoken-but-unanswerable question beats a dropped one).
+
+**Also fixed in the same sweep (not flag-gated).** The design eval fetch had none of the coding
+branch's resilience (Codex P1 on PR #456): no 12s AbortController chained to the interview abort (a
+hung LLM stalled PROCESSING; End waited out the fetch) and no 'failed'-status evaluation row on eval
+failure (a 500 silently dropped the submitted design from `answeredCount` → short-form/zero-score
+session). Both now mirror the coding branch: `designEvaluationToAnswerEvaluation` takes a status param
+and a failed eval still records the submission.
+
+**Verification.** Flag-off byte-identity asserted in both eval-route suites; grounded substitution +
+strip/sanitize covered by route tests; `extractGroundedFollowUp` guards unit-tested. PENDING prod E2E
+(auth is prod-only): one full coding + one full system-design self-interview before flipping
+`FEATURE_FLAG_GROUNDED_FOLLOWUPS=true`, and verify the CMS ModelConfig rows for
+`interview.evaluate-code`/`interview.evaluate-design` carry maxTokens ≥1400/≥1800 (CMS slot config
+overrides `TASK_SLOT_DEFAULTS`, so the code-side bump alone is not a guarantee).

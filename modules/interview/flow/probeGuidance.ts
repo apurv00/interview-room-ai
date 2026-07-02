@@ -48,9 +48,14 @@ export function buildFollowUpCalibration(
   // directives void — wrapping these (trusted, statically-authored) guardrails
   // in tags would instruct the model to ignore them (Codex P2 on #487). This
   // block belongs in the SYSTEM prompt, not the user message.
+  //
+  // Identity comes from the MATCHED template, never the raw inputs: this text
+  // is trusted system prose, and `domain` arrives from the client request body
+  // (the general-template fallback would otherwise carry ANY client string —
+  // including injected instructions — straight into the system prompt).
   return `
 FOLLOW-UP CALIBRATION (trusted interviewer guidance for the grounded follow-up):
-Probing angles appropriate for a ${experience}-years ${domain} candidate in this round:
+Probing angles appropriate for a ${template.experience}-years ${template.domain} candidate in this round:
 ${probeLines.join('\n')}${neverAsk}
 `
 }

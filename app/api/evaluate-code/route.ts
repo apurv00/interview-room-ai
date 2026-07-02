@@ -4,6 +4,7 @@ import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
 import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
+import { sanitizeGeneratedText } from '@shared/services/sanitizeGeneratedText'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { buildFollowUpCalibration } from '@interview/flow/probeGuidance'
 import { z } from 'zod'
@@ -69,8 +70,7 @@ ${JSON_OUTPUT_RULE}
   "feedback": "2-3 sentences of specific feedback",
   "complexity": "O(n) time, O(n) space" or similar,
   "flags": ["specific issues found, e.g. 'missing null check', 'inefficient nested loop'"]${groundedContract}
-}
-${calibration}`,
+}${calibration}`,
         messages: [{
           role: 'user',
           content: `<problem>\nTitle: ${problemTitle}\n${problemDescription}\n</problem>\n\n<code language="${language}">\n${code}\n</code>\n\nEvaluate this ${language} solution.`,
@@ -86,8 +86,13 @@ ${calibration}`,
       const evaluation = JSON.parse(jsonMatch[0])
       // Kill switch: never leak the field when the flag is off (or the model
       // returned a non-string) — absence is what makes the client fall back.
+      // Surviving values are sanitized like every other LLM output that gets
+      // spoken/persisted (the other eval fields flow through the mapping
+      // helpers' bounded extractors; this one is spoken verbatim).
       if (!groundedOn || typeof evaluation.grounded_follow_up !== 'string' || !evaluation.grounded_follow_up.trim()) {
         delete evaluation.grounded_follow_up
+      } else {
+        evaluation.grounded_follow_up = sanitizeGeneratedText(evaluation.grounded_follow_up)
       }
 
       // Track usage

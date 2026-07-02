@@ -4,6 +4,7 @@ import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { trackUsage } from '@shared/services/usageTracking'
 import { aiLogger } from '@shared/logger'
 import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
+import { sanitizeGeneratedText } from '@shared/services/sanitizeGeneratedText'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { buildFollowUpCalibration } from '@interview/flow/probeGuidance'
 import { z } from 'zod'
@@ -30,7 +31,10 @@ const EvaluateDesignSchema = z.object({
   connections: z.array(DesignConnectionSchema).max(100),
   problemTitle: z.string().min(1).max(200),
   problemDescription: z.string().min(1).max(5000),
-  requirements: z.array(z.string()).max(20),
+  // Tolerant: AI-generated problems copy requirements through uncapped and the
+  // client posts them verbatim — a strict .max(20) would 400 the WHOLE eval
+  // over problem metadata (same class as the expectedComponents fix). Clamp.
+  requirements: z.array(z.string()).transform((a) => a.slice(0, 20).map((s) => s.slice(0, 500))),
   questionIndex: z.number().int().min(0),
   sessionId: z.string().optional(),
   // Grounded-follow-up inputs (grounded_followups flag). expectedComponents
@@ -45,9 +49,11 @@ const EvaluateDesignSchema = z.object({
   // uncapped and the client posts it unconditionally — a strict schema here
   // would 400 the WHOLE eval over an optional calibration input (Codex P2 on
   // #487). Clamp instead of reject; the prompt slices further anyway.
+  // Angle brackets stripped: the items render inside <expected_components>
+  // and a literal closing tag in a tampered item could escape the boundary.
   expectedComponents: z.unknown().optional().transform((v) =>
     Array.isArray(v)
-      ? v.filter((s): s is string => typeof s === 'string').slice(0, 30).map((s) => s.slice(0, 100))
+      ? v.filter((s): s is string => typeof s === 'string').slice(0, 30).map((s) => s.replace(/[<>]/g, ' ').slice(0, 100))
       : undefined
   ),
 })
@@ -140,8 +146,7 @@ ${JSON_OUTPUT_RULE}
   "missing_components": ["list of important components they should consider adding"],
   "follow_up_question": "A probing question about their design choices",
   "flags": ["specific issues found, e.g. 'single point of failure', 'no caching layer'"]${groundedContract}
-}
-${calibration}`,
+}${calibration}`,
         messages: [{
           role: 'user',
           content: `<problem>
@@ -169,12 +174,17 @@ Evaluate this system design.`,
       const evaluation = JSON.parse(jsonMatch[0])
       // Kill switch: never leak the grounded fields when the flag is off (or
       // the model returned non-strings) — absence makes the client fall back
-      // to its hardcoded questions, byte-identical to today.
+      // to its hardcoded questions, byte-identical to today. Surviving values
+      // are sanitized like every other spoken/persisted LLM output.
       if (!groundedOn || typeof evaluation.grounded_follow_up !== 'string' || !evaluation.grounded_follow_up.trim()) {
         delete evaluation.grounded_follow_up
+      } else {
+        evaluation.grounded_follow_up = sanitizeGeneratedText(evaluation.grounded_follow_up)
       }
       if (!groundedOn || typeof evaluation.grounded_follow_up_2 !== 'string' || !evaluation.grounded_follow_up_2.trim()) {
         delete evaluation.grounded_follow_up_2
+      } else {
+        evaluation.grounded_follow_up_2 = sanitizeGeneratedText(evaluation.grounded_follow_up_2)
       }
 
       await trackUsage({

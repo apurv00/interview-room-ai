@@ -170,6 +170,7 @@ function designEvaluationToAnswerEvaluation(
   evaluation: Record<string, unknown>,
   problem: { title: string; description: string },
   submission: DesignSubmission,
+  status: AnswerEvaluation['status'] = 'ok',
 ): AnswerEvaluation {
   const feedback = typeof evaluation.feedback === 'string' ? evaluation.feedback : undefined
   const componentLabels = submission.components.map((c) => c.label).join(', ')
@@ -188,7 +189,10 @@ function designEvaluationToAnswerEvaluation(
     primaryStrength: 'architecture',
     answerSummary: feedback || `Submitted architecture diagram for ${problem.title}.`,
     flags: feedbackFlags(evaluation.flags),
-    status: 'ok',
+    // 'failed' (eval timed out / 500) still counts as answered but is excluded
+    // from score aggregation — mirrors the coding path (Codex P1 on PR #456),
+    // which this branch was missing until the stack self-review.
+    status,
     probeDecision: { shouldProbe: false },
   }
 }
@@ -2540,10 +2544,19 @@ export function useInterview({
         // grounded_followups flag is on; '' → the hardcoded questions below.
         let groundedFollowUp = ''
         let groundedFollowUp2 = ''
+        let designEvalRecorded = false
         try {
+          // Bound the eval so a slow/hung LLM can't stall the interview, and
+          // bail immediately when the candidate ends mid-eval — parity with the
+          // coding branch (Codex P1 on PR #456), which the design branch was
+          // missing until the stack self-review.
+          const evalController = new AbortController()
+          const evalTimeout = setTimeout(() => evalController.abort(), 12000)
+          interviewAbortRef.current?.signal.addEventListener('abort', () => evalController.abort(), { once: true })
           const evalRes = await fetch('/api/evaluate-design', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            signal: evalController.signal,
             body: JSON.stringify({
               components: submission.components,
               connections: submission.connections,
@@ -2557,6 +2570,7 @@ export function useInterview({
               expectedComponents: problem.expectedComponents,
             }),
           })
+          clearTimeout(evalTimeout)
           if (evalRes.ok) {
             const evaluation = (await evalRes.json()) as Record<string, unknown>
             const feedback = typeof evaluation.feedback === 'string' ? evaluation.feedback : undefined
@@ -2565,6 +2579,7 @@ export function useInterview({
               ...evaluationsRef.current,
               designEvaluationToAnswerEvaluation(evaluation, problem, submission),
             ]
+            designEvalRecorded = true
             performanceSignalRef.current = computePerformanceSignal()
             const avgScore = (
               boundedScore(evaluation.architecture) +
@@ -2575,15 +2590,28 @@ export function useInterview({
 
             groundedFollowUp = extractGroundedFollowUp(evaluation.grounded_follow_up)
             groundedFollowUp2 = extractGroundedFollowUp(evaluation.grounded_follow_up_2)
-            // Legacy dangling append — only when the grounded path is off.
-            // It speaks a question the candidate never gets a listen window
-            // for; on the grounded path that question becomes the real,
-            // answered follow-up below instead.
-            if (!groundedFollowUp && typeof evaluation.follow_up_question === 'string') {
+            // Legacy dangling append — only when the grounded path is off AND
+            // the follow-up window will actually run (>60s left): it speaks a
+            // question the candidate never gets a listen window for; on the
+            // grounded path that question becomes the real, answered follow-up
+            // below instead — but if time is too short for that follow-up to
+            // run, keep the legacy spoken form rather than dropping it.
+            if ((!groundedFollowUp || timeRemainingRef.current <= 60) && typeof evaluation.follow_up_question === 'string') {
               feedbackText += ` ${evaluation.follow_up_question}`
             }
           }
         } catch { /* continue with default feedback */ }
+
+        // The candidate DID submit a design — record it even when the eval
+        // timed out / failed so answeredCount reflects the submission instead
+        // of dropping a full round to an unscored/short-form interview.
+        // 'failed' status keeps it out of score aggregation (G.4).
+        if (!designEvalRecorded) {
+          evaluationsRef.current = [
+            ...evaluationsRef.current,
+            designEvaluationToAnswerEvaluation({}, problem, submission, 'failed'),
+          ]
+        }
 
         checkAbort()
 
