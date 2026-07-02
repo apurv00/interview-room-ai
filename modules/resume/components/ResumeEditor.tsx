@@ -60,6 +60,11 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
   const [uploading, setUploading] = useState(false)
   const [mobileTab, setMobileTab] = useState<'edit' | 'preview'>('edit')
   const [downloading, setDownloading] = useState(false)
+  /** One-level undo for the latest AI enhancement — the enhance buttons
+   *  REPLACE user-written content in place, which was irreversible. */
+  const [lastEnhance, setLastEnhance] = useState<{ label: string; undo: () => void } | null>(null)
+  const [showPasteImport, setShowPasteImport] = useState(false)
+  const [pasteText, setPasteText] = useState('')
 
   // Persist anonymous edits to localStorage so the user's work survives
   // page reloads and an OAuth round-trip.
@@ -132,6 +137,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
     if (!resume.summary?.trim()) return
     if (isAnonymous) { requireAuth('enhance_resume'); return }
     setEnhancingSection('summary')
+    setError('')
     try {
       const res = await fetch('/api/resume/generate', {
         method: 'POST',
@@ -145,8 +151,16 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
         }),
       })
       const data = await res.json()
-      if (data.enhanced) update('summary', data.enhanced)
-    } catch { /* ignore */ }
+      if (res.ok && data.enhanced) {
+        const prev = resume.summary
+        update('summary', data.enhanced)
+        setLastEnhance({ label: 'Summary enhanced by AI', undo: () => update('summary', prev) })
+      } else {
+        // Previously a failure did NOTHING — the user clicked, the spinner
+        // stopped, and there was no way to tell it hadn't worked.
+        setError(data.error || 'AI enhancement failed — your summary is unchanged. Try again.')
+      }
+    } catch { setError('AI enhancement failed — your summary is unchanged. Try again.') }
     setEnhancingSection(null)
   }
 
@@ -155,6 +169,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
     if (!exp || exp.bullets.every(b => !b.trim())) return
     if (isAnonymous) { requireAuth('enhance_resume'); return }
     setEnhancingSection(expId)
+    setError('')
     try {
       const res = await fetch('/api/resume/generate', {
         method: 'POST',
@@ -166,8 +181,17 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
         }),
       })
       const data = await res.json()
-      if (data.bullets) updateExperience(expId, { bullets: data.bullets })
-    } catch { /* ignore */ }
+      if (res.ok && data.bullets) {
+        const prevBullets = exp.bullets
+        updateExperience(expId, { bullets: data.bullets })
+        setLastEnhance({
+          label: `Bullets enhanced for ${exp.title || exp.company || 'this role'}`,
+          undo: () => updateExperience(expId, { bullets: prevBullets }),
+        })
+      } else {
+        setError(data.error || 'AI enhancement failed — your bullets are unchanged. Try again.')
+      }
+    } catch { setError('AI enhancement failed — your bullets are unchanged. Try again.') }
     setEnhancingSection(null)
   }
 
@@ -186,26 +210,47 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
       // scanned/empty file: 422) — surface them verbatim.
       if (!uploadRes.ok) { setError(uploadData.error || 'Upload failed'); setUploading(false); return }
 
-      // Parse into structured data. Partial-tolerant contract: whatever
-      // sections survived come back under `resume` — prefill ALL of them
-      // (the old code discarded a perfect parse when contactInfo was missing).
-      const parseRes = await fetch('/api/resume/parse', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: uploadData.text }),
-      })
-      const parsed = await parseRes.json()
-      if (parseRes.ok && parsed.resume && parsed.importedSections?.length) {
-        // Upload = REPLACE: buildUploadPrefill wraps the (intentionally
-        // partial) parse in explicit empties so sections absent from the
-        // uploaded file don't survive as stale draft data in the merge.
-        loadResume(buildUploadPrefill(parsed.resume) as Partial<ResumeData>)
-        const summary = `Imported ${parsed.importedSections.length === 1 ? '1 section' : `${parsed.importedSections.length} sections`}: ${parsed.importedSections.join(', ')}. Review before saving.`
-        setNotice(parsed.warning ? `${summary} ${parsed.warning}` : summary)
-      } else {
-        setError(parsed.error || 'Could not parse resume structure. Please fill in sections manually.')
-      }
+      await importFromText(uploadData.text)
     } catch { setError('Upload failed') }
+    setUploading(false)
+  }
+
+  // Parse raw resume text into structured data and prefill the editor.
+  // Shared by file upload and paste-to-import. Partial-tolerant contract:
+  // whatever sections survived come back under `resume` — prefill ALL of
+  // them (the old code discarded a perfect parse when contactInfo was
+  // missing).
+  async function importFromText(text: string) {
+    const parseRes = await fetch('/api/resume/parse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    })
+    const parsed = await parseRes.json()
+    if (parseRes.ok && parsed.resume && parsed.importedSections?.length) {
+      // Import = REPLACE: buildUploadPrefill wraps the (intentionally
+      // partial) parse in explicit empties so sections absent from the
+      // imported text don't survive as stale draft data in the merge.
+      loadResume(buildUploadPrefill(parsed.resume) as Partial<ResumeData>)
+      const summary = `Imported ${parsed.importedSections.length === 1 ? '1 section' : `${parsed.importedSections.length} sections`}: ${parsed.importedSections.join(', ')}. Review before saving.`
+      setNotice(parsed.warning ? `${summary} ${parsed.warning}` : summary)
+      return true
+    }
+    setError(parsed.error || 'Could not parse resume structure. Please fill in sections manually.')
+    return false
+  }
+
+  async function handlePasteImport() {
+    const text = pasteText.trim()
+    if (text.length < 10) { setError('Paste at least a few lines of resume text first.'); return }
+    if (isAnonymous) { requireAuth('parse_resume'); return }
+    setUploading(true)
+    setError('')
+    setNotice('')
+    try {
+      const ok = await importFromText(text)
+      if (ok) { setShowPasteImport(false); setPasteText('') }
+    } catch { setError('Import failed') }
     setUploading(false)
   }
 
@@ -224,6 +269,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
     if (!resume.targetRole) return
     if (isAnonymous) { requireAuth('enhance_resume'); return }
     setEnhancingSection('full')
+    setError('')
     try {
       const res = await fetch('/api/resume/generate', {
         method: 'POST',
@@ -239,12 +285,17 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
         }),
       })
       const data = await res.json()
-      if (data.sections) {
-        for (const s of data.sections) {
-          if (s.type === 'summary' && s.content) update('summary', s.content)
-        }
+      const summarySection = res.ok
+        ? (data.sections as Array<{ type: string; content?: string }> | undefined)?.find(s => s.type === 'summary' && s.content)
+        : undefined
+      if (summarySection?.content) {
+        const prev = resume.summary || ''
+        update('summary', summarySection.content)
+        setLastEnhance({ label: 'Summary generated by AI', undo: () => update('summary', prev) })
+      } else {
+        setError(data.error || 'AI generation failed — nothing was changed. Try again.')
       }
-    } catch { /* ignore */ }
+    } catch { setError('AI generation failed — nothing was changed. Try again.') }
     setEnhancingSection(null)
   }
 
@@ -431,6 +482,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
               onChange={e => update('name', e.target.value)}
               className="text-xl font-bold text-slate-900 bg-transparent border-none focus:outline-none"
               placeholder="Resume Name"
+              aria-label="Resume name"
             />
             <div className="flex gap-2">
               <button
@@ -465,6 +517,27 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
           {notice && (
             <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 text-xs text-emerald-700">
               {notice}
+            </div>
+          )}
+
+          {lastEnhance && (
+            <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-2.5 text-xs text-blue-700 flex items-center justify-between gap-3">
+              <span>{lastEnhance.label}.</span>
+              <span className="flex gap-2 shrink-0">
+                <button
+                  onClick={() => { lastEnhance.undo(); setLastEnhance(null) }}
+                  className="px-2.5 py-1 bg-blue-600/10 border border-blue-500/30 rounded-lg font-medium hover:bg-blue-600/20 transition-colors"
+                >
+                  Undo
+                </button>
+                <button
+                  onClick={() => setLastEnhance(null)}
+                  aria-label="Keep AI change and dismiss"
+                  className="px-2.5 py-1 border border-slate-300 rounded-lg text-slate-500 hover:bg-slate-100 transition-colors"
+                >
+                  Keep
+                </button>
+              </span>
             </div>
           )}
 
@@ -508,14 +581,52 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
               onRemove={() => {}}
               onError={setError}
             />
+            {!showPasteImport ? (
+              <button
+                onClick={() => setShowPasteImport(true)}
+                className="text-[11px] text-blue-600 hover:underline"
+              >
+                Or paste resume text instead
+              </button>
+            ) : (
+              <div className="space-y-2">
+                <label htmlFor="paste-import-text" className="text-[10px] text-slate-400 uppercase tracking-wider">
+                  Paste resume text
+                </label>
+                <textarea
+                  id="paste-import-text"
+                  value={pasteText}
+                  onChange={e => setPasteText(e.target.value)}
+                  placeholder="Paste the full text of your resume here…"
+                  rows={6}
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={handlePasteImport}
+                    disabled={uploading}
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs rounded-lg font-medium transition-colors disabled:opacity-50"
+                  >
+                    {uploading ? 'Importing…' : 'Import'}
+                  </button>
+                  <button
+                    onClick={() => { setShowPasteImport(false); setPasteText('') }}
+                    className="px-3 py-1.5 border border-slate-200 text-slate-500 text-xs rounded-lg font-medium hover:bg-slate-100 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Meta: target role, company, template */}
           <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-[10px] text-slate-400 uppercase tracking-wider">Target Role</label>
+                <label htmlFor="resume-target-role" className="text-[10px] text-slate-400 uppercase tracking-wider">Target Role</label>
                 <input
+                  id="resume-target-role"
                   type="text"
                   value={resume.targetRole || ''}
                   onChange={e => update('targetRole', e.target.value)}
@@ -524,8 +635,9 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
                 />
               </div>
               <div>
-                <label className="text-[10px] text-slate-400 uppercase tracking-wider">Target Company</label>
+                <label htmlFor="resume-target-company" className="text-[10px] text-slate-400 uppercase tracking-wider">Target Company</label>
                 <input
+                  id="resume-target-company"
                   type="text"
                   value={resume.targetCompany || ''}
                   onChange={e => update('targetCompany', e.target.value)}

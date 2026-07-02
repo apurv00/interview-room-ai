@@ -42,6 +42,10 @@ export default function ATSCheckPage() {
   const [savedResumes, setSavedResumes] = useState<SavedResume[]>([])
   const [resumeText, setResumeText] = useState('')
   const [resumeSource, setResumeSource] = useState<'upload' | 'saved'>('upload')
+  /** Full resume object of the selected saved resume — kept so a completed
+   *  check can persist its REAL ATS score back onto the resume (the dashboard
+   *  badge reads savedResumes.atsScore, which previously nothing honest set). */
+  const [selectedSaved, setSelectedSaved] = useState<Record<string, unknown> | null>(null)
   const [resumeFileName, setResumeFileName] = useState('')
   const [jobDescription, setJobDescription] = useState('')
   const [checking, setChecking] = useState(false)
@@ -68,6 +72,7 @@ export default function ATSCheckPage() {
         setResumeText(data.fullText)
         setResumeFileName(resume.name)
         setResumeSource('saved')
+        setSelectedSaved({ ...data, id })
       }
     } catch { /* ignore */ }
   }
@@ -86,6 +91,7 @@ export default function ATSCheckPage() {
         setResumeText(data.text)
         setResumeFileName(data.fileName)
         setResumeSource('upload')
+        setSelectedSaved(null)
       } else setError(data.error || 'Upload failed')
     } catch { setError('Upload failed') }
     setUploading(false)
@@ -125,6 +131,16 @@ export default function ATSCheckPage() {
       const data = await res.json()
       if (res.ok) {
         setResult(data)
+        // Persist the real ATS score onto the saved resume so the dashboard
+        // badge reflects an actual ATS check. Fire-and-forget: a failure here
+        // must not disturb the result the user is reading.
+        if (resumeSource === 'saved' && selectedSaved && typeof data.score === 'number') {
+          fetch('/api/resume/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...selectedSaved, atsScore: data.score }),
+          }).catch(() => {})
+        }
       } else if (res.status === 429 && data.code === 'ANON_DAILY_LIMIT') {
         setError('Daily limit reached. Sign in for unlimited ATS checks.')
         requireAuth('ats_check')
@@ -201,7 +217,7 @@ export default function ATSCheckPage() {
                   <span className="text-sm text-[#059669]">{resumeFileName || 'Resume loaded'}</span>
                   <span className="text-[10px] text-slate-500">({resumeSource === 'saved' ? 'saved' : 'uploaded'})</span>
                 </div>
-                <button onClick={() => { setResumeText(''); setResumeFileName('') }} className="text-xs text-slate-500 hover:text-slate-500">
+                <button onClick={() => { setResumeText(''); setResumeFileName(''); setSelectedSaved(null) }} className="text-xs text-slate-500 hover:text-slate-500">
                   Remove
                 </button>
               </div>
