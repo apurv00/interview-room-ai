@@ -1,20 +1,20 @@
 import { NextResponse } from 'next/server'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { generateCodingProblem } from '@interview/services/core/codingProblemGenerator'
-import { getServedProblemIds, recordServedProblem, unionMostRecentFirst } from '@interview/services/core/servedProblemLedger'
+import { getServedProblemSummaries, countServedProblems, recordServedProblem, unionAvoidEntries } from '@interview/services/core/servedProblemLedger'
 import { aiLogger } from '@shared/logger'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
 
 /**
- * Per-item cap on solvedProblemIds. Each ID is injected into the Claude
- * prompt via `slice(0, 20).join(', ')`. Without a string length cap, a
- * crafted client could send 200 × huge strings → oversized prompt →
- * latency spike, higher token cost, possible context-window overflow.
- * 64 chars is comfortably above our existing ID scheme (`ai-generated-<timestamp>`
- * ≈ 25-30 chars, kebab-case ≤ 40) and leaves headroom for future formats.
- * Codex P2 on PR #303.
+ * Per-item cap on solvedProblemIds. Ids/titles reach the Claude prompt via
+ * formatAvoidList (30 most-recent-first "- Title (id)" lines, each field
+ * neutralized and length-capped, inside <already_served_problems>). Without a
+ * per-item cap here, a crafted client could still send 200 × huge strings →
+ * oversized fingerprint scans and ledger churn. 64 matches toAiProblemId's
+ * clamp and the history routes' per-item filter — the round-trip contract.
+ * Originally Codex P2 on PR #303; mechanism updated by the seeded-generation PR.
  */
 const MAX_PROBLEM_ID_LEN = 64
 
@@ -65,18 +65,24 @@ export const POST = composeApiRoute<Body>({
     try {
       // Server-authoritative exclusion: union the ServedProblem ledger with the
       // client-sent list. Closes the fail-open hole where a failed client
-      // /api/code/history fetch sent [] and dropped every exclusion. Ledger ids
-      // come first so the generator's prompt cap keeps the freshest ones.
-      const ledgerIds = await getServedProblemIds(user.id, 'coding')
-      const avoidIds = unionMostRecentFirst(ledgerIds, body.solvedProblemIds)
+      // /api/code/history fetch sent [] and dropped every exclusion. Ledger
+      // entries come first (and carry titles — the generator renders them as a
+      // titled avoid-list and runs its near-duplicate check against them);
+      // the served count drives the progressive-difficulty nudge.
+      const [served, priorCountInDomain] = await Promise.all([
+        getServedProblemSummaries(user.id, 'coding'),
+        countServedProblems(user.id, 'coding', body.domain),
+      ])
+      const avoid = unionAvoidEntries(served, body.solvedProblemIds)
 
       const problem = await generateCodingProblem(
         body.domain,
         body.experience,
-        avoidIds,
+        avoid.map((a) => a.id),
         body.resumeText,
         body.difficulty,
         body.budgetMinutes,
+        { avoid, priorCountInDomain },
       )
       if (problem) {
         // Record before responding — a served AI problem can never go
