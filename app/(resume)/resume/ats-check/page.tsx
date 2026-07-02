@@ -139,12 +139,23 @@ export default function ATSCheckPage() {
         // Persist the real ATS score onto the saved resume so the dashboard
         // badge reflects an actual ATS check. Fire-and-forget: a failure here
         // must not disturb the result the user is reading.
-        if (resumeSource === 'saved' && selectedSaved && typeof data.score === 'number') {
-          fetch('/api/resume/save', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...selectedSaved, atsScore: data.score }),
-          }).catch(() => {})
+        // REFETCH first — /api/resume/save is a full-replacement save and the
+        // check takes ~30s: replaying the selection-time snapshot would roll
+        // back any edits made in another tab meanwhile (Codex P2). The score
+        // rides on the freshest copy; if the refetch fails, skip persisting.
+        const savedId = (selectedSaved as { id?: string } | null)?.id
+        if (resumeSource === 'saved' && savedId && typeof data.score === 'number') {
+          fetch(`/api/resume/save?id=${savedId}`)
+            .then(r => (r.ok ? r.json() : null))
+            .then(fresh => {
+              if (!fresh || !fresh.name) return
+              return fetch('/api/resume/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ...fresh, id: savedId, atsScore: data.score }),
+              })
+            })
+            .catch(() => {})
         }
       } else if (res.status === 429 && data.code === 'ANON_DAILY_LIMIT') {
         setError('Daily limit reached. Sign in for unlimited ATS checks.')

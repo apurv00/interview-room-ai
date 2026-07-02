@@ -232,9 +232,17 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
       // partial) parse in explicit empties so sections absent from the
       // imported text don't survive as stale draft data in the merge.
       loadResume(buildUploadPrefill(parsed.resume) as Partial<ResumeData>)
+      // The replacement invalidates any pending AI-enhance undo — its closure
+      // would write the PREVIOUS resume's text into the imported one.
+      setLastEnhance(null)
       const summary = `Imported ${parsed.importedSections.length === 1 ? '1 section' : `${parsed.importedSections.length} sections`}: ${parsed.importedSections.join(', ')}. Review before saving.`
       setNotice(parsed.warning ? `${summary} ${parsed.warning}` : summary)
       return true
+    }
+    if (parseRes.status === 429 && parsed.code === 'ANON_DAILY_LIMIT') {
+      setError('Daily import limit reached. Sign in for unlimited imports.')
+      requireAuth('parse_resume')
+      return false
     }
     setError(parsed.error || 'Could not parse resume structure. Please fill in sections manually.')
     return false
@@ -243,7 +251,9 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
   async function handlePasteImport() {
     const text = pasteText.trim()
     if (text.length < 10) { setError('Paste at least a few lines of resume text first.'); return }
-    if (isAnonymous) { requireAuth('parse_resume'); return }
+    // No auth gate: /api/resume/parse is authOptional with its own anonymous
+    // daily cap — pasting is the anonymous-friendly import path (file upload
+    // stays gated because /api/documents/upload requires auth).
     setUploading(true)
     setError('')
     setNotice('')
@@ -261,6 +271,9 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
       const data = await res.json()
       if (res.ok && data) {
         loadResume(data)
+        // Same as importFromText: a pending enhance-undo closure targets the
+        // replaced resume — drop it so Undo can't cross-contaminate.
+        setLastEnhance(null)
       }
     } catch { /* ignore */ }
   }
@@ -556,7 +569,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
               </span>
               <span className="flex gap-2 shrink-0">
                 <button
-                  onClick={() => { loadResume(restorableDraft.data); setRestorableDraft(null) }}
+                  onClick={() => { loadResume(restorableDraft.data); setRestorableDraft(null); setLastEnhance(null) }}
                   className="px-2.5 py-1 bg-amber-600/10 border border-amber-500/30 rounded-lg font-medium hover:bg-amber-600/20 transition-colors"
                 >
                   Restore
@@ -617,9 +630,13 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
                   >
                     {uploading ? 'Importing…' : 'Import'}
                   </button>
+                  {/* Cancel can't abort the in-flight parse — importFromText
+                      would still loadResume() after "cancel", replacing the
+                      editor contents. Disable it until the request settles. */}
                   <button
                     onClick={() => { setShowPasteImport(false); setPasteText('') }}
-                    className="px-3 py-1.5 border border-slate-200 text-slate-500 text-xs rounded-lg font-medium hover:bg-slate-100 transition-colors"
+                    disabled={uploading}
+                    className="px-3 py-1.5 border border-slate-200 text-slate-500 text-xs rounded-lg font-medium hover:bg-slate-100 transition-colors disabled:opacity-50"
                   >
                     Cancel
                   </button>
