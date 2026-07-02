@@ -93,13 +93,34 @@ async function generateWithRetry(ctx: {
   progressionLine: string
 }): Promise<CodingProblem | null> {
   let retryNote = ''
+  // A parsed-but-near-duplicate first attempt. If the retry then fails (no
+  // JSON, or the LLM call errors), a duplicate in hand beats no problem —
+  // return it instead of null, honoring "never block problem delivery"
+  // (Codex P2 on #486).
+  let firstCandidate: CodingProblem | null = null
   for (let attempt = 0; attempt < 2; attempt++) {
-    const problem = await generateOnce(ctx, retryNote)
-    if (!problem) return null
+    let problem: CodingProblem | null = null
+    try {
+      problem = await generateOnce(ctx, retryNote)
+    } catch (err) {
+      if (firstCandidate) {
+        aiLogger.warn({ err, title: firstCandidate.title, domain: ctx.domain }, 'retry failed — delivering near-duplicate first candidate')
+        return firstCandidate
+      }
+      throw err
+    }
+    if (!problem) {
+      if (firstCandidate) {
+        aiLogger.warn({ title: firstCandidate.title, domain: ctx.domain }, 'retry unparseable — delivering near-duplicate first candidate')
+        return firstCandidate
+      }
+      return null
+    }
 
     const collision = findNearDuplicate({ title: problem.title, tags: problem.tags }, ctx.servedTitles)
     if (!collision) return problem
     if (attempt === 0) {
+      firstCandidate = problem
       retryNote = `\nIMPORTANT: your previous attempt produced "${problem.title}", which is too similar to "${collision.title}" — a problem this candidate has already seen. Use a COMPLETELY DIFFERENT scenario and data shape.\n`
       continue
     }

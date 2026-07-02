@@ -94,10 +94,17 @@ English only.`
       // and logged — never block problem delivery.
       let retryNote = ''
       let problem: DesignProblem | null = null
+      // A parsed-but-near-duplicate first attempt. If the retry then fails
+      // (no JSON, malformed JSON, or the LLM call errors), a duplicate in
+      // hand beats no problem — deliver it instead of falling back to the
+      // static path (Codex P2 on #486).
+      let firstCandidate: DesignProblem | null = null
       for (let attempt = 0; attempt < 2; attempt++) {
-        const result = await completion({
-          taskSlot: 'interview.coding-problem-gen',
-          system: `You are an expert system-design interview problem designer. Generate ONE realistic, open-ended design problem the candidate can drive (requirements -> architecture -> deep-dive -> scaling -> tradeoffs).
+        let parsed: Record<string, unknown>
+        try {
+          const result = await completion({
+            taskSlot: 'interview.coding-problem-gen',
+            system: `You are an expert system-design interview problem designer. Generate ONE realistic, open-ended design problem the candidate can drive (requirements -> architecture -> deep-dive -> scaling -> tradeoffs).
 
 ${DATA_BOUNDARY_RULE}
 
@@ -111,13 +118,25 @@ ${JSON_OUTPUT_RULE}
   "hints": ["hint 1", "hint 2"],
   "tags": ["relevant", "tags"]
 }`,
-          messages: [{ role: 'user', content: buildUserContent(retryNote) }],
-        })
+            messages: [{ role: 'user', content: buildUserContent(retryNote) }],
+          })
 
-        const text = result.text || '{}'
-        const jsonMatch = text.match(/\{[\s\S]*\}/)
-        if (!jsonMatch) return NextResponse.json({ problem: null })
-        const parsed = JSON.parse(jsonMatch[0])
+          const text = result.text || '{}'
+          const jsonMatch = text.match(/\{[\s\S]*\}/)
+          if (!jsonMatch) throw new Error('no JSON in completion output')
+          parsed = JSON.parse(jsonMatch[0])
+        } catch (err) {
+          if (firstCandidate) {
+            aiLogger.warn(
+              { err, title: firstCandidate.title, domain: body.domain },
+              'design retry failed — delivering near-duplicate first candidate'
+            )
+            problem = firstCandidate
+            break
+          }
+          // First attempt failed — rethrow to the outer catch (logs + null).
+          throw err
+        }
 
         const candidate: DesignProblem = {
           // Timestamp the fallback id so repeated generations for the same role
@@ -137,6 +156,7 @@ ${JSON_OUTPUT_RULE}
 
         const collision = findNearDuplicate({ title: candidate.title, tags: candidate.tags }, servedTitles)
         if (collision && attempt === 0) {
+          firstCandidate = candidate
           retryNote = `\nIMPORTANT: your previous attempt produced "${candidate.title}", which is too similar to "${collision.title}" — a problem this candidate has already seen. Use a COMPLETELY DIFFERENT scenario.\n`
           continue
         }

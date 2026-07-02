@@ -121,6 +121,25 @@ describe('generateCodingProblem near-duplicate retry', () => {
     await generateCodingProblem('backend', '3-6', [], undefined, 'medium', 15, { avoid })
     expect(mocks.completion).toHaveBeenCalledTimes(1)
   })
+
+  it('delivers the near-duplicate first candidate when the retry is unparseable (Codex P2 on #486)', async () => {
+    mocks.completion
+      .mockResolvedValueOnce(llmProblem('URL Shortener Service'))
+      .mockResolvedValueOnce({ text: 'sorry, no json here' })
+
+    const problem = await generateCodingProblem('backend', '3-6', [], undefined, 'medium', 15, { avoid })
+    expect(problem!.title).toBe('URL Shortener Service')
+    expect(mocks.warn).toHaveBeenCalled()
+  })
+
+  it('delivers the first candidate when the retry call throws', async () => {
+    mocks.completion
+      .mockResolvedValueOnce(llmProblem('URL Shortener Service'))
+      .mockRejectedValueOnce(new Error('LLM down'))
+
+    const problem = await generateCodingProblem('backend', '3-6', [], undefined, 'medium', 15, { avoid })
+    expect(problem!.title).toBe('URL Shortener Service')
+  })
 })
 
 describe('generateCodingProblem failure paths', () => {
