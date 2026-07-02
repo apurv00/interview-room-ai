@@ -14,6 +14,13 @@ interface QuestionRetrievalInput {
   difficulty?: string
   excludeTopics?: string[]
   limit?: number
+  /**
+   * Set false for READ-ONLY retrieval (e.g. style exemplars for problem
+   * generation). The default increments usageCount, which feeds the
+   * prefer-less-used sort — reads that don't actually SERVE the question to
+   * a candidate must not bias which questions the real RAG consumer picks.
+   */
+  trackUsage?: boolean
 }
 
 export async function retrieveQuestions(
@@ -55,8 +62,9 @@ export async function retrieveQuestions(
 
     const questions = await query
 
-    // Increment usage counts (fire and forget)
-    if (questions.length > 0) {
+    // Increment usage counts (fire and forget) — skipped for read-only
+    // retrieval so exemplar reads don't bias the prefer-less-used ordering.
+    if (input.trackUsage !== false && questions.length > 0) {
       const ids = questions.map(q => q._id)
       QuestionBank.updateMany(
         { _id: { $in: ids } },
