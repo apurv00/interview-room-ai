@@ -183,6 +183,14 @@ describe('resumeAIService', () => {
       mockTextResponse('not json')
       await expect(checkATS({ resumeText: 'x'.repeat(200) })).rejects.toThrow(/Failed to parse ATS/)
     })
+
+    it('slices the resume at 24k chars (was 5k — cut multi-page resumes mid-experience)', async () => {
+      mockTextResponse('{"score": 70}')
+      await checkATS({ resumeText: 'a'.repeat(30_000) })
+      const content = mockCompletion.mock.calls[0][0].messages[0].content as string
+      const resumeBlock = content.match(/<resume>\n([\s\S]*?)\n<\/resume>/)
+      expect(resumeBlock![1]).toHaveLength(24_000)
+    })
   })
 
   describe('tailorResume', () => {
@@ -215,6 +223,8 @@ describe('resumeAIService', () => {
         matchScore: 0,
         missingKeywords: [],
         addedKeywords: [],
+        inputTruncated: false,
+        outputTruncated: false,
       })
     })
 
@@ -223,6 +233,40 @@ describe('resumeAIService', () => {
       await expect(
         tailorResume({ resumeText: 'r', jobDescription: 'j' })
       ).rejects.toThrow(/Failed to parse tailoring/)
+    })
+
+    it('retries once with a larger budget when the completion is truncated', async () => {
+      mockCompletion.mockResolvedValueOnce({
+        text: '{"tailoredResume": "cut off mid', truncated: true,
+        model: 'm', provider: 'anthropic', inputTokens: 1, outputTokens: 1, usedFallback: false,
+      })
+      mockTextResponse(JSON.stringify({ tailoredResume: 'FULL REWRITE', matchScore: 80 }))
+      const result = await tailorResume({ resumeText: 'r', jobDescription: 'j' })
+      expect(mockCompletion).toHaveBeenCalledTimes(2)
+      expect(mockCompletion.mock.calls[1][0]).toMatchObject({ maxTokens: 10_000 })
+      expect(result.tailoredResume).toBe('FULL REWRITE')
+      expect(result.outputTruncated).toBe(false)
+    })
+
+    it('flags outputTruncated when even the retry comes back truncated', async () => {
+      const truncatedButParseable = {
+        text: JSON.stringify({ tailoredResume: 'PARTIAL' }), truncated: true,
+        model: 'm', provider: 'anthropic', inputTokens: 1, outputTokens: 1, usedFallback: false,
+      }
+      mockCompletion.mockResolvedValueOnce(truncatedButParseable)
+      mockCompletion.mockResolvedValueOnce(truncatedButParseable)
+      const result = await tailorResume({ resumeText: 'r', jobDescription: 'j' })
+      expect(mockCompletion).toHaveBeenCalledTimes(2)
+      expect(result.outputTruncated).toBe(true)
+    })
+
+    it('flags inputTruncated and slices the resume at 15k chars', async () => {
+      mockTextResponse('{"tailoredResume": "ok"}')
+      const result = await tailorResume({ resumeText: 'a'.repeat(20_000), jobDescription: 'j' })
+      expect(result.inputTruncated).toBe(true)
+      const content = mockCompletion.mock.calls[0][0].messages[0].content as string
+      const resumeBlock = content.match(/<resume>\n([\s\S]*?)\n<\/resume>/)
+      expect(resumeBlock![1]).toHaveLength(15_000)
     })
   })
 

@@ -49,13 +49,23 @@ export async function POST(req: Request) {
   const body = await req.json()
   const parsed = ResumeSchema.safeParse(body)
   if (!parsed.success) {
-    return NextResponse.json({ error: 'Invalid data' }, { status: 400 })
+    // Size caps clamp inside the schema now, so reaching here means a
+    // STRUCTURAL problem — tell the user which field, not just "Invalid data"
+    // (the bare message left resumes unsavable with no way to find out why).
+    const issues = parsed.error.issues.slice(0, 10).map((i) => ({
+      path: i.path.join('.'),
+      message: i.message,
+    }))
+    return NextResponse.json({ error: 'Some fields are invalid', issues }, { status: 400 })
   }
 
   try {
     const result = await saveResume(session.user.id, parsed.data)
     if ('error' in result && result.code === 'RESUME_LIMIT') {
       return NextResponse.json({ error: result.error, code: result.code }, { status: 403 })
+    }
+    if ('error' in result && result.code === 'NOT_FOUND') {
+      return NextResponse.json({ error: result.error, code: result.code }, { status: 404 })
     }
     return NextResponse.json({ id: result.id }, { status: 'created' in result && result.created ? 201 : 200 })
   } catch {

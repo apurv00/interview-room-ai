@@ -74,7 +74,9 @@ export const TASK_SLOT_DEFAULTS: Record<
   'resume.enhance-bullets':         { model: 'claude-sonnet-4-6', maxTokens: 1000, provider: 'anthropic' },
   'resume.generate-full':           { model: 'claude-sonnet-4-6', maxTokens: 3000, provider: 'anthropic' },
   'resume.ats-check':               { model: 'claude-sonnet-4-6', maxTokens: 2000, provider: 'anthropic' },
-  'resume.tailor':                   { model: 'claude-sonnet-4-6', maxTokens: 3000, provider: 'anthropic' },
+  // 8000: the tailor output contains the FULL rewritten resume plus the
+  // change list — 3000 truncated the JSON for normal 2-page resumes.
+  'resume.tailor':                   { model: 'claude-sonnet-4-6', maxTokens: 8000, provider: 'anthropic' },
   // 6000: a dense multi-page resume's structured JSON exceeded the old 3000
   // and the truncated output failed JSON.parse — losing the whole import.
   'resume.parse':                    { model: 'claude-sonnet-4-6', maxTokens: 6000, provider: 'anthropic' },

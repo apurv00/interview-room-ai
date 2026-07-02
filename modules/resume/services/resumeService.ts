@@ -1,6 +1,7 @@
 import { connectDB } from '@shared/db/connection'
 import { User } from '@shared/db/models/User'
 import type { ResumeData } from '../validators/resume'
+import { hasStructuredResumeContent } from '../lib/structuredContent'
 
 const MAX_RESUMES = 3
 
@@ -44,14 +45,18 @@ export async function saveResume(userId: string, data: ResumeData) {
   await connectDB()
   const { id, name, template, targetRole, targetCompany, atsScore,
     contactInfo, summary, experience, education, skills,
-    projects, certifications, customSections, fullText } = data
+    projects, certifications, customSections, sectionOrder, styling, fullText } = data
 
-  // Build fullText from structured data for ATS/tailor operations
-  const computedFullText = fullText || buildFullText(data)
+  // fullText feeds ATS check, tailor, and the interview config. It must be
+  // REGENERATED whenever structured content exists — the posted value is the
+  // ORIGINAL upload/tailor text, frozen at import time, and goes stale the
+  // moment the user edits a bullet. Keep the posted text only when there is
+  // no structure to derive from (upload/tailor saves that failed structuring).
+  const computedFullText = hasStructuredResumeContent(data) ? buildFullText(data) : (fullText || '')
 
   if (id) {
     // Update existing resume
-    await User.updateOne(
+    const res = await User.updateOne(
       { _id: userId, 'savedResumes.id': id },
       {
         $set: {
@@ -68,11 +73,21 @@ export async function saveResume(userId: string, data: ResumeData) {
           'savedResumes.$.projects': projects || [],
           'savedResumes.$.certifications': certifications || [],
           'savedResumes.$.customSections': customSections || [],
+          'savedResumes.$.sectionOrder': sectionOrder || [],
+          'savedResumes.$.styling': styling || {},
           'savedResumes.$.fullText': computedFullText,
           'savedResumes.$.updatedAt': new Date().toISOString(),
         },
       }
     )
+    // No matching subdocument (resume deleted in another tab / stale id):
+    // reporting success here showed a phantom "Saved!" while nothing persisted.
+    if (res.matchedCount === 0) {
+      return {
+        error: 'This resume no longer exists — it may have been deleted. Save your work as a new resume instead.',
+        code: 'NOT_FOUND' as const,
+      }
+    }
     return { id }
   }
 
@@ -103,6 +118,8 @@ export async function saveResume(userId: string, data: ResumeData) {
     projects: projects || [],
     certifications: certifications || [],
     customSections: customSections || [],
+    sectionOrder: sectionOrder || [],
+    styling: styling || {},
     fullText: computedFullText,
     createdAt: now,
     updatedAt: now,

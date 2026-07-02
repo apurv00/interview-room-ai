@@ -32,9 +32,12 @@ interface Props {
    *  and edits are auto-persisted to localStorage via onAnonymousChange. */
   isAnonymous?: boolean
   onAnonymousChange?: (data: ResumeData) => void
+  /** localStorage key for the SIGNED-IN unsaved-work draft (scoped to
+   *  user + resume by the caller). Absent → no authed draft persistence. */
+  draftKey?: string
 }
 
-export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymous = false, onAnonymousChange }: Props) {
+export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymous = false, onAnonymousChange, draftKey }: Props) {
   const { requireAuth } = useAuthGate()
   const {
     resume, isDirty, update, setContactInfo,
@@ -65,6 +68,51 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
     onAnonymousChange(resume)
   }, [resume, isAnonymous, onAnonymousChange])
 
+  // Signed-in users had ZERO unsaved-work protection — the anonymous flow was
+  // ironically safer. Two nets: (1) a beforeunload prompt while dirty;
+  // (2) a debounced localStorage draft (keyed by user+resume via draftKey)
+  // with a restore banner on the next load. The draft clears on save.
+  useEffect(() => {
+    if (isAnonymous || !isDirty) return
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [isDirty, isAnonymous])
+
+  const [restorableDraft, setRestorableDraft] = useState<{ data: Partial<ResumeData>; savedAt: string } | null>(null)
+
+  useEffect(() => {
+    if (isAnonymous || !draftKey) return
+    try {
+      const raw = localStorage.getItem(draftKey)
+      if (raw) {
+        const parsed = JSON.parse(raw) as { data: Partial<ResumeData>; savedAt: string }
+        if (parsed?.data && parsed?.savedAt) setRestorableDraft(parsed)
+      }
+    } catch { /* corrupt draft — ignore */ }
+    // Read once per key; writes below keep it current.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey, isAnonymous])
+
+  useEffect(() => {
+    if (isAnonymous || !draftKey || !isDirty) return
+    const t = setTimeout(() => {
+      try {
+        localStorage.setItem(draftKey, JSON.stringify({ data: resume, savedAt: new Date().toISOString() }))
+      } catch { /* quota — draft is best-effort */ }
+    }, 800)
+    return () => clearTimeout(t)
+  }, [resume, isDirty, isAnonymous, draftKey])
+
+  function clearDraft() {
+    if (!draftKey) return
+    try { localStorage.removeItem(draftKey) } catch { /* ignore */ }
+    setRestorableDraft(null)
+  }
+
   async function handleSave() {
     setSaving(true)
     setError('')
@@ -74,6 +122,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
     } else {
       setSaved(true)
       markClean()
+      clearDraft()
       setTimeout(() => setSaved(false), 3000)
     }
     setSaving(false)
@@ -277,7 +326,11 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
   }
 
   const honorsSectionOrder = templateHonorsSectionOrder(resume.template || 'professional')
-  const sectionIds = resume.sectionOrder || getTemplateSectionOrder(resume.template || 'professional')
+  // ?.length, not ||: saveResume persists `sectionOrder: []` for resumes never
+  // reordered, and [] is truthy — `[] || default` rendered ZERO section editors.
+  const sectionIds = resume.sectionOrder?.length
+    ? resume.sectionOrder
+    : getTemplateSectionOrder(resume.template || 'professional')
 
   function renderSectionEditor(sectionId: string) {
     return (
@@ -416,6 +469,28 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
           {notice && (
             <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 text-xs text-emerald-700">
               {notice}
+            </div>
+          )}
+
+          {restorableDraft && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 text-xs text-amber-700 flex items-center justify-between gap-3">
+              <span>
+                You have unsaved edits from {new Date(restorableDraft.savedAt).toLocaleString()}. Restore them?
+              </span>
+              <span className="flex gap-2 shrink-0">
+                <button
+                  onClick={() => { loadResume(restorableDraft.data); setRestorableDraft(null) }}
+                  className="px-2.5 py-1 bg-amber-600/10 border border-amber-500/30 rounded-lg font-medium hover:bg-amber-600/20 transition-colors"
+                >
+                  Restore
+                </button>
+                <button
+                  onClick={clearDraft}
+                  className="px-2.5 py-1 border border-slate-300 rounded-lg text-slate-500 hover:bg-slate-100 transition-colors"
+                >
+                  Discard
+                </button>
+              </span>
             </div>
           )}
 

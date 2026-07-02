@@ -32,7 +32,9 @@ import {
 describe('resumeService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockUpdateOne.mockResolvedValue({ acknowledged: true })
+    // matchedCount: 1 — saveResume treats matchedCount 0 as "resume deleted
+    // elsewhere" and returns NOT_FOUND instead of a phantom success.
+    mockUpdateOne.mockResolvedValue({ acknowledged: true, matchedCount: 1 })
   })
 
   describe('listResumes', () => {
@@ -148,7 +150,7 @@ describe('resumeService', () => {
       expect(fullText).toContain('Languages: TypeScript, Python')
     })
 
-    it('uses provided fullText when supplied (no rebuild)', async () => {
+    it('keeps provided fullText only when there is no structured content', async () => {
       await saveResume('user-1', {
         id: 'r1',
         name: 'Resume',
@@ -156,6 +158,75 @@ describe('resumeService', () => {
       })
       const [, update] = mockUpdateOne.mock.calls[0]
       expect(update.$set['savedResumes.$.fullText']).toBe('PRE-BUILT TEXT')
+    })
+
+    it('regenerates fullText for a projects-only resume (Codex P2: all buildFullText sections count as structure)', async () => {
+      await saveResume('user-1', {
+        id: 'r1',
+        name: 'Resume',
+        projects: [{ id: 'p1', name: 'Sidecar', description: 'A caching proxy' }],
+        fullText: 'STALE UPLOAD TEXT',
+      })
+      const [, update] = mockUpdateOne.mock.calls[0]
+      const fullText = update.$set['savedResumes.$.fullText'] as string
+      expect(fullText).toContain('PROJECTS')
+      expect(fullText).toContain('Sidecar: A caching proxy')
+      expect(fullText).not.toContain('STALE UPLOAD TEXT')
+    })
+
+    it('regenerates fullText when only a contact email exists (not just fullName)', async () => {
+      await saveResume('user-1', {
+        id: 'r1',
+        name: 'Resume',
+        contactInfo: { fullName: '', email: 'only@email.com' },
+        fullText: 'STALE UPLOAD TEXT',
+      })
+      const [, update] = mockUpdateOne.mock.calls[0]
+      expect(update.$set['savedResumes.$.fullText']).toContain('only@email.com')
+    })
+
+    it('regenerates fullText from structured content even when a stale fullText is posted', async () => {
+      await saveResume('user-1', {
+        id: 'r1',
+        name: 'Resume',
+        summary: 'Edited summary after import',
+        fullText: 'STALE UPLOAD TEXT',
+      })
+      const [, update] = mockUpdateOne.mock.calls[0]
+      const fullText = update.$set['savedResumes.$.fullText'] as string
+      expect(fullText).toContain('Edited summary after import')
+      expect(fullText).not.toContain('STALE UPLOAD TEXT')
+    })
+
+    it('persists sectionOrder and styling on update', async () => {
+      await saveResume('user-1', {
+        id: 'r1',
+        name: 'Resume',
+        sectionOrder: ['skills', 'experience', 'education'],
+        styling: { fontFamily: 'Georgia', headingSize: 20 },
+      })
+      const [, update] = mockUpdateOne.mock.calls[0]
+      expect(update.$set['savedResumes.$.sectionOrder']).toEqual(['skills', 'experience', 'education'])
+      expect(update.$set['savedResumes.$.styling']).toEqual({ fontFamily: 'Georgia', headingSize: 20 })
+    })
+
+    it('persists sectionOrder and styling on insert', async () => {
+      mockFindById.mockResolvedValue({ savedResumes: [] })
+      await saveResume('user-1', {
+        name: 'Fresh',
+        sectionOrder: ['education', 'skills'],
+        styling: { bodySize: 11 },
+      })
+      const [, update] = mockUpdateOne.mock.calls[0]
+      expect(update.$push.savedResumes.sectionOrder).toEqual(['education', 'skills'])
+      expect(update.$push.savedResumes.styling).toEqual({ bodySize: 11 })
+    })
+
+    it('returns NOT_FOUND when the target resume no longer exists (no phantom save)', async () => {
+      mockUpdateOne.mockResolvedValue({ acknowledged: true, matchedCount: 0 })
+      const result = await saveResume('user-1', { id: 'gone', name: 'Ghost' })
+      expect(result).toMatchObject({ code: 'NOT_FOUND' })
+      expect((result as { error: string }).error).toMatch(/no longer exists/)
     })
 
     it('creates a new resume when no id and under limit', async () => {
