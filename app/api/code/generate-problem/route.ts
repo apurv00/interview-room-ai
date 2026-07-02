@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { generateCodingProblem } from '@interview/services/core/codingProblemGenerator'
-import { getServedProblemIds, recordServedProblem, unionMostRecentFirst } from '@interview/services/core/servedProblemLedger'
+import { getServedProblemSummaries, countServedProblems, recordServedProblem, unionAvoidEntries } from '@interview/services/core/servedProblemLedger'
 import { aiLogger } from '@shared/logger'
 import { z } from 'zod'
 
@@ -65,18 +65,24 @@ export const POST = composeApiRoute<Body>({
     try {
       // Server-authoritative exclusion: union the ServedProblem ledger with the
       // client-sent list. Closes the fail-open hole where a failed client
-      // /api/code/history fetch sent [] and dropped every exclusion. Ledger ids
-      // come first so the generator's prompt cap keeps the freshest ones.
-      const ledgerIds = await getServedProblemIds(user.id, 'coding')
-      const avoidIds = unionMostRecentFirst(ledgerIds, body.solvedProblemIds)
+      // /api/code/history fetch sent [] and dropped every exclusion. Ledger
+      // entries come first (and carry titles — the generator renders them as a
+      // titled avoid-list and runs its near-duplicate check against them);
+      // the served count drives the progressive-difficulty nudge.
+      const [served, priorCountInDomain] = await Promise.all([
+        getServedProblemSummaries(user.id, 'coding'),
+        countServedProblems(user.id, 'coding', body.domain),
+      ])
+      const avoid = unionAvoidEntries(served, body.solvedProblemIds)
 
       const problem = await generateCodingProblem(
         body.domain,
         body.experience,
-        avoidIds,
+        avoid.map((a) => a.id),
         body.resumeText,
         body.difficulty,
         body.budgetMinutes,
+        { avoid, priorCountInDomain },
       )
       if (problem) {
         // Record before responding — a served AI problem can never go
