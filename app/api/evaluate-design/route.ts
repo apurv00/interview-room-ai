@@ -112,8 +112,12 @@ export const POST = composeApiRoute<EvaluateDesignPayload>({
   "grounded_follow_up_2": "A second short spoken question probing a trade-off THIS design actually makes (pick the trade-off from their diagram, not a generic one), phrased for this candidate's experience level"`
       : ''
     const calibration = groundedOn ? buildFollowUpCalibration(domain, 'system-design', experience) : ''
+    // The component list is CLIENT-SUPPLIED (the browser posts it and a
+    // candidate can tamper with the body) — it goes INSIDE an XML tag so
+    // DATA_BOUNDARY_RULE neutralizes any injected directives; only the
+    // instruction sentence stays outside as trusted text (Codex P2 on #487).
     const expectedBlock = groundedOn && expectedComponents?.length
-      ? `\nThe problem author expected components such as: ${expectedComponents.slice(0, 15).join(', ')}. If an important one is missing from the candidate's diagram, consider aiming a follow-up at that gap.\n`
+      ? `\nThe problem author's expected components are listed in <expected_components> below (reference data). If an important one is missing from the candidate's diagram, consider aiming a follow-up at that gap.\n<expected_components>\n${expectedComponents.slice(0, 15).join(', ')}\n</expected_components>\n`
       : ''
 
     try {

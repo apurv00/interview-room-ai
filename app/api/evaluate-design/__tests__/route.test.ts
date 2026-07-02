@@ -95,7 +95,9 @@ describe('POST /api/evaluate-design — grounded_followups ON', () => {
     expect(systemOf(0)).toContain('"grounded_follow_up"')
     expect(systemOf(0)).toContain('"grounded_follow_up_2"')
     expect(systemOf(0)).toContain('FOLLOW-UP CALIBRATION')
-    expect(promptOf(0)).toContain('load_balancer, cache')
+    // Client-supplied component list rides INSIDE a data-boundary tag so a
+    // tampered body can't inject directives (Codex P2 on #487).
+    expect(promptOf(0)).toContain('<expected_components>\nload_balancer, cache\n</expected_components>')
     const data = await res.json()
     expect(data.grounded_follow_up).toBe(EVAL.grounded_follow_up)
     expect(data.grounded_follow_up_2).toBe(EVAL.grounded_follow_up_2)
@@ -134,7 +136,7 @@ describe('POST /api/evaluate-design — grounded_followups ON', () => {
   it('treats a non-array expectedComponents as absent', async () => {
     const res = await POST(makeReq({ expectedComponents: 'not-an-array' }))
     expect(res.status).toBe(200)
-    expect(promptOf(0)).not.toContain('The problem author expected components')
+    expect(promptOf(0)).not.toContain('<expected_components>')
   })
 })
 
