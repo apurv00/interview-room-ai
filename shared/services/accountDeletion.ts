@@ -47,6 +47,7 @@ import {
   DailyChallengeAttempt,
   DrillAttempt,
   UserCompetencyState,
+  ServedProblem,
 } from '@shared/db/models'
 
 // ─── Per-session delete ───────────────────────────────────────────────────────
@@ -199,6 +200,7 @@ export async function deleteUserAccount(
     ['DailyChallengeAttempt', DailyChallengeAttempt.deleteMany({ userId: userObjectId })],
     ['DrillAttempt', DrillAttempt.deleteMany({ userId: userObjectId })],
     ['UserCompetencyState', UserCompetencyState.deleteMany({ userId: userObjectId })],
+    ['ServedProblem', ServedProblem.deleteMany({ userId: userObjectId })],
   ]
 
   for (const [name, op] of cascadeOps) {

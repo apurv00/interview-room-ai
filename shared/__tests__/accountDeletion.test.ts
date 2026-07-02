@@ -66,6 +66,7 @@ vi.mock('@shared/db/models', () => {
     DailyChallengeAttempt: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     DrillAttempt: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     UserCompetencyState: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
+    ServedProblem: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 2 }) },
   }
   return actual
 })
@@ -185,6 +186,16 @@ describe('deleteUserAccount – R2 key coverage', () => {
     expect(mockDeleteFromR2).not.toHaveBeenCalled()
     expect(result.r2KeysDeleted).toBe(0)
     expect(result.collectionsCleared['User']).toBe(1)
+  })
+
+  it('cascades the ServedProblem ledger (Codex P1 on #485 — GDPR promise covers every user-keyed collection)', async () => {
+    mockSessionFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+
+    const result = await deleteUserAccount('507f1f77bcf86cd799439011', 'user@example.com')
+
+    // The ledger stores userId, interview metadata, and (for AI picks) the
+    // full problem body — it must not survive DELETE /api/account.
+    expect(result.collectionsCleared['ServedProblem']).toBe(2)
   })
 
   it('projection requested by InterviewSession.find includes audio and screen keys', async () => {
