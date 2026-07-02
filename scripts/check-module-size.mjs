@@ -58,7 +58,15 @@ const BUDGETS = {
   // well under budget (~10.6k/20k). +12 headroom covers near-term config-only
   // variants; a bump past ~100 should move themes to a subdir, not re-bump.
   // See docs/adr/0008-resume-module-budget-bump-template-families.md.
-  'modules/resume':    { maxLOC: 20_000, maxFiles: 100 },
+  // Bumped maxFiles 100 → 104 on 2026-07-02 (PRs #492/#491): adds TWO counted
+  // files, neither a template variant (ADR 0008's re-bump caveat targeted
+  // theme sprawl): hooks/useDebouncedValue.ts (preview re-measure debounce,
+  // unit-tested standalone) and lib/structuredContent.ts (client-safe
+  // structured-content predicate shared by saveResume and the builder page —
+  // extracted precisely so the client page doesn't import the mongoose-backed
+  // service). LOC ~12.1k/20k. +2 headroom keeps the tripwire tight.
+  // See docs/adr/0014-resume-module-budget-bump-cross-cutting-helpers.md.
+  'modules/resume':    { maxLOC: 20_000, maxFiles: 104 },
   'modules/b2b':       { maxLOC: 5_000,  maxFiles: 20 },
   'modules/cms':       { maxLOC: 5_000,  maxFiles: 20 },
   // Bumped maxFiles 130 → 132 on 2026-05-23 (PR #402): added
