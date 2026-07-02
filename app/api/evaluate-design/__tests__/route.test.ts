@@ -94,7 +94,7 @@ describe('POST /api/evaluate-design — grounded_followups ON', () => {
     const res = await POST(makeReq())
     expect(systemOf(0)).toContain('"grounded_follow_up"')
     expect(systemOf(0)).toContain('"grounded_follow_up_2"')
-    expect(promptOf(0)).toContain('<followup_calibration>')
+    expect(systemOf(0)).toContain('FOLLOW-UP CALIBRATION')
     expect(promptOf(0)).toContain('load_balancer, cache')
     const data = await res.json()
     expect(data.grounded_follow_up).toBe(EVAL.grounded_follow_up)
@@ -116,6 +116,26 @@ describe('POST /api/evaluate-design — grounded_followups ON', () => {
     const res = await POST(makeReq({ domain: 'x'.repeat(100) }))
     expect(res.status).toBe(200)
   })
+
+  it('clamps oversized/malformed expectedComponents instead of 400ing the eval (Codex P2 on #487)', async () => {
+    // AI-generated problems copy this array through uncapped; the client
+    // posts it unconditionally — 40 items, one over-long label, one non-string.
+    const oversized = [
+      ...Array.from({ length: 40 }, (_, i) => `component_${i}`),
+      'y'.repeat(300),
+      42 as unknown as string,
+    ]
+    const res = await POST(makeReq({ expectedComponents: oversized }))
+    expect(res.status).toBe(200)
+    // Clamped to 30 items — prompt renders its first 15 as usual.
+    expect(promptOf(0)).toContain('component_0')
+  })
+
+  it('treats a non-array expectedComponents as absent', async () => {
+    const res = await POST(makeReq({ expectedComponents: 'not-an-array' }))
+    expect(res.status).toBe(200)
+    expect(promptOf(0)).not.toContain('The problem author expected components')
+  })
 })
 
 describe('POST /api/evaluate-design — grounded_followups OFF', () => {
@@ -124,7 +144,7 @@ describe('POST /api/evaluate-design — grounded_followups OFF', () => {
   it('keeps the prompt byte-identical to pre-flag behavior', async () => {
     await POST(makeReq())
     expect(systemOf(0)).not.toContain('grounded_follow_up')
-    expect(promptOf(0)).not.toContain('<followup_calibration>')
+    expect(systemOf(0)).not.toContain('FOLLOW-UP CALIBRATION')
     expect(promptOf(0)).not.toContain('load_balancer, cache')
   })
 

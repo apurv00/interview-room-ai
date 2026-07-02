@@ -41,7 +41,15 @@ const EvaluateDesignSchema = z.object({
   // submitted design from scoring (Codex P2 on #487).
   domain: z.string().max(100).optional(),
   experience: z.string().max(32).optional(),
-  expectedComponents: z.array(z.string().max(100)).max(30).optional(),
+  // Tolerant by construction: AI-generated problems copy this array through
+  // uncapped and the client posts it unconditionally — a strict schema here
+  // would 400 the WHOLE eval over an optional calibration input (Codex P2 on
+  // #487). Clamp instead of reject; the prompt slices further anyway.
+  expectedComponents: z.unknown().optional().transform((v) =>
+    Array.isArray(v)
+      ? v.filter((s): s is string => typeof s === 'string').slice(0, 30).map((s) => s.slice(0, 100))
+      : undefined
+  ),
 })
 
 type EvaluateDesignPayload = z.infer<typeof EvaluateDesignSchema>
@@ -128,7 +136,8 @@ ${JSON_OUTPUT_RULE}
   "missing_components": ["list of important components they should consider adding"],
   "follow_up_question": "A probing question about their design choices",
   "flags": ["specific issues found, e.g. 'single point of failure', 'no caching layer'"]${groundedContract}
-}`,
+}
+${calibration}`,
         messages: [{
           role: 'user',
           content: `<problem>
@@ -142,7 +151,7 @@ ${requirements.map((r) => `- ${r}`).join('\n')}
 <candidate_design>
 ${designText}
 </candidate_design>
-${calibration}${expectedBlock}
+${expectedBlock}
 Evaluate this system design.`,
         }],
       })

@@ -69,10 +69,11 @@ ${JSON_OUTPUT_RULE}
   "feedback": "2-3 sentences of specific feedback",
   "complexity": "O(n) time, O(n) space" or similar,
   "flags": ["specific issues found, e.g. 'missing null check', 'inefficient nested loop'"]${groundedContract}
-}`,
+}
+${calibration}`,
         messages: [{
           role: 'user',
-          content: `<problem>\nTitle: ${problemTitle}\n${problemDescription}\n</problem>\n\n<code language="${language}">\n${code}\n</code>\n${calibration}\nEvaluate this ${language} solution.`,
+          content: `<problem>\nTitle: ${problemTitle}\n${problemDescription}\n</problem>\n\n<code language="${language}">\n${code}\n</code>\n\nEvaluate this ${language} solution.`,
         }],
       })
 

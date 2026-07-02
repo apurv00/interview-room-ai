@@ -43,10 +43,14 @@ export function buildFollowUpCalibration(
 
   if (probeLines.length === 0 && !neverAsk) return ''
 
+  // Plain text, NOT XML-wrapped: the eval prompts carry DATA_BOUNDARY_RULE,
+  // which declares XML-tagged content reference-data-only and its embedded
+  // directives void — wrapping these (trusted, statically-authored) guardrails
+  // in tags would instruct the model to ignore them (Codex P2 on #487). This
+  // block belongs in the SYSTEM prompt, not the user message.
   return `
-<followup_calibration>
+FOLLOW-UP CALIBRATION (trusted interviewer guidance for the grounded follow-up):
 Probing angles appropriate for a ${experience}-years ${domain} candidate in this round:
 ${probeLines.join('\n')}${neverAsk}
-</followup_calibration>
 `
 }

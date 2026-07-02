@@ -86,7 +86,7 @@ describe('POST /api/evaluate-code — grounded_followups ON', () => {
   it('requests grounded_follow_up with band calibration and passes it through', async () => {
     const res = await POST(makeReq())
     expect(systemOf(0)).toContain('"grounded_follow_up"')
-    expect(promptOf(0)).toContain('<followup_calibration>')
+    expect(systemOf(0)).toContain('FOLLOW-UP CALIBRATION')
     const data = await res.json()
     expect(data.grounded_follow_up).toBe(EVAL.grounded_follow_up)
   })
@@ -100,7 +100,7 @@ describe('POST /api/evaluate-code — grounded_followups ON', () => {
   it('omits calibration when domain/experience are absent but still requests the field', async () => {
     await POST(makeReq({ domain: undefined, experience: undefined }))
     expect(systemOf(0)).toContain('"grounded_follow_up"')
-    expect(promptOf(0)).not.toContain('<followup_calibration>')
+    expect(systemOf(0)).not.toContain('FOLLOW-UP CALIBRATION')
   })
 
   it('accepts a full-length (100-char) CMS domain slug — the optional field must never 400 the eval', async () => {
@@ -115,7 +115,7 @@ describe('POST /api/evaluate-code — grounded_followups OFF', () => {
   it('keeps the prompt byte-identical to pre-flag behavior', async () => {
     await POST(makeReq())
     expect(systemOf(0)).not.toContain('grounded_follow_up')
-    expect(promptOf(0)).not.toContain('<followup_calibration>')
+    expect(systemOf(0)).not.toContain('FOLLOW-UP CALIBRATION')
   })
 
   it('strips the field even if the model volunteers it', async () => {

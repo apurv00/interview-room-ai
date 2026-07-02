@@ -13,7 +13,7 @@ import { buildFollowUpCalibration } from '@interview/flow/probeGuidance'
 describe('buildFollowUpCalibration', () => {
   it('renders probe lines and neverAsk for a registered domain/depth/band', () => {
     const block = buildFollowUpCalibration('backend', 'coding', '3-6')
-    expect(block).toContain('<followup_calibration>')
+    expect(block).toContain('FOLLOW-UP CALIBRATION')
     expect(block).toContain('3-6-years backend candidate')
     // backend-coding 3-6 exploration probes include trade-off/complexity angles
     expect(block).toMatch(/- .+/)
@@ -29,7 +29,7 @@ describe('buildFollowUpCalibration', () => {
   it('falls back to the general template for domains without their own', () => {
     // pm has no coding template; general:coding exists for all three bands.
     const block = buildFollowUpCalibration('pm', 'coding', '3-6')
-    expect(block).toContain('<followup_calibration>')
+    expect(block).toContain('FOLLOW-UP CALIBRATION')
   })
 
   it('returns empty string when domain or experience is missing', () => {
