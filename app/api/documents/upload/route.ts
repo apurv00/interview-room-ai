@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { parseDocument } from '@shared/services/documentParser'
+import { parseDocument, UnsupportedFileTypeError } from '@shared/services/documentParser'
 import { logger } from '@shared/logger'
 import { uploadToR2, documentKey, isR2Configured } from '@shared/storage/r2'
 import { getServerSession } from 'next-auth'
@@ -50,6 +50,19 @@ export async function POST(req: NextRequest) {
 
     const result = await parseDocument(buffer, file.name)
 
+    // Scanned/image-only PDFs "parse" to (near-)empty text. Failing here with
+    // an actionable message beats returning 200 and letting downstream
+    // consumers die with a misleading "Validation failed".
+    if (result.wordCount < 20) {
+      return NextResponse.json(
+        {
+          error: 'No readable text found in this file — it looks like a scanned image or an empty document. Export a text-based PDF or DOCX, or paste the text directly.',
+          code: 'EMPTY_TEXT',
+        },
+        { status: 422 }
+      )
+    }
+
     // Store original file in R2 if configured
     let r2Key: string | undefined
     if (isR2Configured()) {
@@ -71,6 +84,12 @@ export async function POST(req: NextRequest) {
       r2Key,
     })
   } catch (err) {
+    // Surface the actionable unsupported-type message (drag-and-drop bypasses
+    // the client's accept filter, so .doc/.rtf/.odt land here) — everything
+    // else stays generic.
+    if (err instanceof UnsupportedFileTypeError) {
+      return NextResponse.json({ error: err.message, code: 'UNSUPPORTED_TYPE' }, { status: 415 })
+    }
     logger.error({ err }, 'Document upload/parse error')
     return NextResponse.json({ error: 'Failed to parse document' }, { status: 400 })
   }

@@ -22,9 +22,27 @@ export const POST = composeApiRoute({
     try {
       const result = await parseResumeToStructured(body.text)
       if (!result) {
-        return NextResponse.json({ error: 'Failed to parse resume' }, { status: 500 })
+        // Nothing salvageable — a real outcome (garbage text, scanned-PDF
+        // residue), distinct from a server error: 422 with actionable copy.
+        return NextResponse.json(
+          { error: 'We could not extract structured sections from this text. Try a text-based PDF or DOCX export, or fill the sections in manually.' },
+          { status: 422 },
+        )
       }
-      return NextResponse.json(result)
+      // Partial-tolerant contract: `resume` holds whatever sections survived
+      // normalization; `warning` tells the user what did not make it.
+      const warnings: string[] = []
+      if (result.droppedSections.length > 0) {
+        warnings.push(`Could not import: ${result.droppedSections.join(', ')}.`)
+      }
+      if (result.truncated) {
+        warnings.push('The resume was very long — trailing content may be missing.')
+      }
+      return NextResponse.json({
+        resume: result.resume,
+        importedSections: result.importedSections,
+        warning: warnings.length > 0 ? warnings.join(' ') : undefined,
+      })
     } catch {
       return NextResponse.json({ error: 'Failed to parse resume' }, { status: 500 })
     }

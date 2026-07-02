@@ -264,17 +264,22 @@ export async function parseAndCacheResume(
   if (!resumeText || resumeText.trim().length < 20) return null
 
   try {
-    const raw = await parseResumeToStructured(resumeText)
+    // parseResumeToStructured now returns a partial-tolerant envelope; the
+    // structured sections live under `.resume` (already normalized: ids
+    // guaranteed, junk dropped per-item), so the defensive coercions below
+    // are second-line only.
+    const result = await parseResumeToStructured(resumeText)
+    const raw = result?.resume
     if (!raw || typeof raw !== 'object') return null
 
     const normalized: ParsedResume = {
-      contactInfo: raw.contactInfo || undefined,
+      contactInfo: (raw.contactInfo as ParsedResume['contactInfo']) || undefined,
       summary: typeof raw.summary === 'string' ? raw.summary : undefined,
-      experience: Array.isArray(raw.experience) ? raw.experience : [],
-      education: Array.isArray(raw.education) ? raw.education : [],
-      skills: Array.isArray(raw.skills) ? raw.skills : [],
-      projects: Array.isArray(raw.projects) ? raw.projects : [],
-      certifications: Array.isArray(raw.certifications) ? raw.certifications : undefined,
+      experience: Array.isArray(raw.experience) ? (raw.experience as ParsedResume['experience']) : [],
+      education: Array.isArray(raw.education) ? (raw.education as ParsedResume['education']) : [],
+      skills: Array.isArray(raw.skills) ? (raw.skills as ParsedResume['skills']) : [],
+      projects: Array.isArray(raw.projects) ? (raw.projects as ParsedResume['projects']) : [],
+      certifications: Array.isArray(raw.certifications) ? (raw.certifications as ParsedResume['certifications']) : undefined,
     }
 
     return normalized

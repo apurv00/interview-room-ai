@@ -33,9 +33,24 @@ export default function FileDropzone({
         onError?.(`File too large. Maximum size is ${maxSizeMB}MB.`)
         return
       }
+      // The `accept` attribute only filters the file PICKER — drag-and-drop
+      // delivers any file. Enforce the extension list here too (only for
+      // extension-style entries) so a dropped .doc/.rtf gets an immediate,
+      // actionable message instead of a server round-trip.
+      const allowedExts = accept
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter((s) => s.startsWith('.'))
+      if (allowedExts.length > 0) {
+        const ext = `.${(file.name.split('.').pop() || '').toLowerCase()}`
+        if (!allowedExts.includes(ext)) {
+          onError?.(`Unsupported file type ${ext}. Accepted: ${allowedExts.join(', ')}`)
+          return
+        }
+      }
       onFileSelect(file)
     },
-    [onFileSelect, maxSizeMB, onError]
+    [onFileSelect, maxSizeMB, onError, accept]
   )
 
   const handleDrop = useCallback(
