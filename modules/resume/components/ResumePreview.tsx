@@ -5,6 +5,7 @@ import type { ResumeData } from '../validators/resume'
 import { getTemplate } from './templates'
 import { getFontStack, getFontSizes, getCustomFontSizes, getGoogleFontUrl, DEFAULT_HEADING_SIZE, DEFAULT_BODY_SIZE } from '../config/fontConfig'
 import { computePageLayoutPlan, pageClipHeight } from '../lib/resumePageBreaks'
+import { useDebouncedValue } from '../hooks/useDebouncedValue'
 import {
   measureResumeSections,
   readContinuationHeaderAtBreak,
@@ -32,7 +33,16 @@ interface Props {
   templateId?: string
 }
 
-export default function ResumePreview({ data, templateId = 'professional' }: Props) {
+// Debounce the incoming resume data so the measure pipeline (synchronous DOM
+// reads in measureLayout, triggered by a useLayoutEffect on `data`) runs once
+// per typing pause instead of on every keystroke — each pass forces layout on
+// the hidden measurer and re-plans pagination, which visibly janks typing on
+// multi-page resumes. 250ms: below the "did it react?" threshold, above
+// normal inter-keystroke gaps.
+const MEASURE_DEBOUNCE_MS = 250
+
+export default function ResumePreview({ data: liveData, templateId = 'professional' }: Props) {
+  const data = useDebouncedValue(liveData, MEASURE_DEBOUNCE_MS)
   const TemplateComponent = useMemo(() => getTemplate(templateId), [templateId])
   const [measureData, setMeasureData] = useState(data)
   const stableSkillRatiosRef = useRef<Record<number, number>>({})

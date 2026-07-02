@@ -110,15 +110,27 @@ export default function FileDropzone({
     )
   }
 
-  // Empty state — drag & drop
+  // Empty state — drag & drop. role/tabIndex/keydown make the zone reachable
+  // and operable by keyboard — it was click/drag only (invisible to keyboard
+  // and screen-reader users, since the real <input> is display:none).
   return (
     <div
+      role="button"
+      tabIndex={0}
+      aria-label={`${label}. Press Enter to choose a file.`}
       onDrop={handleDrop}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onClick={() => inputRef.current?.click()}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          inputRef.current?.click()
+        }
+      }}
       className={`
         flex flex-col items-center justify-center gap-2 py-6 px-4 rounded-xl border-2 border-dashed cursor-pointer transition-all duration-200
+        focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500
         ${isDragging
           ? 'border-blue-600 bg-blue-500/10'
           : 'border-slate-200 hover:border-slate-400 bg-white hover:bg-slate-50'
@@ -133,6 +145,9 @@ export default function FileDropzone({
         type="file"
         accept={accept}
         onChange={handleChange}
+        // The programmatic input.click() bubbles back to the zone's onClick,
+        // which would click the input a second time — stop it at the source.
+        onClick={(e) => e.stopPropagation()}
         className="hidden"
       />
     </div>

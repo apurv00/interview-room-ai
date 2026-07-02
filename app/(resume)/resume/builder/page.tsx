@@ -53,6 +53,9 @@ export default function ResumeBuilderPage() {
    *  import it. We NEVER auto-hydrate it into the editor, because the draft
    *  may belong to a previous visitor on the same browser (PII leak). */
   const [pendingAnonDraft, setPendingAnonDraft] = useState<Partial<ResumeData> | null>(null)
+  /** True when the user already has the max number of saved resumes and is
+   *  building a NEW one — warn upfront instead of failing at save time. */
+  const [atResumeCap, setAtResumeCap] = useState<{ count: number; limit: number } | null>(null)
   /** Bumped when we commit a new initialData snapshot (e.g. importing a
    *  pending anonymous draft). React uses this as the ResumeEditor's key
    *  so it fully unmounts/remounts — otherwise `useResume(initial)` would
@@ -157,6 +160,29 @@ export default function ResumeBuilderPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authStatus, searchParams, session?.user?.id])
 
+  // Building a NEW resume while already at the cap previously surfaced
+  // nothing until the save failed with RESUME_LIMIT — after the user had
+  // done all the work. Check upfront and warn before they start.
+  useEffect(() => {
+    if (authStatus !== 'authenticated' || resumeId) {
+      setAtResumeCap(null)
+      return
+    }
+    let cancelled = false
+    fetch('/api/resume/save')
+      .then(r => r.json())
+      .then(data => {
+        if (cancelled) return
+        if (typeof data.count === 'number' && typeof data.limit === 'number' && data.count >= data.limit) {
+          setAtResumeCap({ count: data.count, limit: data.limit })
+        } else {
+          setAtResumeCap(null)
+        }
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [authStatus, resumeId])
+
   const importAnonDraft = useCallback(() => {
     if (!pendingAnonDraft) return
     setInitialData(pendingAnonDraft)
@@ -238,6 +264,13 @@ export default function ResumeBuilderPage() {
           onImport={importAnonDraft}
           onDiscard={discardAnonDraft}
         />
+      )}
+      {atResumeCap && (
+        <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 text-xs text-amber-700">
+          You&apos;ve used all {atResumeCap.limit} resume slots — saving this new resume will fail
+          until you delete one from{' '}
+          <a href="/resume" className="font-medium underline hover:text-amber-800">your resumes</a>.
+        </div>
       )}
       <ResumeEditor
         key={editorKey}

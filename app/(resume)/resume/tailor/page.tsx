@@ -142,7 +142,9 @@ export default function TailorPage() {
           targetRole: '',
           targetCompany: companyName || '',
           fullText: result.tailoredResume,
-          atsScore: result.matchScore,
+          // matchScore is JD-match, NOT ATS compatibility — storing it as
+          // atsScore made the dashboard "ATS: N" badge lie. The badge now
+          // only shows scores from a real ATS check.
           ...structured,
         }),
       })
