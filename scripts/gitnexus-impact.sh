@@ -189,10 +189,15 @@ SYMBOL_ROWS="$(
         GET|POST|PUT|PATCH|DELETE|handler|default|dynamic|constructor) continue ;;
       esac
       [ "${#sym}" -lt 4 ] && continue
-      RAW_HITS="$(grep -rn --include='*.ts' --include='*.tsx' -w "$sym" \
+      # Self-file exclusion must be FIXED-STRING and anchored: dynamic-route
+      # paths contain [] which a regex grep -v treats as a character class,
+      # so app/feedback/[sessionId]/page.tsx never matched its own filter and
+      # leaked into its consumer list (Codex P2 on #490). awk index()==1 is
+      # an exact prefix match with no metacharacter surface.
+      RAW_HITS="$(grep -rn --include='*.ts' --include='*.tsx' -Fw "$sym" \
         "$REPO_ROOT/app" "$REPO_ROOT/modules" "$REPO_ROOT/shared" 2>/dev/null \
-        | grep -v "^$REPO_ROOT/$REL_PATH:" \
-        | sed "s|^$REPO_ROOT/||")"
+        | sed "s|^$REPO_ROOT/||" \
+        | awk -v self="$REL_PATH:" 'index($0, self) != 1')"
       if [ -n "$RAW_HITS" ]; then
         HIT_COUNT="$(printf '%s\n' "$RAW_HITS" | grep -c .)"
         # The consumer FILE list is what the acknowledgement checklist refers
