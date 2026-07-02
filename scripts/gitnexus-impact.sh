@@ -169,14 +169,48 @@ SYMBOL_ROWS="$(
       echo '```'
       echo ""
     done <<<"$SYMBOL_ROWS"
+
+    echo "## Name-based textual sweep (barrel-import blind-spot net)"
+    echo ""
+    echo "_The graph does NOT resolve call edges through barrel re-exports"
+    echo "(\`import { x } from '@resume'\`), and this repo's boundary rules"
+    echo "REQUIRE cross-module imports to go through barrels — so cross-module"
+    echo "callers are systematically MISSING from the graph section above"
+    echo "(verified 2026-07-02: the parseAndCacheResume → parseResumeToStructured"
+    echo "edge was absent in both directions). This sweep greps each symbol"
+    echo "name across app/, modules/, shared/ so barrel-mediated consumers are"
+    echo "visible. Generic names (GET/POST/handler/<4 chars) are skipped as"
+    echo "unsearchable — for route files, callers are HTTP clients anyway:"
+    echo "grep for the route PATH separately._"
+    echo ""
+    while IFS=$'\t' read -r sym uid; do
+      [ -z "$sym" ] && continue
+      case "$sym" in
+        GET|POST|PUT|PATCH|DELETE|handler|default|dynamic|constructor) continue ;;
+      esac
+      [ "${#sym}" -lt 4 ] && continue
+      HITS="$(grep -rn --include='*.ts' --include='*.tsx' -w "$sym" \
+        "$REPO_ROOT/app" "$REPO_ROOT/modules" "$REPO_ROOT/shared" 2>/dev/null \
+        | grep -v "^$REPO_ROOT/$REL_PATH:" \
+        | sed "s|^$REPO_ROOT/||" \
+        | head -30)"
+      if [ -n "$HITS" ]; then
+        echo "### \`$sym\` referenced outside this file:"
+        echo ""
+        echo '```'
+        echo "$HITS"
+        echo '```'
+        echo ""
+      fi
+    done <<<"$SYMBOL_ROWS"
   fi
 
   echo "## Risk acknowledgement"
   echo ""
   echo "Before proceeding with the edit, the editor must have:"
   echo ""
-  echo "- [ ] Read every d=1 caller above"
-  echo "- [ ] Confirmed the change is backward-compatible OR all d=1 callers are updated in the same commit"
+  echo "- [ ] Read every d=1 caller above AND the textual sweep (barrel-mediated consumers do NOT appear in the graph)"
+  echo "- [ ] Confirmed the change is backward-compatible OR all consumers from BOTH lists are updated in the same commit"
   echo "- [ ] A test that exercises the new behavior (or a justified No-tests-needed-because)"
   echo ""
   echo "_This file is auto-generated. The hook only requires it to exist"
