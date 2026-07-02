@@ -80,6 +80,16 @@ describe('findNearDuplicate', () => {
     expect(hit).toEqual({ title: 'Rate Limiter with Sliding Window' })
   })
 
+  it('tags never dilute a plain title match (Codex P2 on #486)', () => {
+    // Title-only score vs 'Design a URL Shortener' = {url,shortener}/{url,shortener} = 1.0;
+    // the merged title∪tags set alone would score 2/5 = 0.4 and miss.
+    const hit = findNearDuplicate(
+      { title: 'URL Shortener', tags: ['arrays', 'hash-map', 'strings'] },
+      served
+    )
+    expect(hit).toEqual({ title: 'Design a URL Shortener' })
+  })
+
   it('returns the first (most recent) collision', () => {
     const hit = findNearDuplicate(
       { title: 'URL Shortener Rate Limiter Sliding Window' },
