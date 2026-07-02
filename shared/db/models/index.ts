@@ -71,6 +71,9 @@ export type { IInterviewSkill } from './InterviewSkill'
 export { MultimodalAnalysis } from './MultimodalAnalysis'
 export type { IMultimodalAnalysis } from './MultimodalAnalysis'
 
+export { ServedProblem } from './ServedProblem'
+export type { IServedProblem } from './ServedProblem'
+
 // ── Learn ──
 
 export { UserCompetencyState } from './UserCompetencyState'

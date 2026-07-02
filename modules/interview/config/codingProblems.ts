@@ -1058,6 +1058,58 @@ export function selectProblem(
 }
 
 /**
+ * Last-resort selection when the pool is exhausted for this user AND the AI
+ * generator failed: instead of a silent uniform-random repeat, pick the problem
+ * the user saw LONGEST ago. `servedIdsMostRecentFirst` is the /api/code/history
+ * order (ledger + legacy, most recent first), so the highest index is the
+ * oldest; never-served ids (not in the list) rank oldest of all.
+ * Deterministic — ties break on pool order.
+ */
+export function selectLeastRecentlyServed(
+  domain: string,
+  experience: string,
+  servedIdsMostRecentFirst: string[],
+  difficultyOverride?: CodingProblem['difficulty'],
+): CodingProblem | null {
+  const primaryDifficulty: CodingProblem['difficulty'] =
+    difficultyOverride ?? (experience === '7+' ? 'hard' : experience === '3-6' ? 'medium' : 'easy')
+
+  const difficultyOrder: Array<CodingProblem['difficulty']> =
+    primaryDifficulty === 'easy' ? ['easy', 'medium'] :
+    primaryDifficulty === 'hard' ? ['hard', 'medium'] :
+    ['medium', 'easy', 'hard']
+
+  // Higher = older. Never-served → Infinity (best candidate).
+  const age = (id: string): number => {
+    const i = servedIdsMostRecentFirst.indexOf(id)
+    return i === -1 ? Number.POSITIVE_INFINITY : i
+  }
+
+  const pickForDomain = (dom: string): CodingProblem | null => {
+    for (const diff of difficultyOrder) {
+      const candidates = CODING_PROBLEMS.filter(
+        (p) => p.difficulty === diff && p.applicableDomains.includes(dom)
+      )
+      if (candidates.length > 0) {
+        return candidates.reduce((oldest, p) => (age(p.id) > age(oldest.id) ? p : oldest))
+      }
+    }
+    return null
+  }
+
+  const exact = pickForDomain(domain)
+  if (exact) return exact
+
+  const fallbackDomain = PROBLEM_POOL_FALLBACK[domain]
+  if (fallbackDomain) {
+    const borrowed = pickForDomain(fallbackDomain)
+    if (borrowed) return borrowed
+  }
+
+  return null
+}
+
+/**
  * Generic per-language function skeleton, used when a problem has no
  * language-specific starter. Many curated problems (and some AI-generated ones)
  * only ship `python`/`javascript` starter code, so selecting Java/C++/TypeScript

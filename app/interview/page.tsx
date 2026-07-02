@@ -32,8 +32,8 @@ import { useCoachMode } from '@interview/hooks/useCoachMode'
 import CoachOverlay from '@interview/components/interview/CoachOverlay'
 import CodingLayout from '@interview/components/interview/CodingLayout'
 import DesignLayout from '@interview/components/interview/DesignLayout'
-import { selectProblem, resolveCodingTimeBudget, resolveCodingDifficulty, type CodingProblem } from '@interview/config/codingProblems'
-import { selectDesignProblem, type DesignProblem } from '@interview/config/designProblems'
+import { selectProblem, selectLeastRecentlyServed, resolveCodingTimeBudget, resolveCodingDifficulty, type CodingProblem } from '@interview/config/codingProblems'
+import { selectDesignProblem, selectLeastRecentlyServedDesign, type DesignProblem } from '@interview/config/designProblems'
 import type { InterviewConfig, DesignSubmission } from '@shared/types'
 import { AVATAR_NAME, getAvatarTitle } from '@interview/config/interviewConfig'
 import { STORAGE_KEYS } from '@shared/storageKeys'
@@ -83,7 +83,7 @@ const DEFAULT_PHASE_COLOR = { text: 'text-[#71767b]', bg: 'bg-[#f8fafc]', border
 
 export default function InterviewPage() {
   const router = useRouter()
-  const { data: authSession } = useSession()
+  const { data: authSession, status: authStatus } = useSession()
 
   // ── Config ──
   const [config, setConfig] = useState<InterviewConfig | null>(null)
@@ -416,6 +416,13 @@ export default function InterviewPage() {
 
   // ─── Load config (with session guard) ──────────────────────────────────────
   useEffect(() => {
+    // Wait for auth to resolve so this effect runs ONCE with the user id
+    // known. On hard loads it used to run first with id=undefined and again
+    // on resolution — each run independently picked (and now ledgers) a
+    // problem, recording a phantom never-shown row and double-spending the
+    // AI generator. /interview is auth-gated in middleware, so 'loading'
+    // always transitions promptly.
+    if (authStatus === 'loading') return
     // UAT-022: missing / cross-user / stale config previously bounced the
     // user to `/` (the marketing homepage), which made bookmarked
     // /interview links look broken. Redirect to the setup wizard instead
@@ -449,6 +456,34 @@ export default function InterviewPage() {
     }
 
     const parsed = JSON.parse(stored)
+    // Record the served problem in the server-side ServedProblem ledger at
+    // selection time (fire-and-forget — recording must never block interview
+    // start). AI problems are also recorded server-side inside the generate
+    // routes; the ledger upsert is idempotent so the double record is harmless.
+    // Recording at selection (not session create) is deliberate: a candidate
+    // who saw the problem and bailed in the lobby has still seen it.
+    const recordServed = (
+      kind: 'coding' | 'system-design',
+      problem: { id: string; title: string; difficulty?: string },
+    ) => {
+      fetch('/api/problems/served', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // keepalive: the browser cancels normal fetches on unload — a candidate
+        // who closes the tab right after seeing the problem would otherwise
+        // leave no static-pick ledger record (Codex P2 on PR #485). The body is
+        // far under the 64KB keepalive cap.
+        keepalive: true,
+        body: JSON.stringify({
+          kind,
+          problemId: problem.id,
+          title: problem.title,
+          domain: parsed.role,
+          difficulty: problem.difficulty,
+          source: problem.id.startsWith('ai-') ? 'ai' : 'static',
+        }),
+      }).catch(() => {})
+    }
     // Select a coding problem if in coding mode (avoid repeats across sessions)
     // IMPORTANT: Defer setConfig until problem is loaded so useInterview doesn't
     // start the standard flow before the problem is available.
@@ -518,17 +553,49 @@ export default function InterviewPage() {
             }
           }
           if (!problem) {
-            // Last resort: any problem from pool (allow repeats)
-            problem = selectProblem(parsed.role, parsed.experience, [], codingDifficulty)
+            // Last resort (pool exhausted for this user AND AI failed): repeat
+            // the problem seen longest ago — deterministic, instead of a
+            // silent uniform-random repeat.
+            problem = selectLeastRecentlyServed(parsed.role, parsed.experience, solvedProblemIds, codingDifficulty)
           }
 
-          if (problem) setCurrentProblem(withBudget(problem))
+          if (problem) {
+            recordServed('coding', problem)
+            setCurrentProblem(withBudget(problem))
+          }
           setConfig(parsed)
         })
-        .catch(() => {
-          // Offline fallback — just pick from pool without history
-          const problem = selectProblem(parsed.role, parsed.experience, [], codingDifficulty)
-          if (problem) setCurrentProblem(withBudget(problem))
+        .catch(async () => {
+          // History fetch failed (network / server hiccup). The generate route
+          // unions its own server-side ledger, so try it before falling back to
+          // an exclusion-blind static pick; when truly offline the fetch fails
+          // fast and we land on the static pool as before.
+          let problem: CodingProblem | null = null
+          try {
+            const res = await fetch('/api/code/generate-problem', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                domain: parsed.role,
+                experience: parsed.experience,
+                solvedProblemIds: [],
+                resumeText: parsed.resumeText,
+                difficulty: codingDifficulty,
+                budgetMinutes: codingBudget,
+              }),
+            })
+            if (res.ok) {
+              const data = (await res.json()) as { problem: CodingProblem | null }
+              problem = data.problem
+            }
+          } catch {
+            // offline — fall through to the static pick
+          }
+          if (!problem) problem = selectProblem(parsed.role, parsed.experience, [], codingDifficulty)
+          if (problem) {
+            recordServed('coding', problem)
+            setCurrentProblem(withBudget(problem))
+          }
           setConfig(parsed)
         })
     } else if (parsed.interviewType === 'system-design') {
@@ -564,20 +631,55 @@ export default function InterviewPage() {
               // network blip / route 500 → keep the static result
             }
           }
-          if (!problem) problem = selectDesignProblem(parsed.role, parsed.experience)
-          if (problem) setCurrentDesignProblem(problem)
+          if (!problem) {
+            // Last resort (pool exhausted for this user AND AI failed): repeat
+            // the problem seen longest ago — deterministic, and no longer drops
+            // the exclusion list the way the old bare re-select did.
+            problem = selectLeastRecentlyServedDesign(parsed.role, parsed.experience, solvedProblemIds)
+          }
+          if (problem) {
+            recordServed('system-design', problem)
+            setCurrentDesignProblem(problem)
+          }
           setConfig(parsed)
         })
-        .catch(() => {
-          // Offline fallback — pick without history
-          const problem = selectDesignProblem(parsed.role, parsed.experience)
-          if (problem) setCurrentDesignProblem(problem)
+        .catch(async () => {
+          // History fetch failed (network / server hiccup). The generate route
+          // unions its own server-side ledger, so try it before falling back to
+          // an exclusion-blind static pick; when truly offline the fetch fails
+          // fast and we land on the static pool as before.
+          let problem: DesignProblem | null = null
+          try {
+            const res = await fetch('/api/design/generate-problem', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                domain: parsed.role,
+                experience: parsed.experience,
+                solvedProblemIds: [],
+                resumeText: parsed.resumeText,
+              }),
+            })
+            if (res.ok) {
+              const data = (await res.json()) as { problem: DesignProblem | null }
+              problem = data.problem
+            }
+          } catch {
+            // offline — fall through to the static pick
+          }
+          if (!problem) problem = selectDesignProblem(parsed.role, parsed.experience)
+          if (problem) {
+            recordServed('system-design', problem)
+            setCurrentDesignProblem(problem)
+          }
           setConfig(parsed)
         })
     } else {
       setConfig(parsed)
     }
-  }, [router, authSession?.user?.id])
+    // authStatus in deps: the 'loading' bail above returns early, and the
+    // status flip to authenticated/unauthenticated triggers the single real run.
+  }, [router, authSession?.user?.id, authStatus])
 
   // ─── Camera init + start recording (only after config is loaded) ───────────
   useEffect(() => {

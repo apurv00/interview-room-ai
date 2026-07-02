@@ -1,6 +1,6 @@
 import mongoose from 'mongoose'
 import { connectDB } from '@shared/db/connection'
-import { User, InterviewSession, PathwayPlan } from '@shared/db/models'
+import { User, InterviewSession, PathwayPlan, ServedProblem } from '@shared/db/models'
 import { UserCompetencyState } from '@shared/db/models/UserCompetencyState'
 import { WeaknessCluster } from '@shared/db/models/WeaknessCluster'
 import { SessionSummary } from '@shared/db/models/SessionSummary'
@@ -25,6 +25,7 @@ export async function generateDataExport(userId: string): Promise<Record<string,
     summaries,
     xpEvents,
     badges,
+    servedProblems,
   ] = await Promise.all([
     User.findById(uid).select('-password -__v').lean(),
     InterviewSession.find({ userId: uid })
@@ -38,6 +39,9 @@ export async function generateDataExport(userId: string): Promise<Record<string,
     SessionSummary.find({ userId: uid }).sort({ sessionDate: -1 }).limit(50).lean(),
     XpEvent.find({ userId: uid }).sort({ createdAt: -1 }).limit(200).lean(),
     UserBadge.find({ userId: uid }).lean(),
+    // GDPR completeness: the served-problem ledger holds per-user interview
+    // metadata and (for AI picks) the full generated problem body.
+    ServedProblem.find({ userId: uid }).select('-__v').sort({ servedAt: -1 }).limit(300).lean(),
   ])
 
   if (!user) {
@@ -131,6 +135,17 @@ export async function generateDataExport(userId: string): Promise<Record<string,
     badges: badges.map(b => ({
       badgeId: b.badgeId,
       earnedAt: b.earnedAt,
+    })),
+
+    servedProblems: servedProblems.map(p => ({
+      kind: p.kind,
+      problemId: p.problemId,
+      title: p.title,
+      domain: p.domain,
+      difficulty: p.difficulty,
+      source: p.source,
+      problemBody: p.problemBody ?? null,
+      servedAt: p.servedAt,
     })),
 
     xpHistory: xpEvents.map(e => ({
