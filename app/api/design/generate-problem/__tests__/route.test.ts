@@ -85,7 +85,7 @@ beforeEach(() => {
   mocks.getServedProblemSummaries.mockResolvedValue([])
   mocks.countServedProblems.mockResolvedValue(0)
   mocks.recordServedProblem.mockResolvedValue(undefined)
-  mocks.buildDesignSeedBlock.mockResolvedValue('\n<style_exemplars>SEED</style_exemplars>\n')
+  mocks.buildDesignSeedBlock.mockResolvedValue({ block: '\n<style_exemplars>SEED</style_exemplars>\n', exemplarTitles: [] })
   mocks.completion.mockResolvedValue({ text: JSON.stringify(GENERATED) })
 })
 
