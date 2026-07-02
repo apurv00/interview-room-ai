@@ -395,3 +395,26 @@ export function createDesignSubmissionGate(): DesignSubmissionGate {
     },
   }
 }
+
+// ─── Grounded follow-ups (coding / system-design rounds) ────────────────────
+
+/**
+ * A spoken follow-up longer than this is a malformed generation — falling
+ * back to the hardcoded question beats a 90-second read-aloud monologue.
+ */
+const MAX_GROUNDED_FOLLOWUP_LEN = 400
+
+/**
+ * Extract a usable grounded follow-up question from an eval response field.
+ * Returns '' unless the value is a non-empty, sanely-sized string — '' makes
+ * the caller fall back to its hardcoded question, so every malformed shape
+ * (absent field, wrong type, empty, over-long) degrades to today's behavior.
+ * The evaluate-code/evaluate-design routes only emit the field when the
+ * `grounded_followups` flag is on, so flag-off is byte-identical by absence.
+ */
+export function extractGroundedFollowUp(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  const trimmed = value.trim()
+  if (!trimmed || trimmed.length > MAX_GROUNDED_FOLLOWUP_LEN) return ''
+  return trimmed
+}

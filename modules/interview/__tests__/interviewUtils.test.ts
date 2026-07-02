@@ -10,6 +10,7 @@ import {
   buildPreviousQA,
   isNonAnswer,
   countTrailingNonAnswers,
+  extractGroundedFollowUp,
 } from '../hooks/interviewUtils'
 import type { AnswerEvaluation, DesignSubmission, ThreadEntry, TranscriptEntry } from '@shared/types'
 
@@ -602,5 +603,34 @@ describe('buildPreviousQA', () => {
     const r = buildPreviousQA(mkTranscript(8), 'academics')
     expect(r).toHaveLength(8)          // slice(-10) = all 8; intro already present, no pin
     expect(r[0].text).toBe('t0')
+  })
+})
+
+// ─── extractGroundedFollowUp (grounded_followups flag) ──────────────────────
+// Every malformed shape must return '' — '' is what makes useInterview fall
+// back to its hardcoded follow-up string, so flag-off/absent/bad-output all
+// degrade to today's exact behavior.
+
+describe('extractGroundedFollowUp', () => {
+  it('returns a trimmed valid question', () => {
+    expect(extractGroundedFollowUp('  Why a nested loop in processOrders?  '))
+      .toBe('Why a nested loop in processOrders?')
+  })
+
+  it('returns "" for absent / non-string values', () => {
+    expect(extractGroundedFollowUp(undefined)).toBe('')
+    expect(extractGroundedFollowUp(null)).toBe('')
+    expect(extractGroundedFollowUp(42)).toBe('')
+    expect(extractGroundedFollowUp({ q: 'x' })).toBe('')
+  })
+
+  it('returns "" for empty/whitespace strings', () => {
+    expect(extractGroundedFollowUp('')).toBe('')
+    expect(extractGroundedFollowUp('   ')).toBe('')
+  })
+
+  it('returns "" for over-long strings (malformed generation, not a spoken question)', () => {
+    expect(extractGroundedFollowUp('x'.repeat(401))).toBe('')
+    expect(extractGroundedFollowUp('x'.repeat(400))).toHaveLength(400)
   })
 })
