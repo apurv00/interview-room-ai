@@ -5,6 +5,7 @@ import { useSession } from 'next-auth/react'
 import { useSearchParams } from 'next/navigation'
 import ResumeEditor from '@resume/components/ResumeEditor'
 import type { ResumeData } from '@resume/validators/resume'
+import { hasStructuredResumeContent } from '@resume/lib/structuredContent'
 import { useAuthGate } from '@shared/providers/AuthGateProvider'
 
 const ANON_DRAFT_KEY = 'resume:draft:anon'
@@ -92,14 +93,11 @@ export default function ResumeBuilderPage() {
             fetch(`/api/resume/save?id=${editId}`)
               .then(r => r.json())
               .then(async (fullData) => {
-                const hasStructuredContent = !!(
-                  fullData.summary ||
-                  fullData.experience?.length ||
-                  fullData.education?.length ||
-                  fullData.skills?.length ||
-                  (fullData.contactInfo?.fullName && fullData.contactInfo.fullName !== '')
-                )
-                if (!hasStructuredContent && fullData.fullText) {
+                // Shared predicate (covers projects/certs/custom sections too):
+                // a projects-only resume IS structured — re-parsing its fullText
+                // here would burn an LLM call and the merge could clobber the
+                // saved sections with a lossy parse round-trip.
+                if (!hasStructuredResumeContent(fullData) && fullData.fullText) {
                   try {
                     const parseRes = await fetch('/api/resume/parse', {
                       method: 'POST',

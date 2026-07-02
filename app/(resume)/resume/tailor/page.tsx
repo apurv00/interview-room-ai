@@ -340,10 +340,18 @@ export default function TailorPage() {
                 >
                   Copy
                 </button>
+                {/* inputTruncated blocks too: for a 15k–50k-char resume the
+                    model only saw the first slice, so tailoredResume OMITS the
+                    unprocessed tail — saving it would silently drop that tail
+                    (Codex P2). Copy stays enabled for manual splicing. */}
                 <button
                   onClick={handleSaveAsCopy}
-                  disabled={savingCopy || result.outputTruncated}
-                  title={result.outputTruncated ? 'The rewrite was cut off — saving would persist an incomplete resume.' : undefined}
+                  disabled={savingCopy || result.outputTruncated || result.inputTruncated}
+                  title={result.outputTruncated
+                    ? 'The rewrite was cut off — saving would persist an incomplete resume.'
+                    : result.inputTruncated
+                      ? 'Only the first part of your resume was tailored — saving would drop the rest. Use Copy and merge manually, or shorten the resume.'
+                      : undefined}
                   className="px-3 py-1.5 bg-blue-600/10 border border-blue-500/20 text-blue-600 text-[10px] rounded-lg font-medium hover:bg-blue-600/20 transition-colors disabled:opacity-50"
                 >
                   {savingCopy ? 'Parsing & Saving...' : 'Save as New Resume'}

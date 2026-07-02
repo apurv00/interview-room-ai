@@ -1,6 +1,7 @@
 import { connectDB } from '@shared/db/connection'
 import { User } from '@shared/db/models/User'
 import type { ResumeData } from '../validators/resume'
+import { hasStructuredResumeContent } from '../lib/structuredContent'
 
 const MAX_RESUMES = 3
 
@@ -51,14 +52,7 @@ export async function saveResume(userId: string, data: ResumeData) {
   // ORIGINAL upload/tailor text, frozen at import time, and goes stale the
   // moment the user edits a bullet. Keep the posted text only when there is
   // no structure to derive from (upload/tailor saves that failed structuring).
-  const hasStructuredContent = !!(
-    summary
-    || experience?.length
-    || education?.length
-    || skills?.length
-    || contactInfo?.fullName
-  )
-  const computedFullText = hasStructuredContent ? buildFullText(data) : (fullText || '')
+  const computedFullText = hasStructuredResumeContent(data) ? buildFullText(data) : (fullText || '')
 
   if (id) {
     // Update existing resume
