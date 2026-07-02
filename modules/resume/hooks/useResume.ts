@@ -179,7 +179,11 @@ export function useResume(initial?: Partial<ResumeData>) {
   // Section-level reordering
   const reorderSections = useCallback((activeId: string, overId: string) => {
     setResume(prev => {
-      const sectionOrder = prev.sectionOrder || getTemplateSectionOrder(prev.template || 'professional')
+      // ?.length, not ||: saveResume persists `sectionOrder: []` for resumes
+      // never reordered, and [] is truthy — indexOf on [] made drag a no-op.
+      const sectionOrder = prev.sectionOrder?.length
+        ? prev.sectionOrder
+        : getTemplateSectionOrder(prev.template || 'professional')
       const oldIndex = sectionOrder.indexOf(activeId)
       const newIndex = sectionOrder.indexOf(overId)
       if (oldIndex === -1 || newIndex === -1) return prev
