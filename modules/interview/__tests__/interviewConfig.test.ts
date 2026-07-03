@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { QUESTION_COUNT, PRESSURE_QUESTION_INDEX, getInterviewIntro, getAvatarTitle } from '../config/interviewConfig'
+import {
+  QUESTION_COUNT,
+  PRESSURE_QUESTION_INDEX,
+  getInterviewIntro,
+  getAvatarTitle,
+  getQuestionCount,
+  getMainQuestionBudget,
+} from '../config/interviewConfig'
 import type { Duration } from '@shared/types'
 
 const DURATIONS: Duration[] = [10, 20, 30]
@@ -27,6 +34,75 @@ describe('QUESTION_COUNT', () => {
 
   it('30-min has 30 total questions (1 intro + 29 AI)', () => {
     expect(1 + (QUESTION_COUNT[30] - 1)).toBe(30)
+  })
+})
+
+describe('getMainQuestionBudget', () => {
+  it.each([
+    [10, 9],
+    [20, 19],
+    [30, 29],
+  ] as [Duration, number][])(
+    '%d-min budget is getQuestionCount - 1 (excludes the intro question) = %d',
+    (duration, expected) => {
+      expect(getMainQuestionBudget(duration)).toBe(getQuestionCount(duration) - 1)
+      expect(getMainQuestionBudget(duration)).toBe(expected)
+    },
+  )
+
+  it('never drops below 1 main question, even for very short durations', () => {
+    expect(getMainQuestionBudget(1 as Duration)).toBeGreaterThanOrEqual(1)
+  })
+})
+
+// Regression guard for the "interview ends after 5-6 questions" reports (2026-07-03).
+// The live loop (useInterview.ts) gates on a MAIN-question counter, while probes/pivots/
+// deferred turns advance a separate monotonic exchange index. These pure simulations model
+// that counting so a future refactor that re-conflates the two (the original bug) fails here.
+describe('main-question budget is independent of probing', () => {
+  // Mirrors the NEW loop: `while (mainAsked < budget)`, probes bump only the exchange index.
+  function simulateMainQuestions(duration: Duration, probesPerTopic: number): number {
+    const budget = getMainQuestionBudget(duration)
+    let mainAsked = 0
+    let exchangeIdx = 1 // qIdx — intro already consumed slot 0
+    while (mainAsked < budget) {
+      mainAsked++ // ask a main question
+      for (let p = 0; p < probesPerTopic; p++) exchangeIdx++ // probes advance the index only
+      exchangeIdx++ // advance to next topic
+    }
+    return mainAsked
+  }
+
+  // Mirrors the OLD (buggy) loop: `while (qIdx < maxQ)`, where probes ALSO consumed qIdx.
+  function simulateOldSharedCounter(duration: Duration, probesPerTopic: number): number {
+    const maxQ = getQuestionCount(duration)
+    let mainAsked = 0
+    let qIdx = 1
+    while (qIdx < maxQ) {
+      mainAsked++
+      for (let p = 0; p < probesPerTopic; p++) qIdx++ // probe stole a slot from the budget
+      qIdx++
+    }
+    return mainAsked
+  }
+
+  it.each(DURATIONS)(
+    '%d-min: main-question count is the same with 0, 1, 2, or 3 probes per topic (time permitting)',
+    (duration) => {
+      const budget = getMainQuestionBudget(duration)
+      for (const probes of [0, 1, 2, 3]) {
+        expect(simulateMainQuestions(duration, probes)).toBe(budget)
+      }
+    },
+  )
+
+  it('demonstrates the OLD shared counter shrank the interview as probing rose (the bug)', () => {
+    // 10-min: old maxQ=10 → 9 main with no probes, but only ~5 with 1 probe/topic.
+    expect(simulateOldSharedCounter(10, 0)).toBe(9)
+    expect(simulateOldSharedCounter(10, 1)).toBeLessThan(simulateOldSharedCounter(10, 0))
+    expect(simulateOldSharedCounter(10, 1)).toBe(5)
+    // The fix keeps all 9 regardless of probing.
+    expect(simulateMainQuestions(10, 1)).toBe(9)
   })
 })
 

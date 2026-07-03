@@ -19,7 +19,7 @@ import type {
 import {
   getInterviewIntro,
   WRAP_UP_LINE,
-  getQuestionCount,
+  getMainQuestionBudget,
 } from '@interview/config/interviewConfig'
 import { getPlannedQuestionCountForFeedback } from '@interview/services/eval/sessionScoringPolicy'
 import { deriveCoachingTip } from '@interview/config/coachingTips'
@@ -1653,12 +1653,19 @@ export function useInterview({
   const runInterviewLoop = useCallback(
     async (startingQIndex: number) => {
       if (!config) return
-      const maxQ = getQuestionCount(config.duration)
+      // maxMainQuestions = MAIN (post-intro) questions this loop should ask. `qIdx` below stays
+      // the monotonic EXCHANGE index (probes / pivot re-anchors / deferred bridges all bump it so
+      // every transcript row + generate/evaluate call gets a unique index) — but it must NOT gate
+      // the loop, or each probe silently costs a main-question slot and a 10-question interview
+      // collapses to ~5 (the "ends after 5-6 questions" reports; see INTERVIEW_FLOW.md §8).
+      // Probing stays bounded by each slot's maxProbes and the interview clock, not by this count.
+      const maxMainQuestions = getMainQuestionBudget(config.duration)
       let qIdx = startingQIndex
+      let mainQuestionsAsked = 0
       disengagedRef.current = false
 
       try {
-      while (qIdx < maxQ) {
+      while (mainQuestionsAsked < maxMainQuestions) {
         checkAbort()
         if (isInterviewOver()) return
         // Only skip starting a NEW question if very little time remains;
@@ -1678,6 +1685,9 @@ export function useInterview({
         questionIndexRef.current = qIdx
         setQuestionIndex(qIdx)
         showNextMainQuestionDisplay()
+        // Count this MAIN question against the loop budget. Probes/pivots/deferred turns below
+        // advance `qIdx` (the exchange index) but deliberately do NOT touch this counter.
+        mainQuestionsAsked++
         // Eagerly show the question text and log it to the transcript so
         // the user sees the UI advance immediately. With streaming TTS
         // restored (see `/api/tts/stream`), the text-to-voice gap is
@@ -1964,7 +1974,9 @@ export function useInterview({
         }
 
         const nextQIdx = qIdx + 1
-        const isFinalTopicFastPath = nextQIdx >= maxQ || timeRemainingRef.current < 60
+        // "Last main question?" keys off the MAIN-question budget, not the exchange index —
+        // otherwise probes inflate qIdx and prematurely trip the final-topic fast path mid-interview.
+        const isFinalTopicFastPath = mainQuestionsAsked >= maxMainQuestions || timeRemainingRef.current < 60
 
         // ── Intentional silence: give short answers a chance to elaborate ──
         let finalAnswer = answer
@@ -1988,7 +2000,7 @@ export function useInterview({
         // Full evaluation runs concurrently in the background (see evaluateMainAnswer).
         // Coaching tip overlay fires when the bg eval resolves — non-blocking.
         checkAbort()
-        const shouldPrefetch = !isFinalTopicFastPath && nextQIdx < maxQ && timeRemainingRef.current > 60
+        const shouldPrefetch = !isFinalTopicFastPath && timeRemainingRef.current > 60
         // Build a snapshot that includes the current (not-yet-finalized) thread so
         // the next question's deduplication prompt sees ALL topics including this one.
         // Without this, completedThreadsRef is stale — missing the current topic —
@@ -2192,7 +2204,7 @@ export function useInterview({
 
         // ── Surface a deferred topic if the candidate interrupted earlier ──
         // Max 2 per interview, only when enough time remains.
-        if (deferredTopicsRef.current.length > 0 && timeRemainingRef.current > 90 && qIdx < maxQ) {
+        if (deferredTopicsRef.current.length > 0 && timeRemainingRef.current > 90 && mainQuestionsAsked < maxMainQuestions) {
           const deferredTopic = deferredTopicsRef.current.shift()!
           const bridgeMsg = `Earlier you mentioned something interesting — "${deferredTopic}". I'd love to hear more about that.`
           checkAbort()
@@ -2229,7 +2241,7 @@ export function useInterview({
       const shouldSurfaceDeferredDuringWrapUp =
         deferredTopicsRef.current.length > 0 &&
         timeRemainingRef.current > 180 &&
-        qIdx < maxQ &&
+        mainQuestionsAsked < maxMainQuestions &&
         !disengagedRef.current // a disengaged candidate gets a clean wrap, no extra deferred topics
 
       if (shouldSurfaceDeferredDuringWrapUp) {
