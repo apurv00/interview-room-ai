@@ -33,6 +33,8 @@ interface ATSResult {
   formatting: { score: number; issues: string[] }
   sections: { found: string[]; missing: string[]; recommended: string[] }
   summary: string
+  /** Only the first ~24k chars of the resume were analyzed. */
+  inputTruncated?: boolean
 }
 
 export default function ATSCheckPage() {
@@ -41,7 +43,7 @@ export default function ATSCheckPage() {
   const isAnonymous = authStatus !== 'authenticated'
   const [savedResumes, setSavedResumes] = useState<SavedResume[]>([])
   const [resumeText, setResumeText] = useState('')
-  const [resumeSource, setResumeSource] = useState<'upload' | 'saved'>('upload')
+  const [resumeSource, setResumeSource] = useState<'upload' | 'saved' | 'paste'>('upload')
   /** Full resume object of the selected saved resume — kept so a completed
    *  check can persist its REAL ATS score back onto the resume (the dashboard
    *  badge reads savedResumes.atsScore, which previously nothing honest set). */
@@ -69,16 +71,32 @@ export default function ATSCheckPage() {
   async function handleSelectSaved(id: string) {
     const resume = savedResumes.find(r => r.id === id)
     if (!resume) return
+    setError('')
     try {
       const res = await fetch(`/api/resume/save?id=${id}`)
+      if (!res.ok) {
+        // 404 = deleted in another tab (stale dropdown). Silently doing nothing
+        // left the dropdown showing it "selected" with no text and a disabled
+        // button — tell the user why.
+        setError('That resume could not be loaded — it may have been deleted. Pick another or refresh.')
+        setSelectedId('')
+        return
+      }
       const data = await res.json()
       if (data.fullText) {
         setResumeText(data.fullText)
         setResumeFileName(resume.name)
         setResumeSource('saved')
         setSelectedSaved({ ...data, id })
+      } else {
+        // A structured resume saved with no derivable text (e.g. name-only).
+        setError('That resume has no text to analyze yet — open it in the builder and add content first.')
+        setSelectedId('')
       }
-    } catch { /* ignore */ }
+    } catch {
+      setError('Could not load that resume. Please try again.')
+      setSelectedId('')
+    }
   }
 
   async function handleUpload(file: File) {
@@ -152,7 +170,9 @@ export default function ATSCheckPage() {
               return fetch('/api/resume/save', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ...fresh, id: savedId, atsScore: data.score }),
+                // atsScoreFromCheck marks this as a REAL ATS score so the
+                // dashboard badge shows it (legacy tailor match-scores stay hidden).
+                body: JSON.stringify({ ...fresh, id: savedId, atsScore: data.score, atsScoreFromCheck: true }),
               })
             })
             .catch(() => {})
@@ -204,7 +224,21 @@ export default function ATSCheckPage() {
 
             {savedResumes.length > 0 && <div className="text-center text-[10px] text-slate-400">or</div>}
 
-            {!resumeText ? (
+            {/* Chip only for a LOADED source (upload/saved). The anonymous paste
+                box stays an editable textarea — it used to flip to a chip after
+                the first character, trapping 1 char and locking out editing. */}
+            {resumeText && resumeSource !== 'paste' ? (
+              <div className="flex items-center justify-between bg-emerald-500/5 border border-emerald-500/15 rounded-xl px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <Check className="w-4 h-4 text-[#059669]" strokeWidth={2} />
+                  <span className="text-sm text-[#059669]">{resumeFileName || 'Resume loaded'}</span>
+                  <span className="text-[10px] text-slate-500">({resumeSource === 'saved' ? 'saved' : 'uploaded'})</span>
+                </div>
+                <button onClick={() => { setResumeText(''); setResumeFileName(''); setSelectedSaved(null); setSelectedId('') }} className="text-xs text-slate-500 hover:text-slate-500">
+                  Remove
+                </button>
+              </div>
+            ) : (
               <>
                 {!isAnonymous && (
                   <FileDropzone label="Upload Resume" isUploading={uploading} onFileSelect={handleUpload} onRemove={() => {}} onError={setError} />
@@ -213,8 +247,8 @@ export default function ATSCheckPage() {
                   <div className="space-y-2">
                     <label className="text-[10px] text-slate-500 uppercase tracking-wider">Paste your resume text</label>
                     <textarea
-                      value={resumeText}
-                      onChange={e => { setResumeText(e.target.value); if (e.target.value) setResumeFileName('Pasted resume') }}
+                      value={resumeSource === 'paste' ? resumeText : ''}
+                      onChange={e => { setResumeText(e.target.value); setResumeSource('paste'); setResumeFileName(e.target.value ? 'Pasted resume' : '') }}
                       placeholder="Paste your resume here. To upload a PDF or DOCX, sign in."
                       rows={8}
                       className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
@@ -226,17 +260,6 @@ export default function ATSCheckPage() {
                   </div>
                 )}
               </>
-            ) : (
-              <div className="flex items-center justify-between bg-emerald-500/5 border border-emerald-500/15 rounded-xl px-4 py-3">
-                <div className="flex items-center gap-2">
-                  <Check className="w-4 h-4 text-[#059669]" strokeWidth={2} />
-                  <span className="text-sm text-[#059669]">{resumeFileName || 'Resume loaded'}</span>
-                  <span className="text-[10px] text-slate-500">({resumeSource === 'saved' ? 'saved' : 'uploaded'})</span>
-                </div>
-                <button onClick={() => { setResumeText(''); setResumeFileName(''); setSelectedSaved(null); setSelectedId('') }} className="text-xs text-slate-500 hover:text-slate-500">
-                  Remove
-                </button>
-              </div>
             )}
           </div>
 
@@ -279,6 +302,12 @@ export default function ATSCheckPage() {
         </div>
       ) : (
         <div className="space-y-6 animate-fade-in">
+          {result.inputTruncated && (
+            <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3 text-xs text-amber-700">
+              Your resume was longer than the analysis window — only the first part was scored.
+              Sections past that point were not read, so &quot;missing&quot; findings for them may be inaccurate.
+            </div>
+          )}
           <div className="bg-white border border-slate-200 rounded-2xl p-6 text-center">
             <p className="text-sm text-slate-500 mb-2">ATS Compatibility Score</p>
             <p className={`text-5xl font-bold ${result.score >= 80 ? 'text-[#059669]' : result.score >= 60 ? 'text-amber-400' : 'text-red-400'}`}>

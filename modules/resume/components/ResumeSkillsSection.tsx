@@ -63,8 +63,14 @@ export default function ResumeSkillsSection({
       </div>
       {skills.map((cat, index) => {
         const ratio = previewPage?.truncatedSkillCategoryRatios?.[index] ?? 1
+        // Prefer the count carried on the (already-truncated) DATA — it is the
+        // only source that survives server rendering (renderToStaticMarkup can't
+        // read the client pageContext). Fall back to the context / ratio for the
+        // live preview's re-slice path.
+        const dataOmitted = (cat as { omittedCount?: number }).omittedCount
         const omittedCount =
-          previewPage?.truncatedSkillCategoryOmittedCounts?.[index]
+          dataOmitted
+          ?? previewPage?.truncatedSkillCategoryOmittedCounts?.[index]
           ?? omittedSkillItemCount(cat.items.length, ratio)
         // Re-slice the items only when a ratio < 1 is supplied (visible pages
         // and PDF export). The hidden measurer passes already-truncated items

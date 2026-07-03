@@ -113,6 +113,10 @@ export const POST = composeApiRoute<ExportWizardInput>({
       })
     } catch {
       // PDF generation failed — return HTML for client-side print-to-PDF fallback
+      // Fallback only (the primary generatePDF path above truncates oversized
+      // skill categories via measurement). This bare HTML render has no
+      // measurement pass, so a category taller than a page clips silently —
+      // same fallback-path limitation as /api/resume/pdf-html.
       const html = generateResumeHTML(resumeData, templateId)
       return NextResponse.json({
         success: true,

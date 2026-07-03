@@ -64,6 +64,9 @@ export default function ResumeBuilderPage() {
    *  so it fully unmounts/remounts — otherwise `useResume(initial)` would
    *  ignore the new prop since `useState` only uses its initializer once. */
   const [editorKey, setEditorKey] = useState(0)
+  /** Whether the (re)mounted editor should start dirty — true only when the
+   *  initialData is UNSAVED imported content (a claimed anonymous draft). */
+  const [editorInitialDirty, setEditorInitialDirty] = useState(false)
 
   useEffect(() => {
     if (authStatus === 'loading') return
@@ -91,7 +94,16 @@ export default function ResumeBuilderPage() {
           const resume = data.resumes?.find((r: { id: string }) => r.id === editId)
           if (resume) {
             fetch(`/api/resume/save?id=${editId}`)
-              .then(r => r.json())
+              .then(async (r) => {
+                // A non-OK detail fetch returns an ERROR JSON body, not a
+                // rejected promise, so the .catch below never fired: the error
+                // object became initialData while resumeId was still set, and
+                // the next Save overwrote the real resume with blanks. Treat a
+                // non-OK response as a load failure (blank template, no
+                // resumeId, notice) — the same class the .catch handles.
+                if (!r.ok) throw new Error(`detail fetch ${r.status}`)
+                return r.json()
+              })
               .then(async (fullData) => {
                 // Shared predicate (covers projects/certs/custom sections too):
                 // a projects-only resume IS structured — re-parsing its fullText
@@ -106,18 +118,31 @@ export default function ResumeBuilderPage() {
                     })
                     if (parseRes.ok) {
                       // Partial-tolerant contract: structured sections live
-                      // under `resume` (see /api/resume/parse).
+                      // under `resume` (see /api/resume/parse); `warning` is set
+                      // when the parse DROPPED sections it couldn't structure.
                       const parsed = await parseRes.json()
                       const structured = parsed.resume ?? {}
                       const mergedData = { ...fullData, ...structured }
                       setInitialData(mergedData)
                       setResumeId(editId)
                       setLoading(false)
-                      fetch('/api/resume/save', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ ...mergedData, id: editId, name: mergedData.name || 'Untitled Resume' }),
-                      }).catch(() => {})
+                      if (parsed.warning) {
+                        // PARTIAL parse: do NOT auto-persist. Persisting the
+                        // partial structure would let a later save regenerate a
+                        // fullText missing the dropped sections, destroying the
+                        // only complete copy. Keep the DB's original fullText;
+                        // show the structured sections for this session and warn.
+                        setLoadNotice(`We structured most of this resume, but ${parsed.warning} Your original text is preserved — review the sections and Save when they look right.`)
+                      } else {
+                        // COMPLETE parse: safe to upgrade the stored resume to
+                        // structured. preserveFullText keeps the original text
+                        // verbatim so nothing the parser didn't model is lost.
+                        fetch('/api/resume/save', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ ...mergedData, id: editId, name: mergedData.name || 'Untitled Resume', preserveFullText: true }),
+                        }).catch(() => {})
+                      }
                       return
                     }
                   } catch { /* fallback to raw data */ }
@@ -193,6 +218,11 @@ export default function ResumeBuilderPage() {
   const importAnonDraft = useCallback(() => {
     if (!pendingAnonDraft) return
     setInitialData(pendingAnonDraft)
+    // Mark the remounted editor dirty: this claimed draft is unsaved, and we're
+    // about to delete its only localStorage copy (the anon key). Without this
+    // the editor started clean, so a review-then-close before any keystroke lost
+    // the draft entirely (no beforeunload, no authed autosave had armed).
+    setEditorInitialDirty(true)
     // Force the ResumeEditor to remount so useResume() re-initializes from
     // the new initialData. Without the key bump, the editor would keep its
     // existing internal state and the imported draft would be discarded.
@@ -211,7 +241,7 @@ export default function ResumeBuilderPage() {
   }, [])
 
   const handleSave = useCallback(
-    async (data: ResumeData): Promise<{ id?: string; error?: string; code?: string }> => {
+    async (data: ResumeData): Promise<{ id?: string; error?: string; code?: string; clamped?: boolean }> => {
       // Anonymous: persist locally and prompt for sign-in.
       if (authStatus !== 'authenticated') {
         persistAnonDraft(data)
@@ -235,6 +265,15 @@ export default function ResumeBuilderPage() {
         })
         const result = await res.json()
         if (!res.ok) {
+          // The stored resume is gone (deleted in another tab). Clearing
+          // resumeId turns the NEXT Save into a create instead of re-sending
+          // the dead id forever — the old error promised "save as new" but no
+          // path did it, stranding the user's edits. The edits stay in the
+          // editor's state; one more Save now persists them as a new resume.
+          if (result.code === 'NOT_FOUND') {
+            setResumeId(undefined)
+            return { error: 'This resume was deleted elsewhere. Click Save again to keep your edits as a new resume.', code: result.code }
+          }
           // Field-level validation issues → a message the user can act on,
           // not the old bare "Invalid data".
           const detail = Array.isArray(result.issues) && result.issues.length > 0
@@ -247,7 +286,7 @@ export default function ResumeBuilderPage() {
         }
         // Clear any leftover anonymous draft now that it's persisted.
         try { localStorage.removeItem(ANON_DRAFT_KEY) } catch { /* ignore */ }
-        return { id: result.id }
+        return { id: result.id, clamped: result.clamped === true }
       } catch {
         return { error: 'Network error' }
       }
@@ -292,6 +331,7 @@ export default function ResumeBuilderPage() {
         isAnonymous={authStatus !== 'authenticated'}
         onAnonymousChange={persistAnonDraft}
         draftKey={session?.user?.id ? `resume:draft:${session.user.id}:${resumeId || 'new'}` : undefined}
+        initialDirty={editorInitialDirty}
       />
     </>
   )

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import type { ResumeData } from '../validators/resume'
 import { useResume } from '../hooks/useResume'
 import { buildUploadPrefill } from '../lib/parseSalvage'
@@ -27,7 +27,7 @@ import { track } from '@shared/analytics/track'
 interface Props {
   initialData?: Partial<ResumeData>
   resumeId?: string
-  onSave: (data: ResumeData) => Promise<{ id?: string; error?: string; code?: string }>
+  onSave: (data: ResumeData) => Promise<{ id?: string; error?: string; code?: string; clamped?: boolean }>
   /** When true, AI/save/download actions are gated behind the auth modal
    *  and edits are auto-persisted to localStorage via onAnonymousChange. */
   isAnonymous?: boolean
@@ -35,9 +35,13 @@ interface Props {
   /** localStorage key for the SIGNED-IN unsaved-work draft (scoped to
    *  user + resume by the caller). Absent → no authed draft persistence. */
   draftKey?: string
+  /** Start the editor dirty — for content the caller INJECTED as initialData
+   *  and that is not yet saved (e.g. a claimed anonymous draft). Arms the
+   *  unsaved-work nets immediately instead of only after a manual keystroke. */
+  initialDirty?: boolean
 }
 
-export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymous = false, onAnonymousChange, draftKey }: Props) {
+export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymous = false, onAnonymousChange, draftKey, initialDirty }: Props) {
   const { requireAuth } = useAuthGate()
   const {
     resume, isDirty, update, setContactInfo,
@@ -50,7 +54,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
     reorderExperience, reorderEducation, reorderProjects, reorderCustomSections,
     reorderBullets, reorderSections,
     loadResume, markClean,
-  } = useResume(initialData)
+  } = useResume(initialData, { initialDirty })
 
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -71,6 +75,18 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
   } | null>(null)
   const [showPasteImport, setShowPasteImport] = useState(false)
   const [pasteText, setPasteText] = useState('')
+  /** Bumped whenever the resume is REPLACED wholesale (import/profile/restore).
+   *  An AI-enhance request captures the value at send time; if it changed by the
+   *  time the response lands, the response targets a resume that no longer
+   *  exists in the editor — applying it would write the OLD resume's text into
+   *  the replacement, so we discard it (Codex P3). */
+  const resumeGenerationRef = useRef(0)
+  /** Always-current resume snapshot for async callbacks (enhance responses):
+   *  the component closure captures `resume` at render time and goes stale
+   *  during an in-flight fetch, so reading it back after `await` would compare
+   *  against the OLD value. */
+  const resumeRef = useRef(resume)
+  useEffect(() => { resumeRef.current = resume }, [resume])
 
   // A pending undo is only valid while the enhanced content is untouched:
   // once the user manually edits the AI-written field (or the resume is
@@ -117,14 +133,18 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
   }, [draftKey, isAnonymous])
 
   useEffect(() => {
-    if (isAnonymous || !draftKey || !isDirty) return
+    // Pause autosave while a restore banner is still OFFERING a prior-session
+    // draft: writing the current near-empty state over it (one keystroke was
+    // enough) destroyed the very draft the banner advertised. Resolving the
+    // banner (Restore or Discard) clears restorableDraft and resumes autosave.
+    if (isAnonymous || !draftKey || !isDirty || restorableDraft) return
     const t = setTimeout(() => {
       try {
         localStorage.setItem(draftKey, JSON.stringify({ data: resume, savedAt: new Date().toISOString() }))
       } catch { /* quota — draft is best-effort */ }
     }, 800)
     return () => clearTimeout(t)
-  }, [resume, isDirty, isAnonymous, draftKey])
+  }, [resume, isDirty, isAnonymous, draftKey, restorableDraft])
 
   function clearDraft() {
     if (!draftKey) return
@@ -135,6 +155,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
   async function handleSave() {
     setSaving(true)
     setError('')
+    setNotice('')
     const result = await onSave({ ...resume, id: resumeId })
     if (result.error) {
       setError(result.error)
@@ -142,6 +163,12 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
       setSaved(true)
       markClean()
       clearDraft()
+      // Don't let "Saved!" hide a silent truncation — the server clamps
+      // over-long fields to their limits and the editor still shows the full
+      // text until reload, so tell the user what will differ.
+      if (result.clamped) {
+        setNotice('Saved. Some entries were longer than the allowed limit and were shortened — reload to see the saved version.')
+      }
       setTimeout(() => setSaved(false), 3000)
     }
     setSaving(false)
@@ -150,6 +177,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
   async function handleEnhanceSummary() {
     if (!resume.summary?.trim()) return
     if (isAnonymous) { requireAuth('enhance_resume'); return }
+    const gen = resumeGenerationRef.current
     setEnhancingSection('summary')
     setError('')
     try {
@@ -165,6 +193,9 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
         }),
       })
       const data = await res.json()
+      // The resume was replaced (import/profile/restore) while this was in
+      // flight — applying now would write into a resume the user discarded.
+      if (resumeGenerationRef.current !== gen) { setEnhancingSection(null); return }
       if (res.ok && data.enhanced) {
         const prev = resume.summary
         const enhanced = data.enhanced as string
@@ -187,6 +218,8 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
     const exp = resume.experience?.find(e => e.id === expId)
     if (!exp || exp.bullets.every(b => !b.trim())) return
     if (isAnonymous) { requireAuth('enhance_resume'); return }
+    const gen = resumeGenerationRef.current
+    const sentBullets = JSON.stringify(exp.bullets)
     setEnhancingSection(expId)
     setError('')
     try {
@@ -200,6 +233,14 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
         }),
       })
       const data = await res.json()
+      // Discard if the resume was replaced, or the user edited these bullets
+      // while the request was in flight (applying would clobber those edits).
+      // Read the LIVE resume via ref — the closure's `resume` is stale here.
+      const liveBullets = resumeRef.current.experience?.find(e => e.id === expId)?.bullets
+      if (resumeGenerationRef.current !== gen || JSON.stringify(liveBullets) !== sentBullets) {
+        setEnhancingSection(null)
+        return
+      }
       if (res.ok && data.bullets) {
         const prevBullets = exp.bullets
         const enhancedKey = JSON.stringify(data.bullets)
@@ -252,9 +293,12 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
       // Import = REPLACE: buildUploadPrefill wraps the (intentionally
       // partial) parse in explicit empties so sections absent from the
       // imported text don't survive as stale draft data in the merge.
-      loadResume(buildUploadPrefill(parsed.resume) as Partial<ResumeData>)
-      // The replacement invalidates any pending AI-enhance undo — its closure
-      // would write the PREVIOUS resume's text into the imported one.
+      // markDirty: imported content is unsaved — arm beforeunload + autosave
+      // so it survives a tab close during the "Review before saving" window.
+      loadResume(buildUploadPrefill(parsed.resume) as Partial<ResumeData>, { markDirty: true })
+      // The replacement invalidates any pending AI-enhance undo AND any
+      // in-flight enhance response — both target the previous resume.
+      resumeGenerationRef.current++
       setLastEnhance(null)
       const summary = `Imported ${parsed.importedSections.length === 1 ? '1 section' : `${parsed.importedSections.length} sections`}: ${parsed.importedSections.join(', ')}. Review before saving.`
       setNotice(parsed.warning ? `${summary} ${parsed.warning}` : summary)
@@ -291,9 +335,10 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
       const res = await fetch('/api/resume/profile')
       const data = await res.json()
       if (res.ok && data) {
-        loadResume(data)
-        // Same as importFromText: a pending enhance-undo closure targets the
-        // replaced resume — drop it so Undo can't cross-contaminate.
+        loadResume(data, { markDirty: true })
+        // Same as importFromText: pending undo + in-flight enhance both target
+        // the replaced resume — invalidate them.
+        resumeGenerationRef.current++
         setLastEnhance(null)
       }
     } catch { /* ignore */ }
@@ -302,6 +347,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
   async function handleGenerateFull() {
     if (!resume.targetRole) return
     if (isAnonymous) { requireAuth('enhance_resume'); return }
+    const gen = resumeGenerationRef.current
     setEnhancingSection('full')
     setError('')
     try {
@@ -319,6 +365,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
         }),
       })
       const data = await res.json()
+      if (resumeGenerationRef.current !== gen) { setEnhancingSection(null); return }
       const summarySection = res.ok
         ? (data.sections as Array<{ type: string; content?: string }> | undefined)?.find(s => s.type === 'summary' && s.content)
         : undefined
@@ -440,7 +487,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
             value={resume.summary || ''}
             onChange={v => update('summary', v)}
             onEnhance={handleEnhanceSummary}
-            enhancing={enhancingSection === 'summary'}
+            enhancing={enhancingSection === 'summary' || enhancingSection === 'full'}
           />
         )}
         {sectionId === 'experience' && (
@@ -595,7 +642,7 @@ export default function ResumeEditor({ initialData, resumeId, onSave, isAnonymou
               </span>
               <span className="flex gap-2 shrink-0">
                 <button
-                  onClick={() => { loadResume(restorableDraft.data); setRestorableDraft(null); setLastEnhance(null) }}
+                  onClick={() => { loadResume(restorableDraft.data, { markDirty: true }); resumeGenerationRef.current++; setRestorableDraft(null); setLastEnhance(null) }}
                   className="px-2.5 py-1 bg-amber-600/10 border border-amber-500/30 rounded-lg font-medium hover:bg-amber-600/20 transition-colors"
                 >
                   Restore

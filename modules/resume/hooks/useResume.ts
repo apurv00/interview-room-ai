@@ -28,9 +28,13 @@ const DEFAULT_RESUME: ResumeData = {
   styling: { fontFamily: 'georgia', fontSize: 'medium', headingSize: 18, bodySize: 9 },
 }
 
-export function useResume(initial?: Partial<ResumeData>) {
+export function useResume(initial?: Partial<ResumeData>, opts?: { initialDirty?: boolean }) {
   const [resume, setResume] = useState<ResumeData>({ ...DEFAULT_RESUME, ...initial })
-  const [isDirty, setDirty] = useState(false)
+  // initialDirty starts the editor "dirty" so the unsaved-work nets (beforeunload
+  // + draft autosave) engage immediately for content that was IMPORTED rather
+  // than loaded from the cloud — e.g. an anonymous draft claimed after sign-in,
+  // which otherwise had zero persistence until the first manual keystroke.
+  const [isDirty, setDirty] = useState(!!opts?.initialDirty)
 
   const update = useCallback(<K extends keyof ResumeData>(key: K, value: ResumeData[K]) => {
     setResume(prev => ({ ...prev, [key]: value }))
@@ -192,10 +196,13 @@ export function useResume(initial?: Partial<ResumeData>) {
     setDirty(true)
   }, [])
 
-  // Load full resume (e.g., from API or profile import)
-  const loadResume = useCallback((data: Partial<ResumeData>) => {
+  // Load full resume (e.g., from API or profile import). markDirty=true for
+  // IMPORTS (paste/upload/profile/draft-restore): the injected content is
+  // unsaved, so it must arm the beforeunload + autosave nets. A plain cloud
+  // load (already persisted) leaves it clean.
+  const loadResume = useCallback((data: Partial<ResumeData>, opts?: { markDirty?: boolean }) => {
     setResume(prev => ({ ...prev, ...data }))
-    setDirty(false)
+    setDirty(!!opts?.markDirty)
   }, [])
 
   const markClean = useCallback(() => setDirty(false), [])

@@ -86,6 +86,9 @@ export const ResumeSchema = z.object({
   targetRole: clampStr(200).optional(),
   targetCompany: clampStr(200).optional(),
   atsScore: z.number().min(0).max(100).nullable().optional(),
+  // Provenance for atsScore: true only when it came from a real ATS check.
+  // Round-trips through the editor so a normal save preserves it.
+  atsScoreFromCheck: z.boolean().optional(),
 
   contactInfo: ContactInfoSchema.optional(),
   summary: clampStr(5000).optional(),
@@ -111,10 +114,15 @@ export const GenerateSchema = z.object({
   currentContent: z.string().max(10000).optional(),
   targetRole: z.string().max(200).optional(),
   targetCompany: z.string().max(200).optional(),
+  // Capped like every sibling field: unbounded here let a generate_full request
+  // build a multi-megabyte prompt (thousands of sections × unbounded content),
+  // which the per-minute rate limit alone can't bound — each allowed request
+  // still bills maximal input tokens. generateFullResume slices content to 500,
+  // so 2000 is generous headroom.
   currentSections: z.array(z.object({
-    type: z.string(),
-    content: z.string(),
-  })).optional(),
+    type: z.string().max(50),
+    content: z.string().max(2000),
+  })).max(20).optional(),
   // For enhance_bullets
   bullets: z.array(z.string().max(1000)).max(20).optional(),
   context: z.object({
@@ -124,19 +132,68 @@ export const GenerateSchema = z.object({
   }).optional(),
 })
 
+/**
+ * True when ResumeSchema's clamp transforms SHORTENED any field of `raw` —
+ * i.e. the saved resume is missing content the client posted. Compares the raw
+ * body to the parsed (clamped) output so it needs no duplicated cap constants:
+ * a field is clamped exactly when its raw length exceeds the parsed length.
+ * The save route surfaces this so "Saved!" doesn't hide a silent truncation.
+ */
+export function resumeClampedContent(raw: unknown, parsed: ResumeData): boolean {
+  if (!raw || typeof raw !== 'object') return false
+  const r = raw as Record<string, unknown>
+  const strShrank = (a: unknown, b: unknown) =>
+    typeof a === 'string' && typeof b === 'string' && a.length > b.length
+  const arrShrank = (a: unknown, b: unknown) =>
+    Array.isArray(a) && Array.isArray(b) && a.length > b.length
+
+  if (strShrank(r.name, parsed.name)) return true
+  if (strShrank(r.summary, parsed.summary)) return true
+  if (arrShrank(r.experience, parsed.experience)) return true
+  const rawExp = Array.isArray(r.experience) ? r.experience : []
+  for (let i = 0; i < (parsed.experience?.length ?? 0); i++) {
+    const rb = (rawExp[i] as { bullets?: unknown })?.bullets
+    const pb = parsed.experience?.[i]?.bullets
+    if (arrShrank(rb, pb)) return true
+    for (let j = 0; j < (pb?.length ?? 0); j++) {
+      if (strShrank((rb as unknown[])?.[j], pb?.[j])) return true
+    }
+  }
+  if (arrShrank(r.education, parsed.education)) return true
+  if (arrShrank(r.skills, parsed.skills)) return true
+  const rawSkills = Array.isArray(r.skills) ? r.skills : []
+  for (let i = 0; i < (parsed.skills?.length ?? 0); i++) {
+    if (arrShrank((rawSkills[i] as { items?: unknown })?.items, parsed.skills?.[i]?.items)) return true
+  }
+  if (arrShrank(r.projects, parsed.projects)) return true
+  if (arrShrank(r.certifications, parsed.certifications)) return true
+  if (arrShrank(r.customSections, parsed.customSections)) return true
+  const rawCustom = Array.isArray(r.customSections) ? r.customSections : []
+  for (let i = 0; i < (parsed.customSections?.length ?? 0); i++) {
+    if (strShrank((rawCustom[i] as { content?: unknown })?.content, parsed.customSections?.[i]?.content)) return true
+  }
+  return false
+}
+
+// AI-input text CLAMPS instead of hard-rejecting at the cap: a saved resume's
+// fullText can legally reach 100k (ResumeSchema.fullText), and handleSelectSaved
+// feeds it straight in — a .max() there 400'd with "Validation failed" instead
+// of letting the service slice-and-warn (checkATS/tailorResume already report
+// inputTruncated). The min() floors stay (too-short IS a real structural error).
+const AI_INPUT_MAX = 100_000
 export const ATSCheckSchema = z.object({
-  resumeText: z.string().min(50).max(50000),
-  jobDescription: z.string().max(50000).optional(),
+  resumeText: z.string().min(50).transform((s) => s.slice(0, AI_INPUT_MAX)),
+  jobDescription: z.string().transform((s) => s.slice(0, AI_INPUT_MAX)).optional(),
 })
 
 export const TailorSchema = z.object({
-  resumeText: z.string().min(50).max(50000),
-  jobDescription: z.string().min(50).max(50000),
-  companyName: z.string().max(200).optional(),
+  resumeText: z.string().min(50).transform((s) => s.slice(0, AI_INPUT_MAX)),
+  jobDescription: z.string().min(50).transform((s) => s.slice(0, AI_INPUT_MAX)),
+  companyName: clampStr(200).optional(),
 })
 
 export const ParseResumeSchema = z.object({
-  text: z.string().min(10).max(50000),
+  text: z.string().min(10).transform((s) => s.slice(0, AI_INPUT_MAX)),
 })
 
 export const PDFGenerateSchema = z.object({

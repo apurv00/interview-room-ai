@@ -53,6 +53,10 @@ export interface IUser extends Document {
     targetRole?: string
     targetCompany?: string
     atsScore?: number | null
+    // True only when atsScore came from a real ATS check. Legacy rows stored
+    // the tailor's JD match-score here (a different metric); gating the badge
+    // on this flag stops the dashboard showing those as "ATS: N".
+    atsScoreFromCheck?: boolean
 
     contactInfo: {
       fullName: string
@@ -245,6 +249,7 @@ const UserSchema = new Schema<IUser>(
       targetRole: { type: String, default: '' },
       targetCompany: { type: String, default: '' },
       atsScore: { type: Number, default: null },
+      atsScoreFromCheck: { type: Boolean, default: false },
 
       contactInfo: {
         fullName: { type: String, default: '' },

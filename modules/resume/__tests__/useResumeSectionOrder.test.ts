@@ -32,3 +32,23 @@ describe('useResume with persisted empty sectionOrder', () => {
     expect(order[2]).toBe(custom[1])
   })
 })
+
+describe('useResume dirty semantics (draft protection #8/#9)', () => {
+  it('starts clean by default', () => {
+    const { result } = renderHook(() => useResume({ name: 'R' }))
+    expect(result.current.isDirty).toBe(false)
+  })
+
+  it('starts dirty when initialDirty is set (imported unsaved content)', () => {
+    const { result } = renderHook(() => useResume({ name: 'R' }, { initialDirty: true }))
+    expect(result.current.isDirty).toBe(true)
+  })
+
+  it('loadResume leaves it clean by default (cloud load) but dirty with markDirty (import)', () => {
+    const { result } = renderHook(() => useResume({ name: 'R' }))
+    act(() => { result.current.loadResume({ summary: 'from cloud' }) })
+    expect(result.current.isDirty).toBe(false)
+    act(() => { result.current.loadResume({ summary: 'imported' }, { markDirty: true }) })
+    expect(result.current.isDirty).toBe(true)
+  })
+})

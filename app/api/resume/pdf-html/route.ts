@@ -67,6 +67,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Invalid data' }, { status: 400 })
   }
 
+  // NOTE: skills truncation is NOT applied here. It requires a DOM measurement
+  // pass (renderPdfFromHtml's puppeteer path measures then re-renders truncated
+  // data with the "+N more" cue). This browser-print fallback — reached only
+  // when the serverless Chromium PDF fails — renders untruncated, so a single
+  // skill category taller than one page is clipped by the viewport's
+  // overflow:hidden. Applying truncation here would need either server-side
+  // measurement (impossible) or threading the live preview's measured ratios
+  // into the request; deferred as a fallback-path edge case rather than editing
+  // the shared inline pagination engine blind (no headless browser to verify).
   const html = renderResumeHTML(parsed.data.resumeData, parsed.data.templateId)
   // Inject the print scale + auto-print just before </body> so they run after
   // the template markup and the existing pagination script.

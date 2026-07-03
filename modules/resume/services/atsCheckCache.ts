@@ -21,11 +21,18 @@ import { logger } from '@shared/logger'
  * the same cache entry; a real edit (added bullet, changed metric)
  * cleanly misses.
  *
- * Bumping the `v1` namespace forces a global invalidation — do it
+ * Bumping the version namespace forces a global invalidation — do it
  * whenever the LLM prompt shape or response schema changes.
+ *
+ * v1 → v2 (2026-07): the input slice grew 5k→24k (resume) / 3k→8k (JD), so
+ * v1 entries were scored on only the first ~page of the resume. The cache key
+ * hashes the FULL text (unchanged by the slice), so those amputated analyses
+ * would keep hitting for 7 days post-deploy — and the "honest ATS badge"
+ * persist path would write the stale score back onto the resume. The bump
+ * evicts them.
  */
 
-const CACHE_KEY_PREFIX = 'ats-check:v1:'
+const CACHE_KEY_PREFIX = 'ats-check:v2:'
 const CACHE_TTL_SECONDS = 7 * 24 * 60 * 60 // 7 days
 
 function normalize(input: string | null | undefined): string {
