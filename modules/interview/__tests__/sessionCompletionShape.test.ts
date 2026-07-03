@@ -67,8 +67,16 @@ describe('G.7 — UpdateSessionSchema accepts completion-shape fields', () => {
     expect(result.success).toBe(true)
   })
 
-  it('rejects answeredCount above the hard cap (100)', () => {
-    const result = UpdateSessionSchema.safeParse({ answeredCount: 101 })
+  it('accepts answeredCount above the old cap of 100 (long/probed sessions after the main/probe decouple)', () => {
+    // answeredCount = intro + main + probe answers; after probes stopped spending the main-question
+    // budget (PR #495), a long 60-min probed session can produce >100 evals. The cap was raised from
+    // 100 → MAX_EXCHANGE_INDEX (500) so completion no longer rejects those. Codex #495 P1.
+    expect(UpdateSessionSchema.safeParse({ answeredCount: 101 }).success).toBe(true)
+    expect(UpdateSessionSchema.safeParse({ answeredCount: 417 }).success).toBe(true)
+  })
+
+  it('still rejects answeredCount above the raised cap (500)', () => {
+    const result = UpdateSessionSchema.safeParse({ answeredCount: 501 })
     expect(result.success).toBe(false)
   })
 })

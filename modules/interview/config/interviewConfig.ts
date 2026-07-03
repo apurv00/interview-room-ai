@@ -128,6 +128,20 @@ export function getQuestionCount(duration: Duration): number {
   return interpolate(duration, [[10, 10], [20, 20], [30, 30]])
 }
 
+// Number of MAIN (post-intro) questions the interview loop should ask.
+//
+// getQuestionCount is the TOTAL question budget for the interview INCLUDING the
+// opening intro question (asked before the loop), so the loop's own budget is one
+// less. Crucially this counts MAIN questions ONLY — probes, pivot re-anchors, and
+// deferred-topic bridges are NOT counted here; they are bounded separately by each
+// slot's maxProbes and the interview clock. The loop must gate on THIS value, not on
+// the monotonic exchange index, or a probed topic silently consumes a main-question
+// slot and a 10-question interview collapses to ~5 (see INTERVIEW_FLOW.md §8,
+// 2026-07-03). minVal keeps very short durations >= 1 main question.
+export function getMainQuestionBudget(duration: Duration): number {
+  return Math.max(1, getQuestionCount(duration) - 1)
+}
+
 /** @deprecated Use getQuestionCount() instead */
 export const QUESTION_COUNT: Record<number, number> = { 10: 10, 20: 20, 30: 30 }
 

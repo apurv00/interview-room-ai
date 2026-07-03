@@ -51,7 +51,10 @@ interface UseInterviewLifecycleEventsArgs {
   phase: InterviewState
   sessionId: string | null
   config: InterviewConfig | null
+  /** Exchange index (probes/pivots included) — used only for q_index_at_abandon. */
   questionIndex: number
+  /** Count of MAIN questions asked (probes excluded) — the basis for the completion question_count. */
+  mainQuestionNumber: number
   timeRemaining: number
 }
 
@@ -98,29 +101,28 @@ function durationSecondsElapsed(config: InterviewConfig | null, timeRemaining: n
 }
 
 /**
- * Convert `questionIndex` to a cardinal count, accounting for the
- * different index bases useInterview.ts uses per interview mode:
+ * Cardinal count of questions the candidate was asked, for the
+ * `interview_completed.question_count` payload.
  *
- * - General/screening/behavioral/etc. (`useInterview.ts:1350`):
- *   `setQuestionIndex(qIdx)` runs at the START of each loop iteration
- *   with a 0-based qIdx. The local `qIdx++` after the answer happens
- *   AFTER the loop's last setQuestionIndex call, so React state ends
- *   up one less than the count. +1 recovers the cardinal.
+ * - Coding (`useInterview.ts` coding flow) and system-design:
+ *   `setQuestionIndex(1)` at the first problem (1-based), 1-2 problems,
+ *   no main-question probe loop — so the exchange index already equals
+ *   the cardinal problem count. Use it directly. (Codex P1 round 4, #331.)
  *
- * - Coding (`useInterview.ts:1921-1922`) and system-design
- *   (`useInterview.ts:2039-2040`): `setQuestionIndex(1)` at the first
- *   problem (1-based). React state at SCORING already equals the
- *   cardinal count. No +1 needed.
- *
- * Codex P1 round 4 on PR #331.
+ * - General/screening/behavioral/etc.: use `mainQuestionNumber` (count of
+ *   MAIN questions asked) + 1 for the intro. Must NOT use `questionIndex`
+ *   here: that is the exchange index, which probes/pivots inflate past the
+ *   main-question count after the main/probe decouple (PR #495), so it
+ *   over-reports (e.g. ~19 for a 9-main-question 10-min interview).
  */
 function questionCountAtCompletion(
   config: InterviewConfig | null,
   questionIndex: number,
+  mainQuestionNumber: number,
 ): number {
   const t = config?.interviewType
   if (t === 'coding' || t === 'system-design') return questionIndex
-  return questionIndex + 1
+  return mainQuestionNumber + 1
 }
 
 export function useInterviewLifecycleEvents({
@@ -128,6 +130,7 @@ export function useInterviewLifecycleEvents({
   sessionId,
   config,
   questionIndex,
+  mainQuestionNumber,
   timeRemaining,
 }: UseInterviewLifecycleEventsArgs): UseInterviewLifecycleEventsReturn {
   const startedFiredRef = useRef(false)
@@ -194,11 +197,11 @@ export function useInterviewLifecycleEvents({
       completedFiredRef.current = true
       track('interview_completed', {
         session_id: sessionId,
-        question_count: questionCountAtCompletion(config, questionIndex),
+        question_count: questionCountAtCompletion(config, questionIndex, mainQuestionNumber),
         duration_seconds_elapsed: durationSecondsElapsed(config, timeRemaining),
       })
     }
-  }, [phase, sessionId, config, questionIndex, timeRemaining])
+  }, [phase, sessionId, config, questionIndex, mainQuestionNumber, timeRemaining])
 
   const markAbandoned = (): void => {
     if (abandonedFiredRef.current) return

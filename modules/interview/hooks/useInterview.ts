@@ -19,7 +19,7 @@ import type {
 import {
   getInterviewIntro,
   WRAP_UP_LINE,
-  getQuestionCount,
+  getMainQuestionBudget,
 } from '@interview/config/interviewConfig'
 import { getPlannedQuestionCountForFeedback } from '@interview/services/eval/sessionScoringPolicy'
 import { deriveCoachingTip } from '@interview/config/coachingTips'
@@ -202,6 +202,8 @@ function designEvaluationToAnswerEvaluation(
 export interface UseInterviewReturn {
   phase: InterviewState
   questionIndex: number
+  /** Count of MAIN questions asked so far (probes/pivots excluded) — for completion analytics. */
+  mainQuestionNumber: number
   questionDisplay: QuestionDisplay
   currentQuestion: string
   avatarEmotion: AvatarEmotion
@@ -362,6 +364,10 @@ export function useInterview({
   const [currentQuestion, setCurrentQuestion] = useState('')
   const [questionIndex, setQuestionIndex] = useState(0)
   const [questionDisplay, setQuestionDisplay] = useState<QuestionDisplay>(INITIAL_QUESTION_DISPLAY)
+  // Reactive mirror of mainQuestionNumberRef — the count of MAIN questions asked (probes/pivots
+  // excluded). Exposed so completion analytics report the question count, not the probe-inflated
+  // exchange index (`questionIndex`). See useInterviewLifecycleEvents.questionCountAtCompletion.
+  const [mainQuestionNumber, setMainQuestionNumber] = useState(0)
   const questionIndexRef = useRef(0)
   const mainQuestionNumberRef = useRef(0)
   const transcriptRef = useRef<TranscriptEntry[]>([])
@@ -490,6 +496,7 @@ export function useInterview({
   function showNextMainQuestionDisplay() {
     const number = mainQuestionNumberRef.current + 1
     mainQuestionNumberRef.current = number
+    setMainQuestionNumber(number)
     setQuestionDisplay({
       kind: 'question',
       number,
@@ -499,6 +506,7 @@ export function useInterview({
 
   function showQuestionDisplay(number: number, progressIndex = number) {
     mainQuestionNumberRef.current = Math.max(mainQuestionNumberRef.current, number)
+    setMainQuestionNumber(mainQuestionNumberRef.current)
     setQuestionDisplay({ kind: 'question', number, progressIndex })
   }
 
@@ -1653,12 +1661,19 @@ export function useInterview({
   const runInterviewLoop = useCallback(
     async (startingQIndex: number) => {
       if (!config) return
-      const maxQ = getQuestionCount(config.duration)
+      // maxMainQuestions = MAIN (post-intro) questions this loop should ask. `qIdx` below stays
+      // the monotonic EXCHANGE index (probes / pivot re-anchors / deferred bridges all bump it so
+      // every transcript row + generate/evaluate call gets a unique index) — but it must NOT gate
+      // the loop, or each probe silently costs a main-question slot and a 10-question interview
+      // collapses to ~5 (the "ends after 5-6 questions" reports; see INTERVIEW_FLOW.md §8).
+      // Probing stays bounded by each slot's maxProbes and the interview clock, not by this count.
+      const maxMainQuestions = getMainQuestionBudget(config.duration)
       let qIdx = startingQIndex
+      let mainQuestionsAsked = 0
       disengagedRef.current = false
 
       try {
-      while (qIdx < maxQ) {
+      while (mainQuestionsAsked < maxMainQuestions) {
         checkAbort()
         if (isInterviewOver()) return
         // Only skip starting a NEW question if very little time remains;
@@ -1672,12 +1687,18 @@ export function useInterview({
           question = await prefetchedQuestionRef.current
           prefetchedQuestionRef.current = null
         } else {
-          question = await generateQuestion(qIdx)
+          // Send the MAIN-question ordinal (not the exchange index qIdx) — see the
+          // nextMainQuestionOrdinal note below. Not yet incremented for this topic, so +1 is
+          // the current main question's ordinal.
+          question = await generateQuestion(mainQuestionsAsked + 1)
         }
         const topicQuestion = question // Save for thread summary
         questionIndexRef.current = qIdx
         setQuestionIndex(qIdx)
         showNextMainQuestionDisplay()
+        // Count this MAIN question against the loop budget. Probes/pivots/deferred turns below
+        // advance `qIdx` (the exchange index) but deliberately do NOT touch this counter.
+        mainQuestionsAsked++
         // Eagerly show the question text and log it to the transcript so
         // the user sees the UI advance immediately. With streaming TTS
         // restored (see `/api/tts/stream`), the text-to-voice gap is
@@ -1963,8 +1984,15 @@ export function useInterview({
           continue
         }
 
-        const nextQIdx = qIdx + 1
-        const isFinalTopicFastPath = nextQIdx >= maxQ || timeRemainingRef.current < 60
+        // generateQuestion (prefetch below) needs the MAIN-question ordinal, NOT the exchange index
+        // qIdx: /api/generate-question uses this value for "question N of M", final-question
+        // detection, pressure escalation, and curveball timing — all of which must not be inflated by
+        // probes. mainQuestionsAsked is already incremented for the current topic, so +1 is the NEXT
+        // main question's ordinal.
+        const nextMainQuestionOrdinal = mainQuestionsAsked + 1
+        // "Last main question?" keys off the MAIN-question budget, not the exchange index —
+        // otherwise probes inflate qIdx and prematurely trip the final-topic fast path mid-interview.
+        const isFinalTopicFastPath = mainQuestionsAsked >= maxMainQuestions || timeRemainingRef.current < 60
 
         // ── Intentional silence: give short answers a chance to elaborate ──
         let finalAnswer = answer
@@ -1988,7 +2016,7 @@ export function useInterview({
         // Full evaluation runs concurrently in the background (see evaluateMainAnswer).
         // Coaching tip overlay fires when the bg eval resolves — non-blocking.
         checkAbort()
-        const shouldPrefetch = !isFinalTopicFastPath && nextQIdx < maxQ && timeRemainingRef.current > 60
+        const shouldPrefetch = !isFinalTopicFastPath && timeRemainingRef.current > 60
         // Build a snapshot that includes the current (not-yet-finalized) thread so
         // the next question's deduplication prompt sees ALL topics including this one.
         // Without this, completedThreadsRef is stale — missing the current topic —
@@ -1996,7 +2024,7 @@ export function useInterview({
         const threadsSnapshot = shouldPrefetch
           ? [...completedThreadsRef.current, buildThreadSummary(topicQuestion)]
           : undefined
-        const nextQuestionPromise = shouldPrefetch ? generateQuestion(nextQIdx, threadsSnapshot) : undefined
+        const nextQuestionPromise = shouldPrefetch ? generateQuestion(nextMainQuestionOrdinal, threadsSnapshot) : undefined
         const { routerResult, prefetchedQ } = await evaluateMainAnswer(
           question, finalAnswer, qIdx, nextQuestionPromise, currentProbeDepthRef.current,
         )
@@ -2192,7 +2220,7 @@ export function useInterview({
 
         // ── Surface a deferred topic if the candidate interrupted earlier ──
         // Max 2 per interview, only when enough time remains.
-        if (deferredTopicsRef.current.length > 0 && timeRemainingRef.current > 90 && qIdx < maxQ) {
+        if (deferredTopicsRef.current.length > 0 && timeRemainingRef.current > 90 && mainQuestionsAsked < maxMainQuestions) {
           const deferredTopic = deferredTopicsRef.current.shift()!
           const bridgeMsg = `Earlier you mentioned something interesting — "${deferredTopic}". I'd love to hear more about that.`
           checkAbort()
@@ -2229,7 +2257,7 @@ export function useInterview({
       const shouldSurfaceDeferredDuringWrapUp =
         deferredTopicsRef.current.length > 0 &&
         timeRemainingRef.current > 180 &&
-        qIdx < maxQ &&
+        mainQuestionsAsked < maxMainQuestions &&
         !disengagedRef.current // a disengaged candidate gets a clean wrap, no extra deferred topics
 
       if (shouldSurfaceDeferredDuringWrapUp) {
@@ -2274,6 +2302,7 @@ export function useInterview({
 
     interviewAbortRef.current = new AbortController()
     mainQuestionNumberRef.current = 0
+    setMainQuestionNumber(0)
     showIntroDisplay()
 
     const start = async () => {
@@ -2775,6 +2804,7 @@ export function useInterview({
   return {
     phase,
     questionIndex,
+    mainQuestionNumber,
     questionDisplay,
     currentQuestion,
     avatarEmotion,

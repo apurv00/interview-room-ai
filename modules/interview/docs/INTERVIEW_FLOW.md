@@ -2008,3 +2008,43 @@ strip/sanitize covered by route tests; `extractGroundedFollowUp` guards unit-tes
 `FEATURE_FLAG_GROUNDED_FOLLOWUPS=true`, and verify the CMS ModelConfig rows for
 `interview.evaluate-code`/`interview.evaluate-design` carry maxTokens ≥1400/≥1800 (CMS slot config
 overrides `TASK_SLOT_DEFAULTS`, so the code-side bump alone is not a guarantee).
+
+### 2026-07-03 · Interviews still ended after 5-6 questions despite the 10/20/30 raise — probes were spending the main-question budget
+
+**Symptom (user reports).** After the 2026-07-01 raise to 10/20/30, a 10-minute interview still
+delivered only ~5-6 main questions — even when the candidate answered fast and the clock had plenty of
+time left. So the raise did not visibly increase question count for most sessions.
+
+**Root cause.** The loop counter `qIdx` was doing double duty: it was BOTH the loop bound
+(`while (qIdx < maxQ)`) AND the monotonic exchange index stamped on every transcript row / generate /
+evaluate call. Because probes (`useInterview.ts` probe loop), pivot re-anchors, and deferred-topic
+bridges each do `qIdx++`, every probe silently consumed a main-question slot. With ~1 probe per topic a
+10-interaction budget yields ~5 main questions — independent of answer speed, so a fast candidate could
+not "earn" more questions. This is the ORIGINAL 2026-03-15 design (`qIdx // Increment global exchange
+counter`), not a regression from the raise; the raise only changed the anchor values (6/11/16 → 10/20/30)
+and thus widened the gap between the labeled count and the delivered count.
+
+**Fix.** Decouple the two. Added `getMainQuestionBudget(duration) = getQuestionCount(duration) - 1`
+(main = total budget minus the intro) and gate the loop on a dedicated `mainQuestionsAsked` counter
+that increments ONLY when a main topic question is asked (right after `showNextMainQuestionDisplay()`).
+`qIdx` is unchanged — it still advances on every interaction (probes/pivots/deferred) so transcript and
+API indices stay unique. The four "are we near the end?" proxies (`isFinalTopicFastPath`, the prefetch
+gate, the mid-loop deferred gate, and the wrap-up deferred gate) now key off
+`mainQuestionsAsked >= maxMainQuestions` instead of `qIdx >= maxQ` — which also fixes their premature
+firing when probes inflated `qIdx`. Probing stays bounded exactly as before by each slot's `maxProbes`
+plus the clock; NO new probe ceiling was added (the main-question count × per-topic maxProbes is already
+a natural bound). Time remains a pure ceiling — a fast candidate now reaches the full main-question count;
+a slow or heavily-probed one is still cut off by the timer, which is expected.
+
+**Not in this change (flagged follow-up).** Completion scoring (G.10) still measures
+`answeredCount` (intro + main + probe evals) against `plannedQuestionCount = getQuestionCount`. The
+decoupling raises the main-question count so completion ratios improve, but `endReason='time_up'` is
+still not exempted from the taper — a candidate stopped by the clock is scored like one who quit. That
+exemption is a separate decision (see the 2026-07-03 audit) and was intentionally left out of this commit.
+
+**Verification.** `interviewConfig.test.ts` covers `getMainQuestionBudget` (= count-1, ≥1 floor) plus
+two pure loop simulations: the NEW main-counter yields the same main-question count with 0/1/2/3 probes
+per topic, and the OLD shared counter is shown shrinking (9 → 5 at 10 min with 1 probe/topic) as a
+regression guard. Full suite green (3335 tests, tsc clean). PENDING prod E2E (auth is prod-only): one
+full 10-min self-interview answering fast — confirm it now reaches ~9 main questions, and one answering
+slowly — confirm the timer still wraps it cleanly.

@@ -316,6 +316,7 @@ export default function InterviewPage() {
   const {
     phase,
     questionIndex,
+    mainQuestionNumber,
     questionDisplay,
     currentQuestion,
     avatarEmotion,
@@ -352,6 +353,7 @@ export default function InterviewPage() {
     sessionId: interview.sessionId,
     config,
     questionIndex,
+    mainQuestionNumber,
     timeRemaining,
   })
 

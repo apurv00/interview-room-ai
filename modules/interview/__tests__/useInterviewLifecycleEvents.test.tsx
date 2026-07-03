@@ -21,6 +21,7 @@ interface Args {
   sessionId: string | null
   config: InterviewConfig | null
   questionIndex: number
+  mainQuestionNumber: number
   timeRemaining: number
 }
 
@@ -29,6 +30,7 @@ const initialArgs: Args = {
   sessionId: null,
   config: null,
   questionIndex: 0,
+  mainQuestionNumber: 0,
   timeRemaining: 30 * 60,
 }
 
@@ -172,7 +174,7 @@ describe('useInterviewLifecycleEvents', () => {
   })
 
   describe('interview_completed', () => {
-    it('fires once on first transition into SCORING with question_count=questionIndex+1 for general flow (Codex P2)', () => {
+    it('reports question_count from the MAIN-question count + intro, ignoring the probe-inflated exchange index (general flow)', () => {
       // Setup: phase=ASK_QUESTION first so started fires (the
       // completed gate now requires startedFiredRef per Codex P2
       // round 4).
@@ -189,16 +191,16 @@ describe('useInterviewLifecycleEvents', () => {
       )
       trackMock.mockClear()
 
-      // A 6-question general/screening interview reaches SCORING
-      // with questionIndex=5 because setQuestionIndex(qIdx) is called
-      // at the start of each iteration in useInterview.ts and the
-      // final qIdx++ happens after the loop's last setQuestionIndex
-      // call. The hook adds 1 to recover the cardinal count.
+      // A 5-main-question interview that probed reaches SCORING with the exchange index
+      // (questionIndex) inflated to 9 by probes, but mainQuestionNumber=5. question_count must be
+      // 6 (5 main + intro), NOT 10 — using questionIndex+1 here would over-report (Codex #495 P2).
       rerender({
+        ...initialArgs,
         phase: 'SCORING',
         sessionId: 'sess-1',
         config: baseConfig,
-        questionIndex: 5,
+        questionIndex: 9,
+        mainQuestionNumber: 5,
         timeRemaining: 120,
       })
 
@@ -233,6 +235,8 @@ describe('useInterviewLifecycleEvents', () => {
         sessionId: 'sess-c',
         config: codingConfig,
         questionIndex: 3,
+        // Distinct from questionIndex to prove coding uses the exchange index, not this value.
+        mainQuestionNumber: 0,
         timeRemaining: 200,
       })
 
@@ -261,6 +265,8 @@ describe('useInterviewLifecycleEvents', () => {
         sessionId: 'sess-d',
         config: designConfig,
         questionIndex: 2,
+        // Distinct from questionIndex to prove system-design uses the exchange index, not this value.
+        mainQuestionNumber: 0,
         timeRemaining: 300,
       })
 
