@@ -202,6 +202,8 @@ function designEvaluationToAnswerEvaluation(
 export interface UseInterviewReturn {
   phase: InterviewState
   questionIndex: number
+  /** Count of MAIN questions asked so far (probes/pivots excluded) — for completion analytics. */
+  mainQuestionNumber: number
   questionDisplay: QuestionDisplay
   currentQuestion: string
   avatarEmotion: AvatarEmotion
@@ -362,6 +364,10 @@ export function useInterview({
   const [currentQuestion, setCurrentQuestion] = useState('')
   const [questionIndex, setQuestionIndex] = useState(0)
   const [questionDisplay, setQuestionDisplay] = useState<QuestionDisplay>(INITIAL_QUESTION_DISPLAY)
+  // Reactive mirror of mainQuestionNumberRef — the count of MAIN questions asked (probes/pivots
+  // excluded). Exposed so completion analytics report the question count, not the probe-inflated
+  // exchange index (`questionIndex`). See useInterviewLifecycleEvents.questionCountAtCompletion.
+  const [mainQuestionNumber, setMainQuestionNumber] = useState(0)
   const questionIndexRef = useRef(0)
   const mainQuestionNumberRef = useRef(0)
   const transcriptRef = useRef<TranscriptEntry[]>([])
@@ -490,6 +496,7 @@ export function useInterview({
   function showNextMainQuestionDisplay() {
     const number = mainQuestionNumberRef.current + 1
     mainQuestionNumberRef.current = number
+    setMainQuestionNumber(number)
     setQuestionDisplay({
       kind: 'question',
       number,
@@ -499,6 +506,7 @@ export function useInterview({
 
   function showQuestionDisplay(number: number, progressIndex = number) {
     mainQuestionNumberRef.current = Math.max(mainQuestionNumberRef.current, number)
+    setMainQuestionNumber(mainQuestionNumberRef.current)
     setQuestionDisplay({ kind: 'question', number, progressIndex })
   }
 
@@ -2294,6 +2302,7 @@ export function useInterview({
 
     interviewAbortRef.current = new AbortController()
     mainQuestionNumberRef.current = 0
+    setMainQuestionNumber(0)
     showIntroDisplay()
 
     const start = async () => {
@@ -2795,6 +2804,7 @@ export function useInterview({
   return {
     phase,
     questionIndex,
+    mainQuestionNumber,
     questionDisplay,
     currentQuestion,
     avatarEmotion,
