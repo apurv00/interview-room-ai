@@ -44,10 +44,19 @@ export function computeOmittedSkillCounts(
 export function sliceSkillCategory<T extends { items: string[] }>(
   category: T,
   ratio: number,
-): T {
+): T & { omittedCount?: number } {
   if (ratio >= 1) return category
   const kept = keptSkillItemCount(category.items.length, ratio)
-  return { ...category, items: category.items.slice(0, kept) }
+  const omitted = category.items.length - kept
+  // Carry the omitted count ON THE DATA so ResumeSkillsSection can render the
+  // "+N more" cue in EVERY server render (preview pages, PDF) — the cue used to
+  // ride a client React context that renderToStaticMarkup can't read, so it
+  // never appeared and truncated skills dropped silently.
+  return {
+    ...category,
+    items: category.items.slice(0, kept),
+    ...(omitted > 0 ? { omittedCount: omitted } : {}),
+  }
 }
 
 /** Preview layout data: shorten oversized skill categories so DOM measurement matches visible pages. */

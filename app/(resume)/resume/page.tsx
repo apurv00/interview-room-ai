@@ -13,6 +13,7 @@ interface ResumeListData {
     targetRole: string
     targetCompany: string
     atsScore: number | null
+    atsScoreFromCheck?: boolean
     updatedAt: string
   }>
   count: number
@@ -200,7 +201,7 @@ export default function ResumeDashboardPage() {
                 </div>
               </Link>
               <div className="flex items-center gap-3 shrink-0 ml-3">
-                {r.atsScore !== null && (
+                {r.atsScore !== null && r.atsScoreFromCheck && (
                   <span className={`text-sm font-bold ${r.atsScore >= 80 ? 'text-[#059669]' : r.atsScore >= 60 ? 'text-amber-400' : 'text-red-400'}`}>
                     ATS: {r.atsScore}
                   </span>

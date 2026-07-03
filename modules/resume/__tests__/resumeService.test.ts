@@ -99,6 +99,58 @@ describe('resumeService', () => {
   })
 
   describe('saveResume', () => {
+    it('keeps the posted fullText when preserveFullText is set, even with partial structure', async () => {
+      // The builder parse-on-open / tailor flows hold the AUTHORITATIVE complete
+      // text but only a PARTIAL structured parse — regenerating would drop the
+      // unmodeled sections.
+      await saveResume('user-1', {
+        id: 'r1',
+        name: 'Resume',
+        summary: 'Only the summary parsed',
+        fullText: 'COMPLETE ORIGINAL TEXT WITH EXPERIENCE',
+      }, { preserveFullText: true })
+      const [, update] = mockUpdateOne.mock.calls[0]
+      expect(update.$set['savedResumes.$.fullText']).toBe('COMPLETE ORIGINAL TEXT WITH EXPERIENCE')
+    })
+
+    it('regenerates fullText (default) — preserveFullText off', async () => {
+      await saveResume('user-1', {
+        id: 'r1', name: 'Resume', summary: 'Edited summary', fullText: 'STALE',
+      })
+      const [, update] = mockUpdateOne.mock.calls[0]
+      expect(update.$set['savedResumes.$.fullText']).toContain('Edited summary')
+      expect(update.$set['savedResumes.$.fullText']).not.toContain('STALE')
+    })
+
+    it('buildFullText includes contact links, gpa/honors, cert dates and project urls', async () => {
+      await saveResume('user-1', {
+        id: 'r1', name: 'R',
+        contactInfo: { fullName: 'Jane', email: 'j@x.co', linkedin: 'linkedin.com/in/jane', github: 'github.com/jane' },
+        education: [{ id: 'e1', institution: 'MIT', degree: 'BS', field: 'CS', gpa: '3.9', honors: 'Summa Cum Laude' }],
+        certifications: [{ name: 'AWS SA', issuer: 'Amazon', date: '2023' }],
+        projects: [{ id: 'p1', name: 'Proj', description: 'A thing', url: 'proj.dev' }],
+      })
+      const [, update] = mockUpdateOne.mock.calls[0]
+      const ft = update.$set['savedResumes.$.fullText'] as string
+      expect(ft).toContain('linkedin.com/in/jane')
+      expect(ft).toContain('github.com/jane')
+      expect(ft).toContain('GPA: 3.9')
+      expect(ft).toContain('Summa Cum Laude')
+      expect(ft).toContain('AWS SA - Amazon (2023)')
+      expect(ft).toContain('proj.dev')
+    })
+
+    it('persists atsScoreFromCheck provenance (default false, honored when true)', async () => {
+      await saveResume('user-1', { id: 'r1', name: 'R', atsScore: 88, atsScoreFromCheck: true })
+      let [, update] = mockUpdateOne.mock.calls[0]
+      expect(update.$set['savedResumes.$.atsScoreFromCheck']).toBe(true)
+
+      mockUpdateOne.mockClear()
+      await saveResume('user-1', { id: 'r1', name: 'R', atsScore: 88 })
+      ;[, update] = mockUpdateOne.mock.calls[0]
+      expect(update.$set['savedResumes.$.atsScoreFromCheck']).toBe(false)
+    })
+
     it('updates an existing resume when id is provided', async () => {
       const data = {
         id: 'r1',

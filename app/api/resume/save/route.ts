@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { listResumes, getResume, saveResume, deleteResume } from '@resume/services/resumeService'
-import { ResumeSchema } from '@resume/validators/resume'
+import { ResumeSchema, resumeClampedContent } from '@resume/validators/resume'
 
 export const dynamic = 'force-dynamic'
 
@@ -47,6 +47,13 @@ export async function POST(req: Request) {
   }
 
   const body = await req.json()
+  // preserveFullText is a control flag, not resume data — parse it off the
+  // body BEFORE Zod validation (ResumeSchema would strip an unknown key). Set
+  // by callers holding an authoritative complete fullText plus a partial
+  // structured parse of it (builder parse-on-open upgrade); keeps the posted
+  // fullText instead of regenerating a lossy one from the partial structure.
+  const preserveFullText = body?.preserveFullText === true
+
   const parsed = ResumeSchema.safeParse(body)
   if (!parsed.success) {
     // Size caps clamp inside the schema now, so reaching here means a
@@ -60,14 +67,20 @@ export async function POST(req: Request) {
   }
 
   try {
-    const result = await saveResume(session.user.id, parsed.data)
+    const result = await saveResume(session.user.id, parsed.data, { preserveFullText })
     if ('error' in result && result.code === 'RESUME_LIMIT') {
       return NextResponse.json({ error: result.error, code: result.code }, { status: 403 })
     }
     if ('error' in result && result.code === 'NOT_FOUND') {
       return NextResponse.json({ error: result.error, code: result.code }, { status: 404 })
     }
-    return NextResponse.json({ id: result.id }, { status: 'created' in result && result.created ? 201 : 200 })
+    // `clamped` tells the client a field was shortened to fit its cap so it can
+    // warn the user instead of showing "Saved!" over a silent truncation (the
+    // editor still holds the un-clamped text until reload).
+    return NextResponse.json(
+      { id: result.id, clamped: resumeClampedContent(body, parsed.data) },
+      { status: 'created' in result && result.created ? 201 : 200 },
+    )
   } catch {
     return NextResponse.json({ error: 'Failed to save resume' }, { status: 500 })
   }

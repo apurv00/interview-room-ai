@@ -23,9 +23,12 @@ export default function SummaryEditor({ value, onChange, onEnhance, enhancing }:
       <textarea
         value={value}
         onChange={e => onChange(e.target.value)}
+        // Locked while the AI rewrite is in flight: typing here mid-request was
+        // silently discarded when the response replaced the field on arrival.
+        disabled={enhancing}
         placeholder="A brief 2-3 sentence professional summary highlighting your key strengths and career objectives..."
         rows={4}
-        className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
+        className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y disabled:opacity-60 disabled:cursor-not-allowed"
       />
     </div>
   )

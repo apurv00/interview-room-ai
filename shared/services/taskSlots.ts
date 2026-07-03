@@ -76,6 +76,13 @@ export const TASK_SLOT_DEFAULTS: Record<
   'resume.ats-check':               { model: 'claude-sonnet-4-6', maxTokens: 2000, provider: 'anthropic' },
   // 8000: the tailor output contains the FULL rewritten resume plus the
   // change list — 3000 truncated the JSON for normal 2-page resumes.
+  // DEPLOY PRECONDITION: these are DEFAULTS. An active CMS ModelConfig row for
+  // resume.tailor / resume.parse overrides them (modelRouter prefers the CMS
+  // slot). A stale row at the OLD 3000/3000 silently defeats the bump — every
+  // tailor/parse then truncates on attempt 1 and reruns at the retry budget
+  // (double spend, ~2x latency, no error). Before/after deploy, verify the CMS
+  // rows for resume.tailor (>=8000), resume.parse (>=6000), resume.ats-check
+  // (>=2000, retry raises to 6000) match or exceed these, or delete the rows.
   'resume.tailor':                   { model: 'claude-sonnet-4-6', maxTokens: 8000, provider: 'anthropic' },
   // 6000: a dense multi-page resume's structured JSON exceeded the old 3000
   // and the truncated output failed JSON.parse — losing the whole import.

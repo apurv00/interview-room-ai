@@ -709,8 +709,9 @@ async function applySkillTruncationForPdf(
     // untruncated HTML on every pass — the loop could never converge and the
     // exported PDF shipped page-overflowing skills that the preview truncated.
     // Rendering pre-truncated data actually changes the DOM the next pass
-    // measures. Trade-off: the PDF omits the preview's "+N more" badge (that
-    // count rides the client context) — the items themselves now match.
+    // measures. applySkillsTruncationToData now carries the omitted count ON
+    // the data, so the "+N more" cue renders in the PDF too — matching the
+    // preview's items AND its overflow indicator.
     const truncatedHtml = renderResumeHTML(applySkillsTruncationToData(data, ratios), templateId)
     await page.setContent(truncatedHtml, { waitUntil: 'networkidle0' })
     await page.waitForFunction(

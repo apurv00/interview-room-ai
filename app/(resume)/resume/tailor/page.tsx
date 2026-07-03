@@ -32,7 +32,7 @@ export default function TailorPage() {
   const isAnonymous = authStatus !== 'authenticated'
   const [savedResumes, setSavedResumes] = useState<SavedResume[]>([])
   const [resumeText, setResumeText] = useState('')
-  const [resumeSource, setResumeSource] = useState<'upload' | 'saved'>('upload')
+  const [resumeSource, setResumeSource] = useState<'upload' | 'saved' | 'paste'>('upload')
   const [resumeFileName, setResumeFileName] = useState('')
   const [jobDescription, setJobDescription] = useState('')
   const [companyName, setCompanyName] = useState('')
@@ -58,15 +58,28 @@ export default function TailorPage() {
   async function handleSelectSaved(id: string) {
     const resume = savedResumes.find(r => r.id === id)
     if (!resume) return
+    setError('')
     try {
       const res = await fetch(`/api/resume/save?id=${id}`)
+      if (!res.ok) {
+        // Stale dropdown (deleted in another tab) used to no-op silently.
+        setError('That resume could not be loaded — it may have been deleted. Pick another or refresh.')
+        setSelectedId('')
+        return
+      }
       const data = await res.json()
       if (data.fullText) {
         setResumeText(data.fullText)
         setResumeFileName(resume.name)
         setResumeSource('saved')
+      } else {
+        setError('That resume has no text to tailor yet — open it in the builder and add content first.')
+        setSelectedId('')
       }
-    } catch { /* ignore */ }
+    } catch {
+      setError('Could not load that resume. Please try again.')
+      setSelectedId('')
+    }
   }
 
   async function handleUpload(file: File) {
@@ -122,23 +135,13 @@ export default function TailorPage() {
     setSavingCopy(true)
     setError('')
     try {
-      // Parse tailored text into structured fields so the builder can render them
-      let structured: Record<string, unknown> = {}
-      try {
-        const parseRes = await fetch('/api/resume/parse', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: result.tailoredResume }),
-        })
-        if (parseRes.ok) {
-          // Partial-tolerant contract: structured sections live under `resume`.
-          const parsed = await parseRes.json()
-          structured = (parsed.resume as Record<string, unknown>) ?? {}
-        }
-      } catch {
-        // Parsing failed — save with fullText only as fallback
-      }
-
+      // Save the COMPLETE tailored text as fullText and let the builder
+      // structure it on open. Parsing here and spreading a PARTIAL result made
+      // saveResume regenerate fullText from that partial structure, silently
+      // dropping any section the parser couldn't model (the whole tailored
+      // rewrite could vanish). With no structured fields posted, saveResume
+      // keeps the tailored text verbatim; opening the copy runs the builder's
+      // partial-tolerant parse-on-open, which warns before it can lose anything.
       const res = await fetch('/api/resume/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -150,7 +153,6 @@ export default function TailorPage() {
           // matchScore is JD-match, NOT ATS compatibility — storing it as
           // atsScore made the dashboard "ATS: N" badge lie. The badge now
           // only shows scores from a real ATS check.
-          ...structured,
         }),
       })
       const data = await res.json()
@@ -195,7 +197,21 @@ export default function TailorPage() {
 
             {savedResumes.length > 0 && <div className="text-center text-[10px] text-slate-400">or</div>}
 
-            {!resumeText ? (
+            {/* Chip only for a LOADED source (upload/saved). The anonymous paste
+                box stays an editable textarea — it used to flip to a chip after
+                the first character, trapping 1 char and locking out editing. */}
+            {resumeText && resumeSource !== 'paste' ? (
+              <div className="flex items-center justify-between bg-emerald-500/5 border border-emerald-500/15 rounded-xl px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <Check className="w-4 h-4 text-[#059669]" strokeWidth={2} />
+                  <span className="text-sm text-[#059669]">{resumeFileName || 'Resume loaded'}</span>
+                  <span className="text-[10px] text-slate-500">({resumeSource === 'saved' ? 'saved' : 'uploaded'})</span>
+                </div>
+                <button onClick={() => { setResumeText(''); setResumeFileName(''); setSelectedId('') }} className="text-xs text-slate-500 hover:text-slate-500">
+                  Remove
+                </button>
+              </div>
+            ) : (
               <>
                 {!isAnonymous && (
                   <FileDropzone label="Upload Resume" isUploading={uploading} onFileSelect={handleUpload} onRemove={() => {}} onError={setError} />
@@ -204,8 +220,8 @@ export default function TailorPage() {
                   <div className="space-y-2">
                     <label className="text-[10px] text-slate-500 uppercase tracking-wider">Paste your resume text</label>
                     <textarea
-                      value={resumeText}
-                      onChange={e => { setResumeText(e.target.value); if (e.target.value) setResumeFileName('Pasted resume') }}
+                      value={resumeSource === 'paste' ? resumeText : ''}
+                      onChange={e => { setResumeText(e.target.value); setResumeSource('paste'); setResumeFileName(e.target.value ? 'Pasted resume' : '') }}
                       placeholder="Paste your resume here. To upload a PDF or DOCX, sign in."
                       rows={8}
                       className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
@@ -217,17 +233,6 @@ export default function TailorPage() {
                   </div>
                 )}
               </>
-            ) : (
-              <div className="flex items-center justify-between bg-emerald-500/5 border border-emerald-500/15 rounded-xl px-4 py-3">
-                <div className="flex items-center gap-2">
-                  <Check className="w-4 h-4 text-[#059669]" strokeWidth={2} />
-                  <span className="text-sm text-[#059669]">{resumeFileName || 'Resume loaded'}</span>
-                  <span className="text-[10px] text-slate-500">({resumeSource === 'saved' ? 'saved' : 'uploaded'})</span>
-                </div>
-                <button onClick={() => { setResumeText(''); setResumeFileName(''); setSelectedId('') }} className="text-xs text-slate-500 hover:text-slate-500">
-                  Remove
-                </button>
-              </div>
             )}
           </div>
 

@@ -19,6 +19,9 @@ export async function listResumes(userId: string) {
     targetRole: r.targetRole || '',
     targetCompany: r.targetCompany || '',
     atsScore: r.atsScore ?? null,
+    // Legacy rows lack this flag → false → the dashboard hides the ATS badge
+    // for scores that were never a real ATS check (old tailor match-scores).
+    atsScoreFromCheck: r.atsScoreFromCheck === true,
     updatedAt: r.updatedAt || new Date().toISOString(),
   }))
 
@@ -41,9 +44,13 @@ export async function getResume(userId: string, resumeId: string) {
   return resume || null
 }
 
-export async function saveResume(userId: string, data: ResumeData) {
+export async function saveResume(
+  userId: string,
+  data: ResumeData,
+  opts?: { preserveFullText?: boolean },
+) {
   await connectDB()
-  const { id, name, template, targetRole, targetCompany, atsScore,
+  const { id, name, template, targetRole, targetCompany, atsScore, atsScoreFromCheck,
     contactInfo, summary, experience, education, skills,
     projects, certifications, customSections, sectionOrder, styling, fullText } = data
 
@@ -52,7 +59,16 @@ export async function saveResume(userId: string, data: ResumeData) {
   // ORIGINAL upload/tailor text, frozen at import time, and goes stale the
   // moment the user edits a bullet. Keep the posted text only when there is
   // no structure to derive from (upload/tailor saves that failed structuring).
-  const computedFullText = hasStructuredResumeContent(data) ? buildFullText(data) : (fullText || '')
+  //
+  // preserveFullText is set by callers that hold the AUTHORITATIVE complete
+  // text (an upload's original text, or a tailored rewrite) alongside a
+  // best-effort PARTIAL structured parse of it. Regenerating from that partial
+  // structure would silently drop whatever the parser couldn't model — the
+  // exact data-loss the builder's parse-on-open upgrade could cause. When set,
+  // the posted fullText wins and buildFullText is only a last-resort fallback.
+  const computedFullText = opts?.preserveFullText
+    ? (fullText || buildFullText(data))
+    : (hasStructuredResumeContent(data) ? buildFullText(data) : (fullText || ''))
 
   if (id) {
     // Update existing resume
@@ -65,6 +81,7 @@ export async function saveResume(userId: string, data: ResumeData) {
           'savedResumes.$.targetRole': targetRole || '',
           'savedResumes.$.targetCompany': targetCompany || '',
           'savedResumes.$.atsScore': atsScore ?? null,
+          'savedResumes.$.atsScoreFromCheck': atsScoreFromCheck ?? false,
           'savedResumes.$.contactInfo': contactInfo || { fullName: '', email: '' },
           'savedResumes.$.summary': summary || '',
           'savedResumes.$.experience': experience || [],
@@ -110,6 +127,7 @@ export async function saveResume(userId: string, data: ResumeData) {
     targetRole: targetRole || '',
     targetCompany: targetCompany || '',
     atsScore: atsScore ?? null,
+    atsScoreFromCheck: atsScoreFromCheck ?? false,
     contactInfo: contactInfo || { fullName: '', email: '' },
     summary: summary || '',
     experience: experience || [],
@@ -277,6 +295,11 @@ function buildFullText(data: ResumeData): string {
     if (c.email) parts.push(c.email)
     if (c.phone) parts.push(c.phone)
     if (c.location) parts.push(c.location)
+    // Contact LINKS were omitted, so ATS checks on the regenerated fullText
+    // wrongly flagged "missing LinkedIn/portfolio" for resumes that had them.
+    if (c.linkedin) parts.push(c.linkedin)
+    if (c.website) parts.push(c.website)
+    if (c.github) parts.push(c.github)
   }
 
   if (data.summary) parts.push(data.summary)
@@ -296,6 +319,8 @@ function buildFullText(data: ResumeData): string {
     for (const edu of data.education) {
       parts.push(`${edu.degree}${edu.field ? ` in ${edu.field}` : ''} - ${edu.institution}`)
       if (edu.graduationDate) parts.push(edu.graduationDate)
+      if (edu.gpa) parts.push(`GPA: ${edu.gpa}`)
+      if (edu.honors) parts.push(edu.honors)
     }
   }
 
@@ -311,13 +336,14 @@ function buildFullText(data: ResumeData): string {
     for (const proj of data.projects) {
       parts.push(`${proj.name}: ${proj.description}`)
       if (proj.technologies?.length) parts.push(`Technologies: ${proj.technologies.join(', ')}`)
+      if (proj.url) parts.push(proj.url)
     }
   }
 
   if (data.certifications?.length) {
     parts.push('CERTIFICATIONS')
     for (const cert of data.certifications) {
-      parts.push(`${cert.name} - ${cert.issuer}`)
+      parts.push(`${cert.name} - ${cert.issuer}${cert.date ? ` (${cert.date})` : ''}`)
     }
   }
 

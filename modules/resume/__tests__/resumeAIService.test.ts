@@ -191,6 +191,31 @@ describe('resumeAIService', () => {
       const resumeBlock = content.match(/<resume>\n([\s\S]*?)\n<\/resume>/)
       expect(resumeBlock![1]).toHaveLength(24_000)
     })
+
+    it('retries once with a larger budget when the completion is truncated', async () => {
+      mockCompletion.mockResolvedValueOnce({
+        text: '{"score": 70, "issues": [{"message": "cut', truncated: true,
+        model: 'm', provider: 'anthropic', inputTokens: 1, outputTokens: 1, usedFallback: false,
+      })
+      mockTextResponse(JSON.stringify({ score: 82 }))
+      const result = await checkATS({ resumeText: 'x'.repeat(200) })
+      expect(mockCompletion).toHaveBeenCalledTimes(2)
+      expect(mockCompletion.mock.calls[1][0]).toMatchObject({ maxTokens: 6000 })
+      expect(result.score).toBe(82)
+      expect(result.outputTruncated).toBe(false)
+    })
+
+    it('flags inputTruncated for a resume past the 24k window', async () => {
+      mockTextResponse('{"score": 70}')
+      const result = await checkATS({ resumeText: 'a'.repeat(30_000) })
+      expect(result.inputTruncated).toBe(true)
+    })
+
+    it('does not flag inputTruncated for a short resume', async () => {
+      mockTextResponse('{"score": 70}')
+      const result = await checkATS({ resumeText: 'x'.repeat(200) })
+      expect(result.inputTruncated).toBe(false)
+    })
   })
 
   describe('tailorResume', () => {

@@ -91,24 +91,35 @@ ${JSON_OUTPUT_RULE}
 
 // ─── ATS Check ──────────────────────────────────────────────────────────────
 
+// 24k/8k (was 5k/3k): a normal 2-page resume exceeds 5,000 chars, so the
+// check silently analyzed only the first ~page and scored keywords/sections
+// it never saw. Input tokens are cheap; the output stays small.
+const ATS_RESUME_CHARS = 24_000
+const ATS_JD_CHARS = 8_000
+// The input slice grew 6x but the output cap did not: a dense resume can make
+// the model enumerate enough issues/keywords to hit the 2000-token default and
+// truncate the JSON — which fails parse and 500s on EVERY retry (parse errors
+// aren't cached). Retry once with a larger budget before giving up.
+const ATS_RETRY_MAX_TOKENS = 6_000
+
 export async function checkATS(data: { resumeText: string; jobDescription?: string }) {
   // UAT-024: content-keyed cache layer. Same (resume, JD) pair hits in
   // <100ms instead of waiting on the ~35s LLM round-trip. Misses fall
   // through to the LLM and persist on success.
   const cacheKey = buildAtsCacheKey(data)
+  const inputTruncated = data.resumeText.length > ATS_RESUME_CHARS
   const cached = await getCachedAtsResult<AtsResultShape>(cacheKey)
   if (cached) {
-    return { ...cached, cached: true as const }
+    // outputTruncated is per-generation; a cached result was a clean parse.
+    return { ...cached, cached: true as const, inputTruncated, outputTruncated: false }
   }
 
-  // 24k/8k (was 5k/3k): a normal 2-page resume exceeds 5,000 chars, so the
-  // check silently analyzed only the first ~page and scored keywords/sections
-  // it never saw. Input tokens are cheap; the output stays small.
   const jdContext = data.jobDescription
-    ? `\n\n<job_description>\n${data.jobDescription.slice(0, 8000)}\n</job_description>\nAlso check keyword alignment with this job description.`
+    ? `\n\n<job_description>\n${data.jobDescription.slice(0, ATS_JD_CHARS)}\n</job_description>\nAlso check keyword alignment with this job description.`
     : ''
 
-  const atsResult = await completion({
+  const runCheck = (maxTokens?: number) => completion({
+    ...(maxTokens ? { maxTokens } : {}),
     taskSlot: 'resume.ats-check',
     system: `${DATA_BOUNDARY_RULE}
 
@@ -133,9 +144,14 @@ ${JSON_OUTPUT_RULE}
 }`,
     messages: [{
       role: 'user',
-      content: `<resume>\n${data.resumeText.slice(0, 24000)}\n</resume>${jdContext}\n\nAnalyze this resume for ATS compatibility.`,
+      content: `<resume>\n${data.resumeText.slice(0, ATS_RESUME_CHARS)}\n</resume>${jdContext}\n\nAnalyze this resume for ATS compatibility.`,
     }],
   })
+
+  let atsResult = await runCheck()
+  if (atsResult.truncated) {
+    atsResult = await runCheck(ATS_RETRY_MAX_TOKENS)
+  }
 
   const raw = atsResult.text || '{}'
   const cleaned = extractJSON(raw)
@@ -161,9 +177,11 @@ ${JSON_OUTPUT_RULE}
       },
       summary: result.summary || 'Unable to generate summary.',
     }
-    // Persist on the happy path only — never cache a parse-error round.
+    // Persist on the happy path only — never cache a parse-error round. The
+    // truncation flags are per-request (derived from input length / this
+    // generation), so they ride OUTSIDE the cached blob.
     await setCachedAtsResult(cacheKey, normalized)
-    return { ...normalized, cached: false as const }
+    return { ...normalized, cached: false as const, inputTruncated, outputTruncated: !!atsResult.truncated }
   } catch {
     console.error('checkATS JSON parse failed. Raw response:', raw.slice(0, 500))
     throw new Error('Failed to parse ATS analysis results. Please try again.')

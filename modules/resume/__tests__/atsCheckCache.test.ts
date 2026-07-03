@@ -52,9 +52,10 @@ describe('buildAtsCacheKey', () => {
     expect(a).toBe(b)
   })
 
-  it('uses the documented v1 namespace prefix', () => {
+  it('uses the current v2 namespace prefix', () => {
+    // v1 → v2 evicts entries scored on the pre-bump 5k input slice.
     const k = buildAtsCacheKey({ resumeText: 'r' })
-    expect(k.startsWith('ats-check:v1:')).toBe(true)
+    expect(k.startsWith('ats-check:v2:')).toBe(true)
   })
 })
 
