@@ -1679,7 +1679,10 @@ export function useInterview({
           question = await prefetchedQuestionRef.current
           prefetchedQuestionRef.current = null
         } else {
-          question = await generateQuestion(qIdx)
+          // Send the MAIN-question ordinal (not the exchange index qIdx) — see the
+          // nextMainQuestionOrdinal note below. Not yet incremented for this topic, so +1 is
+          // the current main question's ordinal.
+          question = await generateQuestion(mainQuestionsAsked + 1)
         }
         const topicQuestion = question // Save for thread summary
         questionIndexRef.current = qIdx
@@ -1973,7 +1976,12 @@ export function useInterview({
           continue
         }
 
-        const nextQIdx = qIdx + 1
+        // generateQuestion (prefetch below) needs the MAIN-question ordinal, NOT the exchange index
+        // qIdx: /api/generate-question uses this value for "question N of M", final-question
+        // detection, pressure escalation, and curveball timing — all of which must not be inflated by
+        // probes. mainQuestionsAsked is already incremented for the current topic, so +1 is the NEXT
+        // main question's ordinal.
+        const nextMainQuestionOrdinal = mainQuestionsAsked + 1
         // "Last main question?" keys off the MAIN-question budget, not the exchange index —
         // otherwise probes inflate qIdx and prematurely trip the final-topic fast path mid-interview.
         const isFinalTopicFastPath = mainQuestionsAsked >= maxMainQuestions || timeRemainingRef.current < 60
@@ -2008,7 +2016,7 @@ export function useInterview({
         const threadsSnapshot = shouldPrefetch
           ? [...completedThreadsRef.current, buildThreadSummary(topicQuestion)]
           : undefined
-        const nextQuestionPromise = shouldPrefetch ? generateQuestion(nextQIdx, threadsSnapshot) : undefined
+        const nextQuestionPromise = shouldPrefetch ? generateQuestion(nextMainQuestionOrdinal, threadsSnapshot) : undefined
         const { routerResult, prefetchedQ } = await evaluateMainAnswer(
           question, finalAnswer, qIdx, nextQuestionPromise, currentProbeDepthRef.current,
         )

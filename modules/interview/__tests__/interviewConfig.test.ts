@@ -106,6 +106,50 @@ describe('main-question budget is independent of probing', () => {
   })
 })
 
+// generateQuestion must receive the MAIN-question ordinal, not the exchange index qIdx (Codex PR
+// #495 P2). The route renders "Generate question ${questionIndex + 1} of ${getQuestionCount}" and
+// keys final-question / pressure / curveball logic on it, so an ordinal inflated by probes yields
+// nonsense like "question 12 of 10" and skips the final-question instruction.
+describe('generation ordinal stays bounded by the question count regardless of probing', () => {
+  // Mirrors the loop: each main topic passes ordinal = mainQuestionsAsked (0-based, intro = 0) to
+  // generateQuestion; probes advance qIdx (the exchange index) but not the ordinal.
+  function simulateOrdinals(duration: Duration, probesPerTopic: number) {
+    const budget = getMainQuestionBudget(duration)
+    const ordinals: number[] = []
+    let qIdx = 1
+    let mainAsked = 0
+    while (mainAsked < budget) {
+      ordinals.push(mainAsked + 1) // 0-based ordinal sent for this main question (intro was 0)
+      mainAsked++
+      for (let p = 0; p < probesPerTopic; p++) qIdx++
+      qIdx++
+    }
+    return { ordinals, finalQIdx: qIdx }
+  }
+
+  it.each(DURATIONS)(
+    '%d-min: the highest generation ordinal equals getQuestionCount - 1 (so "N of M" never exceeds M), for any probe rate',
+    (duration) => {
+      const total = getQuestionCount(duration)
+      for (const probes of [0, 1, 2, 3]) {
+        const { ordinals } = simulateOrdinals(duration, probes)
+        const maxOrdinal = Math.max(...ordinals)
+        // 0-based ordinal max = total - 1 → displayed "question (max+1) of total" = "total of total".
+        expect(maxOrdinal).toBe(total - 1)
+        // The final-question instruction (`questionIndex === totalQuestions - 1`) fires exactly once.
+        expect(ordinals.filter((o) => o === total - 1)).toHaveLength(1)
+      }
+    },
+  )
+
+  it('the exchange index diverges above the ordinal once probes exist (why qIdx is the wrong value to send)', () => {
+    const { ordinals, finalQIdx } = simulateOrdinals(10, 1)
+    // Ordinals stay 1..9; the exchange index runs to ~19 — sending qIdx would print "question 12 of 10".
+    expect(Math.max(...ordinals)).toBe(9)
+    expect(finalQIdx).toBeGreaterThan(getQuestionCount(10))
+  })
+})
+
 describe('PRESSURE_QUESTION_INDEX', () => {
   it.each(DURATIONS)(
     '%d-min: pressure index is within the loop range [1, QUESTION_COUNT)',

@@ -3,6 +3,8 @@ import {
   GenerateQuestionSchema,
   EvaluateAnswerSchema,
   AnswerEvaluationSchema,
+  GenerateFeedbackSchema,
+  UpdateSessionSchema,
 } from '../validators/interview'
 import { getMainQuestionBudget } from '../config/interviewConfig'
 import type { Duration } from '@shared/types'
@@ -42,5 +44,33 @@ describe('questionIndex exchange-index bound accommodates the decoupled loop', (
   it.each(fields)('%s still rejects garbage (negative and absurdly large)', (_name, field) => {
     expect(field.safeParse(-1).success).toBe(false)
     expect(field.safeParse(100_000).success).toBe(false)
+  })
+})
+
+// answeredCount = evaluations.length (intro + main + probe answers) and wasTruncatedByTimer (one
+// flag per answer) scale with total interactions, not the question count. finishInterview sends both
+// to /api/generate-feedback and the session PATCH, so their caps must track the exchange bound too or
+// long probed sessions are rejected at completion — losing DB persistence and feedback (Codex #495 P1).
+describe('completion-count fields accept long/probed sessions', () => {
+  const worstCaseAnswered = getMainQuestionBudget(60 as Duration) * 7 + 4 // ~417
+
+  const countFields = [
+    ['GenerateFeedback.answeredCount', GenerateFeedbackSchema.shape.answeredCount],
+    ['UpdateSession.answeredCount', UpdateSessionSchema.shape.answeredCount],
+  ] as const
+
+  it.each(countFields)('%s accepts the worst-case answered count', (_name, field) => {
+    expect(field.safeParse(worstCaseAnswered).success).toBe(true)
+    expect(worstCaseAnswered).toBeGreaterThan(100) // above the OLD cap
+  })
+
+  const flagArrayFields = [
+    ['GenerateFeedback.wasTruncatedByTimer', GenerateFeedbackSchema.shape.wasTruncatedByTimer],
+    ['UpdateSession.wasTruncatedByTimer', UpdateSessionSchema.shape.wasTruncatedByTimer],
+  ] as const
+
+  it.each(flagArrayFields)('%s accepts one flag per answer on a long session', (_name, field) => {
+    const flags = Array.from({ length: worstCaseAnswered }, () => false)
+    expect(field.safeParse(flags).success).toBe(true)
   })
 })

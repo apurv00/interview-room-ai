@@ -4,14 +4,15 @@ const MAX_LATENCY_TELEMETRY_BYTES = 2048
 const MAX_LATENCY_TIMESTAMP_MS = 4_102_444_800_000 // 2100-01-01T00:00:00.000Z
 const MAX_LATENCY_DURATION_MS = 3_600_000
 
-// Upper bound for `questionIndex` — the monotonic EXCHANGE index that increments on every
-// interaction (main question + each probe + pivot re-anchor + deferred bridge), not just main
-// questions. It is NOT bounded by getQuestionCount: once the loop counts main questions
-// separately from qIdx (see useInterview.ts / getMainQuestionBudget), probes push the exchange
-// index well past the question count. Structural worst case is a 60-min interview (max duration,
-// getQuestionCount(60)=60 → 59 main topics) with ~5 probes + a pivot per topic ≈ 417 exchanges;
-// 500 covers that with margin while still rejecting garbage input. Was 100 (sized for the old
-// qIdx<maxQ invariant where the exchange index could never exceed the question count).
+// Upper bound for anything that scales with the number of INTERACTIONS in a session — the
+// `questionIndex` exchange index AND the per-session counts derived from it (`answeredCount`,
+// the `wasTruncatedByTimer` flag array). All three increment on every interaction (main question +
+// each probe + pivot re-anchor + deferred bridge), not just main questions, and are NOT bounded by
+// getQuestionCount: once the loop counts main questions separately from qIdx (see useInterview.ts /
+// getMainQuestionBudget), probes push these well past the question count. Structural worst case is a
+// 60-min interview (max duration, getQuestionCount(60)=60 → 59 main topics) with ~5 probes + a pivot
+// per topic ≈ 417 exchanges; 500 covers that with margin while still rejecting garbage input. Was 100
+// (sized for the old qIdx<maxQ invariant where the exchange index could never exceed the question count).
 const MAX_EXCHANGE_INDEX = 500
 
 const LatencyDurationMsSchema = z.number().finite().min(0).max(MAX_LATENCY_DURATION_MS)
@@ -251,10 +252,10 @@ export const GenerateFeedbackSchema = z.object({
   // plannedQuestionCount from getQuestionCount(config.duration). The
   // client-populated path (populated by useInterview at finish time)
   // is more accurate because it knows the real endReason.
-  plannedQuestionCount: z.number().int().min(0).max(100).optional(),
-  answeredCount: z.number().int().min(0).max(100).optional(),
+  plannedQuestionCount: z.number().int().min(0).max(MAX_EXCHANGE_INDEX).optional(),
+  answeredCount: z.number().int().min(0).max(MAX_EXCHANGE_INDEX).optional(),
   endReason: z.enum(['normal', 'time_up', 'user_ended', 'usage_limit', 'abandoned']).optional(),
-  wasTruncatedByTimer: z.array(z.boolean()).max(100).optional(),
+  wasTruncatedByTimer: z.array(z.boolean()).max(MAX_EXCHANGE_INDEX).optional(),
 })
 
 export const CreateSessionSchema = z.object({
@@ -303,10 +304,10 @@ export const UpdateSessionSchema = z.object({
   // G.7: session completion shape. Populated by useInterview's
   // finishInterview() when the session ends. Writing these is additive —
   // legacy clients that don't send them continue to work unchanged.
-  plannedQuestionCount: z.number().int().min(0).max(100).optional(),
-  answeredCount: z.number().int().min(0).max(100).optional(),
+  plannedQuestionCount: z.number().int().min(0).max(MAX_EXCHANGE_INDEX).optional(),
+  answeredCount: z.number().int().min(0).max(MAX_EXCHANGE_INDEX).optional(),
   endReason: z.enum(['normal', 'time_up', 'user_ended', 'usage_limit', 'abandoned']).optional(),
-  wasTruncatedByTimer: z.array(z.boolean()).max(100).optional(),
+  wasTruncatedByTimer: z.array(z.boolean()).max(MAX_EXCHANGE_INDEX).optional(),
   interviewLatencyTelemetry: InterviewLatencyTelemetrySchema.optional(),
 })
 
