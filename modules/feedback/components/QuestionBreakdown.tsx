@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import { ScoreBar } from '@shared/ui/ScoreBar'
 import type { TranscriptEntry, AnswerEvaluation } from '@shared/types'
 import { answerSuggestion, dimensionLabels } from '@shared/lib/answerSuggestion'
+import { resolveEvalDepthSlug } from '@interview'
 
 // Safe string coerce to prevent React #310
 function s(v: unknown): string {
@@ -116,10 +117,17 @@ export default function QuestionBreakdown({
           (ev.relevance + ev.structure + ev.specificity + ev.ownership) / 4
         )
         const isOpen = expandedIdx === i
-        const miniStrip = buildMiniStrip(ev, interviewType)
-        const dimLabels = dimensionLabels(interviewType)
+        // Resolve the family from the depth this ROW was actually evaluated with,
+        // not the session slug: academics warm-ups (Q0/Q1) are scored with the
+        // behavioral rubric (resolveEvalDepthSlug), so their four slots mean
+        // behavioral Structure/Specificity/Ownership — not Conceptual Depth /
+        // Derivation / Breadth. Labelling/advising them as academic would be
+        // misleading (Codex P2 on #496).
+        const rowType = resolveEvalDepthSlug(interviewType ?? '', ev.questionIndex)
+        const miniStrip = buildMiniStrip(ev, rowType)
+        const dimLabels = dimensionLabels(rowType)
         // Weakest-dimension + domain-aware coaching tip (null when avg ≥ 60).
-        const suggestion = isFailed ? null : answerSuggestion(ev, interviewType)
+        const suggestion = isFailed ? null : answerSuggestion(ev, rowType)
         const scoreColor = isFailed
           ? 'text-[#71767b]'
           : avgScore >= 75 ? 'text-[#059669]' : avgScore >= 55 ? 'text-amber-600' : 'text-red-500'
