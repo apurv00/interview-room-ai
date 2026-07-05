@@ -1031,6 +1031,8 @@ function DrillPageInner() {
               ownership: activeQuestion.ownership,
             }
           }
+          interviewType={questionCtx?.interviewType ?? undefined}
+          primaryGap={questionCtx?.primaryGap ?? undefined}
         />
       )}
     </main>

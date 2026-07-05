@@ -16,12 +16,6 @@ function makeMoment(startSec: number, type: TimelineEvent['type'], title = 'evt'
   } as TimelineEvent
 }
 
-const QUESTIONS = [
-  { label: 'Q1', offsetSeconds: 0 },
-  { label: 'Q2', offsetSeconds: 60 },
-  { label: 'Q3', offsetSeconds: 120 },
-]
-
 describe('Scrubber', () => {
   it('renders play button + time readout + speed pill', () => {
     render(
@@ -31,7 +25,6 @@ describe('Scrubber', () => {
         onSeek={vi.fn()}
         playing={false}
         setPlaying={vi.fn()}
-        questions={QUESTIONS}
         keyMoments={[]}
       />
     )
@@ -48,14 +41,13 @@ describe('Scrubber', () => {
         onSeek={vi.fn()}
         playing
         setPlaying={vi.fn()}
-        questions={[]}
         keyMoments={[]}
       />
     )
     expect(screen.getByLabelText('Pause')).toBeInTheDocument()
   })
 
-  it('renders one question boundary mark per question', () => {
+  it('does NOT render per-question boundary ticks (dropped in the timeline declutter)', () => {
     const { container } = render(
       <Scrubber
         currentTimeSec={0}
@@ -63,14 +55,11 @@ describe('Scrubber', () => {
         onSeek={vi.fn()}
         playing={false}
         setPlaying={vi.fn()}
-        questions={QUESTIONS}
         keyMoments={[]}
       />
     )
-    // Three thin vertical ticks for three questions
     const slider = container.querySelector('[role="slider"]')!
-    const ticks = slider.querySelectorAll('.w-px.h-3\\.5')
-    expect(ticks.length).toBe(3)
+    expect(slider.querySelectorAll('.w-px.h-3\\.5').length).toBe(0)
   })
 
   it('renders a colored tick per key moment', () => {
@@ -81,7 +70,6 @@ describe('Scrubber', () => {
         onSeek={vi.fn()}
         playing={false}
         setPlaying={vi.fn()}
-        questions={[]}
         keyMoments={[
           makeMoment(30, 'strength'),
           makeMoment(90, 'improvement'),
@@ -102,7 +90,6 @@ describe('Scrubber', () => {
         onSeek={vi.fn()}
         playing={false}
         setPlaying={vi.fn()}
-        questions={[]}
         keyMoments={[]}
       />
     )
@@ -121,7 +108,6 @@ describe('Scrubber', () => {
         onSeek={onSeek}
         playing={false}
         setPlaying={vi.fn()}
-        questions={[]}
         keyMoments={[]}
       />
     )
@@ -141,7 +127,6 @@ describe('Scrubber', () => {
         onSeek={vi.fn()}
         playing={false}
         setPlaying={setPlaying}
-        questions={[]}
         keyMoments={[]}
       />
     )
@@ -159,7 +144,6 @@ describe('Scrubber', () => {
           onSeek={vi.fn()}
           playing={false}
           setPlaying={vi.fn()}
-          questions={[]}
           keyMoments={[]}
           fillerTimestamps={[10, 25, 50, 80]}
         />
@@ -176,7 +160,6 @@ describe('Scrubber', () => {
           onSeek={vi.fn()}
           playing={false}
           setPlaying={vi.fn()}
-          questions={[]}
           keyMoments={[]}
           fillerTimestamps={[50]}
         />
@@ -195,7 +178,6 @@ describe('Scrubber', () => {
           onSeek={vi.fn()}
           playing={false}
           setPlaying={vi.fn()}
-          questions={[]}
           keyMoments={[]}
           fillerTimestamps={[10, NaN, Infinity, -1, 150, 60]}
         />
@@ -213,7 +195,6 @@ describe('Scrubber', () => {
           onSeek={vi.fn()}
           playing={false}
           setPlaying={vi.fn()}
-          questions={[]}
           keyMoments={[]}
         />
       )
@@ -226,7 +207,6 @@ describe('Scrubber', () => {
           onSeek={vi.fn()}
           playing={false}
           setPlaying={vi.fn()}
-          questions={[]}
           keyMoments={[]}
           fillerTimestamps={[]}
         />

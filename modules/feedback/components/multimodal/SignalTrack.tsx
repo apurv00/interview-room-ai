@@ -3,11 +3,6 @@
 import type { TimelineEvent } from '@shared/types/multimodal'
 import { FONT_MONO, KIND_STYLES, timelineTypeToKind } from './tokens'
 
-interface QuestionMarker {
-  label: string
-  offsetSeconds: number
-}
-
 interface SignalTrackProps {
   /** Session-wide timeline events; filtered/displayed by kind. */
   timeline: TimelineEvent[]
@@ -15,8 +10,6 @@ interface SignalTrackProps {
   keyMoments: TimelineEvent[]
   totalDurationSec: number
   currentTimeSec: number
-  /** Question boundaries — drives white vertical Q lines overlaid on segments. */
-  questions: QuestionMarker[]
 }
 
 const LEGEND: Array<{ kind: 'strength' | 'improvement' | 'coaching'; label: string }> = [
@@ -28,9 +21,9 @@ const LEGEND: Array<{ kind: 'strength' | 'improvement' | 'coaching'; label: stri
 /**
  * Session-wide colored-band track below the scrubber. Renders each timeline
  * event as an absolutely-positioned colored band stretching from `startSec`
- * to `endSec`. Q boundary lines overlay (thin white verticals). Key-moment
- * white-bordered circles overlay at moment positions. Playhead bar overlays
- * at currentTimeSec.
+ * to `endSec`. Key-moment white-bordered circles overlay at moment positions.
+ * Playhead bar overlays at currentTimeSec. (Per-question white divider lines
+ * were removed in the timeline declutter — the band shows event signal only.)
  *
  * Compared to the scrubber, this track shows the SHAPE of the interview —
  * where strengths cluster, where improvement opportunities are, etc.
@@ -41,7 +34,6 @@ export default function SignalTrack({
   keyMoments,
   totalDurationSec,
   currentTimeSec,
-  questions,
 }: SignalTrackProps) {
   if (totalDurationSec <= 0) return null
 
@@ -92,20 +84,6 @@ export default function SignalTrack({
               />
             )
           })}
-
-        {/* Q boundary white lines (skip the first which is at 0%) */}
-        {questions.slice(1).map((q, i) => (
-          <div
-            key={`qline-${i}`}
-            className="absolute top-0 bottom-0 w-px"
-            style={{
-              left: `${(q.offsetSeconds / totalDurationSec) * 100}%`,
-              background: 'rgba(255,255,255,0.85)',
-              transform: 'translateX(-0.5px)',
-            }}
-            aria-hidden="true"
-          />
-        ))}
 
         {/* Key-moment circle markers (white-bordered, kind-colored) */}
         {keyMoments.map((km, i) => {
