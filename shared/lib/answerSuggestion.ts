@@ -47,6 +47,25 @@ const SUGGESTION_AVG_THRESHOLD = 60
  * behavioral, technical, case_study, culture_fit, …) is behavioral-family,
  * where the four slots keep their literal meaning and STAR is a valid frame.
  */
+/**
+ * The depth an answer should be EVALUATED / LABELLED as — usually the interview's
+ * own depth, but the academics viva has TWO warm-up turns that only name/scope the
+ * subject, not probe a concept, so they are scored with the behavioral rubric:
+ *   - questionIndex 0: the spoken intro ("which subject are you strongest in?").
+ *   - questionIndex 1: the ease-in "roadmap" warm-up, before any real probing.
+ * The first real viva probe (index ≥ 2) keeps the academics depth.
+ *
+ * Lives here (client-safe, dependency-free) so both the server eval path
+ * (re-exported by @interview/services/eval/scoringGuide, consumed by the
+ * evaluate-answer + turn-router routes) and the client feedback UI
+ * (QuestionBreakdown) resolve the SAME rule with no barrel-drags-server-code
+ * bundling problem and no duplication.
+ */
+export function resolveEvalDepthSlug(interviewType: string, questionIndex?: number): string {
+  if (interviewType === 'academics' && (questionIndex === 0 || questionIndex === 1)) return 'behavioral'
+  return interviewType
+}
+
 export function suggestionFamily(interviewType?: string): SuggestionFamily {
   switch ((interviewType ?? '').toLowerCase()) {
     case 'coding':

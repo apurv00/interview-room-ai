@@ -3,6 +3,7 @@ import {
   answerSuggestion,
   suggestionFamily,
   dimensionLabels,
+  resolveEvalDepthSlug,
   type SuggestionInput,
 } from '../answerSuggestion'
 
@@ -16,6 +17,21 @@ describe('suggestionFamily', () => {
     expect(suggestionFamily('screening')).toBe('behavioral')
     expect(suggestionFamily(undefined)).toBe('behavioral')
     expect(suggestionFamily('SYSTEM-DESIGN')).toBe('system-design') // case-insensitive
+  })
+})
+
+describe('resolveEvalDepthSlug', () => {
+  it('remaps academics warm-ups (Q0/Q1) to behavioral, keeps real probes academic', () => {
+    expect(resolveEvalDepthSlug('academics', 0)).toBe('behavioral')
+    expect(resolveEvalDepthSlug('academics', 1)).toBe('behavioral')
+    expect(resolveEvalDepthSlug('academics', 2)).toBe('academics')
+    expect(resolveEvalDepthSlug('academics', 5)).toBe('academics')
+  })
+
+  it('leaves non-academics types unchanged regardless of index', () => {
+    expect(resolveEvalDepthSlug('coding', 0)).toBe('coding')
+    expect(resolveEvalDepthSlug('behavioral', 1)).toBe('behavioral')
+    expect(resolveEvalDepthSlug('screening')).toBe('screening')
   })
 })
 

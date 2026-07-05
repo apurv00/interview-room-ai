@@ -3,8 +3,7 @@
 import { useMemo, useState } from 'react'
 import { ScoreBar } from '@shared/ui/ScoreBar'
 import type { TranscriptEntry, AnswerEvaluation } from '@shared/types'
-import { answerSuggestion, dimensionLabels } from '@shared/lib/answerSuggestion'
-import { resolveEvalDepthSlug } from '@interview'
+import { answerSuggestion, dimensionLabels, resolveEvalDepthSlug } from '@shared/lib/answerSuggestion'
 
 // Safe string coerce to prevent React #310
 function s(v: unknown): string {

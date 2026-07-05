@@ -39,5 +39,9 @@ headroom). LOC is well under budget — this is a count-shape change, not bloat.
 
 No extra headroom: the next `shared/` file addition should reassess rather than
 reflexively re-bump. The per-row eval-depth resolution (academics warm-ups scored
-with the behavioral rubric) stays at the `@feedback` call site via
-`resolveEvalDepthSlug`, so the shared helper remains pure and module-agnostic.
+with the behavioral rubric) is done by `resolveEvalDepthSlug`, whose canonical
+implementation lives in this same client-safe shared helper and is re-exported by
+`@interview/services/eval/scoringGuide` for the server eval routes — a single
+source of truth for both the scoring path and the feedback UI, and (critically)
+importable from the `'use client'` `QuestionBreakdown` without dragging the
+server-heavy `@interview` barrel into the client bundle.
