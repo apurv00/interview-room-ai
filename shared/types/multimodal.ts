@@ -53,7 +53,14 @@ export interface FacialSegment {
   startSec: number
   endSec: number
   avgEyeContact: number            // 0–1
-  dominantExpression: string
+  /**
+   * Dominant expression for the window, or `undefined` when the window had no
+   * captured frames (honest "no data" — do NOT coerce to 'neutral', which the
+   * ExpressionStrip would render as a real neutral read). Non-empty windows
+   * always carry a string; the aggregator surfaces a sustained non-neutral
+   * expression over the ever-present neutral plurality (see facialAggregator).
+   */
+  dominantExpression?: string
   headStability: number            // 0–1 (1 = very stable)
   gestureLevel: 'minimal' | 'moderate' | 'expressive'
   questionIndex?: number

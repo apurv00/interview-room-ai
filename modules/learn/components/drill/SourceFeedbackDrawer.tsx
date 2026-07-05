@@ -3,6 +3,7 @@
 import { useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ScoreBar } from '@shared/ui/ScoreBar'
+import { answerSuggestion } from '@shared/lib/answerSuggestion'
 
 interface FourDimScores {
   relevance: number
@@ -68,7 +69,10 @@ export default function SourceFeedbackDrawer({
     return () => window.removeEventListener('keydown', onKey)
   }, [open, onClose])
 
-  const suggestion = scores ? getSuggestion(scores) : null
+  // Shared weakest-dimension helper — keeps the drill and the feedback page in
+  // lockstep. No interviewType here (drills are behavioral practice), so this
+  // uses behavioral-family copy. Returns null when avg ≥ 60.
+  const suggestion = scores ? answerSuggestion(scores) : null
 
   return (
     <AnimatePresence>
@@ -171,23 +175,4 @@ export default function SourceFeedbackDrawer({
       )}
     </AnimatePresence>
   )
-}
-
-/** Deterministic suggestion — same logic + copy as
- *  modules/feedback/components/QuestionBreakdown's "Suggestion" block,
- *  so the drill page and the feedback page never give the user
- *  contradictory advice for the same low-scoring answer. */
-function getSuggestion(scores: FourDimScores): string | null {
-  const avg = (scores.relevance + scores.structure + scores.specificity + scores.ownership) / 4
-  if (avg >= 60) return null
-  if (scores.structure < 55) {
-    return 'Try using the STAR framework: describe the Situation, your Task, the Action you took, and the Result.'
-  }
-  if (scores.specificity < 55) {
-    return 'Include specific metrics, numbers, or concrete examples to strengthen your answer.'
-  }
-  if (scores.ownership < 55) {
-    return 'Use "I" instead of "we" and clearly describe your personal contributions.'
-  }
-  return 'Focus on answering the specific question asked. Keep your response targeted and relevant.'
 }

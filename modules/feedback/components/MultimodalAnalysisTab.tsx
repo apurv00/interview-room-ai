@@ -7,7 +7,6 @@ import QuestionChapterRow from '@feedback/components/multimodal/QuestionChapterR
 import Scrubber from '@feedback/components/multimodal/Scrubber'
 import SignalTrack from '@feedback/components/multimodal/SignalTrack'
 import VideoMetricChips from '@feedback/components/multimodal/VideoMetricChips'
-import PeakStumbleCTAs from '@feedback/components/multimodal/PeakStumbleCTAs'
 import { composureLevels as computeComposureLevels } from '@feedback/components/multimodal/composureScore'
 import ExpressionStrip from '@feedback/components/multimodal/ExpressionStrip'
 import EngagementHeatmap from '@feedback/components/multimodal/EngagementHeatmap'
@@ -427,12 +426,6 @@ export default function MultimodalAnalysisTab({
             replayFullscreen={replayFullscreen}
             setReplayFullscreen={setReplayFullscreen}
             onDurationKnown={setVideoDuration}
-          />
-
-          <PeakStumbleCTAs
-            topMoments={analysis.fusionSummary?.topMoments}
-            improvementMoments={analysis.fusionSummary?.improvementMoments}
-            onSeek={(sec) => seek?.(sec)}
           />
 
           <QuestionChapterRow

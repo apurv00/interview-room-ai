@@ -29,10 +29,42 @@ const FILLER_WORDS_BIGRAM = new Set([
 const LIKE_PAUSE_THRESHOLD_SEC = 0.35
 
 function normalizeWord(word: string): string {
+  // Strips only LEADING/TRAILING non-alphanumerics — internal hyphens survive,
+  // so Deepgram backchannels like "uh-huh"/"mm-hmm" reach canonicalFiller intact.
   return word
     .normalize('NFKC')
     .toLowerCase()
     .replace(/^[^a-z0-9']+|[^a-z0-9']+$/g, '')
+}
+
+/**
+ * Canonicalize a normalized token to a filler word, folding the elongated and
+ * variant spellings STT actually emits (umm, uhh, uhm, hmm, mhm, uh-huh, …).
+ * Returns the canonical filler ('um' | 'uh' | 'er' | 'ah' | 'hmm' | 'mhm' |
+ * 'uh-huh' | 'uh-uh') or null when the token is not a filler.
+ *
+ * Why: the counter runs over the Deepgram transcript, which carries fillers
+ * (filler_words=true; smart_format is on but does NOT strip them). The base
+ * lexicon only matched {um, uh, er, ah}, so the elongated/variant spellings a
+ * real transcript carries ("umm"/"uhh"/"uhm"/"hmm"/"mhm"/"uh-huh") slipped
+ * through — that was the reported undercount. Folding them to a canonical form
+ * both counts them AND groups the per-moment chips (umm + um → "um").
+ */
+function canonicalFiller(normalized: string): string | null {
+  if (!normalized) return null
+  if (FILLER_WORDS_SINGLE.has(normalized)) return normalized
+  // Deepgram hyphenated backchannels (internal hyphen survives normalizeWord).
+  if (/^uh-huh$/.test(normalized)) return 'uh-huh'
+  if (/^(uh-uh|nuh-uh)$/.test(normalized)) return 'uh-uh'
+  if (/^mm-?hmm?$/.test(normalized) || /^m+h+m*$/.test(normalized)) return 'mhm'
+  // Elongated single-token fillers.
+  if (/^u+h+m+$/.test(normalized)) return 'um'   // uhm, uhmm → um
+  if (/^u+m+$/.test(normalized)) return 'um'      // um, umm, ummm
+  if (/^u+h+$/.test(normalized)) return 'uh'      // uh, uhh, uhhh
+  if (/^e+r+m*$/.test(normalized)) return 'er'    // er, err, erm
+  if (/^a+h+$/.test(normalized)) return 'ah'      // ah, ahh
+  if (/^h+m+$/.test(normalized)) return 'hmm'     // hm, hmm, hmmm
+  return null
 }
 
 function wordsFromText(text: string): FillerWordInput[] {
@@ -61,7 +93,7 @@ function isContextualLikeFiller(words: FillerWordInput[], index: number): boolea
   const next = words[index + 1]
 
   if (prev && normalizeWord(prev.word) === 'i') return true
-  if (next && FILLER_WORDS_SINGLE.has(normalizeWord(next.word))) return true
+  if (next && canonicalFiller(normalizeWord(next.word)) !== null) return true
 
   if (hasTiming(current)) {
     const pauseBefore = prev && hasTiming(prev) ? current.start - prev.end : 0
@@ -99,13 +131,17 @@ export function computeFillerMetrics(input: string | FillerWordInput[]): FillerM
       }
     }
 
+    const canonical = canonicalFiller(word.normalized)
     if (
       word.isFiller === true ||
-      FILLER_WORDS_SINGLE.has(word.normalized) ||
+      canonical !== null ||
       isContextualLikeFiller(words, i)
     ) {
       fillerWords.push({
-        word: word.normalized,
+        // Canonical form ('umm'/'uhm' → 'um') so per-moment chips group cleanly;
+        // fall back to the raw token for Deepgram-flagged (isFiller) words we
+        // don't otherwise recognize.
+        word: canonical ?? word.normalized,
         index: i,
         ...(typeof word.start === 'number' ? { timestampSec: word.start } : {}),
       })

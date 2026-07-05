@@ -17,6 +17,16 @@ interface AggregateOptions {
 }
 
 /**
+ * Minimum share of a window's frames that must carry the SAME non-neutral
+ * expression for it to override the (near-ubiquitous) neutral plurality.
+ * A talking/listening face classifies as 'neutral' most of the time, so a raw
+ * mode almost always returns 'neutral' and hides real emotion. ~15% ≈ 4.5s of
+ * a 30s answer — enough to be a sustained read rather than a one-off frame,
+ * without demanding it beat neutral outright (which it rarely does).
+ */
+const NON_NEUTRAL_DOMINANCE_FLOOR = 0.15
+
+/**
  * Aggregate raw facial frames into segments.
  *
  * Two modes:
@@ -63,13 +73,15 @@ export function aggregateFacialData(
     )
 
     if (windowFrames.length === 0) {
-      // No frames in window — emit neutral/null values so downstream
-      // doesn't penalize this segment as "no eye contact" or "unstable".
+      // No frames in window — emit sentinel/absent values so downstream doesn't
+      // penalize this segment as "no eye contact" or "unstable". dominantExpression
+      // is OMITTED (undefined), NOT 'neutral', so the replay strip shows honest
+      // "no data" instead of a fake neutral read. Fusion already skips these via
+      // the avgEyeContact === -1 sentinel.
       const empty: FacialSegment = {
         startSec: window.startSec,
         endSec: window.endSec,
         avgEyeContact: -1,  // sentinel: no data (downstream should skip, not treat as 0)
-        dominantExpression: 'neutral',
         headStability: -1,  // sentinel: no data
         gestureLevel: 'minimal',
       }
@@ -82,19 +94,28 @@ export function aggregateFacialData(
       (windowFrames.reduce((sum, f) => sum + f.eyeContactScore, 0) / windowFrames.length).toFixed(3)
     )
 
-    // Dominant expression (most frequent)
+    // Dominant expression. A raw mode almost always returns 'neutral' (a
+    // talking/listening face is neutral for the plurality of frames), which
+    // hides real emotion. Instead, surface the most frequent NON-neutral
+    // expression when it holds a meaningful, sustained share of the window;
+    // otherwise the face genuinely read as neutral.
     const expressionCounts = new Map<string, number>()
     for (const f of windowFrames) {
       expressionCounts.set(f.expression, (expressionCounts.get(f.expression) || 0) + 1)
     }
-    let dominantExpression = 'neutral'
-    let maxCount = 0
+    let topNonNeutral: string | undefined
+    let topNonNeutralCount = 0
     expressionCounts.forEach((count, expr) => {
-      if (count > maxCount) {
-        dominantExpression = expr
-        maxCount = count
+      if (expr === 'neutral') return
+      if (count > topNonNeutralCount) {
+        topNonNeutral = expr
+        topNonNeutralCount = count
       }
     })
+    const dominantExpression =
+      topNonNeutral && topNonNeutralCount / windowFrames.length >= NON_NEUTRAL_DOMINANCE_FLOOR
+        ? topNonNeutral
+        : 'neutral'
 
     // Head stability: bounded exponential decay of yaw/pitch variance.
     // exp(-var/150) maps: variance 0 → stability 1.0, variance 75 → ~0.6,
