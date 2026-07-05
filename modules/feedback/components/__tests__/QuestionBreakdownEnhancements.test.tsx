@@ -142,3 +142,37 @@ describe('QuestionBreakdown — sortOrder + dimension strip + controlled expansi
     expect(screen.queryByText('Score Breakdown')).toBeNull()
   })
 })
+
+describe('QuestionBreakdown — per-row eval-depth family (academics warm-ups, Codex P2 on #496)', () => {
+  it('labels academics warm-ups (Q0/Q1) with the behavioral rubric, real probes with the academic rubric', () => {
+    const evals = [
+      makeEval(0, { relevance: 40, structure: 30, specificity: 40, ownership: 40 }), // warm-up → scored behavioral
+      makeEval(2, { relevance: 40, structure: 30, specificity: 40, ownership: 40 }), // real viva → scored academic
+    ]
+    const { container, rerender } = render(
+      <QuestionBreakdown
+        transcript={transcript}
+        evaluations={evals}
+        interviewType="academics"
+        expandedIdx={0}
+      />
+    )
+    // Row 0 = questionIndex 0 warm-up → behavioral labels, NOT academic ones.
+    const warmup = container.querySelector('[data-question-idx="0"]')! as HTMLElement
+    expect(within(warmup).getByText('Structure (STAR)')).toBeInTheDocument()
+    expect(within(warmup).queryByText('Conceptual Depth')).toBeNull()
+
+    // Row 1 (array index 1) = questionIndex 2 real viva → academic labels.
+    rerender(
+      <QuestionBreakdown
+        transcript={transcript}
+        evaluations={evals}
+        interviewType="academics"
+        expandedIdx={1}
+      />
+    )
+    const viva = container.querySelector('[data-question-idx="1"]')! as HTMLElement
+    expect(within(viva).getByText('Conceptual Depth')).toBeInTheDocument()
+    expect(within(viva).queryByText('Structure (STAR)')).toBeNull()
+  })
+})

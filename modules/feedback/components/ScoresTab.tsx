@@ -110,6 +110,7 @@ export default function ScoresTab({ data }: ScoresTabProps) {
         sortOrder={sortOrder}
         expandedIdx={expandedIdx}
         onExpandedChange={setExpandedIdx}
+        interviewType={data.config?.interviewType}
       />
     </div>
   )

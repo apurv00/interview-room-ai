@@ -9,17 +9,48 @@ const CAPTURE_INTERVAL_MS = 200 // 5fps
 // Expression classification from MediaPipe blend shapes
 type BlendShapeMap = Record<string, number>
 
-function classifyExpression(blendShapes: BlendShapeMap): FacialFrame['expression'] {
+/**
+ * Thresholds on summed L+R blendshapes (each side 0–1, so each sum is 0–2).
+ * Tuned DOWN from the originals (smile>0.4, frown>0.3, surprise brow>0.4 &
+ * eye>0.3, focused browDown>0.3): while a candidate is *speaking*, the mouth
+ * blendshapes are dominated by jaw/viseme movement, which suppresses the
+ * smile/frown signal. The old thresholds left nearly every talking frame on
+ * 'neutral', so the per-question dominant expression collapsed to neutral for
+ * essentially every answer of every interview.
+ *
+ * Only the MOUTH-based reads (smile/frown) are lowered aggressively, because a
+ * speaking jaw suppresses those blendshapes. browDown (focused) is NOT
+ * talking-suppressed, so it keeps the original 0.3 — lowering it would over-fire
+ * 'focused' on any mildly furrowed brow, and (via facialAggregator →
+ * fusionService) that would depress the body-language score, not just tint the
+ * emoji strip.
+ *
+ * CALIBRATION CAVEAT: these are derived from blendshape ranges, NOT yet
+ * validated against real camera interviews. A prod camera pass should confirm
+ * or adjust them (see modules/interview/docs/AI_ANALYSIS.md §8). The dominance
+ * floor in facialAggregator is the second-line safeguard (a class must be
+ * SUSTAINED to surface). Exported so classifyExpression can be unit-tested
+ * without MediaPipe.
+ */
+export const EXPRESSION_THRESHOLDS = {
+  smile: 0.25,
+  frown: 0.2,
+  surpriseBrow: 0.3,
+  surpriseEye: 0.2,
+  focusedBrowDown: 0.3,
+} as const
+
+export function classifyExpression(blendShapes: BlendShapeMap): FacialFrame['expression'] {
   const smile = (blendShapes['mouthSmileLeft'] || 0) + (blendShapes['mouthSmileRight'] || 0)
   const frown = (blendShapes['mouthFrownLeft'] || 0) + (blendShapes['mouthFrownRight'] || 0)
   const browUp = (blendShapes['browOuterUpLeft'] || 0) + (blendShapes['browOuterUpRight'] || 0)
   const eyeWide = (blendShapes['eyeWideLeft'] || 0) + (blendShapes['eyeWideRight'] || 0)
   const browDown = (blendShapes['browDownLeft'] || 0) + (blendShapes['browDownRight'] || 0)
 
-  if (smile > 0.4) return 'smile'
-  if (frown > 0.3) return 'frown'
-  if (browUp > 0.4 && eyeWide > 0.3) return 'surprise'
-  if (browDown > 0.3) return 'focused'
+  if (smile > EXPRESSION_THRESHOLDS.smile) return 'smile'
+  if (frown > EXPRESSION_THRESHOLDS.frown) return 'frown'
+  if (browUp > EXPRESSION_THRESHOLDS.surpriseBrow && eyeWide > EXPRESSION_THRESHOLDS.surpriseEye) return 'surprise'
+  if (browDown > EXPRESSION_THRESHOLDS.focusedBrowDown) return 'focused'
   return 'neutral'
 }
 

@@ -87,7 +87,15 @@ const BUDGETS = {
   // (countFiles skips __tests__/). LOC unaffected, well under budget (~13.8k/25k)
   // — a count-shape change, not bloat. +1 headroom. See
   // docs/adr/0013-shared-budget-bump-azure-tts.md.
-  'shared':            { maxLOC: 25_000, maxFiles: 136 },
+  // Bumped maxFiles 136 → 137 on 2026-07-05 (PR #496): adds ONE counted file —
+  // shared/lib/answerSuggestion.ts, the deterministic per-answer coaching-tip
+  // helper (weakest-dimension + domain-aware) shared by @feedback
+  // (QuestionBreakdown) and @learn (SourceFeedbackDrawer) so the two surfaces
+  // cannot drift — same cross-module-dedup rationale as ADR 0011. The paired
+  // test (__tests__/answerSuggestion.test.ts) is NOT counted (countFiles skips
+  // __tests__/). LOC well under budget. +1 headroom. See
+  // docs/adr/0015-shared-budget-bump-answer-suggestion.md.
+  'shared':            { maxLOC: 25_000, maxFiles: 137 },
 }
 
 const TS_EXTENSIONS = new Set(['.ts', '.tsx'])

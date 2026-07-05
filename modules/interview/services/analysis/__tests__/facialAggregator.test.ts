@@ -136,7 +136,38 @@ describe('facialAggregator', () => {
       // Middle window has no frames — uses sentinel values (-1) to indicate no data
       expect(result[1].avgEyeContact).toBe(-1)
       expect(result[1].headStability).toBe(-1)
-      expect(result[1].dominantExpression).toBe('neutral')
+      // dominantExpression is OMITTED (honest "no data"), not a fake 'neutral'.
+      expect(result[1].dominantExpression).toBeUndefined()
+    })
+  })
+
+  describe('non-neutral dominance (avoid neutral-only collapse)', () => {
+    // Build N frames of a given expression, then M neutral frames, all inside
+    // one 0..100s question window.
+    const window = (nonNeutral: FacialFrame['expression'], nCount: number, neutralCount: number) => {
+      const specs: Partial<FacialFrame>[] = []
+      for (let i = 0; i < nCount; i++) specs.push({ ts: i * 0.2, expression: nonNeutral })
+      for (let i = 0; i < neutralCount; i++) specs.push({ ts: (nCount + i) * 0.2, expression: 'neutral' })
+      return aggregateFacialData(makeFrames(specs), [0], 100)[0]
+    }
+
+    it('surfaces a sustained non-neutral expression even when neutral is the plurality', () => {
+      // 30 smile / 70 neutral → neutral is the raw mode, but smile share = 30%
+      // (≥ 25% floor), so the real expression wins instead of collapsing to neutral.
+      expect(window('smile', 30, 70).dominantExpression).toBe('smile')
+    })
+
+    it('stays neutral when the non-neutral expression is only a brief blip', () => {
+      // 10 focused / 90 neutral → 10% share, below the 25% floor → genuinely neutral.
+      expect(window('focused', 10, 90).dominantExpression).toBe('neutral')
+    })
+
+    it('picks the most frequent non-neutral expression when several are present', () => {
+      const specs: Partial<FacialFrame>[] = []
+      for (let i = 0; i < 30; i++) specs.push({ ts: i * 0.2, expression: 'frown' })
+      for (let i = 0; i < 10; i++) specs.push({ ts: (30 + i) * 0.2, expression: 'smile' })
+      for (let i = 0; i < 60; i++) specs.push({ ts: (40 + i) * 0.2, expression: 'neutral' })
+      expect(aggregateFacialData(makeFrames(specs), [0], 100)[0].dominantExpression).toBe('frown')
     })
   })
 

@@ -179,7 +179,78 @@ Resets a failed row. Idempotent. Body is empty.
 
 ## 8. Known Failure Modes (Append-Only Log)
 
-_No analysis-specific incidents logged yet. When a bug breaks this flow,
-add an entry with the template from `INTERVIEW_FLOW.md` Section 8 —
-date, commit hash, symptom, root cause, fix, why tests missed it,
-prevention._
+### 2026-07-05 · Replay always shows neutral faces, undercounts fillers, duplicate Peak/Stumble · branch `fix/decouple-main-question-count-from-probes`
+
+**Files in scope:** `modules/interview/services/analysis/facialAggregator.ts`
+(hot-path), `modules/interview/hooks/useFacialLandmarks.ts`,
+`modules/interview/config/fillerMetrics.ts`,
+`modules/feedback/components/multimodal/ExpressionStrip.tsx` (via type),
+`modules/feedback/components/MultimodalAnalysisTab.tsx`,
+`shared/types/multimodal.ts`.
+
+**Symptoms reported:**
+1. Every answer's per-question face emoji reads 😐 neutral, every interview.
+2. The "FILLERS x%" metric undercounts (typically 0–1 per question).
+3. The Peak/Stumble pills below the video duplicate the right-column Key moments.
+
+**Root causes:**
+
+- **A (#1) — mode aggregation flattens.** `facialAggregator` set
+  `dominantExpression` to the raw plurality of ~150 per-answer frames. A
+  talking/listening face is `neutral` for the plurality, so the mode returned
+  `neutral` for nearly every window and discarded every minority expression.
+- **B (#1) — classifier blind to a speaking mouth.** `classifyExpression`
+  (`useFacialLandmarks.ts`) only inspected `mouthSmile/Frown/brow/eyeWide` with
+  thresholds (smile>0.4, frown>0.3) that a speaking mouth — dominated by
+  jaw/viseme blendshapes — rarely crossed, pushing the per-frame neutral share
+  toward ~100% before A even ran.
+- **C (#1) — dishonest empty-window sentinel.** Empty (no-frames) windows
+  emitted `dominantExpression: 'neutral'`, a truthy string that passed
+  `ExpressionStrip`'s "hide when no data" guard — so failed capture rendered a
+  full neutral row instead of honest "no data".
+- **D (#2) — narrow filler lexicon.** `computeFillerMetrics` matched only
+  `{um, uh, er, ah}` + a few bigrams; `normalizeWord` did not fold elongations,
+  so the spellings the transcript actually carries (umm, uhh, uhm, hmm, mhm,
+  uh-huh) slipped through. STT source is Deepgram nova-3 (not Whisper) with
+  `filler_words=true`, so fillers ARE present; `smart_format=true` is on but
+  does NOT strip them (confirmed) — the narrow lexicon was the sole cause.
+- **E (#3) — redundant CTAs.** `PeakStumbleCTAs` rendered `topMoments[0]` /
+  `improvementMoments[0]`, both indices into the same `analysis.timeline` that
+  feeds the Key moments list — no new signal.
+
+**Fixes (this branch):**
+- A: `facialAggregator` now surfaces the most frequent NON-neutral expression
+  when its frame share ≥ `NON_NEUTRAL_DOMINANCE_FLOOR` (0.25 ≈ 7.5s of a 30s
+  answer), else neutral. The floor is deliberately conservative because the
+  dominant expression also feeds `fusionService`'s body-language score — a low
+  floor + retuned thresholds could flip "always neutral" into "always
+  focused/frown" (an equal-but-opposite regression with a *larger* blast radius).
+- B: `classifyExpression` thresholds pulled into exported `EXPRESSION_THRESHOLDS`
+  (now unit-tested). Only the MOUTH reads (smile/frown) are lowered — a speaking
+  jaw suppresses them; `focusedBrowDown` keeps the original 0.3 (brow-down is not
+  talking-suppressed, so lowering it would over-fire 'focused'). **CALIBRATION
+  CAVEAT: derived from blendshape ranges, NOT yet validated against a real camera
+  interview — a prod camera pass must confirm/adjust the thresholds AND the
+  dominance floor. Until then the floor is the safeguard.**
+- C: empty windows now OMIT `dominantExpression` (type made optional); the strip
+  renders an honest em-dash. Fusion already skipped these via `avgEyeContact === -1`.
+- D: added `canonicalFiller()` folding elongated/variant spellings to a canonical
+  form (also groups the per-moment chips). `smart_format` stays ON — it drives
+  display punctuation + grace-tail and does not strip fillers, so the lexicon
+  broadening is the complete fix.
+- E: `PeakStumbleCTAs` render + component + test removed.
+
+**Why tests missed it:** `facialAggregator.test.ts` asserted the mode directly
+(20 smile / 80 neutral was never exercised) and asserted the empty-window sentinel
+`'neutral'`; there was no test over a realistic talking-face distribution and none
+for the filler variants. Added: non-neutral-dominance cases, empty→undefined,
+`classifyExpression` unit tests, and elongated-filler cases.
+
+**Still needs prod validation (cannot be done locally — auth is prod-only):**
+a real camera interview to confirm the classifier now produces non-neutral reads.
+(The filler fix is confirmed lexicon-only — `smart_format` does not strip fillers.)
+
+_Related same-branch feedback-page fixes (not the analysis pipeline): heatmap
+header/body column re-alignment (`QuestionHeatmap.tsx`) and weakest-dimension +
+domain-aware per-answer suggestions (`shared/lib/answerSuggestion.ts`, replacing
+the "always STAR" ternary)._

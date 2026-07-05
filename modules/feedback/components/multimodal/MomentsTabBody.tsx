@@ -122,7 +122,12 @@ function buildStats(
     facial?.find((f) => f.questionIndex === qIdx) ??
     (qIdx < (facial?.length ?? 0) ? facial?.[qIdx] : undefined)
   if (fs) {
-    out.push({ label: 'Eye contact', value: `${Math.round((fs.avgEyeContact || 0) * 100)}%` })
+    // avgEyeContact === -1 is the aggregator's "no frames in this window" sentinel
+    // (facialAggregator). `-1 || 0` is -1 (truthy), so guard on >= 0 — otherwise an
+    // empty window renders "Eye contact -100%" instead of being omitted.
+    if (fs.avgEyeContact >= 0) {
+      out.push({ label: 'Eye contact', value: `${Math.round(fs.avgEyeContact * 100)}%` })
+    }
     if (fs.dominantExpression && fs.dominantExpression !== 'neutral') {
       out.push({ label: 'Expression', value: fs.dominantExpression })
     }

@@ -36,18 +36,11 @@ export function buildScoringGuide(depthSlug: string): string {
 }
 
 /**
- * The depth an answer should be EVALUATED as — usually the interview's own depth, but the
- * academics viva has TWO warm-up turns that only name/scope the subject, not probe a concept,
- * and so must not be scored on conceptual correctness / derivation (they would be marked
- * off-topic and drag the aggregate down):
- *   - questionIndex 0: the spoken intro, which asks "which subject are you strongest in?".
- *   - questionIndex 1: the ease-in warm-up slot, where the candidate maps the topics in that
- *     subject ("a roadmap") before any real probing.
- * Both are evaluated as `behavioral` (its dimensions, criteria, skill, and guide) — while still
- * producing an evaluation so the answered-question count stays accurate. The first real viva
- * probe (index ≥ 2, fundamentals) keeps the academics depth.
+ * `resolveEvalDepthSlug` — the depth an answer should be EVALUATED as (academics
+ * warm-ups Q0/Q1 are scored behavioral). The canonical implementation lives in
+ * `shared/lib/answerSuggestion` so the client feedback UI can resolve the SAME
+ * rule without importing this server-adjacent module (which would drag the
+ * @interview barrel's server deps into the client bundle). Re-exported here so
+ * the evaluate-answer + turn-router routes keep their existing import path.
  */
-export function resolveEvalDepthSlug(interviewType: string, questionIndex?: number): string {
-  if (interviewType === 'academics' && (questionIndex === 0 || questionIndex === 1)) return 'behavioral'
-  return interviewType
-}
+export { resolveEvalDepthSlug } from '@shared/lib/answerSuggestion'

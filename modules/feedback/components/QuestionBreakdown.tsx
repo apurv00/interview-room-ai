@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react'
 import { ScoreBar } from '@shared/ui/ScoreBar'
 import type { TranscriptEntry, AnswerEvaluation } from '@shared/types'
+import { answerSuggestion, dimensionLabels, resolveEvalDepthSlug } from '@shared/lib/answerSuggestion'
 
 // Safe string coerce to prevent React #310
 function s(v: unknown): string {
@@ -27,6 +28,12 @@ interface QuestionBreakdownProps {
    */
   expandedIdx?: number | null
   onExpandedChange?: (idx: number | null) => void
+  /**
+   * Session interview-type slug (config.interviewType). Drives domain-aware
+   * dimension labels (e.g. "Code Quality" vs "Structure (STAR)") and the
+   * per-answer suggestion copy. Omitted → behavioral-family defaults.
+   */
+  interviewType?: string
 }
 
 function dimensionBandClass(score: number): string {
@@ -41,12 +48,13 @@ interface MiniDimension {
   score: number
 }
 
-function buildMiniStrip(ev: AnswerEvaluation): MiniDimension[] {
+function buildMiniStrip(ev: AnswerEvaluation, interviewType?: string): MiniDimension[] {
+  const labels = dimensionLabels(interviewType)
   const dims: MiniDimension[] = [
-    { key: 'relevance', label: 'Relevance', score: ev.relevance },
-    { key: 'structure', label: 'Structure', score: ev.structure },
-    { key: 'specificity', label: 'Specificity', score: ev.specificity },
-    { key: 'ownership', label: 'Ownership', score: ev.ownership },
+    { key: 'relevance', label: labels.relevance, score: ev.relevance },
+    { key: 'structure', label: labels.structure, score: ev.structure },
+    { key: 'specificity', label: labels.specificity, score: ev.specificity },
+    { key: 'ownership', label: labels.ownership, score: ev.ownership },
   ]
   if (ev.jdAlignment != null) {
     dims.push({ key: 'jdAlignment', label: 'JD Alignment', score: ev.jdAlignment })
@@ -60,6 +68,7 @@ export default function QuestionBreakdown({
   sortOrder = 'index',
   expandedIdx: controlledExpandedIdx,
   onExpandedChange,
+  interviewType,
 }: QuestionBreakdownProps) {
   const [uncontrolledExpandedIdx, setUncontrolledExpandedIdx] = useState<number | null>(null)
   const isControlled = controlledExpandedIdx !== undefined
@@ -107,7 +116,17 @@ export default function QuestionBreakdown({
           (ev.relevance + ev.structure + ev.specificity + ev.ownership) / 4
         )
         const isOpen = expandedIdx === i
-        const miniStrip = buildMiniStrip(ev)
+        // Resolve the family from the depth this ROW was actually evaluated with,
+        // not the session slug: academics warm-ups (Q0/Q1) are scored with the
+        // behavioral rubric (resolveEvalDepthSlug), so their four slots mean
+        // behavioral Structure/Specificity/Ownership — not Conceptual Depth /
+        // Derivation / Breadth. Labelling/advising them as academic would be
+        // misleading (Codex P2 on #496).
+        const rowType = resolveEvalDepthSlug(interviewType ?? '', ev.questionIndex)
+        const miniStrip = buildMiniStrip(ev, rowType)
+        const dimLabels = dimensionLabels(rowType)
+        // Weakest-dimension + domain-aware coaching tip (null when avg ≥ 60).
+        const suggestion = isFailed ? null : answerSuggestion(ev, rowType)
         const scoreColor = isFailed
           ? 'text-[#71767b]'
           : avgScore >= 75 ? 'text-[#059669]' : avgScore >= 55 ? 'text-amber-600' : 'text-red-500'
@@ -217,10 +236,10 @@ export default function QuestionBreakdown({
                     </div>
                   ) : (
                     <div className="space-y-2">
-                      <ScoreBar label="Relevance" score={ev.relevance} delay={0} />
-                      <ScoreBar label="Structure (STAR)" score={ev.structure} delay={50} />
-                      <ScoreBar label="Specificity" score={ev.specificity} delay={100} />
-                      <ScoreBar label="Ownership" score={ev.ownership} delay={150} />
+                      <ScoreBar label={dimLabels.relevance} score={ev.relevance} delay={0} />
+                      <ScoreBar label={dimLabels.structure} score={ev.structure} delay={50} />
+                      <ScoreBar label={dimLabels.specificity} score={ev.specificity} delay={100} />
+                      <ScoreBar label={dimLabels.ownership} score={ev.ownership} delay={150} />
                       {ev.jdAlignment != null && (
                         <ScoreBar label="JD Alignment" score={ev.jdAlignment} color="cyan" delay={200} />
                       )}
@@ -242,19 +261,11 @@ export default function QuestionBreakdown({
                   </div>
                 )}
 
-                {/* Low score suggestions */}
-                {!isFailed && avgScore < 60 && (
+                {/* Weakest-dimension + domain-aware coaching tip (see shared/lib/answerSuggestion). */}
+                {suggestion && (
                   <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
                     <p className="text-xs text-amber-700 font-medium mb-1">Suggestion</p>
-                    <p className="text-xs text-amber-600">
-                      {ev.structure < 55
-                        ? 'Try using the STAR framework: describe the Situation, your Task, the Action you took, and the Result.'
-                        : ev.specificity < 55
-                        ? 'Include specific metrics, numbers, or concrete examples to strengthen your answer.'
-                        : ev.ownership < 55
-                        ? 'Use "I" instead of "we" and clearly describe your personal contributions.'
-                        : 'Focus on answering the specific question asked. Keep your response targeted and relevant.'}
-                    </p>
+                    <p className="text-xs text-amber-600">{suggestion}</p>
                   </div>
                 )}
 
