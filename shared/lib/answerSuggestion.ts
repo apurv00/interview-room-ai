@@ -11,8 +11,15 @@
  *
  * This helper (1) selects the tip from the ACTUAL weakest dimension and
  * (2) tailors both the copy and the dimension's displayed meaning to the
- * interview family. For coding / system-design it prefers the model's own
- * grounded per-answer feedback when present.
+ * interview family (behavioral / coding / system-design / academics).
+ *
+ * NOTE: an earlier version also surfaced the model's own `answerSummary` text
+ * for coding/design rounds, but that field reuses a "Submitted <lang> solution
+ * for <title>." fallback string when the evaluator returns no feedback, and a
+ * real critique that opens the same way is structurally indistinguishable from
+ * that fallback at this layer (Codex #496). Surfacing was dropped in favor of
+ * the always-correct domain dimension copy; restoring it robustly would need a
+ * source change (a dedicated feedback field on the evaluation).
  *
  * Pure + dependency-free (no imports) so both @feedback and @learn can share it
  * without a cross-module import — shared/** may not depend on any module.
@@ -29,8 +36,6 @@ export interface SuggestionInput {
   jdAlignment?: number | null
   /** LLM-declared weakest dimension; used only when it names one of the 4 slots. */
   primaryGap?: string
-  /** For coding / system-design this carries the model's free-text feedback. */
-  answerSummary?: string
 }
 
 type BaseDim = 'relevance' | 'structure' | 'specificity' | 'ownership'
@@ -123,25 +128,6 @@ export function dimensionLabels(interviewType?: string): Record<BaseDim, string>
   return DIMENSION_LABELS[suggestionFamily(interviewType)]
 }
 
-/**
- * Compact per-family labels for the score heatmap's narrow (w-12) column
- * headers. Domain-aware so the heatmap doesn't show "Str" (tooltip "Structure")
- * for a cell that holds a `code_quality` score while the QuestionBreakdown below
- * labels the same slot "Code Quality". Pair the tooltip with `dimensionLabels`
- * for the full name.
- */
-const DIMENSION_SHORT_LABELS: Record<SuggestionFamily, Record<BaseDim, string>> = {
-  behavioral: { relevance: 'Rel', structure: 'Str', specificity: 'Spec', ownership: 'Own' },
-  coding: { relevance: 'Corr', structure: 'Qual', specificity: 'Eff', ownership: 'Edge' },
-  'system-design': { relevance: 'Req', structure: 'Arch', specificity: 'Scale', ownership: 'Trade' },
-  academics: { relevance: 'Corr', structure: 'Depth', specificity: 'Deriv', ownership: 'Brdth' },
-}
-
-/** Compact slot labels for the heatmap columns (domain-aware). */
-export function dimensionShortLabels(interviewType?: string): Record<BaseDim, string> {
-  return DIMENSION_SHORT_LABELS[suggestionFamily(interviewType)]
-}
-
 function weakestDimension(input: SuggestionInput): Dim {
   const dims: Array<{ key: Dim; score: number }> = [
     { key: 'relevance', score: input.relevance },
@@ -159,19 +145,6 @@ function weakestDimension(input: SuggestionInput): Dim {
   if (gap && dims.some((d) => d.key === gap)) return gap as Dim
 
   return dims.reduce((min, d) => (d.score < min.score ? d : min), dims[0]).key
-}
-
-/**
- * True when `answerSummary` is the model's real free-text feedback (worth
- * surfacing verbatim), false when it's one of the two coding/design fallback
- * templates (see code/designEvaluationToAnswerEvaluation in useInterview.ts):
- *   "Submitted <lang> solution for <title>." · "Submitted architecture diagram for <title>."
- * Matched specifically so genuine feedback that merely opens with "Submitted…"
- * isn't discarded (review finding on #496).
- */
-function isModelFeedback(summary?: string): summary is string {
-  const s = summary?.trim()
-  return !!s && !/^submitted (.+ solution|architecture diagram) for /i.test(s)
 }
 
 const COPY: Record<SuggestionFamily, Record<Dim, string>> = {
@@ -209,20 +182,12 @@ const COPY: Record<SuggestionFamily, Record<Dim, string>> = {
  * Returns the coaching suggestion for a low-scoring answer, or null when the
  * answer scores well enough (rounded avg ≥ 60) that no nudge is warranted.
  *
- * @param input          the four dimension scores (+ optional jdAlignment /
- *                       primaryGap / answerSummary)
+ * @param input          the four dimension scores (+ optional jdAlignment / primaryGap)
  * @param interviewType  the session's interview-type slug (config.interviewType)
  */
 export function answerSuggestion(input: SuggestionInput, interviewType?: string): string | null {
   const avg = Math.round((input.relevance + input.structure + input.specificity + input.ownership) / 4)
   if (avg >= SUGGESTION_AVG_THRESHOLD) return null
 
-  const family = suggestionFamily(interviewType)
-
-  // Prefer the model's own grounded feedback for the code/design rounds.
-  if ((family === 'coding' || family === 'system-design') && isModelFeedback(input.answerSummary)) {
-    return input.answerSummary.trim()
-  }
-
-  return COPY[family][weakestDimension(input)]
+  return COPY[suggestionFamily(interviewType)][weakestDimension(input)]
 }

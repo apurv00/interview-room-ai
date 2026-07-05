@@ -82,7 +82,6 @@ export default function ScoresTab({ data }: ScoresTabProps) {
             evaluations={heatmapEvaluations}
             transcript={data.transcript}
             onCellClick={handleHeatmapCellClick}
-            interviewType={data.config?.interviewType}
           />
         </section>
       )}

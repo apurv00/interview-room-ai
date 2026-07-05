@@ -3,7 +3,6 @@ import {
   answerSuggestion,
   suggestionFamily,
   dimensionLabels,
-  dimensionShortLabels,
   resolveEvalDepthSlug,
   type SuggestionInput,
 } from '../answerSuggestion'
@@ -45,33 +44,6 @@ describe('dimensionLabels', () => {
   })
 })
 
-describe('dimensionShortLabels', () => {
-  it('gives domain-aware compact heatmap headers (no "Str" for a Code Quality column)', () => {
-    expect(dimensionShortLabels(undefined).structure).toBe('Str')
-    expect(dimensionShortLabels('coding').structure).toBe('Qual')
-    expect(dimensionShortLabels('system-design').structure).toBe('Arch')
-    expect(dimensionShortLabels('academics').ownership).toBe('Brdth')
-  })
-})
-
-describe('isModelFeedback surfacing (coding/design)', () => {
-  it('surfaces real feedback that opens with "Submitted" but is not a fallback template', () => {
-    const s = answerSuggestion(
-      { relevance: 40, structure: 40, specificity: 40, ownership: 40, answerSummary: 'Submitted solution passes the tests but is O(n^2) — use a hash map.' },
-      'coding',
-    )
-    expect(s).toBe('Submitted solution passes the tests but is O(n^2) — use a hash map.')
-  })
-
-  it('suppresses the "Submitted <lang> solution for <title>" fallback', () => {
-    const s = answerSuggestion(
-      { relevance: 55, structure: 20, specificity: 55, ownership: 55, answerSummary: 'Submitted python solution for Two Sum.' },
-      'coding',
-    )
-    expect(s?.toLowerCase()).toContain('code quality')
-  })
-})
-
 describe('answerSuggestion', () => {
   it('returns null when the answer scores well enough (avg ≥ 60)', () => {
     expect(answerSuggestion(base)).toBeNull()
@@ -101,29 +73,18 @@ describe('answerSuggestion', () => {
     expect(s).toContain('contribution')
   })
 
-  it('coding: surfaces the model’s own grounded feedback verbatim', () => {
-    const s = answerSuggestion(
-      { relevance: 40, structure: 40, specificity: 40, ownership: 40, answerSummary: 'Correct, but O(n^2) — use a hash map.' },
-      'coding',
-    )
-    expect(s).toBe('Correct, but O(n^2) — use a hash map.')
-  })
-
-  it('coding: ignores the "Submitted …" fallback summary and gives dimension copy — never STAR', () => {
-    const s = answerSuggestion(
-      { relevance: 55, structure: 20, specificity: 55, ownership: 55, answerSummary: 'Submitted python solution for Two Sum.' },
-      'coding',
-    )
+  it('coding: gives domain-specific copy for the weakest slot — never STAR', () => {
+    // structure slot holds code_quality for coding.
+    const s = answerSuggestion({ relevance: 55, structure: 20, specificity: 55, ownership: 55 }, 'coding')
     expect(s).not.toContain('STAR')
     expect(s?.toLowerCase()).toContain('code quality')
   })
 
-  it('system-design: surfaces model feedback when present', () => {
-    const s = answerSuggestion(
-      { relevance: 30, structure: 30, specificity: 30, ownership: 30, answerSummary: 'No caching layer — the read path will not scale.' },
-      'system-design',
-    )
-    expect(s).toBe('No caching layer — the read path will not scale.')
+  it('system-design: gives domain-specific copy for the weakest slot', () => {
+    // structure slot holds architecture for system-design.
+    const s = answerSuggestion({ relevance: 55, structure: 20, specificity: 55, ownership: 55 }, 'system-design')
+    expect(s).not.toContain('STAR')
+    expect(s?.toLowerCase()).toContain('architecture')
   })
 
   it('academics: never recommends STAR', () => {
