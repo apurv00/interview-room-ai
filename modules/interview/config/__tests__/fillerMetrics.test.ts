@@ -31,6 +31,12 @@ describe('computeFillerMetrics', () => {
     expect(result.fillerWordCount).toBe(0)
   })
 
+  it('does NOT flag the verb "err" but DOES catch "erm"/"ermm"', () => {
+    // "I'd rather err on the side of caution" — err is a real word, not a filler.
+    expect(count('I would rather err on the side of caution')).toBe(0)
+    expect(words('erm ermm')).toEqual(['er', 'er'])
+  })
+
   it('still matches multi-word fillers', () => {
     // "you know" (bigram) + "um"
     expect(count('so you know um that was hard')).toBe(2)

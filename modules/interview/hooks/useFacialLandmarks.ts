@@ -18,17 +18,26 @@ type BlendShapeMap = Record<string, number>
  * 'neutral', so the per-question dominant expression collapsed to neutral for
  * essentially every answer of every interview.
  *
+ * Only the MOUTH-based reads (smile/frown) are lowered aggressively, because a
+ * speaking jaw suppresses those blendshapes. browDown (focused) is NOT
+ * talking-suppressed, so it keeps the original 0.3 — lowering it would over-fire
+ * 'focused' on any mildly furrowed brow, and (via facialAggregator →
+ * fusionService) that would depress the body-language score, not just tint the
+ * emoji strip.
+ *
  * CALIBRATION CAVEAT: these are derived from blendshape ranges, NOT yet
  * validated against real camera interviews. A prod camera pass should confirm
- * or adjust them (see modules/interview/docs/AI_ANALYSIS.md §8). Exported so
- * classifyExpression can be unit-tested without MediaPipe.
+ * or adjust them (see modules/interview/docs/AI_ANALYSIS.md §8). The dominance
+ * floor in facialAggregator is the second-line safeguard (a class must be
+ * SUSTAINED to surface). Exported so classifyExpression can be unit-tested
+ * without MediaPipe.
  */
 export const EXPRESSION_THRESHOLDS = {
   smile: 0.25,
   frown: 0.2,
   surpriseBrow: 0.3,
   surpriseEye: 0.2,
-  focusedBrowDown: 0.25,
+  focusedBrowDown: 0.3,
 } as const
 
 export function classifyExpression(blendShapes: BlendShapeMap): FacialFrame['expression'] {

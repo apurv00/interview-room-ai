@@ -61,7 +61,10 @@ function canonicalFiller(normalized: string): string | null {
   if (/^u+h+m+$/.test(normalized)) return 'um'   // uhm, uhmm → um
   if (/^u+m+$/.test(normalized)) return 'um'      // um, umm, ummm
   if (/^u+h+$/.test(normalized)) return 'uh'      // uh, uhh, uhhh
-  if (/^e+r+m*$/.test(normalized)) return 'er'    // er, err, erm
+  // Require the trailing 'm' (erm/ermm) — plain "er" is already in the base set,
+  // and matching bare "e+r+" would wrongly flag the verb "err" ("err on the side
+  // of caution"), inflating the count. (Codex/review finding on #496.)
+  if (/^er+m+$/.test(normalized)) return 'er'     // erm, ermm (NOT err)
   if (/^a+h+$/.test(normalized)) return 'ah'      // ah, ahh
   if (/^h+m+$/.test(normalized)) return 'hmm'     // hm, hmm, hmmm
   return null

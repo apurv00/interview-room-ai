@@ -20,11 +20,15 @@ interface AggregateOptions {
  * Minimum share of a window's frames that must carry the SAME non-neutral
  * expression for it to override the (near-ubiquitous) neutral plurality.
  * A talking/listening face classifies as 'neutral' most of the time, so a raw
- * mode almost always returns 'neutral' and hides real emotion. ~15% ≈ 4.5s of
- * a 30s answer — enough to be a sustained read rather than a one-off frame,
- * without demanding it beat neutral outright (which it rarely does).
+ * mode almost always returns 'neutral' and hides real emotion. 0.25 ≈ 7.5s of a
+ * 30s answer — the expression must be genuinely SUSTAINED (not a transient
+ * classifier blip) to be called dominant. This is deliberately conservative: the
+ * dominant expression also feeds fusionService's body-language score, so a low
+ * floor combined with the (retuned, camera-unvalidated) per-frame thresholds
+ * could flip "always neutral" into "always focused/frown". Raise/lower alongside
+ * a real-camera calibration pass (see AI_ANALYSIS.md §8).
  */
-const NON_NEUTRAL_DOMINANCE_FLOOR = 0.15
+const NON_NEUTRAL_DOMINANCE_FLOOR = 0.25
 
 /**
  * Aggregate raw facial frames into segments.

@@ -152,14 +152,14 @@ describe('facialAggregator', () => {
     }
 
     it('surfaces a sustained non-neutral expression even when neutral is the plurality', () => {
-      // 20 smile / 80 neutral → neutral is the raw mode, but smile share = 20%
-      // (≥ 15% floor), so the real expression wins instead of collapsing to neutral.
-      expect(window('smile', 20, 80).dominantExpression).toBe('smile')
+      // 30 smile / 70 neutral → neutral is the raw mode, but smile share = 30%
+      // (≥ 25% floor), so the real expression wins instead of collapsing to neutral.
+      expect(window('smile', 30, 70).dominantExpression).toBe('smile')
     })
 
     it('stays neutral when the non-neutral expression is only a brief blip', () => {
-      // 5 focused / 95 neutral → 5% share, below the floor → genuinely neutral.
-      expect(window('focused', 5, 95).dominantExpression).toBe('neutral')
+      // 10 focused / 90 neutral → 10% share, below the 25% floor → genuinely neutral.
+      expect(window('focused', 10, 90).dominantExpression).toBe('neutral')
     })
 
     it('picks the most frequent non-neutral expression when several are present', () => {

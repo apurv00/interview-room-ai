@@ -220,11 +220,18 @@ Resets a failed row. Idempotent. Body is empty.
 
 **Fixes (this branch):**
 - A: `facialAggregator` now surfaces the most frequent NON-neutral expression
-  when its frame share ≥ `NON_NEUTRAL_DOMINANCE_FLOOR` (0.15), else neutral.
-- B: `classifyExpression` thresholds lowered + pulled into exported
-  `EXPRESSION_THRESHOLDS` (now unit-tested). **CALIBRATION CAVEAT: retuned from
-  blendshape ranges, NOT yet validated against a real camera interview — a prod
-  camera pass must confirm/adjust the thresholds.**
+  when its frame share ≥ `NON_NEUTRAL_DOMINANCE_FLOOR` (0.25 ≈ 7.5s of a 30s
+  answer), else neutral. The floor is deliberately conservative because the
+  dominant expression also feeds `fusionService`'s body-language score — a low
+  floor + retuned thresholds could flip "always neutral" into "always
+  focused/frown" (an equal-but-opposite regression with a *larger* blast radius).
+- B: `classifyExpression` thresholds pulled into exported `EXPRESSION_THRESHOLDS`
+  (now unit-tested). Only the MOUTH reads (smile/frown) are lowered — a speaking
+  jaw suppresses them; `focusedBrowDown` keeps the original 0.3 (brow-down is not
+  talking-suppressed, so lowering it would over-fire 'focused'). **CALIBRATION
+  CAVEAT: derived from blendshape ranges, NOT yet validated against a real camera
+  interview — a prod camera pass must confirm/adjust the thresholds AND the
+  dominance floor. Until then the floor is the safeguard.**
 - C: empty windows now OMIT `dominantExpression` (type made optional); the strip
   renders an honest em-dash. Fusion already skipped these via `avgEyeContact === -1`.
 - D: added `canonicalFiller()` folding elongated/variant spellings to a canonical

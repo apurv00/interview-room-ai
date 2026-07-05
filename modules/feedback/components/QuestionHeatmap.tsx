@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { dimensionLabels, dimensionShortLabels } from '@shared/lib/answerSuggestion'
 
 interface Evaluation {
   /** 1-based original question number, preserved across filters in OverviewTab.
@@ -31,21 +32,18 @@ interface QuestionHeatmapProps {
    * QuestionBreakdown indexes its accordion rows.
    */
   onCellClick?: (questionIndex: number) => void
+  /**
+   * Session interview-type slug (config.interviewType). Drives domain-aware
+   * column labels so the heatmap doesn't show "Str"/"Structure" for a cell that
+   * holds a code_quality/architecture/conceptual_depth score (which the
+   * QuestionBreakdown below labels "Code Quality"/etc.). Session-level: the
+   * heatmap columns are shared across rows, so the academics warm-up per-row
+   * remap isn't applied here.
+   */
+  interviewType?: string
 }
 
 const DIMENSIONS = ['relevance', 'structure', 'specificity', 'ownership'] as const
-const DIMENSION_LABELS: Record<string, string> = {
-  relevance: 'Rel',
-  structure: 'Str',
-  specificity: 'Spec',
-  ownership: 'Own',
-}
-const DIMENSION_FULL_LABELS: Record<string, string> = {
-  relevance: 'Relevance',
-  structure: 'Structure',
-  specificity: 'Specificity',
-  ownership: 'Ownership',
-}
 
 // Header and body cells share these exact classes so the columns line up.
 // (The previous version rendered the header as a real <table> row and each
@@ -65,8 +63,10 @@ function truncate(text: string, max: number): string {
   return text.length > max ? text.slice(0, max) + '...' : text
 }
 
-export default function QuestionHeatmap({ evaluations, transcript: _transcript, onCellClick }: QuestionHeatmapProps) {
+export default function QuestionHeatmap({ evaluations, transcript: _transcript, onCellClick, interviewType }: QuestionHeatmapProps) {
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
+  const shortLabels = dimensionShortLabels(interviewType)
+  const fullLabels = dimensionLabels(interviewType)
 
   if (!evaluations || evaluations.length === 0) {
     return (
@@ -91,9 +91,9 @@ export default function QuestionHeatmap({ evaluations, transcript: _transcript, 
               key={dim}
               className={`${SCORE_CELL_WIDTH} text-center text-[#71767b] text-xs font-medium`}
               style={CELL_MARGIN}
-              title={DIMENSION_FULL_LABELS[dim]}
+              title={fullLabels[dim]}
             >
-              {DIMENSION_LABELS[dim]}
+              {shortLabels[dim]}
             </div>
           ))}
           <div className={`${SCORE_CELL_WIDTH} text-center text-[#71767b] text-xs font-medium`} style={CELL_MARGIN}>

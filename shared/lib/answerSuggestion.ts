@@ -123,6 +123,25 @@ export function dimensionLabels(interviewType?: string): Record<BaseDim, string>
   return DIMENSION_LABELS[suggestionFamily(interviewType)]
 }
 
+/**
+ * Compact per-family labels for the score heatmap's narrow (w-12) column
+ * headers. Domain-aware so the heatmap doesn't show "Str" (tooltip "Structure")
+ * for a cell that holds a `code_quality` score while the QuestionBreakdown below
+ * labels the same slot "Code Quality". Pair the tooltip with `dimensionLabels`
+ * for the full name.
+ */
+const DIMENSION_SHORT_LABELS: Record<SuggestionFamily, Record<BaseDim, string>> = {
+  behavioral: { relevance: 'Rel', structure: 'Str', specificity: 'Spec', ownership: 'Own' },
+  coding: { relevance: 'Corr', structure: 'Qual', specificity: 'Eff', ownership: 'Edge' },
+  'system-design': { relevance: 'Req', structure: 'Arch', specificity: 'Scale', ownership: 'Trade' },
+  academics: { relevance: 'Corr', structure: 'Depth', specificity: 'Deriv', ownership: 'Brdth' },
+}
+
+/** Compact slot labels for the heatmap columns (domain-aware). */
+export function dimensionShortLabels(interviewType?: string): Record<BaseDim, string> {
+  return DIMENSION_SHORT_LABELS[suggestionFamily(interviewType)]
+}
+
 function weakestDimension(input: SuggestionInput): Dim {
   const dims: Array<{ key: Dim; score: number }> = [
     { key: 'relevance', score: input.relevance },
@@ -143,13 +162,16 @@ function weakestDimension(input: SuggestionInput): Dim {
 }
 
 /**
- * Coding/design fallback summaries both start with "Submitted " (see
- * code/designEvaluationToAnswerEvaluation). Anything else is real model
- * feedback worth surfacing verbatim.
+ * True when `answerSummary` is the model's real free-text feedback (worth
+ * surfacing verbatim), false when it's one of the two coding/design fallback
+ * templates (see code/designEvaluationToAnswerEvaluation in useInterview.ts):
+ *   "Submitted <lang> solution for <title>." · "Submitted architecture diagram for <title>."
+ * Matched specifically so genuine feedback that merely opens with "Submitted…"
+ * isn't discarded (review finding on #496).
  */
 function isModelFeedback(summary?: string): summary is string {
   const s = summary?.trim()
-  return !!s && !/^submitted /i.test(s)
+  return !!s && !/^submitted (.+ solution|architecture diagram) for /i.test(s)
 }
 
 const COPY: Record<SuggestionFamily, Record<Dim, string>> = {

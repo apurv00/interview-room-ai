@@ -32,7 +32,9 @@ describe('classifyExpression', () => {
   })
 
   it('detects focus (brow down) when there is no stronger mouth signal', () => {
-    expect(classifyExpression(bs({ browDownLeft: 0.15, browDownRight: 0.15 }))).toBe('focused')
+    // 0.2 + 0.2 = 0.4 > focusedBrowDown (0.3). browDown is not talking-suppressed,
+    // so it keeps the stricter original threshold to avoid over-firing 'focused'.
+    expect(classifyExpression(bs({ browDownLeft: 0.2, browDownRight: 0.2 }))).toBe('focused')
   })
 
   it('prioritizes a smile over a concurrent brow-down', () => {

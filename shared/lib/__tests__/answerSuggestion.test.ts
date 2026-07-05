@@ -3,6 +3,7 @@ import {
   answerSuggestion,
   suggestionFamily,
   dimensionLabels,
+  dimensionShortLabels,
   resolveEvalDepthSlug,
   type SuggestionInput,
 } from '../answerSuggestion'
@@ -41,6 +42,33 @@ describe('dimensionLabels', () => {
     expect(dimensionLabels('coding').structure).toBe('Code Quality')
     expect(dimensionLabels('system-design').ownership).toBe('Trade-offs')
     expect(dimensionLabels('academics').structure).toBe('Conceptual Depth')
+  })
+})
+
+describe('dimensionShortLabels', () => {
+  it('gives domain-aware compact heatmap headers (no "Str" for a Code Quality column)', () => {
+    expect(dimensionShortLabels(undefined).structure).toBe('Str')
+    expect(dimensionShortLabels('coding').structure).toBe('Qual')
+    expect(dimensionShortLabels('system-design').structure).toBe('Arch')
+    expect(dimensionShortLabels('academics').ownership).toBe('Brdth')
+  })
+})
+
+describe('isModelFeedback surfacing (coding/design)', () => {
+  it('surfaces real feedback that opens with "Submitted" but is not a fallback template', () => {
+    const s = answerSuggestion(
+      { relevance: 40, structure: 40, specificity: 40, ownership: 40, answerSummary: 'Submitted solution passes the tests but is O(n^2) — use a hash map.' },
+      'coding',
+    )
+    expect(s).toBe('Submitted solution passes the tests but is O(n^2) — use a hash map.')
+  })
+
+  it('suppresses the "Submitted <lang> solution for <title>" fallback', () => {
+    const s = answerSuggestion(
+      { relevance: 55, structure: 20, specificity: 55, ownership: 55, answerSummary: 'Submitted python solution for Two Sum.' },
+      'coding',
+    )
+    expect(s?.toLowerCase()).toContain('code quality')
   })
 })
 
