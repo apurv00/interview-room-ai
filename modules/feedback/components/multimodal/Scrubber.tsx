@@ -5,26 +5,12 @@ import { Play, Pause } from 'lucide-react'
 import type { TimelineEvent } from '@shared/types/multimodal'
 import { FONT_MONO, KIND_STYLES, timelineTypeToKind } from './tokens'
 
-interface QuestionMarker {
-  label: string
-  offsetSeconds: number
-}
-
-interface ActiveQuestionRange {
-  startSec: number
-  endSec: number
-}
-
 interface ScrubberProps {
   currentTimeSec: number
   totalDurationSec: number
   onSeek: (sec: number) => void
   playing: boolean
   setPlaying: (p: boolean) => void
-  /** Question boundaries — drives the vertical 1×14 boundary marks. */
-  questions: QuestionMarker[]
-  /** Optional active-question span — drives the accent highlight band on the rail. */
-  activeQuestion?: ActiveQuestionRange | null
   /** Key moments — drives the 2×10 colored ticks on the rail. */
   keyMoments: TimelineEvent[]
   /**
@@ -45,13 +31,16 @@ function formatTime(seconds: number): string {
 }
 
 /**
- * The 28-px-tall video scrubber. Six visual layers stacked inside the track:
+ * The 28-px-tall video scrubber. Layers stacked inside the track:
  *   1. base rail (full-width gray)
- *   2. active-question highlight band (accent-soft)
- *   3. progress fill (dark)
- *   4. question boundary marks (vertical 1×14 ticks)
- *   5. key-moment ticks (2×10 colored bars by kind)
- *   6. playhead (12×12 circle, dark, white border)
+ *   2. progress fill (dark)
+ *   3. key-moment ticks (2×10 colored bars by kind)
+ *   4. filler-word dots (rose, below the rail)
+ *   5. playhead (12×12 circle, dark, white border)
+ *
+ * Per-question boundary ticks and the active-question band were removed in the
+ * timeline declutter — question navigation lives on the video caption, and the
+ * scrubber only carries event signal (moments, fillers).
  *
  * Click anywhere on the track → seek to (clickX / width * totalDuration).
  * `role="slider"` + ARIA values for keyboard / screen reader support.
@@ -62,8 +51,6 @@ export default function Scrubber({
   onSeek,
   playing,
   setPlaying,
-  questions,
-  activeQuestion,
   keyMoments,
   fillerTimestamps,
 }: ScrubberProps) {
@@ -112,36 +99,11 @@ export default function Scrubber({
         {/* Base rail */}
         <div className="absolute left-0 right-0 h-1 bg-stone-300 rounded-full" />
 
-        {/* Active-question highlight band */}
-        {activeQuestion && totalDurationSec > 0 && (
-          <div
-            className="absolute h-1 rounded-full"
-            style={{
-              left: `${(activeQuestion.startSec / totalDurationSec) * 100}%`,
-              width: `${((activeQuestion.endSec - activeQuestion.startSec) / totalDurationSec) * 100}%`,
-              background: '#EFF4FF',
-            }}
-          />
-        )}
-
         {/* Progress fill */}
         <div
           className="absolute left-0 h-1 bg-stone-900 rounded-full"
           style={{ width: `${playheadPct}%` }}
         />
-
-        {/* Question boundary marks (1×14 vertical ticks) */}
-        {totalDurationSec > 0 && questions.map((q, i) => (
-          <div
-            key={`qm-${i}`}
-            className="absolute w-px h-3.5 bg-stone-300"
-            style={{
-              left: `${(q.offsetSeconds / totalDurationSec) * 100}%`,
-              transform: 'translateX(-0.5px)',
-            }}
-            aria-hidden="true"
-          />
-        ))}
 
         {/* Key-moment ticks (2×10 colored bars) */}
         {totalDurationSec > 0 && keyMoments.map((km, i) => {

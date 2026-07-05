@@ -19,13 +19,7 @@ function makeEvent(startSec: number, endSec: number, type: TimelineEvent['type']
 describe('SignalTrack', () => {
   it('renders the legend with Strength / Improvement / Coaching entries', () => {
     render(
-      <SignalTrack
-        timeline={[]}
-        keyMoments={[]}
-        totalDurationSec={300}
-        currentTimeSec={0}
-        questions={[]}
-      />
+      <SignalTrack timeline={[]} keyMoments={[]} totalDurationSec={300} currentTimeSec={0} />
     )
     expect(screen.getByText('Strength')).toBeInTheDocument()
     expect(screen.getByText('Improvement')).toBeInTheDocument()
@@ -34,13 +28,7 @@ describe('SignalTrack', () => {
 
   it('renders nothing when totalDurationSec is 0', () => {
     const { container } = render(
-      <SignalTrack
-        timeline={[]}
-        keyMoments={[]}
-        totalDurationSec={0}
-        currentTimeSec={0}
-        questions={[]}
-      />
+      <SignalTrack timeline={[]} keyMoments={[]} totalDurationSec={0} currentTimeSec={0} />
     )
     expect(container).toBeEmptyDOMElement()
   })
@@ -53,53 +41,33 @@ describe('SignalTrack', () => {
       makeEvent(90, 120, 'coaching_tip'),
     ]
     const { container } = render(
-      <SignalTrack
-        timeline={timeline}
-        keyMoments={[]}
-        totalDurationSec={120}
-        currentTimeSec={0}
-        questions={[]}
-      />
+      <SignalTrack timeline={timeline} keyMoments={[]} totalDurationSec={120} currentTimeSec={0} />
     )
-    // Track contains: segments + Q lines + KM circles + playhead.
-    // With no questions/moments and 3 valid segments, we expect 3 + 1 (playhead) = 4 absolute divs.
     const track = container.querySelector('.h-\\[22px\\]')!
-    // Filter to segments (background-image only, not the playhead which has bg-stone-900)
     const segmentBands = track.querySelectorAll('[title="t"]')
     expect(segmentBands.length).toBe(3)
   })
 
-  it('renders one Q line per question (skipping the first at 0%)', () => {
+  it('does NOT render per-question white divider lines (dropped in the timeline declutter)', () => {
     const { container } = render(
       <SignalTrack
-        timeline={[]}
+        timeline={[makeEvent(0, 30, 'strength')]}
         keyMoments={[]}
         totalDurationSec={300}
         currentTimeSec={0}
-        questions={[
-          { label: 'Q1', offsetSeconds: 0 },
-          { label: 'Q2', offsetSeconds: 100 },
-          { label: 'Q3', offsetSeconds: 200 },
-        ]}
       />
     )
-    // 3 questions but Q1 at 0% is skipped (no boundary line) → 2 vertical white lines
     const track = container.querySelector('.h-\\[22px\\]')!
-    const whiteLines = track.querySelectorAll('.w-px')
-    expect(whiteLines.length).toBe(2)
+    expect(track.querySelectorAll('.w-px').length).toBe(0)
   })
 
   it('renders a circle marker per key moment', () => {
     const { container } = render(
       <SignalTrack
         timeline={[]}
-        keyMoments={[
-          makeEvent(30, 35, 'strength'),
-          makeEvent(120, 125, 'improvement'),
-        ]}
+        keyMoments={[makeEvent(30, 35, 'strength'), makeEvent(120, 125, 'improvement')]}
         totalDurationSec={300}
         currentTimeSec={0}
-        questions={[]}
       />
     )
     const track = container.querySelector('.h-\\[22px\\]')!
@@ -110,13 +78,7 @@ describe('SignalTrack', () => {
 
   it('positions playhead at currentTimeSec / totalDurationSec %', () => {
     const { container } = render(
-      <SignalTrack
-        timeline={[]}
-        keyMoments={[]}
-        totalDurationSec={200}
-        currentTimeSec={50}
-        questions={[]}
-      />
+      <SignalTrack timeline={[]} keyMoments={[]} totalDurationSec={200} currentTimeSec={50} />
     )
     const track = container.querySelector('.h-\\[22px\\]')!
     const playhead = track.querySelector('.bg-stone-900') as HTMLElement

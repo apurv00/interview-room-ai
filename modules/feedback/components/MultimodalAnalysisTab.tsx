@@ -3,12 +3,11 @@
 import { useMemo, useState, useEffect, type RefObject } from 'react'
 import TranscriptTab from '@feedback/components/TranscriptTab'
 import MultimodalReplayShell from '@feedback/components/multimodal/MultimodalReplayShell'
-import QuestionChapterRow from '@feedback/components/multimodal/QuestionChapterRow'
 import Scrubber from '@feedback/components/multimodal/Scrubber'
 import SignalTrack from '@feedback/components/multimodal/SignalTrack'
 import VideoMetricChips from '@feedback/components/multimodal/VideoMetricChips'
-import { composureLevels as computeComposureLevels } from '@feedback/components/multimodal/composureScore'
-import ExpressionStrip from '@feedback/components/multimodal/ExpressionStrip'
+import EmotionMarkers from '@feedback/components/multimodal/EmotionMarkers'
+import { computeEmotionChangeMarkers } from '@feedback/components/multimodal/emotionChangeMarkers'
 import EngagementHeatmap from '@feedback/components/multimodal/EngagementHeatmap'
 import DeliveryContentMatrix from '@feedback/components/multimodal/DeliveryContentMatrix'
 import MomentsTabBody from '@feedback/components/multimodal/MomentsTabBody'
@@ -160,21 +159,6 @@ export default function MultimodalAnalysisTab({
   }, [analysis?.prosodySegments])
 
   const activeQuestion = activeQuestionIndex >= 0 ? questionMarkers[activeQuestionIndex] : null
-  const nextQuestion = activeQuestionIndex >= 0 ? questionMarkers[activeQuestionIndex + 1] : null
-  const activeQuestionRange = activeQuestion
-    ? {
-        startSec: activeQuestion.offsetSeconds,
-        endSec: nextQuestion ? nextQuestion.offsetSeconds : totalDurationSec,
-      }
-    : null
-
-  // Round 5b feature #8 — per-question composure levels (1/2/3 or null).
-  // Aligned to questionMarkers by index. Pure derivation in composureScore.ts;
-  // the helper handles the audio-only / facial-only / missing-both fallbacks.
-  const composureByQ = useMemo(
-    () => computeComposureLevels(analysis?.prosodySegments, analysis?.facialSegments, questionMarkers.length),
-    [analysis?.prosodySegments, analysis?.facialSegments, questionMarkers.length]
-  )
 
   // Round 5b feature #5 — per-question facial segments aligned to questionMarkers
   // by index. Prefer the segment whose `questionIndex` matches; fall back to
@@ -187,6 +171,14 @@ export default function MultimodalAnalysisTab({
       return byField ?? segs[i]
     })
   }, [analysis?.facialSegments, questionMarkers])
+
+  // Sparse emotion-CHANGE markers for the timeline — an emoji only where the
+  // dominant expression transitions into a non-neutral class, replacing the old
+  // one-emoji-per-question ExpressionStrip. See computeEmotionChangeMarkers.
+  const emotionMarkers = useMemo(
+    () => computeEmotionChangeMarkers(facialByQ, questionMarkers),
+    [facialByQ, questionMarkers]
+  )
 
   // Round 5d feature #1 — non-failed evaluations for the Delivery × Content
   // matrix. Mirrors OverviewTab.evalData's filter. Memoized so the matrix's
@@ -428,19 +420,10 @@ export default function MultimodalAnalysisTab({
             onDurationKnown={setVideoDuration}
           />
 
-          <QuestionChapterRow
-            questions={questionMarkers}
+          <EmotionMarkers
+            markers={emotionMarkers}
             totalDurationSec={totalDurationSec}
-            activeIndex={activeQuestionIndex}
-            onJumpToQuestion={(sec) => seek?.(sec)}
-            composureLevels={composureByQ}
-          />
-
-          <ExpressionStrip
-            questions={questionMarkers}
-            totalDurationSec={totalDurationSec}
-            facialSegments={facialByQ}
-            onJumpToQuestion={(sec) => seek?.(sec)}
+            onSeek={(sec) => seek?.(sec)}
           />
 
           <Scrubber
@@ -449,8 +432,6 @@ export default function MultimodalAnalysisTab({
             onSeek={(sec) => seek?.(sec)}
             playing={playing}
             setPlaying={setPlaying}
-            questions={questionMarkers}
-            activeQuestion={activeQuestionRange}
             keyMoments={keyMoments}
             fillerTimestamps={fillerTimestamps}
           />
@@ -460,7 +441,6 @@ export default function MultimodalAnalysisTab({
             keyMoments={keyMoments}
             totalDurationSec={totalDurationSec}
             currentTimeSec={analysisVideoTime}
-            questions={questionMarkers}
           />
 
           <EngagementHeatmap
