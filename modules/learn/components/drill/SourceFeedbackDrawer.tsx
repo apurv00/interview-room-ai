@@ -19,6 +19,12 @@ interface Props {
   question: string
   originalAnswer: string
   scores: FourDimScores | null
+  /** Source session's interview-type slug — drives domain-aware suggestion copy
+   *  (coding/system-design/academics get non-STAR advice). From the drill
+   *  context API. Omitted → behavioral copy. */
+  interviewType?: string | null
+  /** Source answer's LLM-declared weakest dimension, if any (drill context API). */
+  primaryGap?: string | null
 }
 
 /**
@@ -48,6 +54,8 @@ export default function SourceFeedbackDrawer({
   question,
   originalAnswer,
   scores,
+  interviewType,
+  primaryGap,
 }: Props) {
   // Esc closes the drawer. Bound only when open to avoid wasted
   // listener churn.
@@ -70,9 +78,12 @@ export default function SourceFeedbackDrawer({
   }, [open, onClose])
 
   // Shared weakest-dimension helper — keeps the drill and the feedback page in
-  // lockstep. No interviewType here (drills are behavioral practice), so this
-  // uses behavioral-family copy. Returns null when avg ≥ 60.
-  const suggestion = scores ? answerSuggestion(scores) : null
+  // lockstep. Domain-aware via the source session's interviewType + primaryGap
+  // (from the drill context API), so a coding/design/academics-sourced drill
+  // doesn't get behavioral STAR advice. Returns null when avg ≥ 60.
+  const suggestion = scores
+    ? answerSuggestion({ ...scores, primaryGap: primaryGap ?? undefined }, interviewType ?? undefined)
+    : null
 
   return (
     <AnimatePresence>
