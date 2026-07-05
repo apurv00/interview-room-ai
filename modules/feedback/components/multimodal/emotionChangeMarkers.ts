@@ -28,8 +28,9 @@ interface QuestionMarker {
  *  - Windows with no facial data (`dominantExpression` undefined) are skipped
  *    and do NOT reset the running state (a data gap isn't an emotion change).
  *
- * Sparse by construction, so markers don't overlap regardless of interview
- * length.
+ * Sparse by construction (far fewer than one-per-question), so collisions are
+ * rare even in long interviews — though two changes at nearby question
+ * timestamps can still land close together.
  */
 export function computeEmotionChangeMarkers(
   facialByQ: ReadonlyArray<FacialSegment | undefined>,

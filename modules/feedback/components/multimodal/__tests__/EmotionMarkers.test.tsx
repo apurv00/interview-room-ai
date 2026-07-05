@@ -30,10 +30,17 @@ describe('EmotionMarkers', () => {
     expect(buttons[0].getAttribute('title')).toContain('2:30')
   })
 
-  it('seeks to the marker timestamp on click', () => {
+  it('seeks +8s past the marker on click (lede skip, matching the other nav surfaces)', () => {
     const onSeek = vi.fn()
     render(<EmotionMarkers markers={[{ sec: 90, expression: 'frown' }]} totalDurationSec={600} onSeek={onSeek} />)
     fireEvent.click(screen.getByRole('button'))
-    expect(onSeek).toHaveBeenCalledWith(90)
+    expect(onSeek).toHaveBeenCalledWith(98) // 90 + 8, so it lands in the answer, not the black frame
+  })
+
+  it('clamps the lede-skip seek to the session end', () => {
+    const onSeek = vi.fn()
+    render(<EmotionMarkers markers={[{ sec: 598, expression: 'smile' }]} totalDurationSec={600} onSeek={onSeek} />)
+    fireEvent.click(screen.getByRole('button'))
+    expect(onSeek).toHaveBeenCalledWith(600) // min(598 + 8, 600)
   })
 })
