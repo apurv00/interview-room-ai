@@ -64,6 +64,17 @@ describe('ScoreSummaryHeader', () => {
     expect(screen.getByText(/1 of 2 questions answered/i)).toBeInTheDocument()
   })
 
+  it('labels the Strongest/Weakest pills per interview family (coding → Code Quality, not Structure)', () => {
+    const evals: AnswerEvaluation[] = [
+      makeEval({ relevance: 80, structure: 20, specificity: 70, ownership: 65 }),
+    ]
+    render(<ScoreSummaryHeader evaluations={evals} overallScore={47} interviewType="coding" />)
+    // structure slot is weakest → labelled "Code Quality"; relevance slot → "Correctness"
+    expect(screen.getByText('Code Quality')).toBeInTheDocument()
+    expect(screen.getByText('Correctness')).toBeInTheDocument()
+    expect(screen.queryByText('Structure')).not.toBeInTheDocument()
+  })
+
   it('renders without an anchor number when no overall is provided (still shows diagnosis)', () => {
     const evals: AnswerEvaluation[] = [makeEval({ relevance: 85, structure: 70, specificity: 40, ownership: 65 })]
     render(<ScoreSummaryHeader evaluations={evals} />)

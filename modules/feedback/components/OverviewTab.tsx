@@ -165,7 +165,7 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
         <div className="surface-card-bordered p-4 sm:p-5">
           <h3 className="text-subheading text-[#0f1419] mb-3">Scoring Dimensions</h3>
           {evalData.length > 0 ? (
-            <DimensionRadar evaluations={evalData} />
+            <DimensionRadar evaluations={evalData} interviewType={data.config?.interviewType} />
           ) : (
             <p className="text-caption text-[#71767b]">No evaluation data</p>
           )}
@@ -210,7 +210,7 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
       {evalData.length > 1 && (
         <section className="surface-card-bordered p-4 sm:p-5">
           <h3 className="text-subheading text-[#0f1419] mb-3">Score Progression</h3>
-          <ScoreProgressionChart evaluations={evalData} />
+          <ScoreProgressionChart evaluations={evalData} interviewType={data.config?.interviewType} />
         </section>
       )}
 

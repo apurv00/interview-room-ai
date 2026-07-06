@@ -9,6 +9,7 @@ import {
   ResponsiveContainer,
   Tooltip,
 } from 'recharts'
+import { dimensionLabels } from '@shared/lib/answerSuggestion'
 
 interface Evaluation {
   relevance: number
@@ -20,9 +21,11 @@ interface Evaluation {
 
 interface DimensionRadarProps {
   evaluations: Evaluation[]
+  /** Session interview-type slug — domain-aware axis labels (config.interviewType). */
+  interviewType?: string
 }
 
-export default function DimensionRadar({ evaluations }: DimensionRadarProps) {
+export default function DimensionRadar({ evaluations, interviewType }: DimensionRadarProps) {
   if (!evaluations || evaluations.length === 0) {
     return (
       <div className="text-center py-8 text-[#71767b] text-sm">
@@ -38,12 +41,13 @@ export default function DimensionRadar({ evaluations }: DimensionRadarProps) {
   }
 
   const hasJdAlignment = evaluations.some((ev) => ev.jdAlignment != null)
+  const labels = dimensionLabels(interviewType)
 
   const data = [
-    { dimension: 'Relevance', value: avg('relevance'), fullMark: 100 },
-    { dimension: 'Structure', value: avg('structure'), fullMark: 100 },
-    { dimension: 'Specificity', value: avg('specificity'), fullMark: 100 },
-    { dimension: 'Ownership', value: avg('ownership'), fullMark: 100 },
+    { dimension: labels.relevance, value: avg('relevance'), fullMark: 100 },
+    { dimension: labels.structure, value: avg('structure'), fullMark: 100 },
+    { dimension: labels.specificity, value: avg('specificity'), fullMark: 100 },
+    { dimension: labels.ownership, value: avg('ownership'), fullMark: 100 },
     ...(hasJdAlignment
       ? [{ dimension: 'JD Alignment', value: avg('jdAlignment'), fullMark: 100 }]
       : []),
