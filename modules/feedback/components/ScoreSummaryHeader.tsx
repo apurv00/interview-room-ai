@@ -2,6 +2,7 @@
 
 import { useMemo } from 'react'
 import type { AnswerEvaluation } from '@shared/types'
+import { scoreTextClass } from '@shared/ui/ScoreBar'
 
 interface ScoreSummaryHeaderProps {
   evaluations: AnswerEvaluation[]
@@ -52,12 +53,6 @@ function computeStats(evaluations: AnswerEvaluation[]) {
   return { answered: scored.length, total: evaluations.length, strongest, weakest }
 }
 
-function bandClass(score: number): string {
-  if (score >= 75) return 'text-emerald-600'
-  if (score >= 55) return 'text-amber-600'
-  return 'text-red-500'
-}
-
 export default function ScoreSummaryHeader({ evaluations, overallScore }: ScoreSummaryHeaderProps) {
   const stats = useMemo(() => computeStats(evaluations), [evaluations])
 
@@ -79,7 +74,7 @@ export default function ScoreSummaryHeader({ evaluations, overallScore }: ScoreS
         {/* Left — overall anchor (the SAME number as the hero ScoreRing) + completion */}
         <div className="flex items-baseline gap-3 shrink-0">
           {overallScore != null && (
-            <span className={`text-3xl leading-none font-bold ${bandClass(overallScore)}`}>
+            <span className={`text-3xl leading-none font-bold ${scoreTextClass(overallScore)}`}>
               {overallScore}
             </span>
           )}

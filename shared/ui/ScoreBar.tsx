@@ -38,10 +38,35 @@ const COLOR_MAP = {
   },
 }
 
+/**
+ * Canonical score-band thresholds for interview scores. MUST match the hero band
+ * LABEL (feedback page), QuestionBreakdown, and ScoreSummaryHeader — all of which
+ * use 75/55. This file previously used 70/50 for the ring + bars, so the SAME
+ * number could be painted a different band than the label / Scores tab (e.g. a 72
+ * green in the hero ring but amber in "Overall 72") — a subtle trust bug once both
+ * surfaces show the overall score. Single source so they can't drift again. (#498)
+ */
+export function scoreBand(score: number): 'strong' | 'ok' | 'weak' {
+  if (score >= 75) return 'strong'
+  if (score >= 55) return 'ok'
+  return 'weak'
+}
+
+/** Tailwind text-color class for a score band (emerald / amber / red). */
+export function scoreTextClass(score: number): string {
+  const band = scoreBand(score)
+  return band === 'strong' ? 'text-emerald-600' : band === 'ok' ? 'text-amber-600' : 'text-red-500'
+}
+
+const BAND_HEX: Record<'strong' | 'ok' | 'weak', string> = {
+  strong: '#10b981', // emerald-500
+  ok: '#f59e0b', // amber-500
+  weak: '#ef4444', // red-500
+}
+
 function scoreToColor(score: number): 'emerald' | 'amber' | 'rose' {
-  if (score >= 70) return 'emerald'
-  if (score >= 50) return 'amber'
-  return 'rose'
+  const band = scoreBand(score)
+  return band === 'strong' ? 'emerald' : band === 'ok' ? 'amber' : 'rose'
 }
 
 export function ScoreBar({ label, score: rawScore, color, detail, delay = 0 }: ScoreBarProps) {
@@ -86,7 +111,7 @@ export function ScoreRing({ score: rawScore, size = 120 }: ScoreRingProps) {
   const [displayed, setDisplayed] = useState(0)
   const radius = (size / 2) * 0.8
   const circumference = 2 * Math.PI * radius
-  const color = score >= 70 ? '#10b981' : score >= 50 ? '#f59e0b' : '#ef4444'
+  const color = BAND_HEX[scoreBand(score)]
 
   useEffect(() => {
     let start = 0
