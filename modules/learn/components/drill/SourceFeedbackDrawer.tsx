@@ -3,7 +3,7 @@
 import { useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ScoreBar } from '@shared/ui/ScoreBar'
-import { answerSuggestion, dimensionLabels } from '@shared/lib/answerSuggestion'
+import { answerSuggestion, dimensionLabels, resolveEvalDepthSlug } from '@shared/lib/answerSuggestion'
 
 interface FourDimScores {
   relevance: number
@@ -25,6 +25,9 @@ interface Props {
   interviewType?: string | null
   /** Source answer's LLM-declared weakest dimension, if any (drill context API). */
   primaryGap?: string | null
+  /** Source answer's question index — resolves academics warm-ups (Q0/Q1) to the
+   *  behavioral rubric so labels/suggestion match QuestionBreakdown for that answer. */
+  questionIndex?: number
 }
 
 /**
@@ -56,6 +59,7 @@ export default function SourceFeedbackDrawer({
   scores,
   interviewType,
   primaryGap,
+  questionIndex,
 }: Props) {
   // Esc closes the drawer. Bound only when open to avoid wasted
   // listener churn.
@@ -77,16 +81,19 @@ export default function SourceFeedbackDrawer({
     return () => window.removeEventListener('keydown', onKey)
   }, [open, onClose])
 
+  // Resolve the family from the depth this answer was EVALUATED with — academics
+  // warm-ups (Q0/Q1) are scored behavioral, so the drill's labels + suggestion match
+  // what QuestionBreakdown shows for that same answer (#496), not the session slug.
+  const rowType = resolveEvalDepthSlug(interviewType ?? '', questionIndex)
   // Shared weakest-dimension helper — keeps the drill and the feedback page in
-  // lockstep. Domain-aware via the source session's interviewType + primaryGap
-  // (from the drill context API), so a coding/design/academics-sourced drill
-  // doesn't get behavioral STAR advice. Returns null when avg ≥ 60.
+  // lockstep. Domain-aware (coding/design/academics get non-STAR advice); returns
+  // null when avg ≥ 60.
   const suggestion = scores
-    ? answerSuggestion({ ...scores, primaryGap: primaryGap ?? undefined }, interviewType ?? undefined)
+    ? answerSuggestion({ ...scores, primaryGap: primaryGap ?? undefined }, rowType)
     : null
-  // Domain-aware bar labels so a coding/design/academics-sourced drill shows
-  // "Code Quality" / etc., matching the feedback page's QuestionBreakdown.
-  const dimLabels = dimensionLabels(interviewType ?? undefined)
+  // Domain-aware bar labels so the drill shows "Code Quality" / etc., matching the
+  // feedback page's QuestionBreakdown for that answer.
+  const dimLabels = dimensionLabels(rowType)
 
   return (
     <AnimatePresence>

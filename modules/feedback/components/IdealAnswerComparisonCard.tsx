@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from 'react'
 import type { AnswerEvaluation } from '@shared/types'
-import { dimensionLabels, suggestionFamily } from '@shared/lib/answerSuggestion'
+import { dimensionLabels, suggestionFamily, resolveEvalDepthSlug } from '@shared/lib/answerSuggestion'
 
 interface IdealAnswer {
   questionIndex: number
@@ -115,8 +115,15 @@ export default function IdealAnswerComparisonCard({
     ? userAnswer
     : userAnswer.slice(0, ANSWER_PREVIEW_LIMIT).trimEnd() + '…'
 
-  const dims = buildDims(evaluation, interviewType)
-  const whyContent = buildWhyItScoredLow(dims, interviewType)
+  // Resolve the family from the depth THIS question was evaluated with, not the
+  // session slug — academics warm-ups (Q0/Q1) are scored behavioral, so their
+  // labels/prose must be behavioral too (matches QuestionBreakdown, #496).
+  const rowType = resolveEvalDepthSlug(
+    interviewType ?? '',
+    evaluation?.questionIndex ?? ideal.questionIndex,
+  )
+  const dims = buildDims(evaluation, rowType)
+  const whyContent = buildWhyItScoredLow(dims, rowType)
   const avgScore = dims.length > 0
     ? Math.round(dims.reduce((s, d) => s + d.score, 0) / dims.length)
     : null

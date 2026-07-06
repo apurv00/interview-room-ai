@@ -1033,6 +1033,7 @@ function DrillPageInner() {
           }
           interviewType={questionCtx?.interviewType ?? undefined}
           primaryGap={questionCtx?.primaryGap ?? undefined}
+          questionIndex={activeQuestion.questionIndex}
         />
       )}
     </main>

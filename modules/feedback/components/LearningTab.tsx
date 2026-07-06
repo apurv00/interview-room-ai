@@ -4,6 +4,7 @@ import { useMemo } from 'react'
 import LearningPlanSection from '@feedback/components/LearningPlanSection'
 import IdealAnswerComparisonCard from '@feedback/components/IdealAnswerComparisonCard'
 import type { FeedbackData, StoredInterviewData } from '@shared/types'
+import { dimensionLabels } from '@shared/lib/answerSuggestion'
 
 interface LearningTabProps {
   feedback: FeedbackData
@@ -20,30 +21,26 @@ function drillRowId(idx: number): string {
   return `drill-${idx}`
 }
 
-const DIMENSION_LABELS: Record<string, string> = {
-  relevance: 'Relevance',
-  structure: 'Structure',
-  specificity: 'Specificity',
-  ownership: 'Ownership',
-}
-
 interface DimensionStat {
   key: string
   label: string
   score: number
 }
 
-/** Mirrors the same per-question filter the rest of the redesigned feedback page uses. */
+/** Mirrors the same per-question filter the rest of the redesigned feedback page uses.
+ *  Session-level (aggregate) labels, domain-aware via config.interviewType — matches the
+ *  Scores-tab Strongest/Weakest pills so the "what to fix" strip and the cards below agree. */
 function computeDimensionStats(data: StoredInterviewData): DimensionStat[] {
   const evals = (data.evaluations || []).filter(
     (e) => (e as unknown as { status?: string }).status !== 'failed'
   )
   if (evals.length === 0) return []
 
-  const dims: DimensionStat[] = (Object.keys(DIMENSION_LABELS) as (keyof typeof DIMENSION_LABELS)[]).map(
+  const labels = dimensionLabels(data.config?.interviewType)
+  const dims: DimensionStat[] = (Object.keys(labels) as (keyof typeof labels)[]).map(
     (key) => ({
       key,
-      label: DIMENSION_LABELS[key],
+      label: labels[key],
       score: Math.round(
         evals.reduce((s, e) => s + ((e as unknown as Record<string, number>)[key] || 0), 0) /
           evals.length
