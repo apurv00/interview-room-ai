@@ -10,9 +10,11 @@ import type { StoredInterviewData } from '@shared/types'
 
 interface ScoresTabProps {
   data: StoredInterviewData
+  /** The session's single overall score (same value as the hero ScoreRing). */
+  overallScore?: number | null
 }
 
-export default function ScoresTab({ data }: ScoresTabProps) {
+export default function ScoresTab({ data, overallScore }: ScoresTabProps) {
   const [sortOrder, setSortOrder] = useState<QuestionBreakdownSortOrder>('index')
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -73,7 +75,7 @@ export default function ScoresTab({ data }: ScoresTabProps) {
 
   return (
     <div ref={containerRef} className="space-y-5 animate-fade-in">
-      <ScoreSummaryHeader evaluations={data.evaluations || []} />
+      <ScoreSummaryHeader evaluations={data.evaluations || []} overallScore={overallScore} />
 
       {heatmapEvaluations.length > 0 && (
         <section className="surface-card-bordered p-4 sm:p-5">

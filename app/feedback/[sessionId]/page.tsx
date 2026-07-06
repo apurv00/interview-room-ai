@@ -1575,7 +1575,7 @@ function FeedbackPageInner() {
         <div id="tab-content">
 
         {/* Scores tab — verdict-first surface (default landing) */}
-        {activeTab === 'questions' && <ScoresTab data={data} />}
+        {activeTab === 'questions' && <ScoresTab data={data} overallScore={overall_score} />}
 
         {/* Multimodal Analysis tab — evidence surface (sticky video + scrolling stream) */}
         {activeTab === 'analysis' && (

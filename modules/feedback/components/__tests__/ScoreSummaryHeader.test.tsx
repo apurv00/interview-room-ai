@@ -33,16 +33,19 @@ describe('ScoreSummaryHeader', () => {
     expect(screen.getByText(/No scorable answers/i)).toBeInTheDocument()
   })
 
-  it('shows the dimension averages, the strongest dimension and the weakest dimension', () => {
+  it('anchors to the OVERALL score (not a separate average) + shows strongest/weakest', () => {
     const evals: AnswerEvaluation[] = [
       // Specificity is the lowest dimension; Relevance is highest
       makeEval({ relevance: 85, structure: 70, specificity: 40, ownership: 65 }),
       makeEval({ relevance: 90, structure: 75, specificity: 50, ownership: 60 }),
     ]
-    render(<ScoreSummaryHeader evaluations={evals} />)
+    // overall is passed in (same value as the hero ring), NOT recomputed here
+    render(<ScoreSummaryHeader evaluations={evals} overallScore={47} />)
 
-    // Avg of dimension averages: rel 88, str 73, spec 45, own 63 → mean 67
-    expect(screen.getByText('67')).toBeInTheDocument()
+    expect(screen.getByText('47')).toBeInTheDocument()
+    expect(screen.getByText('Overall')).toBeInTheDocument()
+    // the old client "Avg score" of the dimensions (67) is gone
+    expect(screen.queryByText('67')).not.toBeInTheDocument()
     expect(screen.getByText(/2 of 2 questions answered/i)).toBeInTheDocument()
     expect(screen.getByText('Strongest')).toBeInTheDocument()
     expect(screen.getByText('Weakest')).toBeInTheDocument()
@@ -50,17 +53,22 @@ describe('ScoreSummaryHeader', () => {
     expect(screen.getAllByText('Specificity')[0]).toBeInTheDocument()
   })
 
-  it('excludes failed evaluations from the average', () => {
+  it('excludes failed evaluations from the dimension diagnosis + completion', () => {
     const evals: AnswerEvaluation[] = [
-      // Distinct dimension scores so the avg (75) doesn't collide with any
-      // pill numeric in the rendered output.
       makeEval({ relevance: 90, structure: 80, specificity: 70, ownership: 60 }),
       // failed eval with junk fallback scores — should be ignored
       makeEval({ relevance: 50, structure: 50, specificity: 50, ownership: 50 }, 'failed'),
     ]
-    render(<ScoreSummaryHeader evaluations={evals} />)
-    // Avg of dimension averages: (90+80+70+60)/4 = 75
-    expect(screen.getByText('75')).toBeInTheDocument()
+    render(<ScoreSummaryHeader evaluations={evals} overallScore={61} />)
+    expect(screen.getByText('61')).toBeInTheDocument()
     expect(screen.getByText(/1 of 2 questions answered/i)).toBeInTheDocument()
+  })
+
+  it('renders without an anchor number when no overall is provided (still shows diagnosis)', () => {
+    const evals: AnswerEvaluation[] = [makeEval({ relevance: 85, structure: 70, specificity: 40, ownership: 65 })]
+    render(<ScoreSummaryHeader evaluations={evals} />)
+    expect(screen.queryByText('Overall')).not.toBeInTheDocument()
+    expect(screen.getByText(/1 of 1 questions answered/i)).toBeInTheDocument()
+    expect(screen.getByText('Strongest')).toBeInTheDocument()
   })
 })
