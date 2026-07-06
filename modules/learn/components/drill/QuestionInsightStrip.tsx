@@ -7,6 +7,7 @@ import { Lightbulb } from 'lucide-react'
 import { deriveCoachingTip } from '@interview/config/coachingTips'
 // eslint-disable-next-line no-restricted-imports -- same reason.
 import type { AnswerEvaluation } from '@shared/types'
+import { resolveEvalDepthSlug } from '@shared/lib/answerSuggestion'
 
 /**
  * QuestionInsightStrip — coach hint shown above the drill textarea
@@ -62,10 +63,14 @@ export default function QuestionInsightStrip({
     ownership: scores.ownership,
   }
 
+  // Academics warm-ups (Q0/Q1) are scored with the behavioral rubric — resolve the
+  // eval depth per-row so the coaching tip matches what QuestionBreakdown shows for
+  // that answer, not the session slug (#496 per-row rule).
+  const evalDepth = resolveEvalDepthSlug(interviewType ?? '', questionIndex)
   const tip = deriveCoachingTip(
     evaluation,
     domain ?? undefined,
-    interviewType ?? undefined,
+    evalDepth || undefined,
     primaryGap ?? undefined,
   )
 
