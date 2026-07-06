@@ -5,6 +5,15 @@ import type { AnswerEvaluation } from '@shared/types'
 
 interface ScoreSummaryHeaderProps {
   evaluations: AnswerEvaluation[]
+  /**
+   * The session's single overall score (feedback.overall_score) — the SAME
+   * number as the hero ScoreRing. Shown here as a small anchor so the
+   * per-question / per-dimension detail below reads as components of one score,
+   * not a competing average. Previously this header showed a separately-computed
+   * "Avg score" (mean of the answer dimensions), which differed from the overall
+   * and read as a second, contradictory score to candidates.
+   */
+  overallScore?: number | null
 }
 
 type DimensionKey = 'relevance' | 'structure' | 'specificity' | 'ownership'
@@ -27,7 +36,7 @@ function computeStats(evaluations: AnswerEvaluation[]) {
     (e) => (e as unknown as { status?: string }).status !== 'failed'
   )
   if (scored.length === 0) {
-    return { avg: null, answered: 0, total: evaluations.length, strongest: null, weakest: null }
+    return { answered: 0, total: evaluations.length, strongest: null, weakest: null }
   }
 
   const dims: DimensionStat[] = (Object.keys(DIMENSION_LABELS) as DimensionKey[]).map((key) => ({
@@ -40,11 +49,7 @@ function computeStats(evaluations: AnswerEvaluation[]) {
   const strongest = sorted[0]
   const weakest = sorted[sorted.length - 1]
 
-  const avg = Math.round(
-    dims.reduce((s, d) => s + d.score, 0) / dims.length
-  )
-
-  return { avg, answered: scored.length, total: evaluations.length, strongest, weakest }
+  return { answered: scored.length, total: evaluations.length, strongest, weakest }
 }
 
 function bandClass(score: number): string {
@@ -53,10 +58,10 @@ function bandClass(score: number): string {
   return 'text-red-500'
 }
 
-export default function ScoreSummaryHeader({ evaluations }: ScoreSummaryHeaderProps) {
+export default function ScoreSummaryHeader({ evaluations, overallScore }: ScoreSummaryHeaderProps) {
   const stats = useMemo(() => computeStats(evaluations), [evaluations])
 
-  if (stats.avg === null) {
+  if (stats.answered === 0) {
     return (
       <section className="surface-card-bordered p-5 text-center">
         <p className="text-body text-[#71767b]">
@@ -71,22 +76,26 @@ export default function ScoreSummaryHeader({ evaluations }: ScoreSummaryHeaderPr
   return (
     <section className="surface-card-bordered p-5 sm:p-6">
       <div className="flex flex-col sm:flex-row sm:items-center gap-5 sm:gap-6">
-        {/* Left — average */}
+        {/* Left — overall anchor (the SAME number as the hero ScoreRing) + completion */}
         <div className="flex items-baseline gap-3 shrink-0">
-          <span className={`text-[44px] leading-none font-bold ${bandClass(stats.avg)}`}>
-            {stats.avg}
-          </span>
-          <div className="flex flex-col">
-            <span className="text-caption text-[#71767b] uppercase tracking-wide font-medium">
-              Avg score
+          {overallScore != null && (
+            <span className={`text-3xl leading-none font-bold ${bandClass(overallScore)}`}>
+              {overallScore}
             </span>
+          )}
+          <div className="flex flex-col">
+            {overallScore != null && (
+              <span className="text-caption text-[#71767b] uppercase tracking-wide font-medium">
+                Overall
+              </span>
+            )}
             <span className="text-caption text-[#71767b]">
               {stats.answered} of {stats.total} questions answered
             </span>
           </div>
         </div>
 
-        {/* Right — dimension pills */}
+        {/* Right — dimension diagnosis pills (strongest / weakest across answers) */}
         <div className="flex flex-wrap gap-2 sm:ml-auto">
           {stats.strongest && (
             <span
