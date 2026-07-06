@@ -141,6 +141,7 @@ export default function LearningTab({
               originalQuestion={originalQuestionByIdx.get(ideal.questionIndex) || ''}
               userAnswer={userAnswerByIdx.get(ideal.questionIndex) || ''}
               evaluation={evalByIdx.get(ideal.questionIndex) || null}
+              interviewType={data.config?.interviewType}
             />
           ))}
         </section>

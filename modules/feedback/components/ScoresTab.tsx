@@ -75,7 +75,11 @@ export default function ScoresTab({ data, overallScore }: ScoresTabProps) {
 
   return (
     <div ref={containerRef} className="space-y-5 animate-fade-in">
-      <ScoreSummaryHeader evaluations={data.evaluations || []} overallScore={overallScore} />
+      <ScoreSummaryHeader
+        evaluations={data.evaluations || []}
+        overallScore={overallScore}
+        interviewType={data.config?.interviewType}
+      />
 
       {heatmapEvaluations.length > 0 && (
         <section className="surface-card-bordered p-4 sm:p-5">

@@ -2,6 +2,7 @@
 
 import { useState, type ReactNode } from 'react'
 import type { AnswerEvaluation } from '@shared/types'
+import { dimensionLabels, suggestionFamily } from '@shared/lib/answerSuggestion'
 
 interface IdealAnswer {
   questionIndex: number
@@ -20,14 +21,8 @@ interface IdealAnswerComparisonCardProps {
   /** Optional CTA — show "Practice this →" button when a matching drill exists. */
   practiceLinkLabel?: string
   onPracticeClick?: () => void
-}
-
-const DIMENSION_LABELS: Record<string, string> = {
-  relevance: 'Relevance',
-  structure: 'Structure',
-  specificity: 'Specificity',
-  ownership: 'Ownership',
-  jdAlignment: 'JD Alignment',
+  /** Session interview-type slug — domain-aware dimension labels + why-it-scored-low prose. */
+  interviewType?: string
 }
 
 function bandClass(score: number): string {
@@ -42,16 +37,17 @@ interface DimRow {
   score: number
 }
 
-function buildDims(ev: AnswerEvaluation | null | undefined): DimRow[] {
+function buildDims(ev: AnswerEvaluation | null | undefined, interviewType?: string): DimRow[] {
   if (!ev) return []
+  const labels = dimensionLabels(interviewType)
   const rows: DimRow[] = [
-    { key: 'relevance', label: DIMENSION_LABELS.relevance, score: ev.relevance },
-    { key: 'structure', label: DIMENSION_LABELS.structure, score: ev.structure },
-    { key: 'specificity', label: DIMENSION_LABELS.specificity, score: ev.specificity },
-    { key: 'ownership', label: DIMENSION_LABELS.ownership, score: ev.ownership },
+    { key: 'relevance', label: labels.relevance, score: ev.relevance },
+    { key: 'structure', label: labels.structure, score: ev.structure },
+    { key: 'specificity', label: labels.specificity, score: ev.specificity },
+    { key: 'ownership', label: labels.ownership, score: ev.ownership },
   ]
   if (ev.jdAlignment != null) {
-    rows.push({ key: 'jdAlignment', label: DIMENSION_LABELS.jdAlignment, score: ev.jdAlignment })
+    rows.push({ key: 'jdAlignment', label: 'JD Alignment', score: ev.jdAlignment })
   }
   return rows
 }
@@ -61,11 +57,20 @@ function buildDims(ev: AnswerEvaluation | null | undefined): DimRow[] {
  * presentational synthesis — no LLM call. Picks at most 2 weakest dimensions
  * (<60) and emits a one-liner per dimension explaining what the user can fix.
  */
-function buildWhyItScoredLow(dims: DimRow[]): ReactNode {
+function buildWhyItScoredLow(dims: DimRow[], interviewType?: string): ReactNode {
   const weak = dims.filter((d) => d.score < 60).sort((a, b) => a.score - b.score).slice(0, 2)
   if (weak.length === 0) return null
 
+  // The per-dimension prose below is behavioral-specific (STAR, "we"/passive). For
+  // coding/system-design/academics the four slots are re-mapped (structure =
+  // code_quality, etc.), so that prose would contradict the domain label — emit a
+  // neutral line there and let the (domain-aware) label carry the meaning.
+  const behavioral = suggestionFamily(interviewType) === 'behavioral'
+
   const lines = weak.map((d) => {
+    if (!behavioral) {
+      return `${d.label} (${d.score}) — one of your lowest-scoring areas here; see the scorecard above.`
+    }
     switch (d.key) {
       case 'specificity':
         return `${d.label} (${d.score}) — answer lacked metrics, dates, or concrete examples.`
@@ -98,6 +103,7 @@ export default function IdealAnswerComparisonCard({
   evaluation,
   practiceLinkLabel,
   onPracticeClick,
+  interviewType,
 }: IdealAnswerComparisonCardProps) {
   // The user's answer can be long — collapse by default if >300 chars to avoid
   // a wall-of-text. Strong outline + key elements stay always visible (they're
@@ -109,8 +115,8 @@ export default function IdealAnswerComparisonCard({
     ? userAnswer
     : userAnswer.slice(0, ANSWER_PREVIEW_LIMIT).trimEnd() + '…'
 
-  const dims = buildDims(evaluation)
-  const whyContent = buildWhyItScoredLow(dims)
+  const dims = buildDims(evaluation, interviewType)
+  const whyContent = buildWhyItScoredLow(dims, interviewType)
   const avgScore = dims.length > 0
     ? Math.round(dims.reduce((s, d) => s + d.score, 0) / dims.length)
     : null

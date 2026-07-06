@@ -3,9 +3,12 @@
 import { useMemo } from 'react'
 import type { AnswerEvaluation } from '@shared/types'
 import { scoreTextClass } from '@shared/ui/ScoreBar'
+import { dimensionLabels } from '@shared/lib/answerSuggestion'
 
 interface ScoreSummaryHeaderProps {
   evaluations: AnswerEvaluation[]
+  /** Session interview-type slug — domain-aware Strongest/Weakest labels (config.interviewType). */
+  interviewType?: string
   /**
    * The session's single overall score (feedback.overall_score) — the SAME
    * number as the hero ScoreRing. Shown here as a small anchor so the
@@ -19,20 +22,13 @@ interface ScoreSummaryHeaderProps {
 
 type DimensionKey = 'relevance' | 'structure' | 'specificity' | 'ownership'
 
-const DIMENSION_LABELS: Record<DimensionKey, string> = {
-  relevance: 'Relevance',
-  structure: 'Structure',
-  specificity: 'Specificity',
-  ownership: 'Ownership',
-}
-
 interface DimensionStat {
   key: DimensionKey
   label: string
   score: number
 }
 
-function computeStats(evaluations: AnswerEvaluation[]) {
+function computeStats(evaluations: AnswerEvaluation[], interviewType?: string) {
   const scored = evaluations.filter(
     (e) => (e as unknown as { status?: string }).status !== 'failed'
   )
@@ -40,9 +36,12 @@ function computeStats(evaluations: AnswerEvaluation[]) {
     return { answered: 0, total: evaluations.length, strongest: null, weakest: null }
   }
 
-  const dims: DimensionStat[] = (Object.keys(DIMENSION_LABELS) as DimensionKey[]).map((key) => ({
+  // Domain-aware labels so the pills match QuestionBreakdown (e.g. "Code Quality"
+  // for a coding session, not "Structure").
+  const labels = dimensionLabels(interviewType)
+  const dims: DimensionStat[] = (Object.keys(labels) as DimensionKey[]).map((key) => ({
     key,
-    label: DIMENSION_LABELS[key],
+    label: labels[key],
     score: Math.round(scored.reduce((s, e) => s + (e[key] || 0), 0) / scored.length),
   }))
 
@@ -53,8 +52,8 @@ function computeStats(evaluations: AnswerEvaluation[]) {
   return { answered: scored.length, total: evaluations.length, strongest, weakest }
 }
 
-export default function ScoreSummaryHeader({ evaluations, overallScore }: ScoreSummaryHeaderProps) {
-  const stats = useMemo(() => computeStats(evaluations), [evaluations])
+export default function ScoreSummaryHeader({ evaluations, overallScore, interviewType }: ScoreSummaryHeaderProps) {
+  const stats = useMemo(() => computeStats(evaluations, interviewType), [evaluations, interviewType])
 
   if (stats.answered === 0) {
     return (

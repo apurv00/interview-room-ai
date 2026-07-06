@@ -9,6 +9,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts'
+import { dimensionLabels } from '@shared/lib/answerSuggestion'
 
 interface Evaluation {
   /** 1-based original question number, preserved across filters in OverviewTab.
@@ -22,6 +23,8 @@ interface Evaluation {
 
 interface ScoreProgressionChartProps {
   evaluations: Evaluation[]
+  /** Session interview-type slug — domain-aware series names (config.interviewType). */
+  interviewType?: string
 }
 
 const DIMENSION_COLORS = {
@@ -31,7 +34,7 @@ const DIMENSION_COLORS = {
   ownership: '#8b5cf6',
 } as const
 
-export default function ScoreProgressionChart({ evaluations }: ScoreProgressionChartProps) {
+export default function ScoreProgressionChart({ evaluations, interviewType }: ScoreProgressionChartProps) {
   if (!evaluations || evaluations.length === 0) {
     return (
       <div className="text-center py-8 text-[#71767b] text-sm">
@@ -39,6 +42,8 @@ export default function ScoreProgressionChart({ evaluations }: ScoreProgressionC
       </div>
     )
   }
+
+  const labels = dimensionLabels(interviewType)
 
   const data = evaluations.map((ev, i) => ({
     name: `Q${ev.questionNumber ?? i + 1}`,
@@ -85,7 +90,7 @@ export default function ScoreProgressionChart({ evaluations }: ScoreProgressionC
             strokeWidth={2}
             dot={{ r: 3, fill: DIMENSION_COLORS.relevance }}
             activeDot={{ r: 5 }}
-            name="Relevance"
+            name={labels.relevance}
           />
           <Line
             type="monotone"
@@ -94,7 +99,7 @@ export default function ScoreProgressionChart({ evaluations }: ScoreProgressionC
             strokeWidth={2}
             dot={{ r: 3, fill: DIMENSION_COLORS.structure }}
             activeDot={{ r: 5 }}
-            name="Structure"
+            name={labels.structure}
           />
           <Line
             type="monotone"
@@ -103,7 +108,7 @@ export default function ScoreProgressionChart({ evaluations }: ScoreProgressionC
             strokeWidth={2}
             dot={{ r: 3, fill: DIMENSION_COLORS.specificity }}
             activeDot={{ r: 5 }}
-            name="Specificity"
+            name={labels.specificity}
           />
           <Line
             type="monotone"
@@ -112,7 +117,7 @@ export default function ScoreProgressionChart({ evaluations }: ScoreProgressionC
             strokeWidth={2}
             dot={{ r: 3, fill: DIMENSION_COLORS.ownership }}
             activeDot={{ r: 5 }}
-            name="Ownership"
+            name={labels.ownership}
           />
         </LineChart>
       </ResponsiveContainer>

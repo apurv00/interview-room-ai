@@ -3,7 +3,7 @@
 import { useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ScoreBar } from '@shared/ui/ScoreBar'
-import { answerSuggestion } from '@shared/lib/answerSuggestion'
+import { answerSuggestion, dimensionLabels } from '@shared/lib/answerSuggestion'
 
 interface FourDimScores {
   relevance: number
@@ -84,6 +84,9 @@ export default function SourceFeedbackDrawer({
   const suggestion = scores
     ? answerSuggestion({ ...scores, primaryGap: primaryGap ?? undefined }, interviewType ?? undefined)
     : null
+  // Domain-aware bar labels so a coding/design/academics-sourced drill shows
+  // "Code Quality" / etc., matching the feedback page's QuestionBreakdown.
+  const dimLabels = dimensionLabels(interviewType ?? undefined)
 
   return (
     <AnimatePresence>
@@ -152,10 +155,10 @@ export default function SourceFeedbackDrawer({
                     Score breakdown
                   </p>
                   <div className="space-y-2">
-                    <ScoreBar label="Relevance" score={scores.relevance} delay={0} />
-                    <ScoreBar label="Structure (STAR)" score={scores.structure} delay={50} />
-                    <ScoreBar label="Specificity" score={scores.specificity} delay={100} />
-                    <ScoreBar label="Ownership" score={scores.ownership} delay={150} />
+                    <ScoreBar label={dimLabels.relevance} score={scores.relevance} delay={0} />
+                    <ScoreBar label={dimLabels.structure} score={scores.structure} delay={50} />
+                    <ScoreBar label={dimLabels.specificity} score={scores.specificity} delay={100} />
+                    <ScoreBar label={dimLabels.ownership} score={scores.ownership} delay={150} />
                   </div>
                 </section>
               )}
