@@ -1082,7 +1082,13 @@ function cmdReport() {
       else {
         const snapFps = new Set(gateFingerprints(snap))
         const overlap = indiaFps.filter(fp => snapFps.has(fp)).length
-        console.log(`  G5 cross-source overlap (india ∩ JSearch): ${overlap}/${indiaFps.length} — LOWER BOUND from a small sample; full cross-source G5 lands with corpus-scale ingestion telemetry`)
+        // The OBSERVED overlap rate feeds the india companion status — an
+        // india sample already breaching the 35% G5 gate must not read OK
+        // (Codex on #503). Still a lower bound: a passing rate here does
+        // not prove G5, but a failing rate disproves it.
+        const overlapRate = overlap / indiaFps.length
+        companions.india = overlapRate < 0.35 ? 'OK' : 'FAIL'
+        console.log(`  G5 cross-source overlap (india ∩ JSearch): ${overlap}/${indiaFps.length} (${(overlapRate * 100).toFixed(1)}% vs <35% gate) — LOWER BOUND from a small sample; full cross-source G5 lands with corpus-scale ingestion telemetry`)
       }
     }
   } else console.log('\nIndia sampling: PENDING — run `india`')
@@ -1107,17 +1113,19 @@ function cmdReport() {
     else { companions.g2 = fr.verdict; console.log(`\nG2 (freshness): ${fr.verdict} — ${fr.passing}/${fr.comparable} comparable buckets >=10 net-new/week (${fr.sharePct}%, gap ${fr.gapDays}d) — ${freshFile}`) }
   } else console.log('\nG2 (freshness): PENDING — run `snapshot` twice >=24h apart (<=7d), then `fresh <A> <B>`')
   if (snap && snap.kind !== 'pilot') {
-    if (indiaValid) companions.india = 'OK'
     const v = computeVerdict(snap)
     // Final verdict = corpus verdict gated by the companion results: any
-    // companion FAIL forces FAIL; any companion PENDING/INCONCLUSIVE holds
-    // a would-be PASS at PENDING.
+    // companion FAIL forces FAIL; incomplete companions hold BOTH a
+    // would-be PASS and a would-be PARTIAL at PENDING — PARTIAL is an
+    // actionable scoped-launch decision and needs the same evidence
+    // (Codex on #503). Only a corpus FAIL stands on its own.
     let finalVerdict = v.verdict
     const companionFails = []
     if (companions.g2 === 'FAIL') companionFails.push('G2 freshness FAIL')
     if (companions.rot === 'FAIL') companionFails.push('G4 dead-link rate >= 10%')
+    if (companions.india === 'FAIL') companionFails.push('G5 observed cross-source overlap >= 35%')
     if (companionFails.length) finalVerdict = 'FAIL'
-    else if (v.verdict === 'PASS' && (companions.g2 !== 'PASS' || companions.rot !== 'PASS' || companions.india !== 'OK')) finalVerdict = 'PENDING'
+    else if ((v.verdict === 'PASS' || v.verdict === 'PARTIAL') && (companions.g2 !== 'PASS' || companions.rot !== 'PASS' || companions.india !== 'OK')) finalVerdict = 'PENDING'
     console.log(`\n=== §6 VERDICT (all gates): ${finalVerdict} ===`)
     console.log(`  corpus verdict: ${v.verdict} · companions: G2=${companions.g2} rot=${companions.rot} india=${companions.india}${companionFails.length ? ' · failing: ' + companionFails.join(', ') : ''}`)
     for (const r of v.reasons) console.log(`  • ${r}`)
