@@ -207,6 +207,11 @@ test('[Audit-13] spaced phones hit contact-spam; salary-range titles stay undrop
   assert.ok(plus91.drops.includes('contact-spam'))
   const plus91Title = classifyJob({ title: 'Telecaller call +919876543210', company: 'X', description: '', applyUrls: [] })
   assert.ok(plus91Title.drops.includes('title-phone'))
+  // [Cx-27th] HTML markup must not split hard-drop phrases
+  const htmlFee = classifyJob({ title: 'Dev', company: 'X', description: 'Pay registration <b>fee</b> of Rs 500 to apply', applyUrls: [] })
+  assert.ok(htmlFee.drops.includes('fee-fraud'))
+  const htmlSpam = classifyJob({ title: 'Telecaller', company: 'X', description: 'Call <strong>HR</strong> on <b>9876543210</b> now', applyUrls: [] })
+  assert.ok(htmlSpam.drops.includes('contact-spam'))
 })
 
 test('[Audit-23] malformed validThrough is flagged, real expiry drops', () => {

@@ -160,9 +160,13 @@ export function classifyJob({ title = '', company = '', description = '', applyU
   if (/\b\d+\s*openings?\b/i.test(t)) drops.push('title-openings')
   const letters = t.replace(/[^a-zA-Z]/g, '')
   if (letters.length > 10 && letters.replace(/[^A-Z]/g, '').length / letters.length > 0.7) drops.push('title-caps')
-  if (FEE_FRAUD_RE.test(description)) drops.push('fee-fraud')
+  // Body regexes run on TAG-STRIPPED text — apna/Unstop JDs carry HTML, and
+  // 'registration <b>fee</b>' must not split the phrase past FEE_FRAUD_RE
+  // (Codex on #503). Same normalization jdLen uses, computed once.
+  const body = description.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+  if (FEE_FRAUD_RE.test(body)) drops.push('fee-fraud')
   const hasNonRedirectApply = applyUrls.some(u => !isBlockedApplyUrl(u) && classifyApplyUrl(u) !== 'aggregator-redirect')
-  if (CONTACT_SPAM_RE.test(description) && !hasNonRedirectApply) drops.push('contact-spam')
+  if (CONTACT_SPAM_RE.test(body) && !hasNonRedirectApply) drops.push('contact-spam')
   if (applyUrls.length && applyUrls.every(isBlockedApplyUrl)) drops.push('blocklist-apply-domain')
   // Malformed dates must be VISIBLE, not silently alive: NaN passes neither
   // branch, so bad dates get a flag and real expiries get the drop.
@@ -174,7 +178,7 @@ export function classifyJob({ title = '', company = '', description = '', applyU
 
   if (isStaffingOrg(company)) flags.push('staffing')
   if (/\bconfidential\b/i.test(company)) flags.push('confidential')
-  const jdLen = description.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().length
+  const jdLen = body.length
   if (jdLen < 400) flags.push('short-jd')
   return { drops, flags, jdLen }
 }
