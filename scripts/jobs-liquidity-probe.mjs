@@ -768,7 +768,9 @@ async function sampleUnstop(pages = 5) {
       if (!res.ok || !res.json) { out.errors++; continue }
       const body = res.json
       const list = body?.data?.data ?? body?.data ?? (Array.isArray(body) ? body : null)
-      if (!Array.isArray(list)) { out.shapeNote = `unexpected shape, top-level keys: ${Object.keys(body || {}).join(',')}`; break }
+      // A changed envelope is an ERROR, not a note — otherwise a gate-grade
+      // artifact can save with zero/partial unstop coverage and no invalidity.
+      if (!Array.isArray(list)) { out.errors++; out.shapeNote = `unexpected shape, top-level keys: ${Object.keys(body || {}).join(',')}`; break }
       for (const item of list) {
         // Per-item isolation: one malformed item must not discard its page.
         try {
@@ -847,11 +849,13 @@ async function cmdIndia(sampleArg) {
   const apnaShardLoss = apna.shardCount ? apna.shardErrors / apna.shardCount : 0
   const apnaDetailErr = apna.errors / Math.max(apna.sampled, 1)
   const unstopPageErr = unstop.errors / 5
-  const invalidForGating = apnaShardLoss >= 0.25 || apnaDetailErr > 0.1 || unstopPageErr >= 0.4 || (unstop.sampled === 0 && unstop.errors > 0)
+  const invalidForGating = apnaShardLoss >= 0.25 || apnaDetailErr > 0.1 || unstopPageErr >= 0.4 || (unstop.sampled === 0 && unstop.errors > 0) || !!unstop.shapeNote
   if (invalidForGating) console.log(`\n!!! india sampling errored beyond gate tolerance (shard loss ${(apnaShardLoss * 100).toFixed(0)}%, detail errors ${(apnaDetailErr * 100).toFixed(1)}%, unstop page errors ${unstop.errors}/5) — artifact marked INVALID FOR GATING; re-run \`india\`.`)
   fs.mkdirSync(DATA_DIR, { recursive: true })
   const file = path.join(DATA_DIR, `india-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
-  fs.writeFileSync(file, JSON.stringify({ schemaVersion: SCHEMA_VERSION, ranAt: new Date().toISOString(), sampleN, subSpecSample: sampleN < 100, invalidForGating, apna, unstop }, null, 2))
+  // subSpecSample records what was ACTUALLY sampled, not what was requested —
+  // a thin corpus can under-fill a --sample 100 request.
+  fs.writeFileSync(file, JSON.stringify({ schemaVersion: SCHEMA_VERSION, ranAt: new Date().toISOString(), sampleN, actualSampled: apna.sampled, subSpecSample: apna.sampled < 100, invalidForGating, apna, unstop }, null, 2))
   console.log(`\nSaved: ${file}`)
 }
 
@@ -928,9 +932,9 @@ function cmdReport() {
     const art = loadArtifact(path.join(DATA_DIR, f), 'india')
     if (art.schemaVersion !== SCHEMA_VERSION) { indiaSkipped.push(`${f} (stale format)`); continue }
     if (art.invalidForGating) { indiaSkipped.push(`${f} (invalid for gating)`); continue }
-    // Positive proof of spec-size required: artifacts predating the sampleN
-    // field must not read as gate-grade by absence.
-    if (!(art.sampleN >= 100)) { indiaSkipped.push(`${f} (sub-spec or unrecorded sample size)`); continue }
+    // Positive proof of spec-size required — and judged on what was ACTUALLY
+    // sampled, never on what was requested (a thin corpus can under-fill).
+    if (!(art.apna?.sampled >= 100)) { indiaSkipped.push(`${f} (actual apna sample ${art.apna?.sampled ?? 'unrecorded'} < 100)`); continue }
     indiaPick = { file: f, art }; break
   }
   if (indiaSkipped.length) console.log(`\n(india artifacts skipped for gating: ${indiaSkipped.join(' · ')})`)
