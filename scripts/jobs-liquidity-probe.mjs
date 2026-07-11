@@ -849,8 +849,12 @@ async function cmdIndia(sampleArg) {
   const apnaShardLoss = apna.shardCount ? apna.shardErrors / apna.shardCount : 0
   const apnaDetailErr = apna.errors / Math.max(apna.sampled, 1)
   const unstopPageErr = unstop.errors / 5
-  const invalidForGating = apnaShardLoss >= 0.25 || apnaDetailErr > 0.1 || unstopPageErr >= 0.4 || (unstop.sampled === 0 && unstop.errors > 0) || !!unstop.shapeNote
-  if (invalidForGating) console.log(`\n!!! india sampling errored beyond gate tolerance (shard loss ${(apnaShardLoss * 100).toFixed(0)}%, detail errors ${(apnaDetailErr * 100).toFixed(1)}%, unstop page errors ${unstop.errors}/5) — artifact marked INVALID FOR GATING; re-run \`india\`.`)
+  // HTTP-200 pages with no JobPosting JSON-LD are schema drift, not benign
+  // skips — historical hit rate is 91-100%, so a sample below 70% means the
+  // markup or selector broke and the surviving rates are a biased slice.
+  const apnaJsonLdRate = apna.sampled ? apna.jsonldHits / apna.sampled : 0
+  const invalidForGating = apnaShardLoss >= 0.25 || apnaDetailErr > 0.1 || (apna.sampled > 0 && apnaJsonLdRate < 0.7) || unstopPageErr >= 0.4 || (unstop.sampled === 0 && unstop.errors > 0) || !!unstop.shapeNote
+  if (invalidForGating) console.log(`\n!!! india sampling errored beyond gate tolerance (shard loss ${(apnaShardLoss * 100).toFixed(0)}%, detail errors ${(apnaDetailErr * 100).toFixed(1)}%, JSON-LD hit rate ${(apnaJsonLdRate * 100).toFixed(1)}%, unstop page errors ${unstop.errors}/5) — artifact marked INVALID FOR GATING; re-run \`india\`.`)
   fs.mkdirSync(DATA_DIR, { recursive: true })
   const file = path.join(DATA_DIR, `india-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
   // subSpecSample records what was ACTUALLY sampled, not what was requested —
