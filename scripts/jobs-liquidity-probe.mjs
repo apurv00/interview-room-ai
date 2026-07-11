@@ -178,7 +178,7 @@ async function jsearch(query, { datePosted = 'week', page = 1 } = {}) {
   u.searchParams.set('date_posted', datePosted)
   u.searchParams.set('country', 'in')
   jsearchQuota++
-  const res = await get(u, { headers: { 'x-rapidapi-key': key, 'x-rapidapi-host': JSEARCH_HOST }, retries: 1 })
+  const res = await get(u, { headers: { 'x-rapidapi-key': key, 'x-rapidapi-host': JSEARCH_HOST }, retries: 1, timeoutMs: 30000 })
   if (!res.ok) return { ok: false, status: res.status, jobs: [] }
   const body = await res.json().catch(() => ({}))
   return { ok: true, status: res.status, jobs: Array.isArray(body.data) ? body.data : [] }
@@ -198,8 +198,30 @@ function normalizeJSearchJob(j) {
 // ---------------------------------------------------------------------------
 // Bucket runner + snapshot
 // ---------------------------------------------------------------------------
+// Codex P1 on #503: one page (~10 results) caps every bucket below G1's
+// median>=20 threshold — the gate could false-FAIL on adequate supply.
+// Fetch up to the spec's 3-page/bucket/day cap (INGESTION.md §4.4), stopping
+// early when a short page signals the result set is exhausted. num_pages
+// stays 1 per request so quota accounting is exact (billing per num_pages
+// is unverified).
+const MAX_PAGES_PER_BUCKET = 3
+async function fetchBucketJobs(bucket) {
+  const all = []
+  let ok = false, status = 0
+  for (let page = 1; page <= MAX_PAGES_PER_BUCKET; page++) {
+    const res = await jsearch(bucket.query, { page })
+    status = res.status
+    if (!res.ok) break
+    ok = true
+    all.push(...res.jobs)
+    if (res.jobs.length < 10) break // short page = no further pages
+    if (page < MAX_PAGES_PER_BUCKET) await sleep(1100)
+  }
+  return { ok, status, jobs: all }
+}
+
 async function runBucket(bucket) {
-  const { ok, status, jobs } = await jsearch(bucket.query)
+  const { ok, status, jobs } = await fetchBucketJobs(bucket)
   const rows = jobs.map(normalizeJSearchJob)
   const seen = new Set()
   const stats = { bucket: bucket.id, domain: bucket.domain, fresher: !!bucket.fresher, httpStatus: status, raw: rows.length, usable: 0, fullJd: 0, dropped: {}, flagged: {}, byTier: {}, viaSites: {}, fingerprints: [], dupWithinBucket: 0, sampleApplyUrls: [] }
@@ -230,7 +252,13 @@ async function cmdSnapshot({ pilot = false, fresher = false } = {}) {
   console.log(`Running ${buckets.length} buckets against JSearch (date_posted=week, country=in)…`)
   const results = []
   for (const [i, b] of buckets.entries()) {
-    const s = await runBucket(b)
+    // A single slow/failed bucket must never kill the whole snapshot run.
+    let s
+    try {
+      s = await runBucket(b)
+    } catch (err) {
+      s = { bucket: b.id, domain: b.domain, fresher: !!b.fresher, httpStatus: 0, error: String(err?.message || err), raw: 0, usable: 0, fullJd: 0, dropped: {}, flagged: {}, byTier: {}, viaSites: {}, fingerprints: [], dupWithinBucket: 0, sampleApplyUrls: [] }
+    }
     results.push(s)
     console.log(`  [${String(i + 1).padStart(3)}/${buckets.length}] ${b.id.padEnd(28)} raw=${String(s.raw).padStart(3)} usable=${String(s.usable).padStart(3)} fullJD=${s.raw ? Math.round((s.fullJd / s.raw) * 100) : 0}% tiers=${JSON.stringify(s.byTier)}`)
     await sleep(1100) // polite pacing; also keeps quota burn observable
@@ -247,8 +275,10 @@ function median(arr) { const s = [...arr].sort((a, b) => a - b); return s.length
 function pct(n, d) { return d ? `${Math.round((n / d) * 100)}%` : '—' }
 
 function summarizeSnapshot(snap) {
-  const bs = snap.buckets.filter(b => !b.fresher)
-  const fresherBs = snap.buckets.filter(b => b.fresher)
+  const errored = snap.buckets.filter(b => b.error)
+  const bs = snap.buckets.filter(b => !b.fresher && !b.error)
+  const fresherBs = snap.buckets.filter(b => b.fresher && !b.error)
+  if (errored.length) console.log(`\n(${errored.length} bucket(s) errored and are excluded from gates: ${errored.map(b => b.bucket).join(', ')})`)
   const usable = bs.map(b => b.usable)
   const totalRaw = bs.reduce((a, b) => a + b.raw, 0)
   const totalUsable = bs.reduce((a, b) => a + b.usable, 0)
@@ -325,11 +355,21 @@ async function sampleApna(sampleN) {
     const shards = extractLocs(shardIdx).filter(u => /active-job-listings-/.test(u))
     out.shardCount = shards.length
     if (!shards.length) { console.log('apna: no active-job-listings shards found'); return out }
-    const shardXml = await (await get(shards[0])).text()
-    const urls = extractLocs(shardXml).filter(u => /apna\.co\/job/.test(u))
-    console.log(`apna: ${shards.length} active shards; shard 1 has ${urls.length} job URLs; sampling ${Math.min(sampleN, urls.length)} (spread)`)
-    const step = Math.max(1, Math.floor(urls.length / sampleN))
-    for (let i = 0; i < urls.length && out.sampled < sampleN; i += step) {
+    // Codex P2 on #503: sample across ALL active shards, not just shard[0] —
+    // shards may be ordered by date/id/geography, so a single-shard sample
+    // can misrepresent JD-length/consultancy/expiry rates for the corpus.
+    const perShard = Math.max(1, Math.ceil(sampleN / shards.length))
+    const urls = []
+    let corpusTotal = 0
+    for (const shardUrl of shards) {
+      const shardXml = await (await get(shardUrl)).text()
+      const shardUrls = extractLocs(shardXml).filter(u => /apna\.co\/job/.test(u))
+      corpusTotal += shardUrls.length
+      const step = Math.max(1, Math.floor(shardUrls.length / perShard))
+      for (let i = 0, taken = 0; i < shardUrls.length && taken < perShard; i += step, taken++) urls.push(shardUrls[i])
+    }
+    console.log(`apna: ${shards.length} active shards, ${corpusTotal} total job URLs; sampling ${Math.min(sampleN, urls.length)} spread across all shards`)
+    for (let i = 0; i < urls.length && out.sampled < sampleN; i++) {
       out.sampled++
       try {
         const html = await (await get(urls[i], { timeoutMs: 12000, retries: 0 })).text()
