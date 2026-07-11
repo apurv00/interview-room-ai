@@ -27,6 +27,31 @@ export function __usesMaxCompletionTokens(model: string): boolean {
   return MAX_COMPLETION_TOKENS_MODEL_RE.test(model)
 }
 
+// The GPT-5.6 family (sol/terra/luna) and o-series reasoning models lock
+// `temperature` to the default (1) — any other value returns 400
+// `unsupported_value` (verified live against all three 5.6 tiers,
+// 2026-07-11). Earlier GPT-5.x models (gpt-5.4-mini) still accept custom
+// temperature. Omit the param entirely for locked models: the server-side
+// default (1) applies, and callers' intent is preserved for any model that
+// does support it.
+const TEMPERATURE_LOCKED_MODEL_RE = /^(gpt-5\.6|o[1-4])/
+
+export function __supportsCustomTemperature(model: string): boolean {
+  return !TEMPERATURE_LOCKED_MODEL_RE.test(model)
+}
+
+// `reasoning_effort` is sent ONLY to the GPT-5.6 family, whose accepted
+// vocabulary (none/low/medium/high/xhigh) we verified live 2026-07-11.
+// Other reasoning models use different vocabularies (GPT-5.0 uses
+// 'minimal', o-series has no 'none') — sending an unsupported value is a
+// 400, so for any other model the param is dropped and the model's own
+// default applies. Widen deliberately (with a live check) per family.
+const REASONING_EFFORT_MODEL_RE = /^gpt-5\.6/
+
+export function __supportsReasoningEffort(model: string): boolean {
+  return REASONING_EFFORT_MODEL_RE.test(model)
+}
+
 /**
  * Build the request body shared between `complete()` and `stream()`.
  * Factored out so the two paths can't drift on parameter defaults
@@ -61,7 +86,10 @@ function buildRequestBody(params: CompletionParams) {
         content: m.content,
       })),
     ],
-    ...(params.temperature !== undefined && { temperature: params.temperature }),
+    ...(params.temperature !== undefined &&
+      __supportsCustomTemperature(params.model) && { temperature: params.temperature }),
+    ...(params.reasoningEffort !== undefined &&
+      __supportsReasoningEffort(params.model) && { reasoning_effort: params.reasoningEffort }),
   }
 }
 

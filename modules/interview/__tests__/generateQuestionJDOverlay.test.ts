@@ -554,7 +554,8 @@ describe('POST /api/generate-question — JD overlay wiring', () => {
     expect(body.question).toBe('Full retry.')
     expect(mockCompletion).toHaveBeenCalledTimes(2)
     // Retry call still carries the expanded maxTokens from Work Item A
-    expect(mockCompletion.mock.calls[1][0].maxTokens).toBe(500)
+    // (1200 since the 2026-07-11 reasoning-headroom bump)
+    expect(mockCompletion.mock.calls[1][0].maxTokens).toBe(1200)
   })
 
   it('returns flowHints with slotId and competencyBucket for QA harness routing', async () => {

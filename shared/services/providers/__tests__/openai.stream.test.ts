@@ -104,7 +104,7 @@ describe('OpenAI adapter streaming', () => {
     const provider = getProvider('openai')!
     const events: Array<{ kind: string; text?: string; inputTokens?: number; outputTokens?: number; truncated?: boolean }> = []
     for await (const ev of provider.stream!({
-      model: 'gpt-5.4-mini',
+      model: 'gpt-5.6-luna',
       system: 'sys',
       messages: [{ role: 'user', content: 'hi' }],
       maxTokens: 100,
@@ -136,7 +136,7 @@ describe('OpenAI adapter streaming', () => {
     const provider = getProvider('openai')!
     const events = []
     for await (const ev of provider.stream!({
-      model: 'gpt-5.4-mini',
+      model: 'gpt-5.6-luna',
       system: 'sys',
       messages: [{ role: 'user', content: 'hi' }],
       maxTokens: 100,
@@ -157,7 +157,7 @@ describe('OpenAI adapter streaming', () => {
     const provider = getProvider('openai')!
     const events = []
     for await (const ev of provider.stream!({
-      model: 'gpt-5.4-mini',
+      model: 'gpt-5.6-luna',
       system: 'sys',
       messages: [{ role: 'user', content: 'hi' }],
       maxTokens: 100,
@@ -180,7 +180,7 @@ describe('OpenAI adapter streaming', () => {
 
     const provider = getProvider('openai')!
     for await (const _ of provider.stream!({
-      model: 'gpt-5.4-mini', // matches /^(gpt-5|o[1-4])/
+      model: 'gpt-5.6-luna', // matches /^(gpt-5|o[1-4])/
       system: 'sys',
       messages: [{ role: 'user', content: 'hi' }],
       maxTokens: 250,
@@ -226,7 +226,7 @@ describe('OpenAI adapter streaming', () => {
     const provider = getProvider('openai')!
     for await (const _ of provider.stream!(
       {
-        model: 'gpt-5.4-mini',
+        model: 'gpt-5.6-luna',
         system: 'sys',
         messages: [{ role: 'user', content: 'hi' }],
         maxTokens: 100,
@@ -250,7 +250,7 @@ describe('OpenAI adapter streaming', () => {
 
     const provider = getProvider('openai')!
     for await (const _ of provider.stream!({
-      model: 'gpt-5.4-mini',
+      model: 'gpt-5.6-luna',
       system: 'sys',
       messages: [{ role: 'user', content: 'hi' }],
       maxTokens: 100,

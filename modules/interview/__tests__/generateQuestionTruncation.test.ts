@@ -6,7 +6,9 @@
  * max_tokens=300 which is too small at Q15+ when the system prompt has
  * ballooned, so the model cuts off mid-question. Previously the route
  * shipped truncated text to the candidate. Now it:
- *   1. Retries ONCE with maxTokens: 500 if the first call truncated.
+ *   1. Retries ONCE with maxTokens: 1200 if the first call truncated
+ *      (was 500; raised 2026-07-11 to stay above the slot primary of 800
+ *      after the medium-reasoning headroom bump).
  *   2. Returns 503 with isFallback=true if the retry also truncated,
  *      so the client's getNextFallbackQuestion path takes over.
  *   3. Behaves normally when completion is not truncated (no retry, no warn).
@@ -184,7 +186,7 @@ describe('POST /api/generate-question — truncation handling', () => {
     expect(mockCompletion).toHaveBeenCalledTimes(2)
     // Retry must pass an expanded maxTokens override
     const retryCallArgs = mockCompletion.mock.calls[1][0]
-    expect(retryCallArgs.maxTokens).toBe(500)
+    expect(retryCallArgs.maxTokens).toBe(1200)
   })
 
   it('returns 200 with retry text when initial is truncated but retry succeeds', async () => {

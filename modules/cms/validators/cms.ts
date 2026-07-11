@@ -102,6 +102,7 @@ const ModelSlotSchema = z.object({
   fallbackProvider: z.string().max(50).optional(),
   maxTokens: z.number().int().min(100).max(16000),
   temperature: z.number().min(0).max(2).optional(),
+  reasoningEffort: z.enum(['none', 'low', 'medium', 'high', 'xhigh']).optional(),
   isActive: z.boolean(),
   useToonInput: z.boolean().optional(),
 })

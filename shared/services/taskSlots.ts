@@ -1,5 +1,9 @@
 // ─── Task Slots & Defaults ──────────────────────────────────────────────────
 // Pure constants — no mongoose dependency. Safe to import from client code.
+// (The ReasoningEffort import below is type-only — erased at compile time,
+// so no provider SDK code reaches client bundles.)
+
+import type { ReasoningEffort } from './providers/index'
 
 export const TASK_SLOTS = [
   // Interview
@@ -54,22 +58,36 @@ export const TASK_SLOT_DEFAULTS: Record<
     provider: string
     fallbackModel?: string
     fallbackProvider?: string
+    reasoningEffort?: ReasoningEffort
   }
 > = {
-  'interview.generate-question':    { model: 'gpt-5.4-mini', maxTokens: 300, provider: 'openai' },
-  'interview.evaluate-answer':      { model: 'gpt-5.4-mini', maxTokens: 250, provider: 'openai' },
-  'interview.generate-feedback':    { model: 'gpt-5.4-mini', maxTokens: 6000, provider: 'openai' },
+  // ── reasoningEffort tiers (GPT-5.6 slots; decision 2026-07-11) ──
+  // Judgment tasks that are async or latency-tolerant run HIGH now; if
+  // score telemetry (/cms/score-telemetry) shows drift or truncation,
+  // dial individual slots back to medium via a CMS ModelConfig row —
+  // no deploy needed. In-interview generation runs medium/low to stay
+  // inside client timeouts (evaluate-answer has a 5s client abort).
+  // Real-time conversational slots + the streaming drill run NONE:
+  // reasoning happens BEFORE the first output/stream token, so there it
+  // is pure dead air. Reasoning tokens bill against max_completion_tokens,
+  // so every slot with effort also got budget headroom sized ~3× the
+  // live-measured spend (evaluate shape: 64 tokens @high; question
+  // shape: 158 @high) — an undersized budget truncates the JSON, which
+  // is the G.2/G.6 failure class.
+  'interview.generate-question':    { model: 'gpt-5.6-luna', maxTokens: 800, provider: 'openai', reasoningEffort: 'medium' },
+  'interview.evaluate-answer':      { model: 'gpt-5.6-luna', maxTokens: 500, provider: 'openai', reasoningEffort: 'low' },
+  'interview.generate-feedback':    { model: 'gpt-5.6-luna', maxTokens: 7000, provider: 'openai', reasoningEffort: 'high' },
   // maxTokens headroom sized for the grounded_followups fields: truncated JSON
   // here 502s the route and converts the MAIN submission eval into a 'failed'
   // row excluded from aggregation — the added output must never cause that.
-  'interview.evaluate-code':        { model: 'gpt-5.4-mini', maxTokens: 1400, provider: 'openai' },
-  'interview.evaluate-design':      { model: 'gpt-5.4-mini', maxTokens: 1800, provider: 'openai' },
-  'interview.clarify-coding':       { model: 'gpt-5.4-mini', maxTokens: 500, provider: 'openai' },
-  'interview.coding-problem-gen':   { model: 'gpt-5.4-mini', maxTokens: 2000, provider: 'openai' },
-  'interview.code-run':             { model: 'gpt-5.4-mini', maxTokens: 3000, provider: 'openai' },
-  'interview.coach-notes':          { model: 'gpt-5.4-mini', maxTokens: 500, provider: 'openai' },
-  'interview.jd-extract':           { model: 'gpt-5.4-mini', maxTokens: 2500, provider: 'openai' },
-  'interview.fusion-analysis':      { model: 'gpt-5.4-mini', maxTokens: 3000, provider: 'openai' },
+  'interview.evaluate-code':        { model: 'gpt-5.6-luna', maxTokens: 2400, provider: 'openai', reasoningEffort: 'high' },
+  'interview.evaluate-design':      { model: 'gpt-5.6-luna', maxTokens: 2800, provider: 'openai', reasoningEffort: 'high' },
+  'interview.clarify-coding':       { model: 'gpt-5.6-luna', maxTokens: 500, provider: 'openai', reasoningEffort: 'low' },
+  'interview.coding-problem-gen':   { model: 'gpt-5.6-luna', maxTokens: 2600, provider: 'openai', reasoningEffort: 'medium' },
+  'interview.code-run':             { model: 'gpt-5.6-luna', maxTokens: 3000, provider: 'openai', reasoningEffort: 'low' },
+  'interview.coach-notes':          { model: 'gpt-5.6-luna', maxTokens: 500, provider: 'openai', reasoningEffort: 'none' },
+  'interview.jd-extract':           { model: 'gpt-5.6-luna', maxTokens: 2500, provider: 'openai', reasoningEffort: 'low' },
+  'interview.fusion-analysis':      { model: 'gpt-5.6-luna', maxTokens: 3600, provider: 'openai', reasoningEffort: 'high' },
   'resume.enhance-section':         { model: 'claude-sonnet-4-6', maxTokens: 1000, provider: 'anthropic' },
   'resume.enhance-bullets':         { model: 'claude-sonnet-4-6', maxTokens: 1000, provider: 'anthropic' },
   'resume.generate-full':           { model: 'claude-sonnet-4-6', maxTokens: 3000, provider: 'anthropic' },
@@ -97,11 +115,13 @@ export const TASK_SLOT_DEFAULTS: Record<
   // Default to OpenAI so the streaming path (provider.stream on openai
   // adapter) engages on merge with no operator action. Anthropic
   // fallback covers OpenAI outages; CMS can override either side.
-  'learn.drill-evaluate':           { model: 'gpt-5.4-mini', maxTokens: 1500, provider: 'openai', fallbackModel: 'claude-sonnet-4-6', fallbackProvider: 'anthropic' },
+  // drill-evaluate streams to the UI — reasoning would delay the first
+  // visible token (silent head on the stream), so it stays at none.
+  'learn.drill-evaluate':           { model: 'gpt-5.6-luna', maxTokens: 1500, provider: 'openai', fallbackModel: 'claude-sonnet-4-6', fallbackProvider: 'anthropic', reasoningEffort: 'none' },
   'b2b.scorecard':                  { model: 'claude-haiku-4-5', maxTokens: 1000, provider: 'anthropic' },
   'onboarding.extract-profile':     { model: 'claude-sonnet-4-6', maxTokens: 2000, provider: 'anthropic' },
-  'interview.evaluation-engine-v2': { model: 'gpt-5.4-mini', maxTokens: 2000, provider: 'openai' },
-  'interview.answer-candidate-question': { model: 'gpt-5.4-mini', maxTokens: 200, provider: 'openai' },
-  'interview.clarify-case-context':       { model: 'gpt-5.4-mini', maxTokens: 240, provider: 'openai' },
-  'interview.turn-router':               { model: 'gpt-5.4-mini', maxTokens: 150, provider: 'openai' },
+  'interview.evaluation-engine-v2': { model: 'gpt-5.6-luna', maxTokens: 2600, provider: 'openai', reasoningEffort: 'high' },
+  'interview.answer-candidate-question': { model: 'gpt-5.6-luna', maxTokens: 200, provider: 'openai', reasoningEffort: 'none' },
+  'interview.clarify-case-context':       { model: 'gpt-5.6-luna', maxTokens: 400, provider: 'openai', reasoningEffort: 'low' },
+  'interview.turn-router':               { model: 'gpt-5.6-luna', maxTokens: 150, provider: 'openai', reasoningEffort: 'none' },
 }

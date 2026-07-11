@@ -1957,3 +1957,199 @@ Unchanged ids: `f44c09a`, `ae5fc54`, `47150c4`, `b480ddd`, `c1fa41e` (#485); `3c
 `ca5403a` (#487 tip). Root-cause of the drift: the audit hook logs at commit time, and stacked-PR
 rebases rewrite ids afterward — the entries' content (root-cause, verification, test delta) is the
 durable record; ids are best-effort pointers.
+
+### 2026-07-02 20:48:25 +0530 · `fbfac7c` · Apurv
+- **Subject:** fix(resume): continuation-page overlap + partial-tolerant import chain (Phase 1)
+- **Files:** 18 changed, 5 test file(s)
+- **Root-cause:** (1) renderer invalidated the paginator's own coordinate space by
+- **Tests-added: modules/resume/__tests__/parseSalvage.test.ts, app/api/resume/parse/__tests__/route.test.ts, app/api/documents/upload/__tests__/route.test.ts; parseResumeToStructured suite rewritten for **
+- **Verified-by:** 32 new/updated tests; full suite 5162 passed / 0 failed; lint clean; production build clean. The pagination fix mechanism was validated empirically during review (headless-Chromium line-rect probe: wi
+
+### 2026-07-02 21:00:08 +0530 · `9a879b2` · Apurv
+- **Subject:** chore(tooling): add a name-based textual sweep to impact artifacts — the graph misses barrel-import call edges
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** the accountability gate's artifact relied solely on graph CALLS
+- **No-tests-needed-because: shell tooling; verified by executing against the known blind-spot case — the regenerated artifact for modules/resume/services/resumeAIService.ts now lists modules/interview/se**
+- **Verified-by:** ran ./scripts/gitnexus-impact.sh on resumeAIService.ts and inspected the sweep section (10 hits incl. the previously-invisible consumer)
+
+### 2026-07-02 21:05:22 +0530 · `8570eaa` · Apurv
+- **Subject:** fix(resume): scope the empty-text guard — truly-empty for all types, near-empty for PDFs only (Codex P2 on #489)
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** the scanned-PDF heuristic was applied route-wide without checking
+- **Tests-added: split the guard tests three ways (near-empty PDF 422 scanned; empty non-PDF 422 generic; short-but-real .txt 200)**
+- **Verified-by:** upload route suite 7 tests passing
+
+### 2026-07-02 21:14:54 +0530 · `fdd0d42` · Apurv
+- **Subject:** fix(tooling): sweep file list is complete and uncapped; only hit-line detail is bounded, loudly (Codex P2 on #490)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** line-level cap applied to a list whose completeness contract is
+- **No-tests-needed-because: shell tooling; verified by regenerating the artifact for shared/services/modelRouter.ts — `completion` reports 240 hits across 90 files, all 90 files listed, truncation note n**
+- **Verified-by:** sed/grep assertions on the regenerated artifact (file-list count == header file count; TRUNCATED banner present)
+
+### 2026-07-02 21:25:54 +0530 · `7a8fc08` · Apurv
+- **Subject:** fix(tooling): fixed-string self-file exclusion in the sweep — dynamic-route paths leaked into their own consumer lists (Codex P2 on #490)
+- **Files:** 1 changed, 0 test file(s)
+- **Root-cause:** unescaped path interpolated into a regex context; brackets became
+- **No-tests-needed-because: shell tooling; verified by regenerating the artifact for app/feedback/[sessionId]/page.tsx — 0 self-references across its 17 sweep sections — and re-verifying the modelRouter **
+- **Verified-by:** grep assertions on both regenerated artifacts
+
+### 2026-07-02 21:36:06 +0530 · `402d77d` · Apurv
+- **Subject:** fix(resume): upload replaces the draft — explicit empties for sections absent from the parse (Codex P2 on #489)
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** replace semantics implemented with a merge primitive once the
+- **Tests-added: buildUploadPrefill suite (explicit-empties merge clearing; editor-only field survival)**
+- **Verified-by:** parseSalvage suite 15 tests passing; lint clean; production build clean
+
+### 2026-07-02 22:18:11 +0530 · `85256a6` · Apurv
+- **Subject:** fix(resume): stop losing user data on save, validate with clamps, keep AI inputs whole (Phase 2)
+- **Files:** 13 changed, 3 test file(s)
+- **Root-cause:** (1) saveResume $set/$push lists and the User subdocument schema were written before sectionOrder/styling existed and were never extended — Zod accepted the fields, Mongo silently discarded them; (2) h
+- **Tests-added: modules/resume/__tests__/resumeSchemaClamp.test.ts (new, 9 tests); modules/resume/__tests__/resumeService.test.ts (+5: sectionOrder/styling on update+insert, fullText regen vs kept, NOT_F**
+- **Verified-by:** full vitest suite 5183 passed / 18 skipped (322 files); next lint clean; production build clean; gitnexus detect_changes scoped to the 13 expected files; name-based consumer sweep of saveResume/tailor
+
+### 2026-07-02 22:39:35 +0530 · `26ce390` · Apurv
+- **Subject:** feat(resume): Phase 3 UX polish — enhance undo, honest ATS badge, upfront cap, paste import, debounced preview, a11y
+- **Files:** 9 changed, 2 test file(s)
+- **Root-cause:** (1) enhance handlers called update() destructively with no snapshot and swallowed errors in an empty catch; (2) tailor stored matchScore (JD relevance) into atsScore (parser compatibility) and nothing
+- **Tests-added: shared/ui/__tests__/FileDropzone.test.tsx (new, 5 tests: keyboard open, no-op keys, ext validation); modules/resume/__tests__/useDebouncedValue.test.ts (new, 3 tests: immediate initial, t**
+- **Verified-by:** full vitest suite 5191 passed / 18 skipped; next lint clean; production build clean; gitnexus detect_changes scoped to the 7 expected files; FileDropzone consumer sweep (tailor, ats-check, ResumeEdito
+
+### 2026-07-02 22:53:05 +0530 · `9191fb7` · Apurv
+- **Subject:** fix(resume): treat persisted sectionOrder [] as unset — editor rendered zero sections
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** `[] || default` evaluates to [] because empty arrays are truthy in JS; the new $set line 'savedResumes.$.sectionOrder': sectionOrder || [] made [] the common persisted state, turning the latent patter
+- **Tests-added: modules/resume/__tests__/useResumeSectionOrder.test.ts (new, 2 tests: [] falls back to template default + drag works; real custom order still honored)**
+- **Verified-by:** new regression tests pass; full modules/resume suite passes (unit); caught during Phase 4 review before any deploy
+
+### 2026-07-02 22:59:04 +0530 · `efbd8d8` · Apurv
+- **Subject:** fix(resume): Phase 4 P3 sweep — generate rate limit, dropdown re-select, pinned contact card, load-failure notice
+- **Files:** 5 changed, 0 test file(s)
+- **Root-cause:** (1) the route predates composeApiRoute adoption in this module; (2) uncontrolled <select defaultValue> keeps its DOM value after Remove, so selecting the same option produces no change event; (3) getT
+- **No-tests-needed-because: rate-limit/auth/validation behavior comes from composeApiRoute which has its own suite; the remaining changes are client wiring (controlled select value, fixed-position card, **
+- **Verified-by:** full vitest suite 5193 passed / 18 skipped; next lint clean; production build clean; gitnexus detect_changes scoped to the 5 expected files
+
+### 2026-07-03 11:00:10 +0530 · `ba83b99` · Apurv
+- **Subject:** fix(resume): harden the audit stack — 23 review findings (data-loss, drafts, AI robustness, honest UX)
+- **Files:** 25 changed, 6 test file(s)
+- **Root-cause:** #491's unconditional fullText regeneration collides with #489's partial-tolerant parse contract — regenerating from a partial parse drops unmodeled content, and the builder/tailor flows fed partial pa
+- **Tests-added: modules/resume/__tests__/reviewHardening.test.ts (new — clamp detector, schema clamps, currentSections cap, sliceSkillCategory omittedCount); resumeService.test.ts (+preserveFullText, los**
+- **Verified-by:** full vitest suite 5218 passed / 16 skipped (327 files, +~40 new); next lint clean; production build clean; module-size budget green (resume 101/104); gitnexus detect_changes scoped to the 25 expected 
+
+### 2026-07-03 11:32:08 +0530 · `a734886` · Apurv
+- **Subject:** fix(interview): count main questions, not probes, against the per-interview budget
+- **Files:** 4 changed, 1 test file(s)
+- **Root-cause:** qIdx was both the loop-termination bound and the monotonic per-interaction exchange index; probes/pivots/deferred bridges each increment it, so each probe consumed a main-question slot and collapsed t
+- **Tests-added: modules/interview/__tests__/interviewConfig.test.ts**
+- **Verified-by:** unit tests (interviewConfig.test.ts 35 passing incl. getMainQuestionBudget contract + loop-counting simulations proving probe-independence and guarding the old shared-counter regression: 9→5 at 10min/
+
+### 2026-07-03 12:03:19 +0530 · `bd60c6f` · Apurv
+- **Subject:** fix(interview): raise questionIndex cap so the decoupled exchange index can't 400 long sessions
+- **Files:** 2 changed, 1 test file(s)
+- **Root-cause:** a734886 decoupled the loop bound from qIdx, but qIdx (the API questionIndex) still increments per probe/pivot/deferred and was capped at 100 — sized for the retired qIdx<maxQ≤60 invariant. Long (up to
+- **Tests-added: modules/interview/__tests__/exchangeIndexBound.test.ts**
+- **Verified-by:** unit tests (exchangeIndexBound 10 passing — asserts the 60-min structural worst-case index and 200 are accepted, the old cap of 100 is exceeded by the worst case, and negatives / 100000 are rejected, 
+
+### 2026-07-03 12:41:32 +0530 · `d589880` · Apurv
+- **Subject:** fix(interview): keep completion counts + generation ordinal correct after the probe decouple
+- **Files:** 5 changed, 3 test file(s)
+- **Root-cause:** a734886 let qIdx and the eval count grow past the retired qIdx≤getQuestionCount≤60 invariant, but two consumers still assumed it — (P1) answeredCount/wasTruncatedByTimer were capped at 100 in Generate
+- **Tests-added: modules/interview/__tests__/exchangeIndexBound.test.ts (answeredCount + wasTruncatedByTimer cap coverage), modules/interview/__tests__/interviewConfig.test.ts (ordinal-bound simulation: "**
+- **Verified-by:** full interview suite 3354 passing (updated sessionCompletionShape.test.ts to assert the raised cap accepts 101/417 and still rejects 501); tsc --noEmit exit 0; eslint 0 errors. Addresses Codex #495 P1
+
+### 2026-07-03 13:20:06 +0530 · `b11dd48` · Apurv
+- **Subject:** fix(interview): report main-question count (not exchange index) in completion analytics
+- **Files:** 4 changed, 1 test file(s)
+- **Root-cause:** a734886 lets qIdx (mirrored to the questionIndex React state) exceed the main-question count once probes stopped spending the loop budget, but useInterviewLifecycleEvents.questionCountAtCompletion sti
+- **Tests-added: modules/interview/__tests__/useInterviewLifecycleEvents.test.tsx (general flow now asserts question_count = mainQuestionNumber+1 while questionIndex is probe-inflated; coding/system-desig**
+- **Verified-by:** full interview suite 3354 passing; tsc --noEmit exit 0; eslint 0 errors. Addresses Codex #495 P2 (completion analytics). TranscriptPanel progress was already correct — it derives from questionDisplay.
+
+### 2026-07-05 13:42:21 +0530 · `e3cc00c` · Apurv
+- **Subject:** fix(feedback+analysis): heatmap columns, generic STAR tip, neutral faces, filler undercount
+- **Files:** 17 changed, 5 test file(s)
+- **Root-cause:** (1) header <table> vs body colSpan-flex are two unsynchronized layout
+- **Tests-added: shared/lib/__tests__/answerSuggestion.test.ts,**
+- **Verified-by:** vitest run — 4607 tests pass (237 files, incl. 45 new); tsc --noEmit
+
+### 2026-07-05 14:01:28 +0530 · `17ce89b` · Apurv
+- **Subject:** fix(feedback): per-row eval-depth family + shared budget bump (Codex #496, CI)
+- **Files:** 5 changed, 1 test file(s)
+- **Root-cause:** (CI) a new shared file exceeds the file-count tripwire; (P2) per-row
+- **Tests-added: modules/feedback/components/__tests__/QuestionBreakdownEnhancements.test.tsx**
+- **Verified-by:** node scripts/check-module-size.mjs passes (shared 137/137); vitest run
+
+### 2026-07-05 14:22:28 +0530 · `4e58450` · Apurv
+- **Subject:** fix(feedback): client-safe resolveEvalDepthSlug — unbreak the build (Codex P1 #496)
+- **Files:** 6 changed, 1 test file(s)
+- **Root-cause:** a `'use client'` component imported a server-heavy module barrel,
+- **Tests-added: shared/lib/__tests__/answerSuggestion.test.ts (resolveEvalDepthSlug**
+- **Verified-by:** npm run build compiles successfully (no net/tls/dns); node
+
+### 2026-07-05 15:30:52 +0530 · `f3adc0e` · Apurv
+- **Subject:** fix(feedback+analysis): end-to-end review-pass fixes for #496
+- **Files:** 12 changed, 4 test file(s)
+- **Root-cause:** (1) elongation regex too broad; (2) aggressive unvalidated per-frame
+- **Tests-added: err-not-counted + erm/ermm-counted (fillerMetrics.test.ts);**
+- **Verified-by:** npm run build compiles clean (no net/tls/dns); npm run test:run 5272
+
+### 2026-07-05 15:56:51 +0530 · `7713cfe` · Apurv
+- **Subject:** fix(feedback): resolve 2 Codex comments on #496 (feedback-surfacing, heatmap labels)
+- **Files:** 4 changed, 1 test file(s)
+- **Root-cause:** (1) two distinct semantics (real feedback vs the fallback template)
+- **Tests-added: coding/design now assert the domain dimension copy (not surfaced**
+- **Verified-by:** npm run build compiles clean (no net/tls/dns); npm run test:run 5268
+
+### 2026-07-05 19:04:06 +0530 · `224abf5` · Apurv
+- **Subject:** fix(learn): domain-aware drill drawer suggestion (Codex P2 #496)
+- **Files:** 2 changed, 0 test file(s)
+- **Root-cause:** SourceFeedbackDrawer.answerSuggestion(scores) omitted interviewType +
+- **No-tests-needed-because: pure prop-threading of already-tested inputs into the**
+- **Verified-by:** tsc --noEmit clean; next lint clean; vitest modules/learn +
+
+### 2026-07-05 19:24:50 +0530 · `364d463` · Apurv
+- **Subject:** feat(feedback): declutter replay timeline — drop question markers, emotion-change markers only
+- **Files:** 13 changed, 6 test file(s)
+- **Root-cause:** per-question absolutely-positioned rows with no collision handling scale
+- **Tests-added: emotionChangeMarkers.test.ts (change detection incl. neutral baseline +**
+- **Verified-by:** npm run build compiles clean; npm run test:run 5257 pass / 16 skip; tsc
+
+### 2026-07-05 19:53:25 +0530 · `49a2727` · Apurv
+- **Subject:** fix(feedback): emotion-marker lede-skip + hover-centering (review on #497)
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** (1) inconsistent seek contract vs the deleted components; (2) an inline
+- **Tests-added: EmotionMarkers.test.tsx -- click seeks m.sec+8, and clamps to the end.**
+- **Verified-by:** npm run build compiles clean; vitest EmotionMarkers + emotionChangeMarkers
+
+### 2026-07-06 16:49:35 +0530 · `57e7414` · Apurv
+- **Subject:** fix(feedback): collapse to a single score — anchor Scores tab to overall (CX)
+- **Files:** 4 changed, 1 test file(s)
+- **Root-cause:** ScoreSummaryHeader computed + displayed a second interview-level
+- **Tests-added: ScoreSummaryHeader.test.tsx -- anchors to the passed overall (not a**
+- **Verified-by:** npm run build compiles clean; vitest modules/feedback 313 pass; tsc
+
+### 2026-07-06 20:42:46 +0530 · `2435f85` · Apurv
+- **Subject:** fix(feedback): align score-band colors to 75/55 (review on #498)
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** shared/ui/ScoreBar used 70/50 while the rest of the feedback surface used
+- **Tests-added: shared/ui/__tests__/ScoreBar.test.ts -- locks the 75/55 boundaries and**
+- **Verified-by:** npm run build clean; vitest feedback+learn+shared/ui 972 pass + new
+
+### 2026-07-06 21:33:00 +0530 · `c5fb026` · Apurv
+- **Subject:** fix(feedback): domain-aware dimension labels across all single-session views
+- **Files:** 10 changed, 2 test file(s)
+- **Root-cause:** dimension-label domain-awareness was added only to QuestionBreakdown in
+- **Tests-added: IdealAnswerComparisonCard.test.tsx (behavioral STAR prose vs coding**
+- **Verified-by:** npm run build clean; npm run test:run 5264 pass / 16 skip; tsc --noEmit
+
+### 2026-07-06 21:56:28 +0530 · `2bc0f30` · Apurv
+- **Subject:** fix(feedback): per-row academics rule + LearningTab strip (review on #499)
+- **Files:** 5 changed, 1 test file(s)
+- **Root-cause:** session-level family resolution ignored that academics warm-ups (Q0/Q1) are
+- **Tests-added: IdealAnswerComparisonCard.test.tsx -- academics Q0 warm-up -> behavioral**
+- **Verified-by:** npm run build clean; vitest feedback+learn 972 pass; tsc --noEmit clean;
+
+### 2026-07-11 11:39:46 +0530 · `6244a43` · Apurv
+- **Subject:** feat(models): cut all OpenAI task slots over from gpt-5.4-mini to gpt-5.6-luna
+- **Files:** 15 changed, 6 test file(s)
+- **Root-cause:** gpt-5.6-* rejects the custom temperature three conversational
+- **Tests-added: shared/__tests__/providers.test.ts (temperature dispatch**
+- **Verified-by:** full vitest suite 5,279 passed / 0 failed; production build

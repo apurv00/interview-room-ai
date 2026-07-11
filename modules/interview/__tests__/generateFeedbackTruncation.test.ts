@@ -232,9 +232,10 @@ describe('POST /api/generate-feedback — G.3 truncation handling', () => {
 
     expect(mockCompletion).toHaveBeenCalledTimes(3)
     const repairCall = mockCompletion.mock.calls[1][0] as { maxTokens?: number; responseFormat?: { name?: string } }
-    // Repair cap raised to match the core cap (6000) — a flat 3600 would re-truncate the same large
+    // Repair cap raised to match the core cap — a flat 3600 would re-truncate the same large
     // payload at high question counts. See INTERVIEW_FLOW.md §8 (2026-07-01).
-    expect(repairCall.maxTokens).toBe(6000)
+    // 6800 since 2026-07-11: +800 high-reasoning headroom on the feedback slot.
+    expect(repairCall.maxTokens).toBe(6800)
     expect(repairCall.responseFormat?.name).toBe('feedback_core')
     expect(json.red_flags).toEqual([])
     expect(json.confidence_level).not.toBe('Low')

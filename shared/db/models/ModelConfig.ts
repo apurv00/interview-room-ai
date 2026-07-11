@@ -20,6 +20,13 @@ export interface IModelSlotConfig {
   maxTokens: number
   /** Temperature override (0-2). Omit to use provider default. */
   temperature?: number
+  /**
+   * Reasoning-effort override for GPT-5.6-family models
+   * (none/low/medium/high/xhigh). Omit to inherit the code default from
+   * TASK_SLOT_DEFAULTS. Ignored (dropped by the adapter) for models that
+   * don't accept the parameter.
+   */
+  reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh'
   /** Whether this slot is active. Inactive = use hardcoded default. */
   isActive: boolean
   /** When true, structured contextData is TOON-encoded instead of JSON. */
@@ -49,6 +56,7 @@ const ModelSlotConfigSchema = new Schema<IModelSlotConfig>(
     fallbackProvider: { type: String },
     maxTokens: { type: Number, required: true, min: 100, max: 16000 },
     temperature: { type: Number, min: 0, max: 2 },
+    reasoningEffort: { type: String, enum: ['none', 'low', 'medium', 'high', 'xhigh'] },
     isActive: { type: Boolean, default: true },
     useToonInput: { type: Boolean, default: false },
   },

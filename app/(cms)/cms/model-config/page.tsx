@@ -16,9 +16,12 @@ interface SlotConfig {
   fallbackProvider: string
   maxTokens: number
   temperature: number | undefined
+  reasoningEffort: string | undefined
   isActive: boolean
   useToonInput: boolean
 }
+
+const REASONING_EFFORT_OPTIONS = ['none', 'low', 'medium', 'high', 'xhigh'] as const
 
 interface Defaults {
   [key: string]: { model: string; maxTokens: number; provider: string }
@@ -54,6 +57,7 @@ export default function ModelConfigPage() {
             fallbackProvider: s.fallbackProvider || 'anthropic',
             maxTokens: s.maxTokens,
             temperature: s.temperature,
+            reasoningEffort: s.reasoningEffort,
             isActive: s.isActive,
             useToonInput: s.useToonInput || false,
           })
@@ -70,6 +74,7 @@ export default function ModelConfigPage() {
             fallbackProvider: 'anthropic',
             maxTokens: def?.maxTokens || 1000,
             temperature: undefined,
+            reasoningEffort: undefined,
             isActive: false,
             useToonInput: false,
           }
@@ -103,6 +108,7 @@ export default function ModelConfigPage() {
           fallbackProvider: s.fallbackProvider || undefined,
           maxTokens: s.maxTokens,
           temperature: s.temperature ?? undefined,
+          reasoningEffort: s.reasoningEffort || undefined,
           isActive: true,
           useToonInput: s.useToonInput,
         })),
@@ -281,6 +287,19 @@ export default function ModelConfigPage() {
                             placeholder="Default"
                             className="w-full px-3 py-2 border border-[#cfd9de] rounded-lg text-sm focus:outline-none focus:border-[#2563eb]"
                           />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-[#71767b] mb-1">Reasoning Effort (GPT-5.6)</label>
+                          <select
+                            value={slot.reasoningEffort ?? ''}
+                            onChange={e => updateSlot(idx, 'reasoningEffort', e.target.value || undefined)}
+                            className="w-full px-3 py-2 border border-[#cfd9de] rounded-lg text-sm focus:outline-none focus:border-[#2563eb]"
+                          >
+                            <option value="">Default (code tier)</option>
+                            {REASONING_EFFORT_OPTIONS.map(level => (
+                              <option key={level} value={level}>{level}</option>
+                            ))}
+                          </select>
                         </div>
                       </div>
 

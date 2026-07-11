@@ -121,24 +121,24 @@ describe('resolveModel', () => {
 
   // ── Core regression test: provider must match task slot defaults ──────────
   // The bug was that resolveModel() hardcoded provider: 'anthropic' for all
-  // slots, sending OpenAI model names (gpt-5.4-mini) to the Anthropic API.
+  // slots, sending OpenAI model names (gpt-5.6-luna) to the Anthropic API.
 
   it('returns provider: "openai" for interview.generate-question (not hardcoded "anthropic")', async () => {
     const result = await resolveModel('interview.generate-question')
     expect(result.provider).toBe('openai')
-    expect(result.model).toBe('gpt-5.4-mini')
+    expect(result.model).toBe('gpt-5.6-luna')
   })
 
   it('returns provider: "openai" for interview.evaluate-answer', async () => {
     const result = await resolveModel('interview.evaluate-answer')
     expect(result.provider).toBe('openai')
-    expect(result.model).toBe('gpt-5.4-mini')
+    expect(result.model).toBe('gpt-5.6-luna')
   })
 
   it('returns provider: "openai" for interview.turn-router', async () => {
     const result = await resolveModel('interview.turn-router')
     expect(result.provider).toBe('openai')
-    expect(result.model).toBe('gpt-5.4-mini')
+    expect(result.model).toBe('gpt-5.6-luna')
   })
 
   it('returns provider: "anthropic" for resume.enhance-section', async () => {
@@ -222,6 +222,68 @@ describe('resolveModel', () => {
     expect(result.maxTokens).toBe(777)
   })
 
+  // ── reasoningEffort resolution (2026-07-11 GPT-5.6 tiers) ──
+  // Defaults carry the per-slot tier; a CMS row that sets an effort wins;
+  // a CMS row that leaves it unset INHERITS the code default (activating
+  // a slot for a model swap must not silently strip the tier decision).
+
+  it('resolveModel carries reasoningEffort defaults per tier', async () => {
+    expect((await resolveModel('interview.generate-feedback')).reasoningEffort).toBe('high')
+    expect((await resolveModel('interview.evaluate-code')).reasoningEffort).toBe('high')
+    expect((await resolveModel('interview.generate-question')).reasoningEffort).toBe('medium')
+    expect((await resolveModel('interview.evaluate-answer')).reasoningEffort).toBe('low')
+    expect((await resolveModel('interview.turn-router')).reasoningEffort).toBe('none')
+    expect((await resolveModel('learn.drill-evaluate')).reasoningEffort).toBe('none')
+    // Anthropic-routed slots have no effort default — the field is absent.
+    expect((await resolveModel('resume.enhance-section')).reasoningEffort).toBeUndefined()
+  })
+
+  it('CMS slot reasoningEffort overrides the code default', async () => {
+    const cachedConfig = {
+      routingEnabled: true,
+      slotEntries: [
+        [
+          'interview.generate-feedback',
+          {
+            taskSlot: 'interview.generate-feedback',
+            model: 'gpt-5.6-luna',
+            provider: 'openai',
+            maxTokens: 7000,
+            reasoningEffort: 'medium',
+            isActive: true,
+          },
+        ],
+      ],
+    }
+    mockRedisMget.mockResolvedValueOnce([stampedPayload(cachedConfig, '1'), '1'])
+
+    const result = await resolveModel('interview.generate-feedback')
+    expect(result.reasoningEffort).toBe('medium')
+  })
+
+  it('CMS slot WITHOUT reasoningEffort inherits the code default', async () => {
+    const cachedConfig = {
+      routingEnabled: true,
+      slotEntries: [
+        [
+          'interview.generate-feedback',
+          {
+            taskSlot: 'interview.generate-feedback',
+            model: 'some-other-model',
+            provider: 'openai',
+            maxTokens: 7000,
+            isActive: true,
+          },
+        ],
+      ],
+    }
+    mockRedisMget.mockResolvedValueOnce([stampedPayload(cachedConfig, '1'), '1'])
+
+    const result = await resolveModel('interview.generate-feedback')
+    expect(result.model).toBe('some-other-model')
+    expect(result.reasoningEffort).toBe('high') // inherited from TASK_SLOT_DEFAULTS
+  })
+
   it('Redis L2 miss falls through to Mongo path (defaults when Mongo unavailable)', async () => {
     // Default MGET returns [null, null] (miss + no epoch yet). Mongo
     // require fails in tests → loadConfig catches → defaults apply.
@@ -231,7 +293,7 @@ describe('resolveModel', () => {
 
     expect(mockRedisMget).toHaveBeenCalledWith('model-config:v1', 'model-config:epoch:v1')
     expect(result.provider).toBe('openai') // default, not an error
-    expect(result.model).toBe('gpt-5.4-mini')
+    expect(result.model).toBe('gpt-5.6-luna')
   })
 
   it('Redis L2 read error does NOT fail resolveModel (falls through silently)', async () => {
@@ -243,7 +305,7 @@ describe('resolveModel', () => {
 
     // Still returns defaults — no exception raised to the caller.
     expect(result.provider).toBe('openai')
-    expect(result.model).toBe('gpt-5.4-mini')
+    expect(result.model).toBe('gpt-5.6-luna')
   })
 
   it('Redis L2 malformed JSON does NOT fail resolveModel', async () => {
@@ -254,7 +316,7 @@ describe('resolveModel', () => {
     const result = await resolveModel('interview.generate-question')
 
     expect(result.provider).toBe('openai')
-    expect(result.model).toBe('gpt-5.4-mini')
+    expect(result.model).toBe('gpt-5.6-luna')
   })
 
   it('invalidateModelConfigCache() issues Redis DEL on the cache key', async () => {
@@ -373,7 +435,7 @@ describe('resolveModel', () => {
       // (fails in tests → defaults). Assertion proves the stall did NOT
       // propagate into resolveModel's return value.
       expect(result.provider).toBe('openai')
-      expect(result.model).toBe('gpt-5.4-mini')
+      expect(result.model).toBe('gpt-5.6-luna')
     } finally {
       vi.useRealTimers()
     }
@@ -392,7 +454,7 @@ describe('resolveModel', () => {
     // cache. A log line at warn-level surfaces the rejection so we can
     // detect payload drift in production.
     expect(result.provider).toBe('openai')
-    expect(result.model).toBe('gpt-5.4-mini')
+    expect(result.model).toBe('gpt-5.6-luna')
     // Also: the telemetry log must show the Redis path failed and
     // fell through (source !== 'L2-Redis').
     const loadLogs = mockAiLoggerInfo.mock.calls.filter(
@@ -413,7 +475,7 @@ describe('resolveModel', () => {
     const result = await resolveModel('interview.generate-question')
 
     expect(result.provider).toBe('openai')
-    expect(result.model).toBe('gpt-5.4-mini')
+    expect(result.model).toBe('gpt-5.6-luna')
   })
 
   it('rejects Redis payload with malformed slotEntries — falls through (Codex P2 #2)', async () => {
@@ -428,7 +490,7 @@ describe('resolveModel', () => {
     const result = await resolveModel('interview.generate-question')
 
     expect(result.provider).toBe('openai')
-    expect(result.model).toBe('gpt-5.4-mini')
+    expect(result.model).toBe('gpt-5.6-luna')
   })
 
   it('rejects Redis payload where slot value is an empty object — falls through (Codex P2 follow-up)', async () => {
@@ -450,7 +512,7 @@ describe('resolveModel', () => {
 
     // Fell through to Mongo-error path → defaults, NOT undefined.
     expect(result.provider).toBe('openai')
-    expect(result.model).toBe('gpt-5.4-mini')
+    expect(result.model).toBe('gpt-5.6-luna')
     expect(result.maxTokens).toBeGreaterThan(0)
   })
 
@@ -473,7 +535,7 @@ describe('resolveModel', () => {
     const result = await resolveModel('interview.generate-question')
 
     expect(result.provider).toBe('openai')
-    expect(result.model).toBe('gpt-5.4-mini')
+    expect(result.model).toBe('gpt-5.6-luna')
   })
 
   it('does NOT rewrite Redis when invalidation happens mid-load (Codex P2 same-Lambda race on PR #302)', async () => {
@@ -558,7 +620,7 @@ describe('resolveModel', () => {
     // Caller must still see defaults — a Redis-side race does not
     // propagate into the Claude-router return value.
     expect(result.provider).toBe('openai')
-    expect(result.model).toBe('gpt-5.4-mini')
+    expect(result.model).toBe('gpt-5.6-luna')
   })
 
   it('does NOT log model_config_load on L1 (in-memory) cache hits', async () => {
@@ -624,8 +686,8 @@ describe('resolveModel', () => {
       // Stays well below the 5s client abort.
       expect(elapsed).toBeLessThan(900)
       expect(result.provider).toBe('openai')
-      expect(result.model).toBe('gpt-5.4-mini')
-      expect(result.maxTokens).toBe(250)
+      expect(result.model).toBe('gpt-5.6-luna')
+      expect(result.maxTokens).toBe(500)
     })
 
     it('cold resolveModel with L2 miss emits source=cold-defaults-synthetic telemetry', async () => {
@@ -1203,7 +1265,7 @@ describe('resolveModel', () => {
 
       // Reader treats it as a miss → resolveModel uses TASK_SLOT_DEFAULTS
       // (Mongo path fails in test env), NOT the stale model.
-      expect(result.model).toBe('gpt-5.4-mini')
+      expect(result.model).toBe('gpt-5.6-luna')
       expect(result.model).not.toBe('stale-model')
     })
 
@@ -1258,7 +1320,7 @@ describe('resolveModel', () => {
 
       // Falls through to defaults (Mongo fails in test env), no refresh
       // extended the life of the untyped payload.
-      expect(result.model).toBe('gpt-5.4-mini')
+      expect(result.model).toBe('gpt-5.6-luna')
       expect(mockRedisExpire).not.toHaveBeenCalled()
     })
 
