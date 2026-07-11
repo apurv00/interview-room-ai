@@ -452,6 +452,13 @@ export function gateBuckets(snap, { fresher = false } = {}) {
 export function gateFingerprints(snap, opts) {
   return gateBuckets(snap, opts).flatMap(b => (b.fingerprints || []).map(f => f.fp))
 }
+/** G2 population: every sampled non-errored bucket, core AND fresher —
+ *  INGESTION §6 defines freshness over the sampled matrix, and the fresher
+ *  variants are part of a gate-grade snapshot. Core-only reads let G2 PASS
+ *  while the fresher segment was stale (Codex on #503). */
+export function allGateBuckets(snap) {
+  return [...gateBuckets(snap), ...gateBuckets(snap, { fresher: true })]
+}
 
 async function cmdSnapshot({ pilot = false, fresher = true } = {}) {
   const buckets = buildBuckets({ fresher: pilot ? false : fresher }).slice(0, pilot ? 12 : undefined)
@@ -587,13 +594,13 @@ function cmdFresh(fileA, fileB) {
   // since A, and 'net-new' silently undercounts (false-FAIL on G2).
   if (rawGapDays > 7) { console.error(`snapshots are ${rawGapDays.toFixed(1)}d apart — beyond the 7-day search window B cannot see all postings since A; G2 not evaluable, re-run snapshots closer together`); process.exit(1) }
   const aRan = new Date(A.ranAt).getTime()
-  const coreA = gateBuckets(A), coreB = gateBuckets(B)
-  const mapA = new Map(coreA.map(b => [b.bucket, b]))
-  const bNames = new Set(coreB.map(b => b.bucket))
+  const allA = allGateBuckets(A), allB = allGateBuckets(B)
+  const mapA = new Map(allA.map(b => [b.bucket, b]))
+  const bNames = new Set(allB.map(b => b.bucket))
   const perBucket = [], skipped = { errored: 0, capped: 0, unpaired: 0 }
-  skipped.errored = (A.buckets.length - coreA.length - A.buckets.filter(x => x.fresher).length) + (B.buckets.length - coreB.length - B.buckets.filter(x => x.fresher).length)
-  skipped.unpaired += coreA.filter(a => !bNames.has(a.bucket)).length // A-only buckets are skips too
-  for (const b of coreB) {
+  skipped.errored = (A.buckets.length - allA.length) + (B.buckets.length - allB.length)
+  skipped.unpaired += allA.filter(a => !bNames.has(a.bucket)).length // A-only buckets are skips too
+  for (const b of allB) {
     const a = mapA.get(b.bucket)
     if (!a) { skipped.unpaired++; continue }
     if (a.capped || b.capped) { skipped.capped++; continue } // sampling churn ≠ freshness
@@ -613,11 +620,11 @@ function cmdFresh(fileA, fileB) {
   }
   console.log(`=== G2 FRESHNESS (true gap ${rawGapDays.toFixed(2)}d; ${perBucket.length} comparable buckets; skipped: ${skipped.errored} errored, ${skipped.capped} page-capped, ${skipped.unpaired} unpaired) ===`)
   // A verdict from a tiny comparable remnant is not the gate: require at
-  // least half of B's core buckets to be comparable, else NOT EVALUABLE —
+  // least half of B's sampled buckets to be comparable, else NOT EVALUABLE —
   // no artifact is written that report could present as G2 (Codex on #503).
-  const comparabilityShare = coreB.length ? perBucket.length / coreB.length : 0
+  const comparabilityShare = allB.length ? perBucket.length / allB.length : 0
   if (!perBucket.length || comparabilityShare < 0.5) {
-    console.log(`G2: NOT EVALUABLE — only ${perBucket.length}/${coreB.length} core buckets comparable (${(comparabilityShare * 100).toFixed(1)}%; need >=50%). Re-run snapshots or reduce page-capping.`)
+    console.log(`G2: NOT EVALUABLE — only ${perBucket.length}/${allB.length} sampled buckets comparable (${(comparabilityShare * 100).toFixed(1)}%; need >=50%). Re-run snapshots or reduce page-capping.`)
     process.exit(1)
   }
   for (const p of perBucket) console.log(`  ${p.bucket.padEnd(28)} ~${p.freshPerWeek.toFixed(1)}/week${p.undated ? ` (+${p.undated} undated B-only, excluded as non-comparable)` : ''}`)
@@ -630,7 +637,7 @@ function cmdFresh(fileA, fileB) {
   const result = {
     schemaVersion: SCHEMA_VERSION, ranAt: new Date().toISOString(),
     fileA: path.basename(resolveArtifact(fileA)), fileB: path.basename(resolveArtifact(fileB)),
-    gapDays: +rawGapDays.toFixed(2), comparable: perBucket.length, coreBuckets: coreB.length,
+    gapDays: +rawGapDays.toFixed(2), comparable: perBucket.length, buckets: allB.length,
     comparabilitySharePct: +(comparabilityShare * 100).toFixed(1), passing,
     sharePct: +(share * 100).toFixed(1), verdict, skipped,
   }
@@ -727,7 +734,10 @@ export const FRESHER_DOMAIN_PATTERNS = {
   // Word-bounded marketing terms — the substring 'market' matched
   // stock-market and supermarket roles into the marketing tally.
   marketing: /\b(marketing|digital marketing|social media|seo|brand(ing)?)\b/i,
-  sales: /\b(sales|business development|telecall|telesales|field sales)\b/i,
+  // 'telecall(er|ers|ing)?' — a bare word-bounded 'telecall' can never
+  // match 'Telecaller'/'Telecalling Executive', the most common india
+  // sales-fresher titles (Codex on #503).
+  sales: /\b(sales|business development|telecall(er|ers|ing)?|telesales|field sales)\b/i,
   electrical: /electric/i,
   // No bare 'analyst' — Business/Financial Analysts belong to the business/
   // finance domains and must not inflate the data fresher tally.

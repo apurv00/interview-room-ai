@@ -9,7 +9,7 @@ import {
   companyKey, titleKey, locationKey, fingerprint,
   classifyJob, classifyApplyUrl, isBlockedApplyUrl, bestUsableTier, isStaffingOrg,
   betterRepresentative, dedupKey, foldCandidates, pickRotSample, median, lenStats,
-  isErroredBucket, gateBuckets, gateFingerprints, parseArgs,
+  isErroredBucket, gateBuckets, gateFingerprints, allGateBuckets, parseArgs,
   normalizeJSearchJob, accountBucket, detectMassReposts, computeVerdict,
   extractJsonLdJobPosting, matchFresherDomain,
 } from './jobs-liquidity-probe.mjs'
@@ -389,4 +389,22 @@ test('[Cx-37th] india overlap universe: core ∪ fresher JSearch fingerprints', 
   const union = new Set([...gateFingerprints(snap), ...gateFingerprints(snap, { fresher: true })])
   assert.ok(union.has('core-fp'))
   assert.ok(union.has('fresher-fp'))
+})
+
+// ── Codex round-38 regressions ──────────────────────────────────────────────
+
+test('[Cx-38th] allGateBuckets: G2 population spans core AND fresher, still drops errored', () => {
+  const snap = { buckets: [
+    { bucket: 'a', fresher: false, httpStatus: 200, fingerprints: [] },
+    { bucket: 'f1', fresher: true, httpStatus: 200, fingerprints: [] },
+    { bucket: 'f2', fresher: true, httpStatus: 429, fingerprints: [] },
+  ] }
+  assert.deepEqual(allGateBuckets(snap).map(b => b.bucket), ['a', 'f1'])
+})
+
+test('[Cx-38th] sales fresher matcher: Telecaller/Telecalling count, Telecom does not', () => {
+  assert.equal(matchFresherDomain('Telecaller'), 'sales')
+  assert.equal(matchFresherDomain('Telecalling Executive'), 'sales')
+  assert.equal(matchFresherDomain('Telecall'), 'sales')
+  assert.equal(matchFresherDomain('Telecom Engineer'), null)
 })
