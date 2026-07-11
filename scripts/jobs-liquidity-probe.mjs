@@ -735,14 +735,16 @@ async function sampleApna(sampleN) {
         if (isStaffingOrg(org)) out.consultancy++ // same predicate as the snapshot flag — no drift
         const cityMatch = url.match(/\/job\/([^/]+)\//)
         if (cityMatch) out.cities[cityMatch[1]] = (out.cities[cityMatch[1]] || 0) + 1
-        // §2 fresher measurement: matched × full-JD × post-spam per domain
+        // §2 fresher measurement: matched × full-JD × ingest-usable yield.
+        // postSpam counts only rows that would actually enter the corpus:
+        // not expired, full-JD, and clearing every hard drop.
         const fd = matchFresherDomain(`${title} ${url}`)
         if (fd) {
           const t = out.fresherDomains[fd]
           t.matched++
           if (desc.length >= 400) t.fullJd++
           const { drops } = classifyJob({ title, company: org, description: jp.description || '', applyUrls: [], validThrough: jp.validThrough || null })
-          if (!drops.length) t.postSpam++
+          if (!drops.length && !expired && desc.length >= 400) t.postSpam++
         }
         // Fingerprint parity with the snapshot population: no confidential,
         // no expired rows; remote detected from JSON-LD jobLocationType.
@@ -785,7 +787,9 @@ async function sampleUnstop(pages = 5) {
             t.matched++
             if (desc.length >= 400) t.fullJd++
             const { drops } = classifyJob({ title, company: org, description: item.details || '', applyUrls: [] })
-            if (!drops.length) t.postSpam++
+            // Ingest-usable only: live + full-JD + clears every hard drop —
+            // closed or stub rows must not make fresher supply look viable.
+            if (!drops.length && live && desc.length >= 400) t.postSpam++
           }
           const loc0 = Array.isArray(item.locations) && item.locations[0] ? item.locations[0] : null
           const loc = typeof loc0 === 'string' ? loc0 : (loc0?.city || loc0?.name || '')
@@ -813,7 +817,7 @@ export function lenStats(lens) {
 }
 
 function printFresherTally(label, tally) {
-  const line = Object.entries(tally).map(([d, t]) => `${d}: ${t.matched} matched / ${t.fullJd} full-JD / ${t.postSpam} post-spam`).join(' · ')
+  const line = Object.entries(tally).map(([d, t]) => `${d}: ${t.matched} matched / ${t.fullJd} full-JD / ${t.postSpam} ingest-usable`).join(' · ')
   console.log(`${label} fresher-domain measurement (§2): ${line}`)
 }
 
@@ -836,10 +840,15 @@ async function cmdIndia(sampleArg) {
   console.log(`details length distribution: ${lenStats(unstop.descLens)}`)
   printFresherTally('unstop', unstop.fresherDomains)
   if (apna.sampled === 0) { console.log('\nNOT SAVING artifact: apna sampled 0 pages — a degenerate artifact must not shadow a good one as "latest".'); process.exit(1) }
-  // Same invalid-for-gating discipline as snapshots: a mostly-errored
-  // sample must not become the 'latest' artifact feeding report.
-  const invalidForGating = (apna.errors + apna.shardErrors) / Math.max(apna.sampled, 1) > 0.1 || (unstop.sampled === 0 && unstop.errors > 0)
-  if (invalidForGating) console.log('\n!!! >10% of india fetches errored — artifact marked INVALID FOR GATING; re-run `india`.')
+  // Same invalid-for-gating discipline as snapshots — and shard loss is
+  // judged against SHARD COUNT, not detail-sample size: 3 of 4 failed
+  // shards with one shard filling the sample is a biased slice, not a 6%
+  // error rate (Codex on #503).
+  const apnaShardLoss = apna.shardCount ? apna.shardErrors / apna.shardCount : 0
+  const apnaDetailErr = apna.errors / Math.max(apna.sampled, 1)
+  const unstopPageErr = unstop.errors / 5
+  const invalidForGating = apnaShardLoss >= 0.25 || apnaDetailErr > 0.1 || unstopPageErr >= 0.4 || (unstop.sampled === 0 && unstop.errors > 0)
+  if (invalidForGating) console.log(`\n!!! india sampling errored beyond gate tolerance (shard loss ${(apnaShardLoss * 100).toFixed(0)}%, detail errors ${(apnaDetailErr * 100).toFixed(1)}%, unstop page errors ${unstop.errors}/5) — artifact marked INVALID FOR GATING; re-run \`india\`.`)
   fs.mkdirSync(DATA_DIR, { recursive: true })
   const file = path.join(DATA_DIR, `india-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
   fs.writeFileSync(file, JSON.stringify({ schemaVersion: SCHEMA_VERSION, ranAt: new Date().toISOString(), sampleN, subSpecSample: sampleN < 100, invalidForGating, apna, unstop }, null, 2))
@@ -909,19 +918,29 @@ function cmdReport() {
       if (snap.invalidForGating) { console.log('(downstream gate sections skipped — snapshot is invalid for gating)'); snap = null }
     }
   } else console.log('\nG1/G1f/G3/G4/G5/G6: PENDING — no JSearch snapshot yet (run `snapshot`)')
+  // Gate-grade selection: walk india artifacts newest-first and use the
+  // first that is current-format, valid, AND full-spec — a later smoke run
+  // (--sample 20) must never shadow a gate-grade artifact (Codex on #503).
   let indiaValid = null
-  if (indiaFile) {
-    const india = loadArtifact(path.join(DATA_DIR, indiaFile), 'india')
-    // Same strictness as snapshots: stale-format OR invalid-for-gating
-    // india artifacts are NOT evaluated (Codex on #503, audit #19).
-    if (india.schemaVersion !== SCHEMA_VERSION) {
-      console.log(`\nIndia sampling: ${indiaFile} — STALE FORMAT (schemaVersion ${india.schemaVersion || 1}, current ${SCHEMA_VERSION}); stats not evaluated — re-run \`india\``)
-    } else if (india.invalidForGating) {
-      console.log(`\nIndia sampling: ${indiaFile} — marked INVALID FOR GATING (errored fetches); stats not evaluated — re-run \`india\``)
-    } else {
+  const indiaFiles = files.filter(f => f.startsWith('india-')).sort().reverse()
+  let indiaPick = null, indiaSkipped = []
+  for (const f of indiaFiles) {
+    const art = loadArtifact(path.join(DATA_DIR, f), 'india')
+    if (art.schemaVersion !== SCHEMA_VERSION) { indiaSkipped.push(`${f} (stale format)`); continue }
+    if (art.invalidForGating) { indiaSkipped.push(`${f} (invalid for gating)`); continue }
+    // Positive proof of spec-size required: artifacts predating the sampleN
+    // field must not read as gate-grade by absence.
+    if (!(art.sampleN >= 100)) { indiaSkipped.push(`${f} (sub-spec or unrecorded sample size)`); continue }
+    indiaPick = { file: f, art }; break
+  }
+  if (indiaSkipped.length) console.log(`\n(india artifacts skipped for gating: ${indiaSkipped.join(' · ')})`)
+  if (indiaPick) {
+    {
+      const india = indiaPick.art
+      const indiaFileName = indiaPick.file
       indiaValid = india
       const { apna, unstop } = india
-      console.log(`\nIndia sampling: ${indiaFile}${india.subSpecSample ? ' (SUB-SPEC sample size — smoke run, not gate-grade)' : ''}`)
+      console.log(`\nIndia sampling: ${indiaFileName}`)
       console.log(`  apna  full-JD(>=400ch): ${pct1(apna.descLens.filter(l => l >= 400).length, apna.descLens.length)}  expired-served: ${pct1(apna.expired, apna.jsonldHits)}  consultancy/staffing: ${pct1(apna.consultancy, apna.jsonldHits)}`)
       console.log(`  unstop live rate: ${pct1(unstop.regnOpen, unstop.sampled)}`)
       if (apna.fresherDomains) { printFresherTally('  apna', apna.fresherDomains); printFresherTally('  unstop', unstop.fresherDomains) }
