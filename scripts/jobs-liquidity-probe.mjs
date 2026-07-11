@@ -827,7 +827,9 @@ async function sampleUnstop(pages = 5) {
           const rawOrg = item.organisation?.name ?? item.organisation?.title
           const org = typeof rawOrg === 'string' ? rawOrg : ''
           const desc = String(item.details || item.description || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
-          if (desc) out.descLens.push(desc.length)
+          // Every sampled item counts — skipping empty JDs made the
+          // distribution report only over rows that had text (apna parity).
+          out.descLens.push(desc.length)
           // §2 fresher measurement: matched × full-JD × post-spam per domain
           // The Unstop listing page is the apply path (platform-funnel) —
           // [] would false-fire contact-spam on legitimate listings.
@@ -907,7 +909,10 @@ async function cmdIndia(sampleArg) {
   // skips — historical hit rate is 91-100%, so a sample below 70% means the
   // markup or selector broke and the surviving rates are a biased slice.
   const apnaJsonLdRate = apna.sampled ? apna.jsonldHits / apna.sampled : 0
-  const invalidForGating = apnaShardLoss >= 0.25 || apnaDetailErr > 0.1 || (apna.sampled > 0 && apnaJsonLdRate < 0.7) || unstopPageErr >= 0.4 || (unstop.sampled === 0 && unstop.errors > 0) || !!unstop.shapeNote
+  // A gate-grade india artifact requires BOTH sources: fewer than one full
+  // Unstop page (15 items) — including HTTP-OK empty responses — means the
+  // G5/G6 readout would be an apna-only probe (Codex on #503).
+  const invalidForGating = apnaShardLoss >= 0.25 || apnaDetailErr > 0.1 || (apna.sampled > 0 && apnaJsonLdRate < 0.7) || unstopPageErr >= 0.4 || unstop.sampled < 15 || !!unstop.shapeNote
   if (invalidForGating) console.log(`\n!!! india sampling errored beyond gate tolerance (shard loss ${(apnaShardLoss * 100).toFixed(0)}%, detail errors ${(apnaDetailErr * 100).toFixed(1)}%, JSON-LD hit rate ${(apnaJsonLdRate * 100).toFixed(1)}%, unstop page errors ${unstop.errors}/5) — artifact marked INVALID FOR GATING; re-run \`india\`.`)
   fs.mkdirSync(DATA_DIR, { recursive: true })
   const file = path.join(DATA_DIR, `india-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
