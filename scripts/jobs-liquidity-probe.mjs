@@ -30,10 +30,12 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { pathToFileURL, fileURLToPath } from 'node:url'
 
 const SCHEMA_VERSION = 2
-const DATA_DIR = path.join(path.dirname(new URL(import.meta.url).pathname), 'probe-data')
+// fileURLToPath, not URL.pathname — the latter yields /C:/... on Windows
+// and every artifact read/write breaks (Bugbot on #503).
+const DATA_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'probe-data')
 const UA = 'InterviewPrepGuruProbe/0.2 (+https://interviewprep.guru; supply-liquidity-probe; contact: abhishek.apurv00@gmail.com)'
 const JSEARCH_HOST = 'jsearch.p.rapidapi.com'
 
@@ -126,6 +128,11 @@ function hostOf(u) { try { return new URL(u).hostname.toLowerCase() } catch { re
 // Exact host or registrable-suffix match ONLY — substring includes() matched
 // 'recruit.meesho.com'.includes('t.me') and hard-dropped legitimate employers.
 function hostMatches(host, entry) { return host === entry || host.endsWith('.' + entry) }
+// A blocklisted host is never an apply path, ANYWHERE — not for contact-spam
+// exemption, not for tier ranking, not for usable/G4, not for rot sampling.
+// classifyApplyUrl falls unknown hosts through to 'employer', so every tier
+// consumer must filter through this first (Bugbot on #503).
+export function isBlockedApplyUrl(u) { return APPLY_DOMAIN_BLOCKLIST.some(b => hostMatches(hostOf(u), b)) }
 
 export function classifyJob({ title = '', company = '', description = '', applyUrls = [], validThrough = null }) {
   const drops = [], flags = []
@@ -138,10 +145,6 @@ export function classifyJob({ title = '', company = '', description = '', applyU
   const letters = t.replace(/[^a-zA-Z]/g, '')
   if (letters.length > 10 && letters.replace(/[^A-Z]/g, '').length / letters.length > 0.7) drops.push('title-caps')
   if (FEE_FRAUD_RE.test(description)) drops.push('fee-fraud')
-  // A blocklisted host (wa.me/t.me/forms) must never count as a real apply
-  // path — classifyApplyUrl falls unknown hosts through to 'employer', so
-  // blocklist status is checked FIRST (Codex on #503).
-  const isBlockedApplyUrl = u => APPLY_DOMAIN_BLOCKLIST.some(b => hostMatches(hostOf(u), b))
   const hasNonRedirectApply = applyUrls.some(u => !isBlockedApplyUrl(u) && classifyApplyUrl(u) !== 'aggregator-redirect')
   if (CONTACT_SPAM_RE.test(description) && !hasNonRedirectApply) drops.push('contact-spam')
   if (applyUrls.length && applyUrls.every(isBlockedApplyUrl)) drops.push('blocklist-apply-domain')
@@ -171,6 +174,8 @@ export function classifyApplyUrl(url) {
 }
 const TIER_RANK = { 'direct-ats': 0, employer: 1, 'aggregator-deep': 2, 'platform-funnel': 3, 'aggregator-redirect': 4 }
 function bestTier(urls) { return urls.map(classifyApplyUrl).sort((a, b) => TIER_RANK[a] - TIER_RANK[b])[0] || null }
+/** Tier of the best NON-BLOCKLISTED apply URL — the only tier gate math may use. */
+export function bestUsableTier(urls) { return bestTier(urls.filter(u => !isBlockedApplyUrl(u))) }
 
 // ---------------------------------------------------------------------------
 // HTTP — body is consumed INSIDE the abort window (a stalled body previously
@@ -278,7 +283,10 @@ async function runBucket(bucket) {
   for (const r of rows) {
     const urls = r.applyOptions.map(o => o.url).filter(Boolean)
     const { drops, flags, jdLen } = classifyJob({ title: r.title, company: r.company, description: r.description, applyUrls: urls })
-    const cand = { r, urls, drops, flags, jdLen, tier: bestTier(urls), fp: fingerprint(r.company, r.title, r.city, r.isRemote) }
+    // Gate math (tier, usable, sample links) sees only non-blocklisted URLs;
+    // classifyJob above saw the raw list (its blocklist drop needs it).
+    const usableUrls = urls.filter(u => !isBlockedApplyUrl(u))
+    const cand = { r, urls: usableUrls, drops, flags, jdLen, tier: bestTier(usableUrls), fp: fingerprint(r.company, r.title, r.city, r.isRemote) }
     const existing = groups.get(cand.fp)
     if (!existing) { groups.set(cand.fp, cand) }
     else { stats.dupWithinBucket++; if (betterRepresentative(cand, existing)) groups.set(cand.fp, cand) }
@@ -399,8 +407,15 @@ function summarizeSnapshot(snap) {
   console.log(`via-site distribution (Naukri-partner datum): ${topVia || 'none recorded'}`)
 }
 
+/** Bare artifact filenames resolve inside DATA_DIR — every command that takes
+ *  an artifact path must be runnable from the repo root (Bugbot on #503:
+ *  rot got this fix, fresh didn't). */
+function resolveArtifact(file) {
+  if (file && !fs.existsSync(file) && fs.existsSync(path.join(DATA_DIR, file))) return path.join(DATA_DIR, file)
+  return file
+}
 function loadArtifact(file) {
-  const raw = fs.readFileSync(file, 'utf8')
+  const raw = fs.readFileSync(resolveArtifact(file), 'utf8')
   let parsed
   try { parsed = JSON.parse(raw) } catch { console.error(`Corrupt artifact: ${file}`); process.exit(1) }
   return parsed
@@ -443,9 +458,7 @@ function cmdFresh(fileA, fileB) {
 const EXPIRY_MARKERS = /no longer accepting applications|this job (is|has been) (closed|expired)|position (has been )?filled|job (has )?expired|vacancy (is )?closed/i
 async function cmdRot(file) {
   if (!file) { console.error('usage: rot <snapshot.json>'); process.exit(1) }
-  // Accept bare artifact filenames by resolving inside DATA_DIR — report's
-  // suggested command must be runnable from the repo root (Codex on #503).
-  if (!fs.existsSync(file) && fs.existsSync(path.join(DATA_DIR, file))) file = path.join(DATA_DIR, file)
+  file = resolveArtifact(file) // basename kept resolvable; loadArtifact also resolves
   const snap = loadArtifact(file)
   if (snap.schemaVersion !== SCHEMA_VERSION) { console.error(`snapshot schemaVersion ${snap.schemaVersion || 1} != ${SCHEMA_VERSION} — re-run snapshot first`); process.exit(1) }
   // True stratification: stride-sample the BUCKET LIST first so all domains
@@ -661,7 +674,10 @@ function cmdReport() {
       if (!snap) console.log('  G5 cross-source overlap: PENDING — needs a valid snapshot')
       else if (indiaFps.length === 0) console.log('  G5 cross-source overlap: PENDING — india artifact has no fingerprints (re-run `india` with the current probe)')
       else {
-        const snapFps = new Set(snap.buckets.flatMap(b => (b.fingerprints || []).map(f => f.fp)))
+        // Errored buckets are excluded from EVERY gate — the overlap line
+      // included their fingerprints while all other rollups zeroed them
+      // (Bugbot on #503).
+      const snapFps = new Set(snap.buckets.filter(b => !isErroredBucket(b)).flatMap(b => (b.fingerprints || []).map(f => f.fp)))
         const overlap = indiaFps.filter(fp => snapFps.has(fp)).length
         console.log(`  G5 cross-source overlap (india ∩ JSearch): ${overlap}/${indiaFps.length} — LOWER BOUND from a small sample; full cross-source G5 lands with corpus-scale ingestion telemetry`)
       }

@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   companyKey, titleKey, locationKey, fingerprint,
-  classifyJob, classifyApplyUrl,
+  classifyJob, classifyApplyUrl, isBlockedApplyUrl, bestUsableTier,
   betterRepresentative, median, isErroredBucket, parseArgs,
 } from './jobs-liquidity-probe.mjs'
 
@@ -60,6 +60,18 @@ test('[Rev-14] host blocklist is exact/suffix, never substring', () => {
   assert.ok(!ok.drops.includes('blocklist-apply-domain'))
   const blocked = classifyJob({ title: 'Dev', company: 'X', description: 'x '.repeat(300), applyUrls: ['https://wa.me/919876543210'] })
   assert.ok(blocked.drops.includes('blocklist-apply-domain'))
+})
+
+test('[Bugbot-1] blocklisted hosts are excluded from tier ranking everywhere', () => {
+  assert.equal(isBlockedApplyUrl('https://wa.me/919876543210'), true)
+  assert.equal(isBlockedApplyUrl('https://t.me/hrjobs'), true)
+  assert.equal(isBlockedApplyUrl('https://recruit.meesho.com/j/1'), false) // suffix, not substring
+  // wa.me alone: NO usable tier (previously ranked tier-1 'employer')
+  assert.equal(bestUsableTier(['https://wa.me/919876543210']), null)
+  // wa.me + google redirect: the redirect is the only real tier left
+  assert.equal(bestUsableTier(['https://wa.me/x', 'https://www.google.com/url?q=1']), 'aggregator-redirect')
+  // wa.me + genuine employer link: employer wins, spam link never sampled
+  assert.equal(bestUsableTier(['https://wa.me/x', 'https://careers.acme.com/1']), 'employer')
 })
 
 // ── quality gate ────────────────────────────────────────────────────────────
