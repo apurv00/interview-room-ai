@@ -90,6 +90,11 @@ test('hard drops: walk-in, phone-in-title, multirole, openings, caps, fee-fraud,
   // [Cx-34th] plural scam wording must not escape
   assert.ok(d({ description: 'Registration fees of Rs 500 apply' }).includes('fee-fraud'))
   assert.ok(d({ description: 'Refundable deposits required before joining' }).includes('fee-fraud'))
+  // [Cx-35th] amount-bearing pay-for-training shapes must not escape
+  assert.ok(d({ description: 'Pay Rs 500 before joining' }).includes('fee-fraud'))
+  assert.ok(d({ description: 'Pay ₹500 for training kit' }).includes('fee-fraud'))
+  assert.ok(d({ description: 'Pay 1,000 before joining' }).includes('fee-fraud'))
+  assert.ok(!d({ description: 'Competitive pay for training specialists' }).includes('fee-fraud')) // no amount, benign
   assert.ok(d({ company: '  ' }).includes('no-company'))
   assert.ok(d({ validThrough: '2020-01-01' }).includes('valid-through-expired'))
 })
@@ -278,6 +283,11 @@ test('[Audit-1] fresher-domain matcher', () => {
   assert.equal(matchFresherDomain('MIS Executive'), 'data')
   assert.equal(matchFresherDomain('Business Analyst'), null)
   assert.equal(matchFresherDomain('Financial Analyst'), null)
+  // [Cx-35th] 'market' substring must not hijack marketing; HR spelled out counts
+  assert.equal(matchFresherDomain('Stock Market Analyst'), null)
+  assert.equal(matchFresherDomain('Supermarket Cashier'), null)
+  assert.equal(matchFresherDomain('Marketing Executive'), 'marketing')
+  assert.equal(matchFresherDomain('Human Resources Executive'), 'hr')
 })
 
 test('[Audit-9] gateBuckets: single population accessor filters errored + splits fresher', () => {

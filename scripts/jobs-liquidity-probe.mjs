@@ -128,7 +128,10 @@ const CONSULTANCY_RE = /\b(consultanc\w*|consultants?|staffing|manpower|placemen
 // flag and the india consultancy counter in lockstep.
 const STAFFING_NAMES_RE = /\b(teamlease|randstad|quess|adecco|kelly\s?services|gi\s?group|persolkelly|ciel\s?hr|innovsource|firstmeridian)\b/i
 export function isStaffingOrg(name = '') { return CONSULTANCY_RE.test(name) || STAFFING_NAMES_RE.test(name) }
-const FEE_FRAUD_RE = /\b(registration|security)\s+(fees?|deposits?|amounts?)\b|\bpay(ment)?\s+(for|before)\s+(training|joining)\b|\brefundable\s+deposits?\b/i
+// The pay branch allows an optional currency/amount between the verb and
+// the training/joining phrase — 'Pay Rs 500 before joining' is the common
+// Indian scam shape (Codex on #503).
+const FEE_FRAUD_RE = /\b(registration|security)\s+(fees?|deposits?|amounts?)\b|\bpay(ment)?\s+(((rs\.?|inr|₹)\s*)?[\d,]+\s+)?(for|before)\s+(training|joining)\b|\brefundable\s+deposits?\b/i
 // INGESTION.md §4.5 contact-spam: phone/WhatsApp solicitation in the body
 // AND no apply link above redirect tier — a call-the-HR harvesting pattern.
 // Body-side phone matching allows one internal separator ('98765 43210') —
@@ -716,13 +719,15 @@ export function extractJsonLdJobPosting(html) {
 // the exact numbers the segment verdict hinges on. Patterns seed from the
 // same domains the bucket matrix uses.
 export const FRESHER_DOMAIN_PATTERNS = {
-  marketing: /market/i,
+  // Word-bounded marketing terms — the substring 'market' matched
+  // stock-market and supermarket roles into the marketing tally.
+  marketing: /\b(marketing|digital marketing|social media|seo|brand(ing)?)\b/i,
   sales: /\b(sales|business development|telecall|telesales|field sales)\b/i,
   electrical: /electric/i,
   // No bare 'analyst' — Business/Financial Analysts belong to the business/
   // finance domains and must not inflate the data fresher tally.
   data: /\b(data entry|data analyst|data operator|mis analyst|mis executive|mis)\b/i,
-  hr: /\b(hr|recruiter|recruitment|talent acquisition)\b/i,
+  hr: /\b(hr|human resources?|recruiter|recruitment|talent acquisition)\b/i,
 }
 export function matchFresherDomain(text = '') {
   for (const [d, re] of Object.entries(FRESHER_DOMAIN_PATTERNS)) if (re.test(text)) return d
