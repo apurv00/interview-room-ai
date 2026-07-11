@@ -1025,8 +1025,7 @@ export function computeVerdict(snap) {
 function cmdReport() {
   const files = fs.existsSync(DATA_DIR) ? fs.readdirSync(DATA_DIR) : []
   const latest = prefix => files.filter(f => f.startsWith(prefix)).sort().pop()
-  const indiaFile = latest('india-')
-  const rotFile = latest('rot-')
+  const indiaFile = latest('india-') // display-only fallback; gating walks its own selection below
   console.log('=== GATE REPORT (from latest saved artifacts) ===')
   // Gate-grade snapshot selection (same walk india artifacts get): the
   // newest CURRENT-FORMAT, VALID snapshot WITH fresher coverage — a later
@@ -1088,23 +1087,37 @@ function cmdReport() {
         // segment measurement printed just above (Codex on #503). Passing
         // rates remain lower bounds; failing rates disprove.
         const overlapRate = overlap / indiaFps.length
-        const totalFresherUsable = ['apna', 'unstop'].reduce((a, s) => a + Object.values(india[s].fresherDomains || {}).reduce((x, t) => x + (t.postSpam || 0), 0), 0)
-        companions.india = overlapRate >= 0.35 ? 'FAIL' : (totalFresherUsable === 0 ? 'FAIL' : 'OK')
+        // §6's G6 floor applies PER FRESHER DOMAIN (>=10 ingest-usable
+        // combined across sources) — zero-vs-positive was too weak: 1-9
+        // rows, or yield concentrated outside the required domains, must
+        // not read OK (Codex on #503).
+        const domainYield = {}
+        for (const s of ['apna', 'unstop']) for (const [d, t] of Object.entries(india[s].fresherDomains || {})) domainYield[d] = (domainYield[d] || 0) + (t.postSpam || 0)
+        const failingFresher = Object.entries(domainYield).filter(([, n]) => n < 10).map(([d, n]) => `${d}=${n}`)
+        companions.india = overlapRate >= 0.35 ? 'FAIL' : (failingFresher.length ? 'FAIL' : 'OK')
+        companions.indiaNote = overlapRate >= 0.35 ? 'G5 overlap >= 35%' : (failingFresher.length ? `G6 fresher floor unmet: ${failingFresher.join(' ')}` : '')
         console.log(`  G5 cross-source overlap (india ∩ JSearch): ${overlap}/${indiaFps.length} (${(overlapRate * 100).toFixed(1)}% vs <35% gate) — LOWER BOUND from a small sample; full cross-source G5 lands with corpus-scale ingestion telemetry`)
-        console.log(`  G6 india fresher yield (ingest-usable rows across sources): ${totalFresherUsable}${totalFresherUsable === 0 ? ' — SEGMENT SUPPLY CHECK FAILED' : ''}`)
+        console.log(`  G6 india fresher yield per domain (gate >=10 ingest-usable each): ${Object.entries(domainYield).map(([d, n]) => `${d}=${n}`).join(' ')}${failingFresher.length ? ` — BELOW FLOOR: ${failingFresher.join(' ')}` : ''}`)
       }
     }
   } else console.log('\nIndia sampling: PENDING — run `india`')
-  if (rotFile && snapFile && snap) {
-    const rot = loadArtifact(path.join(DATA_DIR, rotFile), 'rot')
-    // Same schema discipline as every other artifact kind — a v1 rot file
-    // must not supply the G4 dead-link half (Codex on #503).
-    if (rot.schemaVersion !== SCHEMA_VERSION) console.log(`\nG4 dead-link half: PENDING — latest rot artifact is stale-format (schemaVersion ${rot.schemaVersion || 1}); re-run \`rot\``)
-    // A rot artifact only speaks for the snapshot its links came from.
-    else if (rot.snapshotFile !== snapFile) console.log(`\nG4 dead-link half: PENDING — latest rot (${rot.snapshotFile}) does not pair with latest snapshot (${snapFile}); run \`node scripts/jobs-liquidity-probe.mjs rot ${path.join(DATA_DIR, snapFile)}\``)
-    else if (rot.inconclusive || rot.deadPct === null) console.log(`\nG4 dead-link half: INCONCLUSIVE — ${rot.unverifiable}/${rot.checked} unverifiable (bot-blocks/timeouts); treat as unresolved`)
-    else { companions.rot = rot.deadPct < 10 ? 'PASS' : 'FAIL'; console.log(`\nG4 dead-link half: ${rot.deadPct}% of ${rot.dead + rot.alive} verifiable (gate <10%) — ${rotFile}`) }
-  } else if (snap) console.log(`\nG4 dead-link half: PENDING — run \`node scripts/jobs-liquidity-probe.mjs rot ${path.join(DATA_DIR, snapFile)}\``)
+  // rot selection walks newest-first for the artifact PAIRING with the
+  // selected snapshot — the last naive latest() selection; a later smoke
+  // rot run must not shadow the matching one (Codex on #503).
+  let rotPick = null
+  if (snap) {
+    for (const f of files.filter(x => x.startsWith('rot-')).sort().reverse()) {
+      const rot = loadArtifact(path.join(DATA_DIR, f), 'rot')
+      if (rot.schemaVersion !== SCHEMA_VERSION) continue
+      if (rot.snapshotFile !== snapFile) continue
+      rotPick = { file: f, rot }; break
+    }
+  }
+  if (rotPick) {
+    const { file: rotFileName, rot } = rotPick
+    if (rot.inconclusive || rot.deadPct === null) console.log(`\nG4 dead-link half: INCONCLUSIVE — ${rot.unverifiable}/${rot.checked} unverifiable (bot-blocks/timeouts); treat as unresolved`)
+    else { companions.rot = rot.deadPct < 10 ? 'PASS' : 'FAIL'; console.log(`\nG4 dead-link half: ${rot.deadPct}% of ${rot.dead + rot.alive} verifiable (gate <10%) — ${rotFileName}`) }
+  } else if (snap) console.log(`\nG4 dead-link half: PENDING — no rot artifact pairs with ${snapFile}; run \`node scripts/jobs-liquidity-probe.mjs rot ${path.join(DATA_DIR, snapFile)}\``)
   else console.log('\nG4 dead-link half: PENDING — needs a valid snapshot first')
   // G2 walks fresh artifacts newest-first for the one PAIRING with the
   // selected snapshot — a later unrelated fresh run must not shadow a
@@ -1134,7 +1147,7 @@ function cmdReport() {
     const companionFails = []
     if (companions.g2 === 'FAIL') companionFails.push('G2 freshness FAIL')
     if (companions.rot === 'FAIL') companionFails.push('G4 dead-link rate >= 10%')
-    if (companions.india === 'FAIL') companionFails.push('G5 observed cross-source overlap >= 35%')
+    if (companions.india === 'FAIL') companionFails.push(`india companion FAIL${companions.indiaNote ? ` (${companions.indiaNote})` : ''}`)
     if (companionFails.length) finalVerdict = 'FAIL'
     else if ((v.verdict === 'PASS' || v.verdict === 'PARTIAL') && (companions.g2 !== 'PASS' || companions.rot !== 'PASS' || companions.india !== 'OK')) finalVerdict = 'PENDING'
     console.log(`\n=== §6 VERDICT (all gates): ${finalVerdict} ===`)
