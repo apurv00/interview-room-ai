@@ -21,6 +21,9 @@ interface SlotConfig {
   useToonInput: boolean
 }
 
+// 'max' intentionally excluded — every GPT-5.6 tier 400s on it despite the
+// OpenAI reference listing it; see the ReasoningEffort type in
+// shared/services/providers/index.ts for the live evidence + widen steps.
 const REASONING_EFFORT_OPTIONS = ['none', 'low', 'medium', 'high', 'xhigh'] as const
 
 interface Defaults {

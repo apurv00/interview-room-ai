@@ -24,7 +24,9 @@ export interface IModelSlotConfig {
    * Reasoning-effort override for GPT-5.6-family models
    * (none/low/medium/high/xhigh). Omit to inherit the code default from
    * TASK_SLOT_DEFAULTS. Ignored (dropped by the adapter) for models that
-   * don't accept the parameter.
+   * don't accept the parameter. 'max' is intentionally absent — all three
+   * GPT-5.6 tiers reject it live despite the OpenAI reference listing it;
+   * see the ReasoningEffort type in shared/services/providers/index.ts.
    */
   reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh'
   /** Whether this slot is active. Inactive = use hardcoded default. */
