@@ -128,7 +128,7 @@ const CONSULTANCY_RE = /\b(consultanc\w*|consultants?|staffing|manpower|placemen
 // flag and the india consultancy counter in lockstep.
 const STAFFING_NAMES_RE = /\b(teamlease|randstad|quess|adecco|kelly\s?services|gi\s?group|persolkelly|ciel\s?hr|innovsource|firstmeridian)\b/i
 export function isStaffingOrg(name = '') { return CONSULTANCY_RE.test(name) || STAFFING_NAMES_RE.test(name) }
-const FEE_FRAUD_RE = /\b(registration|security)\s+(fee|deposit|amount)\b|\bpay(ment)?\s+(for|before)\s+(training|joining)\b|\brefundable\s+deposit\b/i
+const FEE_FRAUD_RE = /\b(registration|security)\s+(fees?|deposits?|amounts?)\b|\bpay(ment)?\s+(for|before)\s+(training|joining)\b|\brefundable\s+deposits?\b/i
 // INGESTION.md §4.5 contact-spam: phone/WhatsApp solicitation in the body
 // AND no apply link above redirect tier — a call-the-HR harvesting pattern.
 // Body-side phone matching allows one internal separator ('98765 43210') —

@@ -87,6 +87,9 @@ test('hard drops: walk-in, phone-in-title, multirole, openings, caps, fee-fraud,
   assert.ok(d({ title: 'Telecaller 50 openings' }).includes('title-openings'))
   assert.ok(d({ title: 'URGENT HIRING TELECALLERS NOW' }).includes('title-caps'))
   assert.ok(d({ description: 'Pay registration fee of Rs 500 to apply' }).includes('fee-fraud'))
+  // [Cx-34th] plural scam wording must not escape
+  assert.ok(d({ description: 'Registration fees of Rs 500 apply' }).includes('fee-fraud'))
+  assert.ok(d({ description: 'Refundable deposits required before joining' }).includes('fee-fraud'))
   assert.ok(d({ company: '  ' }).includes('no-company'))
   assert.ok(d({ validThrough: '2020-01-01' }).includes('valid-through-expired'))
 })
