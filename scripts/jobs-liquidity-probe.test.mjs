@@ -202,6 +202,11 @@ test('[Audit-13] spaced phones hit contact-spam; salary-range titles stay undrop
   assert.ok(spaced.drops.includes('contact-spam'))
   const salary = classifyJob({ title: 'Telecaller 60000-70000 salary', company: 'X', description: 'x '.repeat(300), applyUrls: ['https://a.com/1'] })
   assert.ok(!salary.drops.includes('title-phone'))
+  // [Cx-26th] separator-less +91 numbers must not escape either pattern
+  const plus91 = classifyJob({ title: 'Telecaller', company: 'X', description: 'Interested? WhatsApp +919876543210 now', applyUrls: [] })
+  assert.ok(plus91.drops.includes('contact-spam'))
+  const plus91Title = classifyJob({ title: 'Telecaller call +919876543210', company: 'X', description: '', applyUrls: [] })
+  assert.ok(plus91Title.drops.includes('title-phone'))
 })
 
 test('[Audit-23] malformed validThrough is flagged, real expiry drops', () => {

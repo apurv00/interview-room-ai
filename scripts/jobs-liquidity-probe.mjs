@@ -135,7 +135,9 @@ const FEE_FRAUD_RE = /\b(registration|security)\s+(fee|deposit|amount)\b|\bpay(m
 // call/WhatsApp proximity guards against salary-range false hits. The
 // title-phone drop stays contiguous-only: '60000-70000' in a salary-bearing
 // title must not hard-drop the row.
-const SPACED_PHONE = '(\\+91[\\s-]?)?\\b[6-9]\\d{4}[\\s-]?\\d{5}\\b'
+// (+91-prefix OR word boundary) — '+919876543210' has no \b between the
+// country code and the local digits, so \b-only patterns missed it.
+const SPACED_PHONE = '(\\+91[\\s-]?|\\b)[6-9]\\d{4}[\\s-]?\\d{5}\\b'
 const CONTACT_SPAM_RE = new RegExp(`(\\bcall\\b|\\bwhats\\s?app\\b)[\\s\\S]{0,60}?${SPACED_PHONE}|${SPACED_PHONE}[\\s\\S]{0,60}?(\\bcall\\b|\\bwhats\\s?app\\b)`, 'i')
 
 function hostOf(u) { try { return new URL(u).hostname.toLowerCase() } catch { return '' } }
@@ -153,7 +155,7 @@ export function classifyJob({ title = '', company = '', description = '', applyU
   const t = title.trim()
   if (!company.trim()) drops.push('no-company')
   if (/\bwalk[\s-]?in\b/i.test(t)) drops.push('title-walkin')
-  if (/(\+91[\s-]?)?\b[6-9]\d{9}\b/.test(t)) drops.push('title-phone')
+  if (/(\+91[\s-]?|\b)[6-9]\d{9}\b/.test(t)) drops.push('title-phone')
   if (t.split('/').length > 3) drops.push('title-multirole')
   if (/\b\d+\s*openings?\b/i.test(t)) drops.push('title-openings')
   const letters = t.replace(/[^a-zA-Z]/g, '')
@@ -598,7 +600,14 @@ function cmdFresh(fileA, fileB) {
     perBucket.push({ bucket: b.bucket, freshPerWeek: (fresh / rawGapDays) * 7, undated })
   }
   console.log(`=== G2 FRESHNESS (true gap ${rawGapDays.toFixed(2)}d; ${perBucket.length} comparable buckets; skipped: ${skipped.errored} errored, ${skipped.capped} page-capped, ${skipped.unpaired} unpaired) ===`)
-  if (!perBucket.length) { console.log('G2: NOT EVALUABLE — no comparable bucket pairs'); process.exit(1) }
+  // A verdict from a tiny comparable remnant is not the gate: require at
+  // least half of B's core buckets to be comparable, else NOT EVALUABLE —
+  // no artifact is written that report could present as G2 (Codex on #503).
+  const comparabilityShare = coreB.length ? perBucket.length / coreB.length : 0
+  if (!perBucket.length || comparabilityShare < 0.5) {
+    console.log(`G2: NOT EVALUABLE — only ${perBucket.length}/${coreB.length} core buckets comparable (${(comparabilityShare * 100).toFixed(1)}%; need >=50%). Re-run snapshots or reduce page-capping.`)
+    process.exit(1)
+  }
   for (const p of perBucket) console.log(`  ${p.bucket.padEnd(28)} ~${p.freshPerWeek.toFixed(1)}/week${p.undated ? ` (+${p.undated} undated B-only, excluded as non-comparable)` : ''}`)
   const passing = perBucket.filter(p => p.freshPerWeek >= 10).length // unrounded comparison
   const share = passing / perBucket.length
@@ -609,7 +618,8 @@ function cmdFresh(fileA, fileB) {
   const result = {
     schemaVersion: SCHEMA_VERSION, ranAt: new Date().toISOString(),
     fileA: path.basename(resolveArtifact(fileA)), fileB: path.basename(resolveArtifact(fileB)),
-    gapDays: +rawGapDays.toFixed(2), comparable: perBucket.length, passing,
+    gapDays: +rawGapDays.toFixed(2), comparable: perBucket.length, coreBuckets: coreB.length,
+    comparabilitySharePct: +(comparabilityShare * 100).toFixed(1), passing,
     sharePct: +(share * 100).toFixed(1), verdict, skipped,
   }
   fs.mkdirSync(DATA_DIR, { recursive: true })
