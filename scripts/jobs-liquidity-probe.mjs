@@ -138,9 +138,13 @@ export function classifyJob({ title = '', company = '', description = '', applyU
   const letters = t.replace(/[^a-zA-Z]/g, '')
   if (letters.length > 10 && letters.replace(/[^A-Z]/g, '').length / letters.length > 0.7) drops.push('title-caps')
   if (FEE_FRAUD_RE.test(description)) drops.push('fee-fraud')
-  const hasNonRedirectApply = applyUrls.some(u => classifyApplyUrl(u) !== 'aggregator-redirect')
+  // A blocklisted host (wa.me/t.me/forms) must never count as a real apply
+  // path — classifyApplyUrl falls unknown hosts through to 'employer', so
+  // blocklist status is checked FIRST (Codex on #503).
+  const isBlockedApplyUrl = u => APPLY_DOMAIN_BLOCKLIST.some(b => hostMatches(hostOf(u), b))
+  const hasNonRedirectApply = applyUrls.some(u => !isBlockedApplyUrl(u) && classifyApplyUrl(u) !== 'aggregator-redirect')
   if (CONTACT_SPAM_RE.test(description) && !hasNonRedirectApply) drops.push('contact-spam')
-  if (applyUrls.length && applyUrls.every(u => APPLY_DOMAIN_BLOCKLIST.some(b => hostMatches(hostOf(u), b)))) drops.push('blocklist-apply-domain')
+  if (applyUrls.length && applyUrls.every(isBlockedApplyUrl)) drops.push('blocklist-apply-domain')
   if (validThrough && new Date(validThrough).getTime() < Date.now()) drops.push('valid-through-expired')
 
   if (CONSULTANCY_RE.test(company)) flags.push('staffing')
@@ -299,7 +303,7 @@ async function runBucket(bucket) {
 }
 
 /** Prefer: not-dropped > full-JD > better apply tier > longer JD. */
-function betterRepresentative(a, b) {
+export function betterRepresentative(a, b) {
   if (!a.drops.length !== !b.drops.length) return !a.drops.length
   if ((a.jdLen >= 400) !== (b.jdLen >= 400)) return a.jdLen >= 400
   const at = a.tier ? TIER_RANK[a.tier] : 9, bt = b.tier ? TIER_RANK[b.tier] : 9
@@ -307,7 +311,7 @@ function betterRepresentative(a, b) {
   return a.jdLen > b.jdLen
 }
 
-function isErroredBucket(b) { return !!b.error || (b.httpStatus !== undefined && b.httpStatus !== 200) }
+export function isErroredBucket(b) { return !!b.error || (b.httpStatus !== undefined && b.httpStatus !== 200) }
 
 async function cmdSnapshot({ pilot = false, fresher = true } = {}) {
   const buckets = buildBuckets({ fresher: pilot ? false : fresher }).slice(0, pilot ? 12 : undefined)
@@ -340,7 +344,7 @@ async function cmdSnapshot({ pilot = false, fresher = true } = {}) {
 
 // Lower median for even-length arrays — matches the probe's bias-toward-FAIL
 // philosophy at gate boundaries (upper-middle was a false-pass bias).
-function median(arr) {
+export function median(arr) {
   const s = [...arr].sort((a, b) => a - b)
   if (!s.length) return 0
   return s.length % 2 ? s[(s.length - 1) / 2] : s[s.length / 2 - 1]
@@ -643,17 +647,24 @@ function cmdReport() {
   } else console.log('\nG1/G1f/G3/G4/G5/G6: PENDING — no JSearch snapshot yet (run `snapshot`)')
   if (indiaFile) {
     const india = loadArtifact(path.join(DATA_DIR, indiaFile))
-    const { apna, unstop } = india
-    console.log(`\nIndia sampling: ${indiaFile}${india.schemaVersion !== SCHEMA_VERSION ? ' (STALE FORMAT — re-run `india`)' : ''}`)
-    console.log(`  apna  full-JD(>=400ch): ${pct1(apna.descLens.filter(l => l >= 400).length, apna.descLens.length)}  expired-served: ${pct1(apna.expired, apna.jsonldHits)}  consultancy: ${pct1(apna.consultancy, apna.jsonldHits)}`)
-    console.log(`  unstop live rate: ${pct1(unstop.regnOpen, unstop.sampled)}`)
-    const indiaFps = [...(apna.fingerprints || []), ...(unstop.fingerprints || [])]
-    if (!snap) console.log('  G5 cross-source overlap: PENDING — needs a valid snapshot')
-    else if (indiaFps.length === 0) console.log('  G5 cross-source overlap: PENDING — india artifact has no fingerprints (re-run `india` with the current probe)')
-    else {
-      const snapFps = new Set(snap.buckets.flatMap(b => (b.fingerprints || []).map(f => f.fp)))
-      const overlap = indiaFps.filter(fp => snapFps.has(fp)).length
-      console.log(`  G5 cross-source overlap (india ∩ JSearch): ${overlap}/${indiaFps.length} — LOWER BOUND from a small sample; full cross-source G5 lands with corpus-scale ingestion telemetry`)
+    // Same strictness as snapshots: a stale-format india artifact is NOT
+    // evaluated — its rates and fingerprints must not drive the source
+    // decision (Codex on #503).
+    if (india.schemaVersion !== SCHEMA_VERSION) {
+      console.log(`\nIndia sampling: ${indiaFile} — STALE FORMAT (schemaVersion ${india.schemaVersion || 1}, current ${SCHEMA_VERSION}); stats not evaluated — re-run \`india\``)
+    } else {
+      const { apna, unstop } = india
+      console.log(`\nIndia sampling: ${indiaFile}`)
+      console.log(`  apna  full-JD(>=400ch): ${pct1(apna.descLens.filter(l => l >= 400).length, apna.descLens.length)}  expired-served: ${pct1(apna.expired, apna.jsonldHits)}  consultancy: ${pct1(apna.consultancy, apna.jsonldHits)}`)
+      console.log(`  unstop live rate: ${pct1(unstop.regnOpen, unstop.sampled)}`)
+      const indiaFps = [...(apna.fingerprints || []), ...(unstop.fingerprints || [])]
+      if (!snap) console.log('  G5 cross-source overlap: PENDING — needs a valid snapshot')
+      else if (indiaFps.length === 0) console.log('  G5 cross-source overlap: PENDING — india artifact has no fingerprints (re-run `india` with the current probe)')
+      else {
+        const snapFps = new Set(snap.buckets.flatMap(b => (b.fingerprints || []).map(f => f.fp)))
+        const overlap = indiaFps.filter(fp => snapFps.has(fp)).length
+        console.log(`  G5 cross-source overlap (india ∩ JSearch): ${overlap}/${indiaFps.length} — LOWER BOUND from a small sample; full cross-source G5 lands with corpus-scale ingestion telemetry`)
+      }
     }
   } else console.log('\nIndia sampling: PENDING — run `india`')
   if (rotFile && snapFile && snap) {
@@ -670,7 +681,7 @@ function cmdReport() {
 // CLI — guarded so importing the module (fingerprint-parity tests) never
 // executes commands or exits the host process.
 // ---------------------------------------------------------------------------
-function parseArgs(rest) {
+export function parseArgs(rest) {
   const flags = {}
   const positional = []
   for (let i = 0; i < rest.length; i++) {
