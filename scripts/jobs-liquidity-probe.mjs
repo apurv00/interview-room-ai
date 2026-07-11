@@ -288,6 +288,13 @@ function summarizeSnapshot(snap) {
   const employerPlus = (tierTotals['direct-ats'] || 0) + (tierTotals['employer'] || 0)
   const tierSum = Object.values(tierTotals).reduce((a, b) => a + b, 0)
   const dupTotal = bs.reduce((a, b) => a + b.dupWithinBucket, 0)
+  // Codex P2 on #503 (2nd round): G5 is a CROSS-SOURCE gate. Within-bucket
+  // dups alone under-count the canonical merge burden — also measure
+  // fingerprints recurring across buckets; full cross-source overlap is
+  // reported by `report` (india fingerprints ∩ snapshot) and stays a
+  // lower bound until all sources are sampled at scale.
+  const allFps = bs.flatMap(b => b.fingerprints)
+  const crossBucketDup = allFps.length ? Math.round((1 - new Set(allFps).size / allFps.length) * 100) : 0
   const viaNaukri = bs.reduce((a, b) => a + (b.viaSites['naukri'] || b.viaSites['naukri.com'] || 0), 0)
   console.log('\n=== SNAPSHOT SUMMARY (week window ≈ weekly supply) ===')
   console.log(`buckets: ${bs.length}   raw jobs: ${totalRaw}   usable: ${totalUsable}`)
@@ -295,7 +302,7 @@ function summarizeSnapshot(snap) {
   if (fresherBs.length) console.log(`G1f fresher buckets usable: ${fresherBs.map(b => `${b.bucket}=${b.usable}`).join(', ')}   (gate: >=10 each)`)
   console.log(`G3  full-JD rate (raw): ${pct(totalFullJd, totalRaw)}   (gate: >=70%)`)
   console.log(`G4  employer-or-better apply share: ${pct(employerPlus, tierSum)}   (gate: >=30%)   tiers: ${JSON.stringify(tierTotals)}`)
-  console.log(`G5  within-bucket dup rate: ${pct(dupTotal, totalRaw)}   (gate: <35%)`)
+  console.log(`G5  dup — within-bucket: ${pct(dupTotal, totalRaw)} · cross-bucket: ${crossBucketDup}%   (gate: <35% cross-source; JSearch-internal lower bound — see report for cross-source overlap)`)
   console.log(`viaSite=naukri share (Naukri-partner datum): ${pct(viaNaukri, totalRaw)}`)
 }
 
@@ -317,8 +324,20 @@ function cmdFresh(fileA, fileB) {
 
 async function cmdRot(file) {
   const snap = JSON.parse(fs.readFileSync(file, 'utf8'))
-  const urls = snap.buckets.flatMap(b => b.sampleApplyUrls).slice(0, 40)
-  console.log(`Checking ${urls.length} sampled apply links…`)
+  // Codex P2 on #503 (2nd round): a prefix slice covers only the first ~14
+  // buckets in fixed order. Stratify round-robin — one link per bucket per
+  // round — so every domain (incl. remote buckets) contributes to the
+  // dead-link rate.
+  const lists = snap.buckets.map(b => b.sampleApplyUrls || []).filter(l => l.length)
+  const urls = []
+  for (let round = 0; urls.length < 40; round++) {
+    let added = false
+    for (const list of lists) {
+      if (list[round]) { urls.push(list[round]); added = true; if (urls.length >= 40) break }
+    }
+    if (!added) break
+  }
+  console.log(`Checking ${urls.length} apply links stratified across ${lists.length} buckets…`)
   let dead = 0
   for (const u of urls) {
     try { const res = await get(u, { timeoutMs: 12000, retries: 0 }); if (res.status >= 400) dead++ } catch { dead++ }
@@ -345,7 +364,7 @@ function extractJsonLdJobPosting(html) {
 }
 
 async function sampleApna(sampleN) {
-  const out = { source: 'apna', sampled: 0, jsonldHits: 0, descLens: [], expired: 0, consultancy: 0, cities: {}, errors: 0 }
+  const out = { source: 'apna', sampled: 0, jsonldHits: 0, descLens: [], expired: 0, consultancy: 0, cities: {}, errors: 0, fingerprints: [] }
   try {
     // Sitemap is two levels deep: index -> job-listing-sitemap.xml -> active-job-listings-N.xml -> job URLs
     const idx = await (await get('https://apna.co/api/sitemap-index.xml')).text()
@@ -383,6 +402,10 @@ async function sampleApna(sampleN) {
         if (CONSULTANCY_RE.test(org)) out.consultancy++
         const cityMatch = urls[i].match(/\/job\/([^/]+)\//)
         if (cityMatch) out.cities[cityMatch[1]] = (out.cities[cityMatch[1]] || 0) + 1
+        // Cross-source G5: same canonical fingerprint the pipeline will mint
+        const jl = Array.isArray(jp.jobLocation) ? jp.jobLocation[0] : jp.jobLocation
+        const locality = jl?.address?.addressLocality || (cityMatch ? cityMatch[1] : '')
+        if (org && jp.title) out.fingerprints.push(fingerprint(org, String(jp.title), String(locality), false))
       } catch { out.errors++ }
       await sleep(350)
     }
@@ -391,7 +414,7 @@ async function sampleApna(sampleN) {
 }
 
 async function sampleUnstop(pages = 3) {
-  const out = { source: 'unstop', sampled: 0, regnOpen: 0, descLens: [], errors: 0, shapeNote: '' }
+  const out = { source: 'unstop', sampled: 0, regnOpen: 0, descLens: [], errors: 0, shapeNote: '', fingerprints: [] }
   for (let p = 1; p <= pages; p++) {
     try {
       const res = await get(`https://unstop.com/api/public/opportunity/search-result?opportunity=jobs&per_page=15&page=${p}`, { timeoutMs: 15000 })
@@ -404,6 +427,10 @@ async function sampleUnstop(pages = 3) {
         if (item.regn_open || item.status === 'LIVE') out.regnOpen++ // regn_open is 1/0, not boolean
         const desc = String(item.details || item.description || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
         if (desc) out.descLens.push(desc.length)
+        const org = item.organisation?.name || item.organisation?.title || ''
+        const loc0 = Array.isArray(item.locations) && item.locations[0] ? item.locations[0] : null
+        const loc = typeof loc0 === 'string' ? loc0 : (loc0?.city || loc0?.name || '')
+        if (org && item.title) out.fingerprints.push(fingerprint(org, String(item.title), String(loc), false))
       }
     } catch (e) { out.errors++; out.shapeNote = e.message }
     await sleep(600)
@@ -444,13 +471,20 @@ function cmdReport() {
   const snapFile = latest('snapshot-')
   const indiaFile = latest('india-')
   console.log('=== GATE REPORT (from latest saved artifacts) ===')
-  if (snapFile) { console.log(`\nJSearch snapshot: ${snapFile}`); summarizeSnapshot(JSON.parse(fs.readFileSync(path.join(DATA_DIR, snapFile), 'utf8'))) }
+  let snap = null
+  if (snapFile) { snap = JSON.parse(fs.readFileSync(path.join(DATA_DIR, snapFile), 'utf8')); console.log(`\nJSearch snapshot: ${snapFile}`); summarizeSnapshot(snap) }
   else console.log('\nG1/G3/G4/G5: PENDING — no JSearch snapshot yet (needs RAPIDAPI_KEY; run `snapshot`)')
   if (indiaFile) {
     const { apna, unstop } = JSON.parse(fs.readFileSync(path.join(DATA_DIR, indiaFile), 'utf8'))
     console.log(`\nIndia sampling: ${indiaFile}`)
     console.log(`  apna  full-JD(>=400ch) rate: ${pct(apna.descLens.filter(l => l >= 400).length, apna.descLens.length)}  expired-served: ${pct(apna.expired, apna.jsonldHits)}  consultancy: ${pct(apna.consultancy, apna.jsonldHits)}`)
     console.log(`  unstop regn_open rate: ${pct(unstop.regnOpen, unstop.sampled)}`)
+    if (snap) {
+      const snapFps = new Set(snap.buckets.flatMap(b => b.fingerprints || []))
+      const indiaFps = [...(apna.fingerprints || []), ...(unstop.fingerprints || [])]
+      const overlap = indiaFps.filter(fp => snapFps.has(fp)).length
+      console.log(`  G5 cross-source overlap (india sample ∩ JSearch snapshot): ${overlap}/${indiaFps.length} — LOWER BOUND from a small sample; combine with the cross-bucket rate above; full cross-source G5 lands with corpus-scale ingestion telemetry`)
+    }
   } else console.log('\nIndia sampling: PENDING — run `india`')
   console.log('\nG2 (freshness): run `snapshot` twice >=24h apart, then `fresh <A> <B>`')
 }
