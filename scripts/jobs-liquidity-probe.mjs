@@ -287,9 +287,14 @@ async function runBucket(bucket) {
     // classifyJob above saw the raw list (its blocklist drop needs it).
     const usableUrls = urls.filter(u => !isBlockedApplyUrl(u))
     const cand = { r, urls: usableUrls, drops, flags, jdLen, tier: bestTier(usableUrls), fp: fingerprint(r.company, r.title, r.city, r.isRemote) }
-    const existing = groups.get(cand.fp)
-    if (!existing) { groups.set(cand.fp, cand) }
-    else { stats.dupWithinBucket++; if (betterRepresentative(cand, existing)) groups.set(cand.fp, cand) }
+    // INGESTION.md §4.2: confidential-company rows are EXEMPT from
+    // fingerprint merging — 'confidential|title|city' would collapse
+    // DIFFERENT employers (Codex on #503). Each gets a unique group key
+    // and mints no identity fingerprint (identity is unknowable).
+    const key = dedupKey(cand, groups.size)
+    const existing = groups.get(key)
+    if (!existing) { groups.set(key, cand) }
+    else { stats.dupWithinBucket++; if (betterRepresentative(cand, existing)) groups.set(key, cand) }
   }
   for (const c of groups.values()) {
     if (c.r.viaSite) stats.viaSites[c.r.viaSite] = (stats.viaSites[c.r.viaSite] || 0) + 1
@@ -302,12 +307,18 @@ async function runBucket(bucket) {
       stats.usable++
       if (c.tier) stats.byTierUsable[c.tier] = (stats.byTierUsable[c.tier] || 0) + 1
       // {fp, postedAt} so `fresh` can distinguish genuinely-new postings
-      // from sampling churn in page-capped buckets.
-      stats.fingerprints.push({ fp: c.fp, postedAt: c.r.postedAt })
+      // from sampling churn. Confidential rows mint NO fingerprint —
+      // their identity is unknowable, so they sit out G2/G5 identity math.
+      if (!c.flags.includes('confidential')) stats.fingerprints.push({ fp: c.fp, postedAt: c.r.postedAt })
       if (stats.sampleApplyUrls.length < 3) stats.sampleApplyUrls.push([...c.urls].sort((a, b) => TIER_RANK[classifyApplyUrl(a)] - TIER_RANK[classifyApplyUrl(b)])[0])
     }
   }
   return stats
+}
+
+/** Dedup group key — confidential rows never merge (spec §4.2). */
+export function dedupKey(cand, seq) {
+  return cand.flags.includes('confidential') ? `confidential:${seq}` : cand.fp
 }
 
 /** Prefer: not-dropped > full-JD > better apply tier > longer JD. */
@@ -452,6 +463,20 @@ function cmdFresh(fileA, fileB) {
   console.log(`G2: ${passing}/${perBucket.length} buckets >=10 net-new/week (gate: >=70% of comparable buckets) -> ${share >= 0.7 ? 'PASS' : 'FAIL'} (${(share * 100).toFixed(1)}%)`)
 }
 
+/** Breadth-first sampler: round N takes every bucket's Nth link before any
+ *  bucket's N+1th; caps at `cap` total. Pure — tested in the suite. */
+export function pickRotSample(lists, cap) {
+  const picked = [], contributed = new Set()
+  for (let round = 0; picked.length < cap; round++) {
+    let added = false
+    for (const l of lists) {
+      if (l.urls[round] && picked.length < cap) { picked.push(l.urls[round]); contributed.add(l.bucket); added = true }
+    }
+    if (!added) break
+  }
+  return { picked, contributed }
+}
+
 // Dead = 404/410 only. Bot-blocks (403/406/429/999) and timeouts are
 // UNVERIFIABLE — excluded from both numerator and denominator. 200 bodies on
 // aggregator hosts are sniffed for expiry markers (real rot hides behind 200).
@@ -461,22 +486,11 @@ async function cmdRot(file) {
   file = resolveArtifact(file) // basename kept resolvable; loadArtifact also resolves
   const snap = loadArtifact(file)
   if (snap.schemaVersion !== SCHEMA_VERSION) { console.error(`snapshot schemaVersion ${snap.schemaVersion || 1} != ${SCHEMA_VERSION} — re-run snapshot first`); process.exit(1) }
-  // True stratification: stride-sample the BUCKET LIST first so all domains
-  // (incl. remote) contribute even when >40 buckets have links, then
-  // round-robin remaining slots.
   const lists = snap.buckets.filter(b => !isErroredBucket(b)).map(b => ({ bucket: b.bucket, urls: b.sampleApplyUrls || [] })).filter(l => l.urls.length)
-  const CAP = 40
-  const stride = Math.max(1, Math.ceil(lists.length / CAP))
-  const picked = []
-  const contributed = new Set()
-  for (let round = 0; picked.length < CAP; round++) {
-    let added = false
-    for (let i = round === 0 ? 0 : 0; i < lists.length; i += round === 0 ? stride : 1) {
-      const l = lists[i]
-      if (l.urls[round]) { picked.push(l.urls[round]); contributed.add(l.bucket); added = true; if (picked.length >= CAP) break }
-    }
-    if (!added) break
-  }
+  // Breadth-first over ALL buckets: every bucket's first link is checked
+  // before any bucket's second (cap >= bucket count, so stride subsetting
+  // and its skipped-domain bias are gone entirely — Codex on #503).
+  const { picked, contributed } = pickRotSample(lists, Math.max(40, lists.length))
   console.log(`Checking ${picked.length} apply links from ${contributed.size}/${lists.length} buckets…`)
   let dead = 0, alive = 0, unverifiable = 0, expiredBody = 0
   const byStatus = {}

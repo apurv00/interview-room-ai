@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import {
   companyKey, titleKey, locationKey, fingerprint,
   classifyJob, classifyApplyUrl, isBlockedApplyUrl, bestUsableTier,
-  betterRepresentative, median, isErroredBucket, parseArgs,
+  betterRepresentative, dedupKey, pickRotSample, median, isErroredBucket, parseArgs,
 } from './jobs-liquidity-probe.mjs'
 
 // ── normalization ───────────────────────────────────────────────────────────
@@ -124,6 +124,27 @@ test('[Cx-7th] betterRepresentative: not-dropped > full-JD > tier > length', () 
   assert.ok(betterRepresentative(mk({ tier: 'direct-ats' }), mk({ tier: 'platform-funnel' })))
   assert.ok(betterRepresentative(mk({ jdLen: 900 }), mk({ jdLen: 500 })))             // longer JD tiebreak
   assert.ok(!betterRepresentative(mk({ jdLen: 100 }), mk({ jdLen: 500 })))
+})
+
+test('[Cx-9th] confidential rows never merge and mint no identity (spec §4.2)', () => {
+  const conf = { flags: ['confidential'], fp: 'samefp' }
+  assert.notEqual(dedupKey(conf, 0), dedupKey(conf, 1))       // two confidential rows: distinct keys
+  assert.equal(dedupKey({ flags: [], fp: 'samefp' }, 5), 'samefp') // normal rows: fingerprint key
+})
+
+test('[Cx-9th] pickRotSample is breadth-first: every bucket first, then seconds', () => {
+  const lists = [
+    { bucket: 'a', urls: ['a1', 'a2'] },
+    { bucket: 'b', urls: ['b1'] },
+    { bucket: 'c', urls: ['c1', 'c2'] },
+  ]
+  const { picked, contributed } = pickRotSample(lists, 5)
+  assert.deepEqual(picked, ['a1', 'b1', 'c1', 'a2', 'c2'])    // all firsts before any second
+  assert.equal(contributed.size, 3)
+  // cap >= bucket count guarantees every linked bucket contributes
+  const many = Array.from({ length: 90 }, (_, i) => ({ bucket: `b${i}`, urls: [`u${i}`] }))
+  const wide = pickRotSample(many, Math.max(40, many.length))
+  assert.equal(wide.contributed.size, 90)
 })
 
 // ── gate arithmetic ─────────────────────────────────────────────────────────
