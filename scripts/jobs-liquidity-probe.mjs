@@ -756,21 +756,22 @@ async function sampleApna(sampleN) {
         // detail page IS the apply path (tier platform-funnel) — passing []
         // made contact-spam false-fire on legitimate platform listings
         // whose JD mentions a recruiter phone (Codex on #503).
+        // One classification per row — feeds BOTH the fresher tally and the
+        // fingerprint gate. A row classifyJob would hard-drop (fee-fraud,
+        // walk-in, phone-in-title...) must not mint an identity: G5 compares
+        // only rows ingestion would store (Codex on #503).
+        const { drops } = classifyJob({ title, company: org, description: jp.description || '', applyUrls: [url], validThrough: jp.validThrough || null })
         const fd = matchFresherDomain(`${title} ${url}`)
         if (fd) {
           const t = out.fresherDomains[fd]
           t.matched++
           if (desc.length >= 400) t.fullJd++
-          const { drops } = classifyJob({ title, company: org, description: jp.description || '', applyUrls: [url], validThrough: jp.validThrough || null })
           if (!drops.length && !expired && desc.length >= 400) t.postSpam++
         }
-        // FULL fingerprint parity with the ingestable corpus: no
-        // confidential, no expired, AND full-JD (>=400ch) — G5 overlap must
-        // compare only postings ingestion would actually store.
         const jl = Array.isArray(jp.jobLocation) ? jp.jobLocation[0] : jp.jobLocation
         const locality = jl?.address?.addressLocality || (cityMatch ? cityMatch[1] : '')
         const isRemote = [].concat(jp.jobLocationType ?? []).includes('TELECOMMUTE')
-        if (org && title && !expired && desc.length >= 400 && !/\bconfidential\b/i.test(org)) out.fingerprints.push(fingerprint(org, title, String(locality), isRemote))
+        if (org && title && !expired && desc.length >= 400 && !drops.length && !/\bconfidential\b/i.test(org)) out.fingerprints.push(fingerprint(org, title, String(locality), isRemote))
       } catch { out.errors++ }
       await sleep(350)
     }
@@ -805,12 +806,15 @@ async function sampleUnstop(pages = 5) {
           // The Unstop listing page is the apply path (platform-funnel) —
           // [] would false-fire contact-spam on legitimate listings.
           const pageUrl = typeof item.public_url === 'string' && item.public_url.startsWith('http') ? item.public_url : 'https://unstop.com/jobs'
+          // One classification per row — a row classifyJob would hard-drop
+          // must not mint an identity: G5 compares only rows ingestion
+          // would store (Codex on #503).
+          const { drops } = classifyJob({ title, company: org, description: item.details || '', applyUrls: [pageUrl] })
           const fd = matchFresherDomain(title)
           if (fd) {
             const t = out.fresherDomains[fd]
             t.matched++
             if (desc.length >= 400) t.fullJd++
-            const { drops } = classifyJob({ title, company: org, description: item.details || '', applyUrls: [pageUrl] })
             // Ingest-usable only: live + full-JD + clears every hard drop —
             // closed or stub rows must not make fresher supply look viable.
             if (!drops.length && live && desc.length >= 400) t.postSpam++
@@ -818,9 +822,9 @@ async function sampleUnstop(pages = 5) {
           const loc0 = Array.isArray(item.locations) && item.locations[0] ? item.locations[0] : null
           const loc = typeof loc0 === 'string' ? loc0 : (loc0?.city || loc0?.name || '')
           const isRemote = /remote|work from home/i.test(`${String(loc)} ${title}`)
-          // Fingerprint parity with the snapshot population: live,
-          // non-confidential rows only.
-          if (org && title && live && desc.length >= 400 && !/\bconfidential\b/i.test(org)) out.fingerprints.push(fingerprint(org, title, String(loc), isRemote))
+          // FULL fingerprint parity with the ingestable corpus: live,
+          // full-JD, hard-drop-clean, non-confidential rows only.
+          if (org && title && live && desc.length >= 400 && !drops.length && !/\bconfidential\b/i.test(org)) out.fingerprints.push(fingerprint(org, title, String(loc), isRemote))
         } catch { out.itemErrors++ }
       }
     } catch (e) { out.errors++; out.shapeNote = String(e?.message || e) }
@@ -1013,8 +1017,11 @@ function cmdReport() {
   } else console.log('\nIndia sampling: PENDING — run `india`')
   if (rotFile && snapFile && snap) {
     const rot = loadArtifact(path.join(DATA_DIR, rotFile), 'rot')
+    // Same schema discipline as every other artifact kind — a v1 rot file
+    // must not supply the G4 dead-link half (Codex on #503).
+    if (rot.schemaVersion !== SCHEMA_VERSION) console.log(`\nG4 dead-link half: PENDING — latest rot artifact is stale-format (schemaVersion ${rot.schemaVersion || 1}); re-run \`rot\``)
     // A rot artifact only speaks for the snapshot its links came from.
-    if (rot.snapshotFile !== snapFile) console.log(`\nG4 dead-link half: PENDING — latest rot (${rot.snapshotFile}) does not pair with latest snapshot (${snapFile}); run \`node scripts/jobs-liquidity-probe.mjs rot ${path.join(DATA_DIR, snapFile)}\``)
+    else if (rot.snapshotFile !== snapFile) console.log(`\nG4 dead-link half: PENDING — latest rot (${rot.snapshotFile}) does not pair with latest snapshot (${snapFile}); run \`node scripts/jobs-liquidity-probe.mjs rot ${path.join(DATA_DIR, snapFile)}\``)
     else if (rot.inconclusive || rot.deadPct === null) console.log(`\nG4 dead-link half: INCONCLUSIVE — ${rot.unverifiable}/${rot.checked} unverifiable (bot-blocks/timeouts); treat as unresolved`)
     else console.log(`\nG4 dead-link half: ${rot.deadPct}% of ${rot.dead + rot.alive} verifiable (gate <10%) — ${rotFile}`)
   } else if (snap) console.log(`\nG4 dead-link half: PENDING — run \`node scripts/jobs-liquidity-probe.mjs rot ${path.join(DATA_DIR, snapFile)}\``)
