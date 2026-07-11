@@ -1049,6 +1049,10 @@ function cmdReport() {
   // Gate-grade selection: walk india artifacts newest-first and use the
   // first that is current-format, valid, AND full-spec — a later smoke run
   // (--sample 20) must never shadow a gate-grade artifact (Codex on #503).
+  // Companion gate statuses — computed by the sections below and FED INTO
+  // the final verdict: a §6 PASS is impossible while any companion is
+  // failing or pending (Codex on #503).
+  const companions = { g2: 'PENDING', rot: 'PENDING', india: 'PENDING' }
   let indiaValid = null
   const indiaFiles = files.filter(f => f.startsWith('india-')).sort().reverse()
   let indiaPick = null, indiaSkipped = []
@@ -1090,7 +1094,7 @@ function cmdReport() {
     // A rot artifact only speaks for the snapshot its links came from.
     else if (rot.snapshotFile !== snapFile) console.log(`\nG4 dead-link half: PENDING — latest rot (${rot.snapshotFile}) does not pair with latest snapshot (${snapFile}); run \`node scripts/jobs-liquidity-probe.mjs rot ${path.join(DATA_DIR, snapFile)}\``)
     else if (rot.inconclusive || rot.deadPct === null) console.log(`\nG4 dead-link half: INCONCLUSIVE — ${rot.unverifiable}/${rot.checked} unverifiable (bot-blocks/timeouts); treat as unresolved`)
-    else console.log(`\nG4 dead-link half: ${rot.deadPct}% of ${rot.dead + rot.alive} verifiable (gate <10%) — ${rotFile}`)
+    else { companions.rot = rot.deadPct < 10 ? 'PASS' : 'FAIL'; console.log(`\nG4 dead-link half: ${rot.deadPct}% of ${rot.dead + rot.alive} verifiable (gate <10%) — ${rotFile}`) }
   } else if (snap) console.log(`\nG4 dead-link half: PENDING — run \`node scripts/jobs-liquidity-probe.mjs rot ${path.join(DATA_DIR, snapFile)}\``)
   else console.log('\nG4 dead-link half: PENDING — needs a valid snapshot first')
   // G2 reads the persisted fresh artifact, paired to the latest snapshot
@@ -1100,11 +1104,22 @@ function cmdReport() {
     const fr = loadArtifact(path.join(DATA_DIR, freshFile), 'fresh')
     if (fr.schemaVersion !== SCHEMA_VERSION) console.log('\nG2 (freshness): PENDING — fresh artifact is stale-format; re-run `fresh`')
     else if (fr.fileB !== snapFile) console.log(`\nG2 (freshness): PENDING — latest fresh result (B=${fr.fileB}) does not pair with the latest snapshot (${snapFile}); re-run \`fresh\``)
-    else console.log(`\nG2 (freshness): ${fr.verdict} — ${fr.passing}/${fr.comparable} comparable buckets >=10 net-new/week (${fr.sharePct}%, gap ${fr.gapDays}d) — ${freshFile}`)
+    else { companions.g2 = fr.verdict; console.log(`\nG2 (freshness): ${fr.verdict} — ${fr.passing}/${fr.comparable} comparable buckets >=10 net-new/week (${fr.sharePct}%, gap ${fr.gapDays}d) — ${freshFile}`) }
   } else console.log('\nG2 (freshness): PENDING — run `snapshot` twice >=24h apart (<=7d), then `fresh <A> <B>`')
   if (snap && snap.kind !== 'pilot') {
+    if (indiaValid) companions.india = 'OK'
     const v = computeVerdict(snap)
-    console.log(`\n=== §6 VERDICT (JSearch corpus): ${v.verdict} ===`)
+    // Final verdict = corpus verdict gated by the companion results: any
+    // companion FAIL forces FAIL; any companion PENDING/INCONCLUSIVE holds
+    // a would-be PASS at PENDING.
+    let finalVerdict = v.verdict
+    const companionFails = []
+    if (companions.g2 === 'FAIL') companionFails.push('G2 freshness FAIL')
+    if (companions.rot === 'FAIL') companionFails.push('G4 dead-link rate >= 10%')
+    if (companionFails.length) finalVerdict = 'FAIL'
+    else if (v.verdict === 'PASS' && (companions.g2 !== 'PASS' || companions.rot !== 'PASS' || companions.india !== 'OK')) finalVerdict = 'PENDING'
+    console.log(`\n=== §6 VERDICT (all gates): ${finalVerdict} ===`)
+    console.log(`  corpus verdict: ${v.verdict} · companions: G2=${companions.g2} rot=${companions.rot} india=${companions.india}${companionFails.length ? ' · failing: ' + companionFails.join(', ') : ''}`)
     for (const r of v.reasons) console.log(`  • ${r}`)
     console.log(`  per-domain medians: ${Object.entries(v.gates.domainMedians).map(([d, m]) => `${d}=${m}`).join(' ')}`)
     if (v.gates.lowFullJdBuckets?.length) console.log(`  <50% full-JD buckets flagged: ${v.gates.lowFullJdBuckets.join(', ')}`)
