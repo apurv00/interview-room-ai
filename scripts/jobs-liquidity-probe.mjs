@@ -552,6 +552,9 @@ function cmdFresh(fileA, fileB) {
   const A = loadArtifact(fileA), B = loadArtifact(fileB)
   for (const [name, s] of [['A', A], ['B', B]]) {
     if (s.schemaVersion !== SCHEMA_VERSION) { console.error(`snapshot ${name} has schemaVersion ${s.schemaVersion || 1} != ${SCHEMA_VERSION} — re-run it`); process.exit(1) }
+    // A pilot is a 12-bucket classification sanity check — it must never
+    // become a G2 input that report then prints as freshness (Codex on #503).
+    if (s.kind !== 'snapshot') { console.error(`${name} is a '${s.kind}' artifact — G2 requires two FULL snapshots`); process.exit(1) }
     if (s.invalidForGating) { console.error(`snapshot ${name} is marked INVALID FOR GATING (${s.erroredCount} errored buckets) — re-run it`); process.exit(1) }
   }
   const rawGapDays = (new Date(B.ranAt) - new Date(A.ranAt)) / 86400000
@@ -684,7 +687,9 @@ export const FRESHER_DOMAIN_PATTERNS = {
   marketing: /market/i,
   sales: /\b(sales|business development|telecall|telesales|field sales)\b/i,
   electrical: /electric/i,
-  data: /\b(data entry|data analyst|analyst|mis)\b/i,
+  // No bare 'analyst' — Business/Financial Analysts belong to the business/
+  // finance domains and must not inflate the data fresher tally.
+  data: /\b(data entry|data analyst|data operator|mis analyst|mis executive|mis)\b/i,
   hr: /\b(hr|recruiter|recruitment|talent acquisition)\b/i,
 }
 export function matchFresherDomain(text = '') {

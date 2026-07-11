@@ -252,6 +252,11 @@ test('[Audit-1] fresher-domain matcher', () => {
   assert.equal(matchFresherDomain('Telecaller for field sales'), 'sales')
   assert.equal(matchFresherDomain('HR Recruiter (Fresher)'), 'hr')
   assert.equal(matchFresherDomain('Backend Developer'), null)
+  // [Cx-17th] generic analysts must NOT land in the data fresher tally
+  assert.equal(matchFresherDomain('Data Analyst'), 'data')
+  assert.equal(matchFresherDomain('MIS Executive'), 'data')
+  assert.equal(matchFresherDomain('Business Analyst'), null)
+  assert.equal(matchFresherDomain('Financial Analyst'), null)
 })
 
 test('[Audit-9] gateBuckets: single population accessor filters errored + splits fresher', () => {
