@@ -2,7 +2,9 @@
  * Work Item G.3 — truncation detection in /api/evaluate-answer.
  *
  * Validates the retry-then-mark flow:
- *   1. First completion truncated → retry with maxTokens: 500.
+ *   1. First completion truncated → retry with maxTokens: 800
+ *      (was 500; raised 2026-07-11 to stay above the slot primary of 500
+ *      after the low-reasoning headroom bump).
  *   2. Retry OK → return evaluation with status='ok' (default, implicit).
  *   3. Retry also truncated → evaluation.status = 'truncated' so the
  *      downstream generate-feedback aggregation can flag/skip it.
@@ -193,7 +195,7 @@ describe('POST /api/evaluate-answer — G.3 truncation handling', () => {
     expect(mockCompletionStream).toHaveBeenCalledTimes(2)
     // Second call must include expanded maxTokens override
     const retryCall = mockCompletionStream.mock.calls[1][0] as { maxTokens?: number }
-    expect(retryCall.maxTokens).toBe(500)
+    expect(retryCall.maxTokens).toBe(800)
     // Evaluation reflects the retry's data, not the truncated first attempt
     expect(json.status).toBe('ok')
     expect(json.relevance).toBe(75)

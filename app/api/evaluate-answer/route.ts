@@ -384,7 +384,9 @@ ${dimensionSchema}${jdAlignmentSchema},
           taskSlot: 'interview.evaluate-answer',
           system: systemPrompt,
           messages: [{ role: 'user', content: userPrompt }],
-          maxTokens: 500,
+          // Must exceed the slot primary (500 since the 2026-07-11 low-
+          // reasoning headroom bump) or the retry re-truncates identically.
+          maxTokens: 800,
         })
         result = retry
       }

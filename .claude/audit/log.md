@@ -2146,3 +2146,10 @@ durable record; ids are best-effort pointers.
 - **Root-cause:** session-level family resolution ignored that academics warm-ups (Q0/Q1) are
 - **Tests-added: IdealAnswerComparisonCard.test.tsx -- academics Q0 warm-up -> behavioral**
 - **Verified-by:** npm run build clean; vitest feedback+learn 972 pass; tsc --noEmit clean;
+
+### 2026-07-11 11:39:46 +0530 · `6244a43` · Apurv
+- **Subject:** feat(models): cut all OpenAI task slots over from gpt-5.4-mini to gpt-5.6-luna
+- **Files:** 15 changed, 6 test file(s)
+- **Root-cause:** gpt-5.6-* rejects the custom temperature three conversational
+- **Tests-added: shared/__tests__/providers.test.ts (temperature dispatch**
+- **Verified-by:** full vitest suite 5,279 passed / 0 failed; production build

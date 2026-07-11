@@ -91,6 +91,7 @@ interface SlotConfig {
   maxTokens: number
   provider: string
   temperature?: number
+  reasoningEffort?: import('./providers/index').ReasoningEffort
   isActive: boolean
   useToonInput?: boolean
 }
@@ -295,7 +296,10 @@ function isValidSlotConfig(value: unknown): boolean {
     typeof s.model === 'string' &&
     typeof s.provider === 'string' &&
     typeof s.maxTokens === 'number' &&
-    typeof s.isActive === 'boolean'
+    typeof s.isActive === 'boolean' &&
+    // Optional field: absent in pre-2026-07-11 payloads (accepted — the
+    // slot just inherits the code default), string when present.
+    (s.reasoningEffort === undefined || typeof s.reasoningEffort === 'string')
   )
 }
 
@@ -719,6 +723,7 @@ export async function replaceModelConfigCache(doc: {
     fallbackProvider?: string
     maxTokens: number
     temperature?: number
+    reasoningEffort?: import('./providers/index').ReasoningEffort
     isActive: boolean
     useToonInput?: boolean
   }>
@@ -737,6 +742,7 @@ export async function replaceModelConfigCache(doc: {
         fallbackProvider: slot.fallbackProvider,
         maxTokens: slot.maxTokens,
         temperature: slot.temperature,
+        reasoningEffort: slot.reasoningEffort,
         isActive: slot.isActive,
         useToonInput: slot.useToonInput ?? false,
       })
@@ -823,6 +829,7 @@ export interface ResolvedModel {
   maxTokens: number
   provider: string
   temperature?: number
+  reasoningEffort?: import('./providers/index').ReasoningEffort
   fallbackModel?: string
   fallbackProvider?: string
   useToonInput: boolean
@@ -837,6 +844,7 @@ export async function resolveModel(taskSlot: TaskSlot): Promise<ResolvedModel> {
       model: defaults.model,
       maxTokens: defaults.maxTokens,
       provider: defaults.provider,
+      reasoningEffort: defaults.reasoningEffort,
       fallbackModel: defaults.fallbackModel,
       fallbackProvider: defaults.fallbackProvider,
       useToonInput: false,
@@ -850,6 +858,12 @@ export async function resolveModel(taskSlot: TaskSlot): Promise<ResolvedModel> {
       maxTokens: slotConfig.maxTokens,
       provider: slotConfig.provider,
       temperature: slotConfig.temperature,
+      // CMS row wins when it sets an effort; a row that leaves it unset
+      // inherits the code default so activating a slot for (say) a model
+      // swap doesn't silently strip the tier decision. The adapter drops
+      // the value for models that don't accept it, so a CMS re-route to
+      // gpt-4o/Claude is still safe.
+      reasoningEffort: slotConfig.reasoningEffort ?? defaults.reasoningEffort,
       fallbackModel: slotConfig.fallbackModel,
       fallbackProvider: slotConfig.fallbackProvider ?? 'anthropic',
       useToonInput: slotConfig.useToonInput ?? false,
@@ -860,6 +874,7 @@ export async function resolveModel(taskSlot: TaskSlot): Promise<ResolvedModel> {
     model: defaults.model,
     maxTokens: defaults.maxTokens,
     provider: defaults.provider,
+    reasoningEffort: defaults.reasoningEffort,
     fallbackModel: defaults.fallbackModel,
     fallbackProvider: defaults.fallbackProvider,
     useToonInput: false,
@@ -875,6 +890,7 @@ export interface CompletionOptions {
   contextData?: Record<string, unknown>
   maxTokens?: number
   temperature?: number
+  reasoningEffort?: import('./providers/index').ReasoningEffort
   responseFormat?: import('./providers/index').CompletionResponseFormat
 }
 
@@ -926,6 +942,7 @@ async function callProvider(
   maxTokens: number,
   temperature?: number,
   responseFormat?: import('./providers/index').CompletionResponseFormat,
+  reasoningEffort?: import('./providers/index').ReasoningEffort,
 ): Promise<{ text: string; inputTokens: number; outputTokens: number; truncated?: boolean }> {
   // Dynamic import to avoid pulling all provider SDKs into client bundles
   const { getProvider } = await import('./providers/index')
@@ -936,7 +953,7 @@ async function callProvider(
   if (!provider.isConfigured()) {
     throw new Error(`Provider "${providerName}" not configured (missing API key)`)
   }
-  return provider.complete({ model, system, messages, maxTokens, temperature, responseFormat })
+  return provider.complete({ model, system, messages, maxTokens, temperature, reasoningEffort, responseFormat })
 }
 
 /**
@@ -951,12 +968,13 @@ export async function completion(opts: CompletionOptions): Promise<CompletionRes
   const resolved = await resolveModel(opts.taskSlot)
   const maxTokens = opts.maxTokens ?? resolved.maxTokens
   const temperature = opts.temperature ?? resolved.temperature
+  const reasoningEffort = opts.reasoningEffort ?? resolved.reasoningEffort
   const system = typeof opts.system === 'string' ? opts.system : opts.system.map(b => b.text).join('\n\n')
   const messages = await prepareMessages(opts, resolved)
 
   // Attempt 1: primary model via configured provider
   try {
-    const result = await callProvider(resolved.provider, resolved.model, system, messages, maxTokens, temperature, opts.responseFormat)
+    const result = await callProvider(resolved.provider, resolved.model, system, messages, maxTokens, temperature, opts.responseFormat, reasoningEffort)
     return { ...result, model: resolved.model, provider: resolved.provider, usedFallback: false }
   } catch (primaryErr) {
     aiLogger.warn({ err: primaryErr, taskSlot: opts.taskSlot, model: resolved.model, provider: resolved.provider },
@@ -967,7 +985,7 @@ export async function completion(opts: CompletionOptions): Promise<CompletionRes
   if (resolved.fallbackModel) {
     const fbProvider = resolved.fallbackProvider ?? 'anthropic'
     try {
-      const result = await callProvider(fbProvider, resolved.fallbackModel, system, messages, maxTokens, temperature, opts.responseFormat)
+      const result = await callProvider(fbProvider, resolved.fallbackModel, system, messages, maxTokens, temperature, opts.responseFormat, reasoningEffort)
       return { ...result, model: resolved.fallbackModel, provider: fbProvider, usedFallback: true }
     } catch (fallbackErr) {
       aiLogger.warn({ err: fallbackErr, taskSlot: opts.taskSlot, fallbackModel: resolved.fallbackModel, fallbackProvider: fbProvider },
@@ -982,7 +1000,7 @@ export async function completion(opts: CompletionOptions): Promise<CompletionRes
     throw new Error(`ModelRouter: all attempts failed for ${opts.taskSlot}`)
   }
 
-  const result = await callProvider(defaultProvider, defaults.model, system, messages, opts.maxTokens ?? defaults.maxTokens, temperature, opts.responseFormat)
+  const result = await callProvider(defaultProvider, defaults.model, system, messages, opts.maxTokens ?? defaults.maxTokens, temperature, opts.responseFormat, opts.reasoningEffort ?? defaults.reasoningEffort)
   return { ...result, model: defaults.model, provider: defaultProvider, usedFallback: true }
 }
 
@@ -1036,9 +1054,10 @@ export async function* streamCompletion(
   const resolved = await resolveModel(opts.taskSlot)
   const maxTokens = opts.maxTokens ?? resolved.maxTokens
   const temperature = opts.temperature ?? resolved.temperature
+  const reasoningEffort = opts.reasoningEffort ?? resolved.reasoningEffort
   const system = typeof opts.system === 'string' ? opts.system : opts.system.map((b) => b.text).join('\n\n')
   const messages = await prepareMessages(opts, resolved)
-  const baseParams = { system, messages, maxTokens, temperature, responseFormat: opts.responseFormat }
+  const baseParams = { system, messages, maxTokens, temperature, reasoningEffort, responseFormat: opts.responseFormat }
 
   type Attempt = { provider: string; model: string }
   const attempts: Attempt[] = []

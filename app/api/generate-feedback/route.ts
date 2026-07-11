@@ -238,7 +238,10 @@ For EACH drill_recommendation, populate \`targetQuestions\` with the 0-based que
         // 2026-07-01: 5000 → 7000 — the question count rose to 30, so the
         // weak-question cap (10) now binds far more often, pushing the
         // enrichment payload near the old ceiling.
-        maxTokens: 7000,
+        // 2026-07-11: 7000 → 7800 — the feedback slot runs
+        // reasoningEffort:'high' on gpt-5.6-luna and reasoning tokens
+        // bill against max_completion_tokens; +800 keeps output headroom.
+        maxTokens: 7800,
         responseFormat: FEEDBACK_ENRICHMENT_RESPONSE_FORMAT,
       }),
       new Promise<never>((_, reject) => {
@@ -748,7 +751,9 @@ If no JD was supplied, set jd_match_score to null and jd_requirement_breakdown t
         // LARGER interview FEWER tokens (>=10 → 3600 < 4200). A 30-question report emits more
         // Q-referenced content (red_flags, per-Q strengths/weaknesses), so at 3600 the JSON truncated
         // → repair → degraded fallback. See INTERVIEW_FLOW.md §8 (2026-07-01).
-        maxTokens: evaluations.length >= 20 ? 6000 : evaluations.length >= 10 ? 4800 : 4200,
+        // 2026-07-11: +800 per band — the feedback slot runs reasoningEffort:'high'
+        // on gpt-5.6-luna; reasoning tokens bill against max_completion_tokens.
+        maxTokens: evaluations.length >= 20 ? 6800 : evaluations.length >= 10 ? 5600 : 5000,
         responseFormat: FEEDBACK_CORE_RESPONSE_FORMAT,
       })
 
@@ -805,7 +810,8 @@ You repair malformed interview feedback JSON. The output must match the supplied
           contextData: { evaluationScores: evaluationData },
           // Match the raised core cap — the repair only runs BECAUSE the core call truncated, so a flat
           // 3600 here would just truncate the same large payload again → degraded fallback (2026-07-01).
-          maxTokens: 6000,
+          // 2026-07-11: 6000 → 6800, tracking the core cap's high-reasoning headroom.
+          maxTokens: 6800,
           responseFormat: FEEDBACK_CORE_RESPONSE_FORMAT,
         })
 

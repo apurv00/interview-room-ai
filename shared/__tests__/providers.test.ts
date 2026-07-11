@@ -191,6 +191,61 @@ describe('OpenAI provider adapter', () => {
     expect(sentArgs.temperature).toBe(0.2)
   })
 
+  // ── reasoning_effort dispatch by model family ──
+  // Sent ONLY to the GPT-5.6 family, whose vocabulary
+  // (none/low/medium/high/xhigh) was verified live 2026-07-11 ('max' and
+  // GPT-5.0's 'minimal' are 400s). Other models — including gpt-5.4-mini
+  // and the o-series with their different vocabularies — get the param
+  // dropped so an unsupported value can never 400 a CMS-re-routed slot.
+
+  it.each([
+    ['none'],
+    ['low'],
+    ['medium'],
+    ['high'],
+    ['xhigh'],
+  ])('sends reasoning_effort=%s for gpt-5.6-luna', async (effort) => {
+    mockOpenAICreate.mockResolvedValue({
+      choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 5, completion_tokens: 5 },
+    })
+    const adapter = await getAdapter()
+    await adapter.complete({
+      ...baseParams,
+      model: 'gpt-5.6-luna',
+      reasoningEffort: effort as 'none' | 'low' | 'medium' | 'high' | 'xhigh',
+    })
+    const sentArgs = mockOpenAICreate.mock.calls[0][0]
+    expect(sentArgs.reasoning_effort).toBe(effort)
+  })
+
+  it.each([
+    ['gpt-5.4-mini'],
+    ['gpt-4o'],
+    ['o3-mini'],
+    ['gpt-3.5-turbo'],
+  ])('omits reasoning_effort for non-5.6 model %s', async (model) => {
+    mockOpenAICreate.mockResolvedValue({
+      choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 5, completion_tokens: 5 },
+    })
+    const adapter = await getAdapter()
+    await adapter.complete({ ...baseParams, model, reasoningEffort: 'high' })
+    const sentArgs = mockOpenAICreate.mock.calls[0][0]
+    expect(sentArgs.reasoning_effort).toBeUndefined()
+  })
+
+  it('omits reasoning_effort entirely when not set (default model behavior applies)', async () => {
+    mockOpenAICreate.mockResolvedValue({
+      choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 5, completion_tokens: 5 },
+    })
+    const adapter = await getAdapter()
+    await adapter.complete({ ...baseParams, model: 'gpt-5.6-luna' })
+    const sentArgs = mockOpenAICreate.mock.calls[0][0]
+    expect(sentArgs.reasoning_effort).toBeUndefined()
+  })
+
   it('sends strict json_schema response_format when requested', async () => {
     mockOpenAICreate.mockResolvedValue({
       choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }],

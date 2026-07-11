@@ -2084,3 +2084,22 @@ after deploy.
 **Lesson.** Unit tests mock the provider, so a new model family's parameter contract is invisible
 to CI. Any future default-model swap must re-run a live smoke against every request shape the
 adapter emits (plain / json_schema / json_object / streaming) BEFORE deploy.
+
+**Follow-up (same day) — per-slot `reasoning_effort` tiers.** GPT-5.6 supports `reasoning_effort`
+(none/low/medium/high/xhigh — verified live; 'max' and GPT-5.0's 'minimal' are 400s) and defaults to
+a dynamic medium. Decision: judgment slots run HIGH in code now (`generate-feedback`,
+`evaluation-engine-v2`, `fusion-analysis`, `evaluate-code`, `evaluate-design`); in-interview
+generation runs medium/low (`generate-question` medium, `evaluate-answer` low — 5s client abort);
+real-time conversational + streaming slots run NONE (`turn-router`, `answer-candidate-question`,
+`coach-notes`, `learn.drill-evaluate` — reasoning precedes the first output/stream token, so there
+it is pure dead air). If score telemetry shows drift, dial individual slots back to medium via a
+CMS ModelConfig row (`reasoningEffort` field added end-to-end: Zod → Mongoose → Redis cache →
+resolveModel → adapter) — no deploy needed; a CMS row that leaves the field unset inherits the code
+tier. Reasoning tokens bill against `max_completion_tokens`, so every effort-carrying slot got
+budget headroom (~3× measured spend), and the three explicit route caps moved with them:
+evaluate-answer retry 500→800, generate-question retry 500→1200, generate-feedback core
+4200/4800/6000→5000/5600/6800 + repair 6000→6800 + enrichment 7000→7800. The adapter sends
+`reasoning_effort` ONLY to `/^gpt-5\.6/` — other reasoning families use different vocabularies and
+would 400. Live-verified shapes: feedback-core high+json_schema@6800 (74 reasoning tokens, 4.2s),
+generate-question medium@800 (39 tokens, 1.8s), turn-router none@150 (0 tokens, 1.3s) — all
+finish=stop, valid JSON.

@@ -751,7 +751,9 @@ Return ONLY the question text. No preamble, no numbering, no quotation marks. Ju
           system: fullSystem,
           messages: [{ role: 'user', content: userPrompt }],
           contextData,
-          maxTokens: 500,
+          // Must exceed the slot primary (800 since the 2026-07-11 medium-
+          // reasoning headroom bump) or the retry re-truncates identically.
+          maxTokens: 1200,
         })
 
         trackUsage({

@@ -222,6 +222,68 @@ describe('resolveModel', () => {
     expect(result.maxTokens).toBe(777)
   })
 
+  // ── reasoningEffort resolution (2026-07-11 GPT-5.6 tiers) ──
+  // Defaults carry the per-slot tier; a CMS row that sets an effort wins;
+  // a CMS row that leaves it unset INHERITS the code default (activating
+  // a slot for a model swap must not silently strip the tier decision).
+
+  it('resolveModel carries reasoningEffort defaults per tier', async () => {
+    expect((await resolveModel('interview.generate-feedback')).reasoningEffort).toBe('high')
+    expect((await resolveModel('interview.evaluate-code')).reasoningEffort).toBe('high')
+    expect((await resolveModel('interview.generate-question')).reasoningEffort).toBe('medium')
+    expect((await resolveModel('interview.evaluate-answer')).reasoningEffort).toBe('low')
+    expect((await resolveModel('interview.turn-router')).reasoningEffort).toBe('none')
+    expect((await resolveModel('learn.drill-evaluate')).reasoningEffort).toBe('none')
+    // Anthropic-routed slots have no effort default — the field is absent.
+    expect((await resolveModel('resume.enhance-section')).reasoningEffort).toBeUndefined()
+  })
+
+  it('CMS slot reasoningEffort overrides the code default', async () => {
+    const cachedConfig = {
+      routingEnabled: true,
+      slotEntries: [
+        [
+          'interview.generate-feedback',
+          {
+            taskSlot: 'interview.generate-feedback',
+            model: 'gpt-5.6-luna',
+            provider: 'openai',
+            maxTokens: 7000,
+            reasoningEffort: 'medium',
+            isActive: true,
+          },
+        ],
+      ],
+    }
+    mockRedisMget.mockResolvedValueOnce([stampedPayload(cachedConfig, '1'), '1'])
+
+    const result = await resolveModel('interview.generate-feedback')
+    expect(result.reasoningEffort).toBe('medium')
+  })
+
+  it('CMS slot WITHOUT reasoningEffort inherits the code default', async () => {
+    const cachedConfig = {
+      routingEnabled: true,
+      slotEntries: [
+        [
+          'interview.generate-feedback',
+          {
+            taskSlot: 'interview.generate-feedback',
+            model: 'some-other-model',
+            provider: 'openai',
+            maxTokens: 7000,
+            isActive: true,
+          },
+        ],
+      ],
+    }
+    mockRedisMget.mockResolvedValueOnce([stampedPayload(cachedConfig, '1'), '1'])
+
+    const result = await resolveModel('interview.generate-feedback')
+    expect(result.model).toBe('some-other-model')
+    expect(result.reasoningEffort).toBe('high') // inherited from TASK_SLOT_DEFAULTS
+  })
+
   it('Redis L2 miss falls through to Mongo path (defaults when Mongo unavailable)', async () => {
     // Default MGET returns [null, null] (miss + no epoch yet). Mongo
     // require fails in tests → loadConfig catches → defaults apply.
@@ -625,7 +687,7 @@ describe('resolveModel', () => {
       expect(elapsed).toBeLessThan(900)
       expect(result.provider).toBe('openai')
       expect(result.model).toBe('gpt-5.6-luna')
-      expect(result.maxTokens).toBe(250)
+      expect(result.maxTokens).toBe(500)
     })
 
     it('cold resolveModel with L2 miss emits source=cold-defaults-synthetic telemetry', async () => {

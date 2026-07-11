@@ -8,12 +8,22 @@
 //   2. Import and register it in the providers array below
 //   That's it — no changes to modelRouter, types, or CMS needed.
 
+/**
+ * Reasoning-effort levels accepted by GPT-5.6-family models (verified live
+ * 2026-07-11: gpt-5.6-luna accepts exactly none/low/medium/high/xhigh —
+ * 'max' and the GPT-5.0-era 'minimal' are rejected with 400). Reasoning
+ * tokens are generated BEFORE the first output token and bill against
+ * max_completion_tokens, so slots that opt in need budget headroom.
+ */
+export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh'
+
 export interface CompletionParams {
   model: string
   system: string
   messages: Array<{ role: 'user' | 'assistant'; content: string }>
   maxTokens: number
   temperature?: number
+  reasoningEffort?: ReasoningEffort
   responseFormat?: CompletionResponseFormat
 }
 
