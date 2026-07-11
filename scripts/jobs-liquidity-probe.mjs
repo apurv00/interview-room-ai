@@ -163,10 +163,15 @@ export function classifyJob({ title = '', company = '', description = '', applyU
   if (/\b\d+\s*openings?\b/i.test(t)) drops.push('title-openings')
   const letters = t.replace(/[^a-zA-Z]/g, '')
   if (letters.length > 10 && letters.replace(/[^A-Z]/g, '').length / letters.length > 0.7) drops.push('title-caps')
-  // Body regexes run on TAG-STRIPPED text — apna/Unstop JDs carry HTML, and
-  // 'registration <b>fee</b>' must not split the phrase past FEE_FRAUD_RE
+  // Body regexes run on TAG-STRIPPED, ENTITY-DECODED text — apna/Unstop JDs
+  // carry HTML, and both 'registration <b>fee</b>' and
+  // 'registration&nbsp;fee' must reach FEE_FRAUD_RE as plain words
   // (Codex on #503). Same normalization jdLen uses, computed once.
-  const body = description.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+  const body = description
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&(nbsp|#160|#xa0);/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/\s+/g, ' ').trim()
   if (FEE_FRAUD_RE.test(body)) drops.push('fee-fraud')
   const hasNonRedirectApply = applyUrls.some(u => !isBlockedApplyUrl(u) && classifyApplyUrl(u) !== 'aggregator-redirect')
   if (CONTACT_SPAM_RE.test(body) && !hasNonRedirectApply) drops.push('contact-spam')
@@ -931,8 +936,11 @@ async function cmdIndia(sampleArg) {
   // A gate-grade india artifact requires BOTH sources: fewer than one full
   // Unstop page (15 items) — including HTTP-OK empty responses — means the
   // G5/G6 readout would be an apna-only probe (Codex on #503).
-  const invalidForGating = apnaShardLoss >= 0.25 || apnaDetailErr > 0.1 || (apna.sampled > 0 && apnaJsonLdRate < 0.7) || unstopPageErr >= 0.4 || unstop.sampled < 15 || !!unstop.shapeNote
-  if (invalidForGating) console.log(`\n!!! india sampling errored beyond gate tolerance (shard loss ${(apnaShardLoss * 100).toFixed(0)}%, detail errors ${(apnaDetailErr * 100).toFixed(1)}%, JSON-LD hit rate ${(apnaJsonLdRate * 100).toFixed(1)}%, unstop page errors ${unstop.errors}/5) — artifact marked INVALID FOR GATING; re-run \`india\`.`)
+  // Per-item parse failures are coverage loss too — an all-malformed
+  // unstop run must not gate-grade on apna's health alone (Codex on #503).
+  const unstopItemErr = (unstop.itemErrors || 0) / Math.max(unstop.sampled, 1)
+  const invalidForGating = apnaShardLoss >= 0.25 || apnaDetailErr > 0.1 || (apna.sampled > 0 && apnaJsonLdRate < 0.7) || unstopPageErr >= 0.4 || unstop.sampled < 15 || unstopItemErr > 0.1 || !!unstop.shapeNote
+  if (invalidForGating) console.log(`\n!!! india sampling errored beyond gate tolerance (shard loss ${(apnaShardLoss * 100).toFixed(0)}%, detail errors ${(apnaDetailErr * 100).toFixed(1)}%, JSON-LD hit rate ${(apnaJsonLdRate * 100).toFixed(1)}%, unstop page errors ${unstop.errors}/5, unstop item errors ${(unstopItemErr * 100).toFixed(1)}%) — artifact marked INVALID FOR GATING; re-run \`india\`.`)
   fs.mkdirSync(DATA_DIR, { recursive: true })
   const file = path.join(DATA_DIR, `india-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
   // subSpecSample records what was ACTUALLY sampled, not what was requested —

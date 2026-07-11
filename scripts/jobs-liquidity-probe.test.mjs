@@ -220,6 +220,11 @@ test('[Audit-13] spaced phones hit contact-spam; salary-range titles stay undrop
   // [Cx-27th] HTML markup must not split hard-drop phrases
   const htmlFee = classifyJob({ title: 'Dev', company: 'X', description: 'Pay registration <b>fee</b> of Rs 500 to apply', applyUrls: [] })
   assert.ok(htmlFee.drops.includes('fee-fraud'))
+  // [Cx-36th] entity-encoded whitespace must not split them either
+  const nbspFee = classifyJob({ title: 'Dev', company: 'X', description: 'registration&nbsp;fee of Rs 500', applyUrls: [] })
+  assert.ok(nbspFee.drops.includes('fee-fraud'))
+  const nbspPay = classifyJob({ title: 'Dev', company: 'X', description: 'Pay&nbsp;500&nbsp;before&nbsp;joining', applyUrls: [] })
+  assert.ok(nbspPay.drops.includes('fee-fraud'))
   const htmlSpam = classifyJob({ title: 'Telecaller', company: 'X', description: 'Call <strong>HR</strong> on <b>9876543210</b> now', applyUrls: [] })
   assert.ok(htmlSpam.drops.includes('contact-spam'))
 })
