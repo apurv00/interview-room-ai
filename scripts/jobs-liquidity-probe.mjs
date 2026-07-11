@@ -577,13 +577,22 @@ function cmdFresh(fileA, fileB) {
     if (!a) { skipped.unpaired++; continue }
     if (a.capped || b.capped) { skipped.capped++; continue } // sampling churn ≠ freshness
     const aFps = new Set(a.fingerprints.map(f => f.fp))
-    // Fresh = absent from A AND (no postedAt claim OR posted after A ran).
-    const fresh = b.fingerprints.filter(f => !aFps.has(f.fp) && (!f.postedAt || new Date(f.postedAt).getTime() > aRan)).length
-    perBucket.push({ bucket: b.bucket, freshPerWeek: (fresh / rawGapDays) * 7 })
+    // Fresh REQUIRES a valid postedAt after A ran — undated rows are
+    // non-comparable (sampling churn would read as freshness, violating
+    // the bias-toward-FAIL posture; Codex on #503). Undated volume is
+    // counted so the conservative bias stays visible.
+    let fresh = 0, undated = 0
+    for (const f of b.fingerprints) {
+      if (aFps.has(f.fp)) continue
+      const t = f.postedAt ? new Date(f.postedAt).getTime() : NaN
+      if (Number.isNaN(t)) undated++
+      else if (t > aRan) fresh++
+    }
+    perBucket.push({ bucket: b.bucket, freshPerWeek: (fresh / rawGapDays) * 7, undated })
   }
   console.log(`=== G2 FRESHNESS (true gap ${rawGapDays.toFixed(2)}d; ${perBucket.length} comparable buckets; skipped: ${skipped.errored} errored, ${skipped.capped} page-capped, ${skipped.unpaired} unpaired) ===`)
   if (!perBucket.length) { console.log('G2: NOT EVALUABLE — no comparable bucket pairs'); process.exit(1) }
-  for (const p of perBucket) console.log(`  ${p.bucket.padEnd(28)} ~${p.freshPerWeek.toFixed(1)}/week`)
+  for (const p of perBucket) console.log(`  ${p.bucket.padEnd(28)} ~${p.freshPerWeek.toFixed(1)}/week${p.undated ? ` (+${p.undated} undated B-only, excluded as non-comparable)` : ''}`)
   const passing = perBucket.filter(p => p.freshPerWeek >= 10).length // unrounded comparison
   const share = passing / perBucket.length
   const verdict = share >= 0.7 ? 'PASS' : 'FAIL'
