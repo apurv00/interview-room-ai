@@ -338,23 +338,27 @@ function summarizeSnapshot(snap) {
     console.log(`\n(${errored.length}/${snap.buckets.length} bucket(s) errored — counted as ZERO usable: ${errored.map(b => `${b.bucket}[${b.error || b.httpStatus}]`).join(', ')})`)
     if (snap.invalidForGating) { console.log('!!! >10% of buckets errored — SNAPSHOT INVALID FOR GATING. Re-run `snapshot` before reading any gate.'); return }
   }
+  // "Errored buckets count as zero" applies to EVERY gate rollup — a
+  // partial bucket's pre-failure rows must not feed G3/G4/G5 either
+  // (Codex on #503: the header claimed zeroing that only `usable` did).
+  const valid = bs.filter(b => !isErroredBucket(b))
   const usable = bs.map(b => isErroredBucket(b) ? 0 : b.usable)
-  const totalRaw = bs.reduce((a, b) => a + b.raw, 0)
-  const totalUnique = bs.reduce((a, b) => a + b.uniqueNonDropped, 0)
-  const totalUsable = bs.reduce((a, b) => a + (isErroredBucket(b) ? 0 : b.usable), 0)
-  const totalFullJd = bs.reduce((a, b) => a + b.fullJd, 0)
+  const totalRaw = valid.reduce((a, b) => a + b.raw, 0)
+  const totalUnique = valid.reduce((a, b) => a + b.uniqueNonDropped, 0)
+  const totalUsable = valid.reduce((a, b) => a + b.usable, 0)
+  const totalFullJd = valid.reduce((a, b) => a + b.fullJd, 0)
   const tierUsable = {}, tierAll = {}
-  for (const b of bs) {
+  for (const b of valid) {
     for (const [t, n] of Object.entries(b.byTierUsable)) tierUsable[t] = (tierUsable[t] || 0) + n
     for (const [t, n] of Object.entries(b.byTierAll)) tierAll[t] = (tierAll[t] || 0) + n
   }
   const employerPlus = (tierUsable['direct-ats'] || 0) + (tierUsable['employer'] || 0)
   const tierUsableSum = Object.values(tierUsable).reduce((a, b) => a + b, 0)
-  const dupTotal = bs.reduce((a, b) => a + b.dupWithinBucket, 0)
-  const allFps = bs.filter(b => !isErroredBucket(b)).flatMap(b => b.fingerprints.map(f => f.fp))
+  const dupTotal = valid.reduce((a, b) => a + b.dupWithinBucket, 0)
+  const allFps = valid.flatMap(b => b.fingerprints.map(f => f.fp))
   const crossBucketDup = allFps.length ? ((1 - new Set(allFps).size / allFps.length) * 100).toFixed(1) : '0.0'
   const viaTotals = {}
-  for (const b of bs) for (const [v, n] of Object.entries(b.viaSites)) viaTotals[v] = (viaTotals[v] || 0) + n
+  for (const b of valid) for (const [v, n] of Object.entries(b.viaSites)) viaTotals[v] = (viaTotals[v] || 0) + n
   const topVia = Object.entries(viaTotals).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([v, n]) => `${v}=${n}`).join(' ')
 
   console.log('\n=== SNAPSHOT SUMMARY (week window ≈ weekly supply) ===')
@@ -416,6 +420,9 @@ function cmdFresh(fileA, fileB) {
 const EXPIRY_MARKERS = /no longer accepting applications|this job (is|has been) (closed|expired)|position (has been )?filled|job (has )?expired|vacancy (is )?closed/i
 async function cmdRot(file) {
   if (!file) { console.error('usage: rot <snapshot.json>'); process.exit(1) }
+  // Accept bare artifact filenames by resolving inside DATA_DIR — report's
+  // suggested command must be runnable from the repo root (Codex on #503).
+  if (!fs.existsSync(file) && fs.existsSync(path.join(DATA_DIR, file))) file = path.join(DATA_DIR, file)
   const snap = loadArtifact(file)
   if (snap.schemaVersion !== SCHEMA_VERSION) { console.error(`snapshot schemaVersion ${snap.schemaVersion || 1} != ${SCHEMA_VERSION} — re-run snapshot first`); process.exit(1) }
   // True stratification: stride-sample the BUCKET LIST first so all domains
@@ -633,7 +640,7 @@ function cmdReport() {
   if (rotFile && snapFile && snap) {
     const rot = loadArtifact(path.join(DATA_DIR, rotFile))
     // A rot artifact only speaks for the snapshot its links came from.
-    if (rot.snapshotFile !== snapFile) console.log(`\nG4 dead-link half: PENDING — latest rot (${rot.snapshotFile}) does not pair with latest snapshot (${snapFile}); run \`rot ${snapFile}\``)
+    if (rot.snapshotFile !== snapFile) console.log(`\nG4 dead-link half: PENDING — latest rot (${rot.snapshotFile}) does not pair with latest snapshot (${snapFile}); run \`node scripts/jobs-liquidity-probe.mjs rot ${path.join(DATA_DIR, snapFile)}\``)
     else if (rot.inconclusive || rot.deadPct === null) console.log(`\nG4 dead-link half: INCONCLUSIVE — ${rot.unverifiable}/${rot.checked} unverifiable (bot-blocks/timeouts); treat as unresolved`)
     else console.log(`\nG4 dead-link half: ${rot.deadPct}% of ${rot.dead + rot.alive} verifiable (gate <10%) — ${rotFile}`)
   } else console.log('\nG4 dead-link half: PENDING — run `rot <snapshot.json>` against the latest snapshot')
