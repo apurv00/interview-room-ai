@@ -368,3 +368,25 @@ test('[Rev-17] parseArgs: valued flags, bare flags, positionals', () => {
   assert.deepEqual(parseArgs(['A.json', 'B.json']), { flags: {}, positional: ['A.json', 'B.json'] })
   assert.deepEqual(parseArgs(['snap.json', '--no-fresher']), { flags: { 'no-fresher': true }, positional: ['snap.json'] })
 })
+
+// ── Codex round-37 regressions ──────────────────────────────────────────────
+
+test('[Cx-37th] jdLen is normalized: entity-padded stubs stay under the 400 floor', () => {
+  // 80 × 'hi&nbsp;' = 640 raw bytes but ~239 rendered chars — raw
+  // desc.length cleared the india full-JD/fingerprint floor on stubs.
+  const stub = classifyJob({ title: 'Dev', company: 'X', description: 'hi&nbsp;'.repeat(80), applyUrls: ['https://careers.x.com/1'] })
+  assert.ok(stub.jdLen < 400)
+  assert.ok(stub.flags.includes('short-jd'))
+})
+
+test('[Cx-37th] india overlap universe: core ∪ fresher JSearch fingerprints', () => {
+  const snap = { buckets: [
+    { bucket: 'a', fresher: false, httpStatus: 200, usable: 5, fingerprints: [{ fp: 'core-fp' }] },
+    { bucket: 'c', fresher: true, httpStatus: 200, usable: 3, fingerprints: [{ fp: 'fresher-fp' }] },
+  ] }
+  // Mirrors cmdReport's construction — a dup living only in a JSearch
+  // fresher bucket must count toward the india G5 overlap.
+  const union = new Set([...gateFingerprints(snap), ...gateFingerprints(snap, { fresher: true })])
+  assert.ok(union.has('core-fp'))
+  assert.ok(union.has('fresher-fp'))
+})

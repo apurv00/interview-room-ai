@@ -790,8 +790,6 @@ async function sampleApna(sampleN) {
         out.jsonldHits++
         const title = typeof jp.title === 'string' ? jp.title : ''
         const org = typeof jp.hiringOrganization?.name === 'string' ? jp.hiringOrganization.name : ''
-        const desc = String(jp.description || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
-        out.descLens.push(desc.length)
         const expired = jp.validThrough && new Date(jp.validThrough).getTime() < Date.now()
         if (expired) out.expired++
         if (isStaffingOrg(org)) out.consultancy++ // same predicate as the snapshot flag — no drift
@@ -807,18 +805,23 @@ async function sampleApna(sampleN) {
         // fingerprint gate. A row classifyJob would hard-drop (fee-fraud,
         // walk-in, phone-in-title...) must not mint an identity: G5 compares
         // only rows ingestion would store (Codex on #503).
-        const { drops } = classifyJob({ title, company: org, description: jp.description || '', applyUrls: [url], validThrough: jp.validThrough || null })
+        const { drops, jdLen } = classifyJob({ title, company: org, description: String(jp.description || ''), applyUrls: [url], validThrough: jp.validThrough || null })
+        // jdLen is the classifier's NORMALIZED length (tag-stripped AND
+        // entity-decoded) — raw desc.length counts '&nbsp;' as 6 chars, so
+        // an entity-padded stub could clear the 400 floor and mint a
+        // fingerprint (Codex on #503).
+        out.descLens.push(jdLen)
         const fd = matchFresherDomain(`${title} ${url}`)
         if (fd) {
           const t = out.fresherDomains[fd]
           t.matched++
-          if (desc.length >= 400) t.fullJd++
-          if (!drops.length && !expired && desc.length >= 400) t.postSpam++
+          if (jdLen >= 400) t.fullJd++
+          if (!drops.length && !expired && jdLen >= 400) t.postSpam++
         }
         const jl = Array.isArray(jp.jobLocation) ? jp.jobLocation[0] : jp.jobLocation
         const locality = jl?.address?.addressLocality || (cityMatch ? cityMatch[1] : '')
         const isRemote = [].concat(jp.jobLocationType ?? []).includes('TELECOMMUTE')
-        if (org && title && !expired && desc.length >= 400 && !drops.length && !/\bconfidential\b/i.test(org)) out.fingerprints.push(fingerprint(org, title, String(locality), isRemote))
+        if (org && title && !expired && jdLen >= 400 && !drops.length && !/\bconfidential\b/i.test(org)) out.fingerprints.push(fingerprint(org, title, String(locality), isRemote))
       } catch { out.errors++ }
       await sleep(350)
     }
@@ -850,10 +853,6 @@ async function sampleUnstop(pages = 5) {
           const title = typeof item.title === 'string' ? item.title : ''
           const rawOrg = item.organisation?.name ?? item.organisation?.title
           const org = typeof rawOrg === 'string' ? rawOrg : ''
-          const desc = String(item.details || item.description || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
-          // Every sampled item counts — skipping empty JDs made the
-          // distribution report only over rows that had text (apna parity).
-          out.descLens.push(desc.length)
           // §2 fresher measurement: matched × full-JD × post-spam per domain
           // The Unstop listing page is the apply path (platform-funnel) —
           // [] would false-fire contact-spam on legitimate listings.
@@ -863,22 +862,28 @@ async function sampleUnstop(pages = 5) {
           // would store. The classifier reads the SAME field fallback as
           // desc (details || description) — a JD living in `description`
           // must not bypass fee-fraud/contact-spam (Codex on #503).
-          const { drops } = classifyJob({ title, company: org, description: item.details || item.description || '', applyUrls: [pageUrl] })
+          const { drops, jdLen } = classifyJob({ title, company: org, description: String(item.details || item.description || ''), applyUrls: [pageUrl] })
+          // Every sampled item counts — skipping empty JDs made the
+          // distribution report only over rows that had text (apna parity).
+          // jdLen is the classifier's NORMALIZED length (tag-stripped and
+          // entity-decoded), not raw bytes — '&nbsp;'-padded stubs must not
+          // clear the 400 floor (Codex on #503).
+          out.descLens.push(jdLen)
           const fd = matchFresherDomain(title)
           if (fd) {
             const t = out.fresherDomains[fd]
             t.matched++
-            if (desc.length >= 400) t.fullJd++
+            if (jdLen >= 400) t.fullJd++
             // Ingest-usable only: live + full-JD + clears every hard drop —
             // closed or stub rows must not make fresher supply look viable.
-            if (!drops.length && live && desc.length >= 400) t.postSpam++
+            if (!drops.length && live && jdLen >= 400) t.postSpam++
           }
           const loc0 = Array.isArray(item.locations) && item.locations[0] ? item.locations[0] : null
           const loc = typeof loc0 === 'string' ? loc0 : (loc0?.city || loc0?.name || '')
           const isRemote = /remote|work from home/i.test(`${String(loc)} ${title}`)
           // FULL fingerprint parity with the ingestable corpus: live,
           // full-JD, hard-drop-clean, non-confidential rows only.
-          if (org && title && live && desc.length >= 400 && !drops.length && !/\bconfidential\b/i.test(org)) out.fingerprints.push(fingerprint(org, title, String(loc), isRemote))
+          if (org && title && live && jdLen >= 400 && !drops.length && !/\bconfidential\b/i.test(org)) out.fingerprints.push(fingerprint(org, title, String(loc), isRemote))
         } catch { out.itemErrors++ }
       }
     } catch (e) { out.errors++; out.shapeNote = String(e?.message || e) }
@@ -1092,7 +1097,12 @@ function cmdReport() {
       if (!snap) console.log('  G5 cross-source overlap: PENDING — needs a valid snapshot')
       else if (indiaFps.length === 0) console.log('  G5 cross-source overlap: PENDING — india artifact has no fingerprints (re-run `india` with the current probe)')
       else {
-        const snapFps = new Set(gateFingerprints(snap))
+        // India supply is fresher-skewed — the JSearch side of the overlap
+        // must include fresher buckets too, or a duplicate that only
+        // appears in a JSearch fresher variant counts as 0 overlap and
+        // understates G5 for exactly the segment india measures
+        // (Codex on #503).
+        const snapFps = new Set([...gateFingerprints(snap), ...gateFingerprints(snap, { fresher: true })])
         const overlap = indiaFps.filter(fp => snapFps.has(fp)).length
         // The india companion requires BOTH observed gates: G5 overlap
         // below 35% AND a non-zero ingest-usable fresher yield — an OK
