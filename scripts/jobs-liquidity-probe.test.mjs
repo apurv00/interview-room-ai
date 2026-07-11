@@ -9,6 +9,7 @@ import {
   companyKey, titleKey, locationKey, fingerprint,
   classifyJob, classifyApplyUrl, isBlockedApplyUrl, bestUsableTier,
   betterRepresentative, dedupKey, pickRotSample, median, isErroredBucket, parseArgs,
+  normalizeJSearchJob,
 } from './jobs-liquidity-probe.mjs'
 
 // ── normalization ───────────────────────────────────────────────────────────
@@ -124,6 +125,18 @@ test('[Cx-7th] betterRepresentative: not-dropped > full-JD > tier > length', () 
   assert.ok(betterRepresentative(mk({ tier: 'direct-ats' }), mk({ tier: 'platform-funnel' })))
   assert.ok(betterRepresentative(mk({ jdLen: 900 }), mk({ jdLen: 500 })))             // longer JD tiebreak
   assert.ok(!betterRepresentative(mk({ jdLen: 100 }), mk({ jdLen: 500 })))
+})
+
+test('[Cx-10th] JSearch expiration maps to validThrough and triggers the expired drop', () => {
+  const r = normalizeJSearchJob({
+    job_title: 'Dev', employer_name: 'Acme', job_city: 'Pune',
+    job_description: 'x', job_offer_expiration_datetime_utc: '2020-01-01T00:00:00Z',
+  })
+  assert.equal(r.validThrough, '2020-01-01T00:00:00Z')
+  const { drops } = classifyJob({ title: r.title, company: r.company, description: 'x '.repeat(300), applyUrls: ['https://careers.acme.com/1'], validThrough: r.validThrough })
+  assert.ok(drops.includes('valid-through-expired'))
+  // absent expiration -> null -> no drop
+  assert.equal(normalizeJSearchJob({ job_title: 'Dev', employer_name: 'Acme' }).validThrough, null)
 })
 
 test('[Cx-9th] confidential rows never merge and mint no identity (spec §4.2)', () => {

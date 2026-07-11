@@ -135,7 +135,7 @@ Resolution ladder: sourceKey hit → refresh; fingerprint hit → merge; fuzzy t
 
 **Mandatory amendments (must land before the first canonical `_id` is minted — retro-splitting after apply-tracking ships is a data-corruption migration):**
 1. **Never merge two open postings sharing `sourceId` with different `externalId`s** — mass recruiters (and Bosch's own 546) hold N simultaneous identical-title reqs per city; salt the fingerprint with refNumber/ordinal.
-2. **Exempt `confidentialCompany` rows from fingerprint and fuzzy merging entirely** — degenerate companyKey merges *different employers*.
+2. **Exempt `confidentialCompany` rows from fingerprint and fuzzy merging entirely** — degenerate companyKey merges *different employers*. **Index consequence (Codex on #503):** exempt rows store NO `fingerprint`, and a plain unique index permits only one missing-field document — the `{fingerprint}` index must therefore be a **partial unique** (`partialFilterExpression: { fingerprint: { $type: 'string' } }`) so unlimited confidential rows can coexist while real fingerprints stay unique.
 3. Evict provenance (cap 8) by `lastSeenAt` **preserving source diversity** — JSearch's rotating `job_id` must not churn out genuine cross-source entries.
 4. Order merge ops delete-before-insert (or transaction) — provenance moves can transiently violate the unique sourceKey index mid-`bulkWrite`.
 
@@ -143,7 +143,7 @@ Merge policy: canonical `applyUrl` = highest tier across all provenance options 
 
 ### 4.3 Storage budget + Atlas — **[AMENDED]**
 
-~4 KB/doc avg (base+keys ~1.2 KB, provenance ~0.7 KB, gzipped JD ~1.5 KB, amortized lazy `parsedJD` ~0.25 KB). Launch cap **25k canonical ≈ 125 MB incl. indexes**. Sub-caps tuned post-probe. Index budget (complete): `{fingerprint}` unique · `{'provenance.sourceKey'}` unique · `{companyKey, status}` · `{domain, locationKeys, status, postedAt:-1}` · `{purgeAt}` TTL. No text index.
+~4 KB/doc avg (base+keys ~1.2 KB, provenance ~0.7 KB, gzipped JD ~1.5 KB, amortized lazy `parsedJD` ~0.25 KB). Launch cap **25k canonical ≈ 125 MB incl. indexes**. Sub-caps tuned post-probe. Index budget (complete): `{fingerprint}` **partial unique** (`partialFilterExpression: { fingerprint: { $type: 'string' } }` — confidential rows carry no fingerprint by design; a plain unique index would reject the second one) · `{'provenance.sourceKey'}` unique · `{companyKey, status}` · `{domain, locationKeys, status, postedAt:-1}` · `{purgeAt}` TTL. No text index.
 
 Expiry: ATS missing 2 consecutive polls → closed(`board-poll-miss`); JSON-LD `validThrough` past → closed (and never ingested if already past); aggregator `lastSeenAt` > 14d → closed(`aged-out`); purge = closedAt + 7d via TTL. **User-referenced jobs never purge** — sweep strips `jdCompressed`, keeps slim identity + `parsedJD` (~1.5 KB) so apply-tracking keeps a stable `_id` forever.
 

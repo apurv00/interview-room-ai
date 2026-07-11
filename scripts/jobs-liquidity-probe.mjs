@@ -227,13 +227,16 @@ async function jsearch(query, { datePosted = 'week', page = 1 } = {}) {
   return { ok: true, status: res.status, jobs: body.data }
 }
 
-function normalizeJSearchJob(j) {
+export function normalizeJSearchJob(j) {
   const applyOptions = (j.apply_options || []).map(o => ({ url: o.apply_link, publisher: o.publisher, isDirect: !!o.is_direct }))
   if (j.job_apply_link && !applyOptions.some(o => o.url === j.job_apply_link)) applyOptions.push({ url: j.job_apply_link, publisher: j.job_publisher, isDirect: !!j.job_apply_is_direct })
   return {
     title: j.job_title || '', company: j.employer_name || '',
     city: j.job_city || j.job_state || '', isRemote: !!j.job_is_remote,
     description: j.job_description || '', postedAt: j.job_posted_at_datetime_utc || null,
+    // Expiration must reach the quality gate — dropping it let expired
+    // postings count as usable supply (Codex on #503).
+    validThrough: j.job_offer_expiration_datetime_utc || null,
     viaSite: (j.job_publisher || '').toLowerCase(), applyOptions,
   }
 }
@@ -282,7 +285,7 @@ async function runBucket(bucket) {
   const groups = new Map()
   for (const r of rows) {
     const urls = r.applyOptions.map(o => o.url).filter(Boolean)
-    const { drops, flags, jdLen } = classifyJob({ title: r.title, company: r.company, description: r.description, applyUrls: urls })
+    const { drops, flags, jdLen } = classifyJob({ title: r.title, company: r.company, description: r.description, applyUrls: urls, validThrough: r.validThrough })
     // Gate math (tier, usable, sample links) sees only non-blocklisted URLs;
     // classifyJob above saw the raw list (its blocklist drop needs it).
     const usableUrls = urls.filter(u => !isBlockedApplyUrl(u))
