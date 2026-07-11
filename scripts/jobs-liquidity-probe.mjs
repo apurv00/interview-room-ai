@@ -275,10 +275,18 @@ function median(arr) { const s = [...arr].sort((a, b) => a - b); return s.length
 function pct(n, d) { return d ? `${Math.round((n / d) * 100)}%` : '—' }
 
 function summarizeSnapshot(snap) {
+  // Codex P2 on #503 (3rd round): errored buckets must not silently shrink
+  // the gate population — a partial snapshot could pass on the surviving
+  // slice. They count as ZERO usable (conservative: biases toward FAIL),
+  // and >10% errored invalidates the snapshot for gating entirely.
   const errored = snap.buckets.filter(b => b.error)
-  const bs = snap.buckets.filter(b => !b.fresher && !b.error)
-  const fresherBs = snap.buckets.filter(b => b.fresher && !b.error)
-  if (errored.length) console.log(`\n(${errored.length} bucket(s) errored and are excluded from gates: ${errored.map(b => b.bucket).join(', ')})`)
+  const bs = snap.buckets.filter(b => !b.fresher)
+  const fresherBs = snap.buckets.filter(b => b.fresher)
+  snap.invalidForGating = errored.length / Math.max(snap.buckets.length, 1) > 0.1
+  if (errored.length) {
+    console.log(`\n(${errored.length}/${snap.buckets.length} bucket(s) errored — counted as ZERO usable: ${errored.map(b => b.bucket).join(', ')})`)
+    if (snap.invalidForGating) console.log('!!! >10% of buckets errored — SNAPSHOT INVALID FOR GATING. Re-run `snapshot` before reading any gate.')
+  }
   const usable = bs.map(b => b.usable)
   const totalRaw = bs.reduce((a, b) => a + b.raw, 0)
   const totalUsable = bs.reduce((a, b) => a + b.usable, 0)
@@ -343,7 +351,14 @@ async function cmdRot(file) {
     try { const res = await get(u, { timeoutMs: 12000, retries: 0 }); if (res.status >= 400) dead++ } catch { dead++ }
     await sleep(400)
   }
-  console.log(`G4 dead-link rate: ${pct(dead, urls.length)} (gate: <10%)`)
+  // Codex P2 on #503 (3rd round): persist the result — `report` evaluates
+  // saved artifacts only, so an unsaved rot run would let the gate report
+  // omit the <10% dead-link requirement entirely.
+  const result = { ranAt: new Date().toISOString(), snapshotFile: path.basename(file), checked: urls.length, dead, deadPct: urls.length ? Math.round((dead / urls.length) * 100) : 0 }
+  fs.mkdirSync(DATA_DIR, { recursive: true })
+  const outFile = path.join(DATA_DIR, `rot-${result.ranAt.replace(/[:.]/g, '-')}.json`)
+  fs.writeFileSync(outFile, JSON.stringify(result, null, 2))
+  console.log(`G4 dead-link rate: ${result.deadPct}% of ${result.checked} (gate: <10%) — saved: ${outFile}`)
 }
 
 // ---------------------------------------------------------------------------
@@ -470,6 +485,7 @@ function cmdReport() {
   const latest = prefix => files.filter(f => f.startsWith(prefix)).sort().pop()
   const snapFile = latest('snapshot-')
   const indiaFile = latest('india-')
+  const rotFile = latest('rot-')
   console.log('=== GATE REPORT (from latest saved artifacts) ===')
   let snap = null
   if (snapFile) { snap = JSON.parse(fs.readFileSync(path.join(DATA_DIR, snapFile), 'utf8')); console.log(`\nJSearch snapshot: ${snapFile}`); summarizeSnapshot(snap) }
@@ -486,6 +502,10 @@ function cmdReport() {
       console.log(`  G5 cross-source overlap (india sample ∩ JSearch snapshot): ${overlap}/${indiaFps.length} — LOWER BOUND from a small sample; combine with the cross-bucket rate above; full cross-source G5 lands with corpus-scale ingestion telemetry`)
     }
   } else console.log('\nIndia sampling: PENDING — run `india`')
+  if (rotFile) {
+    const rot = JSON.parse(fs.readFileSync(path.join(DATA_DIR, rotFile), 'utf8'))
+    console.log(`\nG4 dead-link half: ${rot.deadPct}% of ${rot.checked} sampled (gate <10%) — ${rotFile} (vs ${rot.snapshotFile})`)
+  } else console.log('\nG4 dead-link half: PENDING — run `rot <snapshot.json>`')
   console.log('\nG2 (freshness): run `snapshot` twice >=24h apart, then `fresh <A> <B>`')
 }
 
