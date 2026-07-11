@@ -113,7 +113,7 @@ describe('answer-candidate-question route', () => {
       }),
       inputTokens: 10,
       outputTokens: 12,
-      model: 'gpt-5.4-mini',
+      model: 'gpt-5.6-luna',
       provider: 'openai',
       usedFallback: false,
     })
@@ -167,7 +167,7 @@ describe('answer-candidate-question route', () => {
       }),
       inputTokens: 20,
       outputTokens: 10,
-      model: 'gpt-5.4-mini',
+      model: 'gpt-5.6-luna',
       provider: 'openai',
       usedFallback: false,
     })
@@ -192,7 +192,7 @@ describe('answer-candidate-question route', () => {
       }),
       inputTokens: 20,
       outputTokens: 10,
-      model: 'gpt-5.4-mini',
+      model: 'gpt-5.6-luna',
       provider: 'openai',
       usedFallback: false,
     })
@@ -216,7 +216,7 @@ describe('answer-candidate-question route', () => {
       }),
       inputTokens: 10,
       outputTokens: 10,
-      model: 'gpt-5.4-mini',
+      model: 'gpt-5.6-luna',
       provider: 'openai',
       usedFallback: false,
     })
@@ -237,7 +237,7 @@ describe('answer-candidate-question route', () => {
       text: 'not json',
       inputTokens: 10,
       outputTokens: 10,
-      model: 'gpt-5.4-mini',
+      model: 'gpt-5.6-luna',
       provider: 'openai',
       usedFallback: false,
     })

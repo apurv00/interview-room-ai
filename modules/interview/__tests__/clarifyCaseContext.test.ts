@@ -123,7 +123,7 @@ describe('clarify-case-context route', () => {
       }),
       inputTokens: 20,
       outputTokens: 18,
-      model: 'gpt-5.4-mini',
+      model: 'gpt-5.6-luna',
       provider: 'openai',
       usedFallback: false,
     })
@@ -150,7 +150,7 @@ describe('clarify-case-context route', () => {
       }),
       inputTokens: 20,
       outputTokens: 10,
-      model: 'gpt-5.4-mini',
+      model: 'gpt-5.6-luna',
       provider: 'openai',
       usedFallback: false,
     })
@@ -181,7 +181,7 @@ describe('clarify-case-context route', () => {
       }),
       inputTokens: 20,
       outputTokens: 10,
-      model: 'gpt-5.4-mini',
+      model: 'gpt-5.6-luna',
       provider: 'openai',
       usedFallback: false,
     })
@@ -232,7 +232,7 @@ describe('clarify-case-context route', () => {
       text: 'not json',
       inputTokens: 20,
       outputTokens: 10,
-      model: 'gpt-5.4-mini',
+      model: 'gpt-5.6-luna',
       provider: 'openai',
       usedFallback: false,
     })

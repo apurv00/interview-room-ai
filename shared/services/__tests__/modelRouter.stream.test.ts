@@ -405,14 +405,14 @@ describe('streamCompletion — firstTextByteSeen fallback guard', () => {
   })
 
   it('dedupes the chain when primary equals the hardcoded default (Codex P2 on PR #390)', async () => {
-    // learn.drill-evaluate default is now openai/gpt-5.4-mini. If CMS
-    // also routes it to openai/gpt-5.4-mini with a fallback, the prior
+    // learn.drill-evaluate default is now openai/gpt-5.6-luna. If CMS
+    // also routes it to openai/gpt-5.6-luna with a fallback, the prior
     // chain-builder produced [openai, fallback, openai] because it
     // only compared the default against the LAST attempt. That third
     // attempt is a wasted retry of the already-failed primary.
     await injectSlotConfig({
       primaryProvider: 'openai',
-      primaryModel: 'gpt-5.4-mini',
+      primaryModel: 'gpt-5.6-luna',
       fallbackProvider: 'fake-fb',
       fallbackModel: 'fb-m',
     })
@@ -438,8 +438,8 @@ describe('streamCompletion — firstTextByteSeen fallback guard', () => {
       caught = e
     }
     expect(caught).toBeInstanceOf(Error)
-    // Exactly 2 attempts: [openai/gpt-5.4-mini, fake-fb/fb-m].
-    // The hardcoded default (openai/gpt-5.4-mini) is dropped because
+    // Exactly 2 attempts: [openai/gpt-5.6-luna, fake-fb/fb-m].
+    // The hardcoded default (openai/gpt-5.6-luna) is dropped because
     // it duplicates the primary.
     expect(mockGetProvider).toHaveBeenCalledTimes(2)
   })
@@ -453,7 +453,7 @@ describe('streamCompletion — firstTextByteSeen fallback guard', () => {
       primaryProvider: 'fake-primary',
       primaryModel: 'm-1',
       fallbackProvider: 'openai',
-      fallbackModel: 'gpt-5.4-mini', // matches learn.drill-evaluate default
+      fallbackModel: 'gpt-5.6-luna', // matches learn.drill-evaluate default
     })
 
     const err = new Error('all down')
@@ -475,7 +475,7 @@ describe('streamCompletion — firstTextByteSeen fallback guard', () => {
     } catch {
       // expected
     }
-    // 2 attempts: [fake-primary/m-1, openai/gpt-5.4-mini].
+    // 2 attempts: [fake-primary/m-1, openai/gpt-5.6-luna].
     expect(mockGetProvider).toHaveBeenCalledTimes(2)
   })
 

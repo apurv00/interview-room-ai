@@ -2048,3 +2048,39 @@ per topic, and the OLD shared counter is shown shrinking (9 → 5 at 10 min with
 regression guard. Full suite green (3335 tests, tsc clean). PENDING prod E2E (auth is prod-only): one
 full 10-min self-interview answering fast — confirm it now reaches ~9 main questions, and one answering
 slowly — confirm the timer still wraps it cleanly.
+
+### 2026-07-11 · Model cutover gpt-5.4-mini → gpt-5.6-luna: the whole GPT-5.6 family rejects custom temperature
+
+**Context.** All 15 OpenAI-routed task slots (conversational path, feedback, coding/design evals,
+learn.drill-evaluate) cut over from `gpt-5.4-mini` to `gpt-5.6-luna` (released 2026-07-09; $1/$6 per
+1M tokens vs $0.30/$1.20 — roughly 3-5× cost per token) by changing `TASK_SLOT_DEFAULTS`. Prod has
+NO ModelConfig document (verified read-only against Atlas), so the code defaults ARE the live
+routing table — the swap takes effect on deploy with no CMS action.
+
+**Failure mode caught pre-deploy (live smoke test, not theory).** A bare model-id swap 400s every
+conversational call: the GPT-5.6 API locks `temperature` to the default (1) — verified live against
+all three tiers (sol/terra/luna) — and `turn-router` (temperature: 0), `clarify-case-context` (0.2),
+and `answer-candidate-question` (0.2) all pass explicit temperature → `400 unsupported_value` on
+EVERY call. Turn-router fails open to 'advance', so the visible symptom would have been "probes
+never happen + silent 400s in logs", not a crash. gpt-5.4-mini accepted custom temperature, and the
+test suite mocks the OpenAI client, so nothing in CI could catch this.
+
+**Fix (adapter, not call sites).** `shared/services/providers/openai.ts` adds
+`TEMPERATURE_LOCKED_MODEL_RE = /^(gpt-5\.6|o[1-4])/` mirroring the existing
+`max_completion_tokens` model-family dispatch: `temperature` is omitted for locked models (the
+server-side default 1 applies) and passed through for models that accept it. Call sites keep
+expressing intent, so a CMS re-route to a temperature-capable model regains the setting. This also
+fixes the latent o-series variant of the same bug.
+
+**Verification.** Live smoke against the real API with the exact request shapes the adapter emits:
+plain completion (no temperature), strict `json_schema` (generate-feedback shape), streaming with
+`stream_options.include_usage` (drill-evaluate shape), `json_object` — all pass (first stream delta
+526 ms). New provider tests pin the dispatch matrix (5 locked / 4 pass-through models). Pricing
+entry added to `usageTracking.__PRICING` ($0.001/$0.006 per 1K) with the legacy key retained so
+pre-cutover UsageRecords and any stale CMS row stay correctly priced. Full vitest suite (5,279
+passed) + production build green. PENDING prod E2E (auth is prod-only): one full self-interview
+after deploy.
+
+**Lesson.** Unit tests mock the provider, so a new model family's parameter contract is invisible
+to CI. Any future default-model swap must re-run a live smoke against every request shape the
+adapter emits (plain / json_schema / json_object / streaming) BEFORE deploy.

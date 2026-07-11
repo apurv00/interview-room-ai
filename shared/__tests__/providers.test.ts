@@ -107,6 +107,7 @@ describe('OpenAI provider adapter', () => {
   // every call to gpt-5.4-mini in production.
 
   it.each([
+    ['gpt-5.6-luna'],
     ['gpt-5.4-mini'],
     ['gpt-5-nano'],
     ['gpt-5'],
@@ -146,6 +147,48 @@ describe('OpenAI provider adapter', () => {
     expect(sentArgs.model).toBe(model)
     expect(sentArgs.max_tokens).toBe(500)
     expect(sentArgs.max_completion_tokens).toBeUndefined()
+  })
+
+  // ── Temperature dispatch by model family ──
+  // GPT-5.6 (sol/terra/luna) and o-series models lock `temperature` to the
+  // default (1) — any other value returns 400 `unsupported_value` (verified
+  // live against all three 5.6 tiers, 2026-07-11). Earlier GPT-5.x models
+  // (gpt-5.4-mini) accept custom temperature. The adapter must omit the
+  // param for locked models or every conversational route (turn-router,
+  // clarify-case-context, answer-candidate-question — all pass temperature)
+  // 400s on every call.
+
+  it.each([
+    ['gpt-5.6-luna'],
+    ['gpt-5.6-terra'],
+    ['gpt-5.6-sol'],
+    ['o3-mini'],
+    ['o1-preview'],
+  ])('omits temperature for locked model %s', async (model) => {
+    mockOpenAICreate.mockResolvedValue({
+      choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 5, completion_tokens: 5 },
+    })
+    const adapter = await getAdapter()
+    await adapter.complete({ ...baseParams, model, temperature: 0.2 })
+    const sentArgs = mockOpenAICreate.mock.calls[0][0]
+    expect(sentArgs.temperature).toBeUndefined()
+  })
+
+  it.each([
+    ['gpt-5.4-mini'],
+    ['gpt-5-nano'],
+    ['gpt-4o'],
+    ['gpt-3.5-turbo'],
+  ])('passes temperature through for %s', async (model) => {
+    mockOpenAICreate.mockResolvedValue({
+      choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 5, completion_tokens: 5 },
+    })
+    const adapter = await getAdapter()
+    await adapter.complete({ ...baseParams, model, temperature: 0.2 })
+    const sentArgs = mockOpenAICreate.mock.calls[0][0]
+    expect(sentArgs.temperature).toBe(0.2)
   })
 
   it('sends strict json_schema response_format when requested', async () => {

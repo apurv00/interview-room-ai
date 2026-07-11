@@ -56,20 +56,20 @@ export const TASK_SLOT_DEFAULTS: Record<
     fallbackProvider?: string
   }
 > = {
-  'interview.generate-question':    { model: 'gpt-5.4-mini', maxTokens: 300, provider: 'openai' },
-  'interview.evaluate-answer':      { model: 'gpt-5.4-mini', maxTokens: 250, provider: 'openai' },
-  'interview.generate-feedback':    { model: 'gpt-5.4-mini', maxTokens: 6000, provider: 'openai' },
+  'interview.generate-question':    { model: 'gpt-5.6-luna', maxTokens: 300, provider: 'openai' },
+  'interview.evaluate-answer':      { model: 'gpt-5.6-luna', maxTokens: 250, provider: 'openai' },
+  'interview.generate-feedback':    { model: 'gpt-5.6-luna', maxTokens: 6000, provider: 'openai' },
   // maxTokens headroom sized for the grounded_followups fields: truncated JSON
   // here 502s the route and converts the MAIN submission eval into a 'failed'
   // row excluded from aggregation — the added output must never cause that.
-  'interview.evaluate-code':        { model: 'gpt-5.4-mini', maxTokens: 1400, provider: 'openai' },
-  'interview.evaluate-design':      { model: 'gpt-5.4-mini', maxTokens: 1800, provider: 'openai' },
-  'interview.clarify-coding':       { model: 'gpt-5.4-mini', maxTokens: 500, provider: 'openai' },
-  'interview.coding-problem-gen':   { model: 'gpt-5.4-mini', maxTokens: 2000, provider: 'openai' },
-  'interview.code-run':             { model: 'gpt-5.4-mini', maxTokens: 3000, provider: 'openai' },
-  'interview.coach-notes':          { model: 'gpt-5.4-mini', maxTokens: 500, provider: 'openai' },
-  'interview.jd-extract':           { model: 'gpt-5.4-mini', maxTokens: 2500, provider: 'openai' },
-  'interview.fusion-analysis':      { model: 'gpt-5.4-mini', maxTokens: 3000, provider: 'openai' },
+  'interview.evaluate-code':        { model: 'gpt-5.6-luna', maxTokens: 1400, provider: 'openai' },
+  'interview.evaluate-design':      { model: 'gpt-5.6-luna', maxTokens: 1800, provider: 'openai' },
+  'interview.clarify-coding':       { model: 'gpt-5.6-luna', maxTokens: 500, provider: 'openai' },
+  'interview.coding-problem-gen':   { model: 'gpt-5.6-luna', maxTokens: 2000, provider: 'openai' },
+  'interview.code-run':             { model: 'gpt-5.6-luna', maxTokens: 3000, provider: 'openai' },
+  'interview.coach-notes':          { model: 'gpt-5.6-luna', maxTokens: 500, provider: 'openai' },
+  'interview.jd-extract':           { model: 'gpt-5.6-luna', maxTokens: 2500, provider: 'openai' },
+  'interview.fusion-analysis':      { model: 'gpt-5.6-luna', maxTokens: 3000, provider: 'openai' },
   'resume.enhance-section':         { model: 'claude-sonnet-4-6', maxTokens: 1000, provider: 'anthropic' },
   'resume.enhance-bullets':         { model: 'claude-sonnet-4-6', maxTokens: 1000, provider: 'anthropic' },
   'resume.generate-full':           { model: 'claude-sonnet-4-6', maxTokens: 3000, provider: 'anthropic' },
@@ -97,11 +97,11 @@ export const TASK_SLOT_DEFAULTS: Record<
   // Default to OpenAI so the streaming path (provider.stream on openai
   // adapter) engages on merge with no operator action. Anthropic
   // fallback covers OpenAI outages; CMS can override either side.
-  'learn.drill-evaluate':           { model: 'gpt-5.4-mini', maxTokens: 1500, provider: 'openai', fallbackModel: 'claude-sonnet-4-6', fallbackProvider: 'anthropic' },
+  'learn.drill-evaluate':           { model: 'gpt-5.6-luna', maxTokens: 1500, provider: 'openai', fallbackModel: 'claude-sonnet-4-6', fallbackProvider: 'anthropic' },
   'b2b.scorecard':                  { model: 'claude-haiku-4-5', maxTokens: 1000, provider: 'anthropic' },
   'onboarding.extract-profile':     { model: 'claude-sonnet-4-6', maxTokens: 2000, provider: 'anthropic' },
-  'interview.evaluation-engine-v2': { model: 'gpt-5.4-mini', maxTokens: 2000, provider: 'openai' },
-  'interview.answer-candidate-question': { model: 'gpt-5.4-mini', maxTokens: 200, provider: 'openai' },
-  'interview.clarify-case-context':       { model: 'gpt-5.4-mini', maxTokens: 240, provider: 'openai' },
-  'interview.turn-router':               { model: 'gpt-5.4-mini', maxTokens: 150, provider: 'openai' },
+  'interview.evaluation-engine-v2': { model: 'gpt-5.6-luna', maxTokens: 2000, provider: 'openai' },
+  'interview.answer-candidate-question': { model: 'gpt-5.6-luna', maxTokens: 200, provider: 'openai' },
+  'interview.clarify-case-context':       { model: 'gpt-5.6-luna', maxTokens: 240, provider: 'openai' },
+  'interview.turn-router':               { model: 'gpt-5.6-luna', maxTokens: 150, provider: 'openai' },
 }

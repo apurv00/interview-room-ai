@@ -563,7 +563,7 @@ async function ensureConfig(): Promise<CachedConfig> {
   //   b) An L2 hit means Redis has the REAL CMS config — serving
   //      defaults instead would silently use the wrong model for any
   //      slot where CMS diverges from TASK_SLOT_DEFAULTS (e.g. after
-  //      an operator swaps gpt-5.4-mini for claude-sonnet-4-6 in the
+  //      an operator swaps gpt-5.6-luna for claude-sonnet-4-6 in the
   //      CMS admin, or toggles routingEnabled). The initial version of
   //      this refactor skipped L2 on the user thread entirely and
   //      always returned TASK_SLOT_DEFAULTS on any cache miss — Codex
