@@ -85,7 +85,8 @@ const LEGAL_SUFFIX_RE = /\b(pvt|private|ltd|limited|llp|inc|incorporated|corp|co
 const TITLE_STOPWORDS = new Set(['the', 'a', 'an', 'and', 'or', 'for', 'of', 'in', 'at', 'to', 'with'])
 const METRO_ALIASES = {
   gurgaon: 'delhi-ncr', gurugram: 'delhi-ncr', noida: 'delhi-ncr', 'greater noida': 'delhi-ncr',
-  'new delhi': 'delhi-ncr', delhi: 'delhi-ncr', ghaziabad: 'delhi-ncr', faridabad: 'delhi-ncr',
+  'new delhi': 'delhi-ncr', delhi: 'delhi-ncr', 'delhi ncr': 'delhi-ncr', ncr: 'delhi-ncr',
+  ghaziabad: 'delhi-ncr', faridabad: 'delhi-ncr',
   bangalore: 'bengaluru', bengaluru: 'bengaluru', 'bangalore urban': 'bengaluru',
   mumbai: 'mumbai', 'navi mumbai': 'mumbai', thane: 'mumbai',
   hyderabad: 'hyderabad', secunderabad: 'hyderabad',
@@ -101,8 +102,11 @@ export function titleKey(title = '') {
 }
 export function locationKey(city = '', isRemote = false) {
   if (isRemote) return 'remote-in'
-  const c = city.toLowerCase().trim()
-  return METRO_ALIASES[c] || c || 'unknown'
+  // Collapse separator spelling ("Delhi-NCR" / "Delhi NCR" / "delhi_ncr")
+  // BEFORE alias lookup — source-dependent spelling must not mint distinct
+  // fingerprints for the same metro (Codex on #503).
+  const c = city.toLowerCase().replace(/[-_/]+/g, ' ').replace(/\s+/g, ' ').trim()
+  return METRO_ALIASES[c] || (c ? c.replace(/ /g, '-') : 'unknown')
 }
 export function fingerprint(company, title, city, isRemote) {
   return crypto.createHash('sha256').update(`${companyKey(company)}|${titleKey(title)}|${locationKey(city, isRemote)}`).digest('hex').slice(0, 24)
@@ -603,7 +607,13 @@ function cmdReport() {
     snap = loadArtifact(path.join(DATA_DIR, snapFile))
     console.log(`\nJSearch snapshot: ${snapFile}`)
     if (snap.schemaVersion !== SCHEMA_VERSION) { console.log(`!!! snapshot is schemaVersion ${snap.schemaVersion || 1} (current ${SCHEMA_VERSION}) — STALE FORMAT, re-run \`snapshot\`; its gates are not evaluated`); snap = null }
-    else summarizeSnapshot(snap)
+    else {
+      summarizeSnapshot(snap)
+      // An invalid snapshot must not feed ANY downstream gate section
+      // (G5 overlap, rot pairing) — cmdFresh already refuses it; report
+      // must be equally strict (Codex on #503).
+      if (snap.invalidForGating) { console.log('(downstream gate sections skipped — snapshot is invalid for gating)'); snap = null }
+    }
   } else console.log('\nG1/G1f/G3/G4/G5/G6: PENDING — no JSearch snapshot yet (run `snapshot`)')
   if (indiaFile) {
     const india = loadArtifact(path.join(DATA_DIR, indiaFile))
@@ -620,7 +630,7 @@ function cmdReport() {
       console.log(`  G5 cross-source overlap (india ∩ JSearch): ${overlap}/${indiaFps.length} — LOWER BOUND from a small sample; full cross-source G5 lands with corpus-scale ingestion telemetry`)
     }
   } else console.log('\nIndia sampling: PENDING — run `india`')
-  if (rotFile && snapFile) {
+  if (rotFile && snapFile && snap) {
     const rot = loadArtifact(path.join(DATA_DIR, rotFile))
     // A rot artifact only speaks for the snapshot its links came from.
     if (rot.snapshotFile !== snapFile) console.log(`\nG4 dead-link half: PENDING — latest rot (${rot.snapshotFile}) does not pair with latest snapshot (${snapFile}); run \`rot ${snapFile}\``)
