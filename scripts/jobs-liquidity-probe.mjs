@@ -1082,13 +1082,16 @@ function cmdReport() {
       else {
         const snapFps = new Set(gateFingerprints(snap))
         const overlap = indiaFps.filter(fp => snapFps.has(fp)).length
-        // The OBSERVED overlap rate feeds the india companion status — an
-        // india sample already breaching the 35% G5 gate must not read OK
-        // (Codex on #503). Still a lower bound: a passing rate here does
-        // not prove G5, but a failing rate disproves it.
+        // The india companion requires BOTH observed gates: G5 overlap
+        // below 35% AND a non-zero ingest-usable fresher yield — an OK
+        // with zero fresher supply would let the final PASS ignore the
+        // segment measurement printed just above (Codex on #503). Passing
+        // rates remain lower bounds; failing rates disprove.
         const overlapRate = overlap / indiaFps.length
-        companions.india = overlapRate < 0.35 ? 'OK' : 'FAIL'
+        const totalFresherUsable = ['apna', 'unstop'].reduce((a, s) => a + Object.values(india[s].fresherDomains || {}).reduce((x, t) => x + (t.postSpam || 0), 0), 0)
+        companions.india = overlapRate >= 0.35 ? 'FAIL' : (totalFresherUsable === 0 ? 'FAIL' : 'OK')
         console.log(`  G5 cross-source overlap (india ∩ JSearch): ${overlap}/${indiaFps.length} (${(overlapRate * 100).toFixed(1)}% vs <35% gate) — LOWER BOUND from a small sample; full cross-source G5 lands with corpus-scale ingestion telemetry`)
+        console.log(`  G6 india fresher yield (ingest-usable rows across sources): ${totalFresherUsable}${totalFresherUsable === 0 ? ' — SEGMENT SUPPLY CHECK FAILED' : ''}`)
       }
     }
   } else console.log('\nIndia sampling: PENDING — run `india`')
@@ -1103,15 +1106,23 @@ function cmdReport() {
     else { companions.rot = rot.deadPct < 10 ? 'PASS' : 'FAIL'; console.log(`\nG4 dead-link half: ${rot.deadPct}% of ${rot.dead + rot.alive} verifiable (gate <10%) — ${rotFile}`) }
   } else if (snap) console.log(`\nG4 dead-link half: PENDING — run \`node scripts/jobs-liquidity-probe.mjs rot ${path.join(DATA_DIR, snapFile)}\``)
   else console.log('\nG4 dead-link half: PENDING — needs a valid snapshot first')
-  // G2 reads the persisted fresh artifact, paired to the latest snapshot
-  // (a fresh result whose B side isn't this snapshot is stale).
-  const freshFile = latest('fresh-')
-  if (freshFile && snap) {
-    const fr = loadArtifact(path.join(DATA_DIR, freshFile), 'fresh')
-    if (fr.schemaVersion !== SCHEMA_VERSION) console.log('\nG2 (freshness): PENDING — fresh artifact is stale-format; re-run `fresh`')
-    else if (fr.fileB !== snapFile) console.log(`\nG2 (freshness): PENDING — latest fresh result (B=${fr.fileB}) does not pair with the latest snapshot (${snapFile}); re-run \`fresh\``)
-    else { companions.g2 = fr.verdict; console.log(`\nG2 (freshness): ${fr.verdict} — ${fr.passing}/${fr.comparable} comparable buckets >=10 net-new/week (${fr.sharePct}%, gap ${fr.gapDays}d) — ${freshFile}`) }
-  } else console.log('\nG2 (freshness): PENDING — run `snapshot` twice >=24h apart (<=7d), then `fresh <A> <B>`')
+  // G2 walks fresh artifacts newest-first for the one PAIRING with the
+  // selected snapshot — a later unrelated fresh run must not shadow a
+  // complete gate run (same walk snapshots/india get; Codex on #503).
+  let freshPick = null
+  if (snap) {
+    for (const f of files.filter(x => x.startsWith('fresh-')).sort().reverse()) {
+      const fr = loadArtifact(path.join(DATA_DIR, f), 'fresh')
+      if (fr.schemaVersion !== SCHEMA_VERSION) continue
+      if (fr.fileB !== snapFile) continue
+      freshPick = { file: f, fr }; break
+    }
+  }
+  if (freshPick) {
+    const { file: freshFile, fr } = freshPick
+    companions.g2 = fr.verdict
+    console.log(`\nG2 (freshness): ${fr.verdict} — ${fr.passing}/${fr.comparable} comparable buckets >=10 net-new/week (${fr.sharePct}%, gap ${fr.gapDays}d) — ${freshFile}`)
+  } else console.log(`\nG2 (freshness): PENDING — no fresh artifact pairs with ${snapFile || 'a gate-grade snapshot'}; run \`snapshot\` twice >=24h apart (<=7d), then \`fresh <A> <B>\``)
   if (snap && snap.kind !== 'pilot') {
     const v = computeVerdict(snap)
     // Final verdict = corpus verdict gated by the companion results: any
