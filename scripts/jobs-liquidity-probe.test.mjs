@@ -94,7 +94,9 @@ test('hard drops: walk-in, phone-in-title, multirole, openings, caps, fee-fraud,
   assert.ok(d({ description: 'Pay Rs 500 before joining' }).includes('fee-fraud'))
   assert.ok(d({ description: 'Pay ₹500 for training kit' }).includes('fee-fraud'))
   assert.ok(d({ description: 'Pay 1,000 before joining' }).includes('fee-fraud'))
-  assert.ok(!d({ description: 'Competitive pay for training specialists' }).includes('fee-fraud')) // no amount, benign
+  // benign: 'paid after training' — no pay(ment)-for/before shape at all.
+  // NOTE: bare 'pay for training' DOES drop by design (classic scam copy).
+  assert.ok(!d({ description: 'Salary paid after training completion' }).includes('fee-fraud'))
   assert.ok(d({ company: '  ' }).includes('no-company'))
   assert.ok(d({ validThrough: '2020-01-01' }).includes('valid-through-expired'))
 })
