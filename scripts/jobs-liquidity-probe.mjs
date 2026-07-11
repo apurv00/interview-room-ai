@@ -802,7 +802,10 @@ async function sampleUnstop(pages = 5) {
         // Per-item isolation: one malformed item must not discard its page.
         try {
           out.sampled++
-          const live = !!(item.regn_open || item.status === 'LIVE') // regn_open is 1/0
+          // regn_open (1/0) is AUTHORITATIVE per INGESTION.md §6 — a closed
+          // registration with a leftover status:'LIVE' shell is NOT live;
+          // status is consulted only when regn_open is absent entirely.
+          const live = item.regn_open !== undefined && item.regn_open !== null ? !!item.regn_open : item.status === 'LIVE'
           if (live) out.regnOpen++
           const title = typeof item.title === 'string' ? item.title : ''
           const rawOrg = item.organisation?.name ?? item.organisation?.title
