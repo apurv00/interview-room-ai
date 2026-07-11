@@ -1,0 +1,104 @@
+# Jobs Feature — Design Decisions & Standing Rulings
+
+**Status:** Living document (v1.0, 2026-07-11). Companion to [INGESTION.md](./INGESTION.md) and [PRODUCT_FLOW.md](./PRODUCT_FLOW.md).
+**Provenance:** Seven multi-agent design workflows (2026-07-11), each ending in an adversarial critique pass; every load-bearing claim repo-verified or live-probed. This file is the institutional memory: how we got here, what is settled, what is still the founder's call.
+
+---
+
+## 1. How we got here (the design journey)
+
+1. **Trigger:** Tsenta (YC S26 auto-apply agent) prompted "can we do job discovery on InterviewPrepGuru?"
+2. **Strategic verdict:** don't clone auto-apply (crowded, ToS-hostile, off-brand). IPG's unique asset is *demonstrated interview performance*. Differentiator = **the join**: a job list ranked/enriched by longitudinal, evidence-backed readiness, with practicing visibly re-ranking the same job. (Final Round AI ships job matching; MockWin ships JD→mock; **nobody ships the join.** Employer-side validation: Mercor ~$10B, micro1 ~$300M ARR.)
+3. **Critical evaluation:** GO-with-changes. Key repo discoveries: paywall is a stub (limits 999999 with an active backfill; enforcement machinery live in `interviewService.ts:150-166` — fires the moment a real cap is set); Inngest not configured in prod; judge model cutover (gpt-5.6-luna) happened 2026-07-10/11 → score-epoch policy + transcript-replay harness needed.
+4. **Founder direction #1:** paywall is coming on its own track (approvals pending) — Jobs ships free-first; paywall adds Pro surfaces, never claws back.
+5. **Founder direction #2:** Phase 1 cannot assume interview history (readiness bands need ~3 sessions/domain) — cold-start must deliver value day one.
+6. **Founder direction #3:** paste-a-JD is already solved by the mock-interview flow — **the product is a personalized feed** ("bring jobs in"). Paste-a-JD demotes to tracker tail.
+7. **Founder direction #4:** resume-first personalization ("add your resume to find personalized jobs").
+8. **Founder direction #5:** breakdown = (1) job ingestion, (2) product flow (upload resume → build resume → Apply → prep → loop). Both now specced.
+9. **Audience measured** (read-only prod aggregates, 2026-07-11): ~76 users, India-heavy, **54% freshers**, **majority non-SWE** (marketing ~20%, sales, business, PM, electrical), profiles nearly empty (2/76 targetRole, 0/76 targetCompanies, 6/76 resumes), 35/76 have practiceStats. This reshaped supply (India-native sources) and onboarding (resume-first, wizard as primary door).
+
+---
+
+## 2. Standing rulings (settled — do not relitigate)
+
+1. **No auto-apply, ever.** Apply = best-fidelity link-out + tracking + outcome capture. Never price per-application. Also never: cover-letter generation, 50k-page scraping, salary estimation.
+2. **Zero hot-path edits.** The 9 hot-path files are never touched. Practice hand-off = `InterviewConfig` (with `jobDescription`) → localStorage → `/lobby` (precedent: `app/(learn)/learn/practice/page.tsx:87-94`; lobby JD-skip verified; generate-question's ~60% JD targeting activates free). Caveat: `InterviewConfigSchema` (validation surface shared with hot-path routes) needs one optional `attribution` field — full accountability process.
+3. **Readiness = confidence-banded practice-coverage. Bands, never percentages.** Claims about the user's preparation, never the employer's decision ("employer odds" is banned). Sub-band affordance ("evidence 1/3 toward unlocking Readiness on this job") so every session moves something visible. "Not ready" is banned copy; Apply is never disabled by a verdict.
+4. **Two-vocabulary fit honesty.** Unparsed jobs: "Looks relevant · title & location match." Fit bands only on parsed jobs. Reason chips name the profile field they came from. Never claim re-rank sharpening that didn't happen.
+5. **Cost discipline:** JD parse LAZY on first authenticated view (`interview.jd-extract`, ~$0.008, shared across users); the ~35s Sonnet `checkATS` never runs feed-wide or inline (detail-view / background one-shot only); no per-user×job fan-out, ever; rank on-request + cache.
+6. **GDPR completeness:** every new user-scoped model lands in BOTH `accountDeletion.ts` cascade and `dataExportService.ts` export + a completeness test (export already had a known gap — `SavedJobDescription`).
+7. **Day-1 instrumentation:** `{source:'jobs', jobId, applicationId}` attribution persisted to `InterviewSession` + outcome self-report — the calibration dataset is the only compounding moat and cannot be retrofitted.
+8. **Scoring preconditions** for any job-scoped readiness surface: (a) `time_up` taper exemption fix (Phase 1 — today a 15-min session gets tapered + Low-confidence + "ended early" flag, verified in `completionAdjustment.ts`); (b) per-answer→must-have attribution (~2–3d, fast-follow — `SessionSummary` writes only 4 universal dims and drops `jdAlignment`, verified).
+9. **Ingestion legal standard:** invited access only (official APIs, robots Allows, advertised sitemaps); never circumvent technical barriers (WAF/robots blocks); link out for apply; never republish JD verbatim; strip recruiter PII at normalize; `revoked` health state honors objections same-day.
+10. **Canonical identity guards** (before the first canonical `_id` is minted): never merge same-source/different-`externalId` open postings; exempt `confidentialCompany` from merging; provenance eviction preserves source diversity.
+11. **Infra:** Inngest is **already live-synced in prod** (verified 2026-07-11: 8 functions at `/api/inngest`, keep-mongo-warm run history predates today — CLAUDE.md's "not configured" note is stale). Consequence: all crons have been firing; the digest no-oped only because `RESEND_API_KEY` was missing, and the Resend go-live (2026-07-11) made the digest hard-disable PR a same-day deadline. Ingestion has NO inline fallback (no waiting user); Atlas shared tiers all cap at 500 connections (M2 = storage insurance only); sync concurrency ≤2; chunk budgets sized to Vercel Hobby 60s unless the plan check says otherwise.
+12. **Metrics honesty:** segment fresher vs professional, never blended averages; `apply_clicked` (machine fact) ≠ `applied` (user claim); kill thresholds set before launch.
+13. **Free-first launch posture:** free window = deliberate calibration-data acquisition; paywall (exogenous) adds Pro surfaces (tracked-jobs caps, readiness history), never claws back interviews users have normalized; COGS ceiling watched via feature flag.
+14. **No flip keys for unsafe behavior (founder ruling, 2026-07-11):** a guard protecting against known-unsafe behavior is a HARD-DISABLE in code, removed only by the PR that fixes the defect — never an env var or flag someone can flip early. Env vars are for credentials and config values (keys, URLs, numeric limits); ordinary kill-switch flags for *safe* features (e.g. `jobs_ingest` OFF-switch) remain fine. Origin: the email-digest guard on the Inngest enablement PR.
+
+---
+
+## 3. Verified repo facts the design leans on
+
+| Fact | Where |
+|---|---|
+| Practice hand-off precedent (localStorage → `/lobby`) | `app/(learn)/learn/practice/page.tsx:87-94` |
+| Lobby skips JD generation when `config.jobDescription` present; requireAuth gate + post-OAuth resume | `app/lobby/page.tsx:199-222, 435`; `/lobby` in middleware public block (`middleware.ts:151`) |
+| JD-grounded questions off plain `config.jobDescription` | `app/api/generate-question/route.ts:82-86` |
+| JD parser hard-filters `targetCompetencies` to the shared competency vocabulary (no crosswalk needed) | `jdParserService.ts:71-73` ∩ `competencyService.ts` |
+| Competency confidence = evidenceCount/10, 0.3 display floor (~3 sessions/domain per band) | `competencyService.ts:121,199` |
+| `SessionSummary.competencyScores` = 4 universal dims only, drops `jdAlignment` | `sessionSummaryService.ts:38` |
+| `time_up` taper gap (no endReason exemption) | `modules/interview/config/…/completionAdjustment.ts` |
+| Quota machinery live, caps 999999 everywhere + dev backfill resetting lower values | `modules/interview/services/core/interviewService.ts:124-166`; `stripe.ts:20,34,50`; `User.ts:378` |
+| `checkATS` ≈ 35s Sonnet per (resume, JD); Redis-cached by content hash | `modules/resume/services/atsCheckCache.ts:7-9,44-49` |
+| `MAX_RESUMES = 3`; updates bypass the cap | `modules/resume/services/resumeService.ts:6,111-119` |
+| Anonymous resume parse (authOptional, 10/IP/day, stateless) | `app/api/resume/parse/route.ts` |
+| `/api/documents/upload` auth-required (R2 storage) | `app/api/documents/upload/route.ts` |
+| `/api/onboarding/extract` NOT feed-grade (4 coarse fields, 4-value role enum, 4k truncation) | `app/api/onboarding/extract/route.ts` |
+| Tailor page is paste-only today (no `?jobId=` support) | `app/(resume)/resume/tailor/page.tsx` |
+| `SavedJobDescription` + `/api/interview/saved-jds` = dead surfaces (zero UI consumers) | verified by critique; cleanup scheduled in product-flow package 1 |
+| Deletion cascade + export are hand-maintained lists | `accountDeletion.ts:212-228`; `dataExportService.ts` |
+| `fetchWithRetry` returns boolean, discards body; `cachedFetch` is client-side | `shared/fetchWithRetry.ts` — ingestion needs new `fetchJSONWithRetry<T>` |
+| Inngest inline-fallback precedent + `isInngestConfigured()` | `app/api/analysis/start/route.ts:19` (ingestion deliberately does NOT copy the fallback) |
+| IP rate limiting wrong for India (Jio/Airtel CGNAT) | ruling: signed anon cookie primary, IP secondary |
+
+---
+
+## 4. Decisions — CONFIRMED BY FOUNDER 2026-07-11
+
+- **I-1 CONFIRMED:** JSearch **Pro $25/mo** at launch (Ultra $75 is the pre-approved ceiling if the probe shows page-depth need).
+- **I-2 CONFIRMED:** Atlas M0 → **M2 $9/mo** from the week ingestion turns on. Budget approved: ~$34/mo launch run-rate.
+- **I-3 CONFIRMED (default accepted):** govt-notification shelf deferred behind a flag.
+- **P-1 DIRECTION CONFIRMED (default accepted):** jobs-attributed sessions get a distinct allowance + honest degradation surfaces at every quota-adjacent moment; **final numbers decided with the paywall design** (blocks the paywall flip, not the launch). Seams wired in Phase 1.
+- **P-2 CONFIRMED:** **public anon feed, auth-gated job-detail body** (middle exposure).
+- **P-3 CONFIRMED (default accepted):** verdict rule 3 ships **flag-gated**.
+- **P-4 CONFIRMED (default accepted):** 35-day auto-ghost, reversible, rendered "No response."
+- **Score-epoch CONFIRMED:** **pin judgment models per scoring epoch + transcript-replay harness** re-baselines bands on each cutover (harness ~2–3d, scoped in Phase 0).
+- **Build start CONFIRMED:** pre-build gate first — liquidity probe + Inngest prod-enablement PR in parallel; ingestion module starts on probe PASS.
+- Outreach emails: drafted for founder review; nothing sent without explicit approval.
+
+---
+
+## 5. Pre-build gate (all zero/low-cost, before writing `modules/jobs` code)
+
+1. **Liquidity probe** (`scripts/jobs-liquidity-probe.mjs`, ~$25, 2.5 days) — gates G1–G6 + per-source JD-length distribution + consultancy share. THE build gate.
+2. ~~Inngest prod enablement PR~~ **RESOLVED 2026-07-11:** Inngest was already live-synced in prod. Replaced by: (a) digest hard-disable PR (branch `feat/inngest-prod-enablement-guard`, commit `c4f3ac9`) merged before the next 9AM UTC digest run; (b) runs-tab verification of `pathway/regenerate` + `analysis/requested` event functions (their histories reframe the "pathway stuck pending" diagnosis).
+3. **Vercel plan check** (2 min) — decides ingestion chunk budgets (60s vs 300s).
+4. **`db.stats()` storage baseline** — validates the Atlas math.
+5. **apna/Unstop ToS read in a browser + 30-min counsel skim.**
+6. **Partnership emails** to apna, Unstop, Internshala (grey → white; months of lead time; costs three messages).
+7. **Score-epoch decision + transcript-replay harness scoping** (post-cutover re-baseline needs it).
+
+---
+
+## 6. Cost & timeline summary (honest numbers)
+
+- **Ingestion bill:** ~$34–54/mo launch → ~$120–215/mo @1k MAU. Cost per fresh usable listing ≈ $0.001–0.005.
+- **LLM product spend:** lazy JD parse ~$8/mo launch; tailor/ATS on existing slots.
+- **Effort:** ingestion ~10d + feed UI ~19.5d + product flow ~27.5d ≈ **57 raw eng-days → 90–115 with the repo's measured 1.6–2.0× accountability overhead → ~4.5–6 months solo full-time**. Core loop closes at ~60% of that.
+- **60-day verdict numbers:** save→practice ≥30%; apply-clicked→confirmed ≥60% with absolute confirmed applies growing; interview_scheduled count with ≥half via the practice-inference channel.
+- **Kill rule:** 2+ kill thresholds breached at day 60 kills the *flywheel thesis*, not the tab — fall back to feed-as-utility, redirect roadmap to B2B.
+
+## 7. Deliberately not building
+
+Auto-apply (contradicts the anti-spray wedge; recruiter-hostile race to the bottom) · cover-letter generation · scraping breadth / 50k career pages (Tsenta's funded game) · salary estimation (trust arson) · browser extension & native mobile pre-PMF · kanban drag-drop · employer-odds displays · collaborative-filtering/ML feed (v1 personalization is legible and deterministic).
