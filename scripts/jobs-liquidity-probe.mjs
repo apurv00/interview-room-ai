@@ -448,7 +448,9 @@ async function cmdSnapshot({ pilot = false, fresher = true } = {}) {
   // Run-level pass BEFORE accounting: §4.5 mass-repost (same body under >3
   // companyKeys) applies across the whole snapshot; per-bucket gate stats
   // are minted only after it (within-run lower bound of the 7d Redis rule).
-  const { drop: massDrop, flag: repostFlag } = detectMassReposts(collected.flatMap(c => c.reps))
+  // Errored/partial buckets contribute ZERO here too — their reps must not
+  // trip the >3-companies drop against valid buckets (Codex on #503).
+  const { drop: massDrop, flag: repostFlag } = detectMassReposts(collected.filter(c => !isErroredBucket(c.stats)).flatMap(c => c.reps))
   const results = collected.map(c => accountBucket(c.stats, c.reps, massDrop, repostFlag))
   if (massDrop.size) console.log(`(mass-repost: ${massDrop.size} JD bodies span >3 companies — rows hard-dropped per §4.5; ${repostFlag.size} more bodies flagged 'repost')`)
   // invalidForGating is computed and PERSISTED before write — external
@@ -813,8 +815,10 @@ async function sampleUnstop(pages = 5) {
           const pageUrl = typeof item.public_url === 'string' && item.public_url.startsWith('http') ? item.public_url : 'https://unstop.com/jobs'
           // One classification per row — a row classifyJob would hard-drop
           // must not mint an identity: G5 compares only rows ingestion
-          // would store (Codex on #503).
-          const { drops } = classifyJob({ title, company: org, description: item.details || '', applyUrls: [pageUrl] })
+          // would store. The classifier reads the SAME field fallback as
+          // desc (details || description) — a JD living in `description`
+          // must not bypass fee-fraud/contact-spam (Codex on #503).
+          const { drops } = classifyJob({ title, company: org, description: item.details || item.description || '', applyUrls: [pageUrl] })
           const fd = matchFresherDomain(title)
           if (fd) {
             const t = out.fresherDomains[fd]
