@@ -9,11 +9,24 @@
 //   That's it — no changes to modelRouter, types, or CMS needed.
 
 /**
- * Reasoning-effort levels accepted by GPT-5.6-family models (verified live
- * 2026-07-11: gpt-5.6-luna accepts exactly none/low/medium/high/xhigh —
- * 'max' and the GPT-5.0-era 'minimal' are rejected with 400). Reasoning
- * tokens are generated BEFORE the first output token and bill against
- * max_completion_tokens, so slots that opt in need budget headroom.
+ * Reasoning-effort levels accepted by GPT-5.6-family models.
+ *
+ * Why 'max' is deliberately absent (Codex review on PR #500): OpenAI's
+ * Chat Completions REFERENCE lists 'max' in the parameter's generic enum,
+ * but the live API rejects it for EVERY GPT-5.6 tier — sol, terra, and
+ * luna each return 400 "Unsupported value: 'reasoning_effort' does not
+ * support 'max' with this model. Supported values are: 'none', 'low',
+ * 'medium', 'high', and 'xhigh'." (probed per-model 2026-07-11; the
+ * GPT-5.0-era 'minimal' is likewise rejected). Exposing 'max' in the CMS
+ * would let an admin configure a value that 400s every call on that slot,
+ * silently pushing it onto the fallback chain. If OpenAI enables 'max'
+ * for a model we route to: re-run the live probe, then widen this union,
+ * the Zod enum in modules/cms/validators/cms.ts, the Mongoose enum in
+ * shared/db/models/ModelConfig.ts, and REASONING_EFFORT_OPTIONS in
+ * app/(cms)/cms/model-config/page.tsx — all four reference this comment.
+ *
+ * Reasoning tokens are generated BEFORE the first output token and bill
+ * against max_completion_tokens, so slots that opt in need budget headroom.
  */
 export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh'
 

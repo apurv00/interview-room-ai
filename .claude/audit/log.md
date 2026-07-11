@@ -2153,3 +2153,10 @@ durable record; ids are best-effort pointers.
 - **Root-cause:** gpt-5.6-* rejects the custom temperature three conversational
 - **Tests-added: shared/__tests__/providers.test.ts (temperature dispatch**
 - **Verified-by:** full vitest suite 5,279 passed / 0 failed; production build
+
+### 2026-07-11 12:59:09 +0530 · `ead4d32` · Apurv
+- **Subject:** feat(models): per-slot reasoning_effort tiers for GPT-5.6 (judgment slots high)
+- **Files:** 18 changed, 6 test file(s)
+- **Root-cause:** n/a — feature wiring, not a bug fix. The one defect class it
+- **Tests-added: shared/__tests__/providers.test.ts (reasoning_effort**
+- **Verified-by:** full vitest suite 5,292 passed / 0 failed; production build

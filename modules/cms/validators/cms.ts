@@ -102,6 +102,9 @@ const ModelSlotSchema = z.object({
   fallbackProvider: z.string().max(50).optional(),
   maxTokens: z.number().int().min(100).max(16000),
   temperature: z.number().min(0).max(2).optional(),
+  // 'max' intentionally excluded — every GPT-5.6 tier 400s on it despite the
+  // OpenAI reference listing it; see the ReasoningEffort type in
+  // shared/services/providers/index.ts for the live evidence + widen steps.
   reasoningEffort: z.enum(['none', 'low', 'medium', 'high', 'xhigh']).optional(),
   isActive: z.boolean(),
   useToonInput: z.boolean().optional(),
