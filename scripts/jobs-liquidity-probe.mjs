@@ -404,6 +404,13 @@ export function dedupKey(cand, seq) {
  *  representative's fresh postedAt inflated G2). betterRepresentative still
  *  decides which row's drops/flags/meta speak for the group. */
 export function foldCandidates(a, b) {
+  // A hard-dropped copy must not donate its JD length or apply URLs — a
+  // clean stub + fee-fraud full-JD copy would otherwise fold into
+  // "clean + full-JD + good links" and count as supply ingestion would
+  // never store (Codex on #503). Mixed drop status: the clean candidate
+  // stands alone, untouched.
+  const aDropped = a.drops.length > 0, bDropped = b.drops.length > 0
+  if (aDropped !== bDropped) return aDropped ? { ...b } : { ...a }
   const rep = betterRepresentative(a, b) ? a : b
   const urls = [...new Set([...a.urls, ...b.urls])]
   const posted = [a.r.postedAt, b.r.postedAt].filter(Boolean).sort()[0] || null

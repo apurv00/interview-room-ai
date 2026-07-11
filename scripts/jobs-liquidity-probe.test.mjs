@@ -227,6 +227,14 @@ test('[Audit-4] foldCandidates: union urls -> best tier, earliest postedAt, max 
   assert.equal(m.jdLen, 900)                  // max
   assert.equal(m.r.postedAt, '2026-07-01T00:00:00Z') // earliest non-null (repost re-stamps must not inflate G2)
   assert.equal(m.urls.length, 2)
+  // [Cx-21st] a hard-dropped copy donates NOTHING: clean stub + fee-fraud
+  // full-JD copy folds to the clean stub exactly as it was
+  const cleanStub = { r: { postedAt: null, viaSite: '' }, urls: ['https://careers.acme.com/1'], drops: [], flags: [], jdLen: 100, tier: 'employer', fp: 'f2' }
+  const droppedFull = { r: { postedAt: '2026-07-01T00:00:00Z', viaSite: '' }, urls: ['https://boards.greenhouse.io/x/jobs/2'], drops: ['fee-fraud'], flags: [], jdLen: 900, tier: 'direct-ats', fp: 'f2' }
+  const folded = foldCandidates(cleanStub, droppedFull)
+  assert.equal(folded.jdLen, 100)
+  assert.deepEqual(folded.urls, ['https://careers.acme.com/1'])
+  assert.equal(folded.drops.length, 0)
 })
 
 test('[Audit-2] mass-repost: >3 companyKeys drops, 2-3 flags', () => {
