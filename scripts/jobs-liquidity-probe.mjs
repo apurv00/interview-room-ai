@@ -995,23 +995,27 @@ export function computeVerdict(snap) {
 function cmdReport() {
   const files = fs.existsSync(DATA_DIR) ? fs.readdirSync(DATA_DIR) : []
   const latest = prefix => files.filter(f => f.startsWith(prefix)).sort().pop()
-  const snapFile = latest('snapshot-')
   const indiaFile = latest('india-')
   const rotFile = latest('rot-')
   console.log('=== GATE REPORT (from latest saved artifacts) ===')
-  let snap = null
-  if (snapFile) {
-    snap = loadArtifact(path.join(DATA_DIR, snapFile))
+  // Gate-grade snapshot selection (same walk india artifacts get): the
+  // newest CURRENT-FORMAT, VALID snapshot WITH fresher coverage — a later
+  // core-only --no-fresher refresh must not shadow the full run and print
+  // a §6 verdict without the fresher variants §6 requires (Codex on #503).
+  let snap = null, snapFile = null
+  const snapSkipped = []
+  for (const f of files.filter(x => x.startsWith('snapshot-')).sort().reverse()) {
+    const art = loadArtifact(path.join(DATA_DIR, f))
+    if (art.schemaVersion !== SCHEMA_VERSION) { snapSkipped.push(`${f} (stale format)`); continue }
+    if (art.invalidForGating) { snapSkipped.push(`${f} (invalid for gating)`); continue }
+    if (!Array.isArray(art.buckets) || !art.buckets.some(b => b.fresher)) { snapSkipped.push(`${f} (core-only — no fresher buckets)`); continue }
+    snap = art; snapFile = f; break
+  }
+  if (snapSkipped.length) console.log(`\n(snapshots skipped for gating: ${snapSkipped.join(' · ')})`)
+  if (snap) {
     console.log(`\nJSearch snapshot: ${snapFile}`)
-    if (snap.schemaVersion !== SCHEMA_VERSION) { console.log(`!!! snapshot is schemaVersion ${snap.schemaVersion || 1} (current ${SCHEMA_VERSION}) — STALE FORMAT, re-run \`snapshot\`; its gates are not evaluated`); snap = null }
-    else {
-      summarizeSnapshot(snap)
-      // An invalid snapshot must not feed ANY downstream gate section
-      // (G5 overlap, rot pairing) — cmdFresh already refuses it; report
-      // must be equally strict (Codex on #503).
-      if (snap.invalidForGating) { console.log('(downstream gate sections skipped — snapshot is invalid for gating)'); snap = null }
-    }
-  } else console.log('\nG1/G1f/G3/G4/G5/G6: PENDING — no JSearch snapshot yet (run `snapshot`)')
+    summarizeSnapshot(snap)
+  } else console.log('\nG1/G1f/G3/G4/G5/G6: PENDING — no gate-grade snapshot (current-format, valid, WITH fresher buckets); run `snapshot`')
   // Gate-grade selection: walk india artifacts newest-first and use the
   // first that is current-format, valid, AND full-spec — a later smoke run
   // (--sample 20) must never shadow a gate-grade artifact (Codex on #503).
