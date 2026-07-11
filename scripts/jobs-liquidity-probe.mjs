@@ -511,7 +511,8 @@ function summarizeSnapshot(snap) {
 
   if (snap.kind === 'pilot') console.log('\nPILOT — classification sanity check only; gate thresholds are NOT evaluable from 12 buckets.')
   console.log('\n=== SNAPSHOT SUMMARY (week window ≈ weekly supply; core buckets only — fresher measured under G1f/G6) ===')
-  console.log(`buckets: ${bs.length} core (+${fresherBs.length} fresher)   raw: ${totalRaw}   unique-non-dropped: ${totalUnique}   usable: ${totalUsable}   page-capped buckets: ${capped.length}`)
+  const multiReq = valid.reduce((a, b) => a + (b.multiReqCollapsed || 0), 0)
+  console.log(`buckets: ${bs.length} core (+${fresherBs.length} fresher)   raw: ${totalRaw}   unique-non-dropped: ${totalUnique}   usable: ${totalUsable}   page-capped: ${capped.length}   multi-req collapsed: ${multiReq} (same employer/title/city, distinct source ids — G1 reads conservative; §4.2 amendment-1 salting is a pipeline requirement)`)
   console.log(`G1  median usable/bucket/week: ${median(usable)}   (gate: >=20)   buckets<20: ${usable.filter(u => u < 20).length}/${usable.length}`)
   if (fresherBs.length) {
     const fOk = fresherBs.filter(b => !isErroredBucket(b))
@@ -542,6 +543,7 @@ function loadArtifact(file, kind = 'snapshot') {
   if (kind === 'snapshot' && !Array.isArray(parsed.buckets)) { console.error(`${p} is not a snapshot artifact (no buckets array)`); process.exit(1) }
   if (kind === 'india' && !parsed.apna) { console.error(`${p} is not an india artifact (no apna section)`); process.exit(1) }
   if (kind === 'rot' && typeof parsed.checked !== 'number') { console.error(`${p} is not a rot artifact`); process.exit(1) }
+  if (kind === 'fresh' && typeof parsed.comparable !== 'number') { console.error(`${p} is not a fresh artifact`); process.exit(1) }
   return parsed
 }
 
@@ -579,7 +581,20 @@ function cmdFresh(fileA, fileB) {
   for (const p of perBucket) console.log(`  ${p.bucket.padEnd(28)} ~${p.freshPerWeek.toFixed(1)}/week`)
   const passing = perBucket.filter(p => p.freshPerWeek >= 10).length // unrounded comparison
   const share = passing / perBucket.length
-  console.log(`G2: ${passing}/${perBucket.length} buckets >=10 net-new/week (gate: >=70% of comparable buckets) -> ${share >= 0.7 ? 'PASS' : 'FAIL'} (${(share * 100).toFixed(1)}%)`)
+  const verdict = share >= 0.7 ? 'PASS' : 'FAIL'
+  console.log(`G2: ${passing}/${perBucket.length} buckets >=10 net-new/week (gate: >=70% of comparable buckets) -> ${verdict} (${(share * 100).toFixed(1)}%)`)
+  // Persist — report's saved gate verdict must be able to consume G2
+  // instead of eternally instructing the operator to run fresh again.
+  const result = {
+    schemaVersion: SCHEMA_VERSION, ranAt: new Date().toISOString(),
+    fileA: path.basename(resolveArtifact(fileA)), fileB: path.basename(resolveArtifact(fileB)),
+    gapDays: +rawGapDays.toFixed(2), comparable: perBucket.length, passing,
+    sharePct: +(share * 100).toFixed(1), verdict, skipped,
+  }
+  fs.mkdirSync(DATA_DIR, { recursive: true })
+  const outFile = path.join(DATA_DIR, `fresh-${result.ranAt.replace(/[:.]/g, '-')}.json`)
+  fs.writeFileSync(outFile, JSON.stringify(result, null, 2))
+  console.log(`Saved: ${outFile}`)
 }
 
 /** Breadth-first sampler: round N takes every bucket's Nth link before any
@@ -737,21 +752,25 @@ async function sampleApna(sampleN) {
         if (cityMatch) out.cities[cityMatch[1]] = (out.cities[cityMatch[1]] || 0) + 1
         // §2 fresher measurement: matched × full-JD × ingest-usable yield.
         // postSpam counts only rows that would actually enter the corpus:
-        // not expired, full-JD, and clearing every hard drop.
+        // not expired, full-JD, and clearing every hard drop. The platform
+        // detail page IS the apply path (tier platform-funnel) — passing []
+        // made contact-spam false-fire on legitimate platform listings
+        // whose JD mentions a recruiter phone (Codex on #503).
         const fd = matchFresherDomain(`${title} ${url}`)
         if (fd) {
           const t = out.fresherDomains[fd]
           t.matched++
           if (desc.length >= 400) t.fullJd++
-          const { drops } = classifyJob({ title, company: org, description: jp.description || '', applyUrls: [], validThrough: jp.validThrough || null })
+          const { drops } = classifyJob({ title, company: org, description: jp.description || '', applyUrls: [url], validThrough: jp.validThrough || null })
           if (!drops.length && !expired && desc.length >= 400) t.postSpam++
         }
-        // Fingerprint parity with the snapshot population: no confidential,
-        // no expired rows; remote detected from JSON-LD jobLocationType.
+        // FULL fingerprint parity with the ingestable corpus: no
+        // confidential, no expired, AND full-JD (>=400ch) — G5 overlap must
+        // compare only postings ingestion would actually store.
         const jl = Array.isArray(jp.jobLocation) ? jp.jobLocation[0] : jp.jobLocation
         const locality = jl?.address?.addressLocality || (cityMatch ? cityMatch[1] : '')
         const isRemote = [].concat(jp.jobLocationType ?? []).includes('TELECOMMUTE')
-        if (org && title && !expired && !/\bconfidential\b/i.test(org)) out.fingerprints.push(fingerprint(org, title, String(locality), isRemote))
+        if (org && title && !expired && desc.length >= 400 && !/\bconfidential\b/i.test(org)) out.fingerprints.push(fingerprint(org, title, String(locality), isRemote))
       } catch { out.errors++ }
       await sleep(350)
     }
@@ -783,12 +802,15 @@ async function sampleUnstop(pages = 5) {
           const desc = String(item.details || item.description || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
           if (desc) out.descLens.push(desc.length)
           // §2 fresher measurement: matched × full-JD × post-spam per domain
+          // The Unstop listing page is the apply path (platform-funnel) —
+          // [] would false-fire contact-spam on legitimate listings.
+          const pageUrl = typeof item.public_url === 'string' && item.public_url.startsWith('http') ? item.public_url : 'https://unstop.com/jobs'
           const fd = matchFresherDomain(title)
           if (fd) {
             const t = out.fresherDomains[fd]
             t.matched++
             if (desc.length >= 400) t.fullJd++
-            const { drops } = classifyJob({ title, company: org, description: item.details || '', applyUrls: [] })
+            const { drops } = classifyJob({ title, company: org, description: item.details || '', applyUrls: [pageUrl] })
             // Ingest-usable only: live + full-JD + clears every hard drop —
             // closed or stub rows must not make fresher supply look viable.
             if (!drops.length && live && desc.length >= 400) t.postSpam++
@@ -798,7 +820,7 @@ async function sampleUnstop(pages = 5) {
           const isRemote = /remote|work from home/i.test(`${String(loc)} ${title}`)
           // Fingerprint parity with the snapshot population: live,
           // non-confidential rows only.
-          if (org && title && live && !/\bconfidential\b/i.test(org)) out.fingerprints.push(fingerprint(org, title, String(loc), isRemote))
+          if (org && title && live && desc.length >= 400 && !/\bconfidential\b/i.test(org)) out.fingerprints.push(fingerprint(org, title, String(loc), isRemote))
         } catch { out.itemErrors++ }
       }
     } catch (e) { out.errors++; out.shapeNote = String(e?.message || e) }
@@ -880,7 +902,25 @@ export function computeVerdict(snap) {
   const byDomain = {}
   for (const b of coreAll) (byDomain[b.domain] ||= []).push(b)
   const domainMedians = Object.fromEntries(Object.entries(byDomain).map(([d, bs]) => [d, median(bs.map(usableOf))]))
-  const passingDomains = Object.entries(domainMedians).filter(([, m]) => m >= 20).map(([d]) => d)
+  // A PARTIAL verdict's launch scope must meet the QUALITY gates at domain
+  // level too — a domain with volume but poor full-JD or apply fidelity
+  // must not appear "safe to launch" (Codex on #503).
+  const domainQuality = {}
+  for (const [d, bs] of Object.entries(byDomain)) {
+    const validBs = bs.filter(b => !isErroredBucket(b))
+    const unique = validBs.reduce((a, b) => a + b.uniqueNonDropped, 0)
+    const fullJd = validBs.reduce((a, b) => a + b.fullJd, 0)
+    const tu = {}
+    for (const b of validBs) for (const [t, n] of Object.entries(b.byTierUsable)) tu[t] = (tu[t] || 0) + n
+    const us = Object.values(tu).reduce((a, b) => a + b, 0)
+    domainQuality[d] = {
+      fullJdRate: unique ? fullJd / unique : 0,
+      employerShare: us ? ((tu['direct-ats'] || 0) + (tu['employer'] || 0)) / us : 0,
+    }
+  }
+  const passingDomains = Object.entries(domainMedians)
+    .filter(([d, m]) => m >= 20 && domainQuality[d].fullJdRate >= 0.7 && domainQuality[d].employerShare >= 0.3)
+    .map(([d]) => d)
   const g1Median = median(coreAll.map(usableOf))
   const totalUnique = core.reduce((a, b) => a + b.uniqueNonDropped, 0)
   const totalFullJd = core.reduce((a, b) => a + b.fullJd, 0)
@@ -899,7 +939,7 @@ export function computeVerdict(snap) {
   const fresherByDomain = {}
   for (const b of snap.buckets.filter(x => x.fresher)) fresherByDomain[b.domain] = (fresherByDomain[b.domain] || 0) + usableOf(b)
   const fresherPass = Object.entries(fresherByDomain).filter(([, u]) => u >= 10).map(([d]) => d)
-  const gates = { g1Median, g3Pct: +(g3 * 100).toFixed(1), g4Pct: +(g4 * 100).toFixed(1), passSharePct: +(passShare * 100).toFixed(1), domainMedians, lowFullJdBuckets, fresherByDomain, fresherPass }
+  const gates = { g1Median, g3Pct: +(g3 * 100).toFixed(1), g4Pct: +(g4 * 100).toFixed(1), passSharePct: +(passShare * 100).toFixed(1), domainMedians, domainQuality, lowFullJdBuckets, fresherByDomain, fresherPass }
   const reasons = []
   let verdict
   if (passShare < 0.5) { verdict = 'FAIL'; reasons.push(`only ${gates.passSharePct}% of core buckets pass G1+G3 — below the <50% rule`) }
@@ -979,7 +1019,15 @@ function cmdReport() {
     else console.log(`\nG4 dead-link half: ${rot.deadPct}% of ${rot.dead + rot.alive} verifiable (gate <10%) — ${rotFile}`)
   } else if (snap) console.log(`\nG4 dead-link half: PENDING — run \`node scripts/jobs-liquidity-probe.mjs rot ${path.join(DATA_DIR, snapFile)}\``)
   else console.log('\nG4 dead-link half: PENDING — needs a valid snapshot first')
-  console.log('\nG2 (freshness): run `snapshot` twice >=24h apart (<=7d), then `fresh <A> <B>`')
+  // G2 reads the persisted fresh artifact, paired to the latest snapshot
+  // (a fresh result whose B side isn't this snapshot is stale).
+  const freshFile = latest('fresh-')
+  if (freshFile && snap) {
+    const fr = loadArtifact(path.join(DATA_DIR, freshFile), 'fresh')
+    if (fr.schemaVersion !== SCHEMA_VERSION) console.log('\nG2 (freshness): PENDING — fresh artifact is stale-format; re-run `fresh`')
+    else if (fr.fileB !== snapFile) console.log(`\nG2 (freshness): PENDING — latest fresh result (B=${fr.fileB}) does not pair with the latest snapshot (${snapFile}); re-run \`fresh\``)
+    else console.log(`\nG2 (freshness): ${fr.verdict} — ${fr.passing}/${fr.comparable} comparable buckets >=10 net-new/week (${fr.sharePct}%, gap ${fr.gapDays}d) — ${freshFile}`)
+  } else console.log('\nG2 (freshness): PENDING — run `snapshot` twice >=24h apart (<=7d), then `fresh <A> <B>`')
   if (snap && snap.kind !== 'pilot') {
     const v = computeVerdict(snap)
     console.log(`\n=== §6 VERDICT (JSearch corpus): ${v.verdict} ===`)

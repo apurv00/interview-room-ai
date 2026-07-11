@@ -290,6 +290,19 @@ test('[Cx-13th] computeVerdict counts errored core buckets as zero — never inf
   assert.equal(v.gates.domainMedians.z, 0) // fully-errored domain reads zero, not absent
 })
 
+test('[Cx-15th] PARTIAL launch scope requires domain-level QUALITY, not just volume', () => {
+  const mk = (domain, i, usable, fullJd, unique, tier = 'employer') => ({ bucket: `${domain}:${i}`, domain, fresher: false, httpStatus: 200, usable, fullJd, uniqueNonDropped: unique, byTierUsable: { [tier]: usable }, fingerprints: [] })
+  // 'good' passes volume+quality; 'shiny' has volume (median 25) but 40%
+  // full-JD; 'redirecty' has volume but zero employer-or-better share.
+  const snap = { buckets: [
+    mk('good', 0, 25, 24, 25), mk('good', 1, 25, 24, 25),
+    mk('shiny', 0, 25, 10, 25), mk('shiny', 1, 25, 10, 25),
+    mk('redirecty', 0, 25, 24, 25, 'aggregator-redirect'), mk('redirecty', 1, 25, 24, 25, 'aggregator-redirect'),
+  ] }
+  const v = computeVerdict(snap)
+  assert.deepEqual(v.passingDomains, ['good']) // shiny + redirecty excluded despite median 25
+})
+
 test('[Audit-21] lenStats p50 uses the lower median', () => {
   assert.ok(lenStats([100, 500]).includes('p50=100'))
 })
