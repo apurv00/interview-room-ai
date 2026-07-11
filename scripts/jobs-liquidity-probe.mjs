@@ -993,8 +993,19 @@ export function computeVerdict(snap) {
   const gates = { g1Median, g3Pct: +(g3 * 100).toFixed(1), g4Pct: +(g4 * 100).toFixed(1), passSharePct: +(passShare * 100).toFixed(1), domainMedians, domainQuality, lowFullJdBuckets, fresherByDomain, fresherPass }
   const reasons = []
   let verdict
+  const fresherDomainsMeasured = Object.keys(fresherByDomain).length
   if (passShare < 0.5) { verdict = 'FAIL'; reasons.push(`only ${gates.passSharePct}% of core buckets pass G1+G3 — below the <50% rule`) }
-  else if (g1Median >= 20 && g3 >= 0.7 && g4 >= 0.3) { verdict = 'PASS'; reasons.push('G1/G3/G4 pass on the JSearch corpus') }
+  else if (g1Median >= 20 && g3 >= 0.7 && g4 >= 0.3) {
+    // §6 makes the fresher floor part of the rollout gate — core strength
+    // alone must not green-light the build while the majority segment
+    // shows zero JSearch yield (Codex on #503).
+    if (fresherDomainsMeasured > 0 && fresherPass.length === fresherDomainsMeasured) { verdict = 'PASS'; reasons.push('G1/G3/G4 pass and every measured fresher domain meets the >=10/week floor') }
+    else {
+      verdict = 'PARTIAL'
+      reasons.push(`core gates pass but the fresher gate is unmet on JSearch: ${fresherPass.length}/${fresherDomainsMeasured || 0} fresher domains reach >=10/week (G1f) — the fresher-segment decision must read the india measurement; PASS requires fresher evidence`)
+      reasons.push(`launch scoped to passing domains: ${passingDomains.join(', ') || '(none)'}`)
+    }
+  }
   else {
     verdict = 'PARTIAL'
     reasons.push(`launch scoped to passing domains: ${passingDomains.join(', ') || '(none)'}`)

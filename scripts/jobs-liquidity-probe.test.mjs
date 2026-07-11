@@ -289,9 +289,16 @@ test('[Audit-9] gateBuckets: single population accessor filters errored + splits
 })
 
 test('[Audit-7] computeVerdict: PASS / PARTIAL(scoped) / FAIL(<50% rule)', () => {
-  const mkBucket = (domain, i, usable, fullJd, unique) => ({ bucket: `${domain}:${i}`, domain, fresher: false, httpStatus: 200, usable, fullJd, uniqueNonDropped: unique, byTierUsable: { employer: usable }, fingerprints: [] })
-  const pass = { buckets: ['x', 'y'].flatMap(d => [0, 1].map(i => mkBucket(d, i, 25, 24, 25))) }
+  const mkBucket = (domain, i, usable, fullJd, unique, fresher = false) => ({ bucket: `${domain}:${fresher ? 'fresher:' : ''}${i}`, domain, fresher, httpStatus: 200, usable, fullJd, uniqueNonDropped: unique, byTierUsable: { employer: usable }, fingerprints: [] })
+  // PASS requires the fresher gate too ([Cx-28th])
+  const pass = { buckets: [...['x', 'y'].flatMap(d => [0, 1].map(i => mkBucket(d, i, 25, 24, 25))), mkBucket('x', 0, 12, 11, 12, true)] }
   assert.equal(computeVerdict(pass).verdict, 'PASS')
+  // Same strong core WITHOUT fresher coverage must NOT read PASS
+  const noFresher = { buckets: ['x', 'y'].flatMap(d => [0, 1].map(i => mkBucket(d, i, 25, 24, 25))) }
+  assert.equal(computeVerdict(noFresher).verdict, 'PARTIAL')
+  // Strong core with a FAILING fresher domain caps at PARTIAL
+  const weakFresher = { buckets: [...['x', 'y'].flatMap(d => [0, 1].map(i => mkBucket(d, i, 25, 24, 25))), mkBucket('x', 0, 3, 3, 3, true)] }
+  assert.equal(computeVerdict(weakFresher).verdict, 'PARTIAL')
   const partial = { buckets: [...[0, 1].map(i => mkBucket('good', i, 25, 24, 25)), ...[0, 1].map(i => mkBucket('thin', i, 20, 19, 20))] }
   const pv = computeVerdict({ buckets: [...partial.buckets.slice(0, 2), mkBucket('thin', 0, 12, 11, 12), mkBucket('thin', 1, 12, 11, 12)] })
   assert.equal(pv.verdict, 'PARTIAL')
