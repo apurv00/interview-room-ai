@@ -83,7 +83,9 @@ function buildBuckets({ fresher = true } = {}) {
 // companyKey strips LEGAL suffixes only (never "solutions"/"technologies" —
 // half of India's consultancy namespace); titleKey keeps seniority tokens.
 // ---------------------------------------------------------------------------
-const LEGAL_SUFFIX_RE = /\b(pvt|private|ltd|limited|llp|inc|incorporated|corp|corporation)\b\.?/g
+// Anchored to the TAIL and iterated — an unanchored strip turned
+// 'Corporation Bank' into 'bank', false-merging distinct employers.
+const LEGAL_SUFFIX_TAIL_RE = /(\s+(pvt|private|ltd|limited|llp|inc|incorporated|corp|corporation)\.?)+\s*$/
 const TITLE_STOPWORDS = new Set(['the', 'a', 'an', 'and', 'or', 'for', 'of', 'in', 'at', 'to', 'with'])
 const METRO_ALIASES = {
   gurgaon: 'delhi-ncr', gurugram: 'delhi-ncr', noida: 'delhi-ncr', 'greater noida': 'delhi-ncr',
@@ -96,7 +98,7 @@ const METRO_ALIASES = {
 }
 
 export function companyKey(name = '') {
-  return name.toLowerCase().replace(LEGAL_SUFFIX_RE, '').replace(/[^\p{L}\p{N} ]/gu, ' ').replace(/\s+/g, ' ').trim()
+  return name.toLowerCase().replace(LEGAL_SUFFIX_TAIL_RE, '').replace(/[^\p{L}\p{N} ]/gu, ' ').replace(/\s+/g, ' ').trim()
 }
 export function titleKey(title = '') {
   const stripped = title.replace(/\(.*?\)|\[.*?\]/g, ' ').toLowerCase()
@@ -117,12 +119,24 @@ export function fingerprint(company, title, city, isRemote) {
 // ---------------------------------------------------------------------------
 // Quality gate — REFERENCE implementation for modules/jobs qualityGate.
 // ---------------------------------------------------------------------------
-const APPLY_DOMAIN_BLOCKLIST = ['bit.ly', 'forms.gle', 'wa.me', 'api.whatsapp.com', 't.me', 'tinyurl.com']
+// whatsapp.com covers api./chat./www. via suffix matching; telegram.me/.org
+// beside t.me; docs.google.com is the Google-Forms vector (same as forms.gle).
+const APPLY_DOMAIN_BLOCKLIST = ['bit.ly', 'forms.gle', 'docs.google.com', 'wa.me', 'whatsapp.com', 't.me', 'telegram.me', 'telegram.org', 'tinyurl.com']
 const CONSULTANCY_RE = /\b(consultanc\w*|consultants?|staffing|manpower|placements?|recruitment\s+(services|agency|firm)|hr\s+(services|solutions)|talent\s+(acquisition|solutions)\s+(llp|pvt|private))\b/i
+// §4.5 names TeamLease/Randstad/Quess explicitly — India's largest staffing
+// firms match no generic word-shape. One shared predicate keeps the snapshot
+// flag and the india consultancy counter in lockstep.
+const STAFFING_NAMES_RE = /\b(teamlease|randstad|quess|adecco|kelly\s?services|gi\s?group|persolkelly|ciel\s?hr|innovsource|firstmeridian)\b/i
+export function isStaffingOrg(name = '') { return CONSULTANCY_RE.test(name) || STAFFING_NAMES_RE.test(name) }
 const FEE_FRAUD_RE = /\b(registration|security)\s+(fee|deposit|amount)\b|\bpay(ment)?\s+(for|before)\s+(training|joining)\b|\brefundable\s+deposit\b/i
 // INGESTION.md §4.5 contact-spam: phone/WhatsApp solicitation in the body
 // AND no apply link above redirect tier — a call-the-HR harvesting pattern.
-const CONTACT_SPAM_RE = /(\bcall\b|\bwhats\s?app\b)[\s\S]{0,60}?(\+91[\s-]?)?\b[6-9]\d{9}\b|(\+91[\s-]?)?\b[6-9]\d{9}\b[\s\S]{0,60}?(\bcall\b|\bwhats\s?app\b)/i
+// Body-side phone matching allows one internal separator ('98765 43210') —
+// call/WhatsApp proximity guards against salary-range false hits. The
+// title-phone drop stays contiguous-only: '60000-70000' in a salary-bearing
+// title must not hard-drop the row.
+const SPACED_PHONE = '(\\+91[\\s-]?)?\\b[6-9]\\d{4}[\\s-]?\\d{5}\\b'
+const CONTACT_SPAM_RE = new RegExp(`(\\bcall\\b|\\bwhats\\s?app\\b)[\\s\\S]{0,60}?${SPACED_PHONE}|${SPACED_PHONE}[\\s\\S]{0,60}?(\\bcall\\b|\\bwhats\\s?app\\b)`, 'i')
 
 function hostOf(u) { try { return new URL(u).hostname.toLowerCase() } catch { return '' } }
 // Exact host or registrable-suffix match ONLY — substring includes() matched
@@ -148,9 +162,15 @@ export function classifyJob({ title = '', company = '', description = '', applyU
   const hasNonRedirectApply = applyUrls.some(u => !isBlockedApplyUrl(u) && classifyApplyUrl(u) !== 'aggregator-redirect')
   if (CONTACT_SPAM_RE.test(description) && !hasNonRedirectApply) drops.push('contact-spam')
   if (applyUrls.length && applyUrls.every(isBlockedApplyUrl)) drops.push('blocklist-apply-domain')
-  if (validThrough && new Date(validThrough).getTime() < Date.now()) drops.push('valid-through-expired')
+  // Malformed dates must be VISIBLE, not silently alive: NaN passes neither
+  // branch, so bad dates get a flag and real expiries get the drop.
+  if (validThrough) {
+    const vt = new Date(validThrough).getTime()
+    if (Number.isNaN(vt)) flags.push('bad-valid-through')
+    else if (vt < Date.now()) drops.push('valid-through-expired')
+  }
 
-  if (CONSULTANCY_RE.test(company)) flags.push('staffing')
+  if (isStaffingOrg(company)) flags.push('staffing')
   if (/\bconfidential\b/i.test(company)) flags.push('confidential')
   const jdLen = description.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().length
   if (jdLen < 400) flags.push('short-jd')
@@ -160,6 +180,7 @@ export function classifyJob({ title = '', company = '', description = '', applyU
 // ---------------------------------------------------------------------------
 // Apply-tier ladder (INGESTION.md §4.2)
 // ---------------------------------------------------------------------------
+const GOOGLE_REDIRECT_HOSTS = new Set(['google.com', 'www.google.com', 'google.co.in', 'www.google.co.in', 'g.co', 'www.g.co'])
 const ATS_HOSTS = ['greenhouse.io', 'lever.co', 'smartrecruiters.com', 'ashbyhq.com', 'workable.com', 'bamboohr.com', 'jobvite.com', 'icims.com', 'myworkdayjobs.com']
 const AGG_DEEP_HOSTS = ['naukri.com', 'linkedin.com', 'indeed.com', 'shine.com', 'foundit.in', 'monsterindia.com', 'timesjobs.com', 'glassdoor.com', 'glassdoor.co.in']
 const FUNNEL_HOSTS = ['apna.co', 'unstop.com', 'internshala.com', 'cutshort.io', 'instahyre.com']
@@ -169,7 +190,10 @@ export function classifyApplyUrl(url) {
   if (ATS_HOSTS.some(a => hostMatches(h, a))) return 'direct-ats'
   if (AGG_DEEP_HOSTS.some(a => hostMatches(h, a))) return 'aggregator-deep'
   if (FUNNEL_HOSTS.some(a => hostMatches(h, a))) return 'platform-funnel'
-  if (h.includes('google.') || h === 'g.co') return 'aggregator-redirect'
+  // EXACT hosts only — substring 'google.' demoted careers.google.com to
+  // tier-4; suffix matching would reintroduce that. docs.google.com is
+  // handled by the blocklist, not the tier ladder.
+  if (GOOGLE_REDIRECT_HOSTS.has(h)) return 'aggregator-redirect'
   return 'employer'
 }
 const TIER_RANK = { 'direct-ats': 0, employer: 1, 'aggregator-deep': 2, 'platform-funnel': 3, 'aggregator-redirect': 4 }
@@ -190,7 +214,11 @@ async function request(url, { headers = {}, timeoutMs = 15000, retries = 1, onAt
     try {
       if (onAttempt) onAttempt()
       const res = await fetch(url, { headers: { 'user-agent': UA, ...headers }, signal: ctl.signal, redirect: 'follow' })
-      if (res.status >= 500 && attempt < retries) { clearTimeout(timer); await sleep(1500); continue }
+      if (res.status >= 500 && attempt < retries) {
+        clearTimeout(timer)
+        res.body?.cancel?.().catch(() => {}) // release the connection deterministically
+        await sleep(1500); continue
+      }
       // Read the body while the abort timer is still armed.
       const text = await res.text()
       clearTimeout(timer)
@@ -237,6 +265,12 @@ export function normalizeJSearchJob(j) {
     // Expiration must reach the quality gate — dropping it let expired
     // postings count as usable supply (Codex on #503).
     validThrough: j.job_offer_expiration_datetime_utc || null,
+    // Retained so multi-req collapses (§4.2 amendment 1) are COUNTED —
+    // JSearch job_ids rotate, so the probe reports rather than salts; the
+    // pipeline identityResolver MUST salt with refNumber/ordinal for
+    // stable-id (ATS) sources. The probe's fp-only merge is a
+    // JSearch-specific concession, not the reference merge rule.
+    externalId: j.job_id || null,
     viaSite: (j.job_publisher || '').toLowerCase(), applyOptions,
   }
 }
@@ -267,6 +301,13 @@ async function fetchBucketJobs(bucket) {
   return { ok: true, status, jobs: all, pages, partialStatus, capped: pages === MAX_PAGES_PER_BUCKET && lastPageFull }
 }
 
+// sha1 of the normalized JD body — the within-run mass-repost key. Tiny
+// bodies (<100 chars) hash to noise, so they mint no repost key.
+function bodyHashOf(description = '') {
+  const norm = description.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 2000)
+  return norm.length >= 100 ? crypto.createHash('sha1').update(norm).digest('hex').slice(0, 20) : null
+}
+
 async function runBucket(bucket) {
   const fetched = await fetchBucketJobs(bucket)
   const rows = fetched.jobs.map(normalizeJSearchJob)
@@ -275,9 +316,9 @@ async function runBucket(bucket) {
     httpStatus: fetched.status, pages: fetched.pages, capped: !!fetched.capped,
     raw: rows.length, uniqueNonDropped: 0, usable: 0, fullJd: 0,
     dropped: {}, flagged: {}, byTierAll: {}, byTierUsable: {}, viaSites: {},
-    fingerprints: [], dupWithinBucket: 0, sampleApplyUrls: [],
+    fingerprints: [], dupWithinBucket: 0, multiReqCollapsed: 0, sampleApplyUrls: [],
   }
-  if (!fetched.ok) { stats.error = `http-${fetched.status}`; return stats }
+  if (!fetched.ok) { stats.error = `http-${fetched.status}`; return { stats, reps: [] } }
   if (fetched.partialStatus) stats.error = `http-${fetched.partialStatus}-partial`
   // Duplicate handling picks the BEST representative per fingerprint —
   // first-copy-wins let a short-JD/blocked duplicate shadow a usable copy
@@ -297,13 +338,29 @@ async function runBucket(bucket) {
     const key = dedupKey(cand, groups.size)
     const existing = groups.get(key)
     if (!existing) { groups.set(key, cand) }
-    else { stats.dupWithinBucket++; if (betterRepresentative(cand, existing)) groups.set(key, cand) }
+    else {
+      stats.dupWithinBucket++
+      if (existing.r.externalId && cand.r.externalId && existing.r.externalId !== cand.r.externalId) stats.multiReqCollapsed = (stats.multiReqCollapsed || 0) + 1
+      groups.set(key, foldCandidates(cand, existing))
+    }
   }
-  for (const c of groups.values()) {
+  const reps = [...groups.values()].map(c => ({ ...c, bodyHash: bodyHashOf(c.r.description), companyKey: companyKey(c.r.company) }))
+  return { stats, reps }
+}
+
+/** Pure accounting over a bucket's deduped representatives. Runs AFTER the
+ *  run-level mass-repost pass so §4.5's 'same body under >3 companyKeys'
+ *  hard drop applies before any gate stat is minted (within-run lower bound
+ *  of the spec's 7-day Redis rule). repostFlagHashes (2-3 companyKeys) get
+ *  the demotion flag instead. Exported for the test suite. */
+export function accountBucket(stats, reps, massRepostHashes = new Set(), repostFlagHashes = new Set()) {
+  for (const c of reps) {
     if (c.r.viaSite) stats.viaSites[c.r.viaSite] = (stats.viaSites[c.r.viaSite] || 0) + 1
-    if (c.drops.length) { for (const d of c.drops) stats.dropped[d] = (stats.dropped[d] || 0) + 1; continue }
+    const drops = (c.bodyHash && massRepostHashes.has(c.bodyHash)) ? [...c.drops, 'mass-repost'] : c.drops
+    if (drops.length) { for (const d of drops) stats.dropped[d] = (stats.dropped[d] || 0) + 1; continue }
     stats.uniqueNonDropped++
-    for (const f of c.flags) stats.flagged[f] = (stats.flagged[f] || 0) + 1
+    const flags = (c.bodyHash && repostFlagHashes.has(c.bodyHash)) ? [...c.flags, 'repost'] : c.flags
+    for (const f of flags) stats.flagged[f] = (stats.flagged[f] || 0) + 1
     if (c.jdLen >= 400) stats.fullJd++
     if (c.tier) stats.byTierAll[c.tier] = (stats.byTierAll[c.tier] || 0) + 1
     if (c.jdLen >= 400 && c.urls.length) {
@@ -319,9 +376,38 @@ async function runBucket(bucket) {
   return stats
 }
 
+/** Run-level mass-repost detection: bodyHash → distinct companyKeys.
+ *  >3 keys = §4.5 hard drop; 2-3 keys = 'repost' demotion flag. */
+export function detectMassReposts(allReps) {
+  const byHash = new Map()
+  for (const c of allReps) {
+    if (!c.bodyHash) continue
+    if (!byHash.has(c.bodyHash)) byHash.set(c.bodyHash, new Set())
+    byHash.get(c.bodyHash).add(c.companyKey)
+  }
+  const drop = new Set(), flag = new Set()
+  for (const [h, keys] of byHash) {
+    if (keys.size > 3) drop.add(h)
+    else if (keys.size > 1) flag.add(h)
+  }
+  return { drop, flag }
+}
+
 /** Dedup group key — confidential rows never merge (spec §4.2). */
 export function dedupKey(cand, seq) {
   return cand.flags.includes('confidential') ? `confidential:${seq}` : cand.fp
+}
+
+/** §4.2 merge policy at duplicate collapse: the group keeps the UNION of
+ *  usable apply URLs (tier = best across the union), the max jdLen, and the
+ *  EARLIEST non-null postedAt (aggregators re-stamp reposts — taking the
+ *  representative's fresh postedAt inflated G2). betterRepresentative still
+ *  decides which row's drops/flags/meta speak for the group. */
+export function foldCandidates(a, b) {
+  const rep = betterRepresentative(a, b) ? a : b
+  const urls = [...new Set([...a.urls, ...b.urls])]
+  const posted = [a.r.postedAt, b.r.postedAt].filter(Boolean).sort()[0] || null
+  return { ...rep, urls, tier: bestTier(urls), jdLen: Math.max(a.jdLen, b.jdLen), r: { ...rep.r, postedAt: posted } }
 }
 
 /** Prefer: not-dropped > full-JD > better apply tier > longer JD. */
@@ -335,20 +421,36 @@ export function betterRepresentative(a, b) {
 
 export function isErroredBucket(b) { return !!b.error || (b.httpStatus !== undefined && b.httpStatus !== 200) }
 
+/** THE single gate-population accessor. Core gates (G1/G3/G4/G5) read core
+ *  non-errored buckets; fresher gates (G1f/G6) read fresher non-errored.
+ *  No gate consumer may touch snap.buckets directly — population drift
+ *  across consumers caused four separate review findings. */
+export function gateBuckets(snap, { fresher = false } = {}) {
+  return snap.buckets.filter(b => (fresher ? b.fresher : !b.fresher) && !isErroredBucket(b))
+}
+export function gateFingerprints(snap, opts) {
+  return gateBuckets(snap, opts).flatMap(b => (b.fingerprints || []).map(f => f.fp))
+}
+
 async function cmdSnapshot({ pilot = false, fresher = true } = {}) {
   const buckets = buildBuckets({ fresher: pilot ? false : fresher }).slice(0, pilot ? 12 : undefined)
   console.log(`Running ${buckets.length} buckets against JSearch (date_posted=week, country=in)…`)
-  const results = []
+  const collected = []
   for (const [i, b] of buckets.entries()) {
-    let s
-    try { s = await runBucket(b) } catch (err) {
-      s = { bucket: b.id, domain: b.domain, fresher: !!b.fresher, httpStatus: 0, pages: 0, capped: false, error: String(err?.message || err), raw: 0, uniqueNonDropped: 0, usable: 0, fullJd: 0, dropped: {}, flagged: {}, byTierAll: {}, byTierUsable: {}, viaSites: {}, fingerprints: [], dupWithinBucket: 0, sampleApplyUrls: [] }
+    let c
+    try { c = await runBucket(b) } catch (err) {
+      c = { stats: { bucket: b.id, domain: b.domain, fresher: !!b.fresher, httpStatus: 0, pages: 0, capped: false, error: String(err?.message || err), raw: 0, uniqueNonDropped: 0, usable: 0, fullJd: 0, dropped: {}, flagged: {}, byTierAll: {}, byTierUsable: {}, viaSites: {}, fingerprints: [], dupWithinBucket: 0, multiReqCollapsed: 0, sampleApplyUrls: [] }, reps: [] }
     }
-    results.push(s)
-    const mark = s.error ? ` ERROR=${s.error}` : (s.capped ? ' (capped)' : '')
-    console.log(`  [${String(i + 1).padStart(3)}/${buckets.length}] ${b.id.padEnd(28)} raw=${String(s.raw).padStart(3)} usable=${String(s.usable).padStart(3)} fullJD=${s.uniqueNonDropped ? Math.round((s.fullJd / s.uniqueNonDropped) * 100) : 0}%${mark}`)
+    collected.push(c)
+    console.log(`  [${String(i + 1).padStart(3)}/${buckets.length}] ${b.id.padEnd(28)} fetched=${String(c.stats.raw).padStart(3)}${c.stats.error ? ` ERROR=${c.stats.error}` : (c.stats.capped ? ' (capped)' : '')}`)
     await sleep(1100)
   }
+  // Run-level pass BEFORE accounting: §4.5 mass-repost (same body under >3
+  // companyKeys) applies across the whole snapshot; per-bucket gate stats
+  // are minted only after it (within-run lower bound of the 7d Redis rule).
+  const { drop: massDrop, flag: repostFlag } = detectMassReposts(collected.flatMap(c => c.reps))
+  const results = collected.map(c => accountBucket(c.stats, c.reps, massDrop, repostFlag))
+  if (massDrop.size) console.log(`(mass-repost: ${massDrop.size} JD bodies span >3 companies — rows hard-dropped per §4.5; ${repostFlag.size} more bodies flagged 'repost')`)
   // invalidForGating is computed and PERSISTED before write — external
   // consumers must see it in the artifact, not recompute it.
   const erroredCount = results.filter(isErroredBucket).length
@@ -384,9 +486,10 @@ function summarizeSnapshot(snap) {
     if (snap.invalidForGating) { console.log('!!! >10% of buckets errored — SNAPSHOT INVALID FOR GATING. Re-run `snapshot` before reading any gate.'); return }
   }
   // "Errored buckets count as zero" applies to EVERY gate rollup — a
-  // partial bucket's pre-failure rows must not feed G3/G4/G5 either
-  // (Codex on #503: the header claimed zeroing that only `usable` did).
-  const valid = bs.filter(b => !isErroredBucket(b))
+  // partial bucket's pre-failure rows must not feed G3/G4/G5 either.
+  // All rollups route through the single gateBuckets accessor; the
+  // fresher population feeds G1f/G6 ONLY (core gates are labeled so).
+  const valid = gateBuckets(snap)
   const usable = bs.map(b => isErroredBucket(b) ? 0 : b.usable)
   const totalRaw = valid.reduce((a, b) => a + b.raw, 0)
   const totalUnique = valid.reduce((a, b) => a + b.uniqueNonDropped, 0)
@@ -400,13 +503,14 @@ function summarizeSnapshot(snap) {
   const employerPlus = (tierUsable['direct-ats'] || 0) + (tierUsable['employer'] || 0)
   const tierUsableSum = Object.values(tierUsable).reduce((a, b) => a + b, 0)
   const dupTotal = valid.reduce((a, b) => a + b.dupWithinBucket, 0)
-  const allFps = valid.flatMap(b => b.fingerprints.map(f => f.fp))
+  const allFps = gateFingerprints(snap)
   const crossBucketDup = allFps.length ? ((1 - new Set(allFps).size / allFps.length) * 100).toFixed(1) : '0.0'
   const viaTotals = {}
   for (const b of valid) for (const [v, n] of Object.entries(b.viaSites)) viaTotals[v] = (viaTotals[v] || 0) + n
   const topVia = Object.entries(viaTotals).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([v, n]) => `${v}=${n}`).join(' ')
 
-  console.log('\n=== SNAPSHOT SUMMARY (week window ≈ weekly supply) ===')
+  if (snap.kind === 'pilot') console.log('\nPILOT — classification sanity check only; gate thresholds are NOT evaluable from 12 buckets.')
+  console.log('\n=== SNAPSHOT SUMMARY (week window ≈ weekly supply; core buckets only — fresher measured under G1f/G6) ===')
   console.log(`buckets: ${bs.length} core (+${fresherBs.length} fresher)   raw: ${totalRaw}   unique-non-dropped: ${totalUnique}   usable: ${totalUsable}   page-capped buckets: ${capped.length}`)
   console.log(`G1  median usable/bucket/week: ${median(usable)}   (gate: >=20)   buckets<20: ${usable.filter(u => u < 20).length}/${usable.length}`)
   if (fresherBs.length) {
@@ -428,10 +532,16 @@ function resolveArtifact(file) {
   if (file && !fs.existsSync(file) && fs.existsSync(path.join(DATA_DIR, file))) return path.join(DATA_DIR, file)
   return file
 }
-function loadArtifact(file) {
-  const raw = fs.readFileSync(resolveArtifact(file), 'utf8')
+/** kind: 'snapshot' | 'india' — shape-validated so a wrong-kind or missing
+ *  artifact gets the same clean refusal every other invalid input gets. */
+function loadArtifact(file, kind = 'snapshot') {
+  const p = resolveArtifact(file)
+  if (!p || !fs.existsSync(p)) { console.error(`Artifact not found: ${file} (looked in cwd and ${DATA_DIR})`); process.exit(1) }
   let parsed
-  try { parsed = JSON.parse(raw) } catch { console.error(`Corrupt artifact: ${file}`); process.exit(1) }
+  try { parsed = JSON.parse(fs.readFileSync(p, 'utf8')) } catch { console.error(`Corrupt artifact: ${p}`); process.exit(1) }
+  if (kind === 'snapshot' && !Array.isArray(parsed.buckets)) { console.error(`${p} is not a snapshot artifact (no buckets array)`); process.exit(1) }
+  if (kind === 'india' && !parsed.apna) { console.error(`${p} is not an india artifact (no apna section)`); process.exit(1) }
+  if (kind === 'rot' && typeof parsed.checked !== 'number') { console.error(`${p} is not a rot artifact`); process.exit(1) }
   return parsed
 }
 
@@ -445,13 +555,19 @@ function cmdFresh(fileA, fileB) {
   const rawGapDays = (new Date(B.ranAt) - new Date(A.ranAt)) / 86400000
   if (rawGapDays < 0) { console.error(`arguments reversed: B (${B.ranAt}) predates A (${A.ranAt}) — pass the OLDER snapshot first`); process.exit(1) }
   if (rawGapDays < 1.0) { console.error(`snapshots are ${(rawGapDays * 24).toFixed(1)}h apart — G2 requires >=24h between snapshots; not evaluable`); process.exit(1) }
+  // The search window is 7 days: beyond it, B cannot see everything posted
+  // since A, and 'net-new' silently undercounts (false-FAIL on G2).
+  if (rawGapDays > 7) { console.error(`snapshots are ${rawGapDays.toFixed(1)}d apart — beyond the 7-day search window B cannot see all postings since A; G2 not evaluable, re-run snapshots closer together`); process.exit(1) }
   const aRan = new Date(A.ranAt).getTime()
-  const mapA = new Map(A.buckets.map(b => [b.bucket, b]))
+  const coreA = gateBuckets(A), coreB = gateBuckets(B)
+  const mapA = new Map(coreA.map(b => [b.bucket, b]))
+  const bNames = new Set(coreB.map(b => b.bucket))
   const perBucket = [], skipped = { errored: 0, capped: 0, unpaired: 0 }
-  for (const b of B.buckets) {
+  skipped.errored = (A.buckets.length - coreA.length - A.buckets.filter(x => x.fresher).length) + (B.buckets.length - coreB.length - B.buckets.filter(x => x.fresher).length)
+  skipped.unpaired += coreA.filter(a => !bNames.has(a.bucket)).length // A-only buckets are skips too
+  for (const b of coreB) {
     const a = mapA.get(b.bucket)
     if (!a) { skipped.unpaired++; continue }
-    if (isErroredBucket(a) || isErroredBucket(b)) { skipped.errored++; continue }
     if (a.capped || b.capped) { skipped.capped++; continue } // sampling churn ≠ freshness
     const aFps = new Set(a.fingerprints.map(f => f.fp))
     // Fresh = absent from A AND (no postedAt claim OR posted after A ran).
@@ -489,7 +605,10 @@ async function cmdRot(file) {
   file = resolveArtifact(file) // basename kept resolvable; loadArtifact also resolves
   const snap = loadArtifact(file)
   if (snap.schemaVersion !== SCHEMA_VERSION) { console.error(`snapshot schemaVersion ${snap.schemaVersion || 1} != ${SCHEMA_VERSION} — re-run snapshot first`); process.exit(1) }
-  const lists = snap.buckets.filter(b => !isErroredBucket(b)).map(b => ({ bucket: b.bucket, urls: b.sampleApplyUrls || [] })).filter(l => l.urls.length)
+  // Same refusal as fresh — G4's dead-link half must not be computed from a
+  // snapshot every sibling command rejects.
+  if (snap.invalidForGating) { console.error(`snapshot is marked INVALID FOR GATING (${snap.erroredCount} errored buckets) — re-run snapshot first`); process.exit(1) }
+  const lists = gateBuckets(snap).map(b => ({ bucket: b.bucket, urls: b.sampleApplyUrls || [] })).filter(l => l.urls.length)
   // Breadth-first over ALL buckets: every bucket's first link is checked
   // before any bucket's second (cap >= bucket count, so stride subsetting
   // and its skipped-domain bias are gone entirely — Codex on #503).
@@ -529,26 +648,50 @@ async function cmdRot(file) {
 // permitted paths only).
 // ---------------------------------------------------------------------------
 function extractLocs(xml) { return [...xml.matchAll(/<loc>(.*?)<\/loc>/g)].map(m => m[1].trim()) }
-function extractJsonLdJobPosting(html) {
+export function extractJsonLdJobPosting(html) {
   for (const m of html.matchAll(/<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi)) {
     try {
       const parsed = JSON.parse(m[1])
       const nodes = Array.isArray(parsed) ? parsed : parsed['@graph'] ? parsed['@graph'] : [parsed]
-      const jp = nodes.find(n => n && n['@type'] === 'JobPosting')
+      // @type may legally be an array ('["JobPosting","Thing"]')
+      const jp = nodes.find(n => n && [].concat(n['@type'] ?? []).includes('JobPosting'))
       if (jp) return jp
     } catch { /* malformed block — keep scanning */ }
   }
   return null
 }
 
+// §6/§2 fresher measurement: the india sources ARE the fresher supply plan,
+// so the sampler must report fresher-domain-matched × full-JD × post-spam —
+// the exact numbers the segment verdict hinges on. Patterns seed from the
+// same domains the bucket matrix uses.
+export const FRESHER_DOMAIN_PATTERNS = {
+  marketing: /market/i,
+  sales: /\b(sales|business development|telecall|telesales|field sales)\b/i,
+  electrical: /electric/i,
+  data: /\b(data entry|data analyst|analyst|mis)\b/i,
+  hr: /\b(hr|recruiter|recruitment|talent acquisition)\b/i,
+}
+export function matchFresherDomain(text = '') {
+  for (const [d, re] of Object.entries(FRESHER_DOMAIN_PATTERNS)) if (re.test(text)) return d
+  return null
+}
+function emptyFresherTally() {
+  return Object.fromEntries(Object.keys(FRESHER_DOMAIN_PATTERNS).map(d => [d, { matched: 0, fullJd: 0, postSpam: 0 }]))
+}
+
 async function sampleApna(sampleN) {
-  const out = { source: 'apna', shardCount: 0, corpusTotal: 0, sampled: 0, jsonldHits: 0, descLens: [], expired: 0, consultancy: 0, cities: {}, errors: 0, shardErrors: 0, fingerprints: [] }
+  const out = { source: 'apna', shardCount: 0, corpusTotal: 0, sampled: 0, jsonldHits: 0, descLens: [], expired: 0, consultancy: 0, cities: {}, errors: 0, shardErrors: 0, fingerprints: [], fresherDomains: emptyFresherTally() }
   try {
-    const idx = (await getText('https://apna.co/api/sitemap-index.xml')).text
-    const jobIndex = extractLocs(idx).find(u => /job-listing-sitemap\.xml/.test(u))
+    // Every fetch layer checks HTTP status — a WAF/5xx failure is an ERROR,
+    // never silently counted as 'no JSON-LD' quality data.
+    const idxRes = await getText('https://apna.co/api/sitemap-index.xml')
+    if (!idxRes.ok) { console.log(`apna: sitemap index HTTP ${idxRes.status} — source errored`); out.errors++; return out }
+    const jobIndex = extractLocs(idxRes.text).find(u => /job-listing-sitemap\.xml/.test(u))
     if (!jobIndex) { console.log('apna: job-listing-sitemap.xml not found in index'); return out }
-    const shardIdx = (await getText(jobIndex)).text
-    const shards = extractLocs(shardIdx).filter(u => /active-job-listings-/.test(u))
+    const shardIdxRes = await getText(jobIndex)
+    if (!shardIdxRes.ok) { console.log(`apna: shard index HTTP ${shardIdxRes.status} — source errored`); out.errors++; return out }
+    const shards = extractLocs(shardIdxRes.text).filter(u => /active-job-listings-/.test(u))
     out.shardCount = shards.length
     if (!shards.length) { console.log('apna: no active-job-listings shards found'); return out }
     // Collect per-shard picks, then INTERLEAVE round-robin so no shard is
@@ -557,8 +700,9 @@ async function sampleApna(sampleN) {
     const shardPicks = []
     for (const shardUrl of shards) {
       try {
-        const xml = (await getText(shardUrl)).text
-        const su = extractLocs(xml).filter(u => /apna\.co\/job/.test(u))
+        const shardRes = await getText(shardUrl)
+        if (!shardRes.ok) { out.shardErrors++; shardPicks.push([]); await sleep(350); continue }
+        const su = extractLocs(shardRes.text).filter(u => /apna\.co\/job/.test(u))
         out.corpusTotal += su.length
         const step = Math.max(1, Math.floor(su.length / perShard))
         const picks = []
@@ -577,20 +721,35 @@ async function sampleApna(sampleN) {
     for (const url of urls) {
       out.sampled++
       try {
-        const html = (await getText(url, { timeoutMs: 12000, retries: 0 })).text
-        const jp = extractJsonLdJobPosting(html)
+        const detailRes = await getText(url, { timeoutMs: 12000, retries: 0 })
+        if (!detailRes.ok) { out.errors++; await sleep(350); continue }
+        const jp = extractJsonLdJobPosting(detailRes.text)
         if (!jp) continue
         out.jsonldHits++
+        const title = typeof jp.title === 'string' ? jp.title : ''
+        const org = typeof jp.hiringOrganization?.name === 'string' ? jp.hiringOrganization.name : ''
         const desc = String(jp.description || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
         out.descLens.push(desc.length)
-        if (jp.validThrough && new Date(jp.validThrough).getTime() < Date.now()) out.expired++
-        const org = jp.hiringOrganization?.name || ''
-        if (CONSULTANCY_RE.test(org)) out.consultancy++
+        const expired = jp.validThrough && new Date(jp.validThrough).getTime() < Date.now()
+        if (expired) out.expired++
+        if (isStaffingOrg(org)) out.consultancy++ // same predicate as the snapshot flag — no drift
         const cityMatch = url.match(/\/job\/([^/]+)\//)
         if (cityMatch) out.cities[cityMatch[1]] = (out.cities[cityMatch[1]] || 0) + 1
+        // §2 fresher measurement: matched × full-JD × post-spam per domain
+        const fd = matchFresherDomain(`${title} ${url}`)
+        if (fd) {
+          const t = out.fresherDomains[fd]
+          t.matched++
+          if (desc.length >= 400) t.fullJd++
+          const { drops } = classifyJob({ title, company: org, description: jp.description || '', applyUrls: [], validThrough: jp.validThrough || null })
+          if (!drops.length) t.postSpam++
+        }
+        // Fingerprint parity with the snapshot population: no confidential,
+        // no expired rows; remote detected from JSON-LD jobLocationType.
         const jl = Array.isArray(jp.jobLocation) ? jp.jobLocation[0] : jp.jobLocation
         const locality = jl?.address?.addressLocality || (cityMatch ? cityMatch[1] : '')
-        if (org && jp.title) out.fingerprints.push(fingerprint(org, String(jp.title), String(locality), false))
+        const isRemote = [].concat(jp.jobLocationType ?? []).includes('TELECOMMUTE')
+        if (org && title && !expired && !/\bconfidential\b/i.test(org)) out.fingerprints.push(fingerprint(org, title, String(locality), isRemote))
       } catch { out.errors++ }
       await sleep(350)
     }
@@ -599,8 +758,8 @@ async function sampleApna(sampleN) {
   return out
 }
 
-async function sampleUnstop(pages = 3) {
-  const out = { source: 'unstop', sampled: 0, regnOpen: 0, descLens: [], errors: 0, shapeNote: '', fingerprints: [] }
+async function sampleUnstop(pages = 5) {
+  const out = { source: 'unstop', sampled: 0, regnOpen: 0, descLens: [], errors: 0, itemErrors: 0, shapeNote: '', fingerprints: [], fresherDomains: emptyFresherTally() }
   for (let p = 1; p <= pages; p++) {
     try {
       const res = await getJson(`https://unstop.com/api/public/opportunity/search-result?opportunity=jobs&per_page=15&page=${p}`, { timeoutMs: 15000 })
@@ -609,14 +768,32 @@ async function sampleUnstop(pages = 3) {
       const list = body?.data?.data ?? body?.data ?? (Array.isArray(body) ? body : null)
       if (!Array.isArray(list)) { out.shapeNote = `unexpected shape, top-level keys: ${Object.keys(body || {}).join(',')}`; break }
       for (const item of list) {
-        out.sampled++
-        if (item.regn_open || item.status === 'LIVE') out.regnOpen++ // regn_open is 1/0
-        const desc = String(item.details || item.description || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
-        if (desc) out.descLens.push(desc.length)
-        const org = item.organisation?.name || item.organisation?.title || ''
-        const loc0 = Array.isArray(item.locations) && item.locations[0] ? item.locations[0] : null
-        const loc = typeof loc0 === 'string' ? loc0 : (loc0?.city || loc0?.name || '')
-        if (org && item.title) out.fingerprints.push(fingerprint(org, String(item.title), String(loc), false))
+        // Per-item isolation: one malformed item must not discard its page.
+        try {
+          out.sampled++
+          const live = !!(item.regn_open || item.status === 'LIVE') // regn_open is 1/0
+          if (live) out.regnOpen++
+          const title = typeof item.title === 'string' ? item.title : ''
+          const rawOrg = item.organisation?.name ?? item.organisation?.title
+          const org = typeof rawOrg === 'string' ? rawOrg : ''
+          const desc = String(item.details || item.description || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+          if (desc) out.descLens.push(desc.length)
+          // §2 fresher measurement: matched × full-JD × post-spam per domain
+          const fd = matchFresherDomain(title)
+          if (fd) {
+            const t = out.fresherDomains[fd]
+            t.matched++
+            if (desc.length >= 400) t.fullJd++
+            const { drops } = classifyJob({ title, company: org, description: item.details || '', applyUrls: [] })
+            if (!drops.length) t.postSpam++
+          }
+          const loc0 = Array.isArray(item.locations) && item.locations[0] ? item.locations[0] : null
+          const loc = typeof loc0 === 'string' ? loc0 : (loc0?.city || loc0?.name || '')
+          const isRemote = /remote|work from home/i.test(`${String(loc)} ${title}`)
+          // Fingerprint parity with the snapshot population: live,
+          // non-confidential rows only.
+          if (org && title && live && !/\bconfidential\b/i.test(org)) out.fingerprints.push(fingerprint(org, title, String(loc), isRemote))
+        } catch { out.itemErrors++ }
       }
     } catch (e) { out.errors++; out.shapeNote = String(e?.message || e) }
     await sleep(600)
@@ -625,34 +802,91 @@ async function sampleUnstop(pages = 3) {
   return out
 }
 
-function lenStats(lens) {
+export function lenStats(lens) {
   if (!lens.length) return 'n/a'
   const s = [...lens].sort((a, b) => a - b)
   const q = f => s[Math.min(s.length - 1, Math.floor(f * s.length))]
   const ge400 = lens.filter(l => l >= 400).length
-  return `n=${lens.length} min=${s[0]} p25=${q(0.25)} p50=${q(0.5)} p75=${q(0.75)} max=${s[s.length - 1]} | >=400ch: ${pct1(ge400, lens.length)}`
+  // p50 uses the shared lower-median — one bias-toward-FAIL convention
+  // across every gate-adjacent number.
+  return `n=${lens.length} min=${s[0]} p25=${q(0.25)} p50=${median(s)} p75=${q(0.75)} max=${s[s.length - 1]} | >=400ch: ${pct1(ge400, lens.length)}`
+}
+
+function printFresherTally(label, tally) {
+  const line = Object.entries(tally).map(([d, t]) => `${d}: ${t.matched} matched / ${t.fullJd} full-JD / ${t.postSpam} post-spam`).join(' · ')
+  console.log(`${label} fresher-domain measurement (§2): ${line}`)
 }
 
 async function cmdIndia(sampleArg) {
   const sampleN = typeof sampleArg === 'boolean' ? NaN : Number(sampleArg)
   if (!Number.isInteger(sampleN) || sampleN <= 0) { console.error(`--sample must be a positive integer (got: ${sampleArg})`); process.exit(1) }
-  console.log(`FREE India-source sampling (apna sample=${sampleN}, unstop pages=3) — no API key needed\n`)
+  if (sampleN < 100) console.log(`NOTE: sub-spec sample (${sampleN} < 100 detail pages, INGESTION.md §6) — fine for a smoke run, not for the gate decision.`)
+  console.log(`FREE India-source sampling (apna sample=${sampleN}, unstop pages=5) — no API key needed\n`)
   const apna = await sampleApna(sampleN)
-  const unstop = await sampleUnstop(3)
+  const unstop = await sampleUnstop(5)
   console.log('\n=== APNA (sitemap -> JSON-LD JobPosting) ===')
   console.log(`sampled: ${apna.sampled}  jsonld-hit: ${pct1(apna.jsonldHits, apna.sampled)}  fetch-errors: ${apna.errors}  shard-errors: ${apna.shardErrors}`)
   console.log(`JD length distribution: ${lenStats(apna.descLens)}   <-- ingest floor is >=400ch`)
   console.log(`validThrough EXPIRED (should never be served): ${pct1(apna.expired, apna.jsonldHits)}`)
-  console.log(`consultancy-named orgs: ${pct1(apna.consultancy, apna.jsonldHits)}`)
+  console.log(`consultancy/staffing orgs: ${pct1(apna.consultancy, apna.jsonldHits)}`)
   console.log(`top cities: ${Object.entries(apna.cities).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([c, n]) => `${c}=${n}`).join(' ')}`)
+  printFresherTally('apna', apna.fresherDomains)
   console.log('\n=== UNSTOP (public JSON API, robots-allowed) ===')
-  console.log(`sampled: ${unstop.sampled}  live(regn_open): ${pct1(unstop.regnOpen, unstop.sampled)}  errors: ${unstop.errors}${unstop.shapeNote ? `  note: ${unstop.shapeNote}` : ''}`)
+  console.log(`sampled: ${unstop.sampled}  live(regn_open): ${pct1(unstop.regnOpen, unstop.sampled)}  errors: ${unstop.errors}/${unstop.itemErrors} (page/item)${unstop.shapeNote ? `  note: ${unstop.shapeNote}` : ''}`)
   console.log(`details length distribution: ${lenStats(unstop.descLens)}`)
+  printFresherTally('unstop', unstop.fresherDomains)
   if (apna.sampled === 0) { console.log('\nNOT SAVING artifact: apna sampled 0 pages — a degenerate artifact must not shadow a good one as "latest".'); process.exit(1) }
+  // Same invalid-for-gating discipline as snapshots: a mostly-errored
+  // sample must not become the 'latest' artifact feeding report.
+  const invalidForGating = (apna.errors + apna.shardErrors) / Math.max(apna.sampled, 1) > 0.1 || (unstop.sampled === 0 && unstop.errors > 0)
+  if (invalidForGating) console.log('\n!!! >10% of india fetches errored — artifact marked INVALID FOR GATING; re-run `india`.')
   fs.mkdirSync(DATA_DIR, { recursive: true })
   const file = path.join(DATA_DIR, `india-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
-  fs.writeFileSync(file, JSON.stringify({ schemaVersion: SCHEMA_VERSION, ranAt: new Date().toISOString(), apna, unstop }, null, 2))
+  fs.writeFileSync(file, JSON.stringify({ schemaVersion: SCHEMA_VERSION, ranAt: new Date().toISOString(), sampleN, subSpecSample: sampleN < 100, invalidForGating, apna, unstop }, null, 2))
   console.log(`\nSaved: ${file}`)
+}
+
+/** §6 verdict engine — PASS / PARTIAL(scoped to passing domains) / FAIL
+ *  (<50% of core buckets pass G1+G3) / NOT-EVALUABLE. Pure over a snapshot;
+ *  G2 (fresh), dead-links (rot) and the india fresher measurement are
+ *  reported alongside, not folded in silently. Exported for tests. */
+export function computeVerdict(snap) {
+  const core = gateBuckets(snap)
+  if (!core.length) return { verdict: 'NOT-EVALUABLE', reasons: ['no valid core buckets'], gates: {}, passingDomains: [] }
+  const byDomain = {}
+  for (const b of core) (byDomain[b.domain] ||= []).push(b)
+  const domainMedians = Object.fromEntries(Object.entries(byDomain).map(([d, bs]) => [d, median(bs.map(x => x.usable))]))
+  const passingDomains = Object.entries(domainMedians).filter(([, m]) => m >= 20).map(([d]) => d)
+  const g1Median = median(core.map(b => b.usable))
+  const totalUnique = core.reduce((a, b) => a + b.uniqueNonDropped, 0)
+  const totalFullJd = core.reduce((a, b) => a + b.fullJd, 0)
+  const g3 = totalUnique ? totalFullJd / totalUnique : 0
+  // spec: any priority bucket under 50% full-JD gets flagged individually
+  const lowFullJdBuckets = core.filter(b => b.uniqueNonDropped >= 5 && b.fullJd / b.uniqueNonDropped < 0.5).map(b => b.bucket)
+  const tierUsable = {}
+  for (const b of core) for (const [t, n] of Object.entries(b.byTierUsable)) tierUsable[t] = (tierUsable[t] || 0) + n
+  const usableSum = Object.values(tierUsable).reduce((a, b) => a + b, 0)
+  const g4 = usableSum ? ((tierUsable['direct-ats'] || 0) + (tierUsable['employer'] || 0)) / usableSum : 0
+  const bucketPass = core.filter(b => b.usable >= 20 && (b.uniqueNonDropped ? b.fullJd / b.uniqueNonDropped : 0) >= 0.5).length
+  const passShare = bucketPass / core.length
+  // fresher aggregated per domain across metros (top-5 fresher-domain rule)
+  const fresherByDomain = {}
+  for (const b of gateBuckets(snap, { fresher: true })) fresherByDomain[b.domain] = (fresherByDomain[b.domain] || 0) + b.usable
+  const fresherPass = Object.entries(fresherByDomain).filter(([, u]) => u >= 10).map(([d]) => d)
+  const gates = { g1Median, g3Pct: +(g3 * 100).toFixed(1), g4Pct: +(g4 * 100).toFixed(1), passSharePct: +(passShare * 100).toFixed(1), domainMedians, lowFullJdBuckets, fresherByDomain, fresherPass }
+  const reasons = []
+  let verdict
+  if (passShare < 0.5) { verdict = 'FAIL'; reasons.push(`only ${gates.passSharePct}% of core buckets pass G1+G3 — below the <50% rule`) }
+  else if (g1Median >= 20 && g3 >= 0.7 && g4 >= 0.3) { verdict = 'PASS'; reasons.push('G1/G3/G4 pass on the JSearch corpus') }
+  else {
+    verdict = 'PARTIAL'
+    reasons.push(`launch scoped to passing domains: ${passingDomains.join(', ') || '(none)'}`)
+    if (g1Median < 20) reasons.push(`G1 median ${g1Median} < 20`)
+    if (g3 < 0.7) reasons.push(`G3 ${gates.g3Pct}% < 70%`)
+    if (g4 < 0.3) reasons.push(`G4 ${gates.g4Pct}% < 30%`)
+  }
+  reasons.push('G2 (fresh), dead-links (rot) and the india fresher measurement are separate inputs — read them in this report before acting')
+  return { verdict, reasons, gates, passingDomains }
 }
 
 function cmdReport() {
@@ -675,39 +909,49 @@ function cmdReport() {
       if (snap.invalidForGating) { console.log('(downstream gate sections skipped — snapshot is invalid for gating)'); snap = null }
     }
   } else console.log('\nG1/G1f/G3/G4/G5/G6: PENDING — no JSearch snapshot yet (run `snapshot`)')
+  let indiaValid = null
   if (indiaFile) {
-    const india = loadArtifact(path.join(DATA_DIR, indiaFile))
-    // Same strictness as snapshots: a stale-format india artifact is NOT
-    // evaluated — its rates and fingerprints must not drive the source
-    // decision (Codex on #503).
+    const india = loadArtifact(path.join(DATA_DIR, indiaFile), 'india')
+    // Same strictness as snapshots: stale-format OR invalid-for-gating
+    // india artifacts are NOT evaluated (Codex on #503, audit #19).
     if (india.schemaVersion !== SCHEMA_VERSION) {
       console.log(`\nIndia sampling: ${indiaFile} — STALE FORMAT (schemaVersion ${india.schemaVersion || 1}, current ${SCHEMA_VERSION}); stats not evaluated — re-run \`india\``)
+    } else if (india.invalidForGating) {
+      console.log(`\nIndia sampling: ${indiaFile} — marked INVALID FOR GATING (errored fetches); stats not evaluated — re-run \`india\``)
     } else {
+      indiaValid = india
       const { apna, unstop } = india
-      console.log(`\nIndia sampling: ${indiaFile}`)
-      console.log(`  apna  full-JD(>=400ch): ${pct1(apna.descLens.filter(l => l >= 400).length, apna.descLens.length)}  expired-served: ${pct1(apna.expired, apna.jsonldHits)}  consultancy: ${pct1(apna.consultancy, apna.jsonldHits)}`)
+      console.log(`\nIndia sampling: ${indiaFile}${india.subSpecSample ? ' (SUB-SPEC sample size — smoke run, not gate-grade)' : ''}`)
+      console.log(`  apna  full-JD(>=400ch): ${pct1(apna.descLens.filter(l => l >= 400).length, apna.descLens.length)}  expired-served: ${pct1(apna.expired, apna.jsonldHits)}  consultancy/staffing: ${pct1(apna.consultancy, apna.jsonldHits)}`)
       console.log(`  unstop live rate: ${pct1(unstop.regnOpen, unstop.sampled)}`)
+      if (apna.fresherDomains) { printFresherTally('  apna', apna.fresherDomains); printFresherTally('  unstop', unstop.fresherDomains) }
       const indiaFps = [...(apna.fingerprints || []), ...(unstop.fingerprints || [])]
       if (!snap) console.log('  G5 cross-source overlap: PENDING — needs a valid snapshot')
       else if (indiaFps.length === 0) console.log('  G5 cross-source overlap: PENDING — india artifact has no fingerprints (re-run `india` with the current probe)')
       else {
-        // Errored buckets are excluded from EVERY gate — the overlap line
-      // included their fingerprints while all other rollups zeroed them
-      // (Bugbot on #503).
-      const snapFps = new Set(snap.buckets.filter(b => !isErroredBucket(b)).flatMap(b => (b.fingerprints || []).map(f => f.fp)))
+        const snapFps = new Set(gateFingerprints(snap))
         const overlap = indiaFps.filter(fp => snapFps.has(fp)).length
         console.log(`  G5 cross-source overlap (india ∩ JSearch): ${overlap}/${indiaFps.length} — LOWER BOUND from a small sample; full cross-source G5 lands with corpus-scale ingestion telemetry`)
       }
     }
   } else console.log('\nIndia sampling: PENDING — run `india`')
   if (rotFile && snapFile && snap) {
-    const rot = loadArtifact(path.join(DATA_DIR, rotFile))
+    const rot = loadArtifact(path.join(DATA_DIR, rotFile), 'rot')
     // A rot artifact only speaks for the snapshot its links came from.
     if (rot.snapshotFile !== snapFile) console.log(`\nG4 dead-link half: PENDING — latest rot (${rot.snapshotFile}) does not pair with latest snapshot (${snapFile}); run \`node scripts/jobs-liquidity-probe.mjs rot ${path.join(DATA_DIR, snapFile)}\``)
     else if (rot.inconclusive || rot.deadPct === null) console.log(`\nG4 dead-link half: INCONCLUSIVE — ${rot.unverifiable}/${rot.checked} unverifiable (bot-blocks/timeouts); treat as unresolved`)
     else console.log(`\nG4 dead-link half: ${rot.deadPct}% of ${rot.dead + rot.alive} verifiable (gate <10%) — ${rotFile}`)
-  } else console.log('\nG4 dead-link half: PENDING — run `rot <snapshot.json>` against the latest snapshot')
-  console.log('\nG2 (freshness): run `snapshot` twice >=24h apart, then `fresh <A> <B>`')
+  } else if (snap) console.log(`\nG4 dead-link half: PENDING — run \`node scripts/jobs-liquidity-probe.mjs rot ${path.join(DATA_DIR, snapFile)}\``)
+  else console.log('\nG4 dead-link half: PENDING — needs a valid snapshot first')
+  console.log('\nG2 (freshness): run `snapshot` twice >=24h apart (<=7d), then `fresh <A> <B>`')
+  if (snap && snap.kind !== 'pilot') {
+    const v = computeVerdict(snap)
+    console.log(`\n=== §6 VERDICT (JSearch corpus): ${v.verdict} ===`)
+    for (const r of v.reasons) console.log(`  • ${r}`)
+    console.log(`  per-domain medians: ${Object.entries(v.gates.domainMedians).map(([d, m]) => `${d}=${m}`).join(' ')}`)
+    if (v.gates.lowFullJdBuckets?.length) console.log(`  <50% full-JD buckets flagged: ${v.gates.lowFullJdBuckets.join(', ')}`)
+    console.log(`  JSearch fresher buckets (supplementary): ${Object.entries(v.gates.fresherByDomain).map(([d, u]) => `${d}=${u}`).join(' ') || 'none'} — the fresher SEGMENT verdict reads the india measurement above${indiaValid ? '' : ' (PENDING)'}`)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -736,7 +980,7 @@ if (isMain) {
     case 'snapshot': await cmdSnapshot({ fresher: !flags['no-fresher'] }); break
     case 'fresh': cmdFresh(positional[0], positional[1]); break
     case 'rot': await cmdRot(positional[0]); break
-    case 'india': await cmdIndia(flags.sample === undefined ? 60 : flags.sample); break
+    case 'india': await cmdIndia(flags.sample === undefined ? 100 : flags.sample); break
     case 'report': cmdReport(); break
     default:
       console.log('usage: node scripts/jobs-liquidity-probe.mjs <pilot|snapshot [--no-fresher]|fresh A B|rot SNAP|india [--sample N]|report>')

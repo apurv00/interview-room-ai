@@ -7,9 +7,11 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   companyKey, titleKey, locationKey, fingerprint,
-  classifyJob, classifyApplyUrl, isBlockedApplyUrl, bestUsableTier,
-  betterRepresentative, dedupKey, pickRotSample, median, isErroredBucket, parseArgs,
-  normalizeJSearchJob,
+  classifyJob, classifyApplyUrl, isBlockedApplyUrl, bestUsableTier, isStaffingOrg,
+  betterRepresentative, dedupKey, foldCandidates, pickRotSample, median, lenStats,
+  isErroredBucket, gateBuckets, gateFingerprints, parseArgs,
+  normalizeJSearchJob, accountBucket, detectMassReposts, computeVerdict,
+  extractJsonLdJobPosting, matchFresherDomain,
 } from './jobs-liquidity-probe.mjs'
 
 // ── normalization ───────────────────────────────────────────────────────────
@@ -175,6 +177,108 @@ test('[Rev-1/Cx-4th] isErroredBucket: error field OR any non-200 status', () => 
   assert.ok(isErroredBucket({ httpStatus: 200, error: 'http-429-partial' })) // partial fetch
   assert.ok(!isErroredBucket({ httpStatus: 200 }))
   assert.ok(!isErroredBucket({}))                                 // non-bucket-shaped objects are not errored
+})
+
+// ── audit-round regressions (the proper solve) ──────────────────────────────
+
+test('[Audit-12] companyKey strips legal suffixes at the TAIL only', () => {
+  assert.equal(companyKey('Corporation Bank'), 'corporation bank') // NOT 'bank'
+  assert.equal(companyKey('Acme Pvt. Ltd.'), 'acme')
+  assert.equal(companyKey('Quess Corp'), 'quess')
+})
+
+test('[Audit-3/8] messenger blocklist variants + exact Google hosts', () => {
+  for (const u of ['https://chat.whatsapp.com/xyz', 'https://telegram.me/jobs', 'https://telegram.org/x', 'https://docs.google.com/forms/d/1']) {
+    assert.equal(isBlockedApplyUrl(u), true, u)
+    assert.equal(bestUsableTier([u]), null, u)
+  }
+  assert.equal(classifyApplyUrl('https://careers.google.com/jobs/1'), 'employer') // exact-host redirect set
+  assert.equal(classifyApplyUrl('https://www.google.com/search?q=x'), 'aggregator-redirect')
+  assert.equal(classifyApplyUrl('https://www.google.co.in/url?q=x'), 'aggregator-redirect')
+})
+
+test('[Audit-13] spaced phones hit contact-spam; salary-range titles stay undropped', () => {
+  const spaced = classifyJob({ title: 'Telecaller', company: 'X', description: 'WhatsApp HR on 98765 43210 now', applyUrls: [] })
+  assert.ok(spaced.drops.includes('contact-spam'))
+  const salary = classifyJob({ title: 'Telecaller 60000-70000 salary', company: 'X', description: 'x '.repeat(300), applyUrls: ['https://a.com/1'] })
+  assert.ok(!salary.drops.includes('title-phone'))
+})
+
+test('[Audit-23] malformed validThrough is flagged, real expiry drops', () => {
+  const bad = classifyJob({ title: 'Dev', company: 'Acme', description: 'x '.repeat(300), applyUrls: ['https://a.com/1'], validThrough: 'not-a-date' })
+  assert.ok(bad.flags.includes('bad-valid-through') && !bad.drops.includes('valid-through-expired'))
+  const expired = classifyJob({ title: 'Dev', company: 'Acme', description: 'x', applyUrls: [], validThrough: '2020-01-01' })
+  assert.ok(expired.drops.includes('valid-through-expired'))
+})
+
+test('[Audit-5] named staffing firms flagged (spec seed list)', () => {
+  for (const org of ['Quess Corp', 'TeamLease Services', 'Randstad India', 'Adecco Group']) {
+    assert.ok(isStaffingOrg(org), org)
+    assert.ok(classifyJob({ title: 'Dev', company: org, description: 'x '.repeat(300), applyUrls: ['https://a.com/1'] }).flags.includes('staffing'), org)
+  }
+  assert.ok(!isStaffingOrg('Acme Software'))
+})
+
+test('[Audit-4] foldCandidates: union urls -> best tier, earliest postedAt, max jdLen', () => {
+  const a = { r: { postedAt: '2026-07-10T00:00:00Z', viaSite: 'x' }, urls: ['https://www.google.com/url?q=1'], drops: [], flags: [], jdLen: 900, tier: 'aggregator-redirect', fp: 'f1' }
+  const b = { r: { postedAt: '2026-07-01T00:00:00Z', viaSite: 'y' }, urls: ['https://boards.greenhouse.io/x/jobs/1'], drops: [], flags: [], jdLen: 100, tier: 'direct-ats', fp: 'f1' }
+  const m = foldCandidates(a, b)
+  assert.equal(m.tier, 'direct-ats')          // union tier, not the representative's
+  assert.equal(m.jdLen, 900)                  // max
+  assert.equal(m.r.postedAt, '2026-07-01T00:00:00Z') // earliest non-null (repost re-stamps must not inflate G2)
+  assert.equal(m.urls.length, 2)
+})
+
+test('[Audit-2] mass-repost: >3 companyKeys drops, 2-3 flags', () => {
+  const reps = ['a', 'b', 'c', 'd'].map(k => ({ bodyHash: 'H1', companyKey: k, drops: [], flags: [], jdLen: 500, tier: 'employer', urls: ['https://x.com/1'], fp: `f-${k}`, r: { postedAt: null, viaSite: '' } }))
+  const two = ['p', 'q'].map(k => ({ bodyHash: 'H2', companyKey: k, drops: [], flags: [], jdLen: 500, tier: 'employer', urls: ['https://x.com/1'], fp: `g-${k}`, r: { postedAt: null, viaSite: '' } }))
+  const { drop, flag } = detectMassReposts([...reps, ...two])
+  assert.ok(drop.has('H1') && !drop.has('H2'))
+  assert.ok(flag.has('H2') && !flag.has('H1'))
+  const shell = { dropped: {}, flagged: {}, byTierAll: {}, byTierUsable: {}, viaSites: {}, fingerprints: [], uniqueNonDropped: 0, usable: 0, fullJd: 0, sampleApplyUrls: [] }
+  const s = accountBucket(shell, [...reps, ...two], drop, flag)
+  assert.equal(s.dropped['mass-repost'], 4)
+  assert.equal(s.usable, 2)                   // only the H2 pair survives
+  assert.equal(s.flagged['repost'], 2)
+})
+
+test('[Audit-18] JSON-LD @type arrays are recognized', () => {
+  const html = '<script type="application/ld+json">{"@type":["JobPosting","Thing"],"title":"Dev"}</script>'
+  assert.equal(extractJsonLdJobPosting(html)?.title, 'Dev')
+})
+
+test('[Audit-1] fresher-domain matcher', () => {
+  assert.equal(matchFresherDomain('Digital Marketing Executive'), 'marketing')
+  assert.equal(matchFresherDomain('Telecaller for field sales'), 'sales')
+  assert.equal(matchFresherDomain('HR Recruiter (Fresher)'), 'hr')
+  assert.equal(matchFresherDomain('Backend Developer'), null)
+})
+
+test('[Audit-9] gateBuckets: single population accessor filters errored + splits fresher', () => {
+  const snap = { buckets: [
+    { bucket: 'a', fresher: false, httpStatus: 200, usable: 5, fingerprints: [{ fp: 'x' }] },
+    { bucket: 'b', fresher: false, httpStatus: 429, usable: 9, fingerprints: [{ fp: 'y' }] },
+    { bucket: 'c', fresher: true, httpStatus: 200, usable: 3, fingerprints: [{ fp: 'z' }] },
+  ] }
+  assert.deepEqual(gateBuckets(snap).map(b => b.bucket), ['a'])
+  assert.deepEqual(gateBuckets(snap, { fresher: true }).map(b => b.bucket), ['c'])
+  assert.deepEqual(gateFingerprints(snap), ['x']) // errored bucket's fp never leaks
+})
+
+test('[Audit-7] computeVerdict: PASS / PARTIAL(scoped) / FAIL(<50% rule)', () => {
+  const mkBucket = (domain, i, usable, fullJd, unique) => ({ bucket: `${domain}:${i}`, domain, fresher: false, httpStatus: 200, usable, fullJd, uniqueNonDropped: unique, byTierUsable: { employer: usable }, fingerprints: [] })
+  const pass = { buckets: ['x', 'y'].flatMap(d => [0, 1].map(i => mkBucket(d, i, 25, 24, 25))) }
+  assert.equal(computeVerdict(pass).verdict, 'PASS')
+  const partial = { buckets: [...[0, 1].map(i => mkBucket('good', i, 25, 24, 25)), ...[0, 1].map(i => mkBucket('thin', i, 20, 19, 20))] }
+  const pv = computeVerdict({ buckets: [...partial.buckets.slice(0, 2), mkBucket('thin', 0, 12, 11, 12), mkBucket('thin', 1, 12, 11, 12)] })
+  assert.equal(pv.verdict, 'PARTIAL')
+  assert.deepEqual(pv.passingDomains, ['good'])
+  const fail = { buckets: [0, 1, 2, 3].map(i => mkBucket('dead', i, 2, 1, 2)) }
+  assert.equal(computeVerdict(fail).verdict, 'FAIL')
+})
+
+test('[Audit-21] lenStats p50 uses the lower median', () => {
+  assert.ok(lenStats([100, 500]).includes('p50=100'))
 })
 
 // ── CLI parsing ─────────────────────────────────────────────────────────────
