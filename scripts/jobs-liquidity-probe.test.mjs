@@ -299,6 +299,9 @@ test('[Audit-7] computeVerdict: PASS / PARTIAL(scoped) / FAIL(<50% rule)', () =>
   // Strong core with a FAILING fresher domain caps at PARTIAL
   const weakFresher = { buckets: [...['x', 'y'].flatMap(d => [0, 1].map(i => mkBucket(d, i, 25, 24, 25))), mkBucket('x', 0, 3, 3, 3, true)] }
   assert.equal(computeVerdict(weakFresher).verdict, 'PARTIAL')
+  // [Cx-29th] G1f is PER BUCKET: 5+5 across metros must NOT read as 10
+  const summedFresher = { buckets: [...['x', 'y'].flatMap(d => [0, 1].map(i => mkBucket(d, i, 25, 24, 25))), mkBucket('x', 0, 5, 5, 5, true), mkBucket('x', 1, 5, 5, 5, true)] }
+  assert.equal(computeVerdict(summedFresher).verdict, 'PARTIAL')
   const partial = { buckets: [...[0, 1].map(i => mkBucket('good', i, 25, 24, 25)), ...[0, 1].map(i => mkBucket('thin', i, 20, 19, 20))] }
   const pv = computeVerdict({ buckets: [...partial.buckets.slice(0, 2), mkBucket('thin', 0, 12, 11, 12), mkBucket('thin', 1, 12, 11, 12)] })
   assert.equal(pv.verdict, 'PARTIAL')

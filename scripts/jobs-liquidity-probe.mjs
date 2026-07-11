@@ -985,11 +985,16 @@ export function computeVerdict(snap) {
   // An errored bucket cannot pass G1+G3 — it sits in the denominator.
   const bucketPass = coreAll.filter(b => !isErroredBucket(b) && b.usable >= 20 && (b.uniqueNonDropped ? b.fullJd / b.uniqueNonDropped : 0) >= 0.5).length
   const passShare = bucketPass / coreAll.length
-  // fresher aggregated per domain across metros (top-5 fresher-domain rule);
-  // errored fresher buckets likewise contribute zero.
+  // G1f requires EVERY fresher variant bucket to clear >=10/week — summing
+  // metros let 5+5 read as a passing 10 (Codex on #503). The per-domain sum
+  // is kept for display only; errored buckets contribute zero either way.
   const fresherByDomain = {}
-  for (const b of snap.buckets.filter(x => x.fresher)) fresherByDomain[b.domain] = (fresherByDomain[b.domain] || 0) + usableOf(b)
-  const fresherPass = Object.entries(fresherByDomain).filter(([, u]) => u >= 10).map(([d]) => d)
+  const fresherDomainBuckets = {}
+  for (const b of snap.buckets.filter(x => x.fresher)) {
+    fresherByDomain[b.domain] = (fresherByDomain[b.domain] || 0) + usableOf(b)
+    ;(fresherDomainBuckets[b.domain] ||= []).push(usableOf(b))
+  }
+  const fresherPass = Object.entries(fresherDomainBuckets).filter(([, arr]) => arr.every(u => u >= 10)).map(([d]) => d)
   const gates = { g1Median, g3Pct: +(g3 * 100).toFixed(1), g4Pct: +(g4 * 100).toFixed(1), passSharePct: +(passShare * 100).toFixed(1), domainMedians, domainQuality, lowFullJdBuckets, fresherByDomain, fresherPass }
   const reasons = []
   let verdict
