@@ -118,6 +118,9 @@ export function fingerprint(company, title, city, isRemote) {
 const APPLY_DOMAIN_BLOCKLIST = ['bit.ly', 'forms.gle', 'wa.me', 'api.whatsapp.com', 't.me', 'tinyurl.com']
 const CONSULTANCY_RE = /\b(consultanc\w*|consultants?|staffing|manpower|placements?|recruitment\s+(services|agency|firm)|hr\s+(services|solutions)|talent\s+(acquisition|solutions)\s+(llp|pvt|private))\b/i
 const FEE_FRAUD_RE = /\b(registration|security)\s+(fee|deposit|amount)\b|\bpay(ment)?\s+(for|before)\s+(training|joining)\b|\brefundable\s+deposit\b/i
+// INGESTION.md §4.5 contact-spam: phone/WhatsApp solicitation in the body
+// AND no apply link above redirect tier — a call-the-HR harvesting pattern.
+const CONTACT_SPAM_RE = /(\bcall\b|\bwhats\s?app\b)[\s\S]{0,60}?(\+91[\s-]?)?\b[6-9]\d{9}\b|(\+91[\s-]?)?\b[6-9]\d{9}\b[\s\S]{0,60}?(\bcall\b|\bwhats\s?app\b)/i
 
 function hostOf(u) { try { return new URL(u).hostname.toLowerCase() } catch { return '' } }
 // Exact host or registrable-suffix match ONLY — substring includes() matched
@@ -135,6 +138,8 @@ export function classifyJob({ title = '', company = '', description = '', applyU
   const letters = t.replace(/[^a-zA-Z]/g, '')
   if (letters.length > 10 && letters.replace(/[^A-Z]/g, '').length / letters.length > 0.7) drops.push('title-caps')
   if (FEE_FRAUD_RE.test(description)) drops.push('fee-fraud')
+  const hasNonRedirectApply = applyUrls.some(u => classifyApplyUrl(u) !== 'aggregator-redirect')
+  if (CONTACT_SPAM_RE.test(description) && !hasNonRedirectApply) drops.push('contact-spam')
   if (applyUrls.length && applyUrls.every(u => APPLY_DOMAIN_BLOCKLIST.some(b => hostMatches(hostOf(u), b)))) drops.push('blocklist-apply-domain')
   if (validThrough && new Date(validThrough).getTime() < Date.now()) drops.push('valid-through-expired')
 
@@ -253,7 +258,6 @@ async function fetchBucketJobs(bucket) {
 async function runBucket(bucket) {
   const fetched = await fetchBucketJobs(bucket)
   const rows = fetched.jobs.map(normalizeJSearchJob)
-  const seen = new Set()
   const stats = {
     bucket: bucket.id, domain: bucket.domain, fresher: !!bucket.fresher,
     httpStatus: fetched.status, pages: fetched.pages, capped: !!fetched.capped,
@@ -263,29 +267,44 @@ async function runBucket(bucket) {
   }
   if (!fetched.ok) { stats.error = `http-${fetched.status}`; return stats }
   if (fetched.partialStatus) stats.error = `http-${fetched.partialStatus}-partial`
+  // Duplicate handling picks the BEST representative per fingerprint —
+  // first-copy-wins let a short-JD/blocked duplicate shadow a usable copy
+  // of the same posting (false-FAIL pressure on G1/G3/G4; Codex on #503).
+  const groups = new Map()
   for (const r of rows) {
     const urls = r.applyOptions.map(o => o.url).filter(Boolean)
     const { drops, flags, jdLen } = classifyJob({ title: r.title, company: r.company, description: r.description, applyUrls: urls })
-    const fp = fingerprint(r.company, r.title, r.city, r.isRemote)
-    if (seen.has(fp)) { stats.dupWithinBucket++; continue }
-    seen.add(fp)
-    if (r.viaSite) stats.viaSites[r.viaSite] = (stats.viaSites[r.viaSite] || 0) + 1
-    if (drops.length) { for (const d of drops) stats.dropped[d] = (stats.dropped[d] || 0) + 1; continue }
+    const cand = { r, urls, drops, flags, jdLen, tier: bestTier(urls), fp: fingerprint(r.company, r.title, r.city, r.isRemote) }
+    const existing = groups.get(cand.fp)
+    if (!existing) { groups.set(cand.fp, cand) }
+    else { stats.dupWithinBucket++; if (betterRepresentative(cand, existing)) groups.set(cand.fp, cand) }
+  }
+  for (const c of groups.values()) {
+    if (c.r.viaSite) stats.viaSites[c.r.viaSite] = (stats.viaSites[c.r.viaSite] || 0) + 1
+    if (c.drops.length) { for (const d of c.drops) stats.dropped[d] = (stats.dropped[d] || 0) + 1; continue }
     stats.uniqueNonDropped++
-    for (const f of flags) stats.flagged[f] = (stats.flagged[f] || 0) + 1
-    if (jdLen >= 400) stats.fullJd++
-    const tier = bestTier(urls)
-    if (tier) stats.byTierAll[tier] = (stats.byTierAll[tier] || 0) + 1
-    if (jdLen >= 400 && urls.length) {
+    for (const f of c.flags) stats.flagged[f] = (stats.flagged[f] || 0) + 1
+    if (c.jdLen >= 400) stats.fullJd++
+    if (c.tier) stats.byTierAll[c.tier] = (stats.byTierAll[c.tier] || 0) + 1
+    if (c.jdLen >= 400 && c.urls.length) {
       stats.usable++
-      if (tier) stats.byTierUsable[tier] = (stats.byTierUsable[tier] || 0) + 1
+      if (c.tier) stats.byTierUsable[c.tier] = (stats.byTierUsable[c.tier] || 0) + 1
       // {fp, postedAt} so `fresh` can distinguish genuinely-new postings
       // from sampling churn in page-capped buckets.
-      stats.fingerprints.push({ fp, postedAt: r.postedAt })
-      if (stats.sampleApplyUrls.length < 3) stats.sampleApplyUrls.push(urls.sort((a, b) => TIER_RANK[classifyApplyUrl(a)] - TIER_RANK[classifyApplyUrl(b)])[0])
+      stats.fingerprints.push({ fp: c.fp, postedAt: c.r.postedAt })
+      if (stats.sampleApplyUrls.length < 3) stats.sampleApplyUrls.push([...c.urls].sort((a, b) => TIER_RANK[classifyApplyUrl(a)] - TIER_RANK[classifyApplyUrl(b)])[0])
     }
   }
   return stats
+}
+
+/** Prefer: not-dropped > full-JD > better apply tier > longer JD. */
+function betterRepresentative(a, b) {
+  if (!a.drops.length !== !b.drops.length) return !a.drops.length
+  if ((a.jdLen >= 400) !== (b.jdLen >= 400)) return a.jdLen >= 400
+  const at = a.tier ? TIER_RANK[a.tier] : 9, bt = b.tier ? TIER_RANK[b.tier] : 9
+  if (at !== bt) return at < bt
+  return a.jdLen > b.jdLen
 }
 
 function isErroredBucket(b) { return !!b.error || (b.httpStatus !== undefined && b.httpStatus !== 200) }
