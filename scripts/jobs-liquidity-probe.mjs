@@ -864,13 +864,20 @@ async function cmdIndia(sampleArg) {
  *  G2 (fresh), dead-links (rot) and the india fresher measurement are
  *  reported alongside, not folded in silently. Exported for tests. */
 export function computeVerdict(snap) {
+  // Errored core buckets COUNT AS ZERO here, exactly as in the summary —
+  // the median and pass-share denominators use ALL core buckets, so a few
+  // 429'd buckets under the 10% invalid threshold can only drag the
+  // verdict down, never inflate it (Codex on #503). Row-based rates
+  // (G3/G4) read valid buckets — errored ones contribute no rows anyway.
+  const coreAll = snap.buckets.filter(b => !b.fresher)
   const core = gateBuckets(snap)
-  if (!core.length) return { verdict: 'NOT-EVALUABLE', reasons: ['no valid core buckets'], gates: {}, passingDomains: [] }
+  if (!coreAll.length) return { verdict: 'NOT-EVALUABLE', reasons: ['no core buckets'], gates: {}, passingDomains: [] }
+  const usableOf = b => isErroredBucket(b) ? 0 : b.usable
   const byDomain = {}
-  for (const b of core) (byDomain[b.domain] ||= []).push(b)
-  const domainMedians = Object.fromEntries(Object.entries(byDomain).map(([d, bs]) => [d, median(bs.map(x => x.usable))]))
+  for (const b of coreAll) (byDomain[b.domain] ||= []).push(b)
+  const domainMedians = Object.fromEntries(Object.entries(byDomain).map(([d, bs]) => [d, median(bs.map(usableOf))]))
   const passingDomains = Object.entries(domainMedians).filter(([, m]) => m >= 20).map(([d]) => d)
-  const g1Median = median(core.map(b => b.usable))
+  const g1Median = median(coreAll.map(usableOf))
   const totalUnique = core.reduce((a, b) => a + b.uniqueNonDropped, 0)
   const totalFullJd = core.reduce((a, b) => a + b.fullJd, 0)
   const g3 = totalUnique ? totalFullJd / totalUnique : 0
@@ -880,11 +887,13 @@ export function computeVerdict(snap) {
   for (const b of core) for (const [t, n] of Object.entries(b.byTierUsable)) tierUsable[t] = (tierUsable[t] || 0) + n
   const usableSum = Object.values(tierUsable).reduce((a, b) => a + b, 0)
   const g4 = usableSum ? ((tierUsable['direct-ats'] || 0) + (tierUsable['employer'] || 0)) / usableSum : 0
-  const bucketPass = core.filter(b => b.usable >= 20 && (b.uniqueNonDropped ? b.fullJd / b.uniqueNonDropped : 0) >= 0.5).length
-  const passShare = bucketPass / core.length
-  // fresher aggregated per domain across metros (top-5 fresher-domain rule)
+  // An errored bucket cannot pass G1+G3 — it sits in the denominator.
+  const bucketPass = coreAll.filter(b => !isErroredBucket(b) && b.usable >= 20 && (b.uniqueNonDropped ? b.fullJd / b.uniqueNonDropped : 0) >= 0.5).length
+  const passShare = bucketPass / coreAll.length
+  // fresher aggregated per domain across metros (top-5 fresher-domain rule);
+  // errored fresher buckets likewise contribute zero.
   const fresherByDomain = {}
-  for (const b of gateBuckets(snap, { fresher: true })) fresherByDomain[b.domain] = (fresherByDomain[b.domain] || 0) + b.usable
+  for (const b of snap.buckets.filter(x => x.fresher)) fresherByDomain[b.domain] = (fresherByDomain[b.domain] || 0) + usableOf(b)
   const fresherPass = Object.entries(fresherByDomain).filter(([, u]) => u >= 10).map(([d]) => d)
   const gates = { g1Median, g3Pct: +(g3 * 100).toFixed(1), g4Pct: +(g4 * 100).toFixed(1), passSharePct: +(passShare * 100).toFixed(1), domainMedians, lowFullJdBuckets, fresherByDomain, fresherPass }
   const reasons = []

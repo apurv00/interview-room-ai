@@ -277,6 +277,19 @@ test('[Audit-7] computeVerdict: PASS / PARTIAL(scoped) / FAIL(<50% rule)', () =>
   assert.equal(computeVerdict(fail).verdict, 'FAIL')
 })
 
+test('[Cx-13th] computeVerdict counts errored core buckets as zero — never inflated by collection failures', () => {
+  const ok = (domain, i) => ({ bucket: `${domain}:${i}`, domain, fresher: false, httpStatus: 200, usable: 25, fullJd: 24, uniqueNonDropped: 25, byTierUsable: { employer: 25 }, fingerprints: [] })
+  const err = (domain, i) => ({ bucket: `${domain}:e${i}`, domain, fresher: false, httpStatus: 429, usable: 9, fullJd: 8, uniqueNonDropped: 9, byTierUsable: {}, fingerprints: [] })
+  // 3 healthy + 3 errored: survivors alone would read PASS (median 25,
+  // 100% pass-share); with errored-as-zero the pass share is 50% and the
+  // median collapses — the verdict must NOT be PASS.
+  const snap = { buckets: [ok('x', 0), ok('x', 1), ok('y', 0), err('y', 1), err('z', 0), err('z', 1)] }
+  const v = computeVerdict(snap)
+  assert.notEqual(v.verdict, 'PASS')
+  assert.equal(v.gates.passSharePct, 50)
+  assert.equal(v.gates.domainMedians.z, 0) // fully-errored domain reads zero, not absent
+})
+
 test('[Audit-21] lenStats p50 uses the lower median', () => {
   assert.ok(lenStats([100, 500]).includes('p50=100'))
 })
