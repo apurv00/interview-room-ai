@@ -135,6 +135,11 @@ export default withAuth(
           // AI endpoints intentionally opened to anonymous users with strict
           // per-IP daily caps enforced inside composeApiRoute (anonDailyLimit).
           pathname.startsWith('/api/resume/parse') ||
+          // Anonymous product-event capture (jobs Wave 1b, Codex #508):
+          // identity = signed anon cookie minted by the route itself, so the
+          // FIRST anonymous event must reach it; abuse bounded by the route's
+          // 30/min + 300/day anon caps.
+          pathname === '/api/events' ||
           pathname.startsWith('/api/resume/tailor') ||
           pathname.startsWith('/api/resume/ats-check') ||
           pathname.startsWith('/pricing') ||

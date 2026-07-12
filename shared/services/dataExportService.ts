@@ -47,7 +47,7 @@ export async function generateDataExport(userId: string): Promise<Record<string,
     // GDPR completeness (jobs Wave 1b): application outcomes are Article-20
     // core; product events are the user's behavioral record.
     JobApplication.find({ userId: uid }).select('-__v').sort({ updatedAt: -1 }).limit(500).lean(),
-    ProductEvent.find({ userId: uid }).select('-__v -props').sort({ ts: -1 }).limit(1000).lean(),
+    ProductEvent.find({ userId: uid }).select('-__v').sort({ ts: -1 }).limit(1000).lean(),
   ])
 
   if (!user) {
@@ -183,6 +183,10 @@ export async function generateDataExport(userId: string): Promise<Record<string,
       name: e.name,
       jobPostingId: e.jobPostingId?.toString(),
       applicationId: e.applicationId?.toString(),
+      sessionId: e.sessionId?.toString(),
+      // props ARE the behavioral record (method/tier/trigger/outcomes) —
+      // Article-20 core, bounded by the closed input schema (Codex #508).
+      props: e.props ?? null,
       ts: e.ts,
     })),
   }
