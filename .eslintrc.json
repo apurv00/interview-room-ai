@@ -12,7 +12,8 @@
               "@b2b/*",
               "@resume/*",
               "@cms/*",
-              "@feedback/*"
+              "@feedback/*",
+              "@jobs/*"
             ],
             "message": "Cross-module imports must go through the module barrel (e.g. '@interview') rather than reaching into internal paths. If the symbol you need isn't exported, add it to the module's index.ts."
           }
@@ -22,14 +23,23 @@
   },
   "overrides": [
     {
-      "files": ["modules/interview/**/*"],
+      "files": [
+        "modules/interview/**/*"
+      ],
       "rules": {
         "no-restricted-imports": [
           "error",
           {
             "patterns": [
               {
-                "group": ["@learn/*", "@b2b/*", "@resume/*", "@cms/*", "@feedback/*"],
+                "group": [
+                  "@learn/*",
+                  "@b2b/*",
+                  "@resume/*",
+                  "@cms/*",
+                  "@feedback/*",
+                  "@jobs/*"
+                ],
                 "message": "Cross-module imports must use the module barrel (e.g. '@learn')."
               }
             ]
@@ -38,14 +48,23 @@
       }
     },
     {
-      "files": ["modules/learn/**/*"],
+      "files": [
+        "modules/learn/**/*"
+      ],
       "rules": {
         "no-restricted-imports": [
           "error",
           {
             "patterns": [
               {
-                "group": ["@interview/*", "@b2b/*", "@resume/*", "@cms/*", "@feedback/*"],
+                "group": [
+                  "@interview/*",
+                  "@b2b/*",
+                  "@resume/*",
+                  "@cms/*",
+                  "@feedback/*",
+                  "@jobs/*"
+                ],
                 "message": "Cross-module imports must use the module barrel (e.g. '@interview')."
               }
             ]
@@ -54,14 +73,23 @@
       }
     },
     {
-      "files": ["modules/b2b/**/*"],
+      "files": [
+        "modules/b2b/**/*"
+      ],
       "rules": {
         "no-restricted-imports": [
           "error",
           {
             "patterns": [
               {
-                "group": ["@interview/*", "@learn/*", "@resume/*", "@cms/*", "@feedback/*"],
+                "group": [
+                  "@interview/*",
+                  "@learn/*",
+                  "@resume/*",
+                  "@cms/*",
+                  "@feedback/*",
+                  "@jobs/*"
+                ],
                 "message": "Cross-module imports must use the module barrel."
               }
             ]
@@ -70,14 +98,23 @@
       }
     },
     {
-      "files": ["modules/resume/**/*"],
+      "files": [
+        "modules/resume/**/*"
+      ],
       "rules": {
         "no-restricted-imports": [
           "error",
           {
             "patterns": [
               {
-                "group": ["@interview/*", "@learn/*", "@b2b/*", "@cms/*", "@feedback/*"],
+                "group": [
+                  "@interview/*",
+                  "@learn/*",
+                  "@b2b/*",
+                  "@cms/*",
+                  "@feedback/*",
+                  "@jobs/*"
+                ],
                 "message": "Cross-module imports must use the module barrel."
               }
             ]
@@ -86,14 +123,23 @@
       }
     },
     {
-      "files": ["modules/cms/**/*"],
+      "files": [
+        "modules/cms/**/*"
+      ],
       "rules": {
         "no-restricted-imports": [
           "error",
           {
             "patterns": [
               {
-                "group": ["@interview/*", "@learn/*", "@b2b/*", "@resume/*", "@feedback/*"],
+                "group": [
+                  "@interview/*",
+                  "@learn/*",
+                  "@b2b/*",
+                  "@resume/*",
+                  "@feedback/*",
+                  "@jobs/*"
+                ],
                 "message": "Cross-module imports must use the module barrel."
               }
             ]
@@ -102,18 +148,29 @@
       }
     },
     {
-      "files": ["modules/feedback/**/*"],
+      "files": [
+        "modules/feedback/**/*"
+      ],
       "rules": {
         "no-restricted-imports": [
           "error",
           {
             "patterns": [
               {
-                "group": ["@learn/*", "@b2b/*", "@resume/*", "@cms/*"],
-                "message": "Cross-module imports must use the module barrel (e.g. '@interview'). Note: @interview/* deep imports are also barred — go through the @interview barrel."
+                "group": [
+                  "@learn/*",
+                  "@b2b/*",
+                  "@resume/*",
+                  "@cms/*",
+                  "@jobs/*"
+                ],
+                "message": "Cross-module imports must use the module barrel (e.g. '@interview'). Note: @interview/* deep imports are also barred \u2014 go through the @interview barrel."
               },
               {
-                "group": ["@interview/*"],
+                "group": [
+                  "@interview/*",
+                  "@jobs/*"
+                ],
                 "message": "Use the @interview barrel (e.g. `from '@interview'`). If the symbol you need isn't exported, add it to modules/interview/index.ts."
               }
             ]
@@ -122,7 +179,34 @@
       }
     },
     {
-      "files": ["shared/**/*"],
+      "files": [
+        "modules/jobs/**/*"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "@interview/*",
+                  "@learn/*",
+                  "@b2b/*",
+                  "@resume/*",
+                  "@cms/*",
+                  "@feedback/*"
+                ],
+                "message": "Cross-module imports must use the module barrel (e.g. '@interview')."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "shared/**/*"
+      ],
       "rules": {
         "no-restricted-imports": [
           "error",
@@ -141,9 +225,11 @@
                   "@cms",
                   "@cms/*",
                   "@feedback",
-                  "@feedback/*"
+                  "@feedback/*",
+                  "@jobs",
+                  "@jobs/*"
                 ],
-                "message": "shared/ is the kernel — it cannot depend on any domain module. Inject module-specific behavior via slot props or callbacks from the composition root (app/)."
+                "message": "shared/ is the kernel \u2014 it cannot depend on any domain module. Inject module-specific behavior via slot props or callbacks from the composition root (app/)."
               }
             ]
           }
@@ -151,7 +237,12 @@
       }
     },
     {
-      "files": ["app/**/*", "middleware.ts", "next.config.js", "instrumentation.ts"],
+      "files": [
+        "app/**/*",
+        "middleware.ts",
+        "next.config.js",
+        "instrumentation.ts"
+      ],
       "rules": {
         "no-restricted-imports": "off"
       }

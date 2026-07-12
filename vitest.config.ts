@@ -14,6 +14,7 @@ export default defineConfig({
       '@cms': path.resolve(__dirname, 'modules/cms'),
       '@resume': path.resolve(__dirname, 'modules/resume'),
       '@feedback': path.resolve(__dirname, 'modules/feedback'),
+      '@jobs': path.resolve(__dirname, 'modules/jobs'),
       '@': path.resolve(__dirname, '.'),
     },
   },
