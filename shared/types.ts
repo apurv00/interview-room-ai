@@ -33,6 +33,20 @@ export interface InterviewConfig {
    * and fusion scores. Gated behind `NEXT_PUBLIC_FEATURE_PRIVACY_MODE`.
    */
   privacyMode?: boolean
+  /**
+   * Jobs-feature attribution — set ONLY by the jobs practice hand-off so
+   * job-attributed sessions are queryable (the 60-day verdict metrics and
+   * per-job evidence ticker read this). Promoted to a top-level
+   * InterviewSession field at create (privacyMode precedent). Both Zod and
+   * Mongoose strip unknown keys, so this field exists in FOUR places kept
+   * honest by attributionRoundTrip.test.ts: this type, InterviewConfigSchema,
+   * the InterviewSession schema, and the createSession promotion.
+   */
+  attribution?: {
+    source: 'jobs'
+    jobId: string
+    applicationId?: string
+  }
 }
 
 // ─── State Machine ────────────────────────────────────────────────────────────
