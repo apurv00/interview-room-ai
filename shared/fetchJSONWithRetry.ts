@@ -51,10 +51,15 @@ export async function fetchJSONWithRetry<T>(
           // An abort/timeout during the body read keeps its own semantics —
           // rethrow into the outer catch's discrimination.
           if (controller.signal.aborted) throw parseErr
-          // A 2xx with a malformed body (HTML error page served as 200) is
-          // permanent — retrying re-bills the same broken payload
-          // (Codex on #507). Final result, no backoff.
-          return { ok: false, status: res.status, error: 'invalid JSON body' }
+          // Only an ACTUAL parse failure is permanent (HTML error page
+          // served as 200 — retrying re-bills the same broken payload).
+          // A body-stream drop after headers (ECONNRESET/'terminated')
+          // rejects res.json() too but is a transient network error —
+          // rethrow so it flows to the retry path (Codex on #507).
+          if (parseErr instanceof SyntaxError) {
+            return { ok: false, status: res.status, error: 'invalid JSON body' }
+          }
+          throw parseErr
         }
       } else if (res.status !== 429 && res.status < 500) {
         return { ok: false, status: res.status, error: `http-${res.status}` }

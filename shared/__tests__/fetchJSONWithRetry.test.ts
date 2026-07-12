@@ -26,6 +26,22 @@ describe('fetchJSONWithRetry', () => {
     expect(f).toHaveBeenCalledTimes(1)
   })
 
+  it('[Cx-507] a body-stream drop after headers IS retried (transient, not malformed)', async () => {
+    // undici surfaces mid-body connection loss as a non-SyntaxError
+    // rejection from res.json() — that must flow to the retry path.
+    const f = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true, status: 200, json: () => Promise.reject(new TypeError('terminated')),
+      })
+      .mockResolvedValueOnce({
+        ok: true, status: 200, json: () => Promise.resolve({ recovered: true }),
+      })
+    vi.stubGlobal('fetch', f)
+    const r = await fetchJSONWithRetry('https://x.test/a', {}, { baseDelayMs: 1 })
+    expect(r).toEqual({ ok: true, data: { recovered: true }, status: 200 })
+    expect(f).toHaveBeenCalledTimes(2)
+  })
+
   it('does NOT retry non-429 4xx — a 404 is an answer (board liveness)', async () => {
     const f = vi.fn().mockResolvedValue({ ok: false, status: 404 })
     vi.stubGlobal('fetch', f)
