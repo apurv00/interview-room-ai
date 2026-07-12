@@ -15,6 +15,9 @@ export type AuthReason =
   | 'view_history'
   | 'view_progress'
   | 'view_dashboard'
+  | 'save_job'
+  | 'apply_job'
+  | 'view_job_detail'
   | 'generic'
 
 interface ReasonCopy {
@@ -23,6 +26,18 @@ interface ReasonCopy {
 }
 
 const REASON_COPY: Record<AuthReason, ReasonCopy> = {
+  save_job: {
+    title: 'Sign in to save this job',
+    subtitle: 'Saved jobs join your tracker so you can prep, apply, and follow up in one place.',
+  },
+  apply_job: {
+    title: 'Sign in to track this application',
+    subtitle: 'We open the employer link either way — signing in keeps your applications and prep evidence together.',
+  },
+  view_job_detail: {
+    title: 'Sign in to see the full job breakdown',
+    subtitle: 'The requirement X-ray and your fit signals are free with an account.',
+  },
   save_resume: {
     title: 'Sign in to save your resume',
     subtitle: 'Your work will be saved to your account so you can come back anytime.',

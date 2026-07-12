@@ -140,6 +140,11 @@ export default withAuth(
           // FIRST anonymous event must reach it; abuse bounded by the route's
           // 30/min + 300/day anon caps.
           pathname === '/api/events' ||
+          // Jobs feed is a public surface (confirmed decision P-2: anon
+          // browse, auth gated client-side at value-capture; detail body
+          // gating arrives with the detail page). Page itself 404s while
+          // the jobs_tab flag is off.
+          pathname === '/jobs' ||
           pathname.startsWith('/api/resume/tailor') ||
           pathname.startsWith('/api/resume/ats-check') ||
           pathname.startsWith('/pricing') ||
