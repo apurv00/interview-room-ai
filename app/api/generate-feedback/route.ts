@@ -32,7 +32,7 @@ import { recordScoreDelta } from '@shared/services/scoreTelemetry'
 import { acquireFeedbackLock, releaseFeedbackLock } from '@shared/services/feedbackLock'
 import { computeBlendedOverallScore, resolveBlendWeights } from '@interview/services/eval/overallScore'
 import { computePerQAverage, computeAnswerQualityAggregate } from '@interview/services/eval/perQAggregation'
-import { computeCompletionAdjustment } from '@interview/services/eval/completionAdjustment'
+import { computeCompletionAdjustment, type EndReason } from '@interview/services/eval/completionAdjustment'
 import { compactTranscript } from '@interview/services/eval/transcriptCompactor'
 import { computeEngagementContext } from '@interview/services/eval/engagementContext'
 import { getPlannedQuestionCountForFeedback } from '@interview/services/eval/sessionScoringPolicy'
@@ -413,7 +413,25 @@ export const POST = composeApiRoute<GenerateFeedbackBody>({
       typeof body.answeredCount === 'number' && body.answeredCount >= 0
         ? body.answeredCount
         : evaluations.length
-    const g10EndReason = body.endReason ?? 'normal'
+    // Codex on #505: the feedback-page Retry posts neither endReason nor
+    // plannedQuestionCount; defaulting a persisted time_up to 'normal'
+    // re-tapered + re-flagged a timer-complete session on retry. Prefer
+    // the body value (fresh from the live session), else the endReason
+    // PERSISTED at finish (owner-scoped read, same discipline as the
+    // planned-count fallback above); a DB failure falls through to
+    // 'normal' — conservative, matching the planned-count fall-through.
+    const g10EndReason: EndReason = body.endReason ?? (await (async () => {
+      if (!body.sessionId) return 'normal' as const
+      try {
+        await connectDB()
+        const s = (await InterviewSession.findOne({ _id: body.sessionId, userId: user.id })
+          .select('endReason')
+          .lean()) as { endReason?: EndReason } | null
+        return s?.endReason ?? ('normal' as const)
+      } catch {
+        return 'normal' as const
+      }
+    })())
     const g10Adjustment = computeCompletionAdjustment({
       plannedQuestionCount: g10PlannedCount,
       answeredCount: g10AnsweredCount,

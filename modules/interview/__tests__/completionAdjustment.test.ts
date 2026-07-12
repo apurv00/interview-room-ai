@@ -450,6 +450,28 @@ describe('POST /api/generate-feedback — G.10 flag gate', () => {
       expect(json.red_flags.some((f: string) => f.includes('timer expired'))).toBe(false)
     })
 
+    it('retry without endReason loads the persisted time_up — no re-taper (Codex #505)', async () => {
+      // The feedback-page Retry posts no endReason; the route must fall
+      // back to the endReason PERSISTED on the session instead of 'normal'
+      // (which would re-taper a timer-complete session on every retry).
+      mockCompletion.mockResolvedValueOnce(claudeFeedback)
+      const { InterviewSession } = await import('@shared/db/models')
+      vi.mocked(InterviewSession.findOne).mockReturnValueOnce({
+        select: () => ({ lean: () => Promise.resolve({ endReason: 'time_up' }) }),
+      } as never)
+
+      const res = await POST(makeReq({
+        evals: evals(4), plannedQuestionCount: 10, answeredCount: 4,
+        // endReason deliberately omitted — retry shape
+      }))
+      const json = await res.json()
+
+      // 4 of 10 would taper to 52 under 'normal' (see the user_ended case
+      // above); the persisted time_up must exempt it.
+      expect(json.overall_score).toBe(78)
+      expect(json.red_flags.some((f: string) => f.includes('timer expired'))).toBe(false)
+    })
+
     it('full interview: no completion adjustment, no completion red_flag', async () => {
       mockCompletion.mockResolvedValueOnce(claudeFeedback)
 
