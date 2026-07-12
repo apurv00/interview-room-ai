@@ -26,7 +26,6 @@ export async function generateDataExport(userId: string): Promise<Record<string,
     xpEvents,
     badges,
     servedProblems,
-    jobApplications,
   ] = await Promise.all([
     User.findById(uid).select('-password -__v').lean(),
     InterviewSession.find({ userId: uid })
@@ -43,10 +42,49 @@ export async function generateDataExport(userId: string): Promise<Record<string,
     // GDPR completeness: the served-problem ledger holds per-user interview
     // metadata and (for AI picks) the full generated problem body.
     ServedProblem.find({ userId: uid }).select('-__v').sort({ servedAt: -1 }).limit(300).lean(),
-    // GDPR completeness (jobs Wave 1b): application outcomes are Article-20
-    // core; product events are the user's behavioral record.
-    JobApplication.find({ userId: uid }).select('-__v').sort({ updatedAt: -1 }).limit(500).lean(),
   ])
+
+  // GDPR completeness (jobs Wave 1b): application outcomes are Article-20
+  // core. Fetch ALL rows via _id-cursor batches — the model has no
+  // retention cap, so a fixed limit silently truncates active users'
+  // tracker history (Codex #508).
+  type LeanJobApplication = {
+    _id: mongoose.Types.ObjectId
+    jobSnapshot?: Record<string, unknown>
+    status?: string
+    statusHistory?: unknown[]
+    appliedAt?: Date
+    interviewDate?: Date
+    outcome?: Record<string, unknown>
+    notes?: string
+    tailoredVersion?: {
+      sourceResumeId: string
+      tailoredText: string
+      structured?: unknown
+      matchScore?: number
+      addedKeywords: string[]
+      missingKeywords: string[]
+      jdHash: string
+      createdAt: Date
+    }
+    atsResult?: Record<string, unknown>
+    createdAt?: Date
+  }
+  const jobApplications: LeanJobApplication[] = []
+  let appCursor: mongoose.Types.ObjectId | null = null
+  for (;;) {
+    const batch = (await JobApplication.find({
+      userId: uid,
+      ...(appCursor ? { _id: { $lt: appCursor } } : {}),
+    })
+      .select('-__v')
+      .sort({ _id: -1 })
+      .limit(500)
+      .lean()) as unknown as LeanJobApplication[]
+    jobApplications.push(...batch)
+    if (batch.length < 500) break
+    appCursor = batch[batch.length - 1]._id
+  }
 
   // Product events: paginated fetch-ALL — a fixed cap silently truncates
   // the behavioral record for active users (180d retention x 300/day

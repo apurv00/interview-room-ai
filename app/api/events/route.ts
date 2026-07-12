@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { connectDB } from '@shared/db/connection'
 import { ProductEvent } from '@shared/db/models'
-import { ProductEventInputSchema, ANON_COOKIE, ANON_COOKIE_MAX_AGE, anonIdFromCookieHeader, mintAnonCookie } from '@jobs'
+import { ProductEventInputSchema, ANON_COOKIE, ANON_COOKIE_MAX_AGE, anonIdFromCookieHeader, mintAnonCookie, stitchAnonEventsToUser } from '@jobs'
 import { logger } from '@shared/logger'
 
 export const dynamic = 'force-dynamic'
@@ -26,6 +26,9 @@ export const POST = composeApiRoute({
   handler: async (req, { body, user }) => {
     const authedUserId = user && user.id !== 'anonymous' ? user.id : null
 
+    // The anon cookie is read for AUTHED requests too (Codex #508): it is
+    // httpOnly, so this server path is the only place the pre-signup
+    // identity can ever be linked to the user.
     let anonId = anonIdFromCookieHeader(req.headers.get('cookie'))
     let mintedCookie: string | null = null
     if (!authedUserId && !anonId) {
@@ -33,13 +36,20 @@ export const POST = composeApiRoute({
       anonId = minted.anonId
       mintedCookie = minted.cookieValue
     }
-
     try {
       await connectDB()
+      // Stitch AFTER connect (bufferCommands:false — a pre-connection
+      // updateMany throws on cold serverless starts).
+      if (authedUserId && anonId && body.name === 'identity_aliased') {
+        // Backfill pre-signup rows to the user — idempotent, never throws.
+        await stitchAnonEventsToUser(anonId, authedUserId)
+      }
       await ProductEvent.create({
         name: body.name,
         userId: authedUserId ?? undefined,
-        anonId: authedUserId ? undefined : anonId ?? undefined,
+        // Authed events KEEP the anon link when the cookie is present —
+        // dropping it orphans the pre-signup history (Codex #508).
+        anonId: anonId ?? undefined,
         jobPostingId: body.jobPostingId,
         applicationId: body.applicationId,
         sessionId: body.sessionId,
