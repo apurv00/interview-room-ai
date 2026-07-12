@@ -97,7 +97,7 @@
 
 ## 6. Cost & timeline summary (honest numbers)
 
-- **Ingestion bill:** ~$34–54/mo launch → ~$120–215/mo @1k MAU. Cost per fresh usable listing ≈ $0.001–0.005.
+- **Ingestion bill [AMENDED 2026-07-12, I-4]:** ~$79–121/mo launch → ~$180–305/mo @1k MAU (incl. the LLM ingest verdict line, $45–67/mo launch + ~$68 one-time backfill; rules-only base was $34–54/$120–215). Cost per fresh usable listing ≈ $0.004–0.008 incl. verdict (rules-only ≈ $0.001–0.005).
 - **LLM product spend:** lazy JD parse ~$8/mo launch; tailor/ATS on existing slots.
 - **Effort:** ingestion ~10d + feed UI ~19.5d + product flow ~27.5d ≈ **57 raw eng-days → 90–115 with the repo's measured 1.6–2.0× accountability overhead → ~4.5–6 months solo full-time**. Core loop closes at ~60% of that.
 - **60-day verdict numbers:** save→practice ≥30%; apply-clicked→confirmed ≥60% with absolute confirmed applies growing; interview_scheduled count with ≥half via the practice-inference channel.

@@ -216,14 +216,14 @@ Efficiency metric: **cost per fresh usable listing** (unique, non-spam, full-JD,
 
 | Gate | Threshold |
 |---|---|
-| G1 Liquidity | median bucket ≥ 20 net-usable postings/week; top-5 fresher-domain variants ≥ 10/week |
-| G2 Freshness | ≥ 10 net-new/bucket/week on ≥ 70% of sampled buckets |
+| G1 Liquidity **[AMENDED 2026-07-12, ruling #17]** | ~~median bucket ≥ 20~~ → per-domain **country-level (India + remote)** unique supply ≥ 20 net-usable/week for every measured domain, with per-domain full-JD ≥ 70% and employer-share ≥ 30%; city cells are harvest/telemetry only, never verdict inputs. Fresher floor unchanged: fresher-domain variants ≥ 10/week |
+| G2 Freshness | ≥ 10 net-new/bucket/week on ≥ 70% of sampled buckets (unchanged by ruling #17) |
 | G3 Full-JD rate | ≥ 70% corpus-wide (measured per source post-stub-filter); priority bucket < 50% flagged |
 | G4 Apply fidelity | ≥ 30% at tier employer+; dead-link rate < 10% |
 | G5 Dedup burden | cross-source dup < 35% |
-| G6 Spam floor | post-filter yield still meets G1 in fresher buckets |
+| G6 Spam floor | post-filter yield still meets the fresher floor per fresher domain |
 
-Verdicts: PASS (G1–G4 for segments 1+2) → build as written. PARTIAL → launch scoped to passing domains, re-probe monthly; never ship a tab that's empty for the majority. FAIL (<50% of priority buckets pass G1–G3) → TheirStack $169 trial against the same gates + Naukri partner hunt informed by measured `viaSite=naukri` share.
+Verdicts **[AMENDED 2026-07-12, ruling #17 — domain-level, supersedes the city-bucket <50% rule]**: PASS (every measured domain clears amended G1; G2/G4/G5/G6 companions hold) → build as written. PARTIAL → launch scoped to the domains that pass, re-probe monthly; never ship a tab that's empty for the majority. FAIL (< 50% of measured domains pass amended G1, or a companion gate disproves) → TheirStack $169 trial against the same gates + Naukri partner hunt informed by measured `viaSite=naukri` share. Note: the probe's `computeVerdict` amendment lands separately — until it does, `report` prints the superseded city-cell verdict and the domain-level readout is derived from the same saved artifacts at zero API cost.
 
 ### Phase 1 — build order
 
