@@ -1,0 +1,305 @@
+import { gzipSync } from 'zlib'
+import crypto from 'crypto'
+import { JobPosting, type IJobPosting } from '@shared/db/models'
+import { classifyJob, isBlockedApplyUrl, classifyApplyUrl, normalizeJdBody, bodyHashOf } from './qualityGate'
+import { companyKey, titleKey, titleTokens, locationKey, fingerprintOf, sourceKeyOf, isConfidentialCompany, titleJaccard, FUZZY_MERGE_JACCARD } from './identityResolver'
+import type { NormalizedJob } from '../adapters/types'
+
+/**
+ * Ingest pipeline — CLASSIFY → IDENTITY → STORE for one batch of normalized
+ * postings (INGESTION §4.2/§4.5). Deterministic throughout; the async LLM
+ * verdict (ruling #16) attaches AFTER store and never runs here.
+ *
+ * The §4.2 false-merge guards, verbatim:
+ *   #1 never merge same-source/different-externalId OPEN postings — the
+ *      fingerprint is salted with the externalId on that collision;
+ *   #2 confidential companies mint NO fingerprint and never merge;
+ *   #3 provenance eviction (cap 8) preserves source diversity;
+ *   #4 merge writes go through findOneAndUpdate on the winner doc — no
+ *      delete-then-insert window.
+ *
+ * Mass-repost (run-level, §4.5): Redis sha1(body) counter over 7 days —
+ * >3 distinct companyKeys = hard drop, 2-3 = 'repost' flag. Injected as a
+ * dependency and FAIL-OPEN: Redis down must not stall ingestion.
+ */
+
+export interface IngestCounters {
+  processed: number
+  drops: Record<string, number>
+  flagged: Record<string, number>
+  newCount: number
+  merged: number
+  refreshed: number
+  fuzzyMerged: number
+  saltedInserts: number
+}
+
+export interface RepostCounterDeps {
+  /** Returns distinct-company count for the body hash after registering companyKey. Fail-open: null. */
+  registerRepost?: (bodyHash: string, companyKeyStr: string) => Promise<number | null>
+}
+
+const PROVENANCE_CAP = 8
+
+function bump(rec: Record<string, number>, key: string): void {
+  rec[key] = (rec[key] ?? 0) + 1
+}
+
+function usableApplyUrls(job: NormalizedJob): string[] {
+  return job.applyOptions.map((o) => o.url).filter((u) => !isBlockedApplyUrl(u))
+}
+
+/** Best-tier apply URL for the snapshot fields (ties keep first-seen order). */
+function bestApplyUrl(urls: string[]): string | null {
+  if (!urls.length) return null
+  return [...urls].sort((a, b) => {
+    const rank = (u: string) => ['direct-ats', 'employer', 'aggregator-deep', 'platform-funnel', 'aggregator-redirect'].indexOf(classifyApplyUrl(u))
+    return rank(a) - rank(b)
+  })[0]
+}
+
+/**
+ * Provenance eviction preserving source diversity (guard #3): when over cap,
+ * evict the stalest entry among sourceIds that have MORE THAN ONE entry
+ * first — a rotating aggregator id must not churn out the only entry from
+ * another source.
+ */
+export function evictProvenance<T extends { sourceId: string; lastSeenAt: Date }>(entries: T[], cap = PROVENANCE_CAP): T[] {
+  if (entries.length <= cap) return entries
+  const sorted = [...entries].sort((a, b) => new Date(a.lastSeenAt).getTime() - new Date(b.lastSeenAt).getTime())
+  while (sorted.length > cap) {
+    const counts = new Map<string, number>()
+    for (const e of sorted) counts.set(e.sourceId, (counts.get(e.sourceId) ?? 0) + 1)
+    const victim = sorted.find((e) => (counts.get(e.sourceId) ?? 0) > 1) ?? sorted[0]
+    sorted.splice(sorted.indexOf(victim), 1)
+  }
+  return sorted
+}
+
+interface PreparedPosting {
+  job: NormalizedJob
+  cKey: string
+  tKey: string
+  tokens: string[]
+  locKey: string
+  fp: string | null
+  sourceKey: string | null
+  usableUrls: string[]
+  jdLen: number
+  flags: string[]
+}
+
+function buildInsertDoc(p: PreparedPosting, sourceId: string, now: Date, saltedFp?: string | null) {
+  const jdNorm = normalizeJdBody(p.job.description)
+  return {
+    companyKey: p.cKey,
+    titleKey: p.tKey,
+    titleTokens: p.tokens,
+    locationKeys: [p.locKey],
+    fingerprint: saltedFp ?? p.fp ?? undefined,
+    confidentialCompany: isConfidentialCompany(p.job.company),
+    title: p.job.title.slice(0, 300),
+    company: p.job.company.slice(0, 300),
+    locations: p.job.city ? [p.job.city] : [],
+    isRemote: p.job.isRemote,
+    domain: p.job.domainHint,
+    jdCompressed: jdNorm ? gzipSync(Buffer.from(jdNorm)) : undefined,
+    jdLength: p.jdLen,
+    provenance: p.job.externalId
+      ? [{
+          sourceId,
+          externalId: p.job.externalId,
+          sourceKey: sourceKeyOf(sourceId, p.job.externalId),
+          applyUrl: bestApplyUrl(p.usableUrls) ?? p.usableUrls[0] ?? '',
+          applyTier: p.usableUrls.length ? classifyApplyUrl(bestApplyUrl(p.usableUrls) as string) : 'aggregator-redirect',
+          viaSite: p.job.viaSite || undefined,
+          firstSeenAt: now,
+          lastSeenAt: now,
+        }]
+      : [],
+    flags: {
+      staffing: p.flags.includes('staffing'),
+      salaryConflict: false,
+      shortJd: p.flags.includes('short-jd'),
+      repost: p.flags.includes('repost'),
+      repostCount: p.flags.includes('repost') ? 2 : 0,
+    },
+    status: 'open' as const,
+    postedAt: p.job.postedAt ? new Date(p.job.postedAt) : undefined,
+    validThrough: p.job.validThrough ? new Date(p.job.validThrough) : undefined,
+    userReferenced: false,
+  }
+}
+
+/** Merge an incoming posting into an existing canonical doc (§4.2 policy). */
+export function mergeIntoDoc(doc: IJobPosting, p: PreparedPosting, sourceId: string, now: Date): void {
+  // Provenance: refresh same sourceKey, else append (respecting cap+diversity).
+  const sk = p.sourceKey
+  if (sk) {
+    const existing = doc.provenance.find((e) => e.sourceKey === sk)
+    if (existing) {
+      existing.lastSeenAt = now
+    } else {
+      const url = bestApplyUrl(p.usableUrls) ?? p.usableUrls[0] ?? ''
+      doc.provenance.push({
+        sourceId,
+        externalId: p.job.externalId as string,
+        sourceKey: sk,
+        applyUrl: url,
+        applyTier: url ? classifyApplyUrl(url) : 'aggregator-redirect',
+        viaSite: p.job.viaSite || undefined,
+        firstSeenAt: now,
+        lastSeenAt: now,
+      })
+      doc.provenance = evictProvenance(doc.provenance)
+    }
+  }
+  // JD: longest normalized body wins.
+  if (p.jdLen > (doc.jdLength ?? 0)) {
+    const jdNorm = normalizeJdBody(p.job.description)
+    doc.jdCompressed = gzipSync(Buffer.from(jdNorm))
+    doc.jdLength = p.jdLen
+  }
+  // postedAt: earliest non-null (aggregators re-stamp reposts).
+  const incoming = p.job.postedAt ? new Date(p.job.postedAt) : null
+  if (incoming && (!doc.postedAt || incoming < doc.postedAt)) doc.postedAt = incoming
+  // locations: union of location keys (bounded by metro cardinality).
+  if (p.locKey && !doc.locationKeys.includes(p.locKey)) doc.locationKeys.push(p.locKey)
+  if (p.job.city && !doc.locations.includes(p.job.city)) doc.locations.push(p.job.city)
+  // Flags only ever tighten deterministically here (staffing/shortJd recompute
+  // is left to the winner's own classify — a merged stub must not unset them).
+}
+
+export async function ingestBatch(
+  jobs: NormalizedJob[],
+  sourceId: string,
+  deps: RepostCounterDeps = {}
+): Promise<IngestCounters> {
+  const counters: IngestCounters = {
+    processed: 0, drops: {}, flagged: {}, newCount: 0, merged: 0, refreshed: 0, fuzzyMerged: 0, saltedInserts: 0,
+  }
+  const now = new Date()
+
+  for (const job of jobs) {
+    counters.processed++
+    const urls = job.applyOptions.map((o) => o.url)
+    const { drops, flags, jdLen } = classifyJob({
+      title: job.title,
+      company: job.company,
+      description: job.description,
+      applyUrls: urls,
+      validThrough: job.validThrough,
+    })
+
+    // Run-level mass-repost (fail-open on Redis absence/errors).
+    const effectiveFlags: string[] = [...flags]
+    let massRepost = false
+    const bh = bodyHashOf(job.description)
+    if (bh && deps.registerRepost) {
+      const distinctCompanies = await deps.registerRepost(bh, companyKey(job.company)).catch(() => null)
+      if (distinctCompanies !== null) {
+        if (distinctCompanies > 3) massRepost = true
+        else if (distinctCompanies >= 2) effectiveFlags.push('repost')
+      }
+    }
+
+    if (drops.length || massRepost) {
+      for (const d of drops) bump(counters.drops, d)
+      if (massRepost) bump(counters.drops, 'mass-repost')
+      continue // hard drops are never stored (§4.5 floor)
+    }
+    for (const f of effectiveFlags) bump(counters.flagged, f)
+
+    const prepared: PreparedPosting = {
+      job,
+      cKey: companyKey(job.company),
+      tKey: titleKey(job.title),
+      tokens: titleTokens(job.title),
+      locKey: locationKey(job.city, job.isRemote),
+      fp: fingerprintOf(job.company, job.title, job.city, job.isRemote),
+      sourceKey: job.externalId ? sourceKeyOf(sourceId, job.externalId) : null,
+      usableUrls: usableApplyUrls(job),
+      jdLen,
+      flags: effectiveFlags,
+    }
+
+    // ── Identity ladder ──
+    // Tier 1: sourceKey refresh.
+    if (prepared.sourceKey) {
+      const bySource = await JobPosting.findOne({ 'provenance.sourceKey': prepared.sourceKey })
+      if (bySource) {
+        mergeIntoDoc(bySource, prepared, sourceId, now)
+        await bySource.save()
+        counters.refreshed++
+        continue
+      }
+    }
+
+    // Tier 2: canonical fingerprint (absent for confidential — guard #2).
+    if (prepared.fp) {
+      const byFp = await JobPosting.findOne({ fingerprint: prepared.fp })
+      if (byFp) {
+        // Guard #1: same source, different externalId, both open ⇒ distinct
+        // postings (multiple openings of one role) — salt, insert, never merge.
+        const sameSourceDifferentExternal =
+          byFp.status === 'open' &&
+          !!prepared.job.externalId &&
+          byFp.provenance.some((e) => e.sourceId === sourceId && e.externalId !== prepared.job.externalId)
+        if (sameSourceDifferentExternal) {
+          const salted = fingerprintOf(job.company, job.title, job.city, job.isRemote, prepared.job.externalId as string)
+          await JobPosting.create(buildInsertDoc(prepared, sourceId, now, salted))
+          counters.saltedInserts++
+          counters.newCount++
+          continue
+        }
+        mergeIntoDoc(byFp, prepared, sourceId, now)
+        await byFp.save()
+        counters.merged++
+        continue
+      }
+    }
+
+    // Tier 3: fuzzy — COMPANY-SCOPED only, location overlap, Jaccard ≥ 0.85.
+    if (!isConfidentialCompany(job.company)) {
+      const candidates = await JobPosting.find({ companyKey: prepared.cKey, status: 'open' }).limit(20)
+      const match = candidates.find(
+        (c) => c.locationKeys.includes(prepared.locKey) && titleJaccard(c.titleKey, prepared.tKey) >= FUZZY_MERGE_JACCARD
+      )
+      if (match) {
+        mergeIntoDoc(match, prepared, sourceId, now)
+        await match.save()
+        counters.fuzzyMerged++
+        counters.merged++
+        continue
+      }
+    }
+
+    // Tier 4: insert.
+    await JobPosting.create(buildInsertDoc(prepared, sourceId, now))
+    counters.newCount++
+  }
+
+  return counters
+}
+
+/**
+ * Redis-backed 7d mass-repost counter (§4.5): sha1(body) → set of
+ * companyKeys. Returns the distinct-company count AFTER registering.
+ * Fail-open (null) on any Redis error — ingestion never stalls on Redis.
+ */
+export function makeRedisRepostCounter(redis: {
+  sadd: (k: string, v: string) => Promise<number>
+  expire: (k: string, s: number) => Promise<number>
+  scard: (k: string) => Promise<number>
+}): NonNullable<RepostCounterDeps['registerRepost']> {
+  return async (bodyHash, companyKeyStr) => {
+    try {
+      const key = `jobs:repost:7d:${bodyHash}`
+      const added = await redis.sadd(key, crypto.createHash('sha1').update(companyKeyStr).digest('hex').slice(0, 12))
+      if (added === 1) await redis.expire(key, 7 * 24 * 3600)
+      return await redis.scard(key)
+    } catch {
+      return null
+    }
+  }
+}

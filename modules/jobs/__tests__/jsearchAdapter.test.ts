@@ -1,0 +1,83 @@
+import { describe, it, expect } from 'vitest'
+import { jsearchAdapter, buildHarvestBuckets } from '@jobs'
+import type { FetchTarget } from '@jobs'
+
+const bucketTarget: FetchTarget = { kind: 'bucket', bucketId: 'backend:pune', query: 'backend developer in Pune', datePostedWindow: 'week', page: 1 }
+
+// Fixture mirrors the probe-validated JSearch wire shape (PR #503).
+const RAW = {
+  job_id: 'abc123',
+  job_title: 'Backend Developer',
+  employer_name: 'Acme Pvt Ltd',
+  job_city: 'Pune',
+  job_is_remote: false,
+  job_description: 'Build APIs. '.repeat(50),
+  job_posted_at_datetime_utc: '2026-07-10T00:00:00Z',
+  job_offer_expiration_datetime_utc: '2026-08-01T00:00:00Z',
+  job_publisher: 'LinkedIn',
+  job_apply_link: 'https://www.linkedin.com/jobs/view/1',
+  apply_options: [
+    { apply_link: 'https://boards.greenhouse.io/acme/jobs/1', publisher: 'Greenhouse', is_direct: true },
+  ],
+}
+
+describe('jsearchAdapter.normalize', () => {
+  it('maps the probe-validated wire shape, retaining validThrough and externalId', () => {
+    const n = jsearchAdapter.normalize(RAW, bucketTarget)
+    expect(n).not.toBeNull()
+    expect(n!.title).toBe('Backend Developer')
+    expect(n!.company).toBe('Acme Pvt Ltd')
+    expect(n!.validThrough).toBe('2026-08-01T00:00:00Z')
+    expect(n!.externalId).toBe('abc123')
+    expect(n!.viaSite).toBe('linkedin')
+    expect(n!.domainHint).toBe('backend')
+    // job_apply_link joins apply_options without duplication
+    expect(n!.applyOptions.map((o) => o.url)).toEqual([
+      'https://boards.greenhouse.io/acme/jobs/1',
+      'https://www.linkedin.com/jobs/view/1',
+    ])
+  })
+
+  it('returns null (COUNTED drift) when load-bearing fields are missing', () => {
+    expect(jsearchAdapter.normalize({ employer_name: 'X' }, bucketTarget)).toBeNull()
+    expect(jsearchAdapter.normalize({ job_title: 'Dev' }, bucketTarget)).toBeNull()
+    expect(jsearchAdapter.normalize(null, bucketTarget)).toBeNull()
+  })
+
+  it('falls back city -> state and tolerates absent optional fields', () => {
+    const n = jsearchAdapter.normalize({ job_title: 'Dev', employer_name: 'X', job_state: 'Maharashtra' }, bucketTarget)
+    expect(n!.city).toBe('Maharashtra')
+    expect(n!.applyOptions).toEqual([])
+    expect(n!.postedAt).toBeNull()
+  })
+})
+
+describe('jsearchAdapter.buildTargets', () => {
+  it('emits one page-1 target per harvest bucket with cursor-derived windows', () => {
+    const buckets = buildHarvestBuckets()
+    const targets = jsearchAdapter.buildTargets(
+      { sourceId: 'jsearch', enabled: true },
+      [{ bucket: 'backend:pune', newestPostedAt: new Date(Date.now() - 2 * 3600_000) }]
+    )
+    expect(targets).toHaveLength(buckets.length)
+    const pune = targets.find((t) => t.kind === 'bucket' && t.bucketId === 'backend:pune')
+    expect(pune && t(pune).datePostedWindow).toBe('day') // fresh cursor -> smallest window
+    const other = targets.find((t) => t.kind === 'bucket' && t.bucketId === 'frontend:pune')
+    expect(other && t(other).datePostedWindow).toBe('week') // no cursor -> full window
+    function t(x: FetchTarget) { return x as Extract<FetchTarget, { kind: 'bucket' }> }
+  })
+
+  it('disabled source emits nothing', () => {
+    expect(jsearchAdapter.buildTargets({ sourceId: 'jsearch', enabled: false }, [])).toEqual([])
+  })
+})
+
+describe('harvest matrix', () => {
+  it('covers every taxonomy domain, with remote variants except site-bound trades', () => {
+    const buckets = buildHarvestBuckets()
+    const ids = new Set(buckets.map((b) => b.id))
+    expect(ids.has('mechanical:pune')).toBe(true)   // the once-missing domains harvest too
+    expect(ids.has('civil:remote')).toBe(false)     // site-bound: no remote cell
+    expect(ids.has('backend:remote')).toBe(true)
+  })
+})
