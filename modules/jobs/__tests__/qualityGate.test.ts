@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'vitest'
+// Deliberately imported via the @jobs BARREL (not a relative path): this is
+// the regression proof that the vitest resolver carries the @jobs alias in
+// lockstep with tsconfig (Codex on #507 — tests resolving what the build
+// resolves).
 import {
   classifyJob, classifyApplyUrl, isBlockedApplyUrl, bestUsableTier,
   isStaffingOrg, normalizeJdBody, bodyHashOf,
-} from '../services/qualityGate'
+} from '@jobs'
 
 // Ported from the probe's executable spec (scripts/jobs-liquidity-probe.test.mjs).
 // Cases tagged [Cx-*] are accepted PR #503 review findings — never re-break.
@@ -92,6 +96,14 @@ describe('validThrough', () => {
     expect(future.drops).toHaveLength(0)
     expect(future.flags).not.toContain('bad-valid-through')
   })
+
+  it('[Cx-507] a date-only validThrough stays valid through END of that day', () => {
+    // JSON-LD sources commonly send 'YYYY-MM-DD'; midnight-UTC parsing
+    // expired postings at the START of their closing day.
+    const todayUtc = new Date().toISOString().slice(0, 10)
+    expect(classifyJob({ ...base, description: longBody, validThrough: todayUtc }).drops).not.toContain('valid-through-expired')
+    expect(classifyJob({ ...base, description: longBody, validThrough: '2020-01-01' }).drops).toContain('valid-through-expired')
+  })
 })
 
 describe('flags', () => {
@@ -122,5 +134,13 @@ describe('normalizeJdBody / bodyHashOf', () => {
     const b = bodyHashOf(`<p>${longBody}</p>`)
     expect(a).toMatch(/^[0-9a-f]{20}$/)
     expect(a).toBe(b)
+  })
+
+  it('[Cx-507] entity variants hash identically; entity padding cannot cross the 100-char floor', () => {
+    // '&nbsp;' spelling of the same body must group with its plain twin in
+    // the mass-repost counter, and a 240-raw-byte stub that normalizes to
+    // ~90 chars must mint NO repost key.
+    expect(bodyHashOf(longBody.replace(/ /g, '&nbsp;'))).toBe(bodyHashOf(longBody))
+    expect(bodyHashOf('hi&nbsp;'.repeat(30))).toBeNull()
   })
 })

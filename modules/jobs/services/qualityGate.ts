@@ -7,8 +7,11 @@ import {
 /**
  * Deterministic quality gate (INGESTION §4.5 layer 1 — permanent BLOCKING
  * floor per rulings #15/#16). Pure port of the probe's classifyJob & apply-tier
- * ladder; the probe stays the baseline of record, so behavior here must match
- * it byte-for-byte (the ruling-#16 dual-report compares the two).
+ * ladder; the probe stays the baseline of record and behavior should match it
+ * (the ruling-#16 dual-report compares the two). Two DOCUMENTED divergences
+ * pending the probe's SCHEMA_VERSION amendment, which ports both back
+ * (Codex on #507): (1) date-only validThrough = end-of-day, not midnight;
+ * (2) bodyHashOf runs the shared entity-decoding normalization.
  *
  * Run-level rules (mass-repost Redis counter, CMS blocklist overlay) compose
  * at the ingestPipeline call site — they need I/O this pure layer must not.
@@ -106,7 +109,12 @@ export function classifyJob({ title = '', company = '', description = '', applyU
   // Malformed dates must be VISIBLE, not silently alive: NaN passes neither
   // branch, so bad dates get a flag and real expiries get the drop.
   if (validThrough) {
-    const vt = new Date(validThrough).getTime()
+    // Date-only values (JSON-LD sources commonly send 'YYYY-MM-DD') parse
+    // to midnight UTC, which would expire a posting at the START of its
+    // closing day — treat them as valid through END of that day
+    // (Codex on #507).
+    const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(validThrough.trim())
+    const vt = new Date(isDateOnly ? `${validThrough.trim()}T23:59:59.999Z` : validThrough).getTime()
     if (Number.isNaN(vt)) flags.push('bad-valid-through')
     else if (vt < Date.now()) drops.push('valid-through-expired')
   }
@@ -123,6 +131,9 @@ export function classifyJob({ title = '', company = '', description = '', applyU
  * the pipeline layer). Tiny bodies (<100 chars) hash to noise → null.
  */
 export function bodyHashOf(description = ''): string | null {
-  const norm = description.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 2000)
+  // Same normalization the drop regexes and jdLen use (Codex on #507):
+  // entity-encoded variants of one body must hash identically, and
+  // entity-padded stubs must not cross the 100-char floor on raw bytes.
+  const norm = normalizeJdBody(description).toLowerCase().slice(0, 2000)
   return norm.length >= 100 ? crypto.createHash('sha1').update(norm).digest('hex').slice(0, 20) : null
 }
