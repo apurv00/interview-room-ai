@@ -32,6 +32,8 @@ export interface IngestCounters {
   refreshed: number
   fuzzyMerged: number
   saltedInserts: number
+  /** Rows that failed at the store layer — isolated, never batch-aborting. */
+  storeErrors: number
 }
 
 export interface RepostCounterDeps {
@@ -40,6 +42,16 @@ export interface RepostCounterDeps {
 }
 
 const PROVENANCE_CAP = 8
+
+/** Defensive date parse — Mongoose rejects Invalid Date on Date paths, and
+ *  classifyJob deliberately STORES bad-valid-through rows as flagged
+ *  (visible, not silently alive) — so a malformed provider date must map to
+ *  undefined, never Invalid Date (Codex on #510). */
+function validDate(v: string | null | undefined): Date | undefined {
+  if (!v) return undefined
+  const d = new Date(v)
+  return Number.isNaN(d.getTime()) ? undefined : d
+}
 
 function bump(rec: Record<string, number>, key: string): void {
   rec[key] = (rec[key] ?? 0) + 1
@@ -106,16 +118,21 @@ function buildInsertDoc(p: PreparedPosting, sourceId: string, now: Date, saltedF
     jdCompressed: jdNorm ? gzipSync(Buffer.from(jdNorm)) : undefined,
     jdLength: p.jdLen,
     provenance: p.job.externalId
-      ? [{
-          sourceId,
-          externalId: p.job.externalId,
-          sourceKey: sourceKeyOf(sourceId, p.job.externalId),
-          applyUrl: bestApplyUrl(p.usableUrls) ?? p.usableUrls[0] ?? '',
-          applyTier: p.usableUrls.length ? classifyApplyUrl(bestApplyUrl(p.usableUrls) as string) : 'aggregator-redirect',
-          viaSite: p.job.viaSite || undefined,
-          firstSeenAt: now,
-          lastSeenAt: now,
-        }]
+      ? [(() => {
+          const url = bestApplyUrl(p.usableUrls)
+          return {
+            sourceId,
+            externalId: p.job.externalId,
+            sourceKey: sourceKeyOf(sourceId, p.job.externalId),
+            // undefined, never '' — Mongoose treats '' as missing for
+            // required strings and the field is honest-optional now.
+            applyUrl: url ?? undefined,
+            applyTier: url ? classifyApplyUrl(url) : undefined,
+            viaSite: p.job.viaSite || undefined,
+            firstSeenAt: now,
+            lastSeenAt: now,
+          }
+        })()]
       : [],
     flags: {
       staffing: p.flags.includes('staffing'),
@@ -125,8 +142,8 @@ function buildInsertDoc(p: PreparedPosting, sourceId: string, now: Date, saltedF
       repostCount: p.flags.includes('repost') ? 2 : 0,
     },
     status: 'open' as const,
-    postedAt: p.job.postedAt ? new Date(p.job.postedAt) : undefined,
-    validThrough: p.job.validThrough ? new Date(p.job.validThrough) : undefined,
+    postedAt: validDate(p.job.postedAt),
+    validThrough: validDate(p.job.validThrough),
     userReferenced: false,
   }
 }
@@ -140,13 +157,13 @@ export function mergeIntoDoc(doc: IJobPosting, p: PreparedPosting, sourceId: str
     if (existing) {
       existing.lastSeenAt = now
     } else {
-      const url = bestApplyUrl(p.usableUrls) ?? p.usableUrls[0] ?? ''
+      const url = bestApplyUrl(p.usableUrls)
       doc.provenance.push({
         sourceId,
         externalId: p.job.externalId as string,
         sourceKey: sk,
-        applyUrl: url,
-        applyTier: url ? classifyApplyUrl(url) : 'aggregator-redirect',
+        applyUrl: url ?? undefined,
+        applyTier: url ? classifyApplyUrl(url) : undefined,
         viaSite: p.job.viaSite || undefined,
         firstSeenAt: now,
         lastSeenAt: now,
@@ -161,7 +178,7 @@ export function mergeIntoDoc(doc: IJobPosting, p: PreparedPosting, sourceId: str
     doc.jdLength = p.jdLen
   }
   // postedAt: earliest non-null (aggregators re-stamp reposts).
-  const incoming = p.job.postedAt ? new Date(p.job.postedAt) : null
+  const incoming = validDate(p.job.postedAt) ?? null
   if (incoming && (!doc.postedAt || incoming < doc.postedAt)) doc.postedAt = incoming
   // locations: union of location keys (bounded by metro cardinality).
   if (p.locKey && !doc.locationKeys.includes(p.locKey)) doc.locationKeys.push(p.locKey)
@@ -176,7 +193,7 @@ export async function ingestBatch(
   deps: RepostCounterDeps = {}
 ): Promise<IngestCounters> {
   const counters: IngestCounters = {
-    processed: 0, drops: {}, flagged: {}, newCount: 0, merged: 0, refreshed: 0, fuzzyMerged: 0, saltedInserts: 0,
+    processed: 0, drops: {}, flagged: {}, newCount: 0, merged: 0, refreshed: 0, fuzzyMerged: 0, saltedInserts: 0, storeErrors: 0,
   }
   const now = new Date()
 
@@ -223,6 +240,9 @@ export async function ingestBatch(
       flags: effectiveFlags,
     }
 
+    // Per-row isolation (Codex on #510): one malformed row must count as a
+    // store error and continue — never abort the rest of the batch.
+    try {
     // ── Identity ladder ──
     // Tier 1: sourceKey refresh.
     if (prepared.sourceKey) {
@@ -263,7 +283,13 @@ export async function ingestBatch(
     if (!isConfidentialCompany(job.company)) {
       const candidates = await JobPosting.find({ companyKey: prepared.cKey, status: 'open' }).limit(20)
       const match = candidates.find(
-        (c) => c.locationKeys.includes(prepared.locKey) && titleJaccard(c.titleKey, prepared.tKey) >= FUZZY_MERGE_JACCARD
+        (c) =>
+          c.locationKeys.includes(prepared.locKey) &&
+          titleJaccard(c.titleKey, prepared.tKey) >= FUZZY_MERGE_JACCARD &&
+          // Guard #1 applies to the fuzzy tier too (Codex on #510): a
+          // candidate already carrying this source under a DIFFERENT
+          // externalId is a sibling requisition, not the same posting.
+          !(prepared.job.externalId && c.provenance.some((e) => e.sourceId === sourceId && e.externalId !== prepared.job.externalId))
       )
       if (match) {
         mergeIntoDoc(match, prepared, sourceId, now)
@@ -277,6 +303,9 @@ export async function ingestBatch(
     // Tier 4: insert.
     await JobPosting.create(buildInsertDoc(prepared, sourceId, now))
     counters.newCount++
+    } catch {
+      counters.storeErrors++
+    }
   }
 
   return counters

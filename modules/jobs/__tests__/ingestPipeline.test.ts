@@ -148,6 +148,50 @@ describe('ingestBatch — identity ladder', () => {
   })
 })
 
+describe('Codex #510 regressions', () => {
+  it('a row with NO apply link stores with url-less provenance (no batch abort)', async () => {
+    reset()
+    const c = await ingestBatch([job({ applyOptions: [] })], 'jsearch')
+    expect(c.newCount).toBe(1)
+    const doc = mockCreate.mock.calls[0][0]
+    expect(doc.provenance[0].applyUrl).toBeUndefined()
+    expect(doc.provenance[0].applyTier).toBeUndefined()
+    expect(doc.provenance[0].sourceKey).toBe('jsearch:ext-1')
+  })
+
+  it('a malformed validThrough stores FLAGGED with no date — never Invalid Date', async () => {
+    reset()
+    const c = await ingestBatch([job({ validThrough: 'not-a-date' })], 'jsearch')
+    expect(c.newCount).toBe(1)
+    expect(c.flagged['bad-valid-through']).toBe(1)
+    expect(mockCreate.mock.calls[0][0].validThrough).toBeUndefined()
+  })
+
+  it('[guard #1 fuzzy tier] a candidate carrying the same source under a different externalId is never fuzzy-merged', async () => {
+    reset()
+    const sibling = docStub({
+      titleKey: 'backend developer senior',
+      locationKeys: ['pune'],
+      provenance: [{ sourceId: 'jsearch', externalId: 'ext-OTHER', sourceKey: 'jsearch:ext-OTHER', lastSeenAt: new Date() }],
+    })
+    mockFind.mockReturnValueOnce({ limit: () => Promise.resolve([sibling]) })
+    mockFindOne.mockResolvedValue(null)
+    const c = await ingestBatch([job({ title: 'Senior Backend Developer (Urgent)' })], 'jsearch')
+    expect(c.fuzzyMerged).toBe(0)
+    expect(sibling.save).not.toHaveBeenCalled()
+    expect(c.newCount).toBe(1) // inserted as its own posting
+  })
+
+  it('one store failure is isolated — the rest of the batch proceeds', async () => {
+    reset()
+    mockCreate.mockRejectedValueOnce(new Error('validation failed')).mockResolvedValueOnce({})
+    const c = await ingestBatch([job(), job({ externalId: 'ext-2', title: 'Data Analyst' })], 'jsearch')
+    expect(c.storeErrors).toBe(1)
+    expect(c.newCount).toBe(1)
+    expect(c.processed).toBe(2)
+  })
+})
+
 describe('evictProvenance [guard #3]', () => {
   it('evicts stale duplicates before ever touching another source’s only entry', () => {
     const entries = [

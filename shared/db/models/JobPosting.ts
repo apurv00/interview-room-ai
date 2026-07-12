@@ -25,8 +25,8 @@ export interface IJobProvenance {
   externalId: string
   /** `${sourceId}:${externalId}` — the source-tier identity. */
   sourceKey: string
-  applyUrl: string
-  applyTier: 'direct-ats' | 'employer' | 'aggregator-deep' | 'platform-funnel' | 'aggregator-redirect'
+  applyUrl?: string
+  applyTier?: 'direct-ats' | 'employer' | 'aggregator-deep' | 'platform-funnel' | 'aggregator-redirect'
   viaSite?: string
   firstSeenAt: Date
   lastSeenAt: Date
@@ -108,8 +108,13 @@ const ProvenanceSchema = new Schema<IJobProvenance>(
     sourceId: { type: String, required: true },
     externalId: { type: String, required: true },
     sourceKey: { type: String, required: true },
-    applyUrl: { type: String, required: true },
-    applyTier: { type: String, enum: ['direct-ats', 'employer', 'aggregator-deep', 'platform-funnel', 'aggregator-redirect'], required: true },
+    // Optional: a provider row may carry NO apply link (JSearch rows with
+    // neither apply_options nor job_apply_link) — the entry still anchors
+    // source identity while a sibling source supplies the apply path.
+    // Mongoose treats '' as missing for required strings, so required:true
+    // aborted whole batches (Codex on #510).
+    applyUrl: { type: String },
+    applyTier: { type: String, enum: ['direct-ats', 'employer', 'aggregator-deep', 'platform-funnel', 'aggregator-redirect'] },
     viaSite: { type: String },
     firstSeenAt: { type: Date, required: true },
     lastSeenAt: { type: Date, required: true },
