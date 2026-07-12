@@ -248,6 +248,10 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
       // Privacy mode — promoted from config to a top-level field so it can
       // be queried/audited independently of the nested config blob.
       privacyMode: input.config.privacyMode === true ? true : undefined,
+      // Jobs attribution — promoted for the same reason (the config subdoc
+      // strips unknown keys). attributionRoundTrip.test.ts trips if this
+      // line is removed.
+      attribution: input.config.attribution,
       parentSessionId: rootParentId,
       retakeNumber,
       plannedQuestionCount,

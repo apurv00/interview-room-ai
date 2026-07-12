@@ -103,6 +103,15 @@ export interface IInterviewSession extends Document {
   // never uploaded; audio-only webm and facial-landmark JSON still are.
   privacyMode?: boolean
 
+  // Jobs-feature attribution (Wave 0.2) — which job/application this
+  // session was practiced for. Written only via the jobs hand-off;
+  // queryable for the per-job evidence ticker and 60-day verdict metrics.
+  attribution?: {
+    source: 'jobs'
+    jobId: string
+    applicationId?: string
+  }
+
   // Research donation — candidate opted in to contribute this session's
   // signals to the dual-pipeline comparison experiment. Gate for #4.
   researchDonation?: boolean
@@ -257,6 +266,20 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
     // Privacy mode & research donation (per-session opt-in flags)
     privacyMode: { type: Boolean },
     researchDonation: { type: Boolean },
+
+    // Jobs attribution — top-level (not inside config: the config subdoc's
+    // strict schema silently drops unknown keys, which is how
+    // pathwayContext was lost; attributionRoundTrip.test.ts guards this).
+    attribution: {
+      type: new Schema(
+        {
+          source: { type: String, enum: ['jobs'], required: true },
+          jobId: { type: String, required: true, maxlength: 64 },
+          applicationId: { type: String, maxlength: 64 },
+        },
+        { _id: false }
+      ),
+    },
 
     // Sharing
     shareToken: { type: String, unique: true, sparse: true },

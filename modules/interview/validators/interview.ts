@@ -60,6 +60,15 @@ export const InterviewConfigSchema = z.object({
     difficulty: z.string().max(40).optional(),
     returnTo: z.string().max(500).optional(),
   }).optional(),
+  // Jobs practice hand-off attribution (jobs plan Wave 0.2). Kept in
+  // lockstep with shared/types.ts InterviewConfig, the InterviewSession
+  // schema, and the createSession promotion — attributionRoundTrip.test.ts
+  // fails if any of the four drifts.
+  attribution: z.object({
+    source: z.literal('jobs'),
+    jobId: z.string().min(1).max(64),
+    applicationId: z.string().max(64).optional(),
+  }).optional(),
 })
 
 export const TranscriptEntrySchema = z.object({

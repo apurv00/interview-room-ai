@@ -343,6 +343,11 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
       red_flags: [],
       top_3_improvements: ['already', 'written', 'to DB'],
     }
+    // First findOne is the G.10 endReason fallback (Codex #505 — the body
+    // posts no endReason); the SECOND is the pre-flight cache read.
+    mockSessionFindOne.mockReturnValueOnce({
+      select: () => ({ lean: () => Promise.resolve({ endReason: 'normal' }) }),
+    })
     mockSessionFindOne.mockReturnValueOnce({
       select: () => ({ lean: () => Promise.resolve({ feedback: cachedFeedback }) }),
     })
@@ -371,7 +376,12 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
   it('F-4: pre-flight DB read failure is non-fatal (falls through to normal pipeline)', async () => {
     mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: true })
     mockCompletion.mockResolvedValue(happyCompletion)
-    // Simulate a Mongo outage on the pre-flight read.
+    // First findOne is the G.10 endReason fallback (Codex #505; its own
+    // failure is swallowed internally → 'normal'). Simulate the Mongo
+    // outage on the SECOND call — the pre-flight read this test is about.
+    mockSessionFindOne.mockReturnValueOnce({
+      select: () => ({ lean: () => Promise.resolve({ endReason: 'normal' }) }),
+    })
     mockSessionFindOne.mockReturnValueOnce({
       select: () => ({ lean: () => Promise.reject(new Error('Mongo ECONNREFUSED')) }),
     })
