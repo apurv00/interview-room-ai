@@ -95,7 +95,15 @@ const BUDGETS = {
   // test (__tests__/answerSuggestion.test.ts) is NOT counted (countFiles skips
   // __tests__/). LOC well under budget. +1 headroom. See
   // docs/adr/0015-shared-budget-bump-answer-suggestion.md.
-  'shared':            { maxLOC: 25_000, maxFiles: 137 },
+  // Bumped maxFiles 137 → 145 on 2026-07-12 (jobs Wave 0.3/1): the Jobs
+  // feature adds SEVEN counted shared files across two PRs, all following
+  // the repo's own models-live-in-shared convention (barrel header):
+  // JobPosting, JobSourceConfig, JobIngestCursor, JobIngestCycle (Wave
+  // 0.3), JobApplication + ProductEvent (Wave 1), and
+  // shared/fetchJSONWithRetry.ts (adapter helper). 137 + 7 = 144, +1
+  // headroom = 145. LOC well under budget (~15k/25k) — model files, not
+  // logic sprawl. See docs/adr/0016-shared-budget-bump-jobs-models.md.
+  'shared':            { maxLOC: 25_000, maxFiles: 145 },
 }
 
 const TS_EXTENSIONS = new Set(['.ts', '.tsx'])

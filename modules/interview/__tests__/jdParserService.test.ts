@@ -16,7 +16,7 @@ vi.mock('@shared/services/modelRouter', () => ({
 
 import { parseJobDescription, buildParsedJDContext } from '@interview/services/persona/jdParserService'
 import { isFeatureEnabled } from '@shared/featureFlags'
-import type { IParsedJobDescription } from '@shared/db/models/SavedJobDescription'
+import type { IParsedJobDescription } from '@shared/types'
 
 describe('jdParserService', () => {
   beforeEach(() => {

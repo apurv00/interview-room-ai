@@ -43,7 +43,6 @@ import {
   StreakDay,
   SessionSummary,
   XpEvent,
-  SavedJobDescription,
   DailyChallengeAttempt,
   DrillAttempt,
   UserCompetencyState,
@@ -220,11 +219,20 @@ export async function deleteUserAccount(
     ['StreakDay', StreakDay.deleteMany({ userId: userObjectId })],
     ['SessionSummary', SessionSummary.deleteMany({ userId: userObjectId })],
     ['XpEvent', XpEvent.deleteMany({ userId: userObjectId })],
-    ['SavedJobDescription', SavedJobDescription.deleteMany({ userId: userObjectId })],
     ['DailyChallengeAttempt', DailyChallengeAttempt.deleteMany({ userId: userObjectId })],
     ['DrillAttempt', DrillAttempt.deleteMany({ userId: userObjectId })],
     ['UserCompetencyState', UserCompetencyState.deleteMany({ userId: userObjectId })],
     ['ServedProblem', ServedProblem.deleteMany({ userId: userObjectId })],
+    // Legacy purge (Codex on #506): the SavedJobDescription model/route were
+    // deleted (jobs Wave 0.3), but rows written before that may survive in
+    // Mongo — the privacy deletion path must keep clearing them until the
+    // collection is confirmed dropped in prod. Raw collection access since
+    // no model exists; a missing db handle (tests / cold start) counts 0.
+    ['SavedJobDescription (legacy)', (async () => {
+      const db = mongoose.connection.db
+      if (!db) return { deletedCount: 0 }
+      return db.collection('savedjobdescriptions').deleteMany({ userId: userObjectId })
+    })()],
   ]
 
   for (const [name, op] of cascadeOps) {

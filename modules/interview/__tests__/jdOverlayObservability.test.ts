@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { IParsedJobDescription, ParsedRequirement } from '@shared/db/models/SavedJobDescription'
+import type { IParsedJobDescription, ParsedRequirement } from '@shared/types'
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 

@@ -63,7 +63,6 @@ vi.mock('@shared/db/models', () => {
       deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }),
     },
     XpEvent: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
-    SavedJobDescription: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     DailyChallengeAttempt: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     DrillAttempt: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     UserCompetencyState: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
@@ -227,6 +226,11 @@ describe('deleteUserAccount – R2 key coverage', () => {
     // The ledger stores userId, interview metadata, and (for AI picks) the
     // full problem body — it must not survive DELETE /api/account.
     expect(result.collectionsCleared['ServedProblem']).toBe(2)
+    // Legacy SavedJobDescription purge must stay in the cascade until the
+    // prod collection is confirmed dropped (Codex on #506) — raw collection
+    // path counts 0 here (no live connection in tests), but the KEY existing
+    // proves the entry wasn't removed.
+    expect(result.collectionsCleared).toHaveProperty('SavedJobDescription (legacy)')
   })
 
   it('projection requested by InterviewSession.find includes audio and screen keys', async () => {

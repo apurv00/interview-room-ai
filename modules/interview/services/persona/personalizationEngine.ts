@@ -9,7 +9,7 @@ import {
 } from '@learn'
 import { getCompanyContext } from './retrievalService'
 import { buildParsedJDContext } from './jdParserService'
-import type { IParsedJobDescription } from '@shared/db/models/SavedJobDescription'
+import type { IParsedJobDescription } from '@shared/types'
 import { logger } from '@shared/logger'
 
 // ─── Session Brief ──────────────────────────────────────────────────────────

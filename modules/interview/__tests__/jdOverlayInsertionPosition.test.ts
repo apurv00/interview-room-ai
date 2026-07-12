@@ -5,7 +5,7 @@ import { TEMPLATE_REGISTRY } from '@interview/flow/templates'
 import { getQuestionCount } from '@interview/config/interviewConfig'
 import type { Duration } from '@shared/types'
 import type { FlowTemplate } from '@interview/flow/types'
-import type { IParsedJobDescription, ParsedRequirement } from '@shared/db/models/SavedJobDescription'
+import type { IParsedJobDescription, ParsedRequirement } from '@shared/types'
 
 /**
  * Phase 2 audit + E.5 survival: verify that JD overlay insertions

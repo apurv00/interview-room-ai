@@ -49,6 +49,29 @@ export interface InterviewConfig {
   }
 }
 
+// ─── Parsed Job Description ──────────────────────────────────────────────────
+// Hoisted from the deleted SavedJobDescription model (dead surface, zero UI
+// consumers — jobs plan Wave 0.3). These are the shared JD-parse types
+// produced by jdParserService (`interview.jd-extract` slot) and consumed by
+// the interview services and, later, the jobs module's job-detail X-ray.
+
+export interface ParsedRequirement {
+  id: string
+  category: 'technical' | 'behavioral' | 'experience' | 'education' | 'cultural'
+  requirement: string
+  importance: 'must-have' | 'nice-to-have'
+  targetCompetencies: string[]
+}
+
+export interface IParsedJobDescription {
+  rawText: string
+  company: string
+  role: string
+  inferredDomain: string
+  requirements: ParsedRequirement[]
+  keyThemes: string[]
+}
+
 // ─── State Machine ────────────────────────────────────────────────────────────
 
 export type InterviewState =
