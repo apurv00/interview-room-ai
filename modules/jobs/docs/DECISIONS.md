@@ -70,7 +70,7 @@
 ## 4. Decisions — CONFIRMED BY FOUNDER 2026-07-11
 
 - **I-1 CONFIRMED:** JSearch **Pro $25/mo** at launch (Ultra $75 is the pre-approved ceiling if the probe shows page-depth need).
-- **I-2 CONFIRMED:** Atlas M0 → **M2 $9/mo** from the week ingestion turns on. Budget approved: ~$34/mo launch run-rate.
+- **I-2 CONFIRMED:** Atlas M0 → **M2 $9/mo** from the week ingestion turns on. ~~Budget approved: ~$34/mo launch run-rate~~ **[SUPERSEDED 2026-07-12 by I-4]** — that figure was the rules-only ceiling; the approved launch run-rate is now **~$79–121/mo** (I-4 below; INGESTION §5).
 - **I-3 CONFIRMED (default accepted):** govt-notification shelf deferred behind a flag.
 - **I-4 CONFIRMED (2026-07-12):** LLM ingest verdict at **full-corpus coverage** — ~$45–67/mo steady (gpt-5.6-luna, effort low, cached per verdictInputHash) + ~$68 one-time backfill of the standing corpus; **auto soft-close** on `fraud` + genuineness ≤ 0.2 (never delete; CMS-reviewable/reopenable); sequencing = **spec amendment first** (this PR), code phases (rules-only ingestion → verdict infra → shadow → enforce) start after the B-side probe verdict. Ingestion total re-derived: ~$79–121/mo launch (INGESTION §5).
 - **P-1 DIRECTION CONFIRMED (default accepted):** jobs-attributed sessions get a distinct allowance + honest degradation surfaces at every quota-adjacent moment; **final numbers decided with the paywall design** (blocks the paywall flip, not the launch). Seams wired in Phase 1.
