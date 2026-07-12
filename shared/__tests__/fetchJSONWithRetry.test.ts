@@ -60,6 +60,19 @@ describe('fetchJSONWithRetry', () => {
     expect(f).toHaveBeenCalledTimes(2)
   })
 
+  it('[Cx-507] unread retryable bodies are cancelled before backoff (socket release)', async () => {
+    const cancel503 = vi.fn().mockResolvedValue(undefined)
+    const cancel404 = vi.fn().mockResolvedValue(undefined)
+    const f = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 503, body: { cancel: cancel503 } })
+      .mockResolvedValueOnce({ ok: false, status: 404, body: { cancel: cancel404 } })
+    vi.stubGlobal('fetch', f)
+    const r = await fetchJSONWithRetry('https://x.test/a', {}, { baseDelayMs: 1 })
+    expect(cancel503).toHaveBeenCalledTimes(1) // retryable path releases before sleeping
+    expect(cancel404).toHaveBeenCalledTimes(1) // terminal path releases before returning
+    expect(r).toEqual({ ok: false, status: 404, error: 'http-404' })
+  })
+
   it('[Cx-507] a pre-aborted caller signal short-circuits — fetch never fires', async () => {
     const f = vi.fn()
     vi.stubGlobal('fetch', f)

@@ -62,9 +62,16 @@ export async function fetchJSONWithRetry<T>(
           throw parseErr
         }
       } else if (res.status !== 429 && res.status < 500) {
+        // Release the connection on the terminal path too — an unread body
+        // pins an undici socket until GC.
+        try { await res.body?.cancel() } catch { /* already closed */ }
         return { ok: false, status: res.status, error: `http-${res.status}` }
       } else {
         lastError = `http-${res.status}`
+        // Release the connection BEFORE backing off — repeated retryable
+        // 429/5xx responses with unread bodies tie up sockets across the
+        // whole backoff sequence (Codex on #507; probe helper parity).
+        try { await res.body?.cancel() } catch { /* already closed */ }
       }
     } catch (err) {
       // Discriminate on OUR controller's state, not the error name — the
