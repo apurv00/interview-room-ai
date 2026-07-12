@@ -144,15 +144,61 @@ describe('computeCompletionAdjustment (G.10)', () => {
     })
   })
 
-  describe('red flags', () => {
-    it('produces a time_up variant message', () => {
+  describe('time_up exemption (jobs precondition, 2026-07-12)', () => {
+    // The timer is the product's design, not the candidate's choice — a
+    // 15-min session naturally ends at 5-6 of 10 planned and must not be
+    // treated as an early bail.
+    it('applies no taper even deep below the 60% threshold', () => {
       const r = computeCompletionAdjustment({
         plannedQuestionCount: 10,
-        answeredCount: 7,
+        answeredCount: 4,
         endReason: 'time_up',
       })
-      expect(r.redFlags[0]).toMatch(/timer expired/i)
+      expect(r.scoreMultiplier).toBe(1)
     })
+
+    it('keeps the sparsity confidence clamp — honesty is not a penalty', () => {
+      // <50% answered = thin evidence, Low confidence stands even for a
+      // timer-complete session; at ≥50% no clamp, same as any end reason.
+      expect(computeCompletionAdjustment({
+        plannedQuestionCount: 10, answeredCount: 4, endReason: 'time_up',
+      }).clampConfidenceTo).toBe('Low')
+      expect(computeCompletionAdjustment({
+        plannedQuestionCount: 10, answeredCount: 5, endReason: 'time_up',
+      }).clampConfidenceTo).toBeNull()
+    })
+
+    it('emits no red flag — a timer-complete session is complete', () => {
+      const r = computeCompletionAdjustment({
+        plannedQuestionCount: 10,
+        answeredCount: 6,
+        endReason: 'time_up',
+      })
+      expect(r.redFlags).toEqual([])
+    })
+
+    it('short-form guard still fires regardless of end reason', () => {
+      const r = computeCompletionAdjustment({
+        plannedQuestionCount: 10,
+        answeredCount: 2,
+        endReason: 'time_up',
+      })
+      expect(r.shouldReturnShortForm).toBe(true)
+      expect(r.scoreMultiplier).toBe(0)
+      expect(r.clampConfidenceTo).toBe('Low')
+    })
+
+    it('still reports the true completionRatio for telemetry', () => {
+      const r = computeCompletionAdjustment({
+        plannedQuestionCount: 10,
+        answeredCount: 5,
+        endReason: 'time_up',
+      })
+      expect(r.completionRatio).toBe(0.5)
+    })
+  })
+
+  describe('red flags', () => {
 
     it('produces a user_ended variant message', () => {
       const r = computeCompletionAdjustment({
@@ -399,8 +445,9 @@ describe('POST /api/generate-feedback — G.10 flag gate', () => {
       // unchanged because all rows are identical 75s).
       expect(json.overall_score).toBe(78)
       expect(json.confidence_level).not.toBe('Low')
-      // Still pushes red_flag since answered < planned.
-      expect(json.red_flags.some((f: string) => f.includes('timer expired'))).toBe(true)
+      // time_up exemption (2026-07-12): a timer-complete session is
+      // complete — no "timer expired" red flag is pushed anymore.
+      expect(json.red_flags.some((f: string) => f.includes('timer expired'))).toBe(false)
     })
 
     it('full interview: no completion adjustment, no completion red_flag', async () => {

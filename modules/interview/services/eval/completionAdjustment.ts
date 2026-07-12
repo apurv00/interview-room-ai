@@ -95,6 +95,27 @@ export function computeCompletionAdjustment(input: CompletionInput): CompletionA
     }
   }
 
+  // time_up exemption (jobs precondition, founder-confirmed 2026-07-12;
+  // gap verified: a 15-minute session naturally timer-ends at 5-6 of 10
+  // planned questions and was tapered + Low-clamped + red-flagged for
+  // it). The timer is the PRODUCT'S design, not the candidate's choice —
+  // a session that ran its full allotted duration is complete at whatever
+  // count the timer allowed: no taper, no ratio-based confidence clamp,
+  // no red flag. The short-form guard above still applies regardless of
+  // end reason: 1-2 answers cannot produce a scored report.
+  if (endReason === 'time_up') {
+    return {
+      scoreMultiplier: 1,
+      shouldReturnShortForm: false,
+      // Confidence is a data-sparsity signal, not a penalty — the <50%
+      // clamp stays even for timer-complete sessions (thin evidence is
+      // thin evidence), while score and red flags are exempt.
+      clampConfidenceTo: planned > 0 && ratioRaw < 0.5 ? 'Low' : null,
+      redFlags: [],
+      completionRatio,
+    }
+  }
+
   // Linear taper: full credit at ≥60% completion, then scale down.
   // If we don't know `planned`, default to no penalty (multiplier=1) —
   // the caller likely has a legacy session without G.7 fields.
