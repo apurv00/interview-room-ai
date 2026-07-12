@@ -44,8 +44,8 @@ export interface IJobLlmVerdict {
   seniority?: 'fresher' | 'junior' | 'mid' | 'senior' | 'lead' | 'unspecified'
   fresherFriendly?: boolean
   geo?: { locations: string[]; workMode: 'onsite' | 'hybrid' | 'remote' | 'unspecified' }
-  /** Full-field-set hash the verdict binds to — input change ⇒ re-verdict. */
-  contentHash?: string
+  /** Full-field-set hash the verdict binds to (spec name, ruling #16) — input change ⇒ re-verdict. */
+  verdictInputHash?: string
   /** `${actualModelUsed}:${promptVersion}` — immutable within an epoch. */
   epoch?: string
   model?: string
@@ -138,7 +138,7 @@ const LlmVerdictSchema = new Schema<IJobLlmVerdict>(
         { _id: false }
       ),
     },
-    contentHash: { type: String },
+    verdictInputHash: { type: String },
     epoch: { type: String },
     model: { type: String },
     promptVersion: { type: String },
