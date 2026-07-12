@@ -11,7 +11,8 @@
 //                QuestionBank, CompanyPattern, Skill, MultimodalAnalysis
 //   learn      — Competency, Weakness, Summary, Pathway, Drill, XP, Badge,
 //                Streak, DailyChallenge, Benchmark
-//   jobs       — JobPosting, JobSourceConfig, JobIngestCursor, JobIngestCycle
+//   jobs       — JobPosting, JobSourceConfig, JobIngestCursor, JobIngestCycle,
+//                JobApplication, ProductEvent
 //   resume     — WizardConfig, WizardSession
 //   b2b        — (uses Organization + InterviewSession + InterviewTemplate)
 //   cms        — BenchmarkCase, InterviewDomain, InterviewDepth (shared with interview)
@@ -139,6 +140,12 @@ export type { IJobIngestCursor } from './JobIngestCursor'
 
 export { JobIngestCycle } from './JobIngestCycle'
 export type { IJobIngestCycle } from './JobIngestCycle'
+
+export { JobApplication, JOB_APPLICATION_STATUSES } from './JobApplication'
+export type { IJobApplication, JobApplicationStatus } from './JobApplication'
+
+export { ProductEvent } from './ProductEvent'
+export type { IProductEvent } from './ProductEvent'
 
 // ── CMS / Config ──
 

@@ -47,6 +47,9 @@ import {
   DrillAttempt,
   UserCompetencyState,
   ServedProblem,
+  JobApplication,
+  ProductEvent,
+  LessonEngagement,
 } from '@shared/db/models'
 
 // ─── Per-session delete ───────────────────────────────────────────────────────
@@ -223,6 +226,11 @@ export async function deleteUserAccount(
     ['DrillAttempt', DrillAttempt.deleteMany({ userId: userObjectId })],
     ['UserCompetencyState', UserCompetencyState.deleteMany({ userId: userObjectId })],
     ['ServedProblem', ServedProblem.deleteMany({ userId: userObjectId })],
+    ['JobApplication', JobApplication.deleteMany({ userId: userObjectId })],
+    ['ProductEvent', ProductEvent.deleteMany({ userId: userObjectId })],
+    // Pre-existing gap surfaced by the Wave-1b GDPR completeness tripwire:
+    // per-user lesson engagement rows survived account deletion.
+    ['LessonEngagement', LessonEngagement.deleteMany({ userId: userObjectId })],
     // Legacy purge (Codex on #506): the SavedJobDescription model/route were
     // deleted (jobs Wave 0.3), but rows written before that may survive in
     // Mongo — the privacy deletion path must keep clearing them until the

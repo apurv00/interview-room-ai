@@ -1,6 +1,6 @@
 import mongoose from 'mongoose'
 import { connectDB } from '@shared/db/connection'
-import { User, InterviewSession, PathwayPlan, ServedProblem } from '@shared/db/models'
+import { User, InterviewSession, PathwayPlan, ServedProblem, JobApplication, ProductEvent } from '@shared/db/models'
 import { UserCompetencyState } from '@shared/db/models/UserCompetencyState'
 import { WeaknessCluster } from '@shared/db/models/WeaknessCluster'
 import { SessionSummary } from '@shared/db/models/SessionSummary'
@@ -26,6 +26,8 @@ export async function generateDataExport(userId: string): Promise<Record<string,
     xpEvents,
     badges,
     servedProblems,
+    jobApplications,
+    productEvents,
   ] = await Promise.all([
     User.findById(uid).select('-password -__v').lean(),
     InterviewSession.find({ userId: uid })
@@ -42,6 +44,10 @@ export async function generateDataExport(userId: string): Promise<Record<string,
     // GDPR completeness: the served-problem ledger holds per-user interview
     // metadata and (for AI picks) the full generated problem body.
     ServedProblem.find({ userId: uid }).select('-__v').sort({ servedAt: -1 }).limit(300).lean(),
+    // GDPR completeness (jobs Wave 1b): application outcomes are Article-20
+    // core; product events are the user's behavioral record.
+    JobApplication.find({ userId: uid }).select('-__v').sort({ updatedAt: -1 }).limit(500).lean(),
+    ProductEvent.find({ userId: uid }).select('-__v -props').sort({ ts: -1 }).limit(1000).lean(),
   ])
 
   if (!user) {
@@ -152,6 +158,32 @@ export async function generateDataExport(userId: string): Promise<Record<string,
       type: e.type,
       amount: e.amount,
       createdAt: e.createdAt,
+    })),
+
+    jobApplications: jobApplications.map(a => ({
+      id: a._id?.toString(),
+      job: a.jobSnapshot,
+      status: a.status,
+      statusHistory: a.statusHistory,
+      appliedAt: a.appliedAt,
+      interviewDate: a.interviewDate,
+      outcome: a.outcome,
+      notes: a.notes,
+      tailoredVersion: a.tailoredVersion ? {
+        matchScore: a.tailoredVersion.matchScore,
+        addedKeywords: a.tailoredVersion.addedKeywords,
+        missingKeywords: a.tailoredVersion.missingKeywords,
+        createdAt: a.tailoredVersion.createdAt,
+      } : null,
+      atsResult: a.atsResult ?? null,
+      createdAt: a.createdAt,
+    })),
+
+    productEvents: productEvents.map(e => ({
+      name: e.name,
+      jobPostingId: e.jobPostingId?.toString(),
+      applicationId: e.applicationId?.toString(),
+      ts: e.ts,
     })),
   }
 }
