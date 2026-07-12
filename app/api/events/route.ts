@@ -68,6 +68,12 @@ export const POST = composeApiRoute({
         secure: process.env.NODE_ENV === 'production',
         maxAge: ANON_COOKIE_MAX_AGE,
         path: '/',
+        // Cross-subdomain funnel identity (Codex #508): the app serves
+        // resume./learn./cms. subdomains and the NextAuth session cookie is
+        // scoped to .interviewprep.guru (authOptions precedent) — a
+        // host-only anon cookie minted on a subdomain would never reach the
+        // apex-host authed stitch call. Host-only in dev.
+        ...(process.env.NODE_ENV === 'production' ? { domain: '.interviewprep.guru' } : {}),
       })
     }
     return res

@@ -54,6 +54,7 @@ export async function generateDataExport(userId: string): Promise<Record<string,
     status?: string
     statusHistory?: unknown[]
     appliedAt?: Date
+    appliedWith?: { resumeId?: string; wasTailored: boolean; tailoredFromResumeId?: string }
     interviewDate?: Date
     outcome?: Record<string, unknown>
     notes?: string
@@ -231,6 +232,9 @@ export async function generateDataExport(userId: string): Promise<Record<string,
       status: a.status,
       statusHistory: a.statusHistory,
       appliedAt: a.appliedAt,
+      // The per-application submission record — which resume, tailored or
+      // not (Codex #508).
+      appliedWith: a.appliedWith ?? null,
       interviewDate: a.interviewDate,
       outcome: a.outcome,
       notes: a.notes,
