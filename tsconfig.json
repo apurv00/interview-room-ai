@@ -32,7 +32,9 @@
       "@resume": ["./modules/resume"],
       "@resume/*": ["./modules/resume/*"],
       "@feedback": ["./modules/feedback"],
-      "@feedback/*": ["./modules/feedback/*"]
+      "@feedback/*": ["./modules/feedback/*"],
+      "@jobs": ["./modules/jobs"],
+      "@jobs/*": ["./modules/jobs/*"]
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],

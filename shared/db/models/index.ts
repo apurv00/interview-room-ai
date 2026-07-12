@@ -11,6 +11,7 @@
 //                SavedJD, QuestionBank, CompanyPattern, Skill, MultimodalAnalysis
 //   learn      — Competency, Weakness, Summary, Pathway, Drill, XP, Badge,
 //                Streak, DailyChallenge, Benchmark
+//   jobs       — JobPosting, JobSourceConfig, JobIngestCursor, JobIngestCycle
 //   resume     — WizardConfig, WizardSession
 //   b2b        — (uses Organization + InterviewSession + InterviewTemplate)
 //   cms        — BenchmarkCase, InterviewDomain, InterviewDepth (shared with interview)
@@ -127,6 +128,20 @@ export type {
   IStrengthBreakdown, IFollowUpQA, IBulletDecisionEntry,
   WizardSegment, WizardStatus, BulletDecision,
 } from './WizardSession'
+
+// ── Jobs (ingestion corpus — INGESTION.md §4.3; owned by modules/jobs) ──
+
+export { JobPosting } from './JobPosting'
+export type { IJobPosting, IJobProvenance, IJobLlmVerdict } from './JobPosting'
+
+export { JobSourceConfig } from './JobSourceConfig'
+export type { IJobSourceConfig } from './JobSourceConfig'
+
+export { JobIngestCursor } from './JobIngestCursor'
+export type { IJobIngestCursor } from './JobIngestCursor'
+
+export { JobIngestCycle } from './JobIngestCycle'
+export type { IJobIngestCycle } from './JobIngestCycle'
 
 // ── CMS / Config ──
 
