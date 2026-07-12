@@ -70,6 +70,14 @@ describe('apply-url blocklist and tier ladder', () => {
     expect(isBlockedApplyUrl('https://recruit.meesho.com/apply/1')).toBe(false)
     expect(isBlockedApplyUrl('https://chat.whatsapp.com/xyz')).toBe(true)
   })
+
+  it('[Cx-507] trailing DNS root dots cannot bypass the blocklist or tier ladder', () => {
+    expect(isBlockedApplyUrl('https://wa.me./919876543210')).toBe(true)
+    expect(isBlockedApplyUrl('https://chat.whatsapp.com./xyz')).toBe(true)
+    expect(classifyApplyUrl('https://www.google.com./url?q=x')).toBe('aggregator-redirect')
+    // and a legit host with a trailing dot still classifies normally
+    expect(classifyApplyUrl('https://boards.greenhouse.io./acme/jobs/1')).toBe('direct-ats')
+  })
   it('all-blocked apply set drops the row', () => {
     expect(classifyJob({ ...base, applyUrls: ['https://bit.ly/x', 'https://forms.gle/y'], description: longBody }).drops).toContain('blocklist-apply-domain')
   })

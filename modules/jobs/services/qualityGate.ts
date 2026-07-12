@@ -11,7 +11,8 @@ import {
  * (the ruling-#16 dual-report compares the two). Two DOCUMENTED divergences
  * pending the probe's SCHEMA_VERSION amendment, which ports both back
  * (Codex on #507): (1) date-only validThrough = end-of-day, not midnight;
- * (2) bodyHashOf runs the shared entity-decoding normalization.
+ * (2) bodyHashOf runs the shared entity-decoding normalization;
+ * (3) hostOf strips trailing DNS root dots before blocklist/tier matching.
  *
  * Run-level rules (mass-repost Redis counter, CMS blocklist overlay) compose
  * at the ingestPipeline call site — they need I/O this pure layer must not.
@@ -37,7 +38,11 @@ export interface ClassifyResult {
 }
 
 function hostOf(u: string): string {
-  try { return new URL(u).hostname.toLowerCase() } catch { return '' }
+  // Strip trailing DNS root dots — 'https://wa.me./x' yields hostname
+  // 'wa.me.', which matches neither the exact entry nor the '.suffix'
+  // rule and would fall through as an 'employer' apply path
+  // (Codex on #507).
+  try { return new URL(u).hostname.toLowerCase().replace(/\.+$/, '') } catch { return '' }
 }
 // Exact host or registrable-suffix match ONLY — substring includes() matched
 // 'recruit.meesho.com'.includes('t.me') and hard-dropped legitimate employers.
