@@ -27,7 +27,6 @@ export async function generateDataExport(userId: string): Promise<Record<string,
     badges,
     servedProblems,
     jobApplications,
-    productEvents,
   ] = await Promise.all([
     User.findById(uid).select('-password -__v').lean(),
     InterviewSession.find({ userId: uid })
@@ -47,8 +46,36 @@ export async function generateDataExport(userId: string): Promise<Record<string,
     // GDPR completeness (jobs Wave 1b): application outcomes are Article-20
     // core; product events are the user's behavioral record.
     JobApplication.find({ userId: uid }).select('-__v').sort({ updatedAt: -1 }).limit(500).lean(),
-    ProductEvent.find({ userId: uid }).select('-__v').sort({ ts: -1 }).limit(1000).lean(),
   ])
+
+  // Product events: paginated fetch-ALL — a fixed cap silently truncates
+  // the behavioral record for active users (180d retention x 300/day
+  // ceiling >> any single-query limit; Codex #508). _id-cursor batches
+  // keep memory bounded without skip() degradation.
+  type LeanProductEvent = {
+    _id: mongoose.Types.ObjectId
+    name: string
+    jobPostingId?: mongoose.Types.ObjectId
+    applicationId?: mongoose.Types.ObjectId
+    sessionId?: mongoose.Types.ObjectId
+    props?: Record<string, unknown>
+    ts: Date
+  }
+  const productEvents: LeanProductEvent[] = []
+  let eventCursor: mongoose.Types.ObjectId | null = null
+  for (;;) {
+    const batch = (await ProductEvent.find({
+      userId: uid,
+      ...(eventCursor ? { _id: { $lt: eventCursor } } : {}),
+    })
+      .select('-__v')
+      .sort({ _id: -1 })
+      .limit(2000)
+      .lean()) as unknown as LeanProductEvent[]
+    productEvents.push(...batch)
+    if (batch.length < 2000) break
+    eventCursor = batch[batch.length - 1]._id
+  }
 
   if (!user) {
     throw new Error('User not found')
@@ -169,17 +196,23 @@ export async function generateDataExport(userId: string): Promise<Record<string,
       interviewDate: a.interviewDate,
       outcome: a.outcome,
       notes: a.notes,
+      // The tailored resume is the user's ONLY per-job copy — export it
+      // in full, not just its metadata (Codex #508).
       tailoredVersion: a.tailoredVersion ? {
+        sourceResumeId: a.tailoredVersion.sourceResumeId,
+        tailoredText: a.tailoredVersion.tailoredText,
+        structured: a.tailoredVersion.structured ?? null,
         matchScore: a.tailoredVersion.matchScore,
         addedKeywords: a.tailoredVersion.addedKeywords,
         missingKeywords: a.tailoredVersion.missingKeywords,
+        jdHash: a.tailoredVersion.jdHash,
         createdAt: a.tailoredVersion.createdAt,
       } : null,
       atsResult: a.atsResult ?? null,
       createdAt: a.createdAt,
     })),
 
-    productEvents: productEvents.map(e => ({
+    productEvents: productEvents.map((e) => ({
       name: e.name,
       jobPostingId: e.jobPostingId?.toString(),
       applicationId: e.applicationId?.toString(),
