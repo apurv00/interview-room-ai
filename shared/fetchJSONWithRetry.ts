@@ -25,11 +25,19 @@ export async function fetchJSONWithRetry<T>(
   options: RetryJSONOptions = {}
 ): Promise<FetchJSONResult<T>> {
   const { maxRetries = 3, baseDelayMs = 1000, timeoutMs = 15000 } = options
+  // Compose the caller's signal with the per-attempt timeout instead of
+  // clobbering it (Codex on #507): upstream cancellation (Inngest step
+  // deadline, route abort) must kill the in-flight request AND the retry
+  // sequence, not run each attempt to timeoutMs.
+  const callerSignal = init.signal ?? undefined
   let lastStatus = 0
   let lastError = 'no attempts made'
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
+    if (callerSignal?.aborted) return { ok: false, status: lastStatus, error: 'aborted' }
     const controller = new AbortController()
+    const onCallerAbort = () => controller.abort()
+    callerSignal?.addEventListener('abort', onCallerAbort, { once: true })
     const timer = setTimeout(() => controller.abort(), timeoutMs)
     try {
       const res = await fetch(url, { ...init, signal: controller.signal })
@@ -48,10 +56,16 @@ export async function fetchJSONWithRetry<T>(
         lastError = `http-${res.status}`
       }
     } catch (err) {
-      lastError = err instanceof Error && err.name === 'AbortError' ? 'timeout' : String(err)
+      lastError =
+        err instanceof Error && err.name === 'AbortError'
+          ? callerSignal?.aborted ? 'aborted' : 'timeout'
+          : String(err)
     } finally {
       clearTimeout(timer)
+      callerSignal?.removeEventListener('abort', onCallerAbort)
     }
+    // A caller abort ends the sequence — retrying cancelled work is waste.
+    if (callerSignal?.aborted) return { ok: false, status: lastStatus, error: 'aborted' }
     if (attempt < maxRetries - 1) {
       await new Promise((r) => setTimeout(r, baseDelayMs * Math.pow(2, attempt)))
     }
