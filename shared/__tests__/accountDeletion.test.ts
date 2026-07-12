@@ -58,6 +58,9 @@ vi.mock('@shared/db/models', () => {
     PathwayPlan: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     WizardSession: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     StreakDay: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
+    JobApplication: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
+    ProductEvent: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
+    LessonEngagement: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     SessionSummary: {
       deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
       deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }),

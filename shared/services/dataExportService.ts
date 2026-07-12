@@ -1,6 +1,6 @@
 import mongoose from 'mongoose'
 import { connectDB } from '@shared/db/connection'
-import { User, InterviewSession, PathwayPlan, ServedProblem } from '@shared/db/models'
+import { User, InterviewSession, PathwayPlan, ServedProblem, JobApplication, ProductEvent } from '@shared/db/models'
 import { UserCompetencyState } from '@shared/db/models/UserCompetencyState'
 import { WeaknessCluster } from '@shared/db/models/WeaknessCluster'
 import { SessionSummary } from '@shared/db/models/SessionSummary'
@@ -43,6 +43,78 @@ export async function generateDataExport(userId: string): Promise<Record<string,
     // metadata and (for AI picks) the full generated problem body.
     ServedProblem.find({ userId: uid }).select('-__v').sort({ servedAt: -1 }).limit(300).lean(),
   ])
+
+  // GDPR completeness (jobs Wave 1b): application outcomes are Article-20
+  // core. Fetch ALL rows via _id-cursor batches — the model has no
+  // retention cap, so a fixed limit silently truncates active users'
+  // tracker history (Codex #508).
+  type LeanJobApplication = {
+    _id: mongoose.Types.ObjectId
+    jobSnapshot?: Record<string, unknown>
+    status?: string
+    statusHistory?: unknown[]
+    appliedAt?: Date
+    appliedWith?: { resumeId?: string; wasTailored: boolean; tailoredFromResumeId?: string }
+    interviewDate?: Date
+    outcome?: Record<string, unknown>
+    notes?: string
+    tailoredVersion?: {
+      sourceResumeId: string
+      tailoredText: string
+      structured?: unknown
+      matchScore?: number
+      addedKeywords: string[]
+      missingKeywords: string[]
+      jdHash: string
+      createdAt: Date
+    }
+    atsResult?: Record<string, unknown>
+    createdAt?: Date
+  }
+  const jobApplications: LeanJobApplication[] = []
+  let appCursor: mongoose.Types.ObjectId | null = null
+  for (;;) {
+    const batch = (await JobApplication.find({
+      userId: uid,
+      ...(appCursor ? { _id: { $lt: appCursor } } : {}),
+    })
+      .select('-__v')
+      .sort({ _id: -1 })
+      .limit(500)
+      .lean()) as unknown as LeanJobApplication[]
+    jobApplications.push(...batch)
+    if (batch.length < 500) break
+    appCursor = batch[batch.length - 1]._id
+  }
+
+  // Product events: paginated fetch-ALL — a fixed cap silently truncates
+  // the behavioral record for active users (180d retention x 300/day
+  // ceiling >> any single-query limit; Codex #508). _id-cursor batches
+  // keep memory bounded without skip() degradation.
+  type LeanProductEvent = {
+    _id: mongoose.Types.ObjectId
+    name: string
+    jobPostingId?: mongoose.Types.ObjectId
+    applicationId?: mongoose.Types.ObjectId
+    sessionId?: mongoose.Types.ObjectId
+    props?: Record<string, unknown>
+    ts: Date
+  }
+  const productEvents: LeanProductEvent[] = []
+  let eventCursor: mongoose.Types.ObjectId | null = null
+  for (;;) {
+    const batch = (await ProductEvent.find({
+      userId: uid,
+      ...(eventCursor ? { _id: { $lt: eventCursor } } : {}),
+    })
+      .select('-__v')
+      .sort({ _id: -1 })
+      .limit(2000)
+      .lean()) as unknown as LeanProductEvent[]
+    productEvents.push(...batch)
+    if (batch.length < 2000) break
+    eventCursor = batch[batch.length - 1]._id
+  }
 
   if (!user) {
     throw new Error('User not found')
@@ -152,6 +224,45 @@ export async function generateDataExport(userId: string): Promise<Record<string,
       type: e.type,
       amount: e.amount,
       createdAt: e.createdAt,
+    })),
+
+    jobApplications: jobApplications.map(a => ({
+      id: a._id?.toString(),
+      job: a.jobSnapshot,
+      status: a.status,
+      statusHistory: a.statusHistory,
+      appliedAt: a.appliedAt,
+      // The per-application submission record — which resume, tailored or
+      // not (Codex #508).
+      appliedWith: a.appliedWith ?? null,
+      interviewDate: a.interviewDate,
+      outcome: a.outcome,
+      notes: a.notes,
+      // The tailored resume is the user's ONLY per-job copy — export it
+      // in full, not just its metadata (Codex #508).
+      tailoredVersion: a.tailoredVersion ? {
+        sourceResumeId: a.tailoredVersion.sourceResumeId,
+        tailoredText: a.tailoredVersion.tailoredText,
+        structured: a.tailoredVersion.structured ?? null,
+        matchScore: a.tailoredVersion.matchScore,
+        addedKeywords: a.tailoredVersion.addedKeywords,
+        missingKeywords: a.tailoredVersion.missingKeywords,
+        jdHash: a.tailoredVersion.jdHash,
+        createdAt: a.tailoredVersion.createdAt,
+      } : null,
+      atsResult: a.atsResult ?? null,
+      createdAt: a.createdAt,
+    })),
+
+    productEvents: productEvents.map((e) => ({
+      name: e.name,
+      jobPostingId: e.jobPostingId?.toString(),
+      applicationId: e.applicationId?.toString(),
+      sessionId: e.sessionId?.toString(),
+      // props ARE the behavioral record (method/tier/trigger/outcomes) —
+      // Article-20 core, bounded by the closed input schema (Codex #508).
+      props: e.props ?? null,
+      ts: e.ts,
     })),
   }
 }
