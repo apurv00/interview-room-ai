@@ -16,6 +16,16 @@ describe('fetchJSONWithRetry', () => {
     expect(r).toEqual({ ok: true, data: { hello: 'world' }, status: 200 })
   })
 
+  it('[Cx-507] a 2xx with malformed JSON is FINAL — no retry, no re-billing', async () => {
+    const f = vi.fn().mockResolvedValue({
+      ok: true, status: 200, json: () => Promise.reject(new SyntaxError('Unexpected token <')),
+    })
+    vi.stubGlobal('fetch', f)
+    const r = await fetchJSONWithRetry('https://x.test/a', {}, { baseDelayMs: 1 })
+    expect(r).toEqual({ ok: false, status: 200, error: 'invalid JSON body' })
+    expect(f).toHaveBeenCalledTimes(1)
+  })
+
   it('does NOT retry non-429 4xx — a 404 is an answer (board liveness)', async () => {
     const f = vi.fn().mockResolvedValue({ ok: false, status: 404 })
     vi.stubGlobal('fetch', f)

@@ -47,8 +47,14 @@ export async function fetchJSONWithRetry<T>(
           // Body is consumed inside the abort window — a stalled body must
           // hit the same timeout as a stalled connect (probe precedent).
           return { ok: true, data: (await res.json()) as T, status: res.status }
-        } catch {
-          lastError = 'invalid JSON body'
+        } catch (parseErr) {
+          // An abort/timeout during the body read keeps its own semantics —
+          // rethrow into the outer catch's discrimination.
+          if (controller.signal.aborted) throw parseErr
+          // A 2xx with a malformed body (HTML error page served as 200) is
+          // permanent — retrying re-bills the same broken payload
+          // (Codex on #507). Final result, no backoff.
+          return { ok: false, status: res.status, error: 'invalid JSON body' }
         }
       } else if (res.status !== 429 && res.status < 500) {
         return { ok: false, status: res.status, error: `http-${res.status}` }
@@ -56,10 +62,12 @@ export async function fetchJSONWithRetry<T>(
         lastError = `http-${res.status}`
       }
     } catch (err) {
-      lastError =
-        err instanceof Error && err.name === 'AbortError'
-          ? callerSignal?.aborted ? 'aborted' : 'timeout'
-          : String(err)
+      // Discriminate on OUR controller's state, not the error name — the
+      // rethrown body-read abort above and provider-specific abort error
+      // shapes must all land on timeout/aborted.
+      lastError = controller.signal.aborted
+        ? callerSignal?.aborted ? 'aborted' : 'timeout'
+        : String(err)
     } finally {
       clearTimeout(timer)
       callerSignal?.removeEventListener('abort', onCallerAbort)
