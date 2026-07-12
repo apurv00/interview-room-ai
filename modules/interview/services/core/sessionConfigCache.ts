@@ -3,7 +3,7 @@ import { logger } from '@shared/logger'
 import { connectDB } from '@shared/db/connection'
 import { User, InterviewDomain, InterviewDepth, EvaluationRubric, InterviewSession } from '@shared/db/models'
 import { isFeatureEnabled } from '@shared/featureFlags'
-import type { IParsedJobDescription } from '@shared/db/models/SavedJobDescription'
+import type { IParsedJobDescription } from '@shared/types'
 
 // ─── Cache Configuration ────────────────────────────────────────────────────
 

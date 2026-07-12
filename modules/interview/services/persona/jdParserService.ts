@@ -2,7 +2,7 @@ import { completion } from '@shared/services/modelRouter'
 import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { logger } from '@shared/logger'
-import type { IParsedJobDescription, ParsedRequirement } from '@shared/db/models/SavedJobDescription'
+import type { IParsedJobDescription, ParsedRequirement } from '@shared/types'
 import { DOMAIN_COMPETENCIES, UNIVERSAL_COMPETENCIES } from '@learn'
 
 // ─── Parse Job Description ─────────────────────────────────────────────────

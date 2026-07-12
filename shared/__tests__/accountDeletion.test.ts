@@ -63,7 +63,6 @@ vi.mock('@shared/db/models', () => {
       deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }),
     },
     XpEvent: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
-    SavedJobDescription: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     DailyChallengeAttempt: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     DrillAttempt: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     UserCompetencyState: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },

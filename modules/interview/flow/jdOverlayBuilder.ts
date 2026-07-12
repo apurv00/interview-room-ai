@@ -1,5 +1,5 @@
 import type { JDOverlay, JDSlotAnnotation, JDSlotInsertion, TopicSlot, ResolvedSlot } from './types'
-import type { IParsedJobDescription } from '@shared/db/models/SavedJobDescription'
+import type { IParsedJobDescription } from '@shared/types'
 import { logger } from '@shared/logger'
 
 /**

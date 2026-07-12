@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { buildJDOverlayFromParsedJD } from '@interview/flow/jdOverlayBuilder'
-import type { IParsedJobDescription, ParsedRequirement } from '@shared/db/models/SavedJobDescription'
+import type { IParsedJobDescription, ParsedRequirement } from '@shared/types'
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 

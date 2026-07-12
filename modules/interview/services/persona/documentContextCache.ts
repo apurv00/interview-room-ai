@@ -8,7 +8,7 @@ import {
   buildParsedResumeContext,
   type ParsedResume,
 } from './resumeContextService'
-import type { IParsedJobDescription } from '@shared/db/models/SavedJobDescription'
+import type { IParsedJobDescription } from '@shared/types'
 
 // ─── Cache Configuration ───────────────────────────────────────────────────
 

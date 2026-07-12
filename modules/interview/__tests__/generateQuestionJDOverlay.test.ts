@@ -17,7 +17,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextRequest } from 'next/server'
-import type { IParsedJobDescription, ParsedRequirement } from '@shared/db/models/SavedJobDescription'
+import type { IParsedJobDescription, ParsedRequirement } from '@shared/types'
 import type { FlowTemplate, JDOverlay, ResolvedFlow } from '@interview/flow'
 
 // ─── Hoisted mocks ─────────────────────────────────────────────────────────
