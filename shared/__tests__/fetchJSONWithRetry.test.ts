@@ -64,6 +64,20 @@ describe('fetchJSONWithRetry', () => {
     expect(f).toHaveBeenCalledTimes(1) // no retry after caller abort
   })
 
+  it('[Cx-507] a caller abort during the retry BACKOFF settles immediately', async () => {
+    // One retryable failure puts the helper into a long exponential sleep;
+    // aborting mid-backoff must resolve 'aborted' now, not after the delay.
+    const ac = new AbortController()
+    const f = vi.fn().mockResolvedValue({ ok: false, status: 503 })
+    vi.stubGlobal('fetch', f)
+    const started = Date.now()
+    setTimeout(() => ac.abort(), 10)
+    const r = await fetchJSONWithRetry('https://x.test/a', { signal: ac.signal }, { baseDelayMs: 60000 })
+    expect(r).toEqual({ ok: false, status: 503, error: 'aborted' })
+    expect(f).toHaveBeenCalledTimes(1)
+    expect(Date.now() - started).toBeLessThan(5000) // nowhere near the 60s backoff
+  })
+
   it('[Cx-507] the helper timeout still reads as timeout, not aborted', async () => {
     const f = vi.fn().mockImplementation((_url: string, init: RequestInit) =>
       new Promise((_resolve, reject) => {

@@ -16,6 +16,14 @@ describe('companyKey', () => {
   it('[Cx] tail-anchored — "Corporation Bank" is not "bank"', () => {
     expect(companyKey('Corporation Bank')).toBe('corporation bank')
   })
+  it('[Cx-507] compact dot/comma-chained suffixes canonicalize identically', () => {
+    expect(companyKey('Acme Pvt.Ltd.')).toBe('acme')
+    expect(companyKey('Acme Pvt., Ltd.')).toBe('acme')
+    expect(companyKey('Acme.Ltd')).toBe('acme')
+    // the same employer must mint ONE fingerprint across spellings
+    expect(fingerprintOf('Acme Pvt.Ltd.', 'Developer', 'Pune', false))
+      .toBe(fingerprintOf('Acme Pvt Ltd', 'Developer', 'Pune', false))
+  })
   it('never strips solutions/technologies (half of India consultancy namespace)', () => {
     expect(companyKey('ABC Solutions')).toBe('abc solutions')
   })

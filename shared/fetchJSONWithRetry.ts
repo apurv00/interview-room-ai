@@ -67,7 +67,18 @@ export async function fetchJSONWithRetry<T>(
     // A caller abort ends the sequence — retrying cancelled work is waste.
     if (callerSignal?.aborted) return { ok: false, status: lastStatus, error: 'aborted' }
     if (attempt < maxRetries - 1) {
-      await new Promise((r) => setTimeout(r, baseDelayMs * Math.pow(2, attempt)))
+      // Abortable backoff (Codex on #507): a caller abort during the
+      // exponential delay must settle the helper immediately, not after
+      // the full sleep — the loop-top check returns 'aborted' right after.
+      await new Promise<void>((resolve) => {
+        const finish = () => {
+          clearTimeout(timer)
+          callerSignal?.removeEventListener('abort', finish)
+          resolve()
+        }
+        const timer = setTimeout(finish, baseDelayMs * Math.pow(2, attempt))
+        callerSignal?.addEventListener('abort', finish, { once: true })
+      })
     }
   }
 

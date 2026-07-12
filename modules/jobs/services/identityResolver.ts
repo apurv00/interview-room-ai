@@ -16,7 +16,11 @@ import { METRO_ALIASES } from '../config/metros'
 
 // Anchored to the TAIL and iterated — an unanchored strip turned
 // 'Corporation Bank' into 'bank', false-merging distinct employers.
-const LEGAL_SUFFIX_TAIL_RE = /(\s+(pvt|private|ltd|limited|llp|inc|incorporated|corp|corporation)\.?)+\s*$/
+// Separators between chained suffixes accept dots/commas as well as
+// whitespace: 'Acme Pvt.Ltd.' must canonicalize identically to
+// 'Acme Pvt Ltd' or the same employer mints two fingerprints and
+// duplicate postings bypass the merge ladder (Codex on #507).
+const LEGAL_SUFFIX_TAIL_RE = /([\s.,]+(pvt|private|ltd|limited|llp|inc|incorporated|corp|corporation))+[\s.,]*$/
 const TITLE_STOPWORDS = new Set(['the', 'a', 'an', 'and', 'or', 'for', 'of', 'in', 'at', 'to', 'with'])
 // Constructed (not literals): the tsconfig target predates the `u` flag's
 // literal syntax; runtime semantics are identical on Node 18+.
