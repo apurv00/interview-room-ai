@@ -157,6 +157,13 @@ export const atsBoardAdapter: JobSourceAdapter = {
     }
     if (kind === 'smartrecruiters') {
       if (typeof j.name !== 'string' || j.id == null) return null
+      // Bare city ONLY — the combined 'Pune, IN' locationText is for the
+      // India filter, but locationKey()'s alias table needs the naked metro
+      // or SR rows mint keys like 'pune,-in' and never merge with the rest
+      // of the metro corpus (Codex on #513 round-3). Ditto location.remote.
+      const srLoc = j.location as Record<string, unknown> | undefined
+      const srCity = typeof srLoc?.city === 'string' ? srLoc.city : ''
+      const srRemote = srLoc?.remote === true || srLoc?.remote === 'true'
       // NEVER the API `ref` (api.smartrecruiters.com detail endpoint — not a
       // candidate-facing page; Codex on #513, P1). Prefer a provider-sent
       // public applyUrl; else construct the public posting URL.
@@ -169,8 +176,8 @@ export const atsBoardAdapter: JobSourceAdapter = {
       return {
         title: j.name,
         company,
-        city: locationText(kind, j),
-        isRemote: false,
+        city: srCity,
+        isRemote: srRemote,
         description,
         postedAt: typeof j.releasedDate === 'string' ? j.releasedDate : null,
         validThrough: null,

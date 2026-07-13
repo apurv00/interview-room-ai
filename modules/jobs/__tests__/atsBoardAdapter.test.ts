@@ -93,6 +93,19 @@ describe('atsBoardAdapter.normalize per platform', () => {
     expect(n2!.applyOptions[0].url).toBe('https://jobs.smartrecruiters.com/BoschGroup/sr-2')
   })
 
+  it('smartrecruiters: bare city for locationKey + location.remote preserved (Codex #513 round-3)', () => {
+    const n = atsBoardAdapter.normalize(
+      { kind: 'smartrecruiters', raw: { id: 'sr-3', name: 'ME', location: { city: 'Pune', country: 'in', remote: false } } },
+      srTarget
+    )
+    expect(n!.city).toBe('Pune') // never 'Pune, IN'
+    const r = atsBoardAdapter.normalize(
+      { kind: 'smartrecruiters', raw: { id: 'sr-4', name: 'ME', location: { city: 'Bengaluru', country: 'in', remote: true } } },
+      srTarget
+    )
+    expect(r!.isRemote).toBe(true)
+  })
+
   it('rows missing load-bearing fields are drift (null)', () => {
     expect(atsBoardAdapter.normalize({ kind: 'greenhouse', raw: { location: { name: 'Pune' } } }, ghTarget)).toBeNull()
     expect(atsBoardAdapter.normalize({ kind: 'lever', raw: { text: 'X' } }, leverTarget)).toBeNull()

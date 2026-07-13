@@ -285,6 +285,18 @@ describe('board delisting closure (§4.3 board-poll-miss; Codex #513 P2)', () =>
     expect(stale.boardPollMisses).toBe(1)
     expect(stale.status).toBe('open')
 
+    // drifted run: incomplete seen-set — the sweep must not run either
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [{ kind: 'greenhouse', raw: { shape: 'drifted' } }] })
+    const { JobPosting: JP } = await import('@shared/db/models')
+    vi.mocked(JP.find).mockClear()
+    await runSourceSyncHandler({ data: { sourceId: 'gh:phonepe' } }, step, { interRequestDelayMs: 0 })
+    // fuzzy-tier find never fires (row dropped as drift) and the stale
+    // sweep must not fire on a drifted run
+    expect(vi.mocked(JP.find)).not.toHaveBeenCalled()
+
     // failed fetch: the sweep must not run at all
     resetAll()
     mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })

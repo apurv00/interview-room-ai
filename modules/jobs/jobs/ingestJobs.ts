@@ -283,11 +283,13 @@ export async function runSourceSyncHandler(
 
     // Board delisting closure (§4.3 'board-poll-miss'; Codex on #513, P2):
     // ATS rows carry no expiry date — a posting the board stops listing
-    // must close after TWO consecutive clean-sync misses. Only runs on a
-    // fully-successful board sync (a failed fetch is not a miss), and only
-    // closes postings owned SOLELY by this board (another source may still
-    // legitimately list it).
-    if (config.kind === 'ats-board' && total.httpErrors === 0) {
+    // must close after TWO consecutive clean-sync misses. 'Clean' means
+    // FULLY clean: no fetch errors, no normalize drift, no store failures —
+    // a drifted run has an incomplete seen-set and would count still-listed
+    // postings as misses (Codex round-3). Only closes postings owned SOLELY
+    // by this board (another source may still legitimately list it).
+    const cleanRun = total.httpErrors === 0 && total.driftNulls === 0 && total.counters.storeErrors === 0 && targets.length > 0
+    if (config.kind === 'ats-board' && cleanRun) {
       const seen = total.seenSourceKeys
       if (seen.length) {
         await JobPosting.updateMany(
