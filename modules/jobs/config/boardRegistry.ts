@@ -12,16 +12,20 @@ export interface BoardSeed {
   sourceId: string
   atsKind: 'greenhouse' | 'lever' | 'smartrecruiters' | 'ashby' | 'workable' | 'bamboohr'
   slug: string
+  /** Provider-official company name — GH/SR payloads carry their own (which
+   *  win), Lever/Ashby rows don't; the source-id suffix must never reach
+   *  identity or users (Codex on #513 round-5). */
+  displayName: string
   minIndiaPostings: number
 }
 
 export const BOARD_REGISTRY: BoardSeed[] = [
   // Sweep-verified counts (2026-07-11): Bosch(SR)=546, Continental(SR)=107,
   // PhonePe(GH)=48-53, Meesho(Lever)=44, Groww=15, Postman~15 India.
-  { sourceId: 'gh:phonepe', atsKind: 'greenhouse', slug: 'phonepe', minIndiaPostings: 10 },
-  { sourceId: 'gh:postman', atsKind: 'greenhouse', slug: 'postman', minIndiaPostings: 5 },
-  { sourceId: 'lever:meesho', atsKind: 'lever', slug: 'meesho', minIndiaPostings: 10 },
-  { sourceId: 'lever:groww', atsKind: 'lever', slug: 'groww', minIndiaPostings: 5 },
-  { sourceId: 'sr:boschgroup', atsKind: 'smartrecruiters', slug: 'BoschGroup', minIndiaPostings: 50 },
-  { sourceId: 'sr:continentalag', atsKind: 'smartrecruiters', slug: 'ContinentalAG', minIndiaPostings: 20 },
+  { sourceId: 'gh:phonepe', atsKind: 'greenhouse', slug: 'phonepe', displayName: 'PhonePe', minIndiaPostings: 10 },
+  { sourceId: 'gh:postman', atsKind: 'greenhouse', slug: 'postman', displayName: 'Postman', minIndiaPostings: 5 },
+  { sourceId: 'lever:meesho', atsKind: 'lever', slug: 'meesho', displayName: 'Meesho', minIndiaPostings: 10 },
+  { sourceId: 'lever:groww', atsKind: 'lever', slug: 'groww', displayName: 'Groww', minIndiaPostings: 5 },
+  { sourceId: 'sr:boschgroup', atsKind: 'smartrecruiters', slug: 'BoschGroup', displayName: 'Bosch Group', minIndiaPostings: 50 },
+  { sourceId: 'sr:continentalag', atsKind: 'smartrecruiters', slug: 'ContinentalAG', displayName: 'Continental AG', minIndiaPostings: 20 },
 ]

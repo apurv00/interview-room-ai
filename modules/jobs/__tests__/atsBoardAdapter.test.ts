@@ -74,11 +74,11 @@ describe('SmartRecruiters pagination (Codex #513 P1)', () => {
 describe('atsBoardAdapter.normalize per platform', () => {
   it('greenhouse rows map with stable externalId and direct apply', () => {
     const n = atsBoardAdapter.normalize(
-      { kind: 'greenhouse', raw: { id: 123, title: 'Backend Engineer', location: { name: 'Pune, India' }, content: '<p>Build things</p>', absolute_url: 'https://boards.greenhouse.io/phonepe/jobs/123', updated_at: '2026-07-10T00:00:00Z' } },
+      { kind: 'greenhouse', raw: { id: 123, title: 'Backend Engineer', company_name: 'PhonePe', location: { name: 'Pune, India' }, content: '<p>Build things</p>', absolute_url: 'https://boards.greenhouse.io/phonepe/jobs/123', updated_at: '2026-07-10T00:00:00Z' } },
       ghTarget
     )
     expect(n).toMatchObject({
-      title: 'Backend Engineer', company: 'phonepe', externalId: '123',
+      title: 'Backend Engineer', company: 'PhonePe', externalId: '123',
       viaSite: 'greenhouse', postedAt: '2026-07-10T00:00:00Z',
     })
     expect(n!.description).toContain('Build things')
@@ -100,13 +100,40 @@ describe('atsBoardAdapter.normalize per platform', () => {
       srTarget
     )
     expect(n).toMatchObject({ title: 'Electrical Engineer', company: 'boschgroup', externalId: 'sr-1', description: '' })
-    expect(n!.applyOptions[0].url).toBe('https://jobs.smartrecruiters.com/BoschGroup/sr-1')
+    expect(n!.applyOptions[0].url).toBe('https://jobs.smartrecruiters.com/BoschGroup/sr-1-electrical-engineer')
     // and an api-host applyUrl is also rejected in favor of the public URL
     const n2 = atsBoardAdapter.normalize(
       { kind: 'smartrecruiters', raw: { id: 'sr-2', name: 'X', applyUrl: 'https://api.smartrecruiters.com/v1/x' } },
       srTarget
     )
-    expect(n2!.applyOptions[0].url).toBe('https://jobs.smartrecruiters.com/BoschGroup/sr-2')
+    expect(n2!.applyOptions[0].url).toBe('https://jobs.smartrecruiters.com/BoschGroup/sr-2-x')
+  })
+
+  it('company identity ladder: payload name → displayName → source-id suffix (Codex #513 round-5)', () => {
+    // SR payload company.name wins outright
+    const sr = atsBoardAdapter.normalize(
+      { kind: 'smartrecruiters', raw: { id: 'sr-9', name: 'QA', company: { identifier: 'BoschGroup', name: 'Bosch Group' } } },
+      srTarget
+    )
+    expect(sr!.company).toBe('Bosch Group')
+    // Lever rows carry no company name — config displayName wins
+    const leverNamed: FetchTarget = { ...leverTarget, displayName: 'Meesho' }
+    const lv = atsBoardAdapter.normalize(
+      { kind: 'lever', raw: { id: 'lv-1', text: 'SDE', categories: { location: 'Bengaluru' }, descriptionPlain: 'x', hostedUrl: 'https://jobs.lever.co/meesho/lv-1' } },
+      leverNamed
+    )
+    expect(lv!.company).toBe('Meesho')
+    // last resort only: no payload name, no displayName → suffix
+    const gh = atsBoardAdapter.normalize(
+      { kind: 'greenhouse', raw: { id: 9, title: 'SDE' } },
+      ghTarget
+    )
+    expect(gh!.company).toBe('phonepe')
+  })
+
+  it('buildTargets threads displayName from config into the board target', () => {
+    const t = atsBoardAdapter.buildTargets({ sourceId: 'lever:meesho', enabled: true, slug: 'meesho', atsKind: 'lever', displayName: 'Meesho' }, [])
+    expect(t[0]).toMatchObject({ kind: 'board', displayName: 'Meesho' })
   })
 
   it('smartrecruiters: bare city for locationKey + location.remote preserved (Codex #513 round-3)', () => {

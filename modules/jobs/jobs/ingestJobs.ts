@@ -176,8 +176,16 @@ export async function runIngestSchedulerHandler(step: StepRunner): Promise<{ dis
     for (const b of BOARD_REGISTRY) {
       await JobSourceConfig.updateOne(
         { sourceId: b.sourceId },
-        { $setOnInsert: { sourceId: b.sourceId, kind: 'ats-board', atsKind: b.atsKind, slug: b.slug, minIndiaPostings: b.minIndiaPostings, enabled: false, health: 'active', cadenceMinutes: 360 } },
+        { $setOnInsert: { sourceId: b.sourceId, kind: 'ats-board', atsKind: b.atsKind, slug: b.slug, minIndiaPostings: b.minIndiaPostings, displayName: b.displayName, enabled: false, health: 'active', cadenceMinutes: 360 } },
         { upsert: true }
+      )
+      // Backfill displayName ONLY where absent (rows seeded before the field
+      // existed) — never overwrite a set value: config rows are ops-owned
+      // data, and an unconditional $set would revert any ops correction on
+      // the next hourly tick (adversarial review of Codex #513 round-5).
+      await JobSourceConfig.updateOne(
+        { sourceId: b.sourceId, displayName: { $in: [null, ''] } },
+        { $set: { displayName: b.displayName } }
       )
     }
     return true
@@ -227,7 +235,7 @@ export async function runSourceSyncHandler(
   const startedAt = new Date()
   const cursors = await JobIngestCursor.find({ sourceId }).lean()
   const targets = adapter.buildTargets(
-    { sourceId: config.sourceId, enabled: config.enabled, slug: config.slug, atsKind: config.atsKind },
+    { sourceId: config.sourceId, enabled: config.enabled, slug: config.slug, atsKind: config.atsKind, displayName: config.displayName },
     cursors.map((c) => ({ bucket: c.bucket, newestPostedAt: c.newestPostedAt }))
   )
 
@@ -358,7 +366,7 @@ export async function runBoardProbeHandler(step: StepRunner): Promise<{ probed: 
     await step.run(`probe-${board.sourceId}`, async () => {
       const adapter = resolveAdapter(board.sourceId, board.kind)
       if (!adapter) return false
-      const targets = adapter.buildTargets({ sourceId: board.sourceId, enabled: true, slug: board.slug, atsKind: board.atsKind }, [])
+      const targets = adapter.buildTargets({ sourceId: board.sourceId, enabled: true, slug: board.slug, atsKind: board.atsKind, displayName: board.displayName }, [])
       if (!targets.length) return false
       const res = await adapter.fetch(targets[0])
       const update: Record<string, unknown> = {}
