@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { inngest } from '@shared/services/inngest'
-import { isFeatureEnabled } from '@shared/featureFlags'
 
 export const dynamic = 'force-dynamic'
 
@@ -16,9 +15,6 @@ export async function POST(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user || (session.user as { role?: string }).role !== 'platform_admin') {
     return NextResponse.json({ error: 'platform_admin required' }, { status: session?.user ? 403 : 401 })
-  }
-  if (!isFeatureEnabled('jobs_ingest')) {
-    return NextResponse.json({ error: 'jobs_ingest flag is off' }, { status: 503 })
   }
   let sourceId = 'jsearch'
   try {

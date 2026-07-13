@@ -1,18 +1,14 @@
-import { notFound } from 'next/navigation'
 import Link from 'next/link'
-import { isFeatureEnabled } from '@shared/featureFlags'
 
 export const dynamic = 'force-dynamic'
 
 /**
- * /jobs — the feed shell (Wave 1c scaffold). Renders 404 while the
- * jobs_tab flag is off, so shipping this scaffold is byte-invisible in
- * production. The Wave-3 feed replaces the empty state below; the page is
- * a server component so the flag reads real env, and the public-surface
- * posture (P-2: anon browse) is already wired in middleware.
+ * /jobs — the feed shell, LIVE (founder ruling 2026-07-13: no feature
+ * flags for this feature). Shows the honest empty state until ingestion
+ * fills the corpus; the Wave-3 feed replaces it. Public surface per P-2
+ * (anon browse), wired in middleware.
  */
 export default function JobsPage() {
-  if (!isFeatureEnabled('jobs_tab')) notFound()
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-16" aria-label="Job feed">

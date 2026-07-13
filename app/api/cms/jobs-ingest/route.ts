@@ -52,6 +52,7 @@ export async function GET() {
       newCount: c.newCount ?? 0,
       merged: c.merged ?? 0,
       refreshed: c.refreshed ?? 0,
+      storeErrors: c.storeErrors ?? 0,
       quotaSpent: c.quotaSpent ?? 0,
       drops: c.drops ?? {},
       healthTransitions: c.healthTransitions ?? [],

@@ -9,7 +9,6 @@ import { AuthGateProvider } from '@shared/providers/AuthGateProvider'
 import AppShell from '@shared/layout/AppShell'
 import JsonLd from '@shared/seo/JsonLd'
 import { siteConfig } from '@shared/siteConfig'
-import { isFeatureEnabled } from '@shared/featureFlags'
 import { XpBadge, BadgeUnlockChecker } from '@learn'
 import './globals.css'
 
@@ -112,7 +111,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   <AppShell
                     navAuthExtras={<XpBadge />}
                     authedGlobalWidgets={<BadgeUnlockChecker />}
-                    showJobsNav={isFeatureEnabled('jobs_tab')}
                   >
                     {children}
                   </AppShell>

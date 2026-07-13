@@ -18,8 +18,7 @@ import { useAuthGate } from '@shared/providers/AuthGateProvider'
 // Pricing) where hover-to-click feel matters.
 const NAV_LINKS: Array<{ href: string; label: string; prefetch?: boolean }> = [
   { href: '/interview/setup', label: 'Interview', prefetch: false },
-  // 'Jobs' is inserted at index 1 at render time when the composition root
-  // passes showJobsNav (jobs_tab flag) — see navLinks below.
+  { href: '/jobs', label: 'Jobs', prefetch: false },
   { href: '/learn/pathway', label: 'Pathway', prefetch: false },
   { href: '/resume', label: 'Resume', prefetch: false },
   { href: '/history', label: 'History', prefetch: false },
@@ -47,22 +46,13 @@ interface AppShellProps {
    * is authenticated. Keeps domain-specific global UX out of shared/.
    */
   authedGlobalWidgets?: ReactNode
-  /**
-   * Render the Jobs nav entry (jobs_tab flag, computed server-side by the
-   * composition root — this client shell cannot read FEATURE_FLAG_* envs).
-   */
-  showJobsNav?: boolean
 }
 
 export default function AppShell({
   children,
   navAuthExtras,
   authedGlobalWidgets,
-  showJobsNav,
 }: AppShellProps) {
-  const navLinks = showJobsNav
-    ? [NAV_LINKS[0], { href: '/jobs', label: 'Jobs', prefetch: false }, ...NAV_LINKS.slice(1)]
-    : NAV_LINKS
   const pathname = usePathname()
   const { status } = useSession()
   const { open: openAuthGate } = useAuthGate()
@@ -109,7 +99,7 @@ export default function AppShell({
 
             {/* Desktop nav */}
             <div className="hidden md:flex items-center gap-1">
-              {navLinks.map((link) => {
+              {NAV_LINKS.map((link) => {
                 const isActive =
                   pathname === link.href ||
                   (link.href !== '/' && pathname.startsWith(link.href + '/'))
@@ -171,7 +161,7 @@ export default function AppShell({
         {isMobileMenuOpen && (
           <div className="md:hidden border-t border-slate-200/60 bg-white">
             <div className="px-4 py-3 space-y-1">
-              {navLinks.map((link) => {
+              {NAV_LINKS.map((link) => {
                 const isActive =
                   pathname === link.href ||
                   (link.href !== '/' && pathname.startsWith(link.href + '/'))

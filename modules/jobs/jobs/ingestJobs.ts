@@ -1,7 +1,6 @@
 import { inngest } from '@shared/services/inngest'
 import { connectDB } from '@shared/db/connection'
 import { JobSourceConfig, JobIngestCursor, JobIngestCycle } from '@shared/db/models'
-import { isFeatureEnabled } from '@shared/featureFlags'
 import { redis } from '@shared/redis'
 import { logger } from '@shared/logger'
 import { jsearchAdapter } from '../adapters/jsearchAdapter'
@@ -139,7 +138,9 @@ async function processTarget(
 // ── Pure handlers (unit-testable with a step mock) ──────────────────────────
 
 export async function runIngestSchedulerHandler(step: StepRunner): Promise<{ dispatched: number } | { skipped: true }> {
-  if (!isFeatureEnabled('jobs_ingest')) return { skipped: true }
+  // No feature flag (founder ruling 2026-07-13): the ONLY ingestion switch
+  // is data — JobSourceConfig.enabled, seeded false. No enabled sources =
+  // this dispatches nothing and costs nothing.
   await connectDB()
 
   // Seed the jsearch config DISABLED on first contact — ops flips `enabled`
@@ -186,7 +187,6 @@ export async function runSourceSyncHandler(
   opts: SyncHandlerOpts = {}
 ): Promise<{ skipped: true; reason: string } | { cycleWritten: true; counters: IngestCounters }> {
   const delayMs = opts.interRequestDelayMs ?? 300
-  if (!isFeatureEnabled('jobs_ingest')) return { skipped: true, reason: 'flag-off' }
   const { sourceId } = event.data
   const adapter = ADAPTERS[sourceId]
   if (!adapter) return { skipped: true, reason: `no adapter for ${sourceId}` }
@@ -241,9 +241,12 @@ export async function runSourceSyncHandler(
     // probe automation lands in 2.2).
     const allFailed = targets.length > 0 && total.httpErrors >= targets.length
     const driftRate = total.fetched > 0 ? total.driftNulls / total.fetched : 0
+    // Store errors are OUR failures (validation/index regressions), not the
+    // provider's — a run that fetched valid rows but could not store them
+    // must never read healthy (Codex on #511, post-merge follow-up).
     let newHealth: 'active' | 'degraded' | 'quarantined'
     if (driftRate > 0.5) newHealth = 'quarantined'
-    else if (total.saw429 || allFailed || driftRate > 0.2) newHealth = 'degraded'
+    else if (total.saw429 || allFailed || driftRate > 0.2 || total.counters.storeErrors > 0) newHealth = 'degraded'
     else newHealth = 'active'
     await JobSourceConfig.updateOne(
       { sourceId },
@@ -263,6 +266,7 @@ export async function runSourceSyncHandler(
       newCount: total.counters.newCount,
       merged: total.counters.merged,
       refreshed: total.counters.refreshed,
+      storeErrors: total.counters.storeErrors,
       quotaSpent: total.attempts,
       healthTransitions: newHealth !== config.health ? [`${config.health}->${newHealth}`] : [],
     })
