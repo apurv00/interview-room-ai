@@ -1,0 +1,402 @@
+import { gunzipSync } from 'zlib'
+import { inngest } from '@shared/services/inngest'
+import { connectDB } from '@shared/db/connection'
+import { JobPosting, JobSourceConfig, JobIngestCycle, JobsVerdictConfig, type JobsVerdictConfigValues } from '@shared/db/models'
+import { redis } from '@shared/redis'
+import { logger } from '@shared/logger'
+import { PROMPT_VERSION } from '../config/verdictSchema'
+import { evaluatePosting, expectedVerdictModel, resolveExpectedVerdictModel, type EvaluatorDeps } from '../services/postingEvaluator'
+import { verdictInputHash, stripRecruiterPii, sliceBody } from '../config/verdictPrompt'
+import { neutralizePromptLine } from '@shared/services/promptSecurity'
+import { makeLlmBudget } from '../services/llmBudget'
+import { reconcileVerdict } from '../services/verdictReconciler'
+import { hostOf } from '../services/qualityGate'
+
+/**
+ * LLM verdict worker + sweeper (INGESTION §4.5 layer 2, ruling #16).
+ *
+ * Worker: `jobs/verdict.requested` carries ids ONLY (≤40/event, 512KB
+ * discipline); each step.run evaluates 2 postings — worst case 2 × (12s
+ * call + 12s repair) = 48s < the 60s Vercel Hobby step budget. Verdicts are
+ * idempotent on verdictInputHash: a step retry skips already-scored rows.
+ *
+ * Sweeper: hourly cron + manual `jobs/verdict.sweep` kick. Feeds the worker
+ * from BOTH the pending partial index (steady state) and open rows with no
+ * llmVerdict sub-doc at all (pre-flip corpus / missed enqueues / backfill),
+ * so no survivor sits unevaluated indefinitely. Oldest-first, budget-aware
+ * (80% → halve, 95% → pending-only), attempts <5.
+ *
+ * Every switch here is DATA (JobsVerdictConfig singleton — founder ruling
+ * 2026-07-13, no flags): collection OFF = worker + sweeper no-op.
+ */
+
+interface StepRunner {
+  run: <T>(name: string, fn: () => Promise<T> | T) => Promise<T>
+}
+
+const POSTINGS_PER_STEP = 2
+const IDS_PER_EVENT = 40
+const SWEEP_LIMIT_DEFAULT = 400
+const MAX_ATTEMPTS = 5
+const BREAKER_CONSECUTIVE_FAILURES = 6
+
+interface LlmCycleCounters {
+  requested: number
+  scored: number
+  cacheHits: number
+  errors: number
+  timeouts: number
+  softClosed: number
+  verdictDistribution: { genuine: number; suspicious: number; fraud: number }
+  reasonCodeCounts: Record<string, number>
+  bySource: Record<string, Record<string, number>>
+  llmFlaggedCleanRow: number
+  llmClearedFlaggedRow: number
+  inputTokens: number
+  outputTokens: number
+  costUsd: number
+  epoch: string
+}
+
+function emptyLlmCounters(): LlmCycleCounters {
+  return {
+    requested: 0, scored: 0, cacheHits: 0, errors: 0, timeouts: 0, softClosed: 0,
+    verdictDistribution: { genuine: 0, suspicious: 0, fraud: 0 },
+    reasonCodeCounts: {}, bySource: {},
+    llmFlaggedCleanRow: 0, llmClearedFlaggedRow: 0,
+    inputTokens: 0, outputTokens: 0, costUsd: 0,
+    epoch: `${expectedVerdictModel()}:${PROMPT_VERSION}`,
+  }
+}
+
+function mergeLlmCounters(total: LlmCycleCounters, c: LlmCycleCounters): void {
+  total.requested += c.requested
+  total.scored += c.scored
+  total.cacheHits += c.cacheHits
+  total.errors += c.errors
+  total.timeouts += c.timeouts
+  total.softClosed += c.softClosed
+  total.verdictDistribution.genuine += c.verdictDistribution.genuine
+  total.verdictDistribution.suspicious += c.verdictDistribution.suspicious
+  total.verdictDistribution.fraud += c.verdictDistribution.fraud
+  for (const [k, v] of Object.entries(c.reasonCodeCounts)) total.reasonCodeCounts[k] = (total.reasonCodeCounts[k] ?? 0) + v
+  for (const [src, dist] of Object.entries(c.bySource)) {
+    const t = total.bySource[src] ?? (total.bySource[src] = {})
+    for (const [k, v] of Object.entries(dist)) t[k] = (t[k] ?? 0) + v
+  }
+  total.llmFlaggedCleanRow += c.llmFlaggedCleanRow
+  total.llmClearedFlaggedRow += c.llmClearedFlaggedRow
+  total.inputTokens += c.inputTokens
+  total.outputTokens += c.outputTokens
+  total.costUsd += c.costUsd
+}
+
+function jdBodyOf(doc: { jdCompressed?: unknown }): string {
+  const raw = doc.jdCompressed
+  if (!raw) return ''
+  try {
+    const buf = Buffer.isBuffer(raw) ? raw : Buffer.from((raw as { buffer: ArrayBufferLike }).buffer as ArrayBuffer)
+    return gunzipSync(buf).toString('utf8')
+  } catch {
+    return ''
+  }
+}
+
+export interface EvaluateHandlerDeps {
+  /** Test seam — defaults to the real evaluator. */
+  evaluateFn?: typeof evaluatePosting
+}
+
+export async function runEvaluatePostingsHandler(
+  event: { data: { postingIds: string[] } },
+  step: StepRunner,
+  handlerDeps: EvaluateHandlerDeps = {}
+): Promise<{ skipped: string } | { evaluated: number; scored: number; breakerTripped: boolean }> {
+  await connectDB()
+  const cfg = await JobsVerdictConfig.getConfig()
+  if (!cfg.collectionEnabled) return { skipped: 'collection-disabled' }
+  const evaluate = handlerDeps.evaluateFn ?? evaluatePosting
+  const budget = makeLlmBudget(redis, cfg)
+  // CMS-resolved once per run — the epoch must be the model completion()
+  // will actually serve, not the code default (a CMS cutover would
+  // otherwise wedge every verdict as paid model-mismatch).
+  const epochModel = await resolveExpectedVerdictModel()
+
+  // ToS lever (§4.5): a posting with ANY opted-out contributing source never
+  // reaches the model. Loaded once per run.
+  const optedOut = new Set(
+    (await JobSourceConfig.find({ llmVerdictOptOut: true }).select('sourceId').lean()).map((s) => s.sourceId)
+  )
+
+  const ids = event.data.postingIds ?? []
+  const total = emptyLlmCounters()
+  const startedAt = new Date()
+  let evaluated = 0
+  let consecutiveFailures = 0
+  let breakerTripped = false
+
+  for (let i = 0; i < ids.length && !breakerTripped; i += POSTINGS_PER_STEP) {
+    const chunk = ids.slice(i, i + POSTINGS_PER_STEP)
+    const stepResult = await step.run(`evaluate-${Math.floor(i / POSTINGS_PER_STEP)}`, async () => {
+      const c = emptyLlmCounters()
+      let stepEvaluated = 0
+      let fails = consecutiveFailures
+      let tripped = false
+      for (const id of chunk) {
+        const doc = await JobPosting.findById(id).lean()
+        // llm-verdict tombstones stay eligible: §4.3 'a changed body
+        // re-verdicts and may reopen' — every OTHER closed reason is out.
+        const eligible = doc && (doc.status === 'open' || doc.closedReason === 'llm-verdict')
+        if (!doc || !eligible) continue
+        if ((doc.llmVerdict?.attempts ?? 0) >= MAX_ATTEMPTS) continue
+        const sources = (doc.provenance ?? []).map((e) => e.sourceId)
+        if (sources.some((s) => optedOut.has(s))) continue
+        const primarySource = sources[0] ?? 'unknown'
+        const applyHosts = Array.from(new Set(
+          (doc.provenance ?? []).map((e) => (e.applyUrl ? hostOf(e.applyUrl) : '')).filter(Boolean)
+        )).sort()
+        const body = jdBodyOf(doc)
+        // Skip on HASH match, not on status: a scored row whose inputs
+        // changed since scoring MUST re-verdict (§4.5 'input change
+        // re-enqueues'; adversarial review of Wave 2.3). Deterministic:
+        // same slice+strip the evaluator applies.
+        if (doc.llmVerdict?.status === 'scored') {
+          const currentHash = verdictInputHash({
+            companyKey: doc.companyKey,
+            titleKey: doc.titleKey,
+            locationKey: doc.locationKeys?.[0] ?? '',
+            normalizedBody: stripRecruiterPii(sliceBody(body)),
+            applyHosts,
+            salaryPresent: !!doc.salaryText,
+            epochModel,
+          })
+          if (doc.llmVerdict.verdictInputHash === currentHash) continue
+        }
+
+        c.requested++
+        stepEvaluated++
+        const outcome = await evaluate(
+          {
+            companyKey: doc.companyKey,
+            titleKey: doc.titleKey,
+            locationKey: doc.locationKeys?.[0] ?? '',
+            sourceId: primarySource,
+            salaryPresent: !!doc.salaryText,
+            prompt: {
+              title: doc.title,
+              company: doc.company,
+              city: doc.locations?.[0] ?? '',
+              isRemote: !!doc.isRemote,
+              salaryText: doc.salaryText ?? null,
+              applyHosts,
+              body,
+            },
+          },
+          {
+            cache: redis,
+            checkBudget: (ck, src) => budget.check(ck, src),
+            recordSpend: (ck, src, usd) => budget.record(ck, src, usd),
+            pricing: { inputUsdPerMTok: cfg.inputUsdPerMTok, outputUsdPerMTok: cfg.outputUsdPerMTok },
+            expectedModel: epochModel,
+          } as EvaluatorDeps
+        )
+
+        if (outcome.ok) {
+          fails = 0
+          const rec = reconcileVerdict(outcome.verdict, {
+            anyDemotionFlag: !!(doc.flags?.staffing || doc.flags?.shortJd || doc.flags?.repost || doc.confidentialCompany),
+          })
+          const softClose = cfg.enforceEnabled && rec.wouldSoftClose
+          const set: Record<string, unknown> = {
+            llmVerdict: {
+              status: 'scored',
+              verdict: outcome.verdict.verdict,
+              reasonCodes: outcome.verdict.reasonCodes,
+              genuineness: outcome.verdict.genuineness,
+              quality: outcome.verdict.quality,
+              completeness: outcome.verdict.completeness,
+              domain: outcome.verdict.domain,
+              domainConfidence: outcome.verdict.domainConfidence,
+              seniority: outcome.verdict.seniority,
+              fresherFriendly: outcome.verdict.fresherFriendly,
+              // The ONE free-string model output — neutralized before it
+              // touches Mongo (no tags/structure survives; ruling #9).
+              geo: {
+                locations: outcome.verdict.geo.locations.map((l) => neutralizePromptLine(l, 80)).filter(Boolean),
+                workMode: outcome.verdict.geo.workMode,
+              },
+              verdictInputHash: outcome.inputHash,
+              epoch: outcome.epoch,
+              model: outcome.model,
+              promptVersion: PROMPT_VERSION,
+              inputTokens: outcome.inputTokens,
+              outputTokens: outcome.outputTokens,
+              costUsd: outcome.costUsd,
+              ranAt: new Date(),
+              attempts: (doc.llmVerdict?.attempts ?? 0) + 1,
+              disagreesWithRules: rec.disagreesWithRules,
+            },
+          }
+          let unset: Record<string, 1> | undefined
+          if (softClose) {
+            set.status = 'closed'
+            set.closedReason = 'llm-verdict'
+            set.closedAt = new Date()
+          } else if (cfg.enforceEnabled && doc.status === 'closed' && doc.closedReason === 'llm-verdict' && !rec.wouldSoftClose) {
+            // §4.3: a changed body re-verdicts AND MAY REOPEN — the new
+            // verdict cleared the fraud bar, so the tombstone returns to
+            // the open pool.
+            set.status = 'open'
+            unset = { closedReason: 1, closedAt: 1 }
+          }
+          await JobPosting.updateOne({ _id: doc._id }, unset ? { $set: set, $unset: unset } : { $set: set })
+          c.scored++
+          if (outcome.cached) c.cacheHits++
+          c.verdictDistribution[outcome.verdict.verdict]++
+          for (const code of outcome.verdict.reasonCodes) c.reasonCodeCounts[code] = (c.reasonCodeCounts[code] ?? 0) + 1
+          const src = c.bySource[primarySource] ?? (c.bySource[primarySource] = {})
+          src[outcome.verdict.verdict] = (src[outcome.verdict.verdict] ?? 0) + 1
+          if (rec.llmFlaggedCleanRow) c.llmFlaggedCleanRow++
+          if (rec.llmClearedFlaggedRow) c.llmClearedFlaggedRow++
+          if (softClose) c.softClosed++
+          c.inputTokens += outcome.inputTokens
+          c.outputTokens += outcome.outputTokens
+          c.costUsd += outcome.costUsd
+        } else if (outcome.kind === 'budget') {
+          // Not the posting's fault — no attempts bump, no breaker count,
+          // and NOT an error (it would pollute the shadow-exit 'error <5%'
+          // metric during throttling); the backlog gauge shows the queue.
+        } else {
+          fails++
+          if (outcome.kind === 'timeout') c.timeouts++
+          else c.errors++
+          c.costUsd += outcome.costUsd
+          await JobPosting.updateOne(
+            { _id: doc._id },
+            {
+              $set: {
+                'llmVerdict.status': 'pending',
+                'llmVerdict.attempts': (doc.llmVerdict?.attempts ?? 0) + 1,
+                'llmVerdict.lastError': `${outcome.kind}:${outcome.message}`.slice(0, 300),
+              },
+            }
+          )
+          if (fails >= BREAKER_CONSECUTIVE_FAILURES) {
+            await budget.setDegraded()
+            tripped = true
+            break
+          }
+        }
+      }
+      return { counters: c, evaluated: stepEvaluated, consecutiveFailures: fails, breakerTripped: tripped }
+    })
+    mergeLlmCounters(total, stepResult.counters as LlmCycleCounters)
+    evaluated += stepResult.evaluated
+    consecutiveFailures = stepResult.consecutiveFailures
+    breakerTripped = stepResult.breakerTripped
+  }
+
+  await step.run('write-cycle', async () => {
+    try {
+      await JobIngestCycle.create({
+        kind: 'llm-verdict',
+        sourceId: 'llm-verdict',
+        startedAt,
+        finishedAt: new Date(),
+        llm: total,
+        healthTransitions: breakerTripped ? ['verdict-breaker-tripped'] : [],
+      })
+    } catch (err) {
+      logger.warn({ err }, 'verdict cycle telemetry write failed')
+    }
+    return true
+  })
+
+  return { evaluated, scored: total.scored, breakerTripped }
+}
+
+export async function runVerdictSweeperHandler(
+  step: StepRunner,
+  opts: { limit?: number } = {}
+): Promise<{ skipped: string } | { enqueued: number; batches: number }> {
+  await connectDB()
+  const cfg = await JobsVerdictConfig.getConfig()
+  if (!cfg.collectionEnabled) return { skipped: 'collection-disabled' }
+  const budget = makeLlmBudget(redis, cfg)
+  if (await budget.isDegraded()) return { skipped: 'circuit-breaker-degraded' }
+  const gate = await budget.check('__sweeper__', '__sweeper__')
+  if (!gate.allowed) return { skipped: gate.reason ?? 'budget' }
+  const limit = Math.max(1, Math.floor((opts.limit ?? SWEEP_LIMIT_DEFAULT) / (gate.softening ? 2 : 1)))
+
+  // Opted-out sources are excluded IN THE QUERY — a pending row the worker
+  // refuses to evaluate would otherwise pin the oldest-first window and
+  // starve every other source (adversarial review of Wave 2.3).
+  const optedOut = (await JobSourceConfig.find({ llmVerdictOptOut: true }).select('sourceId').lean()).map((s) => s.sourceId)
+
+  const ids = await step.run('find-due', async () => {
+    const rows = await JobPosting.find({
+      $and: [
+        {
+          $or: [
+            { status: 'open' },
+            // §4.3: llm-verdict tombstones whose inputs changed re-verdict
+            // (the merge resets them to pending) and may reopen.
+            { status: 'closed', closedReason: 'llm-verdict' },
+          ],
+        },
+        {
+          $or: [
+            // Steady state: rides the §4.3 pending partial index.
+            { 'llmVerdict.status': 'pending', 'llmVerdict.attempts': { $lt: MAX_ATTEMPTS } },
+            // Catch-all net: pre-flip corpus / missed enqueues (bounded ≤25k scan).
+            { llmVerdict: { $exists: false }, status: 'open' },
+          ],
+        },
+        ...(optedOut.length ? [{ 'provenance.sourceId': { $nin: optedOut } }] : []),
+      ],
+    })
+      .sort({ _id: 1 }) // oldest-first
+      .limit(limit)
+      .select('_id')
+      .lean()
+    return rows.map((r) => String(r._id))
+  })
+
+  let batches = 0
+  for (let i = 0; i < ids.length; i += IDS_PER_EVENT) {
+    const batch = ids.slice(i, i + IDS_PER_EVENT)
+    await step.run(`enqueue-${batches}`, async () => {
+      await inngest.send({ name: 'jobs/verdict.requested', data: { postingIds: batch } })
+      return batch.length
+    })
+    batches++
+  }
+  return { enqueued: ids.length, batches }
+}
+
+// ── Inngest wrappers ─────────────────────────────────────────────────────────
+
+export const jobsEvaluatePostingsJob = inngest.createFunction(
+  {
+    id: 'jobs-evaluate-postings',
+    name: 'Jobs: LLM posting verdicts',
+    retries: 2, // infra throws only — scored-at-hash postings skip on re-run
+    concurrency: [{ limit: 1 }], // one verdict worker at a time (Atlas + spend discipline)
+    triggers: [{ event: 'jobs/verdict.requested' }],
+  },
+  async ({ event, step }) =>
+    runEvaluatePostingsHandler(event as unknown as { data: { postingIds: string[] } }, step as StepRunner)
+)
+
+export const jobsVerdictSweeperJob = inngest.createFunction(
+  {
+    id: 'jobs-verdict-sweeper',
+    name: 'Jobs: verdict sweeper',
+    retries: 1,
+    triggers: [{ cron: '45 * * * *' }, { event: 'jobs/verdict.sweep' }],
+  },
+  async ({ event, step }) =>
+    runVerdictSweeperHandler(step as StepRunner, {
+      limit: (event as unknown as { data?: { limit?: number } })?.data?.limit,
+    })
+)

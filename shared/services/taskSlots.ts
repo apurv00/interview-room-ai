@@ -46,6 +46,8 @@ export const TASK_SLOTS = [
   'interview.clarify-case-context',
   // Fast turn router — probe-vs-advance decision in the critical conversation path
   'interview.turn-router',
+  // Jobs — async posting verdict (INGESTION §4.5 layer 2)
+  'jobs.evaluate-posting',
 ] as const
 
 export type TaskSlot = (typeof TASK_SLOTS)[number]
@@ -124,4 +126,8 @@ export const TASK_SLOT_DEFAULTS: Record<
   'interview.answer-candidate-question': { model: 'gpt-5.6-luna', maxTokens: 200, provider: 'openai', reasoningEffort: 'none' },
   'interview.clarify-case-context':       { model: 'gpt-5.6-luna', maxTokens: 400, provider: 'openai', reasoningEffort: 'low' },
   'interview.turn-router':               { model: 'gpt-5.6-luna', maxTokens: 150, provider: 'openai', reasoningEffort: 'none' },
+  // Corpus-scaled, not user-scaled — effort 'low' is deliberate (below the
+  // judgment=high tier policy); NO fallbackModel: verdict epochs must stay
+  // homogeneous, degradation = verdict stays pending (INGESTION §4.5).
+  'jobs.evaluate-posting':               { model: 'gpt-5.6-luna', maxTokens: 800, provider: 'openai', reasoningEffort: 'low' },
 }

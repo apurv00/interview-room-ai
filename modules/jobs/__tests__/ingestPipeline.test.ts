@@ -287,3 +287,58 @@ describe('makeRedisRepostCounter', () => {
     await expect(counter('hash1', 'acme')).resolves.toBeNull()
   })
 })
+
+describe('scored-verdict invalidation on merge (§4.5 input change re-enqueues)', () => {
+  it('a longer merged JD resets a scored verdict to pending (fresh attempts)', async () => {
+    reset()
+    const existing = docStub({
+      provenance: [{ sourceId: 'jsearch', externalId: 'ext-1', sourceKey: 'jsearch:ext-1', lastSeenAt: new Date('2026-07-01') }],
+      jdLength: 10, // incoming body is longer → JD replace
+      llmVerdict: { status: 'scored', verdict: 'genuine', attempts: 3, verdictInputHash: 'stale' },
+    })
+    mockFindOne.mockResolvedValueOnce(existing)
+    await ingestBatch([job()], 'jsearch')
+    expect(existing.llmVerdict.status).toBe('pending')
+    expect(existing.llmVerdict.attempts).toBe(0)
+  })
+
+  it('an unchanged refresh (same JD length, same apply URL) leaves scored verdicts alone', async () => {
+    reset()
+    const j = job()
+    const existing = docStub({
+      provenance: [{ sourceId: 'jsearch', externalId: 'ext-1', sourceKey: 'jsearch:ext-1', applyUrl: j.applyOptions[0].url, applyTier: 'direct-ats', lastSeenAt: new Date('2026-07-01') }],
+      jdLength: 99999, // incoming shorter → no JD replace
+      llmVerdict: { status: 'scored', verdict: 'genuine', attempts: 3, verdictInputHash: 'h' },
+    })
+    mockFindOne.mockResolvedValueOnce(existing)
+    await ingestBatch([j], 'jsearch')
+    expect(existing.llmVerdict.status).toBe('scored')
+    expect(existing.llmVerdict.attempts).toBe(3)
+  })
+
+  it('an apply-URL change resets a scored verdict (hosts are hash inputs)', async () => {
+    reset()
+    const existing = docStub({
+      provenance: [{ sourceId: 'jsearch', externalId: 'ext-1', sourceKey: 'jsearch:ext-1', applyUrl: 'https://old.example.com/x', applyTier: 'employer', lastSeenAt: new Date('2026-07-01') }],
+      jdLength: 99999,
+      llmVerdict: { status: 'scored', verdict: 'genuine', attempts: 2, verdictInputHash: 'h' },
+    })
+    mockFindOne.mockResolvedValueOnce(existing)
+    await ingestBatch([job()], 'jsearch')
+    expect(existing.llmVerdict.status).toBe('pending')
+  })
+})
+
+describe('llmVerdict pending-init (§4.5 — data switch, byte-identical when off)', () => {
+  it('off (default): the insert doc has NO llmVerdict key materialized', async () => {
+    reset()
+    await ingestBatch([job()], 'jsearch')
+    expect(mockCreate.mock.calls[0][0].llmVerdict).toBeUndefined()
+  })
+
+  it('on: new survivors are stored pending/attempts:0 for the sweeper partial index', async () => {
+    reset()
+    await ingestBatch([job()], 'jsearch', { initVerdictPending: true })
+    expect(mockCreate.mock.calls[0][0].llmVerdict).toEqual({ status: 'pending', attempts: 0 })
+  })
+})

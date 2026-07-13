@@ -39,6 +39,11 @@ export interface IngestCounters {
 export interface RepostCounterDeps {
   /** Returns distinct-company count for the body hash after registering companyKey. Fail-open: null. */
   registerRepost?: (bodyHash: string, companyKeyStr: string) => Promise<number | null>
+  /** §4.5: when verdict collection is enabled (JobsVerdictConfig row, read
+   *  once per sync), new survivors are stored `llmVerdict: {status:'pending'}`
+   *  so the steady-state sweeper runs on the partial index. Disabled = no
+   *  init, byte-identical docs. */
+  initVerdictPending?: boolean
 }
 
 const PROVENANCE_CAP = 8
@@ -101,7 +106,7 @@ interface PreparedPosting {
   flags: string[]
 }
 
-function buildInsertDoc(p: PreparedPosting, sourceId: string, now: Date, saltedFp?: string | null) {
+function buildInsertDoc(p: PreparedPosting, sourceId: string, now: Date, saltedFp?: string | null, initVerdictPending?: boolean) {
   const jdNorm = normalizeJdBody(p.job.description)
   return {
     companyKey: p.cKey,
@@ -109,6 +114,7 @@ function buildInsertDoc(p: PreparedPosting, sourceId: string, now: Date, saltedF
     titleTokens: p.tokens,
     locationKeys: [p.locKey],
     fingerprint: saltedFp ?? p.fp ?? undefined,
+    llmVerdict: initVerdictPending ? { status: 'pending' as const, attempts: 0 } : undefined,
     confidentialCompany: isConfidentialCompany(p.job.company),
     title: p.job.title.slice(0, 300),
     company: p.job.company.slice(0, 300),
@@ -156,6 +162,12 @@ const REOPENABLE_CLOSE_REASONS = new Set(['aged-out', 'board-poll-miss', 'valid-
 
 /** Merge an incoming posting into an existing canonical doc (§4.2 policy). */
 export function mergeIntoDoc(doc: IJobPosting, p: PreparedPosting, sourceId: string, now: Date): void {
+  // §4.5 'input change re-enqueues': the merge is the ONLY place a stored
+  // row's verdict-hash components (JD body, apply URLs) mutate, so it owns
+  // invalidating a scored verdict (adversarial review of Wave 2.3 — without
+  // this, a scam body merged into a pre-scored clean posting keeps its
+  // 'genuine' verdict forever, and §4.3 tombstone re-verdicts are dead).
+  let verdictInputsChanged = false
   // Reopen on fresh evidence (Codex on #510): a posting closed for
   // ABSENCE-class reasons that the source is now serving again must return
   // to the open pool — otherwise the refresh saves a hidden doc and the
@@ -177,9 +189,10 @@ export function mergeIntoDoc(doc: IJobPosting, p: PreparedPosting, sourceId: str
       // has since changed — must pick up the apply path the source serves
       // today. Absence in the incoming payload never erases a stored link.
       const url = bestApplyUrl(p.usableUrls)
-      if (url) {
+      if (url && url !== existing.applyUrl) {
         existing.applyUrl = url
         existing.applyTier = classifyApplyUrl(url)
+        verdictInputsChanged = true
       }
       if (p.job.viaSite) existing.viaSite = p.job.viaSite
     } else {
@@ -195,6 +208,7 @@ export function mergeIntoDoc(doc: IJobPosting, p: PreparedPosting, sourceId: str
         lastSeenAt: now,
       })
       doc.provenance = evictProvenance(doc.provenance)
+      if (url) verdictInputsChanged = true // new apply host joins the hash input
     }
   }
   // JD: longest normalized body wins.
@@ -202,6 +216,7 @@ export function mergeIntoDoc(doc: IJobPosting, p: PreparedPosting, sourceId: str
     const jdNorm = normalizeJdBody(p.job.description)
     doc.jdCompressed = gzipSync(Buffer.from(jdNorm))
     doc.jdLength = p.jdLen
+    verdictInputsChanged = true
   }
   // postedAt: earliest non-null (aggregators re-stamp reposts).
   const incoming = validDate(p.job.postedAt) ?? null
@@ -211,6 +226,10 @@ export function mergeIntoDoc(doc: IJobPosting, p: PreparedPosting, sourceId: str
   if (p.job.city && !doc.locations.includes(p.job.city)) doc.locations.push(p.job.city)
   // Flags only ever tighten deterministically here (staffing/shortJd recompute
   // is left to the winner's own classify — a merged stub must not unset them).
+  if (verdictInputsChanged && doc.llmVerdict?.status === 'scored') {
+    doc.llmVerdict.status = 'pending'
+    doc.llmVerdict.attempts = 0 // new input = fresh attempt budget
+  }
 }
 
 export async function ingestBatch(
@@ -293,7 +312,7 @@ export async function ingestBatch(
           byFp.provenance.some((e) => e.sourceId === sourceId && e.externalId !== prepared.job.externalId)
         if (sameSourceDifferentExternal) {
           const salted = fingerprintOf(job.company, job.title, job.city, job.isRemote, prepared.job.externalId as string)
-          await JobPosting.create(buildInsertDoc(prepared, sourceId, now, salted))
+          await JobPosting.create(buildInsertDoc(prepared, sourceId, now, salted, deps.initVerdictPending))
           counters.saltedInserts++
           counters.newCount++
           continue
@@ -327,7 +346,7 @@ export async function ingestBatch(
     }
 
     // Tier 4: insert.
-    await JobPosting.create(buildInsertDoc(prepared, sourceId, now))
+    await JobPosting.create(buildInsertDoc(prepared, sourceId, now, undefined, deps.initVerdictPending))
     counters.newCount++
     } catch {
       counters.storeErrors++

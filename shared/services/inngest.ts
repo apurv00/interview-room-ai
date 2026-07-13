@@ -43,4 +43,16 @@ export type InngestEvents = {
       sourceId: string
     }
   }
+  // Jobs LLM verdict (Wave 2.3, §4.5): ids only, ≤40 per event.
+  'jobs/verdict.requested': {
+    data: {
+      postingIds: string[]
+    }
+  }
+  // Manual sweeper kick (admin route) — the cron sweeper shares the handler.
+  'jobs/verdict.sweep': {
+    data: {
+      limit?: number
+    }
+  }
 }

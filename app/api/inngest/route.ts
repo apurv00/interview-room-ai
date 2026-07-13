@@ -7,6 +7,7 @@ import { keepMongoWarmJob } from '@learn/jobs/keepMongoWarm'
 import { recordingRetentionJob } from '@interview/jobs/recordingRetentionJob'
 import { pathwayJob } from '@learn/jobs/pathwayJob'
 import { jobsIngestSchedulerJob, jobsSourceSyncJob, jobsBoardProbeJob } from '@jobs/jobs/ingestJobs'
+import { jobsEvaluatePostingsJob, jobsVerdictSweeperJob } from '@jobs/jobs/evaluatePostingsJob'
 
 /**
  * Inngest handler route — entry point for all background jobs.
@@ -31,5 +32,5 @@ export const dynamic = 'force-dynamic'
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [analysisJob, emailDigestJob, regeneratePlansJob, keepMongoWarmJob, recordingRetentionJob, pathwayJob, jobsIngestSchedulerJob, jobsSourceSyncJob, jobsBoardProbeJob],
+  functions: [analysisJob, emailDigestJob, regeneratePlansJob, keepMongoWarmJob, recordingRetentionJob, pathwayJob, jobsIngestSchedulerJob, jobsSourceSyncJob, jobsBoardProbeJob, jobsEvaluatePostingsJob, jobsVerdictSweeperJob],
 })

@@ -37,7 +37,7 @@ export interface ClassifyResult {
   jdLen: number
 }
 
-function hostOf(u: string): string {
+export function hostOf(u: string): string {
   // Strip trailing DNS root dots — 'https://wa.me./x' yields hostname
   // 'wa.me.', which matches neither the exact entry nor the '.suffix'
   // rule and would fall through as an 'employer' apply path

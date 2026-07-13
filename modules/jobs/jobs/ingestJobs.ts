@@ -1,6 +1,6 @@
 import { inngest } from '@shared/services/inngest'
 import { connectDB } from '@shared/db/connection'
-import { JobPosting, JobSourceConfig, JobIngestCursor, JobIngestCycle } from '@shared/db/models'
+import { JobPosting, JobSourceConfig, JobIngestCursor, JobIngestCycle, JobsVerdictConfig } from '@shared/db/models'
 import { redis } from '@shared/redis'
 import { logger } from '@shared/logger'
 import { jsearchAdapter } from '../adapters/jsearchAdapter'
@@ -99,7 +99,8 @@ async function processTarget(
   sourceId: string,
   target: FetchTarget,
   outcome: ChunkOutcome,
-  delayMs = 300
+  delayMs = 300,
+  initVerdictPending = false
 ): Promise<void> {
   let page = 1
   for (;;) {
@@ -121,6 +122,7 @@ async function processTarget(
     }
     const counters = await ingestBatch(normalized, sourceId, {
       registerRepost: makeRedisRepostCounter(redis),
+      initVerdictPending,
     })
     accumulate(outcome, {
       counters, seenSourceKeys: [], fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {},
@@ -233,6 +235,14 @@ export async function runSourceSyncHandler(
   if (!adapter) return { skipped: true, reason: `no adapter for ${sourceId}` }
 
   const startedAt = new Date()
+  // §4.5: read the verdict switch ONCE per sync — new survivors get
+  // llmVerdict:{status:'pending'} for the sweeper's partial index. A
+  // mid-sync CMS flip applies from the next sync, not mid-run.
+  const verdictCfg = await JobsVerdictConfig.getConfig()
+  // Opted-out sources (ToS lever) never even mint pending rows — a pinned
+  // pending row the worker refuses to evaluate would starve the oldest-first
+  // sweep for every other source (adversarial review of Wave 2.3).
+  const initVerdictPending = verdictCfg.collectionEnabled && !config.llmVerdictOptOut
   const cursors = await JobIngestCursor.find({ sourceId }).lean()
   const targets = adapter.buildTargets(
     { sourceId: config.sourceId, enabled: config.enabled, slug: config.slug, atsKind: config.atsKind, displayName: config.displayName },
@@ -245,7 +255,7 @@ export async function runSourceSyncHandler(
     const outcome = await step.run(`fetch-chunk-${Math.floor(i / BUCKETS_PER_CHUNK)}`, async () => {
       const o: ChunkOutcome = { counters: emptyCounters(), seenSourceKeys: [], fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {} }
       for (const target of chunk) {
-        await processTarget(adapter, sourceId, target, o, delayMs)
+        await processTarget(adapter, sourceId, target, o, delayMs, initVerdictPending)
         if (delayMs) await sleep(delayMs)
       }
       return o

@@ -27,10 +27,38 @@ interface CycleRow {
   drops: Record<string, number>
   healthTransitions: string[]
 }
+interface VerdictLlmBlock {
+  requested: number
+  scored: number
+  cacheHits: number
+  errors: number
+  timeouts: number
+  softClosed: number
+  verdictDistribution: { genuine: number; suspicious: number; fraud: number }
+  reasonCodeCounts: Record<string, number>
+  llmFlaggedCleanRow: number
+  llmClearedFlaggedRow: number
+  costUsd: number
+  epoch: string
+}
+interface VerdictPanel {
+  config: {
+    collectionEnabled: boolean
+    enforceEnabled: boolean
+    dailyVerdictCap: number
+    dailyBudgetUsd: number
+    monthlyBudgetUsd: number
+  }
+  backlogPending: number
+  tombstones: number
+  distribution: Record<string, number>
+  cycles: Array<{ startedAt: string; finishedAt: string | null; llm: VerdictLlmBlock | null; healthTransitions: string[] }>
+}
 interface Payload {
   sources: SourceRow[]
   cycles: CycleRow[]
   corpus: { open: number; closed: number }
+  verdict: VerdictPanel
 }
 
 function Stat({ label, value }: { label: string; value: string | number }) {
@@ -119,6 +147,55 @@ export default function JobsIngestPage() {
                 <td>{c.healthTransitions.join(', ') || '—'}</td>
               </tr>
             ))}
+          </tbody>
+        </table>
+      </div>
+
+      <h2 className="mt-10 text-lg font-medium">LLM verdicts (§4.5 — shadow first)</h2>
+      <p className="mt-1 text-sm text-gray-500">
+        Switches are DB config (PATCH /api/cms/jobs-ingest), never env flags. Kick a sweep:
+        POST /api/jobs/admin/sync {'{"mode":"verdict-sweep"}'}.
+      </p>
+      <div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <Stat label="Collection" value={data.verdict.config.collectionEnabled ? 'ON' : 'OFF'} />
+        <Stat label="Enforcement" value={data.verdict.config.enforceEnabled ? 'ON' : 'OFF'} />
+        <Stat label="Pending backlog" value={data.verdict.backlogPending} />
+        <Stat label="Scam tombstones" value={data.verdict.tombstones} />
+      </div>
+      <div className="mt-4 grid grid-cols-3 gap-4">
+        <Stat label="Genuine" value={data.verdict.distribution.genuine ?? 0} />
+        <Stat label="Suspicious" value={data.verdict.distribution.suspicious ?? 0} />
+        <Stat label="Fraud" value={data.verdict.distribution.fraud ?? 0} />
+      </div>
+
+      <h2 className="mt-10 text-lg font-medium">Recent verdict cycles</h2>
+      <div className="mt-3 overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b text-left text-gray-500">
+              <th className="py-2 pr-4">Started</th><th className="pr-4">Requested</th><th className="pr-4">Scored</th>
+              <th className="pr-4">Cache</th><th className="pr-4">Err</th><th className="pr-4">Timeout</th>
+              <th className="pr-4">Soft-closed</th><th className="pr-4">Disagree ↑/↓</th><th className="pr-4">Cost</th><th>Epoch</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.verdict.cycles.map((c, i) => (
+              <tr key={i} className="border-b align-top">
+                <td className="py-2 pr-4">{new Date(c.startedAt).toLocaleString()}</td>
+                <td className="pr-4">{c.llm?.requested ?? 0}</td>
+                <td className="pr-4">{c.llm?.scored ?? 0}</td>
+                <td className="pr-4">{c.llm?.cacheHits ?? 0}</td>
+                <td className="pr-4">{(c.llm?.errors ?? 0) > 0 ? `⚠ ${c.llm?.errors}` : '0'}</td>
+                <td className="pr-4">{c.llm?.timeouts ?? 0}</td>
+                <td className="pr-4">{c.llm?.softClosed ?? 0}</td>
+                <td className="pr-4">{c.llm ? `${c.llm.llmFlaggedCleanRow}/${c.llm.llmClearedFlaggedRow}` : '—'}</td>
+                <td className="pr-4">${(c.llm?.costUsd ?? 0).toFixed(3)}</td>
+                <td>{c.llm?.epoch ?? '—'}</td>
+              </tr>
+            ))}
+            {!data.verdict.cycles.length && (
+              <tr><td className="py-2 text-gray-400" colSpan={10}>No verdict cycles yet — collection is {data.verdict.config.collectionEnabled ? 'on; the sweeper runs at :45' : 'off'}.</td></tr>
+            )}
           </tbody>
         </table>
       </div>
