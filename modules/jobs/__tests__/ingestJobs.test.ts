@@ -142,7 +142,7 @@ describe('runSourceSyncHandler', () => {
     expect(mockCycleCreate).toHaveBeenCalled() // finalize completed
   })
 
-  it('a schema-drift run (HTTP 200, payloads no longer normalize) DEGRADES the source', async () => {
+  it('total schema drift (>50%) QUARANTINES the source — §4.4 contract', async () => {
     resetAll()
     mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
@@ -150,8 +150,27 @@ describe('runSourceSyncHandler', () => {
     const r = await runSourceSyncHandler(EVENT, step, { interRequestDelayMs: 0 })
     expect(r).toMatchObject({ cycleWritten: true })
     const health = mockSourceUpdateOne.mock.calls.at(-1)![1].$set.health
-    expect(health).toBe('degraded')
+    expect(health).toBe('quarantined')
     expect(mockSourceUpdateOne.mock.calls.at(-1)![1].$set.lastHealthyProbeAt).toBeUndefined()
+  })
+
+  it('partial schema drift (20-50%) DEGRADES the source', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    // 1 drifted row of 3 per bucket = ~33% drift: above degrade, below quarantine.
+    mockAdapterFetch.mockResolvedValue({
+      ok: true, status: 200, attempts: 1,
+      raw: [
+        { shape: 'drifted' },
+        { job_id: 'a', job_title: 'Backend Developer', employer_name: 'Acme One', job_city: 'Pune', job_description: 'Build APIs. '.repeat(50), job_apply_link: 'https://careers.acme.com/1' },
+        { job_id: 'b', job_title: 'Data Analyst', employer_name: 'Acme Two', job_city: 'Pune', job_description: 'Analyze data. '.repeat(50), job_apply_link: 'https://careers.acme.com/2' },
+      ],
+    })
+    const r = await runSourceSyncHandler(EVENT, step, { interRequestDelayMs: 0 })
+    expect(r).toMatchObject({ cycleWritten: true })
+    const health = mockSourceUpdateOne.mock.calls.at(-1)![1].$set.health
+    expect(health).toBe('degraded')
   })
 
   it('a 429 anywhere degrades the source; drift rows are counted', async () => {
@@ -161,7 +180,15 @@ describe('runSourceSyncHandler', () => {
     let first = true
     mockAdapterFetch.mockImplementation(async () => {
       if (first) { first = false; return { ok: false, status: 429, attempts: 1, raw: [] } }
-      return { ok: true, status: 200, attempts: 1, raw: [{ not_a_job: true }] } // drift row
+      // one drift row among valid ones — drift stays at exactly 50%
+      // (NOT >50%), so the degrade must come from the 429, not quarantine
+      return {
+        ok: true, status: 200, attempts: 1,
+        raw: [
+          { not_a_job: true },
+          { job_id: 'ok', job_title: 'Backend Developer', employer_name: 'Acme', job_city: 'Pune', job_description: 'Build APIs. '.repeat(50), job_apply_link: 'https://careers.acme.com/1' },
+        ],
+      }
     })
     const r = await runSourceSyncHandler(EVENT, step, { interRequestDelayMs: 0 })
     expect(r).toMatchObject({ cycleWritten: true })

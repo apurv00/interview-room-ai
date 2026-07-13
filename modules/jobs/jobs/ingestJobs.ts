@@ -232,13 +232,19 @@ export async function runSourceSyncHandler(
     }))
     if (ops.length) await JobIngestCursor.bulkWrite(ops)
 
-    // Health: every fetch failing, a 429 anywhere, OR normalize-drift above
-    // the §4.4 threshold degrades — a source whose payloads no longer
-    // normalize is broken even when HTTP succeeds (Codex on #511). A clean
-    // run on a degraded source recovers it. Quarantine escalation = 2.2.
+    // Health (§4.4 thresholds): drift >50% = QUARANTINED (provider schema is
+    // gone — dark the source for ops; the scheduler stops dispatching it,
+    // so a fully-broken provider stops burning billed quota — Codex on
+    // #511); drift >20%, any 429, or all-failed = degraded (still runs,
+    // visibly sick); a clean run on a degraded source recovers it.
+    // Quarantine recovery is deliberate: ops re-activation (weekly board
+    // probe automation lands in 2.2).
     const allFailed = targets.length > 0 && total.httpErrors >= targets.length
     const driftRate = total.fetched > 0 ? total.driftNulls / total.fetched : 0
-    const newHealth = total.saw429 || allFailed || driftRate > 0.2 ? 'degraded' : 'active'
+    let newHealth: 'active' | 'degraded' | 'quarantined'
+    if (driftRate > 0.5) newHealth = 'quarantined'
+    else if (total.saw429 || allFailed || driftRate > 0.2) newHealth = 'degraded'
+    else newHealth = 'active'
     await JobSourceConfig.updateOne(
       { sourceId },
       { $set: { lastSyncAt: new Date(), health: newHealth, ...(newHealth === 'active' ? { lastHealthyProbeAt: new Date() } : {}) } }
