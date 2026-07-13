@@ -109,12 +109,19 @@ async function processTarget(
       counters, fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {},
     })
 
-    // Freshness cursor input: newest postedAt observed for this bucket.
+    // Freshness cursor input: newest PARSEABLE postedAt for this bucket.
+    // A non-parseable provider date must never reach the cursor write —
+    // new Date('garbage') = Invalid Date fails Mongoose casting in
+    // finalize AFTER rows are ingested, and the step then retries forever
+    // on the same bad value (Codex on #511). Compare numerically: mixed
+    // date formats make string comparison meaningless.
     if (t.kind === 'bucket') {
       for (const n of normalized) {
-        if (n.postedAt && (!outcome.newestByBucket[t.bucketId] || n.postedAt > outcome.newestByBucket[t.bucketId])) {
-          outcome.newestByBucket[t.bucketId] = n.postedAt
-        }
+        if (!n.postedAt) continue
+        const ts = new Date(n.postedAt).getTime()
+        if (Number.isNaN(ts)) continue
+        const cur = outcome.newestByBucket[t.bucketId]
+        if (!cur || ts > new Date(cur).getTime()) outcome.newestByBucket[t.bucketId] = n.postedAt
       }
     }
 

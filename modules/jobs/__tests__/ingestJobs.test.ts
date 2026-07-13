@@ -122,6 +122,26 @@ describe('runSourceSyncHandler', () => {
     expect(health).toBe('active')
   })
 
+  it('a garbage postedAt never reaches the cursor write — finalize still succeeds', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockAdapterFetch.mockResolvedValue({
+      ok: true, status: 200, attempts: 1,
+      raw: [{
+        job_id: 'id-1', job_title: 'Backend Developer', employer_name: 'Acme',
+        job_city: 'Pune', job_description: 'Build APIs. '.repeat(50),
+        job_posted_at_datetime_utc: 'Posted 3 days ago', // non-parseable
+        job_apply_link: 'https://careers.acme.com/1',
+      }],
+    })
+    const r = await runSourceSyncHandler(EVENT, step, { interRequestDelayMs: 0 })
+    expect(r).toMatchObject({ cycleWritten: true })
+    // no parseable dates observed -> zero cursor ops, bulkWrite skipped
+    expect(mockCursorBulkWrite).not.toHaveBeenCalled()
+    expect(mockCycleCreate).toHaveBeenCalled() // finalize completed
+  })
+
   it('a schema-drift run (HTTP 200, payloads no longer normalize) DEGRADES the source', async () => {
     resetAll()
     mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
