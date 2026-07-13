@@ -218,6 +218,25 @@ describe('runSourceSyncHandler', () => {
 })
 
 
+describe('board sync uses per-config sourceId (Codex #513 P1)', () => {
+  it('provenance sourceKeys carry gh:phonepe, never the adapter constant', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockAdapterFetch.mockResolvedValue({
+      ok: true, status: 200, attempts: 1,
+      raw: [{ kind: 'greenhouse', raw: { id: 123, title: 'Backend Engineer', location: { name: 'Pune, India' }, content: 'Build things. '.repeat(40), absolute_url: 'https://boards.greenhouse.io/phonepe/jobs/123' } }],
+    })
+    const { JobPosting } = await import('@shared/db/models')
+    vi.mocked(JobPosting.create).mockClear()
+    const r = await runSourceSyncHandler({ data: { sourceId: 'gh:phonepe' } }, step, { interRequestDelayMs: 0 })
+    expect(r).toMatchObject({ cycleWritten: true })
+    const doc = vi.mocked(JobPosting.create).mock.calls[0][0] as { provenance: Array<{ sourceKey: string; sourceId: string }> }
+    expect(doc.provenance[0].sourceKey).toBe('gh:phonepe:123')
+    expect(doc.provenance[0].sourceId).toBe('gh:phonepe')
+  })
+})
+
 describe('runBoardProbeHandler (weekly liveness, §4.4)', () => {
   function boardRow(overrides: Record<string, unknown> = {}) {
     return {
@@ -244,6 +263,17 @@ describe('runBoardProbeHandler (weekly liveness, §4.4)', () => {
     const update = mockSourceUpdateOne.mock.calls.at(-1)![1].$set
     expect(update.emptyStreak).toBe(3)
     expect(update.health).toBe('quarantined')
+  })
+
+  it('an under-supply probe RESETS the recovery streak — consecutive means consecutive', async () => {
+    resetAll()
+    mockSourceFind.mockReturnValue({ lean: () => Promise.resolve([boardRow({ health: 'quarantined', healthyProbeStreak: 1, emptyStreak: 0 })]) })
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [{ kind: 'greenhouse', raw: {} }] }) // 1 < 10 = under
+    await runBoardProbeHandler(step)
+    const update = mockSourceUpdateOne.mock.calls.at(-1)![1].$set
+    expect(update.healthyProbeStreak).toBe(0)
+    expect(update.emptyStreak).toBe(1)
+    expect(update.health).toBeUndefined() // not yet 3 weeks under
   })
 
   it('a quarantined board needs TWO healthy probes to recover', async () => {

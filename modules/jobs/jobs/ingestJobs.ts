@@ -86,9 +86,14 @@ function accumulate(into: ChunkOutcome, from: ChunkOutcome): void {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-/** Fetch one bucket (with §4.4 pagination policy) and ingest its rows. */
+/** Fetch one bucket (with §4.4 pagination policy) and ingest its rows.
+ *  `sourceId` is the CONFIG row's id (gh:phonepe, lever:meesho, jsearch) —
+ *  never the adapter's constant id: the unified board adapter serves many
+ *  companies, and a shared prefix would collide sourceKeys across boards
+ *  whose providers reuse posting ids (Codex on #513, P1). */
 async function processTarget(
   adapter: JobSourceAdapter,
+  sourceId: string,
   target: FetchTarget,
   outcome: ChunkOutcome,
   delayMs = 300
@@ -111,7 +116,7 @@ async function processTarget(
       if (n === null) outcome.driftNulls++
       else normalized.push(n)
     }
-    const counters = await ingestBatch(normalized, adapter.sourceId, {
+    const counters = await ingestBatch(normalized, sourceId, {
       registerRepost: makeRedisRepostCounter(redis),
     })
     accumulate(outcome, {
@@ -226,7 +231,7 @@ export async function runSourceSyncHandler(
     const outcome = await step.run(`fetch-chunk-${Math.floor(i / BUCKETS_PER_CHUNK)}`, async () => {
       const o: ChunkOutcome = { counters: emptyCounters(), fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {} }
       for (const target of chunk) {
-        await processTarget(adapter, target, o, delayMs)
+        await processTarget(adapter, sourceId, target, o, delayMs)
         if (delayMs) await sleep(delayMs)
       }
       return o
@@ -321,6 +326,9 @@ export async function runBoardProbeHandler(step: StepRunner): Promise<{ probed: 
         const under = board.minIndiaPostings != null && indiaCount < board.minIndiaPostings
         const emptyStreak = under ? (board.emptyStreak ?? 0) + 1 : 0
         Object.assign(update, { emptyStreak })
+        // 'Two consecutive healthy probes' means CONSECUTIVE — an
+        // under-supply week resets the recovery streak (Codex on #513).
+        if (under) Object.assign(update, { healthyProbeStreak: 0 })
         if (under && emptyStreak >= 3) {
           Object.assign(update, { health: 'quarantined', healthyProbeStreak: 0 })
         } else if (board.health === 'quarantined' && !under && indiaCount > 0) {
