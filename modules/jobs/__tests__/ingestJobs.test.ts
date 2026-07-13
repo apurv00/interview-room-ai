@@ -142,6 +142,25 @@ describe('runSourceSyncHandler', () => {
     expect(mockCycleCreate).toHaveBeenCalled() // finalize completed
   })
 
+  it('a run with store failures never reads healthy — degraded + storeErrors persisted', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockAdapterFetch.mockResolvedValue({
+      ok: true, status: 200, attempts: 1,
+      raw: [{ job_id: 'x', job_title: 'Backend Developer', employer_name: 'Acme', job_city: 'Pune', job_description: 'Build APIs. '.repeat(50), job_apply_link: 'https://careers.acme.com/1' }],
+    })
+    const { JobPosting } = await import('@shared/db/models')
+    vi.mocked(JobPosting.create).mockRejectedValue(new Error('index regression'))
+    const r = await runSourceSyncHandler(EVENT, step, { interRequestDelayMs: 0 })
+    expect(r).toMatchObject({ cycleWritten: true })
+    const health = mockSourceUpdateOne.mock.calls.at(-1)![1].$set.health
+    expect(health).toBe('degraded')
+    expect(mockSourceUpdateOne.mock.calls.at(-1)![1].$set.lastHealthyProbeAt).toBeUndefined()
+    expect(mockCycleCreate.mock.calls[0][0].storeErrors).toBeGreaterThan(0)
+    vi.mocked(JobPosting.create).mockResolvedValue({} as never)
+  })
+
   it('total schema drift (>50%) QUARANTINES the source — §4.4 contract', async () => {
     resetAll()
     mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })

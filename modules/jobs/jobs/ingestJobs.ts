@@ -241,9 +241,12 @@ export async function runSourceSyncHandler(
     // probe automation lands in 2.2).
     const allFailed = targets.length > 0 && total.httpErrors >= targets.length
     const driftRate = total.fetched > 0 ? total.driftNulls / total.fetched : 0
+    // Store errors are OUR failures (validation/index regressions), not the
+    // provider's — a run that fetched valid rows but could not store them
+    // must never read healthy (Codex on #511, post-merge follow-up).
     let newHealth: 'active' | 'degraded' | 'quarantined'
     if (driftRate > 0.5) newHealth = 'quarantined'
-    else if (total.saw429 || allFailed || driftRate > 0.2) newHealth = 'degraded'
+    else if (total.saw429 || allFailed || driftRate > 0.2 || total.counters.storeErrors > 0) newHealth = 'degraded'
     else newHealth = 'active'
     await JobSourceConfig.updateOne(
       { sourceId },
@@ -263,6 +266,7 @@ export async function runSourceSyncHandler(
       newCount: total.counters.newCount,
       merged: total.counters.merged,
       refreshed: total.counters.refreshed,
+      storeErrors: total.counters.storeErrors,
       quotaSpent: total.attempts,
       healthTransitions: newHealth !== config.health ? [`${config.health}->${newHealth}`] : [],
     })
