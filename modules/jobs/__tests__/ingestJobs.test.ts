@@ -1,11 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
 
 const {
-  mockSend, mockIsFeatureEnabled, mockSourceFindOne, mockSourceFind, mockSourceUpdateOne,
+  mockSend, mockSourceFindOne, mockSourceFind, mockSourceUpdateOne,
   mockCursorFind, mockCursorBulkWrite, mockCycleCreate, mockAdapterFetch,
 } = vi.hoisted(() => ({
   mockSend: vi.fn(),
-  mockIsFeatureEnabled: vi.fn(),
   mockSourceFindOne: vi.fn(),
   mockSourceFind: vi.fn(),
   mockSourceUpdateOne: vi.fn(),
@@ -18,7 +17,6 @@ const {
 vi.mock('@shared/services/inngest', () => ({
   inngest: { send: mockSend, createFunction: vi.fn(() => ({})) },
 }))
-vi.mock('@shared/featureFlags', () => ({ isFeatureEnabled: mockIsFeatureEnabled }))
 vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@shared/redis', () => ({ redis: { sadd: vi.fn(), expire: vi.fn(), scard: vi.fn() } }))
 vi.mock('@shared/logger', () => ({ logger: { warn: vi.fn() } }))
@@ -39,7 +37,6 @@ const step = { run: <T,>(_n: string, fn: () => Promise<T> | T) => Promise.resolv
 
 function resetAll(): void {
   for (const m of [mockSend, mockSourceFindOne, mockSourceFind, mockSourceUpdateOne, mockCursorFind, mockCursorBulkWrite, mockCycleCreate, mockAdapterFetch]) m.mockReset()
-  mockIsFeatureEnabled.mockReset().mockReturnValue(true)
   mockSourceUpdateOne.mockReturnValue({ lean: () => Promise.resolve(null) })
   mockSourceUpdateOne.mockResolvedValue({})
   mockCursorBulkWrite.mockResolvedValue({})
@@ -47,11 +44,11 @@ function resetAll(): void {
 }
 
 describe('runIngestSchedulerHandler', () => {
-  it('flag off → skipped, zero dispatches', async () => {
+  it('no enabled sources → zero dispatches (data is the only switch — no flags)', async () => {
     resetAll()
-    mockIsFeatureEnabled.mockReturnValue(false)
+    mockSourceFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     const r = await runIngestSchedulerHandler(step)
-    expect(r).toEqual({ skipped: true })
+    expect(r).toEqual({ dispatched: 0 })
     expect(mockSend).not.toHaveBeenCalled()
   })
 
@@ -77,11 +74,7 @@ describe('runIngestSchedulerHandler', () => {
 describe('runSourceSyncHandler', () => {
   const EVENT = { data: { sourceId: 'jsearch' } }
 
-  it('flag off / unknown adapter / disabled source / bad health all skip', async () => {
-    resetAll()
-    mockIsFeatureEnabled.mockReturnValue(false)
-    expect(await runSourceSyncHandler(EVENT, step)).toMatchObject({ skipped: true })
-
+  it('unknown adapter / disabled source / bad health all skip', async () => {
     resetAll()
     expect(await runSourceSyncHandler({ data: { sourceId: 'nope' } }, step)).toMatchObject({ skipped: true })
 
@@ -140,6 +133,25 @@ describe('runSourceSyncHandler', () => {
     // no parseable dates observed -> zero cursor ops, bulkWrite skipped
     expect(mockCursorBulkWrite).not.toHaveBeenCalled()
     expect(mockCycleCreate).toHaveBeenCalled() // finalize completed
+  })
+
+  it('a run with store failures never reads healthy — degraded + storeErrors persisted', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockAdapterFetch.mockResolvedValue({
+      ok: true, status: 200, attempts: 1,
+      raw: [{ job_id: 'x', job_title: 'Backend Developer', employer_name: 'Acme', job_city: 'Pune', job_description: 'Build APIs. '.repeat(50), job_apply_link: 'https://careers.acme.com/1' }],
+    })
+    const { JobPosting } = await import('@shared/db/models')
+    vi.mocked(JobPosting.create).mockRejectedValue(new Error('index regression'))
+    const r = await runSourceSyncHandler(EVENT, step, { interRequestDelayMs: 0 })
+    expect(r).toMatchObject({ cycleWritten: true })
+    const health = mockSourceUpdateOne.mock.calls.at(-1)![1].$set.health
+    expect(health).toBe('degraded')
+    expect(mockSourceUpdateOne.mock.calls.at(-1)![1].$set.lastHealthyProbeAt).toBeUndefined()
+    expect(mockCycleCreate.mock.calls[0][0].storeErrors).toBeGreaterThan(0)
+    vi.mocked(JobPosting.create).mockResolvedValue({} as never)
   })
 
   it('total schema drift (>50%) QUARANTINES the source — §4.4 contract', async () => {
