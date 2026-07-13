@@ -114,6 +114,10 @@ describe('runSourceSyncHandler', () => {
     expect(cycle.fetched).toBeGreaterThan(0)
     expect(cycle.quotaSpent).toBe(cycle.fetched) // 1 attempt per bucket, 1 row each
     expect(mockCursorBulkWrite).toHaveBeenCalled()
+    // Monotonic cursors (Codex #511): newestPostedAt via $max, never $set.
+    const op = mockCursorBulkWrite.mock.calls[0][0][0].updateOne
+    expect(op.update.$max.newestPostedAt).toBeInstanceOf(Date)
+    expect(op.update.$set.newestPostedAt).toBeUndefined()
     const health = mockSourceUpdateOne.mock.calls.at(-1)![1].$set.health
     expect(health).toBe('active')
   })

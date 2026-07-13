@@ -215,7 +215,11 @@ export async function runSourceSyncHandler(
     const ops = Object.entries(total.newestByBucket).map(([bucket, newest]) => ({
       updateOne: {
         filter: { sourceId, bucket },
-        update: { $set: { newestPostedAt: new Date(newest), lastRunAt: new Date() } },
+        // $max keeps the cursor MONOTONIC (Codex on #511): a reordered page
+        // or an older overlapping run finalizing late must never move the
+        // cursor backwards — that would widen future windows and re-fetch
+        // stale pages on billed quota.
+        update: { $max: { newestPostedAt: new Date(newest) }, $set: { lastRunAt: new Date() } },
         upsert: true,
       },
     }))
@@ -268,8 +272,16 @@ export const jobsSourceSyncJob = inngest.createFunction(
     name: 'Jobs: source sync',
     retries: 2,
     // First use of Inngest concurrency in this repo (flagged in the plan):
-    // Atlas shared tiers cap connections; sync concurrency ≤2 is ruling #11.
-    concurrency: { limit: 2 },
+    // global limit 2 = the Atlas shared-tier rule (ruling #11); the
+    // per-sourceId key makes each source a SINGLETON — a slow run crossing
+    // the next cron tick (or an admin double-kick) queues instead of
+    // racing cursor/health writes and double-burning billed quota
+    // (Codex on #511). The queued run is then cheap: fresh cursors make it
+    // mostly known-rows and pagination stops at page 1.
+    concurrency: [
+      { limit: 2 },
+      { limit: 1, key: 'event.data.sourceId' },
+    ],
     onFailure: async ({ event }) => {
       const sourceId = (event?.data as { event?: { data?: { sourceId?: string } } })?.event?.data?.sourceId
       try {
