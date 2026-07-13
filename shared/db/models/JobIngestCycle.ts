@@ -23,6 +23,8 @@ export interface IJobIngestCycle extends Document {
   newCount?: number
   merged?: number
   refreshed?: number
+  /** Rows that failed at the store layer (isolated per-row; health-relevant). */
+  storeErrors?: number
   closed?: number
   dupCollapsedPct?: number
   quotaSpent?: number
@@ -66,6 +68,7 @@ const JobIngestCycleSchema = new Schema<IJobIngestCycle>(
     newCount: { type: Number },
     merged: { type: Number },
     refreshed: { type: Number },
+    storeErrors: { type: Number },
     closed: { type: Number },
     dupCollapsedPct: { type: Number },
     quotaSpent: { type: Number },

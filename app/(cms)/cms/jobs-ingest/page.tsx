@@ -22,6 +22,7 @@ interface CycleRow {
   newCount: number
   merged: number
   refreshed: number
+  storeErrors: number
   quotaSpent: number
   drops: Record<string, number>
   healthTransitions: string[]
@@ -97,7 +98,7 @@ export default function JobsIngestPage() {
             <tr className="border-b text-left text-gray-500">
               <th className="py-2 pr-4">Started</th><th className="pr-4">Source</th><th className="pr-4">Fetched</th>
               <th className="pr-4">Drift</th><th className="pr-4">New</th><th className="pr-4">Merged</th>
-              <th className="pr-4">Refreshed</th><th className="pr-4">Quota</th><th className="pr-4">Drops</th><th>Health Δ</th>
+              <th className="pr-4">Refreshed</th><th className="pr-4">Store err</th><th className="pr-4">Quota</th><th className="pr-4">Drops</th><th>Health Δ</th>
             </tr>
           </thead>
           <tbody>
@@ -110,6 +111,7 @@ export default function JobsIngestPage() {
                 <td className="pr-4">{c.newCount}</td>
                 <td className="pr-4">{c.merged}</td>
                 <td className="pr-4">{c.refreshed}</td>
+                <td className="pr-4">{c.storeErrors > 0 ? `⚠ ${c.storeErrors}` : '0'}</td>
                 <td className="pr-4">{c.quotaSpent}</td>
                 <td className="pr-4">
                   {Object.entries(c.drops).map(([k, v]) => `${k}:${v}`).join(' ') || '—'}
