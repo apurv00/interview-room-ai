@@ -15,6 +15,9 @@ export interface IJobSourceConfig extends Document {
   atsKind?: string
   /** ats-board/sitemap: company slug or shard identifier */
   slug?: string
+  /** Human company name for boards whose payload rows omit one (Lever/Ashby)
+   *  — feeds identity + UI; the URL slug is never user-visible. */
+  displayName?: string
   enabled: boolean
   health: 'active' | 'degraded' | 'quarantined' | 'dead' | 'revoked'
   cadenceMinutes: number
@@ -37,6 +40,7 @@ const JobSourceConfigSchema = new Schema<IJobSourceConfig>(
     kind: { type: String, enum: ['aggregator-api', 'ats-board', 'sitemap-jsonld', 'public-api'], required: true },
     atsKind: { type: String },
     slug: { type: String },
+    displayName: { type: String },
     enabled: { type: Boolean, default: false },
     health: { type: String, enum: ['active', 'degraded', 'quarantined', 'dead', 'revoked'], default: 'active' },
     cadenceMinutes: { type: Number, default: 1440 },

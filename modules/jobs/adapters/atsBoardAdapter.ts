@@ -63,6 +63,26 @@ function extractRows(atsKind: BoardKind, data: unknown): Record<string, unknown>
   return null
 }
 
+/**
+ * Company identity ladder: provider payload name (GH `company_name`, SR
+ * `company.name` — live-verified 2026-07-13: 'PhonePe', 'Bosch Group') →
+ * config displayName (Lever/Ashby rows carry none) → source-id suffix as
+ * last resort. The suffix ('boschgroup') must never be first choice: it
+ * breaks companyKey word boundaries so ATS rows would neither fingerprint
+ * nor fuzzy-merge with the same employer from JSearch, and it leaks a slug
+ * into user-visible company names (Codex on #513 round-5).
+ */
+function boardCompany(kind: BoardKind, j: Record<string, unknown>, target: FetchTarget): string {
+  if (kind === 'greenhouse' && typeof j.company_name === 'string' && j.company_name) return j.company_name
+  if (kind === 'smartrecruiters') {
+    const name = (j.company as Record<string, unknown> | undefined)?.name
+    if (typeof name === 'string' && name) return name
+  }
+  if (target.kind === 'board' && target.displayName) return target.displayName
+  const boardId = target.kind === 'board' ? target.boardId : 'ats-board'
+  return boardId.split(':')[1] ?? boardId
+}
+
 function locationText(atsKind: BoardKind, j: Record<string, unknown>): string {
   if (atsKind === 'greenhouse') return String((j.location as Record<string, unknown>)?.name ?? '')
   if (atsKind === 'lever') return String((j.categories as Record<string, unknown>)?.location ?? '')
@@ -85,6 +105,7 @@ export const atsBoardAdapter: JobSourceAdapter = {
       boardId: config.sourceId,
       slug: config.slug,
       atsKind: config.atsKind as BoardKind,
+      displayName: config.displayName,
     }]
   },
 
@@ -126,8 +147,7 @@ export const atsBoardAdapter: JobSourceAdapter = {
   normalize(rawTagged: unknown, target: FetchTarget): NormalizedJob | null {
     const { kind, raw: j } = (rawTagged ?? {}) as BoardRow
     if (!j || typeof j !== 'object' || !kind) return null
-    const boardId = target.kind === 'board' ? target.boardId : 'ats-board'
-    const company = boardId.split(':')[1] ?? boardId
+    const company = boardCompany(kind, j, target)
 
     if (kind === 'greenhouse') {
       if (typeof j.title !== 'string' || j.id == null) return null
@@ -172,7 +192,13 @@ export const atsBoardAdapter: JobSourceAdapter = {
       // candidate-facing page; Codex on #513, P1). Prefer a provider-sent
       // public applyUrl; else construct the public posting URL.
       const sentApply = typeof j.applyUrl === 'string' && !/api\.smartrecruiters\.com/i.test(j.applyUrl) ? j.applyUrl : null
-      const applyUrl = sentApply ?? `https://jobs.smartrecruiters.com/${target.kind === 'board' ? target.slug : ''}/${String(j.id)}`
+      // Canonical public form is `{id}-{title-slug}` (matches SR's own
+      // postingUrl). Live-verified 2026-07-13: the id prefix alone resolves
+      // (200 + full SSR content, slug tail cosmetic), but we mint the
+      // canonical form since the list row hands us the title for free
+      // (Codex on #513 round-5).
+      const titleSlug = j.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+      const applyUrl = sentApply ?? `https://jobs.smartrecruiters.com/${target.kind === 'board' ? target.slug : ''}/${String(j.id)}${titleSlug ? `-${titleSlug}` : ''}`
       const jobAd = (j.jobAd as Record<string, unknown>)?.sections as Record<string, { text?: string }> | undefined
       const description = jobAd
         ? Object.values(jobAd).map((s) => (typeof s?.text === 'string' ? stripHtml(s.text) : '')).join(' ')

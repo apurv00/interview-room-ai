@@ -71,6 +71,15 @@ describe('runIngestSchedulerHandler', () => {
     // invents an active source
     const seed = mockSourceUpdateOne.mock.calls[0]
     expect(seed[1].$setOnInsert.enabled).toBe(false)
+    // board seeds carry displayName on insert; a guarded second update
+    // backfills ONLY absent values so ops edits are never stomped
+    const boardSeed = mockSourceUpdateOne.mock.calls[1]
+    expect(boardSeed[1].$setOnInsert.displayName).toBeTruthy()
+    expect(boardSeed[1].$setOnInsert.enabled).toBe(false)
+    const backfill = mockSourceUpdateOne.mock.calls[2]
+    expect(backfill[0].displayName).toEqual({ $in: [null, ''] })
+    expect(backfill[1].$set.displayName).toBeTruthy()
+    expect(backfill[2]?.upsert).toBeUndefined()
     expect(mockSend).toHaveBeenCalledWith({ name: 'jobs/source.sync', data: { sourceId: 'due-source' } })
   })
 })

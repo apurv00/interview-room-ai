@@ -109,7 +109,7 @@ New shared helper required: **`fetchJSONWithRetry<T>`** — the existing `shared
 ```ts
 type FetchTarget =
   | { kind: 'bucket';  bucketId: string; query: string; datePostedWindow: 'day'|'3days'|'week'; page: number }
-  | { kind: 'board';   boardId: string; slug: string; atsKind: 'greenhouse'|'lever'|'smartrecruiters'|'ashby'|'workable'|'bamboohr' }
+  | { kind: 'board';   boardId: string; slug: string; atsKind: 'greenhouse'|'lever'|'smartrecruiters'|'ashby'|'workable'|'bamboohr'; displayName?: string }  // human company name for boards whose payload omits one (Lever/Ashby); GH/SR payload names win
   | { kind: 'sitemap'; shardUrl: string; slugFilter: { metros: string[]; domainPatterns: RegExp[]; maxDetailFetches: number } }
   | { kind: 'feed';    feedId: string; page: number; perPage: number }
 
