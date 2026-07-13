@@ -172,6 +172,16 @@ export function mergeIntoDoc(doc: IJobPosting, p: PreparedPosting, sourceId: str
     const existing = doc.provenance.find((e) => e.sourceKey === sk)
     if (existing) {
       existing.lastSeenAt = now
+      // The source's CURRENT payload is the live truth for its own row
+      // (Codex on #510): a row that first arrived url-less — or whose link
+      // has since changed — must pick up the apply path the source serves
+      // today. Absence in the incoming payload never erases a stored link.
+      const url = bestApplyUrl(p.usableUrls)
+      if (url) {
+        existing.applyUrl = url
+        existing.applyTier = classifyApplyUrl(url)
+      }
+      if (p.job.viaSite) existing.viaSite = p.job.viaSite
     } else {
       const url = bestApplyUrl(p.usableUrls)
       doc.provenance.push({

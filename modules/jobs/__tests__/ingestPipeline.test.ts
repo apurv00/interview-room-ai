@@ -200,6 +200,38 @@ describe('Codex #510 regressions', () => {
     expect(closed.save).toHaveBeenCalled()
   })
 
+  it('a sourceKey hit refreshes the apply path when the source now supplies one', async () => {
+    reset()
+    const existing = docStub({
+      provenance: [{
+        sourceId: 'jsearch', externalId: 'ext-1', sourceKey: 'jsearch:ext-1',
+        applyUrl: undefined, applyTier: undefined, lastSeenAt: new Date('2026-07-01'),
+      }],
+      jdLength: 999,
+    })
+    mockFindOne.mockResolvedValueOnce(existing)
+    await ingestBatch([job({ applyOptions: [{ url: 'https://boards.greenhouse.io/acme/jobs/9' }] })], 'jsearch')
+    const entry = existing.provenance[0] as Record<string, unknown>
+    expect(entry.applyUrl).toBe('https://boards.greenhouse.io/acme/jobs/9')
+    expect(entry.applyTier).toBe('direct-ats')
+  })
+
+  it('an incoming payload WITHOUT urls never erases a stored apply link', async () => {
+    reset()
+    const existing = docStub({
+      provenance: [{
+        sourceId: 'jsearch', externalId: 'ext-1', sourceKey: 'jsearch:ext-1',
+        applyUrl: 'https://careers.acme.com/1', applyTier: 'employer', lastSeenAt: new Date('2026-07-01'),
+      }],
+      jdLength: 999,
+    })
+    mockFindOne.mockResolvedValueOnce(existing)
+    await ingestBatch([job({ applyOptions: [] })], 'jsearch')
+    const entry = existing.provenance[0] as Record<string, unknown>
+    expect(entry.applyUrl).toBe('https://careers.acme.com/1')
+    expect(entry.applyTier).toBe('employer')
+  })
+
   it('an llm-verdict tombstone STAYS closed on re-fetch (anti-resurrection, ruling #16)', async () => {
     reset()
     const tombstone = docStub({
