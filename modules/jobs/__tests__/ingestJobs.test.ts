@@ -30,14 +30,18 @@ vi.mock('../adapters/jsearchAdapter', async (importOriginal) => {
   const real = await importOriginal<typeof import('../adapters/jsearchAdapter')>()
   return { jsearchAdapter: { ...real.jsearchAdapter, fetch: mockAdapterFetch } }
 })
+vi.mock('../adapters/atsBoardAdapter', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../adapters/atsBoardAdapter')>()
+  return { atsBoardAdapter: { ...real.atsBoardAdapter, fetch: mockAdapterFetch } }
+})
 
-import { runIngestSchedulerHandler, runSourceSyncHandler } from '../jobs/ingestJobs'
+import { runIngestSchedulerHandler, runSourceSyncHandler, runBoardProbeHandler } from '../jobs/ingestJobs'
 
 const step = { run: <T,>(_n: string, fn: () => Promise<T> | T) => Promise.resolve(fn()) }
 
 function resetAll(): void {
   for (const m of [mockSend, mockSourceFindOne, mockSourceFind, mockSourceUpdateOne, mockCursorFind, mockCursorBulkWrite, mockCycleCreate, mockAdapterFetch]) m.mockReset()
-  mockSourceUpdateOne.mockReturnValue({ lean: () => Promise.resolve(null) })
+  mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve(null) })
   mockSourceUpdateOne.mockResolvedValue({})
   mockCursorBulkWrite.mockResolvedValue({})
   mockCycleCreate.mockResolvedValue({})
@@ -76,7 +80,9 @@ describe('runSourceSyncHandler', () => {
 
   it('unknown adapter / disabled source / bad health all skip', async () => {
     resetAll()
-    expect(await runSourceSyncHandler({ data: { sourceId: 'nope' } }, step)).toMatchObject({ skipped: true })
+    // enabled + healthy but no adapter resolves for this kind/id
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'nope', enabled: true, health: 'active', kind: 'public-api' }) })
+    expect(await runSourceSyncHandler({ data: { sourceId: 'nope' } }, step)).toMatchObject({ skipped: true, reason: 'no adapter for nope' })
 
     resetAll()
     mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: false, health: 'active' }) })
@@ -208,5 +214,52 @@ describe('runSourceSyncHandler', () => {
     expect(cycle.driftNulls).toBeGreaterThan(0)
     const health = mockSourceUpdateOne.mock.calls.at(-1)![1].$set.health
     expect(health).toBe('degraded')
+  })
+})
+
+
+describe('runBoardProbeHandler (weekly liveness, §4.4)', () => {
+  function boardRow(overrides: Record<string, unknown> = {}) {
+    return {
+      sourceId: 'gh:phonepe', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe',
+      enabled: true, health: 'active', minIndiaPostings: 10, emptyStreak: 0, healthyProbeStreak: 0,
+      ...overrides,
+    }
+  }
+
+  it('404 quarantines a dead board immediately', async () => {
+    resetAll()
+    mockSourceFind.mockReturnValue({ lean: () => Promise.resolve([boardRow()]) })
+    mockAdapterFetch.mockResolvedValue({ ok: false, status: 404, attempts: 1, raw: [] })
+    await runBoardProbeHandler(step)
+    const update = mockSourceUpdateOne.mock.calls.at(-1)![1].$set
+    expect(update.health).toBe('quarantined')
+  })
+
+  it('sub-minIndiaPostings yield 3 weeks running quarantines (emptyStreak)', async () => {
+    resetAll()
+    mockSourceFind.mockReturnValue({ lean: () => Promise.resolve([boardRow({ emptyStreak: 2 })]) })
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [{ kind: 'greenhouse', raw: {} }] }) // 1 < 10
+    await runBoardProbeHandler(step)
+    const update = mockSourceUpdateOne.mock.calls.at(-1)![1].$set
+    expect(update.emptyStreak).toBe(3)
+    expect(update.health).toBe('quarantined')
+  })
+
+  it('a quarantined board needs TWO healthy probes to recover', async () => {
+    resetAll()
+    const healthyRaw = Array.from({ length: 12 }, () => ({ kind: 'greenhouse', raw: {} }))
+    mockSourceFind.mockReturnValue({ lean: () => Promise.resolve([boardRow({ health: 'quarantined', healthyProbeStreak: 0 })]) })
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: healthyRaw })
+    await runBoardProbeHandler(step)
+    expect(mockSourceUpdateOne.mock.calls.at(-1)![1].$set.healthyProbeStreak).toBe(1)
+
+    resetAll()
+    mockSourceFind.mockReturnValue({ lean: () => Promise.resolve([boardRow({ health: 'quarantined', healthyProbeStreak: 1 })]) })
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: healthyRaw })
+    await runBoardProbeHandler(step)
+    const update = mockSourceUpdateOne.mock.calls.at(-1)![1].$set
+    expect(update.health).toBe('active')
+    expect(update.healthyProbeStreak).toBe(0)
   })
 })

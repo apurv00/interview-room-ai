@@ -4,6 +4,8 @@ import { JobSourceConfig, JobIngestCursor, JobIngestCycle } from '@shared/db/mod
 import { redis } from '@shared/redis'
 import { logger } from '@shared/logger'
 import { jsearchAdapter } from '../adapters/jsearchAdapter'
+import { atsBoardAdapter } from '../adapters/atsBoardAdapter'
+import { BOARD_REGISTRY } from '../config/boardRegistry'
 import type { FetchTarget, JobSourceAdapter, NormalizedJob } from '../adapters/types'
 import { ingestBatch, makeRedisRepostCounter, type IngestCounters } from '../services/ingestPipeline'
 
@@ -29,6 +31,14 @@ import { ingestBatch, makeRedisRepostCounter, type IngestCounters } from '../ser
 
 const ADAPTERS: Record<string, JobSourceAdapter> = {
   jsearch: jsearchAdapter,
+}
+
+/** Adapter resolution: aggregator ids map directly; every ats-board config
+ *  row (gh:, lever:, sr:, ashby: prefixes) rides the unified board adapter. */
+export function resolveAdapter(sourceId: string, kind?: string): JobSourceAdapter | null {
+  if (ADAPTERS[sourceId]) return ADAPTERS[sourceId]
+  if (kind === 'ats-board' || /^(gh|lever|sr|ashby):/.test(sourceId)) return atsBoardAdapter
+  return null
 }
 
 const BUCKETS_PER_CHUNK = 1
@@ -151,6 +161,14 @@ export async function runIngestSchedulerHandler(step: StepRunner): Promise<{ dis
       { $setOnInsert: { sourceId: 'jsearch', kind: 'aggregator-api', enabled: false, health: 'active', cadenceMinutes: 1440 } },
       { upsert: true }
     )
+    // ATS boards (§1 build-now): seeded DISABLED, 6h cadence per §4.4.
+    for (const b of BOARD_REGISTRY) {
+      await JobSourceConfig.updateOne(
+        { sourceId: b.sourceId },
+        { $setOnInsert: { sourceId: b.sourceId, kind: 'ats-board', atsKind: b.atsKind, slug: b.slug, minIndiaPostings: b.minIndiaPostings, enabled: false, health: 'active', cadenceMinutes: 360 } },
+        { upsert: true }
+      )
+    }
     return true
   })
 
@@ -188,18 +206,17 @@ export async function runSourceSyncHandler(
 ): Promise<{ skipped: true; reason: string } | { cycleWritten: true; counters: IngestCounters }> {
   const delayMs = opts.interRequestDelayMs ?? 300
   const { sourceId } = event.data
-  const adapter = ADAPTERS[sourceId]
-  if (!adapter) return { skipped: true, reason: `no adapter for ${sourceId}` }
-
   await connectDB()
   const config = await JobSourceConfig.findOne({ sourceId }).lean()
   if (!config || !config.enabled) return { skipped: true, reason: 'source disabled' }
   if (!['active', 'degraded'].includes(config.health)) return { skipped: true, reason: `health ${config.health}` }
+  const adapter = resolveAdapter(sourceId, config.kind)
+  if (!adapter) return { skipped: true, reason: `no adapter for ${sourceId}` }
 
   const startedAt = new Date()
   const cursors = await JobIngestCursor.find({ sourceId }).lean()
   const targets = adapter.buildTargets(
-    { sourceId: config.sourceId, enabled: config.enabled },
+    { sourceId: config.sourceId, enabled: config.enabled, slug: config.slug, atsKind: config.atsKind },
     cursors.map((c) => ({ bucket: c.bucket, newestPostedAt: c.newestPostedAt }))
   )
 
@@ -276,11 +293,64 @@ export async function runSourceSyncHandler(
   return { cycleWritten: true, counters: total.counters }
 }
 
+/**
+ * Weekly board-liveness probe (§4.4): boards die silently (Paytm 404s,
+ * CRED is a dead logo). 404/410 quarantines immediately; a quarantined
+ * board needs TWO consecutive healthy probes to recover; sub-
+ * minIndiaPostings yield 3 weeks running quarantines.
+ */
+export async function runBoardProbeHandler(step: StepRunner): Promise<{ probed: number }> {
+  await connectDB()
+  const boards = await step.run('load-boards', async () =>
+    JobSourceConfig.find({ kind: 'ats-board', health: { $ne: 'dead' } }).lean()
+  )
+  let probed = 0
+  for (const board of boards) {
+    await step.run(`probe-${board.sourceId}`, async () => {
+      const adapter = resolveAdapter(board.sourceId, board.kind)
+      if (!adapter) return false
+      const targets = adapter.buildTargets({ sourceId: board.sourceId, enabled: true, slug: board.slug, atsKind: board.atsKind }, [])
+      if (!targets.length) return false
+      const res = await adapter.fetch(targets[0])
+      const update: Record<string, unknown> = {}
+      if (!res.ok && (res.status === 404 || res.status === 410)) {
+        // The board itself is gone — quarantine immediately.
+        Object.assign(update, { health: 'quarantined', healthyProbeStreak: 0 })
+      } else if (res.ok) {
+        const indiaCount = res.raw.length
+        const under = board.minIndiaPostings != null && indiaCount < board.minIndiaPostings
+        const emptyStreak = under ? (board.emptyStreak ?? 0) + 1 : 0
+        Object.assign(update, { emptyStreak })
+        if (under && emptyStreak >= 3) {
+          Object.assign(update, { health: 'quarantined', healthyProbeStreak: 0 })
+        } else if (board.health === 'quarantined' && !under && indiaCount > 0) {
+          const streak = (board.healthyProbeStreak ?? 0) + 1
+          Object.assign(update, streak >= 2
+            ? { health: 'active', healthyProbeStreak: 0, lastHealthyProbeAt: new Date() }
+            : { healthyProbeStreak: streak })
+        } else if (!under) {
+          Object.assign(update, { lastHealthyProbeAt: new Date() })
+        }
+      }
+      // Transient non-404 failures leave health to the sync job's judgment.
+      if (Object.keys(update).length) await JobSourceConfig.updateOne({ sourceId: board.sourceId }, { $set: update })
+      return true
+    })
+    probed++
+  }
+  return { probed }
+}
+
 // ── Inngest wrappers ─────────────────────────────────────────────────────────
 
 export const jobsIngestSchedulerJob = inngest.createFunction(
   { id: 'jobs-ingest-scheduler', name: 'Jobs: ingest scheduler', retries: 1, triggers: [{ cron: '15 * * * *' }] },
   async ({ step }) => runIngestSchedulerHandler(step as StepRunner)
+)
+
+export const jobsBoardProbeJob = inngest.createFunction(
+  { id: 'jobs-board-probe', name: 'Jobs: weekly board liveness probe', retries: 1, triggers: [{ cron: '30 6 * * 1' }] },
+  async ({ step }) => runBoardProbeHandler(step as StepRunner)
 )
 
 export const jobsSourceSyncJob = inngest.createFunction(
