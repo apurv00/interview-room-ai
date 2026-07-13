@@ -21,7 +21,7 @@ vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(u
 vi.mock('@shared/redis', () => ({ redis: { sadd: vi.fn(), expire: vi.fn(), scard: vi.fn() } }))
 vi.mock('@shared/logger', () => ({ logger: { warn: vi.fn() } }))
 vi.mock('@shared/db/models', () => ({
-  JobPosting: { findOne: vi.fn().mockResolvedValue(null), find: vi.fn(() => ({ limit: () => Promise.resolve([]) })), create: vi.fn().mockResolvedValue({}) },
+  JobPosting: { findOne: vi.fn().mockResolvedValue(null), find: vi.fn(() => ({ limit: () => Promise.resolve([]) })), create: vi.fn().mockResolvedValue({}), updateMany: vi.fn().mockResolvedValue({}) },
   JobSourceConfig: { findOne: mockSourceFindOne, find: mockSourceFind, updateOne: mockSourceUpdateOne },
   JobIngestCursor: { find: mockCursorFind, bulkWrite: mockCursorBulkWrite },
   JobIngestCycle: { create: mockCycleCreate },
@@ -30,14 +30,18 @@ vi.mock('../adapters/jsearchAdapter', async (importOriginal) => {
   const real = await importOriginal<typeof import('../adapters/jsearchAdapter')>()
   return { jsearchAdapter: { ...real.jsearchAdapter, fetch: mockAdapterFetch } }
 })
+vi.mock('../adapters/atsBoardAdapter', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../adapters/atsBoardAdapter')>()
+  return { atsBoardAdapter: { ...real.atsBoardAdapter, fetch: mockAdapterFetch } }
+})
 
-import { runIngestSchedulerHandler, runSourceSyncHandler } from '../jobs/ingestJobs'
+import { runIngestSchedulerHandler, runSourceSyncHandler, runBoardProbeHandler } from '../jobs/ingestJobs'
 
 const step = { run: <T,>(_n: string, fn: () => Promise<T> | T) => Promise.resolve(fn()) }
 
 function resetAll(): void {
   for (const m of [mockSend, mockSourceFindOne, mockSourceFind, mockSourceUpdateOne, mockCursorFind, mockCursorBulkWrite, mockCycleCreate, mockAdapterFetch]) m.mockReset()
-  mockSourceUpdateOne.mockReturnValue({ lean: () => Promise.resolve(null) })
+  mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve(null) })
   mockSourceUpdateOne.mockResolvedValue({})
   mockCursorBulkWrite.mockResolvedValue({})
   mockCycleCreate.mockResolvedValue({})
@@ -76,7 +80,9 @@ describe('runSourceSyncHandler', () => {
 
   it('unknown adapter / disabled source / bad health all skip', async () => {
     resetAll()
-    expect(await runSourceSyncHandler({ data: { sourceId: 'nope' } }, step)).toMatchObject({ skipped: true })
+    // enabled + healthy but no adapter resolves for this kind/id
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'nope', enabled: true, health: 'active', kind: 'public-api' }) })
+    expect(await runSourceSyncHandler({ data: { sourceId: 'nope' } }, step)).toMatchObject({ skipped: true, reason: 'no adapter for nope' })
 
     resetAll()
     mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: false, health: 'active' }) })
@@ -208,5 +214,173 @@ describe('runSourceSyncHandler', () => {
     expect(cycle.driftNulls).toBeGreaterThan(0)
     const health = mockSourceUpdateOne.mock.calls.at(-1)![1].$set.health
     expect(health).toBe('degraded')
+  })
+})
+
+
+describe('board sync uses per-config sourceId (Codex #513 P1)', () => {
+  it('provenance sourceKeys carry gh:phonepe, never the adapter constant', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockAdapterFetch.mockResolvedValue({
+      ok: true, status: 200, attempts: 1,
+      raw: [{ kind: 'greenhouse', raw: { id: 123, title: 'Backend Engineer', location: { name: 'Pune, India' }, content: 'Build things. '.repeat(40), absolute_url: 'https://boards.greenhouse.io/phonepe/jobs/123' } }],
+    })
+    const { JobPosting } = await import('@shared/db/models')
+    vi.mocked(JobPosting.create).mockClear()
+    const r = await runSourceSyncHandler({ data: { sourceId: 'gh:phonepe' } }, step, { interRequestDelayMs: 0 })
+    expect(r).toMatchObject({ cycleWritten: true })
+    const doc = vi.mocked(JobPosting.create).mock.calls[0][0] as { provenance: Array<{ sourceKey: string; sourceId: string }> }
+    expect(doc.provenance[0].sourceKey).toBe('gh:phonepe:123')
+    expect(doc.provenance[0].sourceId).toBe('gh:phonepe')
+  })
+})
+
+function docStub(overrides: Record<string, unknown> = {}) {
+  return {
+    status: 'open',
+    closedReason: undefined as string | undefined,
+    provenance: [] as Array<Record<string, unknown>>,
+    locationKeys: [] as string[],
+    locations: [] as string[],
+    jdLength: 0,
+    boardPollMisses: 0,
+    save: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  }
+}
+
+describe('board delisting closure (§4.3 board-poll-miss; Codex #513 P2)', () => {
+  it('second consecutive miss closes a board-only posting; other-source rows untouched', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [] }) // clean sync, lists nothing
+    const staleSolo = docStub({ boardPollMisses: 1, provenance: [{ sourceId: 'gh:phonepe', externalId: 'gone', sourceKey: 'gh:phonepe:gone', lastSeenAt: new Date() }] })
+    const staleShared = docStub({ boardPollMisses: 1, provenance: [
+      { sourceId: 'gh:phonepe', externalId: 'x', sourceKey: 'gh:phonepe:x', lastSeenAt: new Date() },
+      { sourceId: 'jsearch', externalId: 'y', sourceKey: 'jsearch:y', lastSeenAt: new Date() },
+    ] })
+    const { JobPosting } = await import('@shared/db/models')
+    vi.mocked(JobPosting.find).mockReturnValueOnce({ limit: () => Promise.resolve([staleSolo, staleShared]) } as never)
+    const r = await runSourceSyncHandler({ data: { sourceId: 'gh:phonepe' } }, step, { interRequestDelayMs: 0 })
+    expect(r).toMatchObject({ cycleWritten: true })
+    expect(staleSolo.status).toBe('closed')
+    expect(staleSolo.closedReason).toBe('board-poll-miss')
+    expect(staleSolo.save).toHaveBeenCalled()
+    expect(staleShared.status).toBe('open') // another source still lists it
+    expect(staleShared.save).not.toHaveBeenCalled()
+  })
+
+  it('first miss only increments; a failed fetch is NOT a miss', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    const stale = docStub({ boardPollMisses: 0, provenance: [{ sourceId: 'gh:phonepe', externalId: 'gone', sourceKey: 'gh:phonepe:gone', lastSeenAt: new Date() }] })
+    const { JobPosting } = await import('@shared/db/models')
+    vi.mocked(JobPosting.find).mockReturnValueOnce({ limit: () => Promise.resolve([stale]) } as never)
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [] })
+    await runSourceSyncHandler({ data: { sourceId: 'gh:phonepe' } }, step, { interRequestDelayMs: 0 })
+    expect(stale.boardPollMisses).toBe(1)
+    expect(stale.status).toBe('open')
+
+    // drifted run: incomplete seen-set — the sweep must not run either
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [{ kind: 'greenhouse', raw: { shape: 'drifted' } }] })
+    const { JobPosting: JP } = await import('@shared/db/models')
+    vi.mocked(JP.find).mockClear()
+    await runSourceSyncHandler({ data: { sourceId: 'gh:phonepe' } }, step, { interRequestDelayMs: 0 })
+    // fuzzy-tier find never fires (row dropped as drift) and the stale
+    // sweep must not fire on a drifted run
+    expect(vi.mocked(JP.find)).not.toHaveBeenCalled()
+
+    // failed fetch: the sweep must not run at all
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockAdapterFetch.mockResolvedValue({ ok: false, status: 503, attempts: 1, raw: [] })
+    vi.mocked(JobPosting.find).mockClear()
+    await runSourceSyncHandler({ data: { sourceId: 'gh:phonepe' } }, step, { interRequestDelayMs: 0 })
+    expect(vi.mocked(JobPosting.find)).not.toHaveBeenCalled()
+  })
+})
+
+describe('runBoardProbeHandler (weekly liveness, §4.4)', () => {
+  function boardRow(overrides: Record<string, unknown> = {}) {
+    return {
+      sourceId: 'gh:phonepe', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe',
+      enabled: true, health: 'active', minIndiaPostings: 10, emptyStreak: 0, healthyProbeStreak: 0,
+      ...overrides,
+    }
+  }
+
+  it('the probe never loads revoked boards — a legal block cannot be probe-cleared (Codex #513 P2)', async () => {
+    resetAll()
+    mockSourceFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    await runBoardProbeHandler(step)
+    const filter = mockSourceFind.mock.calls[0][0]
+    expect(filter.health).toEqual({ $in: ['active', 'degraded', 'quarantined'] })
+  })
+
+  it('404 quarantines a dead board immediately', async () => {
+    resetAll()
+    mockSourceFind.mockReturnValue({ lean: () => Promise.resolve([boardRow()]) })
+    mockAdapterFetch.mockResolvedValue({ ok: false, status: 404, attempts: 1, raw: [] })
+    await runBoardProbeHandler(step)
+    const update = mockSourceUpdateOne.mock.calls.at(-1)![1].$set
+    expect(update.health).toBe('quarantined')
+  })
+
+  it('sub-minIndiaPostings yield 3 weeks running quarantines (emptyStreak)', async () => {
+    resetAll()
+    mockSourceFind.mockReturnValue({ lean: () => Promise.resolve([boardRow({ emptyStreak: 2 })]) })
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [{ kind: 'greenhouse', raw: {} }] }) // 1 < 10
+    await runBoardProbeHandler(step)
+    const update = mockSourceUpdateOne.mock.calls.at(-1)![1].$set
+    expect(update.emptyStreak).toBe(3)
+    expect(update.health).toBe('quarantined')
+  })
+
+  it('an under-supply probe RESETS the recovery streak — consecutive means consecutive', async () => {
+    resetAll()
+    mockSourceFind.mockReturnValue({ lean: () => Promise.resolve([boardRow({ health: 'quarantined', healthyProbeStreak: 1, emptyStreak: 0 })]) })
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [{ kind: 'greenhouse', raw: {} }] }) // 1 < 10 = under
+    await runBoardProbeHandler(step)
+    const update = mockSourceUpdateOne.mock.calls.at(-1)![1].$set
+    expect(update.healthyProbeStreak).toBe(0)
+    expect(update.emptyStreak).toBe(1)
+    expect(update.health).toBeUndefined() // not yet 3 weeks under
+  })
+
+  it('a quarantined board needs TWO healthy probes to recover', async () => {
+    resetAll()
+    const healthyRaw = Array.from({ length: 12 }, (_, i) => ({ kind: 'greenhouse', raw: { id: i, title: 'SDE', location: { name: 'Pune, India' }, content: 'x', absolute_url: `https://boards.greenhouse.io/phonepe/jobs/${i}` } }))
+    mockSourceFind.mockReturnValue({ lean: () => Promise.resolve([boardRow({ health: 'quarantined', healthyProbeStreak: 0 })]) })
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: healthyRaw })
+    await runBoardProbeHandler(step)
+    expect(mockSourceUpdateOne.mock.calls.at(-1)![1].$set.healthyProbeStreak).toBe(1)
+
+    resetAll()
+    mockSourceFind.mockReturnValue({ lean: () => Promise.resolve([boardRow({ health: 'quarantined', healthyProbeStreak: 1 })]) })
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: healthyRaw })
+    await runBoardProbeHandler(step)
+    const update = mockSourceUpdateOne.mock.calls.at(-1)![1].$set
+    expect(update.health).toBe('active')
+    expect(update.healthyProbeStreak).toBe(0)
+  })
+
+  it('drift-broken rows are NOT supply — a shape-broken board cannot probe-recover (Codex #513 round-4)', async () => {
+    resetAll()
+    const driftedRaw = Array.from({ length: 12 }, () => ({ kind: 'greenhouse', raw: { shape: 'drifted' } })) // 12 raw, 0 normalize
+    mockSourceFind.mockReturnValue({ lean: () => Promise.resolve([boardRow({ health: 'quarantined', healthyProbeStreak: 1 })]) })
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: driftedRaw })
+    await runBoardProbeHandler(step)
+    const update = mockSourceUpdateOne.mock.calls.at(-1)![1].$set
+    expect(update.health).toBeUndefined() // stays quarantined
+    expect(update.healthyProbeStreak).toBe(0) // under-supply resets the streak
+    expect(update.emptyStreak).toBe(1)
   })
 })

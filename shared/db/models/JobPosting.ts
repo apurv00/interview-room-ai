@@ -99,6 +99,8 @@ export interface IJobPosting extends Document {
   closedAt?: Date
   purgeAt?: Date
   userReferenced: boolean
+  /** Consecutive clean board syncs that no longer list this posting (§4.3: 2 → board-poll-miss close). */
+  boardPollMisses?: number
   createdAt: Date
   updatedAt: Date
 }
@@ -191,6 +193,7 @@ const JobPostingSchema = new Schema<IJobPosting>(
     closedAt: { type: Date },
     purgeAt: { type: Date },
     userReferenced: { type: Boolean, default: false },
+    boardPollMisses: { type: Number, default: 0 },
   },
   { timestamps: true }
 )

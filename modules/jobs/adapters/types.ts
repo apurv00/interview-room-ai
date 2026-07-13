@@ -52,7 +52,7 @@ export interface NormalizedJob {
 export interface JobSourceAdapter {
   readonly sourceId: string
   readonly kind: IJobSourceConfig['kind']
-  buildTargets(config: Pick<IJobSourceConfig, 'sourceId' | 'enabled'>, cursors: Array<Pick<IJobIngestCursor, 'bucket' | 'newestPostedAt'>>): FetchTarget[]
+  buildTargets(config: Pick<IJobSourceConfig, 'sourceId' | 'enabled'> & Partial<Pick<IJobSourceConfig, 'slug' | 'atsKind'>>, cursors: Array<Pick<IJobIngestCursor, 'bucket' | 'newestPostedAt'>>): FetchTarget[]
   fetch(target: FetchTarget): Promise<FetchResult>
   normalize(raw: unknown, target: FetchTarget): NormalizedJob | null
   classifyApplyUrl(url: string): ApplyTier

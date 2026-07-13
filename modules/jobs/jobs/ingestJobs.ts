@@ -1,9 +1,11 @@
 import { inngest } from '@shared/services/inngest'
 import { connectDB } from '@shared/db/connection'
-import { JobSourceConfig, JobIngestCursor, JobIngestCycle } from '@shared/db/models'
+import { JobPosting, JobSourceConfig, JobIngestCursor, JobIngestCycle } from '@shared/db/models'
 import { redis } from '@shared/redis'
 import { logger } from '@shared/logger'
 import { jsearchAdapter } from '../adapters/jsearchAdapter'
+import { atsBoardAdapter } from '../adapters/atsBoardAdapter'
+import { BOARD_REGISTRY } from '../config/boardRegistry'
 import type { FetchTarget, JobSourceAdapter, NormalizedJob } from '../adapters/types'
 import { ingestBatch, makeRedisRepostCounter, type IngestCounters } from '../services/ingestPipeline'
 
@@ -31,6 +33,14 @@ const ADAPTERS: Record<string, JobSourceAdapter> = {
   jsearch: jsearchAdapter,
 }
 
+/** Adapter resolution: aggregator ids map directly; every ats-board config
+ *  row (gh:, lever:, sr:, ashby: prefixes) rides the unified board adapter. */
+export function resolveAdapter(sourceId: string, kind?: string): JobSourceAdapter | null {
+  if (ADAPTERS[sourceId]) return ADAPTERS[sourceId]
+  if (kind === 'ats-board' || /^(gh|lever|sr|ashby):/.test(sourceId)) return atsBoardAdapter
+  return null
+}
+
 const BUCKETS_PER_CHUNK = 1
 const MAX_PAGES_PER_BUCKET = 3
 const FULL_PAGE_SIZE = 10
@@ -42,6 +52,8 @@ interface StepRunner {
 
 export interface ChunkOutcome {
   counters: IngestCounters
+  /** sourceKeys observed this run — the board delisting sweep's seen-set. */
+  seenSourceKeys: string[]
   fetched: number
   driftNulls: number
   attempts: number
@@ -60,6 +72,7 @@ function accumulate(into: ChunkOutcome, from: ChunkOutcome): void {
   into.attempts += from.attempts
   into.httpErrors += from.httpErrors
   into.saw429 = into.saw429 || from.saw429
+  into.seenSourceKeys.push(...from.seenSourceKeys)
   Object.assign(into.newestByBucket, from.newestByBucket)
   const c = into.counters
   const f = from.counters
@@ -76,9 +89,14 @@ function accumulate(into: ChunkOutcome, from: ChunkOutcome): void {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-/** Fetch one bucket (with §4.4 pagination policy) and ingest its rows. */
+/** Fetch one bucket (with §4.4 pagination policy) and ingest its rows.
+ *  `sourceId` is the CONFIG row's id (gh:phonepe, lever:meesho, jsearch) —
+ *  never the adapter's constant id: the unified board adapter serves many
+ *  companies, and a shared prefix would collide sourceKeys across boards
+ *  whose providers reuse posting ids (Codex on #513, P1). */
 async function processTarget(
   adapter: JobSourceAdapter,
+  sourceId: string,
   target: FetchTarget,
   outcome: ChunkOutcome,
   delayMs = 300
@@ -101,12 +119,15 @@ async function processTarget(
       if (n === null) outcome.driftNulls++
       else normalized.push(n)
     }
-    const counters = await ingestBatch(normalized, adapter.sourceId, {
+    const counters = await ingestBatch(normalized, sourceId, {
       registerRepost: makeRedisRepostCounter(redis),
     })
     accumulate(outcome, {
-      counters, fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {},
+      counters, seenSourceKeys: [], fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {},
     })
+    for (const n of normalized) {
+      if (n.externalId) outcome.seenSourceKeys.push(`${sourceId}:${n.externalId}`)
+    }
 
     // Freshness cursor input: newest PARSEABLE postedAt for this bucket.
     // A non-parseable provider date must never reach the cursor write —
@@ -151,6 +172,14 @@ export async function runIngestSchedulerHandler(step: StepRunner): Promise<{ dis
       { $setOnInsert: { sourceId: 'jsearch', kind: 'aggregator-api', enabled: false, health: 'active', cadenceMinutes: 1440 } },
       { upsert: true }
     )
+    // ATS boards (§1 build-now): seeded DISABLED, 6h cadence per §4.4.
+    for (const b of BOARD_REGISTRY) {
+      await JobSourceConfig.updateOne(
+        { sourceId: b.sourceId },
+        { $setOnInsert: { sourceId: b.sourceId, kind: 'ats-board', atsKind: b.atsKind, slug: b.slug, minIndiaPostings: b.minIndiaPostings, enabled: false, health: 'active', cadenceMinutes: 360 } },
+        { upsert: true }
+      )
+    }
     return true
   })
 
@@ -188,28 +217,27 @@ export async function runSourceSyncHandler(
 ): Promise<{ skipped: true; reason: string } | { cycleWritten: true; counters: IngestCounters }> {
   const delayMs = opts.interRequestDelayMs ?? 300
   const { sourceId } = event.data
-  const adapter = ADAPTERS[sourceId]
-  if (!adapter) return { skipped: true, reason: `no adapter for ${sourceId}` }
-
   await connectDB()
   const config = await JobSourceConfig.findOne({ sourceId }).lean()
   if (!config || !config.enabled) return { skipped: true, reason: 'source disabled' }
   if (!['active', 'degraded'].includes(config.health)) return { skipped: true, reason: `health ${config.health}` }
+  const adapter = resolveAdapter(sourceId, config.kind)
+  if (!adapter) return { skipped: true, reason: `no adapter for ${sourceId}` }
 
   const startedAt = new Date()
   const cursors = await JobIngestCursor.find({ sourceId }).lean()
   const targets = adapter.buildTargets(
-    { sourceId: config.sourceId, enabled: config.enabled },
+    { sourceId: config.sourceId, enabled: config.enabled, slug: config.slug, atsKind: config.atsKind },
     cursors.map((c) => ({ bucket: c.bucket, newestPostedAt: c.newestPostedAt }))
   )
 
-  const total: ChunkOutcome = { counters: emptyCounters(), fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {} }
+  const total: ChunkOutcome = { counters: emptyCounters(), seenSourceKeys: [], fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {} }
   for (let i = 0; i < targets.length; i += BUCKETS_PER_CHUNK) {
     const chunk = targets.slice(i, i + BUCKETS_PER_CHUNK)
     const outcome = await step.run(`fetch-chunk-${Math.floor(i / BUCKETS_PER_CHUNK)}`, async () => {
-      const o: ChunkOutcome = { counters: emptyCounters(), fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {} }
+      const o: ChunkOutcome = { counters: emptyCounters(), seenSourceKeys: [], fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {} }
       for (const target of chunk) {
-        await processTarget(adapter, target, o, delayMs)
+        await processTarget(adapter, sourceId, target, o, delayMs)
         if (delayMs) await sleep(delayMs)
       }
       return o
@@ -253,6 +281,41 @@ export async function runSourceSyncHandler(
       { $set: { lastSyncAt: new Date(), health: newHealth, ...(newHealth === 'active' ? { lastHealthyProbeAt: new Date() } : {}) } }
     )
 
+    // Board delisting closure (§4.3 'board-poll-miss'; Codex on #513, P2):
+    // ATS rows carry no expiry date — a posting the board stops listing
+    // must close after TWO consecutive clean-sync misses. 'Clean' means
+    // FULLY clean: no fetch errors, no normalize drift, no store failures —
+    // a drifted run has an incomplete seen-set and would count still-listed
+    // postings as misses (Codex round-3). Only closes postings owned SOLELY
+    // by this board (another source may still legitimately list it).
+    const cleanRun = total.httpErrors === 0 && total.driftNulls === 0 && total.counters.storeErrors === 0 && targets.length > 0
+    if (config.kind === 'ats-board' && cleanRun) {
+      const seen = total.seenSourceKeys
+      if (seen.length) {
+        await JobPosting.updateMany(
+          { status: 'open', 'provenance.sourceKey': { $in: seen }, boardPollMisses: { $gt: 0 } },
+          { $set: { boardPollMisses: 0 } }
+        )
+      }
+      const stale = await JobPosting.find({
+        status: 'open',
+        'provenance.sourceId': sourceId,
+        ...(seen.length ? { 'provenance.sourceKey': { $nin: seen } } : {}),
+      }).limit(1000)
+      for (const doc of stale) {
+        if (!doc.provenance.every((e) => e.sourceId === sourceId)) continue
+        const misses = (doc.boardPollMisses ?? 0) + 1
+        doc.boardPollMisses = misses
+        if (misses >= 2) {
+          doc.status = 'closed'
+          doc.closedReason = 'board-poll-miss'
+          doc.closedAt = new Date()
+          doc.purgeAt = new Date(Date.now() + 7 * 24 * 3600 * 1000)
+        }
+        await doc.save()
+      }
+    }
+
     await JobIngestCycle.create({
       kind: 'sync',
       sourceId,
@@ -276,11 +339,74 @@ export async function runSourceSyncHandler(
   return { cycleWritten: true, counters: total.counters }
 }
 
+/**
+ * Weekly board-liveness probe (§4.4): boards die silently (Paytm 404s,
+ * CRED is a dead logo). 404/410 quarantines immediately; a quarantined
+ * board needs TWO consecutive healthy probes to recover; sub-
+ * minIndiaPostings yield 3 weeks running quarantines.
+ */
+export async function runBoardProbeHandler(step: StepRunner): Promise<{ probed: number }> {
+  await connectDB()
+  const boards = await step.run('load-boards', async () =>
+    // 'revoked' is a MANUAL legal block (ruling #9) — the liveness probe
+    // must never touch it, or 404→quarantine→2-healthy-probes could
+    // silently reactivate a legally-darkened board (Codex on #513).
+    JobSourceConfig.find({ kind: 'ats-board', health: { $in: ['active', 'degraded', 'quarantined'] } }).lean()
+  )
+  let probed = 0
+  for (const board of boards) {
+    await step.run(`probe-${board.sourceId}`, async () => {
+      const adapter = resolveAdapter(board.sourceId, board.kind)
+      if (!adapter) return false
+      const targets = adapter.buildTargets({ sourceId: board.sourceId, enabled: true, slug: board.slug, atsKind: board.atsKind }, [])
+      if (!targets.length) return false
+      const res = await adapter.fetch(targets[0])
+      const update: Record<string, unknown> = {}
+      if (!res.ok && (res.status === 404 || res.status === 410)) {
+        // The board itself is gone — quarantine immediately.
+        Object.assign(update, { health: 'quarantined', healthyProbeStreak: 0 })
+      } else if (res.ok) {
+        // Supply = rows that NORMALIZE, not raw rows: a board quarantined
+        // for >50% schema drift keeps returning rows, and counting raw
+        // would probe-recover it into an immediate re-quarantine flap
+        // (Codex on #513 round-4). Drifted rows are not usable supply.
+        const indiaCount = res.raw.filter((r) => adapter.normalize(r, targets[0]) !== null).length
+        const under = board.minIndiaPostings != null && indiaCount < board.minIndiaPostings
+        const emptyStreak = under ? (board.emptyStreak ?? 0) + 1 : 0
+        Object.assign(update, { emptyStreak })
+        // 'Two consecutive healthy probes' means CONSECUTIVE — an
+        // under-supply week resets the recovery streak (Codex on #513).
+        if (under) Object.assign(update, { healthyProbeStreak: 0 })
+        if (under && emptyStreak >= 3) {
+          Object.assign(update, { health: 'quarantined', healthyProbeStreak: 0 })
+        } else if (board.health === 'quarantined' && !under && indiaCount > 0) {
+          const streak = (board.healthyProbeStreak ?? 0) + 1
+          Object.assign(update, streak >= 2
+            ? { health: 'active', healthyProbeStreak: 0, lastHealthyProbeAt: new Date() }
+            : { healthyProbeStreak: streak })
+        } else if (!under) {
+          Object.assign(update, { lastHealthyProbeAt: new Date() })
+        }
+      }
+      // Transient non-404 failures leave health to the sync job's judgment.
+      if (Object.keys(update).length) await JobSourceConfig.updateOne({ sourceId: board.sourceId }, { $set: update })
+      return true
+    })
+    probed++
+  }
+  return { probed }
+}
+
 // ── Inngest wrappers ─────────────────────────────────────────────────────────
 
 export const jobsIngestSchedulerJob = inngest.createFunction(
   { id: 'jobs-ingest-scheduler', name: 'Jobs: ingest scheduler', retries: 1, triggers: [{ cron: '15 * * * *' }] },
   async ({ step }) => runIngestSchedulerHandler(step as StepRunner)
+)
+
+export const jobsBoardProbeJob = inngest.createFunction(
+  { id: 'jobs-board-probe', name: 'Jobs: weekly board liveness probe', retries: 1, triggers: [{ cron: '30 6 * * 1' }] },
+  async ({ step }) => runBoardProbeHandler(step as StepRunner)
 )
 
 export const jobsSourceSyncJob = inngest.createFunction(
