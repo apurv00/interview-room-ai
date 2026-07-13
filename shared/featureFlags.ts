@@ -37,6 +37,7 @@ export type FeatureFlag =
   | 'skip_connectdb_when_cached'
   | 'grounded_followups'
   | 'jobs_tab'
+  | 'jobs_ingest'
 
 const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   personalization_engine: true,
@@ -113,6 +114,12 @@ const FLAG_DEFAULTS: Record<FeatureFlag, boolean> = {
   // quality-gate floor is code, not this flag). Flip in Vercel env when
   // the Wave-3 feed ships and a prod self-run of the loop passes.
   jobs_tab: false,
+  // Jobs ingestion master switch (Wave 2.1b). OFF = scheduler and sync
+  // handlers return 'skipped' — zero fetches, zero writes, zero quota.
+  // Ordinary safe kill-switch per ruling #15. Flipping ON alone is still
+  // inert: every JobSourceConfig row seeds enabled:false and ops flips a
+  // source deliberately (two-key launch).
+  jobs_ingest: false,
 }
 
 export function isFeatureEnabled(flag: FeatureFlag): boolean {

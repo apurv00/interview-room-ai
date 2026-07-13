@@ -36,4 +36,11 @@ export type InngestEvents = {
       startTime: number
     }
   }
+  // Jobs ingestion (Wave 2.1b): ids only — the sync job re-reads config,
+  // cursors and targets from Mongo (512KB event limit discipline).
+  'jobs/source.sync': {
+    data: {
+      sourceId: string
+    }
+  }
 }

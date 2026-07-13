@@ -13,6 +13,7 @@ const navItems = [
   { href: '/cms/wizard-config', label: 'Wizard Config', icon: '⚙️' },
   { href: '/cms/model-config', label: 'Model Config', icon: '🤖' },
   { href: '/cms/score-telemetry', label: 'Score Telemetry', icon: '📈' },
+  { href: '/cms/jobs-ingest', label: 'Jobs Ingest', icon: '📥' },
 ]
 
 export default function CmsLayout({ children }: { children: ReactNode }) {
