@@ -24,3 +24,8 @@ export { PRODUCT_EVENT_NAMES, ProductEventInputSchema } from './validators/produ
 export type { ProductEventName, ProductEventInput } from './validators/productEvents'
 export { ANON_COOKIE, ANON_COOKIE_MAX_AGE, mintAnonCookie, verifyAnonCookie, anonIdFromCookieHeader } from './services/anonCookie'
 export { stitchAnonEventsToUser } from './services/identityStitch'
+export { jsearchAdapter } from './adapters/jsearchAdapter'
+export type { FetchTarget, FetchResult, NormalizedJob, JobSourceAdapter } from './adapters/types'
+export { buildHarvestBuckets } from './config/bucketMatrix'
+export { ingestBatch, mergeIntoDoc, evictProvenance, makeRedisRepostCounter } from './services/ingestPipeline'
+export type { IngestCounters, RepostCounterDeps } from './services/ingestPipeline'
