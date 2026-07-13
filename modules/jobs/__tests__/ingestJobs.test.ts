@@ -21,7 +21,7 @@ vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(u
 vi.mock('@shared/redis', () => ({ redis: { sadd: vi.fn(), expire: vi.fn(), scard: vi.fn() } }))
 vi.mock('@shared/logger', () => ({ logger: { warn: vi.fn() } }))
 vi.mock('@shared/db/models', () => ({
-  JobPosting: { findOne: vi.fn().mockResolvedValue(null), find: vi.fn(() => ({ limit: () => Promise.resolve([]) })), create: vi.fn().mockResolvedValue({}) },
+  JobPosting: { findOne: vi.fn().mockResolvedValue(null), find: vi.fn(() => ({ limit: () => Promise.resolve([]) })), create: vi.fn().mockResolvedValue({}), updateMany: vi.fn().mockResolvedValue({}) },
   JobSourceConfig: { findOne: mockSourceFindOne, find: mockSourceFind, updateOne: mockSourceUpdateOne },
   JobIngestCursor: { find: mockCursorFind, bulkWrite: mockCursorBulkWrite },
   JobIngestCycle: { create: mockCycleCreate },
@@ -237,6 +237,65 @@ describe('board sync uses per-config sourceId (Codex #513 P1)', () => {
   })
 })
 
+function docStub(overrides: Record<string, unknown> = {}) {
+  return {
+    status: 'open',
+    closedReason: undefined as string | undefined,
+    provenance: [] as Array<Record<string, unknown>>,
+    locationKeys: [] as string[],
+    locations: [] as string[],
+    jdLength: 0,
+    boardPollMisses: 0,
+    save: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  }
+}
+
+describe('board delisting closure (§4.3 board-poll-miss; Codex #513 P2)', () => {
+  it('second consecutive miss closes a board-only posting; other-source rows untouched', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [] }) // clean sync, lists nothing
+    const staleSolo = docStub({ boardPollMisses: 1, provenance: [{ sourceId: 'gh:phonepe', externalId: 'gone', sourceKey: 'gh:phonepe:gone', lastSeenAt: new Date() }] })
+    const staleShared = docStub({ boardPollMisses: 1, provenance: [
+      { sourceId: 'gh:phonepe', externalId: 'x', sourceKey: 'gh:phonepe:x', lastSeenAt: new Date() },
+      { sourceId: 'jsearch', externalId: 'y', sourceKey: 'jsearch:y', lastSeenAt: new Date() },
+    ] })
+    const { JobPosting } = await import('@shared/db/models')
+    vi.mocked(JobPosting.find).mockReturnValueOnce({ limit: () => Promise.resolve([staleSolo, staleShared]) } as never)
+    const r = await runSourceSyncHandler({ data: { sourceId: 'gh:phonepe' } }, step, { interRequestDelayMs: 0 })
+    expect(r).toMatchObject({ cycleWritten: true })
+    expect(staleSolo.status).toBe('closed')
+    expect(staleSolo.closedReason).toBe('board-poll-miss')
+    expect(staleSolo.save).toHaveBeenCalled()
+    expect(staleShared.status).toBe('open') // another source still lists it
+    expect(staleShared.save).not.toHaveBeenCalled()
+  })
+
+  it('first miss only increments; a failed fetch is NOT a miss', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    const stale = docStub({ boardPollMisses: 0, provenance: [{ sourceId: 'gh:phonepe', externalId: 'gone', sourceKey: 'gh:phonepe:gone', lastSeenAt: new Date() }] })
+    const { JobPosting } = await import('@shared/db/models')
+    vi.mocked(JobPosting.find).mockReturnValueOnce({ limit: () => Promise.resolve([stale]) } as never)
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [] })
+    await runSourceSyncHandler({ data: { sourceId: 'gh:phonepe' } }, step, { interRequestDelayMs: 0 })
+    expect(stale.boardPollMisses).toBe(1)
+    expect(stale.status).toBe('open')
+
+    // failed fetch: the sweep must not run at all
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockAdapterFetch.mockResolvedValue({ ok: false, status: 503, attempts: 1, raw: [] })
+    vi.mocked(JobPosting.find).mockClear()
+    await runSourceSyncHandler({ data: { sourceId: 'gh:phonepe' } }, step, { interRequestDelayMs: 0 })
+    expect(vi.mocked(JobPosting.find)).not.toHaveBeenCalled()
+  })
+})
+
 describe('runBoardProbeHandler (weekly liveness, §4.4)', () => {
   function boardRow(overrides: Record<string, unknown> = {}) {
     return {
@@ -245,6 +304,14 @@ describe('runBoardProbeHandler (weekly liveness, §4.4)', () => {
       ...overrides,
     }
   }
+
+  it('the probe never loads revoked boards — a legal block cannot be probe-cleared (Codex #513 P2)', async () => {
+    resetAll()
+    mockSourceFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    await runBoardProbeHandler(step)
+    const filter = mockSourceFind.mock.calls[0][0]
+    expect(filter.health).toEqual({ $in: ['active', 'degraded', 'quarantined'] })
+  })
 
   it('404 quarantines a dead board immediately', async () => {
     resetAll()

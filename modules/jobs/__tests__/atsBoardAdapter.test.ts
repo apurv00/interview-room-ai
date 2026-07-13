@@ -40,6 +40,21 @@ describe('atsBoardAdapter.fetch — India scoping is policy, not drift', () => {
   })
 })
 
+describe('SmartRecruiters pagination (Codex #513 P1)', () => {
+  it('pages by offset until a short page, aggregating rows', async () => {
+    mockFetchJSON.mockReset()
+    const fullPage = { content: Array.from({ length: 100 }, (_, i) => ({ id: `p1-${i}`, name: 'Engineer', location: { city: 'Pune' } })) }
+    const shortPage = { content: [{ id: 'p2-0', name: 'Engineer', location: { city: 'Pune' } }] }
+    mockFetchJSON.mockResolvedValueOnce({ ok: true, status: 200, data: fullPage })
+    mockFetchJSON.mockResolvedValueOnce({ ok: true, status: 200, data: shortPage })
+    const res = await atsBoardAdapter.fetch(srTarget)
+    expect(res.ok).toBe(true)
+    expect(res.raw).toHaveLength(101)
+    expect(res.attempts).toBe(2)
+    expect(String(mockFetchJSON.mock.calls[1][0])).toContain('offset=100')
+  })
+})
+
 describe('atsBoardAdapter.normalize per platform', () => {
   it('greenhouse rows map with stable externalId and direct apply', () => {
     const n = atsBoardAdapter.normalize(
@@ -63,12 +78,19 @@ describe('atsBoardAdapter.normalize per platform', () => {
     expect(n!.postedAt).toMatch(/^20/)
   })
 
-  it('smartrecruiters rows map; list-only payload without jobAd yields empty description (short-jd flagged downstream, still stored)', () => {
+  it('smartrecruiters: the API ref is NEVER the apply URL — public posting URL constructed (Codex #513 P1)', () => {
     const n = atsBoardAdapter.normalize(
       { kind: 'smartrecruiters', raw: { id: 'sr-1', name: 'Electrical Engineer', location: { city: 'Pune', country: 'in' }, releasedDate: '2026-07-01T00:00:00Z', ref: 'https://api.smartrecruiters.com/v1/companies/BoschGroup/postings/sr-1' } },
       srTarget
     )
     expect(n).toMatchObject({ title: 'Electrical Engineer', company: 'boschgroup', externalId: 'sr-1', description: '' })
+    expect(n!.applyOptions[0].url).toBe('https://jobs.smartrecruiters.com/BoschGroup/sr-1')
+    // and an api-host applyUrl is also rejected in favor of the public URL
+    const n2 = atsBoardAdapter.normalize(
+      { kind: 'smartrecruiters', raw: { id: 'sr-2', name: 'X', applyUrl: 'https://api.smartrecruiters.com/v1/x' } },
+      srTarget
+    )
+    expect(n2!.applyOptions[0].url).toBe('https://jobs.smartrecruiters.com/BoschGroup/sr-2')
   })
 
   it('rows missing load-bearing fields are drift (null)', () => {

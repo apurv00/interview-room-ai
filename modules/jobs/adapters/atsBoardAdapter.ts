@@ -39,7 +39,7 @@ function listUrl(atsKind: string, slug: string): { url: string; init?: RequestIn
     case 'lever':
       return { url: `https://api.lever.co/v0/postings/${slug}?mode=json` }
     case 'smartrecruiters':
-      return { url: `https://api.smartrecruiters.com/v1/companies/${slug}/postings?country=in&limit=100` }
+      return { url: `https://api.smartrecruiters.com/v1/companies/${slug}/postings?country=in&limit=100&offset=0` }
     case 'ashby':
       return {
         url: `https://api.ashbyhq.com/posting-api/job-board/${slug}`,
@@ -88,16 +88,35 @@ export const atsBoardAdapter: JobSourceAdapter = {
     if (target.kind !== 'board') return { ok: false, status: 0, raw: [], attempts: 0 }
     const req = listUrl(target.atsKind, target.slug)
     if (!req) return { ok: false, status: 0, raw: [], attempts: 0 }
-    const res = await fetchJSONWithRetry<unknown>(req.url, req.init ?? {}, { maxRetries: 2, timeoutMs: 15000 })
-    if (!res.ok) return { ok: false, status: res.status, raw: [], attempts: 1 }
-    const rows = extractRows(target.atsKind as BoardKind, res.data)
-    if (rows === null) return { ok: false, status: res.status, raw: [], bodyError: true, attempts: 1 }
+    let attempts = 0
+    let rows: Record<string, unknown>[] = []
+    // SmartRecruiters caps list responses at 100 — Bosch alone is ~546 India
+    // rows, so we page by offset until a short page (Codex on #513, P1).
+    // Safety cap 10 pages; each request is ~1s so a full board fits the
+    // 60s step comfortably. Other boards return complete lists in one call.
+    const SR_PAGE = 100
+    const SR_MAX_PAGES = 10
+    let offset = 0
+    for (;;) {
+      const url = target.atsKind === 'smartrecruiters'
+        ? `https://api.smartrecruiters.com/v1/companies/${target.slug}/postings?country=in&limit=${SR_PAGE}&offset=${offset}`
+        : req.url
+      const res = await fetchJSONWithRetry<unknown>(url, req.init ?? {}, { maxRetries: 2, timeoutMs: 15000 })
+      attempts++
+      if (!res.ok) return { ok: false, status: res.status, raw: [], attempts }
+      const pageRows = extractRows(target.atsKind as BoardKind, res.data)
+      if (pageRows === null) return { ok: false, status: res.status, raw: [], bodyError: true, attempts }
+      rows = rows.concat(pageRows)
+      if (target.atsKind !== 'smartrecruiters' || pageRows.length < SR_PAGE || attempts >= SR_MAX_PAGES) break
+      offset += SR_PAGE
+    }
+    const status = 200
     // India scoping (policy, not drift): SR is server-filtered; others list
     // globally. Tag each row with its board kind so normalize is exact.
     const scoped = rows
       .filter((r) => target.atsKind === 'smartrecruiters' || INDIA_LOCATION_RE.test(locationText(target.atsKind as BoardKind, r)))
       .map((raw): BoardRow => ({ kind: target.atsKind as BoardKind, raw }))
-    return { ok: true, status: res.status, raw: scoped, attempts: 1 }
+    return { ok: true, status, raw: scoped, attempts }
   },
 
   normalize(rawTagged: unknown, target: FetchTarget): NormalizedJob | null {
@@ -138,8 +157,11 @@ export const atsBoardAdapter: JobSourceAdapter = {
     }
     if (kind === 'smartrecruiters') {
       if (typeof j.name !== 'string' || j.id == null) return null
-      const ref = j.ref as string | undefined
-      const applyUrl = typeof j.applyUrl === 'string' ? j.applyUrl : typeof ref === 'string' ? ref : `https://jobs.smartrecruiters.com/${target.kind === 'board' ? target.slug : ''}/${String(j.id)}`
+      // NEVER the API `ref` (api.smartrecruiters.com detail endpoint — not a
+      // candidate-facing page; Codex on #513, P1). Prefer a provider-sent
+      // public applyUrl; else construct the public posting URL.
+      const sentApply = typeof j.applyUrl === 'string' && !/api\.smartrecruiters\.com/i.test(j.applyUrl) ? j.applyUrl : null
+      const applyUrl = sentApply ?? `https://jobs.smartrecruiters.com/${target.kind === 'board' ? target.slug : ''}/${String(j.id)}`
       const jobAd = (j.jobAd as Record<string, unknown>)?.sections as Record<string, { text?: string }> | undefined
       const description = jobAd
         ? Object.values(jobAd).map((s) => (typeof s?.text === 'string' ? stripHtml(s.text) : '')).join(' ')

@@ -1,6 +1,6 @@
 import { inngest } from '@shared/services/inngest'
 import { connectDB } from '@shared/db/connection'
-import { JobSourceConfig, JobIngestCursor, JobIngestCycle } from '@shared/db/models'
+import { JobPosting, JobSourceConfig, JobIngestCursor, JobIngestCycle } from '@shared/db/models'
 import { redis } from '@shared/redis'
 import { logger } from '@shared/logger'
 import { jsearchAdapter } from '../adapters/jsearchAdapter'
@@ -52,6 +52,8 @@ interface StepRunner {
 
 export interface ChunkOutcome {
   counters: IngestCounters
+  /** sourceKeys observed this run — the board delisting sweep's seen-set. */
+  seenSourceKeys: string[]
   fetched: number
   driftNulls: number
   attempts: number
@@ -70,6 +72,7 @@ function accumulate(into: ChunkOutcome, from: ChunkOutcome): void {
   into.attempts += from.attempts
   into.httpErrors += from.httpErrors
   into.saw429 = into.saw429 || from.saw429
+  into.seenSourceKeys.push(...from.seenSourceKeys)
   Object.assign(into.newestByBucket, from.newestByBucket)
   const c = into.counters
   const f = from.counters
@@ -120,8 +123,11 @@ async function processTarget(
       registerRepost: makeRedisRepostCounter(redis),
     })
     accumulate(outcome, {
-      counters, fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {},
+      counters, seenSourceKeys: [], fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {},
     })
+    for (const n of normalized) {
+      if (n.externalId) outcome.seenSourceKeys.push(`${sourceId}:${n.externalId}`)
+    }
 
     // Freshness cursor input: newest PARSEABLE postedAt for this bucket.
     // A non-parseable provider date must never reach the cursor write —
@@ -225,11 +231,11 @@ export async function runSourceSyncHandler(
     cursors.map((c) => ({ bucket: c.bucket, newestPostedAt: c.newestPostedAt }))
   )
 
-  const total: ChunkOutcome = { counters: emptyCounters(), fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {} }
+  const total: ChunkOutcome = { counters: emptyCounters(), seenSourceKeys: [], fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {} }
   for (let i = 0; i < targets.length; i += BUCKETS_PER_CHUNK) {
     const chunk = targets.slice(i, i + BUCKETS_PER_CHUNK)
     const outcome = await step.run(`fetch-chunk-${Math.floor(i / BUCKETS_PER_CHUNK)}`, async () => {
-      const o: ChunkOutcome = { counters: emptyCounters(), fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {} }
+      const o: ChunkOutcome = { counters: emptyCounters(), seenSourceKeys: [], fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {} }
       for (const target of chunk) {
         await processTarget(adapter, sourceId, target, o, delayMs)
         if (delayMs) await sleep(delayMs)
@@ -275,6 +281,39 @@ export async function runSourceSyncHandler(
       { $set: { lastSyncAt: new Date(), health: newHealth, ...(newHealth === 'active' ? { lastHealthyProbeAt: new Date() } : {}) } }
     )
 
+    // Board delisting closure (§4.3 'board-poll-miss'; Codex on #513, P2):
+    // ATS rows carry no expiry date — a posting the board stops listing
+    // must close after TWO consecutive clean-sync misses. Only runs on a
+    // fully-successful board sync (a failed fetch is not a miss), and only
+    // closes postings owned SOLELY by this board (another source may still
+    // legitimately list it).
+    if (config.kind === 'ats-board' && total.httpErrors === 0) {
+      const seen = total.seenSourceKeys
+      if (seen.length) {
+        await JobPosting.updateMany(
+          { status: 'open', 'provenance.sourceKey': { $in: seen }, boardPollMisses: { $gt: 0 } },
+          { $set: { boardPollMisses: 0 } }
+        )
+      }
+      const stale = await JobPosting.find({
+        status: 'open',
+        'provenance.sourceId': sourceId,
+        ...(seen.length ? { 'provenance.sourceKey': { $nin: seen } } : {}),
+      }).limit(1000)
+      for (const doc of stale) {
+        if (!doc.provenance.every((e) => e.sourceId === sourceId)) continue
+        const misses = (doc.boardPollMisses ?? 0) + 1
+        doc.boardPollMisses = misses
+        if (misses >= 2) {
+          doc.status = 'closed'
+          doc.closedReason = 'board-poll-miss'
+          doc.closedAt = new Date()
+          doc.purgeAt = new Date(Date.now() + 7 * 24 * 3600 * 1000)
+        }
+        await doc.save()
+      }
+    }
+
     await JobIngestCycle.create({
       kind: 'sync',
       sourceId,
@@ -307,7 +346,10 @@ export async function runSourceSyncHandler(
 export async function runBoardProbeHandler(step: StepRunner): Promise<{ probed: number }> {
   await connectDB()
   const boards = await step.run('load-boards', async () =>
-    JobSourceConfig.find({ kind: 'ats-board', health: { $ne: 'dead' } }).lean()
+    // 'revoked' is a MANUAL legal block (ruling #9) — the liveness probe
+    // must never touch it, or 404→quarantine→2-healthy-probes could
+    // silently reactivate a legally-darkened board (Codex on #513).
+    JobSourceConfig.find({ kind: 'ats-board', health: { $in: ['active', 'degraded', 'quarantined'] } }).lean()
   )
   let probed = 0
   for (const board of boards) {
