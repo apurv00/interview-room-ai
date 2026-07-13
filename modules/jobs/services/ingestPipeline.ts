@@ -226,7 +226,11 @@ export function mergeIntoDoc(doc: IJobPosting, p: PreparedPosting, sourceId: str
   if (p.job.city && !doc.locations.includes(p.job.city)) doc.locations.push(p.job.city)
   // Flags only ever tighten deterministically here (staffing/shortJd recompute
   // is left to the winner's own classify — a merged stub must not unset them).
-  if (verdictInputsChanged && doc.llmVerdict?.status === 'scored') {
+  // ANY existing verdict state resets — scored verdicts are stale, and an
+  // attempts-exhausted pending row would otherwise be skipped forever by
+  // both worker (>=MAX) and sweeper ($lt) despite changed content
+  // (Codex on #515).
+  if (verdictInputsChanged && doc.llmVerdict) {
     doc.llmVerdict.status = 'pending'
     doc.llmVerdict.attempts = 0 // new input = fresh attempt budget
   }

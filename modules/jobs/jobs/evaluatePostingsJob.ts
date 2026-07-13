@@ -58,14 +58,16 @@ interface LlmCycleCounters {
   epoch: string
 }
 
-function emptyLlmCounters(): LlmCycleCounters {
+function emptyLlmCounters(epochModel = expectedVerdictModel()): LlmCycleCounters {
   return {
     requested: 0, scored: 0, cacheHits: 0, errors: 0, timeouts: 0, softClosed: 0,
     verdictDistribution: { genuine: 0, suspicious: 0, fraud: 0 },
     reasonCodeCounts: {}, bySource: {},
     llmFlaggedCleanRow: 0, llmClearedFlaggedRow: 0,
     inputTokens: 0, outputTokens: 0, costUsd: 0,
-    epoch: `${expectedVerdictModel()}:${PROMPT_VERSION}`,
+    // The RESOLVED model, not the code default — a CMS cutover must not
+    // attribute cycles to the wrong epoch on the dashboard (Codex on #515).
+    epoch: `${epochModel}:${PROMPT_VERSION}`,
   }
 }
 
@@ -129,7 +131,7 @@ export async function runEvaluatePostingsHandler(
   )
 
   const ids = event.data.postingIds ?? []
-  const total = emptyLlmCounters()
+  const total = emptyLlmCounters(epochModel)
   const startedAt = new Date()
   let evaluated = 0
   let consecutiveFailures = 0
@@ -138,7 +140,7 @@ export async function runEvaluatePostingsHandler(
   for (let i = 0; i < ids.length && !breakerTripped; i += POSTINGS_PER_STEP) {
     const chunk = ids.slice(i, i + POSTINGS_PER_STEP)
     const stepResult = await step.run(`evaluate-${Math.floor(i / POSTINGS_PER_STEP)}`, async () => {
-      const c = emptyLlmCounters()
+      const c = emptyLlmCounters(epochModel)
       let stepEvaluated = 0
       let fails = consecutiveFailures
       let tripped = false

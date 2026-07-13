@@ -316,6 +316,19 @@ describe('scored-verdict invalidation on merge (§4.5 input change re-enqueues)'
     expect(existing.llmVerdict.attempts).toBe(3)
   })
 
+  it('an attempts-exhausted PENDING row also resets on input change — never skipped forever (Codex #515)', async () => {
+    reset()
+    const existing = docStub({
+      provenance: [{ sourceId: 'jsearch', externalId: 'ext-1', sourceKey: 'jsearch:ext-1', lastSeenAt: new Date('2026-07-01') }],
+      jdLength: 10, // incoming longer → input change
+      llmVerdict: { status: 'pending', attempts: 5 },
+    })
+    mockFindOne.mockResolvedValueOnce(existing)
+    await ingestBatch([job()], 'jsearch')
+    expect(existing.llmVerdict.attempts).toBe(0)
+    expect(existing.llmVerdict.status).toBe('pending')
+  })
+
   it('an apply-URL change resets a scored verdict (hosts are hash inputs)', async () => {
     reset()
     const existing = docStub({

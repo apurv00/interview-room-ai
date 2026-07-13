@@ -32,6 +32,7 @@ vi.mock('@shared/db/models', () => ({
 }))
 
 import { runEvaluatePostingsHandler, runVerdictSweeperHandler } from '../jobs/evaluatePostingsJob'
+import { resolveModel } from '@shared/services/modelRouter'
 import { verdictInputHash } from '../config/verdictPrompt'
 import { JOB_DOMAINS } from '../config/domains'
 
@@ -220,6 +221,14 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
     expect(r).toMatchObject({ breakerTripped: true })
     expect((r as { evaluated: number }).evaluated).toBe(6) // stopped at the breaker, not the full list
     expect(mockRedis.set).toHaveBeenCalledWith('jobs:llm:degraded', '1', 'EX', 1800)
+  })
+
+  it('cycle rows stamp the CMS-RESOLVED epoch, not the code default (Codex #515)', async () => {
+    resetAll()
+    vi.mocked(resolveModel).mockResolvedValueOnce({ model: 'gpt-9-zeta' } as never)
+    mockPostingFindById.mockReturnValue({ lean: () => Promise.resolve(posting()) })
+    await runEvaluatePostingsHandler({ data: { postingIds: ['p1'] } }, step, { evaluateFn: vi.fn().mockResolvedValue(okOutcome()) as never })
+    expect(mockCycleCreate.mock.calls[0][0].llm.epoch).toBe('gpt-9-zeta:v1')
   })
 
   it('writes a kind:llm-verdict cycle row with the llm counter block', async () => {
