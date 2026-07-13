@@ -32,6 +32,22 @@ describe('atsBoardAdapter.fetch — India scoping is policy, not drift', () => {
     expect(res.raw).toHaveLength(1)
   })
 
+  it('word-bounded + India-scoped remote only: Indianapolis / Remote - US excluded, Remote - India kept (Codex #513 round-4)', async () => {
+    mockFetchJSON.mockResolvedValueOnce({
+      ok: true, status: 200,
+      data: { jobs: [
+        { id: 3, title: 'SDE', location: { name: 'Indianapolis, Indiana, United States' }, content: 'x', absolute_url: 'https://boards.greenhouse.io/phonepe/jobs/3' },
+        { id: 4, title: 'SDE', location: { name: 'Remote - US' }, content: 'x', absolute_url: 'https://boards.greenhouse.io/phonepe/jobs/4' },
+        { id: 5, title: 'SDE', location: { name: 'Remote - India' }, content: 'x', absolute_url: 'https://boards.greenhouse.io/phonepe/jobs/5' },
+      ] },
+    })
+    const res = await atsBoardAdapter.fetch(ghTarget)
+    expect(res.raw).toHaveLength(1)
+    const n = atsBoardAdapter.normalize(res.raw[0], ghTarget)
+    expect(n!.externalId).toBe('5')
+    expect(n!.isRemote).toBe(true)
+  })
+
   it('an unexpected envelope is bodyError (drift-class), not zero supply', async () => {
     mockFetchJSON.mockResolvedValueOnce({ ok: true, status: 200, data: { unexpected: true } })
     const res = await atsBoardAdapter.fetch(ghTarget)

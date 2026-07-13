@@ -11,7 +11,11 @@ import type { FetchResult, FetchTarget, JobSourceAdapter, NormalizedJob } from '
  * India scoping: SmartRecruiters filters server-side (?country=in); the
  * other boards list globally, so non-India rows are EXCLUDED at fetch
  * (policy filtering, deliberately NOT normalize-null — drift semantics are
- * reserved for schema breakage, which degrades health).
+ * reserved for schema breakage, which degrades health). The gate is
+ * word-bounded and requires explicit India context: unanchored 'india'
+ * matched Indianapolis/Indiana, and bare 'remote' admitted 'Remote - US'
+ * rows into the India corpus (Codex on #513 round-4) — a remote row now
+ * passes only when its location text is itself India-scoped.
  *
  * SmartRecruiters v1 is list-only: the list payload carries metadata but
  * the full jobAd lives behind one detail call per posting — deferred
@@ -19,7 +23,7 @@ import type { FetchResult, FetchTarget, JobSourceAdapter, NormalizedJob } from '
  * detail enrichment follow-up.
  */
 
-const INDIA_LOCATION_RE = /india|bengaluru|bangalore|mumbai|new delhi|delhi|gurgaon|gurugram|noida|hyderabad|pune|chennai|kolkata|ahmedabad|remote/i
+const INDIA_SCOPE_RE = /\b(india|bengaluru|bangalore|mumbai|delhi|gurgaon|gurugram|noida|hyderabad|pune|chennai|kolkata|ahmedabad)\b/i
 
 function stripHtml(html: string): string {
   return html.replace(/<[^>]+>/g, ' ')
@@ -114,7 +118,7 @@ export const atsBoardAdapter: JobSourceAdapter = {
     // India scoping (policy, not drift): SR is server-filtered; others list
     // globally. Tag each row with its board kind so normalize is exact.
     const scoped = rows
-      .filter((r) => target.atsKind === 'smartrecruiters' || INDIA_LOCATION_RE.test(locationText(target.atsKind as BoardKind, r)))
+      .filter((r) => target.atsKind === 'smartrecruiters' || INDIA_SCOPE_RE.test(locationText(target.atsKind as BoardKind, r)))
       .map((raw): BoardRow => ({ kind: target.atsKind as BoardKind, raw }))
     return { ok: true, status, raw: scoped, attempts }
   },

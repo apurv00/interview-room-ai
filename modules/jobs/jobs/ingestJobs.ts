@@ -366,7 +366,11 @@ export async function runBoardProbeHandler(step: StepRunner): Promise<{ probed: 
         // The board itself is gone — quarantine immediately.
         Object.assign(update, { health: 'quarantined', healthyProbeStreak: 0 })
       } else if (res.ok) {
-        const indiaCount = res.raw.length
+        // Supply = rows that NORMALIZE, not raw rows: a board quarantined
+        // for >50% schema drift keeps returning rows, and counting raw
+        // would probe-recover it into an immediate re-quarantine flap
+        // (Codex on #513 round-4). Drifted rows are not usable supply.
+        const indiaCount = res.raw.filter((r) => adapter.normalize(r, targets[0]) !== null).length
         const under = board.minIndiaPostings != null && indiaCount < board.minIndiaPostings
         const emptyStreak = under ? (board.emptyStreak ?? 0) + 1 : 0
         Object.assign(update, { emptyStreak })

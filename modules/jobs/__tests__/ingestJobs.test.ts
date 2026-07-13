@@ -357,7 +357,7 @@ describe('runBoardProbeHandler (weekly liveness, §4.4)', () => {
 
   it('a quarantined board needs TWO healthy probes to recover', async () => {
     resetAll()
-    const healthyRaw = Array.from({ length: 12 }, () => ({ kind: 'greenhouse', raw: {} }))
+    const healthyRaw = Array.from({ length: 12 }, (_, i) => ({ kind: 'greenhouse', raw: { id: i, title: 'SDE', location: { name: 'Pune, India' }, content: 'x', absolute_url: `https://boards.greenhouse.io/phonepe/jobs/${i}` } }))
     mockSourceFind.mockReturnValue({ lean: () => Promise.resolve([boardRow({ health: 'quarantined', healthyProbeStreak: 0 })]) })
     mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: healthyRaw })
     await runBoardProbeHandler(step)
@@ -370,5 +370,17 @@ describe('runBoardProbeHandler (weekly liveness, §4.4)', () => {
     const update = mockSourceUpdateOne.mock.calls.at(-1)![1].$set
     expect(update.health).toBe('active')
     expect(update.healthyProbeStreak).toBe(0)
+  })
+
+  it('drift-broken rows are NOT supply — a shape-broken board cannot probe-recover (Codex #513 round-4)', async () => {
+    resetAll()
+    const driftedRaw = Array.from({ length: 12 }, () => ({ kind: 'greenhouse', raw: { shape: 'drifted' } })) // 12 raw, 0 normalize
+    mockSourceFind.mockReturnValue({ lean: () => Promise.resolve([boardRow({ health: 'quarantined', healthyProbeStreak: 1 })]) })
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: driftedRaw })
+    await runBoardProbeHandler(step)
+    const update = mockSourceUpdateOne.mock.calls.at(-1)![1].$set
+    expect(update.health).toBeUndefined() // stays quarantined
+    expect(update.healthyProbeStreak).toBe(0) // under-supply resets the streak
+    expect(update.emptyStreak).toBe(1)
   })
 })
