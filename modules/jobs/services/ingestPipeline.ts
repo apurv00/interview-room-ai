@@ -148,8 +148,24 @@ function buildInsertDoc(p: PreparedPosting, sourceId: string, now: Date, saltedF
   }
 }
 
+/** Close reasons that fresh source evidence may legitimately reverse.
+ *  'llm-verdict' tombstones stay closed on unchanged content (ruling #16
+ *  anti-resurrection — reopening is the verdict layer's decision on a body
+ *  change), and 'source-revoked' is a legal state no fetch can undo. */
+const REOPENABLE_CLOSE_REASONS = new Set(['aged-out', 'board-poll-miss', 'valid-through-expired'])
+
 /** Merge an incoming posting into an existing canonical doc (§4.2 policy). */
 export function mergeIntoDoc(doc: IJobPosting, p: PreparedPosting, sourceId: string, now: Date): void {
+  // Reopen on fresh evidence (Codex on #510): a posting closed for
+  // ABSENCE-class reasons that the source is now serving again must return
+  // to the open pool — otherwise the refresh saves a hidden doc and the
+  // job never re-enters serving until purge deletes it.
+  if (doc.status === 'closed' && (!doc.closedReason || REOPENABLE_CLOSE_REASONS.has(doc.closedReason))) {
+    doc.status = 'open'
+    doc.closedReason = undefined
+    doc.closedAt = undefined
+    doc.purgeAt = undefined
+  }
   // Provenance: refresh same sourceKey, else append (respecting cap+diversity).
   const sk = p.sourceKey
   if (sk) {

@@ -182,6 +182,38 @@ describe('Codex #510 regressions', () => {
     expect(c.newCount).toBe(1) // inserted as its own posting
   })
 
+  it('a re-fetched aged-out posting REOPENS (status + close metadata cleared)', async () => {
+    reset()
+    const closed = docStub({
+      status: 'closed',
+      closedReason: 'aged-out',
+      closedAt: new Date('2026-07-01'),
+      purgeAt: new Date('2026-07-08'),
+      provenance: [{ sourceId: 'jsearch', externalId: 'ext-1', sourceKey: 'jsearch:ext-1', lastSeenAt: new Date('2026-06-25') }],
+    })
+    mockFindOne.mockResolvedValueOnce(closed)
+    const c = await ingestBatch([job()], 'jsearch')
+    expect(c.refreshed).toBe(1)
+    expect(closed.status).toBe('open')
+    expect(closed.closedReason).toBeUndefined()
+    expect(closed.purgeAt).toBeUndefined()
+    expect(closed.save).toHaveBeenCalled()
+  })
+
+  it('an llm-verdict tombstone STAYS closed on re-fetch (anti-resurrection, ruling #16)', async () => {
+    reset()
+    const tombstone = docStub({
+      status: 'closed',
+      closedReason: 'llm-verdict',
+      provenance: [{ sourceId: 'jsearch', externalId: 'ext-1', sourceKey: 'jsearch:ext-1', lastSeenAt: new Date('2026-06-25') }],
+    })
+    mockFindOne.mockResolvedValueOnce(tombstone)
+    const c = await ingestBatch([job()], 'jsearch')
+    expect(c.refreshed).toBe(1) // lastSeenAt still refreshes
+    expect(tombstone.status).toBe('closed')
+    expect(tombstone.closedReason).toBe('llm-verdict')
+  })
+
   it('one store failure is isolated — the rest of the batch proceeds', async () => {
     reset()
     mockCreate.mockRejectedValueOnce(new Error('validation failed')).mockResolvedValueOnce({})
