@@ -19,18 +19,20 @@ import { ingestBatch, makeRedisRepostCounter, type IngestCounters } from '../ser
  * one flip away, never surprised by silent ingestion.
  *
  * jobsSourceSyncJob (event, concurrency limit 2 — the Atlas shared-tier
- * rule; NOTE: first use of Inngest `concurrency` in this repo) — fetches
- * the source's targets in ≤5-bucket chunks (worst case 5 buckets × up to
- * 3 pages = 15 fetches/chunk, the §4.4 ceiling), normalizes (drift
- * COUNTED), runs the deterministic pipeline, updates freshness cursors,
- * and writes one JobIngestCycle telemetry row.
+ * rule; NOTE: first use of Inngest `concurrency` in this repo) — one
+ * bucket per step.run: the worst case (3 full pages × 15s adapter
+ * timeout + spacing) is ~46s, inside the Vercel Hobby 60s budget with
+ * headroom (Codex on #511 — 5-bucket chunks could run 450s and Inngest
+ * would retry the uncheckpointed chunk, re-burning billed quota).
+ * Normalizes (drift COUNTED and health-relevant), runs the deterministic
+ * pipeline, updates freshness cursors, writes one JobIngestCycle row.
  */
 
 const ADAPTERS: Record<string, JobSourceAdapter> = {
   jsearch: jsearchAdapter,
 }
 
-const BUCKETS_PER_CHUNK = 5
+const BUCKETS_PER_CHUNK = 1
 const MAX_PAGES_PER_BUCKET = 3
 const FULL_PAGE_SIZE = 10
 const KNOWN_RATE_PAGINATION_CUTOFF = 0.6
@@ -219,10 +221,13 @@ export async function runSourceSyncHandler(
     }))
     if (ops.length) await JobIngestCursor.bulkWrite(ops)
 
-    // Health: every fetch failing (or a 429 anywhere) degrades; a clean run
-    // on a degraded source recovers it. Quarantine escalation = 2.2 scope.
+    // Health: every fetch failing, a 429 anywhere, OR normalize-drift above
+    // the §4.4 threshold degrades — a source whose payloads no longer
+    // normalize is broken even when HTTP succeeds (Codex on #511). A clean
+    // run on a degraded source recovers it. Quarantine escalation = 2.2.
     const allFailed = targets.length > 0 && total.httpErrors >= targets.length
-    const newHealth = total.saw429 || allFailed ? 'degraded' : 'active'
+    const driftRate = total.fetched > 0 ? total.driftNulls / total.fetched : 0
+    const newHealth = total.saw429 || allFailed || driftRate > 0.2 ? 'degraded' : 'active'
     await JobSourceConfig.updateOne(
       { sourceId },
       { $set: { lastSyncAt: new Date(), health: newHealth, ...(newHealth === 'active' ? { lastHealthyProbeAt: new Date() } : {}) } }

@@ -61,7 +61,10 @@ export const jsearchAdapter: JobSourceAdapter = {
     const res = await fetchJSONWithRetry<JSearchEnvelope>(
       u.toString(),
       { headers: { 'x-rapidapi-key': key, 'x-rapidapi-host': JSEARCH_HOST } },
-      { maxRetries: 1, timeoutMs: 30000 }
+      // 15s: JSearch typically answers in 1-3s; the ceiling exists so a
+      // worst-case bucket (3 pages x timeout) still fits one 60s step
+      // (Codex on #511).
+      { maxRetries: 1, timeoutMs: 15000 }
     )
     if (!res.ok) return { ok: false, status: res.status, raw: [], attempts: 1 }
     const body = res.data

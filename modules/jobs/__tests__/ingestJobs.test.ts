@@ -118,6 +118,18 @@ describe('runSourceSyncHandler', () => {
     expect(health).toBe('active')
   })
 
+  it('a schema-drift run (HTTP 200, payloads no longer normalize) DEGRADES the source', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [{ shape: 'drifted' }] })
+    const r = await runSourceSyncHandler(EVENT, step, { interRequestDelayMs: 0 })
+    expect(r).toMatchObject({ cycleWritten: true })
+    const health = mockSourceUpdateOne.mock.calls.at(-1)![1].$set.health
+    expect(health).toBe('degraded')
+    expect(mockSourceUpdateOne.mock.calls.at(-1)![1].$set.lastHealthyProbeAt).toBeUndefined()
+  })
+
   it('a 429 anywhere degrades the source; drift rows are counted', async () => {
     resetAll()
     mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
