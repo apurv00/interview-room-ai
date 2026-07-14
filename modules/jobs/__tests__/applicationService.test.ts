@@ -132,12 +132,14 @@ describe('transitionStatus (user claims — loose machine, §2)', () => {
 })
 
 describe('reportBrokenLink (§4b crowd healing)', () => {
-  it('NO application row → rejected, and the global demotion never fires (Codex #522)', async () => {
+  it('NO recorded click (missing row OR saved-only) → rejected, demotion never fires (Codex #522)', async () => {
     reset()
-    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 0 }) // covers both: no row, and a row without apply_clicked in history
     const r = await reportBrokenLink('u1', 'j1', 'https://dead.example/apply', NOW)
     expect(r).toEqual({ ok: false })
     expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+    // the filter itself demands the machine fact
+    expect(mockAppUpdateOne.mock.calls[0][0]).toMatchObject({ 'statusHistory.status': 'apply_clicked' })
   })
 
   it('records on the application AND increments the matching provenance rung', async () => {
@@ -145,7 +147,7 @@ describe('reportBrokenLink (§4b crowd healing)', () => {
     mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 1 })
     await reportBrokenLink('u1', 'j1', 'https://dead.example/apply', NOW)
     const [appFilter, appUpdate] = mockAppUpdateOne.mock.calls[0]
-    expect(appFilter).toEqual({ userId: 'u1', jobPostingId: 'j1' })
+    expect(appFilter).toEqual({ userId: 'u1', jobPostingId: 'j1', 'statusHistory.status': 'apply_clicked' })
     expect(appUpdate.$push.brokenLinkReports).toMatchObject({ url: 'https://dead.example/apply', reportedAt: NOW })
     const [postFilter, postUpdate, postOpts] = mockPostingUpdateOne.mock.calls[0]
     expect(postFilter).toEqual({ _id: 'j1', 'provenance.applyUrl': 'https://dead.example/apply' })

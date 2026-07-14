@@ -81,12 +81,14 @@ export async function reportBrokenLink(
   url: string,
   now = new Date()
 ): Promise<{ ok: boolean }> {
-  // The per-application record is the PREREQUISITE for the global demotion
-  // (Codex on #522): a scripted client with no tracker row must not be able
-  // to sink any visible rung for everyone. No matched application = no
-  // posting-level $inc, report rejected.
+  // The demotion predicate is a RECORDED DEAD CLICK, not mere row existence
+  // (Codex on #522 rounds 2+4): a saved-only row (no click ever) must not
+  // unlock posting-level demotion — the application must carry the machine
+  // fact (statusHistory contains apply_clicked) before its report counts.
+  // URL equality is deliberately NOT required: the snapshot stores only the
+  // FIRST click's URL, and reports against alternate rungs are legitimate.
   const app = await JobApplication.updateOne(
-    { userId, jobPostingId },
+    { userId, jobPostingId, 'statusHistory.status': 'apply_clicked' },
     { $push: { brokenLinkReports: { url: url.slice(0, 2000), reportedAt: now } } }
   )
   if ((app?.matchedCount ?? 0) === 0) return { ok: false }
