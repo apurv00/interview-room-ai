@@ -1,7 +1,9 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
+import { JOB_DOMAIN_IDS } from '@jobs/config/domains'
 
 /**
  * /jobs — public Tier-A feed (PRODUCT_FLOW §1 Stage 0; P-2: anon browse).
@@ -10,6 +12,11 @@ import Link from 'next/link'
  * onboarding wave (3.2) attaches one. Demotions arrive pre-applied in rank
  * order from the API; nothing is hidden client-side. Empty state stays the
  * honest one from the scaffold.
+ *
+ * ?domain= (Codex #527): the press surfaces (JobsCountLink) link here with a
+ * domain filter — the page must honor it or the promised "N {domain} jobs"
+ * lands on the unfiltered feed. Same validation as the API (JOB_DOMAIN_IDS;
+ * unknown slugs ignored) and the active filter is always visible + clearable.
  */
 
 interface FeedCard {
@@ -54,7 +61,12 @@ function daysAgo(iso?: string): string | null {
   return `${d}d ago`
 }
 
-export default function JobsPage() {
+function JobsFeed() {
+  const searchParams = useSearchParams()
+  const domainParam = searchParams.get('domain')
+  const domain =
+    domainParam && (JOB_DOMAIN_IDS as readonly string[]).includes(domainParam) ? domainParam : undefined
+
   const [data, setData] = useState<FeedPayload | null>(null)
   const [page, setPage] = useState(1)
   const [city, setCity] = useState('')
@@ -65,6 +77,14 @@ export default function JobsPage() {
   const [capNotice, setCapNotice] = useState(false)
   const [quickWins, setQuickWins] = useState<{ count: number; resumeId?: string } | null>(null)
   const [winsDismissed, setWinsDismissed] = useState(false)
+
+  // Domain arrives via client-side nav too (query-only change doesn't remount);
+  // reset pagination in-render so the fetch effect runs once, not racing twice.
+  const [prevDomain, setPrevDomain] = useState(domain)
+  if (domain !== prevDomain) {
+    setPrevDomain(domain)
+    setPage(1)
+  }
 
   // The confirm bar's output (sessionStorage — dies with the tab; a
   // stranger's resume structure never persists server-side).
@@ -100,6 +120,7 @@ export default function JobsPage() {
   useEffect(() => {
     if (!targetLoaded) return
     const params = new URLSearchParams({ page: String(page) })
+    if (domain) params.set('domain', domain)
     if (city) params.set('city', city)
     if (target?.skills.length) params.set('skills', target.skills.join(','))
     if (target?.role) params.set('targetRole', target.role)
@@ -113,7 +134,7 @@ export default function JobsPage() {
       body: JSON.stringify({ name: 'jobs.feed_viewed', props: { page } }),
       keepalive: true,
     }).catch(() => {})
-  }, [page, city, target, targetLoaded])
+  }, [page, domain, city, target, targetLoaded])
 
   // Reveal honesty (§4a): name the evidence ONLY when matched skills exist;
   // the 3-questions path never gets resume-flavored copy.
@@ -132,6 +153,15 @@ export default function JobsPage() {
         <h1 className="text-2xl font-semibold">Jobs</h1>
         <Link href="/jobs/tracker" className="text-sm text-blue-600 hover:underline">My tracker</Link>
       </div>
+
+      {domain && (
+        <div className="mt-4 flex items-center gap-2 text-sm">
+          <span className="rounded-full border border-blue-300 bg-blue-50 px-3 py-1 text-blue-800 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-200">
+            Showing {domain} jobs
+          </span>
+          <Link href="/jobs" className="text-xs text-blue-600 hover:underline">Clear filter</Link>
+        </div>
+      )}
 
       {target ? (
         <div className="mt-4 flex items-center justify-between rounded-xl border p-3">
@@ -195,7 +225,9 @@ export default function JobsPage() {
         <div className="mt-8 rounded-xl border border-dashed p-6">
           <p className="font-medium">Your feed is warming up.</p>
           <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-            Fresh postings are being gathered{city ? ` — nothing live for “${city}” yet (remote roles appear here too)` : ''}. Check back soon.
+            Fresh postings are being gathered
+            {domain ? ` — nothing live in ${domain} right now` : ''}
+            {city ? ` — nothing live for “${city}” yet (remote roles appear here too)` : ''}. Check back soon.
           </p>
         </div>
       )}
@@ -254,5 +286,15 @@ export default function JobsPage() {
         </div>
       )}
     </main>
+  )
+}
+
+export default function JobsPage() {
+  // Suspense required because JobsFeed uses useSearchParams (?domain= from
+  // the press surfaces) — repo pattern: lobby, tailor, drill pages.
+  return (
+    <Suspense fallback={<main className="mx-auto max-w-3xl px-4 py-10"><p className="mt-8 text-sm text-gray-500">Loading jobs…</p></main>}>
+      <JobsFeed />
+    </Suspense>
   )
 }
