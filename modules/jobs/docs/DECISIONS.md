@@ -106,3 +106,7 @@
 ## 7. Deliberately not building
 
 Auto-apply (contradicts the anti-spray wedge; recruiter-hostile race to the bottom) · cover-letter generation · scraping breadth / 50k career pages (Tsenta's funded game) · salary estimation (trust arson) · browser extension & native mobile pre-PMF · kanban drag-drop · employer-odds displays · collaborative-filtering/ML feed (v1 personalization is legible and deterministic).
+
+18. **P-2 RESOLVED (founder, 2026-07-14): public feed, auth-gated detail.** `/jobs` (feed) and `/jobs/[id]` (shell) render anonymously; the detail BODY (JD text, apply URLs, X-ray) requires auth. The projection split is server-side in `feedService.getJobDetail(id, authed)` — an anonymous response structurally cannot carry JD/apply URLs, so the enriched corpus is not scrapeable via the detail route. Feed API returns cards only (no JD, no apply URLs) with a bounded candidate pool.
+
+19. **P-3 RESOLVED (founder, 2026-07-14): verdict-chip rule 3 held at launch.** Rules 1/2/4/5 ship; rule 3 ("Worth 2 sessions first") stays dormant behind a DB-config row (JobsVerdictConfig pattern — NEVER an env flag, per the 2026-07-13 no-flags correction) until /cms shows readiness data accruing. Until enabled it degrades to rule 2's copy.

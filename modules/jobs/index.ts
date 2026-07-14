@@ -32,3 +32,5 @@ export type { IngestCounters, RepostCounterDeps } from './services/ingestPipelin
 export { atsBoardAdapter } from './adapters/atsBoardAdapter'
 export { BOARD_REGISTRY } from './config/boardRegistry'
 export type { BoardSeed } from './config/boardRegistry'
+export { getFeed, getJobDetail, tierAScore, bestApplyTierOf } from './services/feedService'
+export type { FeedQuery, FeedCard, JobDetailShell, JobDetailFull } from './services/feedService'
