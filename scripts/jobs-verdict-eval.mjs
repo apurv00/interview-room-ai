@@ -16,8 +16,13 @@
  */
 import { spawnSync } from 'node:child_process'
 
-if (!process.env.OPENAI_API_KEY && !process.env.ANTHROPIC_API_KEY) {
-  console.error('Need OPENAI_API_KEY (slot default is an OpenAI model) — aborting before a 130-fixture run of silent failures.')
+// Any provider the CMS can route the slot to (Codex on #516): a cutover
+// eval may legitimately carry only that provider's key. Detailed auth
+// failures still surface per-fixture from completion(); this guard only
+// catches the run-with-zero-keys foot-gun.
+const PROVIDER_KEYS = ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY', 'GOOGLE_AI_API_KEY', 'GROQ_API_KEY']
+if (!PROVIDER_KEYS.some((k) => process.env[k])) {
+  console.error(`Need at least one provider key (${PROVIDER_KEYS.join(' | ')}) — aborting before a 130-fixture run of silent failures.`)
   process.exit(1)
 }
 

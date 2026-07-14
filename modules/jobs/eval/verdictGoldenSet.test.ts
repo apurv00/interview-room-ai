@@ -10,8 +10,15 @@ import { describe, it, expect } from 'vitest'
 // provider modules here registers them into the instance the router actually
 // reads. Prod (consistent CJS) is unaffected; this is an eval-harness-only
 // concern.
+// ALL completion providers the CMS can route the slot to — a cutover eval
+// on openrouter/google/groq would otherwise die with "Provider not
+// registered" for every fixture (Codex on #516). azureTTS is speech-only,
+// not a completion provider.
 import '@shared/services/providers/openai'
 import '@shared/services/providers/anthropic'
+import '@shared/services/providers/openrouter'
+import '@shared/services/providers/google'
+import '@shared/services/providers/groq'
 import { __awaitBackgroundLoadForTesting } from '@shared/services/modelRouter'
 import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
