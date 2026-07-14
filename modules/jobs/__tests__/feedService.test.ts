@@ -246,6 +246,22 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     if (!d2!.gated) expect(d2!.application!.ats).toMatchObject({ state: 'done', score: 70 })
   })
 
+  it('reported rungs sink below clean ones — demoted, never hidden (§4b)', async () => {
+    const { gzipSync } = await import('zlib')
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({
+      jdCompressed: gzipSync(Buffer.from('body')),
+      provenance: [
+        { sourceId: 'a', externalId: '1', sourceKey: 'a:1', applyUrl: 'https://direct.example/1', applyTier: 'direct-ats', brokenReportCount: 2 },
+        { sourceId: 'b', externalId: '2', sourceKey: 'b:2', applyUrl: 'https://board.example/2', applyTier: 'aggregator-deep' },
+      ],
+    })) })
+    const d = await getJobDetail('j1', 'u1')
+    if (!d!.gated) {
+      expect(d!.applyOptions.map((o) => o.url)).toEqual(['https://board.example/2', 'https://direct.example/1'])
+      expect(d!.applyOptions).toHaveLength(2) // demoted, still present
+    }
+  })
+
   it('closed or missing postings 404 regardless of auth', async () => {
     mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({ status: 'closed' })) })
     expect(await getJobDetail('j1', 'u1')).toBeNull()

@@ -54,6 +54,8 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   const [xrayState, setXrayState] = useState<'idle' | 'loading' | 'ready' | 'failed'>('idle')
   const [atsBusy, setAtsBusy] = useState(false)
   const [atsHint, setAtsHint] = useState<string | null>(null)
+  const [sheet, setSheet] = useState<null | { kind: 'normal' | 'quick'; clicked: { url: string; tier: string }; elapsedMs: number }>(null)
+  const [sheetDone, setSheetDone] = useState<string | null>(null)
 
   useEffect(() => {
     fetch(`/api/jobs/${params.id}`)
@@ -148,6 +150,12 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   function onApply(opt: ApplyOption) {
     // SYNC open inside the click handler — never after an await.
     window.open(opt.url, '_blank', 'noopener')
+    // Arm the return-sheet (§4b): fires on visibilitychange→visible, ≥20s
+    // after the click, within 45 minutes. localStorage — survives the
+    // external-tab excursion.
+    try {
+      localStorage.setItem(`JOBS_RETURN_${params.id}`, JSON.stringify({ clickedAt: Date.now(), url: opt.url, tier: opt.tier }))
+    } catch { /* private mode — no sheet, the next-visit confirm card (4.2) catches it */ }
     // Machine fact (apply_clicked) + server-side telemetry in one call —
     // the JobApplication row transitions/creates even if this tab dies
     // (keepalive). Never conflated with the user claim 'applied' (Wave 4).
@@ -157,6 +165,57 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       body: JSON.stringify({ tier: opt.tier, url: opt.url }),
       keepalive: true,
     }).catch(() => {})
+  }
+
+  // Return-to-tab sheet (§4b): ≥20s away = the real ask; <20s = lead with
+  // "did the link work?". One-shot — the arm record clears when shown.
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState !== 'visible') return
+      let rec: { clickedAt: number; url: string; tier: string } | null = null
+      try {
+        const raw = localStorage.getItem(`JOBS_RETURN_${params.id}`)
+        if (raw) rec = JSON.parse(raw)
+      } catch { /* noop */ }
+      if (!rec) return
+      const elapsed = Date.now() - rec.clickedAt
+      if (elapsed > 45 * 60_000) {
+        try { localStorage.removeItem(`JOBS_RETURN_${params.id}`) } catch { /* noop */ }
+        return
+      }
+      try { localStorage.removeItem(`JOBS_RETURN_${params.id}`) } catch { /* noop */ }
+      setSheet({ kind: elapsed >= 20_000 ? 'normal' : 'quick', clicked: { url: rec.url, tier: rec.tier }, elapsedMs: elapsed })
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [params.id])
+
+  async function sheetApplied() {
+    setSheet(null)
+    const res = await fetch(`/api/jobs/${params.id}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'applied', latencyMs: sheet?.elapsedMs }),
+    }).catch(() => null)
+    if (res?.ok) { setSheetDone('Marked as applied ✓ — it’s on your tracker.'); refetchDetail() }
+  }
+
+  async function sheetBrokenLink() {
+    const clicked = sheet?.clicked
+    setSheet(null)
+    if (!clicked) return
+    const alternates = (detail?.applyOptions ?? []).filter((o) => o.url !== clicked.url)
+    await fetch(`/api/jobs/${params.id}/broken-link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: clicked.url, tier: clicked.tier, hadFailover: alternates.length > 0 }),
+    }).catch(() => {})
+    if (alternates.length > 0) {
+      setSheetDone(`Thanks — that link is demoted for everyone. Try “${alternates[0].viaSite ?? alternates[0].tier}” below instead.`)
+    } else {
+      setSheetDone('Thanks — noted. This posting’s links may have gone stale; it stays saved on your tracker.')
+    }
+    refetchDetail() // ladder re-sorts with the reported rung demoted
   }
 
   if (status === 'missing') {
@@ -324,6 +383,40 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
             {detail.jd || 'The source didn’t provide a full description — use the posting link above.'}
           </section>
         </>
+      )}
+
+      {sheet && (
+        <div className="fixed inset-x-0 bottom-0 z-40 mx-auto max-w-3xl p-4">
+          <div className="rounded-xl border bg-white p-4 shadow-lg dark:bg-gray-900">
+            <p className="font-medium">
+              {sheet.kind === 'quick' ? 'That was quick — did the link work?' : `Did you apply to ${detail.company}?`}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {sheet.kind === 'normal' && (
+                <button onClick={sheetApplied} className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700">
+                  ✓ Yes, applied
+                </button>
+              )}
+              <button
+                onClick={() => { setSheet(null); setSheetDone('No rush — want an edge first? Tailor your resume for this job (~15s).') }}
+                className="rounded-lg border px-3 py-1.5 text-sm"
+              >
+                {sheet.kind === 'quick' ? 'It worked — still applying' : 'Not yet'}
+              </button>
+              <button onClick={sheetBrokenLink} className="rounded-lg border border-amber-400 px-3 py-1.5 text-sm text-amber-700 dark:text-amber-400">
+                ⚠ Link didn&apos;t work
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {sheetDone && (
+        <div className="fixed inset-x-0 bottom-0 z-40 mx-auto max-w-3xl p-4">
+          <div className="flex items-start justify-between rounded-xl border bg-white p-3 text-sm shadow-lg dark:bg-gray-900">
+            <p>{sheetDone}{sheetDone.includes('Tailor') && <> <Link href="/resume/tailor" className="text-blue-600 underline">Open tailor</Link></>}</p>
+            <button onClick={() => setSheetDone(null)} aria-label="Dismiss" className="ml-3 text-gray-500 hover:text-gray-700">✕</button>
+          </div>
+        </div>
       )}
 
       <AuthGateModal reason={gate} onClose={() => setGate(null)} />

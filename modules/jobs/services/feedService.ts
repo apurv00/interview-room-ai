@@ -269,8 +269,11 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
   } catch { /* corrupt gzip = empty body; the card still renders */ }
   const applyOptions = (doc.provenance ?? [])
     .filter((p) => p.applyUrl && p.applyTier && isSafeHttpUrl(p.applyUrl))
-    .map((p) => ({ url: p.applyUrl as string, tier: p.applyTier as ApplyTier, viaSite: p.viaSite }))
-    .sort((a, b) => TIER_RANK[a.tier] - TIER_RANK[b.tier])
+    .map((p) => ({ url: p.applyUrl as string, tier: p.applyTier as ApplyTier, viaSite: p.viaSite, broken: (p.brokenReportCount ?? 0) > 0 }))
+    // Crowd-healed ladder (§4b): rungs with dead-click reports sink below
+    // clean ones — demoted, never hidden (they may still work for others).
+    .sort((a, b) => Number(a.broken) - Number(b.broken) || TIER_RANK[a.tier] - TIER_RANK[b.tier])
+    .map(({ url, tier, viaSite }) => ({ url, tier, viaSite }))
   const app = await JobApplication.findOne({ userId, jobPostingId: id }).select('status practiceSessionIds atsResult atsRequestedAt').lean()
   // An atsResult is 'done' only for the CURRENT (resume x JD) pair (Codex
   // on #521): a JD merge OR a resume edit re-opens the check. The resume

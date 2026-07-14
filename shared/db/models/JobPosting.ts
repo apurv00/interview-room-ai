@@ -28,6 +28,8 @@ export interface IJobProvenance {
   applyUrl?: string
   applyTier?: 'direct-ats' | 'employer' | 'aggregator-deep' | 'platform-funnel' | 'aggregator-redirect'
   viaSite?: string
+  /** §4b crowd-healing: dead-click reports demote this rung for everyone. */
+  brokenReportCount?: number
   firstSeenAt: Date
   lastSeenAt: Date
 }
@@ -121,6 +123,7 @@ const ProvenanceSchema = new Schema<IJobProvenance>(
     applyUrl: { type: String },
     applyTier: { type: String, enum: ['direct-ats', 'employer', 'aggregator-deep', 'platform-funnel', 'aggregator-redirect'] },
     viaSite: { type: String },
+    brokenReportCount: { type: Number },
     firstSeenAt: { type: Date, required: true },
     lastSeenAt: { type: Date, required: true },
   },

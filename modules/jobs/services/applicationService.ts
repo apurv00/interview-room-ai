@@ -42,6 +42,51 @@ export async function releaseAtsClaim(userId: string, jobPostingId: string): Pro
   await JobApplication.updateOne({ userId, jobPostingId }, { $unset: { atsRequestedAt: 1 } }).catch(() => {})
 }
 
+/** Statuses a USER may set (loose machine: forward jumps and backward
+ *  corrections both allowed; ghosted/rejected recoverable). apply_clicked
+ *  is the MACHINE fact and is never user-settable. */
+export const USER_SETTABLE_STATUSES = ['saved', 'applied', 'interview_scheduled', 'offer', 'rejected', 'ghosted', 'withdrawn'] as const
+export type UserSettableStatus = (typeof USER_SETTABLE_STATUSES)[number]
+
+export async function transitionStatus(
+  userId: string,
+  jobPostingId: string,
+  to: UserSettableStatus,
+  now = new Date()
+): Promise<{ ok: boolean; status?: string }> {
+  if (!(USER_SETTABLE_STATUSES as readonly string[]).includes(to)) return { ok: false }
+  const res = await JobApplication.updateOne(
+    { userId, jobPostingId },
+    {
+      $set: { status: to, ...(to === 'applied' ? { appliedAt: now } : {}) },
+      $push: { statusHistory: { status: to, at: now, source: 'user' } },
+    }
+  )
+  return (res?.matchedCount ?? 0) > 0 ? { ok: true, status: to } : { ok: false }
+}
+
+/**
+ * Broken-link report (§4b): recorded on the application AND counted on the
+ * posting's provenance entry — one user's dead click demotes that rung for
+ * everyone (heals, never hides; the ladder sort sinks rungs with reports).
+ */
+export async function reportBrokenLink(
+  userId: string,
+  jobPostingId: string,
+  url: string,
+  now = new Date()
+): Promise<{ ok: boolean }> {
+  await JobApplication.updateOne(
+    { userId, jobPostingId },
+    { $push: { brokenLinkReports: { url: url.slice(0, 2000), reportedAt: now } } }
+  )
+  await JobPosting.updateOne(
+    { _id: jobPostingId, 'provenance.applyUrl': url },
+    { $inc: { 'provenance.$.brokenReportCount': 1 } }
+  )
+  return { ok: true }
+}
+
 export interface ApplyClickResult {
   status: string
   created: boolean
