@@ -1,4 +1,4 @@
-import { listResumes, getResume, saveResume } from '@resume'
+import { listResumes, getResume, saveResume, ResumeSchema } from '@resume'
 
 /**
  * Base-resume auto-save + import door (PRODUCT_FLOW §1 Stage 2, Wave 3.2b).
@@ -16,7 +16,7 @@ const BASE_PREFIX = 'Base Resume — '
 
 export type BaseSaveResult =
   | { saved: true; id: string; updated: boolean }
-  | { saved: false; reason: 'cap' | 'error' }
+  | { saved: false; reason: 'cap' | 'error' | 'invalid' }
 
 export async function saveBaseResume(
   userId: string,
@@ -28,11 +28,13 @@ export async function saveBaseResume(
   const listing = await listResumes(userId)
   const rows = (listing?.resumes ?? []) as unknown as Array<{ id: string; name: string; targetRole?: string; updatedAt?: string }>
   const existing = rows.find((r) => r.name === name)
-  const result = await saveResume(
-    userId,
-    { ...structured, id: existing?.id, name, targetRole, fullText } as never,
-    { preserveFullText: true }
-  )
+  // The SAME contract /api/resume/save enforces (Codex on #520): a direct
+  // POST must not persist arbitrary shapes/lengths into savedResumes —
+  // ResumeSchema clamps every string/array (fullText to its legal 100k;
+  // no jobs-side truncation below that).
+  const candidate = ResumeSchema.safeParse({ ...structured, id: existing?.id, name, targetRole, fullText })
+  if (!candidate.success) return { saved: false, reason: 'invalid' }
+  const result = await saveResume(userId, candidate.data as never, { preserveFullText: true })
   if ('error' in result && result.error) {
     return { saved: false, reason: result.code === 'RESUME_LIMIT' ? 'cap' : 'error' }
   }

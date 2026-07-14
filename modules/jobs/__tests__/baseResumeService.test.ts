@@ -1,7 +1,12 @@
 import { describe, it, expect, vi } from 'vitest'
 
 const { mockList, mockGet, mockSave } = vi.hoisted(() => ({ mockList: vi.fn(), mockGet: vi.fn(), mockSave: vi.fn() }))
-vi.mock('@resume', () => ({ listResumes: mockList, getResume: mockGet, saveResume: mockSave }))
+// Partial mock: the REAL ResumeSchema does the validating (that behavior is
+// exactly what these tests pin); only the persistence functions are stubbed.
+vi.mock('@resume', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@resume')>()
+  return { ...real, listResumes: mockList, getResume: mockGet, saveResume: mockSave }
+})
 
 import { saveBaseResume, getBaseResume } from '../services/baseResumeService'
 
@@ -42,6 +47,23 @@ describe('saveBaseResume (Stage-2 auto-save — cap-honest, dedup-by-role)', () 
     expect(await saveBaseResume('u1', STRUCT, 'QA')).toEqual({ saved: false, reason: 'cap' })
     mockSave.mockResolvedValue({ error: 'This resume no longer exists', code: 'NOT_FOUND' })
     expect(await saveBaseResume('u1', STRUCT, 'QA')).toEqual({ saved: false, reason: 'error' })
+  })
+})
+
+describe('saveBaseResume validation (same contract as /api/resume/save)', () => {
+  it('malformed shapes are rejected as invalid — saveResume never sees them', async () => {
+    reset()
+    const r = await saveBaseResume('u1', { experience: 'not-an-array', summary: { evil: true } }, 'QA')
+    expect(r).toEqual({ saved: false, reason: 'invalid' })
+    expect(mockSave).not.toHaveBeenCalled()
+  })
+
+  it('oversized fullText is clamped by the schema to its legal 100k — not truncated below it', async () => {
+    reset()
+    const r = await saveBaseResume('u1', STRUCT, 'QA', 'x'.repeat(150_000))
+    expect(r).toMatchObject({ saved: true })
+    const saved = mockSave.mock.calls[0][1]
+    expect(saved.fullText).toHaveLength(100_000) // schema clamp, no 60k amputation
   })
 })
 

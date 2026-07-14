@@ -134,7 +134,7 @@ export default function JobsStartPage() {
       const save = fetch('/api/jobs/base-resume', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ resume: parsedResume, targetRole: role.trim(), fullText: rawText.slice(0, 60_000) }),
+        body: JSON.stringify({ resume: parsedResume, targetRole: role.trim(), fullText: rawText }),
       })
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => {

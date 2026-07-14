@@ -44,8 +44,13 @@ export async function POST(req: Request) {
       userId,
       body.resume,
       String(body.targetRole ?? '').slice(0, 80),
-      typeof body.fullText === 'string' ? body.fullText.slice(0, 60_000) : undefined
+      // No jobs-side truncation: ResumeSchema owns the clamp (100k) — a 60k
+      // slice here silently amputated legitimate long resumes (Codex #520).
+      typeof body.fullText === 'string' ? body.fullText : undefined
     )
+    if (result.saved === false && result.reason === 'invalid') {
+      return NextResponse.json({ error: 'resume failed validation' }, { status: 400 })
+    }
     return NextResponse.json(result)
   } catch (err) {
     logger.warn({ err }, 'base-resume auto-save failed — onboarding continues without it')
