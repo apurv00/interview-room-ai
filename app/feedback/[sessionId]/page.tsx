@@ -51,6 +51,7 @@ import ShareButton from '@learn/components/feedback/ShareButton'
 import PathwayPendingBanner from '@learn/components/pathway/PathwayPendingBanner'
 import { usePathwayGenerationPoll } from '@learn/hooks/usePathwayGenerationPoll'
 import { STORAGE_KEYS } from '@shared/storageKeys'
+import JobsCountLink from '@jobs/components/JobsCountLink'
 
 // ─── Error Boundary ──────────────────────────────────────────────────────────
 
@@ -1385,6 +1386,7 @@ function FeedbackPageInner() {
             <div>
               <h1 className="text-subheading sm:text-heading leading-tight">Interview Feedback</h1>
               <JobsBridge sessionId={sessionId} />
+              {data?.config?.role && <div><JobsCountLink domain={data.config.role} variant="feedback" /></div>}
               <p className="text-caption text-[#71767b] hidden sm:block">
                 {data.config &&
                   `${getDomainLabel(data.config.role)} · ${data.config.experience} yrs · ${data.config.duration} min`}

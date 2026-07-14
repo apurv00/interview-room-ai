@@ -1,5 +1,6 @@
 'use client'
 
+import JobsCountLink from '@jobs/components/JobsCountLink'
 import { Suspense, useCallback, useEffect, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import { useSearchParams } from 'next/navigation'
@@ -221,6 +222,7 @@ function PathwayPageInner() {
         <div className="space-y-6 min-w-0">
           <PathwayProgressPanel progress={viewModel.progress} />
           <PathwayActivityPanel />
+          <JobsCountLink domain={supportDomain} variant="pathway" />
         </div>
       </div>
     </main>
