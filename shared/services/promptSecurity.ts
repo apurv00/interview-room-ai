@@ -17,3 +17,14 @@ export const DATA_BOUNDARY_RULE =
  * ~8 tokens. Import instead of writing variations per file.
  */
 export const JSON_OUTPUT_RULE = 'Respond with ONLY valid JSON matching the schema below. No markdown, no explanation.'
+
+/**
+ * Neutralize an untrusted string for inline prompt interpolation: strip
+ * angle brackets (no tag escapes), collapse whitespace (no multi-line
+ * instruction smuggling), cap the length. Shared hoist of the problemSeeds
+ * helper (which keeps its local copy — interview module untouched) so
+ * non-interview modules can neutralize without a cross-module import.
+ */
+export function neutralizePromptLine(s: string, cap: number = 80): string {
+  return s.replace(/[<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, cap)
+}

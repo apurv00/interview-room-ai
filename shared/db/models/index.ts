@@ -140,6 +140,8 @@ export type { IJobIngestCursor } from './JobIngestCursor'
 
 export { JobIngestCycle } from './JobIngestCycle'
 export type { IJobIngestCycle } from './JobIngestCycle'
+export { JobsVerdictConfig, JOBS_VERDICT_DEFAULTS } from './JobsVerdictConfig'
+export type { IJobsVerdictConfig, JobsVerdictConfigValues } from './JobsVerdictConfig'
 
 export { JobApplication, JOB_APPLICATION_STATUSES } from './JobApplication'
 export type { IJobApplication, JobApplicationStatus } from './JobApplication'
