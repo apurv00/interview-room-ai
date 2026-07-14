@@ -8,12 +8,14 @@ const { mockPostingFindById, mockPostingUpdateOne, mockAppFindOne, mockAppUpdate
   mockAppCreate: vi.fn(),
   mockAppFindOneAndUpdate: vi.fn(),
 }))
+const { mockSessionFindById } = vi.hoisted(() => ({ mockSessionFindById: vi.fn() }))
 vi.mock('@shared/db/models', () => ({
   JobPosting: { findById: mockPostingFindById, updateOne: mockPostingUpdateOne },
   JobApplication: { findOne: mockAppFindOne, updateOne: mockAppUpdateOne, create: mockAppCreate, findOneAndUpdate: mockAppFindOneAndUpdate },
+  InterviewSession: { findById: mockSessionFindById },
 }))
 
-import { recordApplyClick, claimAtsRun, transitionStatus, reportBrokenLink } from '../services/applicationService'
+import { recordApplyClick, claimAtsRun, transitionStatus, reportBrokenLink, recordPracticeEvidence } from '../services/applicationService'
 
 const NOW = new Date('2026-07-14T12:00:00Z')
 
@@ -154,5 +156,53 @@ describe('reportBrokenLink (§4b crowd healing)', () => {
     // ALL rungs carrying the dead URL take the report (arrayFilters, not $)
     expect(postUpdate).toEqual({ $inc: { 'provenance.$[elem].brokenReportCount': 1 } })
     expect(postOpts).toEqual({ arrayFilters: [{ 'elem.applyUrl': 'https://dead.example/apply' }] })
+  })
+})
+
+describe('recordPracticeEvidence (Wave 4.3 — the evidence ticker source)', () => {
+  function sessionChain(doc: unknown) {
+    mockSessionFindById.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(doc) }) })
+  }
+  function appUpdateChain(doc: unknown) {
+    mockAppFindOneAndUpdate.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(doc) }) })
+  }
+
+  it('jobs-attributed session lands in practiceSessionIds via $addToSet (idempotent), count capped at 3', async () => {
+    reset()
+    mockSessionFindById.mockReset()
+    sessionChain({ _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: 'j1', applicationId: 'app1' } })
+    appUpdateChain({ practiceSessionIds: ['a', 'b', 'c', 'd'] })
+    const r = await recordPracticeEvidence('u1', 's1')
+    expect(r).toEqual({ recorded: true, evidenceCount: 3 })
+    const [filter, update] = mockAppFindOneAndUpdate.mock.calls[0]
+    expect(filter).toEqual({ _id: 'app1', userId: 'u1' }) // userId guard
+    expect(update).toEqual({ $addToSet: { practiceSessionIds: 's1' } })
+  })
+
+  it('no applicationId falls back to the jobPostingId row; non-jobs / foreign sessions record nothing', async () => {
+    reset()
+    mockSessionFindById.mockReset()
+    sessionChain({ _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: 'j9' } })
+    appUpdateChain({ practiceSessionIds: ['s1'] })
+    const r = await recordPracticeEvidence('u1', 's1')
+    expect(r).toEqual({ recorded: true, evidenceCount: 1 })
+    expect(mockAppFindOneAndUpdate.mock.calls[0][0]).toEqual({ userId: 'u1', jobPostingId: 'j9' })
+
+    // non-jobs session
+    mockAppFindOneAndUpdate.mockClear()
+    sessionChain({ _id: 's2', userId: 'u1', attribution: undefined })
+    expect(await recordPracticeEvidence('u1', 's2')).toEqual({ recorded: false })
+    // another user's session id must never attach
+    sessionChain({ _id: 's3', userId: 'someone-else', attribution: { source: 'jobs', jobId: 'j1' } })
+    expect(await recordPracticeEvidence('u1', 's3')).toEqual({ recorded: false })
+    expect(mockAppFindOneAndUpdate).not.toHaveBeenCalled()
+  })
+
+  it('no application row to attach to → recorded:false (practiced without saving or clicking)', async () => {
+    reset()
+    mockSessionFindById.mockReset()
+    sessionChain({ _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: 'j1' } })
+    appUpdateChain(null)
+    expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: false })
   })
 })

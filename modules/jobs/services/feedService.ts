@@ -244,6 +244,7 @@ export interface JobDetailFull extends Omit<JobDetailShell, 'gated'> {
   flags: { staffing: boolean; shortJd: boolean; repost: boolean }
   /** The caller's own tracker row (chip + evidence ticker + ATS inputs). */
   application: {
+    applicationId: string
     status: string
     practiceCount: number
     ats: { state: 'none' | 'pending' | 'done'; score?: number; missingKeywords?: string[]; checkedAt?: string }
@@ -280,7 +281,7 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
     // clean ones — demoted, never hidden (they may still work for others).
     .sort((a, b) => Number(a.broken) - Number(b.broken) || TIER_RANK[a.tier] - TIER_RANK[b.tier])
     .map(({ url, tier, viaSite }) => ({ url, tier, viaSite }))
-  const app = await JobApplication.findOne({ userId, jobPostingId: id }).select('status practiceSessionIds atsResult atsRequestedAt').lean()
+  const app = await JobApplication.findOne({ userId, jobPostingId: id }).select('_id status practiceSessionIds atsResult atsRequestedAt').lean()
   // An atsResult is 'done' only for the CURRENT (resume x JD) pair (Codex
   // on #521): a JD merge OR a resume edit re-opens the check. The resume
   // comparison costs two User reads, so it runs only on the narrow path
@@ -302,6 +303,7 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
     flags: { staffing: !!doc.flags?.staffing, shortJd: !!doc.flags?.shortJd, repost: !!doc.flags?.repost },
     application: app
       ? {
+          applicationId: String(app._id),
           status: app.status,
           practiceCount: Math.min(3, app.practiceSessionIds?.length ?? 0),
           ats: app.atsResult && atsCurrent

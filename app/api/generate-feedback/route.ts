@@ -11,6 +11,7 @@ import { getSkillSections } from '@interview/services/core/skillLoader'
 import { findCompanyProfile } from '@interview/config/companyProfiles'
 import { connectDB } from '@shared/db/connection'
 import { User, InterviewSession } from '@shared/db/models'
+import { recordPracticeEvidence } from '@jobs'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { updateCompetencyState, updateWeaknessClusters } from '@learn/services/competencyService'
 import { generateSessionSummary } from '@learn/services/sessionSummaryService'
@@ -1402,6 +1403,16 @@ You repair malformed interview feedback JSON. The output must match the supplied
         } else {
           markSkipped('practiceStats')
         }
+
+        // Jobs evidence ticker (Wave 4.3): a jobs-attributed session that
+        // reached SCORED feedback counts toward the per-job n/3. Additive
+        // side effect, idempotent in the service ($addToSet), never blocks
+        // or fails feedback.
+        fireAndTrack(
+          'jobsEvidence',
+          Promise.resolve().then(() => recordPracticeEvidence(user.id, sessionId)),
+          'Jobs practice-evidence push failed',
+        )
 
         // Update competency state
         fireAndTrack(

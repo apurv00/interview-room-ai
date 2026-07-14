@@ -80,6 +80,9 @@ vi.mock('@shared/db/connection', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
 }))
 
+// Wave 4.3: generate-feedback gained the jobsEvidence side effect — mock the
+// jobs barrel so the rail's 7th effect succeeds deterministically here.
+vi.mock('@jobs', () => ({ recordPracticeEvidence: vi.fn().mockResolvedValue({ recorded: false }) }))
 vi.mock('@shared/db/models', () => ({
   User: { findById: () => ({ select: () => ({ lean: () => Promise.resolve(null) }) }) },
   InterviewSession: {
@@ -452,8 +455,8 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
     )
     expect(summaryCall).toBeTruthy()
     const [context] = summaryCall as [Record<string, unknown>, string]
-    expect(context.totalSideEffects).toBe(6) // persist + practiceStats + competency + sessionSummary + masteryTracking + universalPlanAdvance; pathwayPlan enqueued after persist
-    expect(context.succeeded).toBe(6)
+    expect(context.totalSideEffects).toBe(7) // persist + jobsEvidence (Wave 4.3) + practiceStats + competency + sessionSummary + masteryTracking + universalPlanAdvance; pathwayPlan enqueued after persist
+    expect(context.succeeded).toBe(7)
     expect(context.failedCount).toBe(0)
     expect(context.failed).toBeUndefined()
     expect(context.sessionId).toBe('507f1f77bcf86cd799439011')
@@ -485,8 +488,8 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
     )
     expect(summaryCall).toBeTruthy()
     const [context] = summaryCall as [Record<string, unknown>, string]
-    expect(context.totalSideEffects).toBe(6) // pathwayPlan no longer in sideEffects[] (PR #398)
-    expect(context.succeeded).toBe(5)
+    expect(context.totalSideEffects).toBe(7) // pathwayPlan no longer in sideEffects[] (PR #398); +jobsEvidence (Wave 4.3)
+    expect(context.succeeded).toBe(6)
     expect(context.failedCount).toBe(1)
     const failed = context.failed as Array<{ name: string; reason: string }>
     expect(failed.map((f) => f.name)).toEqual(['competency'])
