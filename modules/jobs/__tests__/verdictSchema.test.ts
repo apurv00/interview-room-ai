@@ -65,6 +65,17 @@ describe('JobVerdictSchema (§4.5 layer 2 output contract)', () => {
     expect(VERDICT_DOMAIN_IDS).toEqual([...JOB_DOMAINS.map((d) => d.id), 'other'])
   })
 
+  it('reason codes must justify the verdict class — contradictory output is invalid (Codex #515)', () => {
+    expect(JobVerdictSchema.safeParse({ ...valid, verdict: 'genuine', reasonCodes: ['fee_fraud'] }).success).toBe(false)
+    expect(JobVerdictSchema.safeParse({ ...valid, verdict: 'fraud', reasonCodes: ['ok'] }).success).toBe(false)
+    expect(JobVerdictSchema.safeParse({ ...valid, verdict: 'fraud', reasonCodes: ['vague_jd'] }).success).toBe(false) // no fraud-class code
+    expect(JobVerdictSchema.safeParse({ ...valid, verdict: 'suspicious', reasonCodes: ['legit_staffing'] }).success).toBe(false)
+    // coherent combinations pass
+    expect(JobVerdictSchema.safeParse({ ...valid, verdict: 'fraud', reasonCodes: ['fee_fraud', 'vague_jd'], genuineness: 0.1 }).success).toBe(true)
+    expect(JobVerdictSchema.safeParse({ ...valid, verdict: 'suspicious', reasonCodes: ['vague_jd'] }).success).toBe(true)
+    expect(JobVerdictSchema.safeParse({ ...valid, verdict: 'genuine', reasonCodes: ['legit_staffing'] }).success).toBe(true)
+  })
+
   it('epochOf = model:promptVersion', () => {
     expect(epochOf('gpt-5.6-luna')).toBe(`gpt-5.6-luna:${PROMPT_VERSION}`)
   })

@@ -265,7 +265,10 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
 
 describe('runVerdictSweeperHandler (§4.5 sweeper)', () => {
   function sweepChain(rows: Array<{ _id: string }>) {
-    const limitSpy = vi.fn().mockReturnValue({ select: () => ({ lean: () => Promise.resolve(rows) }) })
+    // rows feed the FIRST find (pending/missing); the epoch-backfill find
+    // that follows gets nothing.
+    let calls = 0
+    const limitSpy = vi.fn().mockImplementation(() => ({ select: () => ({ lean: () => Promise.resolve(calls++ === 0 ? rows : []) }) }))
     mockPostingFind.mockReturnValue({ sort: vi.fn().mockReturnValue({ limit: limitSpy }) })
     return limitSpy
   }
@@ -300,6 +303,32 @@ describe('runVerdictSweeperHandler (§4.5 sweeper)', () => {
     expect(mockSend.mock.calls[0][0].name).toBe('jobs/verdict.requested')
     expect(mockSend.mock.calls[0][0].data.postingIds).toHaveLength(40)
     expect(mockSend.mock.calls[1][0].data.postingIds).toHaveLength(5)
+  })
+
+  it('epoch cutover: leftover limit backfills stale-epoch SCORED rows; current-epoch rows untouched (Codex #515)', async () => {
+    resetAll()
+    const limitSpies: Array<ReturnType<typeof vi.fn>> = []
+    mockPostingFind.mockImplementation(() => {
+      const limitSpy = vi.fn().mockReturnValue({ select: () => ({ lean: () => Promise.resolve(limitSpies.length === 1 ? [{ _id: 'pend1' }] : [{ _id: 'stale1' }, { _id: 'stale2' }]) }) })
+      limitSpies.push(limitSpy)
+      return { sort: vi.fn().mockReturnValue({ limit: limitSpy }) }
+    })
+    const r = await runVerdictSweeperHandler(step, { limit: 10 })
+    expect(r).toMatchObject({ enqueued: 3 })
+    // second query targets scored rows from a DIFFERENT epoch only
+    const staleQuery = mockPostingFind.mock.calls[1][0]
+    expect(staleQuery.$and[1]).toEqual({ 'llmVerdict.status': 'scored', 'llmVerdict.epoch': { $ne: 'gpt-5.6-luna:v1' } })
+    // and consumes only the leftover limit (10 - 1 pending = 9)
+    expect(limitSpies[1]).toHaveBeenCalledWith(9)
+    expect(mockSend.mock.calls[0][0].data.postingIds).toEqual(['pend1', 'stale1', 'stale2'])
+  })
+
+  it('a scored row past the attempts cap still epoch-refreshes (cap is for pending failures)', async () => {
+    resetAll()
+    mockPostingFindById.mockReturnValue({ lean: () => Promise.resolve(posting({ llmVerdict: { status: 'scored', attempts: 5, verdictInputHash: 'stale-hash' } })) })
+    const evaluateFn = vi.fn().mockResolvedValue(okOutcome())
+    await runEvaluatePostingsHandler({ data: { postingIds: ['p1'] } }, step, { evaluateFn: evaluateFn as never })
+    expect(evaluateFn).toHaveBeenCalledTimes(1)
   })
 
   it('opted-out sources are excluded IN THE QUERY — pinned pending rows cannot starve the sweep', async () => {

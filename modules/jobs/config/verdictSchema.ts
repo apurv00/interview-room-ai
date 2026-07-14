@@ -46,6 +46,21 @@ export const WORK_MODES = ['onsite', 'hybrid', 'remote', 'unspecified'] as const
 
 const scalar01 = z.number().min(0).max(1)
 
+/**
+ * Reason codes must JUSTIFY the verdict class (cross-field refinement,
+ * Codex on #515): 'genuine' carries only clean codes; 'suspicious' only
+ * suspicious codes; 'fraud' needs >=1 fraud code and may cite supporting
+ * suspicious signals but never clean ones. A contradictory response
+ * (genuine + fee_fraud) is invalid model output — rejected => pending,
+ * never stored as scored; the cycle reason counters are the shadow-exit
+ * audit trail and must not carry incoherent rows.
+ */
+const ALLOWED_CODES_BY_VERDICT: Record<string, readonly string[]> = {
+  genuine: CLEAN_REASON_CODES,
+  suspicious: SUSPICIOUS_REASON_CODES,
+  fraud: [...FRAUD_REASON_CODES, ...SUSPICIOUS_REASON_CODES],
+}
+
 export const JobVerdictSchema = z
   .object({
     verdict: z.enum(['genuine', 'suspicious', 'fraud']),
@@ -63,6 +78,15 @@ export const JobVerdictSchema = z
     }),
   })
   .strict()
+  .superRefine((v, ctx) => {
+    const allowed = ALLOWED_CODES_BY_VERDICT[v.verdict]
+    if (v.reasonCodes.some((c) => !allowed.includes(c))) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['reasonCodes'], message: `codes outside the ${v.verdict} class` })
+    }
+    if (v.verdict === 'fraud' && !v.reasonCodes.some((c) => (FRAUD_REASON_CODES as readonly string[]).includes(c))) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['reasonCodes'], message: 'fraud requires at least one fraud-class code' })
+    }
+  })
 
 export type JobVerdict = z.infer<typeof JobVerdictSchema>
 

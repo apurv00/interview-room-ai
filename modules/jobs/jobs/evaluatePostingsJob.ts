@@ -4,7 +4,7 @@ import { connectDB } from '@shared/db/connection'
 import { JobPosting, JobSourceConfig, JobIngestCycle, JobsVerdictConfig, type JobsVerdictConfigValues } from '@shared/db/models'
 import { redis } from '@shared/redis'
 import { logger } from '@shared/logger'
-import { PROMPT_VERSION } from '../config/verdictSchema'
+import { PROMPT_VERSION, epochOf } from '../config/verdictSchema'
 import { evaluatePosting, expectedVerdictModel, resolveExpectedVerdictModel, type EvaluatorDeps } from '../services/postingEvaluator'
 import { verdictInputHash, stripRecruiterPii, sliceBody } from '../config/verdictPrompt'
 import { neutralizePromptLine } from '@shared/services/promptSecurity'
@@ -150,7 +150,11 @@ export async function runEvaluatePostingsHandler(
         // re-verdicts and may reopen' — every OTHER closed reason is out.
         const eligible = doc && (doc.status === 'open' || doc.closedReason === 'llm-verdict')
         if (!doc || !eligible) continue
-        if ((doc.llmVerdict?.attempts ?? 0) >= MAX_ATTEMPTS) continue
+        // The attempts cap bounds consecutive FAILURES on one input — a
+        // successfully-scored row re-entering for an epoch refresh must not
+        // be strangled by its historical failure count (its failure path
+        // flips it back to pending, where the cap re-applies).
+        if (doc.llmVerdict?.status === 'pending' && (doc.llmVerdict.attempts ?? 0) >= MAX_ATTEMPTS) continue
         const sources = (doc.provenance ?? []).map((e) => e.sourceId)
         if (sources.some((s) => optedOut.has(s))) continue
         const primarySource = sources[0] ?? 'unknown'
@@ -345,18 +349,21 @@ export async function runVerdictSweeperHandler(
   // refuses to evaluate would otherwise pin the oldest-first window and
   // starve every other source (adversarial review of Wave 2.3).
   const optedOut = (await JobSourceConfig.find({ llmVerdictOptOut: true }).select('sourceId').lean()).map((s) => s.sourceId)
+  const currentEpoch = epochOf(await resolveExpectedVerdictModel())
 
   const ids = await step.run('find-due', async () => {
+    const statusScope = {
+      $or: [
+        { status: 'open' },
+        // §4.3: llm-verdict tombstones whose inputs changed re-verdict
+        // (the merge resets them to pending) and may reopen.
+        { status: 'closed', closedReason: 'llm-verdict' },
+      ],
+    }
+    const optOutScope = optedOut.length ? [{ 'provenance.sourceId': { $nin: optedOut } }] : []
     const rows = await JobPosting.find({
       $and: [
-        {
-          $or: [
-            { status: 'open' },
-            // §4.3: llm-verdict tombstones whose inputs changed re-verdict
-            // (the merge resets them to pending) and may reopen.
-            { status: 'closed', closedReason: 'llm-verdict' },
-          ],
-        },
+        statusScope,
         {
           $or: [
             // Steady state: rides the §4.3 pending partial index.
@@ -365,14 +372,35 @@ export async function runVerdictSweeperHandler(
             { llmVerdict: { $exists: false }, status: 'open' },
           ],
         },
-        ...(optedOut.length ? [{ 'provenance.sourceId': { $nin: optedOut } }] : []),
+        ...optOutScope,
       ],
     })
       .sort({ _id: 1 }) // oldest-first
       .limit(limit)
       .select('_id')
       .lean()
-    return rows.map((r) => String(r._id))
+    const due = rows.map((r) => String(r._id))
+    // Epoch-cutover backfill (§4.5 'rolling, budget-capped re-classification';
+    // Codex on #515): scored rows from a stale epoch re-enter ONLY with the
+    // limit left over after live pending work, so cutover rolls through the
+    // corpus across sweeps under the same budget tiers. The worker's hash
+    // check (epoch is a hash component) re-scores them.
+    const remainder = limit - due.length
+    if (remainder > 0) {
+      const stale = await JobPosting.find({
+        $and: [
+          statusScope,
+          { 'llmVerdict.status': 'scored', 'llmVerdict.epoch': { $ne: currentEpoch } },
+          ...optOutScope,
+        ],
+      })
+        .sort({ _id: 1 })
+        .limit(remainder)
+        .select('_id')
+        .lean()
+      due.push(...stale.map((r) => String(r._id)))
+    }
+    return due
   })
 
   let batches = 0
