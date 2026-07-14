@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 
@@ -23,7 +23,7 @@ interface ParsedResume {
 }
 
 export interface JobsTarget {
-  method: 'paste' | 'upload' | 'questions'
+  method: 'paste' | 'upload' | 'questions' | 'import'
   role: string
   city: string
   skills: string[]
@@ -58,6 +58,19 @@ export default function JobsStartPage() {
   const [role, setRole] = useState('')
   const [detectedRole, setDetectedRole] = useState('')
   const [city, setCity] = useState('')
+  // The full parse result + original text — held for the authed base-resume
+  // auto-save (preserveFullText). Stays in memory/sessionStorage only.
+  const [parsedResume, setParsedResume] = useState<ParsedResume | null>(null)
+  const [rawText, setRawText] = useState('')
+  const [importDoor, setImportDoor] = useState<{ id: string; name: string; targetRole: string; skills: string[] } | null>(null)
+
+  // Authed import door — 401 = anon, hide silently.
+  useEffect(() => {
+    fetch('/api/jobs/base-resume')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d?.base) setImportDoor(d.base) })
+      .catch(() => {})
+  }, [])
 
   async function parseAndConfirm(text: string, m: JobsTarget['method']) {
     setBusy(true)
@@ -76,6 +89,8 @@ export default function JobsStartPage() {
         return
       }
       const { resume } = (await res.json()) as { resume: ParsedResume }
+      setParsedResume(resume)
+      setRawText(text)
       setDetectedName(resume.contact?.name ?? '')
       setSkills(flatSkills(resume))
       const detected = resume.experience?.[0]?.title ?? ''
@@ -107,7 +122,35 @@ export default function JobsStartPage() {
     } catch { /* private mode — the feed just stays Tier-A */ }
     track('jobs.resume_attach_completed', { method, skillCount: skills.length })
     track('jobs.target_role_confirmed', { edited: role.trim() !== detectedRole.trim() })
+    // Authed auto-save as "Base Resume — {role}" (Stage 2): keepalive, never
+    // blocks the reveal; 401 (anon) skips silently; the 3/3 cap surfaces as
+    // a dismissible feed notice — extraction still fed ranking either way.
+    if ((method === 'paste' || method === 'upload') && parsedResume) {
+      fetch('/api/jobs/base-resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resume: parsedResume, targetRole: role.trim(), fullText: rawText }),
+        keepalive: true,
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (d && d.saved === false && d.reason === 'cap') {
+            try { sessionStorage.setItem('JOBS_CAP_NOTICE', '1') } catch { /* noop */ }
+          }
+        })
+        .catch(() => {})
+    }
     router.push('/jobs')
+  }
+
+  function importBase() {
+    if (!importDoor) return
+    setMethod('import')
+    setSkills(importDoor.skills)
+    setDetectedRole(importDoor.targetRole)
+    setRole(importDoor.targetRole)
+    track('jobs.resume_attach_started', { method: 'import' })
+    setDoor('confirm')
   }
 
   return (
@@ -117,6 +160,12 @@ export default function JobsStartPage() {
 
       {door === 'chooser' && (
         <div className="mt-6 space-y-3">
+          {importDoor && (
+            <button onClick={importBase} className="block w-full rounded-xl border border-blue-300 p-4 text-left hover:border-blue-500 dark:border-blue-800">
+              <span className="font-medium">Use my saved resume</span>
+              <span className="mt-0.5 block text-sm text-gray-500">{importDoor.name}</span>
+            </button>
+          )}
           <button onClick={() => setDoor('paste')} className="block w-full rounded-xl border p-4 text-left hover:border-blue-400">
             <span className="font-medium">Paste your resume text</span>
             <span className="mt-0.5 block text-sm text-gray-500">Fastest — copy everything, paste here.</span>
