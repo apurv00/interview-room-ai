@@ -58,3 +58,13 @@ describe('fresher measurement cells', () => {
     expect(matchFresherDomain('Data Entry Operator')).toBe('data-analyst')
   })
 })
+
+describe('interviewSlugForDomain (the hand-off role resolver, Codex #524)', async () => {
+  const { interviewSlugForDomain } = await import('../config/domains')
+  it('maps catalog domains 1:1, jobs-only domains to general, unknown to undefined', () => {
+    expect(interviewSlugForDomain('backend')).toBe('backend')
+    expect(interviewSlugForDomain('hr')).toBe('general') // interviewSlug: null → general, never the raw jobs slug
+    expect(interviewSlugForDomain('astrology')).toBeUndefined()
+    expect(interviewSlugForDomain(undefined)).toBeUndefined()
+  })
+})

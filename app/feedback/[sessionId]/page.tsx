@@ -134,26 +134,29 @@ type FeedbackTab = 'overview' | 'questions' | 'analysis' | 'learning'
  * attribution — render the way back + the evidence tick. Pure additive
  * banner; renders nothing for every non-jobs session.
  */
-function JobsBridge() {
+function JobsBridge({ sessionId }: { sessionId: string }) {
   const [bridge, setBridge] = useState<{ jobId: string; company?: string; evidence?: number } | null>(null)
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEYS.INTERVIEW_CONFIG)
-      if (!raw) return
-      const cfg = JSON.parse(raw)
-      const attr = cfg?.attribution
-      if (attr?.source !== 'jobs' || !attr.jobId) return
-      setBridge({ jobId: attr.jobId, company: cfg.targetCompany })
-      fetch(`/api/jobs/${attr.jobId}`)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((d) => {
-          if (d && d.gated === false && d.application) {
-            setBridge((b) => (b ? { ...b, evidence: d.application.practiceCount } : b))
-          }
-        })
-        .catch(() => {})
-    } catch { /* no bridge */ }
-  }, [])
+    if (!sessionId) return
+    // The PERSISTED session is the source of truth: useInterview clears
+    // INTERVIEW_CONFIG from localStorage before navigating here, so the
+    // config is already gone on the normal flow (Codex on #524).
+    fetch(`/api/interviews/${sessionId}?excludeTranscript=true`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((session) => {
+        const attr = session?.attribution
+        if (attr?.source !== 'jobs' || !attr.jobId) return
+        setBridge({ jobId: attr.jobId, company: session?.config?.targetCompany })
+        return fetch(`/api/jobs/${attr.jobId}`)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => {
+            if (d && d.gated === false && d.application) {
+              setBridge((b) => (b ? { ...b, evidence: d.application.practiceCount, company: b.company || d.company } : b))
+            }
+          })
+      })
+      .catch(() => {})
+  }, [sessionId])
   if (!bridge) return null
   return (
     <a href={`/jobs/${bridge.jobId}`} className="mt-1 inline-block text-sm text-blue-600 hover:underline">
@@ -1381,7 +1384,7 @@ function FeedbackPageInner() {
             </button>
             <div>
               <h1 className="text-subheading sm:text-heading leading-tight">Interview Feedback</h1>
-              <JobsBridge />
+              <JobsBridge sessionId={sessionId} />
               <p className="text-caption text-[#71767b] hidden sm:block">
                 {data.config &&
                   `${getDomainLabel(data.config.role)} · ${data.config.experience} yrs · ${data.config.duration} min`}

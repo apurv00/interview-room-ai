@@ -4,6 +4,9 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { STORAGE_KEYS } from '@shared/storageKeys'
+// Deep import (app/** is barrel-exempt): domains.ts is pure constants —
+// the @jobs barrel would drag mongoose into this client chunk.
+import { interviewSlugForDomain } from '@jobs/config/domains'
 import AuthGateModal from '@shared/ui/AuthGateModal'
 
 /**
@@ -141,7 +144,10 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
 
   function onPractice() {
     if (!detail || detail.gated) return
-    const role = detail.domain ?? xray?.inferredDomain
+    // Resolve through the domain metadata: jobs-only slugs (hr) map to
+    // 'general', never raw into InterviewConfig.role (Codex on #524);
+    // the X-ray's inferredDomain is already an interview slug.
+    const role = interviewSlugForDomain(detail.domain) ?? xray?.inferredDomain
     if (!role) return
     // The hand-off (PRODUCT_FLOW §1 Stage 4; precedent learn/practice):
     // config to localStorage, then the lobby owns everything — auth gate,
@@ -346,7 +352,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                 </p>
               </div>
             )}
-            {(detail.domain ?? xray?.inferredDomain) && (
+            {(interviewSlugForDomain(detail.domain) ?? xray?.inferredDomain) && (
               <button
                 onClick={onPractice}
                 className="rounded-lg border border-blue-400 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50 dark:text-blue-300 dark:hover:bg-blue-950"
