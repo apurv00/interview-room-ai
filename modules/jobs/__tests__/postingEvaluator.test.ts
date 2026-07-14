@@ -4,6 +4,7 @@ vi.mock('@shared/logger', () => ({ logger: { warn: vi.fn() } }))
 
 import { evaluatePosting, expectedVerdictModel, type EvaluatorDeps } from '../services/postingEvaluator'
 import { JOB_DOMAINS } from '../config/domains'
+import { PROMPT_VERSION } from '../config/verdictSchema'
 
 const MODEL = expectedVerdictModel()
 
@@ -61,7 +62,7 @@ describe('postingEvaluator (§4.5 — never throws, never fabricates)', () => {
     expect(out.ok).toBe(true)
     if (out.ok) {
       expect(out.verdict.verdict).toBe('genuine')
-      expect(out.epoch).toBe(`${MODEL}:v1`)
+      expect(out.epoch).toBe(`${MODEL}:${PROMPT_VERSION}`)
       expect(out.costUsd).toBeCloseTo((4000 * 0.5 + 300 * 2.0) / 1_000_000)
       expect(out.cached).toBe(false)
     }
@@ -141,7 +142,7 @@ describe('postingEvaluator (§4.5 — never throws, never fabricates)', () => {
     })
     const out = await evaluatePosting(INPUT, deps)
     expect(out.ok).toBe(true)
-    if (out.ok) expect(out.epoch).toBe('gpt-7-nova:v1')
+    if (out.ok) expect(out.epoch).toBe(`gpt-7-nova:${PROMPT_VERSION}`)
   })
 
   it('the hash binds to the model-visible slice: a middle-only change re-uses the verdict', async () => {
@@ -159,6 +160,6 @@ describe('postingEvaluator (§4.5 — never throws, never fabricates)', () => {
     const out = await evaluatePosting(INPUT, deps)
     expect(out.ok).toBe(true)
     expect(set).toHaveBeenCalledTimes(1)
-    if (out.ok) expect(set.mock.calls[0][0]).toBe(`jobs:verdict:v1:${out.inputHash}`)
+    if (out.ok) expect(set.mock.calls[0][0]).toBe(`jobs:verdict:v1:${out.inputHash}`) // cache namespace is independent of PROMPT_VERSION (the hash embeds it)
   })
 })
