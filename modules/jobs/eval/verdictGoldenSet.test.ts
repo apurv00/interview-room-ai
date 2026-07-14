@@ -12,6 +12,7 @@ import { describe, it, expect } from 'vitest'
 // concern.
 import '@shared/services/providers/openai'
 import '@shared/services/providers/anthropic'
+import { __awaitBackgroundLoadForTesting } from '@shared/services/modelRouter'
 import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import goldenSet from './goldenSet.json'
@@ -60,19 +61,19 @@ const CONCURRENCY = 4
  * CMS ModelConfig load runs in the background (cold-defaults-synthetic
  * path) — a fresh eval process right after a CMS cutover would freeze the
  * OLD default as the epoch and then either benchmark the wrong model or
- * mass-reject the real one as model-mismatch (Codex on #516). Freeze the
- * epoch only once two spaced resolutions agree; with no CMS override (or
- * no Mongo in the env) resolution is immediately stable on the defaults.
+ * mass-reject the real one as model-mismatch (Codex on #516). Sampling for
+ * stability can't fix that (cold Mongo paths run 1-2.5s and outlast any
+ * fixed sleep — Codex round-2), so AWAIT the load deterministically: the
+ * first resolution kicks the background load, __awaitBackgroundLoadForTesting
+ * joins the router's _loadPromise (this harness IS a vitest file — the
+ * export exists exactly for deterministic load-joins in test contexts; no-op
+ * when the config is already warm or no Mongo is configured), and the second
+ * resolution reads the authoritative config.
  */
 async function stableEpochModel(): Promise<string> {
-  let prev = await resolveExpectedVerdictModel()
-  for (let i = 0; i < 5; i++) {
-    await new Promise((r) => setTimeout(r, 1500))
-    const next = await resolveExpectedVerdictModel()
-    if (next === prev) return next
-    prev = next
-  }
-  return prev
+  await resolveExpectedVerdictModel()
+  await __awaitBackgroundLoadForTesting()
+  return resolveExpectedVerdictModel()
 }
 
 async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Promise<R[]> {
