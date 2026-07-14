@@ -131,12 +131,19 @@ describe.skipIf(!LIVE)('verdict golden-set live eval (JOBS_VERDICT_EVAL=1)', () 
       )
       if (!outcome.ok) return { id: f.id, category: f.category, ok: false as const, kind: outcome.kind, pass: false }
       const v = outcome.verdict
+      // reasonCodesInclude is ANY-of BY DESIGN (the authoring contract):
+      // multi-code fixtures list alternative acceptable justifications, and
+      // demanding all of them would be brittle against harmless variation
+      // in a 4-code-capped output. Code-level drift across epochs is
+      // visible via matchedReasonCodes in the artifact instead — diff THAT
+      // between cutover runs, not the pass rate (Codex on #516).
+      const matchedReasonCodes = (f.expect.reasonCodesInclude ?? []).filter((c) => v.reasonCodes.includes(c))
       const pass =
         f.expect.verdicts.includes(v.verdict) &&
         (f.expect.genuinenessMax == null || v.genuineness <= f.expect.genuinenessMax) &&
         (f.expect.genuinenessMin == null || v.genuineness >= f.expect.genuinenessMin) &&
-        (f.expect.reasonCodesInclude == null || f.expect.reasonCodesInclude.some((c) => v.reasonCodes.includes(c)))
-      return { id: f.id, category: f.category, ok: true as const, verdict: v.verdict, genuineness: v.genuineness, reasonCodes: v.reasonCodes, pass, expected: f.expect }
+        (f.expect.reasonCodesInclude == null || matchedReasonCodes.length > 0)
+      return { id: f.id, category: f.category, ok: true as const, verdict: v.verdict, genuineness: v.genuineness, reasonCodes: v.reasonCodes, matchedReasonCodes, pass, expected: f.expect }
     })
 
     const okResults = results.filter((r) => r.ok)
