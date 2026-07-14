@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import FileDropzone from '@shared/ui/FileDropzone'
@@ -41,6 +42,23 @@ export default function TailorPage() {
   const [error, setError] = useState('')
   const [uploading, setUploading] = useState(false)
   const [savingCopy, setSavingCopy] = useState(false)
+  // Jobs hand-off (Wave 4.5, package 11): ?jobId= prefills the JD from the
+  // posting and the tailored result persists on the application row.
+  const searchParams = useSearchParams()
+  const jobId = searchParams?.get('jobId') ?? null
+  useEffect(() => {
+    if (!jobId) return
+    fetch(`/api/jobs/${jobId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d && d.gated === false) {
+          if (typeof d.jd === 'string' && d.jd) setJobDescription((prev) => prev || d.jd)
+          if (typeof d.company === 'string') setCompanyName((prev) => prev || d.company)
+        }
+      })
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobId])
   /** Controlled value for the saved-resume dropdown. The old uncontrolled
    *  defaultValue meant that after "Remove", re-selecting the SAME resume
    *  fired no change event — the dropdown looked selected but did nothing. */
@@ -118,6 +136,23 @@ export default function TailorPage() {
       const data = await res.json()
       if (res.ok) {
         setResult(data)
+      // Persist on the application row (latest-wins; never a cap seat).
+      // Truncated outputs are NOT persisted — the same flags already
+      // disable 'Save as New Resume' because the text omits the untouched
+      // tail (Codex on #526); an incomplete per-job resume is worse than none.
+      if (jobId && !data.inputTruncated && !data.outputTruncated) {
+        fetch(`/api/jobs/${jobId}/tailored`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tailoredText: data.tailoredResume ?? data.tailoredText ?? '',
+            sourceResumeId: '',
+            matchScore: data.matchScore,
+            addedKeywords: data.addedKeywords ?? [],
+            missingKeywords: data.missingKeywords ?? [],
+          }),
+        }).catch(() => {})
+      }
       } else if (res.status === 429 && data.code === 'ANON_DAILY_LIMIT') {
         // Anonymous user hit the daily IP cap — soft-prompt them to sign in
         setError('Daily limit reached. Sign in for unlimited tailoring.')

@@ -15,7 +15,7 @@ vi.mock('@shared/db/models', () => ({
   InterviewSession: { findById: mockSessionFindById },
 }))
 
-import { recordApplyClick, claimAtsRun, transitionStatus, reportBrokenLink, recordPracticeEvidence } from '../services/applicationService'
+import { recordApplyClick, claimAtsRun, transitionStatus, reportBrokenLink, recordPracticeEvidence, saveTailoredVersion } from '../services/applicationService'
 
 const NOW = new Date('2026-07-14T12:00:00Z')
 
@@ -204,5 +204,61 @@ describe('recordPracticeEvidence (Wave 4.3 — the evidence ticker source)', () 
     sessionChain({ _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: 'j1' } })
     appUpdateChain(null)
     expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: false })
+  })
+})
+
+describe('saveTailoredVersion (§2 — latest-wins, never a cap seat)', () => {
+  const { gzipSync } = require('zlib')
+  const PAYLOAD = { tailoredText: 'TAILORED', sourceResumeId: 'r1', matchScore: 78, addedKeywords: ['sql'], missingKeywords: ['kafka'] }
+  const PASTE_PAYLOAD = { tailoredText: 'TAILORED', sourceResumeId: undefined, matchScore: 78, addedKeywords: [], missingKeywords: [] }
+  function postingChain(doc: unknown) {
+    mockPostingFindById.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(doc) }) })
+  }
+
+  it('existing row: $set tailoredVersion with jdHash bound to the posting JD', async () => {
+    reset()
+    postingChain({ title: 'SDE', company: 'X', locations: [], provenance: [], status: 'open', jdCompressed: gzipSync(Buffer.from('the jd body')) })
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 1 })
+    const r = await saveTailoredVersion('u1', 'j1', PAYLOAD, NOW)
+    expect(r).toEqual({ ok: true })
+    const [filter, update] = mockAppUpdateOne.mock.calls[0]
+    expect(filter).toEqual({ userId: 'u1', jobPostingId: 'j1' })
+    expect(update.$set.tailoredVersion).toMatchObject({ tailoredText: 'TAILORED', matchScore: 78, createdAt: NOW })
+    expect(update.$set.tailoredVersion.jdHash).toHaveLength(20)
+    expect(mockAppCreate).not.toHaveBeenCalled()
+  })
+
+  it('no row: implicit save — creates at saved WITH the tailored version and pins the posting', async () => {
+    reset()
+    postingChain({ title: 'SDE', company: 'X', locations: ['Pune'], provenance: [{ sourceId: 'jsearch' }], status: 'open', jdCompressed: undefined })
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
+    const r = await saveTailoredVersion('u1', 'j1', PAYLOAD, NOW)
+    expect(r).toEqual({ ok: true })
+    const created = mockAppCreate.mock.calls[0][0]
+    expect(created.status).toBe('saved')
+    expect(created.tailoredVersion.tailoredText).toBe('TAILORED')
+    expect(mockPostingUpdateOne).toHaveBeenCalledWith({ _id: 'j1' }, { $set: { userReferenced: true }, $unset: { purgeAt: 1 } })
+  })
+
+  it('paste-sourced tailors (no sourceResumeId) create cleanly — empty string never reaches Mongoose (Codex P1 #526)', async () => {
+    reset()
+    postingChain({ title: 'SDE', company: 'X', locations: [], provenance: [], status: 'open' })
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
+    const r = await saveTailoredVersion('u1', 'j1', PASTE_PAYLOAD, NOW)
+    expect(r).toEqual({ ok: true })
+    const created = mockAppCreate.mock.calls[0][0]
+    expect(created.tailoredVersion.sourceResumeId).toBeUndefined() // absent, not ''
+    expect('sourceResumeId' in created.tailoredVersion && created.tailoredVersion.sourceResumeId === '').toBe(false)
+  })
+
+  it('missing posting → ok:false; create race falls back to update', async () => {
+    reset()
+    postingChain(null)
+    expect(await saveTailoredVersion('u1', 'gone', PAYLOAD, NOW)).toEqual({ ok: false })
+    reset()
+    postingChain({ title: 'SDE', company: 'X', locations: [], provenance: [], status: 'open' })
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 0 }).mockResolvedValueOnce({ matchedCount: 1 })
+    mockAppCreate.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 11000 }))
+    expect(await saveTailoredVersion('u1', 'j1', PAYLOAD, NOW)).toEqual({ ok: true })
   })
 })
