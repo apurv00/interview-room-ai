@@ -99,14 +99,20 @@ export function isSafeHttpUrl(u: string): boolean {
 }
 
 export function bestApplyTierOf(doc: Pick<IJobPosting, 'provenance'>): ApplyTier | undefined {
-  let best: ApplyTier | undefined
+  // Crowd-healing reaches the FEED too (Codex on #522): a reported rung
+  // must not keep earning the 'Direct application' badge and its rank bonus
+  // while the detail ladder demotes it. Clean rungs win; if every rung is
+  // reported, fall back to the best of them (demote, never hide).
+  let bestClean: ApplyTier | undefined
+  let bestAny: ApplyTier | undefined
   for (const p of doc.provenance ?? []) {
     if (!p.applyUrl || !isSafeHttpUrl(p.applyUrl)) continue // badge honesty: never advertise a path we won't serve
-    if (p.applyTier && (!best || TIER_RANK[p.applyTier as ApplyTier] < TIER_RANK[best])) {
-      best = p.applyTier as ApplyTier
-    }
+    if (!p.applyTier) continue
+    const tier = p.applyTier as ApplyTier
+    if (!bestAny || TIER_RANK[tier] < TIER_RANK[bestAny]) bestAny = tier
+    if (!(p.brokenReportCount ?? 0) && (!bestClean || TIER_RANK[tier] < TIER_RANK[bestClean])) bestClean = tier
   }
-  return best
+  return bestClean ?? bestAny
 }
 
 /** Which of the seeker's skills this posting's TITLE actually evidences —

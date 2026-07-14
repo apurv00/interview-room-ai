@@ -34,7 +34,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   if (!url) return NextResponse.json({ error: 'url required' }, { status: 400 })
 
   await connectDB()
-  await reportBrokenLink(userId, params.id, url)
+  const result = await reportBrokenLink(userId, params.id, url)
+  if (!result.ok) return NextResponse.json({ error: 'no application for this job' }, { status: 404 })
   try {
     await ProductEvent.create({ name: 'jobs.broken_link', userId, jobPostingId: params.id, props: { tier, hadFailover }, ts: new Date() })
   } catch (err) {

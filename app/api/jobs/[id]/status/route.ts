@@ -44,7 +44,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       name: to === 'applied' ? 'jobs.apply_confirmed' : 'jobs.status_changed',
       userId,
       jobPostingId: params.id,
-      props: to === 'applied' ? { latencyMs, viaNudge } : { to, source: 'user' },
+      props: to === 'applied' ? { latencyMs, viaNudge, from: result.from } : { from: result.from, to, source: 'user' },
       ts: new Date(),
     })
   } catch (err) {

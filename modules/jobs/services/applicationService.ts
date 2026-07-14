@@ -53,16 +53,21 @@ export async function transitionStatus(
   jobPostingId: string,
   to: UserSettableStatus,
   now = new Date()
-): Promise<{ ok: boolean; status?: string }> {
+): Promise<{ ok: boolean; status?: string; from?: string }> {
   if (!(USER_SETTABLE_STATUSES as readonly string[]).includes(to)) return { ok: false }
-  const res = await JobApplication.updateOne(
+  // findOneAndUpdate returns the PRE-update doc — the event vocabulary
+  // promises jobs.status_changed{from,to,source}, and in a loose machine
+  // `from` is what distinguishes a forward move from a correction
+  // (Codex on #522).
+  const prev = await JobApplication.findOneAndUpdate(
     { userId, jobPostingId },
     {
       $set: { status: to, ...(to === 'applied' ? { appliedAt: now } : {}) },
       $push: { statusHistory: { status: to, at: now, source: 'user' } },
-    }
+    },
+    { new: false }
   )
-  return (res?.matchedCount ?? 0) > 0 ? { ok: true, status: to } : { ok: false }
+  return prev ? { ok: true, status: to, from: prev.status } : { ok: false }
 }
 
 /**
@@ -76,10 +81,15 @@ export async function reportBrokenLink(
   url: string,
   now = new Date()
 ): Promise<{ ok: boolean }> {
-  await JobApplication.updateOne(
+  // The per-application record is the PREREQUISITE for the global demotion
+  // (Codex on #522): a scripted client with no tracker row must not be able
+  // to sink any visible rung for everyone. No matched application = no
+  // posting-level $inc, report rejected.
+  const app = await JobApplication.updateOne(
     { userId, jobPostingId },
     { $push: { brokenLinkReports: { url: url.slice(0, 2000), reportedAt: now } } }
   )
+  if ((app?.matchedCount ?? 0) === 0) return { ok: false }
   await JobPosting.updateOne(
     { _id: jobPostingId, 'provenance.applyUrl': url },
     { $inc: { 'provenance.$.brokenReportCount': 1 } }
