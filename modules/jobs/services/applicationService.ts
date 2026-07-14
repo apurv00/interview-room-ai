@@ -1,4 +1,6 @@
+import { gunzipSync } from 'zlib'
 import { JobApplication, JobPosting, InterviewSession } from '@shared/db/models'
+import { xrayHashOf } from './xrayService'
 
 /**
  * Application state transitions (PRODUCT_FLOW §2). `apply_clicked` is a
@@ -40,6 +42,58 @@ export async function claimAtsRun(
 /** Rollback for a claim whose enqueue failed — the next click must work. */
 export async function releaseAtsClaim(userId: string, jobPostingId: string): Promise<void> {
   await JobApplication.updateOne({ userId, jobPostingId }, { $unset: { atsRequestedAt: 1 } }).catch(() => {})
+}
+
+/**
+ * Tailored-version persist (§2, Wave 4.5): latest-wins on the application
+ * row — NEVER counted against the 3-resume cap (savedResumes is a doc-size
+ * bound; the application absorbs per-job volume). Tailoring without a row
+ * implicitly saves the job (strongest save signal); jdHash binds the
+ * version to the JD it was tailored against.
+ */
+export async function saveTailoredVersion(
+  userId: string,
+  jobPostingId: string,
+  payload: { tailoredText: string; sourceResumeId: string; matchScore?: number; addedKeywords: string[]; missingKeywords: string[] },
+  now = new Date()
+): Promise<{ ok: boolean }> {
+  const posting = await JobPosting.findById(jobPostingId).select('title company locations provenance status jdCompressed').lean()
+  if (!posting) return { ok: false }
+  let jdHash = ''
+  try {
+    const buf = posting.jdCompressed as Buffer | undefined
+    const jd = buf?.length ? gunzipSync(Buffer.isBuffer(buf) ? buf : Buffer.from((buf as { buffer: ArrayBufferLike }).buffer as ArrayBuffer)).toString('utf8') : ''
+    if (jd) jdHash = xrayHashOf(jd)
+  } catch { /* no jd → empty hash */ }
+
+  const tailoredVersion = { ...payload, jdHash, createdAt: now }
+  const res = await JobApplication.updateOne({ userId, jobPostingId }, { $set: { tailoredVersion } })
+  if ((res?.matchedCount ?? 0) > 0) return { ok: true }
+
+  // No row yet: implicit save (mirrors the save route's create + pin).
+  await JobPosting.updateOne({ _id: jobPostingId }, { $set: { userReferenced: true }, $unset: { purgeAt: 1 } })
+  try {
+    await JobApplication.create({
+      userId,
+      jobPostingId,
+      jobSnapshot: {
+        title: posting.title,
+        company: posting.company,
+        location: (posting.locations ?? [])[0] ?? '',
+        source: posting.provenance?.[0]?.sourceId ?? 'unknown',
+      },
+      status: 'saved',
+      statusHistory: [{ status: 'saved', at: now, source: 'user' }],
+      tailoredVersion,
+    })
+  } catch (err) {
+    if ((err as { code?: number })?.code === 11000) {
+      await JobApplication.updateOne({ userId, jobPostingId }, { $set: { tailoredVersion } })
+    } else {
+      throw err
+    }
+  }
+  return { ok: true }
 }
 
 /** Statuses a USER may set (loose machine: forward jumps and backward

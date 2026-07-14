@@ -63,6 +63,8 @@ export default function JobsPage() {
   const [target, setTarget] = useState<JobsTarget | null>(null)
   const [targetLoaded, setTargetLoaded] = useState(false)
   const [capNotice, setCapNotice] = useState(false)
+  const [quickWins, setQuickWins] = useState<{ count: number; resumeId?: string } | null>(null)
+  const [winsDismissed, setWinsDismissed] = useState(false)
 
   // The confirm bar's output (sessionStorage — dies with the tab; a
   // stranger's resume structure never persists server-side).
@@ -76,8 +78,19 @@ export default function JobsPage() {
       }
     } catch { /* private mode / corrupt entry — Tier-A feed */ }
     try { setCapNotice(sessionStorage.getItem('JOBS_CAP_NOTICE') === '1') } catch { /* noop */ }
+    try { setWinsDismissed(sessionStorage.getItem('JOBS_WINS_DISMISSED') === '1') } catch { /* noop */ }
     setTargetLoaded(true)
+    // Quick wins (package 10, zero LLM): 401 = anon, card hides.
+    fetch('/api/jobs/quick-wins')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d) setQuickWins(d) })
+      .catch(() => {})
   }, [])
+
+  function dismissWins() {
+    setWinsDismissed(true)
+    try { sessionStorage.setItem('JOBS_WINS_DISMISSED', '1') } catch { /* noop */ }
+  }
 
   function dismissCapNotice() {
     setCapNotice(false)
@@ -154,6 +167,16 @@ export default function JobsPage() {
           Filter
         </button>
       </form>
+
+      {quickWins && quickWins.count >= 2 && !winsDismissed && (
+        <div className="mt-4 flex items-start justify-between rounded-xl border p-3 text-sm">
+          <p>
+            Resume: <span className="font-medium">{quickWins.count} quick wins</span> — small fixes, better matches.{' '}
+            <Link href={`/resume/builder${quickWins.resumeId ? `?id=${quickWins.resumeId}` : ''}`} className="text-blue-600 underline">Fix in builder</Link>
+          </p>
+          <button onClick={dismissWins} aria-label="Dismiss" className="ml-3 text-gray-500 hover:text-gray-700">✕</button>
+        </div>
+      )}
 
       {capNotice && (
         <div className="mt-4 flex items-start justify-between rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950">
