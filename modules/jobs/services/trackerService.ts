@@ -74,24 +74,51 @@ export async function getTracker(userId: string, now = new Date()): Promise<Trac
       (GHOSTABLE_STATUSES as readonly string[]).includes(a.status) &&
       now.getTime() - lastActivityAt(a).getTime() > GHOST_AFTER_DAYS * 24 * 3600_000
   )
+  let autoGhosted = 0
   if (toGhost.length) {
-    await JobApplication.updateMany(
-      { _id: { $in: toGhost.map((a) => a._id) }, status: { $in: GHOSTABLE_STATUSES as unknown as string[] } }, // status in filter: never race a fresher move
-      {
-        $set: { status: 'ghosted', ghostSuggestedAt: now },
-        $push: { statusHistory: { status: 'ghosted', at: now, source: 'system' } },
-      }
+    // Per-row OPTIMISTIC token, not a status re-check (Codex on #523): a
+    // user confirming an old apply_clicked as `applied` mid-read leaves the
+    // row still ghostable — only `updatedAt` unchanged since OUR snapshot
+    // proves nothing fresher landed. Contested rows simply don't match.
+    const res = await JobApplication.bulkWrite(
+      toGhost.map((a) => ({
+        updateOne: {
+          filter: { _id: a._id, updatedAt: a.updatedAt },
+          update: {
+            $set: { status: 'ghosted', ghostSuggestedAt: now },
+            $push: { statusHistory: { status: 'ghosted', at: now, source: 'system' } },
+          },
+        },
+      }))
     )
-    try {
-      await ProductEvent.create({ name: 'jobs.ghost_auto', userId, props: { count: toGhost.length }, ts: now })
-    } catch (err) {
-      logger.warn({ err }, 'ghost_auto telemetry write failed')
+    autoGhosted = res?.modifiedCount ?? 0
+    if (autoGhosted > 0) {
+      try {
+        await ProductEvent.create({ name: 'jobs.ghost_auto', userId, props: { count: autoGhosted }, ts: now })
+      } catch (err) {
+        logger.warn({ err }, 'ghost_auto telemetry write failed')
+      }
     }
-    const ghostedIds = new Set(toGhost.map((a) => String(a._id)))
-    for (const a of apps) {
-      if (ghostedIds.has(String(a._id))) {
-        a.status = 'ghosted'
-        a.statusHistory = [...(a.statusHistory ?? []), { status: 'ghosted', at: now, source: 'system' } as never]
+    if (autoGhosted === toGhost.length) {
+      const ghostedIds = new Set(toGhost.map((a) => String(a._id)))
+      for (const a of apps) {
+        if (ghostedIds.has(String(a._id))) {
+          a.status = 'ghosted'
+          a.statusHistory = [...(a.statusHistory ?? []), { status: 'ghosted', at: now, source: 'system' } as never]
+        }
+      }
+    } else {
+      // Rare contested race: render the TRUTH, not our assumption.
+      const fresh = await JobApplication.find({ _id: { $in: toGhost.map((a) => a._id) } })
+        .select('status statusHistory')
+        .lean()
+      const byId = new Map(fresh.map((f) => [String(f._id), f]))
+      for (const a of apps) {
+        const f = byId.get(String(a._id))
+        if (f) {
+          a.status = f.status
+          a.statusHistory = f.statusHistory
+        }
       }
     }
   }
@@ -137,7 +164,7 @@ export async function getTracker(userId: string, now = new Date()): Promise<Trac
           clickedAgoHours: Math.floor((now.getTime() - lastActivityAt(candidate).getTime()) / 3600_000),
         }
       : null,
-    autoGhosted: toGhost.length,
+    autoGhosted,
   }
 }
 

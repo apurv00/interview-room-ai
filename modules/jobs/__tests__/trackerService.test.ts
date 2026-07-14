@@ -1,13 +1,13 @@
 import { describe, it, expect, vi } from 'vitest'
 
-const { mockFind, mockUpdateMany, mockUpdateOne, mockEventCreate } = vi.hoisted(() => ({
+const { mockFind, mockBulkWrite, mockUpdateOne, mockEventCreate } = vi.hoisted(() => ({
   mockFind: vi.fn(),
-  mockUpdateMany: vi.fn(),
+  mockBulkWrite: vi.fn(),
   mockUpdateOne: vi.fn(),
   mockEventCreate: vi.fn(),
 }))
 vi.mock('@shared/db/models', () => ({
-  JobApplication: { find: mockFind, updateMany: mockUpdateMany, updateOne: mockUpdateOne },
+  JobApplication: { find: mockFind, bulkWrite: mockBulkWrite, updateOne: mockUpdateOne },
   ProductEvent: { create: mockEventCreate },
 }))
 vi.mock('@shared/logger', () => ({ logger: { warn: vi.fn() } }))
@@ -37,14 +37,16 @@ function app(over: Record<string, unknown> = {}) {
 }
 
 function chain(apps: unknown[]) {
+  // main tracker query: select→sort→limit→lean; the contested-race refetch
+  // uses select→lean and is mocked per-test with mockReturnValueOnce.
   mockFind.mockReturnValue({
     select: () => ({ sort: () => ({ limit: () => ({ lean: () => Promise.resolve(apps) }) }) }),
   })
 }
 
 function reset() {
-  for (const m of [mockFind, mockUpdateMany, mockUpdateOne, mockEventCreate]) m.mockReset()
-  mockUpdateMany.mockResolvedValue({})
+  for (const m of [mockFind, mockBulkWrite, mockUpdateOne, mockEventCreate]) m.mockReset()
+  mockBulkWrite.mockImplementation(async (ops: unknown[]) => ({ modifiedCount: (ops as unknown[]).length }))
   mockUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mockEventCreate.mockResolvedValue({})
 }
@@ -90,21 +92,36 @@ describe('getTracker (Wave 4.2 — all time logic at read time)', () => {
     chain([stale, fresh, savedOld])
     const v = await getTracker('u1', NOW)
     expect(v.autoGhosted).toBe(1)
-    const [filter, update] = mockUpdateMany.mock.calls[0]
-    expect(filter._id.$in).toEqual([stale._id])
-    expect(filter.status.$in).toEqual(['apply_clicked', 'applied']) // race guard: a fresher move wins
-    expect(update.$set.status).toBe('ghosted')
-    expect(update.$push.statusHistory).toMatchObject({ status: 'ghosted', source: 'system' })
+    const ops = mockBulkWrite.mock.calls[0][0]
+    expect(ops).toHaveLength(1)
+    // per-row OPTIMISTIC token: updatedAt from OUR snapshot, not a status re-check
+    expect(ops[0].updateOne.filter).toEqual({ _id: stale._id, updatedAt: stale.updatedAt })
+    expect(ops[0].updateOne.update.$set.status).toBe('ghosted')
+    expect(ops[0].updateOne.update.$push.statusHistory).toMatchObject({ status: 'ghosted', source: 'system' })
     const ghostGroup = v.groups.find((g) => g.status === 'ghosted')
     expect(ghostGroup?.count).toBe(1)
     expect(mockEventCreate.mock.calls[0][0]).toMatchObject({ name: 'jobs.ghost_auto', props: { count: 1 } })
+  })
+
+  it('a CONTESTED row (user moved it mid-read) is never stomped — truth re-read, no telemetry (Codex #523)', async () => {
+    reset()
+    const contested = app({ statusHistory: [{ status: 'applied', at: daysAgo(36), source: 'user' }] })
+    chain([contested])
+    mockBulkWrite.mockResolvedValueOnce({ modifiedCount: 0 }) // updatedAt token mismatched — a fresher move won
+    mockFind.mockReturnValueOnce({ select: () => ({ sort: () => ({ limit: () => ({ lean: () => Promise.resolve([contested]) }) }) }) })
+    mockFind.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve([{ _id: contested._id, status: 'applied', statusHistory: [{ status: 'applied', at: NOW, source: 'user' }] }]) }) })
+    const v = await getTracker('u1', NOW)
+    expect(v.autoGhosted).toBe(0)
+    expect(v.groups.find((g) => g.status === 'ghosted')).toBeUndefined()
+    expect(v.groups.find((g) => g.status === 'applied')?.count).toBe(1) // the user's fresh claim survives
+    expect(mockEventCreate).not.toHaveBeenCalled()
   })
 
   it('no crossings → no bulk write at all', async () => {
     reset()
     chain([app()])
     await getTracker('u1', NOW)
-    expect(mockUpdateMany).not.toHaveBeenCalled()
+    expect(mockBulkWrite).not.toHaveBeenCalled()
   })
 
   it('confirm card: freshest apply_clicked row inside 20h-7d, gated by the ask budget', async () => {
