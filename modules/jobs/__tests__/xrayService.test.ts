@@ -12,7 +12,7 @@ vi.mock('@interview', () => ({ parseJobDescription: mockParse }))
 import { getOrParseXray, xrayHashOf } from '../services/xrayService'
 
 const JD = 'Build and operate distributed payment services at scale. Must have Node.js.'
-const EXTRACTED = { company: 'PhonePe', role: 'Backend Engineer', inferredDomain: 'backend', requirements: [], keyThemes: ['payments'] }
+const EXTRACTED = { company: 'PhonePe', role: 'Backend Engineer', inferredDomain: 'backend', requirements: [{ id: 'req_1', category: 'technical', requirement: 'Node.js', importance: 'must-have', targetCompetencies: [] }], keyThemes: ['payments'] }
 const PARSED = { rawText: JD, ...EXTRACTED } // what the parser returns; rawText must never persist
 
 function chain(doc: unknown) {
@@ -64,6 +64,19 @@ describe('getOrParseXray (ONE parse per posting, keyed by jdHash)', () => {
     const r = await getOrParseXray('j1')
     expect(r!.cached).toBe(true)
     expect(mockParse).not.toHaveBeenCalled()
+  })
+
+  it('an all-empty fallback parse is served but NEVER cached — a later view retries (Codex #518)', async () => {
+    reset()
+    mockParse.mockResolvedValue({ rawText: JD, company: '', role: '', inferredDomain: '', requirements: [], keyThemes: [] })
+    chain({ _id: 'j1', status: 'open', jdCompressed: gzipSync(Buffer.from(JD)) })
+    const r = await getOrParseXray('j1')
+    expect(r!.cached).toBe(false)
+    expect(mockUpdateOne).not.toHaveBeenCalled() // nothing pinned to the hash
+    // the next view gets a fresh attempt
+    chain({ _id: 'j1', status: 'open', jdCompressed: gzipSync(Buffer.from(JD)) })
+    await getOrParseXray('j1')
+    expect(mockParse).toHaveBeenCalledTimes(2)
   })
 
   it('closed postings are NOT X-ray-able — aligned with the detail 404 (Codex #518)', async () => {

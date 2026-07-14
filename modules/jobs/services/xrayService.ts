@@ -63,6 +63,14 @@ export async function getOrParseXray(jobPostingId: string): Promise<XrayResult |
   }
 
   const { rawText: _omit, ...extracted } = await parseJobDescription(jd)
-  await JobPosting.updateOne({ _id: jobPostingId }, { $set: { parsedJD: extracted, parsedJDHash: hash } })
+  // The parser NEVER throws — model/JSON failures return an all-empty
+  // fallback (no requirements, no themes). Caching that would pin a blank
+  // X-ray to this hash forever; serve it for THIS view but leave the row
+  // unparsed so a later view retries (Codex on #518). A genuine parse of a
+  // real JD always carries at least one requirement or theme.
+  const isFallback = extracted.requirements.length === 0 && extracted.keyThemes.length === 0
+  if (!isFallback) {
+    await JobPosting.updateOne({ _id: jobPostingId }, { $set: { parsedJD: extracted, parsedJDHash: hash } })
+  }
   return { parsed: extracted, cached: false }
 }
