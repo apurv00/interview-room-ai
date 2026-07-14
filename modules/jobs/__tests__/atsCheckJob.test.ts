@@ -38,7 +38,7 @@ const EVENT = { data: { userId: 'u1', jobPostingId: 'j1', claimedAt: CLAIMED } }
 function reset(app: unknown = { _id: 'app1', atsResult: undefined }) {
   for (const m of [mockAppFindOne, mockAppUpdateOne, mockPostingFindById, mockUsageCreate, mockEventCreate, mockCheckATS, mockGetBase, mockGetResume]) m.mockReset()
   mockAppFindOne.mockResolvedValue(app)
-  mockAppUpdateOne.mockResolvedValue({})
+  mockAppUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mockPostingFindById.mockReturnValue({ select: () => ({ lean: () => Promise.resolve({ jdCompressed: gzipSync(Buffer.from(JD)) }) }) })
   mockGetBase.mockResolvedValue({ id: 'base-1', name: 'Base Resume — QA', targetRole: 'QA', skills: [] })
   mockGetResume.mockResolvedValue({ fullText: 'MY RESUME TEXT' })
@@ -53,12 +53,12 @@ describe('runAtsCheckHandler (Save-gated background one-shot)', () => {
     const r = await runAtsCheckHandler(EVENT, step)
     expect(r).toEqual({ done: true, score: 72, cached: false })
     expect(mockCheckATS).toHaveBeenCalledWith({ resumeText: 'MY RESUME TEXT', jobDescription: JD })
-    const update = mockAppUpdateOne.mock.calls[0][1]
+    // ONE claim-scoped atomic write: result + marker clear together, filtered
+    // on the claim this run owns
+    const [writeFilter, update] = mockAppUpdateOne.mock.calls[0]
+    expect(writeFilter).toEqual({ _id: 'app1', atsRequestedAt: new Date(CLAIMED) })
     expect(update.$set.atsResult).toMatchObject({ score: 72, missingKeywords: ['sql', 'kafka'], jdHash: xrayHashOf(JD), resumeHash: xrayHashOf('MY RESUME TEXT') })
-    // marker clear is CLAIM-SCOPED: only the run's own claim is unset
-    const [clearFilter, clearUpdate] = mockAppUpdateOne.mock.calls[1]
-    expect(clearFilter).toEqual({ _id: 'app1', atsRequestedAt: new Date(CLAIMED) })
-    expect(clearUpdate).toEqual({ $unset: { atsRequestedAt: 1 } })
+    expect(update.$unset).toEqual({ atsRequestedAt: 1 })
     expect(mockUsageCreate).toHaveBeenCalledWith({ userId: 'u1', type: 'ats_check' })
     expect(mockEventCreate.mock.calls[0][0]).toMatchObject({ name: 'jobs.ats_score_landed', props: { score: 72 } })
   })
@@ -76,6 +76,15 @@ describe('runAtsCheckHandler (Save-gated background one-shot)', () => {
     const r = await runAtsCheckHandler(EVENT, step)
     expect(r).toMatchObject({ done: true, cached: false })
     expect(mockCheckATS).toHaveBeenCalledTimes(1)
+  })
+
+  it('a SUPERSEDED run (claim reclaimed mid-flight) writes nothing — no result, no quota, no event', async () => {
+    reset()
+    mockAppUpdateOne.mockResolvedValue({ matchedCount: 0 }) // newer claim owns the marker now
+    const r = await runAtsCheckHandler(EVENT, step)
+    expect(r).toEqual({ skipped: 'superseded' })
+    expect(mockUsageCreate).not.toHaveBeenCalled()
+    expect(mockEventCreate).not.toHaveBeenCalled()
   })
 
   it('a CHANGED JD (hash mismatch) legitimately re-runs the check', async () => {

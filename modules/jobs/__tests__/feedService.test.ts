@@ -1,11 +1,16 @@
 import { describe, it, expect, vi } from 'vitest'
 import { gzipSync } from 'zlib'
 
-const { mockFind, mockFindById, mockAppFindOne } = vi.hoisted(() => ({ mockFind: vi.fn(), mockFindById: vi.fn(), mockAppFindOne: vi.fn() }))
+const { mockFind, mockFindById, mockAppFindOne, mockGetBase, mockGetResume } = vi.hoisted(() => ({ mockFind: vi.fn(), mockFindById: vi.fn(), mockAppFindOne: vi.fn(), mockGetBase: vi.fn(), mockGetResume: vi.fn() }))
 vi.mock('@shared/db/models', () => ({
   JobPosting: { find: mockFind, findById: mockFindById },
   JobApplication: { findOne: mockAppFindOne },
 }))
+vi.mock('../services/baseResumeService', () => ({ getBaseResume: mockGetBase }))
+vi.mock('@resume', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@resume')>()
+  return { ...real, getResume: mockGetResume }
+})
 
 import { tierAScore, tierBScore, matchedSkillsOf, bestApplyTierOf, getFeed, getJobDetail } from '../services/feedService'
 import { xrayHashOf } from '../services/xrayService'
@@ -205,6 +210,24 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ status: 'apply_clicked', practiceSessionIds: ['a', 'b', 'c', 'd', 'e'] }) }) })
     const d = await getJobDetail('j1', 'u1')
     if (!d!.gated) expect(d!.application).toEqual({ status: 'apply_clicked', practiceCount: 3, ats: { state: 'none' } }) // practiceCount capped at 3
+  })
+
+  it('a stale-RESUME atsResult re-opens the check even when the JD matches (Codex #521 round-5)', async () => {
+    const { gzipSync } = await import('zlib')
+    const JD = 'Build services with Node.js at scale, and then some more content here.'
+    const base = doc({ jdCompressed: gzipSync(Buffer.from(JD)) })
+    mockGetBase.mockResolvedValue({ id: 'base-1', name: 'Base', targetRole: 'QA', skills: [] })
+    mockGetResume.mockResolvedValue({ fullText: 'EDITED RESUME TEXT' })
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(base) })
+    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ status: 'saved', practiceSessionIds: [], atsResult: { score: 70, missingKeywords: [], jdHash: xrayHashOf(JD), resumeHash: xrayHashOf('OLD RESUME TEXT'), checkedAt: new Date() } }) }) })
+    const d1 = await getJobDetail('j1', 'u1')
+    if (!d1!.gated) expect(d1!.application!.ats.state).toBe('none')
+    // matching resume → done
+    mockGetResume.mockResolvedValue({ fullText: 'OLD RESUME TEXT' })
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(base) })
+    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ status: 'saved', practiceSessionIds: [], atsResult: { score: 70, missingKeywords: [], jdHash: xrayHashOf(JD), resumeHash: xrayHashOf('OLD RESUME TEXT'), checkedAt: new Date() } }) }) })
+    const d2 = await getJobDetail('j1', 'u1')
+    if (!d2!.gated) expect(d2!.application!.ats).toMatchObject({ state: 'done', score: 70 })
   })
 
   it('a stale-JD atsResult re-opens the check; the current JD stays done (Codex #521)', async () => {

@@ -82,13 +82,20 @@ export async function runAtsCheckHandler(
       const result = await checkATS({ resumeText, jobDescription: jd })
       const score = (result as { score?: number })?.score ?? 0
       const missing = ((result as { keywords?: { missing?: string[] } })?.keywords?.missing ?? []).slice(0, 20)
-      // Result write is unconditional (last computation wins — both runs saw
-      // live DB state); the marker clear stays claim-scoped.
-      await JobApplication.updateOne(
-        { _id: app._id },
-        { $set: { atsResult: { score, missingKeywords: missing, jdHash, resumeHash, checkedAt: new Date() } } }
+      // ONE claim-scoped atomic write: result + marker clear land only for
+      // the run that still owns the claim. A superseded run (its claim
+      // reclaimed while it executed past the stale window) matches nothing —
+      // it must not overwrite the newer run's result (Codex on #521 round-5).
+      const write = await JobApplication.updateOne(
+        claimedAt ? { _id: app._id, atsRequestedAt: claimedAt } : { _id: app._id },
+        {
+          $set: { atsResult: { score, missingKeywords: missing, jdHash, resumeHash, checkedAt: new Date() } },
+          $unset: { atsRequestedAt: 1 },
+        }
       )
-      await clearOwnClaim()
+      if ((write?.matchedCount ?? 1) === 0) {
+        return { skipped: 'superseded' as const } // no result, no quota record, no event
+      }
       try {
         await UsageRecord.create({ userId, type: 'ats_check' })
         await ProductEvent.create({ name: 'jobs.ats_score_landed', userId, jobPostingId, props: { score }, ts: new Date() })

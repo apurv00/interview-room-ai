@@ -3,6 +3,8 @@ import { JobPosting, JobApplication, type IJobPosting } from '@shared/db/models'
 import { TIER_RANK, type ApplyTier } from '../config/spamRules'
 import { locationKey, titleJaccard } from './identityResolver'
 import { xrayHashOf } from './xrayService'
+import { getBaseResume } from './baseResumeService'
+import { getResume } from '@resume'
 
 /**
  * Feed serving (PRODUCT_FLOW §1 Stage 0, Wave 3.1) — Tier-A DETERMINISTIC
@@ -270,12 +272,19 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
     .map((p) => ({ url: p.applyUrl as string, tier: p.applyTier as ApplyTier, viaSite: p.viaSite }))
     .sort((a, b) => TIER_RANK[a.tier] - TIER_RANK[b.tier])
   const app = await JobApplication.findOne({ userId, jobPostingId: id }).select('status practiceSessionIds atsResult atsRequestedAt').lean()
-  // An atsResult is 'done' only for the CURRENT JD (Codex on #521): a merge
-  // that replaced jdCompressed must re-open the check — comparing the stored
-  // jdHash against the body we just decompressed is what re-surfaces the
-  // button. A JD-less posting keeps its historical score (nothing to
-  // re-run against).
-  const atsCurrent = !!app?.atsResult && (!jd || app.atsResult.jdHash === xrayHashOf(jd))
+  // An atsResult is 'done' only for the CURRENT (resume x JD) pair (Codex
+  // on #521): a JD merge OR a resume edit re-opens the check. The resume
+  // comparison costs two User reads, so it runs only on the narrow path
+  // where a result exists and the JD already matches. Rows with nothing to
+  // compare against (legacy result without resumeHash, or the resume
+  // deleted since) keep the historical score — better than a dead button.
+  let atsCurrent = !!app?.atsResult && (!jd || app.atsResult.jdHash === xrayHashOf(jd))
+  if (atsCurrent && app?.atsResult?.resumeHash) {
+    const base = await getBaseResume(userId)
+    const full = base ? await getResume(userId, base.id) : null
+    const resumeText = (full as { fullText?: string } | null)?.fullText ?? ''
+    if (resumeText) atsCurrent = app.atsResult.resumeHash === xrayHashOf(resumeText)
+  }
   return {
     ...shellOf(doc as IJobPosting),
     gated: false,
