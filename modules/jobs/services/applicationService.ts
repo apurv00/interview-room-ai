@@ -42,6 +42,68 @@ export async function releaseAtsClaim(userId: string, jobPostingId: string): Pro
   await JobApplication.updateOne({ userId, jobPostingId }, { $unset: { atsRequestedAt: 1 } }).catch(() => {})
 }
 
+/** Statuses a USER may set (loose machine: forward jumps and backward
+ *  corrections both allowed; ghosted/rejected recoverable). apply_clicked
+ *  is the MACHINE fact and is never user-settable. */
+export const USER_SETTABLE_STATUSES = ['saved', 'applied', 'interview_scheduled', 'offer', 'rejected', 'ghosted', 'withdrawn'] as const
+export type UserSettableStatus = (typeof USER_SETTABLE_STATUSES)[number]
+
+export async function transitionStatus(
+  userId: string,
+  jobPostingId: string,
+  to: UserSettableStatus,
+  now = new Date()
+): Promise<{ ok: boolean; status?: string; from?: string }> {
+  if (!(USER_SETTABLE_STATUSES as readonly string[]).includes(to)) return { ok: false }
+  // findOneAndUpdate returns the PRE-update doc — the event vocabulary
+  // promises jobs.status_changed{from,to,source}, and in a loose machine
+  // `from` is what distinguishes a forward move from a correction
+  // (Codex on #522).
+  const prev = await JobApplication.findOneAndUpdate(
+    { userId, jobPostingId },
+    {
+      $set: { status: to, ...(to === 'applied' ? { appliedAt: now } : {}) },
+      $push: { statusHistory: { status: to, at: now, source: 'user' } },
+    },
+    { new: false }
+  )
+  return prev ? { ok: true, status: to, from: prev.status } : { ok: false }
+}
+
+/**
+ * Broken-link report (§4b): recorded on the application AND counted on the
+ * posting's provenance entry — one user's dead click demotes that rung for
+ * everyone (heals, never hides; the ladder sort sinks rungs with reports).
+ */
+export async function reportBrokenLink(
+  userId: string,
+  jobPostingId: string,
+  url: string,
+  now = new Date()
+): Promise<{ ok: boolean }> {
+  // The demotion predicate is a RECORDED DEAD CLICK, not mere row existence
+  // (Codex on #522 rounds 2+4): a saved-only row (no click ever) must not
+  // unlock posting-level demotion — the application must carry the machine
+  // fact (statusHistory contains apply_clicked) before its report counts.
+  // URL equality is deliberately NOT required: the snapshot stores only the
+  // FIRST click's URL, and reports against alternate rungs are legitimate.
+  const app = await JobApplication.updateOne(
+    { userId, jobPostingId, 'statusHistory.status': 'apply_clicked' },
+    { $push: { brokenLinkReports: { url: url.slice(0, 2000), reportedAt: now } } }
+  )
+  if ((app?.matchedCount ?? 0) === 0) return { ok: false }
+  // arrayFilters, not positional $: the merge appends provenance by
+  // sourceKey, so ONE dead URL can sit in several rungs — the positional
+  // operator updated only the first, leaving a clean twin ranked ahead of
+  // the failover (Codex on #522 round-3).
+  await JobPosting.updateOne(
+    { _id: jobPostingId, 'provenance.applyUrl': url },
+    { $inc: { 'provenance.$[elem].brokenReportCount': 1 } },
+    { arrayFilters: [{ 'elem.applyUrl': url }] }
+  )
+  return { ok: true }
+}
+
 export interface ApplyClickResult {
   status: string
   created: boolean

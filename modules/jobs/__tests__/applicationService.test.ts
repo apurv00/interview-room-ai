@@ -1,23 +1,24 @@
 import { describe, it, expect, vi } from 'vitest'
 
-const { mockPostingFindById, mockPostingUpdateOne, mockAppFindOne, mockAppUpdateOne, mockAppCreate } = vi.hoisted(() => ({
+const { mockPostingFindById, mockPostingUpdateOne, mockAppFindOne, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate } = vi.hoisted(() => ({
   mockPostingFindById: vi.fn(),
   mockPostingUpdateOne: vi.fn(),
   mockAppFindOne: vi.fn(),
   mockAppUpdateOne: vi.fn(),
   mockAppCreate: vi.fn(),
+  mockAppFindOneAndUpdate: vi.fn(),
 }))
 vi.mock('@shared/db/models', () => ({
   JobPosting: { findById: mockPostingFindById, updateOne: mockPostingUpdateOne },
-  JobApplication: { findOne: mockAppFindOne, updateOne: mockAppUpdateOne, create: mockAppCreate },
+  JobApplication: { findOne: mockAppFindOne, updateOne: mockAppUpdateOne, create: mockAppCreate, findOneAndUpdate: mockAppFindOneAndUpdate },
 }))
 
-import { recordApplyClick, claimAtsRun } from '../services/applicationService'
+import { recordApplyClick, claimAtsRun, transitionStatus, reportBrokenLink } from '../services/applicationService'
 
 const NOW = new Date('2026-07-14T12:00:00Z')
 
 function reset(posting: unknown = { title: 'SDE', company: 'PhonePe', locations: ['Pune'], provenance: [{ sourceId: 'jsearch' }], status: 'open' }) {
-  for (const m of [mockPostingFindById, mockPostingUpdateOne, mockAppFindOne, mockAppUpdateOne, mockAppCreate]) m.mockReset()
+  for (const m of [mockPostingFindById, mockPostingUpdateOne, mockAppFindOne, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate]) m.mockReset()
   mockPostingFindById.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(posting) }) })
   mockPostingUpdateOne.mockResolvedValue({})
   mockAppUpdateOne.mockResolvedValue({})
@@ -100,5 +101,58 @@ describe('claimAtsRun (atomic single-enqueue claim, Codex #521)', () => {
     await claimAtsRun('u1', 'j1', now)
     const [filter] = mockAppUpdateOne.mock.calls[0]
     expect(filter.$or[1].atsRequestedAt.$lt).toEqual(new Date('2026-07-14T11:57:00Z'))
+  })
+})
+
+describe('transitionStatus (user claims — loose machine, §2)', () => {
+  it('applied sets appliedAt + a user-source history entry, and reports the FROM status', async () => {
+    reset()
+    mockAppFindOneAndUpdate.mockResolvedValueOnce({ status: 'apply_clicked' })
+    const r = await transitionStatus('u1', 'j1', 'applied', NOW)
+    expect(r).toEqual({ ok: true, status: 'applied', from: 'apply_clicked' })
+    const [, update] = mockAppFindOneAndUpdate.mock.calls[0]
+    expect(update.$set).toEqual({ status: 'applied', appliedAt: NOW })
+    expect(update.$push.statusHistory).toMatchObject({ status: 'applied', source: 'user' })
+  })
+
+  it('backward corrections and recoveries are allowed; machine-only apply_clicked is not settable', async () => {
+    reset()
+    mockAppFindOneAndUpdate.mockResolvedValue({ status: 'applied' })
+    expect((await transitionStatus('u1', 'j1', 'saved', NOW)).ok).toBe(true) // backward correction
+    expect((await transitionStatus('u1', 'j1', 'ghosted', NOW)).ok).toBe(true)
+    expect((await transitionStatus('u1', 'j1', 'apply_clicked' as never, NOW)).ok).toBe(false)
+    expect((await transitionStatus('u1', 'j1', 'nonsense' as never, NOW)).ok).toBe(false)
+  })
+
+  it('no application row → ok:false (route 404s)', async () => {
+    reset()
+    mockAppFindOneAndUpdate.mockResolvedValueOnce(null)
+    expect((await transitionStatus('u1', 'j1', 'applied', NOW)).ok).toBe(false)
+  })
+})
+
+describe('reportBrokenLink (§4b crowd healing)', () => {
+  it('NO recorded click (missing row OR saved-only) → rejected, demotion never fires (Codex #522)', async () => {
+    reset()
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 0 }) // covers both: no row, and a row without apply_clicked in history
+    const r = await reportBrokenLink('u1', 'j1', 'https://dead.example/apply', NOW)
+    expect(r).toEqual({ ok: false })
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+    // the filter itself demands the machine fact
+    expect(mockAppUpdateOne.mock.calls[0][0]).toMatchObject({ 'statusHistory.status': 'apply_clicked' })
+  })
+
+  it('records on the application AND increments the matching provenance rung', async () => {
+    reset()
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 1 })
+    await reportBrokenLink('u1', 'j1', 'https://dead.example/apply', NOW)
+    const [appFilter, appUpdate] = mockAppUpdateOne.mock.calls[0]
+    expect(appFilter).toEqual({ userId: 'u1', jobPostingId: 'j1', 'statusHistory.status': 'apply_clicked' })
+    expect(appUpdate.$push.brokenLinkReports).toMatchObject({ url: 'https://dead.example/apply', reportedAt: NOW })
+    const [postFilter, postUpdate, postOpts] = mockPostingUpdateOne.mock.calls[0]
+    expect(postFilter).toEqual({ _id: 'j1', 'provenance.applyUrl': 'https://dead.example/apply' })
+    // ALL rungs carrying the dead URL take the report (arrayFilters, not $)
+    expect(postUpdate).toEqual({ $inc: { 'provenance.$[elem].brokenReportCount': 1 } })
+    expect(postOpts).toEqual({ arrayFilters: [{ 'elem.applyUrl': 'https://dead.example/apply' }] })
   })
 })

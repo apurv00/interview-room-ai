@@ -63,6 +63,18 @@ describe('tierAScore (deterministic rank — rules only, §serving honesty)', ()
     expect(old).toBe(undated)
   })
 
+  it('bestApplyTierOf skips reported rungs when a clean one exists; falls back when all are reported', () => {
+    const mixed = doc({ provenance: [
+      { applyTier: 'direct-ats', applyUrl: 'https://d.example/1', brokenReportCount: 1, sourceId: 'a', externalId: '1', sourceKey: 'a:1' },
+      { applyTier: 'aggregator-deep', applyUrl: 'https://b.example/2', sourceId: 'b', externalId: '2', sourceKey: 'b:2' },
+    ] })
+    expect(bestApplyTierOf(mixed as never)).toBe('aggregator-deep') // healing reaches the badge
+    const allBroken = doc({ provenance: [
+      { applyTier: 'direct-ats', applyUrl: 'https://d.example/1', brokenReportCount: 2, sourceId: 'a', externalId: '1', sourceKey: 'a:1' },
+    ] })
+    expect(bestApplyTierOf(allBroken as never)).toBe('direct-ats') // demote, never hide
+  })
+
   it('bestApplyTierOf picks the best rung across provenance', () => {
     const d = doc({ provenance: [
       { applyTier: 'aggregator-redirect', applyUrl: 'https://agg.example/r', sourceId: 'a', externalId: '1', sourceKey: 'a:1' },
@@ -244,6 +256,22 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ status: 'saved', practiceSessionIds: [], atsResult: { score: 70, missingKeywords: [], jdHash: xrayHashOf(JD), checkedAt: new Date() } }) }) })
     const d2 = await getJobDetail('j1', 'u1')
     if (!d2!.gated) expect(d2!.application!.ats).toMatchObject({ state: 'done', score: 70 })
+  })
+
+  it('reported rungs sink below clean ones — demoted, never hidden (§4b)', async () => {
+    const { gzipSync } = await import('zlib')
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({
+      jdCompressed: gzipSync(Buffer.from('body')),
+      provenance: [
+        { sourceId: 'a', externalId: '1', sourceKey: 'a:1', applyUrl: 'https://direct.example/1', applyTier: 'direct-ats', brokenReportCount: 2 },
+        { sourceId: 'b', externalId: '2', sourceKey: 'b:2', applyUrl: 'https://board.example/2', applyTier: 'aggregator-deep' },
+      ],
+    })) })
+    const d = await getJobDetail('j1', 'u1')
+    if (!d!.gated) {
+      expect(d!.applyOptions.map((o) => o.url)).toEqual(['https://board.example/2', 'https://direct.example/1'])
+      expect(d!.applyOptions).toHaveLength(2) // demoted, still present
+    }
   })
 
   it('closed or missing postings 404 regardless of auth', async () => {

@@ -192,6 +192,10 @@ export function mergeIntoDoc(doc: IJobPosting, p: PreparedPosting, sourceId: str
       if (url && url !== existing.applyUrl) {
         existing.applyUrl = url
         existing.applyTier = classifyApplyUrl(url)
+        // Dead-click reports indict a URL, not a rung: the source shipping a
+        // NEW url gets a clean slate — count > 0 would keep demoting a link
+        // nobody reported (Codex on #522 round-3).
+        existing.brokenReportCount = undefined
         verdictInputsChanged = true
       }
       if (p.job.viaSite) existing.viaSite = p.job.viaSite

@@ -329,16 +329,18 @@ describe('scored-verdict invalidation on merge (§4.5 input change re-enqueues)'
     expect(existing.llmVerdict.status).toBe('pending')
   })
 
-  it('an apply-URL change resets a scored verdict (hosts are hash inputs)', async () => {
+  it('an apply-URL change resets a scored verdict (hosts are hash inputs) AND clears dead-click reports', async () => {
     reset()
     const existing = docStub({
-      provenance: [{ sourceId: 'jsearch', externalId: 'ext-1', sourceKey: 'jsearch:ext-1', applyUrl: 'https://old.example.com/x', applyTier: 'employer', lastSeenAt: new Date('2026-07-01') }],
+      provenance: [{ sourceId: 'jsearch', externalId: 'ext-1', sourceKey: 'jsearch:ext-1', applyUrl: 'https://old.example.com/x', applyTier: 'employer', brokenReportCount: 3, lastSeenAt: new Date('2026-07-01') }],
       jdLength: 99999,
       llmVerdict: { status: 'scored', verdict: 'genuine', attempts: 2, verdictInputHash: 'h' },
     })
     mockFindOne.mockResolvedValueOnce(existing)
     await ingestBatch([job()], 'jsearch')
     expect(existing.llmVerdict.status).toBe('pending')
+    // reports indict a URL, not a rung — the fresh URL starts clean
+    expect(existing.provenance[0].brokenReportCount).toBeUndefined()
   })
 })
 
