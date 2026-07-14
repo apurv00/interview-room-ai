@@ -7,6 +7,7 @@ import { STORAGE_KEYS } from '@shared/storageKeys'
 // Deep import (app/** is barrel-exempt): domains.ts is pure constants —
 // the @jobs barrel would drag mongoose into this client chunk.
 import { interviewSlugForDomain } from '@jobs/config/domains'
+import { buildPrepPlan } from '@jobs/config/prepPlan'
 import AuthGateModal from '@shared/ui/AuthGateModal'
 
 /**
@@ -39,6 +40,8 @@ interface Detail {
     applicationId: string
     status: string
     practiceCount: number
+    interviewDate?: string
+    interviewDateConfidence?: 'exact' | 'week' | 'unknown'
     ats: { state: 'none' | 'pending' | 'done'; score?: number; missingKeywords?: string[] }
   } | null
 }
@@ -62,6 +65,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   const [atsBusy, setAtsBusy] = useState(false)
   const [atsHint, setAtsHint] = useState<string | null>(null)
   const [sheet, setSheet] = useState<null | { kind: 'normal' | 'quick'; clicked: { url: string; tier: string }; elapsedMs: number }>(null)
+  const [inference, setInference] = useState<'idle' | 'asking'>('idle')
   const [sheetDone, setSheetDone] = useState<string | null>(null)
 
   useEffect(() => {
@@ -140,6 +144,45 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
     } finally {
       setAtsBusy(false)
     }
+  }
+
+  function onPracticeClick() {
+    // The inference door (§4c): launching practice on an APPLIED job asks
+    // one tap — and NEVER delays the session; both answers proceed.
+    if (detail && !detail.gated && detail.application?.status === 'applied' && inference === 'idle') {
+      setInference('asking')
+      return
+    }
+    onPractice()
+  }
+
+  function answerInference(scheduled: boolean) {
+    setInference('idle')
+    if (scheduled) {
+      fetch(`/api/jobs/${params.id}/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'interview_scheduled' }),
+        keepalive: true,
+      }).catch(() => {})
+      fetch('/api/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'jobs.interview_scheduled', jobPostingId: params.id, props: { inferredFromPrep: true } }),
+        keepalive: true,
+      }).catch(() => {})
+      // Date capture waits for the feedback page (§4c) — the session comes first.
+    }
+    onPractice()
+  }
+
+  async function captureDate(choice: string) {
+    await fetch(`/api/jobs/${params.id}/interview-date`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ choice }),
+    }).catch(() => {})
+    refetchDetail()
   }
 
   function onPractice() {
@@ -354,7 +397,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
             )}
             {(interviewSlugForDomain(detail.domain) ?? xray?.inferredDomain) && (
               <button
-                onClick={onPractice}
+                onClick={onPracticeClick}
                 className="rounded-lg border border-blue-400 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50 dark:text-blue-300 dark:hover:bg-blue-950"
               >
                 🎙 Practice for this job · 15 min
@@ -388,16 +431,65 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
             </p>
           )}
 
-          {/* Verdict chip — rule 1 (launch majority: no readiness band exists
-              yet). Rules 2/4 arrive with readiness bands; rule 3 stays behind
-              its DB row (DECISIONS #19). "Not ready" is banned copy; Apply is
-              never disabled. */}
-          <div className="mt-5 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm dark:border-blue-900 dark:bg-blue-950">
-            <span className="font-medium">Apply now — prep while you wait.</span>
-            <span className="ml-2 text-xs text-gray-600 dark:text-gray-400">
-              Evidence toward readiness on this job: {detail.application?.practiceCount ?? 0}/3 sessions
-            </span>
-          </div>
+          {inference === 'asking' && (
+            <div className="mt-4 rounded-lg border border-blue-300 bg-blue-50 p-3 text-sm dark:border-blue-800 dark:bg-blue-950">
+              <p className="font-medium">Prepping for a real interview at {detail.company}?</p>
+              <div className="mt-2 flex gap-2">
+                <button onClick={() => answerInference(true)} className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white">Yes — it&apos;s scheduled</button>
+                <button onClick={() => answerInference(false)} className="rounded-lg border px-3 py-1 text-xs">Just practicing</button>
+              </div>
+            </div>
+          )}
+
+          {detail.application?.status === 'interview_scheduled' ? (
+            /* §4c hero swap: the chip yields to the PREP PLAN panel. */
+            <div className="mt-5 rounded-lg border border-blue-300 bg-blue-50 p-4 text-sm dark:border-blue-800 dark:bg-blue-950">
+              <p className="font-medium">🎙 You got the interview. Let&apos;s make sure you&apos;re ready.</p>
+              {!detail.application.interviewDateConfidence ? (
+                <div className="mt-2">
+                  <p className="text-xs text-gray-600 dark:text-gray-400">When is it?</p>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {[['tomorrow', 'Tomorrow'], ['this-week', 'This week'], ['next-week', 'Next week'], ['not-sure', 'Not sure yet']].map(([c, l]) => (
+                      <button key={c} onClick={() => captureDate(c)} className="rounded-full border px-2.5 py-1 text-xs hover:bg-white dark:hover:bg-gray-900">{l}</button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                (() => {
+                  const plan = buildPrepPlan(detail.application.interviewDate ? new Date(detail.application.interviewDate) : null)
+                  return (
+                    <div className="mt-2">
+                      <p className="text-xs text-gray-600 dark:text-gray-400">{plan.headline}</p>
+                      <ul className="mt-2 space-y-1.5">
+                        {plan.sessions.map((sess) => (
+                          <li key={sess.label} className="flex items-center justify-between gap-2">
+                            <span className="text-sm">{sess.label}{sess.dayOffset > 0 ? ` (in ${sess.dayOffset}d)` : ''}</span>
+                            {sess.dayOffset === 0 && (
+                              <button onClick={onPracticeClick} className="rounded-lg bg-blue-600 px-2.5 py-1 text-xs font-medium text-white">Start</button>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )
+                })()
+              )}
+              <p className="mt-2 text-xs text-gray-500">
+                Evidence toward readiness on this job: {detail.application.practiceCount}/3 sessions
+              </p>
+            </div>
+          ) : (
+            /* Verdict chip — rule 1 (launch majority: no readiness band exists
+                yet). Rules 2/4 arrive with readiness bands; rule 3 stays behind
+                its DB row (DECISIONS #19). "Not ready" is banned copy; Apply is
+                never disabled. */
+            <div className="mt-5 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm dark:border-blue-900 dark:bg-blue-950">
+              <span className="font-medium">Apply now — prep while you wait.</span>
+              <span className="ml-2 text-xs text-gray-600 dark:text-gray-400">
+                Evidence toward readiness on this job: {detail.application?.practiceCount ?? 0}/3 sessions
+              </span>
+            </div>
+          )}
 
           <section className="mt-6" aria-label="ATS check">
             {detail.application?.ats.state === 'done' ? (
