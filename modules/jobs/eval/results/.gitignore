@@ -1,0 +1,5 @@
+# live-eval artifacts — per-run outputs, never committed
+*
+!.gitignore
+# EXCEPT the passing baseline of the current epoch (the cutover comparator)
+!baseline-*.json

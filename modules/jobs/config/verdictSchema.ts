@@ -15,7 +15,7 @@ import { JOB_DOMAINS } from './domains'
  * set, or this schema changes, or cached/stored verdicts would silently
  * carry semantics the new prompt no longer has.
  */
-export const PROMPT_VERSION = 'v1'
+export const PROMPT_VERSION = 'v2' // v2 2026-07-14: explicit code-class coherence rule in the calibration line
 
 /** Frozen reason-code enums — snapshot-tested; additions require a PROMPT_VERSION bump. */
 export const FRAUD_REASON_CODES = [

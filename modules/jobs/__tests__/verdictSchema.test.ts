@@ -58,7 +58,7 @@ describe('JobVerdictSchema (§4.5 layer 2 output contract)', () => {
     expect(SUSPICIOUS_REASON_CODES).toEqual(['mass_repost_shell', 'title_body_mismatch', 'vague_jd', 'salary_unrealistic', 'walk_in_funnel', 'consultancy_funnel'])
     expect(CLEAN_REASON_CODES).toEqual(['legit_staffing', 'thin_but_genuine', 'ok'])
     expect(REASON_CODES).toHaveLength(16)
-    expect(PROMPT_VERSION).toBe('v1')
+    expect(PROMPT_VERSION).toBe('v2')
   })
 
   it('domain vocabulary IS the unified taxonomy + other — never a parallel list', () => {

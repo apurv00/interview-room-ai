@@ -34,6 +34,7 @@ vi.mock('@shared/db/models', () => ({
 import { runEvaluatePostingsHandler, runVerdictSweeperHandler } from '../jobs/evaluatePostingsJob'
 import { resolveModel } from '@shared/services/modelRouter'
 import { verdictInputHash } from '../config/verdictPrompt'
+import { PROMPT_VERSION } from '../config/verdictSchema'
 import { JOB_DOMAINS } from '../config/domains'
 
 // The CURRENT hash of the default posting() fixture as the worker computes it
@@ -73,7 +74,7 @@ const OK_VERDICT = {
 }
 
 function okOutcome(verdict = OK_VERDICT) {
-  return { ok: true as const, verdict, model: 'gpt-5.6-luna', epoch: 'gpt-5.6-luna:v1', inputHash: 'h1', inputTokens: 100, outputTokens: 50, costUsd: 0.001, cached: false }
+  return { ok: true as const, verdict, model: 'gpt-5.6-luna', epoch: `gpt-5.6-luna:${PROMPT_VERSION}`, inputHash: 'h1', inputTokens: 100, outputTokens: 50, costUsd: 0.001, cached: false }
 }
 
 function resetAll(): void {
@@ -105,7 +106,7 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
     )
     expect(r).toMatchObject({ evaluated: 1, scored: 1, breakerTripped: false })
     const set = mockPostingUpdateOne.mock.calls[0][1].$set
-    expect(set.llmVerdict).toMatchObject({ status: 'scored', verdict: 'fraud', verdictInputHash: 'h1', epoch: 'gpt-5.6-luna:v1', attempts: 1, disagreesWithRules: true })
+    expect(set.llmVerdict).toMatchObject({ status: 'scored', verdict: 'fraud', verdictInputHash: 'h1', epoch: `gpt-5.6-luna:${PROMPT_VERSION}`, attempts: 1, disagreesWithRules: true })
     expect(set.status).toBeUndefined()
     expect(set.closedReason).toBeUndefined()
   })
@@ -241,7 +242,7 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
     vi.mocked(resolveModel).mockResolvedValueOnce({ model: 'gpt-9-zeta' } as never)
     mockPostingFindById.mockReturnValue({ lean: () => Promise.resolve(posting()) })
     await runEvaluatePostingsHandler({ data: { postingIds: ['p1'] } }, step, { evaluateFn: vi.fn().mockResolvedValue(okOutcome()) as never })
-    expect(mockCycleCreate.mock.calls[0][0].llm.epoch).toBe('gpt-9-zeta:v1')
+    expect(mockCycleCreate.mock.calls[0][0].llm.epoch).toBe(`gpt-9-zeta:${PROMPT_VERSION}`)
   })
 
   it('writes a kind:llm-verdict cycle row with the llm counter block', async () => {
@@ -317,7 +318,7 @@ describe('runVerdictSweeperHandler (§4.5 sweeper)', () => {
     expect(r).toMatchObject({ enqueued: 3 })
     // second query targets scored rows from a DIFFERENT epoch only
     const staleQuery = mockPostingFind.mock.calls[1][0]
-    expect(staleQuery.$and[1]).toEqual({ 'llmVerdict.status': 'scored', 'llmVerdict.epoch': { $ne: 'gpt-5.6-luna:v1' } })
+    expect(staleQuery.$and[1]).toEqual({ 'llmVerdict.status': 'scored', 'llmVerdict.epoch': { $ne: `gpt-5.6-luna:${PROMPT_VERSION}` } })
     // and consumes only the leftover limit (10 - 1 pending = 9)
     expect(limitSpies[1]).toHaveBeenCalledWith(9)
     expect(mockSend.mock.calls[0][0].data.postingIds).toEqual(['pend1', 'stale1', 'stale2'])
