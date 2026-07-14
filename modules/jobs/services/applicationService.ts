@@ -18,7 +18,11 @@ import { JobApplication, JobPosting } from '@shared/db/models'
  * guard and enqueued two model calls. The marker is claimed with a
  * conditional update — only the request that actually flipped it enqueues.
  */
-export async function claimAtsRun(userId: string, jobPostingId: string, now = new Date()): Promise<boolean> {
+export async function claimAtsRun(
+  userId: string,
+  jobPostingId: string,
+  now = new Date()
+): Promise<{ claimed: boolean; claimedAt: Date }> {
   const staleBefore = new Date(now.getTime() - 3 * 60_000)
   const res = await JobApplication.updateOne(
     {
@@ -28,7 +32,9 @@ export async function claimAtsRun(userId: string, jobPostingId: string, now = ne
     },
     { $set: { atsRequestedAt: now } }
   )
-  return (res?.modifiedCount ?? 0) === 1
+  // claimedAt travels through the event: a superseded slow run may only
+  // clear the marker IT set — never a newer run's (Codex on #521).
+  return { claimed: (res?.modifiedCount ?? 0) === 1, claimedAt: now }
 }
 
 /** Rollback for a claim whose enqueue failed — the next click must work. */

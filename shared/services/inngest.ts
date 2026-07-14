@@ -61,6 +61,8 @@ export type InngestEvents = {
     data: {
       userId: string
       jobPostingId: string
+      /** ISO stamp of the claim this run owns — marker clears are scoped to it. */
+      claimedAt: string
     }
   }
 }

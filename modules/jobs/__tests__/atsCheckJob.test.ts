@@ -32,7 +32,8 @@ import { xrayHashOf } from '../services/xrayService'
 
 const step = { run: <T,>(_n: string, fn: () => Promise<T> | T) => Promise.resolve(fn()) }
 const JD = 'Build services. Node.js required. SQL a plus.'
-const EVENT = { data: { userId: 'u1', jobPostingId: 'j1' } }
+const CLAIMED = '2026-07-14T12:00:00.000Z'
+const EVENT = { data: { userId: 'u1', jobPostingId: 'j1', claimedAt: CLAIMED } }
 
 function reset(app: unknown = { _id: 'app1', atsResult: undefined }) {
   for (const m of [mockAppFindOne, mockAppUpdateOne, mockPostingFindById, mockUsageCreate, mockEventCreate, mockCheckATS, mockGetBase, mockGetResume]) m.mockReset()
@@ -53,18 +54,28 @@ describe('runAtsCheckHandler (Save-gated background one-shot)', () => {
     expect(r).toEqual({ done: true, score: 72, cached: false })
     expect(mockCheckATS).toHaveBeenCalledWith({ resumeText: 'MY RESUME TEXT', jobDescription: JD })
     const update = mockAppUpdateOne.mock.calls[0][1]
-    expect(update.$set.atsResult).toMatchObject({ score: 72, missingKeywords: ['sql', 'kafka'], jdHash: xrayHashOf(JD) })
-    expect(update.$unset).toEqual({ atsRequestedAt: 1 })
+    expect(update.$set.atsResult).toMatchObject({ score: 72, missingKeywords: ['sql', 'kafka'], jdHash: xrayHashOf(JD), resumeHash: xrayHashOf('MY RESUME TEXT') })
+    // marker clear is CLAIM-SCOPED: only the run's own claim is unset
+    const [clearFilter, clearUpdate] = mockAppUpdateOne.mock.calls[1]
+    expect(clearFilter).toEqual({ _id: 'app1', atsRequestedAt: new Date(CLAIMED) })
+    expect(clearUpdate).toEqual({ $unset: { atsRequestedAt: 1 } })
     expect(mockUsageCreate).toHaveBeenCalledWith({ userId: 'u1', type: 'ats_check' })
     expect(mockEventCreate.mock.calls[0][0]).toMatchObject({ name: 'jobs.ats_score_landed', props: { score: 72 } })
   })
 
-  it('one-shot: a stored result for the CURRENT jdHash short-circuits — no model call', async () => {
-    reset({ _id: 'app1', atsResult: { score: 61, missingKeywords: [], jdHash: xrayHashOf(JD), checkedAt: new Date() } })
+  it('one-shot: a stored result for the CURRENT (resume x JD) pair short-circuits — no model call', async () => {
+    reset({ _id: 'app1', atsResult: { score: 61, missingKeywords: [], jdHash: xrayHashOf(JD), resumeHash: xrayHashOf('MY RESUME TEXT'), checkedAt: new Date() } })
     const r = await runAtsCheckHandler(EVENT, step)
     expect(r).toEqual({ done: true, score: 61, cached: true })
     expect(mockCheckATS).not.toHaveBeenCalled()
     expect(mockAppUpdateOne.mock.calls[0][1].$unset).toEqual({ atsRequestedAt: 1 }) // marker still cleared
+  })
+
+  it('an EDITED RESUME (same JD) invalidates the result — the pair is the identity (Codex #521)', async () => {
+    reset({ _id: 'app1', atsResult: { score: 61, missingKeywords: [], jdHash: xrayHashOf(JD), resumeHash: 'old-resume-hash', checkedAt: new Date() } })
+    const r = await runAtsCheckHandler(EVENT, step)
+    expect(r).toMatchObject({ done: true, cached: false })
+    expect(mockCheckATS).toHaveBeenCalledTimes(1)
   })
 
   it('a CHANGED JD (hash mismatch) legitimately re-runs the check', async () => {
@@ -85,6 +96,7 @@ describe('runAtsCheckHandler (Save-gated background one-shot)', () => {
     reset()
     mockGetBase.mockResolvedValue(null)
     expect(await runAtsCheckHandler(EVENT, step)).toEqual({ skipped: 'no-resume' })
+    expect(mockAppUpdateOne.mock.calls[0][0]).toEqual({ _id: 'app1', atsRequestedAt: new Date(CLAIMED) })
     expect(mockAppUpdateOne.mock.calls[0][1]).toEqual({ $unset: { atsRequestedAt: 1 } })
 
     reset()

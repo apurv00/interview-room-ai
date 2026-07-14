@@ -72,6 +72,9 @@ export interface IJobApplication extends Document {
     score: number
     missingKeywords: string[]
     jdHash: string
+    /** The result is for a (resume x JD) PAIR — a resume edit invalidates it
+     *  exactly like a JD merge does (Codex on #521). */
+    resumeHash?: string
     checkedAt: Date
   }
   /** Set when a background check is queued; cleared on completion/failure.
@@ -152,6 +155,7 @@ const JobApplicationSchema = new Schema<IJobApplication>(
           score: { type: Number, min: 0, max: 100, required: true },
           missingKeywords: { type: [String], default: [] },
           jdHash: { type: String, required: true },
+          resumeHash: { type: String },
           checkedAt: { type: Date, required: true },
         },
         { _id: false }

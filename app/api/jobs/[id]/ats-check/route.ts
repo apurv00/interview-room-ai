@@ -33,10 +33,10 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   // only the request that actually flipped the marker sends the event; the
   // loser reports pending. Claim failure on a >3min-stale marker retries
   // via the same conditional.
-  const claimed = await claimAtsRun(userId, params.id)
+  const { claimed, claimedAt } = await claimAtsRun(userId, params.id)
   if (!claimed) return NextResponse.json({ status: 'pending' })
   try {
-    await inngest.send({ name: 'jobs/ats.requested', data: { userId, jobPostingId: params.id } })
+    await inngest.send({ name: 'jobs/ats.requested', data: { userId, jobPostingId: params.id, claimedAt: claimedAt.toISOString() } })
   } catch (err) {
     // Claim without a job = three minutes of polling a check that cannot
     // complete. Release so the next click works; the original error still 500s.

@@ -84,11 +84,13 @@ describe('claimAtsRun (atomic single-enqueue claim, Codex #521)', () => {
     reset()
     mockPostingUpdateOne.mockReset()
     mockAppUpdateOne.mockResolvedValueOnce({ modifiedCount: 1 })
-    expect(await claimAtsRun('u1', 'j1')).toBe(true)
+    const win = await claimAtsRun('u1', 'j1')
+    expect(win.claimed).toBe(true)
+    expect(win.claimedAt).toBeInstanceOf(Date)
     const [filter] = mockAppUpdateOne.mock.calls[0]
     expect(filter.$or).toBeDefined() // conditional claim, not unconditional set
     mockAppUpdateOne.mockResolvedValueOnce({ modifiedCount: 0 })
-    expect(await claimAtsRun('u1', 'j1')).toBe(false)
+    expect((await claimAtsRun('u1', 'j1')).claimed).toBe(false)
   })
 
   it('a stale (>3min) marker is reclaimable via the same conditional', async () => {

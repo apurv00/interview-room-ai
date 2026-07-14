@@ -74,6 +74,26 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   // effect keyed on the whole object re-fired the parse while the first one
   // was still uncached — concurrent LLM calls for one JD (Codex on #521).
   const xrayFetchedFor = useRef<string | null>(null)
+  const pendingPollFor = useRef<string | null>(null)
+
+  // A check queued in another tab / before a refresh arrives as state
+  // 'pending' with no local poll loop — poll until it settles or times out
+  // (Codex on #521), once per posting.
+  useEffect(() => {
+    if (detail?.gated !== false || detail.application?.ats.state !== 'pending') return
+    if (pendingPollFor.current === params.id) return
+    pendingPollFor.current = params.id
+    let cancelled = false
+    ;(async () => {
+      for (let i = 0; i < 5 && !cancelled; i++) {
+        await new Promise((r) => setTimeout(r, 12_000))
+        if (cancelled) return
+        await refetchDetail()
+      }
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail, params.id])
   useEffect(() => {
     if (!detail || detail.gated) return
     if (xrayFetchedFor.current === params.id) return
@@ -244,6 +264,9 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                     Missing: {detail.application.ats.missingKeywords!.join(', ')}
                   </span>
                 )}
+                {/* Resume edited since? The job compares BOTH hashes — an
+                    unchanged pair returns the cached score instantly. */}
+                <button onClick={onAtsCheck} className="ml-3 text-xs text-blue-600 hover:underline">Re-check</button>
               </div>
             ) : detail.application?.ats.state === 'pending' || atsBusy ? (
               <p className="text-sm text-gray-500">Checking your resume against this JD (~1 min)…</p>
