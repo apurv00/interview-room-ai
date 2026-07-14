@@ -54,6 +54,7 @@ export default function TrackerPage() {
   const [undo, setUndo] = useState<{ jobPostingId: string; from: string; label: string } | null>(null)
   const [notesFor, setNotesFor] = useState<string | null>(null)
   const [notesDraft, setNotesDraft] = useState('')
+  const [dateSheetFor, setDateSheetFor] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -76,6 +77,8 @@ export default function TrackerPage() {
       body: JSON.stringify({ status: to }),
     }).catch(() => null)
     if (res?.ok) {
+      // §4c: landing on interview_scheduled opens the date sheet.
+      if (to === 'interview_scheduled') setDateSheetFor(jobPostingId)
       // Undo replays `from` through the USER status route — apply_clicked is
       // the machine fact and deliberately not user-settable (letting undo
       // restore it would let anyone fabricate clicks), so moves off a
@@ -92,6 +95,7 @@ export default function TrackerPage() {
     if (!undo) return
     const { jobPostingId, from } = undo
     setUndo(null)
+    setDateSheetFor(null) // an undone transition must not leave its date sheet armed (Codex #525)
     await fetch(`/api/jobs/${jobPostingId}/status`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -110,6 +114,16 @@ export default function TrackerPage() {
     } else {
       await fetch(`/api/jobs/${jobPostingId}/nudge-dismiss`, { method: 'POST' }).catch(() => null)
     }
+    load()
+  }
+
+  async function captureDate(jobPostingId: string, choice: string) {
+    setDateSheetFor(null)
+    await fetch(`/api/jobs/${jobPostingId}/interview-date`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ choice }),
+    }).catch(() => {})
     load()
   }
 
@@ -191,6 +205,16 @@ export default function TrackerPage() {
                   </button>
                   <Link href={`/jobs/${r.jobPostingId}`} className="rounded-full border px-2 py-0.5 text-xs text-blue-600">View</Link>
                 </div>
+                {dateSheetFor === r.jobPostingId && r.status === 'interview_scheduled' && (
+                  <div className="mt-2 rounded-lg border border-blue-300 bg-blue-50 p-2 text-xs dark:border-blue-800 dark:bg-blue-950">
+                    <p className="font-medium">🎙 You got the interview. When is it?</p>
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      {[['tomorrow', 'Tomorrow'], ['this-week', 'This week'], ['next-week', 'Next week'], ['not-sure', 'Not sure yet']].map(([c, l]) => (
+                        <button key={c} onClick={() => captureDate(r.jobPostingId, c)} className="rounded-full border px-2 py-0.5 hover:bg-white dark:hover:bg-gray-900">{l}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {r.notes && notesFor !== r.jobPostingId && <p className="mt-2 whitespace-pre-wrap text-xs text-gray-500">{r.notes}</p>}
                 {notesFor === r.jobPostingId && (
                   <div className="mt-2">

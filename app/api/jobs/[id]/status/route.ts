@@ -26,11 +26,13 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   let to: string | undefined
   let latencyMs: number | undefined
   let viaNudge = false
+  let inferredFromPrep = false
   try {
     const body = await req.json()
     to = body?.status
     if (typeof body?.latencyMs === 'number' && body.latencyMs >= 0) latencyMs = Math.floor(body.latencyMs)
     viaNudge = body?.viaNudge === true
+    inferredFromPrep = body?.inferredFromPrep === true
   } catch { /* fallthrough to validation */ }
   if (!to || !(USER_SETTABLE_STATUSES as readonly string[]).includes(to)) {
     return NextResponse.json({ error: `status must be one of ${USER_SETTABLE_STATUSES.join(', ')}` }, { status: 400 })
@@ -40,11 +42,21 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   const result = await transitionStatus(userId, params.id, to as UserSettableStatus)
   if (!result.ok) return NextResponse.json({ error: 'no application for this job' }, { status: 404 })
   try {
+    // jobs.interview_scheduled has ONE emitter — this route, on the EDGE
+    // (from != to): the inference door and the tracker chip both land here,
+    // and the date-capture route emits nothing, so one scheduled interview
+    // is one event (Codex on #525 — the split emitters double-counted).
+    const scheduledEdge = to === 'interview_scheduled' && result.from !== 'interview_scheduled'
     await ProductEvent.create({
-      name: to === 'applied' ? 'jobs.apply_confirmed' : 'jobs.status_changed',
+      name: to === 'applied' ? 'jobs.apply_confirmed' : scheduledEdge ? 'jobs.interview_scheduled' : 'jobs.status_changed',
       userId,
       jobPostingId: params.id,
-      props: to === 'applied' ? { latencyMs, viaNudge, from: result.from } : { from: result.from, to, source: 'user' },
+      props:
+        to === 'applied'
+          ? { latencyMs, viaNudge, from: result.from }
+          : scheduledEdge
+            ? { inferredFromPrep, from: result.from }
+            : { from: result.from, to, source: 'user' },
       ts: new Date(),
     })
   } catch (err) {
