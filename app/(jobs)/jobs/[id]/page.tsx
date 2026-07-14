@@ -66,10 +66,13 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   function onApply(opt: ApplyOption) {
     // SYNC open inside the click handler — never after an await.
     window.open(opt.url, '_blank', 'noopener')
-    fetch('/api/events', {
+    // Machine fact (apply_clicked) + server-side telemetry in one call —
+    // the JobApplication row transitions/creates even if this tab dies
+    // (keepalive). Never conflated with the user claim 'applied' (Wave 4).
+    fetch(`/api/jobs/${params.id}/apply-click`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'jobs.apply_click', jobPostingId: params.id, props: { tier: opt.tier, source: 'detail' } }),
+      body: JSON.stringify({ tier: opt.tier, url: opt.url }),
       keepalive: true,
     }).catch(() => {})
   }

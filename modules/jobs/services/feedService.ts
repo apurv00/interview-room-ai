@@ -66,9 +66,23 @@ const DEMOTION = { staffing: 10, shortJd: 8, repost: 6, confidential: 4 } as con
 const RECENCY_MAX = 25
 const RECENCY_WINDOW_DAYS = 21
 
+/** Only http(s) ever reaches a client — ingestion blocklists HOSTS, not
+ *  schemes, so a provider payload carrying `javascript:`/`data:` could be
+ *  stored with a tier; this projection is the last line before window.open
+ *  (Codex on #517). */
+export function isSafeHttpUrl(u: string): boolean {
+  try {
+    const proto = new URL(u).protocol
+    return proto === 'http:' || proto === 'https:'
+  } catch {
+    return false
+  }
+}
+
 export function bestApplyTierOf(doc: Pick<IJobPosting, 'provenance'>): ApplyTier | undefined {
   let best: ApplyTier | undefined
   for (const p of doc.provenance ?? []) {
+    if (!p.applyUrl || !isSafeHttpUrl(p.applyUrl)) continue // badge honesty: never advertise a path we won't serve
     if (p.applyTier && (!best || TIER_RANK[p.applyTier as ApplyTier] < TIER_RANK[best])) {
       best = p.applyTier as ApplyTier
     }
@@ -190,7 +204,7 @@ export async function getJobDetail(id: string, authed: boolean): Promise<JobDeta
     jd = buf?.length ? gunzipSync(Buffer.isBuffer(buf) ? buf : Buffer.from((buf as { buffer: ArrayBufferLike }).buffer as ArrayBuffer)).toString('utf8') : ''
   } catch { /* corrupt gzip = empty body; the card still renders */ }
   const applyOptions = (doc.provenance ?? [])
-    .filter((p) => p.applyUrl && p.applyTier)
+    .filter((p) => p.applyUrl && p.applyTier && isSafeHttpUrl(p.applyUrl))
     .map((p) => ({ url: p.applyUrl as string, tier: p.applyTier as ApplyTier, viaSite: p.viaSite }))
     .sort((a, b) => TIER_RANK[a.tier] - TIER_RANK[b.tier])
   return {

@@ -56,8 +56,8 @@ describe('tierAScore (deterministic rank — rules only, §serving honesty)', ()
 
   it('bestApplyTierOf picks the best rung across provenance', () => {
     const d = doc({ provenance: [
-      { applyTier: 'aggregator-redirect', sourceId: 'a', externalId: '1', sourceKey: 'a:1' },
-      { applyTier: 'employer', sourceId: 'b', externalId: '2', sourceKey: 'b:2' },
+      { applyTier: 'aggregator-redirect', applyUrl: 'https://agg.example/r', sourceId: 'a', externalId: '1', sourceKey: 'a:1' },
+      { applyTier: 'employer', applyUrl: 'https://careers.example/j', sourceId: 'b', externalId: '2', sourceKey: 'b:2' },
     ] })
     expect(bestApplyTierOf(d as never)).toBe('employer')
   })
@@ -133,6 +133,24 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
       expect(d!.applyOptions.map((o) => o.tier)).toEqual(['direct-ats', 'aggregator-redirect'])
       expect(d!.flags).toEqual({ staffing: false, shortJd: false, repost: false })
     }
+  })
+
+  it('non-http(s) apply URLs never reach a client — ladder AND badge exclude them (Codex #517)', async () => {
+    const evil = doc({
+      provenance: [
+        { sourceId: 'a', externalId: '1', sourceKey: 'a:1', applyUrl: 'javascript:alert(document.cookie)', applyTier: 'direct-ats' },
+        { sourceId: 'b', externalId: '2', sourceKey: 'b:2', applyUrl: 'data:text/html,<script>1</script>', applyTier: 'employer' },
+        { sourceId: 'c', externalId: '3', sourceKey: 'c:3', applyUrl: 'https://safe.example.com/apply', applyTier: 'aggregator-deep' },
+      ],
+    })
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(evil) })
+    const d = await getJobDetail('j1', true)
+    if (!d!.gated) {
+      expect(d!.applyOptions).toHaveLength(1)
+      expect(d!.applyOptions[0].url).toBe('https://safe.example.com/apply')
+    }
+    // the badge never advertises a path the ladder won't serve
+    expect(bestApplyTierOf(evil as never)).toBe('aggregator-deep')
   })
 
   it('closed or missing postings 404 regardless of auth', async () => {

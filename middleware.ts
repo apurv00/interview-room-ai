@@ -148,7 +148,7 @@ export default withAuth(
           pathname === '/jobs' ||
           pathname.startsWith('/jobs/') ||
           pathname === '/api/jobs/feed' ||
-          (pathname.startsWith('/api/jobs/') && !pathname.startsWith('/api/jobs/admin') && !pathname.endsWith('/save')) ||
+          (pathname.startsWith('/api/jobs/') && !pathname.startsWith('/api/jobs/admin') && !pathname.endsWith('/save') && !pathname.endsWith('/apply-click')) ||
           pathname.startsWith('/api/resume/tailor') ||
           pathname.startsWith('/api/resume/ats-check') ||
           pathname.startsWith('/pricing') ||
