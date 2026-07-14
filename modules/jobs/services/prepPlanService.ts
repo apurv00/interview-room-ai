@@ -1,6 +1,7 @@
 import { JobApplication } from '@shared/db/models'
+import { calendarDaysBetween } from '../config/prepPlan'
 /** Re-exported for the barrel; the pure math lives in config/prepPlan. */
-export { buildPrepPlan, dateForChoice } from '../config/prepPlan'
+export { buildPrepPlan, dateForChoice, calendarDaysBetween } from '../config/prepPlan'
 export type { PrepPlan, PrepPlanSession } from '../config/prepPlan'
 
 export async function setInterviewDate(
@@ -27,6 +28,6 @@ export async function setInterviewDate(
   if ((res?.matchedCount ?? 0) === 0) return { ok: false, daysUntil: null }
   return {
     ok: true,
-    daysUntil: capture.date ? Math.max(0, Math.floor((capture.date.getTime() - now.getTime()) / (24 * 3600_000))) : null,
+    daysUntil: capture.date ? Math.max(0, calendarDaysBetween(now, capture.date)) : null,
   }
 }

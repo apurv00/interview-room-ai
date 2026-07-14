@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest'
 const { mockUpdateOne } = vi.hoisted(() => ({ mockUpdateOne: vi.fn() }))
 vi.mock('@shared/db/models', () => ({ JobApplication: { updateOne: mockUpdateOne } }))
 
-import { buildPrepPlan, dateForChoice } from '../config/prepPlan'
+import { buildPrepPlan, dateForChoice, calendarDaysBetween } from '../config/prepPlan'
 import { setInterviewDate } from '../services/prepPlanService'
 
 const NOW = new Date('2026-07-15T09:00:00Z')
@@ -28,6 +28,21 @@ describe('buildPrepPlan (§4c — instant, deterministic, no LLM)', () => {
     const plan = buildPrepPlan(null, NOW)
     expect(plan.mode).toBe('start-now')
     expect(plan.sessions).toEqual([{ label: 'Session 1 — start now', dayOffset: 0 }])
+  })
+})
+
+describe('calendar-day arithmetic (Codex #525 — Tomorrow never decays to today)', () => {
+  it("'tomorrow' still plans two sessions when rendered hours after capture", () => {
+    const captured = dateForChoice('tomorrow', NOW).date!
+    const sixHoursLater = new Date(NOW.getTime() + 6 * 3600_000)
+    const plan = buildPrepPlan(captured, sixHoursLater)
+    expect(plan.mode).toBe('two-session')
+    expect(plan.sessions).toHaveLength(2)
+  })
+
+  it('calendarDaysBetween counts calendar days, not 24h buckets', () => {
+    expect(calendarDaysBetween(new Date('2026-07-15T23:00:00Z'), new Date('2026-07-16T01:00:00Z'))).toBe(1)
+    expect(calendarDaysBetween(NOW, new Date(NOW.getTime() + 6 * day))).toBe(6)
   })
 })
 

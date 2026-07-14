@@ -445,16 +445,21 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
             /* §4c hero swap: the chip yields to the PREP PLAN panel. */
             <div className="mt-5 rounded-lg border border-blue-300 bg-blue-50 p-4 text-sm dark:border-blue-800 dark:bg-blue-950">
               <p className="font-medium">🎙 You got the interview. Let&apos;s make sure you&apos;re ready.</p>
-              {!detail.application.interviewDateConfidence ? (
+              {/* Capture stays reachable until a real date exists — 'Not sure
+                  yet' must not hide the buttons forever (Codex on #525). */}
+              {!detail.application.interviewDate && (
                 <div className="mt-2">
-                  <p className="text-xs text-gray-600 dark:text-gray-400">When is it?</p>
+                  <p className="text-xs text-gray-600 dark:text-gray-400">
+                    {detail.application.interviewDateConfidence === 'unknown' ? 'Know the date now?' : 'When is it?'}
+                  </p>
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
-                    {[['tomorrow', 'Tomorrow'], ['this-week', 'This week'], ['next-week', 'Next week'], ['not-sure', 'Not sure yet']].map(([c, l]) => (
+                    {[['tomorrow', 'Tomorrow'], ['this-week', 'This week'], ['next-week', 'Next week'], ...(detail.application.interviewDateConfidence === 'unknown' ? [] : [['not-sure', 'Not sure yet']])].map(([c, l]) => (
                       <button key={c} onClick={() => captureDate(c)} className="rounded-full border px-2.5 py-1 text-xs hover:bg-white dark:hover:bg-gray-900">{l}</button>
                     ))}
                   </div>
                 </div>
-              ) : (
+              )}
+              {(detail.application.interviewDate || detail.application.interviewDateConfidence === 'unknown') && (
                 (() => {
                   const plan = buildPrepPlan(detail.application.interviewDate ? new Date(detail.application.interviewDate) : null)
                   return (

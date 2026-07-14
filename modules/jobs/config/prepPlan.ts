@@ -9,6 +9,16 @@
  * exists.
  */
 
+/** CALENDAR days between two instants (UTC-truncated) — 'tomorrow' is 1
+ *  from capture until it arrives, never decaying to 0 within 24h of the
+ *  tap (Codex on #525: ms-floor math showed the interview-day plan an hour
+ *  after choosing Tomorrow). Capture and render share this convention. */
+export function calendarDaysBetween(from: Date, to: Date): number {
+  const a = Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate())
+  const b = Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate())
+  return Math.round((b - a) / (24 * 3600_000))
+}
+
 export interface PrepPlanSession {
   /** Stable ordinal label the UI renders. */
   label: string
@@ -30,7 +40,7 @@ export function buildPrepPlan(interviewDate: Date | null, now = new Date()): Pre
       sessions: [{ label: 'Session 1 — start now', dayOffset: 0 }],
     }
   }
-  const daysUntil = Math.max(0, Math.floor((interviewDate.getTime() - now.getTime()) / (24 * 3600_000)))
+  const daysUntil = Math.max(0, calendarDaysBetween(now, interviewDate))
   if (daysUntil >= 3) {
     const midpoint = Math.floor(daysUntil / 2)
     return {
