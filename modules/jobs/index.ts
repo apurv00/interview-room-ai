@@ -15,7 +15,7 @@ export {
 export type { ClassifyInput, ClassifyResult, DropRule, FlagRule } from './services/qualityGate'
 export { METROS, METRO_ALIASES } from './config/metros'
 export {
-  JOB_DOMAINS, JOB_DOMAIN_IDS, FRESHER_DOMAINS, FRESHER_DOMAIN_PATTERNS, matchFresherDomain,
+  JOB_DOMAINS, JOB_DOMAIN_IDS, FRESHER_DOMAINS, FRESHER_DOMAIN_PATTERNS, matchFresherDomain, interviewSlugForDomain,
 } from './config/domains'
 export type { JobDomainId } from './config/domains'
 export { APPLY_TIERS, TIER_RANK } from './config/spamRules'
@@ -33,7 +33,7 @@ export { atsBoardAdapter } from './adapters/atsBoardAdapter'
 export { BOARD_REGISTRY } from './config/boardRegistry'
 export type { BoardSeed } from './config/boardRegistry'
 export { getFeed, getJobDetail, tierAScore, bestApplyTierOf, isSafeHttpUrl } from './services/feedService'
-export { recordApplyClick, claimAtsRun, releaseAtsClaim, transitionStatus, reportBrokenLink, USER_SETTABLE_STATUSES } from './services/applicationService'
+export { recordApplyClick, claimAtsRun, releaseAtsClaim, transitionStatus, reportBrokenLink, recordPracticeEvidence, USER_SETTABLE_STATUSES } from './services/applicationService'
 export type { UserSettableStatus } from './services/applicationService'
 export { getOrParseXray } from './services/xrayService'
 export { saveBaseResume, getBaseResume } from './services/baseResumeService'

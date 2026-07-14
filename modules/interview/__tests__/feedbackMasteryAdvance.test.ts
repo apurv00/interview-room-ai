@@ -52,6 +52,9 @@ vi.mock('@shared/services/feedbackLock', () => ({
 vi.mock('@shared/services/usageTracking', () => ({ trackUsage: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@shared/services/scoreTelemetry', () => ({ recordScoreDelta: vi.fn().mockResolvedValue(null) }))
 vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(undefined) }))
+// Wave 4.3: generate-feedback gained the jobsEvidence side effect — mock the
+// jobs barrel so the rail's 7th effect succeeds deterministically here.
+vi.mock('@jobs', () => ({ recordPracticeEvidence: vi.fn().mockResolvedValue({ recorded: false }) }))
 vi.mock('@shared/db/models', () => ({
   User: { findById: () => ({ select: () => ({ lean: () => Promise.resolve(null) }) }) },
   InterviewSession: {

@@ -128,6 +128,46 @@ type FeedbackTab = 'overview' | 'questions' | 'analysis' | 'learning'
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
+/**
+ * Jobs practice bridge (Wave 4.3): when this session was launched from a
+ * job ([Practice for this job]), the localStorage config still carries the
+ * attribution — render the way back + the evidence tick. Pure additive
+ * banner; renders nothing for every non-jobs session.
+ */
+function JobsBridge({ sessionId }: { sessionId: string }) {
+  const [bridge, setBridge] = useState<{ jobId: string; company?: string; evidence?: number } | null>(null)
+  useEffect(() => {
+    if (!sessionId) return
+    // The PERSISTED session is the source of truth: useInterview clears
+    // INTERVIEW_CONFIG from localStorage before navigating here, so the
+    // config is already gone on the normal flow (Codex on #524).
+    fetch(`/api/interviews/${sessionId}?excludeTranscript=true`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((session) => {
+        const attr = session?.attribution
+        if (attr?.source !== 'jobs' || !attr.jobId) return
+        setBridge({ jobId: attr.jobId, company: session?.config?.targetCompany })
+        return fetch(`/api/jobs/${attr.jobId}`)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => {
+            if (d && d.gated === false && d.application) {
+              setBridge((b) => (b ? { ...b, evidence: d.application.practiceCount, company: b.company || d.company } : b))
+            }
+          })
+      })
+      .catch(() => {})
+  }, [sessionId])
+  if (!bridge) return null
+  return (
+    <a href={`/jobs/${bridge.jobId}`} className="mt-1 inline-block text-sm text-blue-600 hover:underline">
+      ← Back to {bridge.company || 'the job'}
+      {typeof bridge.evidence === 'number' && (
+        <span className="ml-2 text-xs text-gray-500">Evidence toward readiness on this job: {bridge.evidence}/3</span>
+      )}
+    </a>
+  )
+}
+
 export default function FeedbackPageWrapper() {
   return (
     <FeedbackErrorBoundary>
@@ -1344,6 +1384,7 @@ function FeedbackPageInner() {
             </button>
             <div>
               <h1 className="text-subheading sm:text-heading leading-tight">Interview Feedback</h1>
+              <JobsBridge sessionId={sessionId} />
               <p className="text-caption text-[#71767b] hidden sm:block">
                 {data.config &&
                   `${getDomainLabel(data.config.role)} · ${data.config.experience} yrs · ${data.config.duration} min`}

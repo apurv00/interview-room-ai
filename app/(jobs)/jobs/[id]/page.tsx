@@ -1,7 +1,12 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { STORAGE_KEYS } from '@shared/storageKeys'
+// Deep import (app/** is barrel-exempt): domains.ts is pure constants —
+// the @jobs barrel would drag mongoose into this client chunk.
+import { interviewSlugForDomain } from '@jobs/config/domains'
 import AuthGateModal from '@shared/ui/AuthGateModal'
 
 /**
@@ -15,7 +20,7 @@ import AuthGateModal from '@shared/ui/AuthGateModal'
 
 interface ApplyOption { url: string; tier: string; viaSite?: string }
 interface XrayReq { id: string; category: string; requirement: string; importance: 'must-have' | 'nice-to-have' }
-interface Xray { role: string; keyThemes: string[]; requirements: XrayReq[] }
+interface Xray { role: string; inferredDomain?: string; keyThemes: string[]; requirements: XrayReq[] }
 interface Detail {
   id: string
   title: string
@@ -31,6 +36,7 @@ interface Detail {
   applyOptions?: ApplyOption[]
   flags?: { staffing: boolean; shortJd: boolean; repost: boolean }
   application?: {
+    applicationId: string
     status: string
     practiceCount: number
     ats: { state: 'none' | 'pending' | 'done'; score?: number; missingKeywords?: string[] }
@@ -46,6 +52,7 @@ const TIER_SUBTITLE: Record<string, (co: string, via?: string) => string> = {
 }
 
 export default function JobDetailPage({ params }: { params: { id: string } }) {
+  const router = useRouter()
   const [detail, setDetail] = useState<Detail | null>(null)
   const [status, setStatus] = useState<'loading' | 'ready' | 'missing'>('loading')
   const [gate, setGate] = useState<null | 'view_job_detail' | 'save_job'>(null)
@@ -133,6 +140,42 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
     } finally {
       setAtsBusy(false)
     }
+  }
+
+  function onPractice() {
+    if (!detail || detail.gated) return
+    // Resolve through the domain metadata: jobs-only slugs (hr) map to
+    // 'general', never raw into InterviewConfig.role (Codex on #524);
+    // the X-ray's inferredDomain is already an interview slug.
+    const role = interviewSlugForDomain(detail.domain) ?? xray?.inferredDomain
+    if (!role) return
+    // The hand-off (PRODUCT_FLOW §1 Stage 4; precedent learn/practice):
+    // config to localStorage, then the lobby owns everything — auth gate,
+    // post-OAuth resume, JD-skip. attribution rides the Wave-0 schema field
+    // (round-trip tested); generate-question spends ~60% of questions on JD
+    // must-haves for free. Zero hot-path edits.
+    const config = {
+      role,
+      experience: '3-6',
+      duration: 15,
+      jobDescription: detail.jd,
+      targetCompany: detail.company,
+      attribution: { source: 'jobs', jobId: detail.id, applicationId: detail.application?.applicationId },
+    }
+    try {
+      localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(config))
+    } catch { return }
+    fetch('/api/events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'jobs.prep_started',
+        jobPostingId: params.id,
+        props: { applicationId: detail.application?.applicationId, evidenceCount: detail.application?.practiceCount ?? 0 },
+      }),
+      keepalive: true,
+    }).catch(() => {})
+    router.push('/lobby')
   }
 
   async function onSave() {
@@ -308,6 +351,14 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                   {(TIER_SUBTITLE[primary.tier] ?? (() => ''))(detail.company, primary.viaSite)}
                 </p>
               </div>
+            )}
+            {(interviewSlugForDomain(detail.domain) ?? xray?.inferredDomain) && (
+              <button
+                onClick={onPractice}
+                className="rounded-lg border border-blue-400 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50 dark:text-blue-300 dark:hover:bg-blue-950"
+              >
+                🎙 Practice for this job · 15 min
+              </button>
             )}
             <button
               onClick={onSave}

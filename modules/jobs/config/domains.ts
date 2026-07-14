@@ -86,3 +86,14 @@ export function matchFresherDomain(text = ''): string | null {
   for (const [d, re] of Object.entries(FRESHER_DOMAIN_PATTERNS)) if (re.test(text)) return d
   return null
 }
+
+/** The hand-off's role resolver: jobs-only domains (interviewSlug: null)
+ *  fall back to 'general' — never write a jobs-only slug into
+ *  InterviewConfig.role (Codex on #524). Unknown ids return undefined so
+ *  callers can try the X-ray's inferredDomain next. */
+export function interviewSlugForDomain(id: string | undefined | null): string | undefined {
+  if (!id) return undefined
+  const d = JOB_DOMAINS.find((x) => x.id === id)
+  if (!d) return undefined
+  return d.interviewSlug ?? 'general'
+}

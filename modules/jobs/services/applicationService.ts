@@ -1,4 +1,4 @@
-import { JobApplication, JobPosting } from '@shared/db/models'
+import { JobApplication, JobPosting, InterviewSession } from '@shared/db/models'
 
 /**
  * Application state transitions (PRODUCT_FLOW §2). `apply_clicked` is a
@@ -102,6 +102,39 @@ export async function reportBrokenLink(
     { arrayFilters: [{ 'elem.applyUrl': url }] }
   )
   return { ok: true }
+}
+
+/**
+ * Evidence push (Wave 4.3, PRODUCT_FLOW §1 Stage 4): a jobs-attributed
+ * session that reached SCORED feedback lands in
+ * JobApplication.practiceSessionIds — the tracker/detail evidence ticker
+ * (n/3) reads that array. Idempotent ($addToSet — feedback retries and
+ * cache reloads must not double-count). Called fire-and-forget from the
+ * generate-feedback route's side-effect rail; never throws into it.
+ * Sessions refused scoring (short-form guard) deliberately do NOT count —
+ * the ticker sells readiness evidence, not attendance.
+ */
+export async function recordPracticeEvidence(
+  userId: string,
+  sessionId: string
+): Promise<{ recorded: boolean; evidenceCount?: number }> {
+  const session = await InterviewSession.findById(sessionId).select('attribution userId').lean()
+  const attr = session?.attribution as { source?: string; jobId?: string; applicationId?: string } | undefined
+  if (!session || String(session.userId) !== String(userId) || attr?.source !== 'jobs' || !attr.jobId) {
+    return { recorded: false }
+  }
+  const filter = attr.applicationId
+    ? { _id: attr.applicationId, userId } // userId guard: never attach to another user's row
+    : { userId, jobPostingId: attr.jobId }
+  const app = await JobApplication.findOneAndUpdate(
+    filter,
+    { $addToSet: { practiceSessionIds: session._id } },
+    { new: true }
+  )
+    .select('practiceSessionIds')
+    .lean()
+  if (!app) return { recorded: false } // practiced without saving and no click row — nothing to attach to
+  return { recorded: true, evidenceCount: Math.min(3, app.practiceSessionIds?.length ?? 0) }
 }
 
 export interface ApplyClickResult {
