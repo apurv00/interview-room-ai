@@ -110,7 +110,13 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   async function onSave() {
     const res = await fetch(`/api/jobs/${params.id}/save`, { method: 'POST' })
     if (res.status === 401) { setGate('save_job'); return }
-    if (res.ok) setSaved(true)
+    if (res.ok) {
+      setSaved(true)
+      // Materialize the fresh application row so Save-gated surfaces (the
+      // ATS button, the evidence ticker) unlock without a manual refresh
+      // (Codex on #521).
+      await refetchDetail()
+    }
   }
 
   function onApply(opt: ApplyOption) {

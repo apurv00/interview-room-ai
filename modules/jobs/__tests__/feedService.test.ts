@@ -8,6 +8,7 @@ vi.mock('@shared/db/models', () => ({
 }))
 
 import { tierAScore, tierBScore, matchedSkillsOf, bestApplyTierOf, getFeed, getJobDetail } from '../services/feedService'
+import { xrayHashOf } from '../services/xrayService'
 
 const NOW = new Date('2026-07-14T12:00:00Z')
 
@@ -204,6 +205,22 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ status: 'apply_clicked', practiceSessionIds: ['a', 'b', 'c', 'd', 'e'] }) }) })
     const d = await getJobDetail('j1', 'u1')
     if (!d!.gated) expect(d!.application).toEqual({ status: 'apply_clicked', practiceCount: 3, ats: { state: 'none' } }) // practiceCount capped at 3
+  })
+
+  it('a stale-JD atsResult re-opens the check; the current JD stays done (Codex #521)', async () => {
+    const { gzipSync } = await import('zlib')
+    const JD = 'Build services with Node.js at scale, and then some more content here.'
+    const base = doc({ jdCompressed: gzipSync(Buffer.from(JD)) })
+    // stored result for a DIFFERENT (pre-merge) JD → state none, button back
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(base) })
+    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ status: 'saved', practiceSessionIds: [], atsResult: { score: 70, missingKeywords: [], jdHash: 'stale-hash', checkedAt: new Date() } }) }) })
+    const d1 = await getJobDetail('j1', 'u1')
+    if (!d1!.gated) expect(d1!.application!.ats.state).toBe('none')
+    // matching hash → done with the score
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(base) })
+    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ status: 'saved', practiceSessionIds: [], atsResult: { score: 70, missingKeywords: [], jdHash: xrayHashOf(JD), checkedAt: new Date() } }) }) })
+    const d2 = await getJobDetail('j1', 'u1')
+    if (!d2!.gated) expect(d2!.application!.ats).toMatchObject({ state: 'done', score: 70 })
   })
 
   it('closed or missing postings 404 regardless of auth', async () => {

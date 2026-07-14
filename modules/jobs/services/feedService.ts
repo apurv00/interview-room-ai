@@ -2,6 +2,7 @@ import { gunzipSync } from 'zlib'
 import { JobPosting, JobApplication, type IJobPosting } from '@shared/db/models'
 import { TIER_RANK, type ApplyTier } from '../config/spamRules'
 import { locationKey, titleJaccard } from './identityResolver'
+import { xrayHashOf } from './xrayService'
 
 /**
  * Feed serving (PRODUCT_FLOW §1 Stage 0, Wave 3.1) — Tier-A DETERMINISTIC
@@ -269,6 +270,12 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
     .map((p) => ({ url: p.applyUrl as string, tier: p.applyTier as ApplyTier, viaSite: p.viaSite }))
     .sort((a, b) => TIER_RANK[a.tier] - TIER_RANK[b.tier])
   const app = await JobApplication.findOne({ userId, jobPostingId: id }).select('status practiceSessionIds atsResult atsRequestedAt').lean()
+  // An atsResult is 'done' only for the CURRENT JD (Codex on #521): a merge
+  // that replaced jdCompressed must re-open the check — comparing the stored
+  // jdHash against the body we just decompressed is what re-surfaces the
+  // button. A JD-less posting keeps its historical score (nothing to
+  // re-run against).
+  const atsCurrent = !!app?.atsResult && (!jd || app.atsResult.jdHash === xrayHashOf(jd))
   return {
     ...shellOf(doc as IJobPosting),
     gated: false,
@@ -279,7 +286,7 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
       ? {
           status: app.status,
           practiceCount: Math.min(3, app.practiceSessionIds?.length ?? 0),
-          ats: app.atsResult
+          ats: app.atsResult && atsCurrent
             ? { state: 'done' as const, score: app.atsResult.score, missingKeywords: (app.atsResult.missingKeywords ?? []).slice(0, 5), checkedAt: new Date(app.atsResult.checkedAt).toISOString() }
             : app.atsRequestedAt && Date.now() - new Date(app.atsRequestedAt).getTime() < 3 * 60_000
               ? { state: 'pending' as const }
