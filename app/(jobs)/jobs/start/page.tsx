@@ -115,22 +115,26 @@ export default function JobsStartPage() {
     reader.readAsText(f)
   }
 
-  function confirmTarget() {
+  async function confirmTarget() {
     const target: JobsTarget = { method, role: role.trim(), city: city.trim(), skills }
     try {
       sessionStorage.setItem('JOBS_TARGET', JSON.stringify(target))
     } catch { /* private mode — the feed just stays Tier-A */ }
     track('jobs.resume_attach_completed', { method, skillCount: skills.length })
     track('jobs.target_role_confirmed', { edited: role.trim() !== detectedRole.trim() })
-    // Authed auto-save as "Base Resume — {role}" (Stage 2): keepalive, never
-    // blocks the reveal; 401 (anon) skips silently; the 3/3 cap surfaces as
-    // a dismissible feed notice — extraction still fed ranking either way.
+    // Authed auto-save as "Base Resume — {role}" (Stage 2). Deliberately NOT
+    // keepalive: resume payloads routinely exceed the 64KiB keepalive body
+    // cap and would reject silently (Codex on #520) — and an SPA router.push
+    // doesn't abort in-flight fetches, so keepalive buys nothing here. The
+    // reveal waits at most 1.2s so the CAP flag (a fast DB check) lands
+    // before the feed's one mount-read; a slower save still completes in
+    // flight and flags a later visit. 401 (anon) skips silently; the cap is
+    // a notice, never a block — extraction already fed ranking.
     if ((method === 'paste' || method === 'upload') && parsedResume) {
-      fetch('/api/jobs/base-resume', {
+      const save = fetch('/api/jobs/base-resume', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ resume: parsedResume, targetRole: role.trim(), fullText: rawText }),
-        keepalive: true,
+        body: JSON.stringify({ resume: parsedResume, targetRole: role.trim(), fullText: rawText.slice(0, 60_000) }),
       })
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => {
@@ -139,6 +143,7 @@ export default function JobsStartPage() {
           }
         })
         .catch(() => {})
+      await Promise.race([save, new Promise((r) => setTimeout(r, 1200))])
     }
     router.push('/jobs')
   }
