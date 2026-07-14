@@ -14,6 +14,8 @@ import AuthGateModal from '@shared/ui/AuthGateModal'
  */
 
 interface ApplyOption { url: string; tier: string; viaSite?: string }
+interface XrayReq { id: string; category: string; requirement: string; importance: 'must-have' | 'nice-to-have' }
+interface Xray { role: string; keyThemes: string[]; requirements: XrayReq[] }
 interface Detail {
   id: string
   title: string
@@ -28,6 +30,7 @@ interface Detail {
   jd?: string
   applyOptions?: ApplyOption[]
   flags?: { staffing: boolean; shortJd: boolean; repost: boolean }
+  application?: { status: string; practiceCount: number } | null
 }
 
 const TIER_SUBTITLE: Record<string, (co: string, via?: string) => string> = {
@@ -43,6 +46,8 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   const [status, setStatus] = useState<'loading' | 'ready' | 'missing'>('loading')
   const [gate, setGate] = useState<null | 'view_job_detail' | 'save_job'>(null)
   const [saved, setSaved] = useState(false)
+  const [xray, setXray] = useState<Xray | null>(null)
+  const [xrayState, setXrayState] = useState<'idle' | 'loading' | 'ready' | 'failed'>('idle')
 
   useEffect(() => {
     fetch(`/api/jobs/${params.id}`)
@@ -56,6 +61,17 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       keepalive: true,
     }).catch(() => {})
   }, [params.id])
+
+  // X-ray loads progressively AFTER the body — the first view on a posting
+  // pays a lazy LLM parse (seconds); cached thereafter. Authed only (P-2).
+  useEffect(() => {
+    if (!detail || detail.gated) return
+    setXrayState('loading')
+    fetch(`/api/jobs/${params.id}/xray`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((x) => { setXray(x); setXrayState('ready') })
+      .catch(() => setXrayState('failed'))
+  }, [detail, params.id])
 
   async function onSave() {
     const res = await fetch(`/api/jobs/${params.id}/save`, { method: 'POST' })
@@ -161,6 +177,57 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
               ))}
             </p>
           )}
+
+          {/* Verdict chip — rule 1 (launch majority: no readiness band exists
+              yet). Rules 2/4 arrive with readiness bands; rule 3 stays behind
+              its DB row (DECISIONS #19). "Not ready" is banned copy; Apply is
+              never disabled. */}
+          <div className="mt-5 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm dark:border-blue-900 dark:bg-blue-950">
+            <span className="font-medium">Apply now — prep while you wait.</span>
+            <span className="ml-2 text-xs text-gray-600 dark:text-gray-400">
+              Evidence toward readiness on this job: {detail.application?.practiceCount ?? 0}/3 sessions
+            </span>
+          </div>
+
+          <section className="mt-8" aria-label="Interview X-ray">
+            <h2 className="text-lg font-medium">Interview X-ray</h2>
+            <p className="mt-0.5 text-xs text-gray-500">What this JD says the interview will probe.</p>
+            {xrayState === 'loading' && <p className="mt-3 text-sm text-gray-500">Reading the JD…</p>}
+            {xrayState === 'failed' && <p className="mt-3 text-sm text-gray-500">X-ray unavailable for this posting.</p>}
+            {xrayState === 'ready' && xray && (
+              <div className="mt-3 space-y-4">
+                {xray.keyThemes.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {xray.keyThemes.map((t) => (
+                      <span key={t} className="rounded-full border px-2 py-0.5 text-xs text-gray-600 dark:text-gray-400">{t}</span>
+                    ))}
+                  </div>
+                )}
+                {xray.requirements.filter((r) => r.importance === 'must-have').length > 0 && (
+                  <div>
+                    <h3 className="text-sm font-medium">Must-haves</h3>
+                    <ul className="mt-1 list-inside list-disc space-y-1 text-sm text-gray-700 dark:text-gray-300">
+                      {xray.requirements.filter((r) => r.importance === 'must-have').map((r) => (
+                        <li key={r.id}>{r.requirement}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {xray.requirements.filter((r) => r.importance === 'nice-to-have').length > 0 && (
+                  <details>
+                    <summary className="cursor-pointer text-sm font-medium text-gray-600 dark:text-gray-400">
+                      Nice-to-haves ({xray.requirements.filter((r) => r.importance === 'nice-to-have').length})
+                    </summary>
+                    <ul className="mt-1 list-inside list-disc space-y-1 text-sm text-gray-600 dark:text-gray-400">
+                      {xray.requirements.filter((r) => r.importance === 'nice-to-have').map((r) => (
+                        <li key={r.id}>{r.requirement}</li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </div>
+            )}
+          </section>
 
           <section className="prose prose-sm mt-8 max-w-none whitespace-pre-wrap text-sm leading-relaxed dark:prose-invert">
             {detail.jd || 'The source didn’t provide a full description — use the posting link above.'}

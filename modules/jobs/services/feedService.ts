@@ -1,5 +1,5 @@
 import { gunzipSync } from 'zlib'
-import { JobPosting, type IJobPosting } from '@shared/db/models'
+import { JobPosting, JobApplication, type IJobPosting } from '@shared/db/models'
 import { TIER_RANK, type ApplyTier } from '../config/spamRules'
 import { locationKey } from './identityResolver'
 
@@ -178,6 +178,8 @@ export interface JobDetailFull extends Omit<JobDetailShell, 'gated'> {
   /** Tier-honest apply ladder, best-first — subtitles are the UI's job. */
   applyOptions: Array<{ url: string; tier: ApplyTier; viaSite?: string }>
   flags: { staffing: boolean; shortJd: boolean; repost: boolean }
+  /** The caller's own tracker row (chip + evidence ticker inputs). */
+  application: { status: string; practiceCount: number } | null
 }
 
 function shellOf(doc: IJobPosting): Omit<JobDetailShell, 'gated'> {
@@ -194,10 +196,10 @@ function shellOf(doc: IJobPosting): Omit<JobDetailShell, 'gated'> {
   }
 }
 
-export async function getJobDetail(id: string, authed: boolean): Promise<JobDetailShell | JobDetailFull | null> {
+export async function getJobDetail(id: string, userId?: string | null): Promise<JobDetailShell | JobDetailFull | null> {
   const doc = await JobPosting.findById(id).lean()
   if (!doc || doc.status !== 'open') return null
-  if (!authed) return { ...shellOf(doc as IJobPosting), gated: true }
+  if (!userId) return { ...shellOf(doc as IJobPosting), gated: true }
   const buf = doc.jdCompressed as Buffer | undefined
   let jd = ''
   try {
@@ -207,11 +209,13 @@ export async function getJobDetail(id: string, authed: boolean): Promise<JobDeta
     .filter((p) => p.applyUrl && p.applyTier && isSafeHttpUrl(p.applyUrl))
     .map((p) => ({ url: p.applyUrl as string, tier: p.applyTier as ApplyTier, viaSite: p.viaSite }))
     .sort((a, b) => TIER_RANK[a.tier] - TIER_RANK[b.tier])
+  const app = await JobApplication.findOne({ userId, jobPostingId: id }).select('status practiceSessionIds').lean()
   return {
     ...shellOf(doc as IJobPosting),
     gated: false,
     jd,
     applyOptions,
     flags: { staffing: !!doc.flags?.staffing, shortJd: !!doc.flags?.shortJd, repost: !!doc.flags?.repost },
+    application: app ? { status: app.status, practiceCount: Math.min(3, app.practiceSessionIds?.length ?? 0) } : null,
   }
 }

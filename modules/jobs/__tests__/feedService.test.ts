@@ -1,8 +1,11 @@
 import { describe, it, expect, vi } from 'vitest'
 import { gzipSync } from 'zlib'
 
-const { mockFind, mockFindById } = vi.hoisted(() => ({ mockFind: vi.fn(), mockFindById: vi.fn() }))
-vi.mock('@shared/db/models', () => ({ JobPosting: { find: mockFind, findById: mockFindById } }))
+const { mockFind, mockFindById, mockAppFindOne } = vi.hoisted(() => ({ mockFind: vi.fn(), mockFindById: vi.fn(), mockAppFindOne: vi.fn() }))
+vi.mock('@shared/db/models', () => ({
+  JobPosting: { find: mockFind, findById: mockFindById },
+  JobApplication: { findOne: mockAppFindOne },
+}))
 
 import { tierAScore, bestApplyTierOf, getFeed, getJobDetail } from '../services/feedService'
 
@@ -105,9 +108,11 @@ describe('getFeed (public cards — never JD, never apply URLs)', () => {
 })
 
 describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
+  mockAppFindOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(null) }) })
+
   it('anon = gated shell — JD and apply URLs are ABSENT from the object, not just hidden', async () => {
     mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({ jdCompressed: gzipSync(Buffer.from('secret JD body')) })) })
-    const d = await getJobDetail('j1', false)
+    const d = await getJobDetail('j1', null)
     expect(d).not.toBeNull()
     expect(d!.gated).toBe(true)
     const json = JSON.stringify(d)
@@ -126,7 +131,7 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
         { sourceId: 'b', externalId: '2', sourceKey: 'b:2', applyUrl: 'https://boards.greenhouse.io/x/1', applyTier: 'direct-ats' },
       ],
     })) })
-    const d = await getJobDetail('j1', true)
+    const d = await getJobDetail('j1', 'u1')
     expect(d!.gated).toBe(false)
     if (!d!.gated) {
       expect(d!.jd).toBe('build distributed things')
@@ -144,7 +149,7 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
       ],
     })
     mockFindById.mockReturnValue({ lean: () => Promise.resolve(evil) })
-    const d = await getJobDetail('j1', true)
+    const d = await getJobDetail('j1', 'u1')
     if (!d!.gated) {
       expect(d!.applyOptions).toHaveLength(1)
       expect(d!.applyOptions[0].url).toBe('https://safe.example.com/apply')
@@ -153,10 +158,17 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     expect(bestApplyTierOf(evil as never)).toBe('aggregator-deep')
   })
 
+  it('authed detail carries the caller\'s own application summary (chip + ticker inputs)', async () => {
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc()) })
+    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ status: 'apply_clicked', practiceSessionIds: ['a', 'b', 'c', 'd', 'e'] }) }) })
+    const d = await getJobDetail('j1', 'u1')
+    if (!d!.gated) expect(d!.application).toEqual({ status: 'apply_clicked', practiceCount: 3 }) // capped at 3
+  })
+
   it('closed or missing postings 404 regardless of auth', async () => {
     mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({ status: 'closed' })) })
-    expect(await getJobDetail('j1', true)).toBeNull()
+    expect(await getJobDetail('j1', 'u1')).toBeNull()
     mockFindById.mockReturnValue({ lean: () => Promise.resolve(null) })
-    expect(await getJobDetail('nope', true)).toBeNull()
+    expect(await getJobDetail('nope', 'u1')).toBeNull()
   })
 })
