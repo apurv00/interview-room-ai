@@ -80,6 +80,9 @@ export interface IJobPosting extends Document {
   jdCompressed?: Buffer
   jdLength: number
   parsedJD?: unknown
+  /** Normalized-body hash the parsedJD was computed from — a merged JD
+   *  replacement changes it and the next X-ray view re-parses (§3.1b). */
+  parsedJDHash?: string | null
   // Provenance (cap 8, eviction preserves source diversity — §4.2 guard #3)
   provenance: IJobProvenance[]
   // Quality (deterministic layer — serving consumes as demotions, never hides)
@@ -177,6 +180,7 @@ const JobPostingSchema = new Schema<IJobPosting>(
     jdCompressed: { type: Buffer },
     jdLength: { type: Number, default: 0 },
     parsedJD: { type: Schema.Types.Mixed },
+    parsedJDHash: { type: String },
     provenance: { type: [ProvenanceSchema], default: [] },
     flags: {
       staffing: { type: Boolean, default: false },

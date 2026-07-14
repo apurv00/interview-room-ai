@@ -19,8 +19,9 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     return NextResponse.json({ error: 'not found' }, { status: 404 })
   }
   const session = await getServerSession(authOptions)
+  const userId = (session?.user as { id?: string } | undefined)?.id ?? null
   await connectDB()
-  const detail = await getJobDetail(params.id, !!session?.user)
+  const detail = await getJobDetail(params.id, userId)
   if (!detail) return NextResponse.json({ error: 'not found' }, { status: 404 })
   return NextResponse.json(detail)
 }
