@@ -95,6 +95,7 @@ export default function TrackerPage() {
     if (!undo) return
     const { jobPostingId, from } = undo
     setUndo(null)
+    setDateSheetFor(null) // an undone transition must not leave its date sheet armed (Codex #525)
     await fetch(`/api/jobs/${jobPostingId}/status`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -204,7 +205,7 @@ export default function TrackerPage() {
                   </button>
                   <Link href={`/jobs/${r.jobPostingId}`} className="rounded-full border px-2 py-0.5 text-xs text-blue-600">View</Link>
                 </div>
-                {dateSheetFor === r.jobPostingId && (
+                {dateSheetFor === r.jobPostingId && r.status === 'interview_scheduled' && (
                   <div className="mt-2 rounded-lg border border-blue-300 bg-blue-50 p-2 text-xs dark:border-blue-800 dark:bg-blue-950">
                     <p className="font-medium">🎙 You got the interview. When is it?</p>
                     <div className="mt-1.5 flex flex-wrap gap-1.5">

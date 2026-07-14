@@ -159,16 +159,12 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   function answerInference(scheduled: boolean) {
     setInference('idle')
     if (scheduled) {
+      // The status route is the single jobs.interview_scheduled emitter —
+      // it fires on the edge with this flag (Codex on #525).
       fetch(`/api/jobs/${params.id}/status`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'interview_scheduled' }),
-        keepalive: true,
-      }).catch(() => {})
-      fetch('/api/events', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'jobs.interview_scheduled', jobPostingId: params.id, props: { inferredFromPrep: true } }),
+        body: JSON.stringify({ status: 'interview_scheduled', inferredFromPrep: true }),
         keepalive: true,
       }).catch(() => {})
       // Date capture waits for the feedback page (§4c) — the session comes first.
