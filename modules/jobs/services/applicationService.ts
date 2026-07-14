@@ -12,6 +12,36 @@ import { JobApplication, JobPosting } from '@shared/db/models'
  * clicking an apply link again is not evidence the pipeline moved backward.
  */
 
+/**
+ * Atomically claim the right to enqueue ONE ATS run (Codex on #521):
+ * concurrent POSTs (double-click, retry) both passed the read-then-write
+ * guard and enqueued two model calls. The marker is claimed with a
+ * conditional update — only the request that actually flipped it enqueues.
+ */
+export async function claimAtsRun(
+  userId: string,
+  jobPostingId: string,
+  now = new Date()
+): Promise<{ claimed: boolean; claimedAt: Date }> {
+  const staleBefore = new Date(now.getTime() - 3 * 60_000)
+  const res = await JobApplication.updateOne(
+    {
+      userId,
+      jobPostingId,
+      $or: [{ atsRequestedAt: { $exists: false } }, { atsRequestedAt: { $lt: staleBefore } }],
+    },
+    { $set: { atsRequestedAt: now } }
+  )
+  // claimedAt travels through the event: a superseded slow run may only
+  // clear the marker IT set — never a newer run's (Codex on #521).
+  return { claimed: (res?.modifiedCount ?? 0) === 1, claimedAt: now }
+}
+
+/** Rollback for a claim whose enqueue failed — the next click must work. */
+export async function releaseAtsClaim(userId: string, jobPostingId: string): Promise<void> {
+  await JobApplication.updateOne({ userId, jobPostingId }, { $unset: { atsRequestedAt: 1 } }).catch(() => {})
+}
+
 export interface ApplyClickResult {
   status: string
   created: boolean

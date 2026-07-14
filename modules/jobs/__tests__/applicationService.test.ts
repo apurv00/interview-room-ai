@@ -12,7 +12,7 @@ vi.mock('@shared/db/models', () => ({
   JobApplication: { findOne: mockAppFindOne, updateOne: mockAppUpdateOne, create: mockAppCreate },
 }))
 
-import { recordApplyClick } from '../services/applicationService'
+import { recordApplyClick, claimAtsRun } from '../services/applicationService'
 
 const NOW = new Date('2026-07-14T12:00:00Z')
 
@@ -76,5 +76,29 @@ describe('recordApplyClick (machine fact — never conflated with the user claim
     mockAppFindOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(null) }) })
     const r = await recordApplyClick('u1', 'j1', {}, NOW)
     expect(r?.status).toBe('apply_clicked') // a real click on a stale-but-rendered page is still a machine fact
+  })
+})
+
+describe('claimAtsRun (atomic single-enqueue claim, Codex #521)', () => {
+  it('the winner flips the marker (modifiedCount 1); the loser does not enqueue', async () => {
+    reset()
+    mockPostingUpdateOne.mockReset()
+    mockAppUpdateOne.mockResolvedValueOnce({ modifiedCount: 1 })
+    const win = await claimAtsRun('u1', 'j1')
+    expect(win.claimed).toBe(true)
+    expect(win.claimedAt).toBeInstanceOf(Date)
+    const [filter] = mockAppUpdateOne.mock.calls[0]
+    expect(filter.$or).toBeDefined() // conditional claim, not unconditional set
+    mockAppUpdateOne.mockResolvedValueOnce({ modifiedCount: 0 })
+    expect((await claimAtsRun('u1', 'j1')).claimed).toBe(false)
+  })
+
+  it('a stale (>3min) marker is reclaimable via the same conditional', async () => {
+    reset()
+    mockAppUpdateOne.mockResolvedValueOnce({ modifiedCount: 1 })
+    const now = new Date('2026-07-14T12:00:00Z')
+    await claimAtsRun('u1', 'j1', now)
+    const [filter] = mockAppUpdateOne.mock.calls[0]
+    expect(filter.$or[1].atsRequestedAt.$lt).toEqual(new Date('2026-07-14T11:57:00Z'))
   })
 })
