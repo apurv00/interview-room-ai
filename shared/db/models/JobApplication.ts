@@ -58,7 +58,8 @@ export interface IJobApplication extends Document {
     askCount: number
   }
   tailoredVersion?: {
-    sourceResumeId: string
+    /** Absent for paste/upload-sourced tailors — only saved-resume sources have one. */
+    sourceResumeId?: string
     tailoredText: string
     structured?: unknown
     matchScore?: number
@@ -137,7 +138,7 @@ const JobApplicationSchema = new Schema<IJobApplication>(
     tailoredVersion: {
       type: new Schema(
         {
-          sourceResumeId: { type: String, required: true },
+          sourceResumeId: { type: String },
           tailoredText: { type: String, required: true, maxlength: 60000 },
           structured: { type: Schema.Types.Mixed },
           matchScore: { type: Number, min: 0, max: 100 },

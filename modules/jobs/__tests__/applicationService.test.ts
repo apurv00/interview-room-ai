@@ -210,6 +210,7 @@ describe('recordPracticeEvidence (Wave 4.3 — the evidence ticker source)', () 
 describe('saveTailoredVersion (§2 — latest-wins, never a cap seat)', () => {
   const { gzipSync } = require('zlib')
   const PAYLOAD = { tailoredText: 'TAILORED', sourceResumeId: 'r1', matchScore: 78, addedKeywords: ['sql'], missingKeywords: ['kafka'] }
+  const PASTE_PAYLOAD = { tailoredText: 'TAILORED', sourceResumeId: undefined, matchScore: 78, addedKeywords: [], missingKeywords: [] }
   function postingChain(doc: unknown) {
     mockPostingFindById.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(doc) }) })
   }
@@ -237,6 +238,17 @@ describe('saveTailoredVersion (§2 — latest-wins, never a cap seat)', () => {
     expect(created.status).toBe('saved')
     expect(created.tailoredVersion.tailoredText).toBe('TAILORED')
     expect(mockPostingUpdateOne).toHaveBeenCalledWith({ _id: 'j1' }, { $set: { userReferenced: true }, $unset: { purgeAt: 1 } })
+  })
+
+  it('paste-sourced tailors (no sourceResumeId) create cleanly — empty string never reaches Mongoose (Codex P1 #526)', async () => {
+    reset()
+    postingChain({ title: 'SDE', company: 'X', locations: [], provenance: [], status: 'open' })
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
+    const r = await saveTailoredVersion('u1', 'j1', PASTE_PAYLOAD, NOW)
+    expect(r).toEqual({ ok: true })
+    const created = mockAppCreate.mock.calls[0][0]
+    expect(created.tailoredVersion.sourceResumeId).toBeUndefined() // absent, not ''
+    expect('sourceResumeId' in created.tailoredVersion && created.tailoredVersion.sourceResumeId === '').toBe(false)
   })
 
   it('missing posting → ok:false; create race falls back to update', async () => {

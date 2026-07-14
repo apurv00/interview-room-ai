@@ -54,7 +54,7 @@ export async function releaseAtsClaim(userId: string, jobPostingId: string): Pro
 export async function saveTailoredVersion(
   userId: string,
   jobPostingId: string,
-  payload: { tailoredText: string; sourceResumeId: string; matchScore?: number; addedKeywords: string[]; missingKeywords: string[] },
+  payload: { tailoredText: string; sourceResumeId?: string; matchScore?: number; addedKeywords: string[]; missingKeywords: string[] },
   now = new Date()
 ): Promise<{ ok: boolean }> {
   const posting = await JobPosting.findById(jobPostingId).select('title company locations provenance status jdCompressed').lean()
@@ -66,7 +66,10 @@ export async function saveTailoredVersion(
     if (jd) jdHash = xrayHashOf(jd)
   } catch { /* no jd → empty hash */ }
 
-  const tailoredVersion = { ...payload, jdHash, createdAt: now }
+  // '' would fail the schema's string validation on create (Mongoose treats
+  // empty as missing) — paste/upload-sourced tailors simply have no source
+  // resume (Codex P1 on #526).
+  const tailoredVersion = { ...payload, sourceResumeId: payload.sourceResumeId || undefined, jdHash, createdAt: now }
   const res = await JobApplication.updateOne({ userId, jobPostingId }, { $set: { tailoredVersion } })
   if ((res?.matchedCount ?? 0) > 0) return { ok: true }
 

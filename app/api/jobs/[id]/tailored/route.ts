@@ -34,7 +34,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   await connectDB()
   const result = await saveTailoredVersion(userId, params.id, {
     tailoredText: body.tailoredText.slice(0, 100_000),
-    sourceResumeId: typeof body.sourceResumeId === 'string' ? body.sourceResumeId.slice(0, 100) : '',
+    sourceResumeId: typeof body.sourceResumeId === 'string' && body.sourceResumeId ? body.sourceResumeId.slice(0, 100) : undefined,
     matchScore: typeof body.matchScore === 'number' ? Math.max(0, Math.min(100, body.matchScore)) : undefined,
     addedKeywords: Array.isArray(body.addedKeywords) ? (body.addedKeywords as string[]).slice(0, 30).map((k) => String(k).slice(0, 60)) : [],
     missingKeywords: Array.isArray(body.missingKeywords) ? (body.missingKeywords as string[]).slice(0, 30).map((k) => String(k).slice(0, 60)) : [],

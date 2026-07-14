@@ -137,7 +137,10 @@ export default function TailorPage() {
       if (res.ok) {
         setResult(data)
       // Persist on the application row (latest-wins; never a cap seat).
-      if (jobId) {
+      // Truncated outputs are NOT persisted — the same flags already
+      // disable 'Save as New Resume' because the text omits the untouched
+      // tail (Codex on #526); an incomplete per-job resume is worse than none.
+      if (jobId && !data.inputTruncated && !data.outputTruncated) {
         fetch(`/api/jobs/${jobId}/tailored`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
