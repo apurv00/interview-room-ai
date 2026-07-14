@@ -27,6 +27,8 @@ vi.mock('@shared/db/models', () => ({
   JobIngestCycle: { create: mockCycleCreate },
   // §4.5 switch read once per sync — OFF keeps these tests byte-identical.
   JobsVerdictConfig: { getConfig: vi.fn().mockResolvedValue({ collectionEnabled: false, enforceEnabled: false }) },
+  // Pin re-derivation (§2): default = a live tracker row exists.
+  JobApplication: { exists: vi.fn().mockResolvedValue({ _id: 'app1' }) },
 }))
 vi.mock('../adapters/jsearchAdapter', async (importOriginal) => {
   const real = await importOriginal<typeof import('../adapters/jsearchAdapter')>()
@@ -319,6 +321,20 @@ describe('board delisting closure (§4.3 board-poll-miss; Codex #513 P2)', () =>
     await runSourceSyncHandler({ data: { sourceId: 'gh:phonepe' } }, step, { interRequestDelayMs: 0 })
     expect(pinned.status).toBe('closed')
     expect(pinned.purgeAt).toBeUndefined()
+
+    // ...but an ORPHANED pin (tracker rows cascaded away) re-derives to
+    // unpinned: pin cleared, TTL stamped (Codex #517 round-3)
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [] })
+    const models = await import('@shared/db/models')
+    vi.mocked(models.JobApplication.exists).mockResolvedValueOnce(null as never)
+    const orphaned = { provenance: [{ sourceId: 'gh:phonepe', sourceKey: 'gh:phonepe:z8' }], boardPollMisses: 1, userReferenced: true, save: vi.fn().mockResolvedValue(undefined) } as Record<string, unknown>
+    vi.mocked(models.JobPosting.find).mockReturnValueOnce({ limit: () => Promise.resolve([orphaned]) } as never)
+    await runSourceSyncHandler({ data: { sourceId: 'gh:phonepe' } }, step, { interRequestDelayMs: 0 })
+    expect(orphaned.userReferenced).toBe(false)
+    expect(orphaned.purgeAt).toBeInstanceOf(Date)
 
     // failed fetch: the sweep must not run at all
     resetAll()
