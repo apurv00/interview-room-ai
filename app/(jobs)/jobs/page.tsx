@@ -115,7 +115,10 @@ export default function JobsPage() {
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10" aria-label="Job feed">
-      <h1 className="text-2xl font-semibold">Jobs</h1>
+      <div className="flex items-baseline justify-between">
+        <h1 className="text-2xl font-semibold">Jobs</h1>
+        <Link href="/jobs/tracker" className="text-sm text-blue-600 hover:underline">My tracker</Link>
+      </div>
 
       {target ? (
         <div className="mt-4 flex items-center justify-between rounded-xl border p-3">

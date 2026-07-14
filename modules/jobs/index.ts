@@ -37,4 +37,5 @@ export { recordApplyClick, claimAtsRun, releaseAtsClaim, transitionStatus, repor
 export type { UserSettableStatus } from './services/applicationService'
 export { getOrParseXray } from './services/xrayService'
 export { saveBaseResume, getBaseResume } from './services/baseResumeService'
+export { getTracker, dismissConfirmCard, saveNotes, GHOST_AFTER_DAYS } from './services/trackerService'
 export type { FeedQuery, FeedCard, JobDetailShell, JobDetailFull } from './services/feedService'
