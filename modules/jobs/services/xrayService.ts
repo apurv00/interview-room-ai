@@ -31,8 +31,14 @@ export function xrayHashOf(jd: string): string {
   return createHash('sha1').update(jd).digest('hex').slice(0, 20)
 }
 
+/** rawText is deliberately ABSENT: persisting the parser's echo of the full
+ *  JD would duplicate every posting's body uncompressed inside parsedJD and
+ *  survive retention slimming after jdCompressed is stripped (Codex on
+ *  #518). Consumers that need the JD text read jdCompressed. */
+export type XrayParsed = Omit<IParsedJobDescription, 'rawText'>
+
 export interface XrayResult {
-  parsed: IParsedJobDescription
+  parsed: XrayParsed
   cached: boolean
 }
 
@@ -40,7 +46,9 @@ export async function getOrParseXray(jobPostingId: string): Promise<XrayResult |
   const doc = await JobPosting.findById(jobPostingId)
     .select('jdCompressed parsedJD parsedJDHash status')
     .lean()
-  if (!doc) return null
+  // Closed postings 404 on the detail body — the X-ray endpoint must not
+  // out-serve it during the retention window (Codex on #518).
+  if (!doc || doc.status !== 'open') return null
 
   const buf = doc.jdCompressed as Buffer | undefined
   let jd = ''
@@ -51,10 +59,10 @@ export async function getOrParseXray(jobPostingId: string): Promise<XrayResult |
 
   const hash = xrayHashOf(jd)
   if (doc.parsedJD && doc.parsedJDHash === hash) {
-    return { parsed: doc.parsedJD as IParsedJobDescription, cached: true }
+    return { parsed: doc.parsedJD as XrayParsed, cached: true }
   }
 
-  const parsed = await parseJobDescription(jd)
-  await JobPosting.updateOne({ _id: jobPostingId }, { $set: { parsedJD: parsed, parsedJDHash: hash } })
-  return { parsed, cached: false }
+  const { rawText: _omit, ...extracted } = await parseJobDescription(jd)
+  await JobPosting.updateOne({ _id: jobPostingId }, { $set: { parsedJD: extracted, parsedJDHash: hash } })
+  return { parsed: extracted, cached: false }
 }
