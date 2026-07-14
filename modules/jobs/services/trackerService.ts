@@ -14,9 +14,11 @@ import { logger } from '@shared/logger'
  *   allows any user correction, and `ghosted` renders as "No response",
  *   never the g-word.
  * - The next-visit confirm card (anti-nag ask #2 — the return-sheet was
- *   ask #1) surfaces apply_clicked rows 20h-7d old while the outcome
- *   askCount budget (<2) allows; dismissing spends the budget. After the
- *   budget: the row just reads "Clicked · not confirmed" with one-tap flip.
+ *   ask #1, but the sheet is EPHEMERAL: closing it persists nothing). The
+ *   card therefore owns exactly ONE persisted ask: it surfaces apply_clicked
+ *   rows 20h-7d old while askCount is 0, and a single dismissal retires it.
+ *   After that the row just reads "Clicked · not confirmed" with one-tap
+ *   flip (Codex on #523 — a <2 budget made users dismiss the card twice).
  */
 
 export const GHOST_AFTER_DAYS = 35
@@ -24,7 +26,7 @@ const NUDGE_WAITING_DAYS = 7
 const NUDGE_GHOST_PROMPT_DAYS = 21
 const CONFIRM_MIN_HOURS = 20
 const CONFIRM_MAX_DAYS = 7
-const ASK_BUDGET = 2
+const CARD_ASK_BUDGET = 1
 
 const GHOSTABLE_STATUSES = ['apply_clicked', 'applied'] as const
 
@@ -120,7 +122,7 @@ export async function getTracker(userId: string, now = new Date()): Promise<Trac
   const candidate = apps
     .filter((a) => {
       if (a.status !== 'apply_clicked') return false
-      if ((a.outcome?.askCount ?? 0) >= ASK_BUDGET) return false
+      if ((a.outcome?.askCount ?? 0) >= CARD_ASK_BUDGET) return false
       const ageMs = now.getTime() - lastActivityAt(a).getTime()
       return ageMs >= CONFIRM_MIN_HOURS * 3600_000 && ageMs <= CONFIRM_MAX_DAYS * 24 * 3600_000
     })

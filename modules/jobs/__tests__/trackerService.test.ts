@@ -113,10 +113,19 @@ describe('getTracker (Wave 4.2 — all time logic at read time)', () => {
       app({ status: 'apply_clicked', statusHistory: [{ status: 'apply_clicked', at: daysAgo(1), source: 'system' }], jobSnapshot: { title: 'SDE', company: 'Meesho', location: '' } }),
       app({ status: 'apply_clicked', statusHistory: [{ status: 'apply_clicked', at: daysAgo(0, 2), source: 'system' }] }), // too fresh (2h)
       app({ status: 'apply_clicked', statusHistory: [{ status: 'apply_clicked', at: daysAgo(9), source: 'system' }] }), // too old
-      app({ status: 'apply_clicked', statusHistory: [{ status: 'apply_clicked', at: daysAgo(2), source: 'system' }], outcome: { askCount: 2 } }), // budget spent
+      app({ status: 'apply_clicked', statusHistory: [{ status: 'apply_clicked', at: daysAgo(2), source: 'system' }], outcome: { askCount: 1 } }), // ONE dismissal retires the card
     ])
     const v = await getTracker('u1', NOW)
     expect(v.confirmCard).toMatchObject({ company: 'Meesho' })
+  })
+
+  it('a single dismissal retires the card — no double-dismiss (Codex #523)', async () => {
+    reset()
+    chain([app({ status: 'apply_clicked', statusHistory: [{ status: 'apply_clicked', at: daysAgo(1), source: 'system' }], outcome: { askCount: 1 } })])
+    const v = await getTracker('u1', NOW)
+    expect(v.confirmCard).toBeNull()
+    // the row still offers the one-tap flip
+    expect(v.groups.flatMap((g) => g.rows)[0].unconfirmedClick).toBe(true)
   })
 
   it('no eligible row → no confirm card', async () => {
