@@ -76,7 +76,14 @@ export default function TrackerPage() {
       body: JSON.stringify({ status: to }),
     }).catch(() => null)
     if (res?.ok) {
-      setUndo({ jobPostingId, from, label: `Moved to ${STATUS_LABEL[to] ?? to}` })
+      // Undo replays `from` through the USER status route — apply_clicked is
+      // the machine fact and deliberately not user-settable (letting undo
+      // restore it would let anyone fabricate clicks), so moves off a
+      // 'Clicked · not confirmed' row don't offer undo; the chip strip still
+      // reaches every legitimate state (Codex on #523).
+      if (from !== 'apply_clicked') {
+        setUndo({ jobPostingId, from, label: `Moved to ${STATUS_LABEL[to] ?? to}` })
+      }
       load()
     }
   }
