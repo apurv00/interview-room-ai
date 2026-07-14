@@ -308,6 +308,18 @@ describe('board delisting closure (§4.3 board-poll-miss; Codex #513 P2)', () =>
     // sweep must not fire on a drifted run
     expect(vi.mocked(JP.find)).not.toHaveBeenCalled()
 
+    // a SAVED (userReferenced) posting closes on the 2nd miss but must
+    // NEVER get a purgeAt — the tracker keeps its _id forever (Codex #517)
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [] })
+    const pinned = { provenance: [{ sourceId: 'gh:phonepe', sourceKey: 'gh:phonepe:z9' }], boardPollMisses: 1, userReferenced: true, save: vi.fn().mockResolvedValue(undefined) } as Record<string, unknown>
+    vi.mocked((await import('@shared/db/models')).JobPosting.find).mockReturnValueOnce({ limit: () => Promise.resolve([pinned]) } as never)
+    await runSourceSyncHandler({ data: { sourceId: 'gh:phonepe' } }, step, { interRequestDelayMs: 0 })
+    expect(pinned.status).toBe('closed')
+    expect(pinned.purgeAt).toBeUndefined()
+
     // failed fetch: the sweep must not run at all
     resetAll()
     mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })

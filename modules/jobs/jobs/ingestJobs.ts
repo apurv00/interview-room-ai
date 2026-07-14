@@ -328,7 +328,9 @@ export async function runSourceSyncHandler(
           doc.status = 'closed'
           doc.closedReason = 'board-poll-miss'
           doc.closedAt = new Date()
-          doc.purgeAt = new Date(Date.now() + 7 * 24 * 3600 * 1000)
+          // userReferenced rows (saved/tracked) close but NEVER purge —
+          // the tracker keeps a stable _id forever (§4.3; Codex on #517).
+          if (!doc.userReferenced) doc.purgeAt = new Date(Date.now() + 7 * 24 * 3600 * 1000)
         }
         await doc.save()
       }

@@ -28,6 +28,12 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   if (!posting || posting.status !== 'open') return NextResponse.json({ error: 'not found' }, { status: 404 })
 
   const now = new Date()
+  // Retention pin (PRODUCT_FLOW §2: creation sets ingestion's userReferenced
+  // pin — the tracker needs a stable posting _id forever). $unset purgeAt in
+  // the same write: the delisting sweep can close+stamp between our open-
+  // check read and this write, and a pinned row must never carry a TTL
+  // (Codex on #517). Runs on the already-saved path too — self-healing.
+  await JobPosting.updateOne({ _id: params.id }, { $set: { userReferenced: true }, $unset: { purgeAt: 1 } })
   const existing = await JobApplication.findOne({ userId, jobPostingId: params.id }).select('status').lean()
   if (existing) {
     return NextResponse.json({ ok: true, status: existing.status, alreadySaved: true })
