@@ -31,7 +31,7 @@ interface FeedPayload {
   sharpened?: number
 }
 interface JobsTarget {
-  method: 'paste' | 'upload' | 'questions'
+  method: 'paste' | 'upload' | 'questions' | 'import'
   role: string
   city: string
   skills: string[]
@@ -62,6 +62,7 @@ export default function JobsPage() {
   const [error, setError] = useState(false)
   const [target, setTarget] = useState<JobsTarget | null>(null)
   const [targetLoaded, setTargetLoaded] = useState(false)
+  const [capNotice, setCapNotice] = useState(false)
 
   // The confirm bar's output (sessionStorage — dies with the tab; a
   // stranger's resume structure never persists server-side).
@@ -74,8 +75,14 @@ export default function JobsPage() {
         if (t.city) { setCity(t.city); setCityInput(t.city) }
       }
     } catch { /* private mode / corrupt entry — Tier-A feed */ }
+    try { setCapNotice(sessionStorage.getItem('JOBS_CAP_NOTICE') === '1') } catch { /* noop */ }
     setTargetLoaded(true)
   }, [])
+
+  function dismissCapNotice() {
+    setCapNotice(false)
+    try { sessionStorage.removeItem('JOBS_CAP_NOTICE') } catch { /* noop */ }
+  }
 
   useEffect(() => {
     if (!targetLoaded) return
@@ -144,6 +151,16 @@ export default function JobsPage() {
           Filter
         </button>
       </form>
+
+      {capNotice && (
+        <div className="mt-4 flex items-start justify-between rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950">
+          <p>
+            Your resume library is full (3/3), so we didn&apos;t save this one — your feed is still
+            sorted by it. <Link href="/resume" className="underline">Manage resumes</Link>
+          </p>
+          <button onClick={dismissCapNotice} aria-label="Dismiss" className="ml-3 text-gray-500 hover:text-gray-700">✕</button>
+        </div>
+      )}
 
       {error && <p className="mt-8 text-sm text-red-600">The feed hit a snag — refresh to retry.</p>}
       {!data && !error && <p className="mt-8 text-sm text-gray-500">Loading jobs…</p>}
