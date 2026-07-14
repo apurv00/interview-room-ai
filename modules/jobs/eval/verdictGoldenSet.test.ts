@@ -55,6 +55,26 @@ interface Fixture {
 const LIVE = process.env.JOBS_VERDICT_EVAL === '1'
 const CONCURRENCY = 4
 
+/**
+ * The router's cold start serves TASK_SLOT_DEFAULTS synchronously while the
+ * CMS ModelConfig load runs in the background (cold-defaults-synthetic
+ * path) — a fresh eval process right after a CMS cutover would freeze the
+ * OLD default as the epoch and then either benchmark the wrong model or
+ * mass-reject the real one as model-mismatch (Codex on #516). Freeze the
+ * epoch only once two spaced resolutions agree; with no CMS override (or
+ * no Mongo in the env) resolution is immediately stable on the defaults.
+ */
+async function stableEpochModel(): Promise<string> {
+  let prev = await resolveExpectedVerdictModel()
+  for (let i = 0; i < 5; i++) {
+    await new Promise((r) => setTimeout(r, 1500))
+    const next = await resolveExpectedVerdictModel()
+    if (next === prev) return next
+    prev = next
+  }
+  return prev
+}
+
 async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length)
   let i = 0
@@ -73,7 +93,7 @@ async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Prom
 describe.skipIf(!LIVE)('verdict golden-set live eval (JOBS_VERDICT_EVAL=1)', () => {
   it('fraud-FP < 2% on labeled-genuine; evaluator failure rate < 5%', async () => {
     const fixtures = goldenSet as Fixture[]
-    const epochModel = await resolveExpectedVerdictModel()
+    const epochModel = await stableEpochModel()
     let totalCost = 0
     const deps: EvaluatorDeps = {
       checkBudget: async () => ({ allowed: true, softening: false }),
