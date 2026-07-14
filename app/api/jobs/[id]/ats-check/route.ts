@@ -35,6 +35,14 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   }
 
   await JobApplication.updateOne({ userId, jobPostingId: params.id }, { $set: { atsRequestedAt: new Date() } })
-  await inngest.send({ name: 'jobs/ats.requested', data: { userId, jobPostingId: params.id } })
+  try {
+    await inngest.send({ name: 'jobs/ats.requested', data: { userId, jobPostingId: params.id } })
+  } catch (err) {
+    // Marker without a job = three minutes of polling a check that cannot
+    // complete, and re-clicks swallowed by the duplicate guard (Codex on
+    // #521). Roll it back so the button works on the next click.
+    await JobApplication.updateOne({ userId, jobPostingId: params.id }, { $unset: { atsRequestedAt: 1 } }).catch(() => {})
+    throw err
+  }
   return NextResponse.json({ status: 'pending' })
 }
