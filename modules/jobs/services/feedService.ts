@@ -1,7 +1,7 @@
 import { gunzipSync } from 'zlib'
 import { JobPosting, JobApplication, type IJobPosting } from '@shared/db/models'
 import { TIER_RANK, type ApplyTier } from '../config/spamRules'
-import { locationKey } from './identityResolver'
+import { locationKey, titleJaccard } from './identityResolver'
 
 /**
  * Feed serving (PRODUCT_FLOW §1 Stage 0, Wave 3.1) — Tier-A DETERMINISTIC
@@ -34,6 +34,13 @@ export interface FeedQuery {
   includeRemote?: boolean
   page?: number
   pageSize?: number
+  /** Tier-B (stateless, PRODUCT_FLOW §1 Stage 1): extracted resume skills
+   *  passed from the CLIENT's sessionStorage — never persisted server-side
+   *  for strangers. Capped upstream by the route. */
+  skills?: string[]
+  /** The confirm bar's editable "Role you're targeting" — future intent,
+   *  not resume past (career_switch exists). */
+  targetRole?: string
 }
 
 export interface FeedCard {
@@ -47,8 +54,12 @@ export interface FeedCard {
   salaryText?: string
   /** Best apply path across provenance — badge copy is tier-honest. */
   applyTier?: ApplyTier
-  /** "Looks relevant · title & location match" is the ONLY claim Tier-A may make. */
-  relevance: 'title-location'
+  /** Tier-A cards claim ONLY "title & location match"; Tier-B cards may
+   *  name the resume evidence — but ONLY the skills that actually matched
+   *  (reveal honesty, §4a: claim "based on your resume: X, Y" solely from
+   *  this list). */
+  relevance: 'title-location' | 'resume'
+  matchedSkills: string[]
 }
 
 // ── Tier-A scoring (deterministic; every weight visible in one place) ────────
@@ -61,6 +72,11 @@ const TIER_BONUS: Record<ApplyTier, number> = {
 }
 const DOMAIN_MATCH_BONUS = 25
 const LOCATION_MATCH_BONUS = 20
+/** Tier-B: per matched resume skill (cap 3 count) + target-role title affinity. */
+const SKILL_MATCH_BONUS = 8
+const SKILL_MATCH_CAP = 3
+const ROLE_MATCH_BONUS = 20
+const ROLE_MATCH_JACCARD = 0.5
 const DEMOTION = { staffing: 10, shortJd: 8, repost: 6, confidential: 4 } as const
 /** Linear recency decay to zero over 21 days — beyond that, freshness stops discriminating. */
 const RECENCY_MAX = 25
@@ -90,6 +106,22 @@ export function bestApplyTierOf(doc: Pick<IJobPosting, 'provenance'>): ApplyTier
   return best
 }
 
+/** Which of the seeker's skills this posting's TITLE actually evidences —
+ *  deterministic, and the only permitted source of reveal copy. */
+export function matchedSkillsOf(
+  doc: Pick<IJobPosting, 'title' | 'titleTokens'>,
+  skills: string[] | undefined
+): string[] {
+  if (!skills?.length) return []
+  const tokens = new Set((doc.titleTokens ?? []).map((t) => t.toLowerCase()))
+  const titleLower = (doc.title ?? '').toLowerCase()
+  return skills.filter((sk) => {
+    const s = sk.trim().toLowerCase()
+    if (!s) return false
+    return tokens.has(s) || (s.length >= 3 && titleLower.includes(s))
+  })
+}
+
 export function tierAScore(
   doc: Pick<IJobPosting, 'provenance' | 'flags' | 'confidentialCompany' | 'domain' | 'locationKeys' | 'isRemote' | 'postedAt'>,
   q: { domain?: string; locKey?: string; includeRemote?: boolean },
@@ -114,7 +146,25 @@ export function tierAScore(
   return score
 }
 
-export async function getFeed(query: FeedQuery, now = new Date()): Promise<{ cards: FeedCard[]; page: number; hasMore: boolean; total: number }> {
+/** Tier-B on top of Tier-A: same deterministic base, plus resume-skill and
+ *  target-role affinity. With no skills/targetRole this is EXACTLY tierAScore
+ *  (pinned by test) — the 3-questions path gets Tier-A + role filter and no
+ *  resume-flavored claims. */
+export function tierBScore(
+  doc: Pick<IJobPosting, 'provenance' | 'flags' | 'confidentialCompany' | 'domain' | 'locationKeys' | 'isRemote' | 'postedAt' | 'title' | 'titleTokens'>,
+  q: { domain?: string; locKey?: string; includeRemote?: boolean; skills?: string[]; targetRole?: string },
+  now: Date
+): number {
+  let score = tierAScore(doc, q, now)
+  const matched = matchedSkillsOf(doc, q.skills)
+  score += Math.min(matched.length, SKILL_MATCH_CAP) * SKILL_MATCH_BONUS
+  if (q.targetRole && titleJaccard(q.targetRole, doc.title ?? '') >= ROLE_MATCH_JACCARD) {
+    score += ROLE_MATCH_BONUS
+  }
+  return score
+}
+
+export async function getFeed(query: FeedQuery, now = new Date()): Promise<{ cards: FeedCard[]; page: number; hasMore: boolean; total: number; sharpened: number }> {
   const page = Math.max(1, Math.floor(query.page ?? 1))
   const pageSize = Math.min(PAGE_SIZE_MAX, Math.max(1, Math.floor(query.pageSize ?? PAGE_SIZE_DEFAULT)))
   const locKey = query.city ? locationKey(query.city) : undefined
@@ -126,19 +176,20 @@ export async function getFeed(query: FeedQuery, now = new Date()): Promise<{ car
   if (locKey) filter.$or = [{ locationKeys: locKey }, { isRemote: true }]
 
   const docs = await JobPosting.find(filter)
-    .select('title company locations isRemote domain postedAt salaryText provenance flags confidentialCompany locationKeys')
+    .select('title titleTokens company locations isRemote domain postedAt salaryText provenance flags confidentialCompany locationKeys')
     .sort({ postedAt: -1, _id: -1 })
     .limit(CANDIDATE_POOL)
     .lean()
 
+  const rankQ = { domain: query.domain, locKey, includeRemote: query.includeRemote ?? true, skills: query.skills, targetRole: query.targetRole }
   const scored = docs
-    .map((d) => ({ d, score: tierAScore(d as IJobPosting, { domain: query.domain, locKey, includeRemote: query.includeRemote ?? true }, now) }))
+    .map((d) => ({ d, score: tierBScore(d as IJobPosting, rankQ, now), matched: matchedSkillsOf(d as IJobPosting, query.skills) }))
     .sort((a, b) => b.score - a.score || String(b.d._id).localeCompare(String(a.d._id)))
 
   const start = (page - 1) * pageSize
   const slice = scored.slice(start, start + pageSize)
   return {
-    cards: slice.map(({ d }) => ({
+    cards: slice.map(({ d, matched }) => ({
       id: String(d._id),
       title: d.title,
       company: d.company,
@@ -148,11 +199,15 @@ export async function getFeed(query: FeedQuery, now = new Date()): Promise<{ car
       postedAt: d.postedAt ? new Date(d.postedAt).toISOString() : undefined,
       salaryText: d.salaryText,
       applyTier: bestApplyTierOf(d as IJobPosting),
-      relevance: 'title-location' as const,
+      relevance: matched.length ? ('resume' as const) : ('title-location' as const),
+      matchedSkills: matched,
     })),
     page,
     hasMore: start + pageSize < scored.length,
     total: scored.length,
+    // Reveal honesty (§4a): "sharpened N matches" only when matched-skill
+    // sets actually changed something — otherwise the UI says "Feed refreshed."
+    sharpened: scored.filter((x) => x.matched.length > 0).length,
   }
 }
 

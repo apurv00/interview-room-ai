@@ -18,11 +18,22 @@ export async function GET(req: Request) {
   const domain = domainParam && JOB_DOMAINS.some((d) => d.id === domainParam) ? domainParam : undefined
   const city = (url.searchParams.get('city') ?? '').slice(0, 80) || undefined
   const page = Number(url.searchParams.get('page') ?? 1)
+  // Tier-B inputs come from the CLIENT's sessionStorage (stateless — a
+  // stranger's resume structure never persists server-side). Clamped hard:
+  // 20 skills × 40 chars, role 80 chars.
+  const skills = (url.searchParams.get('skills') ?? '')
+    .split(',')
+    .map((s) => s.trim().slice(0, 40))
+    .filter(Boolean)
+    .slice(0, 20)
+  const targetRole = (url.searchParams.get('targetRole') ?? '').slice(0, 80) || undefined
   await connectDB()
   const feed = await getFeed({
     domain,
     city,
     page: Number.isFinite(page) ? page : 1,
+    skills: skills.length ? skills : undefined,
+    targetRole,
   })
   return NextResponse.json(feed)
 }
