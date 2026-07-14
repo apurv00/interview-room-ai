@@ -203,7 +203,7 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc()) })
     mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ status: 'apply_clicked', practiceSessionIds: ['a', 'b', 'c', 'd', 'e'] }) }) })
     const d = await getJobDetail('j1', 'u1')
-    if (!d!.gated) expect(d!.application).toEqual({ status: 'apply_clicked', practiceCount: 3 }) // capped at 3
+    if (!d!.gated) expect(d!.application).toEqual({ status: 'apply_clicked', practiceCount: 3, ats: { state: 'none' } }) // practiceCount capped at 3
   })
 
   it('closed or missing postings 404 regardless of auth', async () => {

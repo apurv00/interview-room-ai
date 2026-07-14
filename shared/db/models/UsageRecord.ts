@@ -6,7 +6,7 @@ export interface IUsageRecord extends Document {
   userId: mongoose.Types.ObjectId
   organizationId?: mongoose.Types.ObjectId
 
-  type: 'interview_session' | 'api_call_question' | 'api_call_evaluate' | 'api_call_feedback'
+  type: 'interview_session' | 'api_call_question' | 'api_call_evaluate' | 'api_call_feedback' | 'ats_check' | 'jd_parse' | 'resume_tailor'
   sessionId?: mongoose.Types.ObjectId
 
   inputTokens: number
@@ -28,7 +28,8 @@ const UsageRecordSchema = new Schema<IUsageRecord>(
 
     type: {
       type: String,
-      enum: ['interview_session', 'api_call_question', 'api_call_evaluate', 'api_call_feedback'],
+      // + the jobs quota seams (PRODUCT_FLOW §2): recorded from launch, gated by nothing until P-1 resolves.
+      enum: ['interview_session', 'api_call_question', 'api_call_evaluate', 'api_call_feedback', 'ats_check', 'jd_parse', 'resume_tailor'],
       required: true,
     },
     sessionId: { type: Schema.Types.ObjectId, ref: 'InterviewSession' },

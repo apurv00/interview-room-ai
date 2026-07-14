@@ -74,6 +74,9 @@ export interface IJobApplication extends Document {
     jdHash: string
     checkedAt: Date
   }
+  /** Set when a background check is queued; cleared on completion/failure.
+   *  Pending = atsRequestedAt set AND (no atsResult OR older checkedAt). */
+  atsRequestedAt?: Date
   notes?: string
   brokenLinkReports: Array<{ url: string; reportedAt: Date }>
   practiceSessionIds: mongoose.Types.ObjectId[]
@@ -154,6 +157,7 @@ const JobApplicationSchema = new Schema<IJobApplication>(
         { _id: false }
       ),
     },
+    atsRequestedAt: { type: Date },
     notes: { type: String, maxlength: 5000 },
     brokenLinkReports: {
       type: [

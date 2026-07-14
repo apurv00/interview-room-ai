@@ -55,4 +55,12 @@ export type InngestEvents = {
       limit?: number
     }
   }
+  // Save-gated per-job ATS check (Wave 3.3): the ~35s Sonnet checkATS never
+  // runs inline; ids only.
+  'jobs/ats.requested': {
+    data: {
+      userId: string
+      jobPostingId: string
+    }
+  }
 }

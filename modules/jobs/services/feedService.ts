@@ -233,8 +233,12 @@ export interface JobDetailFull extends Omit<JobDetailShell, 'gated'> {
   /** Tier-honest apply ladder, best-first — subtitles are the UI's job. */
   applyOptions: Array<{ url: string; tier: ApplyTier; viaSite?: string }>
   flags: { staffing: boolean; shortJd: boolean; repost: boolean }
-  /** The caller's own tracker row (chip + evidence ticker inputs). */
-  application: { status: string; practiceCount: number } | null
+  /** The caller's own tracker row (chip + evidence ticker + ATS inputs). */
+  application: {
+    status: string
+    practiceCount: number
+    ats: { state: 'none' | 'pending' | 'done'; score?: number; missingKeywords?: string[]; checkedAt?: string }
+  } | null
 }
 
 function shellOf(doc: IJobPosting): Omit<JobDetailShell, 'gated'> {
@@ -264,13 +268,23 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
     .filter((p) => p.applyUrl && p.applyTier && isSafeHttpUrl(p.applyUrl))
     .map((p) => ({ url: p.applyUrl as string, tier: p.applyTier as ApplyTier, viaSite: p.viaSite }))
     .sort((a, b) => TIER_RANK[a.tier] - TIER_RANK[b.tier])
-  const app = await JobApplication.findOne({ userId, jobPostingId: id }).select('status practiceSessionIds').lean()
+  const app = await JobApplication.findOne({ userId, jobPostingId: id }).select('status practiceSessionIds atsResult atsRequestedAt').lean()
   return {
     ...shellOf(doc as IJobPosting),
     gated: false,
     jd,
     applyOptions,
     flags: { staffing: !!doc.flags?.staffing, shortJd: !!doc.flags?.shortJd, repost: !!doc.flags?.repost },
-    application: app ? { status: app.status, practiceCount: Math.min(3, app.practiceSessionIds?.length ?? 0) } : null,
+    application: app
+      ? {
+          status: app.status,
+          practiceCount: Math.min(3, app.practiceSessionIds?.length ?? 0),
+          ats: app.atsResult
+            ? { state: 'done' as const, score: app.atsResult.score, missingKeywords: (app.atsResult.missingKeywords ?? []).slice(0, 5), checkedAt: new Date(app.atsResult.checkedAt).toISOString() }
+            : app.atsRequestedAt && Date.now() - new Date(app.atsRequestedAt).getTime() < 3 * 60_000
+              ? { state: 'pending' as const }
+              : { state: 'none' as const },
+        }
+      : null,
   }
 }

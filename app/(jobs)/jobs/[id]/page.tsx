@@ -30,7 +30,11 @@ interface Detail {
   jd?: string
   applyOptions?: ApplyOption[]
   flags?: { staffing: boolean; shortJd: boolean; repost: boolean }
-  application?: { status: string; practiceCount: number } | null
+  application?: {
+    status: string
+    practiceCount: number
+    ats: { state: 'none' | 'pending' | 'done'; score?: number; missingKeywords?: string[] }
+  } | null
 }
 
 const TIER_SUBTITLE: Record<string, (co: string, via?: string) => string> = {
@@ -48,6 +52,8 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   const [saved, setSaved] = useState(false)
   const [xray, setXray] = useState<Xray | null>(null)
   const [xrayState, setXrayState] = useState<'idle' | 'loading' | 'ready' | 'failed'>('idle')
+  const [atsBusy, setAtsBusy] = useState(false)
+  const [atsHint, setAtsHint] = useState<string | null>(null)
 
   useEffect(() => {
     fetch(`/api/jobs/${params.id}`)
@@ -72,6 +78,34 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       .then((x) => { setXray(x); setXrayState('ready') })
       .catch(() => setXrayState('failed'))
   }, [detail, params.id])
+
+  async function refetchDetail() {
+    try {
+      const r = await fetch(`/api/jobs/${params.id}`)
+      if (r.ok) setDetail(await r.json())
+    } catch { /* keep the current view */ }
+  }
+
+  async function onAtsCheck() {
+    setAtsBusy(true)
+    setAtsHint(null)
+    try {
+      const res = await fetch(`/api/jobs/${params.id}/ats-check`, { method: 'POST' })
+      if (res.status === 409) {
+        const { reason } = await res.json().catch(() => ({ reason: '' }))
+        setAtsHint(reason === 'no-resume' ? 'Attach a resume first — the check compares it to this JD.' : 'Save this job first to unlock the ATS check.')
+        return
+      }
+      if (!res.ok) { setAtsHint('Could not start the check — try again.'); return }
+      // Background one-shot (~35s when uncached): poll the detail a few times.
+      for (let i = 0; i < 5; i++) {
+        await new Promise((r) => setTimeout(r, 12_000))
+        await refetchDetail()
+      }
+    } finally {
+      setAtsBusy(false)
+    }
+  }
 
   async function onSave() {
     const res = await fetch(`/api/jobs/${params.id}/save`, { method: 'POST' })
@@ -188,6 +222,28 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
               Evidence toward readiness on this job: {detail.application?.practiceCount ?? 0}/3 sessions
             </span>
           </div>
+
+          <section className="mt-6" aria-label="ATS check">
+            {detail.application?.ats.state === 'done' ? (
+              <div className="rounded-lg border p-3 text-sm">
+                <span className="font-medium">ATS match: {detail.application.ats.score}/100</span>
+                {(detail.application.ats.missingKeywords?.length ?? 0) > 0 && (
+                  <span className="ml-2 text-xs text-gray-600 dark:text-gray-400">
+                    Missing: {detail.application.ats.missingKeywords!.join(', ')}
+                  </span>
+                )}
+              </div>
+            ) : detail.application?.ats.state === 'pending' || atsBusy ? (
+              <p className="text-sm text-gray-500">Checking your resume against this JD (~1 min)…</p>
+            ) : detail.application ? (
+              <button onClick={onAtsCheck} className="rounded-lg border px-3 py-1.5 text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800">
+                Check my resume against this JD
+              </button>
+            ) : (
+              <p className="text-xs text-gray-500">Save this job to unlock the ATS check.</p>
+            )}
+            {atsHint && <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">{atsHint}</p>}
+          </section>
 
           <section className="mt-8" aria-label="Interview X-ray">
             <h2 className="text-lg font-medium">Interview X-ray</h2>
