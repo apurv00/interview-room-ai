@@ -191,13 +191,33 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   }, [params.id])
 
   async function sheetApplied() {
+    const clicked = sheet?.clicked
+    const elapsedMs = sheet?.elapsedMs
     setSheet(null)
-    const res = await fetch(`/api/jobs/${params.id}/status`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'applied', latencyMs: sheet?.elapsedMs }),
-    }).catch(() => null)
-    if (res?.ok) { setSheetDone('Marked as applied ✓ — it’s on your tracker.'); refetchDetail() }
+    const post = () =>
+      fetch(`/api/jobs/${params.id}/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'applied', latencyMs: elapsedMs }),
+      }).catch(() => null)
+    let res = await post()
+    // 404 = the apply-click keepalive row hasn't landed (in flight or lost) —
+    // recreate the machine fact, then retry the claim. The user's 'Yes,
+    // applied' must never be silently dropped (Codex on #522 round-3).
+    if (res && res.status === 404 && clicked) {
+      await fetch(`/api/jobs/${params.id}/apply-click`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tier: clicked.tier, url: clicked.url }),
+      }).catch(() => {})
+      res = await post()
+    }
+    if (res?.ok) {
+      setSheetDone('Marked as applied ✓ — it’s on your tracker.')
+      refetchDetail()
+    } else {
+      setSheetDone('Couldn’t record that just now — your application is real either way; hit Save and mark it applied in a moment.')
+    }
   }
 
   async function sheetBrokenLink() {

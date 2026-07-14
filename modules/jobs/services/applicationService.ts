@@ -90,9 +90,14 @@ export async function reportBrokenLink(
     { $push: { brokenLinkReports: { url: url.slice(0, 2000), reportedAt: now } } }
   )
   if ((app?.matchedCount ?? 0) === 0) return { ok: false }
+  // arrayFilters, not positional $: the merge appends provenance by
+  // sourceKey, so ONE dead URL can sit in several rungs — the positional
+  // operator updated only the first, leaving a clean twin ranked ahead of
+  // the failover (Codex on #522 round-3).
   await JobPosting.updateOne(
     { _id: jobPostingId, 'provenance.applyUrl': url },
-    { $inc: { 'provenance.$.brokenReportCount': 1 } }
+    { $inc: { 'provenance.$[elem].brokenReportCount': 1 } },
+    { arrayFilters: [{ 'elem.applyUrl': url }] }
   )
   return { ok: true }
 }

@@ -147,8 +147,10 @@ describe('reportBrokenLink (§4b crowd healing)', () => {
     const [appFilter, appUpdate] = mockAppUpdateOne.mock.calls[0]
     expect(appFilter).toEqual({ userId: 'u1', jobPostingId: 'j1' })
     expect(appUpdate.$push.brokenLinkReports).toMatchObject({ url: 'https://dead.example/apply', reportedAt: NOW })
-    const [postFilter, postUpdate] = mockPostingUpdateOne.mock.calls[0]
+    const [postFilter, postUpdate, postOpts] = mockPostingUpdateOne.mock.calls[0]
     expect(postFilter).toEqual({ _id: 'j1', 'provenance.applyUrl': 'https://dead.example/apply' })
-    expect(postUpdate).toEqual({ $inc: { 'provenance.$.brokenReportCount': 1 } })
+    // ALL rungs carrying the dead URL take the report (arrayFilters, not $)
+    expect(postUpdate).toEqual({ $inc: { 'provenance.$[elem].brokenReportCount': 1 } })
+    expect(postOpts).toEqual({ arrayFilters: [{ 'elem.applyUrl': 'https://dead.example/apply' }] })
   })
 })
