@@ -140,11 +140,15 @@ export default withAuth(
           // FIRST anonymous event must reach it; abuse bounded by the route's
           // 30/min + 300/day anon caps.
           pathname === '/api/events' ||
-          // Jobs feed is a public surface (confirmed decision P-2: anon
-          // browse, auth gated client-side at value-capture; detail body
-          // gating arrives with the detail page). Page itself 404s while
-          // the jobs_tab flag is off.
+          // Jobs feed + detail SHELLS are public (founder ruling P-2,
+          // 2026-07-14: public feed, auth-gated detail). The detail API
+          // splits anon-shell vs authed-full server-side — the JD and apply
+          // URLs never reach an anonymous client; the page renders the
+          // shell + sign-in gate. Feed API responses carry cards only.
           pathname === '/jobs' ||
+          pathname.startsWith('/jobs/') ||
+          pathname === '/api/jobs/feed' ||
+          (pathname.startsWith('/api/jobs/') && !pathname.startsWith('/api/jobs/admin') && !pathname.endsWith('/save') && !pathname.endsWith('/apply-click')) ||
           pathname.startsWith('/api/resume/tailor') ||
           pathname.startsWith('/api/resume/ats-check') ||
           pathname.startsWith('/pricing') ||

@@ -1,6 +1,6 @@
 import { inngest } from '@shared/services/inngest'
 import { connectDB } from '@shared/db/connection'
-import { JobPosting, JobSourceConfig, JobIngestCursor, JobIngestCycle, JobsVerdictConfig } from '@shared/db/models'
+import { JobPosting, JobSourceConfig, JobIngestCursor, JobIngestCycle, JobsVerdictConfig, JobApplication } from '@shared/db/models'
 import { redis } from '@shared/redis'
 import { logger } from '@shared/logger'
 import { jsearchAdapter } from '../adapters/jsearchAdapter'
@@ -328,7 +328,20 @@ export async function runSourceSyncHandler(
           doc.status = 'closed'
           doc.closedReason = 'board-poll-miss'
           doc.closedAt = new Date()
-          doc.purgeAt = new Date(Date.now() + 7 * 24 * 3600 * 1000)
+          // userReferenced rows (saved/tracked) close but NEVER purge — the
+          // tracker keeps a stable _id forever (§4.3). The pin is RE-DERIVED
+          // here, not trusted (PRODUCT_FLOW §2: scan JobApplication existence
+          // during GC — immune to cascade drift): account deletion removes
+          // JobApplication rows without touching pins, and clearing pins at
+          // delete time would be refcount-unsafe (other users may reference
+          // the same posting). Orphaned pins clear + purge normally
+          // (Codex on #517 round-3).
+          let pinned = !!doc.userReferenced
+          if (pinned && !(await JobApplication.exists({ jobPostingId: doc._id }))) {
+            doc.userReferenced = false
+            pinned = false
+          }
+          if (!pinned) doc.purgeAt = new Date(Date.now() + 7 * 24 * 3600 * 1000)
         }
         await doc.save()
       }
