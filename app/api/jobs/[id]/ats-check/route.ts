@@ -5,7 +5,7 @@ import { connectDB } from '@shared/db/connection'
 import mongoose from 'mongoose'
 import { JobApplication } from '@shared/db/models'
 import { inngest } from '@shared/services/inngest'
-import { getBaseResume } from '@jobs'
+import { getBaseResume, claimAtsRun, releaseAtsClaim } from '@jobs'
 
 export const dynamic = 'force-dynamic'
 
@@ -29,19 +29,18 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   if (!app) return NextResponse.json({ reason: 'save-first' }, { status: 409 })
   if (!(await getBaseResume(userId))) return NextResponse.json({ reason: 'no-resume' }, { status: 409 })
 
-  // Already running (marker younger than 3 minutes) — don't double-queue.
-  if (app.atsRequestedAt && Date.now() - new Date(app.atsRequestedAt).getTime() < 3 * 60_000) {
-    return NextResponse.json({ status: 'pending' })
-  }
-
-  await JobApplication.updateOne({ userId, jobPostingId: params.id }, { $set: { atsRequestedAt: new Date() } })
+  // ATOMIC claim (Codex on #521): concurrent POSTs must not both enqueue —
+  // only the request that actually flipped the marker sends the event; the
+  // loser reports pending. Claim failure on a >3min-stale marker retries
+  // via the same conditional.
+  const claimed = await claimAtsRun(userId, params.id)
+  if (!claimed) return NextResponse.json({ status: 'pending' })
   try {
     await inngest.send({ name: 'jobs/ats.requested', data: { userId, jobPostingId: params.id } })
   } catch (err) {
-    // Marker without a job = three minutes of polling a check that cannot
-    // complete, and re-clicks swallowed by the duplicate guard (Codex on
-    // #521). Roll it back so the button works on the next click.
-    await JobApplication.updateOne({ userId, jobPostingId: params.id }, { $unset: { atsRequestedAt: 1 } }).catch(() => {})
+    // Claim without a job = three minutes of polling a check that cannot
+    // complete. Release so the next click works; the original error still 500s.
+    await releaseAtsClaim(userId, params.id)
     throw err
   }
   return NextResponse.json({ status: 'pending' })

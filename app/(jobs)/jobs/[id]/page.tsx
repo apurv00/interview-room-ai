@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import AuthGateModal from '@shared/ui/AuthGateModal'
 
@@ -70,8 +70,14 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
 
   // X-ray loads progressively AFTER the body — the first view on a posting
   // pays a lazy LLM parse (seconds); cached thereafter. Authed only (P-2).
+  // Fetch ONCE per posting: ATS polling replaces `detail` every tick, and an
+  // effect keyed on the whole object re-fired the parse while the first one
+  // was still uncached — concurrent LLM calls for one JD (Codex on #521).
+  const xrayFetchedFor = useRef<string | null>(null)
   useEffect(() => {
     if (!detail || detail.gated) return
+    if (xrayFetchedFor.current === params.id) return
+    xrayFetchedFor.current = params.id
     setXrayState('loading')
     fetch(`/api/jobs/${params.id}/xray`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
