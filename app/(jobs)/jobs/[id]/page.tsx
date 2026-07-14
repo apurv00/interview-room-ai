@@ -205,17 +205,31 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
     setSheet(null)
     if (!clicked) return
     const alternates = (detail?.applyOptions ?? []).filter((o) => o.url !== clicked.url)
-    await fetch(`/api/jobs/${params.id}/broken-link`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: clicked.url, tier: clicked.tier, hadFailover: alternates.length > 0 }),
-    }).catch(() => {})
-    if (alternates.length > 0) {
-      setSheetDone(`Thanks — that link is demoted for everyone. Try “${alternates[0].viaSite ?? alternates[0].tier}” below instead.`)
-    } else {
-      setSheetDone('Thanks — noted. This posting’s links may have gone stale; it stays saved on your tracker.')
+    const post = () =>
+      fetch(`/api/jobs/${params.id}/broken-link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: clicked.url, tier: clicked.tier, hadFailover: alternates.length > 0 }),
+      }).catch(() => null)
+    // The apply-click keepalive creates the application row this report
+    // attaches to — if it's still in flight the first POST 404s; one retry
+    // covers that. A report that never lands must NOT claim global healing
+    // (Codex on #522).
+    let res = await post()
+    if (res && res.status === 404) {
+      await new Promise((r) => setTimeout(r, 1500))
+      res = await post()
     }
-    refetchDetail() // ladder re-sorts with the reported rung demoted
+    const alt = alternates.length > 0 ? `Try “${alternates[0].viaSite ?? alternates[0].tier}” below instead.` : ''
+    if (res?.ok) {
+      setSheetDone(alternates.length > 0
+        ? `Thanks — that link is demoted for everyone. ${alt}`
+        : 'Thanks — noted. This posting’s links may have gone stale; it stays saved on your tracker.')
+      refetchDetail() // ladder re-sorts with the reported rung demoted
+    } else {
+      // Honest fallback: the report didn't record — still locally useful.
+      setSheetDone(alt || 'That link may be stale — use “View full posting” above to reach the source directly.')
+    }
   }
 
   if (status === 'missing') {
