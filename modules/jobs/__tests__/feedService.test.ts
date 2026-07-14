@@ -7,7 +7,7 @@ vi.mock('@shared/db/models', () => ({
   JobApplication: { findOne: mockAppFindOne },
 }))
 
-import { tierAScore, bestApplyTierOf, getFeed, getJobDetail } from '../services/feedService'
+import { tierAScore, tierBScore, matchedSkillsOf, bestApplyTierOf, getFeed, getJobDetail } from '../services/feedService'
 
 const NOW = new Date('2026-07-14T12:00:00Z')
 
@@ -66,6 +66,32 @@ describe('tierAScore (deterministic rank — rules only, §serving honesty)', ()
   })
 })
 
+describe('tierBScore (stateless resume rank — Tier-A + evidence)', () => {
+  const D = doc({ title: 'Senior Node.js Backend Engineer', titleTokens: ['senior', 'node.js', 'backend', 'engineer'] })
+
+  it('with no skills/targetRole it IS tierAScore — the 3-questions path never gets resume math', () => {
+    expect(tierBScore(D as never, {}, NOW)).toBe(tierAScore(D as never, {}, NOW))
+  })
+
+  it('matched skills boost (capped at 3) and matchedSkillsOf names ONLY real matches', () => {
+    const skills = ['Node.js', 'Kafka', 'SQL']
+    expect(matchedSkillsOf(D as never, skills)).toEqual(['Node.js'])
+    expect(tierBScore(D as never, { skills }, NOW)).toBeGreaterThan(tierAScore(D as never, {}, NOW))
+    const many = matchedSkillsOf(D as never, ['node.js', 'backend', 'engineer', 'senior'])
+    expect(many.length).toBe(4) // all matched...
+    const capped = tierBScore(D as never, { skills: ['node.js', 'backend', 'engineer', 'senior'] }, NOW)
+    const three = tierBScore(D as never, { skills: ['node.js', 'backend', 'engineer'] }, NOW)
+    expect(capped).toBe(three) // ...but the bonus caps at 3
+  })
+
+  it('target-role affinity boosts on high title overlap only', () => {
+    const hit = tierBScore(D as never, { targetRole: 'Backend Engineer Node.js Senior' }, NOW)
+    const miss = tierBScore(D as never, { targetRole: 'Product Designer' }, NOW)
+    expect(hit).toBeGreaterThan(miss)
+    expect(miss).toBe(tierAScore(D as never, {}, NOW))
+  })
+})
+
 describe('getFeed (public cards — never JD, never apply URLs)', () => {
   function feedChain(docs: unknown[]) {
     mockFind.mockClear()
@@ -94,6 +120,21 @@ describe('getFeed (public cards — never JD, never apply URLs)', () => {
     const filter = mockFind.mock.calls[0][0]
     expect(filter.status).toBe('open')
     expect(filter.$or).toEqual([{ locationKeys: 'pune' }, { isRemote: true }])
+  })
+
+  it('reveal honesty: sharpened counts ONLY cards with real matched skills; cards carry them', async () => {
+    feedChain([
+      doc({ _id: 'hit', title: 'SQL Analyst', titleTokens: ['sql', 'analyst'] }),
+      doc({ _id: 'miss', title: 'Sales Executive', titleTokens: ['sales', 'executive'] }),
+    ])
+    const feed = await getFeed({ skills: ['SQL', 'Tableau'] }, NOW)
+    expect(feed.sharpened).toBe(1)
+    const hit = feed.cards.find((c) => c.id === 'hit')!
+    const miss = feed.cards.find((c) => c.id === 'miss')!
+    expect(hit.matchedSkills).toEqual(['SQL'])
+    expect(hit.relevance).toBe('resume')
+    expect(miss.matchedSkills).toEqual([])
+    expect(miss.relevance).toBe('title-location') // never claims resume evidence it lacks
   })
 
   it('paginates deterministically over the scored pool', async () => {

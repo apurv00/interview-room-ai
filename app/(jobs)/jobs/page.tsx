@@ -22,11 +22,19 @@ interface FeedCard {
   postedAt?: string
   salaryText?: string
   applyTier?: string
+  matchedSkills?: string[]
 }
 interface FeedPayload {
   cards: FeedCard[]
   page: number
   hasMore: boolean
+  sharpened?: number
+}
+interface JobsTarget {
+  method: 'paste' | 'upload' | 'questions'
+  role: string
+  city: string
+  skills: string[]
 }
 
 const TIER_BADGE: Record<string, string> = {
@@ -52,10 +60,29 @@ export default function JobsPage() {
   const [city, setCity] = useState('')
   const [cityInput, setCityInput] = useState('')
   const [error, setError] = useState(false)
+  const [target, setTarget] = useState<JobsTarget | null>(null)
+  const [targetLoaded, setTargetLoaded] = useState(false)
+
+  // The confirm bar's output (sessionStorage — dies with the tab; a
+  // stranger's resume structure never persists server-side).
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem('JOBS_TARGET')
+      if (raw) {
+        const t = JSON.parse(raw) as JobsTarget
+        setTarget(t)
+        if (t.city) { setCity(t.city); setCityInput(t.city) }
+      }
+    } catch { /* private mode / corrupt entry — Tier-A feed */ }
+    setTargetLoaded(true)
+  }, [])
 
   useEffect(() => {
+    if (!targetLoaded) return
     const params = new URLSearchParams({ page: String(page) })
     if (city) params.set('city', city)
+    if (target?.skills.length) params.set('skills', target.skills.join(','))
+    if (target?.role) params.set('targetRole', target.role)
     fetch(`/api/jobs/feed?${params}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then(setData)
@@ -66,23 +93,41 @@ export default function JobsPage() {
       body: JSON.stringify({ name: 'jobs.feed_viewed', props: { page } }),
       keepalive: true,
     }).catch(() => {})
-  }, [page, city])
+  }, [page, city, target, targetLoaded])
+
+  // Reveal honesty (§4a): name the evidence ONLY when matched skills exist;
+  // the 3-questions path never gets resume-flavored copy.
+  const revealSkills = Array.from(new Set((data?.cards ?? []).flatMap((c) => c.matchedSkills ?? []))).slice(0, 3)
+  const revealLine = !target
+    ? null
+    : target.method === 'questions'
+      ? `Sorted by role & location — ${target.role}${target.city ? ` · ${target.city}` : ''}.`
+      : (data?.sharpened ?? 0) > 0 && revealSkills.length
+        ? `Sorted for you — based on your resume: ${revealSkills.join(', ')}.`
+        : 'Feed refreshed.'
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10" aria-label="Job feed">
       <h1 className="text-2xl font-semibold">Jobs</h1>
 
-      <div className="mt-4 rounded-xl border border-dashed p-4">
-        <p className="text-sm font-medium">Attach your resume — we&apos;ll sort these for you.</p>
-        <div className="mt-3 flex gap-3">
-          <Link href="/resume/builder?return=/jobs" className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700">
-            Build my resume
-          </Link>
-          <Link href="/resume" className="rounded-lg border px-3 py-1.5 text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800">
-            I already have one
-          </Link>
+      {target ? (
+        <div className="mt-4 flex items-center justify-between rounded-xl border p-3">
+          <p className="text-sm">{revealLine}</p>
+          <Link href="/jobs/start" className="shrink-0 text-xs text-blue-600 hover:underline">Edit target</Link>
         </div>
-      </div>
+      ) : (
+        <div className="mt-4 rounded-xl border border-dashed p-4">
+          <p className="text-sm font-medium">Attach your resume — we&apos;ll sort these for you.</p>
+          <div className="mt-3 flex gap-3">
+            <Link href="/jobs/start" className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700">
+              Attach or build
+            </Link>
+            <Link href="/jobs/start" className="rounded-lg border px-3 py-1.5 text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800">
+              Answer 3 questions
+            </Link>
+          </div>
+        </div>
+      )}
 
       <form
         className="mt-6 flex gap-2"
@@ -133,7 +178,13 @@ export default function JobsPage() {
                 {c.applyTier && TIER_BADGE[c.applyTier] && (
                   <span className="rounded-full border px-2 py-0.5 text-gray-600 dark:text-gray-400">{TIER_BADGE[c.applyTier]}</span>
                 )}
-                <span className="rounded-full border px-2 py-0.5 text-gray-500">Looks relevant · title &amp; location match</span>
+                {c.matchedSkills?.length ? (
+                  <span className="rounded-full border border-blue-300 px-2 py-0.5 text-blue-700 dark:border-blue-800 dark:text-blue-300">
+                    Matches your resume: {c.matchedSkills.slice(0, 2).join(', ')}
+                  </span>
+                ) : (
+                  <span className="rounded-full border px-2 py-0.5 text-gray-500">Looks relevant · title &amp; location match</span>
+                )}
               </div>
             </Link>
           </li>
