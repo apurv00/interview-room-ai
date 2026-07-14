@@ -40,7 +40,7 @@ import { JOB_DOMAINS } from '../config/domains'
 // (empty body, greenhouse apply host, no salary, default epoch model).
 const FIXTURE_HASH = verdictInputHash({
   companyKey: 'phonepe', titleKey: 'backend engineer', locationKey: 'bengaluru',
-  normalizedBody: '', applyHosts: ['boards.greenhouse.io'], salaryPresent: false,
+  normalizedBody: '', applyHosts: ['boards.greenhouse.io'], salaryText: null,
   epochModel: 'gpt-5.6-luna',
 })
 
@@ -55,7 +55,7 @@ const CFG_ON = {
 
 function posting(over: Record<string, unknown> = {}) {
   return {
-    _id: 'p1', status: 'open',
+    _id: 'p1', status: 'open', updatedAt: new Date('2026-07-14T00:00:00Z'),
     companyKey: 'phonepe', titleKey: 'backend engineer', locationKeys: ['bengaluru'],
     title: 'Backend Engineer', company: 'PhonePe', locations: ['Bengaluru'], isRemote: false,
     salaryText: null, jdCompressed: undefined,
@@ -140,6 +140,19 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
     )
     expect(evaluateFn).not.toHaveBeenCalled()
     expect(r).toMatchObject({ evaluated: 0, scored: 0 })
+  })
+
+  it('verdict writes are freshness-guarded: a mid-flight merge supersedes the result (Codex #515)', async () => {
+    resetAll()
+    const doc = posting()
+    mockPostingFindById.mockReturnValue({ lean: () => Promise.resolve(doc) })
+    mockPostingUpdateOne.mockResolvedValue({ matchedCount: 0 }) // merge bumped updatedAt mid-flight
+    const r = await runEvaluatePostingsHandler({ data: { postingIds: ['p1'] } }, step, { evaluateFn: vi.fn().mockResolvedValue(okOutcome()) as never })
+    // filter carries the optimistic-concurrency token...
+    expect(mockPostingUpdateOne.mock.calls[0][0]).toEqual({ _id: 'p1', updatedAt: doc.updatedAt })
+    // ...and a superseded write is NOT counted as scored
+    expect(r).toMatchObject({ evaluated: 1, scored: 0 })
+    expect(mockCycleCreate.mock.calls.at(-1)![0].llm.scored).toBe(0)
   })
 
   it('a scored row with a STALE hash re-verdicts (§4.5 input change re-enqueues)', async () => {

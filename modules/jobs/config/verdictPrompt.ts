@@ -102,7 +102,10 @@ export interface VerdictHashInput {
   locationKey: string
   normalizedBody: string
   applyHosts: string[]
-  salaryPresent: boolean
+  /** Raw salary text — hashed as the SAME neutralized line the prompt shows
+   *  (a salary-string edit changes what the model sees, so presence-only
+   *  hashing would skip the re-verdict; Codex on #515). */
+  salaryText?: string | null
   /** The slot-configured model — epoch component (`model:promptVersion`). */
   epochModel: string
 }
@@ -125,7 +128,7 @@ export function verdictInputHash(input: VerdictHashInput): string {
     input.locationKey,
     input.normalizedBody,
     [...input.applyHosts].sort().join(','),
-    input.salaryPresent ? 'salary' : 'no-salary',
+    input.salaryText ? neutralizePromptLine(input.salaryText, 120) : 'no-salary',
     PROMPT_VERSION,
     `${input.epochModel}:${PROMPT_VERSION}`,
   ].join('|')

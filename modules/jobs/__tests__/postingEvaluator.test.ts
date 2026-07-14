@@ -25,7 +25,6 @@ const INPUT = {
   titleKey: 'backend engineer',
   locationKey: 'bengaluru',
   sourceId: 'jsearch',
-  salaryPresent: false,
   prompt: {
     title: 'Backend Engineer',
     company: 'PhonePe',

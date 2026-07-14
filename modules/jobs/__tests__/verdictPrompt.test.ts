@@ -68,7 +68,7 @@ describe('verdictInputHash (§4.5 — full field set, never body alone)', () => 
     locationKey: 'bengaluru',
     normalizedBody: 'build things',
     applyHosts: ['a.example.com', 'b.example.com'],
-    salaryPresent: false,
+    salaryText: null as string | null,
     epochModel: 'gpt-5.6-luna',
   }
 
@@ -80,7 +80,10 @@ describe('verdictInputHash (§4.5 — full field set, never body alone)', () => 
     const baseHash = verdictInputHash(h)
     expect(verdictInputHash({ ...h, applyHosts: ['evil.example.com'] })).not.toBe(baseHash)
     expect(verdictInputHash({ ...h, normalizedBody: 'build other things' })).not.toBe(baseHash)
-    expect(verdictInputHash({ ...h, salaryPresent: true })).not.toBe(baseHash)
+    expect(verdictInputHash({ ...h, salaryText: '\u20b95L' })).not.toBe(baseHash)
+    // salary CONTENT is hashed, not mere presence — a bait-and-switch salary
+    // edit changes what the model sees and must re-verdict (Codex #515)
+    expect(verdictInputHash({ ...h, salaryText: '\u20b95L' })).not.toBe(verdictInputHash({ ...h, salaryText: '\u20b950L' }))
     expect(verdictInputHash({ ...h, epochModel: 'other-model' })).not.toBe(baseHash)
     expect(verdictInputHash({ ...h, companyKey: 'other' })).not.toBe(baseHash)
   })

@@ -86,7 +86,6 @@ export interface EvaluatePostingInput {
   locationKey: string
   sourceId: string
   prompt: Omit<VerdictPromptInput, 'body'> & { body: string }
-  salaryPresent: boolean
 }
 
 function costOf(result: CompletionResult, pricing: EvaluatorDeps['pricing']): number {
@@ -129,7 +128,7 @@ export async function evaluatePosting(input: EvaluatePostingInput, deps: Evaluat
     locationKey: input.locationKey,
     normalizedBody: body,
     applyHosts: input.prompt.applyHosts,
-    salaryPresent: input.salaryPresent,
+    salaryText: input.prompt.salaryText,
     epochModel,
   }
   const inputHash = verdictInputHash(hashInput)

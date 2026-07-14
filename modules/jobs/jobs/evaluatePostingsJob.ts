@@ -169,7 +169,7 @@ export async function runEvaluatePostingsHandler(
             locationKey: doc.locationKeys?.[0] ?? '',
             normalizedBody: stripRecruiterPii(sliceBody(body)),
             applyHosts,
-            salaryPresent: !!doc.salaryText,
+            salaryText: doc.salaryText ?? null,
             epochModel,
           })
           if (doc.llmVerdict.verdictInputHash === currentHash) continue
@@ -183,7 +183,6 @@ export async function runEvaluatePostingsHandler(
             titleKey: doc.titleKey,
             locationKey: doc.locationKeys?.[0] ?? '',
             sourceId: primarySource,
-            salaryPresent: !!doc.salaryText,
             prompt: {
               title: doc.title,
               company: doc.company,
@@ -251,7 +250,17 @@ export async function runEvaluatePostingsHandler(
             set.status = 'open'
             unset = { closedReason: 1, closedAt: 1 }
           }
-          await JobPosting.updateOne({ _id: doc._id }, unset ? { $set: set, $unset: unset } : { $set: set })
+          // Freshness guard (Codex on #515): a sync merge landing between
+          // our read and this write resets the verdict to pending — an
+          // unguarded write would stomp that with a verdict for the OLD
+          // inputs, and the sweeper never revisits scored rows. updatedAt
+          // is the save-bumped dirty token; no match = leave the merge's
+          // pending state standing (sweeper re-picks it).
+          const res = await JobPosting.updateOne(
+            { _id: doc._id, updatedAt: doc.updatedAt },
+            unset ? { $set: set, $unset: unset } : { $set: set }
+          )
+          if ((res?.matchedCount ?? 1) === 0) continue // superseded mid-flight — not scored
           c.scored++
           if (outcome.cached) c.cacheHits++
           c.verdictDistribution[outcome.verdict.verdict]++
@@ -273,8 +282,10 @@ export async function runEvaluatePostingsHandler(
           if (outcome.kind === 'timeout') c.timeouts++
           else c.errors++
           c.costUsd += outcome.costUsd
+          // Same freshness guard: never stomp a mid-flight merge reset
+          // (attempts:0 for NEW inputs) with a failure bump for OLD inputs.
           await JobPosting.updateOne(
-            { _id: doc._id },
+            { _id: doc._id, updatedAt: doc.updatedAt },
             {
               $set: {
                 'llmVerdict.status': 'pending',
