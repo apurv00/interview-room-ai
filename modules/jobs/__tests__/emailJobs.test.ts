@@ -251,7 +251,24 @@ describe('runEmailSweepHandler', () => {
     interviewDateConfidence: 'exact', practiceSessionIds: [],
     ...over,
   })
-  const findChain = (rows: unknown[]) => ({ select: () => ({ limit: () => ({ lean: () => Promise.resolve(rows) }) }) })
+  // Cursor-paginated chain: find().select().sort().limit().lean(); rows are
+  // consumed page-by-page (Codex #532 pagination).
+  const findChain = (rows: unknown[]) => {
+    let served = false
+    return () => ({
+      select: () => ({
+        sort: () => ({
+          limit: () => ({
+            lean: () => {
+              if (served) return Promise.resolve([])
+              served = true
+              return Promise.resolve(rows)
+            },
+          }),
+        }),
+      }),
+    })
+  }
 
   it('switch OFF and quiet hours both skip the whole sweep', async () => {
     mockGetConfig.mockResolvedValue({ e2Enabled: false })
@@ -262,33 +279,71 @@ describe('runEmailSweepHandler', () => {
   })
 
   it('sends a due exact-date T-1 reminder with the date-bound dedupeKey', async () => {
-    mockAppFind.mockReturnValue(findChain([appRow()]))
+    mockAppFind.mockImplementation(findChain([appRow()]))
     const r = await runEmailSweepHandler(step)
     expect(r).toEqual({ e2Sent: 1 })
     expect(mockSendCreate.mock.calls[0][0].dedupeKey).toBe('app1:2026-07-22')
   })
 
   it("candidate query is scoped to status 'interview_scheduled' — a corrected row's stale date never reminds (Codex #532)", async () => {
-    mockAppFind.mockReturnValue(findChain([appRow()]))
+    mockAppFind.mockImplementation(findChain([appRow()]))
     await runEmailSweepHandler(step)
     expect(mockAppFind.mock.calls[0][0].status).toBe('interview_scheduled')
   })
 
   it('not-yet-due candidates are filtered (send instant in the future)', async () => {
-    mockAppFind.mockReturnValue(findChain([appRow({ interviewDate: new Date('2026-07-25T00:00:00Z') })]))
+    mockAppFind.mockImplementation(findChain([appRow({ interviewDate: new Date('2026-07-25T00:00:00Z') })]))
     expect(await runEmailSweepHandler(step)).toEqual({ e2Sent: 0 })
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
   it('per-application ceiling: 3 prior reminders → no more, ever (R19)', async () => {
-    mockAppFind.mockReturnValue(findChain([appRow()]))
+    mockAppFind.mockImplementation(findChain([appRow()]))
     mockSendCount.mockResolvedValue(3)
     expect(await runEmailSweepHandler(step)).toEqual({ e2Sent: 0 })
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
+  it('paginates candidates by _id cursor to exhaustion — the tail is never starved behind a head page (Codex #532)', async () => {
+    // A full page (200) followed by a short page: both must be visited.
+    const page1 = Array.from({ length: 200 }, (_, k) => appRow({ _id: `bulk${k}`, userId: `u${k}` }))
+    const page2 = [appRow({ _id: 'tail1', userId: 'uTail' })]
+    let call = 0
+    mockAppFind.mockImplementation(() => ({
+      select: () => ({ sort: () => ({ limit: () => ({ lean: () => Promise.resolve(call++ === 0 ? page1 : call === 2 ? page2 : []) }) }) }),
+    }))
+    const r = await runEmailSweepHandler(step)
+    expect(mockAppFind.mock.calls.length).toBeGreaterThanOrEqual(2)
+    // The second page's filter carries the cursor.
+    expect(mockAppFind.mock.calls[1][0]._id).toEqual({ $gt: 'bulk199' })
+    expect((r as { e2Sent: number }).e2Sent).toBe(201)
+  })
+
+  it('past the 24h send window: a recorded reminder is silent, a MISSING ledger row alerts and never auto-sends (Codex #532)', async () => {
+    // Interview today (Jul 21 IST): T-1 instant was Jul 20 03:30Z — 24.5h ago.
+    const stale = appRow({ interviewDate: new Date('2026-07-21T00:00:00Z') })
+    mockAppFind.mockImplementation(findChain([stale]))
+    // Ledger row present → common case: sent yesterday, nothing to do.
+    mockSendFindOne.mockReturnValue(lean({ dedupeKey: 'app1:2026-07-21', sentAt: new Date() }))
+    expect(await runEmailSweepHandler(step)).toEqual({ e2Sent: 0 })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+    expect(mockLoggerError).not.toHaveBeenCalled()
+
+    // Ledger row MISSING → crash-recovery case: alert, refuse to send.
+    vi.clearAllMocks()
+    mockGetConfig.mockResolvedValue({ e2Enabled: true })
+    mockSendFindOne.mockReturnValue(lean(null))
+    mockAppFind.mockImplementation(findChain([stale]))
+    expect(await runEmailSweepHandler(step)).toEqual({ e2Sent: 0 })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      expect.objectContaining({ applicationId: 'app1' }),
+      expect.stringContaining('human review required')
+    )
+  })
+
   it('a practice session in the last 24h switches to the logistics-only variant (R10)', async () => {
-    mockAppFind.mockReturnValue(findChain([appRow({ practiceSessionIds: ['s1'] })]))
+    mockAppFind.mockImplementation(findChain([appRow({ practiceSessionIds: ['s1'] })]))
     mockSessionExists.mockResolvedValue({ _id: 's1' })
     await runEmailSweepHandler(step)
     const html = mockSendEmail.mock.calls[0][0].html as string

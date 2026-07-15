@@ -106,38 +106,88 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
 
   // Candidates: a set date with actionable confidence, interview not past.
   // Bounded: interviews within ±8 IST days of now cover every derivable
-  // send instant (T-1 and Monday-of-week both fall inside).
-  const candidates = await step.run('find-due-e2', async () => {
-    const rows = await JobApplication.find({
-      // Only rows STILL scheduled (Codex #532): a stale interviewDate on a
-      // row the user corrected to rejected/withdrawn/ghosted must never
-      // mint a reminder for a dead interview.
-      status: 'interview_scheduled',
-      interviewDate: {
-        $gte: new Date(now.getTime() - 2 * 86_400_000),
-        $lte: new Date(now.getTime() + 8 * 86_400_000),
-      },
-      interviewDateConfidence: { $in: ['exact', 'week'] },
-    })
-      .select('_id userId jobPostingId interviewDate interviewDateConfidence practiceSessionIds')
-      .limit(500)
-      .lean()
-    // Due = the derived send instant has arrived and the window hasn't
-    // closed (e2SendInstant returns null past it).
-    return rows
-      .filter((r) => {
-        const at = e2SendInstant(r.interviewDate!, r.interviewDateConfidence as 'exact' | 'week', now)
-        return at !== null && at.getTime() <= now.getTime()
+  // send instant (T-1 and Monday-of-week both fall inside). _id-cursor
+  // paginated to exhaustion (EMAILS.md §2 guard 2; Codex #532 — a head
+  // read starves the tail behind already-processed rows) with a hard stop
+  // of 500 SENDS per run, remainder logged and picked up next hour.
+  const derived = await step.run('find-due-e2', async () => {
+    const SEND_WINDOW_MS = 24 * 3600_000
+    const HARD_STOP = 500
+    type Candidate = {
+      applicationId: string; userId: string; jobPostingId: string
+      interviewDateISO: string; confidence: 'exact' | 'week'; practiceSessionIds: string[]
+    }
+    const due: Candidate[] = []
+    const pastWindow: Candidate[] = []
+    let cursor: string | null = null
+    let truncated = false
+    for (;;) {
+      type LeanApp = { _id: unknown; userId: unknown; jobPostingId: unknown; interviewDate?: Date; interviewDateConfidence?: string; practiceSessionIds?: unknown[] }
+      const batch: LeanApp[] = await JobApplication.find({
+        // Only rows STILL scheduled (Codex #532): a stale interviewDate on
+        // a row the user corrected to rejected/withdrawn/ghosted must
+        // never mint a reminder for a dead interview.
+        status: 'interview_scheduled',
+        interviewDate: {
+          $gte: new Date(now.getTime() - 2 * 86_400_000),
+          $lte: new Date(now.getTime() + 8 * 86_400_000),
+        },
+        interviewDateConfidence: { $in: ['exact', 'week'] },
+        ...(cursor ? { _id: { $gt: cursor } } : {}),
       })
-      .map((r) => ({
-        applicationId: String(r._id),
-        userId: String(r.userId),
-        jobPostingId: String(r.jobPostingId),
-        interviewDateISO: r.interviewDate!.toISOString().slice(0, 10),
-        confidence: r.interviewDateConfidence as 'exact' | 'week',
-        practiceSessionIds: (r.practiceSessionIds ?? []).map(String),
-      }))
+        .select('_id userId jobPostingId interviewDate interviewDateConfidence practiceSessionIds')
+        .sort({ _id: 1 })
+        .limit(200)
+        .lean<LeanApp[]>()
+      for (const r of batch) {
+        const at = e2SendInstant(r.interviewDate!, r.interviewDateConfidence as 'exact' | 'week', now)
+        if (at === null || at.getTime() > now.getTime()) continue
+        const c: Candidate = {
+          applicationId: String(r._id),
+          userId: String(r.userId),
+          jobPostingId: String(r.jobPostingId),
+          interviewDateISO: r.interviewDate!.toISOString().slice(0, 10),
+          confidence: r.interviewDateConfidence as 'exact' | 'week',
+          practiceSessionIds: (r.practiceSessionIds ?? []).map(String),
+        }
+        // Automatic sends are bounded to 24h of the FIRST due instant
+        // (EMAILS.md §2, Codex #532): past it, Resend's idempotency key
+        // has expired, so a missing ledger row must alert a human — never
+        // auto-send a possible duplicate.
+        if (now.getTime() - at.getTime() > SEND_WINDOW_MS) pastWindow.push(c)
+        else if (due.length < HARD_STOP) due.push(c)
+        else truncated = true
+      }
+      if (batch.length < 200) break
+      cursor = String(batch[batch.length - 1]._id)
+    }
+    if (truncated) logger.warn({ hardStop: HARD_STOP }, 'E2 sweep hit the per-run send cap — remainder defers to the next hourly run')
+    return { due, pastWindow }
   })
+  const candidates = derived.due
+
+  // Past-window rows: normal when the reminder already sent (ledger row
+  // exists — the common case on the interview day). A MISSING row here
+  // means a send may have been accepted but never recorded and the
+  // idempotency window is gone — alert, never resend (EMAILS.md §2).
+  if (derived.pastWindow.length) {
+    await step.run('alert-past-window-e2', async () => {
+      for (const c of derived.pastWindow) {
+        const recorded = await JobsEmailSend.findOne({
+          userId: c.userId,
+          stream: 'e2',
+          dedupeKey: `${c.applicationId}:${c.interviewDateISO}`,
+        }).lean()
+        if (!recorded) {
+          logger.error(
+            { applicationId: c.applicationId, interviewDateISO: c.interviewDateISO },
+            'E2 reminder past the 24h idempotency window with NO ledger row — human review required, auto-send refused'
+          )
+        }
+      }
+      return derived.pastWindow.length
+    })
+  }
 
   let sent = 0
   for (let i = 0; i < candidates.length; i += SENDS_PER_STEP) {
