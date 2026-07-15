@@ -165,7 +165,11 @@ export const apnaAdapter: JobSourceAdapter = {
     const all: Array<{ loc: string; lastmod: string | null }> = []
     for (const shard of shards.slice(0, SHARDS_PER_TARGET)) {
       const res = await getText(shard); attempts++
-      if (!res.ok) continue
+      // A failed shard would silently drop EVERY URL it holds while the
+      // successful shards advance the cursor past them (Codex #536 — the
+      // same never-retried class as detail failures, one level up). Fail
+      // the whole target: no cursor advance, health sees the failure.
+      if (!res.ok) return { ok: false, status: res.status, raw: [], attempts }
       for (const e of extractUrlEntries(res.text)) {
         if (/apna\.co\/job/.test(e.loc) && (!sinceIso || !e.lastmod || e.lastmod > sinceIso)) all.push(e)
       }

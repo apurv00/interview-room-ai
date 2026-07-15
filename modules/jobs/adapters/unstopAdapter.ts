@@ -27,6 +27,7 @@ interface UnstopItem {
   regnRequirements?: { remain_days?: number } | null
   region?: string
   details?: string
+  description?: string
   jobDetail?: { locations?: string[] } | null
   start_date?: string
   end_date?: string
@@ -82,7 +83,13 @@ export const unstopAdapter: JobSourceAdapter = {
     // health machine must degrade, never record a clean zero-row sync.
     if (!items) return { ok: false, status: res.status, raw: [], bodyError: true, attempts: 1 }
     // Policy: only OPEN registrations enter (never advertise a closed path).
-    const open = items.filter((it) => it.regn_open === true || it.regn_open === 1 || (it.regnRequirements?.remain_days ?? 0) > 0)
+    // regn_open is AUTHORITATIVE when present (probe mapping): an explicit
+    // false/0 is a closed path no matter what remain_days says; the
+    // remain_days fallback applies only when regn_open is absent.
+    const open = items.filter((it) =>
+      it.regn_open === true || it.regn_open === 1 ||
+      (it.regn_open == null && (it.regnRequirements?.remain_days ?? 0) > 0)
+    )
     return { ok: true, status: res.status, raw: open, attempts: 1 }
   },
 
@@ -102,7 +109,9 @@ export const unstopAdapter: JobSourceAdapter = {
       company,
       city,
       isRemote: /remote/i.test(city) || /remote/i.test(title),
-      description: typeof it.details === 'string' ? stripHtml(it.details) : '',
+      // details || description — the probe's canonical text mapping; an
+      // empty body here would short-JD flag a posting that HAS a JD.
+      description: stripHtml(typeof it.details === 'string' && it.details ? it.details : typeof it.description === 'string' ? it.description : ''),
       postedAt: typeof it.start_date === 'string' ? it.start_date : null,
       validThrough: typeof it.end_date === 'string' ? it.end_date : null,
       externalId: it.id != null ? String(it.id) : null,

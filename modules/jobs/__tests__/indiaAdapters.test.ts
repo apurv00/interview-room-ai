@@ -195,6 +195,21 @@ describe('apna fetch', () => {
     expect(gone.raw).toHaveLength(1)
   })
 
+  it('a failed SHARD fetch fails the whole target — its URLs must never fall behind the cursor (Codex #536)', async () => {
+    vi.mocked(fetch).mockImplementation(async (url: unknown) => {
+      const u = String(url)
+      if (u === INDEX) return { ok: true, status: 200, text: async () => '<sitemapindex><loc>https://apna.co/job-listing-sitemap.xml</loc></sitemapindex>' } as Response
+      if (/job-listing-sitemap\.xml$/.test(u)) return { ok: true, status: 200, text: async () => '<sitemapindex><loc>https://apna.co/active-job-listings-1.xml</loc><loc>https://apna.co/active-job-listings-2.xml</loc></sitemapindex>' } as Response
+      if (/active-job-listings-1\.xml$/.test(u)) return { ok: true, status: 200, text: async () => '<urlset><url><loc>https://apna.co/job/ok-1</loc><lastmod>2026-07-14T00:00:00Z</lastmod></url></urlset>' } as Response
+      if (/active-job-listings-2\.xml$/.test(u)) return { ok: false, status: 503, text: async () => '' } as Response
+      return { ok: true, status: 200, text: async () => pageFor('Long enough description. '.repeat(30)) } as Response
+    })
+    const [, activeTarget] = apnaAdapter.buildTargets({ sourceId: 'apna', enabled: true }, [])
+    const res = await apnaAdapter.fetch(activeTarget)
+    expect(res.ok).toBe(false)
+    expect(res.raw).toHaveLength(0)
+  })
+
   it('a sitemap index that stops naming the job sitemap = FAILED fetch (schema drift, Codex #536)', async () => {
     vi.mocked(fetch).mockImplementation(async () =>
       ({ ok: true, status: 200, text: async () => '<sitemapindex><loc>https://apna.co/other.xml</loc></sitemapindex>' }) as Response)
@@ -271,6 +286,25 @@ describe('unstop adapter', () => {
     expect(unstopAdapter.normalize(item({ public_url: undefined }), target)).toBeNull()
     expect(unstopAdapter.normalize(item({ title: '' }), target)).toBeNull()
     expect(unstopAdapter.normalize(item({ organisation: null }), target)).toBeNull()
+  })
+
+  it('regn_open is authoritative: explicit false never enters even with stale remain_days; absence falls back (Codex #536)', async () => {
+    mockFetchJSON.mockResolvedValue({
+      ok: true, status: 200,
+      data: { data: { data: [
+        item({ id: 1, regn_open: false, regnRequirements: { remain_days: 9 } }), // closed, stale remain_days
+        item({ id: 2, regn_open: undefined, regnRequirements: { remain_days: 5 } }), // absent → fallback admits
+        item({ id: 3, regn_open: undefined, regnRequirements: { remain_days: 0 } }), // absent + expired → out
+      ] } },
+    })
+    const res = await unstopAdapter.fetch(target)
+    expect(res.raw.map((r) => (r as { id: number }).id)).toEqual([2])
+  })
+
+  it('description falls back to the description field when details is absent (probe mapping, Codex #536)', () => {
+    const n = unstopAdapter.normalize(item({ details: undefined, description: '<p>JD lives here instead.</p>' }), target)!
+    expect(n.description).toContain('JD lives here instead')
+    expect(n.description).not.toContain('<p>')
   })
 
   it('error-shaped envelope = FAILED fetch — health must degrade, never a clean zero-row sync (Codex #536)', async () => {
