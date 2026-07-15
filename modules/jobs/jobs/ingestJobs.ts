@@ -47,6 +47,10 @@ export function resolveAdapter(sourceId: string, kind?: string): JobSourceAdapte
 
 const BUCKETS_PER_CHUNK = 1
 const MAX_PAGES_PER_BUCKET = 3
+/** Feed sources (unstop) paginate deeper per run: their whole corpus sits
+ *  behind one paged list, and the known-rate cutoff stops early once the
+ *  run reaches already-ingested rows (Codex #536). */
+const MAX_PAGES_PER_FEED = 12
 const FULL_PAGE_SIZE = 10
 const KNOWN_RATE_PAGINATION_CUTOFF = 0.6
 
@@ -121,7 +125,8 @@ async function processTarget(
   // makes that idempotent. Completeness beats quota.
   let newestSeen: string | undefined
   for (;;) {
-    const t: FetchTarget = target.kind === 'bucket' ? { ...target, page } : target
+    const t: FetchTarget =
+      target.kind === 'bucket' || target.kind === 'feed' ? { ...target, page } : target
     const res = await adapter.fetch(t)
     outcome.attempts += res.attempts
     if (!res.ok) {
@@ -132,6 +137,7 @@ async function processTarget(
       // retry run BEFORE the failed page is ever refetched — flag the
       // bucket so the next run distrusts the cutoff and paginates through.
       if (t.kind === 'bucket') outcome.incompleteBuckets.push(t.bucketId)
+      else if ('cursorBucket' in t && t.cursorBucket) outcome.incompleteBuckets.push(t.cursorBucket)
       return
     }
     outcome.fetched += res.raw.length
@@ -173,12 +179,15 @@ async function processTarget(
     // AND most rows are new to us — a page we mostly already know means
     // the freshness window is exhausted.
     const knownRate = counters.processed > 0 ? (counters.merged + counters.refreshed) / counters.processed : 1
-    const pageFull = res.raw.length >= FULL_PAGE_SIZE
+    const paginable = t.kind === 'bucket' || t.kind === 'feed'
+    const pageSize = t.kind === 'feed' ? t.perPage : FULL_PAGE_SIZE
+    const maxPages = t.kind === 'feed' ? MAX_PAGES_PER_FEED : MAX_PAGES_PER_BUCKET
+    const pageFull = res.raw.length >= pageSize
     // distrustKnown (Codex #528 P1): after an incomplete window, "already
     // known" is evidence of the PARTIAL run's stores, not of exhaustion —
     // the cutoff is disabled until one full clean pass rebuilds trust.
     const cutoffHit = !distrustKnown && knownRate >= KNOWN_RATE_PAGINATION_CUTOFF
-    if (t.kind !== 'bucket' || !pageFull || cutoffHit || page >= MAX_PAGES_PER_BUCKET) {
+    if (!paginable || !pageFull || cutoffHit || page >= maxPages) {
       // Clean exit: every page this window owed us was fetched — the
       // cursor may now advance (bucket targets key on bucketId; sitemap/
       // feed targets on their explicit cursorBucket).

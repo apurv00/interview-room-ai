@@ -288,6 +288,18 @@ describe('unstop adapter', () => {
     expect(unstopAdapter.normalize(item({ organisation: null }), target)).toBeNull()
   })
 
+  it('buildTargets emits ONE continuing target with a cursorBucket — the pipeline pages it until the cutoff (Codex #536)', () => {
+    const targets = unstopAdapter.buildTargets({ sourceId: 'unstop', enabled: true }, [])
+    expect(targets).toHaveLength(1)
+    expect(targets[0]).toMatchObject({ kind: 'feed', page: 1, cursorBucket: 'unstop:feed' })
+  })
+
+  it('fetch honors the target page — pagination is pipeline-driven, not adapter-fixed (Codex #536)', async () => {
+    mockFetchJSON.mockResolvedValue({ ok: true, status: 200, data: { data: { data: [item()] } } })
+    await unstopAdapter.fetch({ ...target, page: 7 })
+    expect(String(mockFetchJSON.mock.calls[0][0])).toContain('page=7')
+  })
+
   it('regn_open is authoritative: explicit false never enters even with stale remain_days; absence falls back (Codex #536)', async () => {
     mockFetchJSON.mockResolvedValue({
       ok: true, status: 200,

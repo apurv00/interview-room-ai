@@ -16,7 +16,6 @@ import type { FetchResult, FetchTarget, JobSourceAdapter, NormalizedJob } from '
  */
 
 const API = 'https://unstop.com/api/public/opportunity/search-result'
-const PAGES_PER_CYCLE = 3
 const PER_PAGE = 15
 
 interface UnstopItem {
@@ -59,14 +58,19 @@ export const unstopAdapter: JobSourceAdapter = {
   kind: 'public-api',
 
   buildTargets() {
-    // Newest-first list pages; merge-by-sourceKey makes re-reads idempotent
-    // and the delisting/expiry lifecycle handles closures.
-    return Array.from({ length: PAGES_PER_CYCLE }, (_, i) => ({
+    // ONE continuing target (Codex #536): the pipeline pages it like a
+    // bucket — full-page + known-rate cutoff + per-run page cap — so the
+    // backlog beyond the newest pages drains across runs instead of
+    // re-reading the same head forever. Merge-by-sourceKey keeps re-read
+    // pages idempotent; the incomplete/distrust machinery applies via
+    // cursorBucket.
+    return [{
       kind: 'feed' as const,
       feedId: 'unstop:jobs',
-      page: i + 1,
+      page: 1,
       perPage: PER_PAGE,
-    }))
+      cursorBucket: 'unstop:feed',
+    }]
   },
 
   async fetch(target: FetchTarget): Promise<FetchResult> {
