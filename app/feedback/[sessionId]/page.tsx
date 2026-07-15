@@ -1385,8 +1385,6 @@ function FeedbackPageInner() {
             </button>
             <div>
               <h1 className="text-subheading sm:text-heading leading-tight">Interview Feedback</h1>
-              <JobsBridge sessionId={sessionId} />
-              {data?.config?.role && <div><JobsCountLink domain={data.config.role} variant="feedback" /></div>}
               <p className="text-caption text-[#71767b] hidden sm:block">
                 {data.config &&
                   `${getDomainLabel(data.config.role)} · ${data.config.experience} yrs · ${data.config.duration} min`}
@@ -1441,6 +1439,14 @@ function FeedbackPageInner() {
           </div>
         </div>
       </header>
+
+      {/* Jobs surfaces live BELOW the header: it is fixed at h-[52px] and
+          cannot host variable-height content (Codex #527). Both children
+          render null in the common case — the row collapses to nothing. */}
+      <div className="max-w-5xl mx-auto px-4 flex flex-wrap items-center gap-x-4">
+        <JobsBridge sessionId={sessionId} />
+        {data?.config?.role && <JobsCountLink domain={data.config.role} variant="feedback" />}
+      </div>
 
       {showPathwayPendingBanner && (
         <div className="max-w-5xl mx-auto px-4 mt-4">

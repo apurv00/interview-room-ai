@@ -11,6 +11,10 @@ import { JOB_DOMAIN_IDS } from '../config/domains'
  * ONLY when the feed was actually filtered by it (unknown slugs fall back
  * to the unfiltered count with generic copy); zero jobs renders NOTHING —
  * no promises about an empty feed. No readiness-ranking claims exist here.
+ * NO evidence claims either (Codex #527): practice evidence is recorded
+ * only for jobs-attributed sessions (recordPracticeEvidence requires
+ * attribution.source='jobs'), and sessions launched from these hosts have
+ * no such attribution — the attributed case is JobsBridge's job.
  *
  * Client-safe by construction: deep-imports the pure domains config; hosts
  * import this file directly (the @jobs barrel drags mongoose).
@@ -45,16 +49,16 @@ export default function JobsCountLink({
   if (variant === 'feedback') {
     return (
       <Link href={href} className="mt-2 inline-block rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm text-blue-800 hover:border-blue-400 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-200">
-        {count} live {what} are hiring right now — this session counts toward them. Browse →
+        {count} live {what} are hiring right now. Browse →
       </Link>
     )
   }
   if (variant === 'pathway') {
     return (
       <div className="rounded-xl border p-4">
-        <h3 className="text-sm font-semibold">Jobs matching your prep</h3>
+        <h3 className="text-sm font-semibold">{state.filtered ? 'Jobs matching your prep' : 'Live jobs on the feed'}</h3>
         <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-          {count} live {what} on the feed — practice here counts as evidence there.
+          {count} live {what} on the feed right now.
         </p>
         <Link href={href} className="mt-2 inline-block text-sm font-medium text-blue-600 hover:underline">
           Browse jobs →
