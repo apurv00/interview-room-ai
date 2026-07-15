@@ -1,5 +1,6 @@
 import { gunzipSync } from 'zlib'
-import { JobApplication, JobPosting, InterviewSession } from '@shared/db/models'
+import { JobApplication, JobPosting, InterviewSession, ProductEvent } from '@shared/db/models'
+import { logger } from '@shared/logger'
 import { xrayHashOf } from './xrayService'
 
 /**
@@ -105,10 +106,19 @@ export async function saveTailoredVersion(
 export const USER_SETTABLE_STATUSES = ['saved', 'applied', 'interview_scheduled', 'offer', 'rejected', 'ghosted', 'withdrawn'] as const
 export type UserSettableStatus = (typeof USER_SETTABLE_STATUSES)[number]
 
+export interface TransitionTelemetry {
+  /** Which surface carried the user's claim (EMAILS.md §4). */
+  channel: 'web' | 'email'
+  latencyMs?: number
+  viaNudge?: boolean
+  inferredFromPrep?: boolean
+}
+
 export async function transitionStatus(
   userId: string,
   jobPostingId: string,
   to: UserSettableStatus,
+  telemetry?: TransitionTelemetry,
   now = new Date()
 ): Promise<{ ok: boolean; status?: string; from?: string }> {
   if (!(USER_SETTABLE_STATUSES as readonly string[]).includes(to)) return { ok: false }
@@ -124,7 +134,33 @@ export async function transitionStatus(
     },
     { new: false }
   )
-  return prev ? { ok: true, status: to, from: prev.status } : { ok: false }
+  if (!prev) return { ok: false }
+
+  // THE single emitter (EMAILS.md §4, Codex #530 R25): jobs.interview_scheduled
+  // fires HERE on the edge (from != to) and nowhere else — the session-gated
+  // status route and any token-gated email action are thin callers, so one
+  // scheduled interview stays one event regardless of channel. Telemetry
+  // never breaks the transition.
+  if (telemetry) {
+    try {
+      const scheduledEdge = to === 'interview_scheduled' && prev.status !== 'interview_scheduled'
+      await ProductEvent.create({
+        name: to === 'applied' ? 'jobs.apply_confirmed' : scheduledEdge ? 'jobs.interview_scheduled' : 'jobs.status_changed',
+        userId,
+        jobPostingId,
+        props:
+          to === 'applied'
+            ? { latencyMs: telemetry.latencyMs, viaNudge: telemetry.viaNudge ?? false, from: prev.status, channel: telemetry.channel }
+            : scheduledEdge
+              ? { inferredFromPrep: telemetry.inferredFromPrep ?? false, from: prev.status, channel: telemetry.channel }
+              : { from: prev.status, to, source: 'user', channel: telemetry.channel },
+        ts: now,
+      })
+    } catch (err) {
+      logger.warn({ err }, 'status telemetry write failed')
+    }
+  }
+  return { ok: true, status: to, from: prev.status }
 }
 
 /**

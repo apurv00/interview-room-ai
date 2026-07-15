@@ -41,3 +41,5 @@ export { getTracker, dismissConfirmCard, saveNotes, GHOST_AFTER_DAYS } from './s
 export { buildPrepPlan, dateForChoice, setInterviewDate } from './services/prepPlanService'
 export type { PrepPlan, PrepPlanSession } from './services/prepPlanService'
 export type { FeedQuery, FeedCard, JobDetailShell, JobDetailFull } from './services/feedService'
+export { isSuppressed, buildFooterUrls, sendTransactional } from './services/emailSendService'
+export type { TransitionTelemetry } from './services/applicationService'

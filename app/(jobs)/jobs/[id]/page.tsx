@@ -66,6 +66,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   const [atsHint, setAtsHint] = useState<string | null>(null)
   const [sheet, setSheet] = useState<null | { kind: 'normal' | 'quick'; clicked: { url: string; tier: string }; elapsedMs: number }>(null)
   const [inference, setInference] = useState<'idle' | 'asking'>('idle')
+  const [practiceEmail, setPracticeEmail] = useState<'idle' | 'sent' | 'email-off' | 'unavailable'>('idle')
   const [sheetDone, setSheetDone] = useState<string | null>(null)
 
   useEffect(() => {
@@ -179,6 +180,20 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       body: JSON.stringify({ choice }),
     }).catch(() => {})
     refetchDetail()
+  }
+
+  async function requestPracticeEmail() {
+    // Honest states (EMAILS.md §3): the server declines visibly when the
+    // stream is off or the user unsubscribed — never a silent accept.
+    try {
+      const r = await fetch(`/api/jobs/${params.id}/practice-link-email`, { method: 'POST' })
+      const d = r.ok ? await r.json() : null
+      if (d?.ok) setPracticeEmail('sent')
+      else if (d?.reason === 'email-off') setPracticeEmail('email-off')
+      else setPracticeEmail('unavailable')
+    } catch {
+      setPracticeEmail('unavailable')
+    }
   }
 
   function onPractice() {
@@ -478,6 +493,27 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
               <p className="mt-2 text-xs text-slate-600">
                 Evidence toward readiness on this job: {detail.application.practiceCount}/3 sessions
               </p>
+              {/* E0 — the load-bearing deferred CTA (PRODUCT_FLOW §4c /
+                  EMAILS.md §1): voice mocks need a mic + quiet room, and
+                  interview news arrives on a phone. Honest states only —
+                  a request the server won't honor is declined visibly. */}
+              {practiceEmail === 'idle' && (
+                <button
+                  onClick={requestPracticeEmail}
+                  className="mt-2 text-xs font-medium text-blue-600 hover:underline"
+                >
+                  📩 Email me tonight&apos;s practice link
+                </button>
+              )}
+              {practiceEmail === 'sent' && (
+                <p className="mt-2 text-xs text-emerald-700">Sent — check your inbox this evening.</p>
+              )}
+              {practiceEmail === 'email-off' && (
+                <p className="mt-2 text-xs text-slate-600">Email is off for your account — turn it on in Settings to use this.</p>
+              )}
+              {practiceEmail === 'unavailable' && (
+                <p className="mt-2 text-xs text-slate-600">Email links aren&apos;t available yet.</p>
+              )}
             </div>
           ) : (
             /* Verdict chip — rule 1 (launch majority: no readiness band exists

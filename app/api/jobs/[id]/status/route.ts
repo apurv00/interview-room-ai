@@ -3,9 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import mongoose from 'mongoose'
-import { ProductEvent } from '@shared/db/models'
 import { transitionStatus, USER_SETTABLE_STATUSES, type UserSettableStatus } from '@jobs'
-import { logger } from '@shared/logger'
 
 export const dynamic = 'force-dynamic'
 
@@ -39,28 +37,17 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   }
 
   await connectDB()
-  const result = await transitionStatus(userId, params.id, to as UserSettableStatus)
+  // jobs.interview_scheduled has ONE emitter — applicationService.
+  // transitionStatus, on the EDGE (from != to). This route is a thin
+  // caller: the inference door, the tracker chip, and the email-action
+  // endpoint all converge on the service, so one scheduled interview is
+  // one event regardless of channel (EMAILS.md §4; Codex on #525/#530).
+  const result = await transitionStatus(userId, params.id, to as UserSettableStatus, {
+    channel: 'web',
+    latencyMs,
+    viaNudge,
+    inferredFromPrep,
+  })
   if (!result.ok) return NextResponse.json({ error: 'no application for this job' }, { status: 404 })
-  try {
-    // jobs.interview_scheduled has ONE emitter — this route, on the EDGE
-    // (from != to): the inference door and the tracker chip both land here,
-    // and the date-capture route emits nothing, so one scheduled interview
-    // is one event (Codex on #525 — the split emitters double-counted).
-    const scheduledEdge = to === 'interview_scheduled' && result.from !== 'interview_scheduled'
-    await ProductEvent.create({
-      name: to === 'applied' ? 'jobs.apply_confirmed' : scheduledEdge ? 'jobs.interview_scheduled' : 'jobs.status_changed',
-      userId,
-      jobPostingId: params.id,
-      props:
-        to === 'applied'
-          ? { latencyMs, viaNudge, from: result.from }
-          : scheduledEdge
-            ? { inferredFromPrep, from: result.from }
-            : { from: result.from, to, source: 'user' },
-      ts: new Date(),
-    })
-  } catch (err) {
-    logger.warn({ err }, 'status telemetry write failed') // telemetry never breaks the flow
-  }
   return NextResponse.json({ ok: true, status: result.status })
 }

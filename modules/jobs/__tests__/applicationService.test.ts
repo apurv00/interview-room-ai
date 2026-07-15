@@ -110,7 +110,7 @@ describe('transitionStatus (user claims — loose machine, §2)', () => {
   it('applied sets appliedAt + a user-source history entry, and reports the FROM status', async () => {
     reset()
     mockAppFindOneAndUpdate.mockResolvedValueOnce({ status: 'apply_clicked' })
-    const r = await transitionStatus('u1', 'j1', 'applied', NOW)
+    const r = await transitionStatus('u1', 'j1', 'applied', undefined, NOW)
     expect(r).toEqual({ ok: true, status: 'applied', from: 'apply_clicked' })
     const [, update] = mockAppFindOneAndUpdate.mock.calls[0]
     expect(update.$set).toEqual({ status: 'applied', appliedAt: NOW })
@@ -121,15 +121,15 @@ describe('transitionStatus (user claims — loose machine, §2)', () => {
     reset()
     mockAppFindOneAndUpdate.mockResolvedValue({ status: 'applied' })
     expect((await transitionStatus('u1', 'j1', 'saved', NOW)).ok).toBe(true) // backward correction
-    expect((await transitionStatus('u1', 'j1', 'ghosted', NOW)).ok).toBe(true)
-    expect((await transitionStatus('u1', 'j1', 'apply_clicked' as never, NOW)).ok).toBe(false)
-    expect((await transitionStatus('u1', 'j1', 'nonsense' as never, NOW)).ok).toBe(false)
+    expect((await transitionStatus('u1', 'j1', 'ghosted', undefined, NOW)).ok).toBe(true)
+    expect((await transitionStatus('u1', 'j1', 'apply_clicked' as never, undefined, NOW)).ok).toBe(false)
+    expect((await transitionStatus('u1', 'j1', 'nonsense' as never, undefined, NOW)).ok).toBe(false)
   })
 
   it('no application row → ok:false (route 404s)', async () => {
     reset()
     mockAppFindOneAndUpdate.mockResolvedValueOnce(null)
-    expect((await transitionStatus('u1', 'j1', 'applied', NOW)).ok).toBe(false)
+    expect((await transitionStatus('u1', 'j1', 'applied', undefined, NOW)).ok).toBe(false)
   })
 })
 
