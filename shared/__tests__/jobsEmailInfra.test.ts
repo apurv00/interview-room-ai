@@ -86,11 +86,22 @@ describe('/api/cms/jobs-ingest/email', () => {
     expect(empty.status).toBe(400)
   })
 
-  it('PATCH accepts valid switches and upserts the singleton', async () => {
+  it('PATCH accepts valid switches and upserts the KEYED singleton (Codex #531 — never an empty filter)', async () => {
     asAdmin()
     const res = await PATCH(new Request('http://x', { method: 'PATCH', body: JSON.stringify({ e2Enabled: true, globalWeeklyCap: 2 }) }))
     expect(res.status).toBe(200)
-    expect(mockUpdateOne).toHaveBeenCalledWith({}, { $set: { e2Enabled: true, globalWeeklyCap: 2 } }, { upsert: true })
+    expect(mockUpdateOne).toHaveBeenCalledWith({ key: 'singleton' }, { $set: { e2Enabled: true, globalWeeklyCap: 2 } }, { upsert: true })
+  })
+
+  it('PATCH losing a concurrent first-insert race (E11000) retries against the winner doc', async () => {
+    asAdmin()
+    mockUpdateOne
+      .mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 11000 }))
+      .mockResolvedValueOnce({})
+    const res = await PATCH(new Request('http://x', { method: 'PATCH', body: JSON.stringify({ e2Enabled: true }) }))
+    expect(res.status).toBe(200)
+    expect(mockUpdateOne).toHaveBeenCalledTimes(2)
+    expect(mockUpdateOne.mock.calls[1]).toEqual([{ key: 'singleton' }, { $set: { e2Enabled: true } }])
   })
 })
 

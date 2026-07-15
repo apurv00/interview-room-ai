@@ -13,6 +13,10 @@ import mongoose, { Schema, Document, Model } from 'mongoose'
  */
 export interface IJobsEmailConfig extends Document {
   _id: mongoose.Types.ObjectId
+  /** Constant singleton key — the unique index on it makes a second config
+   *  doc structurally impossible (Codex #531: an empty-filter upsert races
+   *  on fresh deployments; findOne() then reads an arbitrary copy). */
+  key: 'singleton'
   e0Enabled: boolean
   e1Enabled: boolean
   e2Enabled: boolean
@@ -50,6 +54,7 @@ interface IJobsEmailConfigModel extends Model<IJobsEmailConfig> {
 
 const JobsEmailConfigSchema = new Schema<IJobsEmailConfig>(
   {
+    key: { type: String, default: 'singleton', enum: ['singleton'] },
     e0Enabled: { type: Boolean, default: false },
     e1Enabled: { type: Boolean, default: false },
     e2Enabled: { type: Boolean, default: false },
@@ -62,9 +67,11 @@ const JobsEmailConfigSchema = new Schema<IJobsEmailConfig>(
   { timestamps: true }
 )
 
+JobsEmailConfigSchema.index({ key: 1 }, { unique: true })
+
 // Singleton helper — the single config doc, or safe OFF defaults.
 JobsEmailConfigSchema.statics.getConfig = async function (): Promise<JobsEmailConfigValues> {
-  const doc = await this.findOne().lean()
+  const doc = await this.findOne({ key: 'singleton' }).lean()
   if (!doc) return { ...JOBS_EMAIL_DEFAULTS }
   return {
     e0Enabled: doc.e0Enabled ?? false,

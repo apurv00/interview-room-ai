@@ -70,27 +70,29 @@ describe('signedActionToken', () => {
     expect(verifyActionToken(`${pB64}.${sig}`, 'status')).toEqual({ ok: false, reason: 'expired' })
   })
 
-  it('key rotation: v2 verifies against EMAIL_TOKEN_SECRET_PREVIOUS; unknown v rejects', () => {
-    const OLD = 'the-previous-secret-before-rotation'
+  it('key rotation preserves in-flight tokens (Codex #531): pre-rotation mints still verify via EMAIL_TOKEN_SECRET_PREVIOUS', () => {
+    // Mint under the OLD key (pre-rotation world)...
+    const OLD = 'the-original-secret-before-rotation'
+    vi.stubEnv('EMAIL_TOKEN_SECRET', OLD)
+    const inFlight = mintActionToken(statusInput)
+    // ...then rotate: new current, old moved to PREVIOUS.
+    vi.stubEnv('EMAIL_TOKEN_SECRET', 'brand-new-secret-after-rotation')
     vi.stubEnv('EMAIL_TOKEN_SECRET_PREVIOUS', OLD)
-    const { createHmac } = require('crypto') as typeof import('crypto')
-    const payload = { v: 2, typ: 'status', uid: 'u1', action: 'x', exp: Math.floor(Date.now() / 1000) + 3600 }
-    const pB64 = Buffer.from(JSON.stringify(payload)).toString('base64url')
-    const sigOld = createHmac('sha256', OLD).update(pB64).digest().toString('base64url')
-    expect(verifyActionToken(`${pB64}.${sigOld}`, 'status').ok).toBe(true)
-    // Same payload signed with the CURRENT secret but claiming v2 → invalid.
-    const sigNew = createHmac('sha256', SECRET).update(pB64).digest().toString('base64url')
-    expect(verifyActionToken(`${pB64}.${sigNew}`, 'status').ok).toBe(false)
-    // Unknown key id.
-    const p3 = Buffer.from(JSON.stringify({ ...payload, v: 9 })).toString('base64url')
-    const sig3 = createHmac('sha256', SECRET).update(p3).digest().toString('base64url')
-    expect(verifyActionToken(`${p3}.${sig3}`, 'status').ok).toBe(false)
+    expect(verifyActionToken(inFlight, 'status').ok).toBe(true)
+    // Grace window ends (previous dropped): the in-flight token dies.
+    vi.stubEnv('EMAIL_TOKEN_SECRET_PREVIOUS', '')
+    expect(verifyActionToken(inFlight, 'status')).toEqual({ ok: false, reason: 'invalid' })
   })
 
-  it('mint always uses v1 (current key) — rotation grace is verify-only', () => {
-    vi.stubEnv('EMAIL_TOKEN_SECRET_PREVIOUS', 'old-key')
-    const token = mintActionToken(statusInput)
-    const res = verifyActionToken(token, 'status')
-    expect(res.ok && res.payload.v).toBe(1)
+  it('a token signed by an unknown key never verifies; unknown format version rejects', () => {
+    const { createHmac } = require('crypto') as typeof import('crypto')
+    const payload = { v: 1, typ: 'status', uid: 'u1', action: 'x', exp: Math.floor(Date.now() / 1000) + 3600 }
+    const pB64 = Buffer.from(JSON.stringify(payload)).toString('base64url')
+    const rogue = createHmac('sha256', 'attacker-key').update(pB64).digest().toString('base64url')
+    expect(verifyActionToken(`${pB64}.${rogue}`, 'status')).toEqual({ ok: false, reason: 'invalid' })
+    // Unknown payload format version — even correctly signed.
+    const p9 = Buffer.from(JSON.stringify({ ...payload, v: 9 })).toString('base64url')
+    const sig9 = createHmac('sha256', SECRET).update(p9).digest().toString('base64url')
+    expect(verifyActionToken(`${p9}.${sig9}`, 'status')).toEqual({ ok: false, reason: 'invalid' })
   })
 })

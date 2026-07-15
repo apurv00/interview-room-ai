@@ -10,14 +10,19 @@ import { createHmac, timingSafeEqual } from 'crypto'
  * Token = base64url(JSON payload) + '.' + base64url(HMAC-SHA256(payload)).
  * Payload is versioned and TYPED — `typ` is verified by the consuming
  * endpoint so an unsubscribe token can never fire a status action.
- * Key rotation: `v: 1` = EMAIL_TOKEN_SECRET, `v: 2` = accepted against
- * EMAIL_TOKEN_SECRET_PREVIOUS during a grace window (mint always uses v1).
+ * Key rotation (Codex #531): the payload does NOT encode which key signed
+ * it — a pre-rotation token can't know it's about to be superseded.
+ * Verification tries EMAIL_TOKEN_SECRET first, then
+ * EMAIL_TOKEN_SECRET_PREVIOUS, so in-flight mail survives a rotation for
+ * as long as the previous key stays configured. `v` is the payload FORMAT
+ * version (currently 1), nothing more.
  */
 
 export type TokenType = 'unsub' | 'status'
 
 export interface ActionTokenPayload {
-  v: 1 | 2
+  /** Payload FORMAT version — key selection is not encoded in the token. */
+  v: 1
   typ: TokenType
   /** User id (string form of the ObjectId). */
   uid: string
@@ -39,14 +44,15 @@ export type VerifyResult =
 
 const b64url = (buf: Buffer) => buf.toString('base64url')
 
-function keyFor(v: number): string | undefined {
-  if (v === 1) return process.env.EMAIL_TOKEN_SECRET
-  if (v === 2) return process.env.EMAIL_TOKEN_SECRET_PREVIOUS
-  return undefined
-}
-
 function sign(payloadB64: string, secret: string): Buffer {
   return createHmac('sha256', secret).update(payloadB64).digest()
+}
+
+/** Current key first, previous key during a rotation grace window. */
+function verifyKeys(): string[] {
+  return [process.env.EMAIL_TOKEN_SECRET, process.env.EMAIL_TOKEN_SECRET_PREVIOUS].filter(
+    (s): s is string => typeof s === 'string' && s.length > 0
+  )
 }
 
 export function mintActionToken(
@@ -78,9 +84,7 @@ export function verifyActionToken(token: string, expectedTyp: TokenType): Verify
     return { ok: false, reason: 'invalid' }
   }
   if (!payload || typeof payload !== 'object') return { ok: false, reason: 'invalid' }
-
-  const secret = keyFor(payload.v)
-  if (!secret) return { ok: false, reason: 'invalid' }
+  if (payload.v !== 1) return { ok: false, reason: 'invalid' }
 
   let sig: Buffer
   try {
@@ -88,10 +92,13 @@ export function verifyActionToken(token: string, expectedTyp: TokenType): Verify
   } catch {
     return { ok: false, reason: 'invalid' }
   }
-  const expected = sign(payloadB64, secret)
-  if (sig.length !== expected.length || !timingSafeEqual(sig, expected)) {
-    return { ok: false, reason: 'invalid' }
-  }
+  // In-flight tokens survive rotation: try current, then previous (Codex
+  // #531 — the token cannot know which key signed it).
+  const signedByKnownKey = verifyKeys().some((secret) => {
+    const expected = sign(payloadB64, secret)
+    return sig.length === expected.length && timingSafeEqual(sig, expected)
+  })
+  if (!signedByKnownKey) return { ok: false, reason: 'invalid' }
 
   // Signature is valid — now the claims. exp is mandatory (Codex-reviewed
   // spec: absent exp never verifies), typ must match the endpoint.

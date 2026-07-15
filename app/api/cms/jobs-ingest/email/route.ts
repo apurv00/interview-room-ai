@@ -80,6 +80,17 @@ export async function PATCH(req: Request) {
   if (Object.keys(set).length === 0) return NextResponse.json({ error: 'no valid keys' }, { status: 400 })
 
   await connectDB()
-  await JobsEmailConfig.updateOne({}, { $set: set }, { upsert: true })
+  // Keyed upsert against the unique singleton index: a concurrent first
+  // PATCH loses the insert race with E11000 — retry once, it now matches
+  // the winner's doc (Codex #531).
+  try {
+    await JobsEmailConfig.updateOne({ key: 'singleton' }, { $set: set }, { upsert: true })
+  } catch (err) {
+    if ((err as { code?: number }).code === 11000) {
+      await JobsEmailConfig.updateOne({ key: 'singleton' }, { $set: set })
+    } else {
+      throw err
+    }
+  }
   return NextResponse.json({ ok: true, config: await JobsEmailConfig.getConfig() })
 }
