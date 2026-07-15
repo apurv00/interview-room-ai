@@ -40,7 +40,7 @@ STRANGER ─► /jobs feed ─► UPLOAD RESUME ─► confirm bar ─► ranked
 
 **Stage 3 — Apply (sacred).** Link-out on the 5-tier ladder; `window.open` fires synchronously in the click handler (mobile popup blockers kill async opens). Nothing ever stands between intent and the employer's page. Details in §4b.
 
-**Stage 4 — Prep.** [Practice for this job] writes `InterviewConfig{ jobDescription, targetCompany, duration: 15, attribution: {source:'jobs', jobId, applicationId} }` to localStorage → `/lobby`. Exact precedent: `app/(learn)/learn/practice/page.tsx:87-94`; lobby requireAuth gate + post-OAuth resume + JD-skip all pre-exist; `/api/generate-question` spends ~60% of questions on JD must-haves for free. Zero hot-path file edits. Feedback page adds "Back to {job}" + the evidence tick.
+**Stage 4 — Prep.** [Practice for this job] writes `InterviewConfig{ jobDescription, targetCompany, duration: 20, attribution: {source:'jobs', jobId, applicationId} }` to localStorage → `/lobby`. Exact precedent: `app/(learn)/learn/practice/page.tsx:87-94`; lobby requireAuth gate + post-OAuth resume + JD-skip all pre-exist; `/api/generate-question` spends ~60% of questions on JD must-haves for free. Zero hot-path file edits. Feedback page adds "Back to {job}" + the evidence tick.
 
 **Stage 5 — Track → outcome → loop.** Return-sheet claims, 21d ghost prompt, interview inference at practice time, post-interview check-in. Every terminal outcome routes back to the feed ("keep prepping — 3 similar live jobs").
 

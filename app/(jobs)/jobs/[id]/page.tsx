@@ -230,7 +230,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
     const config = {
       role,
       experience: '3-6',
-      duration: 15,
+      duration: 20,
       jobDescription: detail.jd,
       targetCompany: detail.company,
       attribution: { source: 'jobs', jobId: detail.id, applicationId: detail.application?.applicationId },
